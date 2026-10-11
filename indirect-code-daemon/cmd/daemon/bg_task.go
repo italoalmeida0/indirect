@@ -37,29 +37,56 @@ func (b *bgBuffer) append(text string, capBytes int) (droppedBytes int64, droppe
 	b.bytes += len(text)
 	for b.bytes > capBytes && len(b.chunks) > 0 {
 		head := b.chunks[0]
-		over := b.bytes - capBytes
-		if over >= len(head) {
-			b.chunks = b.chunks[1:]
-			b.bytes -= len(head)
-			droppedBytes += int64(len(head))
-			droppedLines += int64(countLines(head))
-		} else {
-			// Partial head trim: drop whole lines only, so the retained
-			// tail always starts at a line boundary.
-			cut := strings.Index(head[over:], "\n")
-			var drop string
-			if cut < 0 {
-				drop = head
+		// Whole lines only: a drop ends at a line boundary, so the retained
+		// tail always starts at one. A trailing partial line — its
+		// continuation arrives in a later chunk, or it is the live last
+		// line — is NEVER dropped: its residue stays with the retained
+		// content, and DroppedLines counts only FULLY dropped lines (a line
+		// that survives in the tail is never counted as dropped).
+		complete := strings.LastIndexByte(head, '\n') + 1 // whole-line prefix
+		if complete == 0 {
+			if len(b.chunks) > 1 {
+				// Head is a partial line continued by the next chunk: carry
+				// the residue there so the drop decision sees whole lines.
+				b.chunks[1] = head + b.chunks[1]
 				b.chunks = b.chunks[1:]
-				b.bytes -= len(head)
-			} else {
-				drop = head[:over+cut+1]
-				b.chunks[0] = head[over+cut+1:]
-				b.bytes -= len(drop)
+				continue
 			}
-			droppedBytes += int64(len(drop))
-			droppedLines += int64(countLines(drop))
+			// A single live partial line: keep it — the tail may overshoot
+			// the cap by one line. Only a pathological line (beyond 2x the
+			// cap) is bounded by cutting its oldest bytes; such a cut drops
+			// no complete line, so none is counted.
+			if b.bytes <= 2*capBytes {
+				break
+			}
+			cut := b.bytes - capBytes
+			b.chunks[0] = head[cut:]
+			b.bytes -= cut
+			droppedBytes += int64(cut)
+			continue
 		}
+		over := b.bytes - capBytes
+		cut := complete
+		if over < complete {
+			// Drop through the first line boundary at/after the budget.
+			cut = over + strings.IndexByte(head[over:], '\n') + 1
+		}
+		if cut == len(head) && len(b.chunks) == 1 {
+			// Dropping this would empty the tail while TotalLines still
+			// counts the content: keep the newest line whole instead.
+			keep := strings.LastIndexByte(head[:len(head)-1], '\n') + 1
+			if keep == 0 {
+				break
+			}
+			cut = keep
+		}
+		b.chunks[0] = head[cut:]
+		if b.chunks[0] == "" {
+			b.chunks = b.chunks[1:]
+		}
+		b.bytes -= cut
+		droppedBytes += int64(cut)
+		droppedLines += int64(countLines(head[:cut]))
 	}
 	return droppedBytes, droppedLines
 }
@@ -112,8 +139,10 @@ func listBgTaskIDs(rec *SessionRecord) string {
 	}
 	for _, t := range rec.BgTasks[start:] {
 		label := strings.TrimSpace(strings.SplitN(t.Label, "\n", 2)[0])
-		if len(label) > 60 {
-			label = label[:60] + "…"
+		// Truncate by runes (like noticePreview): a byte cut can split a
+		// multibyte rune and ship invalid UTF-8 to the model.
+		if r := []rune(label); len(r) > 60 {
+			label = string(r[:60]) + "…"
 		}
 		fmt.Fprintf(&sb, "\n  %s [%s] %s", t.ID, t.Status, label)
 	}

@@ -15,6 +15,7 @@ package runner
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -78,17 +79,29 @@ func OutName(sessionID, jobID string, startedAtMs int64) string {
 }
 
 // ParseOutName recovers (sessionId, jobId, startedAtMs) from an out
-// filename — the fallback identity when state is gone.
+// filename — the fallback identity when state is gone. The separators are
+// resolved from the ENDS (the timestamp follows the last "__", the session
+// id ends at the first "__"), so ids containing "__" still round-trip
+// through OutName. (When both ids contain "__" the split is ambiguous and
+// resolves at the first separator: the job id keeps the remainder.)
 func ParseOutName(name string) (sessionID, jobID string, startedAtMs int64, ok bool) {
 	base := strings.TrimSuffix(filepath.Base(name), ".log")
-	parts := strings.SplitN(base, "__", 3)
-	if len(parts) != 3 {
+	sep := strings.LastIndex(base, "__")
+	if sep < 0 {
 		return "", "", 0, false
 	}
-	if _, err := fmt.Sscanf(parts[2], "%d", &startedAtMs); err != nil {
+	ms, err := strconv.ParseInt(base[sep+2:], 10, 64)
+	if err != nil {
 		return "", "", 0, false
 	}
-	return parts[0], parts[1], startedAtMs, true
+	rest := base[:sep]
+	// The session id ends at the first "__"; the job id takes the rest,
+	// separators included.
+	split := strings.Index(rest, "__")
+	if split < 0 {
+		return "", "", 0, false
+	}
+	return rest[:split], rest[split+2:], ms, true
 }
 
 // sanitize keeps ids filename-safe without hiding their identity.

@@ -200,7 +200,7 @@ func (t *recordedTool) resolve(rec *executionReceipt, path string) (core.ToolRes
 	if !st.Terminal() {
 		return core.ToolResult{}, fmt.Errorf("execution %s is already running or awaiting recovery; do not launch a replacement. Inspect the background task and its log: %s", rec.ID, st.BrainPath)
 	}
-	if err := repairTerminalCopy(st); err != nil {
+	if err := repairTerminalCopy(t.root, st); err != nil {
 		return core.ToolResult{}, unknownExecution(rec.ID)
 	}
 	code := -1

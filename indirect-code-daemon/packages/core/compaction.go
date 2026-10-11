@@ -481,10 +481,20 @@ func FindCutPointMsgs(msgs []provider.Message, keepRecent int, perMsg []int) Cut
 	if idx <= 0 {
 		return CutPoint{Index: 0, TurnStartIndex: -1}
 	}
+	// With keepRecent <= 0 the walk-back never runs and idx stays at
+	// len(msgs); the tool-pair loops below index msgs[idx]. Clamp before
+	// them so the exported API cannot panic on an out-of-range index.
+	if idx >= len(msgs) {
+		idx = len(msgs) - 1
+	}
+	walkIdx := idx
 	// Never cut directly after an assistant tool_call (its results would
 	// be orphaned) — move the boundary forward past the result run.
-	for idx < len(msgs) && isToolCallTail(msgs[idx-1]) && isToolResultHead(msgs[idx]) {
+	for idx > 0 && idx < len(msgs) && isToolCallTail(msgs[idx-1]) && isToolResultHead(msgs[idx]) {
 		idx++
+	}
+	if idx >= len(msgs) {
+		idx = len(msgs) - 1
 	}
 	// Never cut directly before a tool result run — move back to include
 	// the owning assistant tool_call.
@@ -498,18 +508,42 @@ func FindCutPointMsgs(msgs []provider.Message, keepRecent int, perMsg []int) Cut
 		idx = len(msgs) - 1
 	}
 
+	cut := CutPoint{TurnStartIndex: -1}
 	// If the cut point is a user boundary, it is a clean turn boundary.
 	// If it is an assistant message, it splits the turn!
 	if isUserBoundary(msgs[idx]) {
-		return CutPoint{Index: idx, SplitTurn: false, TurnStartIndex: -1}
+		cut.Index = idx
+	} else if turnStart := findTurnStartIndex(msgs, idx); turnStart >= 0 {
+		cut.Index, cut.SplitTurn, cut.TurnStartIndex = idx, true, turnStart
+	} else {
+		// No preceding user boundary found; snap to user boundary if one follows.
+		cut.Index = snapCutToUserBoundary(msgs, idx)
 	}
-	turnStart := findTurnStartIndex(msgs, idx)
-	if turnStart >= 0 {
-		return CutPoint{Index: idx, SplitTurn: true, TurnStartIndex: turnStart}
+	if cut.Index <= 0 && walkIdx > 0 {
+		// No usable boundary: the tool-pair retreat collapsed the cut to 0
+		// (ownerless tool results, or a lone boundary at index 0), which
+		// would make Compact no-op on an oversized transcript. Fall back to
+		// the start of the oldest tool group at or after the walk-back
+		// boundary so the prefix is summarized and the keep floor holds.
+		// Without a turn structure the fallback cut never splits a turn.
+		cut = CutPoint{Index: oldestGroupStartAt(msgs, walkIdx), SplitTurn: false, TurnStartIndex: -1}
 	}
-	// No preceding user boundary found; snap to user boundary if one follows.
-	snapped := snapCutToUserBoundary(msgs, idx)
-	return CutPoint{Index: snapped, SplitTurn: false, TurnStartIndex: -1}
+	return cut
+}
+
+// oldestGroupStartAt returns the start of the oldest tool group at or
+// after idx: a group is an assistant tool_call together with the tool
+// result run that answers it (or a bare tool result run in a
+// boundary-less transcript). When the kept tail is a single continuing
+// group there is no later start and idx is returned unchanged.
+func oldestGroupStartAt(msgs []provider.Message, idx int) int {
+	for j := idx; j < len(msgs); j++ {
+		if j > 0 && isToolResultHead(msgs[j]) && (isToolCallTail(msgs[j-1]) || isToolResultHead(msgs[j-1])) {
+			continue // still inside the previous group
+		}
+		return j
+	}
+	return idx
 }
 
 // snapCutToUserBoundary moves a pair-safe cut forward to the next user

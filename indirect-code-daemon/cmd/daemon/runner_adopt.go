@@ -30,8 +30,12 @@ var orphanAfterMs = int64(3 * tools.AutoBackgroundAfter / time.Millisecond)
 // repairTerminalCopy heals the crash windows between the terminal state
 // write and the brain copy (and a torn mid-copy): the out log is the
 // source of truth, so a missing or truncated brain copy is re-COPIED
-// (copy semantics preserved — the out original always survives).
-func repairTerminalCopy(st *runner.State) error {
+// (copy semantics preserved — the out original always survives). A
+// successful copy also heals OutputReady — the copy IS the publication
+// the flag describes — and the healed state is persisted (the runner
+// crashed before its own second write; without this the run reads as
+// unknownExecution forever).
+func repairTerminalCopy(root string, st *runner.State) error {
 	if st.LogPath == "" || st.BrainPath == "" {
 		return fmt.Errorf("missing output path")
 	}
@@ -42,7 +46,11 @@ func repairTerminalCopy(st *runner.State) error {
 	if dst, err := os.Stat(st.BrainPath); err == nil && !dst.IsDir() && dst.Size() == src.Size() && st.OutputReady {
 		return nil
 	}
-	return durable.Copy(st.LogPath, st.BrainPath)
+	if err := durable.Copy(st.LogPath, st.BrainPath); err != nil {
+		return err
+	}
+	st.OutputReady = true
+	return runner.WriteState(root, st)
 }
 
 // rootDir resolves <root> from the supervisor's data dir (the slot).
@@ -61,7 +69,7 @@ func (b *bgSupervisor) adoptRunners() {
 		case st.Terminal():
 			// Restore the session tail/status before acknowledging the notice.
 			// The out log also repairs a copy interrupted by a crash.
-			if err := repairTerminalCopy(st); err != nil {
+			if err := repairTerminalCopy(root, st); err != nil {
 				trace("runner.copy.repair_failed", map[string]any{"job": st.JobID, "error": err.Error()})
 			}
 			b.sessionInbox(st.SessionID, bgTaskRecoverMsg{JobID: st.JobID})

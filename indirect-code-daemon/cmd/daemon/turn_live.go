@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 	"llm-gateway/indirect-code-daemon/packages/core"
@@ -219,6 +220,11 @@ func bgTaskPayloads(tasks []BgTask) []map[string]any {
 		content := t.Content
 		if len(content) > 20*1024 {
 			content = content[len(content)-20*1024:]
+			// The byte cut can split a multibyte rune: realign to a rune
+			// boundary before shipping, or the client receives invalid UTF-8.
+			for len(content) > 0 && !utf8.RuneStart(content[0]) {
+				content = content[1:]
+			}
 			if i := indexByte(content, '\n'); i >= 0 {
 				content = content[i+1:]
 			}

@@ -585,7 +585,11 @@ func (b *bgSupervisor) retainNotice(jobID, sessionID, text string, finished bool
 	b.notices[jobID] = n
 	if raw, err := json.Marshal(n); err == nil {
 		_ = os.MkdirAll(b.bgDir(), 0o700)
-		_ = os.WriteFile(b.noticePath(jobID), raw, 0o600)
+		// Atomic publish (tmp+rename): a crash mid-write must never leave a
+		// torn notice.json that boot then cannot deliver.
+		if err := writeAtomicFile(b.noticePath(jobID), raw); err != nil {
+			trace("bg.notice.write_failed", map[string]any{"job": jobID, "error": err.Error()})
+		}
 	}
 	return n
 }
@@ -704,6 +708,46 @@ func (b *bgSupervisor) dropNoticesFor(sessionID string) {
 	}
 }
 
+// PurgeSessionBookkeeping removes the bg/ bookkeeping files (pid + notice)
+// owned by a purged session. Supervisor purge deletes the session's records
+// but has no view into bg/; leaving the files there would orphan them forever
+// and let boot re-deliver notices for a session that no longer exists.
+// Errors are ignored (best-effort cleanup): a locked/unreadable file stays
+// for the next sweep instead of failing the purge.
+func (b *bgSupervisor) PurgeSessionBookkeeping(sessionID string) {
+	entries, err := os.ReadDir(b.bgDir())
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		path := filepath.Join(b.bgDir(), name)
+		switch {
+		case strings.HasSuffix(name, ".pid.json"):
+			var pf bgPidfile
+			raw, err := os.ReadFile(path)
+			if err != nil || json.Unmarshal(raw, &pf) != nil {
+				continue // unreadable: not ours to delete
+			}
+			if pf.SessionID == sessionID {
+				_ = os.Remove(path)
+			}
+		case strings.HasSuffix(name, ".notice.json"):
+			var n pendingNotice
+			raw, err := os.ReadFile(path)
+			if err != nil || json.Unmarshal(raw, &n) != nil {
+				continue // unreadable: not ours to delete
+			}
+			if n.SessionID == sessionID {
+				_ = os.Remove(path)
+			}
+		}
+	}
+}
+
 // loadNotices recovers unacknowledged notices after a restart (V2-003:
 // terminal metadata is retained on disk — never the already-deleted
 // pidfile). The original process is NOT re-run.
@@ -722,7 +766,9 @@ func (b *bgSupervisor) loadNotices() {
 		}
 		var n pendingNotice
 		if json.Unmarshal(raw, &n) != nil || n.JobID == "" {
-			_ = os.Remove(filepath.Join(b.bgDir(), e.Name()))
+			// An invalid/torn record stays on disk for operator inspection:
+			// deleting it would lose the completion notice with no trace.
+			trace("bg.notice.invalid", map[string]any{"file": e.Name()})
 			continue
 		}
 		if _, exists := b.notices[n.JobID]; !exists {

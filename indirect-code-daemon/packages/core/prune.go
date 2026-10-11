@@ -59,9 +59,11 @@ func PruneOldToolResults(msgs []provider.Message) []provider.Message {
 				continue
 			}
 
-			// Size of this tool result, counted with the same ruler
-			// as the rest of the context pipeline.
-			estimatedTokens := provider.ContextTokens("", nil, []provider.Message{m})
+			// Size of THIS tool result, counted with the same ruler as the
+			// rest of the context pipeline. Counting the whole message here
+			// would charge its k blocks k times and exhaust the protection
+			// budget k times too fast.
+			estimatedTokens := provider.ContextTokens("", nil, []provider.Message{{Role: provider.RoleTool, Content: []provider.Content{trb}}})
 
 			if isRecentTurn && recentToolTokens+estimatedTokens <= PruneProtectTokens {
 				recentToolTokens += estimatedTokens

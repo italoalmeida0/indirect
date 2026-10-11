@@ -80,7 +80,11 @@ func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		return core.ToolResult{}, fmt.Errorf("reason is required: describe in ≤100 chars what you are waiting for")
 	}
 	if len(reason) > 100 {
-		reason = reason[:100]
+		// Truncate by runes (like noticePreview): a byte cut can split a
+		// multibyte rune and ship invalid UTF-8 in the UI summary.
+		if r := []rune(reason); len(r) > 100 {
+			reason = string(r[:100])
+		}
 	}
 	wait := time.Duration(a.MaxWaitSeconds * float64(time.Second))
 	// Pinned-task shortcut: the wait is justified by a task that is still
