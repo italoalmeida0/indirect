@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // Storage migration chain for one SLOT dir (sessions + storage_version.json
@@ -78,6 +79,23 @@ func StoredVersion(slotDir string) (int, error) {
 	return doc.Version, nil
 }
 
+// hasSessionArtifacts reports whether the slot holds real session data
+// (any sessions/*.jsonl file). Used to tell a fresh slot (nothing to
+// convert → baseline stamp) from a legacy pre-versioning slot (data to
+// convert → run the chain from the assumed v1).
+func hasSessionArtifacts(slotDir string) bool {
+	entries, err := os.ReadDir(filepath.Join(slotDir, "sessions"))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+			return true
+		}
+	}
+	return false
+}
+
 func writeVersion(slotDir string, v int) error {
 	data, err := json.MarshalIndent(map[string]any{"version": v}, "", "  ")
 	if err != nil {
@@ -115,7 +133,11 @@ func MigrateDir(dir string) ([]int, error) {
 // bumping the stored version, so re-running resumes correctly.
 //
 // A fresh slot dir (no version file, no sessions) is stamped at
-// CurrentVersion with no conversions: baseline, not a migration.
+// CurrentVersion with no conversions: baseline, not a migration. A slot
+// with session artifacts but no version file is a LEGACY v1 slot (the
+// pre-versioning format): run the whole chain from the assumed v1 instead
+// of stamping a baseline — the conversions (bg sweep, tool_result
+// envelope, tool vocabulary) must still happen.
 func Migrate(slotDir string) ([]int, error) {
 	stored, err := StoredVersion(slotDir)
 	if err != nil {
@@ -125,11 +147,16 @@ func Migrate(slotDir string) ([]int, error) {
 		return nil, fmt.Errorf("storage v%d is newer than this launcher (v%d): update the launcher", stored, CurrentVersion)
 	}
 	if stored == 0 {
-		// Fresh slot: stamp the baseline, run nothing.
-		if err := writeVersion(slotDir, CurrentVersion); err != nil {
-			return nil, fmt.Errorf("baseline stamp: %w", err)
+		if !hasSessionArtifacts(slotDir) {
+			// Fresh slot: stamp the baseline, run nothing.
+			if err := writeVersion(slotDir, CurrentVersion); err != nil {
+				return nil, fmt.Errorf("baseline stamp: %w", err)
+			}
+			return []int{CurrentVersion}, nil
 		}
-		return []int{CurrentVersion}, nil
+		// Legacy v1 slot (sessions present, no version file): assume v1 and
+		// run the full chain instead of skipping every conversion.
+		stored = 1
 	}
 	var applied []int
 	for _, m := range ordered() {

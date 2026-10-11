@@ -3,7 +3,10 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -30,6 +33,15 @@ import (
 // the flushed prefix always replay to a consistent record.
 
 const walVersion = 1
+
+// errWALExists is returned by openWAL when a healthy WAL is already on
+// disk: a turn is (or was) in flight and must be resumed or discarded
+// first. Same condition as the O_EXCL "file exists" it replaces.
+var errWALExists = errors.New("wal already exists")
+
+// walAppendFault is a test seam for the WAL creation/append fsync failure
+// path (nil in production).
+var walAppendFault func() error
 
 // WAL event types. Small, append-only, replayed in order.
 const (
@@ -152,6 +164,8 @@ func (s *diskStore) ensureBrainDir(sessionID string) string {
 }
 
 // openWAL creates (or truncates) the WAL and writes the header line.
+// Every failure path cleans up the half-created file (close + remove):
+// a leftover WAL would look like a crashed turn and be resumed as one.
 func (s *diskStore) openWAL(sessionID string, h *walHeader) (*walWriter, error) {
 	if h.ExecutionScope == "" {
 		h.ExecutionScope = randomID8() + randomID8()
@@ -165,22 +179,30 @@ func (s *diskStore) openWAL(sessionID string, h *walHeader) (*walWriter, error) 
 	}
 	f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
+		if os.IsExist(err) {
+			return nil, fmt.Errorf("openWAL %s: %w", sessionID, errWALExists)
+		}
+		return nil, err
+	}
+	cleanup := func(err error) (*walWriter, error) {
+		f.Close()
+		_ = os.Remove(p) // every error path shares the cleanup
 		return nil, err
 	}
 	ww := &walWriter{file: f, w: bufio.NewWriterSize(f, 64*1024), path: p}
 	if err := ww.append(walEvent{V: walVersion, Type: walTypeHeader, Header: h}); err != nil {
-		f.Close()
-		_ = os.Remove(p)
-		return nil, err
+		return cleanup(err)
 	}
 	if err := ww.flush(); err != nil {
-		f.Close()
-		_ = os.Remove(p)
-		return nil, err
+		return cleanup(err)
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		return nil, err
+		return cleanup(err)
+	}
+	if walAppendFault != nil {
+		if err := walAppendFault(); err != nil {
+			return cleanup(err)
+		}
 	}
 	return ww, nil
 }
@@ -333,6 +355,7 @@ func replayWAL(base *SessionRecord, data []byte) (*SessionRecord, *walHeader, er
 // Never skip corrupt interior events or discard a valid prefix for a bad tail.
 func replayWALPrefix(base *SessionRecord, data []byte) (*SessionRecord, *walHeader, int, error) {
 	rec := base
+	seen := newMsgDedup(base) // identities of the frozen JSON, for replay dedup
 	var header *walHeader
 	lines := bytes.Split(data, []byte{'\n'})
 	last := len(lines) - 1
@@ -364,7 +387,7 @@ func replayWALPrefix(base *SessionRecord, data []byte) (*SessionRecord, *walHead
 			validEnd = offset
 			continue
 		}
-		if err := applyWALEvent(rec, &ev); err != nil {
+		if err := applyWALEvent(rec, &ev, seen); err != nil {
 			if i == last {
 				break
 			}
@@ -378,7 +401,7 @@ func replayWALPrefix(base *SessionRecord, data []byte) (*SessionRecord, *walHead
 	return rec, header, validEnd, nil
 }
 
-func applyWALEvent(rec *SessionRecord, ev *walEvent) error {
+func applyWALEvent(rec *SessionRecord, ev *walEvent, seen *msgDedup) error {
 	switch ev.Type {
 	case walTypeHeader:
 		return nil // identity only, already consumed
@@ -390,7 +413,16 @@ func applyWALEvent(rec *SessionRecord, ev *walEvent) error {
 		if err != nil {
 			return err
 		}
-		rec.Messages = append(rec.Messages, m)
+		// Commit-window crash duplicate: the turn line may already hold this
+		// message while the WAL was never removed. Replay must dedup by
+		// message identity (same rule as assembleRecord), never append blind.
+		if seen == nil {
+			rec.Messages = append(rec.Messages, m)
+		} else if at, known := seen.fold(m, len(rec.Messages)); known {
+			rec.Messages[at] = m // newest copy wins, original position
+		} else {
+			rec.Messages = append(rec.Messages, m)
+		}
 		if ev.UpdatedAt > 0 {
 			rec.UpdatedAt = ev.UpdatedAt
 		}
@@ -646,6 +678,78 @@ func (s *diskStore) commitWAL(id string, rec *SessionRecord, wal *walWriter) err
 	return nil
 }
 
+// msgFingerprint hashes the message content with the ID blanked, so the
+// same artifact persisted twice (even once with a synthetic legacy ID)
+// fingerprints identically.
+func msgFingerprint(m provider.Message) string {
+	cp := m
+	cp.ID = ""
+	data, err := json.Marshal(cp)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// msgDedup carries the identities already persisted (the frozen JSON) so
+// WAL replay can tell a duplicate (message already committed to a turn
+// line) from a fresh append of the turn in flight.
+type msgDedup struct {
+	baseIDs map[string]int // ID -> position in the frozen JSON
+	baseFPs map[string]int // content fingerprint -> position in the frozen JSON
+	walIDs  map[string]int // ID -> position of an earlier event of this replay
+}
+
+// newMsgDedup snapshots the base record's identities at replay start. The
+// frozen-JSON/WAL boundary is the assembleRecord "across lines" rule: a
+// message already on disk is a duplicate; identical ID-less messages
+// INSIDE the replay stream stay (they are one line's content).
+func newMsgDedup(base *SessionRecord) *msgDedup {
+	d := &msgDedup{
+		baseIDs: make(map[string]int, len(base.Messages)),
+		baseFPs: make(map[string]int, len(base.Messages)),
+		walIDs:  make(map[string]int),
+	}
+	for i := range base.Messages {
+		m := base.Messages[i]
+		if m.ID != "" {
+			d.baseIDs[m.ID] = i
+		}
+		if fp := msgFingerprint(m); fp != "" {
+			d.baseFPs[fp] = i
+		}
+	}
+	return d
+}
+
+// fold reports the position of an already-persisted copy of m — the same
+// identity rule as assembleRecord: by ID (newest copy wins, ORIGINAL
+// position kept), and for ID-less messages by content fingerprint against
+// the frozen JSON only (the cross-line legacy-duplicate rule; identical
+// ID-less messages inside one replay stream stay). ok is false for a fresh
+// message: it lands at pos and is remembered for the following events.
+func (d *msgDedup) fold(m provider.Message, pos int) (at int, ok bool) {
+	if m.ID != "" {
+		if p, seen := d.baseIDs[m.ID]; seen {
+			return p, true
+		}
+		if p, seen := d.walIDs[m.ID]; seen {
+			return p, true
+		}
+		d.walIDs[m.ID] = pos
+		return pos, false
+	}
+	fp := msgFingerprint(m)
+	if fp == "" {
+		return pos, false
+	}
+	if p, seen := d.baseFPs[fp]; seen {
+		return p, true
+	}
+	return pos, false
+}
+
 // turnLineMatches reports whether the turn line already on disk holds
 // exactly the given messages (same count AND same serialized content).
 // Comparing content, not just the count, keeps the commit fast path from
@@ -669,21 +773,22 @@ func turnLineMatches(tl turnLine, msgs []provider.Message) bool {
 
 // sliceTurnMessages extracts one turn's messages with the shared
 // turnGroups zero-index attachment rules (splitRecord's own grouping):
-// zero-index messages attach to the FOLLOWING turn, trailing zeros to
-// the last turn. Every message belongs to exactly one turn line, so a
+// zero-index messages attach to the FOLLOWING turn, trailing zeros to the
+// last turn. Every message belongs to exactly one turn line, so a
 // zero-index notice between turns is never written into two lines.
+// Non-adjacent runs of the same turn index (T1,T2,T1) belong to one turn
+// line: accumulate EVERY matching group, not just the first.
 func sliceTurnMessages(msgs []provider.Message, turnIdx int) []provider.Message {
+	var out []provider.Message
 	for _, g := range turnGroups(msgs) {
 		if g.turn != turnIdx {
 			continue
 		}
-		out := make([]provider.Message, 0, len(g.idx))
 		for _, i := range g.idx {
 			out = append(out, msgs[i])
 		}
-		return out
 	}
-	return nil
+	return out
 }
 
 // recordMeta projects a record onto its meta line.
@@ -712,6 +817,49 @@ func closeWAL(wal **walWriter) {
 		_ = (*wal).close()
 		*wal = nil
 	}
+}
+
+// removeStaleWAL deletes the session's WAL when it cannot hold a turn worth
+// resuming (no header, zero/older turn index, or interior corruption that
+// openWALAppend cannot repair) and reports whether a file was actually
+// removed. A healthy WAL for the current turn — including one with only a
+// torn tail write (repairable) — is kept (probe handle closed). Restore-time
+// cleanup for the turnResumeCandidate nil-return branches: a WAL may never
+// survive idle ("idle = the JSON alone"), and a dead one would otherwise be
+// replayed into every read and block the next openWAL (file exists).
+func (s *diskStore) removeStaleWAL(id string, rec *SessionRecord) bool {
+	p := s.walPath(id)
+	if p == "" {
+		return false
+	}
+	if _, err := os.Stat(p); err != nil {
+		return false // no WAL: nothing to remove
+	}
+	dead := false
+	header, err := s.readWALHeader(id)
+	switch {
+	case err != nil || header == nil:
+		dead = true // unreadable or no header line
+	case header.TurnIndex <= 0:
+		dead = true
+	case rec != nil && header.TurnIndex < rec.TurnSeq:
+		dead = true // turn already committed: dead events
+	}
+	if !dead {
+		w, werr := s.openWALAppend(id)
+		if werr != nil {
+			dead = true // interior corruption: fail-closed, never resumable
+		} else {
+			_ = w.close()
+		}
+	}
+	if !dead {
+		return false
+	}
+	if err := os.Remove(p); err != nil {
+		return false
+	}
+	return true
 }
 
 // saveSessionSync writes the record atomically (tmp + rename + fsync)

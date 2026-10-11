@@ -75,7 +75,8 @@ func (s *diskStore) loadSession(id string) (*SessionRecord, error) {
 
 // loadSessionFused loads the frozen JSON and, when a WAL exists, replays
 // it on top. The read path during a running turn: always current, never a
-// mid-turn rewrite.
+// mid-turn rewrite. A corrupt WAL fails the load closed (no silent empty
+// session); stale/removed WALs just load the JSON alone.
 func (s *diskStore) loadSessionFused(id string) (*SessionRecord, *walHeader, error) {
 	rec, err := s.loadSession(id)
 	if err != nil {

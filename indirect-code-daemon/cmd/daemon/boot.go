@@ -147,8 +147,10 @@ func bootMain() {
 	// 4. Run the daemon with --data-dir pointing AT THE SLOT (canonical:
 	// dataDir = <root>/slots/slot-x; sessions/config/pid are slot-local).
 	// Update restarts are driven by the brutal protocol (app --update
-	// spawns --update-end detached) — no exit-code protocol. Unexpected exits restart with
-	// backoff a few times (crash resilience), then give up.
+	// spawns --update-end detached) — no exit-code protocol. Unexpected
+	// exits — including clean ones — restart with backoff a few times
+	// (crash resilience), then give up. Only an explicit stop (--stop /
+	// update handoff) ends supervision without a respawn.
 	daemonDataDir := slotDir
 	if daemonDataDir == "" {
 		daemonDataDir = rootDir // explicit -daemon override: run wherever told
@@ -156,31 +158,72 @@ func bootMain() {
 	if activeSlot != "" {
 		daemonArgs = append([]string{"--slot", activeSlot}, daemonArgs...)
 	}
-	crashes := 0
 	fmt.Println("Ready — listening for turns.")
+	os.Exit(superviseWorkerLoop(daemonPath, daemonDataDir, daemonArgs))
+}
+
+// superviseCrashBudget is how many unrequested worker exits the boot loop
+// respawns before giving up (reset after 10 minutes of healthy runtime).
+var superviseCrashBudget = 3
+
+// superviseBackoff is the per-attempt restart delay multiplier (attempt N
+// waits N × backoff). A var for tests.
+var superviseBackoff = 5 * time.Second
+
+// execDaemonFn is the child-launch seam for tests.
+var execDaemonFn = execDaemon
+
+// bootNextAction classifies one child exit for the supervision loop:
+// "stop" only for an explicit stop request or an update handoff; EVERY other
+// exit — clean or not — is a crash that must consume a respawn attempt.
+// Crash-only design: a worker exiting 0 without being asked is still a crash
+// (the daemon has no unrequested clean-exit path), and letting it end the
+// boot would put the machine offline until relaunched.
+func bootNextAction(code int, err error, dataDir string) string {
+	if errors.Is(err, errUpdateHandoff) {
+		return "stop"
+	}
+	if stopRequested(dataDir) {
+		return "stop"
+	}
+	return "restart"
+}
+
+// stopRequested reports (and clears) an explicit --stop request marker.
+func stopRequested(dataDir string) bool {
+	stopReq := filepath.Join(dataDir, "stop.req")
+	if _, serr := os.Stat(stopReq); serr != nil {
+		return false
+	}
+	_ = os.Remove(stopReq)
+	return true
+}
+
+// superviseWorkerLoop runs the worker and supervises it: unexpected exits
+// (including clean ones) restart with backoff a few times, then give up.
+// Returns the exit code for the boot process (intentional stop → the child's
+// code; give-up → 1).
+func superviseWorkerLoop(daemonPath, daemonDataDir string, daemonArgs []string) int {
+	crashes := 0
 	for {
 		started := time.Now()
-		code, err := execDaemon(daemonPath, daemonDataDir, daemonArgs)
+		code, err := execDaemonFn(daemonPath, daemonDataDir, daemonArgs)
 		if time.Since(started) >= 10*time.Minute {
 			crashes = 0
 		}
-		if errors.Is(err, errUpdateHandoff) {
-			return
-		}
-		if err == nil {
-			os.Exit(code)
-		}
-		stopReq := filepath.Join(daemonDataDir, "stop.req")
-		if _, serr := os.Stat(stopReq); serr == nil {
-			_ = os.Remove(stopReq)
-			os.Exit(code)
+		if bootNextAction(code, err, daemonDataDir) == "stop" {
+			return code
 		}
 		crashes++
-		if crashes > 3 {
-			fail("daemon keeps exiting (last exit %d: %v)", code, err)
+		if crashes > superviseCrashBudget {
+			// Same reporting the old inline fail() did, then give up.
+			fmt.Println("FAILED")
+			fmt.Printf("Error: daemon keeps exiting (last exit %d: %v)\n", code, err)
+			fmt.Printf("See %s for details.\n", filepath.Join(newDiskStore(daemonDataDir).rootDir(), "logs", "daemon.log"))
+			return 1
 		}
-		wait := time.Duration(crashes) * 5 * time.Second
-		fmt.Printf("Warning: daemon exited %d (%v) — restarting in %v (attempt %d/3) ...\n", code, err, wait, crashes)
+		wait := time.Duration(crashes) * superviseBackoff
+		fmt.Printf("Warning: daemon exited %d (%v) — restarting in %v (attempt %d/%d) ...\n", code, err, wait, crashes, superviseCrashBudget)
 		time.Sleep(wait)
 	}
 }
