@@ -229,7 +229,13 @@ func (a *sessionActor) onQueueSendNow(m queueSendNowMsg) {
 		head := a.rec.Queue[0]
 		a.rec.Queue = a.rec.Queue[1:]
 		if err := a.startTurn(head.Text, head.AttachmentIDs, head.Model, head.YOLO, nil); err != nil {
+			// Failed start (e.g. a transient persist error): the item
+			// falls back into the queue — but the send-now INTENT must
+			// survive, like the running branch below. Without the flag a
+			// failed start demotes the item to plain queue order and a
+			// cancelled turn would never promote it.
 			a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
+			a.sendNow = true
 		}
 		return
 	}

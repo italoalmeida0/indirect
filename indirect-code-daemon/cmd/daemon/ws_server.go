@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -542,10 +543,11 @@ func (s *wsServer) handleRaw(raw []byte) {
 			SessionID     string   `json:"sessionId"`
 			Text          string   `json:"text"`
 			Model         string   `json:"model"`
+			YOLO          bool     `json:"yolo"`
 			AttachmentIDs []string `json:"attachmentIds"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "add", Text: req.Text, Model: req.Model, AttachmentIDs: req.AttachmentIDs})
+		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "add", Text: req.Text, Model: req.Model, YOLO: req.YOLO, AttachmentIDs: req.AttachmentIDs})
 	case "queue_remove":
 		var req struct {
 			SessionID string `json:"sessionId"`
@@ -554,14 +556,26 @@ func (s *wsServer) handleRaw(raw []byte) {
 		_ = json.Unmarshal(raw, &req)
 		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "remove", ID: req.QueueID})
 	case "queue_update":
+		// attachmentIds contract (queue_update): omitted or null = the
+		// item's attachments are UNCHANGED; [] clears them; [ids] replaces
+		// them. The full-item form (a list, even empty) also applies `text`
+		// ("" clears it); the partial form (no list) applies `text` only
+		// when non-empty. A text-only edit MUST omit the field — sending
+		// the draft's shorter list would silently drop the attachments the
+		// draft never loaded. The pointer keeps omitted distinct from [].
 		var req struct {
-			SessionID     string   `json:"sessionId"`
-			QueueID       string   `json:"queueId"`
-			Text          string   `json:"text"`
-			AttachmentIDs []string `json:"attachmentIds"`
+			SessionID     string    `json:"sessionId"`
+			QueueID       string    `json:"queueId"`
+			Text          string    `json:"text"`
+			YOLO          bool      `json:"yolo"`
+			AttachmentIDs *[]string `json:"attachmentIds"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "update", ID: req.QueueID, Text: req.Text, AttachmentIDs: req.AttachmentIDs})
+		var ids []string
+		if req.AttachmentIDs != nil {
+			ids = *req.AttachmentIDs
+		}
+		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "update", ID: req.QueueID, Text: req.Text, YOLO: req.YOLO, AttachmentIDs: ids})
 	case "queue_send_now":
 		var req struct {
 			SessionID string `json:"sessionId"`
@@ -720,9 +734,40 @@ func (s *wsServer) handleRaw(raw []byte) {
 
 	case "bg_cancel":
 		var req struct {
-			JobID string `json:"jobId"`
+			JobID     string `json:"jobId"`
+			SessionID string `json:"sessionId"`
 		}
 		_ = json.Unmarshal(raw, &req)
+		// Ownership check (dashboard parity with the model path's
+		// bgSupervisor.cancelJob): a frame may only cancel a job of the
+		// session it names. The job's owner comes from the supervisor via
+		// bgQueryMsg before anything is cancelled. Unowned/unknown jobs and
+		// session-less frames are refused (fail closed).
+		if req.SessionID == "" {
+			s.error("", "", "bg_cancel: sessionId is required")
+			return
+		}
+		owner, found := "", false
+		qreply := make(chan any, 1)
+		select {
+		case s.bg.inbox <- Envelope{Payload: bgQueryMsg{JobID: req.JobID, Reply: qreply}}:
+		case <-time.After(replyTimeout):
+			s.error(req.SessionID, "", "bg supervisor unreachable")
+			return
+		}
+		select {
+		case r := <-qreply:
+			if q, ok := r.(bgQueryResult); ok && q.Found {
+				owner, found = q.Owner, true
+			}
+		case <-time.After(replyTimeout):
+			s.error(req.SessionID, "", "bg supervisor unreachable")
+			return
+		}
+		if !found || req.SessionID == "" || owner != req.SessionID {
+			s.error(req.SessionID, "", fmt.Sprintf("bg_cancel: no background task %q in this session", req.JobID))
+			return
+		}
 		creply := make(chan any, 1)
 		select {
 		case s.bg.inbox <- Envelope{Payload: bgCancelMsg{JobID: req.JobID, By: "user", Reply: creply}}:

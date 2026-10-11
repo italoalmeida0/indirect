@@ -12,6 +12,10 @@ import (
 // instead of being refused. When a turn completes normally, the queue head
 // is promoted to a new turn automatically. A cancelled turn never drains
 // the queue. Queue items persist in the session file like everything else.
+//
+// Editing an item ("update", see queueOpMsg) distinguishes "attachments
+// unchanged" (the wire omits attachmentIds) from "replace with []" — an
+// item's attachments survive a text-only edit.
 
 const maxQueueItems = 30
 

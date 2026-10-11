@@ -30,10 +30,20 @@ type userPromptMsg struct {
 
 // queueOpMsg mutates the waiting queue. Served only when it cannot disturb
 // a running turn.
+//
+// "update" contract (attachmentIds + text): AttachmentIDs == nil means
+// "attachments UNCHANGED" (partial update); non-nil is a FULL-ITEM update —
+// the list replaces the item's attachments ([] clears them) and Text is
+// applied along with it ("" clears the item's text). With AttachmentIDs ==
+// nil, Text is applied only when non-empty ("" = "no change"). So: a
+// text-only edit omits AttachmentIDs and sends a non-empty Text; clearing
+// the text resends the full attachment list ([] when the item has none).
+// A tri-state YOLO for "update" would need the same pointer discipline: a
+// defaulted bool must never clobber the stored flag.
 type queueOpMsg struct {
 	Op            string // "add" | "remove" | "reorder" | "clear"
 	Text          string
-	AttachmentIDs []string
+	AttachmentIDs []string // nil = no change (update); see contract above
 	Model         string
 	YOLO          bool
 	ID            string   // remove
