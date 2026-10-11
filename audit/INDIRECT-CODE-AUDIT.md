@@ -1993,6 +1993,66 @@ acompanha a fila de 128 e cada append drenado toca progress antes do gate de
 gen). Esfomear exigiria ingresso sustentado >64 msgs/ciclo de drain por 30s —
 inalcançável só com workers zumbi. **Refutado end-to-end.**
 
+### Bugs 79-81 — Hipóteses web finais CONFIRMADAS (TestWebFinal)
+**#79 — Corrida de `fetchSession` congela o transcript na perna de sid stale `[!]`**
+— `order.ts:22-26` + `useTranscript.ts:519-521`. Gap event → resync `fetchSession`
+(id A); `fetchSession` concorrente na janela de resposta sobrescreve
+`transcriptRequestId` (id B); resposta A descartada pelo
+`noteSessionDataRequestGuard` → `waiting` nunca limpa, **nenhum** follow-up
+`get_session` é emitido (`request()` suprimido por `if (waiting) return`) —
+eventos seguintes ficam bufferizados para sempre. Caveat: se o fetch concorrente
+for da mesma sessão, a resposta dele cura via `snapshot()`; o **freeze permanente**
+é a perna de sid stale (`useComposer.ts:341` com sid capturado no send, host/
+sessão trocados no meio) — probe #1b: eventos congelados, zero resyncs.
+**Médio-alta** (transcript trava em corrida de send × switch).
+
+**#80 — `questionSubmitting` trava no re-show same-id após falha `[!]`**
+— `useTranscript.ts:1234-1238` + `:117-118`. `answerQuestion` → erro com id
+divergente → `questionSubmitting` fica `true` → próximo `answerQuestion`
+recusado (linha 143) = modal preso. Sub-claim "id muda via snapshot" **refutado**
+(`showQuestion` reseta em qualquer mudança de id). Mas o alcance real: o re-show
+do **mesmo** id após uma falha de submit cai no early-return da linha 118 que
+**mantém** `questionSubmitting=true` — retry bloqueado. Nota: o daemon atual
+nunca emite `question_error` (falha de validação vira `{type:"error"}` com
+pending mantido, session_actor.go:1053-1055) — então o alcance é via o campo
+`questionError` local. **Médio** (modal preso após erro de submit).
+
+**#81 — Replay de approval/question ressuscita card morto `[!]`**
+— `IndirectCodePage.tsx:950-967` + `useTranscript.ts:1177-1187`.
+`noteApprovalRequest`/`showQuestion` são despachados **sem** tratamento de cursor
+(diferente de `handleStatusEvent`/`handleAgentEvent`). Replay de
+`tool_approval_request` após `approval_resolved` ressuscita `pendingApproval`
+com o callId morto; a resposta do usuário cai no branch stale do
+`onApprovalResponse` (session_actor.go:1008-1017) que trace e **não emite nada**
+— resposta silenciosamente descartada. Mesmo bypass para `question_request`. O
+daemon estampa cursor só em agent_event/session_data/session_content/
+session_compacted/session_truncated/session_status (transcript_identity.go:55-63)
+— estes request events andam no wire desordenados. **Médio** (card morto na tela
++ resposta perdida em replay).
+
+### Bugs 82-85 (refutados/parciais) — hipóteses web finais `[-]`
+- **#82 useComposer draft clobber** — **refutado**: o restore só sobrescreve
+  quando sid/host mudam, e todo keystroke passa por `setInputPrompt` que
+  sincroniza `currentSid`/`currentHost` primeiro — texto digitado nunca fica
+  atrás de sid stale. Host-switch limpa a caixa por comportamento explícito.
+- **#83 useMirror leak** — **refutado**: `storeFor` é cacheado no Map de stores
+  (A→B→A retorna o **mesmo** objeto); probe contou construções de
+  IndexedDB/SyncManager: **zero** novas por re-switch. Ciclo de vida correto.
+- **#84 preserveReadingPosition overshoot** — **refutado como enunciado**: o
+  frame de apply mede rects frescos e aplica correção **relativa**
+  (`scrollTop += node.top - elRectTop - anchor.offset`), scrollHeight não entra
+  no delta → crescimento entre capture e apply não overshoots (probe: offset
+  preservado exato com +200px). **Sub-claim CONFIRMADO**: o fallback
+  `scrollTop = top` (linha 36) restaura o valor pré-capture verbatim → o view
+  deriva pelo crescimento quando o node da âncora sumiu. Baixo.
+- **#85 worker `previous` + carrier collision** — **parcial**: o worker path
+  sempre normaliza com `previous=[]` (sync passa `messages()`) → identidade
+  diverge entre caminhos (msg_<srcIdx> vs id preservado — folds/drafts keyed por
+  id divergem). Mas a colisão de `tools_${wire.id}` é **inatingível** no daemon
+  atual (IDs aleatórios `provider.NewMessageID`; rows legadas ganham
+  `legacy_<sha>` únicos; store dedupe por ID). **Baixo** (divergência de
+  identidade worker vs sync).
+
 ---
 
 ## 4. Áreas validadas (por tópico)
