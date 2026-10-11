@@ -676,9 +676,15 @@ judged:
 				trace("watchdog.quarantine", map[string]any{"sid": id, "rounds": ent.staleRounds})
 				fmt.Printf("[WARN] watchdog: session %s stuck %d rounds, quarantining\n", id, ent.staleRounds)
 			}
+			// The control lane carries cancellation (V2-006): an admitted
+			// cancel is NEVER silently dropped — same contract as the ws
+			// cancel path. Wait for room (bounded); on timeout keep the
+			// escalation honest with a visible trace.
 			select {
 			case ent.handle.control <- cancelTurnMsg{Reason: reason}:
-			default:
+			case <-time.After(replyTimeout):
+				trace("watchdog.cancel_dropped", map[string]any{"sid": id, "reason": reason, "rounds": ent.staleRounds})
+				fmt.Printf("[WARN] watchdog: cancel for session %s dropped (control lane full)\n", id)
 			}
 		}
 	}
@@ -729,9 +735,15 @@ func turnResumeCandidate(rec *SessionRecord, st *diskStore, id string) (*walHead
 	}
 	header, herr := st.readWALHeader(id)
 	if herr != nil || header == nil || header.TurnIndex <= 0 {
+		// Unreadable/invalid WAL can never be resumed: remove it now
+		// (Bug 12) — leaving it replays dead events on every load and
+		// pins the session in "running" with no resume path.
+		st.removeStaleWAL(id, rec)
 		return nil, nil
 	}
 	if rec.TurnSeq > header.TurnIndex {
+		// WAL of an already-committed turn: dead events, never resumable.
+		st.removeStaleWAL(id, rec)
 		return nil, nil
 	}
 	if rec.TurnSeq == header.TurnIndex && rec.Turn != nil &&
@@ -758,6 +770,9 @@ func turnResumeCandidate(rec *SessionRecord, st *diskStore, id string) (*walHead
 	}
 	ww, werr := st.openWALAppend(id)
 	if werr != nil {
+		// Interior corruption is fail-closed: never resumable, so the WAL
+		// must not linger (every load would replay dead events).
+		st.removeStaleWAL(id, rec)
 		return nil, nil
 	}
 	return header, ww
@@ -889,6 +904,12 @@ func (s *sessionSupervisor) purge(id string) error {
 				return err
 			}
 		}
+	}
+	// The purged session's background bookkeeping dies with it (Bug 20):
+	// bg/<job>.pid.json and bg/<job>.notice.json would otherwise leak as
+	// orphan files and get re-delivered to a session that no longer exists.
+	if s.bg != nil {
+		s.bg.PurgeSessionBookkeeping(id)
 	}
 	s.mu.Lock()
 	delete(s.resident, id)

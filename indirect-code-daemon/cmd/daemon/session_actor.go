@@ -864,21 +864,11 @@ func (a *sessionActor) finishTurn(ok bool) {
 	a.emit(map[string]any{"type": "session_data", "hostId": hostID, "session": snapshot})
 	a.emit(map[string]any{"type": "session_status", "hostId": hostID, "sessionId": a.id, "status": "idle"})
 	a.emit(map[string]any{"type": "turn_finished", "sessionId": a.id, "ok": ok})
-	// Promote queue head (only the finalizer promotes): a normally
-	// completed turn promotes the head; a cancelled turn promotes only
-	// when flagged send-now (queue_send_now semantics).
-	if !a.closing && len(a.rec.Queue) > 0 && (ok || a.sendNow) {
-		head := a.rec.Queue[0]
-		a.rec.Queue = a.rec.Queue[1:]
-		a.sendNow = false
-		if err := a.startTurn(head.Text, head.AttachmentIDs, head.Model, head.YOLO, nil); err != nil {
-			a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
-		}
-	} else {
-		a.sendNow = false
-	}
-	// discard&resend-family stash: the user OP is applied here (the single
-	// running→idle transition) — never mid-turn, never lost.
+	// discard&resend-family stash: the user OP is applied FIRST (the single
+	// running→idle transition) — it is the user's latest intent and decides
+	// the next turn. Applied before queue promotion: promoting first would
+	// run the stash's destructive cut against the freshly promoted turn and
+	// then lose the edit (the seeded start fails "session is busy").
 	if op := a.pendingResend; op != nil {
 		a.pendingResend = nil
 		switch op.kind {
@@ -888,12 +878,36 @@ func (a *sessionActor) finishTurn(ok bool) {
 			a.applyForkAndResend(op.fork)
 		}
 	}
+	// Promote queue head (only the finalizer promotes): a normally
+	// completed turn promotes the head; a cancelled turn promotes only
+	// when flagged send-now (queue_send_now semantics). Only while the
+	// session is still free: a stash that just started its own turn owns
+	// the session (promoting now would fail busy and lose sendNow).
+	if !a.closing && a.state == stateIdle && len(a.rec.Queue) > 0 && (ok || a.sendNow) {
+		head := a.rec.Queue[0]
+		a.rec.Queue = a.rec.Queue[1:]
+		a.sendNow = false
+		if err := a.startTurn(head.Text, head.AttachmentIDs, head.Model, head.YOLO, nil); err != nil {
+			a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
+		}
+	} else {
+		a.sendNow = false
+	}
 }
 
 func (a *sessionActor) doCancel(reason string) {
 	trace("actor.cancel", map[string]any{"sid": a.id, "reason": reason, "state": a.state, "gen": a.gen})
 	a.waitOp, a.waitUntil = "", 0 // cancellation ends any declared wait
 	if a.state == stateIdle || a.state == statePersist {
+		return
+	}
+	if a.state == stateOrphaned {
+		// Quarantined: the stuck worker is fenced (gen bump) and its
+		// workerFinishedMsg is gen-dropped, so nothing will ever call
+		// finishTurn. Finalize here (turn cancelled → idle): entering
+		// stateCancel would wedge the session in "cancelling" forever and
+		// silently lose the admitted cancel (V2-006).
+		a.finishTurn(false)
 		return
 	}
 	// F3: cancelling escalation. Each watchdog cancel bumps cancelRounds;
@@ -2227,6 +2241,11 @@ func (a *sessionActor) quarantine() {
 		a.cancel()
 		a.cancel = nil
 	}
+	// The worker is fenced below (gen bump): its workerFinishedMsg is
+	// gen-dropped, so nothing will ever consume workerDone. Zero it so a
+	// later doCancel cannot mistake the dead channel for a live worker
+	// and park the session in stateCancel forever.
+	a.workerDone = nil
 	rounds := a.cancelRounds
 	a.gen++ // Fence any subsequent data or emits from the stuck worker.
 	a.cancelRounds = 0
