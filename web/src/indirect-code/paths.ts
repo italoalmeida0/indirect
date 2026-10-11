@@ -87,11 +87,32 @@ export function absoluteRemotePath(path: string, cwd: string, home = ""): string
   return /^[a-z]:[\\/]/i.test(cwd) || cwd.startsWith("\\\\") ? value.replace(/\//g, "\\") : value;
 }
 
-export function projectsByActivity<T extends {id:string; path:string; createdAt:number}>(projects:T[], sessions:{cwd:string; updatedAt:number}[]): T[] {
+/** Recency stamp for session ordering and the sidebar time label: the
+ * start time of the session's most recent turn. Sessions that never ran a
+ * turn fall back to updatedAt. */
+export function sessionRecency(s: {lastTurnStartedAt?: number; updatedAt: number}): number {
+  return s.lastTurnStartedAt && s.lastTurnStartedAt > 0 ? s.lastTurnStartedAt : s.updatedAt;
+}
+
+/** Projects ordered by activity: each project ranks by the newest turn
+ * start among its 10 most recent sessions (newest first), falling back to
+ * creation date when it has no sessions. */
+export function projectsByActivity<T extends {id:string; path:string; createdAt:number}>(projects:T[], sessions:{cwd:string; updatedAt:number; lastTurnStartedAt?:number}[]): T[] {
   const activity = new Map(projects.map((p) => [p.id, p.createdAt]));
+  const byProject = new Map<string, {updatedAt:number; lastTurnStartedAt?:number}[]>();
   for (const session of sessions) {
     const project = projectForDirectory(session.cwd, projects);
-    if (project) activity.set(project.id, Math.max(activity.get(project.id) || 0, session.updatedAt));
+    if (!project) continue;
+    const list = byProject.get(project.id) ?? [];
+    list.push(session);
+    byProject.set(project.id, list);
+  }
+  for (const [id, list] of byProject) {
+    // Only the 10 most recent sessions of the project count for its rank.
+    list.sort((a, b) => sessionRecency(b) - sessionRecency(a));
+    let rank = 0;
+    for (const s of list.slice(0, 10)) rank = Math.max(rank, sessionRecency(s));
+    activity.set(id, Math.max(activity.get(id) || 0, rank));
   }
   return [...projects].sort((a,b) => (activity.get(b.id) || 0) - (activity.get(a.id) || 0) || a.id.localeCompare(b.id));
 }

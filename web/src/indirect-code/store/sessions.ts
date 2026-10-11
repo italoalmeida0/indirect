@@ -29,6 +29,9 @@ export interface RcSession {
   pinned: boolean;
   createdAt: number;
   updatedAt: number;
+  /** Start time of the most recent turn (sidebar recency); 0/absent on
+   * sessions that never ran a turn — callers fall back to updatedAt. */
+  lastTurnStartedAt?: number;
   todosOpen?: boolean;
   options?: { effort: string; mode: string; skills: string[]; access: string };
 }
@@ -132,6 +135,7 @@ export function createDataLayer(opts: {
       // now instead of rendering "20706d" via timeAgo.
       createdAt: typeof r.createdAt === "number" && r.createdAt > 0 ? r.createdAt : Date.now(),
       updatedAt: typeof r.updatedAt === "number" && r.updatedAt > 0 ? r.updatedAt : Date.now(),
+      lastTurnStartedAt: typeof r.lastTurnStartedAt === "number" && r.lastTurnStartedAt > 0 ? r.lastTurnStartedAt : undefined,
       todosOpen: typeof r.todosOpen === "boolean" ? r.todosOpen : undefined,
       options: r.options ? {
         effort: r.options.effort || "medium",

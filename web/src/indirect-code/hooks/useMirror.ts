@@ -1,7 +1,7 @@
 import { createMemo, onCleanup } from "solid-js";
 import { createDataLayer } from "../store/sessions";
 import type { DaemonCommand } from "../daemon-protocol";
-import { projectsByActivity } from "../paths";
+import { projectsByActivity, sessionRecency } from "../paths";
 import type { Project, SessionSummary } from "../types";
 
 /** SignalDB mirror (sessions/projects/config per host). The page never
@@ -24,7 +24,7 @@ export function createMirror(opts: {
   const sessions = createMemo<SessionSummary[]>(() => {
     const st = store();
     return st ? st.sessions.find({ hostId: opts.getHostId() }).fetch().slice()
-      .sort((a, b) => b.updatedAt - a.updatedAt) : [];
+      .sort((a, b) => sessionRecency(b) - sessionRecency(a)) : [];
   }, [], { equals: (a, b) => JSON.stringify(a) === JSON.stringify(b) });
   const projects = createMemo<Project[]>(() => {
     const st = store();

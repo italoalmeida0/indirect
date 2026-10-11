@@ -9,7 +9,7 @@ import {
   sanitizeUserText,
   stripLeadingSystemPrompt,
 } from "../web/src/indirect-code/live";
-import { absoluteRemotePath, collapseCwd, projectForDirectory, projectsByActivity, sameRemotePath } from "../web/src/indirect-code/paths";
+import { absoluteRemotePath, collapseCwd, projectForDirectory, projectsByActivity, sameRemotePath, sessionRecency } from "../web/src/indirect-code/paths";
 import {
   blockTurnDuration, buildRenderBlocks, createRenderBlockBuilder, cacheHitPct, fmtUsd, isHeaderOnlySleep, isTurnStartMessage, latestShortTurnMessage, mapBalloonsToBlocks, terminalPresentation, toolSummary, usageCosts,
 } from "../web/src/indirect-code/transcript";
@@ -71,6 +71,31 @@ test("orders projects by their own conversations' most recent activity", () => {
   const projects = [{id:"home",path:"/home",createdAt:1},{id:"first",path:"/home/first",createdAt:10},{id:"second",path:"/home/second",createdAt:20}];
   const ordered = projectsByActivity(projects,[{cwd:"/home/first",updatedAt:300},{cwd:"/home/second",updatedAt:100}]);
   expect(ordered.map((p) => p.id)).toEqual(["first","second","home"]);
+});
+
+test("ranks sessions and projects by the start of the last turn", () => {
+  // updatedAt churns on every event; only the last turn's start counts.
+  expect(sessionRecency({updatedAt: 500})).toBe(500);
+  expect(sessionRecency({updatedAt: 500, lastTurnStartedAt: 0})).toBe(500);
+  expect(sessionRecency({updatedAt: 500, lastTurnStartedAt: 120})).toBe(120);
+  const projects = [{id:"old",path:"/old",createdAt:1},{id:"fresh",path:"/fresh",createdAt:1}];
+  const sessions = [
+    {cwd:"/old", updatedAt: 900, lastTurnStartedAt: 400},
+    {cwd:"/fresh", updatedAt: 300, lastTurnStartedAt: 500},
+  ];
+  expect(projectsByActivity(projects, sessions).map((p) => p.id)).toEqual(["fresh","old"]);
+});
+
+test("ranks a project by the newest turn start among its recent sessions", () => {
+  const projects = [{id:"many",path:"/many",createdAt:1},{id:"one",path:"/one",createdAt:1}];
+  const sessions: {cwd:string; updatedAt:number; lastTurnStartedAt?:number}[] = [
+    // A churned updatedAt (huge) with an old turn start must not lift the
+    // project: rank comes from the newest turn start of its recent sessions.
+    ...Array.from({length: 10}, (_, i) => ({cwd:"/many", updatedAt: 1000 - i, lastTurnStartedAt: 100 + i})),
+    {cwd:"/many", updatedAt: 99999, lastTurnStartedAt: 5},
+    {cwd:"/one", updatedAt: 300, lastTurnStartedAt: 300},
+  ];
+  expect(projectsByActivity(projects, sessions).map((p) => p.id)).toEqual(["one","many"]);
 });
 
 test("groups a whole tool turn into one aggregate with ordered entries", () => {

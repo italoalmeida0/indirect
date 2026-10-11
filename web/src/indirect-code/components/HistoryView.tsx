@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { timeAgo } from "../utils/format";
+import { sessionRecency } from "../paths";
 import type { SessionSummary } from "../types";
 import type { SearchHit } from "../viewTypes";
 
@@ -100,7 +101,7 @@ export function HistoryView(props: HistoryViewProps) {
               >
                 <div class="flex items-center justify-between gap-3">
                   <span class="text-[13px] text-ink-200 truncate font-medium">{s.title}</span>
-                  <span class="text-[11px] text-ink-600 shrink-0">{timeAgo(s.updatedAt)}</span>
+                  <span class="text-[11px] text-ink-600 shrink-0">{timeAgo(sessionRecency(s))}</span>
                 </div>
                 <div class="flex items-center gap-1.5 mt-0.5 text-[11px] text-ink-500">
                   <Iconify icon="lucide:folder" size={11} />
