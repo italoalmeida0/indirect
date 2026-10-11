@@ -26,6 +26,24 @@ export function closeDaemonSocket(hostId: string): void {
   }
 }
 
+/**
+ * Repair path (re-pair): drop the socket WITHOUT the remote-kill frames.
+ * The host row is not deleted — the token was rotated on purpose so the
+ * daemon keeps serving and its reconnect loop re-handshakes with the new
+ * token. The "shutdown" frame of closeDaemonSocket would make a live
+ * daemon self-terminate (it reads the frame as "host deleted") instead of
+ * redialing, killing in-flight turns over a repair that must be seamless.
+ */
+export function disconnectDaemonSocket(hostId: string): void {
+  const ws = daemons.get(hostId);
+  if (ws) {
+    try {
+      ws.close(1000, "host_repaired");
+    } catch {}
+    daemons.delete(hostId);
+  }
+}
+
 export function isHostOnline(hostId: string): boolean {
   return daemons.has(hostId);
 }
@@ -278,6 +296,24 @@ function turnKey(hostId: string, sessionId: string): string {
   return `${hostId}:${sessionId}`;
 }
 
+function isRelayRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+/**
+ * Session id of a daemon frame. Realtime `session_data` frames carry only
+ * `hostId` + `session` (session_actor.go / turn_worker.go) — their id lives
+ * in `session.id`, so fall back to it. Everything else (`session_status`,
+ * `agent_event`, ...) carries a top-level `sessionId`.
+ */
+export function relayFrameSessionId(parsed: unknown): string {
+  if (!isRelayRecord(parsed)) return "";
+  if (typeof parsed.sessionId === "string") return parsed.sessionId;
+  const session = parsed.session;
+  if (isRelayRecord(session) && typeof session.id === "string") return session.id;
+  return "";
+}
+
 /**
  * Turn-end fan-out for closed tabs. Fires only when the user has zero
  * connected browser tabs (open tabs notify locally via Camada A) and the
@@ -285,12 +321,12 @@ function turnKey(hostId: string, sessionId: string): string {
  * `turn_end` agent events are per-model-step, never a turn boundary.
  * Fire-and-forget: never blocks the relay hot path.
  */
-function maybePushTurnEnd(userId: string, hostId: string, parsed: any): void {
-  if (!parsed || typeof parsed !== "object") return;
-  const sessionId = typeof parsed.sessionId === "string" ? parsed.sessionId : "";
+function maybePushTurnEnd(userId: string, hostId: string, parsed: unknown): void {
+  const sessionId = relayFrameSessionId(parsed);
   if (!sessionId) return;
   const key = turnKey(hostId, sessionId);
-  if (parsed.type === "session_data" && parsed.session && typeof parsed.session === "object") {
+  if (!isRelayRecord(parsed)) return;
+  if (parsed.type === "session_data" && isRelayRecord(parsed.session)) {
     const title = parsed.session.title;
     if (typeof title === "string" && title) {
       lastSessionTitle.set(key, title);
@@ -301,9 +337,9 @@ function maybePushTurnEnd(userId: string, hostId: string, parsed: any): void {
     }
     return;
   }
-  if (parsed.type === "agent_event" && parsed.event && typeof parsed.event === "object") {
+  if (parsed.type === "agent_event") {
     const ev = parsed.event;
-    if (ev.type === "turn_end") {
+    if (isRelayRecord(ev) && ev.type === "turn_end") {
       lastDisposition.set(
         key,
         ev.cancelled === true ? "cancelled" : typeof ev.error === "string" && ev.error ? "error" : "done",
@@ -334,14 +370,15 @@ function broadcastToUser(userId: string, data: string | object): void {
 }
 
 /** Large transcript-carrying events compress 5-10x; small status
- *  signals skip it (deflate overhead exceeds the savings). */
-function shouldCompressRelayEvent(parsed: any): boolean {
-  const t = parsed?.type;
+ *  signals skip it (deflate overhead exceeds the savings). Exported for
+ *  the whitelist contract test (test/relay-regression.test.ts). */
+export function shouldCompressRelayEvent(parsed: unknown): boolean {
+  const t = isRelayRecord(parsed) ? parsed.type : undefined;
   return (
     t === "session_data" ||
     t === "session_content" ||
     t === "agent_event" ||
-    t === "file_balloon"
+    t === "turn_file_changes"
   );
 }
 

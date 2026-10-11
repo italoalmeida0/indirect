@@ -85,9 +85,22 @@ export interface RcDataLayer {
 
 interface PendingReq {
   hostId: string;
+  /** Pull collection: the daemon echoes it in the response — the guard
+   * rejects a wrong-collection reply (stale id / cross-tab id collision)
+   * instead of resolving the wrong pull (audit bug 34). */
+  collection: string;
   resolve: (msg: any) => void;
   reject: (err: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+}
+
+/** Pull-reply correlation: matches on id + hostId + collection. A reply for
+ * another host, another tab's namespace or ANOTHER COLLECTION must not
+ * resolve this request (audit bug 34). Pure and exported as the test seam
+ * for the guard. */
+export function pullReplyMatches(req: Pick<PendingReq, "hostId" | "collection">, reply: { hostId?: string; collection?: string }): boolean {
+  return reply.hostId === req.hostId &&
+    (typeof reply.collection !== "string" || reply.collection === req.collection);
 }
 
 /** Zero/negative timestamps are corruption, not 1970. The fallback must NOT
@@ -165,7 +178,7 @@ export function createDataLayer(opts: {
         pending.delete(id);
         reject(new Error(`pull '${pull.collection}' timed out`));
       }, 12000);
-      pending.set(id, { hostId, resolve, reject, timer });
+      pending.set(id, { hostId, collection: pull.collection, resolve, reject, timer });
       opts.send({ ...pull, hostId, id });
     });
   }
@@ -316,13 +329,15 @@ export function createDataLayer(opts: {
         const p = pending.get(replyId)!;
         // A reply for another host (or another tab's namespace) must NOT be
         // swallowed here: returning false lets it fall through instead of
-        // resolving the wrong request.
-        if (pull.hostId !== p.hostId) return false;
+        // resolving the wrong request. Same for a wrong COLLECTION (audit bug
+        // 34): a stale id or a cross-tab id collision must never resolve a
+        // projects pull with sessions items (or vice versa).
+        if (!pullReplyMatches(p, pull)) return false;
         pending.delete(replyId);
         clearTimeout(p.timer);
         const relayError = typeof pull.error === "string" && pull.error
           ? pull.error
-          : (msg.type === "error" || pull.replyTo === "pull")
+          : msg.type === "error"
             ? String(pull.message || "daemon pull failed")
             : "";
         if (relayError) p.reject(new Error(relayError));

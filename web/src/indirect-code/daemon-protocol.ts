@@ -164,10 +164,12 @@ export interface PullWireMessage {
   type?: "pull-response";
   id: number;
   hostId: string;
+  /** Pull collection, echoed by the daemon — the correlation guard rejects
+   * a wrong-collection reply (audit bug 34). */
+  collection?: string;
   items?: unknown[];
   error?: unknown;
   message?: string;
-  replyTo?: string;
 }
 
 export type DaemonMessage = DaemonEvent | PullWireMessage;

@@ -4,7 +4,7 @@ import { createKey, revokeKey } from "../keys";
 import { decryptSecret, randomToken, sha256Hex } from "../crypto";
 import { err, json, readJsonBody } from "../http";
 import { GATEWAY_SECRET, PUBLIC_URL } from "../config";
-import { closeDaemonSocket, isHostUpdating } from "./relay";
+import { closeDaemonSocket, disconnectDaemonSocket, isHostUpdating } from "./relay";
 import { publicModelEntry, routerSnapshot } from "../models";
 
 /**
@@ -166,8 +166,12 @@ export async function handleIndirectCodeRestRoute(
         }
 
         // Drop any stale socket still keyed by this host so the re-paired
-        // daemon is the only writer; it reconnects with the rotated token.
-        closeDaemonSocket(existing.id);
+        // daemon is the only writer. NO remote-kill frames here: this is a
+        // repair (host row survives, token just rotated) — the daemon keeps
+        // running and its reconnect loop re-handshakes with the new token.
+        // The kill frames of closeDaemonSocket are reserved for real host
+        // deletion below (they make a live daemon self-terminate).
+        disconnectDaemonSocket(existing.id);
 
         audit("remote_host.repaired", {
           actorId: row.user_id,
@@ -272,7 +276,9 @@ export async function handleIndirectCodeRestRoute(
 
     if (!host) return err(404, "host not found", req);
 
-    // Close any active WebSocket connection for this daemon
+    // Close any active WebSocket connection for this daemon. Kill frames
+    // ARE intended here: the host row goes away for good — the daemon must
+    // self-terminate, not redial (any redial would 401).
     closeDaemonSocket(host.id);
 
     // Revoke dedicated API key if exists
