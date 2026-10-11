@@ -283,6 +283,18 @@ func runWith(spec Spec, opts runOptions) int {
 	<-reaped
 	if reapErr != nil {
 		stopHeartbeat()
+		// The tree did not drain: the outcome is unknown — but the state
+		// MUST say so (audit bug 67). Returning without a terminal record
+		// left state.json "running" forever and boot's F6 later reported
+		// the completed command as OutcomeUnknown with no run record.
+		end := NowMs()
+		code := 75
+		stMu.Lock()
+		st.Status = StatusDone
+		st.OutcomeUnknown = true
+		st.ExitCode, st.EndedAt = &code, &end
+		stMu.Unlock()
+		_ = opts.writeState(spec.Root, st)
 		return 75
 	}
 	// Let the tail catch the last bytes before the copy.

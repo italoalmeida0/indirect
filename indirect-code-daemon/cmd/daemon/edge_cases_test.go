@@ -156,7 +156,7 @@ func TestSweepTmpOrphansRemovesOnlyStaleKnownPrefixes(t *testing.T) {
 	stale := filepath.Join(dir, ".session-stale")
 	fresh := filepath.Join(dir, ".session-fresh")
 	unrelated := filepath.Join(dir, "sess.jsonl")
-	exactPrefix := filepath.Join(dir, ".session-") // len == prefix: not matched
+	exactPrefix := filepath.Join(dir, ".session-") // matches the prefix: tmp debris too
 	nested := filepath.Join(dir, ".session-d")
 	for _, p := range []string{stale, fresh, unrelated, exactPrefix} {
 		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
@@ -176,13 +176,19 @@ func TestSweepTmpOrphansRemovesOnlyStaleKnownPrefixes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if n := sweepTmpOrphans(dir, 30*time.Minute); n != 1 {
-		t.Errorf("removed %d, want 1", n)
+	// sweepTmpOrphans matches prefixes (audit bug 72: HasPrefix — a file
+	// named exactly ".session-" is tmp debris like any other; CreateTemp
+	// never produces that exact name, so removing it loses nothing).
+	if n := sweepTmpOrphans(dir, 30*time.Minute); n != 2 {
+		t.Errorf("removed %d, want 2", n)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Error("stale tmp orphan must be removed")
 	}
-	for _, p := range []string{fresh, unrelated, exactPrefix} {
+	if _, err := os.Stat(exactPrefix); !os.IsNotExist(err) {
+		t.Error("a file named exactly like the tmp prefix is tmp debris — removed")
+	}
+	for _, p := range []string{fresh, unrelated} {
 		if _, err := os.Stat(p); err != nil {
 			t.Errorf("%s must survive: %v", filepath.Base(p), err)
 		}

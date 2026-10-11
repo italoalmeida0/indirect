@@ -300,21 +300,25 @@ func (t *PythonTool) Execute(ctx context.Context, raw json.RawMessage, progress 
 		}
 		return finishPythonCommand(out.runErr, stdout, stderr, start, progress)
 	}
-	jobID, fullLog, sink, deliver := t.Slow("python", label, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, StderrPath: proc.ErrLogPath, Stop: stop})
-	// V2R-001: detached into a real background job — notify on terminal.
+	// V2R-001: detached into a real background job — notify on terminal. The
+	// disposition is the durable record of HOW the outcome is consumed: it
+	// must be written BEFORE the job is registered (audit bug 68) — a crash
+	// between register and disposition left it absent (=inline) and the boot
+	// recovery then suppressed the completion notice of a real bg job.
 	if proc.Disposition != nil && proc.JobID != "" {
 		if err := proc.Disposition(proc.JobID, DispBackground); err != nil {
 			stop()
 			<-doneCh
 			cleanup(false)
-			return core.ToolResult{}, fmt.Errorf("could not persist background disposition; process stopped, inspect it with bg_check (job_id %q): %w", jobID, err)
+			return core.ToolResult{}, fmt.Errorf("could not persist background disposition; process stopped, inspect it with bg_check (job_id %q): %w", proc.JobID, err)
 		}
 	}
+	jobID, fullLog, sink, deliver := t.Slow("python", label, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, StderrPath: proc.ErrLogPath, Stop: stop})
 	if jobID == "" {
 		stop()
 		<-doneCh
 		cleanup(false)
-		return core.ToolResult{}, fmt.Errorf("could not register background job; process stopped (job_id %q)", jobID)
+		return core.ToolResult{}, fmt.Errorf("could not register background job; process stopped (job_id %q)", proc.JobID)
 	}
 	// Handoff: flush pre-detach output FIRST, then publish the sink (the
 	// pump is serialized on streamMu, so chunk order is exact).

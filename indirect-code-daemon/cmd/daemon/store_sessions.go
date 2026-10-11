@@ -94,44 +94,63 @@ func validSessionID(id string) bool {
 }
 
 // tmpOrphanPrefixes lists tmp file prefixes our writers use (all
-// tmp+rename, never valid data). sweepTmpOrphans removes stale ones.
-var tmpOrphanPrefixes = []string{".session-", ".migrate-", ".storage-version-", ".daemon-", ".launcher-", ".dl-"}
+// tmp+rename, never valid data). tmpOrphanSuffixes covers the migration
+// rewriters' `<path>.vNtmp` shape. sweepTmpOrphans removes stale ones.
+var tmpOrphanPrefixes = []string{
+	".session-", ".migrate-", ".storage-version-", ".daemon-", ".launcher-", ".dl-",
+	// Writer tmp+rename debris (audit bug 72) — see each writer's CreateTemp:
+	".config-",       // config.go
+	".publish-",      // internal/durable
+	".upd-",          // boot_update.go / update_flow.go
+	".stage-",        // fetch.go (bin stage)
+	".app-",          // handoff.go (app copy)
+	".stage-runner-", // runner_client.go (runner binary stage)
+	// NOTE: turn_attachments.go writes "att-*" and KEEPS that name as the
+	// committed file (AttachmentRef.ID is its basename) — it is NOT tmp
+	// debris and must never be swept.
+}
+var tmpOrphanSuffixes = []string{".v3tmp", ".v4tmp"}
 
-// sweepTmpOrphans removes crashed-run tmp files older than maxAge in dir
-// (non-recursive). Returns the count removed.
+// sweepTmpOrphans removes crashed-run tmp files older than maxAge in dir and
+// its subdirectories (the writers scatter tmp across sessions/, bin/,
+// runners/, <sid>/attachments/ and the root). Log/jsonl/json files never
+// match a tmp prefix or suffix, so GC-exempt dirs (runners/out) keep their
+// logs. Returns the count removed.
 func sweepTmpOrphans(dir string, maxAge time.Duration) int {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
-	}
 	now := time.Now()
 	n := 0
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	_ = filepath.WalkDir(dir, func(path string, e os.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return nil
 		}
 		name := e.Name()
 		match := false
 		for _, p := range tmpOrphanPrefixes {
-			if len(name) > len(p) && name[:len(p)] == p {
+			if strings.HasPrefix(name, p) {
 				match = true
 				break
 			}
 		}
 		if !match {
-			continue
+			for _, s := range tmpOrphanSuffixes {
+				if strings.HasSuffix(name, s) {
+					match = true
+					break
+				}
+			}
+		}
+		if !match {
+			return nil
 		}
 		info, err := e.Info()
-		if err != nil {
-			continue
+		if err != nil || now.Sub(info.ModTime()) < maxAge {
+			return nil
 		}
-		if now.Sub(info.ModTime()) < maxAge {
-			continue
-		}
-		if err := os.Remove(filepath.Join(dir, name)); err == nil {
+		if err := os.Remove(path); err == nil {
 			n++
 		}
-	}
+		return nil
+	})
 	return n
 }
 

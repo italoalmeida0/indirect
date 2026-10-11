@@ -1345,36 +1345,26 @@ func (s *wsServer) readRecord(sessionID string) *SessionRecord {
 	return nil
 }
 
+// truncateAndRun is the ATOMIC edit-and-run (audit bug 43): one actor
+// message does cut + insert + start in a single durable commit. The old
+// two-step (editRegenerateMsg then userPromptMsg) could lose the edit text
+// when the second leg failed after a persisted truncation.
 func (s *wsServer) truncateAndRun(sessionID string, index int, text, model string, yolo bool, attachmentIDs []string) {
 	res := s.sessions.route(sessionID, false)
 	if res.Error != "" {
 		return
 	}
-	er := make(chan any, 1)
+	rr := make(chan any, 1)
 	select {
-	case res.Inbox <- Envelope{SessionID: sessionID, Payload: editRegenerateMsg{Keep: index, AttachmentIDs: attachmentIDs, Model: model, Reply: er}}:
+	case res.Inbox <- Envelope{SessionID: sessionID, Payload: truncateAndRunMsg{Keep: index, Text: text, AttachmentIDs: attachmentIDs, Model: model, YOLO: yolo, Reply: rr}}:
 	case <-time.After(replyTimeout):
+		s.error(sessionID, "", "Session busy")
 		return
 	}
 	select {
-	case r := <-er:
-		if pr, ok := r.(promptResult); ok && pr.Error == "" {
-			// Start the turn with the truncated text.
-			pr2 := make(chan any, 1)
-			select {
-			case res.Inbox <- Envelope{SessionID: sessionID, Payload: userPromptMsg{Text: text, AttachmentIDs: attachmentIDs, Model: model, YOLO: yolo, Reply: pr2}}:
-			case <-time.After(replyTimeout):
-				return
-			}
-			select {
-			case r2 := <-pr2:
-				if prr, ok := r2.(promptResult); ok && prr.Error != "" {
-					s.error(sessionID, "", prr.Error)
-				}
-			case <-time.After(replyTimeout):
-			}
-		} else if ok && pr.Error != "" {
-			s.error(sessionID, "", pr.Error)
+	case r := <-rr:
+		if tr, ok := r.(truncateRunResult); ok && tr.Error != "" {
+			s.error(sessionID, "", tr.Error)
 		}
 	case <-time.After(replyTimeout):
 	}

@@ -128,8 +128,13 @@ func (a *sessionAdmin) purgeSession(id string) error {
 		// V2-003: the deleted session's pending notices die with it —
 		// a late delivery must never resurrect the session. This send is
 		// retried until the supervisor loop accepts it (or the bound
-		// expires and the drop is traced).
-		a.sendBounded(Envelope{Payload: bgDropNoticesMsg{SessionID: id}}, 5*time.Second)
+		// expires and the drop is traced). Belt-and-braces (audit bug 71):
+		// if the drop message could not be queued, remove the notice/pid
+		// files directly (supervisor.purge does the same via
+		// PurgeSessionBookkeeping — a lost message must not leak them).
+		if !a.sendBounded(Envelope{Payload: bgDropNoticesMsg{SessionID: id}}, 5*time.Second) {
+			a.bg.PurgeSessionBookkeeping(id)
+		}
 	}
 	if a.purge == nil {
 		err := fmt.Errorf("session purge unavailable")

@@ -240,7 +240,9 @@ func (a *sessionActor) handleData(env Envelope) {
 	// Epoch gate: worker mail (finish/heartbeat/WAL appends) from a stale
 	// incarnation is dropped. Dispatcher/client mail uses epoch 0 and
 	// always passes (it carries its own gen/id correlation).
+	// INV#5: stale-worker rejections must be traced (audit bug 51).
 	if env.Epoch != 0 && a.epoch != 0 && env.Epoch != a.epoch {
+		trace("actor.epoch.stale", map[string]any{"sid": a.id, "epoch": env.Epoch, "current": a.epoch, "type": msgType(env.Payload)})
 		return
 	}
 	switch m := env.Payload.(type) {
@@ -258,6 +260,8 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.onEditRegenerate(m)
 	case discardAndResendMsg:
 		a.onDiscardAndResend(m)
+	case truncateAndRunMsg:
+		a.onTruncateAndRun(m)
 	case forkAndResendMsg:
 		a.onForkAndResend(m)
 	case seededStartMsg:
@@ -863,7 +867,7 @@ func (a *sessionActor) finishTurn(ok bool) {
 	}
 	a.emit(map[string]any{"type": "session_data", "hostId": hostID, "session": snapshot})
 	a.emit(map[string]any{"type": "session_status", "hostId": hostID, "sessionId": a.id, "status": "idle"})
-	a.emit(map[string]any{"type": "turn_finished", "sessionId": a.id, "ok": ok})
+	a.emit(map[string]any{"type": "turn_finished", "hostId": hostID, "sessionId": a.id, "ok": ok})
 	// discard&resend-family stash: the user OP is applied FIRST (the single
 	// running→idle transition) — it is the user's latest intent and decides
 	// the next turn. Applied before queue promotion: promoting first would
@@ -1189,6 +1193,84 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 		return
 	}
 	replyResend(m.Reply, discardResendResult{TurnSeq: m.TurnID})
+}
+
+// onTruncateAndRun is the ATOMIC edit-and-run (audit bug 43): cut at Keep,
+// insert the new user row and start the turn — one durable commit, so a
+// failed start can never lose the edit text (the row is durable first).
+// Replaces the two-step editRegenerateMsg + userPromptMsg.
+func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
+	if a.state != stateIdle {
+		select {
+		case m.Reply <- truncateRunResult{Error: "session is busy"}:
+		default:
+		}
+		return
+	}
+	if a.persistErr != nil {
+		select {
+		case m.Reply <- truncateRunResult{Error: "session storage is failing; try again"}:
+		default:
+		}
+		return
+	}
+	keep := m.Keep
+	if keep < 0 {
+		keep = 0
+	}
+	if keep > len(a.rec.Messages) {
+		keep = len(a.rec.Messages)
+	}
+	text := core.SanitizeUserText(m.Text)
+	ids := append([]string(nil), m.AttachmentIDs...)
+	if strings.TrimSpace(text) == "" && len(ids) == 0 {
+		select {
+		case m.Reply <- truncateRunResult{Error: "Message cannot be empty"}:
+		default:
+		}
+		return
+	}
+	if err := validateAttachmentIDs(a.rec, ids); err != nil {
+		select {
+		case m.Reply <- truncateRunResult{Error: err.Error()}:
+		default:
+		}
+		return
+	}
+	previous := cloneRecord(a.rec)
+	// Cut at Keep + the same three repairs onEditApply applies.
+	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:keep]...)
+	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, keep)
+	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
+	pruneOrphanAttachments(a.rec, nil)
+	// Insert the new user row (same turn number: a re-run of that turn).
+	row := seededUserMessage(a.rec, text, ids)
+	row.TurnIndex = dropTurnForPrefix(a.rec.Messages)
+	a.rec.Messages = append(a.rec.Messages, row)
+	// ONE durable commit: the cut AND the new row land together.
+	if err := a.store.persistEdited(a.id, row.TurnIndex, a.rec.Messages[keep:], nil, recordMeta(a.rec)); err != nil {
+		a.rec = previous
+		select {
+		case m.Reply <- truncateRunResult{Error: "Could not save: " + err.Error()}:
+		default:
+		}
+		return
+	}
+	a.emit(map[string]any{"type": "session_truncated", "hostId": a.hostID(), "sessionId": a.id, "keepIndex": keep - 1})
+	a.emit(tailContentEvent(a.hostID(), a.id, "session_content", a.rec, 0, nil))
+	a.pingChange()
+	if err := a.startSeededTurn(row.TurnIndex, m.Model, m.YOLO, ids); err != nil {
+		// The message is SAFE (durable row above) — report, never lose.
+		select {
+		case m.Reply <- truncateRunResult{Error: "Message saved, but the turn did not start: " + err.Error()}:
+		default:
+		}
+		return
+	}
+	select {
+	case m.Reply <- truncateRunResult{TurnSeq: row.TurnIndex}:
+	default:
+	}
 }
 
 // startSeededTurn starts a turn whose user row already exists in the
@@ -1554,6 +1636,13 @@ func (a *sessionActor) onEditRegenerate(m editRegenerateMsg) {
 		keep = len(a.rec.Messages)
 	}
 	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:keep]...)
+	// The same three repairs onEditApply applies after its cut (audit bug
+	// 44): balloons describing cut messages must go, orphaned tool_use pairs
+	// must be re-paired and orphaned attachments pruned — otherwise the
+	// persisted record keeps stale balloons and unpaired rows.
+	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, keep)
+	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
+	pruneOrphanAttachments(a.rec, nil)
 	a.rec.Status = "idle"
 	a.rec.UpdatedAt = time.Now().UnixMilli()
 	keepTurn := dropTurnForPrefix(a.rec.Messages)

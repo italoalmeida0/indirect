@@ -130,6 +130,31 @@ type discardResendResult struct {
 	Queued  bool
 }
 
+// truncateAndRunMsg is the ATOMIC edit-and-run primitive (audit bug 43).
+// One message, one durable commit: cut the transcript at Keep, insert the
+// new user row and start the turn — a failed start can never lose the text
+// (the row is durable first). Replaces the two-step editRegenerateMsg +
+// userPromptMsg that truncateAndRun used (a failed second leg lost the
+// edit text after a persisted truncation).
+//   - Keep = number of raw messages to KEEP (truncate at that boundary).
+//   - Empty Text = regenerate the kept tail (no new row needed beyond the
+//     original boundary semantics).
+type truncateAndRunMsg struct {
+	Keep          int
+	Text          string
+	AttachmentIDs []string
+	Model         string
+	YOLO          bool
+	Reply         chan any // truncateRunResult
+}
+
+// truncateRunResult answers truncateAndRunMsg. Error is ALWAYS set on
+// failure (the client keeps its edit text and retries).
+type truncateRunResult struct {
+	Error   string
+	TurnSeq int
+}
+
 // forkAndResendMsg forks the prefix ABOVE the turn at TurnID into a new
 // session (the boundary turn is NOT included) and starts a turn there with
 // Text. The new user row is persisted INTO the fork before the turn starts

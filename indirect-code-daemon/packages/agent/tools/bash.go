@@ -202,13 +202,12 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		<-done
 		return finishSync(waitErr)
 	}
-	// From here the job owns the process lifetime.
-	jobID, fullLog, stream, deliver := t.Slow("bash", a.Command, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, Stop: func() {
-		runCancel()
-		proc.Stop()
-	}})
 	// V2R-001: this task detached into a real background job — its terminal
-	// outcome must reach the session (notify).
+	// outcome must reach the session (notify). The disposition is the
+	// durable record of HOW the outcome is consumed: it must be written
+	// BEFORE the job is registered (audit bug 68) — a crash between
+	// register and disposition left it absent (=inline) and the boot
+	// recovery then suppressed the completion notice of a real bg job.
 	if proc.Disposition != nil && proc.JobID != "" {
 		if err := proc.Disposition(proc.JobID, DispBackground); err != nil {
 			runCancel()
@@ -216,16 +215,21 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			<-waitCh
 			<-done
 			proc.Cleanup(false)
-			return core.ToolResult{}, fmt.Errorf("could not persist background disposition; process stopped, inspect it with bg_check (job_id %q): %w", jobID, err)
+			return core.ToolResult{}, fmt.Errorf("could not persist background disposition; process stopped, inspect it with bg_check (job_id %q): %w", proc.JobID, err)
 		}
 	}
+	// From here the job owns the process lifetime.
+	jobID, fullLog, stream, deliver := t.Slow("bash", a.Command, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, Stop: func() {
+		runCancel()
+		proc.Stop()
+	}})
 	if jobID == "" {
 		runCancel()
 		proc.Stop()
 		<-waitCh
 		<-done
 		proc.Cleanup(false)
-		return core.ToolResult{}, fmt.Errorf("could not register background job; process stopped (job_id %q)", jobID)
+		return core.ToolResult{}, fmt.Errorf("could not register background job; process stopped (job_id %q)", proc.JobID)
 	}
 	// Handoff under the pump's mutex: flush the pre-detach buffer FIRST
 	// (inside the critical section), then publish the sink. A pump emit is
