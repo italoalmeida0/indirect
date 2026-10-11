@@ -1851,6 +1851,148 @@ boot suprir notice quando houver job row sem disposition.
   **refutado** (Bug 59). **visibleRuns/running-tail/segKey/collapse** →
   **Bugs 55-58**. **scroll pin/followTail** → **refutados** (Bugs 60-61).
 
+### Bug 69 — Row `background_delivery` com bloco de tool renderiza bolha vazia `[!]`
+**Arquivo:** `web/src/indirect-code/transcript/updaters.ts` (`normalizeSessionMessages`).
+
+O early-return de `background_delivery` ("never rendered, never a carrier —
+not even an empty one") roda **depois** do loop de blocos: se a row carregar um
+`tool_result` (fold de background real!), o `ensureCarrier` cria um carrier
+**antes** do check de meta — o return descarta a row user mas o carrier sintético
+já foi pushado em `out`.
+
+**Evidência empírica** (probe fase 2a, depois removido):
+```
+bg row bubbles: 1     ← esperado 0 (a notice nunca renderiza)
+```
+Row: `{role: user, content: [tool_result], meta: {background_delivery: job1}}`
+→ 1 bolha vazia renderizada.
+
+**Impacto:** o fold de um background job (row user com `background_delivery` +
+tool_result) gera uma **bolha vazia** no transcript em vez de ser invisível —
+o invariante documentado ("not even an empty one") é violado.
+
+**Severidade: baixa-média** (bolha vazia estranha em folds de background).
+
+**Correção sugerida:** mover o check de `background_delivery` para **antes** do
+loop de blocos (early return no `forEach`, como a intenção original).
+
+### Hipóteses fase 2a (refutadas/confirmadas pelo probe acima)
+- **`orderedMessages` NaN comparator** — **refutado**: `toSorted` mantém ordem de
+  inserção para rows unstamped (`c,a,b` determinístico, 20 rows em ordem).
+  Sem bug.
+- **Heurística de match de `user_message`** — **confirmada como limitação**:
+  2 rows otimistas + 1 evento = só a primeira é confirmada; a segunda mantém
+  texto otimista para sempre (sem evento futuro a confirme). Observação de
+  design; sem fix aplicado.
+- **`requestId` collection guard** — **presente** pós-fix do Bug 34.
+
+### Bug 70 (refutado) — `applyV4` reescreve `*.wal.jsonl` (scout StorePersistence #6) `[-]`
+Hipótese: o filtro `HasSuffix(".jsonl")` (v4_tool_vocabulary.go:101) inclui
+`<id>.wal.jsonl`, e o rewriter droparia tails não-JSON silenciosamente.
+**Refutado pelo probe** (depois removido): WAL com header + msg event + torn
+tail passa por `applyV4` **intacto** — 3 linhas preservadas. Motivo:
+`renameSessionToolVocabulary` só reescreve linhas com `kind:"turn"` (linhas de
+WAL usam `type:"header"`/`"msg"` e caem no `probe.Kind != "turn"` →
+`out = append(out, line)`); linhas não-JSON também são **preservadas**
+(o scout errava em "silently dropped"). Sem mudança → nem tmp+rename acontece.
+
+O residual real (leitura): um WAL **não** é alvo efetivo do v4 — se um dia
+fosse, o rewrite seria in-place com tmp+rename, e um crash entre os dois
+deixaria `<path>.v4tmp` órfão (o sweep de tmp não cobre `.v4tmp`). Baixo.
+
+### Bug 71 (confirmado, mitigado) — `sendBounded` descarta `bgDropNoticesMsg` em timeout e o purge continua `[~]`
+**Arquivo:** `sessions_admin.go:86-103` (`sendBounded`) + `:132` (chamada).
+
+`sendBounded` retorna `false` + `trace("admin.bg.send.lost")` no timeout, mas
+`purgeSession` **ignora o retorno** e continua — o hazard está documentado no
+código (83-85: "a dropped drop-notices would let a late notice resurrect a
+deleted session"). Confirmação: leitura bilateral.
+
+**Mitigação atual (pós-fix do Bug 20):** `PurgeSessionBookkeeping` (chamado no
+`supervisor.purge`) remove os `notice.json`/`pid.json` da sessão diretamente —
+mesmo que a mensagem `bgDropNoticesMsg` se perca, os arquivos somem. O residual
+é uma entrada zombie no mapa `b.notices` em RAM até o próximo restart (o
+`tryNotice` falha no route da sessão purgada → no-op; sem dano).
+
+**Severidade: baixa** (mitigado; o caso de perda é janela de 5s com bg.inbox
+cheio).
+
+### Bug 72 — Sweep de tmp não cobre a maioria dos prefixes dos writers `[!]` (leitura)
+**Arquivo:** `store_sessions.go:98` (`tmpOrphanPrefixes`).
+
+O sweep cobre 6 prefixes (`.session-`, `.migrate-`, `.storage-version-`,
+`.daemon-`, `.launcher-`, `.dl-`), mas os writers reais usam **mais**:
+`.config-*` (config.go), `.publish-*` (durable/file.go), `.upd-*` (boot_update/
+update_flow), `.stage-*` (fetch), `.app-*` (handoff), `.stage-runner-*`
+(runner_client), `att-*` (turn_attachments), `.v3tmp`/`.v4tmp` (migrations).
+Crash no meio de qualquer desses tmp+rename → arquivo órfão **para sempre**
+(o sweep nunca o alcança; `main.go` varre só sessions/ + raiz do slot, não
+recursivo). Sem corrupção — só lixo acumulado. Confirmado por leitura (a
+lista de prefixes dos writers é observável nos próprios arquivos).
+
+**Severidade: baixa** (lixo órfão após crash; nunca limpo).
+
+### Bugs 73-74 (refutados por leitura) — `listSessionSummaries` e `gcRunners` `[-]`
+- **#73 (scout StorePersistence item 2a / 9)**: "HasSuffix(\".jsonl\") admite junk
+  files" — **refutado**: `listSessionSummaries` (sessions_admin.go:24) **já**
+  exclui `*.wal.jsonl` explicitamente e pula linhas com `meta.ID != id`. O
+  residual (sessões com meta rasgado nunca listadas = órfãs no purge do
+  cascade) é real mas defensivo: lixo não-listado não é servido ao usuário.
+  Arquivo órfão fica no disco até limpeza manual. Baixo.
+- **#74 (scout RunnerBackground item 18)**: "gcRunners deleta state com notice
+  em retry >1h" — **refutado por leitura**: os guards são `b.jobs` + `b.notices`
+  (in-memory) + graça 1h; uma notice só sai do mapa via `onAck` (que limpa a
+  identity de propósito) ou `dropNoticesFor` (só em purge de sessão — onde o
+  state é lixo mesmo). Uma notice ativa em retry **nunca** sai do mapa
+  espontaneamente → o guard `if _, pending := b.notices[...]` a protege
+  indefinidamente. Sem bug.
+
+### Bugs 75-77 — Hipóteses de concorrência CONFIRMADAS com probe real (TestConcurrency)
+**#75 — Races de config: lost update entre writers + RAM/disk divergente em
+`setAutoUpdate` `[!]`** — `ws_server.go:1635-1701` + `update_host.go:101-110`.
+Probe real: `onUpdateConfig(temperature=0.7)` + `rememberSelection(model-b)`
+concorrentes → **lost update** (disco: settings=0.7, selection=nil; RAM
+divergente). Fault seam (dir read-only): `setAutoUpdate` deixa RAM=false,
+disco=true — erro engolido pelo `_ =` (update_host.go:109). Nuança: os writers
+WS passam todos pelo `hostLane` serializado hoje, então WS↔WS é inalcançável
+**agora** — mas qualquer caller fora do lane (update flow, código futuro)
+reproduz o probe. **Médio** (contrato quebrado, exposure atual indireta).
+Testes permanentes escritos e skipados: `config_race_regression_test.go` (2).
+
+**#76 — `repairToolUseResultPairs` muta Content slice compartilhado (DATA RACE
+real)** `[!]` — `packages/core/message.go:191`. Duas evidências: (a) o slice
+compartilhado do tool message foi mutado len/cap 1/4→2/4 pelo
+`buildContextFromLocked` (contrato "request-only" quebrado, agent.go:893-923);
+(b) `go test -race` reporta **DATA RACE** entre dois `BuildContext()` concorrentes
+(no slicecopy de message.go:191). Exposure real: builds concorrentes/aninhados
+de contexto compartilhando arrays do transcript (estimateContext + agent loop,
+resume paths). **Médio-alta** (race real confirmado pelo detector).
+Testes permanentes: `repair_shared_slice_regression_test.go` (2: mutation +
+-race), skipados.
+
+**#77 — Ressurreição por turno tardio pós-purge CONFIRMADA (store layer)** `[!]``
+— `supervisor.go:868-873`. Probe: actor residente real (running + queue) passou
+pelo `supervisor.purge` real → shutdown → finalizer commita → purge deleta o
+arquivo → **commit tardio re-cria `sessions/<id>.jsonl`** (o fence `deleted[id]`
+existe só durante o purge — defer o remove). Contrapartida refutada
+honestamente: o **actor em si** não committa pós-purge (`doShutdown` seta
+`closing` e a promoção de queue é gated; commit precede a remoção). A
+ressurreição exige um writer externo de record velho (admin fork path
+`sessions_admin.go:196`, ou finalizer de encarnação racing). Fix pequeno:
+tombstone por store ou fencing token checado no `saveSessionSync`. **Médio**
+(classe Bug-2; janela pequena). Sem teste permanente ainda (precisa de decisão
+de design).
+
+### Bug 78 (refutado) — Zombie mail esfomeia heartbeat → falso-positivo do watchdog `[-]`
+Mecanismo **confirmado**: inbox 128/128 cheio de `walAppendMsg` gen-stale de
+zumbi derruba o heartbeat do worker vivo (`default:` em turn_worker.go:342) e
+bloqueia o `sendInbox`. MAS o falso-positivo do watchdog é **refutado em escala
+testável**: sob flood sustentado + streaming vivo, o `watchdogRound` nunca
+dispara (lastProgressLag ~1ms vs threshold; o drain de 64/batch do actor
+acompanha a fila de 128 e cada append drenado toca progress antes do gate de
+gen). Esfomear exigiria ingresso sustentado >64 msgs/ciclo de drain por 30s —
+inalcançável só com workers zumbi. **Refutado end-to-end.**
+
 ---
 
 ## 4. Áreas validadas (por tópico)
