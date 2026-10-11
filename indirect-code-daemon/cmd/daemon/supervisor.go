@@ -850,6 +850,15 @@ func (s *sessionSupervisor) purge(id string) error {
 	s.mu.Lock()
 	s.deleted[id] = true
 	s.mu.Unlock()
+	// The fence only guards THIS purge: once it ends (files gone on
+	// success, session still alive on error) the marker must not linger —
+	// it would block a legitimately surviving session forever and grow
+	// the map without bound.
+	defer func() {
+		s.mu.Lock()
+		delete(s.deleted, id)
+		s.mu.Unlock()
+	}()
 	// Wait for an in-progress cold load to observe the deletion fence.
 	s.flights.do(id, func() spawnResult { return spawnResult{Error: "deleted"} })
 	s.mu.Lock()

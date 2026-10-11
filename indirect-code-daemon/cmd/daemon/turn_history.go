@@ -39,74 +39,81 @@ type historyBlock struct {
 
 
 // sliceHistoryBlock returns the tail block (beforeTurn <= 0) or the block
-// of turns strictly below beforeTurn. Turns are grouped by TurnIndex in
-// transcript order; messages with TurnIndex 0 (pre-turn system notices)
-// attach to the following turn. Balloons whose TurnIndex falls inside the
-// block ride along.
+// of turns strictly below beforeTurn. Turns are grouped with the shared
+// turnGroups rule (turn_grouping.go): zero-index notices attach to the
+// following turn, trailing notices to the last turn, so a notice between
+// turns is never dragged into two blocks and messages of a skipped turn
+// (>= beforeTurn) never leak into the page. Balloons whose TurnIndex is
+// one of the block's turns ride along.
 func sliceHistoryBlock(msgs []provider.Message, balloons []filetrack.TurnChanges, beforeTurn int) historyBlock {
 	var out historyBlock
 	if len(msgs) == 0 {
 		return out
 	}
-	// Distinct turns, ascending, and per-turn message ranges.
-	type turnRange struct {
-		turn       int
-		start, end int // [start, end) into msgs
-	}
-	var ranges []turnRange
+	// Whole-turn groups in transcript order. They partition the
+	// transcript, so any run of groups is contiguous and FirstIndex stays
+	// the true raw offset of Messages[0] (the srcIdx base).
+	all := turnGroups(msgs)
 	seen := map[int]bool{}
-	for i, m := range msgs {
-		ti := m.TurnIndex
-		if beforeTurn > 0 && ti >= beforeTurn {
-			continue
-		}
-		if len(ranges) == 0 || ranges[len(ranges)-1].turn != ti {
-			// TurnIndex 0 prefix attaches to the first real turn below.
-			if ti == 0 && len(ranges) > 0 {
-				ranges[len(ranges)-1].end = i + 1
-				continue
-			}
-			ranges = append(ranges, turnRange{turn: ti, start: i, end: i + 1})
-		} else {
-			ranges[len(ranges)-1].end = i + 1
-		}
-		if ti != 0 {
-			seen[ti] = true
+	for _, g := range all {
+		if g.turn != 0 {
+			seen[g.turn] = true
 		}
 	}
 	out.TotalTurns = len(seen)
-	if len(ranges) == 0 {
+	// Groups eligible for this page: turns strictly below beforeTurn.
+	var groups []turnGroup
+	for _, g := range all {
+		if beforeTurn > 0 && g.turn >= beforeTurn {
+			continue
+		}
+		groups = append(groups, g)
+	}
+	if len(groups) == 0 {
 		return out
 	}
 	// Walk backwards accumulating whole turns until the budget is met.
 	// Blocks are always whole turns (never cut a turn in half): the turn
 	// crossing the budget line is included entirely (round-up), minimum
-	// one turn. Safety cap: stop adding older turns once the page exceeds
-	// historyBlockMaxMessages — a single monster turn still ships whole
-	// (it is the freshest data), but it never drags older turns along.
+	// one turn. Safety cap: stop adding older turns once the page holds
+	// historyBlockMaxMessages messages — a single monster turn still
+	// ships whole (it is the freshest data), but it never drags older
+	// turns along.
 	budget := 0
-	first := len(ranges) // index into ranges of the block's oldest turn
-	for i := len(ranges) - 1; i >= 0; i-- {
-		r := ranges[i]
-		turnMsgs := msgs[r.start:r.end]
-		if i < len(ranges)-1 && len(msgs[ranges[i+1].start:ranges[len(ranges)-1].end]) >= historyBlockMaxMessages {
+	held := 0
+	first := len(groups) // index into groups of the block's oldest turn
+	for i := len(groups) - 1; i >= 0; i-- {
+		if i < len(groups)-1 && held >= historyBlockMaxMessages {
 			break
 		}
+		g := groups[i]
+		var turnMsgs []provider.Message
+		for _, idx := range g.idx {
+			turnMsgs = append(turnMsgs, msgs[idx])
+		}
 		budget += turnTokenCount(turnMsgs)
+		held += len(g.idx)
 		first = i
 		if budget >= historyBlockTokens {
 			break
 		}
 	}
-	block := ranges[first:]
-	start, end := block[0].start, block[len(block)-1].end
-	out.FirstIndex = start
-	out.Messages = append([]provider.Message{}, msgs[start:end]...)
+	block := groups[first:]
+	out.FirstIndex = block[0].idx[0]
+	for _, g := range block {
+		for _, idx := range g.idx {
+			out.Messages = append(out.Messages, msgs[idx])
+		}
+	}
 	out.OldestTurn = block[0].turn
 	out.NewestTurn = block[len(block)-1].turn
 	out.HasOlder = first > 0
+	turnSet := map[int]bool{}
+	for _, g := range block {
+		turnSet[g.turn] = true
+	}
 	for _, b := range balloons {
-		if b.TurnIndex >= out.OldestTurn && (out.NewestTurn <= 0 || b.TurnIndex <= out.NewestTurn) {
+		if turnSet[b.TurnIndex] {
 			out.Balloons = append(out.Balloons, b)
 		}
 	}
@@ -123,52 +130,45 @@ func sliceHistoryBlock(msgs []provider.Message, balloons []filetrack.TurnChanges
 const completionTailTurns = 2
 
 // sliceLastTurns returns the block of the last n whole turns in
-// transcript order, newest last. TurnIndex 0 prefix messages (pre-turn
-// system notices) ride with the first block turn, mirroring
-// sliceHistoryBlock.
+// transcript order, newest last, grouped with the shared turnGroups
+// rule: TurnIndex 0 prefix messages (pre-turn system notices) ride with
+// the first block turn, mirroring sliceHistoryBlock.
 func sliceLastTurns(msgs []provider.Message, balloons []filetrack.TurnChanges, n int) historyBlock {
 	var out historyBlock
 	if len(msgs) == 0 || n <= 0 {
 		return out
 	}
-	type turnRange struct {
-		turn       int
-		start, end int
-	}
-	var ranges []turnRange
+	all := turnGroups(msgs)
 	seen := map[int]bool{}
-	for i, m := range msgs {
-		ti := m.TurnIndex
-		if len(ranges) == 0 || ranges[len(ranges)-1].turn != ti {
-			if ti == 0 && len(ranges) > 0 {
-				ranges[len(ranges)-1].end = i + 1
-				continue
-			}
-			ranges = append(ranges, turnRange{turn: ti, start: i, end: i + 1})
-		} else {
-			ranges[len(ranges)-1].end = i + 1
-		}
-		if ti != 0 {
-			seen[ti] = true
+	for _, g := range all {
+		if g.turn != 0 {
+			seen[g.turn] = true
 		}
 	}
 	out.TotalTurns = len(seen)
-	if len(ranges) == 0 {
+	if len(all) == 0 {
 		return out
 	}
-	first := len(ranges) - n
+	first := len(all) - n
 	if first < 0 {
 		first = 0
 	}
-	block := ranges[first:]
-	start, end := block[0].start, block[len(block)-1].end
-	out.FirstIndex = start
-	out.Messages = append([]provider.Message{}, msgs[start:end]...)
+	block := all[first:]
+	out.FirstIndex = block[0].idx[0]
+	for _, g := range block {
+		for _, idx := range g.idx {
+			out.Messages = append(out.Messages, msgs[idx])
+		}
+	}
 	out.OldestTurn = block[0].turn
 	out.NewestTurn = block[len(block)-1].turn
 	out.HasOlder = first > 0
+	turnSet := map[int]bool{}
+	for _, g := range block {
+		turnSet[g.turn] = true
+	}
 	for _, b := range balloons {
-		if b.TurnIndex >= out.OldestTurn && (out.NewestTurn <= 0 || b.TurnIndex <= out.NewestTurn) {
+		if turnSet[b.TurnIndex] {
 			out.Balloons = append(out.Balloons, b)
 		}
 	}

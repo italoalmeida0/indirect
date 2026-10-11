@@ -552,24 +552,10 @@ func (s *diskStore) commitWAL(id string, rec *SessionRecord, wal *walWriter) err
 	}
 	turnIdx := rec.TurnSeq
 	// Messages of the finished turn (in-memory, includes WAL replay).
-	// Mirrors splitRecord: leading TurnIndex-0 notices attach to turn 1.
-	var turnMsgs []provider.Message
-	for _, m := range rec.Messages {
-		if m.TurnIndex == turnIdx || (turnIdx == 1 && m.TurnIndex <= 0) {
-			// Leading zeros only: stop attaching zeros once turn 1's
-			// own messages started... simpler: attach ALL zero-index
-			// messages that appear BEFORE the first turn-1 message.
-			// (Trailing zeros after the last turn attach to the last
-			// line via splitRecord; in-memory commit of the final turn
-			// includes them below.)
-			turnMsgs = append(turnMsgs, m)
-		}
-	}
-	// Refine: only leading zeros (before first turnIdx message) + the
-	// turn's own messages + trailing zeros after the LAST message when
-	// this is the newest turn on disk.
-	turnMsgs = sliceTurnMessages(rec.Messages, turnIdx)
-	// Zero-index notices at the very head belong to turn 1's line.
+	// sliceTurnMessages applies the shared turnGroups rule: zero-index
+	// notices attach to the following turn, trailing notices to the last
+	// turn — one message, one turn line.
+	turnMsgs := sliceTurnMessages(rec.Messages, turnIdx)
 	existingIdx := -1
 	for i, tl := range lines {
 		if tl.Turn == turnIdx {
@@ -676,36 +662,23 @@ func turnLineMatches(tl turnLine, msgs []provider.Message) bool {
 	return true
 }
 
-// sliceTurnMessages extracts one turn's messages with splitRecord's
-// zero-index attachment rules: leading zeros attach to the first
-// non-zero turn at/after them; trailing zeros attach to the last turn.
+// sliceTurnMessages extracts one turn's messages with the shared
+// turnGroups zero-index attachment rules (splitRecord's own grouping):
+// zero-index messages attach to the FOLLOWING turn, trailing zeros to
+// the last turn. Every message belongs to exactly one turn line, so a
+// zero-index notice between turns is never written into two lines.
 func sliceTurnMessages(msgs []provider.Message, turnIdx int) []provider.Message {
-	// Find first index with TurnIndex == turnIdx.
-	first := -1
-	for i, m := range msgs {
-		if m.TurnIndex == turnIdx {
-			first = i
-			break
+	for _, g := range turnGroups(msgs) {
+		if g.turn != turnIdx {
+			continue
 		}
-	}
-	if first < 0 {
-		return nil
-	}
-	// Leading zeros: zeros immediately before `first` back to the previous
-	// non-zero turn (exclusive).
-	start := first
-	for start > 0 && msgs[start-1].TurnIndex <= 0 {
-		start--
-	}
-	// End: next non-zero turn that is NOT turnIdx (exclusive).
-	end := len(msgs)
-	for i := first; i < len(msgs); i++ {
-		if msgs[i].TurnIndex > 0 && msgs[i].TurnIndex != turnIdx {
-			end = i
-			break
+		out := make([]provider.Message, 0, len(g.idx))
+		for _, i := range g.idx {
+			out = append(out, msgs[i])
 		}
+		return out
 	}
-	return msgs[start:end]
+	return nil
 }
 
 // recordMeta projects a record onto its meta line.

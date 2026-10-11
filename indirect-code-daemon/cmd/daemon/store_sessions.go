@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -150,44 +152,10 @@ func splitRecord(rec *SessionRecord) ([]turnLine, metaLine) {
 		ApprovalDeadlineUnix: rec.ApprovalDeadlineUnix,
 		BgTasks: rec.BgTasks,
 	}
-	// Group message indices by turn.
-	type group struct {
-		turn int
-		idx  []int
-	}
-	var groups []group
-	pendingZero := []int{}
-	flushZero := func(turn int) {
-		if len(pendingZero) == 0 {
-			return
-		}
-		if len(groups) > 0 && groups[len(groups)-1].turn == turn {
-			groups[len(groups)-1].idx = append(groups[len(groups)-1].idx, pendingZero...)
-		} else {
-			groups = append(groups, group{turn: turn, idx: append([]int{}, pendingZero...)})
-		}
-		pendingZero = nil
-	}
-	for i, m := range rec.Messages {
-		if m.TurnIndex <= 0 {
-			pendingZero = append(pendingZero, i)
-			continue
-		}
-		flushZero(m.TurnIndex)
-		if len(groups) > 0 && groups[len(groups)-1].turn == m.TurnIndex {
-			groups[len(groups)-1].idx = append(groups[len(groups)-1].idx, i)
-		} else {
-			groups = append(groups, group{turn: m.TurnIndex, idx: []int{i}})
-		}
-	}
-	// Trailing zero-index messages attach to the last group (or turn 1).
-	if len(pendingZero) > 0 {
-		if len(groups) > 0 {
-			groups[len(groups)-1].idx = append(groups[len(groups)-1].idx, pendingZero...)
-		} else {
-			groups = append(groups, group{turn: 1, idx: pendingZero})
-		}
-	}
+	// Group message indices by turn with the shared rule (turnGroups):
+	// zero-index messages attach to the FOLLOWING turn, trailing zeros to
+	// the last group (turn 1 when everything is zero-indexed).
+	groups := turnGroups(rec.Messages)
 	balloonsByTurn := map[int]*filetrack.TurnChanges{}
 	for i := range rec.FileBalloons {
 		b := rec.FileBalloons[i]
@@ -373,35 +341,65 @@ func assembleRecord(lines []turnLine, meta metaLine) *SessionRecord {
 		ApprovalDeadlineUnix: meta.ApprovalDeadlineUnix,
 		BgTasks: meta.BgTasks,
 	}
-	// Defensively deduplicate turn lines by Turn number if Turn > 0:
-	// if multiple lines share the same turn, the last one wins.
-	var dedupedLines []turnLine
-	lastIdxByTurn := make(map[int]int)
-	for i, tl := range lines {
-		if tl.Turn > 0 {
-			lastIdxByTurn[tl.Turn] = i
-		}
-	}
-	for i, tl := range lines {
-		if tl.Turn > 0 && lastIdxByTurn[tl.Turn] != i {
-			continue
-		}
-		dedupedLines = append(dedupedLines, tl)
-	}
-
-	seenMsgIDs := make(map[string]struct{})
+	// Merge turn lines by message identity instead of "last line wins":
+	// lines sharing a Turn merge in order, deduped by message ID (the
+	// complete later copy replaces the partial earlier one in place) and,
+	// for ID-less messages, by content fingerprint ACROSS lines (the same
+	// zero-index notice used to be written into two turn lines; those
+	// legacy duplicates collapse here on read). Duplicates inside one
+	// line are kept: a single line never repeats a message artifact.
+	idPos := make(map[string]int)
+	fpSeen := make(map[string]bool) // fingerprints of finished lines
+	var lastLineTurn int
 	seenBalloons := make(map[int]struct{})
-	for _, tl := range dedupedLines {
+	fingerprint := func(msg provider.Message) string {
+		cp := msg
+		cp.ID = ""
+		data, err := json.Marshal(cp)
+		if err != nil {
+			return ""
+		}
+		sum := sha256.Sum256(data)
+		return hex.EncodeToString(sum[:])
+	}
+	for _, tl := range lines {
+		lastLineTurn = tl.Turn
+		fpThisLine := make(map[string]bool)
 		for _, raw := range tl.Messages {
-			if msg, err := core.HydrateMessageObject(raw); err == nil {
-				if msg.ID != "" {
-					if _, seen := seenMsgIDs[msg.ID]; seen {
-						continue
-					}
-					seenMsgIDs[msg.ID] = struct{}{}
-				}
-				rec.Messages = append(rec.Messages, msg)
+			msg, err := core.HydrateMessageObject(raw)
+			if err != nil {
+				continue
 			}
+			if msg.ID != "" {
+				if pos, seen := idPos[msg.ID]; seen {
+					// Same message on another line: the newest copy wins,
+					// keeping the original transcript position.
+					rec.Messages[pos] = msg
+					continue
+				}
+				idPos[msg.ID] = len(rec.Messages)
+				rec.Messages = append(rec.Messages, msg)
+				continue
+			}
+			fp := fingerprint(msg)
+			if fp == "" {
+				rec.Messages = append(rec.Messages, msg)
+				continue
+			}
+			if fpThisLine[fp] {
+				// Repeated inside the same line: legitimate content.
+				rec.Messages = append(rec.Messages, msg)
+				continue
+			}
+			if fpSeen[fp] {
+				// Same ID-less message on another line: legacy duplicate.
+				continue
+			}
+			fpThisLine[fp] = true
+			rec.Messages = append(rec.Messages, msg)
+		}
+		for fp := range fpThisLine {
+			fpSeen[fp] = true
 		}
 		if tl.Balloon != nil {
 			if _, seen := seenBalloons[tl.Balloon.TurnIndex]; !seen {
@@ -424,8 +422,8 @@ func assembleRecord(lines []turnLine, meta metaLine) *SessionRecord {
 		}
 	}
 	if hasIndexed {
-		if n := len(dedupedLines); n > 0 && rec.TurnSeq < dedupedLines[n-1].Turn {
-			rec.TurnSeq = dedupedLines[n-1].Turn
+		if len(lines) > 0 && rec.TurnSeq < lastLineTurn {
+			rec.TurnSeq = lastLineTurn
 		}
 	}
 	ensureTranscriptIDs(rec)
@@ -1015,161 +1013,6 @@ func (s *diskStore) persistEdited(id string, firstDirtyTurn int, suffixMsgs []pr
 		return err
 	}
 	return commitTmpFile(tmp, tmpName, path)
-}
-
-// readBlockBefore reads turn lines backwards: turns < beforeTurn (0 =
-// tail), oldest-first, stopping once tokenBudget is met (round-up: the
-// crossing turn is included whole, minimum one turn). Returns parsed
-// lines + cursor. Token counting is exact btdby4 per turn (same ruler as
-// the live context estimate); both IO and parsing stop at the budget —
-// the file is never fully scanned for a page.
-func (s *diskStore) readBlockBefore(id string, beforeTurn int, tokenBudget int) ([]turnLine, blockCursor, error) {
-	var cur blockCursor
-	if !validSessionID(id) {
-		return nil, cur, fmt.Errorf("invalid session id")
-	}
-	f, err := os.Open(s.sessionFile(id))
-	if err != nil {
-		return nil, cur, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return nil, cur, err
-	}
-	metaOff, merr := metaStartOffset(f, st.Size())
-	if merr != nil {
-		return nil, cur, merr
-	}
-	const chunk = 64 * 1024
-	var (
-		carry     []byte
-		collected []turnLine // newest-first
-		seen      = map[int]bool{}
-		budget    int
-		done      bool
-	)
-	off := metaOff
-	for off > 0 && !done {
-		n := int64(chunk)
-		if off < n {
-			n = off
-		}
-		off -= n
-		tmp := make([]byte, n)
-		if _, err := f.ReadAt(tmp, off); err != nil {
-			return nil, cur, err
-		}
-		buf := append(tmp, carry...)
-		parts := bytes.Split(buf, []byte{'\n'})
-		carry = parts[0]
-		for i := len(parts) - 1; i >= 1 && !done; i-- {
-			line := bytes.TrimRight(parts[i], "\r")
-			if len(bytes.TrimSpace(line)) == 0 {
-				continue
-			}
-			var probe struct {
-				Kind string `json:"kind"`
-				Turn int    `json:"turn"`
-			}
-			if err := json.Unmarshal(line, &probe); err != nil || probe.Kind != "turn" {
-				continue
-			}
-			if beforeTurn > 0 && probe.Turn >= beforeTurn {
-				continue
-			}
-			if seen[probe.Turn] {
-				continue // one line per turn; dupes impossible, skip safe
-			}
-			seen[probe.Turn] = true
-			var tl turnLine
-			if err := json.Unmarshal(line, &tl); err != nil {
-				continue
-			}
-			collected = append(collected, tl)
-			budget += storeTurnTokens(&tl)
-			if budget >= tokenBudget {
-				done = true
-			}
-		}
-	}
-	// File head: when the scan reached offset 0, carry holds the very
-	// first line (complete, not partial) — process it.
-	if off == 0 && !done && len(bytes.TrimSpace(carry)) > 0 {
-		var probe struct {
-			Kind string `json:"kind"`
-			Turn int    `json:"turn"`
-		}
-		if err := json.Unmarshal(carry, &probe); err == nil && probe.Kind == "turn" &&
-			(beforeTurn <= 0 || probe.Turn < beforeTurn) && !seen[probe.Turn] {
-			var tl turnLine
-			if jerr := json.Unmarshal(carry, &tl); jerr == nil {
-				collected = append(collected, tl)
-			}
-		}
-	}
-	if len(collected) == 0 {
-		return nil, cur, nil
-	}
-	// Oldest-first.
-	lines := make([]turnLine, 0, len(collected))
-	for i := len(collected) - 1; i >= 0; i-- {
-		lines = append(lines, collected[i])
-	}
-	oldest, newest := lines[0].Turn, lines[len(lines)-1].Turn
-	cur = blockCursor{
-		OldestTurn: oldest, NewestTurn: newest,
-		HasOlder:      off > 0 || oldest > 1,
-		FirstMsgIndex: -1, // resolved by history_page via forward prefix count
-	}
-	return lines, cur, nil
-}
-
-// storeTurnTokens exact-counts one parsed turn line with btdby4.
-func storeTurnTokens(tl *turnLine) int {
-	if tl == nil || len(tl.Messages) == 0 {
-		return 0
-	}
-	msgs := make([]provider.Message, 0, len(tl.Messages))
-	for _, raw := range tl.Messages {
-		if m, err := core.HydrateMessageObject(raw); err == nil {
-			msgs = append(msgs, m)
-		}
-	}
-	return turnTokenCount(msgs)
-}
-
-// blockCursor describes one history page for history_page.go.
-type blockCursor struct {
-	OldestTurn    int
-	NewestTurn    int
-	HasOlder      bool
-	FirstMsgIndex int
-}
-
-// metaStartOffset returns the byte offset where the meta tail line starts.
-func metaStartOffset(f *os.File, size int64) (int64, error) {
-	if size == 0 {
-		return 0, fmt.Errorf("empty file")
-	}
-	line, err := readLastLine(f)
-	if err != nil {
-		return 0, err
-	}
-	// Offset = size - len(line) - trailing newline(s).
-	trimmed := bytes.TrimRight(line, "\r\n")
-	off := size - int64(len(trimmed)) - 1
-	// Account for \r\n vs \n.
-	if off > 0 {
-		b := make([]byte, 1)
-		if _, err := f.ReadAt(b, off-1); err == nil && b[0] == '\r' {
-			off--
-		}
-	}
-	if off < 0 {
-		off = 0
-	}
-	return off, nil
 }
 
 // sweepTmpLoop removes stale tmp orphans hourly (plus one immediate
