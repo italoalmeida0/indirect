@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"llm-gateway/indirect-code-daemon/packages/core"
 )
@@ -262,6 +263,69 @@ func normalizeForFuzzyMatch(text string) string {
 	return fuzzyReplacer.Replace(text)
 }
 
+// fuzzyRune is one normalized rune together with the original byte span
+// [start,end) it came from. A normalized rune may expand the original
+// (a smart quote is 3 UTF-8 bytes normalizing to 1) or the original may
+// expand the normalized (trailing whitespace is dropped entirely).
+type fuzzyRune struct {
+	r   rune
+	start int
+	end   int
+}
+
+// fuzzyFoldRune maps a rune to its fuzzy-normalized form (see
+// fuzzyReplacer). Unmapped runes fold to themselves.
+func fuzzyFoldRune(r rune) rune {
+	switch r {
+	case '\u2018', '\u2019', '\u201a', '\u201b':
+		return '\''
+	case '\u201c', '\u201d', '\u201e', '\u201f':
+		return '"'
+	case '\u2010', '\u2011', '\u2012', '\u2013', '\u2014', '\u2015', '\u2212':
+		return '-'
+	case '\u00a0', '\u2002', '\u2003', '\u2004', '\u2005', '\u2006', '\u2007',
+		'\u2008', '\u2009', '\u200a', '\u202f', '\u205f', '\u3000':
+		return ' '
+	}
+	return r
+}
+
+// normalizeRunesForFuzzy folds text into normalized runes while keeping
+// the original byte span of every rune, so a match found in normalized
+// space maps back onto the exact original bytes. Per-line trailing
+// whitespace is dropped (it is not part of the match).
+func normalizeRunesForFuzzy(text string) []fuzzyRune {
+	out := make([]fuzzyRune, 0, len(text))
+	pending := make([]fuzzyRune, 0, 8) // trailing whitespace of the current line
+	for i, r := range text {
+		end := i + len(string(r))
+		if r == '\n' {
+			// Per-line trailing whitespace is dropped before the newline.
+			pending = pending[:0]
+			out = append(out, fuzzyRune{r: '\n', start: i, end: end})
+			continue
+		}
+		if unicode.IsSpace(r) {
+			pending = append(pending, fuzzyRune{r: fuzzyFoldRune(r), start: i, end: end})
+			continue
+		}
+		out = append(out, pending...)
+		pending = pending[:0]
+		out = append(out, fuzzyRune{r: fuzzyFoldRune(r), start: i, end: end})
+	}
+	// Whitespace at EOF is trailing whitespace too: drop it.
+	return out
+}
+
+// fuzzyRuneString renders the normalized runes (the search space).
+func fuzzyRuneString(rs []fuzzyRune) string {
+	var b strings.Builder
+	for _, fr := range rs {
+		b.WriteRune(fr.r)
+	}
+	return b.String()
+}
+
 var fuzzyReplacer = strings.NewReplacer(
 	// Smart single quotes → '
 	"‘", "'",
@@ -305,21 +369,51 @@ type fuzzyMatchResult struct {
 }
 
 // fuzzyFindText locates text: exact match first, then fuzzy
-// match in normalized space.
+// match in normalized space. Fuzzy matches are mapped back onto the
+// original bytes via rune spans, so index/matchLen always address the
+// content passed in — never the normalized space.
 func fuzzyFindText(content, oldText string) fuzzyMatchResult {
+	if oldText == "" {
+		return fuzzyMatchResult{found: false}
+	}
 	if idx := strings.Index(content, oldText); idx != -1 {
 		return fuzzyMatchResult{found: true, index: idx, matchLen: len(oldText), usedFuzzy: false}
 	}
-	fuzzyContent := normalizeForFuzzyMatch(content)
+	runes := normalizeRunesForFuzzy(content)
+	fuzzyContent := fuzzyRuneString(runes)
 	fuzzyOldText := normalizeForFuzzyMatch(oldText)
-	idx := strings.Index(fuzzyContent, fuzzyOldText)
-	if idx == -1 {
+	if fuzzyOldText == "" {
+		// oldText was pure whitespace (or whitespace + newline): it folds
+		// to nothing and must never match an empty span at offset 0.
 		return fuzzyMatchResult{found: false}
 	}
-	return fuzzyMatchResult{found: true, index: idx, matchLen: len(fuzzyOldText), usedFuzzy: true}
+	pos := strings.Index(fuzzyContent, fuzzyOldText)
+	if pos == -1 {
+		return fuzzyMatchResult{found: false}
+	}
+	// Map the normalized match back to original bytes. strings.Index
+	// returns a byte offset; the span table is indexed by rune.
+	runePos := utf8.RuneCountInString(fuzzyContent[:pos])
+	runeLen := utf8.RuneCountInString(fuzzyOldText)
+	if runePos+runeLen > len(runes) {
+		return fuzzyMatchResult{found: false}
+	}
+	start := runes[runePos].start
+	last := runes[runePos+runeLen-1]
+	return fuzzyMatchResult{found: true, index: start, matchLen: last.end - start, usedFuzzy: true}
 }
 
+// countOccurrences counts non-overlapping occurrences of oldText in
+// content, in the same space the match was found: exact space when the
+// text matches exactly, fuzzy space otherwise. A text that exists exactly
+// once is never reported as duplicated because of a fuzzy twin.
 func countOccurrences(content, oldText string) int {
+	if oldText == "" {
+		return 0
+	}
+	if n := strings.Count(content, oldText); n > 0 {
+		return n
+	}
 	fuzzyContent := normalizeForFuzzyMatch(content)
 	fuzzyOldText := normalizeForFuzzyMatch(oldText)
 	if fuzzyOldText == "" {
@@ -358,7 +452,7 @@ func indentTolerantFind(content, oldText string) (index, length int, ok bool) {
 		match := true
 		for j := range oldLines {
 			fileLine := strings.TrimSuffix(contentLines[i+j], "\n")
-			if trimLeadingSpace(fileLine) != trimLeadingSpace(oldLines[j]) {
+			if !indentTolerantLineEquals(fileLine, oldLines[j]) {
 				match = false
 				break
 			}
@@ -397,7 +491,7 @@ func countIndentTolerantOccurrences(content, oldText string) int {
 		match := true
 		for j := range oldLines {
 			fileLine := strings.TrimSuffix(contentLines[i+j], "\n")
-			if trimLeadingSpace(fileLine) != trimLeadingSpace(oldLines[j]) {
+			if !indentTolerantLineEquals(fileLine, oldLines[j]) {
 				match = false
 				break
 			}
@@ -422,6 +516,15 @@ func splitMatchLines(text string) []string {
 
 func trimLeadingSpace(s string) string {
 	return strings.TrimLeft(s, " \t")
+}
+
+// indentTolerantLineEquals compares a file line and an old_text line
+// modulo leading whitespace AND fuzzy-normalized characters (smart
+// quotes, dashes, special spaces, trailing whitespace), so an edit that
+// needs both tolerance levels still lands.
+func indentTolerantLineEquals(fileLine, oldLine string) bool {
+	return normalizeForFuzzyMatch(trimLeadingSpace(fileLine)) ==
+		normalizeForFuzzyMatch(trimLeadingSpace(oldLine))
 }
 
 // transferIndent re-indents newText to the matched file region: each new
@@ -615,10 +718,10 @@ type textReplacement struct {
 
 // applyEditsToNormalizedContent applies every edit: all
 // edits are matched against the same original content; replacements are then
-// applied in reverse order so offsets stay stable. If any edit needs fuzzy
-// matching, the operation runs in fuzzy-normalized content space and then
-// overlays those line-level changes onto the original content so unchanged
-// line blocks keep their original bytes.
+// applied in reverse order so offsets stay stable. Fuzzy matches are mapped
+// back onto the original bytes (see normalizeRunesForFuzzy), so replacements
+// only ever touch the exact bytes the edit targeted — characters outside the
+// matched span keep their original form.
 func applyEditsToNormalizedContent(normalizedContent string, edits []textEdit, path string) (string, string, error) {
 	normalizedEdits := make([]textEdit, len(edits))
 	for i, e := range edits {
@@ -634,41 +737,29 @@ func applyEditsToNormalizedContent(normalizedContent string, edits []textEdit, p
 		}
 	}
 
-	usedFuzzyMatch := false
-	for _, e := range normalizedEdits {
-		if m := fuzzyFindText(normalizedContent, e.OldText); m.found && m.usedFuzzy {
-			usedFuzzyMatch = true
-			break
-		}
-	}
-	replacementBaseContent := normalizedContent
-	if usedFuzzyMatch {
-		replacementBaseContent = normalizeForFuzzyMatch(normalizedContent)
-	}
-
 	var matchedEdits []matchedEdit
 	for i, e := range normalizedEdits {
-		matchResult := fuzzyFindText(replacementBaseContent, e.OldText)
+		matchResult := fuzzyFindText(normalizedContent, e.OldText)
 		if !matchResult.found {
 			// Indentation-tolerant fallback: a line-aligned block that
 			// matches modulo leading whitespace is accepted and
 			// re-indented to the file's own whitespace.
-			if idx, ln, ok := indentTolerantFind(replacementBaseContent, e.OldText); ok {
-				if n := countIndentTolerantOccurrences(replacementBaseContent, e.OldText); n > 1 {
+			if idx, ln, ok := indentTolerantFind(normalizedContent, e.OldText); ok {
+				if n := countIndentTolerantOccurrences(normalizedContent, e.OldText); n > 1 {
 					return "", "", getDuplicateError(path, i, len(normalizedEdits), n)
 				}
 				matchedEdits = append(matchedEdits, matchedEdit{
 					editIndex:  i,
 					matchIndex: idx,
 					matchLen:   ln,
-					newText:    transferIndent(replacementBaseContent[idx:idx+ln], e.OldText, e.NewText),
+					newText:    transferIndent(normalizedContent[idx:idx+ln], e.OldText, e.NewText),
 				})
 				continue
 			}
-			hint := notFoundHint(replacementBaseContent, e.OldText)
+			hint := notFoundHint(normalizedContent, e.OldText)
 			return "", "", fmt.Errorf("%s%s", getNotFoundError(path, i, len(normalizedEdits)), hint)
 		}
-		occurrences := countOccurrences(replacementBaseContent, e.OldText)
+		occurrences := countOccurrences(normalizedContent, e.OldText)
 		if occurrences > 1 {
 			return "", "", getDuplicateError(path, i, len(normalizedEdits), occurrences)
 		}
@@ -694,16 +785,7 @@ func applyEditsToNormalizedContent(normalizedContent string, edits []textEdit, p
 	}
 
 	baseContent := normalizedContent
-	var newContent string
-	if usedFuzzyMatch {
-		var err error
-		newContent, err = applyReplacementsPreservingUnchangedLines(normalizedContent, replacementBaseContent, toReplacements(matchedEdits))
-		if err != nil {
-			return "", "", err
-		}
-	} else {
-		newContent = applyReplacements(replacementBaseContent, toReplacements(matchedEdits), 0)
-	}
+	newContent := applyReplacements(normalizedContent, toReplacements(matchedEdits), 0)
 
 	if baseContent == newContent {
 		return "", "", getNoChangeError(path, len(normalizedEdits))
@@ -744,99 +826,6 @@ func splitLinesWithEndings(content string) []string {
 		lines = append(lines, content[start:])
 	}
 	return lines
-}
-
-type lineSpan struct {
-	start int
-	end   int
-}
-
-func getLineSpans(content string) []lineSpan {
-	offset := 0
-	spans := make([]lineSpan, 0)
-	for _, line := range splitLinesWithEndings(content) {
-		spans = append(spans, lineSpan{start: offset, end: offset + len(line)})
-		offset += len(line)
-	}
-	return spans
-}
-
-func getReplacementLineRange(lines []lineSpan, r textReplacement) (int, int, error) {
-	replacementStart := r.matchIndex
-	replacementEnd := r.matchIndex + r.matchLen
-
-	startLine := -1
-	for i, line := range lines {
-		if replacementStart >= line.start && replacementStart < line.end {
-			startLine = i
-			break
-		}
-	}
-	if startLine == -1 {
-		return 0, 0, fmt.Errorf("Replacement range is outside the base content.")
-	}
-
-	endLine := startLine
-	for endLine < len(lines) && lines[endLine].end < replacementEnd {
-		endLine++
-	}
-	if endLine >= len(lines) {
-		return 0, 0, fmt.Errorf("Replacement range is outside the base content.")
-	}
-	return startLine, endLine + 1, nil
-}
-
-// applyReplacementsPreservingUnchangedLines overlays matches: replacements
-// matched against the normalized base are widened to the lines they touch;
-// touched lines are rewritten from the normalized base and every other line
-// is copied back from the original so unchanged blocks keep their bytes.
-func applyReplacementsPreservingUnchangedLines(originalContent, baseContent string, replacements []textReplacement) (string, error) {
-	originalLines := splitLinesWithEndings(originalContent)
-	baseLines := getLineSpans(baseContent)
-	if len(originalLines) != len(baseLines) {
-		// Base and original must agree on line count.
-		return "", fmt.Errorf("Cannot preserve unchanged lines because the base content has a different line count.")
-	}
-
-	type group struct {
-		startLine    int
-		endLine      int
-		replacements []textReplacement
-	}
-	var groups []group
-	sorted := append([]textReplacement(nil), replacements...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].matchIndex < sorted[j].matchIndex })
-	for _, r := range sorted {
-		startLine, endLine, err := getReplacementLineRange(baseLines, r)
-		if err != nil {
-			return "", err
-		}
-		if n := len(groups); n > 0 && startLine < groups[n-1].endLine {
-			g := &groups[n-1]
-			if endLine > g.endLine {
-				g.endLine = endLine
-			}
-			g.replacements = append(g.replacements, r)
-			continue
-		}
-		groups = append(groups, group{startLine: startLine, endLine: endLine, replacements: []textReplacement{r}})
-	}
-
-	originalLineIndex := 0
-	var result strings.Builder
-	for _, g := range groups {
-		result.WriteString(strings.Join(originalLines[originalLineIndex:g.startLine], ""))
-		groupStartOffset := baseLines[g.startLine].start
-		groupEndOffset := baseLines[g.endLine-1].end
-		result.WriteString(applyReplacements(
-			baseContent[groupStartOffset:groupEndOffset],
-			g.replacements,
-			groupStartOffset,
-		))
-		originalLineIndex = g.endLine
-	}
-	result.WriteString(strings.Join(originalLines[originalLineIndex:], ""))
-	return result.String(), nil
 }
 
 // diffContextLines is the number of unchanged lines kept on each

@@ -2,9 +2,13 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-const GW_PORT = 4600;
-const UP_PORT = 4601;
-const GW = `http://127.0.0.1:${GW_PORT}`;
+import { findFreePort } from "./free-port";
+
+// Ports are allocated at runtime so concurrent `bun test` runs can never
+// collide on bind.
+let GW_PORT: number;
+let UP_PORT: number;
+let GW: string;
 const ADMIN_PW = "audit-pw-12345678";
 
 let gwProc: ReturnType<typeof Bun.spawn>;
@@ -34,6 +38,9 @@ function startUpstream() {
 }
 
 beforeAll(async () => {
+  GW_PORT = await findFreePort();
+  UP_PORT = await findFreePort();
+  GW = `http://127.0.0.1:${GW_PORT}`;
   dataDir = mkdtempSync(path.join(tmpdir(), "gw-audit-"));
   const staticDir = path.join(dataDir, "dist");
   mkdirSync(staticDir, { recursive: true });

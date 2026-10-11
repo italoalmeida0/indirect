@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { $ } from "bun";
+import { findFreePort } from "./free-port";
 
 /**
  * Web Push black-box: subscribe -> simulated turn end with no tab open ->
@@ -14,10 +15,12 @@ import { $ } from "bun";
  * subscription endpoint URL, so any local URL works.
  */
 
-const GW_PORT = 4511;
-const GW = `http://127.0.0.1:${GW_PORT}`;
-const GW_WS = `ws://127.0.0.1:${GW_PORT}`;
-const PUSH_PORT = 4591;
+// Ports are allocated at runtime so concurrent `bun test` runs can never
+// collide on bind.
+let GW_PORT: number;
+let GW: string;
+let GW_WS: string;
+let PUSH_PORT: number;
 const ADMIN_PW = "push-admin-pass-1";
 
 let gwProc: ReturnType<typeof Bun.spawn>;
@@ -39,6 +42,10 @@ async function waitForServer(): Promise<void> {
 }
 
 beforeAll(async () => {
+  GW_PORT = await findFreePort();
+  GW = `http://127.0.0.1:${GW_PORT}`;
+  GW_WS = `ws://127.0.0.1:${GW_PORT}`;
+  PUSH_PORT = await findFreePort();
   // web-push always uses https.request (even for http:// URLs), so the fake
   // push service must be TLS. Self-signed cert + NODE_TLS_REJECT_UNAUTHORIZED=0
   // on the gateway side (test-only).

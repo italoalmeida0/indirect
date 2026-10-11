@@ -78,6 +78,30 @@ func (a *sessionAdmin) host() string {
 	return ""
 }
 
+// sendBounded enqueues a supervisor envelope with a bounded retry: the
+// bg loop drains its inbox continuously, so a full inbox resolves quickly,
+// but a single timed-out send must never silently skip a state change
+// (a dropped drop-notices would let a late notice resurrect a deleted
+// session; a dropped cancel would leak a running job).
+func (a *sessionAdmin) sendBounded(env Envelope, timeout time.Duration) bool {
+	if a.bg == nil {
+		return false
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		select {
+		case a.bg.inbox <- env:
+			return true
+		default:
+		}
+		if time.Now().After(deadline) {
+			trace("admin.bg.send.lost", map[string]any{"payload": fmt.Sprintf("%T", env.Payload)})
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // purgeSession stops bg jobs, drops the resident actor, deletes disk state.
 func (a *sessionAdmin) purgeSession(id string) error {
 	if !validSessionID(id) {
@@ -86,19 +110,13 @@ func (a *sessionAdmin) purgeSession(id string) error {
 	// Best-effort: cancel running jobs of this session via bg supervisor.
 	if a.bg != nil {
 		reply := make(chan any, 1)
-		select {
-		case a.bg.inbox <- Envelope{Payload: bgJobsOfMsg{SessionID: id, Reply: reply}}:
-		case <-time.After(replyTimeout):
-		}
+		a.sendBounded(Envelope{Payload: bgJobsOfMsg{SessionID: id, Reply: reply}}, replyTimeout)
 		select {
 		case r := <-reply:
 			if ids, ok := r.([]string); ok {
 				for _, jid := range ids {
 					creply := make(chan any, 1)
-					select {
-					case a.bg.inbox <- Envelope{Payload: bgCancelMsg{JobID: jid, Reply: creply}}:
-					case <-time.After(replyTimeout):
-					}
+					a.sendBounded(Envelope{Payload: bgCancelMsg{JobID: jid, Reply: creply}}, replyTimeout)
 					select {
 					case <-creply:
 					case <-time.After(replyTimeout):
@@ -108,11 +126,10 @@ func (a *sessionAdmin) purgeSession(id string) error {
 		case <-time.After(replyTimeout):
 		}
 		// V2-003: the deleted session's pending notices die with it —
-		// a late delivery must never resurrect the session.
-		select {
-		case a.bg.inbox <- Envelope{Payload: bgDropNoticesMsg{SessionID: id}}:
-		case <-time.After(replyTimeout):
-		}
+		// a late delivery must never resurrect the session. This send is
+		// retried until the supervisor loop accepts it (or the bound
+		// expires and the drop is traced).
+		a.sendBounded(Envelope{Payload: bgDropNoticesMsg{SessionID: id}}, 5*time.Second)
 	}
 	if a.purge == nil {
 		err := fmt.Errorf("session purge unavailable")

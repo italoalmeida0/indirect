@@ -2,10 +2,13 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
+import { findFreePort } from "./free-port";
 
-const GW_PORT = 4510;
-const GW = `http://127.0.0.1:${GW_PORT}`;
-const GW_WS = `ws://127.0.0.1:${GW_PORT}`;
+// Ports are allocated at runtime so concurrent `bun test` runs (or a
+// leftover gateway process) can never collide on bind.
+let GW_PORT: number;
+let GW: string;
+let GW_WS: string;
 const ADMIN_PW = "remote-admin-pass-1";
 
 let gwProc: ReturnType<typeof Bun.spawn>;
@@ -24,6 +27,9 @@ async function waitForServer(): Promise<void> {
 }
 
 beforeAll(async () => {
+  GW_PORT = await findFreePort();
+  GW = `http://127.0.0.1:${GW_PORT}`;
+  GW_WS = `ws://127.0.0.1:${GW_PORT}`;
   dataDir = mkdtempSync(path.join(tmpdir(), "llmgw-remote-test-"));
   mkdirSync(dataDir, { recursive: true });
 

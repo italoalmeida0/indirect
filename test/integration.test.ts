@@ -5,6 +5,7 @@ import path from "path";
 import { Database } from "bun:sqlite";
 
 import { totpAt } from "../server/crypto";
+import { findFreePort } from "./free-port";
 
 /**
  * Black-box integration suite (farm-game "audit" style): the gateway and the
@@ -12,10 +13,12 @@ import { totpAt } from "../server/crypto";
  * over HTTP — the same way an attacker or a real client would talk to it.
  */
 
-const GW_PORT = 4420;
-const UP_PORT = 4421;
-const GW = `http://127.0.0.1:${GW_PORT}`;
-const UP = `http://127.0.0.1:${UP_PORT}`;
+// Ports are allocated at runtime so concurrent `bun test` runs (or
+// leftover processes) can never collide on bind.
+let GW_PORT: number;
+let UP_PORT: number;
+let GW: string;
+let UP: string;
 const UPSTREAM_KEY = "sk-fake-secret";
 const ADMIN_PW = "admin-password-123";
 
@@ -81,6 +84,10 @@ async function llm(pathname: string, key: string, body: unknown, anthropicStyle 
 }
 
 beforeAll(async () => {
+  GW_PORT = await findFreePort();
+  UP_PORT = await findFreePort();
+  GW = `http://127.0.0.1:${GW_PORT}`;
+  UP = `http://127.0.0.1:${UP_PORT}`;
   dataDir = mkdtempSync(path.join(tmpdir(), "gw-it-"));
   const staticDir = path.join(dataDir, "dist");
   mkdirSync(staticDir, { recursive: true });
@@ -2449,10 +2456,10 @@ describe("IR routing regressions over HTTP", () => {
  * into other suites.
  */
 describe("zero-usage inference (isolated pair)", () => {
-  const GW2_PORT = 4470;
-  const UP2_PORT = 4471;
-  const GW2 = `http://127.0.0.1:${GW2_PORT}`;
-  const UP2 = `http://127.0.0.1:${UP2_PORT}`;
+  let GW2_PORT: number;
+  let UP2_PORT: number;
+  let GW2: string;
+  let UP2: string;
   let gw2: ReturnType<typeof Bun.spawn> | undefined;
   let up2: ReturnType<typeof Bun.spawn> | undefined;
   let dir2 = "";
@@ -2484,6 +2491,10 @@ describe("zero-usage inference (isolated pair)", () => {
     });
 
   beforeAll(async () => {
+    GW2_PORT = await findFreePort();
+    UP2_PORT = await findFreePort();
+    GW2 = `http://127.0.0.1:${GW2_PORT}`;
+    UP2 = `http://127.0.0.1:${UP2_PORT}`;
     dir2 = mkdtempSync(path.join(tmpdir(), "gw-zero-"));
     up2 = spawn("test/fake-upstream.ts", { FAKE_UPSTREAM_PORT: String(UP2_PORT), FAKE_UPSTREAM_KEY: UPSTREAM_KEY });
     gw2 = spawn("server/index.ts", {

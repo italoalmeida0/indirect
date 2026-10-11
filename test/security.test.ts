@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 
 import { totpAt } from "../server/crypto";
+import { findFreePort } from "./free-port";
 
 /**
  * SECURITY AUDIT SUITE (black-box).
@@ -27,9 +28,11 @@ import { totpAt } from "../server/crypto";
  * only as trustworthy as the edge proxy overwriting it).
  */
 
-const GW_PORT = 4500;
-const UP_PORT = 4501;
-const GW = `http://127.0.0.1:${GW_PORT}`;
+// Ports are allocated at runtime so concurrent `bun test` runs can never
+// collide on bind.
+let GW_PORT: number;
+let UP_PORT: number;
+let GW: string;
 const ADMIN_PW = "audit-admin-pass-1";
 
 let gwProc: ReturnType<typeof Bun.spawn>;
@@ -171,6 +174,9 @@ async function forgeJwt(payload: Record<string, unknown>, secret: string): Promi
 // ---------------------------------------------------------------- lifecycle
 
 beforeAll(async () => {
+  GW_PORT = await findFreePort();
+  UP_PORT = await findFreePort();
+  GW = `http://127.0.0.1:${GW_PORT}`;
   dataDir = mkdtempSync(path.join(tmpdir(), "gw-sec-"));
   const staticDir = path.join(dataDir, "dist");
   mkdirSync(staticDir, { recursive: true });

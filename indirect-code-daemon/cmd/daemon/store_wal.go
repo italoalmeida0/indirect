@@ -452,6 +452,11 @@ func applyWALEvent(rec *SessionRecord, ev *walEvent) error {
 	case walTypeTurnState:
 		if rec.Turn != nil {
 			rec.Turn.Status = ev.TurnStatus
+		} else {
+			// A turn-state flip without an active turn means the matching
+			// turn_start never made it into the WAL (torn tail / crash).
+			// Record the drop instead of losing it silently.
+			trace("wal.turn_state.orphan", map[string]any{"status": ev.TurnStatus})
 		}
 		if ev.UpdatedAt > 0 {
 			rec.UpdatedAt = ev.UpdatedAt
