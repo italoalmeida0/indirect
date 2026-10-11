@@ -14,6 +14,10 @@ export interface ContentBlock {
   toolId?: string;
   toolName?: string;
   toolArgs?: string;
+  /** Raw transcript index of the message this block was parsed from (set on
+   * hoisted tool_result blocks — their carrier's srcIdx may be far older, so
+   * edit/delete/regenerate cuts must compare against this, not the carrier). */
+  srcIdx?: number;
   toolResult?: string;
   toolProgress?: string;
   toolStartedAt?: number;
@@ -153,6 +157,11 @@ export type RenderBlockKind = "single" | "series";
 export interface RenderBlockBase {
   kind: RenderBlockKind;
   id?: string;
+  /** Identity of the rendered turn this block belongs to (stable across
+   * rebuilds and cache hits). Live state is turn-scoped: every block whose
+   * turnKey matches the newest block's turnKey shows running state while
+   * the session runs — not just the transcript's last block. */
+  turnKey: string;
 }
 
 export interface RenderBlockSingle extends RenderBlockBase {

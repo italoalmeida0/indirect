@@ -14,6 +14,7 @@ import {
   appendTextDelta as reduceTextDelta,
   appendToolArgsDelta as reduceToolArgs,
   appendToolResult as reduceToolResult,
+  cutTail,
   finishTurn,
   mergeAssistantMessage,
   mergeUsage,
@@ -847,18 +848,55 @@ export function createTranscript(opts: {
 
   function restoreEditDraft() {
     if (editingMsgIdx() != null) {
-      const current = messages().find((m) => m.srcIdx === editingMsgIdx());
-      if (!current || sourceOf(current) !== editSource?.source) cancelEditMsg();
+      const idx = editingMsgIdx() ?? -1;
+      const current = messages().find((m) => m.srcIdx === idx);
+      if (current && sourceOf(current) === editSource?.source) return;
+      // The message moved (truncation/compaction/resend): the edit follows it
+      // by content instead of being cancelled — the typed text is never lost.
+      const source = editSource?.source;
+      const moved = source === undefined
+        ? undefined
+        : messages().find((m) => m.role === "user" && sourceOf(m) === source);
+      if (moved && typeof moved.srcIdx === "number" && source !== undefined) {
+        const targetIdx = moved.srcIdx;
+        batch(() => {
+          editSource = { host: opts.getHostId(), sid: opts.getSessionId(), idx: targetIdx, source: source };
+          setEditingMsgIdx(targetIdx);
+          persistEditDraft();
+        });
+        return;
+      }
+      // Message gone: drop the in-progress edit but keep the typed draft in
+      // localStorage for manual recovery (never delete the user's text here).
+      batch(() => {
+        editAttachments.clearAttachments();
+        setEditingAttachments([]);
+        editSource = null;
+        setEditingMsgIdx(null);
+        setEditingMsgText("");
+      });
       return;
     }
     try {
       const saved = localStorage.getItem(`${editDraftPrefix()}active`);
       if (saved == null) return;
       const idx = Number(saved);
-      const msg = messages().find((m) => m.srcIdx === idx && m.role === "user");
       const draft = JSON.parse(localStorage.getItem(`${editDraftPrefix()}${idx}`) || "null");
-      if (msg && draft?.source === sourceOf(msg) && typeof draft.text === "string") startEditMsg(idx, msg);
-      else clearEditDraft(idx);
+      if (typeof draft?.text !== "string" || typeof draft?.source !== "string") return;
+      // The message may sit at another srcIdx now: match it by content and
+      // re-anchor the draft there. A lookup miss KEEPS the draft for manual
+      // recovery — deleting it silently lost the user's typed text.
+      const msg = messages().find((m) => m.srcIdx === idx && m.role === "user" && sourceOf(m) === draft.source)
+        ?? messages().find((m) => m.role === "user" && sourceOf(m) === draft.source);
+      const target = msg?.srcIdx;
+      if (msg == null || target == null) return;
+      if (target !== idx) {
+        // Re-anchor: the old key stays (manual recovery); the pointer and a
+        // copy move to the message's new home.
+        localStorage.setItem(`${editDraftPrefix()}${target}`, JSON.stringify(draft));
+        localStorage.setItem(`${editDraftPrefix()}active`, String(target));
+      }
+      startEditMsg(target, msg);
     } catch {}
   }
 
@@ -1005,15 +1043,13 @@ export function createTranscript(opts: {
     // Authoritative tail cut after edit/regenerate (daemon broadcast).
     // keepIndex is the last RAW message to keep; drop rendered messages
     // whose srcIdx exceeds it, then let the following session_content
-    // (or the new turn) repaint.
+    // (or the new turn) repaint. cutTail owns the cut rules: unstamped
+    // echoes die with the tail and hoisted tool results are pruned by
+    // their own raw envelope index, not their carrier's.
     if (sessionId !== opts.getSessionId()) return;
     if (keep >= -1) {
       contextVersion++;
-      setMessages((prev: ChatMessage[]) => {
-        if (keep === -1) return [];
-        const cut = prev.findIndex((m) => (m.srcIdx ?? -1) > keep);
-        return cut < 0 ? prev : prev.slice(0, cut);
-      });
+      setMessages((prev: ChatMessage[]) => cutTail(prev, keep));
       // The past changed: drop seals + cursor (a fresh tail arrives
       // next and re-seals).
       resetHistory();

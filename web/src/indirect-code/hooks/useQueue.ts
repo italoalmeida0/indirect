@@ -57,10 +57,16 @@ export function createQueue(opts: {
     opts.send({ type: "queue_add", sessionId: sid, text, model, yolo, attachmentIds });
   }
 
-  function updateQueued(queueId: string, text: string, attachmentIds: string[]) {
+  function updateQueued(queueId: string, text: string, attachmentIds?: string[]) {
     const sid = opts.getSessionId();
     if (!sid || !opts.isOpen()) return;
-    opts.send({ type: "queue_update", sessionId: sid, queueId, text, attachmentIds });
+    // Tri-state contract (daemon): omitted = attachments UNCHANGED (partial
+    // update); [] = cleared; [ids] = full replacement. A text-only edit must
+    // omit the field or the daemon replaces the set (dropping any id the
+    // draft does not carry).
+    opts.send(attachmentIds === undefined
+      ? { type: "queue_update", sessionId: sid, queueId, text }
+      : { type: "queue_update", sessionId: sid, queueId, text, attachmentIds });
     setEditingQueueId(null);
   }
 
@@ -95,18 +101,23 @@ export function createQueue(opts: {
   function beginEdit(item: QueuedMessage, stored: { id: string; name: string; mime: string; size: number }[]) {
     setEditingQueueId(item.id);
     setEditingQueueText(item.text);
+    // The item's own attachmentIds is the source of truth; `stored` only
+    // supplies display metadata. Every id must be preloaded — dropping the
+    // ones without metadata made the next save replace the set without them.
+    const metaById = new Map(stored.map((a) => [a.id, a]));
     editDraft.setPendingAttachments(
-      stored
-        .filter((a) => item.attachmentIds.includes(a.id))
-        .map((a) => ({
+      item.attachmentIds.map((id) => {
+        const meta = metaById.get(id);
+        return {
           key: crypto.randomUUID(),
-          name: a.name,
-          mime: a.mime,
-          size: a.size,
+          name: meta?.name ?? id,
+          mime: meta?.mime ?? "",
+          size: meta?.size ?? 0,
           dataB64: "",
-          serverId: a.id,
+          serverId: id,
           serverSessionId: opts.getSessionId(),
-        })),
+        };
+      }),
     );
   }
 
@@ -120,7 +131,13 @@ export function createQueue(opts: {
     }
     try {
       const ids = await Promise.all(pending.map((a) => editDraft.uploadOneAttachment(sid, a)));
-      updateQueued(queueId, editingQueueText(), ids);
+      // Same membership as the item's stored list → text-only edit: omit the
+      // field (partial update). Any change sends the FULL new list — the
+      // daemon treats a present array as a full replacement (and [] clears).
+      const current = queueOf(sid).find((q) => q.id === queueId);
+      const unchanged = !!current && ids.length === current.attachmentIds.length &&
+        ids.every((id) => current.attachmentIds.includes(id));
+      updateQueued(queueId, editingQueueText(), unchanged ? undefined : ids);
       editDraft.clearAttachments();
       return true;
     } catch (e) {

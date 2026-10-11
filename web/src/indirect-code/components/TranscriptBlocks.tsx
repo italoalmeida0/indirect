@@ -8,6 +8,7 @@ import type { ChatMessage, ContentBlock, RenderBlock, RenderBlockSeries, ToolUni
 import { partitionToolSegs } from "../utils/toolSegs";
 import type { ToolSeg } from "../utils/toolSegs";
 import { groupTitle, specialTitle } from "../utils/titles";
+import { isBlockRunning, groupToolRuns } from "../utils/blockRuns";
 import { formatDurationSecs } from "../utils/format";
 import { useToolUnitModel } from "./tool/toolUnitModel";
 import { ToolUnitHeader } from "./tool/ToolUnitHeader";
@@ -105,7 +106,7 @@ function renderTurnAggregate(
   // NOTE: ctx.renderBlocks() is the FULL list (sealed blocks + live
   // tail; the <For> in TranscriptView slices by seal); the running turn
   // is always the newest block, which always renders.
-  const running = createMemo(() => ctx.renderBlocks().at(-1)?.msg.id === series.msg.id && ctx.sessionStatus() === "running");
+  const running = createMemo(() => isBlockRunning(ctx.renderBlocks(), series, ctx.sessionStatus()));
   const summary = createMemo(() => specialTitle(series.units, {
     thoughts: series.entries.filter((e) => e.kind === "thinking").length,
   }));
@@ -129,19 +130,7 @@ function renderTurnAggregate(
    * live only while the turn's tail is still thinking. */
   const tailIsThinking = () => series.entries?.[lastEntryIdx()]?.kind === "thinking";
   const thinkingHidden = () => !ctx.verboseChat();
-  const visibleRuns = createMemo(() => {
-    const runs = new Map<string | undefined, ToolUnit[]>();
-    let run: ToolUnit[] | undefined;
-    series.entries.forEach((entry) => {
-      if (entry.kind === "tools") {
-        if (!run) { run = []; runs.set(entry.id, run); }
-        run.push(...entry.units);
-      } else if (!(entry.kind === "thinking" && thinkingHidden())) {
-        run = undefined;
-      }
-    });
-    return runs;
-  });
+  const visibleRuns = createMemo(() => groupToolRuns(series.entries));
   return (
     <div class="w-full border-t border-line/60 overflow-hidden mt-1">
       <button

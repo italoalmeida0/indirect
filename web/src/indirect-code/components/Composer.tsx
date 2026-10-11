@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { useComposerCtx, useSession, useTranscriptCtx, useUI } from "../ctx";
+import { composerIsCollapsed } from "../utils/composerState";
 import { ScrollOverlays } from "./composer/ScrollOverlays";
 import { StatusBanners } from "./composer/StatusBanners";
 import { ComposerInput } from "./composer/ComposerInput";
@@ -17,7 +18,12 @@ export function Composer() {
   // Short viewports: the whole composer (input, toolbar, footer) can be
   // minimized, leaving only the turn-status row + chevron above. Never in a
   // new conversation — there is nothing to minimize into.
-  const collapsed = () => ui.composerCollapsed() && !s.draftMode() && !!s.activeSessionId() && !s.workspaceBlocked();
+  const collapsed = () => composerIsCollapsed({
+    composerCollapsed: ui.composerCollapsed(),
+    draftMode: s.draftMode(),
+    activeSessionId: s.activeSessionId(),
+    workspaceBlocked: s.workspaceBlocked(),
+  });
   // Minimized: the status row is the last thing on screen, so the wrapper
   // needs its own bottom breathing room (nothing below it to add any).
   const wrapperClass = () => s.draftMode()

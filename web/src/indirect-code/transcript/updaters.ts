@@ -65,8 +65,13 @@ export function normalizeSessionMessages(rawMsgs: any[], previous: ChatMessage[]
     for (const b of blocks) {
       if (b.type === "tool_result") {
         const owner=(b.toolId && callCarriers.get(b.toolId)) || ensureCarrier(at(idx),m);
+        // A hoisted result lives on its CALL's carrier, which may be far
+        // older than the raw "tool" envelope it came from: stamp the block
+        // with its own envelope index so edit/regenerate cuts can prune it
+        // (cutTail) even when the carrier itself survives.
+        const hoisted: ContentBlock = { ...b, srcIdx: at(idx) };
         const existing=owner.blocks.findIndex(x=>x.type==="tool_result" && x.toolId===b.toolId);
-        if(existing>=0) owner.blocks[existing]=b; else owner.blocks.push(b);
+        if(existing>=0) owner.blocks[existing]=hoisted; else owner.blocks.push(hoisted);
       }
       else rest.push(b);
     }
@@ -294,7 +299,9 @@ export function appendToolResult(
     if (existing >= 0) {
       // A replayed detach placeholder must not undo a terminal background fold.
       if ((blocks[existing].toolDetails as any)?.detached && !(details as any)?.detached) return prev;
-      blocks[existing] = resBlock;
+      // Keep the hoisted envelope stamp: the live event carries no raw index,
+      // and cutTail prunes orphaned results by it (BUG 30).
+      blocks[existing] = { ...resBlock, srcIdx: blocks[existing].srcIdx };
     } else blocks.push(resBlock);
     return [...prev.slice(0,index),{...carrier,blocks},...prev.slice(index+1)];
   }
@@ -316,11 +323,34 @@ export function stampDuration(prev: ChatMessage[], dur: number): ChatMessage[] {
   return prev;
 }
 
-/** Optimistic cut of the rendered tail (edit/regenerate): discards
- * messages with srcIdx beyond the retained raw index. */
+/** Optimistic cut of the rendered tail (edit/regenerate): discards messages
+ * with srcIdx beyond the retained raw index. Rows without a raw index
+ * (pending optimistic echoes) are never retained by a keep >= 0 cut — they
+ * describe intent for a tail that is being discarded; keepRawIdx -1 clears
+ * everything (matches handleTruncated's "cut all"). A hoisted tool_result
+ * block knows its own raw envelope index (its carrier may be far older), so
+ * it is pruned even when the carrier itself survives the cut. */
 export function cutTail(prev: ChatMessage[], keepRawIdx: number): ChatMessage[] {
+  if (keepRawIdx < 0) return [];
   const cut = prev.findIndex((m) => (m.srcIdx ?? -1) > keepRawIdx);
-  return cut < 0 ? prev : prev.slice(0, cut);
+  const bound = cut < 0 ? prev.length : cut;
+  const kept: ChatMessage[] = [];
+  let changed = cut >= 0;
+  for (let i = 0; i < bound; i++) {
+    const m = prev[i];
+    // Unstamped rows (pending optimistic echoes) are never raw-addressable:
+    // a keep >= 0 cut discards them together with the tail.
+    if (m.srcIdx == null) { changed = true; continue; }
+    // A hoisted tool_result carries its own raw envelope index (its carrier
+    // may be far older): prune it even when the carrier survives the cut.
+    if (!m.blocks.some((b) => b.type === "tool_result" && b.srcIdx != null && b.srcIdx > keepRawIdx)) {
+      kept.push(m);
+      continue;
+    }
+    kept.push({ ...m, blocks: m.blocks.filter((b) => !(b.type === "tool_result" && b.srcIdx != null && b.srcIdx > keepRawIdx)) });
+    changed = true;
+  }
+  return changed ? kept : prev;
 }
 
 /** Merges assistant_message: merges into the last assistant or opens a bubble
@@ -367,10 +397,14 @@ export function orderedMessages(messages: ChatMessage[]): ChatMessage[] {
 }
 
 /** A tail snapshot replaces its raw range, including removed/retried rows.
- * Older pages remain intact; snapshot order is authoritative. */
+ * Older pages remain intact; snapshot order is authoritative. Rows without a
+ * raw index (optimistic echo, live carrier) are pending intent, not "old
+ * tail" — a refresh must not wipe them; they are the newest content
+ * (orderedMessages sorts them last), so they follow the snapshot tail. */
 export function mergeTranscriptTail(prev: ChatMessage[], tail: ChatMessage[], firstIndex: number): ChatMessage[] {
   const ids=new Set(tail.map(m=>m.id));
-  return [...prev.filter(m=>m.srcIdx!=null && m.srcIdx<firstIndex && !ids.has(m.id)),...tail];
+  return [...prev.filter(m=>m.srcIdx!=null && m.srcIdx<firstIndex && !ids.has(m.id)),...tail,
+    ...prev.filter(m=>m.srcIdx==null && !ids.has(m.id))];
 }
 
 /** Turn transition when becoming idle (turn end without endedAt). */

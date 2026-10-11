@@ -219,7 +219,7 @@ function buildTurnEntries(turnMsgs: ChatMessage[]): TurnEntry[] {
   }));
 }
 
-function buildTurnBlocks(turnMsgs: ChatMessage[]): RenderBlock[] {
+function buildTurnBlocks(turnMsgs: ChatMessage[], turnKey: string): RenderBlock[] {
   const blocks: RenderBlock[] = [];
   let currentGroup: ChatMessage[] = [];
 
@@ -236,6 +236,7 @@ function buildTurnBlocks(turnMsgs: ChatMessage[]): RenderBlock[] {
       blocks.push({
         kind: "series",
         id: blockId,
+        turnKey,
         msg: leadMsg,
         extras: groupMsgs.slice(1),
         units: pairTurnUnits(groupMsgs),
@@ -243,7 +244,7 @@ function buildTurnBlocks(turnMsgs: ChatMessage[]): RenderBlock[] {
         textMsg,
       });
     } else {
-      blocks.push({ kind: "single", msg: textMsg || leadMsg });
+      blocks.push({ kind: "single", turnKey, msg: textMsg || leadMsg });
     }
     currentGroup = [];
   };
@@ -281,7 +282,12 @@ export function buildRenderBlocks(
 
   for (let i = 0; i < list.length; i++) {
     const head = list[i];
-    if (head.role === "user") { result.push({ kind: "single", msg: head }); continue; }
+    // Turn identity shared by every block of the turn: the daemon's turn
+    // sequence keeps mid-turn steering splits unified, and the group's lead
+    // message id covers legacy messages without a stamped turnIndex. Live
+    // state is turn-scoped — consumers match this key, never block position.
+    const turnKey = head.turnIndex != null ? `turn:${head.turnIndex}` : `msg:${head.id}`;
+    if (head.role === "user") { result.push({ kind: "single", turnKey, msg: head }); continue; }
 
     let turnEnd = i;
     while (turnEnd + 1 < list.length && list[turnEnd + 1].role !== "user" &&
@@ -291,7 +297,7 @@ export function buildRenderBlocks(
     if (cached && cached.messages.length === turnMsgs.length && cached.messages.every((m, index) => m === turnMsgs[index])) {
       result.push(...cached.blocks); nextCache.set(head.id, cached); i = turnEnd; continue;
     }
-    const blocks = buildTurnBlocks(turnMsgs);
+    const blocks = buildTurnBlocks(turnMsgs, turnKey);
     result.push(...blocks);
     nextCache.set(head.id, { messages: turnMsgs, blocks });
     i = turnEnd;

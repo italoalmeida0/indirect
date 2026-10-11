@@ -28,6 +28,11 @@ function unescapeAttr(v: string): string {
     .replace(/&amp;/g, "&");
 }
 
+/** Mirrors the daemon's UnescapeEnvelopeBody (packages/core/envelope.go):
+ * the daemon escapes only the two spoofable sequences (`<tool_result`,
+ * `</tool_result`) — the trailing `>` is NOT escaped — so an escaped marker
+ * arriving on the wire unescapes with a plain replace, never requiring
+ * `&gt;` to appear anywhere. */
 function unescapeBody(s: string): string {
   return s.replace(/&lt;\/tool_result/g, "</tool_result").replace(/&lt;tool_result/g, "<tool_result");
 }
@@ -107,28 +112,20 @@ export function stripToolEnvelopeDetailed(text: string): {
   footer: FooterFact[];
 } {
   if (typeof text !== "string") return { body: text, attrs: {}, footer: [] };
-  // Defense in depth, NOT the escape contract: the daemon escapes only the
-  // two sequences that could close/spoof the envelope (<tool_result and
-  // </tool_result) and unescapes them before display, so a replayed body
-  // never arrives as a whole escaped envelope. This branch only handles a
-  // legacy/hand-copied "&lt;tool_result…&gt;" blob pasted into markdown, and
-  // it is idempotent for already-unescaped bodies.
-  const work = text.replace(
-    /&lt;tool_result([\s\S]*?)(?:&lt;\/tool_result&gt;|$)/g,
-    (matched: string, inner: string) => {
-      const gt = inner.indexOf("&gt;");
-      if (gt < 0) return "";
-      const close = matched.indexOf("&lt;/tool_result&gt;");
-      return close < 0 ? "" : inner.slice(gt + 4);
-    },
-  );
-  if (!work.includes(OPEN)) return { body: work, attrs: {}, footer: [] };
+  // No pre-parse unescape pass: the daemon's escape contract
+  // (escapeEnvelopeBody: only `<tool_result` and `</tool_result` become
+  // `&lt;tool_result` / `&lt;/tool_result`, the trailing `>` is never escaped)
+  // is reversed exactly by parseToolEnvelope's unescapeBody (mirrors
+  // UnescapeEnvelopeBody). A defensive pre-parse replace of escaped markers
+  // would corrupt wire-form bodies ("use &lt;tool_result> to wrap"): those
+  // markers are REAL body content and must survive to the parsed body.
+  if (!text.includes(OPEN)) return { body: text, attrs: {}, footer: [] };
   let attrs: Record<string, string> = {};
   let footer: FooterFact[] = [];
   let seen = false;
   // Closed segments first (body between the tags), then any trailing
   // unclosed fragment (a partial stream) is dropped entirely.
-  const body = work.replace(
+  const body = text.replace(
     new RegExp(`${OPEN}([\\s\\S]*?)(?:${CLOSE}|$)`, "g"),
     (matched: string, inner: string) => {
       if (seen) return "";
@@ -150,8 +147,12 @@ export function stripToolEnvelopeDetailed(text: string): {
  * so it never renders as output. */
 export function bodyWithoutFooter(text: string): string {
   // Only footer-shaped facts (exit/status/duration/page/…) are stripped: a
-  // legitimate last output line like "[done]" must survive.
-  const fact = String.raw`\[(?:exit \d+|running|ok|error|canceled|completed|Took [^\]]+|[\d.\-–/]+ truncated|[\d.\-–/]+|more lines: offset \d+|No output yet\.)\]`;
+  // legitimate last output line like "[done]" or "[42]" must survive. Page
+  // facts carry the daemon's "start-end/total" range shape, so purely
+  // numeric bracket lines (counts, ids, versions) never match.
+  const page = String.raw`\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?/\d+(?:\.\d+)?`;
+  const fact = String.raw`\[(?:exit \d+|running|ok|error|canceled|completed|Took [^\]]+|${page} truncated|${page}|more lines: offset \d+|No output yet\.)\]`;
   const m = new RegExp(`(?:\\n|^)(${fact}(?:  ${fact})*)\\s*$`).exec(text);
-  return m ? text.slice(0, m.index + (m.index > 0 ? 1 : 0)) : text;
+  // Cut the footer line AND the newline that introduced it.
+  return m ? text.slice(0, m.index) : text;
 }

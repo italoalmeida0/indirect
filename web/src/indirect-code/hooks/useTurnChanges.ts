@@ -43,9 +43,29 @@ export function createTurnChanges(opts: {
   const balloons = () => state.balloons;
   function setBalloons(value: TurnBalloon[] | ((prev: TurnBalloon[]) => TurnBalloon[])) {
     const next = typeof value === "function" ? untrack(() => value(state.balloons)) : value;
-    setState("balloons", reconcile(next.map((b) => ({ ...b, id: String(b.turnIndex),
-      files: b.files.map((f) => ({ ...f, id: f.path })),
-    })), { merge: true }));
+    // Reconcile identity: keys must be UNIQUE per row. A duplicated turnIndex
+    // (live + committed halves) or a duplicated file path (modified + new)
+    // used to collide here and corrupt the store on the next reconcile pass
+    // (rows vanished or turned null). The first occurrence keeps its plain
+    // key (stable DOM identity across updates); later ones get their
+    // occurrence index appended.
+    const turnOccurrences = new Map<string, number>();
+    const rows = next.map((b) => {
+      const turnKey = String(b.turnIndex);
+      const nth = turnOccurrences.get(turnKey) ?? 0;
+      turnOccurrences.set(turnKey, nth + 1);
+      const pathOccurrences = new Map<string, number>();
+      return {
+        ...b,
+        id: nth === 0 ? turnKey : `${turnKey}:${nth}`,
+        files: b.files.map((f) => {
+          const nthPath = pathOccurrences.get(f.path) ?? 0;
+          pathOccurrences.set(f.path, nthPath + 1);
+          return { ...f, id: nthPath === 0 ? f.path : `${f.path}:${nthPath}` };
+        }),
+      };
+    });
+    setState("balloons", reconcile(rows, { merge: true }));
   }
   const [undoBusy, setUndoBusy] = createSignal<number | null>(null);
   const [expanded, setExpanded] = createSignal<Record<string, boolean>>({});

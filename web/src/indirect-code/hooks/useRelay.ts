@@ -97,10 +97,25 @@ export function createRelay(opts: {
       setConnectionState("disconnected");
       opts.onClose();
       const delay = Math.min(1000 * 2 ** reconnectAttempt++, 15000);
-      reconnectTimer = setTimeout(async () => {
-        // An authenticated request refreshes an expired dashboard token first.
-        await opts.ensureAuth();
-        if (!disposed && opts.isActiveHost(hostId)) connect(hostId);
+      reconnectTimer = setTimeout(() => {
+        void (async () => {
+          try {
+            // An authenticated request refreshes an expired dashboard token first.
+            await opts.ensureAuth();
+          } catch (err) {
+            // A transient refresh failure must not kill the reconnect loop:
+            // this timer is the ONLY reconnect path, so an unhandled rejection
+            // here left the relay disconnected until a page reload. The
+            // connection is attempted regardless — the next attempt retries
+            // the auth refresh (and the backoff keeps the loop alive).
+            console.error("Indirect Code auth refresh failed:", err);
+          }
+          try {
+            if (!disposed && opts.isActiveHost(hostId)) connect(hostId);
+          } catch (err) {
+            console.error("Indirect Code reconnect failed:", err);
+          }
+        })();
       }, delay);
     };
   }

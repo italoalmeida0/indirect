@@ -90,6 +90,54 @@ interface PendingReq {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/** Zero/negative timestamps are corruption, not 1970. The fallback must NOT
+ * read the clock: useMirror suppresses mirror updates by comparing
+ * JSON.stringify-equal summaries, and a fresh `Date.now()` per pull made
+ * every corrupted session churn the sidebar on every pull forever. A single
+ * frozen sentinel keeps the value stable per payload — and timeAgo renders a
+ * non-positive stamp as "—", never "20706d". */
+const CORRUPT_TIMESTAMP = 0;
+
+/** One pulled session row from the daemon (unvalidated wire shape: only the
+ * fields normalizeSession reads). */
+interface RawSessionRow {
+  id: string;
+  cwd?: string;
+  title?: string;
+  model?: string;
+  status?: string;
+  pinned?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+  lastTurnStartedAt?: number;
+  todosOpen?: boolean;
+  options?: { effort?: string; mode?: string; skills?: string[]; access?: string };
+}
+
+/** One pulled session row mapped to the mirror schema. Exported as a test
+ * seam (the data layer itself needs IndexedDB to stand up). */
+export function normalizeSession(r: RawSessionRow, hostId: string): RcSession {
+  return {
+    id: r.id,
+    hostId,
+    cwd: r.cwd || "",
+    title: r.title || r.cwd || "New conversation",
+    model: r.model || "",
+    status: r.status === "running" ? "running" : "idle",
+    pinned: !!r.pinned,
+    createdAt: typeof r.createdAt === "number" && r.createdAt > 0 ? r.createdAt : CORRUPT_TIMESTAMP,
+    updatedAt: typeof r.updatedAt === "number" && r.updatedAt > 0 ? r.updatedAt : CORRUPT_TIMESTAMP,
+    lastTurnStartedAt: typeof r.lastTurnStartedAt === "number" && r.lastTurnStartedAt > 0 ? r.lastTurnStartedAt : undefined,
+    todosOpen: typeof r.todosOpen === "boolean" ? r.todosOpen : undefined,
+    options: r.options ? {
+      effort: r.options.effort || "medium",
+      mode: r.options.mode || "build",
+      skills: Array.isArray(r.options.skills) ? r.options.skills : [],
+      access: r.options.access || "full",
+    } : undefined,
+  };
+}
+
 /**
  * Creates the data layer. `send` transmits over the page's daemon socket and
  * must stamp the hostId itself; `isOpen` reports socket readiness.
@@ -120,30 +168,6 @@ export function createDataLayer(opts: {
       pending.set(id, { hostId, resolve, reject, timer });
       opts.send({ ...pull, hostId, id });
     });
-  }
-
-  function normalizeSession(r: any, hostId: string): RcSession {
-    return {
-      id: r.id,
-      hostId,
-      cwd: r.cwd || "",
-      title: r.title || r.cwd || "New conversation",
-      model: r.model || "",
-      status: r.status === "running" ? "running" : "idle",
-      pinned: !!r.pinned,
-      // Zero/negative timestamps are corruption, not 1970: fall back to
-      // now instead of rendering "20706d" via timeAgo.
-      createdAt: typeof r.createdAt === "number" && r.createdAt > 0 ? r.createdAt : Date.now(),
-      updatedAt: typeof r.updatedAt === "number" && r.updatedAt > 0 ? r.updatedAt : Date.now(),
-      lastTurnStartedAt: typeof r.lastTurnStartedAt === "number" && r.lastTurnStartedAt > 0 ? r.lastTurnStartedAt : undefined,
-      todosOpen: typeof r.todosOpen === "boolean" ? r.todosOpen : undefined,
-      options: r.options ? {
-        effort: r.options.effort || "medium",
-        mode: r.options.mode || "build",
-        skills: Array.isArray(r.options.skills) ? r.options.skills : [],
-        access: r.options.access || "full",
-      } : undefined,
-    };
   }
 
   function normalizeProject(p: any, hostId: string): RcProject {

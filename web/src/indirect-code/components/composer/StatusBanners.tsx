@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { useHost, useSession, useTranscriptCtx, useUI } from "../../ctx";
+import { composerIsCollapsed } from "../../utils/composerState";
 import { IndirectBrand } from "../IndirectBrand";
 
 /** Minimize/restore the composer (input, toolbar, footer) and the whole
@@ -36,7 +37,12 @@ export function StatusBanners() {
   const ui = useUI();
   /** Same effective predicate as the composer box: the persisted preference
    *  only bites in an existing, available conversation. */
-  const collapsed = () => ui.composerCollapsed() && !s.draftMode() && !s.workspaceBlocked();
+  const collapsed = () => composerIsCollapsed({
+    composerCollapsed: ui.composerCollapsed(),
+    draftMode: s.draftMode(),
+    activeSessionId: s.activeSessionId(),
+    workspaceBlocked: s.workspaceBlocked(),
+  });
   return (
 <>
 <Show when={s.draftMode()}>

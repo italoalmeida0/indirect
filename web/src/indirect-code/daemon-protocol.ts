@@ -36,11 +36,11 @@ export type DaemonCommand = CommandBase &
   | { type: "configure_session"; sessionId: string; model: string; options: Omit<SessionChoice, "model"> }
   | { type: "prompt"; sessionId: string; requestId?: string; text: string; model: string; yolo: boolean; options: Omit<SessionChoice, "model">; attachmentIds: string[] }
   | { type: "queue_add"; sessionId: string; text: string; model: string; yolo: boolean; attachmentIds: string[] }
-  | { type: "queue_update"; sessionId: string; queueId: string; text: string; attachmentIds: string[] }
+  | { type: "queue_update"; sessionId: string; queueId: string; text: string; /** Omitted = attachments unchanged (partial update); [] = cleared; [ids] = replaced. */ attachmentIds?: string[] }
   | { type: "queue_remove"; sessionId: string; queueId: string }
   | { type: "queue_send_now"; sessionId: string; queueId: string }
   | { type: "cancel"; sessionId: string }
-  | { type: "bg_cancel"; jobId: string }
+  | { type: "bg_cancel"; jobId: string; sessionId: string }
   | { type: "fork_session"; sessionId: string; index: number; requestId?: string; editText?: string; model?: string; yolo?: boolean; attachmentIds?: string[] }
   | { type: "discard_and_resend"; sessionId: string; requestId?: string; turnId: number; text: string; model: string; yolo: boolean; attachmentIds?: string[] }
   | { type: "fork_and_resend"; sessionId: string; requestId?: string; turnId: number; text: string; model: string; yolo: boolean; attachmentIds?: string[] }
