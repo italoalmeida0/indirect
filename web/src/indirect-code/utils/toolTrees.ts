@@ -110,7 +110,10 @@ function parseEntryLine(line: string, forceDepthZero: boolean): InspectEntry | n
   const rest = m[3].trim();
   if (!rest) return null;
   // Daemon prints indent BEFORE the flag; an empty flag still occupies 4
-  // columns ("    "). Single-file results carry no indent at all.
+  // columns ("    "). Single-file results carry no indent at all. The -4
+  // for the no-flag case compensates those 4 flag columns (real daemon
+  // format: "    bin/" is depth 0, "      helper.ts" is depth 1 — verified
+  // against the shipped test fixtures; a naive leading/2 would flatten it).
   const depth = forceDepthZero ? 0 : hasFlag ? Math.floor(leading / 2) : Math.max(0, Math.floor((leading - 4) / 2));
   const b = rest.match(/^(.*?)(\/)?(?: \((.*)\))?$/);
   if (!b) return null;
@@ -157,10 +160,16 @@ export function parseInspectTree(raw: string): InspectTree | null {
       entries,
     };
   }
-  // Single-file form: one line with a size meta, no header.
-  if (lines.length === 1) {
+  // Single-file form: one line, no header. Valid as a tree when it looks
+  // like an entry: a flagged row ("[A]   src/util.go (...)") or a path
+  // with an optional "(meta)" tail ("file.txt", "file.txt (4.2 kB, 10
+  // lines)") — audit bug 38 accepts the bare form too. A prose line
+  // ("garbage without structure") is not a tree.
+  const one = lines[0].trim();
+  const looksLikeEntry = one.startsWith("[") || /^\S+(?:\s+\(.*\))?$/.test(one);
+  if (lines.length === 1 && looksLikeEntry) {
     const e = parseEntryLine(lines[0], true);
-    if (!e || e.size === undefined) return null;
+    if (!e) return null;
     return { scope: "", count: 1, entries: [e] };
   }
   return null;
@@ -186,6 +195,9 @@ export function parseGlobList(raw: string): GlobList | null {
   }
   const files = lines.map((l) => l.trim()).filter(Boolean);
   if (files.length === 0) return null;
-  if (files.some((f) => f.includes("\n") || f.startsWith("("))) return null;
+  // The truncation marker was already detected and popped above (exact
+  // regex) — the old startsWith("(") heuristic rejected any legit filename
+  // beginning with "(" (audit bug 39), and a split line can never contain
+  // "\n". Real filenames pass through untouched.
   return { none: false, files, truncated };
 }

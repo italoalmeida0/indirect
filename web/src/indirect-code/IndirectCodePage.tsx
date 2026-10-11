@@ -1000,6 +1000,9 @@ export default function IndirectCodePage() {
         if (queue.editDraft.failUpload(msg.requestId, msg.message || "Upload failed")) break;
         if (review.failPreview(msg.requestId, msg.message || "Preview failed")) break;
         if (composer.failUpload(msg.requestId, msg.message || "Upload failed")) break;
+        // replyTo is emitted by the GATEWAY relay on its offline/updating
+        // errors (relay.ts:222,246) — the daemon's own error emitter has no
+        // replyTo (audit bug 51 is daemon-side only).
         if (msg.replyTo === "create_session") setCreatingSession(false);
         if (msg.message === "Remote host is offline") {
           hosts.markActiveHostOffline();

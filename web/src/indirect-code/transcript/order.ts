@@ -27,7 +27,15 @@ export function createTranscriptOrder(resync: () => void, capacity = 512) {
 
   return {
     event(cursor: TranscriptCursor | undefined, apply: () => void) {
-      if (!cursor) { if (!stream) apply(); return; }
+      if (!cursor) {
+        if (!stream) { apply(); return; }
+        // Cursor-less event after stream init (audit bug 46): dropped silently
+        // by the old code — no apply AND no resync, so text_delta/tool_result
+        // were lost until the next snapshot. Ask for an authoritative
+        // snapshot instead (same contract as a seq gap).
+        request();
+        return;
+      }
       if (!valid(cursor) || retired.has(cursor.stream)) return;
       if (cursor.stream !== stream) change(cursor.stream);
       if (cursor.seq <= seq || events.some(event => event.seq === cursor.seq)) return;
@@ -38,7 +46,16 @@ export function createTranscriptOrder(resync: () => void, capacity = 512) {
       apply();
     },
     snapshot(cursor: TranscriptCursor | undefined): (() => void)[] | null {
-      if (!cursor) return stream ? null : [];
+      if (!cursor) {
+        if (stream) {
+          // Cursor-less snapshot with an active stream (audit bug 26): the
+          // old code returned null WITHOUT requesting a resync, so the
+          // caller discarded the snapshot and the client silently diverged.
+          // Re-anchor with an authoritative fetch first.
+          request();
+        }
+        return stream ? null : [];
+      }
       if (!valid(cursor) || retired.has(cursor.stream)) return null;
       if (cursor.stream !== stream) change(cursor.stream);
       const after = events.filter(event => event.seq > cursor.seq).sort((a, b) => a.seq - b.seq);

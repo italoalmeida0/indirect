@@ -2053,6 +2053,29 @@ session_compacted/session_truncated/session_status (transcript_identity.go:55-63
   `legacy_<sha>` únicos; store dedupe por ID). **Baixo** (divergência de
   identidade worker vs sync).
 
+### Bug 86 (correção do Bug 51) — `replyTo` NÃO é código morto: é emitido pelo relay do gateway `[-]`
+O Bug 51 da auditoria dizia que `replyTo` (daemon-protocol.ts:158) era "código
+morto" porque o **daemon** nunca o emite. Mas o **gateway** o emite nos erros de
+relay (`relay.ts:222,246` — offline/updating) e o dispatcher do frontend os
+usa de verdade (`replyTo === 'pull'`/`'browse_folders'`/`'create_session'`).
+A hipótese grepou só o daemon e errava o escopo. Correção: manter o campo e os
+branches (o half real do Bug 51 — trace do epoch gate no daemon — está
+aplicado). Lição: grep bilateral em **todos** os emissores (daemon + gateway),
+não só o lado que o reporte original olhava.
+
+### Bug 87 (correção do Bug 38) — depth de inspect estava CORRETO; só o single-file era bug `[-]`
+O Bug 38 da auditoria dizia que `parseEntryLine` achatava o aninhamento de
+linhas sem flag. **Os testes existentes** (`indirect-code-ui.test.ts:821`)
+provam que o formato real do daemon tem a flag column de **4 colunas sempre**
+(`"    bin/"` = indent 4 = flag vazia = depth 0; `"      helper.ts"` = 6 =
+depth 1) — o `-4` original estava certo. Minha primeira correção (usar
+`leading/2` puro) **quebrou 2 testes existentes** ao mudar comportamento real;
+revertida. O **half real** do Bug 38 permanece: o single-file form aceitava só
+linha com `size` definido — agora aceita bare `file.txt` e `file.txt (meta)`,
+rejeitando linhas de prosa ("garbage without structure" continua null).
+Lição: os testes existentes pinnavam comportamento REAL do formato do daemon,
+não incidental — a auditoria cometeu o erro oposto do que costuma pegar.
+
 ---
 
 ## 4. Áreas validadas (por tópico)
