@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -70,10 +71,22 @@ func fireAndForget(inbox chan<- Envelope, env Envelope, onDrop func()) {
 // configCell is copy-on-write global config. Readers load lock-free;
 // writers build a new value and swap the pointer. No actor, no watchdog:
 // a pointer swap cannot wedge.
+//
+// Writers additionally serialize their read-modify-save-store sequence on
+// mu (audit bug 75): concurrent onUpdateConfig/rememberSelection/setAutoUpdate
+// used to interleave and silently drop each other's fields (the later store
+// won). Readers stay lock-free — only writers take mu.
 type configCell struct {
 	ptr atomic.Pointer[DaemonConfig]
+	mu  sync.Mutex
 }
 
 func (c *configCell) load() *DaemonConfig { return c.ptr.Load() }
 
 func (c *configCell) store(cfg *DaemonConfig) { c.ptr.Store(cfg) }
+
+// writeLock serializes one config read-modify-save-store sequence. Callers
+// hold it across load → mutate → saveDaemonConfig → store so two writers can
+// never interleave; the atomic pointer swap alone cannot prevent a lost
+// update (each writer copies the OLD value and overwrites the other's save).
+func (c *configCell) writeLock() *sync.Mutex { return &c.mu }

@@ -1049,7 +1049,10 @@ func (a *sessionActor) onQuestionResponse(m questionResponseMsg) {
 	}
 	if a.pending.question != nil {
 		if err := a.pending.question.ValidateAnswers(m.Answers); err != nil {
-			a.emit(map[string]any{"type": "error", "sessionId": a.id, "message": err.Error()})
+			// Validation failure keeps the question pending for retry —
+			// emit question_error (not the generic error) so the client can
+			// clear its submitting state and re-enable the submit (audit bug 80).
+			a.emit(map[string]any{"type": "question_error", "sessionId": a.id, "questionId": m.ID, "message": err.Error()})
 			return
 		}
 	}

@@ -4,7 +4,40 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// Purge tombstones (audit bug 77): a purged session's files are deleted, but a
+// late writer (racing incarnation's finalizer, admin fork path) could re-create
+// sessions/<id>.jsonl afterwards — resurrecting a deleted session. The
+// tombstone blocks every store write for that (dataDir, id) pair after a
+// successful purge. Keyed by dataDir too: tests reuse ids across isolated
+// tempdirs. In-process only: a restart loses both the tombstone AND the zombie
+// writers (the cold load fails on the missing file, never re-creating it).
+var (
+	purgedMu      sync.Mutex
+	purgedSession = map[string]struct{}{}
+)
+
+func purgeKey(dataDir, id string) string { return dataDir + "\x00" + id }
+
+// markSessionPurged records that id was deleted from dataDir.
+func markSessionPurged(dataDir, id string) {
+	purgedMu.Lock()
+	purgedSession[purgeKey(dataDir, id)] = struct{}{}
+	purgedMu.Unlock()
+}
+
+// sessionPurged reports whether id was deleted from dataDir.
+func sessionPurged(dataDir, id string) bool {
+	purgedMu.Lock()
+	_, ok := purgedSession[purgeKey(dataDir, id)]
+	purgedMu.Unlock()
+	return ok
+}
+
+// errSessionPurged is returned by every store write for a purged session.
+var errSessionPurged = fmt.Errorf("session was deleted")
 
 // diskStore is the v2 session/WAL disk layer. It owns NO locks and NO
 // goroutines: every method is a pure disk operation called by exactly one

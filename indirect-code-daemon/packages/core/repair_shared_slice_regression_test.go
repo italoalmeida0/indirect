@@ -44,7 +44,6 @@ func regressionOrphanTranscript() []provider.Message {
 // TestRegressionRepairDoesNotMutateInput: the request-only contract — the
 // transcript handed to the pipeline must come back byte-identical.
 func TestRegressionRepairDoesNotMutateInput(t *testing.T) {
-	t.Skip("BUG audit §5-10: repairToolUseResultPairs mutates the shared Content array; unskip when fixing")
 	msgs := regressionOrphanTranscript()
 	beforeLen := len(msgs[1].Content)
 	beforeCap := cap(msgs[1].Content)
@@ -58,7 +57,6 @@ func TestRegressionRepairDoesNotMutateInput(t *testing.T) {
 // TestRegressionRepairNoRaceOnSharedContent: two concurrent BuildContext
 // runs must not race (run with -race) over the transcript's Content arrays.
 func TestRegressionRepairNoRaceOnSharedContent(t *testing.T) {
-	t.Skip("BUG audit §5-10: concurrent context builds race on shared Content arrays; unskip when fixing")
 	a := NewAgent(nil, "", "", nil)
 	a.SetMessages(regressionOrphanTranscript())
 	var wg sync.WaitGroup

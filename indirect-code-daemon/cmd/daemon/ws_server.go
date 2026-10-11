@@ -1643,6 +1643,11 @@ func (s *wsServer) onUpdateConfig(raw []byte) {
 		return
 	}
 	// v2: settings only (mcpServers/skills ignored — removed domains).
+	// Serialize the read-modify-save-store sequence (audit bug 75): without
+	// this, a concurrent rememberSelection copies the pre-update config and
+	// its save silently drops this update (or vice versa).
+	s.cfg.writeLock().Lock()
+	defer s.cfg.writeLock().Unlock()
 	cfg := s.cfg.load()
 	if cfg == nil {
 		s.emit(map[string]any{"type": "config_updated", "requestId": req.RequestID, "hostId": s.host(), "success": false, "error": "no config"})
@@ -1682,6 +1687,11 @@ func (s *wsServer) onUpdateConfig(raw []byte) {
 // rememberSelection persists the last explicit model/options choice as the
 // default for new sessions (v1 parity: pull config exposes lastSelection).
 func (s *wsServer) rememberSelection(model string, options SessionOptions) error {
+	// Serialize with the other config writers (audit bug 75): same
+	// read-modify-save-store sequence as onUpdateConfig — an interleaved
+	// save loses the other writer's field.
+	s.cfg.writeLock().Lock()
+	defer s.cfg.writeLock().Unlock()
 	cfg := s.cfg.load()
 	if cfg == nil {
 		return errors.New("no config")

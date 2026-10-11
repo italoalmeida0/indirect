@@ -114,7 +114,24 @@ export function createTranscript(opts: {
   const [pendingQuestion, setPendingQuestion] = createSignal<PendingQuestion | null>(null);
   const [questionSubmitting, setQuestionSubmitting] = createSignal(false);
   const [questionError, setQuestionError] = createSignal("");
+  // Replay guard (audit bug 81): these request events ride the wire without a
+  // transcript cursor, so a late replay can re-raise a card whose id was
+  // already resolved — the user's answer would then hit the daemon's stale
+  // branch and be dropped silently. Remember resolved ids and ignore their
+  // late re-requests. Capped: a session raises a handful of these.
+  const resolvedAsks = new Set<string>();
+  function rememberResolvedAsk(prefix: string, id: string) {
+    resolvedAsks.add(prefix + id);
+    if (resolvedAsks.size > 256) {
+      for (const key of resolvedAsks) {
+        resolvedAsks.delete(key);
+        if (resolvedAsks.size <= 128) break;
+      }
+    }
+  }
+  const askResolved = (prefix: string, id: string) => resolvedAsks.has(prefix + id);
   function showQuestion(question: PendingQuestion | null) {
+    if (question && askResolved("q:", question.id)) return; // late replay: dead id
     if (question && pendingQuestion()?.id === question.id) return;
     if (question) {
       const raw = (question as any).questions ?? (question as any).question;
@@ -514,11 +531,18 @@ export function createTranscript(opts: {
   }
 
   // --- Session fetch (get_session with dedicated requestId) ---
+  // Pending fetch ids: a single "current id" used to drop a resync response
+  // when a concurrent fetchSession overwrote it (audit bug 79 — waiting stuck
+  // forever, transcript frozen). Every issued id stays acceptable until its
+  // answer arrives; the session guard still rejects foreign-session snapshots.
+  let pendingFetchIds = new Set<string>();
   let transcriptRequestId = "";
   let initialScrollSession = "";
   function fetchSession(sessionId: string) {
-    transcriptRequestId = crypto.randomUUID();
-    opts.send({ type: "get_session", sessionId, requestId: transcriptRequestId });
+    const requestId = crypto.randomUUID();
+    transcriptRequestId = requestId;
+    pendingFetchIds.add(requestId);
+    opts.send({ type: "get_session", sessionId, requestId });
   }
   /** Marks the session whose next full snapshot triggers initial scroll. */
   function beginLoad(sessionId: string) {
@@ -1031,7 +1055,9 @@ export function createTranscript(opts: {
   }
   // --- Daemon events (called by the page dispatcher) ---
   function noteSessionDataRequestGuard(requestId: string | undefined): boolean {
-    if (requestId && requestId !== transcriptRequestId) return true;
+    // Consumed on accept: each issued fetch id is good for exactly one
+    // response (concurrent ids coexist in the set until each arrives).
+    if (requestId && !pendingFetchIds.delete(requestId)) return true;
     return false;
   }
   function handleTruncated(sessionId: string | undefined, keep: number, cursor?: TranscriptCursor, onApplied?: () => void) {
@@ -1176,6 +1202,7 @@ export function createTranscript(opts: {
   /** tool_approval_request event (with session guard). */
   function noteApprovalRequest(msg: ToolApprovalRequestEvent) {
     if (msg.sessionId === opts.getSessionId()) {
+      if (askResolved("a:", msg.callId)) return; // late replay: already resolved
       setPendingApproval({
         callId: msg.callId,
         tool: msg.tool,
@@ -1187,6 +1214,7 @@ export function createTranscript(opts: {
     }
   }
   function noteApprovalResolved(sessionId: string | undefined, callId: string) {
+    rememberResolvedAsk("a:", callId);
     if (sessionId === opts.getSessionId() && pendingApproval()?.callId === callId) {
       setPendingApproval(null);
     }
@@ -1228,6 +1256,7 @@ export function createTranscript(opts: {
   }
   /** question_resolved event (with session/question guard). */
   function noteQuestionResolved(sessionId: string | undefined, questionId: string) {
+    rememberResolvedAsk("q:", questionId); // a resolved id is dead forever
     if (sessionId === opts.getSessionId() && pendingQuestion()?.id === questionId) showQuestion(null);
   }
   /** question_error event (with session/question guard). */
@@ -1243,6 +1272,7 @@ export function createTranscript(opts: {
   function resetForSession() {
     contextVersion++; transcriptOrder.reset();
     transcriptRequestId="";
+    pendingFetchIds.clear();
     snapshotVersion++; pendingSnapshot = null;
     forkRequestId = "";
     forkHostId = "";

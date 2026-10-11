@@ -98,15 +98,23 @@ func (d *DaemonServer) writePidFile() {
 }
 
 // setAutoUpdate persists the apply toggle (default true when unset).
+// Saves BEFORE publishing (audit bug 75): disk is the durable source of
+// truth — a failed write must leave RAM on the old value, never ahead of
+// the next restart. Serialized with the ws config writers on the cell lock.
 func (d *DaemonServer) setAutoUpdate(enabled bool) {
 	cfg := d.configNow()
 	if cfg == nil {
 		return
 	}
+	d.cell.writeLock().Lock()
+	defer d.cell.writeLock().Unlock()
 	next := *cfg
 	next.AutoUpdate = &enabled
+	if err := saveDaemonConfig(d.root.configPathDir(), &next); err != nil {
+		trace("config.auto_update.save_failed", map[string]any{"error": err.Error()})
+		return
+	}
 	d.cell.store(&next)
-	_ = saveDaemonConfig(d.root.configPathDir(), &next)
 }
 
 // sendWS pushes a daemon->frontend event: on the socket THIS host owns

@@ -174,6 +174,11 @@ func (s *diskStore) openWAL(sessionID string, h *walHeader) (*walWriter, error) 
 	if p == "" {
 		return nil, fmt.Errorf("invalid session id")
 	}
+	// Purge tombstone (audit bug 77): a late turn start must not leave a
+	// recovery artifact for a deleted session.
+	if sessionPurged(s.dataDir, sessionID) {
+		return nil, errSessionPurged
+	}
 	if err := os.MkdirAll(s.sessionsDir(), 0o700); err != nil {
 		return nil, err
 	}

@@ -911,6 +911,9 @@ func (s *sessionSupervisor) purge(id string) error {
 	if s.bg != nil {
 		s.bg.PurgeSessionBookkeeping(id)
 	}
+	// Tombstone (audit bug 77): files are gone — block any late writer
+	// (racing finalizer, admin fork path) from re-creating them.
+	markSessionPurged(s.dataDir, id)
 	s.mu.Lock()
 	delete(s.resident, id)
 	s.mu.Unlock()

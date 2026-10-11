@@ -26,7 +26,6 @@ import (
 // TestRegressionConfigWritersNoLostUpdate drives the real wsServer writers
 // concurrently; both the settings update and the model selection must land.
 func TestRegressionConfigWritersNoLostUpdate(t *testing.T) {
-	t.Skip("BUG audit §5-3: concurrent config writers lose updates; unskip when fixing")
 	for attempt := range 25 {
 		dir := t.TempDir()
 		cell := &configCell{}
@@ -73,7 +72,6 @@ func TestRegressionConfigWritersNoLostUpdate(t *testing.T) {
 // setAutoUpdate must not publish the new value to RAM (or must surface the
 // error). The fault seam is a read-only config dir.
 func TestRegressionSetAutoUpdateNoRAMAheadOfDisk(t *testing.T) {
-	t.Skip("BUG audit §5-3: setAutoUpdate publishes RAM before disk, ignores write error; unskip when fixing")
 	dir := t.TempDir()
 	yes := true
 	if err := saveDaemonConfig(dir, &DaemonConfig{HostID: "h1", AutoUpdate: &yes}); err != nil {

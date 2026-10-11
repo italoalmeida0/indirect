@@ -36,6 +36,13 @@ export function normalizeSessionMessages(rawMsgs: any[], previous: ChatMessage[]
     return carrier;
   };
   (rawMsgs || []).forEach((m: any, idx: number) => {
+    // Background completion notices (system-reminders, model-facing only):
+    // never rendered, never a carrier — not even an empty one. Checked FIRST
+    // (audit bug 69): a fold row carrying a tool_result hoisted a synthetic
+    // carrier before this check ran, leaving an empty bubble on screen.
+    if (typeof m.meta?.background_delivery === "string" && m.meta.background_delivery) {
+      return;
+    }
     const blocks = parseContentBlocks(m);
     const role = m.role === "assistant" ? "assistant" : m.role === "tool" ? "tool" : "user";
     if (role === "assistant") {
@@ -79,11 +86,6 @@ export function normalizeSessionMessages(rawMsgs: any[], previous: ChatMessage[]
       // "tool" envelopes never become bubbles; a user envelope holding
       // only tool results must not render as an empty user bubble.
       if (rest.length > 0) ensureCarrier(at(idx), m).blocks.push(...rest);
-      return;
-    }
-    if (typeof m.meta?.background_delivery === "string" && m.meta.background_delivery) {
-      // Background completion notices (system-reminders, model-facing
-      // only): never rendered, never a carrier — not even an empty one.
       return;
     }
     const isStart = m.isTurnStart !== undefined ? Boolean(m.isTurnStart) : !m.midTurn;

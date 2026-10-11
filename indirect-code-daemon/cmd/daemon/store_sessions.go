@@ -208,6 +208,11 @@ func (s *diskStore) writeSessionFile(id string, lines []turnLine, meta metaLine)
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session id")
 	}
+	// Purge tombstone (audit bug 77): a late writer must never re-create a
+	// deleted session's file.
+	if sessionPurged(s.dataDir, id) {
+		return errSessionPurged
+	}
 	dir := s.sessionsDir()
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
@@ -562,6 +567,11 @@ func readSecondToLastLine(f *os.File) ([]byte, error) {
 func (s *diskStore) appendTurnLine(id string, tl turnLine, meta metaLine) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session id")
+	}
+	// Purge tombstone (audit bug 77): a late commit must not re-create a
+	// deleted session's file.
+	if sessionPurged(s.dataDir, id) {
+		return errSessionPurged
 	}
 	path := s.sessionFile(id)
 	// Fast path: plain append when the file ends with a valid meta line.

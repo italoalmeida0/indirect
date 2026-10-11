@@ -142,7 +142,20 @@ func repairToolUseResultPairs(msgs []provider.Message) []provider.Message {
 		return msgs
 	}
 	out := make([]provider.Message, 0, len(msgs)+2)
+	// Stubs to merge into the NEXT tool-role message, keyed by its index.
+	// The input transcript is NEVER mutated (request-only contract, audit
+	// bug 76): merging used to append into the shared Content backing
+	// array, racing concurrent context builds over the same transcript.
+	// The merge lands on the copy that goes into out instead.
+	pending := map[int][]provider.Content{}
 	for i, m := range msgs {
+		if stubs, ok := pending[i]; ok {
+			delete(pending, i)
+			merged := make([]provider.Content, 0, len(m.Content)+len(stubs))
+			merged = append(merged, m.Content...)
+			merged = append(merged, stubs...)
+			m.Content = merged
+		}
 		out = append(out, m)
 		if m.Role != provider.RoleAssistant {
 			continue
@@ -186,11 +199,13 @@ func repairToolUseResultPairs(msgs []provider.Message) []provider.Message {
 		// otherwise insert a synthetic one right after the
 		// assistant message. Merging keeps the tool-role row
 		// count stable; inserting handles the common case where
-		// no tool message was persisted at all.
+		// no tool message was persisted at all. The merge is
+		// DEFERRED to the next iteration (pending[i+1]) so it
+		// lands on the COPY going into out — never on msgs[i+1]'s
+		// shared Content array (audit bug 76).
 		if i+1 < len(msgs) && msgs[i+1].Role == provider.RoleTool {
-			msgs[i+1].Content = append(msgs[i+1].Content, stubs...)
-			// We already appended m to out; the modified next
-			// message will be appended on the following iteration.
+			pending[i+1] = append(pending[i+1], stubs...)
+			// The merge happens when index i+1 is copied below.
 			continue
 		}
 		out = append(out, provider.Message{
