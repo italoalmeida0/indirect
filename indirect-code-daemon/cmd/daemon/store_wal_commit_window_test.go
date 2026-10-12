@@ -149,8 +149,12 @@ func TestOpenWALFailureRemovesHalfCreatedWAL(t *testing.T) {
 		t.Fatalf("no WAL header must survive: header=%v err=%v", hdr, herr)
 	}
 	walAppendFault = nil // storage healthy again
-	if _, err := s.openWAL("sess-fs-sync-fail", h); err != nil {
-		t.Fatalf("next openWAL must succeed after the failed one: %v", err)
+	// Windows: the writer MUST be closed — an open handle blocks the
+	// TempDir cleanup (unlinkat: file in use), which fails the test there.
+	if w2, werr := s.openWAL("sess-fs-sync-fail", h); werr != nil {
+		t.Fatalf("next openWAL must succeed after the failed one: %v", werr)
+	} else {
+		_ = w2.close()
 	}
 }
 

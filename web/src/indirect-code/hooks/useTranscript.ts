@@ -535,12 +535,10 @@ export function createTranscript(opts: {
   // when a concurrent fetchSession overwrote it (audit bug 79 — waiting stuck
   // forever, transcript frozen). Every issued id stays acceptable until its
   // answer arrives; the session guard still rejects foreign-session snapshots.
-  let pendingFetchIds = new Set<string>();
-  let transcriptRequestId = "";
+  const pendingFetchIds = new Set<string>();
   let initialScrollSession = "";
   function fetchSession(sessionId: string) {
     const requestId = crypto.randomUUID();
-    transcriptRequestId = requestId;
     pendingFetchIds.add(requestId);
     opts.send({ type: "get_session", sessionId, requestId });
   }
@@ -1271,7 +1269,6 @@ export function createTranscript(opts: {
    */
   function resetForSession() {
     contextVersion++; transcriptOrder.reset();
-    transcriptRequestId="";
     pendingFetchIds.clear();
     snapshotVersion++; pendingSnapshot = null;
     forkRequestId = "";
