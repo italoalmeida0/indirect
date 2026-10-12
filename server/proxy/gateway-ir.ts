@@ -1169,9 +1169,12 @@ function decodeChatResponseToIR(text: string, fallbackModel: string): IRResponse
   }
   const u = asRecord(j.usage);
   const prompt = Number(u.prompt_tokens ?? 0) || 0;
-  const cached = Number(asRecord(u.prompt_tokens_details).cached_tokens ?? 0) || 0;
+  // Same dialect split as the stream parser: `prompt_cache_hit_tokens`
+  // is the DeepSeek-native cache field, top-level `reasoning_tokens`
+  // the GLM/Kimi/Qwen one.
+  const cached = Number(asRecord(u.prompt_tokens_details).cached_tokens ?? u.prompt_cache_hit_tokens ?? 0) || 0;
   const completion = Number(u.completion_tokens ?? 0) || 0;
-  const reasonTok = Math.max(0, Number(asRecord(u.completion_tokens_details).reasoning_tokens ?? 0) || 0);
+  const reasonTok = Math.min(completion, Math.max(0, Number(asRecord(u.completion_tokens_details).reasoning_tokens ?? u.reasoning_tokens ?? 0) || 0));
   const outTok = Math.max(0, completion - reasonTok);
   const visibleText = typeof message.content === "string" ? message.content : "";
   // Zero-output guard (buffered): upstream said 0 output but visible text/
@@ -1550,6 +1553,41 @@ export interface IRStreamWriter {
 const te = new TextEncoder();
 const sseBytes = (payload: string): Uint8Array => te.encode(payload);
 
+/** Adopt an (in, cache) split from a cumulative usage snapshot. Chat
+ *  stacks differ: some report usage once at the end, vLLM-style stacks
+ *  attach a cumulative usage object to EVERY chunk — early snapshots
+ *  carry the full prompt as fresh input and only the terminal chunk
+ *  breaks out `cached_tokens`. Per-key max() would keep the early
+ *  inTok AND the late cacheTok (double-counting the prompt); instead
+ *  the pair comes from the snapshot with the largest prompt total,
+ *  ties going to the snapshot with more cached detail. Returns true
+ *  when the pair was adopted. */
+function adoptInputPair(state: { inTok: number; cacheTok: number }, d: { inTok: number; cacheTok: number }): boolean {
+  const total = d.inTok + d.cacheTok;
+  const cur = state.inTok + state.cacheTok;
+  if (total > cur || (total === cur && d.cacheTok > state.cacheTok)) {
+    state.inTok = d.inTok;
+    state.cacheTok = d.cacheTok;
+    return true;
+  }
+  return false;
+}
+
+/** Output-side twin of adoptInputPair: cumulative snapshots grow
+ *  completion monotonically, but the reasoning split may only appear
+ *  in the terminal snapshot — max(outTok) would keep the pre-split
+ *  (thinking-inclusive) figure. Adopt (out, reasoning) from the
+ *  snapshot with the largest completion total, ties to more reasoning. */
+function adoptOutputPair(state: { outTok: number; reasonTok: number }, d: { outTok: number; reasonTok?: number }): void {
+  const reason = d.reasonTok ?? 0;
+  const total = d.outTok + reason;
+  const cur = state.outTok + state.reasonTok;
+  if (total > cur || (total === cur && reason > state.reasonTok)) {
+    state.outTok = d.outTok;
+    state.reasonTok = reason;
+  }
+}
+
 function chatStreamParser(data: string): IRStreamDelta[] {
   if (data === "[DONE]") return [{ finish: "stop" }];
   try {
@@ -1558,13 +1596,23 @@ function chatStreamParser(data: string): IRStreamDelta[] {
     const choice = j.choices?.[0];
     const delta = choice?.delta ?? {};
     if (typeof delta.content === "string" && delta.content) out.push({ text: delta.content });
-    // DeepSeek-style reasoning models stream thinking in `reasoning_content`
-    // (content arrives only after thinking completes): surface it as text so
-    // stream clients see progress and nothing is silently dropped. Usage
-    // accounting still excludes it (reasoning_tokens split at the terminal).
-    if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
-      out.push({ text: delta.reasoning_content, thinking: true });
+    // Reasoning models stream thinking under dialect-specific keys:
+    // `reasoning_content` (DeepSeek/GLM/Kimi/Qwen native), `reasoning`
+    // (vLLM serving gpt-oss/DeepSeek-V4/Nemotron on aggregators), or
+    // structured `reasoning_details[]` (OpenRouter). They are alternate
+    // encodings of the same text — take the first that yields any, so
+    // stream clients see progress and nothing is silently dropped.
+    // Usage accounting still excludes it (reasoning_tokens split at
+    // the terminal).
+    let thinkingText = "";
+    if (typeof delta.reasoning_content === "string" && delta.reasoning_content) thinkingText = delta.reasoning_content;
+    else if (typeof delta.reasoning === "string" && delta.reasoning) thinkingText = delta.reasoning;
+    else if (Array.isArray(delta.reasoning_details)) {
+      for (const it of delta.reasoning_details) {
+        if (it && typeof it.text === "string") thinkingText += it.text;
+      }
     }
+    if (thinkingText) out.push({ text: thinkingText, thinking: true });
     const tc = asArr(delta.tool_calls);
     for (const rawTc of tc) {
       const t = asRecord(rawTc) as any;
@@ -1598,9 +1646,14 @@ function chatStreamParser(data: string): IRStreamDelta[] {
     // chunk (finish + usage) + [DONE], legacy parity.
     if (u && (u.prompt_tokens !== undefined || u.completion_tokens !== undefined)) {
       const prompt = Number(u.prompt_tokens ?? 0) || 0;
-      const cached = Number(u.prompt_tokens_details?.cached_tokens ?? 0) || 0;
+      // Cache split dialects: OpenAI-style `prompt_tokens_details`, or the
+      // DeepSeek-native top-level `prompt_cache_hit_tokens`. Reasoning
+      // tokens likewise ride either `completion_tokens_details` or a
+      // top-level `reasoning_tokens` (GLM/Kimi/Qwen stacks); clamp to
+      // completion — some stacks report reasoning one above it.
+      const cached = Number(u.prompt_tokens_details?.cached_tokens ?? u.prompt_cache_hit_tokens ?? 0) || 0;
       const completion = Number(u.completion_tokens ?? 0) || 0;
-      const reasonTok = Math.max(0, Number(u.completion_tokens_details?.reasoning_tokens ?? 0) || 0);
+      const reasonTok = Math.min(completion, Math.max(0, Number(u.completion_tokens_details?.reasoning_tokens ?? u.reasoning_tokens ?? 0) || 0));
       const usage = {
         inTok: Math.max(0, prompt - cached),
         cacheTok: Math.max(0, cached),
@@ -1741,7 +1794,7 @@ function responsesStreamParser(): (event: string, data: string) => IRStreamDelta
 }
 
 class ChatStreamWriter implements IRStreamWriter {
-  private lastUsage: { inTok: number; cacheTok: number; outTok: number } | null = null;
+  private lastUsage: { inTok: number; cacheTok: number; outTok: number; reasonTok: number } | null = null;
   private sentRole = false;
   private headerSent = false;
   private id = `chatcmpl-${Date.now().toString(36)}`;
@@ -1815,11 +1868,9 @@ class ChatStreamWriter implements IRStreamWriter {
       }
       if (d.usage && !d.finish) {
         const u = d.usage;
-        this.lastUsage = {
-          inTok: Math.max(this.lastUsage?.inTok ?? 0, u.inTok),
-          cacheTok: Math.max(this.lastUsage?.cacheTok ?? 0, u.cacheTok),
-          outTok: Math.max(this.lastUsage?.outTok ?? 0, u.outTok),
-        };
+        if (!this.lastUsage) this.lastUsage = { inTok: 0, cacheTok: 0, outTok: 0, reasonTok: 0 };
+        adoptInputPair(this.lastUsage, u);
+        adoptOutputPair(this.lastUsage, u);
       }
     }
     return out;
@@ -1847,13 +1898,20 @@ class AnthropicStreamWriter implements IRStreamWriter {
   private calls = new Map<string, number>();
   private open = new Set<number>();
   private lastCall = "";
-  private usage = { inTok: 0, cacheTok: 0, outTok: 0, cacheCreation: 0 };
+  private usage = { inTok: 0, cacheTok: 0, outTok: 0, cacheCreation: 0, reasonTok: 0 };
   constructor(private model: string) {}
   feed(deltas: IRStreamDelta[]): Uint8Array[] {
     const out: Uint8Array[] = [];
     const ev = (type: string, fields: Record<string, unknown>) => out.push(sseBytes(`event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`));
     for (const d of deltas) if (d.usage) {
-      for (const key of ["inTok", "cacheTok", "outTok", "cacheCreation"] as const) this.usage[key] = Math.max(this.usage[key], d.usage[key] ?? 0);
+      const adopted = adoptInputPair(this.usage, d.usage);
+      // cacheCreation rides the same snapshot as the (in, cache) pair;
+      // an equal-total repeat of that snapshot (the translator also
+      // pre-applies it via setInputUsage) must still land it.
+      if (d.usage.cacheCreation !== undefined && (adopted || d.usage.inTok + d.usage.cacheTok === this.usage.inTok + this.usage.cacheTok)) {
+        this.usage.cacheCreation = d.usage.cacheCreation;
+      }
+      adoptOutputPair(this.usage, d.usage);
     }
     if (!this.started) {
       this.started = true;
@@ -1902,8 +1960,7 @@ class AnthropicStreamWriter implements IRStreamWriter {
   }
   flush(): Uint8Array[] { return []; }
   setInputUsage(inTok: number, cacheTok: number): void {
-    this.usage.inTok = Math.max(this.usage.inTok, inTok);
-    this.usage.cacheTok = Math.max(this.usage.cacheTok, cacheTok);
+    adoptInputPair(this.usage, { inTok, cacheTok });
   }
 }
 
@@ -1930,7 +1987,10 @@ class ResponsesStreamWriter implements IRStreamWriter {
       : item.kind === "thinking" ? { type: "reasoning", id: item.id, summary: text ? [{ type: "summary_text", text }] : [] }
       : { type: "message", id: item.id, role: "assistant", status, content: text ? [{ type: "output_text", text, annotations: [] }] : [] };
     for (const d of deltas) {
-      if (d.usage) for (const key of ["inTok", "cacheTok", "outTok", "reasonTok"] as const) this.usage[key] = Math.max(this.usage[key], d.usage[key] ?? 0);
+      if (d.usage) {
+        adoptInputPair(this.usage, d.usage);
+        adoptOutputPair(this.usage, d.usage);
+      }
       if (d.text) {
         const thinking = d.thinking === true;
         let index = this.texts.get(thinking);
@@ -2162,21 +2222,37 @@ export class IRStreamTranslator {
       } catch {
         deltas = [];
       }
-      // Finish frames may carry tool_use deltas in the SAME chunk (Google
-      // style: tool_calls + finish_reason:stop together). The pending
-      // finish must not swallow them: only a BARE finish (finish alone,
-      // no text/tool/usage) is held for a trailing usage chunk.
-      // Usage-carrying finish frames and non-chat protocols pass through.
-      const bareFinish = deltas.length === 1 && deltas[0].finish && !deltas[0].usage && !deltas[0].text && !deltas[0].toolUse;
-      if (bareFinish && this.upstream === "openai" && this.pendingFinish === null) {
-        this.pendingFinish = deltas[0].finish!;
-        // Still feed the writer for first-byte/liveness side effects? No:
-        // the writer would emit the terminal chunk now, before usage. Just
-        // hold it — text already flowed, TTFB is satisfied.
-        continue;
+      // Finish frames may carry text/tool_use deltas in the SAME chunk
+      // (DeepSeek/Google style: final content or tool_calls together
+      // with finish_reason). The pending finish must not swallow them:
+      // content/tool/usage deltas process immediately (below), only
+      // the finish itself is held for a trailing usage chunk. Holding
+      // matters even when the finish chunk carries usage — vLLM-style
+      // stacks attach cumulative usage (without the cache split) to it
+      // and break out cached_tokens only in a TRAILING usage-only
+      // chunk; terminating now would discard that chunk entirely. The
+      // held finish fires on the next frame, [DONE], or flush.
+      // Non-chat protocols and error frames pass through untouched.
+      const finishDelta = deltas.find((d) => d.finish);
+      const holdableFinish = finishDelta !== undefined && !deltas.some((d) => d.error);
+      // A finish held from a PREVIOUS frame merges into this one; a
+      // finish held by THIS frame must not merge into itself.
+      const heldBefore = this.pendingFinish;
+      if (holdableFinish && this.upstream === "openai" && heldBefore === null) {
+        this.pendingFinish = finishDelta.finish!;
+        const heldUsage = finishDelta.usage;
+        deltas = deltas.filter((d) => !d.finish);
+        if (heldUsage && !deltas.some((d) => d.usage)) deltas.push({ usage: heldUsage });
+        if (!deltas.length) {
+          // Pure bare finish: still feed the writer for first-byte/
+          // liveness side effects? No: the writer would emit the
+          // terminal chunk now, before usage. Just hold it — text
+          // already flowed, TTFB is satisfied.
+          continue;
+        }
       }
-      if (this.pendingFinish !== null) {
-        const pf = this.pendingFinish;
+      if (heldBefore !== null) {
+        const pf = heldBefore;
         this.pendingFinish = null;
         // The usage-only Chat parser's synthetic stop cannot overwrite a
         // real length/tool_calls finish received in the preceding frame.
@@ -2226,10 +2302,8 @@ export class IRStreamTranslator {
         if (d.text || d.toolUse?.inputDelta) this.sawUsage = true;
         if (d.usage) {
           this.sawUsage = true;
-          this.inTok = Math.max(this.inTok, d.usage.inTok);
-          this.cacheTok = Math.max(this.cacheTok, d.usage.cacheTok);
-          this.outTok = Math.max(this.outTok, d.usage.outTok);
-          this.reasonTok = Math.max(this.reasonTok, d.usage.reasonTok ?? 0);
+          adoptInputPair(this, d.usage);
+          adoptOutputPair(this, d.usage);
           const w = this.writer as unknown as { setInputUsage?: (a: number, b: number) => void };
           if (d.usage.inTok > 0 || d.usage.cacheTok > 0) w.setInputUsage?.(d.usage.inTok, d.usage.cacheTok);
           void this.toolJsonChars;

@@ -92,6 +92,38 @@ describe("IR streaming regressions", () => {
       expect(event.usage.completion_tokens).toBe(2);
     }
   });
+  test("vLLM `reasoning` deltas surface as thinking, distinct from the answer", () => {
+    // Dialect split (live, Synthetic hf:*): GLM/Kimi/Qwen stream
+    // `reasoning_content`, vLLM serving gpt-oss/DeepSeek-V4/Nemotron
+    // streams `reasoning`, OpenRouter adds `reasoning_details[]`.
+    const wire = frame("", { choices: [{ delta: { reasoning: "Thinking" } }] }) + frame("", { choices: [{ delta: { content: "Answer" } }] }) + "data: [DONE]\n\n";
+    const anth = translate("openai", "anthropic", wire);
+    expect(anth.filter((e) => e.delta?.type === "thinking_delta").map((e) => e.delta.thinking)).toEqual(["Thinking"]);
+    expect(anth.filter((e) => e.delta?.type === "text_delta").map((e) => e.delta.text)).toEqual(["Answer"]);
+    expect(JSON.stringify(translate("openai", "openai", wire))).toContain('"reasoning_content":"Thinking"');
+    const details = frame("", { choices: [{ delta: { reasoning_details: [{ type: "reasoning.text", text: "Thinking" }] } }] }) + frame("", { choices: [{ delta: { content: "Answer" } }] }) + "data: [DONE]\n\n";
+    expect(translate("openai", "anthropic", details).filter((e) => e.delta?.type === "thinking_delta").map((e) => e.delta.thinking)).toEqual(["Thinking"]);
+  });
+  test("terminal cached_tokens survive a finish chunk that already carried cumulative usage", () => {
+    // vLLM dialect (live): EVERY chunk carries cumulative usage WITHOUT
+    // the cache split; only the trailing usage-only chunk (sent AFTER
+    // finish_reason) breaks out cached_tokens + reasoning_tokens.
+    // Terminating on the finish chunk must not discard it, and the
+    // (in, cache) pair must come from that final snapshot (no
+    // full-prompt + cached double count).
+    const wire =
+      frame("", { choices: [{ delta: { reasoning: "ponder" } }], usage: { prompt_tokens: 100, completion_tokens: 4 } }) +
+      frame("", { choices: [{ delta: { content: "42" } }], usage: { prompt_tokens: 100, completion_tokens: 9 } }) +
+      frame("", { choices: [{ delta: { content: "!" }, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 10 } }) +
+      frame("", { choices: [], usage: { prompt_tokens: 100, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 80 }, reasoning_tokens: 4 } }) +
+      "data: [DONE]\n\n";
+    const md = translate("openai", "anthropic", wire).find((e) => e.type === "message_delta");
+    expect(md.usage).toEqual({ input_tokens: 20, cache_read_input_tokens: 80, cache_creation_input_tokens: 0, output_tokens: 6 });
+    const term = translate("openai", "openai", wire).filter((e) => e.usage).at(-1);
+    expect(term.usage.prompt_tokens).toBe(100);
+    expect(term.usage.prompt_tokens_details.cached_tokens).toBe(80);
+    expect(term.usage.completion_tokens).toBe(6);
+  });
   test("Anthropic terminal usage reaches the client before message_stop", () => {
     const wire = frame("message_start", { message: { usage: { input_tokens: 10 } } }) + frame("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } });
     expect(translate("anthropic", "anthropic", wire).find((e) => e.type === "message_delta").usage.output_tokens).toBe(5);
@@ -102,6 +134,18 @@ describe("IR streaming regressions", () => {
     expect(events.at(-1).response.status).toBe("incomplete");
     const abrupt = translate("openai", "responses", frame("", { choices: [{ delta: { content: "partial" } }] }));
     expect(abrupt.at(-1).response.status).toBe("failed");
+  });
+  test("buffered chat usage reads DeepSeek-native cache + top-level reasoning fields", () => {
+    const ir = decodeResponseToIR("openai", JSON.stringify({
+      model: "m",
+      choices: [{ message: { role: "assistant", content: "42", reasoning_content: "ponder" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 100, prompt_cache_hit_tokens: 80, completion_tokens: 10, reasoning_tokens: 4 },
+    }), "m");
+    expect(ir.inTok).toBe(20);
+    expect(ir.cacheTok).toBe(80);
+    expect(ir.outTok).toBe(6);
+    expect(ir.reasonTok).toBe(4);
+    expect(ir.thinking.map((t) => t.data)).toEqual(["ponder"]);
   });
   test("buffered Responses preserves incomplete and failed status", () => {
     for (const status of ["incomplete", "failed"]) {

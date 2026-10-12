@@ -332,9 +332,14 @@ describe("proxy Anthropic→OpenAI translation (in-process)", () => {
     );
     const p1 = stream.feed(chunk1);
     const p2 = stream.feed(chunk2);
+    // The finish is held for a possible trailing usage-only chunk (vLLM
+    // stacks break out cached_tokens only there); with [DONE] omitted,
+    // the EOF flush — exactly what the proxy pump does on upstream EOF —
+    // emits the terminal sequence.
+    const tail = stream.flush();
     expect(stream.isDone).toBe(true);
 
-    const fullSse = [...p1, ...p2].map((p) => new TextDecoder().decode(p)).join("");
+    const fullSse = [...p1, ...p2, ...tail].map((p) => new TextDecoder().decode(p)).join("");
     expect(fullSse).toContain('"type":"redacted_thinking","data":"sig123"');
     expect(fullSse).toContain('"type":"tool_use","id":"call_1","name":"run"');
     expect(fullSse).toContain('"stop_reason":"tool_use"');
