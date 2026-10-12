@@ -11,7 +11,6 @@ import type { AgentSettings, SkillConfig } from "../types";
 import type { RcConfig } from "../store/sessions";
 
 const defaults: AgentSettings = {
-  temperature: 0.7,
   autoCompactPercent: 80,
   noAutoTitle: false,
   jailByDefault: false,
@@ -65,7 +64,6 @@ export function createSettings(opts: {
     const s = doc?.settings || {};
     batch(() => {
       setDaemonSettings({
-        temperature: typeof s.temperature === "number" ? s.temperature : 0.7,
         autoCompactPercent:
           s.autoCompactPercent ??
           s.autoCompactThreshold ??
@@ -191,7 +189,6 @@ export function createSettings(opts: {
       requestId: saveRequest.id,
       expectedRevision: baseRevision(),
       settings: {
-        temperature: s.temperature,
         auto_compact_threshold: s.autoCompactPercent,
         no_auto_title: s.noAutoTitle,
         jail_by_default: s.jailByDefault,

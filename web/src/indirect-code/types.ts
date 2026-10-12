@@ -117,7 +117,6 @@ export interface PendingApproval {
 }
 
 export interface AgentSettings {
-  temperature: number;
   autoCompactPercent: number;
   noAutoTitle: boolean;
   jailByDefault: boolean;

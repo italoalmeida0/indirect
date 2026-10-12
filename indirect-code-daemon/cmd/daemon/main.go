@@ -476,7 +476,7 @@ func (r *root) performPairing(connectURL, hostName string) error {
 	}
 	cfg := r.cfg.load()
 	if cfg == nil {
-		cfg = &DaemonConfig{Settings: HarnessSettings{AutoCompactThreshold: 95, RespectGitignore: true, ToolRender: "box", Reasoning: "medium", Temperature: 0.7}}
+		cfg = &DaemonConfig{Settings: HarnessSettings{AutoCompactThreshold: 95, RespectGitignore: true, ToolRender: "box", Reasoning: "medium"}}
 	} else {
 		cp := *cfg
 		cfg = &cp

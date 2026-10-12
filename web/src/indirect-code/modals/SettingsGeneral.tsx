@@ -302,29 +302,6 @@ export function SettingsGeneralSection() {
         Compact the transcript automatically past this context usage.
       </p>
     </div>
-    <div>
-      <label class="block font-medium text-ink-200 mb-1">
-        Temperature
-      </label>
-      <div class="flex items-center gap-3">
-        <input
-          type="range"
-          min="0"
-          max="2"
-          step="0.1"
-          value={m.daemonSettings().temperature ?? 0.7}
-          onInput={(e) =>
-            m.setDaemonSettings({ ...m.daemonSettings(), temperature: Number(e.currentTarget.value) })
-          }
-          class="flex-1 accent-brand-500"
-          aria-label="Model temperature"
-        />
-        <span class="text-ink-200 tabular-nums w-8 text-right">{(m.daemonSettings().temperature ?? 0.7).toFixed(1)}</span>
-      </div>
-      <p class="text-[11px] text-ink-500 mt-1">
-        Sampling temperature for model turns (0 = deterministic, 2 = most random).
-      </p>
-    </div>
     <div class="flex items-center justify-between gap-4">
       <div>
         <div class="font-medium text-ink-200">Jail new conversations</div>

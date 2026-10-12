@@ -267,12 +267,14 @@ func (EventDone) isEvent() {}
 
 // Request is a single LLM call.
 type Request struct {
-	Model       string
-	System      string
-	Messages    []Message
-	Tools       []Tool
-	MaxTokens   int
-	Temperature *float32
+	Model     string
+	System    string
+	Messages  []Message
+	Tools     []Tool
+	MaxTokens int
+	// No sampling parameters are ever sent: the provider default
+	// applies. Reasoning-only models reject `temperature` outright,
+	// and pinning a value only narrows model compatibility.
 	// Reasoning is "", "minimum", "low", "medium", "high", "xhigh", or
 	// "max". Empty disables reasoning. The max tier is sent natively only to
 	// models that support it and clamped elsewhere.

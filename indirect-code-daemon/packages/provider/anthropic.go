@@ -113,13 +113,12 @@ type anthTool struct {
 }
 
 type anthRequest struct {
-	Model       string        `json:"model"`
-	System      interface{}   `json:"system,omitempty"` // []anthSystemBlock
-	Messages    []anthMessage `json:"messages"`
-	Tools       []anthTool    `json:"tools,omitempty"`
-	MaxTokens   int           `json:"max_tokens"`
-	Temperature *float32      `json:"temperature,omitempty"`
-	Stream      bool          `json:"stream"`
+	Model     string        `json:"model"`
+	System    interface{}   `json:"system,omitempty"` // []anthSystemBlock
+	Messages  []anthMessage `json:"messages"`
+	Tools     []anthTool    `json:"tools,omitempty"`
+	MaxTokens int           `json:"max_tokens"`
+	Stream    bool          `json:"stream"`
 }
 
 // ---- request building ----
@@ -164,12 +163,6 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		Model:     req.Model,
 		MaxTokens: maxTok,
 		Stream:    true,
-	}
-	// Reasoning-only models (e.g. gpt-5.6-luna via gateway translation)
-	// reject `temperature` outright (only the default 1 is accepted): omit
-	// it instead of sending a value the upstream refuses.
-	if !m.Reasoning || !m.OmitTemperature {
-		out.Temperature = req.Temperature
 	}
 	if req.System != "" {
 		out.System = []anthSystemBlock{

@@ -231,7 +231,6 @@ func (w *turnBridge) run() error {
 	w.agent.CompletionTool = modeCompletionTool(w.snap.options.Mode)
 	w.agent.Reasoning = w.snap.options.Effort
 	w.agent.BeforeRequest = w.beforeRequest
-	w.agent.Temperature = &cfg.Settings.Temperature
 	w.agent.MaxTokens = maxOutputTokens(w.modelInfo)
 	if len(w.snap.messages) > 0 {
 		w.agent.SetMessages(w.snap.messages)

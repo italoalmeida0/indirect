@@ -12,13 +12,13 @@ import (
 
 func TestConfigUpdateChecksRevisionAndPublishesAfterSave(t *testing.T) {
 	h := newWSHarness(t)
-	h.server.onUpdateConfig([]byte(`{"requestId":"stale","expectedRevision":"stale","settings":{"temperature":1.7}}`))
+	h.server.onUpdateConfig([]byte(`{"requestId":"stale","expectedRevision":"stale","settings":{"auto_compact_threshold":70}}`))
 	if got := h.lastType("config_updated"); got == nil || got["success"] == true {
 		t.Fatalf("stale config update was accepted: %#v", got)
 	}
 
 	revision := configRevision(h.cfg.load())
-	h.server.onUpdateConfig([]byte(`{"requestId":"ok","expectedRevision":"` + revision + `","settings":{"temperature":1.7}}`))
+	h.server.onUpdateConfig([]byte(`{"requestId":"ok","expectedRevision":"` + revision + `","settings":{"auto_compact_threshold":70}}`))
 	var got map[string]any
 	deadline := time.Now().Add(3 * time.Second)
 	for got == nil && time.Now().Before(deadline) {
@@ -41,8 +41,8 @@ func TestConfigUpdateChecksRevisionAndPublishesAfterSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disk.Settings.Temperature != 1.7 || h.cfg.load().Settings.Temperature != 1.7 {
-		t.Fatalf("config was not published consistently: disk=%v live=%v", disk.Settings.Temperature, h.cfg.load().Settings.Temperature)
+	if disk.Settings.AutoCompactThreshold != 70 || h.cfg.load().Settings.AutoCompactThreshold != 70 {
+		t.Fatalf("config was not published consistently: disk=%v live=%v", disk.Settings.AutoCompactThreshold, h.cfg.load().Settings.AutoCompactThreshold)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestConfigUpdateRejectsMalformedInputAndSettingTypes(t *testing.T) {
 	if got := h.lastType("config_updated"); got == nil || got["success"] == true {
 		t.Fatalf("malformed config update was accepted: %#v", got)
 	}
-	h.server.onUpdateConfig([]byte(`{"requestId":"bad-type","settings":{"temperature":"hot"}}`))
+	h.server.onUpdateConfig([]byte(`{"requestId":"bad-type","settings":{"auto_compact_threshold":"hot"}}`))
 	if got := h.lastType("config_updated"); got == nil || got["success"] == true {
 		t.Fatalf("invalid setting type was accepted: %#v", got)
 	}

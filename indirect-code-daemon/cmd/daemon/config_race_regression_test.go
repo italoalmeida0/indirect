@@ -43,7 +43,7 @@ func TestRegressionConfigWritersNoLostUpdate(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			s.onUpdateConfig([]byte(`{"requestId":"r1","settings":{"temperature":0.7}}`))
+			s.onUpdateConfig([]byte(`{"requestId":"r1","settings":{"auto_compact_threshold":70}}`))
 		}()
 		go func() {
 			defer wg.Done()
@@ -59,8 +59,8 @@ func TestRegressionConfigWritersNoLostUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load config: %v", err)
 		}
-		if onDisk.Settings.Temperature != 0.7 {
-			t.Fatalf("attempt %d: settings update lost (temperature=%v)", attempt, onDisk.Settings.Temperature)
+		if onDisk.Settings.AutoCompactThreshold != 70 {
+			t.Fatalf("attempt %d: settings update lost (auto_compact_threshold=%v)", attempt, onDisk.Settings.AutoCompactThreshold)
 		}
 		if onDisk.LastSelection == nil || onDisk.LastSelection.Model != "model-b" {
 			t.Fatalf("attempt %d: selection update lost (lastSelection=%v)", attempt, onDisk.LastSelection)

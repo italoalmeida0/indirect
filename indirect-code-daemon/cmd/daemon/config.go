@@ -82,7 +82,7 @@ func saveDaemonConfig(dataDir string, cfg *DaemonConfig) error {
 }
 
 func validateEditableConfig(cfg *DaemonConfig) error {
-	if cfg.Settings.Temperature < 0 || cfg.Settings.Temperature > 2 || cfg.Settings.AutoCompactThreshold < 0 || cfg.Settings.AutoCompactThreshold > 95 {
+	if cfg.Settings.AutoCompactThreshold < 0 || cfg.Settings.AutoCompactThreshold > 95 {
 		return errors.New("Invalid agent settings")
 	}
 	return nil

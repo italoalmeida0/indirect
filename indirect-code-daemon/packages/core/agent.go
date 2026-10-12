@@ -136,12 +136,11 @@ func StripLeadingSystemPrompt(text string) string {
 // Agent is a stateful conversation bound to a provider client, a model,
 // and a set of tools.
 type Agent struct {
-	Client      provider.Client
-	Model       string
-	System      string
-	Tools       Registry
-	Reasoning   string
-	Temperature *float32
+	Client    provider.Client
+	Model     string
+	System    string
+	Tools     Registry
+	Reasoning string
 
 	// MaxTokens caps the model's output tokens per turn. Zero leaves
 	// the field unset on the provider request, letting each provider
@@ -657,10 +656,6 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			}
 			if errors.Is(err, ErrRepetitionLoop) && attempt < 3 {
 				sink(EvToolProgress{Text: "Repetition loop detected; retrying response…"})
-				if a.Temperature != nil && *a.Temperature < 1.95 {
-					temp := *a.Temperature + 0.05
-					a.Temperature = &temp
-				}
 				continue
 			}
 			if ctx.Err() != nil || !a.canRetryError(err, attempt) {
@@ -969,7 +964,6 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 			Tools:        a.Tools.Specs(),
 			Reasoning:    a.Reasoning,
 			MaxTokens:    a.MaxTokens,
-			Temperature:  a.Temperature,
 			SessionID:    a.SessionID,
 			MaxToolCalls: a.MaxToolCalls,
 		}

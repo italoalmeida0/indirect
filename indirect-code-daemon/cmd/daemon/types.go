@@ -11,19 +11,18 @@ import (
 // v2: Skills/MCP removed (never used, no legacy). Unknown JSON keys from v1
 // config files are ignored on load, so old config.json files keep parsing.
 type HarnessSettings struct {
-	Model                string  `json:"model,omitempty"`
-	Reasoning            string  `json:"reasoning,omitempty"` // "off" | "low" | "medium" | "high"
-	Temperature          float32 `json:"temperature,omitempty"`
-	AutoCompactThreshold int     `json:"auto_compact_threshold"` // 0=off, 80, 85, 90, 95
-	NoAutoTitle          bool    `json:"no_auto_title,omitempty"`
-	JailByDefault        bool    `json:"jail_by_default"`
-	ToolRender           string  `json:"tool_render,omitempty"` // "box" | "flat"
-	CompactInput         bool    `json:"compact_input"`
-	CompactMode          bool    `json:"compact_mode"`
-	RecursiveFileSuggest bool    `json:"recursive_file_suggest"`
-	RespectGitignore     bool    `json:"respect_gitignore"`
-	Insecure             bool    `json:"insecure"`
-	HTTPProxy            string  `json:"http_proxy,omitempty"`
+	Model                string `json:"model,omitempty"`
+	Reasoning            string `json:"reasoning,omitempty"`    // "off" | "low" | "medium" | "high"
+	AutoCompactThreshold int    `json:"auto_compact_threshold"` // 0=off, 80, 85, 90, 95
+	NoAutoTitle          bool   `json:"no_auto_title,omitempty"`
+	JailByDefault        bool   `json:"jail_by_default"`
+	ToolRender           string `json:"tool_render,omitempty"` // "box" | "flat"
+	CompactInput         bool   `json:"compact_input"`
+	CompactMode          bool   `json:"compact_mode"`
+	RecursiveFileSuggest bool   `json:"recursive_file_suggest"`
+	RespectGitignore     bool   `json:"respect_gitignore"`
+	Insecure             bool   `json:"insecure"`
+	HTTPProxy            string `json:"http_proxy,omitempty"`
 }
 
 // DaemonConfig holds credentials and gateway connection details.
@@ -90,7 +89,7 @@ type ModelSelection struct {
 // SessionOptions are per-session agent behavior flags.
 // v2: Skills wiring removed, but the field stays in the WIRE envelope
 // (always []) because the frontend and the frozen WS protocol expect it
-//.
+// .
 type SessionOptions struct {
 	Effort string   `json:"effort"`
 	Mode   string   `json:"mode"`
@@ -186,18 +185,18 @@ type BgTask struct {
 
 // SessionSummary is returned to the web client for listing.
 type SessionSummary struct {
-	ID        string          `json:"id"`
-	CWD       string          `json:"cwd"`
-	Title     string          `json:"title"`
-	Model     string          `json:"model"`
-	Status    string          `json:"status"`
-	Pinned    bool            `json:"pinned"`
-	CreatedAt int64           `json:"createdAt"`
-	UpdatedAt int64           `json:"updatedAt"`
+	ID        string `json:"id"`
+	CWD       string `json:"cwd"`
+	Title     string `json:"title"`
+	Model     string `json:"model"`
+	Status    string `json:"status"`
+	Pinned    bool   `json:"pinned"`
+	CreatedAt int64  `json:"createdAt"`
+	UpdatedAt int64  `json:"updatedAt"`
 	// LastTurnStartedAt is the start time of the most recent turn
 	// (Turn.StartedAt). The sidebar orders sessions and projects by this
 	// stamp instead of UpdatedAt, which moves on every event.
-	LastTurnStartedAt int64     `json:"lastTurnStartedAt,omitempty"`
-	TodosOpen         *bool     `json:"todosOpen,omitempty"`
-	Options   *SessionOptions `json:"options,omitempty"`
+	LastTurnStartedAt int64           `json:"lastTurnStartedAt,omitempty"`
+	TodosOpen         *bool           `json:"todosOpen,omitempty"`
+	Options           *SessionOptions `json:"options,omitempty"`
 }

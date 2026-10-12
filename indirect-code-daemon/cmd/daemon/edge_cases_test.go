@@ -213,15 +213,13 @@ func TestValidateEditableConfigBounds(t *testing.T) {
 	ok := func(s HarnessSettings) error {
 		return validateEditableConfig(&DaemonConfig{Settings: s})
 	}
-	if err := ok(HarnessSettings{Temperature: 0, AutoCompactThreshold: 95}); err != nil {
+	if err := ok(HarnessSettings{AutoCompactThreshold: 95}); err != nil {
 		t.Errorf("bounds must be inclusive: %v", err)
 	}
-	if err := ok(HarnessSettings{Temperature: 2, AutoCompactThreshold: 0}); err != nil {
+	if err := ok(HarnessSettings{AutoCompactThreshold: 0}); err != nil {
 		t.Errorf("bounds must be inclusive: %v", err)
 	}
 	for _, s := range []HarnessSettings{
-		{Temperature: -0.1},
-		{Temperature: 2.1},
 		{AutoCompactThreshold: -1},
 		{AutoCompactThreshold: 96},
 	} {

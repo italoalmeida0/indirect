@@ -8,7 +8,7 @@ import "testing"
 func testDaemon(t *testing.T) *DaemonServer {
 	t.Helper()
 	r := newRoot(t.TempDir())
-	r.cfg.store(&DaemonConfig{HostID: "host-test", Settings: HarnessSettings{NoAutoTitle: true, Reasoning: "high", Temperature: 0.4}})
+	r.cfg.store(&DaemonConfig{HostID: "host-test", Settings: HarnessSettings{NoAutoTitle: true, Reasoning: "high"}})
 	return attachUpdateHost(r)
 }
 

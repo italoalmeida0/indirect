@@ -262,20 +262,6 @@ func TestAgentPropagatesMaxToolCalls(t *testing.T) {
 	}
 }
 
-func TestAgentPropagatesTemperature(t *testing.T) {
-	client := &captureClient{}
-	a := NewAgent(client, "fake-model", "system", Registry{})
-	temp := float32(0)
-	a.Temperature = &temp
-
-	if err := a.Prompt(context.Background(), "hello", nil, nil); err != nil {
-		t.Fatalf("Prompt returned %v", err)
-	}
-	if client.lastReq.Temperature == nil || *client.lastReq.Temperature != temp {
-		t.Fatalf("request Temperature = %v; want %v", client.lastReq.Temperature, temp)
-	}
-}
-
 // TestRetryScheduleShape pins the upstream retry cadence: 1s x3, 5s x2,
 // 10s x2, 30s x2, 1m x2, 5m x2, 10m x2, 30m x2, then hourly forever.
 func TestRetryScheduleShape(t *testing.T) {

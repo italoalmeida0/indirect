@@ -11,12 +11,10 @@ import (
 
 func TestAnthropicBuildRequest(t *testing.T) {
 	c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{ID: "m"}).(*anthropicClient)
-	temp := float32(0.5)
 	wire, err := c.buildRequest(Request{
-		Model:       "m",
-		System:      "sys",
-		Temperature: &temp,
-		MaxTokens:   512,
+		Model:     "m",
+		System:    "sys",
+		MaxTokens: 512,
 		Messages: []Message{
 			{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}},
 			{Role: RoleAssistant, Content: []Content{
@@ -357,28 +355,31 @@ func TestAnthropicErrorStatus(t *testing.T) {
 	}
 }
 
-// Reasoning-only models (e.g. gpt-5.6-luna via gateway translation) reject
-// `temperature` outright: the client must omit it, never send a value.
-func TestAnthropicOmitsTemperatureForReasoning(t *testing.T) {
-	c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{ID: "m", Reasoning: true, OmitTemperature: true}).(*anthropicClient)
-	temp := float32(0.5)
-	wire, err := c.buildRequest(Request{Model: "m", Temperature: &temp, MaxTokens: 512,
-		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wire.Temperature != nil {
-		t.Fatalf("reasoning model must omit temperature, got %v", *wire.Temperature)
-	}
-	// Non-reasoning models keep sending it.
-	c2 := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{ID: "m"}).(*anthropicClient)
-	wire2, err := c2.buildRequest(Request{Model: "m", Temperature: &temp, MaxTokens: 512,
-		Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wire2.Temperature == nil || *wire2.Temperature != temp {
-		t.Fatal("non-reasoning model must keep temperature")
+// No sampling parameters are ever sent: reasoning-only models (e.g.
+// gpt-5.6-luna via gateway translation) reject `temperature` outright,
+// so the wire payload must never carry the key, whatever the model.
+func TestAnthropicNeverSendsTemperature(t *testing.T) {
+	for _, model := range []Model{
+		{ID: "m"},
+		{ID: "m", Reasoning: true},
+	} {
+		c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", model).(*anthropicClient)
+		wire, err := c.buildRequest(Request{Model: "m", MaxTokens: 512,
+			Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]json.RawMessage
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := payload["temperature"]; ok {
+			t.Fatalf("model %+v: payload must never carry temperature: %s", model, body)
+		}
 	}
 }
 

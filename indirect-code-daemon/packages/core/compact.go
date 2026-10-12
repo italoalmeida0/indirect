@@ -273,11 +273,10 @@ func (a *Agent) MaybeAutoCompact(ctx context.Context, window int, sink func(delt
 // reports whether the turn stopped for length plus the token usage.
 func (a *Agent) runSummarizer(ctx context.Context, prompt string, sink func(delta string)) (string, bool, provider.Usage, error) {
 	req := provider.Request{
-		Model:       a.Model,
-		System:      SummarizationSystemPrompt,
-		MaxTokens:   4096,
-		Temperature: a.Temperature,
-		SessionID:   a.SessionID,
+		Model:     a.Model,
+		System:    SummarizationSystemPrompt,
+		MaxTokens: 4096,
+		SessionID: a.SessionID,
 		Messages: []provider.Message{
 			{
 				Role:    provider.RoleUser,
