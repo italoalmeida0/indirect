@@ -33,8 +33,7 @@
           var android = /Android/.test(ua);
           var touch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
           var flag = function () {
-            var small = Math.min(window.screen.width, window.screen.height) <= 768;
-            document.documentElement.classList.toggle("mobile", (ios || android) && touch && small);
+            document.documentElement.classList.toggle("mobile", (ios || android) && touch && window.innerWidth <= 768);
           };
           flag();
           // UA/touch are device-intrinsic, but screen dims change when the
