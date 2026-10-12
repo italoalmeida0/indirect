@@ -9,10 +9,10 @@ import path from "path";
 //   - iOS incl. modern iPad (reports a "Macintosh" UA since iPadOS 13 —
 //     caught by maxTouchPoints > 1) and Android;
 //   - touch present;
-//   - phone/tablet-sized SCREEN (min(w,h) <= 768) so orientation cannot flip
-//     the result — an innerWidth threshold calls an iPhone landscape (844)
-//     desktop, and min(viewport) on a maximized 1366x768 window (~600px
-//     innerHeight) called touch laptops mobile.
+//   - window.innerWidth <= 768 (documented semantics: landscape phones and
+//     landscape iPads exceed 768 and get the desktop layout).
+// The UA gate is what protects touch laptops: the flag can never be true on
+// Windows/macOS hardware regardless of width, touch or pointer reporting.
 //
 // This test EXECUTES the real inline script from web/index.html against
 // device fingerprints — the code under test is the shipped script itself.
@@ -26,7 +26,7 @@ type Device = {
   name: string;
   ua: string;
   touch: boolean;
-  screen: { width: number; height: number };
+  innerWidth: number;
   expectMobile: boolean;
   note?: string;
 };
@@ -38,15 +38,16 @@ const WIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KH
 const MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 const DEVICES: Device[] = [
-  { name: "iPhone portrait", ua: IPHONE_UA, touch: true, screen: { width: 390, height: 844 }, expectMobile: true },
-  { name: "iPhone landscape", ua: IPHONE_UA, touch: true, screen: { width: 844, height: 390 }, expectMobile: true, note: "innerWidth=844 would be desktop" },
-  { name: "Android phone landscape", ua: ANDROID_UA, touch: true, screen: { width: 915, height: 412 }, expectMobile: true },
-  { name: "iPad modern (Macintosh UA, maxTouchPoints 5)", ua: IPAD_UA, touch: true, screen: { width: 1024, height: 768 }, expectMobile: true, note: "real iPad reports >1 touch points" },
-  { name: "iPad 10.9/Air (min=820)", ua: IPAD_UA, touch: true, screen: { width: 820, height: 1180 }, expectMobile: false, note: "documented trade-off: 768 threshold keeps big tablets on desktop layout" },
-  { name: "Windows touch laptop 1366x768", ua: WIN_UA, touch: true, screen: { width: 1366, height: 768 }, expectMobile: false, note: "the regression" },
-  { name: "Windows touch laptop big", ua: WIN_UA, touch: true, screen: { width: 2560, height: 1440 }, expectMobile: false },
-  { name: "macOS desktop", ua: MAC_UA, touch: false, screen: { width: 1920, height: 1080 }, expectMobile: false },
-  { name: "desktop small window", ua: MAC_UA, touch: false, screen: { width: 700, height: 500 }, expectMobile: false },
+  { name: "iPhone portrait", ua: IPHONE_UA, touch: true, innerWidth: 390, expectMobile: true },
+  { name: "iPhone landscape", ua: IPHONE_UA, touch: true, innerWidth: 844, expectMobile: false, note: "innerWidth semantics: landscape = desktop layout" },
+  { name: "Android phone portrait", ua: ANDROID_UA, touch: true, innerWidth: 412, expectMobile: true },
+  { name: "Android phone landscape", ua: ANDROID_UA, touch: true, innerWidth: 915, expectMobile: false, note: "innerWidth semantics: landscape = desktop layout" },
+  { name: "iPad modern portrait (Macintosh UA, maxTouchPoints 5)", ua: IPAD_UA, touch: true, innerWidth: 768, expectMobile: true },
+  { name: "iPad landscape", ua: IPAD_UA, touch: true, innerWidth: 1024, expectMobile: false, note: "innerWidth semantics" },
+  { name: "Windows touch laptop 1366x768", ua: WIN_UA, touch: true, innerWidth: 1366, expectMobile: false, note: "the regression" },
+  { name: "Windows touch laptop narrow window (700px)", ua: WIN_UA, touch: true, innerWidth: 700, expectMobile: false, note: "UA gate: never mobile on Windows hardware" },
+  { name: "macOS desktop", ua: MAC_UA, touch: false, innerWidth: 1920, expectMobile: false },
+  { name: "desktop small window", ua: MAC_UA, touch: false, innerWidth: 700, expectMobile: false },
 ];
 
 // Persistent stub: the script writes the class, consumers read it.
@@ -57,9 +58,7 @@ beforeAll(() => {
   const root = globalThis as Record<string, unknown>;
   const matchMedia = () => ({ matches: false }); // pointer flags are not used anymore
   root.window = {
-    get screen() {
-      return { width: device.screen.width, height: device.screen.height };
-    },
+    get innerWidth() { return device.innerWidth; },
     matchMedia,
     addEventListener: () => {},
   };
@@ -88,7 +87,7 @@ function runFlag(d: Device): boolean {
   return classes.has("mobile");
 }
 
-describe("html.mobile — real script from web/index.html (UA + touch + screen)", () => {
+describe("html.mobile — real script from web/index.html (UA + touch + width)", () => {
   for (const d of DEVICES) {
     test(`${d.name} -> ${d.expectMobile ? "mobile" : "desktop"}${d.note ? ` (${d.note})` : ""}`, () => {
       expect(runFlag(d)).toBe(d.expectMobile);
@@ -98,7 +97,7 @@ describe("html.mobile — real script from web/index.html (UA + touch + screen)"
   test("flag is the single source: layout predicate reads the same class", () => {
     // IndirectCodePage's isMobile, ui.tsx and presentation.tsx all read
     // documentElement.classList.contains("mobile") — never window width.
-    runFlag(DEVICES[4]); // Windows touch laptop: desktop
+    runFlag(DEVICES[6]); // Windows touch laptop: desktop
     expect(classes.has("mobile")).toBe(false);
     runFlag(DEVICES[0]); // iPhone: mobile
     expect(classes.has("mobile")).toBe(true);
