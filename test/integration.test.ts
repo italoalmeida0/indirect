@@ -127,7 +127,7 @@ beforeAll(async () => {
     STATIC_DIR: staticDir,
   });
   await waitFor(`${GW}/api/health`);
-});
+}, 60_000);
 
 afterAll(() => {
   try { gwProc?.kill(); } catch {}
@@ -2537,7 +2537,7 @@ describe("zero-usage inference (isolated pair)", () => {
     try { gw2?.kill(); } catch {}
     try { up2?.kill(); } catch {}
     try { rmSync(dir2, { recursive: true, force: true }); } catch {}
-  });
+  }, 60_000);
 
   test("zero usage from the provider is inferred, never recorded as zero", async () => {
     const big = (n: number, ch: string) => ch.repeat(n);

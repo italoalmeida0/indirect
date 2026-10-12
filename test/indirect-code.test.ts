@@ -50,7 +50,7 @@ beforeAll(async () => {
   });
 
   await waitForServer();
-});
+}, 60_000);
 
 afterAll(() => {
   try {

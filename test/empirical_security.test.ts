@@ -74,7 +74,7 @@ beforeAll(async () => {
     } catch {}
     await Bun.sleep(100);
   }
-});
+}, 60_000);
 
 afterAll(() => {
   try { gwProc?.kill(); } catch {}
