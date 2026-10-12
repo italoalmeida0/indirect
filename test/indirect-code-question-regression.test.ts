@@ -1,4 +1,4 @@
-import { describe, expect, mock, test, vi } from "bun:test";
+import { afterEach, describe, expect, mock, test, vi } from "bun:test";
 import { createRoot } from "solid-js";
 import type { DaemonCommand } from "../web/src/indirect-code/daemon-protocol";
 
@@ -6,6 +6,10 @@ import type { DaemonCommand } from "../web/src/indirect-code/daemon-protocol";
 // questionSubmitting (via question_error) so the modal is answerable again.
 
 mock.module("virtual:icons", () => ({ registry: {} }));
+// Timers are faked per test — restore the real clock AFTER each test or the
+// fake clock leaks into later test FILES (same process): their beforeAll
+// hooks (Bun.sleep-based readiness polls) then hang forever.
+afterEach(() => { vi.useRealTimers(); });
 
 /** DOM globals the web hooks read at module init or in scroll plumbing. */
 function stubBrowserGlobals() {

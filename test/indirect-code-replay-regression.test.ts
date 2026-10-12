@@ -1,4 +1,4 @@
-import { describe, expect, mock, test, vi } from "bun:test";
+import { afterEach, describe, expect, mock, test, vi } from "bun:test";
 import { createRoot } from "solid-js";
 
 // Regression: audit bug 81 — a replayed approval/question request for an
@@ -6,6 +6,10 @@ import { createRoot } from "solid-js";
 // user's answer on the stale branch, silently).
 
 mock.module("virtual:icons", () => ({ registry: {} }));
+// Timers are faked per test — restore the real clock AFTER each test or the
+// fake clock leaks into later test FILES (same process): their beforeAll
+// hooks (Bun.sleep-based readiness polls) then hang forever.
+afterEach(() => { vi.useRealTimers(); });
 
 function stubBrowserGlobals() {
   const storage = new Map<string, string>();

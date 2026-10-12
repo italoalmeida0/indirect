@@ -1,4 +1,4 @@
-import { describe, expect, mock, test, vi } from "bun:test";
+import { afterEach, describe, expect, mock, test, vi } from "bun:test";
 import { createRoot } from "solid-js";
 import type { DaemonCommand } from "../web/src/indirect-code/daemon-protocol";
 
@@ -7,6 +7,10 @@ import type { DaemonCommand } from "../web/src/indirect-code/daemon-protocol";
 // dropped, freezing the transcript forever).
 
 mock.module("virtual:icons", () => ({ registry: {} }));
+// Timers are faked per test — restore the real clock AFTER each test or the
+// fake clock leaks into later test FILES (same process): their beforeAll
+// hooks (Bun.sleep-based readiness polls) then hang forever.
+afterEach(() => { vi.useRealTimers(); });
 
 function stubBrowserGlobals() {
   const storage = new Map<string, string>();

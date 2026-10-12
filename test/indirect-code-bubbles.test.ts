@@ -1,4 +1,4 @@
-import { describe, expect, mock, test, vi } from "bun:test";
+import { afterEach, describe, expect, mock, test, vi } from "bun:test";
 import { createRoot } from "solid-js";
 import type { DaemonCommand } from "../web/src/indirect-code/daemon-protocol";
 import type { Session } from "../web/src/api";
@@ -13,6 +13,9 @@ import { createBackground } from "../web/src/indirect-code/hooks/useBackground";
 // virtual:icons is a build-time module (iconify plugin) absent from bun test;
 // hooks pulling the UI graph transitively only need the registry export.
 mock.module("virtual:icons", () => ({ registry: {} }));
+// Safety net: a test that throws before its finally clause would leak the
+// fake clock into later test FILES (same process) — restore unconditionally.
+afterEach(() => { vi.useRealTimers(); });
 
 /** DOM globals the web hooks read at module init or in scroll plumbing. */
 function stubBrowserGlobals() {

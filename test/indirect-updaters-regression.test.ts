@@ -1,4 +1,4 @@
-import { expect, setSystemTime, test, vi } from "bun:test";
+import { afterEach, expect, setSystemTime, test, vi } from "bun:test";
 import {
   appendToolResult,
   cutTail,
@@ -9,6 +9,9 @@ import {
 } from "../web/src/indirect-code/transcript/updaters";
 import { normalizeSession } from "../web/src/indirect-code/store/sessions";
 import type { ChatMessage } from "../web/src/indirect-code/types";
+// Safety net: a test that throws before its finally clause would leak the
+// fake clock into later test FILES (same process) — restore unconditionally.
+afterEach(() => { vi.useRealTimers(); });
 
 const assistant = (id: string, text = ""): ChatMessage => ({
   id,
