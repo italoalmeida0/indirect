@@ -16,6 +16,7 @@ import { IndirectBrand } from "./components/IndirectBrand";
 import { HostCard } from "./components/HostCard";
 import { RemoteHints } from "./presentation";
 import { projectForDirectory } from "./paths";
+import { createMobileFlag } from "./utils/mobileFlag";
 import { contextDisplay, type GatewayModel } from "./context";
 import { api } from "../api";
 import { Onboarding } from "./components/Onboarding";
@@ -525,10 +526,11 @@ export default function IndirectCodePage() {
 
   // UI state
   const [sidebarOpen, setSidebarOpen] = createSignal(true);
-  // Mobile: drawer below 768px regardless of touch (small desktop windows too).
-  const [isMobile, setIsMobile] = createSignal(
-    typeof window !== "undefined" ? window.innerWidth <= 768 : false,
-  );
+  // Mobile = the pre-paint html.mobile flag (web/index.html script): the
+  // single source of truth (viewport heuristics mislabel touch laptops and
+  // small desktop windows). The script keeps the class in sync on
+  // resize/orientationchange — this signal just follows it.
+  const isMobile = createMobileFlag();
 
   // Anchor refs for floating menus (floating-ui positions them in a Portal).
   let newProjBtn: HTMLButtonElement | undefined;
@@ -1057,15 +1059,9 @@ export default function IndirectCodePage() {
     });
     // Sidebar starts closed on mobile (chatbot useMobile).
     if (isMobile()) setSidebarOpen(false);
-    const onResize = () => {
-      try {
-        const mobile = window.innerWidth <= 768;
-        if (mobile && !isMobile()) setSidebarOpen(false);
-        setIsMobile(mobile);
-      } catch {}
-    };
-    window.addEventListener("resize", onResize);
-    onCleanup(() => window.removeEventListener("resize", onResize));
+    // The html.mobile flag (web/index.html) tracks resize/orientationchange
+    // itself; isMobile follows it via the MutationObserver in
+    // createMobileFlag — no window resize handler needed here.
     // Shortcuts: Ctrl/Cmd+K search, Ctrl/Cmd+N new conversation (chatbot).
     // Esc cascades: menus -> history -> editor -> preview -> confirm.
     const onKey = (e: KeyboardEvent) => {
