@@ -281,8 +281,9 @@ type Agent struct {
 	rev  uint64
 	cost CostTracker
 
-	lastToolKey          string
-	consecutiveToolCount int
+	// recentToolKeys is the sliding loop-prevention window: the last
+	// toolLoopWindow non-exempt call keys (name+arguments), oldest first.
+	recentToolKeys []string
 
 	// summaryGate is the per-turn summary availability state. It is reset by
 	// every runLoop (so a resumed turn restarts clean) and owned by the same
@@ -1292,6 +1293,22 @@ func (a *Agent) hasSummaryTool() bool {
 	return ok
 }
 
+// Loop prevention window: a call whose name+arguments already ran
+// toolLoopMaxInWindow times within the last toolLoopWindow calls is
+// refused. Alternating two identical calls (A B A B A) trips it just
+// like three in a row; a key ages out as newer calls push it past
+// the window.
+const (
+	toolLoopWindow      = 12
+	toolLoopMaxInWindow = 2
+)
+
+// toolLoopExempt names polling tools whose identical repetition is
+// the intended use (reading or waiting on one background job).
+func toolLoopExempt(name string) bool {
+	return name == "bg_check" || name == "bg_await"
+}
+
 func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink func(AgentEvent)) ToolResult {
 	summaryCall := tc.Name == summaryToolName
 
@@ -1318,23 +1335,28 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink 
 		}
 	}
 
-	callKey := tc.Name + ":" + string(tc.Arguments)
-	a.mu.Lock()
-	if a.lastToolKey == callKey {
-		a.consecutiveToolCount++
-	} else {
-		a.lastToolKey = callKey
-		a.consecutiveToolCount = 1
-	}
-	consecutive := a.consecutiveToolCount
-	a.mu.Unlock()
+	if !toolLoopExempt(tc.Name) {
+		callKey := tc.Name + ":" + string(tc.Arguments)
+		a.mu.Lock()
+		seen := 0
+		for _, k := range a.recentToolKeys {
+			if k == callKey {
+				seen++
+			}
+		}
+		a.recentToolKeys = append(a.recentToolKeys, callKey)
+		if len(a.recentToolKeys) > toolLoopWindow {
+			a.recentToolKeys = a.recentToolKeys[len(a.recentToolKeys)-toolLoopWindow:]
+		}
+		a.mu.Unlock()
 
-	if consecutive >= 3 {
-		return ToolResult{
-			Content: []provider.Content{provider.TextBlock{
-				Text: fmt.Sprintf("Loop prevention: tool %q was called 3 consecutive times with identical arguments. Stop repeating the same call. Inspect previous outputs and change strategy.", tc.Name),
-			}},
-			IsError: true,
+		if seen >= toolLoopMaxInWindow {
+			return ToolResult{
+				Content: []provider.Content{provider.TextBlock{
+					Text: fmt.Sprintf("Loop prevention: tool %q was already called %d times with identical arguments within the last %d tool calls. Stop repeating the same call. Inspect previous outputs (for background jobs, read the finished job with bg_check) and change strategy.", tc.Name, seen, toolLoopWindow),
+				}},
+				IsError: true,
+			}
 		}
 	}
 

@@ -56,7 +56,7 @@ func (b *bgSupervisor) readopt() {
 		if pf.Identity != "" && tools.ProcessIdentity(pf.PID) == pf.Identity {
 			j := &bgJob{
 				ID: pf.JobID, Kind: pf.Kind, SessionID: pf.SessionID,
-				Label: pf.Label, PID: pf.PID, Identity: pf.Identity, Status: BgStatusRunning,
+				Label: pf.Label, Fingerprint: bgFingerprint(pf.Kind, pf.Label), PID: pf.PID, Identity: pf.Identity, Status: BgStatusRunning,
 				StartedAt: pf.StartedAt, LogPath: pf.LogPath, StderrPath: pf.StderrPath,
 				done: make(chan struct{}),
 			}

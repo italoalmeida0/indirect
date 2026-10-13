@@ -42,8 +42,11 @@ type bgJob struct {
 	Kind      string
 	SessionID string
 	Label     string
-	PID       int
-	Identity  string
+	// Fingerprint keys the exact command behind the job (duplicate
+	// guard); empty for jobs adopted without a registration label.
+	Fingerprint string
+	PID         int
+	Identity    string
 	// Runner marks a crash-only runner-backed job (V2R-003): its durable
 	// state file under runners/ is the SOLE recovery authority, so the
 	// legacy pidfile path must never re-adopt or finalize it.
@@ -235,6 +238,12 @@ func (b *bgSupervisor) handle(env Envelope) {
 		m.Reply <- b.onCancel(m.JobID, m.By)
 	case bgQueryMsg:
 		m.Reply <- b.onQuery(m.JobID)
+	case bgFindRunningMsg:
+		res := bgFindRunningResult{}
+		if j := b.findRunningByFingerprint(m.SessionID, m.Fingerprint); j != nil {
+			res = bgFindRunningResult{Found: true, JobID: j.ID, StartedAt: j.StartedAt}
+		}
+		m.Reply <- res
 	case bgJobsOfMsg:
 		// Empty SessionID = test/debug listing: every job id (any
 		// status). A session purge passes its id and gets running only.
@@ -270,11 +279,12 @@ func (b *bgSupervisor) onRegister(m bgRegisterMsg) {
 		jobID = "bg_" + randomID8()
 	}
 	j := &bgJob{
-		ID:        jobID,
-		Kind:      m.Kind,
-		SessionID: m.SessionID,
-		Label:     truncateBgLabel(m.Label),
-		PID:       m.PID, Identity: tools.ProcessIdentity(m.PID),
+		ID:          jobID,
+		Kind:        m.Kind,
+		SessionID:   m.SessionID,
+		Label:       truncateBgLabel(m.Label),
+		Fingerprint: bgFingerprint(m.Kind, m.Label),
+		PID:         m.PID, Identity: tools.ProcessIdentity(m.PID),
 		Runner:    m.JobID != "",
 		Status:    BgStatusRunning,
 		StartedAt: time.Now().UnixMilli(),
@@ -487,6 +497,20 @@ type bgQueryResult struct {
 	Owner   string
 	Running bool
 	Found   bool
+}
+
+// bgFindRunningMsg finds a running job by exact command fingerprint
+// (duplicate guard). Reply is bgFindRunningResult.
+type bgFindRunningMsg struct {
+	SessionID   string
+	Fingerprint string
+	Reply       chan any
+}
+
+type bgFindRunningResult struct {
+	Found     bool
+	JobID     string
+	StartedAt int64
 }
 
 // ---- cancel API (turnBridge.CancelBackgroundJob + dashboard) ----
@@ -785,6 +809,25 @@ func (b *bgSupervisor) onQuery(jobID string) bgQueryResult {
 		return bgQueryResult{Status: j.Status, Label: j.Label, Owner: j.SessionID, Running: j.Status == BgStatusRunning, Found: true}
 	}
 	return bgQueryResult{}
+}
+
+// findRunningByFingerprint returns the earliest running job of the
+// session whose exact command fingerprint matches, or nil. Runs on
+// the supervisor goroutine (message handler and tests only).
+func (b *bgSupervisor) findRunningByFingerprint(sessionID, fingerprint string) *bgJob {
+	if fingerprint == "" {
+		return nil
+	}
+	var best *bgJob
+	for _, j := range b.jobs {
+		if j.SessionID != sessionID || j.Status != BgStatusRunning || j.Fingerprint != fingerprint {
+			continue
+		}
+		if best == nil || j.StartedAt < best.StartedAt || (j.StartedAt == best.StartedAt && j.ID < best.ID) {
+			best = j
+		}
+	}
+	return best
 }
 
 func bgAppendLogLine(logPath, line string) {

@@ -155,8 +155,8 @@ func (b *bgSupervisor) adoptOne(st *runner.State) {
 	}
 	j := &bgJob{
 		ID: st.JobID, Kind: st.Kind, SessionID: st.SessionID,
-		Label: truncateBgLabel(st.Label),
-		PID:   st.PID, Identity: st.ProcessIdentity,
+		Label: truncateBgLabel(st.Label), Fingerprint: bgFingerprint(st.Kind, st.Label),
+		PID: st.PID, Identity: st.ProcessIdentity,
 		Runner:    true,
 		Status:    BgStatusRunning,
 		StartedAt: st.StartedAt,

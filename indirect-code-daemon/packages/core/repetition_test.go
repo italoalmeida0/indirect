@@ -185,3 +185,40 @@ func TestAgentToolCallLoopPrevention(t *testing.T) {
 		t.Fatalf("expected Loop prevention message, got: %s", text)
 	}
 }
+
+// TestAgentToolCallWindowLoopPrevention: alternating two identical
+// calls (A B A B A) must trip the guard on the third A even though
+// no three calls are consecutive. Polling tools (bg_check/bg_await)
+// are exempt. Keys leave the window after enough other calls.
+func TestAgentToolCallWindowLoopPrevention(t *testing.T) {
+	registry := NewRegistry(&dummyTool{name: "bash"}, &dummyTool{name: "bg_check"})
+	a := NewAgent(nil, "m", "s", registry)
+	call := func(name, args string) ToolResult {
+		return a.runOneTool(context.Background(), provider.ToolCallBlock{
+			ID: "c", Name: name, Arguments: json.RawMessage(args),
+		}, func(AgentEvent) {})
+	}
+	A := `{"command":"bun test"}`
+	B := `{"command":"bun run lint"}`
+	for i, args := range []string{A, B, A, B} {
+		if res := call("bash", args); res.IsError {
+			t.Fatalf("call %d (%s) should execute, got error", i+1, args)
+		}
+	}
+	if res := call("bash", A); !res.IsError {
+		t.Fatal("third A inside the window should trigger loop prevention")
+	}
+	// Polling the same background job is legitimate: never blocked.
+	for i := 0; i < 4; i++ {
+		if res := call("bg_check", `{"job_id":"j1"}`); res.IsError {
+			t.Fatalf("bg_check poll %d must be exempt from loop prevention", i+1)
+		}
+	}
+	// After enough distinct calls the A key leaves the window.
+	for i := 0; i < 12; i++ {
+		call("bash", `{"command":"echo `+string(rune('a'+i))+`"}`)
+	}
+	if res := call("bash", A); res.IsError {
+		t.Fatal("A should execute again after leaving the window")
+	}
+}

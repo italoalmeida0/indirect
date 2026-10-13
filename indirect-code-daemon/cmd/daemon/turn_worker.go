@@ -150,13 +150,19 @@ type turnBridge struct {
 	// todos tracks the session's checklist on the worker goroutine:
 	// seeded from the snapshot, replaced by every todo tool call.
 	// Live-state reminders and the finish gate read it.
-	todos     []tools.TodoItem
-	agent     *core.Agent
-	client    provider.Client
-	modelInfo provider.Model
-	reg       core.Registry
-	tfc       *turnFileChanges
-	live      *liveTracker
+	todos []tools.TodoItem
+	// mutationSeq counts edit/write calls this turn; jobMutationMark
+	// records it per background job at registration. The exact-
+	// duplicate bg guard refuses only while no file mutation landed
+	// after the running job started (its result cannot be stale).
+	mutationSeq     int
+	jobMutationMark map[string]int
+	agent           *core.Agent
+	client          provider.Client
+	modelInfo       provider.Model
+	reg             core.Registry
+	tfc             *turnFileChanges
+	live            *liveTracker
 }
 
 func (w *turnBridge) run() error {
@@ -470,6 +476,15 @@ func (w *turnBridge) approveTool(call provider.ToolCallBlock) (bool, string, jso
 	if w.ctx.Err() != nil {
 		return false, "Turn cancelled", nil
 	}
+	// File mutations invalidate the exact-duplicate bg guard for jobs
+	// started before them; counted pre-approval (a rejected edit
+	// only loses a dedupe opportunity, never blocks real work).
+	if call.Name == "edit" || call.Name == "write" {
+		w.mutationSeq++
+	}
+	if reason := w.duplicateBgRefusal(call); reason != "" {
+		return false, reason, nil
+	}
 	ch := make(chan approvalOutcome, 1)
 	id := call.ID
 	if id == "" {
@@ -736,6 +751,10 @@ func (w *turnBridge) slowHook() tools.SlowHook {
 			return "", "", func(string) {}, func(string, bool, int) {}
 		}
 		id := reg.JobID
+		if w.jobMutationMark == nil {
+			w.jobMutationMark = map[string]int{}
+		}
+		w.jobMutationMark[id] = w.mutationSeq
 		// Register the session-global BgTask: from here every chunk is
 		// durable in session+WAL, independent of turn state.
 		//
