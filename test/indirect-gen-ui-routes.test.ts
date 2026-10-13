@@ -147,7 +147,17 @@ describe("gen-ui widget routes", () => {
     expect(html.length).toBeLessThan(200_000);
     expect(html).not.toContain("globalThis.THREE=");
     const map = JSON.parse(/<script type="importmap"[^>]*>([\s\S]*?)<\/script>/.exec(html)![1]);
-    for (const [spec, file] of [["three", "three.js"], ["d3", "d3.js"], ["gsap", "gsap.js"], ["chart", "chart.js"], ["leaflet", "leaflet.js"]] as const) {
+    for (const [spec, file] of [
+      ["three", "three.js"],
+      ["d3", "d3.js"],
+      ["gsap", "gsap.js"],
+      ["chart", "chart.js"],
+      ["leaflet", "leaflet.js"],
+      ["cannon-es", "cannon-es.js"],
+      ["cannon", "cannon-es.js"],
+      ["matter-js", "matter-js.js"],
+      ["matter", "matter-js.js"],
+    ] as const) {
       expect(map.imports[spec]).toBe(`/api/indirect-code/gen-ui/lib/${file}`);
     }
     // The module endpoint and lib endpoint are reachable and cacheable.
@@ -169,6 +179,8 @@ describe("gen-ui widget routes", () => {
       "gsap.js": ["to", "from", "timeline", "killTweensOf", "set", "default"],
       "chart.js": ["Chart", "default"],
       "leaflet.js": ["map", "marker", "tileLayer", "divIcon", "polyline", "circle", "default"],
+      "cannon-es.js": ["World", "Body", "Vec3", "Box", "Sphere", "default"],
+      "matter-js.js": ["Engine", "Bodies", "Composite", "World", "Render", "Runner", "default"],
     };
     for (const [file, members] of Object.entries(documented)) {
       const res = await get(`/api/indirect-code/gen-ui/lib/${file}`);

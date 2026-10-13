@@ -157,9 +157,10 @@ export interface RenderBlockBase {
   kind: RenderBlockKind;
   id?: string;
   /** Identity of the rendered turn this block belongs to (stable across
-   * rebuilds and cache hits). Live state is turn-scoped: every block whose
-   * turnKey matches the newest block's turnKey shows running state while
-   * the session runs — not just the transcript's last block. */
+   * rebuilds and cache hits). Identity only: live state is decided by
+   * `isBlockRunning` (the silent tail aggregate runs; a block that carries —
+   * or is followed by — a visible message is done), never by matching this
+   * key alone. */
   turnKey: string;
 }
 

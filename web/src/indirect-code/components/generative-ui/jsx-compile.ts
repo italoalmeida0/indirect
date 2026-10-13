@@ -61,6 +61,8 @@ const GLOBAL_USAGE: { specifier: string; pattern: RegExp }[] = [
   { specifier: "gsap", pattern: /\bgsap\s*[.(]/ },
   { specifier: "chart", pattern: /\bChart\s*[.(]/ },
   { specifier: "leaflet", pattern: /\bL\s*\.\s*(?:map|marker|tileLayer|polyline|polygon|circle|circleMarker|latLng|icon|divIcon|featureGroup|layerGroup|geoJSON|control)\s*\(|\bwindow\s*\.\s*L\b/ },
+  { specifier: "cannon-es", pattern: /\bCANNON\b/ },
+  { specifier: "matter-js", pattern: /\bMatter\s*\./ },
 ];
 
 /** Prepend side-effect imports for libs the code uses but never imports. */

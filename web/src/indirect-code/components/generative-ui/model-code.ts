@@ -118,6 +118,10 @@ const RESOLVABLE_SPECIFIERS = new Set([
   "chart.js/auto",
   "three",
   "leaflet",
+  "cannon-es",
+  "cannon",
+  "matter-js",
+  "matter",
 ]);
 
 /** URL literals allowed for module specifiers: the one vetted lib CDN. */
@@ -272,7 +276,7 @@ function auditImports(ast: Node): string | null {
     return (
       `unsupported import${bad.length > 1 ? "s" : ""}: ${bad.map((s) => JSON.stringify(s)).join(", ")} — ` +
       `widgets may only import react / react-dom and the preloaded libs ` +
-      `(d3, gsap, chart, three, leaflet); esm.sh needs net: true`
+      `(d3, gsap, chart, three, leaflet, cannon-es, matter-js); esm.sh needs net: true`
     );
   }
   if (indirect) {

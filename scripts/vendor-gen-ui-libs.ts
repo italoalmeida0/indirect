@@ -51,6 +51,8 @@ const BUNDLED: { name: string; entry: string; global: string }[] = [
   { name: "chart.js", entry: "entry-chart.ts", global: "Chart" },
   { name: "three.js", entry: "entry-three.ts", global: "THREE" },
   { name: "leaflet.js", entry: "entry-map.ts", global: "L" },
+  { name: "cannon-es.js", entry: "entry-cannon.ts", global: "CANNON" },
+  { name: "matter-js.js", entry: "entry-matter.ts", global: "Matter" },
 ];
 
 /**
@@ -64,6 +66,10 @@ export const GEN_UI_LIB_FILES: Record<string, string> = {
   chart: "chart.js",
   three: "three.js",
   leaflet: "leaflet.js",
+  "cannon-es": "cannon-es.js",
+  cannon: "cannon-es.js",
+  "matter-js": "matter-js.js",
+  matter: "matter-js.js",
 };
 
 function inlineStyle(lib: (typeof STYLED)[number]): string {

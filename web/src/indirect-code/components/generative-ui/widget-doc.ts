@@ -638,6 +638,12 @@ export function buildJsxImportMap(moduleUrls: {
     imports["chart.js"] = moduleUrls.libs.chart;
     imports["chart.js/auto"] = moduleUrls.libs.chart;
   }
+  if (moduleUrls.libs["cannon-es"]) {
+    imports.cannon = moduleUrls.libs["cannon-es"];
+  }
+  if (moduleUrls.libs["matter-js"]) {
+    imports.matter = moduleUrls.libs["matter-js"];
+  }
   return JSON.stringify({ imports });
 }
 

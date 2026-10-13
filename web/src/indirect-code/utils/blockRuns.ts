@@ -5,12 +5,19 @@ import type { RenderBlock, TurnEntry, ToolUnit } from "../types";
  * `isBlockRunning` owns the running-tail predicate; `groupToolRuns` maps a
  * series' entries to the tool run each `tools` row renders. */
 
-/** Live state is turn-scoped: a multi-text turn spans several render blocks,
- * and every one of them shows live state (spinner/auto-open/isActive) while
- * its turn runs — not just the transcript's last block. */
+/** A block runs only while it is the transcript tail AND no visible message
+ * has landed on it yet: text only reaches the transcript once the work before
+ * it produced an answer, so an aggregate that carries its own text message
+ * (`textMsg`) is done — and so is any aggregate a message block appeared
+ * after (it is no longer the tail). Only that last, still-silent aggregate
+ * of a running session spins/auto-opens; older aggregates stop the moment a
+ * message separates them from the tail (the message IS the end-of-work
+ * signal). Message blocks themselves never run. */
 export function isBlockRunning(blocks: RenderBlock[], block: RenderBlock, sessionStatus: string): boolean {
+  if (sessionStatus !== "running") return false;
+  if (block.kind !== "series" || block.textMsg) return false;
   const last = blocks.at(-1);
-  return sessionStatus === "running" && last != null && last.turnKey === block.turnKey;
+  return last != null && (last === block || last.msg.id === block.msg.id);
 }
 
 /** One run per contiguous tools entry. ANY other entry — thinking or image,

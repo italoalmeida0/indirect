@@ -49,8 +49,8 @@ function rowKey(row: TurnBalloon | TurnChangedFile): string {
   return row && typeof row === "object" && "id" in row && typeof row.id === "string" ? row.id : "";
 }
 
-describe("Bug 55 — every block of the running turn shows live state", () => {
-  test("multi-text turn: all blocks report running, not just the last", () => {
+describe("Bug 55 — a visible message ends an aggregate's live state", () => {
+  test("only the silent tail aggregate runs; text-carrying aggregates stop", () => {
     // text→tool→text→tool→text spans several render blocks in ONE turn.
     // The mid-turn texts carry summary/completion flags: plain interim text is
     // ephemeral (superseded by the next tool call) and would not stay visible.
@@ -60,19 +60,52 @@ describe("Bug 55 — every block of the running turn shows live state", () => {
       { id: "m2", role: "assistant", turnIndex: 7, hasSummary: true, blocks: [{ type: "text", text: "step one" }] },
       { id: "m3", role: "assistant", turnIndex: 7, blocks: [{ type: "tool_call", toolId: "b1", toolName: "bash", toolArgs: "{}" }] },
       { id: "m4", role: "assistant", turnIndex: 7, hasCompletion: true, blocks: [{ type: "text", text: "done" }] },
+      { id: "m5", role: "assistant", turnIndex: 7, blocks: [{ type: "tool_call", toolId: "c1", toolName: "bash", toolArgs: "{}" }] },
     ];
     const blocks = buildRenderBlocks(list);
     const assistantBlocks = blocks.filter((b) => b.msg.role !== "user");
     expect(assistantBlocks.length).toBeGreaterThan(1);
-    // The old tail-only predicate (`at(-1)?.msg.id === block.msg.id`) lit
-    // exactly one block; every block of the running turn must be live.
-    for (const block of assistantBlocks) {
-      expect(isBlockRunning(blocks, block, "running")).toBe(true);
+    // A visible message is the end-of-work signal: an aggregate that carries
+    // its own text (or that a message block appeared after) is history and
+    // must not spin. Only the silent tail aggregate is still working.
+    const live = assistantBlocks.filter((b) => isBlockRunning(blocks, b, "running"));
+    expect(live.length).toBe(1);
+    expect(live[0]).toBe(assistantBlocks[assistantBlocks.length - 1]);
+    expect(live[0].kind === "series" && live[0].textMsg == null).toBe(true);
+    // Every aggregate that carries a message is done.
+    for (const block of assistantBlocks.slice(0, -1)) {
+      expect(isBlockRunning(blocks, block, "running")).toBe(false);
     }
     // And nothing is live once the session is idle.
     for (const block of assistantBlocks) {
       expect(isBlockRunning(blocks, block, "idle")).toBe(false);
     }
+  });
+
+  test("a turn ending on its answer never spins", () => {
+    // tool → text fuses into ONE aggregate carrying the message: the moment
+    // the message landed the work is over, even while the session still runs.
+    const list: ChatMessage[] = [
+      { id: "m1", role: "assistant", turnIndex: 7, blocks: [{ type: "tool_call", toolId: "a1", toolName: "read", toolArgs: "{}" }] },
+      { id: "m2", role: "assistant", turnIndex: 7, hasCompletion: true, blocks: [{ type: "text", text: "done" }] },
+    ];
+    const blocks = buildRenderBlocks(list);
+    expect(blocks.length).toBe(1);
+    expect(blocks[0].kind === "series" && blocks[0].textMsg != null).toBe(true);
+    expect(isBlockRunning(blocks, blocks[0], "running")).toBe(false);
+  });
+
+  test("an aggregate a message appeared after is no longer live", () => {
+    // tool (turn 7) → text (turn 8): the text is a new block after the
+    // aggregate — the aggregate is history even though the session runs.
+    const list: ChatMessage[] = [
+      { id: "m1", role: "assistant", turnIndex: 7, blocks: [{ type: "tool_call", toolId: "a1", toolName: "read", toolArgs: "{}" }] },
+      { id: "m2", role: "assistant", turnIndex: 8, blocks: [{ type: "text", text: "answer" }] },
+    ];
+    const blocks = buildRenderBlocks(list);
+    expect(blocks.length).toBe(2);
+    expect(isBlockRunning(blocks, blocks[0], "running")).toBe(false);
+    expect(isBlockRunning(blocks, blocks[1], "running")).toBe(false);
   });
 });
 

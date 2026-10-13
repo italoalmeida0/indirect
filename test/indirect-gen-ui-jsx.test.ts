@@ -107,6 +107,9 @@ describe("generative ui @jsx compilation", () => {
     if (out.ok) return;
     expect(out.error).toContain("unsupported import");
     expect(out.error).toContain("left-pad");
+    // Preloaded physics libs compile cleanly.
+    expect(compileJsxModule('import * as CANNON from "cannon-es"; export default function App() { return <div/>; }').ok).toBe(true);
+    expect(compileJsxModule('import Matter from "matter-js"; export default function App() { return <div/>; }').ok).toBe(true);
     // esm.sh URLs are fine as source (always allowed; the CSP only admits
     // that one CDN).
     const esm = compileJsxModule('export default function App() { import("https://esm.sh/x@1"); return <div/>; }');
@@ -271,6 +274,18 @@ describe("generative ui module routes", () => {
     const code = await three.text();
     expect(code).toContain("globalThis.THREE=");
     expect(/\bexport\b/.test(code)).toBe(true);
+
+    const cannon = await get("/api/indirect-code/gen-ui/lib/cannon-es.js");
+    expect(cannon.status).toBe(200);
+    const cannonCode = await cannon.text();
+    expect(cannonCode).toContain("globalThis.CANNON=");
+    expect(/\bexport\b/.test(cannonCode)).toBe(true);
+
+    const matter = await get("/api/indirect-code/gen-ui/lib/matter-js.js");
+    expect(matter.status).toBe(200);
+    const matterCode = await matter.text();
+    expect(matterCode).toContain("globalThis.Matter=");
+    expect(/\bexport\b/.test(matterCode)).toBe(true);
 
     // Unknown / traversal names are refused.
     expect((await get("/api/indirect-code/gen-ui/lib/evil.js")).status).toBe(404);

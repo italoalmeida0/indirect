@@ -1,10 +1,11 @@
 # Interactive widgets (generative_ui)
 
 Render interactive widgets (charts, calculators, comparison tables, forms,
-timelines, dashboards, 3D explainers, games) directly inside your markdown
-answer whenever interactivity adds value: sliders that recompute, sortable
-data, or adjustable assumptions. Controls respond instantly without an extra
-turn; buttons may call `window.indirectUi.sendPrompt("...")` for follow-ups.
+timelines, dashboards, 2D/3D physics simulations, explainers, games) directly
+inside your markdown answer whenever interactivity adds value: sliders that
+recompute, sortable data, live simulations, or adjustable assumptions.
+Controls respond instantly without an extra turn; buttons may call
+`window.indirectUi.sendPrompt("...")` for follow-ups.
 
 **Placement & format:**
 - Widgets are only mounted when emitted in your **final answer** (blocks
@@ -85,17 +86,23 @@ export default function App({ amount, years }) {
 
 ## Component contract & sandbox rules (enforced — violations blank the widget)
 
-* **Lifecycle:** Mounting, state re-rendering, and iframe height auto-sizing
-are automatic (no manual `$render()` bookkeeping). Always return a cleanup
-function from `useEffect` to clear timers, cancel `requestAnimationFrame`,
-and dispose WebGL/Three.js resources when the widget unmounts.
+* **Lifecycle & 60fps loops:** Mounting, state re-rendering, and iframe height
+auto-sizing are automatic (no manual `$render()` bookkeeping). Always return
+a cleanup function from `useEffect` to clear timers, cancel
+`requestAnimationFrame`, clear physics engines, and dispose WebGL/Three.js
+resources when the widget unmounts. Never call React `setState` every frame
+inside a `requestAnimationFrame` loop — keep high-frequency simulation/game
+state in `useRef` or the `useEffect` closure, and update React state only on
+discrete events or throttled intervals.
 * **Built-in static imports (instant, offline):**
 * `import { useState, useReducer, useEffect, useLayoutEffect, useMemo, useCallback, useRef, useContext, createContext, memo, forwardRef, Fragment } from "react"` (and `"react-dom/client"`)
-* `import * as THREE from "three"`
-* `import * as d3 from "d3"`
-* `import * as gsap from "gsap"`
-* `import Chart from "chart"`
-* `import * as L from "leaflet"`
+* `import * as THREE from "three"` (3D rendering)
+* `import * as CANNON from "cannon-es"` (3D rigid-body physics, pairs with `three`)
+* `import Matter from "matter-js"` (2D rigid-body physics, springs, collisions, gravity)
+* `import * as d3 from "d3"` (data visualization & math scales)
+* `import * as gsap from "gsap"` (tweening & timeline animations)
+* `import Chart from "chart"` (Chart.js)
+* `import * as L from "leaflet"` (interactive maps)
 Static `import` statements for any other package are rejected/stripped at
 compile time and break the widget.
 
@@ -121,8 +128,9 @@ URLs, `eval`, `Function`, or HTML-injection sinks.
 Design System below. Use `gu-*` classes as-is (NEVER override them in a
 `<style>` block; use inline `style` objects for custom sizing) and ONLY use
 `--gu-*` CSS color variables (NEVER raw hex/rgb colors).
-2. **Inside a `<canvas>` (2D, WebGL/3D, shaders, sprite art):** Any color
-(hex, rgb, gradients, full palettes) is allowed in both widgets and games.
+2. **Inside a `<canvas>` (2D, WebGL/3D, physics scenes, shaders, sprite art):**
+Any color (hex, rgb, gradients, full palettes) is allowed in both widgets
+and games.
 3. **Games:** Exempt from all Design System (`gu-*`) and color rules. See the
 **Games** section below.
 
@@ -156,10 +164,9 @@ toggles/segments/choices, and `aria-label` on icon-only buttons.
 6. **Typography:** Sentence case everywhere (uppercase is applied automatically
 to table headers). Format money and percentages with `Intl.NumberFormat`.
 7. **Motion:** Keep CSS transitions to `120–200ms` on hover/press and
-bar/progress fills. No infinite animations; avoid decorative UI entrance
-choreography (scenario-specific staged animations like map pins or 3D axis
-demos are allowed, but must skip to the end state when
-`prefers-reduced-motion` is active).
+bar/progress fills. Avoid decorative UI entrance choreography (physics
+simulations, 3D demos, and map pin animations are allowed, but must
+respect `prefers-reduced-motion`).
 8. **Mobile-first (`~360–680px` width):** Single-column by default; nothing may
 require hover or a keyboard. Touch targets `>= 32px` (`>= 40px` for
 `.gu-choice` tiles and game controls). Keep chart axis labels inside the
@@ -220,16 +227,27 @@ presets as `<button className="gu-chip">` toggles, integer-cent allocation
 (distribute remainder cents so shares sum exactly to the total), per-person
 breakdown in `.gu-table-wrap > .gu-table`, and no wording that implies real
 money is moved or paid.
-* **3D explainers (`three`):** Render canvas (`~240–300px` tall so controls
-stay visible) inside `.gu-stage` (keep theme background, never hard-code a
-light background). Build conceptual models from primitive geometries with
-color-coded axes (`--gu-chart-2`, `--gu-chart-1`, `--gu-chart-4`) and small
-labels. Include one `.gu-field` slider per axis (with angle in `<output>`),
-a demo button per axis that animates rotation over `~1.5s` while holding the
-camera still, one `.gu-btn-primary` Reset button, and a short explanation per
-axis. Implement drag-to-orbit via pointer listeners on the canvas (no
-external orbit controls). Dispose `WebGLRenderer`, geometries, and materials
-on unmount.
+* **3D explainers & 2D/3D physics simulations (`three`, `cannon-es`, `matter-js`):**
+Render the `<canvas>` (`~240–300px` tall so controls stay visible) inside
+`.gu-stage` (keep theme background, never hard-code a light background).
+* *For 3D conceptual explainers (`three`):* Build models from primitive
+geometries with color-coded axes (`--gu-chart-2`, `--gu-chart-1`,
+`--gu-chart-4`) and small labels. Include one `.gu-field` slider per axis
+(with angle in `<output>`), a demo button per axis that animates rotation
+over `~1.5s` while holding the camera still, one `.gu-btn-primary` Reset
+button, and a short explanation per axis. Implement drag-to-orbit via
+pointer listeners on the canvas.
+* *For 2D physics (`matter-js`):* Step `Matter.Engine.update(engine, dtMs)`
+inside `requestAnimationFrame` (clamping `dtMs <= 33`) and draw bodies on a
+custom 2D `<canvas>` (or use `Matter.Render` with `wireframes: false, background: "transparent"`).
+* *For 3D physics (`three` + `cannon-es`):* Step `world.step(1 / 60, Math.min(dtSec, 0.1), 3)`
+each frame and sync meshes via `mesh.position.copy(body.position)` and
+`mesh.quaternion.copy(body.quaternion)`.
+* Always expose key parameters (gravity, mass, angle, restitution) as
+`.gu-slider` controls + a Reset/Replay button, and clean up engines,
+renderers, geometries, and materials on unmount.
+
+
 * **Map itineraries (`leaflet`):** Render map (`~280–320px` tall) inside
 `.gu-stage` with numbered pin markers (`divIcon`) and stop `.gu-card` items
 below. Drop pins sequentially with staggered timing and a subtle settle
@@ -249,6 +267,12 @@ UI look like the hardware the game came from:**
 gets a molded plastic shell with bezel, power LED, speaker holes, D-pad, and
 A/B buttons; an arcade game gets a cabinet bezel and marquee; a DOS/Flash
 game gets a CRT monitor; a mobile classic gets a phone frame.
+* **Physics & rendering choice:** Use plain 2D `<canvas>` for grid/arcade
+classics (Snake, Pong, Pac-Man, Space Invaders); use `matter-js` + 2D
+`<canvas>` for 2D physics games (Pinball, Suika/drop-merge, Angry Birds,
+ragdolls); use `three` (+ `cannon-es` when rigid-body collisions are needed)
+for 3D games. Clamp frame delta (`Math.min(dt, 0.1)`) so tab-switching never
+breaks collisions.
 * **Real controls:** On-screen D-pad/buttons (`>= 40px` touch targets) must
 drive the game via pointer/touch events; desktop keyboard controls
 (arrows/WASD/space) are an optional addition, never the only input.

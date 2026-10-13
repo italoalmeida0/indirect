@@ -9,6 +9,7 @@ import {
 /** The frame starts this thin and grows to the widget's measured content. */
 const MIN_START_HEIGHT = MIN_FRAME_HEIGHT;
 import { parseGenerativeUiDsl, hasWidgetBody, type GenerativeUiData } from "./dsl";
+import { resolvePublishedFrame } from "./frame-height";
 
 /**
  * Generative UI widget (React `@jsx` widgets).
@@ -29,6 +30,16 @@ import { parseGenerativeUiDsl, hasWidgetBody, type GenerativeUiData } from "./ds
  * are refused. Served documents carry their own strict CSP header
  * (sandbox allow-scripts; default-src 'none') and work in any embedder.
  */
+/** Last measured widget height per published (content-addressed) URL. Two
+ * end-of-turn paths used to collapse the card to its start height until the
+ * session was reopened: (1) the tail re-send re-triggers publishing with
+ * content that compiles to the same module — the URL is unchanged, the iframe
+ * never reloads and never re-reports a height, so zeroing it stranded the
+ * card; (2) the transcript row remounts and its height signal starts at 0.
+ * Keyed by URL (not by source text) so any textual noise around the same
+ * compiled widget still finds its measurement. */
+const frameHeights = new Map<string, number>();
+
 export function GenerativeUiWidget(props: {
   /** Raw fenced block body (may be partial while streaming). */
   body: () => string;
@@ -53,6 +64,8 @@ export function GenerativeUiWidget(props: {
   // real height over the bridge (clamped), so no height bookkeeping is needed
   // in the DSL.
   const stateJSON = () => JSON.stringify(data().state ?? {});
+  /** Dedupe key for publish: identical theme+state+source never re-POSTs. */
+  const widgetKey = () => `${theme()}\u0000${stateJSON()}\u0000${data().jsx ?? ""}`;
 
   onMount(() => {
     const observer = new MutationObserver(() => setTheme(widgetTheme()));
@@ -65,9 +78,16 @@ export function GenerativeUiWidget(props: {
 
   // ---- final widget ----
   let publishInFlight = false;
+  let publishedKey = "";
   const finalize = async () => {
     const d = data();
     if (!d.jsx || publishInFlight) return;
+    // Snapshot reconciliation can re-trigger this with semantically identical
+    // content (escaped text resolves, footers strip): publishing the same
+    // content again is a no-op worth keeping — a second POST would only
+    // return the same content-addressed URL.
+    const key = widgetKey();
+    if (key === publishedKey && finalUrl()) return;
     publishInFlight = true;
     try {
       const res = await fetch("/api/indirect-code/gen-ui/widgets", {
@@ -81,8 +101,15 @@ export function GenerativeUiWidget(props: {
       });
       const out = await res.json().catch(() => null);
       if (res.ok && out?.url) {
-        setFinalUrl(out.url as string);
-        setFinalHeight(0); // grow from the widget's own measurement
+        publishedKey = key;
+        const resolved = resolvePublishedFrame({
+          nextUrl: out.url as string,
+          currentUrl: finalUrl(),
+          currentHeight: finalHeight(),
+          cachedHeight: frameHeights.get(out.url as string),
+        });
+        setFinalUrl(resolved.url);
+        setFinalHeight(resolved.height);
         setError("");
       } else {
         setError(`Widget could not be published (HTTP ${res.status}).`);
@@ -114,7 +141,11 @@ export function GenerativeUiWidget(props: {
           if (props.onOpenLink) props.onOpenLink(url);
           else window.open(url, "_blank", "noopener,noreferrer");
         },
-        onResize: (height) => setFinalHeight(height),
+        onResize: (height) => {
+          const url = finalUrl();
+          if (url) frameHeights.set(url, height);
+          setFinalHeight(height);
+        },
         onError: (message) => setError(message),
       },
     );
