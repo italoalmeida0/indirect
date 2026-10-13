@@ -340,6 +340,8 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.onRecoveredBgChunk(m)
 	case bgTaskReadMsg:
 		a.onBgTaskRead(m)
+	case bgTaskListMsg:
+		a.onBgTaskList(m)
 	case turnBalloonMsg:
 		// Stashed until finishTurn appends it with the final message count.
 		// Gen gate (B1): a zombie worker's balloon must not anchor to a new
@@ -1437,7 +1439,7 @@ func (a *sessionActor) applyForkAndResend(m forkAndResendMsg) {
 // attachment text/images and any current date/mode directives.
 func seededUserMessage(rec *SessionRecord, text string, ids []string) provider.Message {
 	options := normalizedOptions(rec.Options)
-	snap := workerSnapshot{options: options}
+	snap := workerSnapshot{options: options, todos: append([]tools.TodoItem(nil), rec.Todos...), bgTasks: runningBgTasks(rec.BgTasks)}
 	fullText, images := buildTurnPrompt(rec.Attachments, text, ids, options.Mode)
 	sysBlock := buildTurnSystemDirectives(&snap, time.Now())
 	rec.LastDate, rec.LastMode = snap.lastDate, snap.lastMode
@@ -2175,6 +2177,18 @@ func (a *sessionActor) onBgTaskRead(m bgTaskReadMsg) {
 		case m.Reply <- res:
 		default:
 		}
+	}
+}
+
+// onBgTaskList answers the running background tasks for live-state
+// reminders (turn reminder, summary notices, finish-blocked warning).
+func (a *sessionActor) onBgTaskList(m bgTaskListMsg) {
+	if m.Reply == nil {
+		return
+	}
+	select {
+	case m.Reply <- bgTaskListResult{Tasks: runningBgTasks(a.rec.BgTasks)}:
+	default:
 	}
 }
 

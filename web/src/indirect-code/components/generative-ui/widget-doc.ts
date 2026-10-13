@@ -5,14 +5,16 @@
  * allowlist-only): a widget document is uploaded to
  * /api/indirect-code/gen-ui/widgets and rendered in an iframe pointing at it
  * (sandbox="allow-scripts", opaque origin). This module builds those
- * documents and contains the two boundary sanitizers:
+ * documents. The widget is a React component (`@jsx` source) compiled to
+ * plain JS at doc build time (sucrase, in jsx-compile.ts) and spliced into
+ * one wrapper script; the embedded REACT_RUNTIME_JS provides the React
+ * globals it targets. The boundary sanitizers guard the splice:
  *
- *  - escapeCSPMeta: model-controlled CSS can never contain "</style" (the
- *    only sequence that can break out of the style element and inject markup
- *    or a competing CSP meta);
- *  - wrapModelJS / closeUnclosedTags: the model's @js body is spliced as text
- *    inside one wrapper <script>; "</script" inside it (strings, regexes) is
- *    re-escaped so it can never close the element.
+ *  - escapeStyleClose: vetted lib css can never contain "</style";
+ *  - escapeScriptClose: model-controlled script text can never close its
+ *    element or open a sibling script;
+ *  - sanitizeModelJS: eval / navigation / network statements are stripped
+ *    line-wise before they reach the frame.
  *
  * Both are pure functions with unit tests (test/indirect-gen-ui-dsl.test.ts).
  */
@@ -398,21 +400,25 @@ export function escapeStyleClose(raw: string): string {
 }
 
 /**
- * The model's @js body is spliced as one script block. Statements that the
- * sandbox forbids are stripped before they ever reach the frame (the Go-side
- * prompt forbids them too; this is the enforcement layer).
+ * The model's module code is stored and served as a standalone script, and
+ * its imports are validated at compile time (jsx-compile.ts) against the
+ * widget import map. Statements the sandbox forbids are still stripped
+ * before they ever reach the frame (the prompt forbids them too; this is
+ * the enforcement layer).
  */
-/** Dynamic imports are allowed only from this CDN, and only in net widgets. */
+/** Dynamic imports from this CDN are always allowed (jsdelivr-style lib CDN). */
 const ESM_SH_DYNAMIC_IMPORT = /\bimport\s*\(\s*["']https:\/\/esm\.sh\//;
 
-export function sanitizeModelJS(js: string, opts?: { allowEsmSh?: boolean }): string {
+export function sanitizeModelJS(js: string): string {
   const out: string[] = [];
   for (const line of js.split("\n")) {
-    if (opts?.allowEsmSh && ESM_SH_DYNAMIC_IMPORT.test(line)) {
+    if (ESM_SH_DYNAMIC_IMPORT.test(line)) {
       out.push(line);
       continue;
     }
-    if (/\b(import\s|export\s|import\(|eval\s*\(|new\s+Function\s*\()/.test(line)) continue;
+    // Static import/export statements are the module format — they are
+    // validated at compile time, never stripped here.
+    if (/\b(import\s*\(|eval\s*\(|new\s+Function\s*\()/.test(line)) continue;
     if (/\b(location\s*\.\s*(href|assign|replace)|window\s*\.\s*open\s*\(|top\s*\.\s*location|parent\s*\.\s*location)/.test(line)) continue;
     if (/\b(fetch\s*\(|XMLHttpRequest|WebSocket|importScripts\s*\(|navigator\s*\.\s*sendBeacon)/.test(line)) continue;
     out.push(line);
@@ -544,88 +550,91 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
 }
 
 /**
- * The model's @js body, in its own <script> element so a parse error in
- * model code can never take the runtime (bridge, $render) down with it.
- *
- * The body is spliced (as escaped text) into one wrapper function with
- * `state`, `$render()`, `$onDestroy()`, `$onError()`, `$onResize()` and
- * `window.indirectUi` in scope — exactly the DSL contract. It may end with
- * `return { destroy() {...} }` to release resources (three.js, gsap, rAF):
- * the returned destroy() is registered as a cleanup hook. No eval: the
- * widget CSP has no 'unsafe-eval', and a syntax error in the body only
- * kills this one script element.
+ * The react shim module (served from /lib/react-shim.js): a real ES module
+ * re-exporting the embedded runtime (installed inline in the document by
+ * REACT_RUNTIME_JS before this module loads), so widget code can
+ * `import { useState } from "react"`. The widget import map points react,
+ * react-dom, react-dom/client and the jsx-runtime specifiers at this one
+ * module (it exports the union of those surfaces).
  */
-export function buildModelScript(js: string, opts?: { allowEsmSh?: boolean }): string {
-  return `
-(function () {
-  "use strict";
-  var state = window.__gu && window.__gu.state || {};
-  var $render = window.__gu && window.__gu.render || function () {};
-  var $onDestroy = window.__gu && window.__gu.onDestroy || function () {};
-  var $onError = window.__gu && window.__gu.onError || function () {};
-  var $onResize = window.__gu && window.__gu.onResize || function () {};
-  try {
-    var __result = (function () {
-${escapeScriptClose(sanitizeModelJS(js, opts))}
-    })();
-    if (__result && typeof __result.destroy === "function") $onDestroy(__result.destroy);
-  } catch (err) {
-    try { if (window.__gu && window.__gu.reportError) window.__gu.reportError(err); else if (window.__gu) window.__gu.error = String(err); } catch {}
-  }
-})();
+export function buildReactShimModule(): string {
+  return `const React = window.React;
+if (!React) throw new Error("generative-ui runtime missing");
+export default React;
+export const Children = React.Children, Component = React.Component,
+  PureComponent = React.PureComponent, Fragment = React.Fragment,
+  createElement = React.createElement, cloneElement = React.cloneElement,
+  createContext = React.createContext, isValidElement = React.isValidElement,
+  forwardRef = React.forwardRef, memo = React.memo,
+  useState = React.useState, useReducer = React.useReducer,
+  useEffect = React.useEffect, useLayoutEffect = React.useLayoutEffect,
+  useMemo = React.useMemo, useCallback = React.useCallback,
+  useRef = React.useRef, useContext = React.useContext, useId = React.useId,
+  useDebugValue = React.useDebugValue, useImperativeHandle = React.useImperativeHandle,
+  useTransition = React.useTransition, useDeferredValue = React.useDeferredValue,
+  useSyncExternalStore = React.useSyncExternalStore, startTransition = React.startTransition;
+export const jsx = React.createElement, jsxs = React.createElement,
+  jsxDEV = React.createElement;
+export const createRoot = window.ReactDOMClient.createRoot,
+  hydrateRoot = window.ReactDOMClient.hydrateRoot,
+  render = window.ReactDOM.render,
+  unmountComponentAtNode = window.ReactDOM.unmountComponentAtNode,
+  createPortal = window.ReactDOM.createPortal;
 `;
 }
 
 /**
- * The `@jsx` model script: a tiny CommonJS shim (react / react-dom /
- * react-dom/client map onto the runtime globals) around the compiled module,
- * then an auto-mount of its App root — `export default function App`, named
- * `App`, or the module default export — into `.gu-root`. The state object is
- * passed as props, mirroring the HTML/CSS/JS `state` contract.
+ * The widget import map: widget modules are plain ESM and resolve react /
+ * react-dom / the jsx-runtime specifiers to the shim module and the
+ * preloaded libs (d3, gsap, chart, three, leaflet) to their vendored
+ * modules. Everything else is rejected at compile time.
  */
-export function buildJsxModelScript(compiledCode: string, opts?: { allowEsmSh?: boolean }): string {
-  return `
+export function buildJsxImportMap(moduleUrls: {
+  react: string;
+  libs: Record<string, string>;
+}): string {
+  const imports: Record<string, string> = {
+    react: moduleUrls.react,
+    "react/jsx-runtime": moduleUrls.react,
+    "react/jsx-dev-runtime": moduleUrls.react,
+    "react-dom": moduleUrls.react,
+    "react-dom/client": moduleUrls.react,
+  };
+  for (const [name, url] of Object.entries(moduleUrls.libs)) imports[name] = url;
+  // chart.js entry points resolve to the same chart module.
+  if (moduleUrls.libs.chart) {
+    imports["chart.js"] = moduleUrls.libs.chart;
+    imports["chart.js/auto"] = moduleUrls.libs.chart;
+  }
+  return JSON.stringify({ imports });
+}
+
+/**
+ * The widget module body: the compiled ESM source plus the auto-mount
+ * glue — the App root (`export default function App`, or the default
+ * export) rendered into document.body with the `state` header as props.
+ * The module is stored and served whole (text/javascript), so model code
+ * never lives inside the HTML document.
+ */
+export function buildJsxModuleBody(compiledCode: string): string {
+  return `${escapeScriptClose(sanitizeModelJS(compiledCode))}
+;
 (function () {
   "use strict";
-  // Scope bindings for compiled JSX (React.createElement) and import-free
-  // hook names — in a browser these fall back to the window globals, but the
-  // explicit bindings keep the module self-contained.
-  var React = window.React;
-  var ReactDOM = window.ReactDOM;
-  var ReactDOMClient = window.ReactDOMClient;
-  var Fragment = React.Fragment;
-  var useState = React.useState, useReducer = React.useReducer,
-      useEffect = React.useEffect, useLayoutEffect = React.useLayoutEffect,
-      useMemo = React.useMemo, useCallback = React.useCallback,
-      useRef = React.useRef, useContext = React.useContext,
-      useId = React.useId, useImperativeHandle = React.useImperativeHandle;
-  var module = { exports: {} };
-  var exports = module.exports;
-  function require(name) {
-    if (name === "react") return window.React;
-    if (name === "react-dom") return window.ReactDOM;
-    if (name === "react-dom/client") return window.ReactDOMClient;
-    if (name === "react/jsx-runtime" || name === "react/jsx-dev-runtime") {
-      return { Fragment: window.React.Fragment, jsx: window.React.createElement, jsxs: window.React.createElement, jsxDEV: window.React.createElement };
-    }
-    throw new Error("Widget modules may only import react / react-dom (got " + name + ")");
-  }
+  var __app = null;
   try {
-${escapeScriptClose(sanitizeModelJS(compiledCode, opts))}
-  } catch (err) {
-    try { if (window.__gu && window.__gu.reportError) window.__gu.reportError(err); else if (window.__gu) window.__gu.error = String(err); } catch {}
-    return;
-  }
+    // Module-scope binding: "export default function App", named App, or the
+    // default export alias. Missing binding is a ReferenceError -> null.
+    __app = App;
+  } catch (err) { __app = null; }
   try {
-    var App = module.exports.default || module.exports.App;
-    if (typeof App !== "function" && typeof App !== "object") {
-      App = typeof window.App === "function" ? window.App : null;
+    if (!__app && typeof window.App === "function") __app = window.App;
+    if (!__app) {
+      if (window.__gu && window.__gu.reportError) window.__gu.reportError(new Error("widget: export a default React component (App)"));
+      return;
     }
-    if (!App) return;
-    var host = document.body;
-    var root = window.ReactDOMClient.createRoot(host);
-    var state = window.__gu && window.__gu.state || {};
-    root.render(window.React.createElement(App, state));
+    var root = window.ReactDOMClient.createRoot(document.body);
+    root.render(window.React.createElement(__app, (window.__gu && window.__gu.state) || {}));
     if (window.__gu && window.__gu.onDestroy) window.__gu.onDestroy(function () { root.unmount(); });
   } catch (err) {
     try { if (window.__gu && window.__gu.reportError) window.__gu.reportError(err); else if (window.__gu) window.__gu.error = String(err); } catch {}
@@ -636,28 +645,15 @@ ${escapeScriptClose(sanitizeModelJS(compiledCode, opts))}
 
 export type WidgetDocParams = {
   theme: "dark" | "light";
-  html: string;
-  css: string;
+  /** URL of the stored widget module (compiled `@jsx` source, served as ESM). */
+  moduleUrl: string;
+  /** JSON import map (from buildJsxImportMap) resolving react + lib modules. */
+  importMap: string;
   stateJSON: string;
-  js: string;
-  initialHeight: number;
   scriptNonce: string;
-  /** Preloaded library sources (IIFE globals), keyed by lib name. */
-  libs?: Record<string, string>;
-  /** Preloaded library stylesheets (leaf map css), keyed by lib name. */
-  libCss?: Record<string, string>;
-  /** Opt-in network capability (`net: true` header): https images/tiles. */
-  net?: boolean;
-  /** React-format widget (`@jsx` source, compiled at doc build time). */
-  jsx?: string;
+  /** Vendored lib stylesheet to inline (e.g. leaflet css with inlined images). */
+  libCss?: string;
 };
-
-/**
- * Injection order matters: chart.js and three.js may pull utilities from
- * gsap-style helpers and d3 is standalone, but keeping one fixed order makes
- * the document byte-stable for content-addressed ids.
- */
-const LIB_ORDER = ["d3", "gsap", "chart", "three", "map"];
 
 /**
  * Images may load from any http(s) site in every variant (photos, covers,
@@ -667,40 +663,28 @@ const LIB_ORDER = ["d3", "gsap", "chart", "three", "map"];
 const WIDGET_IMG_SRC = "img-src data: blob: https: http:";
 
 /**
- * Opt-in network variant (`net: true` DSL header): on top of any-site
- * images, the widget may fetch https data/map tiles and dynamically import
- * JS libraries from esm.sh (the only allowed script origin besides the
- * nonce). Still no cookies or same-origin access — the sandbox keeps the
- * document in an opaque origin.
+ * Origins of the served widget modules (import map targets): the vendored
+ * library bundles and the stored widget modules. Same-origin paths, listed
+ * explicitly because the rest of the document is nonce-only.
  */
-export function widgetNetCSP(nonce: string): string {
-  return [
-    "sandbox allow-scripts",
-    "default-src 'none'",
-    WIDGET_IMG_SRC,
-    "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}' https://esm.sh`,
-    "font-src data:",
-    "connect-src https:",
-    "form-action 'none'",
-    "base-uri 'none'",
-    "frame-ancestors 'self'",
-  ].join("; ");
-}
+const MODULE_SRC = "/api/indirect-code/gen-ui/lib/ /api/indirect-code/gen-ui/modules/";
 
+/**
+ * The widget CSP. Network is images + https data + esm.sh (the one allowed
+ * script origin besides the nonce and the served widget modules). Still no
+ * cookies or same-origin access — the sandbox keeps the document in an
+ * opaque origin (`sandbox allow-scripts` applies even when the document is
+ * opened at top level).
+ */
 export function widgetCSP(nonce: string): string {
   return [
-    // `sandbox allow-scripts` applies even when the document is opened at
-    // top level: the widget always runs in an opaque origin, no cookies, no
-    // storage, no network beyond http(s) images — otherwise identical to a
-    // sandboxed iframe.
     "sandbox allow-scripts",
     "default-src 'none'",
     WIDGET_IMG_SRC,
     "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${nonce}' ${MODULE_SRC} https://esm.sh`,
     "font-src data:",
-    "connect-src 'none'",
+    "connect-src https:",
     "form-action 'none'",
     "base-uri 'none'",
     "frame-ancestors 'self'",
@@ -712,27 +696,14 @@ export function widgetCSP(nonce: string): string {
  * delivered via <meta>, so they are omitted (the response header carries
  * them; the meta is belt-and-braces for non-HTTP contexts only).
  */
-export function widgetMetaNetCSP(nonce: string): string {
-  return [
-    "default-src 'none'",
-    WIDGET_IMG_SRC,
-    "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}' https://esm.sh`,
-    "font-src data:",
-    "connect-src https:",
-    "form-action 'none'",
-    "base-uri 'none'",
-  ].join("; ");
-}
-
 export function widgetMetaCSP(nonce: string): string {
   return [
     "default-src 'none'",
     WIDGET_IMG_SRC,
     "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${nonce}' ${MODULE_SRC} https://esm.sh`,
     "font-src data:",
-    "connect-src 'none'",
+    "connect-src https:",
     "form-action 'none'",
     "base-uri 'none'",
   ].join("; ");
@@ -745,91 +716,18 @@ export function widgetMetaCSP(nonce: string): string {
  * contexts).
  */
 export function buildWidgetDocument(params: WidgetDocParams): string {
-  const libs = params.libs ?? {};
-  const libCss = params.libCss ?? {};
-  const libScripts = LIB_ORDER.filter((name) => libs[name])
-    .map((name) => `<script nonce="${params.scriptNonce}">${escapeScriptClose(libs[name])}\n</script>\n`)
-    .join("");
-  const libStyles = LIB_ORDER.filter((name) => libCss[name])
-    .map((name) => `<style>${escapeStyleClose(libCss[name])}</style>\n`)
-    .join("");
-  return `<!doctype html>
-<html data-theme="${params.theme}"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="${params.net ? widgetMetaNetCSP(params.scriptNonce) : widgetMetaCSP(params.scriptNonce)}">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>${WIDGET_BASE_CSS}</style>
-${libStyles}
-<style>${escapeStyleClose(params.css || "")}</style>
-</head>
-<body style="min-height:${params.initialHeight}px">
-${params.jsx ? "" : params.html || ""}
-${libScripts}${params.jsx ? `<script nonce="${params.scriptNonce}">${escapeScriptClose(REACT_RUNTIME_JS)}</script>\n` : ""}<script nonce="${params.scriptNonce}">${escapeScriptClose(buildRuntimeScript({
-    stateJSON: params.stateJSON,
-  }))}</script>
-<script nonce="${params.scriptNonce}">${escapeScriptClose(
-    params.jsx
-      ? buildJsxModelScript(params.jsx, { allowEsmSh: params.net === true })
-      : buildModelScript(params.js, { allowEsmSh: params.net === true }),
-  )}</script>
-</body></html>`;
-}
-
-export type PreviewDocParams = {
-  theme: "dark" | "light";
-  scriptNonce: string;
-};
-
-/**
- * The streaming preview document: an empty shell whose listener accepts
- * partial HTML/CSS fragments over postMessage and morphs them in place
- * (Idiomorph preserves DOM state and focus while the model streams). It runs
- * no model code at all.
- */
-export function buildPreviewDocument(params: PreviewDocParams): string {
   return `<!doctype html>
 <html data-theme="${params.theme}"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${widgetMetaCSP(params.scriptNonce)}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${WIDGET_BASE_CSS}</style>
-
-<style id="gu-style"></style>
-</head><body><div id="gu-preview-root" class="gu-root"></div>
-<script nonce="${params.scriptNonce}">window.__guPreview = true;</script>
-<script nonce="${params.scriptNonce}">__IDIOMORPH__</script>
+${params.libCss ? `<style>${escapeStyleClose(params.libCss)}</style>\n` : ""}<script type="importmap" nonce="${params.scriptNonce}">${escapeScriptClose(params.importMap)}</script>
+</head>
+<body>
+<script nonce="${params.scriptNonce}">${escapeScriptClose(REACT_RUNTIME_JS)}</script>
+<script nonce="${params.scriptNonce}">${escapeScriptClose(buildRuntimeScript({
+    stateJSON: params.stateJSON,
+  }))}</script>
+<script type="module" src="${params.moduleUrl}" crossorigin="anonymous"></script>
 </body></html>`;
 }
-
-/** Injects the Idiomorph source into the preview document placeholder. */
-export function withIdiomorph(doc: string, idiomorphSource: string): string {
-  return doc.replace("__IDIOMORPH__", escapeScriptClose(idiomorphSource) + PREVIEW_LISTENER);
-}
-
-const PREVIEW_LISTENER = `
-(function(){
-  var root = document.getElementById("gu-preview-root");
-  var style = document.getElementById("gu-style");
-  window.addEventListener("message", function (event) {
-    if (event.source !== window.parent) return;
-    var data = event.data;
-    if (!data || data.__guPreview !== true) return;
-    if (typeof data.css === "string") style.textContent = data.css;
-    if (typeof data.html === "string") {
-      if (data.html.indexOf("<") === -1 || isSingleRootSafe(data.html)) {
-        root.innerHTML = "";
-        var tpl = document.createElement("template");
-        tpl.innerHTML = data.html;
-        root.appendChild(tpl.content);
-      } else {
-        Idiomorph.morph(root, data.html, { morphStyle: "innerHTML" });
-      }
-    }
-    window.parent.postMessage({ __gu: "resize", height: Math.ceil(root.getBoundingClientRect().height) }, "*");
-  });
-  function isSingleRootSafe(html) {
-    var tpl = document.createElement("template");
-    tpl.innerHTML = html;
-    return tpl.content.children.length === 1 && !tpl.textContent.trim();
-  }
-  window.parent.postMessage({ __gu: "resize", height: Math.ceil(root.getBoundingClientRect().height) }, "*");
-})();
-`;

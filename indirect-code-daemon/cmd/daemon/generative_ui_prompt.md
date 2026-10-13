@@ -22,7 +22,6 @@ placeholder sentence for streaming.
 
 ````generative_ui
 placeholder: Compiling your visualization
-height: 320
 state: {"amount": 1000, "years": 5}
 libs: d3
 
@@ -49,13 +48,13 @@ export default function App({ amount, years }) {
 
 - `placeholder:` 3–8 word sentence-case label shown while the widget streams
   in ("Compiling your visualization", not "Loading").
-- `height:` initial widget height in px, 64–4000, sized to fit first paint.
 - `state:` JSON object with the initial widget state. It is passed as the
   props of your root component (and available as `window.__gu.state`).
 - `libs:` comma-separated preloads from `d3, gsap, chart, three, map` —
-  available as `window.d3`, `window.gsap`, `window.Chart`, `window.THREE`,
-  `window.L`. Omit when the widget needs none.
-- `net: true` opts into https images/map tiles. Omit it otherwise.
+  import them as ES modules: `import * as THREE from "three"`, `import * as
+  d3 from "d3"`, `import * as gsap from "gsap"`, `import Chart from
+  "chart"`, `import * as L from "leaflet"` (use `L` for map). Omit the header
+  when the widget needs none.
 
 ### Component contract
 
@@ -67,7 +66,8 @@ export default function App({ amount, years }) {
   is the supported module surface — React 18 semantics: `useState`,
   `useReducer`, `useEffect`, `useLayoutEffect`, `useMemo`, `useCallback`,
   `useRef`, `useContext`, `createContext`, `memo`, `forwardRef`, `Fragment`.
-  No other packages.
+  The `libs` listed in the header are importable too (see above). Anything
+  else is rejected at compile time.
 - Mounting, re-rendering and height-reporting are automatic. Re-render on
   state change like any React app; no `$render()` bookkeeping.
 - Cleanup: return a cleanup function from `useEffect` (stop timers, cancel
@@ -76,13 +76,24 @@ export default function App({ amount, years }) {
 
 ## Sandbox rules (enforced — violating them blanks the widget)
 
-- No network access at all: no fetch/XHR/WebSocket, no remote scripts, no
-  external fonts. All data must be embedded in the component. (`net: true`
-  allows https <img>/map tiles only.)
+- Network is limited to what the sandbox admits: an `<img>` may load from
+  any http(s) site (photos, covers, avatars — always give it a fixed aspect
+  box and an `alt`, it can still fail), map tiles render, and JS libraries
+  load from esm.sh (below). No fetch/XHR/WebSocket, no remote <script>, no
+  external fonts. All data must be embedded in the component.
 - No navigation (location.href, window.open): links use
   window.indirectUi.openLink(url) (http/https only).
 - No javascript: URLs, no eval-style tricks. Plain DOM/React only.
 - Keep the height honest: the frame auto-sizes to your content.
+- Any other JS library via esm.sh: load it with a
+  DYNAMIC import only —
+  `import("https://esm.sh/canvas-confetti@1").then((m) => { ... }).catch(() => { /* render fallback */ })`,
+  typically inside a handler or `useEffect`. Static `import` statements for
+  third-party packages are stripped and break the widget; the
+  `https://esm.sh/` URL must be a string literal in the `import(...)` call.
+  Prefer the preloaded globals when they cover the job (instant, offline);
+  reach for esm.sh only for what they cannot do, pin a version, and always
+  render a useful fallback if the load fails.
 
 ## Design system (class library compiled into the widget surface)
 
@@ -166,7 +177,7 @@ the camera (no external controls). Keep the canvas ~240-300px tall so
 controls stay visible in chat. Dispose the WebGLRenderer in the effect
 cleanup. Conceptual model, not a simulator.
 
-**Map itineraries (map, net)**: `libs: map` + `net: true`; the map in a
+**Map itineraries (map)**: `libs: map`; the map in a
 `.gu-stage` (~280-320px tall), numbered pin markers (divIcon) and stop cards
 below it. Drop the pins one by one with staggered timing and a small settle
 animation, reveal the connecting polyline after the pins, highlight the
@@ -224,7 +235,6 @@ implies money is moved or paid.
 
 ````generative_ui
 placeholder: Building your savings projection
-height: 360
 state: {"amount": 1000, "years": 5}
 
 @jsx

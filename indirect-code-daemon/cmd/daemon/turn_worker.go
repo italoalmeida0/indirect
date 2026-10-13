@@ -46,6 +46,11 @@ type workerSnapshot struct {
 	prompt      string
 	attachIDs   []string
 	incoming    []filetrack.TrackedFile
+	// todos and bgTasks snapshot the session's live plan and running
+	// background tasks at turn start: the opening system reminder
+	// reports them, and the worker tracks todo updates from there.
+	todos   []tools.TodoItem
+	bgTasks []BgTask
 	// resume, when True, continues the fused transcript via agent.Continue
 	// instead of opening a new user turn (crash/watchdog resume path).
 	compact   bool
@@ -83,6 +88,8 @@ func snapshotTurn(act *sessionActor, gen int, prompt string, meta map[string]str
 		compaction:  cloneJSON(act.rec.Compaction),
 		context:     cloneJSON(act.rec.Context),
 		attachments: append([]AttachmentRef(nil), act.rec.Attachments...),
+		todos:       append([]tools.TodoItem(nil), act.rec.Todos...),
+		bgTasks:     runningBgTasks(act.rec.BgTasks),
 		cwd:         act.rec.CWD,
 		prompt:      prompt,
 		promptMeta:  cloneJSON(meta),
@@ -140,12 +147,16 @@ type turnBridge struct {
 
 	sessionCWD string
 	modelToUse string
-	agent      *core.Agent
-	client     provider.Client
-	modelInfo  provider.Model
-	reg        core.Registry
-	tfc        *turnFileChanges
-	live       *liveTracker
+	// todos tracks the session's checklist on the worker goroutine:
+	// seeded from the snapshot, replaced by every todo tool call.
+	// Live-state reminders and the finish gate read it.
+	todos     []tools.TodoItem
+	agent     *core.Agent
+	client    provider.Client
+	modelInfo provider.Model
+	reg       core.Registry
+	tfc       *turnFileChanges
+	live      *liveTracker
 }
 
 func (w *turnBridge) run() error {
@@ -179,6 +190,7 @@ func (w *turnBridge) run() error {
 		w.tfc.tracker = filetrack.RestoreTurnTracker(dropBrainTracked(w.snap.incoming, brainDir))
 	}
 	w.live = &liveTracker{}
+	w.todos = append([]tools.TodoItem(nil), w.snap.todos...)
 
 	// Every command runs through the crash-only runner (decided D6).
 	// Tests and headless workers without a store keep the direct path.
@@ -206,7 +218,7 @@ func (w *turnBridge) run() error {
 	bgAwaitTool := &tools.BgAwaitTool{Host: w, SessionID: w.env.actorID}
 	questionTool := &tools.QuestionTool{Ask: w.askQuestions}
 	todoTool := &tools.TodoTool{Update: w.updateTodos}
-	finishTool := &tools.FinishEntireRequestTool{Mode: normalizedOptions(w.snap.options).Mode, OnFinish: func() error { return nil }}
+	finishTool := &tools.FinishEntireRequestTool{Mode: normalizedOptions(w.snap.options).Mode, OnFinish: func() error { return nil }, IncompleteCheck: w.finishBlockWarning}
 	summaryTool := &tools.SummaryTool{}
 	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool), bgCheckTool)...)
 
@@ -238,6 +250,7 @@ func (w *turnBridge) run() error {
 	w.agent.SeedCost(w.snap.usage)
 	w.agent.SeedCompactionState(w.snap.compaction)
 	w.agent.BeforeToolExecute = w.approveTool
+	w.agent.SummaryNudgeExtra = w.stateSectionsText
 	w.agent.OnMessageAppended = w.onMessageAppended
 	w.agent.OnContextAppended = w.onContextAppended
 	w.agent.OnCompactionState = w.onCompactionState
@@ -559,9 +572,53 @@ func (w *turnBridge) updateTodos(items []tools.TodoItem) error {
 		return context.Canceled
 	}
 	cp := append([]tools.TodoItem{}, items...)
+	w.todos = cp
 	w.sendInbox(walAppendMsg{ev: walEvent{Type: walTypeTodos, Todos: cp}})
 	w.emit(map[string]any{"type": "agent_event", "hostId": w.cfg.HostID, "sessionId": w.env.actorID, "event": map[string]any{"type": "todo_update", "items": items}})
 	return nil
+}
+
+// listRunningBgTasks asks the session actor for the session's
+// running background tasks (it owns BgTasks). Any failure reads as
+// "none known": live-state reminders degrade to omitting the
+// section instead of stalling the turn.
+func (w *turnBridge) listRunningBgTasks() []BgTask {
+	if w.env.inbox == nil {
+		return nil
+	}
+	reply := make(chan any, 1)
+	select {
+	case w.env.inbox <- w.stamp(bgTaskListMsg{Reply: reply}):
+	case <-w.ctx.Done():
+		return nil
+	}
+	select {
+	case r := <-reply:
+		res, _ := r.(bgTaskListResult)
+		return res.Tasks
+	case <-w.ctx.Done():
+		return nil
+	case <-time.After(replyTimeout):
+		return nil
+	}
+}
+
+// stateSectionsText renders the live session state (running
+// background tasks above the active todo list) for summary notices.
+// Empty when neither section has content.
+func (w *turnBridge) stateSectionsText() string {
+	return strings.Join(turnStateSections(w.listRunningBgTasks(), w.todos, time.Now()), "\n")
+}
+
+// finishBlockWarning implements the finish tool's incomplete check:
+// open todo items block finishing, and the warning also lists any
+// background tasks still running. The todo cache is current as of
+// the latest todo tool call on this worker.
+func (w *turnBridge) finishBlockWarning() string {
+	if open, _ := openTodos(w.todos); len(open) == 0 {
+		return ""
+	}
+	return finishBlockedWarning(w.listRunningBgTasks(), w.todos, time.Now())
 }
 
 // BgAwaitHost: wake an bg_await early when any session job finishes (push

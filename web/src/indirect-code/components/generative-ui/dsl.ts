@@ -1,152 +1,98 @@
 /**
- * Generative UI DSL: a fenced markdown code block (```generative_ui) whose
- * body describes one interactive widget. The assistant writes it inline in
- * its markdown answer; the transcript renderer (TarnavMarkdown CodeBlock)
- * recognizes the fence and mounts the widget instead of a code block.
+ * Generative UI block DSL (pure, no DOM).
  *
- * Grammar (tolerant, stream-friendly — partial bodies parse as they stream):
+ * The widget is a markdown DSL (```generative_ui fenced block). The body is
+ * a React component: optional header lines, then one `@jsx` marker and the
+ * JSX/TSX source file. `@tsx` is accepted as an alias of `@jsx`.
  *
- *   placeholder: Compiling your visualization
- *   height: 320
- *   state: {"amount": 1000, "years": 5}
- *   libs: d3, gsap
- *   net: true
- *
- *   @html
- *   <div class="gu-root">...</div>
- *   @css
- *   .gu-root { ... }
- *   @js
- *   const total = document.getElementById("total");
- *   ... plain script body: sees `state`, `$render()`, `window.indirectUi` ...
- *
- * Header keys are `key: value` lines before the first @section. Sections are
- * `@html`, `@css`, `@js` (aliases: @javascript, @script). Content before any
- * @section is treated as html. Unknown keys and unknown @lines are ignored.
- *
- * A body whose first section is `@jsx` (alias `@tsx`) is the React format:
- * everything after the marker is one JSX/TSX source file (React 1:1, App
- * root, hooks) compiled at doc build time — no html/css/js sections.
+ * Header keys are `key: value` lines before the @jsx marker. Unknown keys
+ * are ignored. Everything after the marker is verbatim source — later lines
+ * are never re-parsed as headers or markers.
  */
 export type GenerativeUiData = {
   placeholder?: string;
   /** Initial widget state object (from the `state:` JSON header). */
   state?: Record<string, unknown>;
-  html?: string;
-  css?: string;
-  js?: string;
-  /** React-format widget source (whole body after an `@jsx` marker). */
-  jsx?: string;
-  height?: number;
-  /** Libraries to preload as globals (`libs: d3, three` header). */
+  /** Libraries to preload (only names in LIBS are honored). */
   libs?: string[];
-  /**
-   * Opt-in network capability (`net: true` header): https data/tiles and
-   * esm.sh dynamic imports inside the widget. Plain http(s) images work
-   * without it. Off by default.
-   */
-  net?: boolean;
+  /** The React widget source (whole body after the `@jsx` marker). */
+  jsx?: string;
 };
 
-const GENERATIVE_UI_LIBS = ["d3", "gsap", "chart", "three", "map"] as const;
+/** Only these libs exist as vetted local bundles. */
+const LIBS = new Set(["d3", "gsap", "chart", "three", "map"]);
 
-const SECTION_RE = /^@(html|css|js|javascript|script)\s*$/i;
 const JSX_SECTION_RE = /^@(jsx|tsx)\s*$/i;
-const HEADER_RE = /^(placeholder|height|state|libs|net)\s*:\s*(.*)$/i;
+const HEADER_RE = /^(placeholder|state|libs)\s*:\s*(.*)$/i;
 
 export function parseGenerativeUiDsl(raw: string | undefined): GenerativeUiData {
   const out: GenerativeUiData = {};
   if (!raw) return out;
-  const sections: { html: string[]; css: string[]; js: string[] } = { html: [], css: [], js: [] };
   const jsxLines: string[] = [];
-  let current: "html" | "css" | "js" | "jsx" | null = null;
+  let inJsx = false;
   let headerDone = false;
 
   for (const line of raw.split("\n")) {
-    // React format: the whole body after `@jsx` is one source file — later
-    // lines are verbatim source, never re-parsed as sections.
-    if (current === "jsx") {
+    // React source is verbatim: later lines are never re-parsed.
+    if (inJsx) {
       jsxLines.push(line);
-      continue;
-    }
-    const section = SECTION_RE.exec(line.trim());
-    if (section) {
-      const name = section[1].toLowerCase();
-      current = name === "css" ? "css" : name === "html" ? "html" : "js";
-      headerDone = true;
       continue;
     }
     const jsxSection = JSX_SECTION_RE.exec(line.trim());
     if (jsxSection) {
-      current = "jsx";
+      inJsx = true;
       headerDone = true;
       continue;
     }
-    if (!headerDone && !current) {
+    if (!headerDone) {
       const header = HEADER_RE.exec(line.trim());
       if (header) {
         const key = header[1].toLowerCase();
         const value = header[2].trim();
         if (key === "placeholder") out.placeholder = value.slice(0, 120);
-        else if (key === "height") {
-          const n = Number(value);
-          if (Number.isFinite(n) && n > 0) out.height = n;
-        } else if (key === "state") {
+        else if (key === "state") {
           out.state = parseStateJSON(value);
         } else if (key === "libs") {
           const libs = parseLibs(value);
           if (libs.length) out.libs = libs;
-        } else if (key === "net") {
-          out.net = /^(1|true|yes|on)$/i.test(value.trim());
         }
         continue;
       }
       if (line.trim() === "") continue; // header separator
-      // First non-header content line: default section is html.
-      current = "html";
       headerDone = true;
     }
-    (sections[current ?? "html"]).push(line);
   }
 
   if (jsxLines.length) {
     out.jsx = jsxLines.join("\n").trim() || undefined;
-    return out;
   }
-
-  out.html = sections.html.join("\n").trim() || undefined;
-  out.css = sections.css.join("\n").trim() || undefined;
-  out.js = sections.js.join("\n").trim() || undefined;
   return out;
 }
 
-/** State must be a JSON object literal; anything else is dropped. */
 function parseStateJSON(value: string): Record<string, unknown> | undefined {
-  if (!value) return undefined;
   try {
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : undefined;
   } catch {
     return undefined;
   }
 }
 
 /**
- * Library list: comma/space separated names, whitelisted against
- * GENERATIVE_UI_LIBS, de-duplicated, order preserved. Unknown names drop.
+ * `libs: d3, three` / `libs: three d3` — tolerate comma and whitespace
+ * separators. Unknown names are dropped (not honored by the doc builder).
  */
 function parseLibs(value: string): string[] {
-  const out: string[] = [];
-  for (const part of value.split(/[,\s]+/)) {
-    const name = part.trim().toLowerCase();
-    if ((GENERATIVE_UI_LIBS as readonly string[]).includes(name) && !out.includes(name)) out.push(name);
-  }
-  return out.slice(0, 4);
+  const parts = value
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => LIBS.has(s));
+  return [...new Set(parts)];
 }
 
-/** True when the body has enough content to mount a widget preview. */
+/** True when the body has a widget source to mount. */
 export function hasWidgetBody(data: GenerativeUiData): boolean {
-  return !!data.html || !!data.css || !!data.js || !!data.jsx;
+  return !!data.jsx;
 }
 
 export const GENERATIVE_UI_LANGS = new Set(["generative_ui", "genui"]);

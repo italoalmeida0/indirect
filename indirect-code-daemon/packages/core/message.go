@@ -121,7 +121,7 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 
 // repairToolUseResultPairs walks a transcript and synthesises stub
 // tool_result blocks for any assistant tool_use blocks that aren't
-// paired with a matching result in the next message. Anthropic (and
+// paired with a matching result before the next assistant message. Anthropic (and
 // OpenAI via the responses API) reject any request whose transcript
 // leaves a tool_use without its matching tool_result immediately
 // after, with errors like:
@@ -170,11 +170,21 @@ func repairToolUseResultPairs(msgs []provider.Message) []provider.Message {
 		if len(ids) == 0 {
 			continue
 		}
-		// Look at the next message (if any) and collect tool_result
-		// CallIDs it covers.
+		// Collect the tool_result CallIDs covered by the messages
+		// that follow, stopping at the next assistant message. Two
+		// durable shapes both count as paired: ONE tool message
+		// carrying every result of the batch, and the PersistentTurns
+		// shape of one tool message per result (each result is
+		// committed before the next tool starts). Non-tool messages
+		// in between (an actor-folded user notice that landed while
+		// a tool was executing) do not break the pairing either;
+		// only the next assistant message closes the window.
 		have := map[string]bool{}
-		if i+1 < len(msgs) && msgs[i+1].Role == provider.RoleTool {
-			for _, c := range msgs[i+1].Content {
+		for j := i + 1; j < len(msgs) && msgs[j].Role != provider.RoleAssistant; j++ {
+			if msgs[j].Role != provider.RoleTool {
+				continue
+			}
+			for _, c := range msgs[j].Content {
 				if tr, ok := c.(provider.ToolResultBlock); ok {
 					have[tr.CallID] = true
 				}

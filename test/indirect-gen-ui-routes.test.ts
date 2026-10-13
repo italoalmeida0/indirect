@@ -4,15 +4,23 @@ import { handleGenUiRoute, genUiStoreSize } from "../server/routes/gen-ui";
 import { vendorGenUiLibs } from "../scripts/vendor-gen-ui-libs";
 
 /**
- * Generative UI widget documents (black-box route contract).
+ * Generative UI widget documents (black-box route contract, React `@jsx`
+ * widgets only).
  *
  * The gateway CSP forbids inline frames, so widget documents are served as
  * real documents under /api/indirect-code/gen-ui/. These tests pin the
  * security contract of that surface: strict sandbox CSP on every response,
- * content-addressed unguessable ids, and no way for model-controlled CSS/JS
- * to break out of its element.
+ * content-addressed unguessable ids, compilation at doc build time (the
+ * sandbox has no eval) and no way for model code to break out of its script
+ * element.
  */
 const BASE = "http://gw.test";
+
+const APP = `import { useState } from "react";
+export default function App() {
+  const [x] = useState(1);
+  return <div className="gu-root"><h2 className="gu-title">hi {x}</h2></div>;
+}`;
 
 function post(path: string, body: unknown): Promise<Response> {
   return handleGenUiRoute(
@@ -43,11 +51,8 @@ describe("gen-ui widget routes", () => {
   test("POST stores a widget and returns its content-addressed URL", async () => {
     const res = await post("/api/indirect-code/gen-ui/widgets", {
       theme: "dark",
-      html: '<div class="gu-root">hi</div>',
-      css: ".gu-root{}",
-      js: "document.querySelector('.gu-root').style.opacity = '1';",
+      jsx: APP,
       stateJSON: "{}",
-      initialHeight: 300,
     });
     expect(res.status).toBe(200);
     const out = await res.json();
@@ -56,7 +61,7 @@ describe("gen-ui widget routes", () => {
   });
 
   test("identical content deduplicates to the same id", async () => {
-    const body = { theme: "dark", html: "<div>same</div>", css: "", js: "", stateJSON: "{}", initialHeight: 200 };
+    const body = { theme: "dark", jsx: APP, stateJSON: "{}" };
     const a: any = await (await post("/api/indirect-code/gen-ui/widgets", body)).json();
     const b: any = await (await post("/api/indirect-code/gen-ui/widgets", body)).json();
     expect(a.id).toBe(b.id);
@@ -65,11 +70,8 @@ describe("gen-ui widget routes", () => {
   test("GET serves the widget with a locked-down sandbox CSP header", async () => {
     const out: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "light",
-      html: '<div class="gu-root"><h2 class="gu-title">T</h2></div>',
-      css: "",
-      js: "window.__ran = 1;",
+      jsx: APP,
       stateJSON: '{"a":1}',
-      initialHeight: 320,
     })).json();
     const res = await get(out.url);
     expect(res.status).toBe(200);
@@ -77,11 +79,17 @@ describe("gen-ui widget routes", () => {
     const csp = res.headers.get("content-security-policy") || "";
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).toContain("default-src 'none'");
-    expect(csp).toContain("connect-src 'none'");
+    // Network is limited to images, https data and the esm.sh lib CDN.
+    expect(csp).toContain("connect-src https:");
+    expect(csp).toContain("https://esm.sh");
     expect(csp).not.toMatch(/script-src[^;]*unsafe-inline/);
     const html = await res.text();
-    expect(html).toContain('class="gu-root"');
+    // The document carries the React runtime + the bridge; the widget code
+    // lives in its own served module (referenced by the import map).
+    expect(html).toContain("window.React = React");
     expect(html).toContain("window.__gu");
+    expect(html).toContain('<script type="importmap"');
+    expect(html).toContain("/api/indirect-code/gen-ui/modules/");
   });
 
   test("unknown widget id 404s (ids are unguessable sha256 digests)", async () => {
@@ -91,25 +99,23 @@ describe("gen-ui widget routes", () => {
 
   test("oversized widgets are refused", async () => {
     const res = await post("/api/indirect-code/gen-ui/widgets", {
-      html: "<div>" + "a".repeat(1_600_000) + "</div>",
+      jsx: "const a = '" + "a".repeat(1_600_000) + "';",
     });
     expect(res.status).toBe(413);
   });
 
   test("empty widgets are refused", async () => {
-    const res = await post("/api/indirect-code/gen-ui/widgets", { html: "", css: "" });
+    const res = await post("/api/indirect-code/gen-ui/widgets", { jsx: "" });
     expect(res.status).toBe(400);
   });
 
-  test("preview shell is served with the same sandbox CSP and runs no model code", async () => {
-    const res = await get("/api/indirect-code/gen-ui/preview?theme=light");
-    expect(res.status).toBe(200);
-    const csp = res.headers.get("content-security-policy") || "";
-    expect(csp).toContain("sandbox allow-scripts");
-    const html = await res.text();
-    expect(html).toContain("__guPreview");
-    expect(html).toContain("Idiomorph");
-    expect(html).toContain('data-theme="light"');
+  test("sources that do not compile are refused with the compiler message", async () => {
+    const res = await post("/api/indirect-code/gen-ui/widgets", {
+      jsx: "export default function App( { return <div/>;",
+    });
+    expect(res.status).toBe(400);
+    const out: any = await res.json();
+    expect(String(out.error)).toContain("invalid jsx");
   });
 
   test("the store is bounded", () => {
@@ -117,83 +123,74 @@ describe("gen-ui widget routes", () => {
     expect(genUiStoreSize()).toBeLessThanOrEqual(400);
   });
 
-  test("libs header injects the requested library bundles", async () => {
+  test("libs header maps the requested modules in the import map", async () => {
     const out: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "dark",
-      html: '<div class="gu-root">3d</div>',
-      css: "",
-      js: "window.__ran = 1;",
+      jsx: APP,
       stateJSON: "{}",
-      initialHeight: 200,
       libs: ["three", "gsap"],
     })).json();
     const html = await (await get(out.url)).text();
-    expect(html).toContain("globalThis.THREE=");
-    expect(html).toContain("globalThis.gsap=");
-    // Canonical injection order: gsap before three.
-    expect(html.indexOf("globalThis.gsap=")).toBeLessThan(html.indexOf("globalThis.THREE="));
-    // The model script carries the lifecycle contract.
-    expect(html).toContain("$onDestroy(__result.destroy)");
+    // The document is tiny: the libs live in shared, cacheable modules.
+    expect(html.length).toBeLessThan(200_000);
+    expect(html).not.toContain("globalThis.THREE=");
+    const map = JSON.parse(/<script type="importmap"[^>]*>([\s\S]*?)<\/script>/.exec(html)![1]);
+    expect(map.imports.three).toBe("/api/indirect-code/gen-ui/lib/three.js");
+    expect(map.imports.gsap).toBe("/api/indirect-code/gen-ui/lib/gsap.js");
+    expect(map.imports.d3).toBeUndefined();
+    // The module endpoint and lib endpoint are reachable and cacheable.
+    const lib = await get("/api/indirect-code/gen-ui/lib/three.js");
+    expect(lib.status).toBe(200);
+    expect(lib.headers.get("access-control-allow-origin")).toBe("*");
+    expect(lib.headers.get("cache-control")).toContain("immutable");
   });
 
-  test("net widgets serve the https variant CSP and map libs bundle leaflet", async () => {
+  test("widgets always serve the https/esm.sh CSP and map libs bundle leaflet", async () => {
     const out: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "light",
-      html: '<div class="gu-root" id="map"></div>',
-      css: "#map { height: 320px; }",
-      js: "window.__made = 1;",
+      jsx: `export default function App() {
+        import("https://esm.sh/canvas-confetti@1").then((m) => m.default());
+        return <div className="gu-root" id="map">map</div>;
+      }`,
       stateJSON: "{}",
-      initialHeight: 320,
       libs: ["map"],
-      net: true,
     })).json();
     const res = await get(out.url);
     const csp = res.headers.get("content-security-policy") || "";
     expect(csp).toContain("img-src data: blob: https: http:");
     expect(csp).toContain("connect-src https:");
-    // esm.sh is the one extra script origin for net widgets.
+    // esm.sh is the one extra script origin, on every widget.
     expect(csp).toContain("https://esm.sh");
     expect(csp).toContain("sandbox allow-scripts");
     const html = await res.text();
-    expect(html).toContain("window.L=");
-    expect(html).toContain("leaflet"); // css inlined (images as data URIs)
+    // The leaflet stylesheet (with inlined images) is inlined in the doc.
+    expect(html).toContain("leaflet");
     expect(html).not.toContain("url(images/");
-    // Strict widgets (no net): images may load from any http(s) site, but
-    // data connections and esm.sh scripts stay locked out.
-    const strict: any = await (await post("/api/indirect-code/gen-ui/widgets", {
-      theme: "light",
-      html: '<div class="gu-root">x</div>',
-      css: "", js: "window.__made = 2;", stateJSON: "{}", initialHeight: 320,
-    })).json();
-    const strictCsp = (await get(strict.url)).headers.get("content-security-policy") || "";
-    expect(strictCsp).toContain("img-src data: blob: https: http:");
-    expect(strictCsp).not.toContain("esm.sh");
-    expect(strictCsp).toContain("connect-src 'none'");
-    const strictScriptSrc = strictCsp.split(";").map((s) => s.trim()).find((s) => s.startsWith("script-src")) || "";
-    expect(strictScriptSrc).not.toContain("https:");
+    // The esm.sh dynamic import survives into the served module.
+    const moduleUrl = /src="(\/api\/indirect-code\/gen-ui\/modules\/[0-9a-f]{64})"/.exec(html)![1];
+    expect(await (await get(moduleUrl)).text()).toContain("https://esm.sh/canvas-confetti@1");
   });
 
-  test("widgets default to the d3 bundle and never inline unknown libs", async () => {
+  test("widgets default to the d3 module and drop unknown libs", async () => {
     const out: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "dark",
-      html: '<div class="gu-root">chart</div>',
-      css: "",
-      js: "window.__ran = 2;",
+      jsx: APP,
       stateJSON: "{}",
-      initialHeight: 200,
       libs: ["evil", "chart"],
     })).json();
     const html = await (await get(out.url)).text();
-    expect(html).toContain("globalThis.Chart=");
-    expect(html).not.toContain("globalThis.evil");
-    // The default (no libs) document still carries d3.
+    const map = JSON.parse(/<script type="importmap"[^>]*>([\s\S]*?)<\/script>/.exec(html)![1]);
+    expect(map.imports.chart).toBe("/api/indirect-code/gen-ui/lib/chart.js");
+    expect(map.imports.evil).toBeUndefined();
+    // The default (no libs) document still maps d3.
     const def: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "dark",
-      html: '<div class="gu-root">d3</div>',
-      css: "", js: "window.__ran = 3;", stateJSON: "{}", initialHeight: 200,
+      jsx: APP,
+      stateJSON: "{}",
     })).json();
     const defHtml = await (await get(def.url)).text();
-    expect(defHtml.length).toBeGreaterThan(100_000);
-    expect(defHtml).not.toContain("globalThis.THREE=");
+    const defMap = JSON.parse(/<script type="importmap"[^>]*>([\s\S]*?)<\/script>/.exec(defHtml)![1]);
+    expect(defMap.imports.d3).toBe("/api/indirect-code/gen-ui/lib/d3.js");
+    expect(defMap.imports.three).toBeUndefined();
   });
 });

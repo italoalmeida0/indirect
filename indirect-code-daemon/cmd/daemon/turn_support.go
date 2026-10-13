@@ -160,7 +160,9 @@ func randomConvertID() []byte {
 // buildTurnSystemDirectives prepends date directives to the opening prompt
 // (v1 turnPrompt parity). It mutates the WORKER snapshot copy
 // (LastDate/LastMode); the actor persists them via the walTypeMeta append
-// the caller sends right after. Fires once per change, not every turn.
+// the caller sends right after. The date part fires once per change; the
+// live-state sections (running background tasks, active todo list) ride
+// EVERY new user turn, each only when it has content.
 //
 // Mode is deliberately NOT announced here: the system prompt is rebuilt
 // per mode and is the single source of truth for the active mode. LastMode
@@ -179,6 +181,7 @@ func buildTurnSystemDirectives(snap *workerSnapshot, now time.Time) string {
 		snap.lastDate = today
 	}
 	snap.lastMode = mode
+	sysParts = append(sysParts, turnStateSections(snap.bgTasks, snap.todos, now)...)
 	if len(sysParts) == 0 {
 		return ""
 	}

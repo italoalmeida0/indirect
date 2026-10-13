@@ -19,7 +19,12 @@ type FinishEntireRequestTool struct {
 	// completed). It is required in practice: without it the turn does not
 	// end.
 	OnFinish func() error
-	Mode     string
+	// IncompleteCheck, when set, runs before OnFinish. A non-empty
+	// return BLOCKS the finish: it becomes the tool error, OnFinish
+	// does not run and the turn continues so the model can resolve
+	// the block (open checklist items) and call again.
+	IncompleteCheck func() string
+	Mode            string
 }
 
 // finishArgs is the model-facing argument set. There are no aliases or
@@ -58,6 +63,14 @@ func (t *FinishEntireRequestTool) Execute(ctx context.Context, raw json.RawMessa
 			IsError: true,
 			Content: []provider.Content{provider.TextBlock{Text: "final_message_to_user is required: write the complete final message for the user (Markdown). It is the only text they read."}},
 		}, nil
+	}
+	if t.IncompleteCheck != nil {
+		if warning := strings.TrimSpace(t.IncompleteCheck()); warning != "" {
+			return core.ToolResult{
+				IsError: true,
+				Content: []provider.Content{provider.TextBlock{Text: warning}},
+			}, nil
+		}
 	}
 	if t.OnFinish != nil {
 		if err := t.OnFinish(); err != nil {

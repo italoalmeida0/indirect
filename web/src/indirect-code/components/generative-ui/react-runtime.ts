@@ -887,6 +887,9 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   function eventName(prop) {
     var name = prop.slice(2).toLowerCase();
     if (name === "doubleclick") return "dblclick";
+    // React parity: onChange is the DOM input event (range/checkbox/select
+    // fire input on every interaction, change only on commit).
+    if (name === "change") return "input";
     return name;
   }
 

@@ -183,6 +183,13 @@ type Agent struct {
 	// Kept as-is: it mutates runtime config, not message context.
 	BeforeRequest func(context.Context) error
 
+	// SummaryNudgeExtra, when set, supplies host state text folded
+	// into every SECOND progress-summary notice of a turn (the 2nd,
+	// 4th, ... notice; odd notices stay plain). It runs on the agent
+	// goroutine at notice time, so it can read live host state; an
+	// empty return adds nothing.
+	SummaryNudgeExtra func() string
+
 	// CompletionTool selects the tool-only response protocol. When nonempty,
 	// free assistant text is discarded at ingress, before events or persistence.
 	// Thinking and tool content survive. Empty enables conversational text.
@@ -566,6 +573,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 	// retry forever on the backoff schedule — only AI conclusion or
 	// user cancel (context cancellation) ends a turn.
 	nudges := 0
+	summaryNotices := 0
 	completionNudges := 0
 	completedInTurn := false
 	preparationAttempt := 0
@@ -736,7 +744,8 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			if hasSummaryTool && ((time.Since(lastSummaryAt) >= 60*time.Second && toolsSinceSummary >= 15) || toolsSinceSummary >= 30) {
 				toolsSinceSummary = 0
 				lastSummaryAt = time.Now()
-				a.appendNudge(a.grantSummaryUse(), sink)
+				summaryNotices++
+				a.appendNudge(summaryNoticeText(a.grantSummaryUse(), summaryNotices, a.SummaryNudgeExtra), sink)
 			}
 
 			continue
@@ -1209,6 +1218,24 @@ func (a *Agent) grantSummaryUse() string {
 	}
 	a.summaryGate.credit = true
 	return SummaryWarnNudge
+}
+
+// summaryNoticeText folds host extra state into every SECOND summary
+// notice of a turn (count 2, 4, ...), inside the system-warn
+// envelope. Odd notices, a missing hook and an empty extra all keep
+// the plain notice. The hook runs only when its text will be used.
+func summaryNoticeText(notice string, count int, extra func() string) string {
+	if count%2 != 0 || extra == nil {
+		return notice
+	}
+	text := strings.TrimSpace(extra())
+	if text == "" {
+		return notice
+	}
+	if strings.HasSuffix(notice, "</system-warn>") {
+		return strings.TrimSuffix(notice, "</system-warn>") + "\n" + text + "\n</system-warn>"
+	}
+	return notice + "\n" + text
 }
 
 // takeSummaryCredit spends the single summary use the latest notice granted.

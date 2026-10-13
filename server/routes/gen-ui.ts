@@ -1,162 +1,151 @@
 import { existsSync, readFileSync } from "fs";
+import path from "path";
 
 import { err, json, readJsonBody } from "../http";
 import {
-  buildPreviewDocument,
+  buildJsxImportMap,
+  buildJsxModuleBody,
+  buildReactShimModule,
   buildWidgetDocument,
   makeScriptNonce,
   widgetCSP,
-  widgetNetCSP,
-  withIdiomorph,
 } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
-import { IDIOMORPH_JS } from "../../web/src/indirect-code/components/generative-ui/idiomorph-inline";
 import { compileJsxModule } from "../../web/src/indirect-code/components/generative-ui/jsx-compile";
+import { GEN_UI_LIB_FILES } from "../../scripts/vendor-gen-ui-libs";
 import { createHash } from "crypto";
 
 /**
- * Generative UI widget documents.
+ * Generative UI widget documents (React `@jsx` widgets only).
  *
  * The gateway CSP is frame-src allowlist-only and forbids inline frames, so
  * sandboxed widget documents are served as real same-origin documents:
  *
- *  POST /api/indirect-code/gen-ui/widgets      -> store a widget, get its URL
- *  GET  /api/indirect-code/gen-ui/widgets/:id  -> the widget document (CSP header)
- *  GET  /api/indirect-code/gen-ui/preview      -> the streaming preview shell
+ *  POST /api/indirect-code/gen-ui/widgets       -> store a widget, get its URL
+ *  GET  /api/indirect-code/gen-ui/widgets/:id   -> the widget document (CSP header)
+ *  GET  /api/indirect-code/gen-ui/modules/:id   -> a stored widget module (ESM)
+ *  GET  /api/indirect-code/gen-ui/lib/:file     -> vendored library modules (ESM)
+ *
+ * A widget is one React component. Its source is compiled with the Bun
+ * transpiler at doc build time (the sandbox has no 'unsafe-eval', so the
+ * frame only ever runs plain JS) and stored as a standalone ES module; the
+ * document references it through an import map together with the vendored
+ * library modules — one shared, cacheable copy per library instead of an
+ * inline copy per document. Broken sources are a 400 with the compiler
+ * message — the widget never mounts half-working.
  *
  * Security contract (two independent layers):
- *  - every response carries `Content-Security-Policy: sandbox allow-scripts;
+ *  - every document carries `Content-Security-Policy: sandbox allow-scripts;
  *    default-src 'none'; ...` — the CSP `sandbox` directive applies even when
  *    the document is opened at top level, so the widget always runs in an
- *    opaque origin (network limited to http(s) images, plus https/esm.sh
- *    when the widget opts into `net`);
- *  - widget ids are sha256(content): unguessable and deduplicated. No auth is
- *    required to fetch a widget (iframes cannot send headers) and a widget
- *    document is inert without its exact content hash.
+ *    opaque origin (network limited to http(s) images, https data and esm.sh
+ *    libs). Module/lib responses are plain scripts fetched by that document:
+ *    same-origin, immutable, and only ever loaded under a sandboxed
+ *    document's import map;
+ *  - widget and module ids are sha256(content): unguessable and
+ *    deduplicated. No auth is required to fetch a widget (iframes cannot
+ *    send headers) and a widget document is inert without its exact content
+ *    hash.
  *
- * The store is an in-memory LRU: transcripts re-upload their widgets on load
+ * Stores are in-memory LRUs: transcripts re-upload their widgets on load
  * (the DSL lives in the message markdown), so nothing needs to survive a
- * restart. Bounded at WIDGET_STORE_MAX docs / WIDGET_STORE_MAX_BYTES.
+ * restart. Bounded at STORE_MAX entries / STORE_MAX_BYTES.
  */
 
-const WIDGET_STORE_MAX = 400;
-const WIDGET_STORE_MAX_BYTES = 64 * 1024 * 1024;
+const STORE_MAX = 400;
+const STORE_MAX_BYTES = 64 * 1024 * 1024;
 
-type WidgetEntry = { id: string; html: string; bytes: number; net: boolean };
-const widgets = new Map<string, WidgetEntry>();
-let widgetsBytes = 0;
+type Entry = { id: string; body: string; bytes: number };
 
-/** Content-addressed id: identical widget content maps to one document. */
-function widgetContentId(parts: {
-  theme: string; html: string; css: string; js: string; jsx: string; stateJSON: string; initialHeight: number;
-  libs: string[]; net: boolean;
-}): string {
-  return createHash("sha256")
-    .update(JSON.stringify([parts.theme, parts.html, parts.css, parts.js, parts.jsx, parts.stateJSON, parts.initialHeight, parts.libs, parts.net]))
-    .digest("hex");
-}
-
-function putWidget(id: string, html: string, net: boolean): WidgetEntry {
-  const existing = widgets.get(id);
-  if (existing) {
-    // Refresh LRU position.
-    widgets.delete(id);
-    widgets.set(id, existing);
-    return existing;
-  }
-  const entry: WidgetEntry = { id, html, bytes: html.length, net };
-  widgets.set(id, entry);
-  widgetsBytes += entry.bytes;
-  while (widgets.size > WIDGET_STORE_MAX || widgetsBytes > WIDGET_STORE_MAX_BYTES) {
-    const oldest = widgets.entries().next().value as [string, WidgetEntry] | undefined;
-    if (!oldest) break;
-    widgets.delete(oldest[0]);
-    widgetsBytes -= oldest[1].bytes;
-  }
-  return entry;
-}
-
-/**
- * Widget libraries (d3, gsap, chart.js, three) are inlined into widget
- * documents so they work offline (scripts are nonce-only; esm.sh is the
- * `net` opt-in escape hatch for anything else). Sources come from the
- * vendored build output, falling back to node_modules for dev checkouts.
- * Cached per library; a missing library is simply omitted.
- */
-const LIB_CANDIDATES: Record<string, string[]> = {
-  d3: ["dist/vendor/gen-ui/d3.min.js", "web/public/vendor/gen-ui/d3.min.js", "node_modules/d3/dist/d3.min.js"],
-  gsap: ["dist/vendor/gen-ui/gsap.min.js", "web/public/vendor/gen-ui/gsap.min.js"],
-  chart: ["dist/vendor/gen-ui/chart.min.js", "web/public/vendor/gen-ui/chart.min.js"],
-  three: ["dist/vendor/gen-ui/three.min.js", "web/public/vendor/gen-ui/three.min.js"],
-  map: ["dist/vendor/gen-ui/leaflet.js", "web/public/vendor/gen-ui/leaflet.js", "node_modules/leaflet/dist/leaflet.js"],
-};
-
-const LIB_CSS_CANDIDATES: Record<string, string[]> = {
-  map: ["dist/vendor/gen-ui/map.css", "web/public/vendor/gen-ui/map.css"],
-};
-const libSourceCache = new Map<string, string | null>();
-function libSource(name: string): string | null {
-  if (libSourceCache.has(name)) return libSourceCache.get(name)!;
-  let source: string | null = null;
-  for (const p of LIB_CANDIDATES[name] ?? []) {
-    try {
-      if (existsSync(p)) {
-        source = readFileSync(p, "utf8");
-        break;
+function makeStore() {
+  const map = new Map<string, Entry>();
+  let bytes = 0;
+  return {
+    get(id: string): Entry | undefined {
+      const e = map.get(id);
+      if (e) {
+        // Refresh LRU position.
+        map.delete(id);
+        map.set(id, e);
       }
+      return e;
+    },
+    put(id: string, body: string): Entry {
+      const existing = map.get(id);
+      if (existing) {
+        map.delete(id);
+        map.set(id, existing);
+        return existing;
+      }
+      const entry: Entry = { id, body, bytes: body.length };
+      map.set(id, entry);
+      bytes += entry.bytes;
+      while (map.size > STORE_MAX || bytes > STORE_MAX_BYTES) {
+        const oldest = map.entries().next().value as [string, Entry] | undefined;
+        if (!oldest) break;
+        map.delete(oldest[0]);
+        bytes -= oldest[1].bytes;
+      }
+      return entry;
+    },
+    size: () => map.size,
+  };
+}
+
+const widgets = makeStore();
+const modules = makeStore();
+
+/** Content-addressed id: identical content maps to one entry. */
+function contentId(parts: unknown[]): string {
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+}
+
+/* ---------------- vendored library modules ---------------- */
+
+/** Candidate roots for the vendored build output (gitignored artifacts). */
+const VENDOR_DIRS = [
+  path.resolve("web/public/vendor/gen-ui"),
+  path.resolve("dist/vendor/gen-ui"),
+];
+
+function readVendorFile(file: string): string | null {
+  for (const dir of VENDOR_DIRS) {
+    const p = path.join(dir, file);
+    if (!p.startsWith(dir + path.sep)) return null; // no traversal
+    try {
+      if (existsSync(p)) return readFileSync(p, "utf8");
     } catch {
       // keep looking
     }
   }
-  libSourceCache.set(name, source);
-  return source;
+  return null;
 }
 
-const libCssCache = new Map<string, string | null>();
-function libCssSource(name: string): string | null {
-  if (libCssCache.has(name)) return libCssCache.get(name)!;
-  let source: string | null = null;
-  for (const p of LIB_CSS_CANDIDATES[name] ?? []) {
-    try {
-      if (existsSync(p)) {
-        source = readFileSync(p, "utf8");
-        break;
-      }
-    } catch {
-      // keep looking
-    }
-  }
-  libCssCache.set(name, source);
-  return source;
+/** Library module files the import map may reference (plus the react shim). */
+const LIB_MODULE_FILES = new Set<string>(Object.values(GEN_UI_LIB_FILES));
+const LIB_CSS_FILES = new Set<string>(["map.css"]);
+
+function libContentType(file: string): string {
+  return file.endsWith(".css") ? "text/css; charset=utf-8" : "text/javascript; charset=utf-8";
 }
 
-/** Resolved library sources for a widget body (keyed by lib name). */
-function resolveWidgetLibs(libs: string[] | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const name of libs && libs.length ? libs : ["d3"]) {
-    const source = libSource(name);
-    if (source) out[name] = source;
-  }
-  return out;
-}
-
-/** Resolved library stylesheets (keyed by lib name). */
-function resolveWidgetLibCss(libs: string[] | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const name of libs && libs.length ? libs : ["d3"]) {
-    const source = libCssSource(name);
-    if (source) out[name] = source;
-  }
-  return out;
-}
-
-function widgetDocHeaders(nonce: string, net = false): Headers {
-  return new Headers({
-    "content-type": "text/html; charset=utf-8",
-    "content-security-policy": net ? widgetNetCSP(nonce) : widgetCSP(nonce),
-    "cache-control": "no-store",
+/** Cross-origin read is required: widget frames are opaque origins. */
+function moduleHeaders(contentType: string): Record<string, string> {
+  return {
+    "content-type": contentType,
+    "cache-control": "public, max-age=31536000, immutable",
+    "access-control-allow-origin": "*",
     "x-content-type-options": "nosniff",
-  });
+  };
 }
+
+/** Inline stylesheet text for a lib (e.g. leaflet css with inlined images). */
+function libCssSource(name: string): string | null {
+  const file = GEN_UI_LIB_FILES[name] ? `${name}.css` : null;
+  if (!file || !LIB_CSS_FILES.has(file)) return null;
+  return readVendorFile(file);
+}
+
+/* ---------------- routes ---------------- */
 
 export async function handleGenUiRoute(
   path: string,
@@ -164,53 +153,51 @@ export async function handleGenUiRoute(
   _url: URL,
 ): Promise<Response | null> {
   if (path === "/api/indirect-code/gen-ui/widgets" && req.method === "POST") {
-    let body: Record<string, unknown>;
-    try {
-      body = await readJsonBody(req, 2_000_000);
-    } catch {
-      return err(400, "invalid JSON body", req);
-    }
+    const body = await readJsonBody(req, 2_500_000);
     const theme: "dark" | "light" = body?.theme === "light" ? "light" : "dark";
-    const html = typeof body?.html === "string" ? body.html : "";
-    const css = typeof body?.css === "string" ? body.css : "";
-    const js = typeof body?.js === "string" ? body.js : "";
     const jsx = typeof body?.jsx === "string" ? body.jsx : "";
     const stateJSON = typeof body?.stateJSON === "string" ? body.stateJSON : "{}";
-    const initialHeight = Number(body?.initialHeight) || 320;
-    if (!html && !css && !js && !jsx) return err(400, "empty widget", req);
-    const total = html.length + css.length + js.length + jsx.length + stateJSON.length;
+    if (!jsx.trim()) return err(400, "empty widget", req);
+    const total = jsx.length + stateJSON.length;
     if (total > 1_500_000) return err(413, "widget too large", req);
-    // React-format widgets (`@jsx`) compile here, at doc build time: the
-    // widget sandbox has no 'unsafe-eval', so it only ever runs plain JS.
-    let compiledJsx = "";
-    if (jsx) {
-      const compiled = compileJsxModule(jsx);
-      if (!compiled.ok) return err(400, `invalid jsx: ${compiled.error}`, req);
-      compiledJsx = compiled.code;
-    }
-    const height = Math.min(4000, Math.max(64, initialHeight));
+    // The source compiles here, at doc build time: the widget sandbox has no
+    // 'unsafe-eval', so it only ever runs plain JS.
+    const compiled = compileJsxModule(jsx);
+    if (!compiled.ok) return err(400, `invalid jsx: ${compiled.error}`, req);
     const libs = Array.isArray(body?.libs)
       ? (body.libs as unknown[]).filter((l): l is string => typeof l === "string").slice(0, 4)
       : ["d3"];
-    const net = body?.net === true;
-    const id = widgetContentId({ theme, html, css, js, jsx: compiledJsx, stateJSON, initialHeight: height, libs, net });
+
+    // The compiled widget lives as its own module: identical source shares
+    // one module entry, and the document stays tiny.
+    const moduleBody = buildJsxModuleBody(compiled.code);
+    const moduleId = contentId([moduleBody]);
+    modules.put(moduleId, moduleBody);
+    const moduleUrl = `/api/indirect-code/gen-ui/modules/${moduleId}`;
+
+    const id = contentId([theme, moduleId, stateJSON, libs]);
     const existing = widgets.get(id);
     if (existing) {
-      // Refresh LRU position; the document is deterministic per content.
-      widgets.delete(id);
-      widgets.set(id, existing);
       return json({ success: true, id: existing.id, url: `/api/indirect-code/gen-ui/widgets/${existing.id}` }, { req });
     }
     const nonce = makeScriptNonce();
-    const doc = buildWidgetDocument({
-      theme, html, css, stateJSON, js, jsx: compiledJsx,
-      initialHeight: height,
-      scriptNonce: nonce,
-      libs: resolveWidgetLibs(libs),
-      libCss: resolveWidgetLibCss(libs),
-      net,
+    const importMap = buildJsxImportMap({
+      react: "/api/indirect-code/gen-ui/lib/react-shim.js",
+      libs: Object.fromEntries(
+        libs
+          .filter((name) => GEN_UI_LIB_FILES[name])
+          .map((name) => [name, `/api/indirect-code/gen-ui/lib/${GEN_UI_LIB_FILES[name]}`]),
+      ),
     });
-    const entry = putWidget(id, doc, net);
+    const doc = buildWidgetDocument({
+      theme,
+      moduleUrl,
+      importMap,
+      stateJSON,
+      scriptNonce: nonce,
+      libCss: libs.includes("map") ? libCssSource("map") ?? undefined : undefined,
+    });
+    const entry = widgets.put(id, doc);
     return json({ success: true, id: entry.id, url: `/api/indirect-code/gen-ui/widgets/${entry.id}` }, { req });
   }
 
@@ -218,28 +205,47 @@ export async function handleGenUiRoute(
   if (widgetMatch && req.method === "GET") {
     const entry = widgets.get(widgetMatch[1]);
     if (!entry) return err(404, "widget not found", req);
-    // The doc is already a complete document: re-derive a nonce-agnostic CSP
-    // is impossible (the nonce lives in the doc), so serve with the same CSP
-    // string built into the doc header check: extract it from the stored doc.
-    // `net` widgets get the opt-in https variant (the strict header would
-    // override their meta otherwise).
-    const nonceMatch = /script-src 'nonce-([0-9a-f]{32})'/.exec(entry.html);
-    return new Response(entry.html, {
-      headers: widgetDocHeaders(nonceMatch?.[1] || "", entry.net),
+    // The nonce lives in the stored document: the CSP header must carry the
+    // same value (the doc is immutable, so it can be re-derived on read).
+    const nonceMatch = /script-src 'nonce-([0-9a-f]{32})'/.exec(entry.body);
+    const nonce = nonceMatch?.[1] || "";
+    return new Response(entry.body, {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "public, max-age=31536000, immutable",
+        "content-security-policy": widgetCSP(nonce),
+        "x-content-type-options": "nosniff",
+      },
     });
   }
 
-  if (path === "/api/indirect-code/gen-ui/preview" && req.method === "GET") {
-    const nonce = makeScriptNonce();
-    const theme: "dark" | "light" = _url.searchParams.get("theme") === "light" ? "light" : "dark";
-    const doc = withIdiomorph(buildPreviewDocument({ theme, scriptNonce: nonce }), IDIOMORPH_JS);
-    return new Response(doc, { headers: widgetDocHeaders(nonce) });
+  const moduleMatch = /^\/api\/indirect-code\/gen-ui\/modules\/([0-9a-f]{64})$/.exec(path);
+  if (moduleMatch && req.method === "GET") {
+    const entry = modules.get(moduleMatch[1]);
+    if (!entry) return err(404, "module not found", req);
+    return new Response(entry.body, { headers: moduleHeaders("text/javascript; charset=utf-8") });
   }
+
+  const libMatch = /^\/api\/indirect-code\/gen-ui\/lib\/([\w.-]+)$/.exec(path);
+  if (libMatch && req.method === "GET") {
+    const file = libMatch[1];
+    if (file === "react-shim.js") {
+      return new Response(buildReactShimModule(), { headers: moduleHeaders("text/javascript; charset=utf-8") });
+    }
+    if (!LIB_MODULE_FILES.has(file) && !LIB_CSS_FILES.has(file)) return err(404, "unknown lib", req);
+    const source = readVendorFile(file);
+    if (source == null) return err(404, "lib not vendored (run build)", req);
+    return new Response(source, { headers: moduleHeaders(libContentType(file)) });
+  }
+
+  // Anything else under the gen-ui namespace is a 404, not an unhandled
+  // route (the namespace is self-contained).
+  if (path.startsWith("/api/indirect-code/gen-ui/")) return err(404, "not found", req);
 
   return null;
 }
 
-/** Exposed for black-box tests. */
+/** Test hook: widget/module store sizes (bounded LRUs). */
 export function genUiStoreSize(): number {
-  return widgets.size;
+  return widgets.size();
 }

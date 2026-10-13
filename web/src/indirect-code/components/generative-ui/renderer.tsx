@@ -2,24 +2,27 @@ import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } 
 import {
   attachGuBridge,
   clampFrameHeight,
+  MIN_FRAME_HEIGHT,
   widgetTheme,
 } from "./bridge";
-import { processPartialHtml } from "./process-partial-html";
+
+/** The frame starts this thin and grows to the widget's measured content. */
+const MIN_START_HEIGHT = MIN_FRAME_HEIGHT;
 import { parseGenerativeUiDsl, hasWidgetBody, type GenerativeUiData } from "./dsl";
 
 /**
- * Generative UI widget (ported from OpenIntelligentUI renderer.tsx to Solid).
+ * Generative UI widget (React `@jsx` widgets).
  *
- * The widget is a markdown DSL (```generative_ui fenced block). Rendering
- * runs in two stages:
+ * The widget is a markdown DSL (```generative_ui fenced block): header keys,
+ * then one React component. Rendering runs in two stages:
  *
- *  - while the assistant streams the block, a *preview* iframe (served by
- *    /api/indirect-code/gen-ui/preview) morphs the partial HTML in place —
- *    Idiomorph preserves DOM state and focus across every token;
+ *  - while the assistant streams the block, the placeholder pill covers an
+ *    inert surface — the source is compiled once, when the block closes;
  *  - when the block closes, the body is uploaded to
- *    /api/indirect-code/gen-ui/widgets and the *final* iframe loads that
- *    document: the real sandboxed widget (runtime + @js + libs), interactive
- *    and isolated (network: images, plus https/esm.sh with `net: true`).
+ *    /api/indirect-code/gen-ui/widgets (compiled server-side with sucrase)
+ *    and the *final* iframe loads that document: the real sandboxed widget
+ *    (React runtime + compiled module + libs), interactive and isolated
+ *    (network: images, plus https/esm.sh with `net: true`).
  *
  * Why URLs instead of srcdoc: the gateway CSP is frame-src allowlist with
  * no 'unsafe-inline' — inline frames inherit it and their inline scripts
@@ -36,7 +39,6 @@ export function GenerativeUiWidget(props: {
   onPrefillPrompt?: (text: string) => void;
   onOpenLink?: (url: string) => void;
 }) {
-  const [previewEl, setPreviewEl] = createSignal<HTMLIFrameElement>();
   const [finalEl, setFinalEl] = createSignal<HTMLIFrameElement>();
   const [finalUrl, setFinalUrl] = createSignal<string>("");
   const [finalHeight, setFinalHeight] = createSignal<number>(0);
@@ -47,13 +49,9 @@ export function GenerativeUiWidget(props: {
   // Memoized: parse once per body change, not once per accessor read (the
   // effects and JSX below read data() many times per token while streaming).
   const data = createMemo<GenerativeUiData>(() => parseGenerativeUiDsl(props.body()));
-  /** React-format widget: no live preview — the placeholder stays until the
-   *  block closes and the full source is published (compiled server-side). */
-  const isJsx = () => !!data().jsx;
-  const rootHeight = () => {
-    const h = Number(data().height) || 320;
-    return clampFrameHeight(h > 0 ? h : 320);
-  };
+  // The frame starts thin and grows to fit content: the widget reports its
+  // real height over the bridge (clamped), so no height bookkeeping is needed
+  // in the DSL.
   const stateJSON = () => JSON.stringify(data().state ?? {});
 
   onMount(() => {
@@ -65,41 +63,11 @@ export function GenerativeUiWidget(props: {
     onCleanup(() => observer.disconnect());
   });
 
-  // ---- preview (streaming) ----
-  let previewDirty = false;
-  let previewTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const pushPreview = () => {
-    previewTimer = undefined;
-    const win = previewEl()?.contentWindow;
-    if (!win) return;
-    const d = data();
-    win.postMessage(
-      { __guPreview: true, html: processPartialHtml(d.html || ""), css: d.css || "" },
-      "*",
-    );
-  };
-  // The preview frame's listener only attaches on load: re-push the latest
-  // fragment on load so a fast stream can never outrun the frame boot.
-  const onPreviewLoad = () => pushPreview();
-  const schedulePreview = () => {
-    previewDirty = true;
-    if (previewTimer) return;
-    previewTimer = setTimeout(() => {
-      if (!previewDirty) return;
-      previewDirty = false;
-      pushPreview();
-    }, 120);
-  };
-
-  const previewSrc = () =>
-    `/api/indirect-code/gen-ui/preview?theme=${theme() === "light" ? "light" : "dark"}`;
-
   // ---- final widget ----
   let publishInFlight = false;
   const finalize = async () => {
     const d = data();
-    if ((!d.html && !d.jsx) || publishInFlight) return;
+    if (!d.jsx || publishInFlight) return;
     publishInFlight = true;
     try {
       const res = await fetch("/api/indirect-code/gen-ui/widgets", {
@@ -107,20 +75,15 @@ export function GenerativeUiWidget(props: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           theme: theme(),
-          html: d.jsx ? "" : processPartialHtml(d.html || ""),
-          css: d.jsx ? "" : d.css || "",
-          js: d.jsx ? "" : d.js || "",
-          jsx: d.jsx || "",
+          jsx: d.jsx,
           stateJSON: stateJSON(),
-          initialHeight: rootHeight(),
           libs: d.libs && d.libs.length ? d.libs : ["d3"],
-          net: d.net === true,
         }),
       });
       const out = await res.json().catch(() => null);
       if (res.ok && out?.url) {
         setFinalUrl(out.url as string);
-        setFinalHeight(rootHeight());
+        setFinalHeight(0); // grow from the widget's own measurement
         setError("");
       } else {
         setError(`Widget could not be published (HTTP ${res.status}).`);
@@ -134,31 +97,17 @@ export function GenerativeUiWidget(props: {
 
   createEffect(
     on(
-      () => [data().html, data().css, data().js, data().jsx, stateJSON(), theme(), streaming(), (data().libs || []).join(","), data().net ? 1 : 0] as const,
-      ([, , , , , , stillStreaming]) => {
+      () => [data().jsx, stateJSON(), theme(), streaming(), (data().libs || []).join(",")] as const,
+      ([, , , stillStreaming]) => {
         if (stillStreaming) return;
         void finalize();
       },
     ),
   );
 
-  createEffect(
-    on(
-      () => [data().html, data().css, theme()] as const,
-      () => {
-        if (!streaming()) return;
-        // React-format widgets compile at publish time: no morphing preview
-        // while streaming — only the placeholder surface until the block
-        // closes and the complete source is processed in one go.
-        if (isJsx()) return;
-        schedulePreview();
-      },
-    ),
-  );
-
   onMount(() => {
     const detach = attachGuBridge(
-      () => (streaming() ? previewEl()?.contentWindow : finalEl()?.contentWindow),
+      () => (streaming() ? undefined : finalEl()?.contentWindow),
       {
         onSendPrompt: (text) => props.onSendPrompt(text),
         onOpenLink: (url) => {
@@ -206,26 +155,10 @@ export function GenerativeUiWidget(props: {
         <Show
           when={!streaming() && !!finalUrl()}
           fallback={
-            <Show
-              when={!isJsx()}
-              fallback={
-                /* React-format widgets render nothing while streaming: the
-                   placeholder pill above covers this inert surface until the
-                   block closes and the compiled widget mounts. */
-                <div class="block w-full border-0 bg-card" style={{ height: `${rootHeight()}px` }} />
-              }
-            >
-              <iframe
-                ref={setPreviewEl}
-                sandbox="allow-scripts"
-                referrerpolicy="no-referrer"
-                title="Interactive widget"
-                src={previewSrc()}
-                onLoad={onPreviewLoad}
-                class="block w-full border-0 bg-card"
-                style={{ height: `${rootHeight()}px` }}
-              />
-            </Show>
+            /* Widgets compile at publish time: this thin inert surface keeps
+               the placeholder visible while streaming; the frame grows to
+               fit the mounted widget (bridge resize). */
+            <div class="block w-full border-0 bg-card" style={{ height: `${MIN_START_HEIGHT}px` }} />
           }
         >
           <iframe
@@ -235,7 +168,7 @@ export function GenerativeUiWidget(props: {
             title="Interactive widget"
             src={finalUrl()}
             class="block w-full border-0 bg-card transition-[height] duration-200 ease-out motion-reduce:transition-none"
-            style={{ height: `${clampFrameHeight(finalHeight() || rootHeight())}px` }}
+            style={{ height: `${clampFrameHeight(finalHeight() || MIN_START_HEIGHT)}px` }}
           />
         </Show>
         <Show when={error()}>

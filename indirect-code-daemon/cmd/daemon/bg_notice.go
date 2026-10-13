@@ -63,3 +63,13 @@ type bgTaskReadResult struct {
 	Truncated bool
 	Error     string
 }
+
+// bgTaskListMsg lists the session's running background tasks (live
+// state reminders). Reply is bgTaskListResult with output stripped.
+type bgTaskListMsg struct {
+	Reply chan any
+}
+
+type bgTaskListResult struct {
+	Tasks []BgTask
+}

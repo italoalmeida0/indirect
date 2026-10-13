@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 	"llm-gateway/indirect-code-daemon/packages/provider"
 )
 
@@ -48,7 +49,7 @@ func queuePayload(queue []QueuedMessage) []any {
 // normal opening prompt.
 func (a *sessionActor) buildQueuedUserMessage(q QueuedMessage) provider.Message {
 	options := normalizedOptions(a.rec.Options)
-	snap := workerSnapshot{options: options, lastDate: a.rec.LastDate, lastMode: a.rec.LastMode}
+	snap := workerSnapshot{options: options, lastDate: a.rec.LastDate, lastMode: a.rec.LastMode, todos: append([]tools.TodoItem(nil), a.rec.Todos...), bgTasks: runningBgTasks(a.rec.BgTasks)}
 	fullText, images := buildTurnPrompt(a.rec.Attachments, q.Text, q.AttachmentIDs, options.Mode)
 	sysBlock := buildTurnSystemDirectives(&snap, time.Now())
 	a.rec.LastDate, a.rec.LastMode = snap.lastDate, snap.lastMode
