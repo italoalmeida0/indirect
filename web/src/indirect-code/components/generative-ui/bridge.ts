@@ -11,6 +11,8 @@
 
 export type GuBridgeOps = {
   onSendPrompt: (text: string) => void;
+  /** Paste text into the composer without sending (follow-up drafting). */
+  onPrefillPrompt?: (text: string) => void;
   onOpenLink: (url: string) => void;
   onResize: (height: number) => void;
   /** Runtime error reported by the widget (shown in the host error footer). */
@@ -67,12 +69,17 @@ export function attachGuBridge(
   const handler = (event: MessageEvent) => {
     if (event.source !== frameWindow()) return;
     const data: any = event.data;
-    if (!data || typeof data !== "object" || data.__gu !== "sendPrompt" && data.__gu !== "openLink" && data.__gu !== "resize" && data.__gu !== "error") return;
+    if (!data || typeof data !== "object" || data.__gu !== "sendPrompt" && data.__gu !== "prefillPrompt" && data.__gu !== "openLink" && data.__gu !== "resize" && data.__gu !== "error") return;
     if (!rateOk()) return;
     switch (data.__gu) {
       case "sendPrompt": {
         const text = typeof data.text === "string" ? data.text.slice(0, MAX_PROMPT_CHARS).trim() : "";
         if (text) ops.onSendPrompt(text);
+        return;
+      }
+      case "prefillPrompt": {
+        const text = typeof data.text === "string" ? data.text.slice(0, MAX_PROMPT_CHARS).trim() : "";
+        if (text && ops.onPrefillPrompt) ops.onPrefillPrompt(text);
         return;
       }
       case "openLink": {

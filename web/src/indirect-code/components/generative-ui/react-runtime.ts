@@ -866,7 +866,16 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
       } else if (k === "value" || k === "checked" || k === "selected") {
         setControlProp(dom, k, v);
       } else if (k === "dangerouslySetInnerHTML") {
-        if (v && typeof v === "object" && typeof v.__html === "string") dom.innerHTML = v.__html;
+        // Deliberately ignored: widgets are model-authored and the DSL
+        // documents this prop as inert. Honoring it would turn any model
+        // string into raw HTML in the sandboxed document (inline event
+        // handler attributes there execute), so the runtime never writes
+        // innerHTML on a model's behalf.
+      } else if (k.slice(0, 5) === "aria-") {
+        // ARIA is string-valued in React: aria-pressed={true} is
+        // aria-pressed="true", and false is "false" (never an empty
+        // attribute — CSS and AT both key on the string).
+        setAttr(dom, k, v === true ? "true" : v === false ? "false" : v);
       } else if (v === true) setAttr(dom, k, "");
       else if (v === false || v === null || v === undefined) dom.removeAttribute(k);
       else setAttr(dom, k, v);

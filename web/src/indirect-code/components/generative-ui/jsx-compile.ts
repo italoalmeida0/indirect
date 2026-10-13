@@ -18,39 +18,27 @@
  * The widget CSP has no 'unsafe-eval', so compilation happens here, never
  * inside the frame; the output is stored and served as a plain module script.
  */
+import { enforceModelModule } from "./model-code";
+
 const IMPORT_RE =
   /(?:^|[\s;}])(?:import\s*(?:[\w$*{},\s]*?from\s*)?|export\s*[\w$*{},\s]*?from\s*)["']([^"']+)["']/g;
-const DYNAMIC_IMPORT_RE = /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
 
-/** Every module specifier in the source, static and dynamic. */
+/**
+ * Shallow specifier scan used ONLY for the lib-global prelude below. The
+ * real import audit is AST-based (model-code.ts: acorn parse, every static
+ * and dynamic specifier checked as a literal — a regex cannot see
+ * `import(u)`).
+ */
 function jsxBareSpecifiers(src: string): string[] {
   const out = new Set<string>();
-  for (const re of [IMPORT_RE, DYNAMIC_IMPORT_RE]) {
-    re.lastIndex = 0;
-    for (const m of src.matchAll(re)) out.add(m[1]);
-  }
+  IMPORT_RE.lastIndex = 0;
+  for (const m of src.matchAll(IMPORT_RE)) out.add(m[1]);
   return [...out];
 }
 
 export type JsxCompileResult =
   | { ok: true; code: string }
   | { ok: false; error: string };
-
-/** Specifiers the widget import map can resolve (see buildJsxImportMap). */
-const RESOLVABLE_SPECIFIERS = new Set([
-  "react",
-  "react/jsx-runtime",
-  "react/jsx-dev-runtime",
-  "react-dom",
-  "react-dom/client",
-  "d3",
-  "gsap",
-  "chart",
-  "chart.js",
-  "chart.js/auto",
-  "three",
-  "leaflet",
-]);
 
 const transpiler = new Bun.Transpiler({
   loader: "tsx",
@@ -93,28 +81,21 @@ function injectGlobalImports(code: string): string {
  * `net: true`).
  */
 export function compileJsxModule(src: string): JsxCompileResult {
-  // https://esm.sh/... specifiers are not import-map entries: they resolve
-  // at runtime against the CSP (net: true widgets only), like any URL.
-  const bad = jsxBareSpecifiers(src).filter((s) => !RESOLVABLE_SPECIFIERS.has(s) && !/^https:\/\/esm\.sh\//.test(s));
-  if (bad.length) {
-    return {
-      ok: false,
-      error:
-        `unsupported import${bad.length > 1 ? "s" : ""}: ${bad.map((s) => JSON.stringify(s)).join(", ")} — ` +
-        `widgets may only import react / react-dom and the preloaded libs ` +
-        `(d3, gsap, chart, three, leaflet); esm.sh needs net: true`,
-    };
-  }
+  let transformed: string;
   try {
-    return { ok: true, code: injectGlobalImports(transpiler.transformSync(src)) };
+    transformed = injectGlobalImports(transpiler.transformSync(src));
   } catch (err) {
     // Bun throws an AggregateError with structured position entries.
     const errors = (err as { errors?: { message?: string; position?: { line?: number } }[] }).errors;
     if (Array.isArray(errors) && errors.length) {
       const first = errors[0];
-      const at = typeof first.position?.line === "number" ? ` (line ${first.position.line})` : "";
+      const at = typeof first.position?.line === "number" ? ` (line ${first.position!.line})` : "";
       return { ok: false, error: `${first.message ?? "parse error"}${at}` };
     }
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
+  // The model-code boundary: acorn parse -> import audit -> AST sanitizing
+  // -> astring generate. Import validation lives there (a regex cannot see
+  // `import(u)`); this returns the final module source or a compile error.
+  return enforceModelModule(transformed);
 }

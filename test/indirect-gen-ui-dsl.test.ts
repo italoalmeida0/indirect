@@ -175,11 +175,39 @@ describe("widget document sanitizers", () => {
     expect(clean).toContain("const x = 1;");
     expect(clean).toContain("textContent = 'ok'");
     // Static imports are the widget module format — validated at compile
-    // time against the import map, never stripped here.
-    expect(clean).toContain("import { a } from 'b';");
+    // time against the import map, never stripped here (astring output
+    // normalizes the braces: `import {a} from 'b';`).
+    expect(clean).toContain("import {a} from 'b';");
     for (const bad of ["fetch(", "location.href", "eval(", "new Function("]) {
       expect(clean).not.toContain(bad);
     }
+  });
+
+  test("sanitizeModelJS treats string literals as data, never as code", () => {
+    // The regex-era bug: a benign string that merely LOOKS like a call got
+    // cut line-wise. With the AST pipeline literals are data.
+    const js = 'const sample = "eval(1) fetch(x) window.location = 1";';
+    const clean = sanitizeModelJS(js);
+    expect(clean).toContain('eval(1) fetch(x) window.location = 1');
+  });
+
+  test("sanitizeModelJS strips HTML injection sinks structurally", () => {
+    const cases: [string, string][] = [
+      ["el.innerHTML = '<b>x</b>';", "innerHTML"],
+      ["el.outerHTML = '<b>x</b>';", "outerHTML"],
+      ["el.insertAdjacentHTML('beforeend', '<b>x</b>');", "insertAdjacentHTML"],
+      ["document.write('<b>x</b>');", "document.write"],
+      ["el.setAttribute('onclick', 'alert(1)');", "setAttribute('onclick'"],
+      ["React.createElement('a', { href: 'javascript:alert(1)' });", "javascript:"],
+      ["React.createElement('div', { dangerouslySetInnerHTML: { __html: '<b>x' } });", "dangerouslySetInnerHTML"],
+    ];
+    for (const [src, marker] of cases) {
+      const clean = sanitizeModelJS(src);
+      expect(clean, src).not.toContain(marker);
+    }
+    // Benign attribute writes are NOT sinks and survive.
+    const benign = sanitizeModelJS("el.setAttribute('data-x', '1');");
+    expect(benign).toContain("setAttribute('data-x', '1')");
   });
 
   test("sanitizeModelJS allows esm.sh dynamic imports only when opted in", () => {
@@ -188,13 +216,42 @@ describe("widget document sanitizers", () => {
     const statik = 'import confetti from "https://esm.sh/canvas-confetti@1";';
     // The literal esm.sh dynamic import always survives (the one allowed
     // lib CDN; a static import of a URL is a compile error, caught earlier
-    // by jsx-compile).
+    // by jsx-compile). Output is astring-normalized (arrow parens drop).
     const clean = sanitizeModelJS([esm, other, statik].join("\n"));
-    expect(clean).toContain(esm);
+    expect(clean).toContain('import("https://esm.sh/canvas-confetti@1")');
+    expect(clean).toContain("m.default()");
     expect(clean).not.toContain("evil.example");
     // Static imports are kept (the module format) — only dynamic foreign
     // imports are stripped.
     expect(clean).toContain("import confetti");
+  });
+
+  test("sanitizeModelJS strips navigation by assignment and history writes", () => {
+    const js = [
+      "const total = 1;",
+      "location = 'https://evil.example';",
+      "window.location = 'https://evil.example';",
+      "window.location.assign('https://evil.example');",
+      "top.location.replace('https://evil.example');",
+      "history.pushState({}, '', 'https://evil.example');",
+      "window.React = 1;",
+      "const keep = window.__gu.state;",
+    ].join("\n");
+    const clean = sanitizeModelJS(js);
+    expect(clean).toContain("const total = 1;");
+    // Reading globals is supported (window.__gu.state, window.indirectUi);
+    // assigning them is pollution and is stripped.
+    expect(clean).toContain("window.__gu.state");
+    for (const bad of ["location =", "window.location =", "pushState", "window.React =", "location.assign", "location.replace"]) {
+      expect(clean).not.toContain(bad);
+    }
+  });
+
+  test("buildRuntimeScript exposes the documented indirectUi surface", () => {
+    const script = buildRuntimeScript({ stateJSON: "{}" });
+    for (const fn of ["sendPrompt", "prefillPrompt", "openLink", "resize"]) {
+      expect(script).toContain(`${fn}: function`);
+    }
   });
 
   test("buildRuntimeScript wraps model js in a try/catch", () => {

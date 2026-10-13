@@ -13,13 +13,17 @@
  *  - escapeStyleClose: vetted lib css can never contain "</style";
  *  - escapeScriptClose: model-controlled script text can never close its
  *    element or open a sibling script;
- *  - sanitizeModelJS: eval / navigation / network statements are stripped
- *    line-wise before they reach the frame.
+ *  - the model-code boundary (model-code.ts): Bun.Transpiler -> acorn ->
+ *    astring — forbidden capability nodes are stripped structurally and
+ *    string literals are never touched.
  *
- * Both are pure functions with unit tests (test/indirect-gen-ui-dsl.test.ts).
+ * All are pure functions with unit tests (test/indirect-gen-ui-dsl.test.ts).
  */
 
 import { REACT_RUNTIME_JS } from "./react-runtime";
+import { buildJsxModuleBody, escapeScriptClose, sanitizeModelJS } from "./model-code";
+
+export { buildJsxModuleBody, escapeScriptClose, sanitizeModelJS };
 
 export const WIDGET_BASE_CSS = `
 *, *::before, *::after { box-sizing: border-box; }
@@ -388,11 +392,9 @@ export function makeScriptNonce(): string {
 /**
  * Re-escapes every "<script" / "</script" (in any case, with optional
  * whitespace) so model text spliced inside a <script> element can never
- * close it or open a sibling script.
+ * close it or open a sibling script. Owned by model-code.ts (the model-code
+ * boundary); imported + re-exported here for the HTML document assembly.
  */
-export function escapeScriptClose(raw: string): string {
-  return raw.replace(/<\s*\/?\s*script/gi, "<\\/script");
-}
 
 /** Same idea for CSS spliced into a <style> element ("</style"). */
 export function escapeStyleClose(raw: string): string {
@@ -400,31 +402,10 @@ export function escapeStyleClose(raw: string): string {
 }
 
 /**
- * The model's module code is stored and served as a standalone script, and
- * its imports are validated at compile time (jsx-compile.ts) against the
- * widget import map. Statements the sandbox forbids are still stripped
- * before they ever reach the frame (the prompt forbids them too; this is
- * the enforcement layer).
+ * The widget module body is built in model-code.ts (the model-code boundary:
+ * Bun.Transpiler -> acorn -> astring); re-exported above so document
+ * assembly keeps one import site.
  */
-/** Dynamic imports from this CDN are always allowed (jsdelivr-style lib CDN). */
-const ESM_SH_DYNAMIC_IMPORT = /\bimport\s*\(\s*["']https:\/\/esm\.sh\//;
-
-export function sanitizeModelJS(js: string): string {
-  const out: string[] = [];
-  for (const line of js.split("\n")) {
-    if (ESM_SH_DYNAMIC_IMPORT.test(line)) {
-      out.push(line);
-      continue;
-    }
-    // Static import/export statements are the module format — they are
-    // validated at compile time, never stripped here.
-    if (/\b(import\s*\(|eval\s*\(|new\s+Function\s*\()/.test(line)) continue;
-    if (/\b(location\s*\.\s*(href|assign|replace)|window\s*\.\s*open\s*\(|top\s*\.\s*location|parent\s*\.\s*location)/.test(line)) continue;
-    if (/\b(fetch\s*\(|XMLHttpRequest|WebSocket|importScripts\s*\(|navigator\s*\.\s*sendBeacon)/.test(line)) continue;
-    out.push(line);
-  }
-  return out.join("\n");
-}
 
 /** Runtime script of a widget document (see prompt_gen_ui.go for the contract). */
 export function buildRuntimeScript(params: { stateJSON: string }): string {
@@ -438,6 +419,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
   var __errorHandler = null;
   var __host = {
     sendPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "sendPrompt", text: String(text).slice(0, 4000) }, "*"); },
+    prefillPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "prefillPrompt", text: String(text).slice(0, 4000) }, "*"); },
     openLink: function (url) { if (typeof url === "string") window.parent.postMessage({ __gu: "openLink", url: String(url).slice(0, 2048) }, "*"); },
     resize: function (height) { window.parent.postMessage({ __gu: "resize", height: Number(height) }, "*"); }
   };
@@ -657,40 +639,6 @@ export function buildJsxImportMap(moduleUrls: {
     imports["chart.js/auto"] = moduleUrls.libs.chart;
   }
   return JSON.stringify({ imports });
-}
-
-/**
- * The widget module body: the compiled ESM source plus the auto-mount
- * glue — the App root (`export default function App`, or the default
- * export) rendered into document.body with the `state` header as props.
- * The module is stored and served whole (text/javascript), so model code
- * never lives inside the HTML document.
- */
-export function buildJsxModuleBody(compiledCode: string): string {
-  return `${escapeScriptClose(sanitizeModelJS(compiledCode))}
-;
-(function () {
-  "use strict";
-  var __app = null;
-  try {
-    // Module-scope binding: "export default function App", named App, or the
-    // default export alias. Missing binding is a ReferenceError -> null.
-    __app = App;
-  } catch (err) { __app = null; }
-  try {
-    if (!__app && typeof window.App === "function") __app = window.App;
-    if (!__app) {
-      if (window.__gu && window.__gu.reportError) window.__gu.reportError(new Error("widget: export a default React component (App)"));
-      return;
-    }
-    var root = window.ReactDOMClient.createRoot(document.body);
-    root.render(window.React.createElement(__app, (window.__gu && window.__gu.state) || {}));
-    if (window.__gu && window.__gu.onDestroy) window.__gu.onDestroy(function () { root.unmount(); });
-  } catch (err) {
-    try { if (window.__gu && window.__gu.reportError) window.__gu.reportError(err); else if (window.__gu) window.__gu.error = String(err); } catch {}
-  }
-})();
-`;
 }
 
 export type WidgetDocParams = {

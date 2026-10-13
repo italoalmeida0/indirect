@@ -157,6 +157,36 @@ describe("gen-ui widget routes", () => {
     expect(lib.headers.get("cache-control")).toContain("immutable");
   });
 
+  test("every vendored lib exposes the documented API surface", async () => {
+    // Regression guard for the vendor entrypoints (scripts/gen-ui-libs/):
+    // the widgets are documented to use `import * as L from "leaflet"` /
+    // `import * as gsap from "gsap"` and call members on the namespace, so
+    // each bundle must re-export the library's named surface — a bare
+    // `export default` makes every namespace call fail at runtime.
+    const documented: Record<string, string[]> = {
+      "three.js": ["Scene", "Mesh", "WebGLRenderer", "PerspectiveCamera", "TorusKnotGeometry", "DirectionalLight"],
+      "d3.js": ["select", "scaleLinear", "arc"],
+      "gsap.js": ["to", "from", "timeline", "killTweensOf", "set", "default"],
+      "chart.js": ["Chart", "default"],
+      "leaflet.js": ["map", "marker", "tileLayer", "divIcon", "polyline", "circle", "default"],
+    };
+    for (const [file, members] of Object.entries(documented)) {
+      const res = await get(`/api/indirect-code/gen-ui/lib/${file}`);
+      expect(res.status, file).toBe(200);
+      const src = await res.text();
+      const exported = new Set<string>();
+      for (const m of src.matchAll(/export\s*\{([^}]*)\}/g)) {
+        for (const part of m[1].split(",")) {
+          const name = part.trim().split(/\s+as\s+/).pop();
+          if (name) exported.add(name);
+        }
+      }
+      for (const member of members) {
+        expect(exported.has(member), `${file} must export ${member} (got ${exported.size} names)`).toBe(true);
+      }
+    }
+  });
+
   test("lib styles embed in their module (no doc css)", async () => {
     const out: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "light",

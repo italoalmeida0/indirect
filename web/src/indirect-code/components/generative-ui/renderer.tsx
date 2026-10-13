@@ -109,6 +109,7 @@ export function GenerativeUiWidget(props: {
       () => (streaming() ? undefined : finalEl()?.contentWindow),
       {
         onSendPrompt: (text) => props.onSendPrompt(text),
+        onPrefillPrompt: (text) => props.onPrefillPrompt?.(text),
         onOpenLink: (url) => {
           if (props.onOpenLink) props.onOpenLink(url);
           else window.open(url, "_blank", "noopener,noreferrer");
