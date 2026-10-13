@@ -63,7 +63,6 @@ export function createHosts(opts: {
       }
     } catch (e: any) {
       console.warn("Failed to load remote hosts:", e);
-      opts.toast("Failed to load remote hosts: " + (e?.message || e), "err");
     }
   }
 

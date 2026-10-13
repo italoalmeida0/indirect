@@ -386,6 +386,9 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
 
   function reportError(err) {
     try {
+      console.error("[generative-ui]", err);
+    } catch (ignore) {}
+    try {
       if (window.__gu && window.__gu.reportError) window.__gu.reportError(err);
     } catch (ignore) {}
   }
