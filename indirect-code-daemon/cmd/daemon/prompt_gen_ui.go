@@ -11,7 +11,11 @@ import (
 // code block tagged generative_ui and the transcript renderer mounts the live
 // widget in place. Keep this in sync with
 // web/src/indirect-code/components/generative-ui/dsl.ts and widget-doc.ts
-// (WIDGET_BASE_CSS is the class library the prompt describes).
+// (WIDGET_BASE_CSS is the class library the prompt describes). Scope of the
+// color/style rules, mirrored from the .md: they bind widget UI only — inside
+// a <canvas> (2D/3D) any color is allowed, and games have no UI rules at all
+// (custom CSS/elements welcome; a shell that mimics the game's original
+// console is appreciated). Everything must work on both phones and desktops.
 //
 // Delivery note: the renderer only mounts blocks that reach the transcript
 // through the assistant's final answer. That path differs per mode, so the
