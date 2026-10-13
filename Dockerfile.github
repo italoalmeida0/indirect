@@ -29,6 +29,7 @@ COPY --from=src /src/repo/package.json /src/repo/bun.lock ./
 COPY --from=src /src/repo/patches ./patches
 RUN bun install --frozen-lockfile
 COPY --from=src /src/repo/plugins ./plugins
+COPY --from=src /src/repo/scripts ./scripts
 COPY --from=src /src/repo/build.ts /src/repo/tsconfig.json ./
 COPY --from=src /src/repo/web ./web
 COPY --from=src /src/repo/indirect-code-daemon/dist ./indirect-code-daemon/dist
@@ -47,6 +48,7 @@ COPY --from=src /src/repo/package.json /src/repo/bun.lock ./
 COPY --from=src /src/repo/patches ./patches
 RUN bun install --frozen-lockfile --production
 COPY --from=src /src/repo/server ./server
+COPY --from=src /src/repo/web ./web
 COPY --from=webbuild /app/dist ./dist
 # NOTE: daemon releases ride inside ./dist/r/ (copied by build.ts from
 # indirect-code-daemon/dist/) — no separate COPY (would duplicate ~319MB).

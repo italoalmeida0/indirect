@@ -5,6 +5,7 @@ COPY package.json bun.lock ./
 COPY patches ./patches
 RUN bun install --frozen-lockfile
 COPY plugins ./plugins
+COPY scripts ./scripts
 COPY build.ts tsconfig.json ./
 COPY web ./web
 COPY indirect-code-daemon/dist ./indirect-code-daemon/dist
@@ -23,6 +24,7 @@ COPY package.json bun.lock ./
 COPY patches ./patches
 RUN bun install --frozen-lockfile --production
 COPY server ./server
+COPY web ./web
 COPY --from=webbuild /app/dist ./dist
 # NOTE: daemon releases ride inside ./dist/r/ (copied by build.ts from
 # indirect-code-daemon/dist/) — no separate COPY (would duplicate ~319MB).
