@@ -10,6 +10,7 @@ import {
   withIdiomorph,
 } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
 import { IDIOMORPH_JS } from "../../web/src/indirect-code/components/generative-ui/idiomorph-inline";
+import { compileJsxModule } from "../../web/src/indirect-code/components/generative-ui/jsx-compile";
 import { createHash } from "crypto";
 
 /**
@@ -46,11 +47,11 @@ let widgetsBytes = 0;
 
 /** Content-addressed id: identical widget content maps to one document. */
 function widgetContentId(parts: {
-  theme: string; html: string; css: string; js: string; stateJSON: string; initialHeight: number;
+  theme: string; html: string; css: string; js: string; jsx: string; stateJSON: string; initialHeight: number;
   libs: string[]; net: boolean;
 }): string {
   return createHash("sha256")
-    .update(JSON.stringify([parts.theme, parts.html, parts.css, parts.js, parts.stateJSON, parts.initialHeight, parts.libs, parts.net]))
+    .update(JSON.stringify([parts.theme, parts.html, parts.css, parts.js, parts.jsx, parts.stateJSON, parts.initialHeight, parts.libs, parts.net]))
     .digest("hex");
 }
 
@@ -173,17 +174,26 @@ export async function handleGenUiRoute(
     const html = typeof body?.html === "string" ? body.html : "";
     const css = typeof body?.css === "string" ? body.css : "";
     const js = typeof body?.js === "string" ? body.js : "";
+    const jsx = typeof body?.jsx === "string" ? body.jsx : "";
     const stateJSON = typeof body?.stateJSON === "string" ? body.stateJSON : "{}";
     const initialHeight = Number(body?.initialHeight) || 320;
-    if (!html && !css && !js) return err(400, "empty widget", req);
-    const total = html.length + css.length + js.length + stateJSON.length;
+    if (!html && !css && !js && !jsx) return err(400, "empty widget", req);
+    const total = html.length + css.length + js.length + jsx.length + stateJSON.length;
     if (total > 1_500_000) return err(413, "widget too large", req);
+    // React-format widgets (`@jsx`) compile here, at doc build time: the
+    // widget sandbox has no 'unsafe-eval', so it only ever runs plain JS.
+    let compiledJsx = "";
+    if (jsx) {
+      const compiled = compileJsxModule(jsx);
+      if (!compiled.ok) return err(400, `invalid jsx: ${compiled.error}`, req);
+      compiledJsx = compiled.code;
+    }
     const height = Math.min(4000, Math.max(64, initialHeight));
     const libs = Array.isArray(body?.libs)
       ? (body.libs as unknown[]).filter((l): l is string => typeof l === "string").slice(0, 4)
       : ["d3"];
     const net = body?.net === true;
-    const id = widgetContentId({ theme, html, css, js, stateJSON, initialHeight: height, libs, net });
+    const id = widgetContentId({ theme, html, css, js, jsx: compiledJsx, stateJSON, initialHeight: height, libs, net });
     const existing = widgets.get(id);
     if (existing) {
       // Refresh LRU position; the document is deterministic per content.
@@ -193,7 +203,7 @@ export async function handleGenUiRoute(
     }
     const nonce = makeScriptNonce();
     const doc = buildWidgetDocument({
-      theme, html, css, stateJSON, js,
+      theme, html, css, stateJSON, js, jsx: compiledJsx,
       initialHeight: height,
       scriptNonce: nonce,
       libs: resolveWidgetLibs(libs),

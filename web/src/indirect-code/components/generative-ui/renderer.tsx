@@ -47,6 +47,9 @@ export function GenerativeUiWidget(props: {
   // Memoized: parse once per body change, not once per accessor read (the
   // effects and JSX below read data() many times per token while streaming).
   const data = createMemo<GenerativeUiData>(() => parseGenerativeUiDsl(props.body()));
+  /** React-format widget: no live preview — the placeholder stays until the
+   *  block closes and the full source is published (compiled server-side). */
+  const isJsx = () => !!data().jsx;
   const rootHeight = () => {
     const h = Number(data().height) || 320;
     return clampFrameHeight(h > 0 ? h : 320);
@@ -96,7 +99,7 @@ export function GenerativeUiWidget(props: {
   let publishInFlight = false;
   const finalize = async () => {
     const d = data();
-    if (!d.html || publishInFlight) return;
+    if ((!d.html && !d.jsx) || publishInFlight) return;
     publishInFlight = true;
     try {
       const res = await fetch("/api/indirect-code/gen-ui/widgets", {
@@ -104,9 +107,10 @@ export function GenerativeUiWidget(props: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           theme: theme(),
-          html: processPartialHtml(d.html),
-          css: d.css || "",
-          js: d.js || "",
+          html: d.jsx ? "" : processPartialHtml(d.html || ""),
+          css: d.jsx ? "" : d.css || "",
+          js: d.jsx ? "" : d.js || "",
+          jsx: d.jsx || "",
           stateJSON: stateJSON(),
           initialHeight: rootHeight(),
           libs: d.libs && d.libs.length ? d.libs : ["d3"],
@@ -130,8 +134,8 @@ export function GenerativeUiWidget(props: {
 
   createEffect(
     on(
-      () => [data().html, data().css, data().js, stateJSON(), theme(), streaming(), (data().libs || []).join(","), data().net ? 1 : 0] as const,
-      ([, , , , , stillStreaming]) => {
+      () => [data().html, data().css, data().js, data().jsx, stateJSON(), theme(), streaming(), (data().libs || []).join(","), data().net ? 1 : 0] as const,
+      ([, , , , , , stillStreaming]) => {
         if (stillStreaming) return;
         void finalize();
       },
@@ -143,6 +147,10 @@ export function GenerativeUiWidget(props: {
       () => [data().html, data().css, theme()] as const,
       () => {
         if (!streaming()) return;
+        // React-format widgets compile at publish time: no morphing preview
+        // while streaming — only the placeholder surface until the block
+        // closes and the complete source is processed in one go.
+        if (isJsx()) return;
         schedulePreview();
       },
     ),
@@ -198,16 +206,26 @@ export function GenerativeUiWidget(props: {
         <Show
           when={!streaming() && !!finalUrl()}
           fallback={
-            <iframe
-              ref={setPreviewEl}
-              sandbox="allow-scripts"
-              referrerpolicy="no-referrer"
-              title="Interactive widget"
-              src={previewSrc()}
-              onLoad={onPreviewLoad}
-              class="block w-full border-0 bg-card"
-              style={{ height: `${rootHeight()}px` }}
-            />
+            <Show
+              when={!isJsx()}
+              fallback={
+                /* React-format widgets render nothing while streaming: the
+                   placeholder pill above covers this inert surface until the
+                   block closes and the compiled widget mounts. */
+                <div class="block w-full border-0 bg-card" style={{ height: `${rootHeight()}px` }} />
+              }
+            >
+              <iframe
+                ref={setPreviewEl}
+                sandbox="allow-scripts"
+                referrerpolicy="no-referrer"
+                title="Interactive widget"
+                src={previewSrc()}
+                onLoad={onPreviewLoad}
+                class="block w-full border-0 bg-card"
+                style={{ height: `${rootHeight()}px` }}
+              />
+            </Show>
           }
         >
           <iframe

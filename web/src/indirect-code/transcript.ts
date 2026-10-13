@@ -38,6 +38,53 @@ function hasToolActivity(message: ChatMessage): boolean {
   return message.blocks.some((b) => b.type === "tool_call" || b.type === "tool_result");
 }
 
+/**
+ * Ephemeral interim text (Talk-style turns): a plain assistant text segment
+ * is shown while it streams, but once a tool call, a new thinking run or an
+ * image lands after it in the same turn, the segment is superseded and stops
+ * rendering — only the turn's trailing text stays visible as the final
+ * answer. Summary (`hasSummary`) and completion (`hasCompletion`) texts are
+ * deliberate user-facing signals and are never superseded, so workspace
+ * turns (whose only visible texts are those projections) are unaffected.
+ * Display-only: raw messages and srcIdx mapping are untouched, and messages
+ * are kept even when emptied so turn structure stays stable.
+ */
+function stripEphemeralTurnText(turnMsgs: ChatMessage[]): ChatMessage[] {
+  let ordinal = 0;
+  let lastSuperseder = -1;
+  const candidateAt = new Map<string, number>(); // "msg:block" -> ordinal
+  for (let mi = 0; mi < turnMsgs.length; mi++) {
+    const m = turnMsgs[mi];
+    const candidate =
+      m.role === "assistant" && !m.hasCompletion && !m.hasSummary;
+    for (let bi = 0; bi < m.blocks.length; bi++) {
+      const b = m.blocks[bi];
+      if (candidate && b.type === "text" && !!b.text?.trim()) {
+        candidateAt.set(`${mi}:${bi}`, ordinal);
+      } else if (
+        b.type === "tool_call" ||
+        b.type === "image" ||
+        (b.type === "reasoning" && !!b.reasoning?.trim())
+      ) {
+        lastSuperseder = ordinal;
+      }
+      ordinal++;
+    }
+  }
+  if (lastSuperseder < 0 || candidateAt.size === 0) return turnMsgs;
+  let changed = false;
+  const out = turnMsgs.map((m, mi) => {
+    const blocks = m.blocks.filter((_, bi) => {
+      const at = candidateAt.get(`${mi}:${bi}`);
+      return at === undefined || at > lastSuperseder;
+    });
+    if (blocks.length === m.blocks.length) return m;
+    changed = true;
+    return { ...m, blocks };
+  });
+  return changed ? out : turnMsgs;
+}
+
 /** Per-row session costs with the output bucket split pro-rata between
  * plain output and reasoning (same unit price, so the split is exact).
  * Null when the daemon reported no pricing — callers then hide costs. */
@@ -297,7 +344,7 @@ export function buildRenderBlocks(
     if (cached && cached.messages.length === turnMsgs.length && cached.messages.every((m, index) => m === turnMsgs[index])) {
       result.push(...cached.blocks); nextCache.set(head.id, cached); i = turnEnd; continue;
     }
-    const blocks = buildTurnBlocks(turnMsgs, turnKey);
+    const blocks = buildTurnBlocks(stripEphemeralTurnText(turnMsgs), turnKey);
     result.push(...blocks);
     nextCache.set(head.id, { messages: turnMsgs, blocks });
     i = turnEnd;

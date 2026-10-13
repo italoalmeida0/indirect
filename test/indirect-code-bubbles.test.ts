@@ -52,12 +52,14 @@ function rowKey(row: TurnBalloon | TurnChangedFile): string {
 describe("Bug 55 — every block of the running turn shows live state", () => {
   test("multi-text turn: all blocks report running, not just the last", () => {
     // text→tool→text→tool→text spans several render blocks in ONE turn.
+    // The mid-turn texts carry summary/completion flags: plain interim text is
+    // ephemeral (superseded by the next tool call) and would not stay visible.
     const list: ChatMessage[] = [
       { id: "u1", role: "user", blocks: [{ type: "text", text: "go" }] },
       { id: "m1", role: "assistant", turnIndex: 7, blocks: [{ type: "tool_call", toolId: "a1", toolName: "read", toolArgs: "{}" }] },
-      { id: "m2", role: "assistant", turnIndex: 7, blocks: [{ type: "text", text: "step one" }] },
+      { id: "m2", role: "assistant", turnIndex: 7, hasSummary: true, blocks: [{ type: "text", text: "step one" }] },
       { id: "m3", role: "assistant", turnIndex: 7, blocks: [{ type: "tool_call", toolId: "b1", toolName: "bash", toolArgs: "{}" }] },
-      { id: "m4", role: "assistant", turnIndex: 7, blocks: [{ type: "text", text: "done" }] },
+      { id: "m4", role: "assistant", turnIndex: 7, hasCompletion: true, blocks: [{ type: "text", text: "done" }] },
     ];
     const blocks = buildRenderBlocks(list);
     const assistantBlocks = blocks.filter((b) => b.msg.role !== "user");

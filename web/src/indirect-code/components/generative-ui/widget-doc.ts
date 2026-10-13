@@ -17,6 +17,8 @@
  * Both are pure functions with unit tests (test/indirect-gen-ui-dsl.test.ts).
  */
 
+import { REACT_RUNTIME_JS } from "./react-runtime";
+
 export const WIDGET_BASE_CSS = `
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -132,7 +134,10 @@ body {
   border-radius: var(--gu-radius);
   padding: 12px;
 }
-.gu-btn {
+/* Button base is self-contained per class: gu-btn-primary / gu-btn-ghost /
+   gu-btn-sm work standalone (models follow the docs and use one class), and
+   stacking them with gu-btn still composes via the later variant rules. */
+.gu-btn, .gu-btn-primary, .gu-btn-ghost, .gu-btn-sm {
   appearance: none; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: 32px; padding: 0 14px;
@@ -144,10 +149,14 @@ body {
   box-shadow: var(--gu-shadow);
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 100ms ease;
 }
-.gu-btn:hover { background: color-mix(in oklab, var(--gu-elev) 88%, var(--gu-text) 5%); }
-.gu-btn:active { transform: translateY(1px); }
-.gu-btn:focus-visible { outline: 2px solid var(--gu-brand); outline-offset: 2px; }
-.gu-btn:disabled { opacity: 0.45; pointer-events: none; }
+.gu-btn:hover, .gu-btn-primary:hover, .gu-btn-ghost:hover, .gu-btn-sm:hover {
+  background: color-mix(in oklab, var(--gu-elev) 88%, var(--gu-text) 5%);
+}
+.gu-btn:active, .gu-btn-primary:active, .gu-btn-ghost:active, .gu-btn-sm:active { transform: translateY(1px); }
+.gu-btn:focus-visible, .gu-btn-primary:focus-visible, .gu-btn-ghost:focus-visible, .gu-btn-sm:focus-visible {
+  outline: 2px solid var(--gu-brand); outline-offset: 2px;
+}
+.gu-btn:disabled, .gu-btn-primary:disabled, .gu-btn-ghost:disabled, .gu-btn-sm:disabled { opacity: 0.45; pointer-events: none; }
 .gu-btn-primary {
   background: var(--gu-accent); color: var(--gu-accent-fg); border-color: transparent;
   box-shadow: var(--gu-shadow);
@@ -567,6 +576,64 @@ ${escapeScriptClose(sanitizeModelJS(js, opts))}
 `;
 }
 
+/**
+ * The `@jsx` model script: a tiny CommonJS shim (react / react-dom /
+ * react-dom/client map onto the runtime globals) around the compiled module,
+ * then an auto-mount of its App root — `export default function App`, named
+ * `App`, or the module default export — into `.gu-root`. The state object is
+ * passed as props, mirroring the HTML/CSS/JS `state` contract.
+ */
+export function buildJsxModelScript(compiledCode: string, opts?: { allowEsmSh?: boolean }): string {
+  return `
+(function () {
+  "use strict";
+  // Scope bindings for compiled JSX (React.createElement) and import-free
+  // hook names — in a browser these fall back to the window globals, but the
+  // explicit bindings keep the module self-contained.
+  var React = window.React;
+  var ReactDOM = window.ReactDOM;
+  var ReactDOMClient = window.ReactDOMClient;
+  var Fragment = React.Fragment;
+  var useState = React.useState, useReducer = React.useReducer,
+      useEffect = React.useEffect, useLayoutEffect = React.useLayoutEffect,
+      useMemo = React.useMemo, useCallback = React.useCallback,
+      useRef = React.useRef, useContext = React.useContext,
+      useId = React.useId, useImperativeHandle = React.useImperativeHandle;
+  var module = { exports: {} };
+  var exports = module.exports;
+  function require(name) {
+    if (name === "react") return window.React;
+    if (name === "react-dom") return window.ReactDOM;
+    if (name === "react-dom/client") return window.ReactDOMClient;
+    if (name === "react/jsx-runtime" || name === "react/jsx-dev-runtime") {
+      return { Fragment: window.React.Fragment, jsx: window.React.createElement, jsxs: window.React.createElement, jsxDEV: window.React.createElement };
+    }
+    throw new Error("Widget modules may only import react / react-dom (got " + name + ")");
+  }
+  try {
+${escapeScriptClose(sanitizeModelJS(compiledCode, opts))}
+  } catch (err) {
+    try { if (window.__gu && window.__gu.reportError) window.__gu.reportError(err); else if (window.__gu) window.__gu.error = String(err); } catch {}
+    return;
+  }
+  try {
+    var App = module.exports.default || module.exports.App;
+    if (typeof App !== "function" && typeof App !== "object") {
+      App = typeof window.App === "function" ? window.App : null;
+    }
+    if (!App) return;
+    var host = document.body;
+    var root = window.ReactDOMClient.createRoot(host);
+    var state = window.__gu && window.__gu.state || {};
+    root.render(window.React.createElement(App, state));
+    if (window.__gu && window.__gu.onDestroy) window.__gu.onDestroy(function () { root.unmount(); });
+  } catch (err) {
+    try { if (window.__gu && window.__gu.reportError) window.__gu.reportError(err); else if (window.__gu) window.__gu.error = String(err); } catch {}
+  }
+})();
+`;
+}
+
 export type WidgetDocParams = {
   theme: "dark" | "light";
   html: string;
@@ -581,6 +648,8 @@ export type WidgetDocParams = {
   libCss?: Record<string, string>;
   /** Opt-in network capability (`net: true` header): https images/tiles. */
   net?: boolean;
+  /** React-format widget (`@jsx` source, compiled at doc build time). */
+  jsx?: string;
 };
 
 /**
@@ -693,11 +762,15 @@ ${libStyles}
 <style>${escapeStyleClose(params.css || "")}</style>
 </head>
 <body style="min-height:${params.initialHeight}px">
-${params.html || ""}
-${libScripts}<script nonce="${params.scriptNonce}">${escapeScriptClose(buildRuntimeScript({
+${params.jsx ? "" : params.html || ""}
+${libScripts}${params.jsx ? `<script nonce="${params.scriptNonce}">${escapeScriptClose(REACT_RUNTIME_JS)}</script>\n` : ""}<script nonce="${params.scriptNonce}">${escapeScriptClose(buildRuntimeScript({
     stateJSON: params.stateJSON,
   }))}</script>
-<script nonce="${params.scriptNonce}">${escapeScriptClose(buildModelScript(params.js, { allowEsmSh: params.net === true }))}</script>
+<script nonce="${params.scriptNonce}">${escapeScriptClose(
+    params.jsx
+      ? buildJsxModelScript(params.jsx, { allowEsmSh: params.net === true })
+      : buildModelScript(params.js, { allowEsmSh: params.net === true }),
+  )}</script>
 </body></html>`;
 }
 

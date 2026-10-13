@@ -128,23 +128,25 @@ describe("render blocks carry turn identity (bug 55 plumbing)", () => {
     time: 1,
     blocks: [{ type: "tool_call", toolId, toolName: "bash", toolArgs: "" }],
   });
-  const textMsg = (id: string, turnIndex: number | undefined, text: string): ChatMessage => ({
+  const textMsg = (id: string, turnIndex: number | undefined, text: string, flags?: { hasSummary?: boolean; hasCompletion?: boolean }): ChatMessage => ({
     id,
     role: "assistant",
     turnIndex,
     time: 1,
     blocks: [{ type: "text", text }],
+    ...flags,
   });
 
   test("every block of a multi-text turn shares one turn identity", () => {
     // text -> tool -> text -> tool -> text spans several render blocks; live
     // state is turn-scoped, so all of them must share one turnKey — not just
-    // the transcript's last block.
+    // the transcript's last block. The texts are summary/completion projections
+    // (plain interim text is ephemeral and would not stay visible).
     const turn: ChatMessage[] = [
       toolMsg("m1", 7, "t1"),
-      textMsg("m2", 7, "one"),
+      textMsg("m2", 7, "one", { hasSummary: true }),
       toolMsg("m3", 7, "t2"),
-      textMsg("m4", 7, "two"),
+      textMsg("m4", 7, "two", { hasCompletion: true }),
       toolMsg("m5", 7, "t3"),
     ];
     const blocks = buildRenderBlocks(turn);
@@ -160,7 +162,7 @@ describe("render blocks carry turn identity (bug 55 plumbing)", () => {
     const earlier = textMsg("m0", 6, "earlier answer");
     const turn: ChatMessage[] = [
       toolMsg("m1", 7, "t1"),
-      textMsg("m2", 7, "one"),
+      textMsg("m2", 7, "one", { hasSummary: true }),
       toolMsg("m3", 7, "t2"),
     ];
     const build = createRenderBlockBuilder();
@@ -174,7 +176,7 @@ describe("render blocks carry turn identity (bug 55 plumbing)", () => {
     expect(single).toHaveLength(1);
     expect(single[0].turnKey).toBe("turn:3");
     // Legacy messages without a stamped turnIndex fall back to the lead id.
-    const legacy = buildRenderBlocks([textMsg("a1", undefined, "hi"), toolMsg("a2", undefined, "t")]);
+    const legacy = buildRenderBlocks([textMsg("a1", undefined, "hi", { hasSummary: true }), toolMsg("a2", undefined, "t")]);
     expect(legacy.every((b) => b.turnKey === "msg:a1")).toBe(true);
   });
 

@@ -23,6 +23,10 @@
  * Header keys are `key: value` lines before the first @section. Sections are
  * `@html`, `@css`, `@js` (aliases: @javascript, @script). Content before any
  * @section is treated as html. Unknown keys and unknown @lines are ignored.
+ *
+ * A body whose first section is `@jsx` (alias `@tsx`) is the React format:
+ * everything after the marker is one JSX/TSX source file (React 1:1, App
+ * root, hooks) compiled at doc build time — no html/css/js sections.
  */
 export type GenerativeUiData = {
   placeholder?: string;
@@ -31,6 +35,8 @@ export type GenerativeUiData = {
   html?: string;
   css?: string;
   js?: string;
+  /** React-format widget source (whole body after an `@jsx` marker). */
+  jsx?: string;
   height?: number;
   /** Libraries to preload as globals (`libs: d3, three` header). */
   libs?: string[];
@@ -45,20 +51,34 @@ export type GenerativeUiData = {
 const GENERATIVE_UI_LIBS = ["d3", "gsap", "chart", "three", "map"] as const;
 
 const SECTION_RE = /^@(html|css|js|javascript|script)\s*$/i;
+const JSX_SECTION_RE = /^@(jsx|tsx)\s*$/i;
 const HEADER_RE = /^(placeholder|height|state|libs|net)\s*:\s*(.*)$/i;
 
 export function parseGenerativeUiDsl(raw: string | undefined): GenerativeUiData {
   const out: GenerativeUiData = {};
   if (!raw) return out;
   const sections: { html: string[]; css: string[]; js: string[] } = { html: [], css: [], js: [] };
-  let current: "html" | "css" | "js" | null = null;
+  const jsxLines: string[] = [];
+  let current: "html" | "css" | "js" | "jsx" | null = null;
   let headerDone = false;
 
   for (const line of raw.split("\n")) {
+    // React format: the whole body after `@jsx` is one source file — later
+    // lines are verbatim source, never re-parsed as sections.
+    if (current === "jsx") {
+      jsxLines.push(line);
+      continue;
+    }
     const section = SECTION_RE.exec(line.trim());
     if (section) {
       const name = section[1].toLowerCase();
       current = name === "css" ? "css" : name === "html" ? "html" : "js";
+      headerDone = true;
+      continue;
+    }
+    const jsxSection = JSX_SECTION_RE.exec(line.trim());
+    if (jsxSection) {
+      current = "jsx";
       headerDone = true;
       continue;
     }
@@ -87,6 +107,11 @@ export function parseGenerativeUiDsl(raw: string | undefined): GenerativeUiData 
       headerDone = true;
     }
     (sections[current ?? "html"]).push(line);
+  }
+
+  if (jsxLines.length) {
+    out.jsx = jsxLines.join("\n").trim() || undefined;
+    return out;
   }
 
   out.html = sections.html.join("\n").trim() || undefined;
@@ -121,7 +146,7 @@ function parseLibs(value: string): string[] {
 
 /** True when the body has enough content to mount a widget preview. */
 export function hasWidgetBody(data: GenerativeUiData): boolean {
-  return !!data.html || !!data.css || !!data.js;
+  return !!data.html || !!data.css || !!data.js || !!data.jsx;
 }
 
 export const GENERATIVE_UI_LANGS = new Set(["generative_ui", "genui"]);

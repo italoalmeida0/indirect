@@ -137,13 +137,15 @@ test("turn aggregate combines tools and closing text message into a unified ball
 });
 
 test("multi-step turns produce distinct balloons each with its own aggregate and message", () => {
+  // Workspace turn: interim visible text is a summary projection and the
+  // closing text a completion projection (live.ts stamps both flags).
   const list: ChatMessage[] = [
     {id:"one",role:"assistant",srcIdx:1,blocks:[{type:"tool_call",toolId:"a",toolName:"read"}]},
     {id:"two",role:"assistant",srcIdx:2,blocks:[{type:"tool_result",toolId:"a",toolResult:"content"}]},
-    {id:"three",role:"assistant",srcIdx:3,blocks:[{type:"text",text:"Read file."}]},
+    {id:"three",role:"assistant",srcIdx:3,hasSummary:true,blocks:[{type:"text",text:"Read file."}]},
     {id:"four",role:"assistant",srcIdx:4,blocks:[{type:"tool_call",toolId:"b",toolName:"edit"}]},
     {id:"five",role:"assistant",srcIdx:5,blocks:[{type:"tool_result",toolId:"b",toolResult:"ok"}]},
-    {id:"six",role:"assistant",srcIdx:6,blocks:[{type:"text",text:"Edited file."}]},
+    {id:"six",role:"assistant",srcIdx:6,hasCompletion:true,blocks:[{type:"text",text:"Edited file."}]},
   ];
   const blocks = buildRenderBlocks(list);
   expect(blocks).toHaveLength(2);
@@ -167,6 +169,53 @@ test("text-only turns render each message as a distinct bubble", () => {
   expect(blocks.map((b) => b.kind)).toEqual(["single","single","single"]);
   expect(blocks.map((b) => b.msg.id)).toEqual(["u","a","b"]);
   expect(buildRenderBlocks(list.slice(0, 2)).map((b) => b.kind)).toEqual(["single", "single"]);
+});
+
+const visibleAssistantTexts = (blocks: ReturnType<typeof buildRenderBlocks>): string[] =>
+  blocks.flatMap((b) => {
+    const msgs = b.kind === "series" ? (b.textMsg ? [b.textMsg] : []) : [b.msg];
+    return msgs
+      .filter((m) => m.role === "assistant")
+      .flatMap((m) => m.blocks.flatMap((x) => (x.type === "text" && x.text ? [x.text] : [])));
+  });
+
+test("talk turns keep only the trailing plain text (interim text is ephemeral)", () => {
+  const list: ChatMessage[] = [
+    {id:"u",role:"user",srcIdx:0,blocks:[{type:"text",text:"hi"}]},
+    {id:"a1",role:"assistant",srcIdx:1,blocks:[{type:"text",text:"Let me search that."}]},
+    {id:"a2",role:"assistant",srcIdx:2,blocks:[{type:"tool_call",toolId:"s",toolName:"search_web"}]},
+    {id:"t1",role:"tool",srcIdx:3,blocks:[{type:"tool_result",toolId:"s",toolResult:"results"}]},
+    {id:"a3",role:"assistant",srcIdx:4,blocks:[{type:"text",text:"Final answer."}]},
+  ];
+  // While the interim text is the latest segment it is visible...
+  expect(visibleAssistantTexts(buildRenderBlocks(list.slice(0, 2)))).toEqual(["Let me search that."]);
+  // ...the arriving tool call supersedes it immediately...
+  expect(visibleAssistantTexts(buildRenderBlocks(list.slice(0, 3)))).toEqual([]);
+  // ...and at turn end only the trailing text remains.
+  expect(visibleAssistantTexts(buildRenderBlocks(list))).toEqual(["Final answer."]);
+  // Raw messages are untouched (display-only suppression).
+  expect(list[1].blocks).toHaveLength(1);
+});
+
+test("new thinking supersedes earlier plain text in the same turn", () => {
+  const list: ChatMessage[] = [
+    {id:"u",role:"user",srcIdx:0,blocks:[{type:"text",text:"hi"}]},
+    {id:"a1",role:"assistant",srcIdx:1,blocks:[{type:"text",text:"First take."}]},
+    {id:"a2",role:"assistant",srcIdx:2,blocks:[{type:"reasoning",reasoning:"Reconsidering"}]},
+    {id:"a3",role:"assistant",srcIdx:3,blocks:[{type:"text",text:"Revised answer."}]},
+  ];
+  expect(visibleAssistantTexts(buildRenderBlocks(list))).toEqual(["Revised answer."]);
+});
+
+test("summary and completion texts are never ephemeral", () => {
+  const list: ChatMessage[] = [
+    {id:"u",role:"user",srcIdx:0,blocks:[{type:"text",text:"hi"}]},
+    {id:"a1",role:"assistant",srcIdx:1,hasSummary:true,blocks:[{type:"text",text:"Progress so far."}]},
+    {id:"a2",role:"assistant",srcIdx:2,blocks:[{type:"tool_call",toolId:"b",toolName:"bash"}]},
+    {id:"t1",role:"tool",srcIdx:3,blocks:[{type:"tool_result",toolId:"b",toolResult:"ok"}]},
+    {id:"a3",role:"assistant",srcIdx:4,hasCompletion:true,blocks:[{type:"text",text:"All done."}]},
+  ];
+  expect(visibleAssistantTexts(buildRenderBlocks(list))).toEqual(["Progress so far.", "All done."]);
 });
 
 

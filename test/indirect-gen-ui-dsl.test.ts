@@ -316,6 +316,21 @@ describe("widget design system", () => {
     expect(WIDGET_BASE_CSS).toContain("tbody tr:nth-child(even) { background: transparent; }");
   });
 
+  test("button variant classes are self-contained, not modifiers of .gu-btn", () => {
+    // The docs present gu-btn-primary / gu-btn-ghost / gu-btn-sm as standalone
+    // classes ("gu-btn-primary (the ONE main action)"), so a lone
+    // `class="gu-btn-primary"` must carry the full button chrome — otherwise
+    // it renders as an unstyled native button.
+    expect(WIDGET_BASE_CSS).toMatch(/\.gu-btn, \.gu-btn-primary, \.gu-btn-ghost, \.gu-btn-sm \{/);
+    // Interaction states must cover the standalone classes too.
+    for (const state of [":hover", ":active", ":focus-visible", ":disabled"]) {
+      expect(WIDGET_BASE_CSS).toContain(".gu-btn" + state);
+      expect(WIDGET_BASE_CSS).toContain(".gu-btn-primary" + state);
+      expect(WIDGET_BASE_CSS).toContain(".gu-btn-ghost" + state);
+      expect(WIDGET_BASE_CSS).toContain(".gu-btn-sm" + state);
+    }
+  });
+
   test("runtime auto-fits height and syncs slider fill", () => {
     const script = buildRuntimeScript({ stateJSON: "{}" });
     expect(script).toContain("ResizeObserver");

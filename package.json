@@ -1,6 +1,6 @@
 {
   "name": "llm-gateway",
-  "version": "2.0.35",
+  "version": "2.0.36",
   "description": "Self-hosted LLM Gateway: multi-tenant API keys with budgets, proxying to one upstream OpenAI/Anthropic-compatible provider.",
   "type": "module",
   "scripts": {
@@ -49,6 +49,7 @@
     "solid-charts": "0.0.2",
     "sortablejs": "^1.15.7",
     "streaming-markdown": "0.2.15",
+    "sucrase": "^3.35.1",
     "three": "^0.186.1",
     "usal": "^2.0.0",
     "web-push": "^3.6.7"
@@ -71,6 +72,7 @@
     "babel-preset-solid": "^1.9.12",
     "eslint": "^10.10.0",
     "eslint-plugin-solid": "^0.17.0",
+    "happy-dom": "^21.0.1",
     "postcss": "^8.5.26",
     "solid-js": "^1.9.14",
     "tailwindcss": "^4.3.3",
