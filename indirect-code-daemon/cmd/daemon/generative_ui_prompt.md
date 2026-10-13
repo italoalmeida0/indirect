@@ -23,7 +23,6 @@ placeholder sentence for streaming.
 ````generative_ui
 placeholder: Compiling your visualization
 state: {"amount": 1000, "years": 5}
-libs: d3
 
 @jsx
 import { useState, useMemo } from "react";
@@ -50,11 +49,6 @@ export default function App({ amount, years }) {
   in ("Compiling your visualization", not "Loading").
 - `state:` JSON object with the initial widget state. It is passed as the
   props of your root component (and available as `window.__gu.state`).
-- `libs:` comma-separated preloads from `d3, gsap, chart, three, map` —
-  import them as ES modules: `import * as THREE from "three"`, `import * as
-  d3 from "d3"`, `import * as gsap from "gsap"`, `import Chart from
-  "chart"`, `import * as L from "leaflet"` (use `L` for map). Omit the header
-  when the widget needs none.
 
 ### Component contract
 
@@ -66,8 +60,11 @@ export default function App({ amount, years }) {
   is the supported module surface — React 18 semantics: `useState`,
   `useReducer`, `useEffect`, `useLayoutEffect`, `useMemo`, `useCallback`,
   `useRef`, `useContext`, `createContext`, `memo`, `forwardRef`, `Fragment`.
-  The `libs` listed in the header are importable too (see above). Anything
-  else is rejected at compile time.
+- Extra libraries: just import them — `import * as THREE from "three"`,
+  `import * as d3 from "d3"`, `import * as gsap from "gsap"`, `import Chart
+  from "chart"`, `import * as L from "leaflet"` (maps). Imports are the
+  declaration: whatever you import is loaded on demand; anything else is
+  rejected at compile time.
 - Mounting, re-rendering and height-reporting are automatic. Re-render on
   state change like any React app; no `$render()` bookkeeping.
 - Cleanup: return a cleanup function from `useEffect` (stop timers, cancel
@@ -80,7 +77,8 @@ export default function App({ amount, years }) {
   any http(s) site (photos, covers, avatars — always give it a fixed aspect
   box and an `alt`, it can still fail), map tiles render, and JS libraries
   load from esm.sh (below). No fetch/XHR/WebSocket, no remote <script>, no
-  external fonts. All data must be embedded in the component.
+  external fonts. All data must be embedded in the component. Remote images
+  are routed through the gateway automatically — use plain absolute URLs.
 - No navigation (location.href, window.open): links use
   window.indirectUi.openLink(url) (http/https only).
 - No javascript: URLs, no eval-style tricks. Plain DOM/React only.
@@ -177,7 +175,7 @@ the camera (no external controls). Keep the canvas ~240-300px tall so
 controls stay visible in chat. Dispose the WebGLRenderer in the effect
 cleanup. Conceptual model, not a simulator.
 
-**Map itineraries (map)**: `libs: map`; the map in a
+**Map itineraries (leaflet)**: `import * as L from "leaflet"`; the map in a
 `.gu-stage` (~280-320px tall), numbered pin markers (divIcon) and stop cards
 below it. Drop the pins one by one with staggered timing and a small settle
 animation, reveal the connecting polyline after the pins, highlight the

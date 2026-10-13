@@ -61,6 +61,32 @@ const transpiler = new Bun.Transpiler({
 });
 
 /**
+ * Lib globals a widget may use without importing. Widgets SHOULD import
+ * (`import * as THREE from "three"`), but a model that reads the classic
+ * global still works: a side-effect import is prepended so the module loads
+ * and assigns its global. Detection is conservative (distinctive tokens and
+ * known leaflet entry points only).
+ */
+const GLOBAL_USAGE: { specifier: string; pattern: RegExp }[] = [
+  { specifier: "three", pattern: /\bTHREE\b/ },
+  { specifier: "d3", pattern: /\bd3\s*\./ },
+  { specifier: "gsap", pattern: /\bgsap\s*[.(]/ },
+  { specifier: "chart", pattern: /\bChart\s*[.(]/ },
+  { specifier: "leaflet", pattern: /\bL\s*\.\s*(?:map|marker|tileLayer|polyline|polygon|circle|circleMarker|latLng|icon|divIcon|featureGroup|layerGroup|geoJSON|control)\s*\(|\bwindow\s*\.\s*L\b/ },
+];
+
+/** Prepend side-effect imports for libs the code uses but never imports. */
+function injectGlobalImports(code: string): string {
+  const imported = new Set(jsxBareSpecifiers(code));
+  const prelude: string[] = [];
+  for (const { specifier, pattern } of GLOBAL_USAGE) {
+    if (imported.has(specifier) || !pattern.test(code)) continue;
+    prelude.push(`import ${JSON.stringify(specifier)};`);
+  }
+  return prelude.length ? prelude.join("\n") + "\n" + code : code;
+}
+
+/**
  * Compile the widget source to one ESM body. Imports of anything the widget
  * import map cannot resolve are a compile error — they would be dead weight
  * in the CSP-locked document (or, for esm.sh URLs, silently unusable outside
@@ -80,7 +106,7 @@ export function compileJsxModule(src: string): JsxCompileResult {
     };
   }
   try {
-    return { ok: true, code: transpiler.transformSync(src) };
+    return { ok: true, code: injectGlobalImports(transpiler.transformSync(src)) };
   } catch (err) {
     // Bun throws an AggregateError with structured position entries.
     const errors = (err as { errors?: { message?: string; position?: { line?: number } }[] }).errors;

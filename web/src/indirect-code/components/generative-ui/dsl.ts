@@ -13,17 +13,12 @@ export type GenerativeUiData = {
   placeholder?: string;
   /** Initial widget state object (from the `state:` JSON header). */
   state?: Record<string, unknown>;
-  /** Libraries to preload (only names in LIBS are honored). */
-  libs?: string[];
   /** The React widget source (whole body after the `@jsx` marker). */
   jsx?: string;
 };
 
-/** Only these libs exist as vetted local bundles. */
-const LIBS = new Set(["d3", "gsap", "chart", "three", "map"]);
-
 const JSX_SECTION_RE = /^@(jsx|tsx)\s*$/i;
-const HEADER_RE = /^(placeholder|state|libs)\s*:\s*(.*)$/i;
+const HEADER_RE = /^(placeholder|state)\s*:\s*(.*)$/i;
 
 export function parseGenerativeUiDsl(raw: string | undefined): GenerativeUiData {
   const out: GenerativeUiData = {};
@@ -52,9 +47,6 @@ export function parseGenerativeUiDsl(raw: string | undefined): GenerativeUiData 
         if (key === "placeholder") out.placeholder = value.slice(0, 120);
         else if (key === "state") {
           out.state = parseStateJSON(value);
-        } else if (key === "libs") {
-          const libs = parseLibs(value);
-          if (libs.length) out.libs = libs;
         }
         continue;
       }
@@ -76,18 +68,6 @@ function parseStateJSON(value: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
-}
-
-/**
- * `libs: d3, three` / `libs: three d3` — tolerate comma and whitespace
- * separators. Unknown names are dropped (not honored by the doc builder).
- */
-function parseLibs(value: string): string[] {
-  const parts = value
-    .split(/[,\s]+/)
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => LIBS.has(s));
-  return [...new Set(parts)];
 }
 
 /** True when the body has a widget source to mount. */

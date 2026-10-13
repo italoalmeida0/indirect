@@ -160,6 +160,7 @@ describe("generative ui @jsx documents", () => {
     }),
     stateJSON: '{"n":2}',
     scriptNonce: "N0NCE",
+    origin: "https://gw.test",
   });
 
   test("the document embeds the runtime and loads the module via import map", () => {
@@ -196,7 +197,6 @@ describe("generative ui module routes", () => {
       theme: "dark",
       jsx: SRC,
       stateJSON: "{}",
-      libs: ["d3"],
     });
     expect(res.status).toBe(200);
     const created = (await res.json()) as { success: boolean; url: string };

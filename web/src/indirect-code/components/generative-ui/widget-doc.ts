@@ -495,6 +495,31 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
   }
   document.addEventListener("input", function (ev) { __syncSlider(ev.target); }, true);
   document.addEventListener("change", function (ev) { __syncSlider(ev.target); }, true);
+  // Remote images go through the gateway image proxy: it bypasses hotlink
+  // protection (no referrer), caches one copy per URL, and validates the
+  // payload (magic bytes) before the frame ever sees it. On proxy refusal
+  // there is one direct attempt against the original host, then the img
+  // simply stays broken (the runtime never hides errors silently).
+  function __proxyImg(img) {
+    if (!img || img.tagName !== "IMG") return;
+    var src = img.getAttribute("src") || "";
+    // data:/blob:/same-origin untouched (no regex: the slash closes a
+    // regex literal inside this template).
+    if (src.indexOf("http://") !== 0 && src.indexOf("https://") !== 0) return;
+    if (img.getAttribute("data-gu-proxy")) return; // already rewritten
+    img.setAttribute("data-gu-proxy", "1");
+    img.setAttribute("data-gu-orig", src);
+    img.src = "/api/indirect-code/gen-ui/img?u=" + encodeURIComponent(src);
+    img.addEventListener("error", function () {
+      if (img.getAttribute("data-gu-fallback")) return;
+      img.setAttribute("data-gu-fallback", "1");
+      img.src = img.getAttribute("data-gu-orig") || src;
+    }, { once: true });
+  }
+  function __proxyImages(scope) {
+    var list = (scope || document).querySelectorAll("img[src]");
+    for (var i = 0; i < list.length; i++) __proxyImg(list[i]);
+  }
   function $onDestroy(fn) { if (typeof fn === "function") __destroyers.push(fn); }
   function $onResize(fn) { if (typeof fn === "function") __resizers.push(fn); }
   function $onError(fn) { if (typeof fn === "function") __errorHandler = fn; }
@@ -519,6 +544,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
   function __bootObservers() {
     var root = document.querySelector(".gu-root") || document.body;
     __syncSliders(document);
+    __proxyImages(document);
     __scheduleHeight();
     try {
       if (typeof ResizeObserver === "function") new ResizeObserver(__scheduleHeight).observe(root);
@@ -528,8 +554,29 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
       // slider fill writes and fires per frame during gsap/canvas
       // animations. Size changes from attribute churn are ResizeObserver's
       // job above; this observer only needs newly added nodes/sliders.
-      new MutationObserver(function () { __syncSliders(document); __scheduleHeight(); })
-        .observe(root, { childList: true, subtree: true });
+      new MutationObserver(function (records) {
+        __syncSliders(document);
+        for (var i = 0; i < records.length; i++) {
+          var nodes = records[i].addedNodes;
+          for (var j = 0; j < nodes.length; j++) {
+            var n = nodes[j];
+            if (n.nodeType !== 1) continue;
+            if (n.tagName === "IMG") __proxyImg(n);
+            else if (n.querySelectorAll) __proxyImages(n);
+          }
+        }
+        __scheduleHeight();
+      }).observe(root, { childList: true, subtree: true });
+    } catch {}
+    try {
+      // src attribute changes on existing images (React updates) — style
+      // writes never match this filter, so animations cannot churn it.
+      new MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i++) {
+          var t = records[i].target;
+          if (t && t.tagName === "IMG") __proxyImg(t);
+        }
+      }).observe(root, { attributes: true, attributeFilter: ["src"], subtree: true });
     } catch {}
     window.addEventListener("load", __scheduleHeight);
   }
@@ -587,10 +634,13 @@ export const createRoot = window.ReactDOMClient.createRoot,
  * The widget import map: widget modules are plain ESM and resolve react /
  * react-dom / the jsx-runtime specifiers to the shim module and the
  * preloaded libs (d3, gsap, chart, three, leaflet) to their vendored
- * modules. Everything else is rejected at compile time.
+ * modules. Every vendored lib is always mapped — an unused entry costs a
+ * few bytes of JSON and is never fetched (the browser only loads what the
+ * module imports). Everything else is rejected at compile time.
  */
 export function buildJsxImportMap(moduleUrls: {
   react: string;
+  /** Specifier -> module URL (e.g. "three" -> "/.../lib/three.js"). */
   libs: Record<string, string>;
 }): string {
   const imports: Record<string, string> = {
@@ -651,8 +701,8 @@ export type WidgetDocParams = {
   importMap: string;
   stateJSON: string;
   scriptNonce: string;
-  /** Vendored lib stylesheet to inline (e.g. leaflet css with inlined images). */
-  libCss?: string;
+  /** Public origin of this deployment (absolute CSP sources — see moduleSrc). */
+  origin: string;
 };
 
 /**
@@ -663,11 +713,15 @@ export type WidgetDocParams = {
 const WIDGET_IMG_SRC = "img-src data: blob: https: http:";
 
 /**
- * Origins of the served widget modules (import map targets): the vendored
- * library bundles and the stored widget modules. Same-origin paths, listed
- * explicitly because the rest of the document is nonce-only.
+ * Sources of the served widget modules (import map targets): the vendored
+ * library bundles and the stored widget modules. These MUST be absolute —
+ * CSP rejects path-only sources, and in the sandbox the document has an
+ * opaque origin, so 'self' matches nothing. The public origin comes from
+ * the request (see requestOrigin in the route).
  */
-const MODULE_SRC = "/api/indirect-code/gen-ui/lib/ /api/indirect-code/gen-ui/modules/";
+function moduleSrc(origin: string): string {
+  return `${origin}/api/indirect-code/gen-ui/lib/ ${origin}/api/indirect-code/gen-ui/modules/`;
+}
 
 /**
  * The widget CSP. Network is images + https data + esm.sh (the one allowed
@@ -676,13 +730,13 @@ const MODULE_SRC = "/api/indirect-code/gen-ui/lib/ /api/indirect-code/gen-ui/mod
  * opaque origin (`sandbox allow-scripts` applies even when the document is
  * opened at top level).
  */
-export function widgetCSP(nonce: string): string {
+export function widgetCSP(nonce: string, origin: string): string {
   return [
     "sandbox allow-scripts",
     "default-src 'none'",
     WIDGET_IMG_SRC,
     "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}' ${MODULE_SRC} https://esm.sh`,
+    `script-src 'nonce-${nonce}' ${moduleSrc(origin)} https://esm.sh`,
     "font-src data:",
     "connect-src https:",
     "form-action 'none'",
@@ -696,12 +750,12 @@ export function widgetCSP(nonce: string): string {
  * delivered via <meta>, so they are omitted (the response header carries
  * them; the meta is belt-and-braces for non-HTTP contexts only).
  */
-export function widgetMetaCSP(nonce: string): string {
+export function widgetMetaCSP(nonce: string, origin: string): string {
   return [
     "default-src 'none'",
     WIDGET_IMG_SRC,
     "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}' ${MODULE_SRC} https://esm.sh`,
+    `script-src 'nonce-${nonce}' ${moduleSrc(origin)} https://esm.sh`,
     "font-src data:",
     "connect-src https:",
     "form-action 'none'",
@@ -718,10 +772,10 @@ export function widgetMetaCSP(nonce: string): string {
 export function buildWidgetDocument(params: WidgetDocParams): string {
   return `<!doctype html>
 <html data-theme="${params.theme}"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="${widgetMetaCSP(params.scriptNonce)}">
+<meta http-equiv="Content-Security-Policy" content="${widgetMetaCSP(params.scriptNonce, params.origin)}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${WIDGET_BASE_CSS}</style>
-${params.libCss ? `<style>${escapeStyleClose(params.libCss)}</style>\n` : ""}<script type="importmap" nonce="${params.scriptNonce}">${escapeScriptClose(params.importMap)}</script>
+<script type="importmap" nonce="${params.scriptNonce}">${escapeScriptClose(params.importMap)}</script>
 </head>
 <body>
 <script nonce="${params.scriptNonce}">${escapeScriptClose(REACT_RUNTIME_JS)}</script>

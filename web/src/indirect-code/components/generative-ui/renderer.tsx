@@ -77,7 +77,6 @@ export function GenerativeUiWidget(props: {
           theme: theme(),
           jsx: d.jsx,
           stateJSON: stateJSON(),
-          libs: d.libs && d.libs.length ? d.libs : ["d3"],
         }),
       });
       const out = await res.json().catch(() => null);
@@ -97,7 +96,7 @@ export function GenerativeUiWidget(props: {
 
   createEffect(
     on(
-      () => [data().jsx, stateJSON(), theme(), streaming(), (data().libs || []).join(",")] as const,
+      () => [data().jsx, stateJSON(), theme(), streaming()] as const,
       ([, , , stillStreaming]) => {
         if (stillStreaming) return;
         void finalize();

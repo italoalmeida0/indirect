@@ -1,6 +1,12 @@
 import { describe, expect, test, beforeAll } from "bun:test";
 
-import { handleGenUiRoute, genUiStoreSize } from "../server/routes/gen-ui";
+import {
+  handleGenUiRoute,
+  genUiImageCacheSize,
+  genUiStoreSize,
+  isBlockedAddress,
+  sniffImageMime,
+} from "../server/routes/gen-ui";
 import { vendorGenUiLibs } from "../scripts/vendor-gen-ui-libs";
 
 /**
@@ -83,6 +89,12 @@ describe("gen-ui widget routes", () => {
     expect(csp).toContain("connect-src https:");
     expect(csp).toContain("https://esm.sh");
     expect(csp).not.toMatch(/script-src[^;]*unsafe-inline/);
+    // CSP script sources must be absolute (paths are rejected by the
+    // browser): the served modules are pinned to the request origin.
+    expect(csp).toContain(`${BASE}/api/indirect-code/gen-ui/lib/`);
+    expect(csp).toContain(`${BASE}/api/indirect-code/gen-ui/modules/`);
+    // No path-only source ever (CSP rejects those silently).
+    expect(csp).not.toMatch(/script-src[^;]*\s\/api/);
     const html = await res.text();
     // The document carries the React runtime + the bridge; the widget code
     // lives in its own served module (referenced by the import map).
@@ -123,21 +135,21 @@ describe("gen-ui widget routes", () => {
     expect(genUiStoreSize()).toBeLessThanOrEqual(400);
   });
 
-  test("libs header maps the requested modules in the import map", async () => {
+  test("the import map maps every vendored lib (imports decide the fetches)", async () => {
     const out: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "dark",
       jsx: APP,
       stateJSON: "{}",
-      libs: ["three", "gsap"],
     })).json();
     const html = await (await get(out.url)).text();
-    // The document is tiny: the libs live in shared, cacheable modules.
+    // The document is tiny: the libs live in shared, cacheable modules and
+    // the browser only fetches what the module actually imports.
     expect(html.length).toBeLessThan(200_000);
     expect(html).not.toContain("globalThis.THREE=");
     const map = JSON.parse(/<script type="importmap"[^>]*>([\s\S]*?)<\/script>/.exec(html)![1]);
-    expect(map.imports.three).toBe("/api/indirect-code/gen-ui/lib/three.js");
-    expect(map.imports.gsap).toBe("/api/indirect-code/gen-ui/lib/gsap.js");
-    expect(map.imports.d3).toBeUndefined();
+    for (const [spec, file] of [["three", "three.js"], ["d3", "d3.js"], ["gsap", "gsap.js"], ["chart", "chart.js"], ["leaflet", "leaflet.js"]] as const) {
+      expect(map.imports[spec]).toBe(`/api/indirect-code/gen-ui/lib/${file}`);
+    }
     // The module endpoint and lib endpoint are reachable and cacheable.
     const lib = await get("/api/indirect-code/gen-ui/lib/three.js");
     expect(lib.status).toBe(200);
@@ -145,7 +157,7 @@ describe("gen-ui widget routes", () => {
     expect(lib.headers.get("cache-control")).toContain("immutable");
   });
 
-  test("widgets always serve the https/esm.sh CSP and map libs bundle leaflet", async () => {
+  test("lib styles embed in their module (no doc css)", async () => {
     const out: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "light",
       jsx: `export default function App() {
@@ -153,7 +165,6 @@ describe("gen-ui widget routes", () => {
         return <div className="gu-root" id="map">map</div>;
       }`,
       stateJSON: "{}",
-      libs: ["map"],
     })).json();
     const res = await get(out.url);
     const csp = res.headers.get("content-security-policy") || "";
@@ -163,34 +174,155 @@ describe("gen-ui widget routes", () => {
     expect(csp).toContain("https://esm.sh");
     expect(csp).toContain("sandbox allow-scripts");
     const html = await res.text();
-    // The leaflet stylesheet (with inlined images) is inlined in the doc.
-    expect(html).toContain("leaflet");
+    // The leaflet style (with inlined images) rides inside the lib module,
+    // not the document.
     expect(html).not.toContain("url(images/");
+    const leaflet = await (await get("/api/indirect-code/gen-ui/lib/leaflet.js")).text();
+    expect(leaflet).toContain("leaflet"); // css text embedded
+    expect(leaflet).not.toContain("url(images/");
     // The esm.sh dynamic import survives into the served module.
     const moduleUrl = /src="(\/api\/indirect-code\/gen-ui\/modules\/[0-9a-f]{64})"/.exec(html)![1];
     expect(await (await get(moduleUrl)).text()).toContain("https://esm.sh/canvas-confetti@1");
   });
 
-  test("widgets default to the d3 module and drop unknown libs", async () => {
+  test("global-style lib usage is detected and side-effect imported", async () => {
+    // A model that reads the classic global (no import) still works: the
+    // compiler prepends a side-effect import so the module assigns it.
     const out: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "dark",
-      jsx: APP,
+      jsx: `export default function App() {
+        const scene = new THREE.Scene();
+        return <div className="gu-root">{String(!!scene)}</div>;
+      }`,
       stateJSON: "{}",
-      libs: ["evil", "chart"],
     })).json();
     const html = await (await get(out.url)).text();
-    const map = JSON.parse(/<script type="importmap"[^>]*>([\s\S]*?)<\/script>/.exec(html)![1]);
-    expect(map.imports.chart).toBe("/api/indirect-code/gen-ui/lib/chart.js");
-    expect(map.imports.evil).toBeUndefined();
-    // The default (no libs) document still maps d3.
-    const def: any = await (await post("/api/indirect-code/gen-ui/widgets", {
-      theme: "dark",
-      jsx: APP,
-      stateJSON: "{}",
-    })).json();
-    const defHtml = await (await get(def.url)).text();
-    const defMap = JSON.parse(/<script type="importmap"[^>]*>([\s\S]*?)<\/script>/.exec(defHtml)![1]);
-    expect(defMap.imports.d3).toBe("/api/indirect-code/gen-ui/lib/d3.js");
-    expect(defMap.imports.three).toBeUndefined();
+    const moduleUrl = /src="(\/api\/indirect-code\/gen-ui\/modules\/[0-9a-f]{64})"/.exec(html)![1];
+    const code = await (await get(moduleUrl)).text();
+    expect(code).toContain('import "three";');
+  });
+});
+
+describe("gen-ui image proxy", () => {
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+  const realFetch = globalThis.fetch;
+  let fetchCalls: string[] = [];
+
+  function stub(handler: (url: string) => Response | Promise<Response>): void {
+    fetchCalls = [];
+    (globalThis as any).fetch = async (input: unknown) => {
+      const url = String((input as { url?: string }).url ?? input);
+      fetchCalls.push(url);
+      return handler(url);
+    };
+  }
+
+  function img(u: string): Promise<Response> {
+    return handleGenUiRoute(
+      "/api/indirect-code/gen-ui/img",
+      new Request(`${BASE}/api/indirect-code/gen-ui/img?u=${encodeURIComponent(u)}`),
+      new URL(`${BASE}/api/indirect-code/gen-ui/img?u=${encodeURIComponent(u)}`),
+    ) as Promise<Response>;
+  }
+
+  test("sniffImageMime trusts the bytes, not the header", () => {
+    expect(sniffImageMime(PNG)).toBe("image/png");
+    expect(sniffImageMime(new TextEncoder().encode("<html>oops</html>"))).toBeNull();
+    expect(sniffImageMime(new TextEncoder().encode('<?xml version="1.0"?><svg xmlns="x"><rect/></svg>'))).toBe("image/svg+xml");
+    expect(sniffImageMime(new Uint8Array(4))).toBeNull();
+  });
+
+  test("isBlockedAddress covers loopback, RFC1918, link-local and metadata", () => {
+    for (const host of [
+      "127.0.0.1", "0.0.0.0", "10.1.2.3", "172.16.9.9", "192.168.1.1",
+      "169.254.169.254", "100.100.100.100", "224.0.0.1", "::1", "[::1]",
+      "fe80::1", "fd00::1", "localhost", "db.internal", "printer.local",
+    ]) {
+      expect(isBlockedAddress(host)).toBe(true);
+    }
+    for (const host of ["8.8.8.8", "1.1.1.1", "example.com", "2606:4700::1111", "cdn.example.org"]) {
+      expect(isBlockedAddress(host)).toBe(false);
+    }
+  });
+
+  test("SSRF targets are refused without ever fetching", async () => {
+    stub(() => { throw new Error("fetch must not be called"); });
+    for (const u of [
+      "http://127.0.0.1/x.png",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://10.0.0.5/admin",
+      "https://db.internal/secret.png",
+      "javascript:alert(1)",
+      "file:///etc/passwd",
+    ]) {
+      const res = await img(u);
+      expect(res.status).toBe(400);
+      expect(fetchCalls.length).toBe(0);
+    }
+    const missing = await img("");
+    expect(missing.status).toBe(400);
+  });
+
+  test("images are served by their binary signature with hardening headers", async () => {
+    // Upstream lies with a text/plain header; the bytes are what count.
+    stub(() => new Response(PNG, { status: 200, headers: { "content-type": "text/plain" } }));
+    const res = await img("https://8.8.8.8/pic.png");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("content-security-policy")).toBe("sandbox");
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG);
+    // Cached: the second request never re-fetches.
+    const before = fetchCalls.length;
+    const again = await img("https://8.8.8.8/pic.png");
+    expect(again.status).toBe(200);
+    expect(fetchCalls.length).toBe(before);
+    expect(genUiImageCacheSize()).toBeGreaterThan(0);
+  });
+
+  test("documents and oversized payloads are refused", async () => {
+    stub(() => new Response("<html>error page</html>", { status: 200, headers: { "content-type": "text/html" } }));
+    const doc = await img("https://8.8.8.8/landing");
+    expect(doc.status).toBe(415);
+
+    stub(() => new Response(PNG, { status: 200, headers: { "content-type": "image/png", "content-length": "99999999999" } }));
+    const big = await img("https://8.8.8.8/huge.png");
+    expect(big.status).toBe(413);
+
+    stub(() => new Response("nope", { status: 404 }));
+    const missing = await img("https://8.8.8.8/gone.png");
+    expect(missing.status).toBe(400);
+  });
+
+  test("redirect hops are re-validated and bounded", async () => {
+    stub((url) => {
+      if (url === "https://8.8.8.8/start.png") {
+        return new Response(null, { status: 302, headers: { location: "https://1.1.1.1/final.png" } });
+      }
+      return new Response(PNG, { status: 200, headers: { "content-type": "image/png" } });
+    });
+    const ok = await img("https://8.8.8.8/start.png");
+    expect(ok.status).toBe(200);
+    expect(fetchCalls).toEqual(["https://8.8.8.8/start.png", "https://1.1.1.1/final.png"]);
+
+    stub((url) => {
+      if (url.startsWith("https://cdn.example.com")) {
+        return new Response(null, { status: 302, headers: { location: "http://169.254.169.254/latest/" } });
+      }
+      throw new Error("fetch must not follow a blocked hop");
+    });
+    const ssrf = await img("https://8.8.8.8/trap.png");
+    expect(ssrf.status).toBe(400);
+
+    stub((url) => new Response(null, { status: 302, headers: { location: url + "/again" } }));
+    const loop = await img("https://8.8.8.8/loop.png");
+    expect(loop.status).toBe(400);
+    expect(fetchCalls.length).toBeLessThanOrEqual(4); // initial + 3 redirects
+  });
+
+  test("teardown", () => {
+    globalThis.fetch = realFetch;
+    expect(true).toBe(true);
   });
 });

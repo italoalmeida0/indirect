@@ -69,16 +69,13 @@ describe("parseGenerativeUiDsl", () => {
   });
 
 
-  test("parses the libs header (whitelist, dedupe, order)", () => {
-    expect(parseGenerativeUiDsl("libs: d3, three\n@jsx\nconst a = 1;").libs)
-      .toEqual(["d3", "three"]);
-    expect(parseGenerativeUiDsl("libs: three d3 three\n@jsx\nconst a = 1;").libs)
-      .toEqual(["three", "d3"]);
-    expect(parseGenerativeUiDsl("libs: evil, d3\n@jsx\nconst a = 1;").libs)
-      .toEqual(["d3"]);
-    expect(parseGenerativeUiDsl("@jsx\nconst a = 1;").libs).toBeUndefined();
-    expect(parseGenerativeUiDsl("libs: gsap, chart\n@jsx\nconst a = 1;").libs)
-      .toEqual(["gsap", "chart"]);
+  test("the libs header is gone: imports declare the libs", () => {
+    // A `libs:` line (legacy) is ignored like any unknown key — the import
+    // map always maps every vendored lib and the browser only fetches what
+    // the module actually imports.
+    const d = parseGenerativeUiDsl("libs: d3, three\n@jsx\nconst a = 1;");
+    expect(d.jsx).toBe("const a = 1;");
+    expect("libs" in d).toBe(false);
   });
 
   test("unknown header keys do not crash the parser", () => {
@@ -222,7 +219,7 @@ describe("widget document sanitizers", () => {
   test("buildJsxImportMap resolves the react surface and the vendored libs", () => {
     const map = JSON.parse(buildJsxImportMap({
       react: "/api/indirect-code/gen-ui/lib/react-shim.js",
-      libs: { d3: "/api/indirect-code/gen-ui/lib/d3.js" },
+      libs: { d3: "/api/indirect-code/gen-ui/lib/d3.js", chart: "/api/indirect-code/gen-ui/lib/chart.js" },
     }));
     expect(map.imports).toEqual({
       react: "/api/indirect-code/gen-ui/lib/react-shim.js",
@@ -231,18 +228,23 @@ describe("widget document sanitizers", () => {
       "react-dom": "/api/indirect-code/gen-ui/lib/react-shim.js",
       "react-dom/client": "/api/indirect-code/gen-ui/lib/react-shim.js",
       d3: "/api/indirect-code/gen-ui/lib/d3.js",
+      chart: "/api/indirect-code/gen-ui/lib/chart.js",
+      "chart.js": "/api/indirect-code/gen-ui/lib/chart.js",
+      "chart.js/auto": "/api/indirect-code/gen-ui/lib/chart.js",
     });
   });
 
   test("widget CSP is locked down: sandboxed, network limited to data + esm.sh", () => {
-    const csp = widgetCSP("abc");
+    const csp = widgetCSP("abc", "https://gw.test");
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'nonce-abc'");
     // The served widget modules (lib + stored module) are the only script
-    // sources besides the nonce and the one allowed lib CDN (esm.sh).
-    expect(csp).toContain("/api/indirect-code/gen-ui/lib/");
-    expect(csp).toContain("/api/indirect-code/gen-ui/modules/");
+    // sources besides the nonce and the one allowed lib CDN (esm.sh). CSP
+    // requires ABSOLUTE sources — paths are invalid and 'self' matches
+    // nothing in the opaque sandbox origin — so they carry the origin.
+    expect(csp).toContain("https://gw.test/api/indirect-code/gen-ui/lib/");
+    expect(csp).toContain("https://gw.test/api/indirect-code/gen-ui/modules/");
     expect(csp).toContain("https://esm.sh");
     // fetch/XHR/WebSocket lines are stripped from model code
     // (sanitizeModelJS); https connects cover the esm.sh module graph and
@@ -264,6 +266,7 @@ describe("widget document sanitizers", () => {
       importMap: buildJsxImportMap({ react: "/api/indirect-code/gen-ui/lib/react-shim.js", libs: {} }),
       stateJSON: "{}",
       scriptNonce: makeScriptNonce(),
+      origin: "https://gw.test",
     });
     // The model lives in the served module: the document only carries the
     // runtime, the bridge and the module reference.
@@ -328,10 +331,15 @@ describe("widget design system", () => {
     expect(script).toContain("ResizeObserver");
     expect(script).toContain("MutationObserver");
     expect(script).toContain('setProperty("--p"');
-    // The mutation observer must never watch attributes: slider fill writes
-    // (and per-frame animation styles) would self-trigger it into a loop.
-    expect(script).not.toContain("attributeFilter");
-    expect(script).not.toContain("attributes: true");
+    // Attribute watching is limited to the src filter (image proxy
+    // rewrite): slider fill writes and per-frame animation styles would
+    // self-trigger any wider attribute observer into a loop.
+    // Remote images are rewritten through the gateway image proxy.
+    expect(script).toContain("/api/indirect-code/gen-ui/img?u=");
+    expect(script).toContain("data-gu-orig");
+    expect(script).toContain('attributeFilter: ["src"]');
+    expect(script).not.toContain('attributeFilter: ["style"');
+    expect(script).not.toContain('attributeFilter: ["class"');
     // Uncaught widget errors are reported to the host error footer.
     expect(script).toContain("unhandledrejection");
     expect(script).toContain('addEventListener("error"');

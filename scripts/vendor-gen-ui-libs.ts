@@ -27,9 +27,15 @@ const outDir = path.join(ROOT, "web", "public", "vendor", "gen-ui");
  * Stylesheets inlined into widgets: url(images/...) references are rewritten
  * to data URIs so the sandbox (img-src data: blob:) can render them offline.
  */
-const STYLED: { name: string; from: string; imagesDir: string }[] = [
+/**
+ * Stylesheets embedded INTO a lib module (the module injects a <style> on
+ * import): url(images/...) references are rewritten to data URIs so the
+ * sandbox (img-src data: blob:) can render them offline. Embedding keeps the
+ * widget doc CSS-free — `import * as L from "leaflet"` brings its style.
+ */
+const STYLED: { jsName: string; from: string; imagesDir: string }[] = [
   {
-    name: "map.css",
+    jsName: "leaflet.js",
     from: path.join(ROOT, "node_modules", "leaflet", "dist", "leaflet.css"),
     imagesDir: path.join(ROOT, "node_modules", "leaflet", "dist", "images"),
   },
@@ -47,23 +53,25 @@ const BUNDLED: { name: string; entry: string; global: string }[] = [
   { name: "leaflet.js", entry: "entry-map.ts", global: "L" },
 ];
 
-/** Every library module file the widget runtime may import, by lib name. */
+/**
+ * Every library module file the widget runtime may import, keyed by the
+ * import specifier widget code writes (`import * as THREE from "three"`).
+ * The import map maps these specifiers to the served module files.
+ */
 export const GEN_UI_LIB_FILES: Record<string, string> = {
   d3: "d3.js",
   gsap: "gsap.js",
   chart: "chart.js",
   three: "three.js",
-  map: "leaflet.js",
+  leaflet: "leaflet.js",
 };
 
-export const GEN_UI_LIB_CSS_FILES = STYLED.map((l) => l.name);
-
-function inlineStyle(lib: (typeof STYLED)[number]): void {
+function inlineStyle(lib: (typeof STYLED)[number]): string {
   if (!existsSync(lib.from)) {
-    console.warn(`[vendor-gen-ui] missing ${lib.from}, skipping ${lib.name}`);
-    return;
+    console.warn(`[vendor-gen-ui] missing ${lib.from}, skipping style for ${lib.jsName}`);
+    return "";
   }
-  const css = readFileSync(lib.from, "utf8").replace(
+  return readFileSync(lib.from, "utf8").replace(
     /url\((["']?)images\/([^)"']+)\1\)/g,
     (_m, _q, file: string) => {
       try {
@@ -75,8 +83,18 @@ function inlineStyle(lib: (typeof STYLED)[number]): void {
       }
     },
   );
-  Bun.write(path.join(outDir, lib.name), css);
-  console.log(`[vendor-gen-ui] ${lib.name} (${(css.length / 1024).toFixed(0)} KB, images inlined)`);
+}
+
+/** Style-injection snippet appended to a lib module (runs on import). */
+function styleInjection(css: string): string {
+  if (!css) return "";
+  return (
+    "\n;(() => {\n" +
+    '  const s = document.createElement("style");\n' +
+    `  s.textContent = ${JSON.stringify(css)};\n` +
+    "  (document.head || document.documentElement).appendChild(s);\n" +
+    "})();\n"
+  );
 }
 
 async function bundleLib(lib: { name: string; entry: string; global: string }): Promise<void> {
@@ -115,8 +133,12 @@ async function bundleLib(lib: { name: string; entry: string; global: string }): 
       return;
     }
     mkdirSync(outDir, { recursive: true });
-    Bun.write(dest, bundled);
-    console.log(`[vendor-gen-ui] ${lib.name} (${(bundled.length / 1024).toFixed(0)} KB, ESM ${lib.global})`);
+    const styled = STYLED.find((s) => s.jsName === lib.name);
+    const extra = styled ? styleInjection(inlineStyle(styled)) : "";
+    Bun.write(dest, bundled + extra);
+    console.log(
+      `[vendor-gen-ui] ${lib.name} (${((bundled.length + extra.length) / 1024).toFixed(0)} KB, ESM ${lib.global}${extra ? " + css" : ""})`,
+    );
     rmSync(tmpOut, { recursive: true, force: true });
   } catch (err) {
     if (existsSync(dest)) {
@@ -129,8 +151,7 @@ async function bundleLib(lib: { name: string; entry: string; global: string }): 
 
 export async function vendorGenUiLibs(): Promise<void> {
   mkdirSync(outDir, { recursive: true });
-  for (const lib of BUNDLED) await bundleLib(lib);
-  for (const lib of STYLED) inlineStyle(lib);
+  for (const lib of BUNDLED) await bundleLib(lib); // styles embed here
 }
 
 if (import.meta.main) await vendorGenUiLibs();
