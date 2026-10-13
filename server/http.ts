@@ -40,7 +40,9 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
       [
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client 'sha256-iKw46DCzbOwveIMV5nHtaw7pEHqZ/HG5qLLxyrscv1w=' 'sha256-udweQu0/QO+buA7Ub3sQ33gElcVLpH0v6ZhZe9H8LB8='",
-        "frame-src https://accounts.google.com/gsi/",
+        // 'self' hosts sandboxed Generative UI widget documents
+        // (/api/indirect-code/gen-ui/widgets/:id, CSP-sandboxed themselves).
+        "frame-src 'self' https://accounts.google.com/gsi/",
         "connect-src 'self' https://accounts.google.com/gsi/ https://api.iconify.design",
         "img-src 'self' data:",
         "style-src 'self' 'unsafe-inline'",

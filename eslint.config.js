@@ -16,6 +16,8 @@ export default tseslint.config(
       "patches/**",
       "**/*.wasm",
       "docs/**",
+      // Vendored browser assets (generative UI sandbox libraries).
+      "web/public/**",
       // Third-party reference snapshots (git-ignored, carry their own configs).
       "remote-code-ref/**",
       // Local scratch/reference checkouts (not part of this repo's build).

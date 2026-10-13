@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import tailwindPlugin from "./plugins/tailwind-plugin";
 import solidPlugin from "./plugins/solid-plugin";
 import iconifyPlugin from "./plugins/iconify-solid-plugin";
+import { vendorGenUiLibs } from "./scripts/vendor-gen-ui-libs";
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.join(ROOT, "dist");
@@ -51,6 +52,10 @@ async function build() {
     process.exit(1);
   }
 
+  // Generative UI sandbox libraries (d3, gsap, chart.js, three...) inlined
+  // into widget frames.
+  console.log("[build] Vendoring generative UI sandbox libraries...");
+  await vendorGenUiLibs();
   // Static legal pages + any other public assets (served as-is by the backend).
   if (existsSync(path.join(ROOT, "web", "public"))) {
     cpSync(path.join(ROOT, "web", "public"), distDir, { recursive: true });
