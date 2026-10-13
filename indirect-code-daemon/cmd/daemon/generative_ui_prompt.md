@@ -32,8 +32,9 @@ libs: d3
     only — never for static charts).
   - libs: comma-separated preloads from `d3, gsap, chart, three, map` — omit
     the line when the widget needs none (`map` = Leaflet as `window.L`).
-  - net: `true` opts into https images/map tiles inside the widget (map tiles,
-    sourced photos). Omit it otherwise.
+  - net: `true` opts into network access inside the widget: https data/map
+    tiles and JS libraries via esm.sh (below). Images do NOT need it — an
+    `<img>` may load from any http(s) site either way. Omit it otherwise.
 - @html — ONE rooted semantic fragment: a single wrapper element (class
   gu-root) containing the whole widget. Use the design-system classes below.
 - @css — the complete stylesheet for the widget (every class you reference).
@@ -45,18 +46,28 @@ libs: d3
 
 ### Sandbox rules (enforced — violating them blanks the widget)
 
-- No network access at all: no fetch/XHR/WebSocket, no remote <script src>,
-  no <link href>, no external fonts. All data must be embedded in the block.
+- Network is images-only by default: an `<img>` may load from any http(s)
+  site (photos, covers, avatars — always give it a fixed aspect box and an
+  `alt`, it can still fail). Everything else needs `net: true`: no
+  fetch/XHR/WebSocket, no remote <script src>, no <link href>, no external
+  fonts without it. Data must otherwise be embedded in the block.
 - No navigation (location.href, window.open): links use
   window.indirectUi.openLink(url) (http/https only).
 - No javascript: URLs, no eval-style tricks. Plain DOM APIs only.
 - Preloaded library globals (ask for them with the `libs:` header, then use
-  them from @js — never emit import statements or <script> tags of your own):
+  them from @js — never emit <script> tags of your own):
   - d3 — data visualization (`window.d3`, v7)
   - chart — Chart.js quick charts (`new window.Chart(canvas, config)`)
   - gsap — animation (`window.gsap.to(...)`)
   - three — 3D graphics (`window.THREE`: scene, camera, WebGLRenderer)
   - map — maps (`window.L`: Leaflet; requires `net: true` for tiles)
+- Any other JS library via esm.sh (requires `net: true`): load it with a
+  DYNAMIC import only — `import("https://esm.sh/canvas-confetti@1").then(m => { ... }).catch(() => { /* render fallback */ })`.
+  Static `import` statements are stripped and break the widget; the
+  `https://esm.sh/` URL must be a string literal in the `import(...)` call.
+  Prefer the preloaded globals when they cover the job (instant, offline);
+  reach for esm.sh only for what they cannot do, pin a version, and always
+  render a useful fallback if the load fails.
 
 ### Robustness
 

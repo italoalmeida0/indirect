@@ -149,22 +149,28 @@ describe("gen-ui widget routes", () => {
     })).json();
     const res = await get(out.url);
     const csp = res.headers.get("content-security-policy") || "";
-    expect(csp).toContain("img-src data: blob: https:");
+    expect(csp).toContain("img-src data: blob: https: http:");
     expect(csp).toContain("connect-src https:");
+    // esm.sh is the one extra script origin for net widgets.
+    expect(csp).toContain("https://esm.sh");
     expect(csp).toContain("sandbox allow-scripts");
     const html = await res.text();
     expect(html).toContain("window.L=");
     expect(html).toContain("leaflet"); // css inlined (images as data URIs)
     expect(html).not.toContain("url(images/");
-    // Strict widgets (no net) must not gain https access.
+    // Strict widgets (no net): images may load from any http(s) site, but
+    // data connections and esm.sh scripts stay locked out.
     const strict: any = await (await post("/api/indirect-code/gen-ui/widgets", {
       theme: "light",
       html: '<div class="gu-root">x</div>',
       css: "", js: "window.__made = 2;", stateJSON: "{}", initialHeight: 320,
     })).json();
     const strictCsp = (await get(strict.url)).headers.get("content-security-policy") || "";
-    expect(strictCsp).not.toContain("https:");
+    expect(strictCsp).toContain("img-src data: blob: https: http:");
+    expect(strictCsp).not.toContain("esm.sh");
     expect(strictCsp).toContain("connect-src 'none'");
+    const strictScriptSrc = strictCsp.split(";").map((s) => s.trim()).find((s) => s.startsWith("script-src")) || "";
+    expect(strictScriptSrc).not.toContain("https:");
   });
 
   test("widgets default to the d3 bundle and never inline unknown libs", async () => {

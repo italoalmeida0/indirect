@@ -5,7 +5,7 @@
  * messages before any of them reaches application code.
  *
  * Threat model: the widget document contains model-generated JS. It is not
- * trusted. The bridge accepts exactly three ops, clamps every value and
+ * trusted. The bridge accepts exactly four ops, clamps every value and
  * never forwards the raw message.
  */
 
@@ -13,12 +13,16 @@ export type GuBridgeOps = {
   onSendPrompt: (text: string) => void;
   onOpenLink: (url: string) => void;
   onResize: (height: number) => void;
+  /** Runtime error reported by the widget (shown in the host error footer). */
+  onError?: (message: string) => void;
 };
 
 /** A widget may ask for follow-ups, but never spam: cap the op rate. */
 const MAX_OPS_PER_MINUTE = 60;
 /** Follow-up prompt text is user-visible content; keep it sane. */
 const MAX_PROMPT_CHARS = 2000;
+/** Error text is user-visible content too; keep it one short line. */
+const MAX_ERROR_CHARS = 500;
 /** Reported heights are clamped so a hostile widget cannot blow up layout. */
 export const MIN_FRAME_HEIGHT = 64;
 export const MAX_FRAME_HEIGHT = 4000;
@@ -63,7 +67,7 @@ export function attachGuBridge(
   const handler = (event: MessageEvent) => {
     if (event.source !== frameWindow()) return;
     const data: any = event.data;
-    if (!data || typeof data !== "object" || data.__gu !== "sendPrompt" && data.__gu !== "openLink" && data.__gu !== "resize") return;
+    if (!data || typeof data !== "object" || data.__gu !== "sendPrompt" && data.__gu !== "openLink" && data.__gu !== "resize" && data.__gu !== "error") return;
     if (!rateOk()) return;
     switch (data.__gu) {
       case "sendPrompt": {
@@ -78,6 +82,11 @@ export function attachGuBridge(
       }
       case "resize": {
         ops.onResize(clampFrameHeight(Number(data.height)));
+        return;
+      }
+      case "error": {
+        const message = typeof data.message === "string" ? data.message.slice(0, MAX_ERROR_CHARS).trim() : "";
+        if (message) ops.onError?.(message);
         return;
       }
     }

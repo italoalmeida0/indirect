@@ -35,8 +35,9 @@ export type GenerativeUiData = {
   /** Libraries to preload as globals (`libs: d3, three` header). */
   libs?: string[];
   /**
-   * Opt-in network capability (`net: true` header): https images/tiles/data
-   * inside the widget (map tiles, sourced photos). Off by default.
+   * Opt-in network capability (`net: true` header): https data/tiles and
+   * esm.sh dynamic imports inside the widget. Plain http(s) images work
+   * without it. Off by default.
    */
   net?: boolean;
 };
@@ -128,6 +129,25 @@ export const GENERATIVE_UI_LANGS = new Set(["generative_ui", "genui"]);
 export type GenerativeUiSegment =
   | { kind: "md"; text: string }
   | { kind: "widget"; body: string; closed: boolean; lang: string };
+
+export type GenerativeUiSegmentWithId = GenerativeUiSegment & { id: string };
+
+/**
+ * Stable segment identity for store reconciliation. Streaming is append-only
+ * at the tail (segments before the growing one never move), so index+kind is
+ * a durable key: the markdown run before a fence keeps its id after the fence
+ * completes, and a kind flip at an index (a partial fence line resolving into
+ * a widget) changes the id, remounting exactly that one segment.
+ */
+export function generativeUiSegmentId(seg: GenerativeUiSegment, index: number): string {
+  return `s${index}:${seg.kind}`;
+}
+
+export function withGenerativeUiSegmentIds(
+  segs: GenerativeUiSegment[],
+): GenerativeUiSegmentWithId[] {
+  return segs.map((seg, i) => ({ ...seg, id: generativeUiSegmentId(seg, i) }));
+}
 
 const FENCE_OPEN_RE = /^( {0,3})(`{3,})\s*(\S*)\s*$/;
 

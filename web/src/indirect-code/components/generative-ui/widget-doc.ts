@@ -393,9 +393,16 @@ export function escapeStyleClose(raw: string): string {
  * sandbox forbids are stripped before they ever reach the frame (the Go-side
  * prompt forbids them too; this is the enforcement layer).
  */
-export function sanitizeModelJS(js: string): string {
+/** Dynamic imports are allowed only from this CDN, and only in net widgets. */
+const ESM_SH_DYNAMIC_IMPORT = /\bimport\s*\(\s*["']https:\/\/esm\.sh\//;
+
+export function sanitizeModelJS(js: string, opts?: { allowEsmSh?: boolean }): string {
   const out: string[] = [];
   for (const line of js.split("\n")) {
+    if (opts?.allowEsmSh && ESM_SH_DYNAMIC_IMPORT.test(line)) {
+      out.push(line);
+      continue;
+    }
     if (/\b(import\s|export\s|import\(|eval\s*\(|new\s+Function\s*\()/.test(line)) continue;
     if (/\b(location\s*\.\s*(href|assign|replace)|window\s*\.\s*open\s*\(|top\s*\.\s*location|parent\s*\.\s*location)/.test(line)) continue;
     if (/\b(fetch\s*\(|XMLHttpRequest|WebSocket|importScripts\s*\(|navigator\s*\.\s*sendBeacon)/.test(line)) continue;
@@ -463,7 +470,9 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     var min = Number(el.min) || 0, max = Number(el.max);
     if (!Number.isFinite(max) || max <= min) max = min + 100;
     var pct = ((Number(el.value) - min) / (max - min)) * 100;
-    if (Number.isFinite(pct)) el.style.setProperty("--p", Math.min(100, Math.max(0, pct)) + "%");
+    if (!Number.isFinite(pct)) return;
+    var next = Math.min(100, Math.max(0, pct)) + "%";
+    if (el.style.getPropertyValue("--p") !== next) el.style.setProperty("--p", next);
   }
   function __syncSliders(scope) {
     var list = (scope || document).querySelectorAll('input[type="range"]');
@@ -500,13 +509,25 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
       if (typeof ResizeObserver === "function") new ResizeObserver(__scheduleHeight).observe(root);
     } catch {}
     try {
+      // childList only: observing style/class attributes self-triggers on
+      // slider fill writes and fires per frame during gsap/canvas
+      // animations. Size changes from attribute churn are ResizeObserver's
+      // job above; this observer only needs newly added nodes/sliders.
       new MutationObserver(function () { __syncSliders(document); __scheduleHeight(); })
-        .observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] });
+        .observe(root, { childList: true, subtree: true });
     } catch {}
     window.addEventListener("load", __scheduleHeight);
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", __bootObservers);
   else __bootObservers();
+  // Uncaught model errors (including async/esm load failures) surface in
+  // the host error footer instead of dying silently inside the frame.
+  window.addEventListener("error", function (ev) {
+    if (ev && ev.message) reportError(ev.error || ev.message);
+  });
+  window.addEventListener("unhandledrejection", function (ev) {
+    reportError((ev && ev.reason) || "Unhandled promise rejection");
+  });
   // Runs when the widget leaves the page (iframe swap, navigation, close).
   window.addEventListener("pagehide", runDestroy);
 })();
@@ -525,7 +546,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
  * widget CSP has no 'unsafe-eval', and a syntax error in the body only
  * kills this one script element.
  */
-export function buildModelScript(js: string): string {
+export function buildModelScript(js: string, opts?: { allowEsmSh?: boolean }): string {
   return `
 (function () {
   "use strict";
@@ -536,7 +557,7 @@ export function buildModelScript(js: string): string {
   var $onResize = window.__gu && window.__gu.onResize || function () {};
   try {
     var __result = (function () {
-${escapeScriptClose(sanitizeModelJS(js))}
+${escapeScriptClose(sanitizeModelJS(js, opts))}
     })();
     if (__result && typeof __result.destroy === "function") $onDestroy(__result.destroy);
   } catch (err) {
@@ -570,18 +591,26 @@ export type WidgetDocParams = {
 const LIB_ORDER = ["d3", "gsap", "chart", "three", "map"];
 
 /**
- * Opt-in network variant (`net: true` DSL header): the widget may fetch
- * https images and map tiles (OpenStreetMap/USGS style data). Scripts stay
- * nonce-only and no other protocol/origin is reachable — still no cookies or
- * same-origin access (the sandbox keeps the document in an opaque origin).
+ * Images may load from any http(s) site in every variant (photos, covers,
+ * avatars). Images cannot script or read the page, and the frame sends no
+ * referrer; everything beyond images stays locked down per variant below.
+ */
+const WIDGET_IMG_SRC = "img-src data: blob: https: http:";
+
+/**
+ * Opt-in network variant (`net: true` DSL header): on top of any-site
+ * images, the widget may fetch https data/map tiles and dynamically import
+ * JS libraries from esm.sh (the only allowed script origin besides the
+ * nonce). Still no cookies or same-origin access — the sandbox keeps the
+ * document in an opaque origin.
  */
 export function widgetNetCSP(nonce: string): string {
   return [
     "sandbox allow-scripts",
     "default-src 'none'",
-    "img-src data: blob: https:",
+    WIDGET_IMG_SRC,
     "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${nonce}' https://esm.sh`,
     "font-src data:",
     "connect-src https:",
     "form-action 'none'",
@@ -594,10 +623,11 @@ export function widgetCSP(nonce: string): string {
   return [
     // `sandbox allow-scripts` applies even when the document is opened at
     // top level: the widget always runs in an opaque origin, no cookies, no
-    // storage, no network — capability-wise identical to a sandboxed iframe.
+    // storage, no network beyond http(s) images — otherwise identical to a
+    // sandboxed iframe.
     "sandbox allow-scripts",
     "default-src 'none'",
-    "img-src data: blob:",
+    WIDGET_IMG_SRC,
     "style-src 'unsafe-inline'",
     `script-src 'nonce-${nonce}'`,
     "font-src data:",
@@ -616,9 +646,9 @@ export function widgetCSP(nonce: string): string {
 export function widgetMetaNetCSP(nonce: string): string {
   return [
     "default-src 'none'",
-    "img-src data: blob: https:",
+    WIDGET_IMG_SRC,
     "style-src 'unsafe-inline'",
-    `script-src 'nonce-${nonce}'`,
+    `script-src 'nonce-${nonce}' https://esm.sh`,
     "font-src data:",
     "connect-src https:",
     "form-action 'none'",
@@ -629,7 +659,7 @@ export function widgetMetaNetCSP(nonce: string): string {
 export function widgetMetaCSP(nonce: string): string {
   return [
     "default-src 'none'",
-    "img-src data: blob:",
+    WIDGET_IMG_SRC,
     "style-src 'unsafe-inline'",
     `script-src 'nonce-${nonce}'`,
     "font-src data:",
@@ -667,7 +697,7 @@ ${params.html || ""}
 ${libScripts}<script nonce="${params.scriptNonce}">${escapeScriptClose(buildRuntimeScript({
     stateJSON: params.stateJSON,
   }))}</script>
-<script nonce="${params.scriptNonce}">${escapeScriptClose(buildModelScript(params.js))}</script>
+<script nonce="${params.scriptNonce}">${escapeScriptClose(buildModelScript(params.js, { allowEsmSh: params.net === true }))}</script>
 </body></html>`;
 }
 

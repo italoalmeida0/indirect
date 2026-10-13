@@ -26,7 +26,8 @@ import { createHash } from "crypto";
  *  - every response carries `Content-Security-Policy: sandbox allow-scripts;
  *    default-src 'none'; ...` — the CSP `sandbox` directive applies even when
  *    the document is opened at top level, so the widget always runs in an
- *    opaque origin with no network access;
+ *    opaque origin (network limited to http(s) images, plus https/esm.sh
+ *    when the widget opts into `net`);
  *  - widget ids are sha256(content): unguessable and deduplicated. No auth is
  *    required to fetch a widget (iframes cannot send headers) and a widget
  *    document is inert without its exact content hash.
@@ -75,7 +76,8 @@ function putWidget(id: string, html: string, net: boolean): WidgetEntry {
 
 /**
  * Widget libraries (d3, gsap, chart.js, three) are inlined into widget
- * documents (the sandbox has no network access). Sources come from the
+ * documents so they work offline (scripts are nonce-only; esm.sh is the
+ * `net` opt-in escape hatch for anything else). Sources come from the
  * vendored build output, falling back to node_modules for dev checkouts.
  * Cached per library; a missing library is simply omitted.
  */
