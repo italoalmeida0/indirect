@@ -175,9 +175,39 @@ describe("IR request and target regressions", () => {
   test("chat encode emits reasoning_effort only for reasoning targets or explicit client effort (live 2026-09-26: gpt-4o-mini 400s it)", async () => {
     const base = { model: "m", system: "", warnings: [], messages: [{ role: "user" as const, blocks: [{ type: "text" as const, text: "hi" }] }], tools: [], toolChoice: { mode: "auto" as const }, params: {} };
     expect((encodeIR("openai", base, "gpt-4o-mini") as any).reasoning_effort).toBeUndefined();
-    expect((encodeIR("openai", base, "gpt-5.6-luna") as any).reasoning_effort).toBe("low");
+    expect((encodeIR("openai", base, "gpt-5.6-luna") as any).reasoning_effort).toBe("high");
     const asked = { ...base, params: { reasoningEffort: "high" } };
     expect((encodeIR("openai", asked, "gpt-4o-mini") as any).reasoning_effort).toBe("high");
+  });
+  test("anthropic effort survives translation: output_config tier, budget tiers, explicit off", async () => {
+    const base = { model: "hf:zai-org/GLM-5.3-Flash", max_tokens: 64000, messages: [{ role: "user", content: "hi" }] };
+    // Adaptive output_config carries the exact tier (daemon sessions).
+    const max = await decodeToIR("anthropic", { ...base, thinking: { type: "enabled", budget_tokens: 32768 }, output_config: { effort: "max" } });
+    expect(max.params.reasoningEffort).toBe("max");
+    expect((encodeIR("openai", max, "hf:zai-org/GLM-5.3-Flash") as any).reasoning_effort).toBe("max");
+    expect((encodeIR("responses", max, "hf:zai-org/GLM-5.3-Flash") as any).reasoning).toEqual({ effort: "max" });
+    // Manual budgets map onto tiers instead of a blanket "high".
+    for (const [budget, want] of [[512, "low"], [2048, "medium"], [8192, "high"], [16384, "xhigh"], [32768, "max"]] as const) {
+      const ir = await decodeToIR("anthropic", { ...base, thinking: { type: "enabled", budget_tokens: budget } });
+      expect(ir.params.reasoningEffort).toBe(want);
+    }
+    // Explicit off: no effort hint on ANY egress and no family default.
+    const off = await decodeToIR("anthropic", { ...base, thinking: { type: "disabled" } });
+    expect(off.params.reasoningEffort).toBe("none");
+    expect((encodeIR("openai", off, "hf:zai-org/GLM-5.3-Flash") as any).reasoning_effort).toBeUndefined();
+    expect((encodeIR("responses", off, "hf:zai-org/GLM-5.3-Flash") as any).reasoning).toBeUndefined();
+  });
+  test("native anthropic attempts keep manual thinking and drop the gateway tier", () => {
+    const dual = { model: "m", thinking: { type: "enabled", budget_tokens: 32768 }, output_config: { effort: "max" }, messages: [] };
+    const out: any = normalizeAttemptBody(dual, { via: "anthropic", upstreamModel: "m" });
+    expect(out.output_config).toBeUndefined();
+    expect(out.thinking).toEqual({ type: "enabled", budget_tokens: 32768 });
+    const offOut: any = normalizeAttemptBody({ model: "m", output_config: { effort: "none" }, messages: [] }, { via: "anthropic", upstreamModel: "m" });
+    expect(offOut.output_config).toBeUndefined();
+    expect(offOut.thinking).toEqual({ type: "disabled" });
+    // Chat wires represent explicit off by absence, never effort:"none".
+    const chat: any = normalizeAttemptBody({ model: "m", reasoning_effort: "none", messages: [] }, { via: "openai", upstreamModel: "gpt-5.6-luna" });
+    expect(chat.reasoning_effort).toBeUndefined();
   });
   test("compacted tool ids cannot collide with existing ids", () => {
     const long = "a".repeat(100);

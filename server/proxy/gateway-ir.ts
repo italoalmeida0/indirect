@@ -57,7 +57,9 @@ export interface IRParams {
   topP?: number;
   stopSequences?: string[];
   stream?: boolean;
-  /** Reasoning effort hint ("low"|"medium"|"high"|"max"| custom string). */
+  /** Reasoning effort hint ("none"|"minimum"|"low"|"medium"|"high"|
+   *  "xhigh"|"max"| custom string). "none" is an EXPLICIT client choice
+   *  (encoders omit the hint instead of applying their default). */
   reasoningEffort?: string;
 }
 
@@ -82,6 +84,63 @@ const asRecord = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 
 const asArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+
+/** Canonicalize a client reasoning-effort value. Known aliases map to
+ *  the shared tier names; unknown provider-specific strings pass
+ *  through trimmed. Empty/non-string input stays undefined. */
+function normalizeReasoningEffortValue(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  switch (trimmed.toLowerCase()) {
+    case "off":
+    case "none":
+    case "disabled":
+      return "none";
+    case "min":
+    case "minimal":
+    case "minimum":
+      return "minimum";
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return trimmed.toLowerCase();
+    case "maximum":
+      return "xhigh";
+    default:
+      return trimmed;
+  }
+}
+
+function isReasoningOff(effort: string | undefined): boolean {
+  return normalizeReasoningEffortValue(effort) === "none";
+}
+
+/** Map an Anthropic manual thinking budget onto the nearest effort
+ *  tier (no/invalid budget = the historical "high"). */
+function effortFromThinkingBudget(budget: unknown): string {
+  if (typeof budget !== "number" || !Number.isFinite(budget) || budget <= 0) return "high";
+  if (budget <= 1024) return "low";
+  if (budget <= 4096) return "medium";
+  if (budget <= 8192) return "high";
+  if (budget <= 16384) return "xhigh";
+  return "max";
+}
+
+/** The effort an Anthropic-messages client actually asked for:
+ *  `thinking:{type:"disabled"}` is explicit off; adaptive
+ *  `output_config.effort` carries the exact tier; manual
+ *  `thinking:{type:"enabled",budget_tokens}` maps by budget. */
+function anthropicReasoningEffort(body: Record<string, unknown>): string | undefined {
+  const thinking = asRecord(body.thinking);
+  if (thinking.type === "disabled") return "none";
+  const adaptive = normalizeReasoningEffortValue(asRecord(body.output_config).effort);
+  if (adaptive !== undefined) return adaptive;
+  if (thinking.type === "enabled") return effortFromThinkingBudget(thinking.budget_tokens);
+  return undefined;
+}
 
 function blockText(v: unknown): string {
   const r = asRecord(v);
@@ -343,7 +402,7 @@ export async function decodeChatToIR(body: Record<string, unknown>): Promise<Gat
       topP: typeof body.top_p === "number" ? body.top_p : undefined,
       stopSequences: stops.length ? stops : undefined,
       stream: body.stream === true ? true : undefined,
-      reasoningEffort: typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined,
+      reasoningEffort: normalizeReasoningEffortValue(body.reasoning_effort),
     },
     warnings,
   };
@@ -458,7 +517,6 @@ export async function decodeAnthropicToIR(body: Record<string, unknown>): Promis
     };
   }).filter((t) => t.name);
 
-  const thinking = asRecord(body.thinking);
   return {
     model: String(body.model ?? ""),
     system: systemToString(body.system),
@@ -471,7 +529,7 @@ export async function decodeAnthropicToIR(body: Record<string, unknown>): Promis
       topP: typeof body.top_p === "number" ? body.top_p : undefined,
       stopSequences: asArr(body.stop_sequences).filter((s): s is string => typeof s === "string"),
       stream: body.stream === true ? true : undefined,
-      reasoningEffort: thinking.type === "enabled" ? "high" : undefined,
+      reasoningEffort: anthropicReasoningEffort(body),
     },
     warnings,
   };
@@ -648,7 +706,7 @@ export async function decodeResponsesToIR(body: Record<string, unknown>): Promis
       temperature: typeof body.temperature === "number" ? body.temperature : undefined,
       topP: typeof body.top_p === "number" ? body.top_p : undefined,
       stream: body.stream === true ? true : undefined,
-      reasoningEffort: typeof asRecord(body.reasoning).effort === "string" ? String(asRecord(body.reasoning).effort) : undefined,
+      reasoningEffort: normalizeReasoningEffortValue(asRecord(body.reasoning).effort),
     },
     warnings,
   };
@@ -781,8 +839,12 @@ export function encodeIRToChat(ir: GatewayRequest, model: string): Record<string
   // (live 2026-09-26: anthropic->chat translation to gpt-4o-mini failed
   // with "Unrecognized request argument supplied: reasoning_effort").
   // normalizeForTarget strips any remainder for non-reasoning targets.
-  if (ir.params.reasoningEffort !== undefined || isReasoningTarget(model)) {
-    out.reasoning_effort = ir.params.reasoningEffort ?? "low";
+  if (ir.params.reasoningEffort !== undefined) {
+    // Explicit off wins over the reasoning-family default below: omit
+    // the hint entirely instead of replacing "none" with that default.
+    if (!isReasoningOff(ir.params.reasoningEffort)) out.reasoning_effort = ir.params.reasoningEffort;
+  } else if (isReasoningTarget(model)) {
+    out.reasoning_effort = "high";
   }
   if (out.stream === true) out.stream_options = { include_usage: true };
   return out;
@@ -885,8 +947,10 @@ export function encodeIRToAnthropic(ir: GatewayRequest, model: string): Record<s
   // and forced tool choice cannot support manual thinking.
   const effort = ir.params.reasoningEffort;
   const supportsThinking = /claude.*(?:3[.-]7|(?:sonnet|opus|haiku)[.-]4|4[.-](?:sonnet|opus))/.test(model.toLowerCase());
-  const budget = Math.min(({ low: 1024, medium: 4096, high: 8192, max: 10000 } as Record<string, number>)[effort ?? ""] ?? 1024, Number(out.max_tokens) - 1);
-  if (supportsThinking && effort && !["none", "minimal"].includes(effort) && budget >= 1024 && !["required", "named"].includes(ir.toolChoice.mode)) {
+  const budget = Math.min(({ minimum: 1024, low: 1024, medium: 4096, high: 8192, xhigh: 10000, max: 10000 } as Record<string, number>)[effort ?? ""] ?? 1024, Number(out.max_tokens) - 1);
+  if (supportsThinking && isReasoningOff(effort)) {
+    out.thinking = { type: "disabled" };
+  } else if (supportsThinking && effort && budget >= 1024 && !["required", "named"].includes(ir.toolChoice.mode)) {
     out.thinking = { type: "enabled", budget_tokens: budget };
     delete out.temperature;
     delete out.top_p;
@@ -965,7 +1029,7 @@ export function encodeIRToResponses(ir: GatewayRequest, model: string): Record<s
   }
   if (ir.params.temperature !== undefined) out.temperature = ir.params.temperature;
   if (ir.params.topP !== undefined) out.top_p = ir.params.topP;
-  if (ir.params.reasoningEffort !== undefined) out.reasoning = { effort: ir.params.reasoningEffort };
+  if (ir.params.reasoningEffort !== undefined && !isReasoningOff(ir.params.reasoningEffort)) out.reasoning = { effort: ir.params.reasoningEffort };
   return out;
 }
 

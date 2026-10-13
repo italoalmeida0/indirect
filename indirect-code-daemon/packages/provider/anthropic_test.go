@@ -65,6 +65,62 @@ func TestAnthropicBuildRequest(t *testing.T) {
 	}
 }
 
+// The selected session effort must reach the gateway on the wire:
+// exact adaptive tier in output_config plus a manual thinking budget.
+// Regression: buildRequest used to drop req.Reasoning entirely, so the
+// gateway defaulted every reasoning model to "low".
+func TestAnthropicBuildRequestReasoningEffort(t *testing.T) {
+	glm := Model{ID: "hf:zai-org/GLM-5.3-Flash", Reasoning: true,
+		ReasoningLevelMap: map[string]string{"low": "low", "high": "high", "max": "max"},
+		ContextWindow:     524288, MaxOutput: 65536}
+	build := func(c *anthropicClient, effort string, maxTok int) *anthRequest {
+		wire, err := c.buildRequest(Request{Model: "m", Reasoning: effort, MaxTokens: maxTok,
+			Messages: []Message{{Role: RoleUser, Content: []Content{TextBlock{Text: "hi"}}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wire
+	}
+
+	c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", glm).(*anthropicClient)
+	wire := build(c, "max", 64000)
+	if wire.OutputConfig == nil || wire.OutputConfig.Effort != "max" {
+		t.Fatalf("max effort not on wire: %+v", wire.OutputConfig)
+	}
+	if wire.Thinking == nil || wire.Thinking.Type != "enabled" || wire.Thinking.BudgetTokens != 32768 {
+		t.Fatalf("max thinking budget wrong: %+v", wire.Thinking)
+	}
+	body, _ := json.Marshal(wire)
+	if !strings.Contains(string(body), `"output_config":{"effort":"max"}`) {
+		t.Fatalf("serialized request missing effort: %s", body)
+	}
+
+	// A model that doesn't advertise max clamps to its nearest tier.
+	generic := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{ID: "m", Reasoning: true}).(*anthropicClient)
+	if got := build(generic, "max", 64000).OutputConfig.Effort; got != "high" {
+		t.Fatalf("generic max clamp = %q, want high", got)
+	}
+
+	// Explicit off disables thinking and sends no effort tier, so the
+	// gateway cannot substitute its own default.
+	off := build(c, "none", 64000)
+	if off.OutputConfig != nil {
+		t.Fatalf("off must not send output_config: %+v", off.OutputConfig)
+	}
+	if off.Thinking == nil || off.Thinking.Type != "disabled" {
+		t.Fatalf("off must disable thinking: %+v", off.Thinking)
+	}
+
+	// Manual budget always stays strictly below max_tokens.
+	small := build(c, "low", 1500)
+	if small.Thinking == nil || small.Thinking.BudgetTokens >= 1500 {
+		t.Fatalf("budget must clamp below max_tokens: %+v", small.Thinking)
+	}
+	if small.OutputConfig == nil || small.OutputConfig.Effort != "low" {
+		t.Fatalf("low effort not on wire: %+v", small.OutputConfig)
+	}
+}
+
 func TestAnthropicHeadersAndPath(t *testing.T) {
 	var path, key, ver string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

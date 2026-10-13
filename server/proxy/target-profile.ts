@@ -199,7 +199,7 @@ export function profileForTarget(src: ProfileSource): TargetProfile {
   // thinking. A controlled A/B on z-ai/glm-5.3-flash proved the opposite —
   // WITHOUT effort: 4000/4000 reasoning, finish:length, zero text (28s);
   // WITH effort:"low": finish:stop, 3388 chars of code, 0 reasoning (8s).
-  // So effort is FORWARDED (including the IR default "low").
+  // So effort is FORWARDED (including the IR default "high").
   return profile;
 }
 
@@ -284,6 +284,11 @@ export function applyBlockFilter(body: Record<string, unknown>, dropTypes: strin
   return { ...body };
 }
 
+/** True for an explicit reasoning-off value in any client dialect. */
+function effortIsOff(v: unknown): boolean {
+  return typeof v === "string" && ["off", "none", "disabled"].includes(v.trim().toLowerCase());
+}
+
 /**
  * Normalize ANY request body for a concrete upstream attempt — including
  * same-protocol ("passthrough") ones. This is the universal pass every
@@ -300,6 +305,29 @@ export function normalizeForTarget(
   via: WireProto = "openai",
 ): Record<string, unknown> {
   let out = via === "openai" ? applyOutputLimitKey(body, profile.outputLimitKey) : body;
+  // Explicit reasoning-off is represented by ABSENCE on chat/responses
+  // wires (strict upstreams reject "none" as an effort value) and by
+  // thinking:{type:"disabled"} on Anthropic wires.
+  if (effortIsOff(out.reasoning_effort)) {
+    const { reasoning_effort: _dropOff, ...rest } = out;
+    out = rest;
+  }
+  if (effortIsOff(asRecord(out.reasoning).effort)) {
+    const { reasoning: _dropOffReasoning, ...rest } = out;
+    out = rest;
+  }
+  if (via === "anthropic" && "output_config" in out) {
+    if (effortIsOff(asRecord(out.output_config).effort)) {
+      const { output_config: _dropCfg, ...rest } = out;
+      out = "thinking" in rest ? rest : { ...rest, thinking: { type: "disabled" } };
+    } else if (asRecord(out.thinking).type === "enabled") {
+      // Dual-encoded clients (manual budget + adaptive tier): a native
+      // Anthropic attempt speaks the manual form; the tier is for the
+      // gateway's translated egresses and must not ride along.
+      const { output_config: _dropCfg, ...rest } = out;
+      out = rest;
+    }
+  }
   if (!profile.forwardReasoningEffort && "reasoning_effort" in out) {
     const { reasoning_effort: _drop, ...rest } = out;
     out = rest;

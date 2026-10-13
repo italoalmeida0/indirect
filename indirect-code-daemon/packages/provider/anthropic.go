@@ -112,13 +112,24 @@ type anthTool struct {
 	CacheControl *anthCacheControl `json:"cache_control,omitempty"`
 }
 
+type anthThinking struct {
+	Type         string `json:"type"` // "enabled" | "disabled"
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
+}
+
+type anthOutputConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
 type anthRequest struct {
-	Model     string        `json:"model"`
-	System    interface{}   `json:"system,omitempty"` // []anthSystemBlock
-	Messages  []anthMessage `json:"messages"`
-	Tools     []anthTool    `json:"tools,omitempty"`
-	MaxTokens int           `json:"max_tokens"`
-	Stream    bool          `json:"stream"`
+	Model        string            `json:"model"`
+	System       interface{}       `json:"system,omitempty"` // []anthSystemBlock
+	Messages     []anthMessage     `json:"messages"`
+	Tools        []anthTool        `json:"tools,omitempty"`
+	MaxTokens    int               `json:"max_tokens"`
+	Thinking     *anthThinking     `json:"thinking,omitempty"`
+	OutputConfig *anthOutputConfig `json:"output_config,omitempty"`
+	Stream       bool              `json:"stream"`
 }
 
 // ---- request building ----
@@ -163,6 +174,22 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		Model:     req.Model,
 		MaxTokens: maxTok,
 		Stream:    true,
+	}
+	// The session's selected effort MUST reach the gateway: emit it as
+	// adaptive output_config.effort (exact tier for translated egresses)
+	// plus a manual thinking budget (native Anthropic). Levels the
+	// active model doesn't advertise clamp to the nearest tier.
+	level := NormalizeReasoning(req.Reasoning)
+	if c.modelOverride != nil {
+		level = ClampReasoningForModel(m, level)
+	}
+	if level == "" {
+		out.Thinking = &anthThinking{Type: "disabled"}
+	} else {
+		out.OutputConfig = &anthOutputConfig{Effort: AnthropicAdaptiveEffort(level)}
+		if budget := min(ReasoningBudget(level), maxTok-1); budget >= 1024 {
+			out.Thinking = &anthThinking{Type: "enabled", BudgetTokens: budget}
+		}
 	}
 	if req.System != "" {
 		out.System = []anthSystemBlock{
