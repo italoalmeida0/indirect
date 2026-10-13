@@ -80,39 +80,51 @@ function inlineStyle(lib: (typeof STYLED)[number]): void {
 }
 
 async function bundleLib(lib: { name: string; entry: string; global: string }): Promise<void> {
-  const entry = path.join(ROOT, "scripts", "gen-ui-libs", lib.entry);
-  if (!existsSync(entry)) {
-    console.warn(`[vendor-gen-ui] missing entry ${entry}, skipping ${lib.name}`);
-    return;
+  const dest = path.join(outDir, lib.name);
+  try {
+    const entry = path.join(ROOT, "scripts", "gen-ui-libs", lib.entry);
+    if (!existsSync(entry)) {
+      console.warn(`[vendor-gen-ui] missing entry ${entry}, skipping ${lib.name}`);
+      return;
+    }
+    const tmpOut = path.join(ROOT, "node_modules", ".gen-ui-build");
+    rmSync(tmpOut, { recursive: true, force: true });
+    const result = await Bun.build({
+      entrypoints: [entry],
+      format: "esm",
+      target: "browser",
+      minify: true,
+      naming: { entry: "[name].esm.js" },
+      outdir: tmpOut,
+    });
+    if (!result.success) {
+      console.warn(`[vendor-gen-ui] bundle failed for ${lib.name}:`, result.logs);
+      if (existsSync(dest)) {
+        console.log(`[vendor-gen-ui] keeping existing committed ${lib.name}`);
+      }
+      return;
+    }
+    const bundled = await Bun.file(result.outputs[0].path).text();
+    // Sanity: the module must close itself and expose its global.
+    if (!/\bexport\s*\{/.test(bundled) && !/\bexport\s+default\b/.test(bundled)) {
+      console.warn(`[vendor-gen-ui] ${lib.name}: no exports in bundle, skipping`);
+      return;
+    }
+    if (!bundled.includes(`globalThis.${lib.global}=`) && !bundled.includes(`globalThis.${lib.global} =`)) {
+      console.warn(`[vendor-gen-ui] ${lib.name}: global ${lib.global} not assigned, skipping`);
+      return;
+    }
+    mkdirSync(outDir, { recursive: true });
+    Bun.write(dest, bundled);
+    console.log(`[vendor-gen-ui] ${lib.name} (${(bundled.length / 1024).toFixed(0)} KB, ESM ${lib.global})`);
+    rmSync(tmpOut, { recursive: true, force: true });
+  } catch (err) {
+    if (existsSync(dest)) {
+      console.warn(`[vendor-gen-ui] error bundling ${lib.name}, keeping existing committed file:`, err);
+    } else {
+      console.warn(`[vendor-gen-ui] error bundling ${lib.name}:`, err);
+    }
   }
-  const tmpOut = path.join(ROOT, "node_modules", ".gen-ui-build");
-  rmSync(tmpOut, { recursive: true, force: true });
-  const result = await Bun.build({
-    entrypoints: [entry],
-    format: "esm",
-    target: "browser",
-    minify: true,
-    naming: { entry: "[name].esm.js" },
-    outdir: tmpOut,
-  });
-  if (!result.success) {
-    console.warn(`[vendor-gen-ui] bundle failed for ${lib.name}:`, result.logs);
-    return;
-  }
-  const bundled = await Bun.file(result.outputs[0].path).text();
-  // Sanity: the module must close itself and expose its global.
-  if (!/\bexport\s*\{/.test(bundled) && !/\bexport\s+default\b/.test(bundled)) {
-    console.warn(`[vendor-gen-ui] ${lib.name}: no exports in bundle, skipping`);
-    return;
-  }
-  if (!bundled.includes(`globalThis.${lib.global}=`) && !bundled.includes(`globalThis.${lib.global} =`)) {
-    console.warn(`[vendor-gen-ui] ${lib.name}: global ${lib.global} not assigned, skipping`);
-    return;
-  }
-  mkdirSync(outDir, { recursive: true });
-  Bun.write(path.join(outDir, lib.name), bundled);
-  console.log(`[vendor-gen-ui] ${lib.name} (${(bundled.length / 1024).toFixed(0)} KB, ESM ${lib.global})`);
-  rmSync(tmpOut, { recursive: true, force: true });
 }
 
 export async function vendorGenUiLibs(): Promise<void> {
