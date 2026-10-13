@@ -49,6 +49,7 @@ COPY --from=src /src/repo/patches ./patches
 RUN bun install --frozen-lockfile --production
 COPY --from=src /src/repo/server ./server
 COPY --from=src /src/repo/web ./web
+COPY --from=src /src/repo/scripts ./scripts
 COPY --from=webbuild /app/dist ./dist
 # NOTE: daemon releases ride inside ./dist/r/ (copied by build.ts from
 # indirect-code-daemon/dist/) — no separate COPY (would duplicate ~319MB).

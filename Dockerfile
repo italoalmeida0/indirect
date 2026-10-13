@@ -25,6 +25,7 @@ COPY patches ./patches
 RUN bun install --frozen-lockfile --production
 COPY server ./server
 COPY web ./web
+COPY scripts ./scripts
 COPY --from=webbuild /app/dist ./dist
 # NOTE: daemon releases ride inside ./dist/r/ (copied by build.ts from
 # indirect-code-daemon/dist/) — no separate COPY (would duplicate ~319MB).
