@@ -12,7 +12,7 @@ import { GATEWAY_SECRET } from "./config";
 import { keyUsable } from "./failover";
 import { apiFamilyForBaseUrl } from "./proxy/target-profile";
 import { normalizePricing, pricingColumns } from "./pricing";
-import { defaultToolCallModeFor, normalizeToolCallMode } from "./tool-call-mode";
+import { normalizeToolCallMode } from "./tool-call-mode";
 
 /**
  * Model registry & routing.
@@ -291,7 +291,7 @@ export async function syncProviderModels(
           prices.inputCache,
           prices.inputCacheWrite,
           prices.output,
-          defaultToolCallModeFor(m.id),
+          "fallback",
           now,
           now,
         );

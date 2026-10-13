@@ -1095,13 +1095,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       const via = cand.via;
       const upstreamProto = via;
       // Per-model tool-call strategy (tool_call_mode): 'native' forwards the
-      // tools array; 'xiaomi'/'smart' strip it and recover markup calls at
-      // the response edge (see server/proxy/markup-tools.ts). The registry
-      // row wins; unregistered targets fall back to id auto-detection.
+      // tools array; instruction modes ('workaround'/'own') strip it and
+      // recover markup calls at the response edge (see
+      // server/proxy/markup-tools.ts). The registry row wins; unregistered
+      // targets fall back to passive 'fallback'.
       const toolCallMode = resolveToolCallMode(
         snap.models.get(routedPublicModel ?? String((bodyJson as any)?.model ?? ""))?.tool_call_mode,
-        cand.upstreamModel,
-        (bodyJson as any)?.model,
       );
       // Trailing "/" would produce "//chat/completions" — new rows are
       // stripped at write time, this covers legacy rows still carrying one.
@@ -1215,10 +1214,10 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           // Non-JSON bodies go upstream untouched.
         }
       }
-      // Markup tool-call adaptation (tool_call_mode 'xiaomi'/'smart'): native
-      // function calling is unreliable for these targets, so the tool schema
-      // is moved into an in-band instruction and the model's markup tool
-      // calls are recovered at the response edge.
+      // Markup tool-call adaptation (tool_call_mode 'workaround'/'own'):
+      // native function calling is unreliable for these targets, so the tool
+      // schema is moved into an in-band instruction and the model's markup
+      // tool calls are recovered at the response edge.
       if (isInstructionMode(toolCallMode) && req.method === "POST" && bodyJson) {
         try {
           const parsed = JSON.parse(attemptBody) as Record<string, unknown>;

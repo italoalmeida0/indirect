@@ -26,14 +26,13 @@ const { invalidateModelCache } = await import("../server/models");
 const { toolHintsFromRequest } = await import("../server/proxy/dsml");
 const {
   extractMarkupToolCalls,
-  isXiaomiModel,
   applyMarkupRequestAdaptation,
   buildWorkaroundToolInstruction,
   buildMarkupInstruction,
   MarkupStreamExtractor,
   markupRecoverer,
 } = await import("../server/proxy/markup-tools");
-const { resolveToolCallMode, defaultToolCallModeFor } = await import("../server/tool-call-mode");
+const { resolveToolCallMode } = await import("../server/tool-call-mode");
 
 // --- fixtures --------------------------------------------------------------
 
@@ -83,30 +82,17 @@ const CANONICAL =
 
 // --- part 1: pure unit -------------------------------------------------------
 
-describe("Xiaomi detection", () => {
-  test("any model id containing xiaomi is a Xiaomi target", () => {
-    expect(isXiaomiModel("xiaomi/mimo-v2.5-pro")).toBe(true);
-    expect(isXiaomiModel("Xiaomi-MiMo")).toBe(true);
-    expect(isXiaomiModel("mimo-v2.5-pro")).toBe(false);
-    expect(isXiaomiModel("gpt-5")).toBe(false);
-    expect(isXiaomiModel(undefined)).toBe(false);
-  });
-});
-
 describe("tool-call mode resolution", () => {
-  test("an explicit row mode wins over id auto-detection", () => {
-    expect(resolveToolCallMode("native", "xiaomi/mimo")).toBe("native");
-    expect(resolveToolCallMode("fallback", "gpt-5")).toBe("fallback");
-    expect(resolveToolCallMode("workaround", "gpt-5")).toBe("workaround");
-    expect(resolveToolCallMode("own", "gpt-5")).toBe("own");
+  test("an explicit row mode is honored", () => {
+    expect(resolveToolCallMode("native")).toBe("native");
+    expect(resolveToolCallMode("fallback")).toBe("fallback");
+    expect(resolveToolCallMode("workaround")).toBe("workaround");
+    expect(resolveToolCallMode("own")).toBe("own");
   });
-  test("with no row, a xiaomi id auto-selects workaround; others default to fallback", () => {
-    expect(resolveToolCallMode(undefined, "gpt-5", "xiaomi/mimo")).toBe("workaround");
-    expect(resolveToolCallMode(null, "gpt-5")).toBe("fallback");
-  });
-  test("defaultToolCallModeFor: xiaomi -> workaround, others -> fallback", () => {
-    expect(defaultToolCallModeFor("xiaomi/mimo")).toBe("workaround");
-    expect(defaultToolCallModeFor("MiniMax-M2")).toBe("fallback");
+  test("with no row, every model defaults to fallback (no id auto-detection)", () => {
+    expect(resolveToolCallMode(undefined)).toBe("fallback");
+    expect(resolveToolCallMode(null)).toBe("fallback");
+    expect(resolveToolCallMode("garbage")).toBe("native");
   });
 });
 
@@ -626,6 +612,7 @@ afterAll(() => {
   db.transaction(() => {
     db.prepare("DELETE FROM usage_daily WHERE key_id = ?").run(KEYID);
     db.prepare("DELETE FROM usage_events WHERE key_id = ?").run(KEYID);
+    db.prepare("DELETE FROM models WHERE id = ?").run(MODEL);
     db.prepare("DELETE FROM providers WHERE id = ?").run(PID);
     db.prepare("DELETE FROM users WHERE id = ?").run(UID);
     db.prepare("INSERT INTO settings (key, value) VALUES ('routing_mode', 'passthrough') ON CONFLICT(key) DO UPDATE SET value='passthrough'").run();
@@ -646,6 +633,14 @@ beforeAll(async () => {
   db.prepare(
     "INSERT INTO api_keys (id, user_id, name, prefix, hash, status, created_at) VALUES (?, ?, 't', ?, ?, 'active', ?)",
   ).run(KEYID, UID, GW_KEY.slice(0, 8), sha256Hex(GW_KEY), now);
+  // The workaround is strictly opt-in per model: this row is what selects it
+  // (no id-based auto-detection).
+  db.prepare(
+    `INSERT INTO models (id, provider_id, upstream_model, name, description, enabled,
+       input_modalities, output_modalities, sampling_params, features,
+       tool_call_mode, source, created_at, updated_at)
+     VALUES (?, ?, 'mimo-upstream', '', '', 1, '["text"]', '["text"]', '[]', '[]', 'workaround', 'manual', ?, ?)`,
+  ).run(MODEL, PID, now, now);
   db.prepare("INSERT INTO settings (key, value) VALUES ('routing_mode', 'passthrough') ON CONFLICT(key) DO UPDATE SET value='passthrough'").run();
   invalidateModelCache();
 });

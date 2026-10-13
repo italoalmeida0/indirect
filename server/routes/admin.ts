@@ -25,7 +25,7 @@ import { kvSnapshotCached } from "../tokens";
 import { gridPage, parseGridQuery, parseCursor, buildGridWhere, type ColSpec } from "../gridql";
 import { queryKeys } from "../keys";
 import { normalizePricing, pricingColumns } from "../pricing";
-import { TOOL_CALL_MODES, defaultToolCallModeFor, type ToolCallMode } from "../tool-call-mode";
+import { TOOL_CALL_MODES, type ToolCallMode } from "../tool-call-mode";
 
 /**
  * /api/admin/* — everything requires role=admin. Every mutation is audited.
@@ -994,10 +994,8 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const f = modelFields(body);
     const upstreamModel =
       targets?.[0]?.upstreamModel ?? f.upstream_model ?? id;
-    // Default the strategy by id when the admin did not pick one: a MiMo
-    // model gets the workaround, everything else stays native.
-    const toolCallMode =
-      "toolCallMode" in body ? f.tool_call_mode : defaultToolCallModeFor(id);
+    // Default is passive 'fallback' when the admin did not pick a strategy.
+    const toolCallMode = f.tool_call_mode;
     const now = Date.now();
     const chain = targets ?? [{ providerId, upstreamModel, enabled: f.enabled === 1 }];
     db.transaction(() => {

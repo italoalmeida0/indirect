@@ -1585,14 +1585,14 @@ describe("model registry & routing mode", () => {
     ).toBe(400);
   });
 
-  test("model tool_call_mode: default by id, explicit override, validation", async () => {
-    // A xiaomi id defaults to the active workaround; anything else is fallback.
+  test("model tool_call_mode: default fallback, explicit override, validation", async () => {
+    // Every model defaults to passive fallback — no id-based auto-detection.
     const xm = await api("/api/admin/models", {
       token: adminToken,
       body: { id: "xiaomi/mimo-tcm", providerId, upstreamModel: "fake-llm-1" },
     });
     expect(xm.status).toBe(200);
-    expect(xm.json.model.toolCallMode).toBe("workaround");
+    expect(xm.json.model.toolCallMode).toBe("fallback");
 
     const plain = await api("/api/admin/models", {
       token: adminToken,
@@ -1601,7 +1601,7 @@ describe("model registry & routing mode", () => {
     expect(plain.status).toBe(200);
     expect(plain.json.model.toolCallMode).toBe("fallback");
 
-    // Explicit native on a non-xiaomi id, then flip to workaround via PATCH.
+    // Explicit native, then flip to workaround via PATCH (both are opt-in).
     const nat = await api("/api/admin/models", {
       token: adminToken,
       body: { id: "native-tcm", providerId, upstreamModel: "fake-llm-1", toolCallMode: "native" },

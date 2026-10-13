@@ -597,6 +597,17 @@ const MIGRATIONS: Migration[] = [
       UPDATE models SET tool_call_mode = 'workaround' WHERE lower(id) LIKE '%xiaomi%';
     `,
   },
+  {
+    name: "022_model_tool_call_mode_default_fallback",
+    // Tool-call modes are strictly per-model opt-in: there is no id-based
+    // auto-detection anymore, so every existing model is reset to the passive
+    // 'fallback' default (including the 021 xiaomi backfill and any manual
+    // workaround/own overrides). Admins re-apply an active mode explicitly
+    // per model if needed.
+    up: `
+      UPDATE models SET tool_call_mode = 'fallback';
+    `,
+  },
 ];
 
 export function migrate(): void {
@@ -713,7 +724,7 @@ export interface ModelRow {
   sampling_params: string;
   features: string;
   reasoning_efforts: string | null;
-  /** Tool-call strategy: 'native' | 'smart' | 'xiaomi' (migration 021). */
+  /** Tool-call strategy: 'native' | 'fallback' | 'workaround' | 'own' (migration 021). */
   tool_call_mode: string;
   pricing: string | null;
   pricing_input: number | null;

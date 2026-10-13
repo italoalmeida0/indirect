@@ -20,8 +20,8 @@
  *     model sometimes leaks markup even with native calling on.
  *   - `workaround`: ACTIVE. Native `tools` are stripped and the schema is
  *     re-delivered as an in-band instruction teaching the xiaomi XML format;
- *     the response is recovered from every dialect. Auto-selected for models
- *     whose id contains "xiaomi".
+ *     the response is recovered from every dialect. Never auto-selected:
+ *     only an explicit registry row opts a model into it.
  *   - `own`: ACTIVE, like `workaround`, but teaches a DIFFERENT format: a
  *     single JSON object inside a fenced ```tool_call code block. Providers
  *     that recognize and rewrite the common `<tool_call>` markup (OpenAI's
@@ -30,6 +30,10 @@
  *
  * Native `tool_calls` are ALWAYS accepted in every mode: recovery only ADDS
  * calls found in content, it never removes native ones.
+ *
+ * Modes are strictly per-model configuration: there is no id-based
+ * auto-detection. Every model defaults to `fallback`; `native`, `workaround`
+ * and `own` are opt-in via the registry row.
  */
 
 export type ToolCallMode = "native" | "fallback" | "workaround" | "own";
@@ -50,25 +54,12 @@ export function isInstructionMode(mode: ToolCallMode): boolean {
   return mode === "workaround" || mode === "own";
 }
 
-/** Auto default for an unregistered model: MiMo ids get the active
- *  workaround, the rest stay passive `fallback`. */
-export function defaultToolCallModeFor(id: unknown): ToolCallMode {
-  return typeof id === "string" && /xiaomi/i.test(id) ? "workaround" : "fallback";
-}
-
 /**
- * Effective mode for a request: an explicit registry row wins; otherwise fall
- * back to id-based auto-detection over the public and upstream ids (so a
- * MiMo served under a name without "xiaomi" is still covered when the
- * upstream id carries it). Unknown ids default to `fallback`.
+ * Effective mode for a request: an explicit registry row wins; models without
+ * one (and unknown ids) default to passive `fallback`. `workaround`/`own` are
+ * strictly opt-in per model.
  */
-export function resolveToolCallMode(
-  rowMode: string | null | undefined,
-  ...ids: Array<string | null | undefined>
-): ToolCallMode {
+export function resolveToolCallMode(rowMode: string | null | undefined): ToolCallMode {
   if (rowMode !== null && rowMode !== undefined) return normalizeToolCallMode(rowMode);
-  for (const id of ids) {
-    if (typeof id === "string" && /xiaomi/i.test(id)) return "workaround";
-  }
   return "fallback";
 }

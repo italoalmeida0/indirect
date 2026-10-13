@@ -51,11 +51,6 @@ const asRecord = (v: unknown): Record<string, unknown> =>
 
 const asArr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
 
-/** Detection by model id: any id containing "xiaomi" gets the workaround by
- *  default (mirrors defaultToolCallModeFor, kept for direct callers). */
-export function isXiaomiModel(model: unknown): boolean {
-  return typeof model === "string" && /xiaomi/i.test(model);
-}
 // ---------------------------------------------------------------------------
 // markup dialects
 // ---------------------------------------------------------------------------
