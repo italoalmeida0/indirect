@@ -445,10 +445,10 @@ type widgetLintArgs struct {
 
 func (t *WidgetLintTool) Name() string { return "widget_lint" }
 func (t *WidgetLintTool) Description() string {
-	return "Lint a stored widget without re-storing it: compile, import audit, smoke render at the gateway. Pass optional `test` code (TSX, run in a sandboxed worker) that imports the widget module and asserts on its exported logic — the widget must `export` what the test exercises. Use this after widget_set to verify the widget is safe to show."
+	return "Lint a stored widget without re-storing it: compile, import audit, smoke render at the gateway. Pass optional `test` code (TSX) that imports the widget module with `import { … } from \"widget\"` and asserts on its exported logic — export the functions/components under test from the widget source (the module may have named exports besides the default `App`). Throwing an error fails the lint; a pass proves the logic works before the widget is shown. Use this after widget_set to verify the widget is safe to show."
 }
 func (t *WidgetLintTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id to lint"},"test":{"type":"string","description":"Optional extra test code (TSX). It runs in a sandboxed worker and can import the widget module — the widget must export the functions/components under test. Throwing an error fails the lint."},"state":{"type":"string","description":"Optional state JSON to render with (defaults to the state the source or the fence carries)"}},"required":["id"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id to lint"},"test":{"type":"string","description":"Optional test code (TSX). It runs in the same sandbox and imports the widget module as \\\"widget\\\" — the widget must export the functions/components under test (named exports besides the default App). Throwing an error fails the lint."},"state":{"type":"string","description":"Optional state JSON to render with (defaults to the state the source or the fence carries)"}},"required":["id"]}`)
 }
 
 func (t *WidgetLintTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {

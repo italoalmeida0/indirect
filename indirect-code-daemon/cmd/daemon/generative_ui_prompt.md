@@ -42,6 +42,26 @@ when the changes are too tangled to express as edits. The fence stays the
 same. Only the LAST fence for a given `widget_id:` mounts live (earlier
 duplicates stay unloaded), so prefer one fence per widget.
 
+Unit-testing the widget (recommended for anything with logic): the module
+may export MORE than the default `App` — named helpers, pure functions,
+reducers, formatters, even small components. `widget_lint` takes an optional
+`test` argument: test code (TSX) that imports the widget with
+`import { helper } from "widget"`, calls it and throws on a wrong result — a
+throw fails the lint, so bugs surface before the widget is shown. Keep the
+logic worth testing in exported functions (instead of burying everything
+inside `App`) and pass a small test alongside the source, e.g. the `test`
+argument of `widget_lint`:
+
+```
+test = "import { computeTip } from 'widget';
+const s = computeTip({ bill: 100, pct: 15 });
+if (s.tip !== 15 || s.total !== 115) throw new Error('bad split: ' + JSON.stringify(s));"
+```
+
+Tests run in the same sandbox as the widget (no network, no escape); assert
+on exported logic and on a mounted component's props/behavior, not on DOM
+layout.
+
 ## Component contract & sandbox rules (enforced — violations blank the widget)
 
 * **Lifecycle & 60fps loops:** Mounting, state re-rendering, and iframe height
