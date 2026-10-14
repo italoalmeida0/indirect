@@ -209,6 +209,8 @@ func sessionPayload(rec *SessionRecord) map[string]any {
 		"turnSeq":      rec.TurnSeq,
 		"fileBalloons": fileBalloonPayloads(rec.FileBalloons),
 		"bgTasks":      bgTaskPayloads(rec.BgTasks),
+		// Widget METADATA only: sources are fetched on demand (get_widget).
+		"widgets": widgetPayloads(rec.Widgets),
 	}
 }
 

@@ -1,62 +1,46 @@
 /**
  * Generative UI block DSL (pure, no DOM).
  *
- * The widget is a markdown DSL (```generative_ui fenced block). The body is
- * a React component: optional header lines, then one `@jsx` marker and the
- * JSX/TSX source file. `@tsx` is accepted as an alias of `@jsx`.
+ * The widget is a markdown DSL (```generative_ui fenced block). The fence
+ * has HEADER LINES ONLY — no body:
  *
- * Header keys are `key: value` lines before the @jsx marker. Unknown keys
- * are ignored. Everything after the marker is verbatim source — later lines
- * are never re-parsed as headers or markers.
+ *   - `widget_id:` (required to mount) — links to the widget source stored
+ *     in the session's widget store with the widget_set tool.
+ *   - `placeholder:` — short label shown while the widget loads.
+ *   - `state:` — JSON default state, passed as props to the widget App.
+ *
+ * Header keys are `key: value` lines. Unknown keys are ignored. A fence
+ * without a `widget_id:` renders as a static card (placeholder + state
+ * preview) — session migration has already rewritten the legacy fence
+ * shapes.
  */
 export type GenerativeUiData = {
   placeholder?: string;
-  /** Initial widget state object (from the `state:` JSON header). */
+  /** Default widget state object (from the `state:` JSON header). */
   state?: Record<string, unknown>;
-  /** The React widget source (whole body after the `@jsx` marker). */
-  jsx?: string;
+  /** Widget id linking to the session's widget store (the `widget_id:` header). */
+  id?: string;
 };
 
-const JSX_SECTION_RE = /^@(jsx|tsx)\s*$/i;
-const HEADER_RE = /^(placeholder|state)\s*:\s*(.*)$/i;
+const HEADER_RE = /^(placeholder|state|widget_id)\s*:\s*(.*)$/i;
 
 export function parseGenerativeUiDsl(raw: string | undefined): GenerativeUiData {
   const out: GenerativeUiData = {};
   if (!raw) return out;
-  const jsxLines: string[] = [];
-  let inJsx = false;
-  let headerDone = false;
 
   for (const line of raw.split("\n")) {
-    // React source is verbatim: later lines are never re-parsed.
-    if (inJsx) {
-      jsxLines.push(line);
+    const header = HEADER_RE.exec(line.trim());
+    if (header) {
+      const key = header[1].toLowerCase();
+      const value = header[2].trim();
+      if (key === "placeholder") out.placeholder = value.slice(0, 120);
+      else if (key === "state") out.state = parseStateJSON(value);
+      else if (key === "widget_id") out.id = value.slice(0, 120) || undefined;
       continue;
     }
-    const jsxSection = JSX_SECTION_RE.exec(line.trim());
-    if (jsxSection) {
-      inJsx = true;
-      headerDone = true;
-      continue;
-    }
-    if (!headerDone) {
-      const header = HEADER_RE.exec(line.trim());
-      if (header) {
-        const key = header[1].toLowerCase();
-        const value = header[2].trim();
-        if (key === "placeholder") out.placeholder = value.slice(0, 120);
-        else if (key === "state") {
-          out.state = parseStateJSON(value);
-        }
-        continue;
-      }
-      if (line.trim() === "") continue; // header separator
-      headerDone = true;
-    }
-  }
-
-  if (jsxLines.length) {
-    out.jsx = jsxLines.join("\n").trim() || undefined;
+    if (line.trim() === "") continue; // header separator
+    // Any non-header content is legacy noise (migration rewrites it away);
+    // ignore it — the fence links by id only.
   }
   return out;
 }
@@ -68,11 +52,6 @@ function parseStateJSON(value: string): Record<string, unknown> | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** True when the body has a widget source to mount. */
-export function hasWidgetBody(data: GenerativeUiData): boolean {
-  return !!data.jsx;
 }
 
 export const GENERATIVE_UI_LANGS = new Set(["generative_ui", "genui"]);
@@ -106,7 +85,7 @@ const FENCE_OPEN_RE = /^( {0,3})(`{3,})\s*(\S*)\s*$/;
  * Splits markdown into text runs and generative_ui widget runs. Fences of
  * other languages are kept inside the text runs untouched (TarnavMarkdown
  * renders them). An unterminated generative_ui fence at the end of a stream
- * becomes an open widget segment (the preview renders while it streams).
+ * becomes an open widget segment (the placeholder renders while it streams).
  */
 export function splitGenerativeUiSegments(text: string): GenerativeUiSegment[] {
   const out: GenerativeUiSegment[] = [];

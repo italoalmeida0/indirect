@@ -10,7 +10,7 @@ import {
 import { vendorGenUiLibs } from "../scripts/vendor-gen-ui-libs";
 
 /**
- * Generative UI widget documents (black-box route contract, React `@jsx`
+ * Generative UI widget documents (black-box route contract, React TSX
  * widgets only).
  *
  * The gateway CSP forbids inline frames, so widget documents are served as

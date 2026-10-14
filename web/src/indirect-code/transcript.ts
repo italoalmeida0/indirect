@@ -625,6 +625,46 @@ export function toolSummary(u: ToolUnit): ToolSummary {
         stat: n > 0 ? `${n} lines` : undefined,
       };
     }
+    case "widget_set": {
+      if (args.delete) {
+        return { icon: "lucide:trash-2", verb: "Deleted", target: String(args.id || "widget") };
+      }
+      const content = String(args.content || "");
+      const n = content ? content.split("\n").length : 0;
+      const lintOk = (u.result?.toolDetails as any)?.lint_ok;
+      return {
+        icon: "lucide:file-text",
+        verb: "Created",
+        target: String(args.id || "widget"),
+        stat: n > 0 ? `${n} lines` : lintOk === false ? "lint failed" : undefined,
+      };
+    }
+    case "widget_read": {
+      return {
+        icon: "lucide:eye",
+        verb: "Read",
+        target: String(args.id || "widget"),
+      };
+    }
+    case "widget_edit": {
+      return {
+        icon: "lucide:file-text",
+        verb: "Edited",
+        target: String(args.id || "widget"),
+        stat: `${(args.edits || []).length} replacement${(args.edits || []).length === 1 ? "" : "s"}`,
+      };
+    }
+    case "widget_list": {
+      return { icon: "lucide:list-tree", verb: "Widgets", target: "" };
+    }
+    case "widget_lint": {
+      const lintOk = (u.result?.toolDetails as any)?.lint_ok;
+      return {
+        icon: "lucide:shield-check",
+        verb: lintOk === false ? "Lint failed" : "Lint",
+        target: String(args.id || "widget"),
+      };
+    }
     default: {
       // Result without its call (a late or replayed tool_result): label it as
       // a result and let the body carry the text. The target repeats the

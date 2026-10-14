@@ -10,6 +10,7 @@ import { handleUsageRoute } from "./routes/usage";
 import { handleAdminRoute } from "./routes/admin";
 import { handleIndirectCodeRestRoute } from "./routes/indirect-code";
 import { handleGenUiRoute } from "./routes/gen-ui";
+import { ensureObscuraBrowser } from "./routes/obscura";
 import { handlePushRoute } from "./routes/push";
 import { handleIndirectCodeUpgrade, remoteRelayWsHandlers, type WsData } from "./routes/relay";
 import { handleProxy } from "./proxy/index";
@@ -171,5 +172,10 @@ const server: Server<WsData> = Bun.serve<WsData>({
 
 console.log(`[BOOT] llm-gateway listening on http://${server.hostname}:${server.port} (${IS_PROD ? "prod" : "dev"})`);
 console.log(`[BOOT] data dir: ${DATA_DIR}`);
+// Generative-ui lint browser (obscura): fetched into DATA_DIR on first use,
+// eagerly here so the first widget lint never waits on the download.
+void ensureObscuraBrowser()
+  .then((p) => console.log(`[BOOT] obscura lint browser: ${p}`))
+  .catch((e) => console.warn(`[BOOT] obscura lint browser unavailable: ${e instanceof Error ? e.message : e}`));
 
 export { server };

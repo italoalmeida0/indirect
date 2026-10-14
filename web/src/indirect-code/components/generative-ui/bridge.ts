@@ -17,6 +17,8 @@ export type GuBridgeOps = {
   onResize: (height: number) => void;
   /** Runtime error reported by the widget (shown in the host error footer). */
   onError?: (message: string) => void;
+  /** Explicit (non-reactive) state save: widget calls window.__gu.saveState(). */
+  onState?: (stateJSON: string) => void;
 };
 
 /** A widget may ask for follow-ups, but never spam: cap the op rate. */
@@ -25,6 +27,8 @@ const MAX_OPS_PER_MINUTE = 60;
 const MAX_PROMPT_CHARS = 2000;
 /** Error text is user-visible content too; keep it one short line. */
 const MAX_ERROR_CHARS = 500;
+/** Saved state snapshots are bounded (widget state, not data storage). */
+const MAX_STATE_CHARS = 20000;
 /** Reported heights are clamped so a hostile widget cannot blow up layout. */
 export const MIN_FRAME_HEIGHT = 64;
 export const MAX_FRAME_HEIGHT = 4000;
@@ -69,7 +73,7 @@ export function attachGuBridge(
   const handler = (event: MessageEvent) => {
     if (event.source !== frameWindow()) return;
     const data: any = event.data;
-    if (!data || typeof data !== "object" || data.__gu !== "sendPrompt" && data.__gu !== "prefillPrompt" && data.__gu !== "openLink" && data.__gu !== "resize" && data.__gu !== "error") return;
+    if (!data || typeof data !== "object" || data.__gu !== "sendPrompt" && data.__gu !== "prefillPrompt" && data.__gu !== "openLink" && data.__gu !== "resize" && data.__gu !== "error" && data.__gu !== "state") return;
     if (!rateOk()) return;
     switch (data.__gu) {
       case "sendPrompt": {
@@ -94,6 +98,11 @@ export function attachGuBridge(
       case "error": {
         const message = typeof data.message === "string" ? data.message.slice(0, MAX_ERROR_CHARS).trim() : "";
         if (message) ops.onError?.(message);
+        return;
+      }
+      case "state": {
+        const stateJSON = typeof data.state === "string" ? data.state.slice(0, MAX_STATE_CHARS) : "";
+        if (stateJSON && ops.onState) ops.onState(stateJSON);
         return;
       }
     }

@@ -7,82 +7,36 @@ recompute, sortable data, live simulations, or adjustable assumptions.
 Controls respond instantly without an extra turn; buttons may call
 `window.indirectUi.sendPrompt("...")` for follow-ups.
 
-**Placement & format:**
-- Widgets are only mounted when emitted in your **final answer** (blocks
-  emitted in thoughts or intermediate steps are never rendered).
-- Emit **ONE** fenced code block tagged `generative_ui` per widget.
-- Every widget is a **React 18 function component** (`export default function App`)
-  written as a single JSX/TSX source file after the `@jsx` marker. TypeScript
-  types are allowed (or plain JSX). No HTML section or other template format
-  exists.
+**Widgets live in the session's widget store, not in the transcript.** You
+store a widget's TSX source with the `widget_*` tools (their descriptions
+carry the full contract), and your markdown answer mounts it with a
+header-only fence that links the stored widget.
 
-## Block format & example
+## Fence format (in your markdown answer)
 
-### Header lines (optional, before `@jsx`)
-- `placeholder:` 3–8 word sentence-case label shown while streaming
-  (e.g., `"Building your savings projection"`, never `"Loading"`).
-- `state:` JSON object with initial state, passed as props to `App` (and
-  available at `window.__gu.state`).
+Widgets are only mounted when emitted in your **final answer** (blocks
+emitted in thoughts or intermediate steps are never rendered). Emit **ONE**
+fenced code block tagged `generative_ui` per widget. The fence has **header
+lines only — no body**:
+
+- `widget_id:` (required) — the id the widget source was stored under with
+  `widget_set`. This is the link: the fence renders the stored source for
+  that widget.
+- `placeholder:` — 3–8 word sentence-case label shown while loading (e.g.
+  `"Building your savings projection"`, never `"Loading"`).
+- `state:` — JSON object: the widget's default state, passed as props to
+  `App` (and available at `window.__gu.state`). The user's saved state for the
+  widget wins over this default.
 
 ````generative_ui
 placeholder: Building your savings projection
 state: {"amount": 1000, "years": 5}
+widget_id: savings
+````
 
-@jsx
-import { useState, useMemo } from "react";
-
-export default function App({ amount, years }) {
-  const [monthly, setMonthly] = useState(amount);
-  const annualRate = 0.05;
-  const { total, gain } = useMemo(() => {
-    const months = years * 12;
-    const r = annualRate / 12;
-    const futureValue = monthly * ((Math.pow(1 + r, months) - 1) / r);
-    const principal = monthly * months;
-    return { total: futureValue, gain: futureValue - principal };
-  }, [monthly, years]);
-
-  const fmt = new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    maximumFractionDigits: 0,
-  });
-
-  return (
-    <div className="gu-root">
-      <div className="gu-col">
-        <header className="gu-header">
-          <h2 className="gu-title">Your savings grow to {fmt.format(total)}</h2>
-          <p className="gu-caption">Compound interest, 5% annual, monthly contributions over {years} years.</p>
-        </header>
-        <div className="gu-kpi">
-          <div className="gu-kpi-item">
-            <span className="gu-kpi-value">{fmt.format(total)}</span>
-            <span className="gu-kpi-label">Final balance</span>
-          </div>
-          <div className="gu-kpi-item">
-            <span className="gu-kpi-value">{fmt.format(gain)}</span>
-            <span className="gu-kpi-label">Interest earned</span>
-          </div>
-        </div>
-        <label className="gu-field">
-          <span>Monthly amount <output>{fmt.format(monthly)}</output></span>
-          <input
-            className="gu-slider"
-            type="range"
-            min={50}
-            max={2000}
-            step={50}
-            value={monthly}
-            onChange={(e) => setMonthly(Number(e.currentTarget.value))}
-          />
-        </label>
-      </div>
-    </div>
-  );
-}
-
-```
+Workflow: store the source with `widget_set` (verify with `widget_lint` when
+in doubt), then link it with `widget_id:` in the fence. To change a widget
+later, update its stored source — the fence stays the same.
 
 ## Component contract & sandbox rules (enforced — violations blank the widget)
 
@@ -230,7 +184,7 @@ money is moved or paid.
 * **3D explainers & 2D/3D physics simulations (`three`, `cannon-es`, `matter-js`):**
 Render the `<canvas>` (`~240–300px` tall so controls stay visible) inside
 `.gu-stage` (keep theme background, never hard-code a light background).
-* *For 3D conceptual explainers (`three`):* Build models from primitive
+* *For 3D conceptual explainers (`three`):* Assemble models from primitive
 geometries with color-coded axes (`--gu-chart-2`, `--gu-chart-1`,
 `--gu-chart-4`) and small labels. Include one `.gu-field` slider per axis
 (with angle in `<output>`), a demo button per axis that animates rotation

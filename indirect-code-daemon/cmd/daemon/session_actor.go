@@ -342,6 +342,8 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.onBgTaskRead(m)
 	case bgTaskListMsg:
 		a.onBgTaskList(m)
+	case widgetStoreMsg:
+		a.onWidgetStore(m)
 	case turnBalloonMsg:
 		// Stashed until finishTurn appends it with the final message count.
 		// Gen gate (B1): a zombie worker's balloon must not anchor to a new
@@ -1909,7 +1911,7 @@ func (a *sessionActor) onWALAppend(m walAppendMsg) {
 		// Tracker snapshot for the LIVE file-changes view: keep it so a
 		// mid-turn get_turn_changes can rebuild the live balloon.
 		a.liveIncoming = append([]filetrack.TrackedFile(nil), ev.Incoming...)
-	case walTypeQueue, walTypeTitle, walTypeModel, walTypeOptions, walTypeTurnState, walTypeMeta, walTypeAttach, walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
+	case walTypeQueue, walTypeTitle, walTypeModel, walTypeOptions, walTypeTurnState, walTypeMeta, walTypeAttach, walTypeWidgets, walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
 		a.applyControlWAL(ev)
 	}
 	a.rec.UpdatedAt = time.Now().UnixMilli()
@@ -1943,6 +1945,8 @@ func (a *sessionActor) applyControlWAL(ev walEvent) {
 		}
 	case walTypeAttach:
 		a.rec.Attachments = append([]AttachmentRef(nil), ev.Attachments...)
+	case walTypeWidgets:
+		a.rec.Widgets = append([]tools.WidgetFile(nil), ev.Widgets...)
 	case walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
 		a.applyBgWAL(ev)
 	case walTypeMeta:
@@ -2466,6 +2470,9 @@ func estimateResidentBytes(rec *SessionRecord) int64 {
 	}
 	for _, q := range rec.Queue {
 		n += int64(len(q.Text))
+	}
+	for _, w := range rec.Widgets {
+		n += int64(len(w.Source))
 	}
 	for _, b := range rec.FileBalloons {
 		n += int64(len(b.Files) * 512)

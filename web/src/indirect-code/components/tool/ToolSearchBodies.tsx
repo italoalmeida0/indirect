@@ -25,7 +25,7 @@ function flagBadge(flag: string) {
 
 export function ToolSearchBodies(props: ToolPartProps) {
   const inspectTree = createMemo(() => {
-    if (props.m.name() !== "inspect") return null;
+    if (props.m.name() !== "inspect" && props.m.name() !== "widget_list") return null;
     return parseInspectTree(props.m.terminal().output || props.m.output() || "");
   });
   const globList = createMemo(() => {
@@ -50,7 +50,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
             <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.terminal().output || props.m.output() || props.m.prog() || ""} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
           </Show>
         </Show>
-        <Show when={props.m.name() === "inspect"}>
+        <Show when={props.m.name() === "inspect" || props.m.name() === "widget_list"}>
           <Show
             when={props.m.output() || props.m.prog()}
             fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Listing…" : null}</div>}
@@ -64,7 +64,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
               {(t) => (
                 <>
                   <div class="px-3 pt-2 pb-1 font-mono text-[11px] text-ink-500">
-                    {t().scope && t().scope !== "./" ? t().scope : "workspace"} · {t().count} {t().count === 1 ? "entry" : "entries"}
+                    {t().scope && t().scope !== "./" ? t().scope : props.m.name() === "widget_list" ? "widgets" : "workspace"} · {t().count} {t().count === 1 ? "entry" : "entries"}
                     {t().capped ? ` (capped at ${t().capped})` : ""}
                   </div>
                   <ul class="px-1.5 pb-1.5">
@@ -260,7 +260,20 @@ export function ToolSearchBodies(props: ToolPartProps) {
             />
           </Show>
         </Show>
-        <Show when={!(props.m.name() === "bash" || props.m.name() === "bg_await" || props.m.name() === "bg_check" || props.m.name() === "bg_cancel" || props.m.name() === "edit" || props.m.name() === "read" || props.m.name() === "write" || props.m.name() === "python" || props.m.name() === "search" || props.m.name() === "inspect" || props.m.name() === "glob" || props.m.name() === "question" || props.m.name() === "patch" || props.m.name() === "search_web" || props.m.name() === "fetch_url")}>
+        <Show when={props.m.name() === "widget_lint"}>
+          <Show
+            when={props.u.result?.toolDetails?.display || props.m.output() || props.m.prog()}
+            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Linting widget…" : null}</div>}
+          >
+            {/* Lint is plain text — but a failed lint paints it red. */}
+            <pre
+              class={`px-3 py-2 text-[11px] whitespace-pre-wrap ${props.u.result && props.u.result.toolDetails?.lint_ok === false ? "text-rose-500" : "text-ink-300"}`}
+            >
+              {String(props.u.result?.toolDetails?.display || props.m.output() || props.m.prog())}
+            </pre>
+          </Show>
+        </Show>
+        <Show when={!(props.m.name() === "bash" || props.m.name() === "bg_await" || props.m.name() === "bg_check" || props.m.name() === "bg_cancel" || props.m.name() === "edit" || props.m.name() === "read" || props.m.name() === "write" || props.m.name() === "python" || props.m.name() === "search" || props.m.name() === "inspect" || props.m.name() === "glob" || props.m.name() === "question" || props.m.name() === "patch" || props.m.name() === "search_web" || props.m.name() === "fetch_url" || props.m.name() === "widget_set" || props.m.name() === "widget_read" || props.m.name() === "widget_edit" || props.m.name() === "widget_list" || props.m.name() === "widget_lint")}>
           <Show
             when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream()}
             fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.m.name() === "question" ? "Waiting for your answers…" : props.ctx.pendingApproval()?.callId === props.u.call?.toolId ? "Waiting for approval…" : props.active ? "Running…" : null}</div>}

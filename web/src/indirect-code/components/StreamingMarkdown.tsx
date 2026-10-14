@@ -7,7 +7,7 @@ import {
   withGenerativeUiSegmentIds,
   type GenerativeUiSegmentWithId,
 } from "./generative-ui/dsl";
-import { useComposerCtx } from "../ctx";
+import { useComposerCtx, useHost, useSession } from "../ctx";
 
 /**
  * Transcript adapter: the actual markdown renderer is TarnavMarkdown, with
@@ -27,6 +27,17 @@ export function StreamingMarkdown(props: {
   basic?: boolean;
 }) {
   const composer = useComposerCtx();
+  const host = useHost();
+  const session = useSession();
+  // Widget source access (WS get_widget) — only when the page mounted the
+  // contexts (plain fixtures render the static card).
+  const widgetCtx = () => {
+    const sid = session?.activeSessionId?.();
+    const hid = host?.activeHostId?.();
+    const send = host?.send;
+    if (!sid || !hid || !send) return undefined;
+    return { send: send as (payload: { type: "get_widget"; sessionId: string; requestId: string; widgetId: string }) => void, hostId: hid, sessionId: sid };
+  };
   const split = () =>
     withGenerativeUiSegmentIds(splitGenerativeUiSegments(props.children || ""));
   const [state, setState] = createStore<{ segs: GenerativeUiSegmentWithId[] }>({
@@ -58,6 +69,7 @@ export function StreamingMarkdown(props: {
           <GenerativeUiWidget
             body={() => seg.body}
             streaming={() => !!props.streaming && !seg.closed}
+            ctx={widgetCtx()}
             onSendPrompt={(text) => {
               composer.setInputPrompt(text);
               void composer.sendPrompt();

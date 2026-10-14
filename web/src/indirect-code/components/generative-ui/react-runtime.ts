@@ -1,10 +1,10 @@
 /**
- * Generative UI: a compact React 1:1 runtime embedded into `@jsx` widget
- * documents. The @jsx format is plain React — function components, hooks,
- * className/style objects, Context, memo/forwardRef, an App root — compiled
- * to `React.createElement` calls by sucrase at doc build time (jsx-compile.ts).
- * This runtime provides the same public surface the compiled code touches,
- * over a minimal fiber reconciler.
+ * Generative UI: a compact React 1:1 runtime embedded into `generative_ui`
+ * widget documents. The widget format is plain React — function components,
+ * hooks, className/style objects, Context, memo/forwardRef, an App root —
+ * compiled to `React.createElement` calls by Bun.Transpiler at doc build time
+ * (jsx-compile.ts). This runtime provides the same public surface the
+ * compiled code touches, over a minimal fiber reconciler.
  *
  * API semantics mirror React 18 (function + class components, hooks). There
  * is no concurrent scheduling: setState re-renders on a microtask. Widgets

@@ -103,6 +103,14 @@ func (s *diskStore) loadSession(id string) (*SessionRecord, error) {
 	if rec.ID != id || rec.ID == "" {
 		return nil, fmt.Errorf("session id mismatch")
 	}
+	// One-time migration: legacy generative_ui fences (```jsx conversion /
+	// drop of the oldest shape) rewrite the frozen record on first load.
+	// Message counts never change here, so WAL commit dedupe is unaffected.
+	if migrateLegacyWidgets(rec) {
+		if err := s.saveSessionSync(rec); err != nil {
+			return nil, fmt.Errorf("widget migration: %w", err)
+		}
+	}
 	return rec, nil
 }
 

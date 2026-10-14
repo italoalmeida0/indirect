@@ -100,7 +100,22 @@ const DOCUMENT_CALLS = new Set(["write", "writeln"]);
 /** Bare-identifier call targets that are always forbidden. */
 const FORBIDDEN_IDENT_CALLS = new Set(["eval", "Function", "importScripts", "fetch", "XMLHttpRequest", "WebSocket", "EventSource"]);
 /** Member call tails that are forbidden on any receiver. */
-const FORBIDDEN_ANY_RECEIVER_CALLS = new Set(["insertAdjacentHTML"]);
+const FORBIDDEN_ANY_RECEIVER_CALLS = new Set([
+  "insertAdjacentHTML",
+  // Network primitives — bare `fetch(` is in FORBIDDEN_IDENT_CALLS, but the
+  // same calls through a receiver (`window.fetch`, `globalThis.fetch`) must
+  // not slip past the audit either.
+  "fetch", "XMLHttpRequest", "WebSocket", "EventSource",
+]);
+/**
+ * Prototype-chain escape hatches: `f.constructor("code")()` rebuilds
+ * `Function` from any function, and `.constructor`/`.__proto__` member
+ * ACCESS is the raw material for the same escape — both are forbidden on
+ * any receiver (reads included). Widgets never need them.
+ */
+const FORBIDDEN_MEMBER_PROPS = new Set(["constructor", "__proto__", "prototype"]);
+/** Reflection calls that rebuild the same escapes. */
+const FORBIDDEN_REFLECTION_CALLS = new Set(["getPrototypeOf", "setPrototypeOf", "getOwnPropertyDescriptor", "defineProperty"]);
 /** Attribute names that turn an element into a code/URL sink. */
 const URL_ATTRS = new Set(["href", "src", "action", "formaction", "formAction", "xlink:href", "data", "poster"]);
 
@@ -152,6 +167,8 @@ function isForbiddenExpression(node: AnyNode): boolean {
     const tail = callee && callee.type === "MemberExpression" ? propName(callee.property) : null;
     if (tail) {
       if (FORBIDDEN_ANY_RECEIVER_CALLS.has(tail)) return true;
+      if (FORBIDDEN_MEMBER_PROPS.has(tail)) return true;
+      if (FORBIDDEN_REFLECTION_CALLS.has(tail)) return true;
       const root = rootIdentifier(callee);
       if (root === "location" && NAVIGATION_CALLS.has(tail)) return true;
       // window.location.assign / top.location.replace / self.location.reload
@@ -186,6 +203,14 @@ function isForbiddenExpression(node: AnyNode): boolean {
     // Any write through a global root is pollution: window.React = 1,
     // document.title = ..., globalThis.x = ... Reads are untouched.
     return !!root && GLOBAL_ROOTS.has(root);
+  }
+
+  // Prototype escapes are reads too: `f.constructor`, `x.__proto__`,
+  // `Fn.prototype` — the material for the Function() bypass. Runs on the
+  // MemberExpression itself (not just calls).
+  if (node.type === "MemberExpression") {
+    const p = propName(node.property);
+    return !!p && FORBIDDEN_MEMBER_PROPS.has(p);
   }
 
   return false;

@@ -1,5 +1,5 @@
 /**
- * Generative UI `@jsx` compilation (server + tests only — do NOT import from
+ * Generative UI TSX compilation (server + tests only — do NOT import from
  * SPA-bundled code; this runs where Bun's native transpiler is available).
  *
  * The widget is plain React (JSX + TypeScript types allowed), compiled to a

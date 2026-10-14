@@ -28,6 +28,7 @@ import {
   NewProjectModal, ChoiceModal, ConfirmModal, PairModal,
 } from "./modals/SimpleModals";
 import { PreviewModal } from "./modals/PreviewModal";
+import { noteWidgetData, invalidateWidgetSources } from "./components/generative-ui/widget-source";
 import { SettingsModal } from "./modals/SettingsModal";
 import {
   RemoteCodeProvider,
@@ -541,6 +542,10 @@ export default function IndirectCodePage() {
 
   let forkKind: "resend" | "regenerate" | "fork" | null = null;
   let pendingDiscardReloadSid: string | null = null;
+  // In-flight widget_set/widget_edit calls (tool_call → tool_result
+  // pairing): toolId → the widget id they mutate, so a store change
+  // invalidates exactly that widget's cached source.
+  const widgetToolCalls = new Map<string, string>();
   function reloadSessionFromDaemon(sid: string) {
     if (!sid || sid !== activeSessionId()) return;
     const s = mirror.sessions().find((x) => x.id === sid);
@@ -805,6 +810,11 @@ export default function IndirectCodePage() {
         break;
       }
 
+      case "widget_data": {
+        noteWidgetData(msg as any);
+        break;
+      }
+
       case "session_data": {
         if (transcript.noteSessionDataRequestGuard(msg.requestId)) break;
         // Historic full-record shape; render it like session_content.
@@ -983,6 +993,42 @@ export default function IndirectCodePage() {
           const sid = pendingDiscardReloadSid;
           pendingDiscardReloadSid = null;
           reloadSessionFromDaemon(sid);
+        }
+        // Widget STORE changes (widget_set / widget_edit — read-only tools
+        // must not invalidate anything) drop the cached source of the one
+        // widget they touched, so a fence referencing that id re-publishes
+        // with the fresh source on the next render.
+        if (msg.event?.type === "tool_call") {
+          const ev = msg.event as any;
+          const evName = String(ev.name || "");
+          if (evName === "widget_set" || evName === "widget_edit") {
+            let wid = "";
+            const a = ev.args;
+            if (a && typeof a === "object" && typeof (a as any).id === "string") wid = (a as any).id;
+            else if (typeof a === "string") {
+              try {
+                const p = JSON.parse(a);
+                if (p && typeof p.id === "string") wid = p.id;
+              } catch {}
+            }
+            widgetToolCalls.set(String(ev.id), wid);
+          }
+        } else if (msg.event?.type === "tool_result" && widgetToolCalls.has(String((msg.event as any).id))) {
+          const ev = msg.event as any;
+          const toolId = String(ev.id);
+          let wid = widgetToolCalls.get(toolId) || "";
+          widgetToolCalls.delete(toolId);
+          // The tool result carries the authoritative widget id (Details.id).
+          const det = ev.details;
+          if ((!det || typeof det !== "object" || typeof (det as any).id !== "string") && typeof det === "string") {
+            try {
+              const p = JSON.parse(det);
+              if (p && typeof p.id === "string") wid = p.id;
+            } catch {}
+          } else if (det && typeof det === "object" && typeof (det as any).id === "string") {
+            wid = (det as any).id;
+          }
+          invalidateWidgetSources(msg.sessionId, wid || undefined);
         }
         transcript.handleAgentEvent(msg.sessionId, msg.event, msg.transcript);
         break;
@@ -1287,6 +1333,7 @@ export default function IndirectCodePage() {
     ...hosts,
     connectionState: relay.connectionState,
     wsOpen,
+    send: (payload) => relay.send(payload),
   };
   const sessionValue: SessionCtxValue = {
     ...projects,

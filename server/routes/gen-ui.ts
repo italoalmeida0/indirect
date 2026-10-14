@@ -3,6 +3,9 @@ import path from "path";
 
 import { err, json, readJsonBody } from "../http";
 import { TRUST_PROXY } from "../config";
+import { db } from "../db";
+import { sha256Hex } from "../crypto";
+import { runWidgetLint } from "./widget-lint";
 import {
   buildJsxImportMap,
   buildJsxModuleBody,
@@ -17,7 +20,7 @@ import { createHash } from "crypto";
 import { lookup } from "node:dns";
 
 /**
- * Generative UI widget documents (React `@jsx` widgets only).
+ * Generative UI widget documents (React TSX widgets only).
  *
  * The gateway CSP is frame-src allowlist-only and forbids inline frames, so
  * sandboxed widget documents are served as real same-origin documents:
@@ -26,6 +29,7 @@ import { lookup } from "node:dns";
  *  GET  /api/indirect-code/gen-ui/widgets/:id   -> the widget document (CSP header)
  *  GET  /api/indirect-code/gen-ui/modules/:id   -> a stored widget module (ESM)
  *  GET  /api/indirect-code/gen-ui/lib/:file     -> vendored library modules (ESM)
+ *  POST /api/indirect-code/gen-ui/lint          -> lint a widget source (daemon token)
  *
  * A widget is one React component. Its source is compiled with the Bun
  * transpiler at doc build time (the sandbox has no 'unsafe-eval', so the
@@ -375,6 +379,27 @@ export async function handleGenUiRoute(
   req: Request,
   _url: URL,
 ): Promise<Response | null> {
+  // Lint: the daemon validates widget sources here before showing them.
+  // Auth is the daemon token (same surface as /api/indirect-code/models).
+  if (path === "/api/indirect-code/gen-ui/lint" && req.method === "POST") {
+    const token = req.headers.get("authorization")?.replace(/^Bearer /, "") || "";
+    const host = db.prepare<{ id: string }, [string]>(
+      `SELECT h.id FROM remote_hosts h JOIN users u ON u.id = h.user_id
+       WHERE h.daemon_token_hash = ? AND u.status = 'active'`,
+    ).get(sha256Hex(token));
+    if (!host) return err(401, "unauthorized daemon token", req);
+    const body = await readJsonBody(req, 2_500_000);
+    const id = typeof body?.id === "string" ? body.id : "";
+    const source = typeof body?.source === "string" ? body.source : "";
+    const test = typeof body?.test === "string" ? body.test : "";
+    const state = typeof body?.state === "string" ? body.state : "";
+    if (!id.trim()) return err(400, "id is required", req);
+    if (!source.trim()) return err(400, "empty widget source", req);
+    if (source.length + test.length > 1_500_000) return err(413, "widget too large", req);
+    const res = await runWidgetLint({ id, source, test, state });
+    return json(res, { req });
+  }
+
   if (path === "/api/indirect-code/gen-ui/widgets" && req.method === "POST") {
     const body = await readJsonBody(req, 2_500_000);
     const theme: "dark" | "light" = body?.theme === "light" ? "light" : "dark";

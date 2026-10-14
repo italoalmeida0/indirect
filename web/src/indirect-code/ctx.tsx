@@ -26,6 +26,8 @@ import { contextDisplay, type GatewayModel } from "./context";
 export interface HostCtxValue extends Hosts {
   connectionState: Relay["connectionState"];
   wsOpen: () => boolean;
+  /** Relay WS send (daemon commands), stamped with the active hostId. */
+  send: Relay["send"];
 }
 
 export interface SessionCtxValue extends Projects {

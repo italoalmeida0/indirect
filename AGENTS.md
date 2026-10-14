@@ -79,6 +79,36 @@ frontend + daemon. Run checks from the appropriate project root.
   `normalizeSessionMessages` preserves folds across snapshots. Session deletion
   drops pending notices; late delivery must never resurrect a session.
 
+## Generative UI widgets
+
+- The `generative_ui` fence carries HEADER LINES ONLY: `widget_id:` (links the
+  session widget store), `placeholder:`, `state:` (JSON default). The TSX
+  source lives in `SessionRecord.Widgets` (WAL `widgets` replace events),
+  stored by the `widget_set` tool — never in the transcript.
+  Fence headers use `widget_id:` (never `id:`) so the link to the store is
+  explicit.
+- Tools: `widget_set`/`widget_list`/`widget_lint` everywhere; `widget_read`
+  and `widget_edit` are talk-only (the other modes have a real terminal:
+  write the source as a file, import with `widget_set {id, src_file}`).
+  Tool outputs mirror the native create/inspect/read/edit shapes so the
+  frontend bodies are copy-paste; widget edits never produce change balloons.
+- Every `widget_set` lints at the gateway (`POST
+  /api/indirect-code/gen-ui/lint`, daemon token): compile → import audit →
+  smoke render in the Obscura lint browser → optional `test` code importing
+  the widget module. One obscura process per lint (`obscura fetch file://…`),
+  auto-downloaded into DATA_DIR at gateway boot (stealth build; no fallback
+  browser). The model-code audit also neutralizes sandbox escapes
+  (constructor/__proto__/prototype, receiver fetch/XHR, reflection, global
+  writes).
+- Snapshots carry widget METADATA only; sources are fetched over the relay
+  with `get_widget` → `widget_data` and cached until a widget tool runs.
+- Widget state persists to localStorage (`gu:state:<host>:<session>:<id>`)
+  only through the explicit `window.__gu.saveState()` hook (never reactive);
+  the saved state wins over the fence `state:` default at mount.
+- Legacy fence shapes are migrated at session load (no legacy runtime path):
+  `@jsx` bodies become plain ```jsx code fences, the oldest headerless shape
+  is dropped. The system prompt documents only the `id:` format.
+
 ## Gateway constraints (when touching gateway code)
 
 - SQLite migrations in `server/db.ts` are append-only. `bun:sqlite` `.changes`

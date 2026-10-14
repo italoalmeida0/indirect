@@ -835,6 +835,15 @@ func (s *wsServer) handleRaw(raw []byte) {
 		_ = json.Unmarshal(raw, &req)
 		s.onGetAttachment(req.SessionID, req.AttachmentID)
 
+	case "get_widget":
+		var req struct {
+			RequestID string `json:"requestId"`
+			SessionID string `json:"sessionId"`
+			WidgetID  string `json:"widgetId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.onGetWidget(req.RequestID, req.SessionID, req.WidgetID)
+
 	case "search_files":
 		var req struct {
 			RequestID string `json:"requestId"`

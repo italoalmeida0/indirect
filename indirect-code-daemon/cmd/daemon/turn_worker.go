@@ -51,6 +51,9 @@ type workerSnapshot struct {
 	// reports them, and the worker tracks todo updates from there.
 	todos   []tools.TodoItem
 	bgTasks []BgTask
+	// widgets snapshot the session's widget store (generative-ui) at
+	// turn start; live reads/writes round-trip through the actor.
+	widgets []tools.WidgetFile
 	// resume, when True, continues the fused transcript via agent.Continue
 	// instead of opening a new user turn (crash/watchdog resume path).
 	compact   bool
@@ -89,6 +92,7 @@ func snapshotTurn(act *sessionActor, gen int, prompt string, meta map[string]str
 		context:     cloneJSON(act.rec.Context),
 		attachments: append([]AttachmentRef(nil), act.rec.Attachments...),
 		todos:       append([]tools.TodoItem(nil), act.rec.Todos...),
+		widgets:     append([]tools.WidgetFile(nil), act.rec.Widgets...),
 		bgTasks:     runningBgTasks(act.rec.BgTasks),
 		cwd:         act.rec.CWD,
 		prompt:      prompt,
@@ -151,6 +155,10 @@ type turnBridge struct {
 	// seeded from the snapshot, replaced by every todo tool call.
 	// Live-state reminders and the finish gate read it.
 	todos []tools.TodoItem
+	// widgets tracks the session's widget store on the worker goroutine
+	// (seeded from the snapshot); live reads/writes round-trip through
+	// the actor via widgetStoreBridge.
+	widgets []tools.WidgetFile
 	// mutationSeq counts edit/write calls this turn; jobMutationMark
 	// records it per background job at registration. The exact-
 	// duplicate bg guard refuses only while no file mutation landed
@@ -197,6 +205,7 @@ func (w *turnBridge) run() error {
 	}
 	w.live = &liveTracker{}
 	w.todos = append([]tools.TodoItem(nil), w.snap.todos...)
+	w.widgets = append([]tools.WidgetFile(nil), w.snap.widgets...)
 
 	// Every command runs through the crash-only runner (decided D6).
 	// Tests and headless workers without a store keep the direct path.
@@ -224,9 +233,16 @@ func (w *turnBridge) run() error {
 	bgAwaitTool := &tools.BgAwaitTool{Host: w, SessionID: w.env.actorID}
 	questionTool := &tools.QuestionTool{Ask: w.askQuestions}
 	todoTool := &tools.TodoTool{Update: w.updateTodos}
+	widgetStore := &widgetStoreBridge{w: w}
+	widgetLint := tools.WidgetLintFunc(w.widgetLint)
+	widgetSetTool := &tools.WidgetSetTool{Store: widgetStore, Lint: widgetLint, AllowSrcFile: normalizedOptions(w.snap.options).Mode != "talk", Sandbox: sb, CWD: w.sessionCWD}
+	widgetListTool := &tools.WidgetListTool{Store: widgetStore}
+	widgetLintTool := &tools.WidgetLintTool{Store: widgetStore, Lint: widgetLint}
+	widgetReadTool := &tools.WidgetReadTool{Store: widgetStore}
+	widgetEditTool := &tools.WidgetEditTool{Store: widgetStore}
 	finishTool := &tools.FinishEntireRequestTool{Mode: normalizedOptions(w.snap.options).Mode, OnFinish: func() error { return nil }, IncompleteCheck: w.finishBlockWarning}
 	summaryTool := &tools.SummaryTool{}
-	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool), bgCheckTool)...)
+	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool, bgCheckTool), widgetSetTool, widgetListTool, widgetLintTool, widgetReadTool, widgetEditTool)...)
 
 	if w.env.store != nil {
 		header, err := w.env.store.readWALHeader(w.env.actorID)

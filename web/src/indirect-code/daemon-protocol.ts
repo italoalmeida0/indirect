@@ -56,6 +56,7 @@ export type DaemonCommand = CommandBase &
   | { type: "upload_attachment"; requestId: string; sessionId: string; name: string; mime: string; data: string; text?: string }
   | { type: "search_files"; requestId: string; sessionId: string; projectId: string; query: string }
   | { type: "get_attachment"; sessionId: string; attachmentId: string }
+  | { type: "get_widget"; sessionId: string; requestId: string; widgetId: string }
   | { type: "search"; query: string; limit: number }
   | { type: "check_workspace"; requestId: string; sessionId: string; projectId?: string }
   | { type: "question_response"; sessionId: string; questionId: string; answers: string[][] }
@@ -131,6 +132,7 @@ export type DaemonEvent = EventBase &
     | { type: "notice"; message?: string }
     | { type: "file_matches"; requestId: string; sessionId?: string; files?: string[]; error?: string; truncated?: boolean }
     | { type: "attachment_data"; requestId?: string; sessionId: string; attachment?: WireRecord }
+    | { type: "widget_data"; requestId?: string; sessionId?: string; widgetId?: string; widget?: WireRecord }
     | { type: "session_data"; requestId?: string; sessionId?: string; session?: WireRecord }
     | { type: "session_truncated"; sessionId?: string; keepIndex?: number }
     | { type: "session_content"; sessionId?: string; messages?: unknown[]; compaction?: unknown }

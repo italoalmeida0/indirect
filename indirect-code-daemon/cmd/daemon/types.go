@@ -129,8 +129,12 @@ type SessionRecord struct {
 	UpdatedAt   int64              `json:"updatedAt"`
 	Messages    []provider.Message `json:"messages"`
 	Attachments []AttachmentRef    `json:"attachments,omitempty"`
-	LastDate    string             `json:"lastDate,omitempty"`
-	LastMode    string             `json:"lastMode,omitempty"`
+	// Widgets holds the generative-ui widget sources keyed by their fence
+	// `widget_id:`. Stored in the session record (like Todos), replaced
+	// wholesale by each widget_set/widget_edit.
+	Widgets  []tools.WidgetFile `json:"widgets,omitempty"`
+	LastDate string             `json:"lastDate,omitempty"`
+	LastMode string             `json:"lastMode,omitempty"`
 	// Compaction is the incremental chain head (previous summary +
 	// file ops + cut anchor + count). Persisted on every compaction so the
 	// next summarization — even after a daemon restart — builds an update

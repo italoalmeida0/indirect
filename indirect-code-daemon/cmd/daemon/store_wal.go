@@ -61,6 +61,7 @@ const (
 	walTypeBgTask     = "bg_task"     // bg task register/upsert (id, kind, label, status)
 	walTypeBgChunk    = "bg_chunk"    // bg task output chunk append (content tail)
 	walTypeBgFinish   = "bg_finish"   // bg task terminal transition (status, trim)
+	walTypeWidgets    = "widgets"     // generative-ui widget sources replace
 )
 
 // walHeader is always line 1: the turn's recovery record (prompt,
@@ -113,6 +114,7 @@ type walEvent struct {
 	Options     *SessionOptions         `json:"options,omitempty"`
 	TurnStatus  string                  `json:"turnStatus,omitempty"`
 	Attachments []AttachmentRef         `json:"attachments,omitempty"`
+	Widgets     []tools.WidgetFile      `json:"widgets,omitempty"`
 	BgTask      *BgTask                 `json:"bgTask,omitempty"`
 	BgChunk     *BgChunk                `json:"bgChunk,omitempty"`
 	BgFinish    *BgFinish               `json:"bgFinish,omitempty"`
@@ -500,6 +502,11 @@ func applyWALEvent(rec *SessionRecord, ev *walEvent, seen *msgDedup) error {
 		}
 	case walTypeAttach:
 		rec.Attachments = append([]AttachmentRef{}, ev.Attachments...)
+		if ev.UpdatedAt > 0 {
+			rec.UpdatedAt = ev.UpdatedAt
+		}
+	case walTypeWidgets:
+		rec.Widgets = append([]tools.WidgetFile{}, ev.Widgets...)
 		if ev.UpdatedAt > 0 {
 			rec.UpdatedAt = ev.UpdatedAt
 		}
@@ -896,7 +903,7 @@ func appendWALEvent(wal *walWriter, ev walEvent) error {
 		switch ev.Type {
 		case walTypeMsg, walTypeUsage, walTypeCompaction, walTypeTodos,
 			walTypeQueue, walTypeTitle, walTypeModel, walTypeOptions,
-			walTypeTurnState, walTypeMeta, walTypeAttach,
+			walTypeTurnState, walTypeMeta, walTypeAttach, walTypeWidgets,
 			walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
 			ev.UpdatedAt = time.Now().UnixMilli()
 		}

@@ -5,8 +5,8 @@
  * allowlist-only): a widget document is uploaded to
  * /api/indirect-code/gen-ui/widgets and rendered in an iframe pointing at it
  * (sandbox="allow-scripts", opaque origin). This module builds those
- * documents. The widget is a React component (`@jsx` source) compiled to
- * plain JS at doc build time (sucrase, in jsx-compile.ts) and spliced into
+ * documents. The widget is a React component (TSX source) compiled to
+ * plain JS at doc build time (Bun.Transpiler, in jsx-compile.ts) and spliced into
  * one wrapper script; the embedded REACT_RUNTIME_JS provides the React
  * globals it targets. The boundary sanitizers guard the splice:
  *
@@ -226,7 +226,7 @@ body {
 .gu-slider {
   -webkit-appearance: none; appearance: none;
   width: 100%; height: 28px; margin: 0; background: transparent; cursor: pointer;
-  --p: 50%;
+  --p: 0%;
 }
 .gu-slider::-webkit-slider-runnable-track {
   height: 4px; border-radius: 999px;
@@ -421,7 +421,8 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     sendPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "sendPrompt", text: String(text).slice(0, 4000) }, "*"); },
     prefillPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "prefillPrompt", text: String(text).slice(0, 4000) }, "*"); },
     openLink: function (url) { if (typeof url === "string") window.parent.postMessage({ __gu: "openLink", url: String(url).slice(0, 2048) }, "*"); },
-    resize: function (height) { window.parent.postMessage({ __gu: "resize", height: Number(height) }, "*"); }
+    resize: function (height) { window.parent.postMessage({ __gu: "resize", height: Number(height) }, "*"); },
+    saveState: function (s) { try { window.parent.postMessage({ __gu: "state", state: JSON.stringify(s === undefined ? window.__gu.state : s).slice(0, 20000) }, "*"); } catch {} }
   };
   window.indirectUi = Object.freeze(__host);
   var __lastHeight = 0;
@@ -461,20 +462,40 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     __heightTimer = setTimeout(__flushHeight, 120);
   }
   // Slider fill: keep --p in sync so the thin track paints its filled
-  // portion without any model-side bookkeeping.
+  // portion without any model-side bookkeeping. Tracks the exact center of the
+  // 20px thumb from 0% to 100%.
   function __syncSlider(el) {
     if (!el || el.type !== "range") return;
-    var min = Number(el.min) || 0, max = Number(el.max);
+    var min = Number(el.min);
+    if (!Number.isFinite(min)) min = 0;
+    var max = Number(el.max);
     if (!Number.isFinite(max) || max <= min) max = min + 100;
-    var pct = ((Number(el.value) - min) / (max - min)) * 100;
-    if (!Number.isFinite(pct)) return;
-    var next = Math.min(100, Math.max(0, pct)) + "%";
+    var val = Number(el.value);
+    if (!Number.isFinite(val)) val = min;
+    var ratio = Math.min(1, Math.max(0, (val - min) / (max - min)));
+    // Thumb diameter is 20px. Center of thumb travels from 10px to (width - 10px).
+    // Exact center offset: (0.5 - ratio) * 20px.
+    var next = "calc(" + (ratio * 100).toFixed(2) + "% + " + ((0.5 - ratio) * 20).toFixed(2) + "px)";
     if (el.style.getPropertyValue("--p") !== next) el.style.setProperty("--p", next);
   }
   function __syncSliders(scope) {
     var list = (scope || document).querySelectorAll('input[type="range"]');
     for (var i = 0; i < list.length; i++) __syncSlider(list[i]);
   }
+  try {
+    var __proto = HTMLInputElement.prototype;
+    var __desc = Object.getOwnPropertyDescriptor(__proto, "value");
+    if (__desc && __desc.set) {
+      Object.defineProperty(__proto, "value", {
+        set: function (v) {
+          __desc.set.call(this, v);
+          if (this.type === "range") __syncSlider(this);
+        },
+        get: __desc.get,
+        configurable: true
+      });
+    }
+  } catch (_) {}
   document.addEventListener("input", function (ev) { __syncSlider(ev.target); }, true);
   document.addEventListener("change", function (ev) { __syncSlider(ev.target); }, true);
   // Remote images go through the gateway image proxy: it bypasses hotlink
@@ -521,6 +542,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     state: state, render: $render,
     onDestroy: $onDestroy, onResize: $onResize, onError: $onError,
     reportError: reportError, destroy: runDestroy,
+    saveState: __host.saveState,
     error: null
   };
   function __bootObservers() {
@@ -649,7 +671,7 @@ export function buildJsxImportMap(moduleUrls: {
 
 export type WidgetDocParams = {
   theme: "dark" | "light";
-  /** URL of the stored widget module (compiled `@jsx` source, served as ESM). */
+  /** URL of the stored widget module (compiled TSX source, served as ESM). */
   moduleUrl: string;
   /** JSON import map (from buildJsxImportMap) resolving react + lib modules. */
   importMap: string;

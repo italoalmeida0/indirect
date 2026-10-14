@@ -79,6 +79,7 @@ export function ToolEditBodies(props: ToolPartProps) {
     const a = props.m.args();
     if (a.path) return String(a.path);
     if (a.file) return String(a.file);
+    if (a.id && (props.m.name() === "widget_edit" || props.m.name() === "widget_read" || props.m.name() === "widget_set")) return String(a.id);
     if (Array.isArray(a.edits) && a.edits.length === 1) {
       return String(a.edits[0]?.path || a.edits[0]?.file || "");
     }
@@ -97,7 +98,7 @@ export function ToolEditBodies(props: ToolPartProps) {
     <>
       {/* Context body per tool kind (scrollable, always inline — the
           collapsible rows already are the "open file/diff" view). */}
-      <Show when={(props.m.name() === "edit" || props.m.name() === "patch") && props.u.result}>
+      <Show when={(props.m.name() === "edit" || props.m.name() === "patch" || props.m.name() === "widget_edit") && props.u.result}>
         <Show when={props.u.result?.toolDetails?.dry_run === true}>
           <div class="mx-3 mt-2 mb-1 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
             <Iconify icon="lucide:eye" size={12} /> Dry run — no files written
@@ -116,7 +117,7 @@ export function ToolEditBodies(props: ToolPartProps) {
           </For>
         </Show>
       </Show>
-        <Show when={(props.m.name() === "edit" || props.m.name() === "patch") && !props.u.result}>
+        <Show when={(props.m.name() === "edit" || props.m.name() === "patch" || props.m.name() === "widget_edit") && !props.u.result}>
           <Show when={props.u.result?.toolDetails?.dry_run === true}>
             <div class="mx-3 mt-2 mb-1 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
               <Iconify icon="lucide:eye" size={12} /> Dry run — no files written
@@ -126,7 +127,7 @@ export function ToolEditBodies(props: ToolPartProps) {
             {props.active ? (props.u.result?.toolDetails?.dry_run === true ? "Previewing edit…" : "Applying edit…") : null}
           </div>
         </Show>
-        <Show when={props.m.name() === "read"}>
+        <Show when={props.m.name() === "read" || props.m.name() === "widget_read"}>
           <Show
             when={props.u.result?.toolDetails?.display || props.m.output() || props.m.prog()}
             fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Reading file…" : null}</div>}
@@ -134,17 +135,17 @@ export function ToolEditBodies(props: ToolPartProps) {
             <CodeBlock embedded numbered
               follow={() => props.m.open() && props.running}
               text={(props.u.result?.toolDetails?.display ?? props.m.output()) || props.m.prog() || ""}
-              language={languageForPath(String(props.m.args().path || ""))}
+              language={languageForPath(String(props.m.args().path || props.m.args().id || "")) || (props.m.name() === "widget_read" ? "tsx" : undefined)}
               wrap={false}
               scrollKey={props.m.key()}
             />
           </Show>
         </Show>
-        <Show when={props.m.name() === "write"}>
+        <Show when={props.m.name() === "write" || props.m.name() === "widget_set"}>
           <CodeBlock embedded numbered
             follow={() => props.m.open() && props.running}
             text={String((props.u.result?.toolDetails?.display ?? props.m.output()) || props.m.args().content || "")}
-            language={languageForPath(String(props.m.args().path || ""))}
+            language={languageForPath(String(props.m.args().path || props.m.args().id || "")) || (props.m.name() === "widget_set" ? "tsx" : undefined)}
             wrap={false}
             scrollKey={props.m.key()}
           />

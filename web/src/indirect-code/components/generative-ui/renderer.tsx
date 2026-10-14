@@ -1,71 +1,86 @@
-import { createEffect, createMemo, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+
 import {
   attachGuBridge,
   clampFrameHeight,
   MIN_FRAME_HEIGHT,
   widgetTheme,
 } from "./bridge";
-
-/** The frame starts this thin and grows to the widget's measured content. */
-const MIN_START_HEIGHT = MIN_FRAME_HEIGHT;
-import { parseGenerativeUiDsl, hasWidgetBody, type GenerativeUiData } from "./dsl";
-import { resolvePublishedFrame } from "./frame-height";
+import { parseGenerativeUiDsl, type GenerativeUiData } from "./dsl";
+import { fetchWidgetSource, widgetSourceVersion } from "./widget-source";
 
 /**
- * Generative UI widget (React `@jsx` widgets).
+ * Host renderer of a ```generative_ui fence.
  *
- * The widget is a markdown DSL (```generative_ui fenced block): header keys,
- * then one React component. Rendering runs in two stages:
+ * The fence carries HEADER LINES ONLY (placeholder / state / widget_id). The
+ * widget's TSX source lives in the session's widget store (widget_set
+ * tool); the fence links it by `widget_id:`. Rendering:
  *
- *  - while the assistant streams the block, the placeholder pill covers an
- *    inert surface — the source is compiled once, when the block closes;
- *  - when the block closes, the body is uploaded to
- *    /api/indirect-code/gen-ui/widgets (compiled server-side with sucrase)
- *    and the *final* iframe loads that document: the real sandboxed widget
- *    (React runtime + compiled module + libs), interactive and isolated
- *    (network: images, plus https/esm.sh with `net: true`).
+ *  - fence with `widget_id:` + relay ctx → fetch the stored source (WS
+ *    get_widget), publish it into the content-addressed gateway store and
+ *    mount the sandboxed iframe document.
+ *  - fence without `widget_id:` (or no relay ctx) → static card with the
+ *    placeholder + default state preview (no frame).
  *
- * Why URLs instead of srcdoc: the gateway CSP is frame-src allowlist with
- * no 'unsafe-inline' — inline frames inherit it and their inline scripts
- * are refused. Served documents carry their own strict CSP header
- * (sandbox allow-scripts; default-src 'none') and work in any embedder.
+ * State: the widget's explicit `window.__gu.saveState()` hook persists to
+ * localStorage (per host + session + widget id) — non-reactive, only when
+ * the widget asks. On load the saved state wins over the fence `state:`
+ * default.
  */
-/** Last measured widget height per published (content-addressed) URL. Two
- * end-of-turn paths used to collapse the card to its start height until the
- * session was reopened: (1) the tail re-send re-triggers publishing with
- * content that compiles to the same module — the URL is unchanged, the iframe
- * never reloads and never re-reports a height, so zeroing it stranded the
- * card; (2) the transcript row remounts and its height signal starts at 0.
- * Keyed by URL (not by source text) so any textual noise around the same
- * compiled widget still finds its measurement. */
-const frameHeights = new Map<string, number>();
-
 export function GenerativeUiWidget(props: {
-  /** Raw fenced block body (may be partial while streaming). */
+  /** Fence body (header lines), a signal so streaming updates re-parse. */
   body: () => string;
-  /** True while the assistant is still streaming this block. */
+  /** True while the fence is still streaming. */
   streaming: () => boolean;
   onSendPrompt: (text: string) => void;
-  /** Paste text into the composer without sending (error reports). */
   onPrefillPrompt?: (text: string) => void;
   onOpenLink?: (url: string) => void;
+  /** Relay access for fetching widget sources (absent = static card). */
+  ctx?: {
+    send: (payload: { type: "get_widget"; sessionId: string; requestId: string; widgetId: string }) => void;
+    hostId: string;
+    sessionId: string;
+  };
 }) {
-  const [finalEl, setFinalEl] = createSignal<HTMLIFrameElement>();
+  const MIN_START_HEIGHT = 96;
+  const [finalEl, setFinalEl] = createSignal<HTMLIFrameElement | null>(null);
   const [finalUrl, setFinalUrl] = createSignal<string>("");
   const [finalHeight, setFinalHeight] = createSignal<number>(0);
   const [error, setError] = createSignal<string>("");
   const [theme, setTheme] = createSignal(widgetTheme());
 
   const streaming = () => props.streaming();
-  // Memoized: parse once per body change, not once per accessor read (the
-  // effects and JSX below read data() many times per token while streaming).
-  const data = createMemo<GenerativeUiData>(() => parseGenerativeUiDsl(props.body()));
-  // The frame starts thin and grows to fit content: the widget reports its
-  // real height over the bridge (clamped), so no height bookkeeping is needed
-  // in the DSL.
-  const stateJSON = () => JSON.stringify(data().state ?? {});
-  /** Dedupe key for publish: identical theme+state+source never re-POSTs. */
-  const widgetKey = () => `${theme()}\u0000${stateJSON()}\u0000${data().jsx ?? ""}`;
+  // Memoized-ish: parse once per body change (accessors are read often
+  // during streaming).
+  let parsedCache: { raw: string; data: GenerativeUiData } | null = null;
+  const data = (): GenerativeUiData => {
+    const raw = props.body();
+    if (!parsedCache || parsedCache.raw !== raw) parsedCache = { raw, data: parseGenerativeUiDsl(raw) };
+    return parsedCache.data;
+  };
+
+  /**
+   * Saved state lookup: keyed by host + session + widget id only. There is
+   * deliberately NO id-only fallback — a widget's state belongs to the exact
+   * session it was created in (a same-id widget in another session must not
+   * inherit it).
+   */
+  const stateKey = (id: string): string => {
+    const c = props.ctx;
+    return c ? `gu:state:${c.hostId}:${c.sessionId}:${id}` : `gu:state:::${id}`;
+  };
+  const readSavedState = (id: string): string | null => {
+    try {
+      return window.localStorage.getItem(stateKey(id));
+    } catch {
+      return null;
+    }
+  };
+  const writeSavedState = (id: string, stateJSON: string): void => {
+    try {
+      window.localStorage.setItem(stateKey(id), stateJSON);
+    } catch {}
+  };
 
   onMount(() => {
     const observer = new MutationObserver(() => setTheme(widgetTheme()));
@@ -76,12 +91,49 @@ export function GenerativeUiWidget(props: {
     onCleanup(() => observer.disconnect());
   });
 
+  // ---- source resolution (id → session widget store) ----
+  const [source, setSource] = createSignal<string>("");
+  const [missing, setMissing] = createSignal(false);
+  createEffect(
+    on(
+      // widgetSourceVersion bumps on cache invalidation: the effect must
+      // re-run so a dropped cache entry is actually re-fetched.
+      () => [data().id, streaming(), widgetSourceVersion.get()] as const,
+      ([id, stillStreaming]) => {
+        if (!id || stillStreaming || !props.ctx) return;
+        // fetchWidgetSource serves the in-memory cache when present (a
+        // version bump only re-runs this for the widget whose entry was
+        // dropped — the others resolve from cache, no WS round-trip).
+        void fetchWidgetSource(props.ctx!.send, props.ctx!.hostId, props.ctx!.sessionId, id).then((rec) => {
+          if (rec?.source) {
+            setMissing(false);
+            setSource(rec.source);
+          } else {
+            setMissing(true);
+            setSource("");
+          }
+        });
+      },
+    ),
+  );
+
+  // Effective state: the widget's saved state wins over the fence default.
+  const stateJSON = () => {
+    const d = data();
+    const saved = d.id ? readSavedState(d.id) : null;
+    if (saved) return saved;
+    return JSON.stringify(d.state ?? {});
+  };
+
+  /** Dedupe key for publish: identical theme+state+source never re-POSTs. */
+  const widgetKey = () => `${theme()}\u0000${stateJSON()}\u0000${source()}`;
+
   // ---- final widget ----
   let publishInFlight = false;
   let publishedKey = "";
   const finalize = async () => {
     const d = data();
-    if (!d.jsx || publishInFlight) return;
+    if (!d.id || !source() || publishInFlight) return;
     // Snapshot reconciliation can re-trigger this with semantically identical
     // content (escaped text resolves, footers strip): publishing the same
     // content again is a no-op worth keeping — a second POST would only
@@ -95,7 +147,7 @@ export function GenerativeUiWidget(props: {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           theme: theme(),
-          jsx: d.jsx,
+          jsx: source(),
           stateJSON: stateJSON(),
         }),
       });
@@ -123,7 +175,7 @@ export function GenerativeUiWidget(props: {
 
   createEffect(
     on(
-      () => [data().jsx, stateJSON(), theme(), streaming()] as const,
+      () => [source(), stateJSON(), theme(), streaming()] as const,
       ([, , , stillStreaming]) => {
         if (stillStreaming) return;
         void finalize();
@@ -147,6 +199,11 @@ export function GenerativeUiWidget(props: {
           setFinalHeight(height);
         },
         onError: (message) => setError(message),
+        // Explicit save hook (window.__gu.saveState) — never reactive.
+        onState: (stateJSON) => {
+          const id = data().id;
+          if (id) writeSavedState(id, stateJSON);
+        },
       },
     );
     onCleanup(detach);
@@ -166,20 +223,54 @@ export function GenerativeUiWidget(props: {
     ].join("\n");
   };
 
+  const isStatic = () => !data().id || (!props.ctx && !streaming());
+
   return (
-    <Show when={hasWidgetBody(data()) || streaming()}>
+    <>
       {/* One surface only: the host card and the widget document share the
           `card` token, so the frame seam is invisible. While the widget is
           not ready, a centered loading pill (placeholder text) floats over
           the streaming preview; runtime errors land in the footer below. */}
       <div class="gu-card-host relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]">
-        <Show when={(streaming() || !finalUrl()) && !error()}>
+        <Show when={(streaming() || (!finalUrl() && !isStatic() && !missing())) && !error()}>
           <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center p-4">
             <div class="flex max-w-full items-center gap-2 rounded-full border border-line bg-elev/90 py-1.5 pr-3.5 pl-3 shadow-sm backdrop-blur">
               <span class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-ink-500 border-t-transparent" />
               <span class="truncate text-[11px] font-medium text-ink-400">
                 {data().placeholder || "Building your widget"}
               </span>
+            </div>
+          </div>
+        </Show>
+        <Show when={missing()}>
+          <div class="ui-card-mode p-4">
+            <div class="flex items-center gap-2">
+              <span class="shrink-0 text-[11px] font-semibold text-rose-500">Widget not found</span>
+              <span class="min-w-0 flex-1 truncate text-[11px] text-ink-400">
+                No widget source stored for id “{data().id}” in this session.
+              </span>
+              <Show when={props.onPrefillPrompt}>
+                <button
+                  type="button"
+                  class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
+                  onClick={() => props.onPrefillPrompt?.(`The widget with id "${data().id}" is referenced by a generative_ui fence but has no stored source. Store it with widget_set (id: "${data().id}").`)}
+                >
+                  Ask to fix
+                </button>
+              </Show>
+            </div>
+          </div>
+        </Show>
+        <Show when={isStatic() && !streaming() && !missing()}>
+          <div class="ui-card-mode p-4">
+            <div class="text-[11px] font-semibold text-ink-300">{data().placeholder || "Interactive widget"}</div>
+            <Show when={Object.keys(data().state ?? {}).length}>
+              <pre class="mt-2 max-h-40 overflow-auto rounded-lg border border-line bg-elev/40 p-2 text-[11px] text-ink-400">
+                {JSON.stringify(data().state ?? {}, null, 2)}
+              </pre>
+            </Show>
+            <div class="mt-2 text-[11px] text-ink-500">
+              Static preview — this fence has no <code>widget_id:</code> link to a stored widget source.
             </div>
           </div>
         </Show>
@@ -228,9 +319,27 @@ export function GenerativeUiWidget(props: {
           </div>
         </Show>
       </div>
-    </Show>
+    </>
   );
 }
+
+/**
+ * Keeps the previously painted height while the same widget is republished
+ * (same content-addressed URL family) so an update never flashes the thin
+ * loading state again.
+ */
+function resolvePublishedFrame(params: {
+  nextUrl: string;
+  currentUrl: string;
+  currentHeight: number;
+  cachedHeight: number | undefined;
+}): { url: string; height: number } {
+  const { nextUrl, currentUrl, currentHeight, cachedHeight } = params;
+  if (nextUrl === currentUrl) return { url: nextUrl, height: currentHeight || cachedHeight || MIN_FRAME_HEIGHT };
+  return { url: nextUrl, height: cachedHeight ?? MIN_FRAME_HEIGHT };
+}
+
+const frameHeights = new Map<string, number>();
 
 export { parseGenerativeUiDsl };
 export type { GenerativeUiData };
