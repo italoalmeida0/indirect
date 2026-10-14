@@ -370,7 +370,7 @@ export function GenerativeUiWidget(props: {
                 ? "pointer-events-none flex items-center justify-end gap-1 p-2"
                 /* max-md: opacity-100 — no hover on touch screens, so the
                    reload/fullscreen/unload controls must always show there. */
-                : "pointer-events-none -mb-1 flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100 max-md:opacity-100"
+                : "pointer-events-none mb-2 flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100 max-md:opacity-100"
             }
           >
             <div class="pointer-events-auto flex items-center gap-0.5">
