@@ -1,5 +1,5 @@
 # ===== Build stage: bundle the dashboard SPA =====
-FROM oven/bun:1-alpine AS webbuild
+FROM oven/bun:1-slim AS webbuild
 WORKDIR /app
 COPY package.json bun.lock ./
 COPY patches ./patches
@@ -12,7 +12,7 @@ COPY indirect-code-daemon/dist ./indirect-code-daemon/dist
 RUN bun ./build.ts
 
 # ===== Runtime stage: server + built assets =====
-FROM oven/bun:1-alpine
+FROM oven/bun:1-slim
 WORKDIR /app
 
 ENV NODE_ENV=production \
@@ -33,7 +33,7 @@ COPY --from=webbuild /app/dist ./dist
 # Run as a dedicated non-root user (least privilege). /data holds the DB and
 # the dev secret, so it is owned by that user and mounted as a volume.
 RUN mkdir -p /data \
-    && addgroup -S gateway && adduser -S -G gateway gateway \
+    && groupadd -r gateway && useradd -r -g gateway gateway \
     && chown -R gateway:gateway /app /data
 USER gateway
 
