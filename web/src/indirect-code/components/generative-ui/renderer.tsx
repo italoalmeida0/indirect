@@ -59,6 +59,8 @@ export function GenerativeUiWidget(props: {
   const [unfrozen, setUnfrozen] = createSignal(false);
   const [deactivated, setDeactivated] = createSignal(false);
   const [superseded, setSuperseded] = createSignal(false);
+  /** Immersive fullscreen overlay (games/3D widgets on small screens). */
+  const [expanded, setExpanded] = createSignal(false);
   /**
    * Unloaded: superseded by a newer fence for the same widget id (registry),
    * an earlier duplicate in document order (prop), or user-deactivated.
@@ -94,6 +96,19 @@ export function GenerativeUiWidget(props: {
     forcePublish = true;
     void finalize();
   };
+
+  // Escape exits the fullscreen overlay; auto-exit when the widget unloads.
+  createEffect(() => {
+    if (!expanded()) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
+  createEffect(() => {
+    if (frozen() && expanded()) setExpanded(false);
+  });
 
   const streaming = () => props.streaming();
   // Memoized-ish: parse once per body change (accessors are read often
@@ -311,21 +326,49 @@ export function GenerativeUiWidget(props: {
           `card` token, so the frame seam is invisible. While the widget is
           not ready, a centered loading pill (placeholder text) floats over
           the streaming preview; runtime errors land in the footer below. */}
-      <div class="group/guhost">
+      <div class={expanded() ? "group/guhost fixed inset-0 z-[55] flex flex-col overflow-hidden bg-ink-950/95" : "group/guhost"}>
         <Show when={!streaming()}>
-          <div class="pointer-events-none -mb-1 flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100">
+          <div
+            class={
+              expanded()
+                ? "pointer-events-none flex items-center justify-end gap-1 p-2"
+                /* max-md: opacity-100 — no hover on touch screens, so the
+                   reload/fullscreen/unload controls must always show there. */
+                : "pointer-events-none -mb-1 flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100 max-md:opacity-100"
+            }
+          >
             <div class="pointer-events-auto flex items-center gap-0.5">
               <Show
                 when={!frozen()}
                 fallback={<MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />}
               >
                 <MsgIconBtn tip="Reload widget" icon="lucide:refresh-cw" compact onClick={reload} />
-                <MsgIconBtn tip="Unload widget" icon="lucide:eye-off" compact onClick={() => setDeactivated(true)} />
+                <MsgIconBtn
+                  tip={expanded() ? "Exit fullscreen" : "Fullscreen widget"}
+                  icon={expanded() ? "lucide:minimize" : "lucide:maximize"}
+                  compact
+                  onClick={() => setExpanded(!expanded())}
+                />
+                <MsgIconBtn
+                  tip="Unload widget"
+                  icon="lucide:eye-off"
+                  compact
+                  onClick={() => {
+                    setExpanded(false);
+                    setDeactivated(true);
+                  }}
+                />
               </Show>
             </div>
           </div>
         </Show>
-        <div class="gu-card-host relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]">
+        <div
+          class={
+            expanded()
+              ? "relative min-h-0 flex-1 overflow-hidden"
+              : "gu-card-host relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]"
+          }
+        >
         <Show when={frozen() && !streaming()}>
           <div class="ui-card-mode flex items-center justify-center gap-2 px-3 py-1.5">
             <span class="truncate text-[11px] text-ink-500 gu-mono">{data().id || "widget"}</span>
@@ -395,8 +438,16 @@ export function GenerativeUiWidget(props: {
             referrerpolicy="no-referrer"
             title="Interactive widget"
             src={finalUrl()}
-            class="block w-full border-0 bg-card transition-[height] duration-200 ease-out motion-reduce:transition-none"
-            style={{ height: `${clampFrameHeight(finalHeight() || MIN_START_HEIGHT)}px` }}
+            class={
+              expanded()
+                ? "block h-full w-full border-0 bg-card"
+                : "block w-full border-0 bg-card transition-[height] duration-200 ease-out motion-reduce:transition-none"
+            }
+            style={
+              expanded()
+                ? { height: "100%" }
+                : { height: `${clampFrameHeight(finalHeight() || MIN_START_HEIGHT)}px` }
+            }
           />
         </Show>
         <Show when={error()}>
