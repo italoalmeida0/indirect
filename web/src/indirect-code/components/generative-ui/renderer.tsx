@@ -130,6 +130,8 @@ export function GenerativeUiWidget(props: {
     const c = props.ctx;
     return c ? `gu:state:${c.hostId}:${c.sessionId}:${id}` : `gu:state:::${id}`;
   };
+  /** Saved snapshot for this widget (null = none): drives the reset control. */
+  const [savedState, setSavedState] = createSignal<string | null>(null);
   const readSavedState = (id: string): string | null => {
     try {
       return window.localStorage.getItem(stateKey(id));
@@ -141,6 +143,13 @@ export function GenerativeUiWidget(props: {
     try {
       window.localStorage.setItem(stateKey(id), stateJSON);
     } catch {}
+    setSavedState(stateJSON);
+  };
+  const deleteSavedState = (id: string): void => {
+    try {
+      window.localStorage.removeItem(stateKey(id));
+    } catch {}
+    setSavedState(null);
   };
 
   onMount(() => {
@@ -209,11 +218,27 @@ export function GenerativeUiWidget(props: {
   );
 
   // Effective state: the widget's saved state wins over the fence default.
+  // (readSavedState is the source of truth; the signal only drives the
+  // reset-control visibility and re-syncs when the widget id changes.)
+  createEffect(() => {
+    const id = data().id;
+    setSavedState(id ? readSavedState(id) : null);
+  });
   const stateJSON = () => {
     const d = data();
     const saved = d.id ? readSavedState(d.id) : null;
     if (saved) return saved;
     return JSON.stringify(d.state ?? {});
+  };
+
+  /** Reset to the fence default state and remount fresh. */
+  const resetState = () => {
+    const id = data().id;
+    if (!id) return;
+    deleteSavedState(id);
+    // stateJSON() now falls back to the fence default, so the content key
+    // changes and finalize() really re-publishes (no dedupe no-op).
+    void finalize();
   };
 
   /** Dedupe key for publish: identical theme+state+source never re-POSTs. */
@@ -342,6 +367,14 @@ export function GenerativeUiWidget(props: {
                 when={!frozen()}
                 fallback={<MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />}
               >
+                <Show when={savedState() !== null}>
+                  <MsgIconBtn
+                    tip="Reset widget state"
+                    icon="lucide:rotate-ccw"
+                    compact
+                    onClick={resetState}
+                  />
+                </Show>
                 <MsgIconBtn tip="Reload widget" icon="lucide:refresh-cw" compact onClick={reload} />
                 <MsgIconBtn
                   tip={expanded() ? "Exit fullscreen" : "Fullscreen widget"}
