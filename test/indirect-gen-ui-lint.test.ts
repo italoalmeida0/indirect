@@ -416,14 +416,17 @@ export default function App() { return <div className="gu-root" />; }`;
     expect(failing.errors[0].message).toContain("expected 2 meshes");
   }, 60_000);
 
-  test("a 2D-only widget gets a 3D-availability note, not a failure", async () => {
+  test("a 2D-only widget gets no 3D notes at all", async () => {
     const res = await runWidgetLint({
       id: "t2d",
       source: `export default function App() { return <div className="gu-root">plain 2d</div>; }`,
     });
     expect(res.ok).toBe(true);
-    expect((res.notes || []).some((n) => n.includes("3D:"))).toBe(true);
-    expect((res.notes || []).some((n) => n.includes("not used"))).toBe(true);
+    // Nothing to report when the 3D path was never touched — and the
+    // output never names the lint browser.
+    expect((res.notes || []).some((n) => n.includes("3D"))).toBe(false);
+    expect(res.output).toContain("render: ok");
+    expect(res.output).not.toContain("obscura");
   }, 60_000);
 });
 

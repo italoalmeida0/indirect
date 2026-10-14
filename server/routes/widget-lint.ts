@@ -156,7 +156,7 @@ async function phase(name, url, runFn) {
   }
   return R.errors.length === before;
 }
-if (await phase("render", "./widget.js")) R.output.push("render: ok (obscura smoke render)");
+if (await phase("render", "./widget.js")) R.output.push("render: ok");
 // The widget mounts on the next animation frame (the runtime's $render).
 // EXERCISE it then: pump real frames + timers for a while so update-phase
 // bugs (game loops, setState ticks, resize handlers) land in errors too —
@@ -324,7 +324,7 @@ async function runWidgetLintInner(req: WidgetLintRequest): Promise<WidgetLintRes
     notes.push(`lint-browser limitation (not a widget bug): ${e.message.split("\n")[0]}`);
   }
   if (!errors.some((e) => e.phase === "render")) {
-    output.push("render: ok (obscura smoke render)");
+    output.push("render: ok");
     if (testModule && !errors.some((e) => e.phase === "test")) output.push("test: ok");
   }
 
@@ -366,22 +366,18 @@ type WebGLReport = {
 
 /**
  * Turns the WebGL report into non-fatal notes: how much of the 3D path the
- * smoke render actually exercised. A widget that builds a three.js scene
- * gets "3D exercised" with real program/draw counts; a pure-2D widget just
- * notes the polyfill was available.
+ * smoke render actually exercised. Only widgets that actually used WebGL
+ * get a note (that it was tested on the polyfill); a 2D widget says nothing.
  */
 function webglNotes(webgl: WebGLReport | null | undefined): string[] {
   if (!webgl) return [];
   const s = webgl.summary;
   if (!s) return [];
+  if ((s.contexts ?? 0) === 0) return []; // never exercised: nothing to report
+  const via = webgl.native ? "WebGL" : "WebGL polyfill (software)";
   const notes: string[] = [];
-  const gl = webgl.native ? "native WebGL" : "WebGL polyfill (software, no GPU in the lint browser)";
-  if ((s.contexts ?? 0) === 0) {
-    notes.push(`3D: ${gl} available, not used by this widget`);
-    return notes;
-  }
   notes.push(
-    `3D exercised on ${gl}: ${s.contexts} context(s), ${s.programs} program(s), ` +
+    `3D exercised via ${via}: ${s.contexts} context(s), ${s.programs} program(s), ` +
       `${s.shaders} shader(s), ${s.drawCalls} draw call(s), ${s.uniformsSet} uniform(s), ` +
       `${s.textures} texture(s), ${s.buffers} buffer(s)`,
   );

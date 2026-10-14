@@ -304,9 +304,9 @@ func TestRenderWidgetLintTextIncludes3DNotes(t *testing.T) {
 	res := WidgetLintResult{
 		OK:         true,
 		DurationMs: 12,
-		Output:     "compile: ok\nrender: ok (obscura smoke render)",
+		Output:     "compile: ok\nrender: ok",
 		Notes: []string{
-			"3D exercised on WebGL polyfill (software, no GPU in the lint browser): 1 context(s), 2 program(s), 2 shader(s), 1 draw call(s)",
+			"3D exercised via WebGL polyfill (software): 1 context(s), 2 program(s), 2 shader(s), 1 draw call(s)",
 		},
 	}
 	text := renderWidgetLintText(res, "w")
