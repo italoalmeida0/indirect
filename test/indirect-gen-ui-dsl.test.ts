@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  frozenDuplicateSegmentIds,
   parseGenerativeUiDsl,
   splitGenerativeUiSegments,
   withGenerativeUiSegmentIds,
@@ -8,7 +9,7 @@ import {
 } from "../web/src/indirect-code/components/generative-ui/dsl";
 
 /**
- * The fence carries HEADER LINES ONLY (placeholder / state / id). The widget
+ * The fence carries HEADER LINES ONLY (placeholder / state / widget_id). The widget
  * source lives in the session's widget store; `widget_id:` is the link. Legacy
  * `@jsx` bodies are migrated away daemon-side and never parsed here.
  */
@@ -114,5 +115,33 @@ after`);
     const withIds = withGenerativeUiSegmentIds(segs);
     expect(withIds[0].id).toBe(generativeUiSegmentId(segs[0], 0));
     expect(withIds[1].id).not.toBe(withIds[0].id);
+  });
+});
+
+describe("frozenDuplicateSegmentIds", () => {
+  const fence = (id: string) => "```generative_ui\nwidget_id: " + id + "\n```";
+
+  test("only the LAST fence of a widget id stays active", () => {
+    const segs = withGenerativeUiSegmentIds(
+      splitGenerativeUiSegments(fence("w1") + "\n\ntext\n\n" + fence("w1") + "\n\n" + fence("w2")),
+    );
+    const frozen = frozenDuplicateSegmentIds(segs);
+    const widgets = segs.filter((s) => s.kind === "widget");
+    expect(widgets).toHaveLength(3);
+    expect(frozen.has(widgets[0].id)).toBe(true); // first w1 frozen
+    expect(frozen.has(widgets[1].id)).toBe(false); // last w1 active
+    expect(frozen.has(widgets[2].id)).toBe(false); // w2 active
+  });
+
+  test("a single fence never freezes", () => {
+    const segs = withGenerativeUiSegmentIds(splitGenerativeUiSegments(fence("only") + "\n"));
+    expect(frozenDuplicateSegmentIds(segs).size).toBe(0);
+  });
+
+  test("three duplicates freeze the two earlier ones", () => {
+    const segs = withGenerativeUiSegmentIds(
+      splitGenerativeUiSegments([fence("x"), fence("x"), fence("x")].join("\n\n")),
+    );
+    expect(frozenDuplicateSegmentIds(segs).size).toBe(2);
   });
 });

@@ -1,4 +1,5 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { MsgIconBtn } from "../MsgActions";
 
 import {
   attachGuBridge,
@@ -32,6 +33,12 @@ export function GenerativeUiWidget(props: {
   body: () => string;
   /** True while the fence is still streaming. */
   streaming: () => boolean;
+  /**
+   * True for EARLIER duplicates of a widget id whose last fence is another
+   * instance in the same transcript: those stay unloaded (no iframe, no
+   * lib fetch) until the user mounts them manually.
+   */
+  frozen?: () => boolean;
   onSendPrompt: (text: string) => void;
   onPrefillPrompt?: (text: string) => void;
   onOpenLink?: (url: string) => void;
@@ -48,6 +55,22 @@ export function GenerativeUiWidget(props: {
   const [finalHeight, setFinalHeight] = createSignal<number>(0);
   const [error, setError] = createSignal<string>("");
   const [theme, setTheme] = createSignal(widgetTheme());
+  const [unfrozen, setUnfrozen] = createSignal(false);
+  const [deactivated, setDeactivated] = createSignal(false);
+  /** Unloaded: an earlier duplicate (prop) or user-deactivated. */
+  const frozen = () => deactivated() || (!unfrozen() && (props.frozen?.() ?? false));
+  const reactivate = () => {
+    setDeactivated(false);
+    setUnfrozen(true);
+    void finalize();
+  };
+  /** Hard reload: drop the published document and republish (fresh mount). */
+  const reload = () => {
+    if (frozen() || !source()) return;
+    publishedKey = "";
+    setFinalUrl("");
+    void finalize();
+  };
 
   const streaming = () => props.streaming();
   // Memoized-ish: parse once per body change (accessors are read often
@@ -100,7 +123,7 @@ export function GenerativeUiWidget(props: {
       // re-run so a dropped cache entry is actually re-fetched.
       () => [data().id, streaming(), widgetSourceVersion.get()] as const,
       ([id, stillStreaming]) => {
-        if (!id || stillStreaming || !props.ctx) return;
+        if (!id || stillStreaming || !props.ctx || frozen()) return;
         // fetchWidgetSource serves the in-memory cache when present (a
         // version bump only re-runs this for the widget whose entry was
         // dropped — the others resolve from cache, no WS round-trip).
@@ -133,7 +156,7 @@ export function GenerativeUiWidget(props: {
   let publishedKey = "";
   const finalize = async () => {
     const d = data();
-    if (!d.id || !source() || publishInFlight) return;
+    if (!d.id || !source() || publishInFlight || frozen()) return;
     // Snapshot reconciliation can re-trigger this with semantically identical
     // content (escaped text resolves, footers strip): publishing the same
     // content again is a no-op worth keeping — a second POST would only
@@ -231,8 +254,43 @@ export function GenerativeUiWidget(props: {
           `card` token, so the frame seam is invisible. While the widget is
           not ready, a centered loading pill (placeholder text) floats over
           the streaming preview; runtime errors land in the footer below. */}
-      <div class="gu-card-host relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]">
-        <Show when={(streaming() || (!finalUrl() && !isStatic() && !missing())) && !error()}>
+      <div class="gu-card-host group/guhost relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]">
+        <Show when={!streaming()}>
+          <div class="pointer-events-none absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100">
+            <div class="pointer-events-auto rounded-md border border-line bg-elev/90 p-0.5 shadow-sm backdrop-blur">
+              <Show
+                when={!frozen()}
+                fallback={
+                  <MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />
+                }
+              >
+                <MsgIconBtn tip="Reload widget" icon="lucide:refresh-cw" compact onClick={reload} />
+                <MsgIconBtn tip="Unload widget" icon="lucide:eye-off" compact onClick={() => setDeactivated(true)} />
+              </Show>
+            </div>
+          </div>
+        </Show>
+        <Show when={frozen() && !streaming()}>
+          <div class="ui-card-mode p-4">
+            <div class="flex items-center gap-2">
+              <span class="shrink-0 text-[11px] font-semibold text-ink-300">
+                {data().placeholder || "Interactive widget"}
+              </span>
+              <span class="gu-badge">Unloaded</span>
+              <span class="min-w-0 flex-1 truncate text-[11px] text-ink-500">
+                Earlier duplicate of widget “{data().id}” — only the last fence of a widget stays mounted.
+              </span>
+              <button
+                type="button"
+                class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
+                onClick={reactivate}
+              >
+                Load widget
+              </button>
+            </div>
+          </div>
+        </Show>
+        <Show when={!frozen() && (streaming() || (!finalUrl() && !isStatic() && !missing())) && !error()}>
           <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center p-4">
             <div class="flex max-w-full items-center gap-2 rounded-full border border-line bg-elev/90 py-1.5 pr-3.5 pl-3 shadow-sm backdrop-blur">
               <span class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-ink-500 border-t-transparent" />
@@ -275,7 +333,7 @@ export function GenerativeUiWidget(props: {
           </div>
         </Show>
         <Show
-          when={!streaming() && !!finalUrl()}
+          when={!frozen() && !streaming() && !!finalUrl()}
           fallback={
             /* Widgets compile at publish time: this thin inert surface keeps
                the placeholder visible while streaming; the frame grows to

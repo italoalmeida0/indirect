@@ -36,7 +36,11 @@ widget_id: savings
 
 Workflow: store the source with `widget_set` (verify with `widget_lint` when
 in doubt), then link it with `widget_id:` in the fence. To change a widget
-later, update its stored source — the fence stays the same.
+later, edit its stored source with `widget_edit` (targeted replacements) —
+avoid rewriting the whole source from scratch with `widget_set`; only do that
+when the changes are too tangled to express as edits. The fence stays the
+same. Only the LAST fence for a given `widget_id:` mounts live (earlier
+duplicates stay unloaded), so prefer one fence per widget.
 
 ## Component contract & sandbox rules (enforced — violations blank the widget)
 

@@ -3,6 +3,7 @@ import { createStore, reconcile } from "solid-js/store";
 import { TarnavMarkdown } from "./TarnavMarkdown";
 import { GenerativeUiWidget } from "./generative-ui/renderer";
 import {
+  frozenDuplicateSegmentIds,
   splitGenerativeUiSegments,
   withGenerativeUiSegmentIds,
   type GenerativeUiSegmentWithId,
@@ -40,6 +41,9 @@ export function StreamingMarkdown(props: {
   };
   const split = () =>
     withGenerativeUiSegmentIds(splitGenerativeUiSegments(props.children || ""));
+  // Duplicate fences for the same widget_id: only the LAST mounts live
+  // (earlier duplicates freeze — see frozenDuplicateSegmentIds).
+  const frozenIds = () => frozenDuplicateSegmentIds(split());
   const [state, setState] = createStore<{ segs: GenerativeUiSegmentWithId[] }>({
     segs: props.basic ? [] : split(),
   });
@@ -69,6 +73,7 @@ export function StreamingMarkdown(props: {
           <GenerativeUiWidget
             body={() => seg.body}
             streaming={() => !!props.streaming && !seg.closed}
+            frozen={() => frozenIds().has(seg.id)}
             ctx={widgetCtx()}
             onSendPrompt={(text) => {
               composer.setInputPrompt(text);

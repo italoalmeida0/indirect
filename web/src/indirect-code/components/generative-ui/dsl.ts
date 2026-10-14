@@ -63,6 +63,30 @@ export type GenerativeUiSegment =
 export type GenerativeUiSegmentWithId = GenerativeUiSegment & { id: string };
 
 /**
+ * Segment ids of EARLIER duplicates: several fences in one transcript can
+ * link the same `widget_id:` (a widget edited and re-emitted over time).
+ * Mounting every instance keeps one live iframe per fence — heavy when the
+ * widget pulls vendored libs (three, d3). Only the LAST fence of a given
+ * widget id mounts live; earlier ones are frozen (static card) and can be
+ * mounted manually.
+ */
+export function frozenDuplicateSegmentIds(segs: GenerativeUiSegmentWithId[]): Set<string> {
+  const lastById = new Map<string, string>();
+  for (const seg of segs) {
+    if (seg.kind !== "widget") continue;
+    const id = parseGenerativeUiDsl(seg.body).id;
+    if (id) lastById.set(id, seg.id);
+  }
+  const frozen = new Set<string>();
+  for (const seg of segs) {
+    if (seg.kind !== "widget") continue;
+    const id = parseGenerativeUiDsl(seg.body).id;
+    if (id && lastById.get(id) !== seg.id) frozen.add(seg.id);
+  }
+  return frozen;
+}
+
+/**
  * Stable segment identity for store reconciliation. Streaming is append-only
  * at the tail (segments before the growing one never move), so index+kind is
  * a durable key: the markdown run before a fence keeps its id after the fence
