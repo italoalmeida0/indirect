@@ -18,7 +18,7 @@
  * The widget CSP has no 'unsafe-eval', so compilation happens here, never
  * inside the frame; the output is stored and served as a plain module script.
  */
-import { enforceModelModule } from "./model-code";
+import { enforceModelModule, type AuditFinding } from "./model-code";
 
 const IMPORT_RE =
   /(?:^|[\s;}])(?:import\s*(?:[\w$*{},\s]*?from\s*)?|export\s*[\w$*{},\s]*?from\s*)["']([^"']+)["']/g;
@@ -37,7 +37,7 @@ function jsxBareSpecifiers(src: string): string[] {
 }
 
 export type JsxCompileResult =
-  | { ok: true; code: string }
+  | { ok: true; code: string; stripped: AuditFinding[] }
   | { ok: false; error: string };
 
 const transpiler = new Bun.Transpiler({
@@ -67,13 +67,30 @@ const GLOBAL_USAGE: { specifier: string; pattern: RegExp }[] = [
 
 /** Prepend side-effect imports for libs the code uses but never imports. */
 function injectGlobalImports(code: string): string {
+  return appendGlobalImports(code, globalImportsFor(code));
+}
+
+/**
+ * Side-effect imports for the lib globals the code uses but never imports.
+ * Shared with the lint compile path (which APPENDS them — a prepended line
+ * would shift the model's line numbers).
+ */
+export function globalImportsFor(code: string): string[] {
   const imported = new Set(jsxBareSpecifiers(code));
   const prelude: string[] = [];
   for (const { specifier, pattern } of GLOBAL_USAGE) {
     if (imported.has(specifier) || !pattern.test(code)) continue;
     prelude.push(`import ${JSON.stringify(specifier)};`);
   }
-  return prelude.length ? prelude.join("\n") + "\n" + code : code;
+  return prelude;
+}
+
+/**
+ * Appends (not prepends) the prelude imports: static imports hoist, and the
+ * trailing form keeps every source line at its own line number.
+ */
+export function appendGlobalImports(code: string, prelude: string[]): string {
+  return prelude.length ? code + (code.endsWith("\n") ? "" : "\n") + prelude.join("\n") + "\n" : code;
 }
 
 /**
@@ -98,6 +115,7 @@ export function compileJsxModule(src: string): JsxCompileResult {
   }
   // The model-code boundary: acorn parse -> import audit -> AST sanitizing
   // -> astring generate. Import validation lives there (a regex cannot see
-  // `import(u)`); this returns the final module source or a compile error.
+  // `import(u)`); this returns the final module source (plus the sanitized
+  // findings, with lines, for lint reporting) or a compile error.
   return enforceModelModule(transformed);
 }

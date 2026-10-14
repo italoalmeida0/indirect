@@ -1,6 +1,6 @@
 {
   "name": "llm-gateway",
-  "version": "2.0.42",
+  "version": "2.0.43",
   "description": "Self-hosted LLM Gateway: multi-tenant API keys with budgets, proxying to one upstream OpenAI/Anthropic-compatible provider.",
   "type": "module",
   "scripts": {
@@ -29,6 +29,7 @@
   "dependencies": {
     "@bjorn3/browser_wasi_shim": "^0.4.2",
     "@floating-ui/dom": "^1.8.0",
+    "@jridgewell/remapping": "^2.3.5",
     "@opendocsg/pdf2md": "^0.3.0",
     "@signaldb/core": "^1.8.1",
     "@signaldb/indexeddb": "^1.1.0",
@@ -47,6 +48,7 @@
     "katex": "0.16.47",
     "leaflet": "^1.9.4",
     "magic-bytes.js": "^1.13.1",
+    "magic-string": "^1.4.3",
     "marked": "^18.0.11",
     "matter-js": "^0.20.0",
     "nodemailer": "^9.0.5",
@@ -55,6 +57,7 @@
     "solid-charts": "0.0.2",
     "sortablejs": "^1.15.7",
     "streaming-markdown": "0.2.15",
+    "sucrase": "^3.35.1",
     "three": "^0.186.1",
     "usal": "^2.0.0",
     "web-push": "^3.6.7"

@@ -95,7 +95,9 @@ frontend + daemon. Run checks from the appropriate project root.
 - Every `widget_set` lints at the gateway (`POST
   /api/indirect-code/gen-ui/lint`, daemon token): compile → import audit →
   smoke render in the Obscura lint browser → optional `test` code importing
-  the widget module. One obscura process per lint (`obscura fetch file://…`),
+  the widget module. Lint compiles with sucrase + source map (the API path
+  keeps Bun.Transpiler), so findings and runtime stacks carry ORIGINAL
+  source lines and a `createCodeFrame` snippet pointing at the region to fix. One obscura process per lint (`obscura fetch file://…`),
   auto-downloaded into DATA_DIR at gateway boot (stealth build; no fallback
   browser). The model-code audit also neutralizes sandbox escapes
   (constructor/__proto__/prototype, receiver fetch/XHR, reflection, global

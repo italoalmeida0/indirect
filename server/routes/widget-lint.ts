@@ -1,10 +1,12 @@
 /**
  * Generative UI widget lint runner (server side).
  *
- * Pipeline: compile (Bun jsx transform + the model-code audit) → smoke
- * render in the Obscura lint browser (a REAL isolated browser process:
- * no `process`, no `require`, no gateway access from widget code) →
- * optional test code run against the widget module's exports.
+ * Pipeline: compile (sucrase + the model-code audit — line-preserving, so
+ * every finding maps back to the MODEL's source) → smoke render in the
+ * Obscura lint browser (a REAL isolated browser process: no `process`, no
+ * `require`, no gateway access from widget code) → optional test code run
+ * against the widget module's exports. Errors carry a code frame of the
+ * original source (createCodeFrame), pointing at the exact region to fix.
  *
  * There is NO fallback browser: obscura is fetched/installed on demand
  * (see obscura.ts) and a lint without it fails loudly. One obscura process
@@ -14,7 +16,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { compileJsxModule } from "../../web/src/indirect-code/components/generative-ui/jsx-compile";
+import { compileWidgetForLint, SourceMapIndex, type SourcePosition } from "../../web/src/indirect-code/components/generative-ui/lint-compile";
+import { createCodeFrame } from "../../web/src/indirect-code/components/generative-ui/code-frame";
 import { buildJsxModuleBody, escapeScriptClose } from "../../web/src/indirect-code/components/generative-ui/model-code";
 import { buildReactShimModule } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
 import { REACT_RUNTIME_JS } from "../../web/src/indirect-code/components/generative-ui/react-runtime";
@@ -24,7 +27,18 @@ export type WidgetLintError = {
   phase: "compile" | "audit" | "render" | "test";
   message: string;
   line?: number;
+  column?: number;
 };
+
+/** One error as the lint page reports it (file + compiled position). */
+type PageError = WidgetLintError & { file?: string };
+
+/** Appends an original-source code frame to a lint message. */
+function withFrame(message: string, source: string, pos?: SourcePosition): string {
+  if (!pos?.line || !source) return message;
+  return `${message}
+${createCodeFrame(source, { line: pos.line, column: pos.column >= 0 ? pos.column + 1 : undefined })}`;
+}
 
 export type WidgetLintResult = {
   ok: boolean;
@@ -71,20 +85,36 @@ function lintPageHTML(stateJSON: string, hasTest: boolean): string {
   })}</script>
 <script>
 window.__lint_result = { errors: [], output: [], done: false };
+// Best-effort position extraction from a runtime error (widget.js:12:5 …).
+window.__lint_pos = function (e) {
+  var s = ((e && e.stack) || "") + "";
+  var m = /((?:widget|test)\\.js):(\\d+):(\\d+)/.exec(s);
+  if (m) return { file: m[1], line: parseInt(m[2], 10), column: parseInt(m[3], 10) };
+  var l = /(\\d+)/.exec(s);
+  return { file: "widget.js", line: (e && e.lineno) || undefined, column: undefined };
+};
+window.__lint_push = function (phase, e, fallback) {
+  var p = window.__lint_pos(e);
+  window.__lint_result.errors.push({
+    phase: phase,
+    message: String((e && e.message) || e || fallback).slice(0, 2000),
+    line: p.line,
+    column: p.column,
+    file: p.file
+  });
+};
 window.__gu = {
   state: ${stateJSON},
   error: null,
-  reportError: function (e) {
-    window.__lint_result.errors.push({ phase: "render", message: String((e && e.message) || e).slice(0, 2000) });
-  },
+  reportError: function (e) { window.__lint_push("render", e, "widget error"); },
   onDestroy: function () {},
   saveState: function () {}
 };
 window.addEventListener("error", function (ev) {
-  window.__lint_result.errors.push({ phase: "render", message: String(ev.message || "uncaught error").slice(0, 2000) });
+  window.__lint_push("render", ev.error || ev, ev.message || "uncaught error");
 });
 window.addEventListener("unhandledrejection", function (ev) {
-  window.__lint_result.errors.push({ phase: "render", message: String((ev.reason && ev.reason.message) || ev.reason || "unhandled rejection").slice(0, 2000) });
+  window.__lint_push("render", ev.reason, "unhandled rejection");
 });
 </script>
 <script type="module">
@@ -98,7 +128,7 @@ async function phase(name, url, runFn) {
     const mod = await import(url);
     if (runFn) await runFn(mod);
   } catch (e) {
-    R.errors.push({ phase: name, message: String((e && e.message) || e).slice(0, 2000) });
+    window.__lint_push(name, e, "error");
   }
   return R.errors.length === before;
 }
@@ -111,7 +141,9 @@ R.done = true;
 
 /** The test module: the model's test code plus the exported fn runner. */
 function testModuleSource(testCode: string): string {
-  return `${testCode}
+  // escapeScriptClose is belt-and-braces: the test code is model-authored
+  // and the module is inlined into a <script type="module"> tag.
+  return `${escapeScriptClose(testCode)}
 ;export default (async () => {
   if (typeof test === "function") { await test(); }
   else if (typeof run === "function") { await run(); }
@@ -120,13 +152,32 @@ function testModuleSource(testCode: string): string {
 
 /* ---------------- phases ---------------- */
 
-function compilePhase(source: string): { ok: boolean; code: string; error?: WidgetLintError } {
-  const compiled = compileJsxModule(source);
+function compilePhase(source: string): { ok: boolean; code: string; map: SourceMapIndex | null; errors: WidgetLintError[] } {
+  const compiled = compileWidgetForLint(source);
   if (!compiled.ok) {
     const auditLike = /import|specifier|parseable|unsupported syntax|forbidden/i.test(compiled.error);
-    return { ok: false, code: "", error: { phase: auditLike ? "audit" : "compile", message: compiled.error } };
+    return {
+      ok: false,
+      code: "",
+      map: null,
+      errors: [{
+        phase: auditLike ? "audit" : "compile",
+        message: withFrame(compiled.error, source, compiled.pos),
+        line: compiled.pos?.line,
+        column: compiled.pos?.column,
+      }],
+    };
   }
-  return { ok: true, code: compiled.code };
+  // Capabilities the boundary stripped are lint findings too (with the
+  // ORIGINAL line they sit on): the widget saved WITHOUT them, and the
+  // model needs to know why its code behaves differently.
+  const errors: WidgetLintError[] = compiled.findings.map((f) => ({
+    phase: "audit" as const,
+    line: f.line,
+    column: f.column,
+    message: withFrame(`${f.reason} — removed from the module (the widget runs without it)`, source, f.line ? { line: f.line, column: f.column ?? 0 } : undefined),
+  }));
+  return { ok: true, code: compiled.code, map: compiled.map, errors };
 }
 
 /* ---------------- entry ---------------- */
@@ -138,9 +189,12 @@ export async function runWidgetLint(req: WidgetLintRequest): Promise<WidgetLintR
 
   const compiled = compilePhase(req.source);
   if (!compiled.ok) {
-    errors.push(compiled.error!);
+    errors.push(...compiled.errors);
     return { ok: false, errors, output: "", durationMs: Date.now() - started };
   }
+  // Stripped-capability findings are reported WITH the render (the module
+  // was sanitized, so it still runs — but the model must know what went).
+  errors.push(...compiled.errors);
 
   let stateJSON = "{}";
   if (req.state && req.state.trim()) {
@@ -152,7 +206,9 @@ export async function runWidgetLint(req: WidgetLintRequest): Promise<WidgetLintR
   }
 
   let testModule: string | null = null;
-  if (errors.length === 0 && req.test && req.test.trim()) {
+  let testMap: SourceMapIndex | null = null;
+  const testSource = req.test ?? "";
+  if (req.test && req.test.trim()) {
     // The test imports the widget module with the "widget" specifier —
     // route it through an allowed placeholder for the audit, then back to
     // the colocated ./widget.js the lint page maps.
@@ -165,35 +221,73 @@ export async function runWidgetLint(req: WidgetLintRequest): Promise<WidgetLintR
       const compiledTest = compilePhase(src);
       if (!compiledTest.ok) {
         // The test-code boundary failure keeps the historical "audit"
-        // phase label (compileJsxModule = transform + audit boundary).
-        const e = compiledTest.error!;
-        errors.push({ phase: e.phase === "compile" ? "audit" : e.phase, message: e.message });
+        // phase label (the boundary = transform + audit).
+        for (const e of compiledTest.errors) {
+          errors.push({ ...e, phase: e.phase === "compile" ? "audit" : e.phase });
+        }
       } else {
+        for (const f of compiledTest.errors) errors.push(f);
+        testMap = compiledTest.map;
         testModule = testModuleSource(compiledTest.code.split(placeholder).join("./widget.js"));
       }
     }
   }
 
-  if (errors.length === 0) {
-    const renderErrors = await runInObscura({
-      widgetModule: buildJsxModuleBody(compiled.code),
-      testModule,
-      stateJSON,
-      timeoutS: testModule ? Math.min(LINT_TIMEOUT_S, TEST_TIMEOUT_S + 5) : LINT_TIMEOUT_S,
-    });
-    errors.push(...renderErrors);
-    if (errors.some((e) => e.phase === "render")) output.length = 0;
-    else {
-      output.push("render: ok (obscura smoke render)");
-      if (testModule && !errors.some((e) => e.phase === "test")) output.push("test: ok");
-    }
+  const renderErrors = await runInObscura({
+    widgetModule: buildJsxModuleBody(compiled.code),
+    testModule,
+    stateJSON,
+    timeoutS: testModule ? Math.min(LINT_TIMEOUT_S, TEST_TIMEOUT_S + 5) : LINT_TIMEOUT_S,
+    widgetMap: compiled.map,
+    testMap: testMap,
+    widgetSource: req.source,
+    testSource: testSource,
+  });
+  errors.push(...renderErrors);
+  if (!errors.some((e) => e.phase === "render")) {
+    output.push("render: ok (obscura smoke render)");
+    if (testModule && !errors.some((e) => e.phase === "test")) output.push("test: ok");
   }
 
   return { ok: errors.length === 0, errors, output: output.join("\n"), durationMs: Date.now() - started };
 }
 
-type ObscuraRun = { widgetModule: string; testModule: string | null; stateJSON: string; timeoutS: number };
-type LintPageResult = { errors?: WidgetLintError[]; output?: string[]; done?: boolean };
+type ObscuraRun = {
+  widgetModule: string;
+  testModule: string | null;
+  stateJSON: string;
+  timeoutS: number;
+  /** Original-source mapping + text for code frames (widget / test). */
+  widgetMap: SourceMapIndex | null;
+  testMap: SourceMapIndex | null;
+  widgetSource: string;
+  testSource: string;
+};
+type LintPageResult = { errors?: PageError[]; output?: string[]; done?: boolean };
+
+/**
+ * Maps one page error (compiled position inside widget.js/test.js) back to
+ * the MODEL's source and appends a code frame pointing at the region to fix.
+ */
+function finalizePageError(e: PageError, run: ObscuraRun): WidgetLintError {
+  const isTest = e.file === "test.js" || e.phase === "test";
+  const map = isTest ? run.testMap : run.widgetMap;
+  const source = isTest ? run.testSource : run.widgetSource;
+  let pos: SourcePosition | undefined;
+  if (e.line && map) {
+    const orig = map.originalPositionFor(e.line, typeof e.column === "number" && e.column > 0 ? e.column - 1 : 0);
+    if (orig) pos = orig;
+    else pos = { line: e.line, column: 0 };
+  } else if (e.line) {
+    pos = { line: e.line, column: 0 };
+  }
+  return {
+    phase: e.phase,
+    line: pos?.line,
+    column: pos?.column,
+    message: withFrame(String(e.message || "").slice(0, 2000), source, pos),
+  };
+}
 
 /**
  * One obscura attempt. The `--eval` snapshot is taken when the page load
@@ -246,20 +340,14 @@ async function runInObscura(run: ObscuraRun): Promise<WidgetLintError[]> {
     while (Date.now() < deadline) {
       last = await obscuraOnce(binary, dir, Math.max(2, Math.ceil((deadline - Date.now()) / 1000)));
       if (last.parsed && last.parsed.done) {
-        return (last.parsed.errors || []).map((e) => ({
-          phase: e.phase,
-          message: String(e.message || "").slice(0, 2000),
-        }));
+        return (last.parsed.errors || []).map((e) => finalizePageError(e, run));
       }
     }
 
     // Deadline passed without a finished result: a hang somewhere. Errors
     // recorded before the hang are real findings — keep them, append the
     // timeout verdict.
-    const found = (last?.parsed?.errors || []).map((e) => ({
-      phase: e.phase,
-      message: String(e.message || "").slice(0, 2000),
-    }));
+    const found = (last?.parsed?.errors || []).map((e) => finalizePageError(e, run));
     return [...found, { phase: run.testModule ? "test" : "render", message: `lint timed out after ${run.timeoutS}s` }];
   } finally {
     try {

@@ -435,7 +435,7 @@ func (t *WidgetLintTool) Description() string {
 	return "Lint a stored widget without re-storing it: compile, import audit, smoke render at the gateway. Pass optional `test` code (TSX, run in a sandboxed worker) that imports the widget module and asserts on its exported logic — the widget must `export` what the test exercises. Use this after widget_set to verify the widget is safe to show."
 }
 func (t *WidgetLintTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id to lint"},"test":{"type":"string","description:"Optional extra test code (TSX). It runs in a sandboxed worker and can import the widget module — the widget must export the functions/components under test. Throwing an error fails the lint."}},"required":["id"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id to lint"},"test":{"type":"string","description":"Optional extra test code (TSX). It runs in a sandboxed worker and can import the widget module — the widget must export the functions/components under test. Throwing an error fails the lint."}},"required":["id"]}`)
 }
 
 func (t *WidgetLintTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {

@@ -10,7 +10,8 @@
  *   -> acorn parse (ESTree)       — understand the code
  *   -> acorn-walk (ancestor)      — decide what is forbidden (the audit)
  *   -> tree surgery               — remove exactly those nodes
- *   -> astring generate           — deterministic, valid JS output
+ *   -> map-safe sanitize          — forbidden ranges replaced in place
+ *                                 (magic-string: zero line movement)
  *   -> escapeScriptClose          — belt-and-braces for string literals
  *
  * A regex sanitizer is fooled by anything it was not written against: the
@@ -32,13 +33,14 @@
  *   - global pollution: assignment through window/document/globalThis
  *   - dynamic import of anything but https://esm.sh/ string literals
  *
- * Everything else compiles through verbatim (modulo astring formatting).
+ * Everything else compiles through verbatim (byte-identical outside the
+ * sanitized spots).
  * Unparseable code fails closed: it is rejected at compile time and dropped
  * by the sanitizer — code that cannot be parsed cannot be audited.
  */
 import { parse, type Node } from "acorn";
 import * as walk from "acorn-walk";
-import { generate } from "astring";
+import MagicString from "magic-string";
 
 // Loose ESTree shapes: acorn's Node union covers standard syntax, but the
 // audit inspects arbitrary node fields generically.
@@ -51,15 +53,6 @@ type AnyNode = any;
  */
 export function escapeScriptClose(raw: string): string {
   return raw.replace(/<\s*\/?\s*script/gi, "<\\/script");
-}
-
-/** `void 0` — the neutral replacement for a removed expression. */
-function void0(): AnyNode {
-  return { type: "UnaryExpression", operator: "void", prefix: true, argument: { type: "Literal", value: 0, raw: "0" } };
-}
-
-function isNode(v: unknown): v is AnyNode {
-  return !!v && typeof v === "object" && typeof (v as AnyNode).type === "string";
 }
 
 /** Identifier name of `x` in `x.a.b[...]` (the root of a member chain). */
@@ -225,48 +218,89 @@ function isForbiddenProperty(node: AnyNode): boolean {
   return false;
 }
 
-type Verdict = { forbidden: Set<AnyNode>; forbiddenProps: Set<AnyNode> };
+/**
+ * Audit verdict: what to cut (byte ranges in the parsed source) + what was
+ * cut (findings, for the lint report). The sanitizer REPLACES those ranges
+ * in place (magic-string), never regenerates the tree — so every line the
+ * model wrote stays on its own line and any upstream source map keeps
+ * pointing at the right region.
+ */
+type Verdict = {
+  /** Expression nodes to replace with `void 0`. */
+  forbidden: AnyNode[];
+  /** Object-literal properties to drop (with their trailing comma). */
+  forbiddenProps: AnyNode[];
+  stripped: AuditFinding[];
+};
+
+/** One sanitized capability, with its location for the lint report. */
+export type AuditFinding = { line?: number; column?: number; reason: string };
+
+/** Short human label for a sanitized node — the lint shows it per line. */
+function describeForbidden(node: AnyNode): string {
+  if (node.type === "MemberExpression") {
+    return `\`.${propName(node.property)}\` access (prototype-chain escape)`;
+  }
+  if (node.type === "CallExpression" || node.type === "NewExpression") {
+    const callee: AnyNode = node.callee;
+    const tail = callee && callee.type === "MemberExpression" ? propName(callee.property) : null;
+    const name = callee && callee.type === "Identifier" ? callee.name : tail;
+    return `\`${name || node.type}\` call (forbidden capability)`;
+  }
+  if (node.type === "AssignmentExpression") return "assignment to a protected global";
+  if (node.type === "ImportExpression") return "dynamic import of a non-whitelisted specifier";
+  return "forbidden capability";
+}
 
 /**
  * The decision layer: walk every node with its ancestor chain and record
- * what must go. The walker is also the compatibility gate — a node type
- * acorn-walk cannot traverse throws here and fails closed, never in prod.
+ * what must go (with the line it sits on, for the lint report). The walker
+ * is also the compatibility gate — a node type acorn-walk cannot traverse
+ * throws here and fails closed, never in prod.
  */
-function audit(ast: Node): Verdict {
-  const forbidden = new Set<AnyNode>();
-  const forbiddenProps = new Set<AnyNode>();
+function audit(ast: Node, source: string): Verdict {
+  const forbidden: AnyNode[] = [];
+  const forbiddenProps: AnyNode[] = [];
+  const stripped: AuditFinding[] = [];
+  const record = (node: AnyNode) => {
+    stripped.push({ line: node.loc?.start?.line, column: node.loc?.start?.column, reason: describeForbidden(node) });
+  };
   walk.ancestor(ast, {
     Expression(node: AnyNode) {
-      if (isForbiddenExpression(node)) forbidden.add(node);
+      if (isForbiddenExpression(node)) {
+        forbidden.push(node);
+        record(node);
+      }
     },
-    Property(node: AnyNode) {
-      if (isForbiddenProperty(node)) forbiddenProps.add(node);
+    Property(node: AnyNode, ancestors: AnyNode[]) {
+      if (isForbiddenProperty(node)) {
+        forbiddenProps.push(node);
+        record(node);
+        // Cut the property WITH its trailing comma (keep the leading one):
+        // the object literal stays parseable without any reflow.
+        const parent = ancestors[ancestors.length - 2];
+        const items: AnyNode[] = (parent && (parent.properties || parent.value?.elements)) || [];
+        const idx = items.indexOf(node);
+        const next = idx >= 0 ? items[idx + 1] : null;
+        let cutEnd = node.end;
+        if (next) {
+          // A following sibling exists: eat the comma between them.
+          cutEnd = next.start;
+        } else {
+          const tail = source.slice(node.end).match(/^\s*,/);
+          if (tail) cutEnd = node.end + tail[0].length;
+        }
+        node.cutRange = [node.start, cutEnd];
+      }
     },
   });
-  return { forbidden, forbiddenProps };
-}
-
-/** Apply the audit decisions: replace expressions, drop properties. */
-function applyDecisions(node: AnyNode, verdict: Verdict): AnyNode | null {
-  if (verdict.forbidden.has(node)) return void0();
-  if (verdict.forbiddenProps.has(node)) return null;
-  for (const key of Object.keys(node)) {
-    if (key === "type" || key === "start" || key === "end" || key === "loc" || key === "range" || key === "raw") continue;
-    const v = node[key];
-    if (Array.isArray(v)) {
-      node[key] = v.map((c) => (isNode(c) ? applyDecisions(c, verdict) : c)).filter((c) => c !== null);
-    } else if (isNode(v)) {
-      const r = applyDecisions(v, verdict);
-      node[key] = r === null ? void0() : r;
-    }
-  }
-  return node;
+  return { forbidden, forbiddenProps, stripped };
 }
 
 /** Parse model JS; null when it is not a parseable ES module. */
 function parseModelModule(js: string): Node | null {
   try {
-    return parse(js, { ecmaVersion: "latest", sourceType: "module" });
+    return parse(js, { ecmaVersion: "latest", sourceType: "module", locations: true });
   } catch {
     return null;
   }
@@ -276,80 +310,141 @@ function parseModelModule(js: string): Node | null {
  * Import audit: every static and dynamic specifier must be a literal the
  * widget import map (or the one vetted CDN) can resolve. Anything else —
  * bare package names, foreign URLs, variables, template literals — is a
- * compile error with a message the model can act on.
+ * compile error with a message the model can act on (plus the location of
+ * the first offending specifier, for the lint code frame).
  */
-function auditImports(ast: Node): string | null {
+function auditImports(ast: Node): { error: string; loc?: { line?: number; column?: number } } | null {
   const bad: string[] = [];
   let indirect = 0;
+  let firstLoc: { line?: number; column?: number } | undefined;
+  const mark = (node: AnyNode) => {
+    if (!firstLoc) firstLoc = { line: node.loc?.start?.line, column: node.loc?.start?.column };
+  };
   walk.simple(ast, {
     ImportDeclaration(node: AnyNode) {
-      if (!allowedSpecifier(String(node.source.value))) bad.push(String(node.source.value));
+      if (!allowedSpecifier(String(node.source.value))) {
+        bad.push(String(node.source.value));
+        mark(node);
+      }
     },
     ExportNamedDeclaration(node: AnyNode) {
-      if (node.source && !allowedSpecifier(String(node.source.value))) bad.push(String(node.source.value));
+      if (node.source && !allowedSpecifier(String(node.source.value))) {
+        bad.push(String(node.source.value));
+        mark(node);
+      }
     },
     ExportAllDeclaration(node: AnyNode) {
-      if (!allowedSpecifier(String(node.source.value))) bad.push(String(node.source.value));
+      if (!allowedSpecifier(String(node.source.value))) {
+        bad.push(String(node.source.value));
+        mark(node);
+      }
     },
     ImportExpression(node: AnyNode) {
       const src: AnyNode = node.source;
-      if (!src || src.type !== "Literal" || typeof src.value !== "string") indirect++;
-      else if (!allowedSpecifier(src.value)) bad.push(String(src.value));
+      if (!src || src.type !== "Literal" || typeof src.value !== "string") {
+        indirect++;
+        mark(node);
+      } else if (!allowedSpecifier(src.value)) {
+        bad.push(String(src.value));
+        mark(node);
+      }
     },
   });
   if (bad.length) {
-    return (
-      `unsupported import${bad.length > 1 ? "s" : ""}: ${bad.map((s) => JSON.stringify(s)).join(", ")} — ` +
-      `widgets may only import react / react-dom and the preloaded libs ` +
-      `(d3, gsap, chart, three, leaflet, cannon-es, matter-js); esm.sh needs net: true`
-    );
+    return {
+      loc: firstLoc,
+      error:
+        `unsupported import${bad.length > 1 ? "s" : ""}: ${bad.map((s) => JSON.stringify(s)).join(", ")} — ` +
+        `widgets may only import react / react-dom and the preloaded libs ` +
+        `(d3, gsap, chart, three, leaflet, cannon-es, matter-js); esm.sh needs net: true`,
+    };
   }
   if (indirect) {
-    return `dynamic import specifier must be a literal string — widgets may only import the preloaded libs or https://esm.sh/ URLs`;
+    return {
+      loc: firstLoc,
+      error: `dynamic import specifier must be a literal string — widgets may only import the preloaded libs or https://esm.sh/ URLs`,
+    };
   }
   return null;
 }
 
-export type ModelModuleResult = { ok: true; code: string } | { ok: false; error: string };
-
-function regenerate(ast: Node, verdict: Verdict): string {
-  return generate(applyDecisions(ast as AnyNode, verdict) as Node);
-}
+export type ModelModuleResult =
+  | { ok: true; code: string; stripped: AuditFinding[]; map: object }
+  | { ok: false; error: string; errorLoc?: { line?: number; column?: number } };
 
 /**
- * The full model-code boundary on compiled (post-Bun) module code: parse,
- * audit imports, sanitize forbidden capabilities, regenerate. Returns the
- * final module source, or a compile error the model can act on. This is
- * the entry point compileJsxModule uses.
+ * Sanitize + report (the audit boundary's main entry): the returned `code`
+ * is the input with forbidden ranges replaced in place — line numbers and
+ * upstream source maps stay valid. Fails closed on anything unparseable.
  */
-export function enforceModelModule(compiledCode: string): ModelModuleResult {
+export function sanitizeModelModule(compiledCode: string): ModelModuleResult {
   const ast = parseModelModule(compiledCode);
   if (!ast) return { ok: false, error: "invalid widget code: not parseable as an ES module" };
   const importError = auditImports(ast);
-  if (importError) return { ok: false, error: importError };
+  if (importError) return { ok: false, error: importError.error, errorLoc: importError.loc };
   try {
-    return { ok: true, code: regenerate(ast, audit(ast)) };
+    const verdict = audit(ast, compiledCode);
+    const { code, map } = sanitizeCode(compiledCode, verdict);
+    return { ok: true, code, map, stripped: verdict.stripped };
   } catch {
-    // astring/walk could not process a node type: fail closed.
+    // acorn-walk could not process a node type: fail closed.
     return { ok: false, error: "invalid widget code: unsupported syntax" };
   }
 }
 
 /**
+ * Map-safe sanitize: replaces the forbidden ranges with `void 0` / deletes
+ * forbidden properties IN PLACE (magic-string). Every replacement carries
+ * the newlines the removed text spanned, so ALL lines the model wrote stay
+ * on their own line — source maps survive the sanitize.
+ */
+function sanitizeCode(code: string, verdict: Verdict): { code: string; map: object } {
+  const ms = new MagicString(code);
+  const edit = (a: number, b: number, replacement: string) => {
+    const newlines = (code.slice(a, b).match(/\n/g) || []).length;
+    ms.overwrite(a, b, replacement + "\n".repeat(newlines));
+  };
+  for (const prop of verdict.forbiddenProps) {
+    const [a, b] = prop.cutRange ?? [prop.start, prop.end];
+    edit(a, b, "");
+  }
+  for (const node of verdict.forbidden) {
+    edit(node.start, node.end, "void 0");
+  }
+  return {
+    code: ms.toString(),
+    // source-map from the sanitized text back to the text being sanitized —
+    // the lint chains this with the transpile map (remapping) so frames
+    // survive BOTH stages.
+    map: ms.generateMap({ source: "widget.js", includeContent: false, hires: true }) as unknown as object,
+  };
+}
+
+/**
+ * The full model-code boundary on compiled (post-Bun) module code: parse,
+ * audit imports, sanitize forbidden capabilities, regenerate. Returns the
+ * final module source (plus the sanitized findings, with lines, for lint
+ * reporting), or a compile error the model can act on. This is the entry
+ * point compileJsxModule uses.
+ */
+export function enforceModelModule(compiledCode: string): ModelModuleResult {
+  return sanitizeModelModule(compiledCode);
+}
+
+/**
  * Sanitize model-authored module code (belt-and-braces entry point used by
- * the module-body builder). Parses the code, removes every node that
- * exercises a forbidden capability, and regenerates deterministic JS.
- * Static imports are the module format and survive (they are validated at
- * compile time by enforceModelModule); unparseable input is dropped
- * entirely (fail closed).
+ * the module-body builder): forbidden capability ranges are replaced in
+ * place, everything else is untouched. Unparseable input passes through
+ * unchanged — by this point the code already compiled, so anything odd
+ * here must NOT shift a single line of the model's source.
  */
 export function sanitizeModelJS(js: string): string {
   const ast = parseModelModule(js);
-  if (!ast) return "";
+  if (!ast) return js;
   try {
-    return regenerate(ast, audit(ast));
+    return sanitizeCode(js, audit(ast, js)).code;
   } catch {
-    return "";
+    return js;
   }
 }
 
