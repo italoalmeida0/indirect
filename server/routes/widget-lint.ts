@@ -139,11 +139,21 @@ async function phase(name, url, runFn) {
   return R.errors.length === before;
 }
 if (await phase("render", "./widget.js")) R.output.push("render: ok (obscura smoke render)");
-${hasTest ? `if (await phase("test", "./test.js", (mod) => mod.default)) R.output.push("test: ok");` : ""}
-// The widget mounts on the next animation frame (the runtime's $render):
-// let it run so a mount-time crash lands in errors before the verdict.
+// The widget mounts on the next animation frame (the runtime's $render).
+// EXERCISE it then: pump real frames + timers for a while so update-phase
+// bugs (game loops, setState ticks, resize handlers) land in errors too —
+// a mount-only smoke render misses every "works until the first tick"
+// failure.
 await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-await new Promise((r) => setTimeout(r, 50));
+await new Promise((r) => {
+  const t0 = Date.now();
+  const tick = () => {
+    if (Date.now() - t0 > 1200) r();
+    else requestAnimationFrame(tick);
+  };
+  tick();
+});
+${hasTest ? `if (await phase("test", "./test.js", (mod) => mod.default)) R.output.push("test: ok");` : ""}
 R.done = true;
 </script>
 </body></html>`;

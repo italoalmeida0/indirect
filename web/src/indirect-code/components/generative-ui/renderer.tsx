@@ -1,5 +1,6 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 import { MsgIconBtn } from "../MsgActions";
+import { claimLiveWidget, releaseLiveWidget } from "./widget-live";
 
 import {
   attachGuBridge,
@@ -57,8 +58,14 @@ export function GenerativeUiWidget(props: {
   const [theme, setTheme] = createSignal(widgetTheme());
   const [unfrozen, setUnfrozen] = createSignal(false);
   const [deactivated, setDeactivated] = createSignal(false);
-  /** Unloaded: an earlier duplicate (prop) or user-deactivated. */
-  const frozen = () => deactivated() || (!unfrozen() && (props.frozen?.() ?? false));
+  const [superseded, setSuperseded] = createSignal(false);
+  /**
+   * Unloaded: superseded by a newer fence for the same widget id (registry),
+   * an earlier duplicate in document order (prop), or user-deactivated.
+   * A manual Load overrides both duplicate signals.
+   */
+  const frozen = () =>
+    deactivated() || (!unfrozen() && (superseded() || (props.frozen?.() ?? false)));
   const reactivate = () => {
     setDeactivated(false);
     setUnfrozen(true);
@@ -113,6 +120,36 @@ export function GenerativeUiWidget(props: {
     });
     onCleanup(() => observer.disconnect());
   });
+
+  // ---- one live instance per widget id (transcript-wide) ----
+  // Claim order is effect order (document order): the newest fence for an
+  // id wins, earlier ones go superseded; releasing the active one (message
+  // deleted, session switch) reactivates the newest survivor.
+  {
+    const token = Symbol("gu-live");
+    let claimed = "";
+    createEffect(
+      on(
+        () => data().id,
+        (id) => {
+          const wid = id ?? "";
+          if (wid === claimed) return;
+          if (claimed) releaseLiveWidget(claimed, token);
+          claimed = wid;
+          if (wid) {
+            claimLiveWidget(wid, {
+              token,
+              onSupersede: () => setSuperseded(true),
+              onReactivate: () => setSuperseded(false),
+            });
+          }
+        },
+      ),
+    );
+    onCleanup(() => {
+      if (claimed) releaseLiveWidget(claimed, token);
+    });
+  }
 
   // ---- source resolution (id → session widget store) ----
   const [source, setSource] = createSignal<string>("");
@@ -323,9 +360,13 @@ export function GenerativeUiWidget(props: {
           when={!frozen() && !streaming() && !!finalUrl()}
           fallback={
             /* Widgets compile at publish time: this thin inert surface keeps
-               the placeholder visible while streaming; the frame grows to
-               fit the mounted widget (bridge resize). */
-            <div class="block w-full border-0 bg-card" style={{ height: `${MIN_START_HEIGHT}px` }} />
+               the placeholder visible while streaming/loading; the frame
+               grows to fit the mounted widget (bridge resize). Never when
+               the widget is unloaded (frozen), missing or static — those
+               states render their own compact card. */
+            <Show when={!frozen() && !missing() && !isStatic() && !error()}>
+              <div class="block w-full border-0 bg-card" style={{ height: `${MIN_START_HEIGHT}px` }} />
+            </Show>
           }
         >
           <iframe

@@ -181,6 +181,33 @@ export default function App() {
     expect(res.ok).toBe(true);
   });
 
+  test("update-phase bugs surface in the smoke render (exercised loop)", async () => {
+    // A classic "works until the first tick": the widget renders fine and
+    // only throws from its interval a few ticks in. A mount-only render
+    // would pass it — the exercised smoke render must not.
+    const src = `import { useEffect, useState } from "react";
+
+export default function App() {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => {
+      setN((x) => {
+        if (x >= 3) {
+          const broken = undefined;
+          broken.side; // boom on the 4th tick
+        }
+        return x + 1;
+      });
+    }, 30);
+    return () => clearInterval(id);
+  }, []);
+  return <div className="gu-root">{n}</div>;
+}`;
+    const res = await runWidgetLint({ id: "t", source: src });
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => /side/.test(e.message))).toBe(true);
+  });
+
   test("an invalid state header fails the lint", async () => {
     const res = await runWidgetLint({ id: "t", source: goodWidget, state: "{bad json}" });
     expect(res.ok).toBe(false);

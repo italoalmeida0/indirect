@@ -145,3 +145,41 @@ describe("frozenDuplicateSegmentIds", () => {
     expect(frozenDuplicateSegmentIds(segs).size).toBe(2);
   });
 });
+
+describe("widget-live registry (one live instance per widget id)", () => {
+  test("the newest claim supersedes earlier ones; release reactivates", async () => {
+    const { claimLiveWidget, releaseLiveWidget, liveWidgetCount } = await import(
+      "../web/src/indirect-code/components/generative-ui/widget-live"
+    );
+    const events: string[] = [];
+    const mk = (name: string) => {
+      const token = Symbol(name);
+      return {
+        token,
+        entry: {
+          token,
+          onSupersede: () => events.push(`supersede:${name}`),
+          onReactivate: () => events.push(`reactivate:${name}`),
+        },
+      };
+    };
+    const a = mk("a");
+    const b = mk("b");
+    const c = mk("c");
+    claimLiveWidget("w1", a.entry);
+    claimLiveWidget("w1", b.entry);
+    claimLiveWidget("w1", c.entry);
+    expect(events).toEqual(["supersede:a", "supersede:b"]);
+    expect(liveWidgetCount("w1")).toBe(3);
+
+    // The active one leaves: the newest survivor comes back.
+    releaseLiveWidget("w1", c.token);
+    expect(events.at(-1)).toBe("reactivate:b");
+    releaseLiveWidget("w1", b.token);
+    expect(events.at(-1)).toBe("reactivate:a");
+    releaseLiveWidget("w1", a.token);
+    expect(liveWidgetCount("w1")).toBe(0);
+    // Releasing an unknown token is a no-op.
+    releaseLiveWidget("w1", a.token);
+  });
+});
