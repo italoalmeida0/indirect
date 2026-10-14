@@ -267,6 +267,330 @@ export default function App() {
 });
 
 /**
+ * 3D / WebGL support: the lint browser has no GPU and no native WebGL, so a
+ * software WebGL2 polyfill is installed on the lint page. These tests prove
+ * three.js widgets are REALLY exercised by the smoke render (renderer
+ * construction, program compile/link, draw calls) and that genuine GLSL
+ * bugs fail the lint instead of being waved through.
+ */
+describe("widget lint 3D / WebGL support", () => {
+  test("a three.js widget renders in the lint browser and is reported as exercised", async () => {
+    const src = `import { useRef, useEffect } from "react";
+import * as THREE from "three";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setSize(240, 160, false);
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(50, 240 / 160, 0.1, 100);
+    camera.position.z = 3;
+    const mesh = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0x4488ff })
+    );
+    scene.add(mesh);
+    const render = () => {
+      mesh.rotation.y += 0.2;
+      renderer.render(scene, camera);
+    };
+    render();
+    const id = setInterval(render, 30);
+    return () => { clearInterval(id); renderer.dispose(); };
+  }, []);
+  return (
+    <div className="gu-root">
+      <div className="gu-stage"><canvas ref={ref} width={240} height={160} /></div>
+    </div>
+  );
+}`;
+    const res = await runWidgetLint({ id: "t3d", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+    // The 3D path must be genuinely exercised — context + program + draws.
+    const note = (res.notes || []).find((n) => n.includes("3D exercised"));
+    expect(note).toBeDefined();
+    expect(note).toContain("program");
+    expect(note).toContain("draw call");
+  }, 60_000);
+
+  test("a broken custom ShaderMaterial GLSL fails the lint (real driver feedback)", async () => {
+    const src = `import { useRef, useEffect } from "react";
+import * as THREE from "three";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const renderer = new THREE.WebGLRenderer({ canvas: ref.current });
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera();
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.ShaderMaterial({
+        vertexShader: "void main() { gl_Position = vec4(position, 1.0); }",
+        fragmentShader: "void broken( { this is not glsl"
+      })
+    );
+    scene.add(mesh);
+    renderer.render(scene, camera);
+    return () => renderer.dispose();
+  }, []);
+  return <div className="gu-root"><canvas ref={ref} /></div>;
+}`;
+    const res = await runWidgetLint({ id: "t3d-bad", source: src });
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => e.message.includes("WebGL shader compile/link failed"))).toBe(true);
+    expect(res.errors[0].phase).toBe("render");
+  }, 60_000);
+
+  test("raw WebGL widgets are exercised too (context + compile diagnostics)", async () => {
+    const src = `import { useRef, useEffect } from "react";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const gl = ref.current.getContext("webgl2");
+    if (!gl) throw new Error("no webgl2 context in the lint browser");
+    const shader = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(shader, "#version 300 es\\nprecision mediump float;\\nout vec4 o;\\nvoid main() { o = vec4(1.0); }");
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      throw new Error("good shader rejected: " + gl.getShaderInfoLog(shader));
+    }
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }, []);
+  return <div className="gu-root"><canvas ref={ref} width={64} height={64} /></div>;
+}`;
+    const res = await runWidgetLint({ id: "t3d-raw", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+    const note = (res.notes || []).find((n) => n.includes("3D exercised"));
+    expect(note).toBeDefined();
+    expect(note).toContain("shader");
+  }, 60_000);
+
+  test("a shader with unbalanced braces is reported as a compile error", async () => {
+    const src = `import { useRef, useEffect } from "react";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const gl = ref.current.getContext("webgl");
+    const shader = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(shader, "void main() { gl_Position = vec4(0.0);");
+    gl.compileShader(shader);
+  }, []);
+  return <div className="gu-root"><canvas ref={ref} /></div>;
+}`;
+    const res = await runWidgetLint({ id: "t3d-brace", source: src });
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => e.message.includes("WebGL shader compile/link failed"))).toBe(true);
+  }, 60_000);
+
+  test("3D + test code: a test that asserts on the three.js exports passes", async () => {
+    const widget = `import * as THREE from "three";
+export function makeScene() {
+  const scene = new THREE.Scene();
+  scene.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial()));
+  return scene;
+}
+export default function App() { return <div className="gu-root" />; }`;
+    const passing = await runWidgetLint({
+      id: "t3d-test",
+      source: widget,
+      test: `import { makeScene } from "widget";\nconst s = makeScene();\nif (s.children.length !== 1) throw new Error("scene broken: " + s.children.length);`,
+    });
+    expect(passing.errors).toEqual([]);
+    expect(passing.ok).toBe(true);
+
+    const failing = await runWidgetLint({
+      id: "t3d-test",
+      source: widget,
+      test: `import { makeScene } from "widget";\nconst s = makeScene();\nif (s.children.length !== 2) throw new Error("expected 2 meshes");`,
+    });
+    expect(failing.ok).toBe(false);
+    expect(failing.errors[0].phase).toBe("test");
+    expect(failing.errors[0].message).toContain("expected 2 meshes");
+  }, 60_000);
+
+  test("a 2D-only widget gets a 3D-availability note, not a failure", async () => {
+    const res = await runWidgetLint({
+      id: "t2d",
+      source: `export default function App() { return <div className="gu-root">plain 2d</div>; }`,
+    });
+    expect(res.ok).toBe(true);
+    expect((res.notes || []).some((n) => n.includes("3D:"))).toBe(true);
+    expect((res.notes || []).some((n) => n.includes("not used"))).toBe(true);
+  }, 60_000);
+});
+
+/**
+ * Chart support: SVG text metrics. The lint browser has no font shaping for
+ * SVG <text> (getBBox returns 0x0, getComputedTextLength 0,
+ * getStartPositionOfChar missing), so d3 charts that measure labels would
+ * mis-measure in the smoke render. The SVG metrics polyfill restores the
+ * API from the canvas measurer; these tests prove label measuring works.
+ */
+describe("widget lint SVG text metrics (charts)", () => {
+  test("SVG label measurement works in the lint browser", async () => {
+    const src = `import { useEffect, useRef } from "react";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const svg = ref.current;
+    const text = svg.querySelector("text");
+    const fail = (msg) => { throw new Error(msg); };
+    if (!(svg instanceof SVGElement)) fail("<svg> is not an SVG element (namespace broken)");
+    if (!(text instanceof SVGElement)) fail("<text> is not an SVG element (namespace broken)");
+    if (text.getAttribute("text-anchor") !== "middle") fail("textAnchor prop not mapped to text-anchor");
+    if (text.getAttribute("font-size") !== "14") fail("fontSize prop not mapped to font-size");
+    const bbox = text.getBBox();
+    if (!(bbox.width > 0 && bbox.height > 0)) fail("getBBox empty: " + bbox.width + "x" + bbox.height);
+    const len = text.getComputedTextLength();
+    if (!(len > 0)) fail("getComputedTextLength is " + len);
+    const start = text.getStartPositionOfChar(0);
+    const start2 = text.getStartPositionOfChar(3);
+    if (!(start2.x > start.x)) fail("char positions not monotonic");
+    const extent = text.getExtentOfChar(1);
+    if (!(extent.width > 0)) fail("getExtentOfChar width " + extent.width);
+    const idx = text.getCharNumAtPosition({ x: start.x + 2, y: start.y });
+    if (idx !== 0) fail("getCharNumAtPosition returned " + idx);
+  }, []);
+  return (
+    <div className="gu-root">
+      <svg ref={ref} width={320} height={80}>
+        <text x={10} y={40} fontSize={14} textAnchor="middle">Revenue by quarter 2026</text>
+      </svg>
+    </div>
+  );
+}`;
+    const res = await runWidgetLint({ id: "t-svg", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+
+  test("a d3-style chart that measures and places tick labels passes", async () => {
+    const src = `import * as d3 from "d3";
+import { useEffect, useRef } from "react";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const svg = d3.select(ref.current);
+    const data = [4, 8, 15, 16, 23, 42];
+    const x = d3.scaleBand().domain(data.map(String)).range([40, 300]).padding(0.2);
+    const y = d3.scaleLinear().domain([0, 45]).range([60, 10]);
+    svg.selectAll("rect").data(data).join("rect")
+      .attr("x", (d, i) => x(String(d))).attr("y", (d) => y(d))
+      .attr("width", x.bandwidth()).attr("height", (d) => 60 - y(d));
+    svg.selectAll("text").data(data).join("text")
+      .attr("x", (d) => x(String(d)) + x.bandwidth() / 2).attr("y", 72)
+      .attr("text-anchor", "middle").attr("font-size", 10)
+      .text(String);
+    // Label-placement logic a real chart runs: measure, then decide.
+    const labels = ref.current.querySelectorAll("text");
+    let total = 0;
+    for (const t of labels) {
+      const b = t.getBBox();
+      if (!(b.width > 0)) throw new Error("tick label mis-measured");
+      total += b.width;
+    }
+    if (!(total > 10)) throw new Error("labels too narrow: " + total);
+  }, []);
+  return (
+    <div className="gu-root">
+      <div className="gu-stage"><svg ref={ref} width={320} height={80} /></div>
+    </div>
+  );
+}`;
+    const res = await runWidgetLint({ id: "t-svg-d3", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+
+  test("empty labels measure as zero without throwing", async () => {
+    const src = `import { useEffect, useRef } from "react";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const text = ref.current.querySelector("text");
+    if (text.getBBox().width !== 0) throw new Error("empty label should measure 0");
+    if (text.getComputedTextLength() !== 0) throw new Error("empty label length should be 0");
+  }, []);
+  return (
+    <div className="gu-root">
+      <svg ref={ref} width={200} height={40}><text x={5} y={20} /></svg>
+    </div>
+  );
+}`;
+    const res = await runWidgetLint({ id: "t-svg-empty", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+});
+
+/**
+ * Interactive API shims: the lint browser lacks navigator.vibrate,
+ * requestFullscreen and video.requestVideoFrameCallback — widget code that
+ * calls them from handlers/loops must not crash the smoke render.
+ */
+describe("widget lint browser API shims", () => {
+  test("games-style calls (vibrate / fullscreen / video frame callback) do not crash", async () => {
+    const src = `import { useEffect, useRef } from "react";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (typeof navigator.vibrate !== "function") throw new Error("navigator.vibrate missing");
+    if (navigator.vibrate(50) !== true) throw new Error("vibrate should report accepted");
+    if (typeof el.requestFullscreen !== "function") throw new Error("requestFullscreen missing");
+    let fullscreenResolved = false;
+    el.requestFullscreen().then(() => { fullscreenResolved = true; }, () => { fullscreenResolved = true; });
+    const video = document.createElement("video");
+    if (typeof video.requestVideoFrameCallback !== "function") throw new Error("requestVideoFrameCallback missing");
+    let frame = 0;
+    const handle = video.requestVideoFrameCallback(() => { frame++; });
+    if (typeof video.cancelVideoFrameCallback !== "function") throw new Error("cancelVideoFrameCallback missing");
+    video.cancelVideoFrameCallback(handle);
+    setTimeout(() => {
+      if (frame !== 0) throw new Error("cancelled frame callback ran");
+      if (!fullscreenResolved) throw new Error("requestFullscreen never settled");
+    }, 30);
+  }, []);
+  return (
+    <div className="gu-root" ref={ref}>
+      <button className="gu-btn">press</button>
+    </div>
+  );
+}`;
+    const res = await runWidgetLint({ id: "t-shim", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+
+  test("shims never override native implementations", async () => {
+    const src = `export default function App() {
+  const shims = window.__guBrowserShims;
+  const webgl = window.__guWebglPolyfill;
+  const svg = window.__guSvgMetricsPolyfill;
+  if (!shims || !shims.installed) throw new Error("browser shims not installed");
+  if (!webgl || webgl.installed !== true) throw new Error("webgl polyfill not installed");
+  if (!svg || svg.installed !== true) throw new Error("svg metrics polyfill not installed");
+  return <div className="gu-root">shims ok</div>;
+}`;
+    const res = await runWidgetLint({ id: "t-shim-2", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+});
+
+/**
  * Adversarial probes: the audit is the model-code boundary (compileJsxModule
  * = transform + audit), and these vectors must be neutralized THERE — before
  * anything reaches the lint browser. The boundary either rejects the code or

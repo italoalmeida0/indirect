@@ -584,6 +584,10 @@ export default function IndirectCodePage() {
     options.resetPending();
     setDraftMode(false);
     transcript.resetForSession();
+    // Widget sources are per session and may have changed on disk while this
+    // session was away (widget_set from another client, recovery, …). Drop
+    // the cache so re-entering always re-fetches fresh sources.
+    invalidateWidgetSources(id);
     turnChanges.reset();
     notice.setAppNotice(null);
     transcript.beginLoad(id);

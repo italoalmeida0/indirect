@@ -122,7 +122,7 @@ func TestWidgetSetStripsPastedFence(t *testing.T) {
 	store := newFakeWidgetStore()
 	tool := &WidgetSetTool{Store: store, Lint: lintOK}
 	runSet(t, tool, map[string]any{
-		"id": "w",
+		"id":      "w",
 		"content": "```generative_ui\nplaceholder: Hi\nstate: {}\n@jsx\nexport default function App() { return null; }\n```",
 	})
 	f, _ := store.GetWidget("w")
@@ -298,4 +298,22 @@ func attrMap(res core.ToolResult) map[string]string {
 		out[a.Key] = a.Value
 	}
 	return out
+}
+
+func TestRenderWidgetLintTextIncludes3DNotes(t *testing.T) {
+	res := WidgetLintResult{
+		OK:         true,
+		DurationMs: 12,
+		Output:     "compile: ok\nrender: ok (obscura smoke render)",
+		Notes: []string{
+			"3D exercised on WebGL polyfill (software, no GPU in the lint browser): 1 context(s), 2 program(s), 2 shader(s), 1 draw call(s)",
+		},
+	}
+	text := renderWidgetLintText(res, "w")
+	if !strings.Contains(text, "LINT OK") {
+		t.Fatalf("expected LINT OK in %q", text)
+	}
+	if !strings.Contains(text, "[note] 3D exercised") {
+		t.Fatalf("expected the 3D note line in %q", text)
+	}
 }

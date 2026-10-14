@@ -33,10 +33,13 @@ type WidgetLintError struct {
 
 // WidgetLintResult is the gateway lint outcome for one widget source.
 type WidgetLintResult struct {
-	OK        bool              `json:"ok"`
-	Errors    []WidgetLintError `json:"errors,omitempty"`
-	Output    string            `json:"output,omitempty"`
-	DurationMs int64            `json:"durationMs,omitempty"`
+	OK         bool              `json:"ok"`
+	Errors     []WidgetLintError `json:"errors,omitempty"`
+	Output     string            `json:"output,omitempty"`
+	DurationMs int64             `json:"durationMs,omitempty"`
+	// Notes carries non-fatal observations from the lint (how much of the
+	// 3D/WebGL path the smoke render exercised, polyfill notes).
+	Notes []string `json:"notes,omitempty"`
 	// Skipped is set when no linter is wired (gateway unreachable or not
 	// configured): the widget is stored but was NOT validated.
 	Skipped bool `json:"skipped,omitempty"`
@@ -151,6 +154,9 @@ func renderWidgetLintText(res WidgetLintResult, id string) string {
 		} else {
 			fmt.Fprintf(&b, "[%s] %s\n", e.Phase, e.Message)
 		}
+	}
+	for _, n := range res.Notes {
+		fmt.Fprintf(&b, "[note] %s\n", n)
 	}
 	if strings.TrimSpace(res.Output) != "" {
 		out := strings.TrimRight(res.Output, "\n")

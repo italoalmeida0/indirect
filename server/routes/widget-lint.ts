@@ -21,6 +21,9 @@ import { createCodeFrame } from "../../web/src/indirect-code/components/generati
 import { buildJsxModuleBody, escapeScriptClose } from "../../web/src/indirect-code/components/generative-ui/model-code";
 import { buildReactShimModule, buildRuntimeScript, WIDGET_BASE_CSS } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
 import { REACT_RUNTIME_JS } from "../../web/src/indirect-code/components/generative-ui/react-runtime";
+import { WEBGL_POLYFILL_JS } from "../../web/src/indirect-code/components/generative-ui/webgl-polyfill";
+import { SVG_METRICS_POLYFILL_JS } from "../../web/src/indirect-code/components/generative-ui/svg-metrics-polyfill";
+import { BROWSER_SHIMS_JS } from "../../web/src/indirect-code/components/generative-ui/browser-shims";
 import { ensureObscuraBrowser } from "./obscura";
 import { readVendorFile, referencedLibModules } from "./gen-ui-libs";
 
@@ -46,6 +49,8 @@ export type WidgetLintResult = {
   errors: WidgetLintError[];
   output: string;
   durationMs: number;
+  /** Non-fatal observations (3D/WebGL exercise stats, polyfill notes). */
+  notes?: string[];
 };
 
 export type WidgetLintRequest = {
@@ -73,6 +78,9 @@ function lintPageHTML(stateJSON: string, hasTest: boolean, libEntries: Record<st
 <html><head><meta charset="utf-8"></head><body>
 <style>${WIDGET_BASE_CSS}</style>
 <script>${escapeScriptClose(REACT_RUNTIME_JS)}</script>
+<script>${escapeScriptClose(WEBGL_POLYFILL_JS)}</script>
+<script>${escapeScriptClose(SVG_METRICS_POLYFILL_JS)}</script>
+<script>${escapeScriptClose(BROWSER_SHIMS_JS)}</script>
 <script type="importmap">${JSON.stringify({
     imports: {
       react: "./react-shim.js",
@@ -90,7 +98,17 @@ function lintPageHTML(stateJSON: string, hasTest: boolean, libEntries: Record<st
   })}</script>
 <script>${escapeScriptClose(buildRuntimeScript({ stateJSON }))}</script>
 <script>
-window.__lint_result = { errors: [], output: [], done: false };
+window.__lint_result = { errors: [], output: [], done: false, webgl: null };
+// WebGL availability for the 3D path: the polyfill installs before any
+// widget code runs and reports what it did (contexts, programs, draws).
+(function () {
+  var pf = window.__guWebglPolyfill;
+  window.__lint_result.webgl = {
+    installed: !!(pf && pf.installed),
+    native: !!(pf && pf.reason === "native-webgl-available"),
+    summary: pf && pf.summary ? pf.summary() : null
+  };
+})();
 // Best-effort position extraction from a runtime error (widget.js:12:5 …).
 window.__lint_pos = function (e) {
   var s = ((e && e.stack) || "") + "";
@@ -154,6 +172,18 @@ await new Promise((r) => {
   tick();
 });
 ${hasTest ? `if (await phase("test", "./test.js", (mod) => mod.default)) R.output.push("test: ok");` : ""}
+try {
+  var pf = window.__guWebglPolyfill;
+  if (pf && pf.summary) {
+    R.webgl = { installed: !!pf.installed, native: pf.reason === "native-webgl-available", summary: pf.summary() };
+    // Shader compile/link diagnostics are REAL widget bugs (a driver reports
+    // them the same way) — surface them as render findings.
+    var se = (R.webgl.summary && R.webgl.summary.shaderErrors) || [];
+    for (var wi = 0; wi < se.length; wi++) {
+      R.errors.push({ phase: "render", message: "WebGL shader compile/link failed: " + se[wi], file: "widget.js" });
+    }
+  }
+} catch (e) { /* stats are best-effort */ }
 R.done = true;
 </script>
 </body></html>`;
@@ -269,7 +299,7 @@ async function runWidgetLintInner(req: WidgetLintRequest): Promise<WidgetLintRes
     }
   }
 
-  const renderErrors = await runInObscura({
+  const { errors: renderErrors, webgl } = await runInObscura({
     widgetModule: buildJsxModuleBody(compiled.code),
     testModule,
     stateJSON,
@@ -279,23 +309,26 @@ async function runWidgetLintInner(req: WidgetLintRequest): Promise<WidgetLintRes
     widgetSource: req.source,
     testSource: testSource,
   });
-  // Environment limitations of the lint browser (no GPU → no WebGL) are
-  // NOT widget bugs: production browsers have WebGL. They surface as a
-  // note ("3D content not exercised") instead of failing the lint — every
-  // other render error still fails.
-  const real = renderErrors.filter((e) => !isLintEnvLimitation(e.message));
-  const envNotes = renderErrors.filter((e) => isLintEnvLimitation(e.message));
-  errors.push(...real);
+  // Shader compile/link failures reported by the WebGL polyfill are real
+  // widget bugs (a driver reports them identically) — fail the lint with
+  // them. Environment limitations of the lint browser (software
+  // rasterization, no MSAA resolve, …) are NOT widget bugs: production
+  // browsers have real WebGL. They surface as notes instead of failing.
+  const isShaderBug = (m: string) => m.startsWith("WebGL shader compile/link failed:");
+  const shaderBugs = renderErrors.filter((e) => isShaderBug(e.message));
+  const real = renderErrors.filter((e) => !isLintEnvLimitation(e.message) && !isShaderBug(e.message));
+  const envNotes = renderErrors.filter((e) => isLintEnvLimitation(e.message) && !isShaderBug(e.message));
+  errors.push(...real, ...shaderBugs);
+  const notes = webglNotes(webgl);
+  for (const e of envNotes.slice(0, 3)) {
+    notes.push(`lint-browser limitation (not a widget bug): ${e.message.split("\n")[0]}`);
+  }
   if (!errors.some((e) => e.phase === "render")) {
-    output.push(
-      envNotes.length > 0
-        ? "render: ok (obscura smoke render; WebGL unavailable in the lint browser — 3D/GPU content not exercised)"
-        : "render: ok (obscura smoke render)",
-    );
+    output.push("render: ok (obscura smoke render)");
     if (testModule && !errors.some((e) => e.phase === "test")) output.push("test: ok");
   }
 
-  return { ok: errors.length === 0, errors, output: output.join("\n"), durationMs: Date.now() - started };
+  return { ok: errors.length === 0, errors, notes, output: output.join("\n"), durationMs: Date.now() - started };
 }
 
 type ObscuraRun = {
@@ -309,15 +342,64 @@ type ObscuraRun = {
   widgetSource: string;
   testSource: string;
 };
-type LintPageResult = { errors?: PageError[]; output?: string[]; done?: boolean };
+type LintPageResult = { errors?: PageError[]; output?: string[]; done?: boolean; webgl?: WebGLReport | null };
+
+/** WebGL availability + exercise stats reported by the lint page polyfill. */
+type WebGLReport = {
+  installed?: boolean;
+  native?: boolean;
+  summary?: {
+    contexts?: number;
+    programs?: number;
+    shaders?: number;
+    drawCalls?: number;
+    clearCalls?: number;
+    compileErrors?: number;
+    linkErrors?: number;
+    uniformsSet?: number;
+    textures?: number;
+    buffers?: number;
+    warnings?: string[];
+    shaderErrors?: string[];
+  } | null;
+};
 
 /**
- * The lint browser has no GPU, so WebGL context creation fails there and
- * only there. A widget that renders 3D content is fine in production —
- * these errors are lint-environment limitations, not findings.
+ * Turns the WebGL report into non-fatal notes: how much of the 3D path the
+ * smoke render actually exercised. A widget that builds a three.js scene
+ * gets "3D exercised" with real program/draw counts; a pure-2D widget just
+ * notes the polyfill was available.
+ */
+function webglNotes(webgl: WebGLReport | null | undefined): string[] {
+  if (!webgl) return [];
+  const s = webgl.summary;
+  if (!s) return [];
+  const notes: string[] = [];
+  const gl = webgl.native ? "native WebGL" : "WebGL polyfill (software, no GPU in the lint browser)";
+  if ((s.contexts ?? 0) === 0) {
+    notes.push(`3D: ${gl} available, not used by this widget`);
+    return notes;
+  }
+  notes.push(
+    `3D exercised on ${gl}: ${s.contexts} context(s), ${s.programs} program(s), ` +
+      `${s.shaders} shader(s), ${s.drawCalls} draw call(s), ${s.uniformsSet} uniform(s), ` +
+      `${s.textures} texture(s), ${s.buffers} buffer(s)`,
+  );
+  if (s.warnings && s.warnings.length > 0) notes.push(`3D notes: ${s.warnings.slice(0, 6).join("; ")}`);
+  return notes;
+}
+
+/**
+ * The lint browser ships no GPU. The WebGL polyfill makes the whole
+ * three.js/WebGL API work in software, so 3D widgets ARE exercised there —
+ * only things a polyfill cannot faithfully emulate (real rasterization,
+ * MSAA resolve, GPU sync timing) may remain as environment limitations.
+ * They surface as notes; every other render error is a finding.
  */
 function isLintEnvLimitation(message: string): boolean {
-  return /webgl|WebGLRenderer|Error creating (?:GL|WebGL|a WebGL)|GPU device|no 3d support/i.test(message);
+  return /no 3d support|GPU device (?:lost|removed)|Error creating (?:GL|WebGL|a WebGL)|software-simplified by the (?:software )?polyfill/i.test(
+    message,
+  );
 }
 
 /** Same phase + same first line = the same finding (dual reporting paths). */
@@ -396,12 +478,15 @@ async function obscuraOnce(binary: string, dir: string, timeoutS: number): Promi
   return { parsed, raw: out, stderr };
 }
 
-async function runInObscura(run: ObscuraRun): Promise<WidgetLintError[]> {
+async function runInObscura(run: ObscuraRun): Promise<{ errors: WidgetLintError[]; webgl: WebGLReport | null }> {
   let binary: string;
   try {
     binary = await ensureObscuraBrowser();
   } catch (e) {
-    return [{ phase: "render", message: `lint browser unavailable: ${e instanceof Error ? e.message : String(e)}` }];
+    return {
+      errors: [{ phase: "render", message: `lint browser unavailable: ${e instanceof Error ? e.message : String(e)}` }],
+      webgl: null,
+    };
   }
 
   const dir = mkdtempSync(path.join(tmpdir(), "gen-ui-lint-"));
@@ -432,7 +517,10 @@ async function runInObscura(run: ObscuraRun): Promise<WidgetLintError[]> {
     while (Date.now() < deadline) {
       last = await obscuraOnce(binary, dir, Math.max(2, Math.ceil((deadline - Date.now()) / 1000)));
       if (last.parsed && last.parsed.done) {
-        return dedupeErrors((last.parsed.errors || []).map((e) => finalizePageError(e, run)));
+        return {
+          errors: dedupeErrors((last.parsed.errors || []).map((e) => finalizePageError(e, run))),
+          webgl: last.parsed.webgl ?? null,
+        };
       }
     }
 
@@ -440,7 +528,10 @@ async function runInObscura(run: ObscuraRun): Promise<WidgetLintError[]> {
     // recorded before the hang are real findings — keep them, append the
     // timeout verdict.
     const found = dedupeErrors((last?.parsed?.errors || []).map((e) => finalizePageError(e, run)));
-    return [...found, { phase: run.testModule ? "test" : "render", message: `lint timed out after ${run.timeoutS}s` }];
+    return {
+      errors: [...found, { phase: run.testModule ? "test" : "render", message: `lint timed out after ${run.timeoutS}s` }],
+      webgl: last?.parsed?.webgl ?? null,
+    };
   } finally {
     try {
       rmSync(dir, { recursive: true, force: true });

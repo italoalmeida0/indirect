@@ -9,7 +9,7 @@ import {
   widgetTheme,
 } from "./bridge";
 import { parseGenerativeUiDsl, type GenerativeUiData } from "./dsl";
-import { fetchWidgetSource, widgetSourceVersion } from "./widget-source";
+import { fetchWidgetSource, invalidateWidgetSources, widgetSourceVersion } from "./widget-source";
 
 /**
  * Host renderer of a ```generative_ui fence.
@@ -71,11 +71,27 @@ export function GenerativeUiWidget(props: {
     setUnfrozen(true);
     void finalize();
   };
-  /** Hard reload: drop the published document and republish (fresh mount). */
-  const reload = () => {
-    if (frozen() || !source()) return;
+  /** Hard reload: re-fetch the source from the daemon, then republish (fresh
+   *  mount). Works even when the source is missing/stale — that is exactly
+   *  the case the button is needed for. */
+  const reload = async () => {
+    if (frozen()) return;
+    const id = data().id;
+    if (!id || !props.ctx) return;
+    // Drop the published doc + the cached source so finalize really
+    // re-POSTs (the content-addressed publish key would otherwise no-op).
     publishedKey = "";
     setFinalUrl("");
+    invalidateWidgetSources(props.ctx!.sessionId, id);
+    const rec = await fetchWidgetSource(props.ctx!.send, props.ctx!.hostId, props.ctx!.sessionId, id);
+    if (rec?.source) {
+      setMissing(false);
+      setSource(rec.source);
+    } else {
+      setMissing(true);
+      setSource("");
+    }
+    forcePublish = true;
     void finalize();
   };
 
@@ -191,15 +207,18 @@ export function GenerativeUiWidget(props: {
   // ---- final widget ----
   let publishInFlight = false;
   let publishedKey = "";
+  /** Set by reload(): the next publish must not dedupe by content key. */
+  let forcePublish = false;
   const finalize = async () => {
     const d = data();
     if (!d.id || !source() || publishInFlight || frozen()) return;
     // Snapshot reconciliation can re-trigger this with semantically identical
     // content (escaped text resolves, footers strip): publishing the same
     // content again is a no-op worth keeping — a second POST would only
-    // return the same content-addressed URL.
+    // return the same content-addressed URL. An explicit reload overrides
+    // the dedupe so the iframe document is rebuilt from scratch.
     const key = widgetKey();
-    if (key === publishedKey && finalUrl()) return;
+    if (!forcePublish && key === publishedKey && finalUrl()) return;
     publishInFlight = true;
     try {
       const res = await fetch("/api/indirect-code/gen-ui/widgets", {
@@ -214,6 +233,7 @@ export function GenerativeUiWidget(props: {
       const out = await res.json().catch(() => null);
       if (res.ok && out?.url) {
         publishedKey = key;
+        forcePublish = false;
         const resolved = resolvePublishedFrame({
           nextUrl: out.url as string,
           currentUrl: finalUrl(),
