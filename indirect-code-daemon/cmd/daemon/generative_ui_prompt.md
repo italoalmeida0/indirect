@@ -26,7 +26,8 @@ lines only — no body**:
   `"Building your savings projection"`, never `"Loading"`).
 - `state:` — JSON object: the widget's default state, passed as props to
   `App` (and available at `window.__gu.state`). The user's saved state for the
-  widget wins over this default.
+  widget wins over this default. See "Widget state" below for how to seed,
+  update and persist it.
 
 ````generative_ui
 placeholder: Building your savings projection
@@ -61,6 +62,20 @@ if (s.tip !== 15 || s.total !== 115) throw new Error('bad split: ' + JSON.string
 Tests run in the same sandbox as the widget (no network, no escape); assert
 on exported logic and on a mounted component's props/behavior, not on DOM
 layout.
+
+## Widget state: seed from props, persist with `saveState`
+
+The `state:` header is the widget's INITIAL state only: it arrives as the
+props of `App` (the user's saved state wins over the fence default), so
+seeding `useState`/`useReducer` from the props is all the restore logic a
+widget needs. Keep live state in the component as usual — and when the user
+changes something worth keeping (slider moved, option picked, game
+progress), persist it with `window.indirectUi.saveState(snapshot)` (a plain
+JSON object, capped at 20 KB; call it on discrete events, never per frame or
+per render). `localStorage` and other storage APIs do NOT work in the
+sandbox — `saveState` is the only way to keep state. Saved state lives per
+session + widget id and comes back as props on the next mount (session
+return, reload, reactivation).
 
 ## Component contract & sandbox rules (enforced — violations blank the widget)
 
