@@ -400,16 +400,26 @@ export function sanitizeModelModule(compiledCode: string): ModelModuleResult {
  */
 function sanitizeCode(code: string, verdict: Verdict): { code: string; map: object } {
   const ms = new MagicString(code);
-  const edit = (a: number, b: number, replacement: string) => {
-    const newlines = (code.slice(a, b).match(/\n/g) || []).length;
-    ms.overwrite(a, b, replacement + "\n".repeat(newlines));
-  };
+  // Forbidden ranges can nest (a `.constructor` call inside a forbidden
+  // `fetch`, say). magic-string cannot overwrite overlapping ranges, so
+  // apply the OUTERMOST cut first and drop every edit that overlaps one
+  // already applied — the outer replacement covers the inner escape anyway.
+  type Cut = { a: number; b: number; text: string };
+  const cuts: Cut[] = [];
   for (const prop of verdict.forbiddenProps) {
     const [a, b] = prop.cutRange ?? [prop.start, prop.end];
-    edit(a, b, "");
+    cuts.push({ a, b, text: "" });
   }
   for (const node of verdict.forbidden) {
-    edit(node.start, node.end, "void 0");
+    cuts.push({ a: node.start, b: node.end, text: "void 0" });
+  }
+  cuts.sort((x, y) => x.a - y.a || y.b - x.b);
+  let lastEnd = -1;
+  for (const cut of cuts) {
+    if (cut.a < lastEnd) continue; // nested/overlapping: outer cut wins
+    lastEnd = cut.b;
+    const newlines = (code.slice(cut.a, cut.b).match(/\n/g) || []).length;
+    ms.overwrite(cut.a, cut.b, cut.text + "\n".repeat(newlines));
   }
   return {
     code: ms.toString(),

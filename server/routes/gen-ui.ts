@@ -373,8 +373,21 @@ export async function handleGenUiRoute(
     if (!id.trim()) return err(400, "id is required", req);
     if (!source.trim()) return err(400, "empty widget source", req);
     if (source.length + test.length > 1_500_000) return err(413, "widget too large", req);
-    const res = await runWidgetLint({ id, source, test, state });
-    return json(res, { req });
+    try {
+      const res = await runWidgetLint({ id, source, test, state });
+      return json(res, { req });
+    } catch (e) {
+      // Never surface an opaque 500: the lint is the model's feedback loop,
+      // so an internal failure becomes a structured lint error with the real
+      // message (the stack lands in the gateway log for us).
+      console.error("[gen-ui] lint internal error:", e);
+      return json({
+        ok: false,
+        errors: [{ phase: "compile", message: `internal lint error: ${e instanceof Error ? e.message : String(e)}` }],
+        output: "",
+        durationMs: 0,
+      }, { req });
+    }
   }
 
   if (path === "/api/indirect-code/gen-ui/widgets" && req.method === "POST") {

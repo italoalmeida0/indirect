@@ -109,13 +109,25 @@ func (w *turnBridge) widgetLint(ctx context.Context, id, source, test, state str
 		return tools.WidgetLintResult{}, fmt.Errorf("gateway lint unreachable: %w", err)
 	}
 	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return tools.WidgetLintResult{}, fmt.Errorf("lint response unreadable (status %d): %w", resp.StatusCode, err)
+	}
 	var res tools.WidgetLintResult
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&res); err != nil {
-		return tools.WidgetLintResult{}, fmt.Errorf("bad lint response (status %d): %w", resp.StatusCode, err)
+	if err := json.Unmarshal(raw, &res); err != nil {
+		snippet := strings.TrimSpace(string(raw))
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "..."
+		}
+		return tools.WidgetLintResult{}, fmt.Errorf("bad lint response (status %d): %v; body: %s", resp.StatusCode, err, snippet)
 	}
 	if resp.StatusCode != http.StatusOK {
 		if len(res.Errors) == 0 {
-			return tools.WidgetLintResult{}, fmt.Errorf("lint failed (status %d)", resp.StatusCode)
+			snippet := strings.TrimSpace(string(raw))
+			if len(snippet) > 300 {
+				snippet = snippet[:300] + "..."
+			}
+			return tools.WidgetLintResult{}, fmt.Errorf("lint failed (status %d): %s", resp.StatusCode, snippet)
 		}
 		res.OK = false
 	}

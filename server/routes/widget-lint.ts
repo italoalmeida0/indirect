@@ -193,6 +193,21 @@ function compilePhase(source: string): { ok: boolean; code: string; map: SourceM
 /* ---------------- entry ---------------- */
 
 export async function runWidgetLint(req: WidgetLintRequest): Promise<WidgetLintResult> {
+  try {
+    return await runWidgetLintInner(req);
+  } catch (e) {
+    // The lint is the model's feedback loop: an internal failure must come
+    // back as a finding with the real message, never as a thrown error.
+    return {
+      ok: false,
+      errors: [{ phase: "compile", message: `internal lint error: ${e instanceof Error ? e.message : String(e)}` }],
+      output: "",
+      durationMs: 0,
+    };
+  }
+}
+
+async function runWidgetLintInner(req: WidgetLintRequest): Promise<WidgetLintResult> {
   const started = Date.now();
   const errors: WidgetLintError[] = [];
   const output: string[] = [];
@@ -207,11 +222,12 @@ export async function runWidgetLint(req: WidgetLintRequest): Promise<WidgetLintR
   errors.push(...compiled.errors);
 
   let stateJSON = "{}";
-  if (req.state && req.state.trim()) {
+  const rawState = typeof req.state === "string" ? req.state.trim() : "";
+  if (rawState) {
     try {
-      stateJSON = JSON.stringify(JSON.parse(req.state));
+      stateJSON = JSON.stringify(JSON.parse(rawState));
     } catch {
-      errors.push({ phase: "render", message: `state header is not valid JSON: ${req.state.slice(0, 120)}` });
+      errors.push({ phase: "render", message: `state header is not valid JSON: ${rawState.slice(0, 120)}` });
     }
   }
 
@@ -253,9 +269,19 @@ export async function runWidgetLint(req: WidgetLintRequest): Promise<WidgetLintR
     widgetSource: req.source,
     testSource: testSource,
   });
-  errors.push(...renderErrors);
+  // Environment limitations of the lint browser (no GPU → no WebGL) are
+  // NOT widget bugs: production browsers have WebGL. They surface as a
+  // note ("3D content not exercised") instead of failing the lint — every
+  // other render error still fails.
+  const real = renderErrors.filter((e) => !isLintEnvLimitation(e.message));
+  const envNotes = renderErrors.filter((e) => isLintEnvLimitation(e.message));
+  errors.push(...real);
   if (!errors.some((e) => e.phase === "render")) {
-    output.push("render: ok (obscura smoke render)");
+    output.push(
+      envNotes.length > 0
+        ? "render: ok (obscura smoke render; WebGL unavailable in the lint browser — 3D/GPU content not exercised)"
+        : "render: ok (obscura smoke render)",
+    );
     if (testModule && !errors.some((e) => e.phase === "test")) output.push("test: ok");
   }
 
@@ -274,6 +300,26 @@ type ObscuraRun = {
   testSource: string;
 };
 type LintPageResult = { errors?: PageError[]; output?: string[]; done?: boolean };
+
+/**
+ * The lint browser has no GPU, so WebGL context creation fails there and
+ * only there. A widget that renders 3D content is fine in production —
+ * these errors are lint-environment limitations, not findings.
+ */
+function isLintEnvLimitation(message: string): boolean {
+  return /webgl|WebGLRenderer|Error creating (?:GL|WebGL|a WebGL)|GPU device|no 3d support/i.test(message);
+}
+
+/** Same phase + same first line = the same finding (dual reporting paths). */
+function dedupeErrors(errors: WidgetLintError[]): WidgetLintError[] {
+  const seen = new Set<string>();
+  return errors.filter((e) => {
+    const key = e.phase + "\u0000" + e.message.split("\n")[0];
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 /**
  * Maps one page error (compiled position inside widget.js/test.js) back to
@@ -362,14 +408,14 @@ async function runInObscura(run: ObscuraRun): Promise<WidgetLintError[]> {
     while (Date.now() < deadline) {
       last = await obscuraOnce(binary, dir, Math.max(2, Math.ceil((deadline - Date.now()) / 1000)));
       if (last.parsed && last.parsed.done) {
-        return (last.parsed.errors || []).map((e) => finalizePageError(e, run));
+        return dedupeErrors((last.parsed.errors || []).map((e) => finalizePageError(e, run)));
       }
     }
 
     // Deadline passed without a finished result: a hang somewhere. Errors
     // recorded before the hang are real findings — keep them, append the
     // timeout verdict.
-    const found = (last?.parsed?.errors || []).map((e) => finalizePageError(e, run));
+    const found = dedupeErrors((last?.parsed?.errors || []).map((e) => finalizePageError(e, run)));
     return [...found, { phase: run.testModule ? "test" : "render", message: `lint timed out after ${run.timeoutS}s` }];
   } finally {
     try {
