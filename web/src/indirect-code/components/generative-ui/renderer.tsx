@@ -1,5 +1,6 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
 import { MsgIconBtn } from "../MsgActions";
+import { useModal } from "../../ctx";
 import { claimLiveWidget, releaseLiveWidget } from "./widget-live";
 
 import {
@@ -61,6 +62,8 @@ export function GenerativeUiWidget(props: {
   const [superseded, setSuperseded] = createSignal(false);
   /** Immersive fullscreen overlay (games/3D widgets on small screens). */
   const [expanded, setExpanded] = createSignal(false);
+  /** Global confirm modal (promise-based) for the destructive reset. */
+  const modal = useModal();
   /**
    * Unloaded: superseded by a newer fence for the same widget id (registry),
    * an earlier duplicate in document order (prop), or user-deactivated.
@@ -231,10 +234,18 @@ export function GenerativeUiWidget(props: {
     return JSON.stringify(d.state ?? {});
   };
 
-  /** Reset to the fence default state and remount fresh. */
-  const resetState = () => {
+  /** Reset to the fence default state and remount fresh — destructive (the
+   *  saved snapshot is gone for good), so it always asks first. */
+  const resetState = async () => {
     const id = data().id;
     if (!id) return;
+    const ok = await modal.showConfirm({
+      title: "Reset widget state?",
+      message: "The saved state of this widget will be discarded and it will restart from its default state.",
+      confirmText: "Reset state",
+      danger: true,
+    });
+    if (!ok) return;
     deleteSavedState(id);
     // stateJSON() now falls back to the fence default, so the content key
     // changes and finalize() really re-publishes (no dedupe no-op).
