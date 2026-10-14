@@ -13,15 +13,16 @@
  * per lint (spawns in ~50ms) — a widget that spins forever is killed with
  * the process, never with the gateway.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { compileWidgetForLint, SourceMapIndex, type SourcePosition } from "../../web/src/indirect-code/components/generative-ui/lint-compile";
 import { createCodeFrame } from "../../web/src/indirect-code/components/generative-ui/code-frame";
 import { buildJsxModuleBody, escapeScriptClose } from "../../web/src/indirect-code/components/generative-ui/model-code";
-import { buildReactShimModule } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
+import { buildReactShimModule, buildRuntimeScript, WIDGET_BASE_CSS } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
 import { REACT_RUNTIME_JS } from "../../web/src/indirect-code/components/generative-ui/react-runtime";
 import { ensureObscuraBrowser } from "./obscura";
+import { readVendorFile, referencedLibModules } from "./gen-ui-libs";
 
 export type WidgetLintError = {
   phase: "compile" | "audit" | "render" | "test";
@@ -67,9 +68,10 @@ const TEST_TIMEOUT_S = 10;
  * errors that escape the harness land in `errors` via the page's error
  * hooks.
  */
-function lintPageHTML(stateJSON: string, hasTest: boolean): string {
+function lintPageHTML(stateJSON: string, hasTest: boolean, libEntries: Record<string, string>): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"></head><body>
+<style>${WIDGET_BASE_CSS}</style>
 <script>${escapeScriptClose(REACT_RUNTIME_JS)}</script>
 <script type="importmap">${JSON.stringify({
     imports: {
@@ -81,8 +83,12 @@ function lintPageHTML(stateJSON: string, hasTest: boolean): string {
       widget: "./widget.js",
       "./widget": "./widget.js",
       "./widget.js": "./widget.js",
+      // Vendored lib bundles the module references (d3, three, …) — same
+      // files the served widget docs map, written next to the lint page.
+      ...libEntries,
     },
   })}</script>
+<script>${escapeScriptClose(buildRuntimeScript({ stateJSON }))}</script>
 <script>
 window.__lint_result = { errors: [], output: [], done: false };
 // Best-effort position extraction from a runtime error (widget.js:12:5 …).
@@ -103,24 +109,24 @@ window.__lint_push = function (phase, e, fallback) {
     file: p.file
   });
 };
-window.__gu = {
-  state: ${stateJSON},
-  error: null,
-  reportError: function (e) { window.__lint_push("render", e, "widget error"); },
-  onDestroy: function () {},
-  saveState: function () {}
-};
+// The REAL widget runtime reports through $onError (full error object,
+// stack included — the lint extracts positions from it) and through
+// { __gu: "error" } host messages (same channel production uses; message
+// only). Host bridge calls (sendPrompt/openLink/resize/saveState) are the
+// contract itself, not findings.
+window.__gu.onError(function (e) { window.__lint_push("render", e, "widget error"); });
+window.addEventListener("message", function (ev) {
+  var d = ev.data;
+  if (d && d.__gu === "error") window.__lint_push("render", { message: d.message }, "widget error");
+});
 window.addEventListener("error", function (ev) {
   window.__lint_push("render", ev.error || ev, ev.message || "uncaught error");
 });
 window.addEventListener("unhandledrejection", function (ev) {
-  window.__lint_push("render", ev.reason, "unhandled rejection");
+  window.__lint_push("render", ev.reason || ev, "unhandled rejection");
 });
 </script>
 <script type="module">
-// Top-level await all the way: the page's load event (and therefore
-// obscura's --eval) waits for this module's completion — a dynamic
-// import of a hanging test blocks it and trips the navigation deadline.
 const R = window.__lint_result;
 async function phase(name, url, runFn) {
   const before = R.errors.length;
@@ -128,12 +134,16 @@ async function phase(name, url, runFn) {
     const mod = await import(url);
     if (runFn) await runFn(mod);
   } catch (e) {
-    window.__lint_push(name, e, "error");
+    R.errors.push({ phase: name, message: String((e && e.message) || e).slice(0, 2000) });
   }
   return R.errors.length === before;
 }
 if (await phase("render", "./widget.js")) R.output.push("render: ok (obscura smoke render)");
 ${hasTest ? `if (await phase("test", "./test.js", (mod) => mod.default)) R.output.push("test: ok");` : ""}
+// The widget mounts on the next animation frame (the runtime's $render):
+// let it run so a mount-time crash lands in errors before the verdict.
+await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+await new Promise((r) => setTimeout(r, 50));
 R.done = true;
 </script>
 </body></html>`;
@@ -326,7 +336,19 @@ async function runInObscura(run: ObscuraRun): Promise<WidgetLintError[]> {
 
   const dir = mkdtempSync(path.join(tmpdir(), "gen-ui-lint-"));
   try {
-    writeFileSync(path.join(dir, "lint.html"), lintPageHTML(run.stateJSON, !!run.testModule));
+    // Vendored lib bundles the widget (or test) references — a lib global
+    // like `d3` lands here as an appended side-effect import. Missing
+    // bundles stay missing on purpose: the import error is a real finding.
+    const libEntries: Record<string, string> = {};
+    const allCode = run.widgetModule + (run.testModule ? `\n${run.testModule}` : "");
+    for (const [spec, file] of referencedLibModules(allCode)) {
+      const source = readVendorFile(file);
+      if (source == null) continue;
+      mkdirSync(path.join(dir, "lib"), { recursive: true });
+      writeFileSync(path.join(dir, "lib", file), source);
+      libEntries[spec] = `./lib/${file}`;
+    }
+    writeFileSync(path.join(dir, "lint.html"), lintPageHTML(run.stateJSON, !!run.testModule, libEntries));
     writeFileSync(path.join(dir, "react-shim.js"), buildReactShimModule());
     writeFileSync(path.join(dir, "widget.js"), run.widgetModule);
     if (run.testModule) writeFileSync(path.join(dir, "test.js"), run.testModule);

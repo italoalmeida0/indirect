@@ -1,4 +1,3 @@
-import { existsSync, readFileSync } from "fs";
 import path from "path";
 
 import { err, json, readJsonBody } from "../http";
@@ -15,7 +14,7 @@ import {
   widgetCSP,
 } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
 import { compileJsxModule } from "../../web/src/indirect-code/components/generative-ui/jsx-compile";
-import { GEN_UI_LIB_FILES } from "../../scripts/vendor-gen-ui-libs";
+import { GEN_UI_LIB_FILES, LIB_MODULE_FILES, readVendorFile } from "./gen-ui-libs";
 import { createHash } from "crypto";
 import { lookup } from "node:dns";
 
@@ -126,28 +125,6 @@ function requestOrigin(req: Request): string {
 }
 
 /* ---------------- vendored library modules ---------------- */
-
-/** Candidate roots for the vendored build output (gitignored artifacts). */
-const VENDOR_DIRS = [
-  path.resolve("web/public/vendor/gen-ui"),
-  path.resolve("dist/vendor/gen-ui"),
-];
-
-function readVendorFile(file: string): string | null {
-  for (const dir of VENDOR_DIRS) {
-    const p = path.join(dir, file);
-    if (!p.startsWith(dir + path.sep)) return null; // no traversal
-    try {
-      if (existsSync(p)) return readFileSync(p, "utf8");
-    } catch {
-      // keep looking
-    }
-  }
-  return null;
-}
-
-/** Library module files the import map may reference (plus the react shim). */
-const LIB_MODULE_FILES = new Set<string>(Object.values(GEN_UI_LIB_FILES));
 
 function libContentType(_file: string): string {
   return "text/javascript; charset=utf-8";

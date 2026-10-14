@@ -1,6 +1,6 @@
 {
   "name": "llm-gateway",
-  "version": "2.0.43",
+  "version": "2.0.44",
   "description": "Self-hosted LLM Gateway: multi-tenant API keys with budgets, proxying to one upstream OpenAI/Anthropic-compatible provider.",
   "type": "module",
   "scripts": {

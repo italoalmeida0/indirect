@@ -121,11 +121,14 @@ func widgetStateHeader(source string) string {
 
 // runWidgetLint validates one source through the gateway linter. A missing
 // linter degrades to Skipped (store without validation), never to a fake ok.
-func runWidgetLint(ctx context.Context, lint WidgetLintFunc, id, source, test string) WidgetLintResult {
+func runWidgetLint(ctx context.Context, lint WidgetLintFunc, id, source, test, state string) WidgetLintResult {
 	if lint == nil {
 		return WidgetLintResult{Skipped: true}
 	}
-	res, err := lint(ctx, id, source, test, widgetStateHeader(source))
+	if state == "" {
+		state = widgetStateHeader(source)
+	}
+	res, err := lint(ctx, id, source, test, state)
 	if err != nil {
 		return WidgetLintResult{OK: false, Errors: []WidgetLintError{{Phase: "lint", Message: err.Error()}}}
 	}
@@ -183,7 +186,10 @@ type widgetSetArgs struct {
 	ID      string `json:"id"`
 	Content string `json:"content"`
 	SrcFile string `json:"src_file"`
-	Delete  bool   `json:"delete"`
+	// State is the fence `state:` JSON the widget will render with — the
+	// lint uses it as props so the smoke render matches what users see.
+	State  string `json:"state"`
+	Delete bool   `json:"delete"`
 }
 
 func (t *WidgetSetTool) Name() string { return "widget_set" }
@@ -195,9 +201,9 @@ func (t *WidgetSetTool) Description() string {
 }
 func (t *WidgetSetTool) Schema() json.RawMessage {
 	if t.AllowSrcFile {
-		return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id — the same id the generative_ui fence links with its widget_id: header"},"content":{"type":"string","description":"The widget TSX source (raw module, no fence markers). Mutually exclusive with src_file."},"src_file":{"type":"string","description":"Workspace file to import as the widget source (created with write/edit/bash first). Mutually exclusive with content."},"delete":{"type":"boolean","description":"Delete the widget with this id instead of storing it"}},"required":["id"]}`)
+		return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id — the same id the generative_ui fence links with its widget_id: header"},"content":{"type":"string","description":"The widget TSX source (raw module, no fence markers). Mutually exclusive with src_file."},"src_file":{"type":"string","description":"Workspace file to import as the widget source (created with write/edit/bash first). Mutually exclusive with content."},"state":{"type":"string","description":"The fence state JSON the widget renders with (its props). The lint smoke-renders with exactly this state."},"delete":{"type":"boolean","description":"Delete the widget with this id instead of storing it"}},"required":["id"]}`)
 	}
-	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id — the same id the generative_ui fence links with its widget_id: header"},"content":{"type":"string","description":"The widget TSX source (raw module, no fence markers)"},"delete":{"type":"boolean","description":"Delete the widget with this id instead of storing it"}},"required":["id"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id — the same id the generative_ui fence links with its widget_id: header"},"content":{"type":"string","description":"The widget TSX source (raw module, no fence markers)"},"state":{"type":"string","description":"The fence state JSON the widget renders with (its props). The lint smoke-renders with exactly this state."},"delete":{"type":"boolean","description":"Delete the widget with this id instead of storing it"}},"required":["id"]}`)
 }
 
 func (t *WidgetSetTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
@@ -262,7 +268,7 @@ func (t *WidgetSetTool) Execute(ctx context.Context, raw json.RawMessage, progre
 	// any legacy `@jsx` marker so the stored source is always a raw module.
 	source = stripWidgetFence(source)
 
-	res := runWidgetLint(ctx, t.Lint, a.ID, source, "")
+	res := runWidgetLint(ctx, t.Lint, a.ID, source, "", a.State)
 	file := WidgetFile{
 		ID:          a.ID,
 		Source:      source,
@@ -426,8 +432,9 @@ type WidgetLintTool struct {
 }
 
 type widgetLintArgs struct {
-	ID   string `json:"id"`
-	Test string `json:"test"`
+	ID    string `json:"id"`
+	Test  string `json:"test"`
+	State string `json:"state"`
 }
 
 func (t *WidgetLintTool) Name() string { return "widget_lint" }
@@ -435,7 +442,7 @@ func (t *WidgetLintTool) Description() string {
 	return "Lint a stored widget without re-storing it: compile, import audit, smoke render at the gateway. Pass optional `test` code (TSX, run in a sandboxed worker) that imports the widget module and asserts on its exported logic — the widget must `export` what the test exercises. Use this after widget_set to verify the widget is safe to show."
 }
 func (t *WidgetLintTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id to lint"},"test":{"type":"string","description":"Optional extra test code (TSX). It runs in a sandboxed worker and can import the widget module — the widget must export the functions/components under test. Throwing an error fails the lint."}},"required":["id"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id to lint"},"test":{"type":"string","description":"Optional extra test code (TSX). It runs in a sandboxed worker and can import the widget module — the widget must export the functions/components under test. Throwing an error fails the lint."},"state":{"type":"string","description":"Optional state JSON to render with (defaults to the state the source or the fence carries)"}},"required":["id"]}`)
 }
 
 func (t *WidgetLintTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
@@ -453,7 +460,7 @@ func (t *WidgetLintTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	if !ok {
 		return core.ToolResult{}, fmt.Errorf("widget %q not found", a.ID)
 	}
-	res := runWidgetLint(ctx, t.Lint, a.ID, file.Source, a.Test)
+	res := runWidgetLint(ctx, t.Lint, a.ID, file.Source, a.Test, a.State)
 	text := renderWidgetLintText(res, a.ID)
 	if progress != nil {
 		progress(text)

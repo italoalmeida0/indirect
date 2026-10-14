@@ -126,6 +126,61 @@ function boom() {
     expect(typeof err.line).toBe("number");
   });
 
+  test("the lint renders with the REQUESTED state (props)", async () => {
+    // The lint page runs the REAL widget runtime (same buildRuntimeScript
+    // as production) with `window.__gu.state` set to the request's state —
+    // so the smoke render sees the props the fence will carry. A widget
+    // that throws on its required prop must fail the lint; the same widget
+    // with the right state must pass.
+    const src = `export default function App({ amount }) {
+  if (typeof amount !== "number") throw new Error("amount prop missing");
+  return <div className="gu-root">{amount}</div>;
+}`;
+    const bad = await runWidgetLint({ id: "t", source: src, state: "{}" });
+    expect(bad.ok).toBe(false);
+    expect(bad.errors[0].phase).toBe("render");
+    expect(bad.errors[0].message).toContain("amount prop missing");
+
+    const good = await runWidgetLint({ id: "t", source: src, state: '{"amount": 42}' });
+    expect(good.errors).toEqual([]);
+    expect(good.ok).toBe(true);
+  });
+
+  test("mount-time effects run in the smoke render (real runtime)", async () => {
+    // useEffect runs against the REAL runtime now — a crash inside an
+    // effect must surface as a render error, not pass silently.
+    const src = `import { useEffect } from "react";
+
+export default function App() {
+  useEffect(() => {
+    throw new Error("effect boom");
+  }, []);
+  return <div className="gu-root">ok</div>;
+}`;
+    const res = await runWidgetLint({ id: "t", source: src });
+    expect(res.ok).toBe(false);
+    expect(res.errors.some((e) => e.message.includes("effect boom"))).toBe(true);
+  });
+
+  test("lib globals (d3) resolve in the lint page (appended prelude)", async () => {
+    // The widget uses `d3` as a LIB GLOBAL (no import): the compile appends
+    // a side-effect import at the END (line numbers preserved) and the lint
+    // page maps the vendored bundle for it.
+    const src = `import { useRef, useEffect } from "react";
+
+export default function App() {
+  const ref = useRef(null);
+  useEffect(() => {
+    const sel = d3.select(ref.current);
+    sel.selectAll("div").data([1, 2, 3]).join("div").style("height", (d) => d * 4 + "px");
+  }, []);
+  return <div ref={ref} />;
+}`;
+    const res = await runWidgetLint({ id: "t", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  });
+
   test("an invalid state header fails the lint", async () => {
     const res = await runWidgetLint({ id: "t", source: goodWidget, state: "{bad json}" });
     expect(res.ok).toBe(false);
