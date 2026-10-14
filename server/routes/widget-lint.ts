@@ -352,10 +352,24 @@ function finalizePageError(e: PageError, run: ObscuraRun): WidgetLintError {
  * until the deadline.
  */
 async function obscuraOnce(binary: string, dir: string, timeoutS: number): Promise<{ parsed: LintPageResult | null; raw: string; stderr: string }> {
-  const proc = Bun.spawn(
-    [binary, "fetch", `file://${path.join(dir, "lint.html")}`, "--eval", "JSON.stringify(window.__lint_result)", "--quiet", "--timeout", String(timeoutS)],
-    { stdout: "pipe", stderr: "pipe" },
-  );
+  let proc;
+  try {
+    proc = Bun.spawn(
+      [binary, "fetch", `file://${path.join(dir, "lint.html")}`, "--eval", "JSON.stringify(window.__lint_result)", "--quiet", "--timeout", String(timeoutS)],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+  } catch (e) {
+    // posix_spawn ENOENT on an existing file = the dynamic loader is
+    // missing (glibc binary on a musl/distroless image).
+    return {
+      parsed: null,
+      raw: "",
+      stderr:
+        `lint browser cannot start (${e instanceof Error ? e.message : String(e)}) — ` +
+        `obscura needs glibc: run the gateway on a glibc base image (e.g. debian:slim), ` +
+        `install gcompat on Alpine, or set OBSCURA_PATH to a working binary`,
+    };
+  }
   const killer = setTimeout(() => proc.kill(), timeoutS * 1000 + 2000);
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),

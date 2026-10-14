@@ -1,5 +1,3 @@
-import path from "path";
-
 import { err, json, readJsonBody } from "../http";
 import { TRUST_PROXY } from "../config";
 import { db } from "../db";

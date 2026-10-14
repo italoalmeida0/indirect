@@ -61,15 +61,43 @@ export function ensureObscuraBrowser(): Promise<string> {
   return ensurePromise;
 }
 
+/**
+ * The binary must actually EXECUTE (not just exist): a glibc build on a
+ * musl/distroless image fails at posix_spawn with a bare ENOENT. Probe once
+ * so the failure says what to fix instead of surfacing inside a lint.
+ */
+function probeBinary(path: string): void {
+  let probe;
+  try {
+    probe = Bun.spawnSync([path, "--version"]);
+  } catch (e) {
+    throw new Error(
+      `obscura at ${path} cannot start: ${e instanceof Error ? e.message : String(e)} — ` +
+      `the release binary needs glibc (ld-linux). Run the gateway on a glibc base image ` +
+      `(e.g. debian:slim), install gcompat on Alpine, or point OBSCURA_PATH at a working binary`,
+      { cause: e },
+    );
+  }
+  if (probe.exitCode !== 0) {
+    throw new Error(
+      `obscura at ${path} exited ${probe.exitCode} on --version: ` +
+      `${probe.stderr.toString().trim().slice(0, 200)} — the release binary needs glibc; ` +
+      `use a glibc base image (e.g. debian:slim), install gcompat on Alpine, or set OBSCURA_PATH`,
+    );
+  }
+}
+
 async function doEnsure(): Promise<string> {
   const override = process.env.OBSCURA_PATH?.trim();
   const { binary } = releaseAsset();
   if (override && existsSync(override)) {
+    probeBinary(override);
     resolved = override;
     return resolved;
   }
   for (const p of candidatePaths(binary)) {
     if (existsSync(p)) {
+      probeBinary(p);
       resolved = p;
       return resolved;
     }
@@ -79,6 +107,7 @@ async function doEnsure(): Promise<string> {
   if (which.exitCode === 0) {
     const found = which.stdout.toString().split("\n")[0].trim();
     if (found && existsSync(found)) {
+      probeBinary(found);
       resolved = found;
       return resolved;
     }
@@ -101,6 +130,7 @@ async function doEnsure(): Promise<string> {
   }
   writeFileSync(target, bytes);
   if (process.platform !== "win32") chmodSync(target, 0o755);
+  probeBinary(target);
   resolved = target;
   console.log(`[gen-ui] obscura ready (${(bytes.length / 1_000_000).toFixed(0)} MB)`);
   return resolved;
