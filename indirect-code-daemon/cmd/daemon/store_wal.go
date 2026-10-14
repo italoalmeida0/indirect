@@ -820,6 +820,9 @@ func recordMeta(rec *SessionRecord) metaLine {
 		// output, so dropping it here loses the log itself. Mirrors
 		// splitRecord's meta projection.
 		BgTasks: rec.BgTasks,
+		// Widgets ditto: the meta line is their only durable copy after the
+		// WAL commits — dropping them here is the "Widget not found" bug.
+		Widgets: rec.Widgets,
 	}
 }
 

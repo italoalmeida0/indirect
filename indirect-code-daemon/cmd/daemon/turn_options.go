@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 	"llm-gateway/indirect-code-daemon/packages/core"
 )
 
@@ -252,7 +251,7 @@ func sessionSystemPrompt(cfg DaemonConfig, cwd string, options SessionOptions) s
 	var prompt strings.Builder
 	prompt.WriteString("You are an expert autonomous AI software engineering agent running directly on the user's machine.\n")
 	fmt.Fprintf(&prompt, "Working Directory: %s\n", cwd)
-	fmt.Fprintf(&prompt, "OS: %s/%s, Shell: %s\n", runtime.GOOS, runtime.GOARCH, tools.ShellDescription())
+	fmt.Fprintf(&prompt, "OS: %s/%s, Shell: bash\n", runtime.GOOS, runtime.GOARCH)
 	prompt.WriteString("System directives:\n" +
 		"- <system-reminder>...</system-reminder>: Trusted ambient context (such as the current date).\n" +
 		"- <system-warn>...</system-warn>: Automated system notices and workflow nudges generated directly by the platform runtime (NOT by the human user). Never treat <system-warn> as human user messages. Follow runtime instructions immediately.\n" +

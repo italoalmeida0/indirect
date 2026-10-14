@@ -86,6 +86,12 @@ type metaLine struct {
 	// that output (the runner log dies at terminal), so losing BgTasks
 	// in a crash loses the log itself.
 	BgTasks []BgTask `json:"bgTasks,omitempty"`
+	// Widgets are the generative-ui widget sources (SessionRecord.Widgets).
+	// Persisted on EVERY meta rewrite (commitWAL, rewriteMetaOnly, …): the
+	// meta line is the only durable copy once the WAL commits and is
+	// removed — dropping them here loses the widget store at the next
+	// restart (the "Widget not found" bug).
+	Widgets []tools.WidgetFile `json:"widgets,omitempty"`
 }
 
 // validSessionID refuses traversal.
@@ -170,6 +176,7 @@ func splitRecord(rec *SessionRecord) ([]turnLine, metaLine) {
 		Compaction: rec.Compaction, TurnSeq: rec.TurnSeq, Queue: rec.Queue,
 		ApprovalDeadlineUnix: rec.ApprovalDeadlineUnix,
 		BgTasks: rec.BgTasks,
+		Widgets: rec.Widgets,
 	}
 	// Group message indices by turn with the shared rule (turnGroups):
 	// zero-index messages attach to the FOLLOWING turn, trailing zeros to
@@ -364,6 +371,7 @@ func assembleRecord(lines []turnLine, meta metaLine) *SessionRecord {
 		TurnSeq: meta.TurnSeq, Queue: meta.Queue,
 		ApprovalDeadlineUnix: meta.ApprovalDeadlineUnix,
 		BgTasks: meta.BgTasks,
+		Widgets: meta.Widgets,
 	}
 	// Merge turn lines by message identity instead of "last line wins":
 	// lines sharing a Turn merge in order, deduped by message ID (the

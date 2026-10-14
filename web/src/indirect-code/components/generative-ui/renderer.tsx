@@ -254,15 +254,13 @@ export function GenerativeUiWidget(props: {
           `card` token, so the frame seam is invisible. While the widget is
           not ready, a centered loading pill (placeholder text) floats over
           the streaming preview; runtime errors land in the footer below. */}
-      <div class="gu-card-host group/guhost relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]">
+      <div class="group/guhost">
         <Show when={!streaming()}>
-          <div class="pointer-events-none absolute top-1.5 right-1.5 z-20 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100">
-            <div class="pointer-events-auto rounded-md border border-line bg-elev/90 p-0.5 shadow-sm backdrop-blur">
+          <div class="pointer-events-none -mb-1 flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100">
+            <div class="pointer-events-auto flex items-center gap-0.5">
               <Show
                 when={!frozen()}
-                fallback={
-                  <MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />
-                }
+                fallback={<MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />}
               >
                 <MsgIconBtn tip="Reload widget" icon="lucide:refresh-cw" compact onClick={reload} />
                 <MsgIconBtn tip="Unload widget" icon="lucide:eye-off" compact onClick={() => setDeactivated(true)} />
@@ -270,24 +268,17 @@ export function GenerativeUiWidget(props: {
             </div>
           </div>
         </Show>
+        <div class="gu-card-host relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]">
         <Show when={frozen() && !streaming()}>
-          <div class="ui-card-mode p-4">
-            <div class="flex items-center gap-2">
-              <span class="shrink-0 text-[11px] font-semibold text-ink-300">
-                {data().placeholder || "Interactive widget"}
-              </span>
-              <span class="gu-badge">Unloaded</span>
-              <span class="min-w-0 flex-1 truncate text-[11px] text-ink-500">
-                Earlier duplicate of widget “{data().id}” — only the last fence of a widget stays mounted.
-              </span>
-              <button
-                type="button"
-                class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
-                onClick={reactivate}
-              >
-                Load widget
-              </button>
-            </div>
+          <div class="ui-card-mode flex items-center justify-center gap-2 px-3 py-1.5">
+            <span class="truncate text-[11px] text-ink-500 gu-mono">{data().id || "widget"}</span>
+            <button
+              type="button"
+              class="ui-button ui-button-sm ui-button-outline cursor-pointer"
+              onClick={reactivate}
+            >
+              Load
+            </button>
           </div>
         </Show>
         <Show when={!frozen() && (streaming() || (!finalUrl() && !isStatic() && !missing())) && !error()}>
@@ -301,22 +292,18 @@ export function GenerativeUiWidget(props: {
           </div>
         </Show>
         <Show when={missing()}>
-          <div class="ui-card-mode p-4">
-            <div class="flex items-center gap-2">
-              <span class="shrink-0 text-[11px] font-semibold text-rose-500">Widget not found</span>
-              <span class="min-w-0 flex-1 truncate text-[11px] text-ink-400">
-                No widget source stored for id “{data().id}” in this session.
-              </span>
-              <Show when={props.onPrefillPrompt}>
-                <button
-                  type="button"
-                  class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
-                  onClick={() => props.onPrefillPrompt?.(`The widget with id "${data().id}" is referenced by a generative_ui fence but has no stored source. Store it with widget_set (id: "${data().id}").`)}
-                >
-                  Ask to fix
-                </button>
-              </Show>
-            </div>
+          <div class="ui-card-mode flex items-center gap-2 px-3 py-1.5">
+            <span class="shrink-0 text-[11px] font-semibold text-rose-500">Widget not found</span>
+            <span class="min-w-0 flex-1 truncate text-[11px] text-ink-500 gu-mono">{data().id}</span>
+            <Show when={props.onPrefillPrompt}>
+              <button
+                type="button"
+                class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
+                onClick={() => props.onPrefillPrompt?.(`The widget with id "${data().id}" is referenced by a generative_ui fence but has no stored source. Store it with widget_set (id: "${data().id}").`)}
+              >
+                Ask to fix
+              </button>
+            </Show>
           </div>
         </Show>
         <Show when={isStatic() && !streaming() && !missing()}>
@@ -376,6 +363,7 @@ export function GenerativeUiWidget(props: {
             </button>
           </div>
         </Show>
+        </div>
       </div>
     </>
   );

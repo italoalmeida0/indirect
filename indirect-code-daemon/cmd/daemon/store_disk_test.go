@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 	"llm-gateway/indirect-code-daemon/packages/provider"
 )
 
@@ -317,3 +318,58 @@ func TestCommitWALReplacesTurnWithoutDuplicating(t *testing.T) {
 	}
 }
 
+
+// Widgets must survive EVERY meta rewrite: the meta line is their only
+// durable copy after the WAL commits and is removed. Dropping them there
+// is the "Widget not found after restart" bug (regression).
+func TestWidgetsSurviveCommitAndReload(t *testing.T) {
+	dir := t.TempDir()
+	st := newDiskStore(dir)
+	sessID := "s_widgets_persist"
+
+	widget := tools.WidgetFile{ID: "brain3d", Source: "export default function App() { return null; }", Placeholder: "Brain 3d", Size: 52, UpdatedAt: 42}
+	rec := &SessionRecord{
+		ID: sessID, CWD: "/tmp", Status: "idle", TurnSeq: 1,
+		Messages: []provider.Message{{ID: "m1", Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "hi"}}, TurnIndex: 1}},
+		Widgets:  []tools.WidgetFile{widget},
+	}
+	// commitWAL runs the rewriteMetaOnly / writeSessionFile meta path —
+	// exactly what erased widgets before.
+	if err := st.commitWAL(sessID, rec, nil); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	fused, _, err := st.loadSessionFused(sessID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(fused.Widgets) != 1 || fused.Widgets[0].ID != "brain3d" {
+		t.Fatalf("widgets lost on reload: %+v", fused.Widgets)
+	}
+	if fused.Widgets[0].Source != widget.Source || fused.Widgets[0].Placeholder != "Brain 3d" {
+		t.Fatalf("widget content mangled: %+v", fused.Widgets[0])
+	}
+
+	// A second commit (meta-only retry path) must not drop them either.
+	if err := st.commitWAL(sessID, fused, nil); err != nil {
+		t.Fatalf("second commit: %v", err)
+	}
+	again, _, err := st.loadSessionFused(sessID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if len(again.Widgets) != 1 {
+		t.Fatalf("widgets lost on meta rewrite: %+v", again.Widgets)
+	}
+
+	// saveSessionSync (full write) keeps them too.
+	if err := st.saveSessionSync(again); err != nil {
+		t.Fatalf("full save: %v", err)
+	}
+	final, _, err := st.loadSessionFused(sessID)
+	if err != nil {
+		t.Fatalf("final load: %v", err)
+	}
+	if len(final.Widgets) != 1 || final.Widgets[0].UpdatedAt != 42 {
+		t.Fatalf("widgets lost on full save: %+v", final.Widgets)
+	}
+}
