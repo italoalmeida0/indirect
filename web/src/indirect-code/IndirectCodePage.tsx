@@ -55,6 +55,7 @@ import { createProjects } from "./hooks/useProjects";
 import { createWorkspace } from "./hooks/useWorkspace";
 import { createHosts } from "./hooks/useHosts";
 import { createSettings } from "./hooks/useSettings";
+import { baseMode, effectiveModeSkills } from "./utils/modeSkills";
 
 /** The workspace header becomes the native titlebar when WCO is enabled. */
 function WorkspaceHeader() {
@@ -319,9 +320,31 @@ export default function IndirectCodePage() {
     toast: notice.toast,
   });
 
+  /** An existing session's mode is FIXED (the mode it was created with):
+   * the wire must always carry it, and the mode picker only offers skills
+   * of that same base mode. Undefined in draft, where the primary skill
+   * still decides. */
+  function lockedSessionMode(): "agentic" | "talk" | undefined {
+    if (draftMode() || !activeSessionId()) return undefined;
+    return baseMode(activeSession()?.options?.mode || options.agentMode());
+  }
   const options = createSessionOptions({
     send: (payload) => relay.send(payload),
     getSessionId: () => activeSessionId(),
+    // Catalog lookups run lazily (settings is created below): the official
+    // daemon skill list wins; the 4-skill cache answers before it loads.
+    getSkill: (name) => {
+      const real = settings.savedSkills()[name];
+      if (real) return { mode: real.mode, usable: real.usable };
+      const cached = effectiveModeSkills(undefined, false).find((m) => m.name === name);
+      return cached ? { mode: cached.mode, usable: cached.usable } : undefined;
+    },
+    listModeSkills: () => {
+      const list = effectiveModeSkills(settings.savedSkills(), settings.skillsLoaded());
+      const locked = lockedSessionMode();
+      return (locked ? list.filter((m) => baseMode(m.mode) === locked) : list).map((m) => m.name);
+    },
+    getLockedMode: () => lockedSessionMode(),
   });
 
   const review = createReview({
@@ -553,6 +576,8 @@ export default function IndirectCodePage() {
       transcript.setSessionStatus(s.status);
       if (s.model) options.setActiveModel(s.model);
       if (s.options) options.applyOptions(s.options);
+      options.applyApprovalMode(s.approvalMode);
+      options.applySessionSkills(s.skills);
       if (typeof s.todosOpen === "boolean") transcript.applyTodosOpenFromRemote(s.todosOpen);
     }
     transcript.fetchSession(sid);
@@ -603,6 +628,8 @@ export default function IndirectCodePage() {
       transcript.setSessionStatus(s.status);
       if (s.model) options.setActiveModel(s.model);
       if (s.options) options.applyOptions(s.options);
+      options.applyApprovalMode(s.approvalMode);
+      options.applySessionSkills(s.skills);
       if (typeof s.todosOpen === "boolean") transcript.applyTodosOpenFromRemote(s.todosOpen);
     }
     transcript.fetchSession(id);
@@ -623,6 +650,10 @@ export default function IndirectCodePage() {
     turnChanges.reset();
     notice.setAppNotice(null);
     options.applyOptions(options.getLastLocalSelection() || mirror.configDoc()?.lastSelection);
+    // Draft bootstrap: a mode skill is mandatory when one exists — the
+    // picker must show a primary (and creation must send one) from the
+    // start, even before the official skill list arrives (cache answers).
+    options.ensureSelection();
     composer.clearAttachments();
     if (projectId) projects.setActiveProjectId(projectId);
     if (isMobile()) setSidebarOpen(false);
@@ -632,8 +663,11 @@ export default function IndirectCodePage() {
   // No session is ever a dead end: typing + Enter auto-starts a
   // conversation inside the active project, then the text is delivered.
   function beginConversationWith() {
+    // Talk sessions have no project: they are born in the default Home
+    // project (empty cwd — the daemon falls back to the home directory).
+    const talk = options.pendingMode() === "talk";
     const proj = projects.activeProject();
-    if (!proj) {
+    if (!talk && !proj) {
       notice.toast("Create a project first", "err");
       return;
     }
@@ -644,7 +678,7 @@ export default function IndirectCodePage() {
     if (creatingSession()) return;
     setCreatingSession(true);
     creationRequestId = crypto.randomUUID();
-    relay.send({ type: "create_session", requestId: creationRequestId, cwd: proj.path, title: "", model: options.activeModel(), options: options.sessionOptions() });
+    relay.send({ type: "create_session", requestId: creationRequestId, cwd: talk ? "" : proj!.path, title: "", model: options.activeModel(), options: options.sessionOptions() });
   }
 
   async function deleteSession(id: string, e?: MouseEvent) {
@@ -835,6 +869,8 @@ export default function IndirectCodePage() {
           transcript.applySnapshot(sid, r, () => {
             turnChanges.applySnapshot(r);
             options.reconcileServerSelection(sid, r.model, r.options, gatewayModels().map((m) => m.id), gatewayModels()[0]?.id || "");
+            options.applyApprovalMode(r.approvalMode);
+            options.applySessionSkills(r.skills);
           });
         }
         break;
@@ -1297,6 +1333,8 @@ export default function IndirectCodePage() {
     if (s.model || s.options) {
       options.reconcileServerSelection(s.id, s.model, s.options, gatewayModels().map((m) => m.id), gatewayModels()[0]?.id || "");
     }
+    options.applyApprovalMode(s.approvalMode);
+    options.applySessionSkills(s.skills);
   });
 
   createEffect(() => {
@@ -1307,6 +1345,9 @@ export default function IndirectCodePage() {
     const selection = options.getLastLocalSelection() || saved;
     options.setActiveModel(catalog.find((m) => m.id === selection?.model)?.id || catalog[0]?.id || "");
     options.applyOptions(selection);
+    // Draft bootstrap (same as startNewConversation): the mandatory mode
+    // skill is in place before the first picker render or creation.
+    options.ensureSelection();
   });
 
   // Auto-poll hosts while waiting for initial daemon pairing
@@ -1376,6 +1417,11 @@ export default function IndirectCodePage() {
     setAgentMode: options.setAgentMode,
     selectedSkills: options.selectedSkills,
     setSelectedSkills: options.setSelectedSkills,
+    syncSkills: options.syncSkills,
+    pendingMode: options.pendingMode,
+    approvalMode: options.approvalMode,
+    skillUsables: options.skillUsables,
+    cycleSkillUsable: options.cycleSkillUsable,
     yoloMode: options.yoloMode,
     setYoloMode: options.setYoloMode,
     modeMenuOpen: options.modeMenuOpen,

@@ -263,6 +263,14 @@ type Agent struct {
 	// outside a.mu, so the hook may call any Agent method.
 	AutoCompact func(ctx context.Context, sink func(AgentEvent)) error
 
+	// RequestMessages, if set, transforms the request-only message list
+	// right before it goes to the provider. The daemon uses it to inject
+	// the ephemeral <skill></skill> prefix before the current turn's
+	// message: it is computed per request and NEVER feeds back into the
+	// transcript, so skill prefixes never pollute the persisted history.
+	// Runs inside a.mu (keep it fast and pure).
+	RequestMessages func([]provider.Message) []provider.Message
+
 	// Preparation caches the effective prompt separately from its unmodified
 	// base so a model or session reset cannot stack extension appendices.
 	startPrepared                                    bool
@@ -976,6 +984,9 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 			MaxTokens:    a.MaxTokens,
 			SessionID:    a.SessionID,
 			MaxToolCalls: a.MaxToolCalls,
+		}
+		if a.RequestMessages != nil {
+			req.Messages = a.RequestMessages(req.Messages)
 		}
 		a.mu.Unlock()
 		break

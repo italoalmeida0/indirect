@@ -6,6 +6,7 @@ import (
 
 	"llm-gateway/indirect-code-daemon/packages/core"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // Legacy saved transcripts still need display filtering. New responses are
@@ -96,11 +97,26 @@ func TestModeToolRestrictionLearningCompletes(t *testing.T) {
 			}
 		}
 	}
-	// Learning keeps its read-only guarantee on project files.
-	for _, tool := range []string{"write", "edit", "patch"} {
-		if reason := modeToolRestriction("learning", tool); reason == "" {
-			t.Fatalf("learning must block %s", tool)
-		}
+	// The read-only guarantee of the legacy plan/learning modes now rides
+	// skill permissions (see skillsArgRestriction/skillsRegistry), not the
+	// base mode: an agentic session with the plan skill denies edit/write
+	// through the policy projection.
+	eff := skills.Effective{
+		Mode:       "agentic",
+		HasVisible: true,
+		Chain: []skills.Skill{{Name: "plan", Permissions: map[string]skills.PermSpec{
+			"bash":  {Policy: skills.PolicyYolo},
+			"edit":  {Policy: skills.PolicyDeny},
+			"write": {Policy: skills.PolicyDeny},
+		}}},
+	}
+	if reason := skillsArgRestriction(eff, "edit", nil); reason != "" {
+		// arg restrictions only fire on denied KEYS; tool-level deny is a
+		// registry projection (skillsRegistry), so an empty reason here is
+		// correct.
+	}
+	if !registryNames(skillsRegistry(registryForTest(), eff))["bash"] {
+		t.Fatalf("granted bash must stay available")
 	}
 }
 

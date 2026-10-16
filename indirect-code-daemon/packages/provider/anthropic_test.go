@@ -494,3 +494,93 @@ func TestAnthropicBuildRequestMergesToolAndUserSteering(t *testing.T) {
 		t.Fatalf("second block must be steering text block, got %v", lastBlocks[1])
 	}
 }
+
+func TestAnthropicEmptyUserTurnsKeepPlaceholder(t *testing.T) {
+	c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{ID: "m"}).(*anthropicClient)
+	wire, err := c.buildRequest(Request{
+		Model:     "m",
+		MaxTokens: 512,
+		Messages: []Message{
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "real message"}}},
+			// Filters cut this turn: no blocks at all.
+			{Role: RoleAssistant, Content: []Content{TextBlock{Text: "kept reply"}}},
+			{Role: RoleUser, Content: nil},
+			// …and this one: only whitespace text survives the trim. Consecutive
+			// user turns merge on the wire, so both placeholders share the last
+			// user message as one block each.
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "   \n"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Messages) != 3 {
+		t.Fatalf("expected 3 wire messages, got %d", len(wire.Messages))
+	}
+	blocks, ok := wire.Messages[2].Content.([]interface{})
+	if !ok || len(blocks) != 2 {
+		t.Fatalf("expected two placeholder blocks in merged user turn, got %v", wire.Messages[2].Content)
+	}
+	for i, b := range blocks {
+		tb, isText := b.(anthTextBlock)
+		if !isText || tb.Text != "..." {
+			t.Fatalf("block %d: expected \"...\" placeholder, got %v", i, b)
+		}
+	}
+}
+
+func TestAnthropicCutAssistantTextKeepsPlaceholder(t *testing.T) {
+	c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{ID: "m"}).(*anthropicClient)
+	wire, err := c.buildRequest(Request{
+		Model:     "m",
+		MaxTokens: 512,
+		Messages: []Message{
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "real message"}}},
+			// The turn had text, but every text block is blank after trim.
+			{Role: RoleAssistant, Content: []Content{TextBlock{Text: "  "}}},
+			// Reasoning-only turns are dropped, never synthesized.
+			{Role: RoleAssistant, Content: []Content{ReasoningBlock{Summary: "thinking"}}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire.Messages) != 2 {
+		t.Fatalf("expected 2 wire messages (reasoning-only dropped), got %d", len(wire.Messages))
+	}
+	blocks, ok := wire.Messages[1].Content.([]interface{})
+	if !ok || len(blocks) != 1 {
+		t.Fatalf("expected one assistant placeholder block, got %v", wire.Messages[1].Content)
+	}
+	tb, isText := blocks[0].(anthTextBlock)
+	if !isText || tb.Text != "..." {
+		t.Fatalf("expected \"...\" placeholder assistant text, got %v", blocks[0])
+	}
+}
+
+func TestAnthropicRedactedThinkingNeverReplaced(t *testing.T) {
+	c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{ID: "m"}).(*anthropicClient)
+	wire, err := c.buildRequest(Request{
+		Model:     "m",
+		MaxTokens: 512,
+		Messages: []Message{
+			{Role: RoleUser, Content: []Content{TextBlock{Text: "real message"}}},
+			// Text got cut, but the redacted thinking blob must survive and
+			// no text placeholder may be forged around it.
+			{Role: RoleAssistant, Content: []Content{
+				ReasoningBlock{Encrypted: "blob"},
+				TextBlock{Text: ""},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks, ok := wire.Messages[1].Content.([]interface{})
+	if !ok || len(blocks) != 1 {
+		t.Fatalf("expected exactly the redacted_thinking block, got %v", wire.Messages[1].Content)
+	}
+	if rh, isRed := blocks[0].(anthRedactedThinkingBlock); !isRed || rh.Data != "blob" {
+		t.Fatalf("redacted thinking must replay verbatim, got %v", blocks[0])
+	}
+}

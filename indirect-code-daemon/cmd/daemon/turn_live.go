@@ -11,6 +11,7 @@ import (
 	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 	"llm-gateway/indirect-code-daemon/packages/core"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // liveBlock is a transient replay of only the current assistant response.
@@ -211,7 +212,42 @@ func sessionPayload(rec *SessionRecord) map[string]any {
 		"bgTasks":      bgTaskPayloads(rec.BgTasks),
 		// Widget METADATA only: sources are fetched on demand (get_widget).
 		"widgets": widgetPayloads(rec.Widgets),
+		// Skill selection (priority/active/usable per skill name) and the
+		// resolved approval mode: "yolo" hides the YOLO/ASK selector in the
+		// UI (always yolo), "ask" shows it (spec 4.2).
+		"skills":       skillsPayload(rec.Skills),
+		"approvalMode": skillsApprovalMode(rec),
 	}
+}
+
+// skillsApprovalMode resolves the session's effective approval display for
+// the UI ("ask" | "yolo"): the main skill's approvalMode. When
+// it is "yolo", every resolved "ask" auto-approves (the main skill bypasses the
+// user's ask rules), so the YOLO/ASK selector is hidden. "ask" (default,
+// including no skills) shows the selector.
+func skillsApprovalMode(rec *SessionRecord) string {
+	eff, err := skillRegistry.resolveSession(rec.Skills, rec.Options.Mode)
+	if err == nil && eff.AskAutoApprove {
+		return "yolo"
+	}
+	return "ask"
+}
+
+// skillsPayload serializes the session skill selection for the web client
+// (complete snapshot: priority/active/usable plus the daemon-owned turn
+// markers, so the UI can show once/delivered state).
+func skillsPayload(in map[string]skills.SessionSkill) map[string]any {
+	if len(in) == 0 {
+		return map[string]any{}
+	}
+	out := make(map[string]any, len(in))
+	for name, st := range in {
+		out[name] = map[string]any{
+			"priority": st.Priority, "active": st.Active, "usable": st.Usable,
+			"once": st.Once, "inContext": st.InContext, "byAI": st.ByAI,
+		}
+	}
+	return out
 }
 
 // bgTaskPayloads serializes session-global bg tasks for the web client.

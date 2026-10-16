@@ -13,6 +13,7 @@ import (
 	"llm-gateway/indirect-code-daemon/packages/core"
 	"llm-gateway/indirect-code-daemon/packages/filetrack"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // turnWorker runs one agent turn on a daughter goroutine of the session
@@ -54,6 +55,10 @@ type workerSnapshot struct {
 	// widgets snapshot the session's widget store (generative-ui) at
 	// turn start; live reads/writes round-trip through the actor.
 	widgets []tools.WidgetFile
+	// skills snapshot the session's skill selection at turn start. They
+	// drive the effective tool policy and the ephemeral <skill> prefix
+	// (request-only, never persisted).
+	skills map[string]skills.SessionSkill
 	// resume, when True, continues the fused transcript via agent.Continue
 	// instead of opening a new user turn (crash/watchdog resume path).
 	compact   bool
@@ -93,6 +98,7 @@ func snapshotTurn(act *sessionActor, gen int, prompt string, meta map[string]str
 		attachments: append([]AttachmentRef(nil), act.rec.Attachments...),
 		todos:       append([]tools.TodoItem(nil), act.rec.Todos...),
 		widgets:     append([]tools.WidgetFile(nil), act.rec.Widgets...),
+		skills:      cloneSkillsMap(act.rec.Skills),
 		bgTasks:     runningBgTasks(act.rec.BgTasks),
 		cwd:         act.rec.CWD,
 		prompt:      prompt,
@@ -159,6 +165,11 @@ type turnBridge struct {
 	// (seeded from the snapshot); live reads/writes round-trip through
 	// the actor via widgetStoreBridge.
 	widgets []tools.WidgetFile
+	// skillEff is the resolved skill policy for this turn (base mode,
+	// approval mode, tool permissions, ordered skill bodies). skillUses
+	// records use_skill calls to fold/activate at turn end.
+	skillEff  skills.Effective
+	skillUses []skillUseRecord
 	// mutationSeq counts edit/write calls this turn; jobMutationMark
 	// records it per background job at registration. The exact-
 	// duplicate bg guard refuses only while no file mutation landed
@@ -206,6 +217,12 @@ func (w *turnBridge) run() error {
 	w.live = &liveTracker{}
 	w.todos = append([]tools.TodoItem(nil), w.snap.todos...)
 	w.widgets = append([]tools.WidgetFile(nil), w.snap.widgets...)
+	// Skill policy for this turn: base mode ceiling + active skills by
+	// priority (approval mode, tool permissions, ordered bodies). The
+	// <skill> prefix is built from this and injected request-side only.
+	if err := w.resolveSkillPolicy(); err != nil {
+		return err
+	}
 
 	// Every command runs through the crash-only runner (decided D6).
 	// Tests and headless workers without a store keep the direct path.
@@ -242,7 +259,8 @@ func (w *turnBridge) run() error {
 	widgetEditTool := &tools.WidgetEditTool{Store: widgetStore}
 	finishTool := &tools.FinishEntireRequestTool{Mode: normalizedOptions(w.snap.options).Mode, OnFinish: func() error { return nil }, IncompleteCheck: w.finishBlockWarning}
 	summaryTool := &tools.SummaryTool{}
-	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool, bgCheckTool), widgetSetTool, widgetListTool, widgetLintTool, widgetReadTool, widgetEditTool)...)
+	useSkillTool := &tools.UseSkillTool{Host: w}
+	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool, bgCheckTool), widgetSetTool, widgetListTool, widgetLintTool, widgetReadTool, widgetEditTool, useSkillTool)...)
 
 	if w.env.store != nil {
 		header, err := w.env.store.readWALHeader(w.env.actorID)
@@ -257,12 +275,12 @@ func (w *turnBridge) run() error {
 		}
 	}
 
-	initTools := w.toolsForMode(w.snap.options.Mode)
+	initTools := w.effectiveRegistry()
 
 	w.agent = core.NewAgent(w.client, w.modelToUse, systemPromptWithBrain(cfg, w.sessionCWD, w.snap.options, brainDir), initTools)
 	w.agent.TurnIndex = w.snap.turnIndex
 	w.agent.PersistentTurns = true
-	w.agent.CompletionTool = modeCompletionTool(w.snap.options.Mode)
+	w.agent.CompletionTool = modeCompletionTool(w.skillEff.Mode)
 	w.agent.Reasoning = w.snap.options.Effort
 	w.agent.BeforeRequest = w.beforeRequest
 	w.agent.MaxTokens = maxOutputTokens(w.modelInfo)
@@ -272,6 +290,15 @@ func (w *turnBridge) run() error {
 	w.agent.SeedCost(w.snap.usage)
 	w.agent.SeedCompactionState(w.snap.compaction)
 	w.agent.BeforeToolExecute = w.approveTool
+	// Ephemeral <skill> prefix: prepended to the marked current-turn user
+	// message inside the REQUEST-ONLY list. The persisted transcript never
+	// carries it (built on the fly, not stored in session history). It is
+	// rebuilt on EVERY request from the current skill policy: a skill
+	// loaded via use_skill mid-turn is excluded (its body already rode the
+	// tool_result), and a user activation mid-turn joins the next request.
+	w.agent.RequestMessages = func(msgs []provider.Message) []provider.Message {
+		return injectSkillsPrefix(msgs, buildSkillPrefix(w.skillEff))
+	}
 	w.agent.SummaryNudgeExtra = w.stateSectionsText
 	w.agent.OnMessageAppended = w.onMessageAppended
 	w.agent.OnContextAppended = w.onContextAppended
@@ -321,8 +348,14 @@ func (w *turnBridge) run() error {
 		for k, v := range w.snap.promptMeta {
 			meta[k] = v
 		}
+		// Mark the opening row: the <skill> prefix is injected before its
+		// text at REQUEST time (RequestMessages hook) and never persisted.
+		markTurnPrompt(meta)
 		turnErr = w.agent.PromptWithMeta(w.ctx, fullPrompt, images, meta, sink)
 	}
+	// Skill activations land in the session record immediately (see
+	// RecordSkillUse); turn-end bookkeeping (once deactivation, artifact
+	// drop, marker reset) is the actor's job in finishTurn.
 	// Final balloon computed here; the actor appends it at finish.
 	if b := finishTurnTracking(w.tfc, -1); b != nil {
 		w.sendInbox(turnBalloonMsg{balloon: *b})
@@ -429,6 +462,10 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 			return context.Canceled
 		}
 		rf.model, rf.options = rr.model, rr.options
+		w.snap.skills = rr.skills // complete skill snapshot from the actor
+		if err := w.resolveSkillPolicy(); err != nil {
+			return err
+		}
 		if len(rr.context) > 0 {
 			w.agent.SetMessages(append(w.agent.History(), rr.context...))
 			for _, m := range rr.context {
@@ -465,22 +502,9 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 	brainDir := w.env.brainDir(w.env.actorID)
 	system := systemPromptWithBrain(cfg, w.sessionCWD, rf.options, brainDir)
 	w.agent.SetSystem(system)
-	w.agent.SetTools(w.toolsForMode(rf.options.Mode))
-	w.agent.CompletionTool = modeCompletionTool(rf.options.Mode)
+	w.agent.SetTools(w.effectiveRegistry())
+	w.agent.CompletionTool = modeCompletionTool(w.skillEff.Mode)
 	return nil
-}
-
-// toolsForMode returns the registry restricted to the active mode's
-// allowlist (modeRegistry) and refreshes the mode-dependent completion
-// tool description for that mode. The per-request registry is a fresh
-// map each time: a mode switch swaps the whole tool list so the model
-// only ever sees the active mode's tools.
-func (w *turnBridge) toolsForMode(mode string) core.Registry {
-	normalized := normalizedOptions(SessionOptions{Mode: mode}).Mode
-	if t, ok := w.reg["finish_entire_request"].(*tools.FinishEntireRequestTool); ok {
-		t.Mode = normalized
-	}
-	return modeRegistry(w.reg, normalized)
 }
 
 // approveTool blocks the worker until the human answers (or timeout/cancel).

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
+
 	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 	"llm-gateway/indirect-code-daemon/packages/core"
 	"llm-gateway/indirect-code-daemon/packages/filetrack"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // HarnessSettings stores user-tunable agent behavior and runtime flags.
@@ -86,15 +89,39 @@ type ModelSelection struct {
 	SessionOptions
 }
 
-// SessionOptions are per-session agent behavior flags.
-// v2: Skills wiring removed, but the field stays in the WIRE envelope
-// (always []) because the frontend and the frozen WS protocol expect it
-// .
+// SkillChoice is one active skill on the create/configure wire: the
+// frontend sends ONLY the active skills, sorted by priority (first =
+// primary; the daemon numbers priority 1..n by position). Usable is
+// present only when it differs from the skill file's original — a
+// missing/empty usable inherits the file default. A bare string (the
+// pre-usable wire shape) is also accepted as a name-only entry.
+type SkillChoice struct {
+	Name   string `json:"name"`
+	Usable string `json:"usable,omitempty"`
+}
+
+// UnmarshalJSON accepts both the object shape and the legacy bare-name
+// string shape.
+func (c *SkillChoice) UnmarshalJSON(data []byte) error {
+	var name string
+	if err := json.Unmarshal(data, &name); err == nil {
+		c.Name, c.Usable = name, ""
+		return nil
+	}
+	type plain SkillChoice
+	return json.Unmarshal(data, (*plain)(c))
+}
+
+// SessionOptions are per-session agent behavior flags. Mode is the base
+// session mode ("agentic" | "talk") as derived and sent by the frontend;
+// invalid values canonicalize to "talk" at ingestion. Skills is a create/
+// configure INPUT only — the persisted options always carry it empty
+// (the live selection is SessionRecord.Skills).
 type SessionOptions struct {
-	Effort string   `json:"effort"`
-	Mode   string   `json:"mode"`
-	Skills []string `json:"skills"`
-	Access string   `json:"access"`
+	Effort string        `json:"effort"`
+	Mode   string        `json:"mode"`
+	Skills []SkillChoice `json:"skills"`
+	Access string        `json:"access"`
 }
 
 // QueuedMessage is one user message waiting for the running turn to finish.
@@ -132,9 +159,15 @@ type SessionRecord struct {
 	// Widgets holds the generative-ui widget sources keyed by their fence
 	// `widget_id:`. Stored in the session record (like Todos), replaced
 	// wholesale by each widget_set/widget_edit.
-	Widgets  []tools.WidgetFile `json:"widgets,omitempty"`
-	LastDate string             `json:"lastDate,omitempty"`
-	LastMode string             `json:"lastMode,omitempty"`
+	Widgets []tools.WidgetFile `json:"widgets,omitempty"`
+	// Skills holds the session's skill selection keyed by skill name:
+	// priority order, active flag and the usable override (locked per the
+	// usability table). Resolved into the effective tool policy and the
+	// ephemeral <skill> prefix at request time; never part of the
+	// persisted message history.
+	Skills   map[string]skills.SessionSkill `json:"skills,omitempty"`
+	LastDate string                         `json:"lastDate,omitempty"`
+	LastMode string                         `json:"lastMode,omitempty"`
 	// Compaction is the incremental chain head (previous summary +
 	// file ops + cut anchor + count). Persisted on every compaction so the
 	// next summarization — even after a daemon restart — builds an update

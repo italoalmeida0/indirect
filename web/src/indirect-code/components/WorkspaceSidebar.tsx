@@ -104,7 +104,23 @@ export function WorkspaceSidebar() {
         <Show
           when={s.selectionMode()}
           fallback={
-            <span class="text-[11px] font-medium text-ink-500">Projects</span>
+            /* Projects | Talk view switch (persisted across reloads) */
+            <div class="flex items-center rounded-md bg-ink-900/60 p-0.5" role="group" aria-label="Sidebar list view">
+              <button
+                onClick={() => s.setSidebarView("projects")}
+                aria-pressed={s.sidebarView() === "projects"}
+                class={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${s.sidebarView() === "projects" ? "bg-ink-800 text-ink-100 font-medium" : "text-ink-500 hover:text-ink-300"}`}
+              >
+                Projects
+              </button>
+              <button
+                onClick={() => s.setSidebarView("talk")}
+                aria-pressed={s.sidebarView() === "talk"}
+                class={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${s.sidebarView() === "talk" ? "bg-ink-800 text-ink-100 font-medium" : "text-ink-500 hover:text-ink-300"}`}
+              >
+                Talk
+              </button>
+            </div>
           }
         >
           <span class="text-[11px] font-medium text-ink-300">
@@ -161,6 +177,18 @@ export function WorkspaceSidebar() {
           </div>
         </div>
       </div>
+      <Show when={s.sidebarView() === "talk"}>
+        <div class="space-y-0.5">
+          <For
+            each={s.visibleSessions("talk", s.talkSessions())}
+            fallback={<div class="px-2.5 py-2 text-xs text-ink-600">No talk conversations yet.</div>}
+          >
+            {(sess) => renderRow(sess)}
+          </For>
+          {s.sessionListToggle("talk", s.talkSessions().length)}
+        </div>
+      </Show>
+      <Show when={s.sidebarView() === "projects"}>
       <Show
         when={s.projects().length > 0}
         fallback={
@@ -235,6 +263,7 @@ export function WorkspaceSidebar() {
               </div>
             </Show>
           </div>
+      </Show>
       </Show>
     </div>
   {/* Batch bar (chatbot selection mode) */}

@@ -20,11 +20,22 @@ export interface CommandBase {
   id?: number;
 }
 
+/** One active skill on the create/configure wire: only active skills are
+ * sent, sorted by priority (first = primary). `usable` rides only when it
+ * differs from the skill file's original — omitted means inherit. */
+export interface SkillChoiceWire {
+  name: string;
+  usable?: string;
+}
+
 export interface SessionChoice {
   model: string;
   effort: string;
+  /** Base session mode ("agentic" | "talk"), derived by the frontend from
+   * the lowest-priority selected skill. The daemon only validates the
+   * enum (invalid falls back to "talk"). */
   mode: string;
-  skills: string[];
+  skills: SkillChoiceWire[];
   access: string;
 }
 
@@ -34,6 +45,12 @@ export type DaemonCommand = CommandBase &
   | { type: "get_history"; sessionId: string; beforeTurn: number; requestId?: string }
   | { type: "pull"; collection: string }
   | { type: "configure_session"; sessionId: string; model: string; options: Omit<SessionChoice, "model"> }
+  /** Granular skill edit: per-skill set/unset of active + usable plus a full
+   * reorder for drag-to-sort. The daemon answers with a complete skills
+   * snapshot (session_data). `order` renumbers priority by name order.
+   * `usable` rides only when it differs from the skill file's original —
+   * omitted means inherit (the daemon stores it verbatim, unvalidated). */
+  | { type: "update_skills"; sessionId: string; set: Record<string, { active: boolean; usable?: string }>; unset: string[]; order: string[] }
   | { type: "prompt"; sessionId: string; requestId?: string; text: string; model: string; yolo: boolean; options: Omit<SessionChoice, "model">; attachmentIds: string[] }
   | { type: "queue_add"; sessionId: string; text: string; model: string; yolo: boolean; attachmentIds: string[] }
   | { type: "queue_update"; sessionId: string; queueId: string; text: string; /** Omitted = attachments unchanged (partial update); [] = cleared; [ids] = replaced. */ attachmentIds?: string[] }

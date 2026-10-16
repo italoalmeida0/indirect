@@ -24,7 +24,7 @@ import (
 // last since day one.
 
 // CurrentVersion is the storage schema version the daemon understands.
-const CurrentVersion = 4
+const CurrentVersion = 5
 
 // Migration is one version step: version N-1 -> N.
 type Migration struct {

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // sessionsAdmin implements create/delete/rename/pin + summaries + purge.
@@ -192,10 +194,37 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 		model = lastModel
 	}
 	now := time.Now().UnixMilli()
+	norm := normalizedOptions(options)
+	// Creation is passive: the client sends ONLY the active skills,
+	// sorted by priority (first = primary), each with a usable override
+	// only when it differs from the skill file's original (missing =
+	// inherit, stored verbatim — the frontend owns validation);
+	// unknown/never names drop silently. The session MODE is the wire's
+	// mode as canonicalized by normalizedOptions above (the frontend
+	// derives it from the primary skill; invalid falls back to "talk").
+	recSkills := map[string]skills.SessionSkill{}
+	prio := 1
+	for _, choice := range options.Skills {
+		name := strings.TrimSpace(choice.Name)
+		if name == "" || recSkills[name].Active {
+			continue
+		}
+		sk, ok := skillRegistry.get(name)
+		if !ok {
+			continue
+		}
+		if usable, err := skills.UsableValue(sk, ""); err != nil || usable == "never" {
+			continue // never: base-only, invisible even to the user
+		}
+		recSkills[name] = skills.SessionSkill{Priority: prio, Active: true, Usable: choice.Usable}
+		prio++
+	}
+	recSkills = skillRegistry.normalizeSessionSkills(recSkills)
 	rec := &SessionRecord{
-		Options: normalizedOptions(options), ID: sessID, CWD: cwd,
+		Options: norm, ID: sessID, CWD: cwd,
 		Title: title, TitleSource: titleSource, Model: model,
 		Status: "idle", CreatedAt: now, UpdatedAt: now,
+		Skills: recSkills,
 	}
 	st := newDiskStore(a.dataDir)
 	if err := st.saveSessionSync(rec); err != nil {

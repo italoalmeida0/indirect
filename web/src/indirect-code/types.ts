@@ -129,6 +129,15 @@ export interface SkillConfig {
   description: string;
   body: string;
   enabled: boolean;
+  /** Activation policy: "deny" (hidden/locked), "ask", "yolo" (locked) or
+   * "inherit" (follows the session approval mode). */
+  usable?: string;
+  /** Skill main mode ("agentic" | "talk"); omitted = inherit. */
+  mode?: string;
+  /** The skill's own approvalMode ("ask" | "yolo"); omitted = "ask". On the
+   * PRIMARY skill, "yolo" auto-approves resolved asks and hides the
+   * ASK/YOLO selector. */
+  approvalMode?: string;
 }
 
 export interface ToolUnit {

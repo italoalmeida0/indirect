@@ -18,6 +18,15 @@ const anthropicDefaultBaseURL = "https://api.anthropic.com"
 
 const anthropicVersion = "2023-06-01"
 
+// anthropicEmptyTextPlaceholder stands in for a message whose content would
+// serialize empty after trimming (e.g. a history filter cut every text block
+// of the turn). The Anthropic API rejects empty text blocks and empty
+// content, so a lone "..." keeps the turn replayable. It never replaces
+// thinking: reasoning/redacted_thinking blocks replay untouched, and turns
+// that carry no wire-visible text at all (reasoning-only, server-tool-only)
+// are dropped exactly as before.
+const anthropicEmptyTextPlaceholder = "..."
+
 type anthropicClient struct {
 	apiKey        string
 	baseURL       string
@@ -201,6 +210,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		}
 	}
 
+	req.Messages = placeholderEmptyUserTurns(req.Messages)
 	req.Messages = RepairOrphanedToolResults(req.Messages)
 	appendMessage := func(role string, blocks []interface{}) {
 		if len(blocks) == 0 {
@@ -222,6 +232,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		case RoleAssistant:
 			var blocks []interface{}
 			var text strings.Builder
+			hadText := false
 			flushText := func() {
 				if text.Len() > 0 {
 					blocks = append(blocks, anthTextBlock{Type: "text", Text: text.String()})
@@ -231,6 +242,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 			for _, b := range msg.Content {
 				switch v := b.(type) {
 				case TextBlock:
+					hadText = true
 					if strings.TrimSpace(v.Text) == "" {
 						continue
 					}
@@ -263,6 +275,15 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 				}
 			}
 			flushText()
+			// A turn whose text was cut (filters/trimming) must not replay as
+			// an empty or invisible assistant message. If the turn carried
+			// text at all but nothing survived, keep it visible with a
+			// placeholder. Pure thinking/server-tool turns stay dropped: they
+			// have no client-visible content and adding text would forge an
+			// assistant reply that was never generated.
+			if hadText && len(blocks) == 0 {
+				blocks = append(blocks, anthTextBlock{Type: "text", Text: anthropicEmptyTextPlaceholder})
+			}
 			appendMessage("assistant", blocks)
 		case RoleTool:
 			// All results of one message share a single user turn, as the
@@ -325,11 +346,50 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	return out, nil
 }
 
+// buildAnthUserContent renders a user turn. Text blocks that are empty
+// after a trim are skipped (the API rejects them); when nothing survives —
+// a filter cut the turn down to [] or "" — the placeholder keeps the
+// message replayable instead of serializing an empty content.
+// placeholderEmptyUserTurns keeps cut-to-empty user turns on the wire.
+// History filters may empty a user message (content cut to [], or text that
+// is blank after trimming); both would serialize as an empty content —
+// rejected by the API and dropped by RepairOrphanedToolResults. Substitute
+// the placeholder so the turn stays replayable. Assistant turns are never
+// synthesized here (a fabricated assistant reply would be forged output),
+// and turns that already carry any wire payload (text, image, tool call or
+// tool result) are left untouched.
+func placeholderEmptyUserTurns(msgs []Message) []Message {
+	out := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == RoleUser {
+			hasPayload := false
+			for _, b := range m.Content {
+				switch v := b.(type) {
+				case TextBlock:
+					if strings.TrimSpace(v.Text) != "" {
+						hasPayload = true
+					}
+				case ImageBlock, ToolCallBlock, ToolResultBlock:
+					hasPayload = true
+				}
+			}
+			if !hasPayload {
+				m.Content = []Content{TextBlock{Text: anthropicEmptyTextPlaceholder}}
+			}
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 func buildAnthUserContent(blocks []Content) []interface{} {
 	var out []interface{}
 	for _, b := range blocks {
 		switch v := b.(type) {
 		case TextBlock:
+			if strings.TrimSpace(v.Text) == "" {
+				continue
+			}
 			out = append(out, anthTextBlock{Type: "text", Text: v.Text})
 		case ImageBlock:
 			var img anthImageBlock
@@ -340,6 +400,9 @@ func buildAnthUserContent(blocks []Content) []interface{} {
 			out = append(out, img)
 		}
 	}
+	if len(out) == 0 {
+		return []interface{}{anthTextBlock{Type: "text", Text: anthropicEmptyTextPlaceholder}}
+	}
 	return out
 }
 
@@ -348,6 +411,11 @@ func buildAnthToolResultContent(blocks []Content) interface{} {
 	for _, b := range blocks {
 		switch v := b.(type) {
 		case TextBlock:
+			// No empty text blocks on the wire; a result whose text was cut
+			// down to nothing falls through to the empty-content case below.
+			if strings.TrimSpace(v.Text) == "" {
+				continue
+			}
 			out = append(out, anthTextBlock{Type: "text", Text: v.Text})
 		case ImageBlock:
 			var img anthImageBlock

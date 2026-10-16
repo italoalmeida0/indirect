@@ -17,6 +17,7 @@ import (
 	"llm-gateway/indirect-code-daemon/packages/core"
 	"llm-gateway/indirect-code-daemon/packages/filetrack"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // Session WAL (write-ahead log): during a turn the session JSON stays
@@ -62,6 +63,7 @@ const (
 	walTypeBgChunk    = "bg_chunk"    // bg task output chunk append (content tail)
 	walTypeBgFinish   = "bg_finish"   // bg task terminal transition (status, trim)
 	walTypeWidgets    = "widgets"     // generative-ui widget sources replace
+	walTypeSkills     = "skills"      // session skill selection replace
 )
 
 // walHeader is always line 1: the turn's recovery record (prompt,
@@ -115,6 +117,7 @@ type walEvent struct {
 	TurnStatus  string                  `json:"turnStatus,omitempty"`
 	Attachments []AttachmentRef         `json:"attachments,omitempty"`
 	Widgets     []tools.WidgetFile      `json:"widgets,omitempty"`
+	Skills      map[string]skills.SessionSkill `json:"skills,omitempty"`
 	BgTask      *BgTask                 `json:"bgTask,omitempty"`
 	BgChunk     *BgChunk                `json:"bgChunk,omitempty"`
 	BgFinish    *BgFinish               `json:"bgFinish,omitempty"`
@@ -510,6 +513,11 @@ func applyWALEvent(rec *SessionRecord, ev *walEvent, seen *msgDedup) error {
 		if ev.UpdatedAt > 0 {
 			rec.UpdatedAt = ev.UpdatedAt
 		}
+	case walTypeSkills:
+		rec.Skills = cloneSkillsMap(ev.Skills)
+		if ev.UpdatedAt > 0 {
+			rec.UpdatedAt = ev.UpdatedAt
+		}
 	case walTypeBgTask:
 		if ev.BgTask != nil {
 			upsertBgTask(rec, ev.BgTask)
@@ -823,6 +831,9 @@ func recordMeta(rec *SessionRecord) metaLine {
 		// Widgets ditto: the meta line is their only durable copy after the
 		// WAL commits — dropping them here is the "Widget not found" bug.
 		Widgets: rec.Widgets,
+		// Skills selection survives every meta rewrite like Widgets: the
+		// meta line is the durable copy once the WAL commits.
+		Skills: rec.Skills,
 	}
 }
 
@@ -907,7 +918,7 @@ func appendWALEvent(wal *walWriter, ev walEvent) error {
 		case walTypeMsg, walTypeUsage, walTypeCompaction, walTypeTodos,
 			walTypeQueue, walTypeTitle, walTypeModel, walTypeOptions,
 			walTypeTurnState, walTypeMeta, walTypeAttach, walTypeWidgets,
-			walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
+			walTypeSkills, walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
 			ev.UpdatedAt = time.Now().UnixMilli()
 		}
 	}

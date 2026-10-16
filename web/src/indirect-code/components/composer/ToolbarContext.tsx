@@ -1,13 +1,24 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
-import { useComposerCtx, useModal, useUI } from "../../ctx";
+import { attachSortable } from "../../../sortable";
+import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { FloatMenu } from "../FloatMenu";
 import { MenuItem } from "../MenuItem";
 import { formatEffort } from "../../utils/format";
+import { baseMode, effectiveModeSkills, isModeSkillName as isModeSkill } from "../../utils/modeSkills";
+
+/** The 4 mode skills form the single-choice primary selector. They render
+ * from a temporary frontend cache until the daemon's official skill list
+ * arrives; then the official list rules (description/mode taken from it,
+ * entries that vanished or turned usable:"never" hidden). Exactly one is
+ * mandatory as the primary skill (when any exists) and its mode becomes
+ * the session mode the frontend sends. These never appear in the
+ * additional skills list. */
 
 export function ToolbarContext() {
   const c = useComposerCtx();
   const m = useModal();
+  const s = useSession();
   const ui = useUI();
 
   // Mobile submenu navigation inside the "+" menu
@@ -19,6 +30,132 @@ export function ToolbarContext() {
       setSubView("main");
     }
   });
+
+  /** The effective mode-skill list: cache before the official daemon list
+   * loads, reconciled with it afterwards. For an EXISTING session the mode
+   * is fixed at creation, so only skills of the session's own base mode
+   * are offered (a talk session never shows build/plan/learning, an
+   * agentic one never shows talk); drafts see the whole list. */
+  function modeSkills() {
+    const list = effectiveModeSkills(m.savedSkills(), m.skillsLoaded());
+    if (s.draftMode()) return list;
+    const base = baseMode(c.agentMode());
+    return list.filter((spec) => baseMode(spec.mode) === base);
+  }
+
+  /** The ASK/YOLO selector is hidden when the primary (lowest-priority)
+   * skill has approvalMode "yolo" — derived here from the effective
+   * catalog (the daemon-sent approvalMode of an existing session is the
+   * fallback for skills the catalog no longer knows). */
+  function approvalSelectorHidden() {
+    const primary = c.selectedSkills()[0];
+    const ap = primary
+      ? m.savedSkills()[primary]?.approvalMode ?? modeSkills().find((s) => s.name === primary)?.approvalMode
+      : undefined;
+    return ap === "yolo" || c.approvalMode() === "yolo";
+  }
+
+  /** Chooses one of the mode skills as the session's primary skill: it goes
+   * first in the active order (lowest priority number) and its mode is
+   * re-sent via configure (the daemon takes the wire mode as-is). Other
+   * mode skills drop out (single choice). */
+  function chooseModeSkill(name: string) {
+    const spec = modeSkills().find((s) => s.name === name);
+    if (!spec) return;
+    c.setAgentMode(baseMode(spec.mode));
+    c.syncSkills([name, ...c.selectedSkills().filter((n) => n !== name && !isModeSkill(n))]);
+    c.configureSession();
+  }
+
+  /** Additional skills = everything except the 4 mode skills. Displayed
+   * order: selected (session priority order) first, then the rest by name. */
+  function additionalSkills(): [string, any][] {
+    const sel = c.selectedSkills().filter((n) => !isModeSkill(n));
+    const rest = Object.entries(m.savedSkills())
+      .filter(([n, skill]) => !isModeSkill(n) && skill.enabled && (skill.usable ?? "inherit") !== "never")
+      .map(([n]) => n)
+      .filter((n) => !sel.includes(n))
+      .sort();
+    return [...sel, ...rest].map((n) => [n, m.savedSkills()[n]] as [string, any]);
+  }
+
+  /** Drag-to-sort of the additional list: active skills keep their order
+   * under the primary (mode) skill; unusued rows are ignored. */
+  function reorderAdditional(ids: string[]) {
+    const sel = c.selectedSkills();
+    const primary = sel.filter(isModeSkill);
+    const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n));
+    c.syncSkills([...primary, ...rest]);
+  }
+
+  function toggleAdditional(name: string) {
+    const sel = c.selectedSkills();
+    c.syncSkills(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
+  }
+
+  const modeSkillList = (
+    <For each={modeSkills()}>
+      {(mode) => (
+        <button
+          role="menuitemradio"
+          aria-checked={c.selectedSkills()[0] === mode.name}
+          onClick={() => chooseModeSkill(mode.name)}
+          class="w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-elev cursor-pointer"
+        >
+          <Iconify icon={mode.icon} size={16} />
+          <span class="flex-1">
+            <span class="font-medium text-ink-100">{mode.label}</span>
+            <span class="block text-[11px] text-ink-500 mt-0.5">{mode.description}</span>
+          </span>
+          <Show when={c.selectedSkills()[0] === mode.name}>
+            <Iconify icon="lucide:check" size={14} />
+          </Show>
+        </button>
+      )}
+    </For>
+  );
+
+  const additionalSkillList = (
+    <>
+      <ul ref={(el) => attachSortable(el, { onReorder: reorderAdditional })}>
+        <For each={additionalSkills()} fallback={<li class="p-2 text-ink-500">Create custom skills in Settings.</li>}>
+          {([name, skill]) => (
+            <li data-id={name} class="flex items-center gap-1">
+              <button data-handle aria-label={`Reorder ${name}`} class="shrink-0 px-1 py-2 text-ink-600 hover:text-ink-300 cursor-grab" onClick={(e) => e.stopPropagation()}>
+                <Iconify icon="lucide:grip-vertical" size={14} />
+              </button>
+              <button
+                role="menuitemcheckbox"
+                aria-checked={c.selectedSkills().includes(name)}
+                onClick={() => toggleAdditional(name)}
+                class="flex-1 rounded-lg px-2 py-2 flex items-center gap-2 text-left hover:bg-elev cursor-pointer"
+              >
+                <Iconify icon="lucide:puzzle" size={14} />
+                <span class="flex-1">
+                  <span class="text-ink-200">{name}</span>
+                  <span class="block text-[11px] text-ink-500">{skill?.description}</span>
+                </span>
+                <Show when={c.selectedSkills().includes(name)}>
+                  <Iconify icon="lucide:check" size={14} />
+                </Show>
+              </button>
+              <Show when={(skill?.usable ?? "inherit") === "ask" || (skill?.usable ?? "inherit") === "inherit"}>
+                <button aria-label={`Change activation policy for ${name}`} onClick={(e) => { e.stopPropagation(); c.cycleSkillUsable(name, skill?.usable); }} class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-300 hover:bg-elev cursor-pointer">
+                  {c.skillUsables()[name] ?? "inherit"}
+                </button>
+              </Show>
+              <Show when={skill?.usable === "yolo"}>
+                <span class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-500">yolo</span>
+              </Show>
+              <Show when={skill?.usable === "deny"}>
+                <span class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-500">hidden</span>
+              </Show>
+            </li>
+          )}
+        </For>
+      </ul>
+    </>
+  );
 
   return (
 <>
@@ -154,15 +291,7 @@ export function ToolbarContext() {
           </MenuItem>
 
           <MenuItem
-            icon={
-              c.agentMode() === "plan"
-                ? "lucide:list-checks"
-                : c.agentMode() === "learning"
-                ? "lucide:graduation-cap"
-                : c.agentMode() === "talk"
-                ? "lucide:messages-square"
-                : "lucide:hammer"
-            }
+            icon={c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer"}
             onClick={() => setSubView("mode")}
           >
             <span class="flex-1">Mode</span>
@@ -175,6 +304,7 @@ export function ToolbarContext() {
             <Iconify icon="lucide:chevron-right" size={13} class="text-ink-500 shrink-0 ml-1" />
           </MenuItem>
 
+          <Show when={!approvalSelectorHidden()}>
           <MenuItem
             icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"}
             iconClass={c.yoloMode() ? "text-brand-500" : ""}
@@ -186,6 +316,7 @@ export function ToolbarContext() {
             </span>
             <Iconify icon="lucide:chevron-right" size={13} class="text-ink-500 shrink-0 ml-1" />
           </MenuItem>
+          </Show>
         </div>
       </Show>
 
@@ -229,65 +360,13 @@ export function ToolbarContext() {
               Done
             </button>
           </div>
-          <p class="px-2 py-1.5 font-medium text-ink-400">Mode</p>
-          <For
-            each={[
-              { id: "build", label: "Build", description: "Implement and validate changes", icon: "lucide:hammer" },
-              { id: "plan", label: "Plan", description: "Explore and plan without editing files", icon: "lucide:list-checks" },
-              { id: "talk", label: "Talk", description: "Conversational agent with web research, no workspace access", icon: "lucide:messages-square" },
-              { id: "learning", label: "Learning", description: "Learn through hints and guiding questions", icon: "lucide:graduation-cap" },
-            ]}
-          >
-            {(mode) => (
-              <button
-                role="menuitemradio"
-                aria-checked={c.agentMode() === mode.id}
-                onClick={() => {
-                  c.setAgentMode(mode.id);
-                  c.configureSession();
-                }}
-                class="w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-elev cursor-pointer"
-              >
-                <Iconify icon={mode.icon} size={16} />
-                <span class="flex-1">
-                  <span class="font-medium text-ink-100">{mode.label}</span>
-                  <span class="block text-[11px] text-ink-500 mt-0.5">{mode.description}</span>
-                </span>
-                <Show when={c.agentMode() === mode.id}>
-                  <Iconify icon="lucide:check" size={14} />
-                </Show>
-              </button>
-            )}
-          </For>
+          <Show when={modeSkills().length > 0}>
+            <p class="px-2 py-1.5 font-medium text-ink-400">Mode</p>
+            {modeSkillList}
+          </Show>
           <div class="mt-1 border-t border-line pt-2">
             <p class="px-2 pb-1 font-medium text-ink-400">Additional skills</p>
-            <For
-              each={Object.entries(m.savedSkills()).filter(([, skill]) => skill.enabled)}
-              fallback={<p class="p-2 text-ink-500">Create custom skills in Settings.</p>}
-            >
-              {([name, skill]) => (
-                <button
-                  role="menuitemcheckbox"
-                  aria-checked={c.selectedSkills().includes(name)}
-                  onClick={() => {
-                    c.setSelectedSkills((prev) =>
-                      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
-                    );
-                    c.configureSession();
-                  }}
-                  class="w-full rounded-lg px-2 py-2 flex items-center gap-2 text-left hover:bg-elev cursor-pointer"
-                >
-                  <Iconify icon="lucide:puzzle" size={14} />
-                  <span class="flex-1">
-                    <span class="text-ink-200">{name}</span>
-                    <span class="block text-[11px] text-ink-500">{skill.description}</span>
-                  </span>
-                  <Show when={c.selectedSkills().includes(name)}>
-                    <Iconify icon="lucide:check" size={14} />
-                  </Show>
-                </button>
-              )}
-            </For>
+            {additionalSkillList}
           </div>
         </div>
       </Show>
@@ -355,26 +434,21 @@ export function ToolbarContext() {
   <button ref={c.modeBtn} data-menubtn aria-label="Agent mode and skills" aria-expanded={c.modeMenuOpen()}
     onClick={() => { const next = !c.modeMenuOpen(); ui.closeMenus(); c.setModeMenuOpen(next); }}
     class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs hover:bg-elev cursor-pointer">
-    <Iconify icon={c.agentMode() === "plan" ? "lucide:list-checks" : c.agentMode() === "learning" ? "lucide:graduation-cap" : c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer"} size={14} />
+    <Iconify icon={c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer"} size={14} />
     <span class="capitalize">{c.agentMode()}</span><Show when={c.selectedSkills().filter((name) => m.savedSkills()[name]?.enabled).length > 0}><span class="text-ink-500">+{c.selectedSkills().filter((name) => m.savedSkills()[name]?.enabled).length}</span></Show>
     <Iconify icon="lucide:chevron-down" size={11} />
   </button>
   <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} placement="top-start" width="20rem">
-    <p class="px-2 py-1.5 font-medium text-ink-400">Mode</p>
-    <For each={[{id:"build", label:"Build", description:"Implement and validate changes", icon:"lucide:hammer"}, {id:"plan", label:"Plan", description:"Explore and plan without editing files", icon:"lucide:list-checks"}, {id:"talk", label:"Talk", description:"Conversational agent with web research, no workspace access", icon:"lucide:messages-square"}, {id:"learning", label:"Learning", description:"Learn through hints and guiding questions", icon:"lucide:graduation-cap"}]}>{(mode) =>
-      <button role="menuitemradio" aria-checked={c.agentMode() === mode.id} onClick={() => { c.setAgentMode(mode.id); c.configureSession(); }} class="w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-elev cursor-pointer">
-        <Iconify icon={mode.icon} size={16} /><span class="flex-1"><span class="font-medium text-ink-100">{mode.label}</span><span class="block text-[11px] text-ink-500 mt-0.5">{mode.description}</span></span><Show when={c.agentMode() === mode.id}><Iconify icon="lucide:check" size={14} /></Show>
-      </button>
-    }</For>
+    <Show when={modeSkills().length > 0}>
+      <p class="px-2 py-1.5 font-medium text-ink-400">Mode</p>
+      {modeSkillList}
+    </Show>
     <div class="mt-1 border-t border-line pt-2"><p class="px-2 pb-1 font-medium text-ink-400">Additional skills</p>
-      <For each={Object.entries(m.savedSkills()).filter(([,skill]) => skill.enabled)} fallback={<p class="p-2 text-ink-500">Create custom skills in Settings.</p>}>{([name, skill]) =>
-        <button role="menuitemcheckbox" aria-checked={c.selectedSkills().includes(name)} onClick={() => { c.setSelectedSkills((prev) => prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]); c.configureSession(); }} class="w-full rounded-lg px-2 py-2 flex items-center gap-2 text-left hover:bg-elev cursor-pointer">
-          <Iconify icon="lucide:puzzle" size={14} /><span class="flex-1"><span class="text-ink-200">{name}</span><span class="block text-[11px] text-ink-500">{skill.description}</span></span><Show when={c.selectedSkills().includes(name)}><Iconify icon="lucide:check" size={14} /></Show>
-        </button>
-      }</For>
+      {additionalSkillList}
     </div>
   </FloatMenu>
 </div>
+<Show when={!approvalSelectorHidden()}>
 <div>
   <button ref={c.accessBtn} data-menubtn aria-label="Agent permissions" aria-expanded={c.accessMenuOpen()}
     onClick={() => { const next = !c.accessMenuOpen(); ui.closeMenus(); c.setAccessMenuOpen(next); }}
@@ -392,6 +466,7 @@ export function ToolbarContext() {
     }</For>
   </FloatMenu>
 </div>
+</Show>
 </Show>
 </>
   );

@@ -69,8 +69,8 @@ func TestMigrateV1ToV2SweepsBgFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applied) != 3 || applied[0] != 2 || applied[1] != 3 || applied[2] != 4 {
-		t.Fatalf("applied = %v, want [2 3 4]", applied)
+	if len(applied) != CurrentVersion-1 || applied[0] != 2 || applied[len(applied)-1] != CurrentVersion {
+		t.Fatalf("applied = %v, want the full chain 2..%d", applied, CurrentVersion)
 	}
 	for _, p := range []string{
 		"runners/j1.state.json", "runners/j1.disposition", "runners/j1.launch",
@@ -104,14 +104,14 @@ func TestMigrateV3WrapsLegacyToolResults(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Start at v2 so only v3 runs.
+	// Start at v2 so the chain resumes from v3.
 	os.WriteFile(filepath.Join(slotDir, "storage_version.json"), []byte(`{"version": 2}`), 0o600)
 	applied, err := Migrate(slotDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applied) != 2 || applied[0] != 3 || applied[1] != 4 {
-		t.Fatalf("applied = %v, want [3 4]", applied)
+	if len(applied) != CurrentVersion-2 || applied[0] != 3 || applied[len(applied)-1] != CurrentVersion {
+		t.Fatalf("applied = %v, want the chain 3..%d", applied, CurrentVersion)
 	}
 	got, err := os.ReadFile(sessPath)
 	if err != nil {
@@ -176,8 +176,8 @@ func TestMigrateLegacySlotWithoutVersionFileRunsChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(applied) != 3 || applied[0] != 2 || applied[1] != 3 || applied[2] != 4 {
-		t.Fatalf("legacy slot must run the chain from v1, applied = %v, want [2 3 4]", applied)
+	if len(applied) != CurrentVersion-1 || applied[0] != 2 || applied[len(applied)-1] != CurrentVersion {
+		t.Fatalf("legacy slot must run the chain from v1, applied = %v, want 2..%d", applied, CurrentVersion)
 	}
 	if v, _ := StoredVersion(slotDir); v != CurrentVersion {
 		t.Fatalf("stored version = %d, want %d", v, CurrentVersion)

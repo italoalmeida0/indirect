@@ -46,6 +46,10 @@ export function createSettings(opts: {
   const savedSkills = createMemo<Record<string, SkillConfig>>(
     () => configDoc()?.skills || {},
   );
+  /** Whether the daemon's OFFICIAL skill list has been received for this
+   * host (config mirror present). Before that, the mode picker renders its
+   * temporary 4-skill cache; afterwards the official list rules. */
+  const skillsLoaded = () => configDoc() != null;
   const settingsChanged = createMemo(
     () =>
       !!(
@@ -259,6 +263,7 @@ export function createSettings(opts: {
     daemonSettings,
     setDaemonSettings,
     savedSkills,
+    skillsLoaded,
     openSettings,
     cancelSettings,
     reloadSettings,

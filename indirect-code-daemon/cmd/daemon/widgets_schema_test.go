@@ -7,16 +7,32 @@ import (
 
 	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 	"llm-gateway/indirect-code-daemon/packages/core"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 func TestWidgetToolPayloadsPerMode(t *testing.T) {
-	for _, mode := range []string{"build", "plan", "learning", "talk"} {
-		allowSrc := mode != "talk"
+	// Which widget tools belong to which delivery context is decided by
+	// the BUILTIN SKILL FILES (their permissions entries grant the tools),
+	// not by hardcoded lists in Go: load them from builtin_skills/ and
+	// validate the schemas of exactly the tools each one grants.
+	for _, skillFile := range []string{"generative_ui_agentic.md", "generative_ui_talk.md"} {
+		data, err := builtinSkillsFS.ReadFile("builtin_skills/" + skillFile)
+		if err != nil {
+			t.Fatalf("%s: %v", skillFile, err)
+		}
+		sk, err := skills.Parse(skillFile, data)
+		if err != nil {
+			t.Fatalf("%s: %v", skillFile, err)
+		}
 		modeReg := core.Registry{}
-		for _, name := range modeTools[mode] {
+		for name, spec := range sk.Permissions {
+			if spec.Policy == skills.PolicyDeny {
+				continue
+			}
 			switch name {
 			case "widget_set":
-				modeReg[name] = &tools.WidgetSetTool{AllowSrcFile: allowSrc}
+				// Only the agentic delivery touches workspace files.
+				modeReg[name] = &tools.WidgetSetTool{AllowSrcFile: sk.Mode != "talk"}
 			case "widget_list":
 				modeReg[name] = &tools.WidgetListTool{}
 			case "widget_lint":
@@ -25,17 +41,19 @@ func TestWidgetToolPayloadsPerMode(t *testing.T) {
 				modeReg[name] = &tools.WidgetReadTool{}
 			case "widget_edit":
 				modeReg[name] = &tools.WidgetEditTool{}
+			default:
+				t.Errorf("%s grants non-widget tool %q", skillFile, name)
 			}
 		}
-		t.Logf("=== mode %-8s", mode)
-		for _, name := range modeTools[mode] {
+		t.Logf("=== %s (%s)", skillFile, sk.Mode)
+		for name := range modeReg {
 			tool, ok := modeReg[name]
 			if !ok {
 				continue
 			}
 			var schema map[string]any
 			if err := json.Unmarshal(tool.Schema(), &schema); err != nil {
-				t.Fatalf("%s/%s schema INVALID JSON: %v", mode, name, err)
+				t.Fatalf("%s/%s schema INVALID JSON: %v", skillFile, name, err)
 			}
 			props, _ := schema["properties"].(map[string]any)
 			req, _ := schema["required"].([]any)

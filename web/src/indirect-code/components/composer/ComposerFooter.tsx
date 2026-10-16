@@ -13,9 +13,11 @@ export function ComposerFooter() {
   const ui = useUI();
   return (
 <>
-<Show when={s.draftMode()}>
+<Show when={s.draftMode() && c.pendingMode() !== "talk"}>
   <div class="mt-3 flex justify-center" data-draft-project>
-    {/* Project picker — where the next conversation starts.
+    {/* Project picker — where the next conversation starts. Talk drafts
+        have no project (they are born in the default Home project), so
+        the picker hides while the pending mode is talk.
         Default: project of the newest conversation (daemon). */}
     <div>
       <button

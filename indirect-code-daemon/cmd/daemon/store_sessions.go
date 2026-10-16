@@ -18,6 +18,7 @@ import (
 	"llm-gateway/indirect-code-daemon/packages/core"
 	"llm-gateway/indirect-code-daemon/packages/filetrack"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // Session store: one JSONL file per session, one line per finished turn,
@@ -92,6 +93,11 @@ type metaLine struct {
 	// removed — dropping them here loses the widget store at the next
 	// restart (the "Widget not found" bug).
 	Widgets []tools.WidgetFile `json:"widgets,omitempty"`
+	// Skills are the session's skill selection (SessionRecord.Skills):
+	// priority order + active + usable override per skill name. Persisted
+	// on every meta rewrite like Widgets — the meta line is the durable
+	// copy once the WAL commits.
+	Skills map[string]skills.SessionSkill `json:"skills,omitempty"`
 }
 
 // validSessionID refuses traversal.
@@ -177,6 +183,7 @@ func splitRecord(rec *SessionRecord) ([]turnLine, metaLine) {
 		ApprovalDeadlineUnix: rec.ApprovalDeadlineUnix,
 		BgTasks: rec.BgTasks,
 		Widgets: rec.Widgets,
+		Skills:  rec.Skills,
 	}
 	// Group message indices by turn with the shared rule (turnGroups):
 	// zero-index messages attach to the FOLLOWING turn, trailing zeros to
@@ -368,6 +375,7 @@ func assembleRecord(lines []turnLine, meta metaLine) *SessionRecord {
 		Status: meta.Status, Pinned: meta.Pinned, Jailed: meta.Jailed,
 		CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt,
 		Attachments: meta.Attachments, Compaction: meta.Compaction,
+		Skills: meta.Skills,
 		TurnSeq: meta.TurnSeq, Queue: meta.Queue,
 		ApprovalDeadlineUnix: meta.ApprovalDeadlineUnix,
 		BgTasks: meta.BgTasks,

@@ -1,4 +1,4 @@
-import type { DaemonCommand } from "../daemon-protocol";
+import type { DaemonCommand, SkillChoiceWire } from "../daemon-protocol";
 import { createEffect, createMemo, createSignal, onCleanup, type Setter } from "solid-js";
 import { REASONING_LEVELS, SLASH_COMMANDS } from "../constants";
 import { formatEffort, normalizeEffort } from "../utils/format";
@@ -22,7 +22,7 @@ export function createComposer(opts: {
   getOptions: () => {
     effort: string;
     mode: string;
-    skills: string[];
+    skills: SkillChoiceWire[];
     access: string;
   };
   isSessionRunning: () => boolean;

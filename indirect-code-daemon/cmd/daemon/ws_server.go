@@ -13,6 +13,7 @@ import (
 
 	"llm-gateway/indirect-code-daemon/packages/core"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // wsServer is the v2 WS boundary: one read loop (JSON dispatch, NO global
@@ -537,6 +538,24 @@ func (s *wsServer) handleRaw(raw []byte) {
 		}
 		// The host half (rememberSelection — read back via `pull config`)
 		// runs on the host lane at admission time (V2-006, see dispatch).
+
+	case "set_skills", "update_skills":
+		// Granular skill edit: per-skill set/unset of active + usable plus a
+		// full reorder. The daemon answers with a complete skills snapshot
+		// (session_data) and never validates skill/mode compatibility.
+		var req struct {
+			SessionID string                         `json:"sessionId"`
+			Set       map[string]skills.SessionSkill `json:"set"`
+			Unset     []string                       `json:"unset"`
+			Order     []string                       `json:"order"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		if res := s.sessions.route(req.SessionID, false); res.Error == "" {
+			select {
+			case res.Inbox <- Envelope{Payload: skillsUpdateMsg{Set: req.Set, Unset: req.Unset, Order: req.Order}}:
+			case <-time.After(replyTimeout):
+			}
+		}
 
 	case "queue_add":
 		var req struct {
@@ -1076,7 +1095,7 @@ func (s *wsServer) onPull(id json.RawMessage, collection string) {
 		reply([]map[string]any{{
 			"id": "daemon", "revision": configRevision(cfg),
 			"settings": settings, "lastSelection": last,
-			"mcpServers": map[string]any{}, "skills": map[string]any{}, "name": name,
+			"mcpServers": map[string]any{}, "skills": skillsListing(), "name": name,
 		}}, "")
 	default:
 		reply(nil, "unknown collection")

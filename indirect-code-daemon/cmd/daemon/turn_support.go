@@ -28,16 +28,14 @@ func estimateContext(agent *core.Agent, model provider.Model) *SessionContext {
 // approval must not let a stale approval execute a tool the active mode does
 // not have. Messages stay generic — they never describe other modes.
 func modeToolRestriction(mode, tool string) string {
-	mode = normalizedOptions(SessionOptions{Mode: mode}).Mode
+	mode = canonicalSessionMode(mode)
 	// "patch" is an alias of "edit" (Registry.Get resolves it), so it follows
-	// edit's allowlist entry instead of being treated as a foreign tool.
+	// edit's ceiling instead of being treated as a foreign tool.
 	if tool == "patch" {
 		tool = "edit"
 	}
-	for _, name := range modeTools[mode] {
-		if name == tool {
-			return ""
-		}
+	if modeAllows(mode, tool) {
+		return ""
 	}
 	if tool == "finish_entire_request" {
 		return tool + " is not the completion signal of the current mode."

@@ -33,7 +33,14 @@ export interface RcSession {
    * sessions that never ran a turn — callers fall back to updatedAt. */
   lastTurnStartedAt?: number;
   todosOpen?: boolean;
-  options?: { effort: string; mode: string; skills: string[]; access: string };
+  options?: { effort: string; mode: string; skills: { name: string; usable?: string }[]; access: string };
+  /** Session skill selection (daemon SessionRecord.Skills, complete
+   * snapshot): name -> {priority, active, usable} plus the daemon-owned
+   * turn markers (once/inContext/byAI). */
+  skills?: Record<string, { priority: number; active: boolean; usable: string; once?: boolean; inContext?: boolean; byAI?: boolean }>;
+  /** Resolved approval mode ("ask" | "yolo"): "yolo" hides the YOLO/ASK
+   * selector in the UI. */
+  approvalMode?: string;
 }
 
 /** One mirrored project (host folder grouping conversations). */
@@ -124,7 +131,9 @@ interface RawSessionRow {
   updatedAt?: number;
   lastTurnStartedAt?: number;
   todosOpen?: boolean;
-  options?: { effort?: string; mode?: string; skills?: string[]; access?: string };
+  options?: { effort?: string; mode?: string; skills?: { name: string; usable?: string }[]; access?: string };
+  skills?: Record<string, { priority?: number; active?: boolean; usable?: string }>;
+  approvalMode?: string;
 }
 
 /** One pulled session row mapped to the mirror schema. Exported as a test
@@ -148,7 +157,24 @@ export function normalizeSession(r: RawSessionRow, hostId: string): RcSession {
       skills: Array.isArray(r.options.skills) ? r.options.skills : [],
       access: r.options.access || "full",
     } : undefined,
+    skills: normalizeSessionSkills(r.skills),
+    approvalMode: r.approvalMode === "yolo" ? "yolo" : r.approvalMode === "ask" ? "ask" : undefined,
   };
+}
+
+/** Normalizes the session skill map (raw wire entries may omit fields). */
+function normalizeSessionSkills(raw: any): Record<string, { priority: number; active: boolean; usable: string }> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const out: Record<string, { priority: number; active: boolean; usable: string }> = {};
+  for (const [name, entry] of Object.entries<any>(raw)) {
+    if (!entry || typeof entry !== "object") continue;
+    out[name] = {
+      priority: typeof entry.priority === "number" ? entry.priority : 0,
+      active: !!entry.active,
+      usable: typeof entry.usable === "string" ? entry.usable : "inherit",
+    };
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**

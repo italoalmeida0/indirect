@@ -1,3 +1,15 @@
+---
+name: generative_ui
+description: Interactive generative-UI widgets (charts, calculators, games) design system.
+usable: never
+tools:
+  permissions:
+    widget_set: yolo
+    widget_list: yolo
+    widget_lint: yolo
+    widget_read: yolo
+    widget_edit: yolo
+---
 # Interactive widgets (generative_ui)
 
 Render interactive widgets (charts, calculators, comparison tables, forms,

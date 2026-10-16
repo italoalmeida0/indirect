@@ -6,6 +6,7 @@ import (
 	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 	"llm-gateway/indirect-code-daemon/packages/filetrack"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 // Session actor message protocol.
@@ -306,6 +307,10 @@ type workerRefreshResult struct {
 	model   string
 	options SessionOptions
 	context []provider.Message
+	// skills is the CURRENT session skill map (complete snapshot): the
+	// worker re-resolves the skill policy and rebuilds the ephemeral
+	// <skill> prefix from it before every provider request.
+	skills map[string]skills.SessionSkill
 }
 
 // workerApprovalReqMsg: worker blocked in approveTool; actor moves to
@@ -391,6 +396,21 @@ type todosOpenMsg struct {
 type configureMsg struct {
 	Model   string
 	Options SessionOptions
+}
+
+// skillsUpdateMsg applies a granular frontend skill edit: per-skill
+// set/unset of active + usable, plus a full reorder for drag-to-sort.
+// The daemon answers with a complete skills snapshot; there is no
+// compatibility validation (the frontend owns usable-lock validation).
+type skillsUpdateMsg struct {
+	gen int
+	// Set carries the per-skill edits (name is the map key).
+	Set map[string]skills.SessionSkill
+	// Unset names skills to remove from the session map entirely.
+	Unset []string
+	// Order, when non-empty, renumbers Priority by this name order
+	// (unknown names keep their relative position at the tail).
+	Order []string
 }
 
 // queueSendNowMsg moves a queued item to the head; the finalizer path

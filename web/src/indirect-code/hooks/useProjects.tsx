@@ -34,6 +34,9 @@ export function createProjects(opts: {
   const newestSessionProjectId = createMemo(() => {
     let best: SessionSummary | null = null;
     for (const s of opts.sessions()) {
+      // Talk sessions live in Home by construction; they must not pull
+      // the default project for the next agentic conversation.
+      if (isTalkSession(s)) continue;
       if (!best || sessionRecency(s) > sessionRecency(best)) best = s;
     }
     if (!best) return "";
@@ -205,11 +208,32 @@ export function createProjects(opts: {
   function sessionsOfProject(projectId: string) {
     return opts.sessions().filter((s) => projectForDirectory(s.cwd, opts.projects())?.id === projectId);
   }
+  // Talk conversations live in their own sidebar view (they sit in the
+  // Home project on disk, but are not project work): the Projects lists
+  // exclude them, the Talk view lists exactly them, flat by recency.
+  function isTalkSession(s: SessionSummary) {
+    return (s.options?.mode || "").toLowerCase() === "talk";
+  }
   function projectSessions(projectId: string) {
-    return sortedSessions(sessionsOfProject(projectId));
+    return sortedSessions(sessionsOfProject(projectId).filter((s) => !isTalkSession(s)));
   }
   function looseSessions() {
-    return sortedSessions(opts.sessions().filter((s) => !projectForDirectory(s.cwd, opts.projects())));
+    return sortedSessions(opts.sessions().filter((s) => !isTalkSession(s) && !projectForDirectory(s.cwd, opts.projects())));
+  }
+  function talkSessions() {
+    return sortedSessions(opts.sessions().filter(isTalkSession));
+  }
+
+  // Sidebar list view: project tree vs. flat talk list. Persisted so a
+  // reload lands back on the view the user left open.
+  const [sidebarView, setSidebarViewSignal] = createSignal<"projects" | "talk">(
+    (() => {
+      try { return localStorage.getItem("llmgw-rc-sidebar-view") === "talk" ? "talk" : "projects"; } catch { return "projects"; }
+    })(),
+  );
+  function setSidebarView(v: "projects" | "talk") {
+    setSidebarViewSignal(v);
+    try { localStorage.setItem("llmgw-rc-sidebar-view", v); } catch {}
   }
 
   // Filter + daemon search (history).
@@ -335,7 +359,8 @@ export function createProjects(opts: {
     isFolderRequest, isProjectCreation,
     isProjectExpanded, toggleProjectExpanded,
     sortedSessions, visibleSessions, sessionListToggle,
-    sessionsOfProject, projectSessions, looseSessions,
+    sessionsOfProject, projectSessions, looseSessions, talkSessions, isTalkSession,
+    sidebarView, setSidebarView,
     sessionFilter, setSessionFilter, matchQuery,
     searchResults, setSearchResults, queueDaemonSearch, noteSearchResults,
     renamingId, setRenamingId, renameText, setRenameText, submitRename,

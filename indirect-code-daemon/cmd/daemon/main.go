@@ -210,6 +210,12 @@ func daemonMain() {
 		}
 	}
 
+	// Builtin skills (builtin_skills/*.md) are embedded in the binary and
+	// merged in RAM at load: they never touch the machine's skills
+	// directory, and their names are reserved — a user skill with the
+	// same name is ignored (builtins cannot be overridden).
+	skillRegistry.initFrom(dataDir)
+
 	// Crash debris: sweep stale tmp files; boot() in the supervisor flips
 	// stale running sessions back to idle (WAL sessions resume on route).
 	st := newDiskStore(dataDir)

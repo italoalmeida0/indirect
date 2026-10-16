@@ -65,6 +65,16 @@ export interface ComposerCtxValue extends Composer {
   setAgentMode: SessionOptions["setAgentMode"];
   selectedSkills: SessionOptions["selectedSkills"];
   setSelectedSkills: SessionOptions["setSelectedSkills"];
+  /** Replaces the session's active-skill set (persists via update_skills). */
+  syncSkills: SessionOptions["syncSkills"];
+  /** Mode the next create/configure will carry (locked for an existing
+   * session, derived from the primary skill in draft). */
+  pendingMode: SessionOptions["pendingMode"];
+  /** Per-skill session usable override + cycling (ask/yolo/deny/inherit). */
+  skillUsables: SessionOptions["skillUsables"];
+  cycleSkillUsable: SessionOptions["cycleSkillUsable"];
+  /** Resolved approval mode ("ask" | "yolo"); yolo hides the YOLO/ASK selector. */
+  approvalMode: SessionOptions["approvalMode"];
   yoloMode: SessionOptions["yoloMode"];
   setYoloMode: SessionOptions["setYoloMode"];
   modeMenuOpen: SessionOptions["modeMenuOpen"];

@@ -14,6 +14,7 @@ import (
 	"llm-gateway/indirect-code-daemon/packages/core"
 	"llm-gateway/indirect-code-daemon/packages/filetrack"
 	"llm-gateway/indirect-code-daemon/packages/provider"
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 var _ = core.StripLeadingSystemPrompt
@@ -312,7 +313,7 @@ func (a *sessionActor) handleData(env Envelope) {
 				}
 			}
 			select {
-			case m.Reply <- workerRefreshResult{model: a.rec.Model, options: normalizedOptions(a.rec.Options), context: a.pendingContext}:
+			case m.Reply <- workerRefreshResult{model: a.rec.Model, options: normalizedOptions(a.rec.Options), context: a.pendingContext, skills: cloneSkillsMap(a.rec.Skills)}:
 				a.pendingContext = nil
 			default:
 				// Worker stopped waiting (cancelled/timeout): drop.
@@ -344,6 +345,10 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.onBgTaskList(m)
 	case widgetStoreMsg:
 		a.onWidgetStore(m)
+	case skillActivateMsg:
+		a.onSkillActivate(m)
+	case skillsUpdateMsg:
+		a.onSkillsUpdate(m)
 	case turnBalloonMsg:
 		// Stashed until finishTurn appends it with the final message count.
 		// Gen gate (B1): a zombie worker's balloon must not anchor to a new
@@ -393,6 +398,10 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.saveOrAppend(walEvent{Type: walTypeMeta})
 	case configureMsg:
 		a.touch()
+		// The session MODE is the wire's mode (the frontend re-derives it
+		// from the primary skill and re-sends it here, so mode switches
+		// are live); normalizedOptions below canonicalizes it (invalid
+		// falls back to "talk"). The daemon never derives it.
 		if m.Model != "" {
 			a.rec.Model = m.Model
 			a.saveOrAppend(walEvent{Type: walTypeModel, Model: m.Model})
@@ -823,6 +832,14 @@ func (a *sessionActor) finishTurn(ok bool) {
 	a.clearPending()
 	a.waitOp, a.waitUntil = "", 0 // the turn's waits end with the turn
 	a.live = nil                  // the turn's overlay ends with the turn
+	// Turn-end skill rules (before any index math): once skills deactivate,
+	// the daemon-owned turn markers reset, and the turn's use_skill
+	// artifacts + skill notices leave the transcript BEFORE the commit
+	// (skill bodies live only in the ephemeral <skill> prefix; nothing
+	// activation-related is durable).
+	a.endTurnSkills()
+	a.pendingContext = nil // unconsumed notices are turn-scoped: drop them
+	a.rec.Messages = stripSkillArtifacts(a.rec.Messages, a.rec.TurnSeq)
 	if a.cancel != nil {
 		a.cancel = nil
 	}
@@ -1458,9 +1475,17 @@ func seededUserMessage(rec *SessionRecord, text string, ids []string) provider.M
 	for _, image := range images {
 		content = append(content, image)
 	}
+	meta := attachmentMessageMeta(text, ids, rec.Attachments)
+	if meta == nil {
+		meta = map[string]string{}
+	}
+	// The seeded row IS the current turn's user row (seamless resend runs
+	// Continue on it): the ephemeral <skill> prefix attaches to it at
+	// request time and is never persisted.
+	markTurnPrompt(meta)
 	return provider.Message{
 		ID: provider.NewMessageID(), Role: provider.RoleUser, Time: time.Now(),
-		Content: content, Meta: attachmentMessageMeta(text, ids, rec.Attachments),
+		Content: content, Meta: meta,
 	}
 }
 
@@ -1984,9 +2009,67 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 		m.reply <- approvalOutcome{reason: reason}
 		return
 	}
-	if options.Access == "full" || m.tool == "question" || m.tool == "todo" || m.tool == "finish_entire_request" {
+	// Skill policy gate (defense in depth — the registry already hides
+	// denied tools): arg-key deny refuses the call, and a per-tool "ask"
+	// forces human approval even under the session YOLO toggle while a
+	// per-tool "yolo" runs free even in ask mode.
+	eff, err := skillRegistry.resolveSession(a.rec.Skills, options.Mode)
+	if err != nil {
+		m.reply <- approvalOutcome{reason: "skill policy: " + err.Error()}
+		return
+	}
+	if reason := skillsArgRestriction(eff, m.tool, m.args); reason != "" {
+		m.reply <- approvalOutcome{reason: reason}
+		return
+	}
+	// The agentic mode's own machinery (summary + completion) is ALWAYS
+	// active and ALWAYS yolo — it is part of the mode, not governed by
+	// skill rules: no skill policy may ask, deny or slow it down.
+	if m.tool == "summary" || m.tool == completionToolName {
 		m.reply <- approvalOutcome{approved: true}
 		return
+	}
+	// use_skill has its OWN rules (the usability table of the target
+	// skill) and is never governed by skill permission entries. usable
+	// "ask" forces human approval even under session YOLO; "yolo" runs
+	// free even in ask mode; "deny"/"never" refuse.
+	forceHuman := false
+	if m.tool == "use_skill" {
+		switch verdict, reason := useSkillUsableGate(a.rec.Skills, m.args); verdict {
+		case "approve":
+			m.reply <- approvalOutcome{approved: true}
+			return
+		case "refuse":
+			m.reply <- approvalOutcome{reason: reason}
+			return
+		case "ask":
+			forceHuman = true
+		default: // inherit: the session's own YOLO/ASK toggle decides
+			if options.Access == "full" {
+				m.reply <- approvalOutcome{approved: true}
+				return
+			}
+			forceHuman = true
+		}
+	}
+	if !forceHuman {
+		// Skill policy chain (arg -> tool -> inherit list -> earlier
+		// skills -> deny). A resolved "ask" shows human approval unless
+		// the session's own YOLO toggle or the main skill's approvalMode yolo
+		// auto-approves it.
+		switch skillsApproval(eff, m.tool, m.args) {
+		case skills.PolicyYolo:
+			m.reply <- approvalOutcome{approved: true}
+			return
+		case skills.PolicyDeny:
+			m.reply <- approvalOutcome{reason: "tool denied by the active skill policy"}
+			return
+		default: // ask
+			if options.Access == "full" || m.tool == "question" || m.tool == "todo" {
+				m.reply <- approvalOutcome{approved: true}
+				return
+			}
+		}
 	}
 	// The browser returns callId; use that identity for both sides.
 	if m.callID != "" {
