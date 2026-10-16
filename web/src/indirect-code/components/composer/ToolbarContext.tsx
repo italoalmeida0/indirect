@@ -5,7 +5,7 @@ import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { FloatMenu } from "../FloatMenu";
 import { MenuItem } from "../MenuItem";
 import { formatEffort } from "../../utils/format";
-import { baseMode, effectiveModeSkills, isModeSkillName as isModeSkill } from "../../utils/modeSkills";
+import { baseMode, effectiveModeSkills, isModeSkillName as isModeSkill, originalUsable } from "../../utils/modeSkills";
 
 /** The 4 mode skills form the single-choice primary selector. They render
  * from a temporary frontend cache until the daemon's official skill list
@@ -72,7 +72,7 @@ export function ToolbarContext() {
   function additionalSkills(): [string, any][] {
     const sel = c.selectedSkills().filter((n) => !isModeSkill(n));
     const rest = Object.entries(m.savedSkills())
-      .filter(([n, skill]) => !isModeSkill(n) && skill.enabled && (skill.usable ?? "inherit") !== "never")
+      .filter(([n, skill]) => !isModeSkill(n) && skill.enabled && originalUsable(skill.usable) !== "never")
       .map(([n]) => n)
       .filter((n) => !sel.includes(n))
       .sort();
@@ -139,15 +139,15 @@ export function ToolbarContext() {
                   <Iconify icon="lucide:check" size={14} />
                 </Show>
               </button>
-              <Show when={(skill?.usable ?? "inherit") === "ask" || (skill?.usable ?? "inherit") === "inherit"}>
+              <Show when={originalUsable(skill?.usable) === "ask"}>
                 <button aria-label={`Change activation policy for ${name}`} onClick={(e) => { e.stopPropagation(); c.cycleSkillUsable(name, skill?.usable); }} class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-300 hover:bg-elev cursor-pointer">
                   {c.skillUsables()[name] ?? "inherit"}
                 </button>
               </Show>
-              <Show when={skill?.usable === "yolo"}>
+              <Show when={originalUsable(skill?.usable) === "yolo"}>
                 <span class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-500">yolo</span>
               </Show>
-              <Show when={skill?.usable === "deny"}>
+              <Show when={originalUsable(skill?.usable) === "deny"}>
                 <span class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-500">hidden</span>
               </Show>
             </li>

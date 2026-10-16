@@ -167,18 +167,22 @@ func (a *sessionActor) endTurnSkills() bool {
 }
 
 // stripSkillArtifacts removes the CURRENT turn's use_skill tool
-// calls/results from the message list before the turn commits. The skill
-// bodies live in the ephemeral <skill> prefix of the turns where the skill
-// is active, so the raw activation artifacts must never join the persisted
-// context (they would duplicate the body forever). Only messages of turn
-// turnIdx are touched: older committed turns may carry their own
-// pre-folded placeholders and stay as they are.
+// calls/results — and the ephemeral skill-deactivation notices — from the
+// message list before the turn commits. The skill bodies live in the
+// ephemeral <skill> prefix of the turns where the skill is active, so the
+// raw activation artifacts must never join the persisted context (they
+// would duplicate the body forever); notices are request-only by
+// contract. Only messages of turn turnIdx are touched: older committed
+// turns may carry their own pre-folded placeholders and stay as they are.
 func stripSkillArtifacts(msgs []provider.Message, turnIdx int) []provider.Message {
 	out := make([]provider.Message, 0, len(msgs))
 	for _, msg := range msgs {
 		if msg.TurnIndex != turnIdx {
 			out = append(out, msg)
 			continue
+		}
+		if _, isNotice := msg.Meta[skillNoticeMetaKey]; isNotice {
+			continue // ephemeral notice: never committed
 		}
 		content := make([]provider.Content, 0, len(msg.Content))
 		for _, c := range msg.Content {
@@ -240,11 +244,15 @@ func sortSkillsByNamePriority(m map[string]skills.SessionSkill, names []string) 
 	}
 }
 
-// useSkillUsableGate applies the usability table to a use_skill call:
-// "deny" refuses, "ask" forces human approval (even under session YOLO),
-// "yolo" approves free, "inherit" leaves the decision to the session's
-// approval mode (returns "", ""). Unknown skills leave the decision to the
-// tool itself (its error surface is better than a generic refusal).
+// useSkillUsableGate applies the usability table to a use_skill call
+// (file original + session override, via UsableValue): "deny"/"never"
+// refuse, "yolo" approves free, "ask" forces human approval. The session
+// approvalMode NEVER influences this gate: there is no effective
+// "inherit" left to resolve — a session "inherit" (or missing usable)
+// simply means the file original applies, and a file without a usable
+// key has deny as its original. Unknown skills return "" and leave the
+// decision to the tool itself (its error surface is better than a
+// generic refusal).
 func useSkillUsableGate(active map[string]skills.SessionSkill, args json.RawMessage) (verdict string, reason string) {
 	var parsed struct {
 		Name string `json:"name"`
@@ -267,6 +275,7 @@ func useSkillUsableGate(active map[string]skills.SessionSkill, args json.RawMess
 		return "ask", ""
 	case "yolo":
 		return "approve", ""
+	default: // unreachable: UsableValue only returns the four originals
+		return "refuse", "skill is not available"
 	}
-	return "", ""
 }

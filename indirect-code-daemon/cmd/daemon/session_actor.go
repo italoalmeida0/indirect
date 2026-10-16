@@ -2030,9 +2030,10 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 		return
 	}
 	// use_skill has its OWN rules (the usability table of the target
-	// skill) and is never governed by skill permission entries. usable
-	// "ask" forces human approval even under session YOLO; "yolo" runs
-	// free even in ask mode; "deny"/"never" refuse.
+	// skill) and is never governed by skill permission entries or by the
+	// session approvalMode: usable "ask" forces human approval even under
+	// session YOLO; "yolo" runs free even in ask mode; "deny"/"never"
+	// (including a skill.md without a usable key) refuse.
 	forceHuman := false
 	if m.tool == "use_skill" {
 		switch verdict, reason := useSkillUsableGate(a.rec.Skills, m.args); verdict {
@@ -2044,7 +2045,7 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 			return
 		case "ask":
 			forceHuman = true
-		default: // inherit: the session's own YOLO/ASK toggle decides
+		default: // unknown skill: let the tool's own error surface decide
 			if options.Access == "full" {
 				m.reply <- approvalOutcome{approved: true}
 				return

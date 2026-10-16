@@ -45,12 +45,12 @@ export function effectiveModeSkills(
   const out: ModeSkillSpec[] = [];
   for (const cached of MODE_SKILL_CACHE) {
     const real = official?.[cached.name];
-    if (!real || (real.usable ?? "inherit") === "never") continue;
+    if (!real || originalUsable(real.usable) === "never") continue;
     out.push({
       ...cached,
       description: real.description || cached.description,
       mode: real.mode || cached.mode,
-      usable: real.usable,
+      usable: originalUsable(real.usable),
       approvalMode: real.approvalMode,
     });
   }
@@ -88,11 +88,19 @@ export function deriveSessionMode(
   return first ? baseMode(modeOf(first)) : "talk";
 }
 
+/** The skill file's ORIGINAL usable, canonicalized: ask/yolo/deny/never.
+ * There is no file-level "inherit" — a skill.md without the key (or a
+ * legacy catalog value) resolves to "deny". */
+export function originalUsable(usable: string | undefined): string {
+  return usable === "ask" || usable === "yolo" || usable === "never" ? usable : "deny";
+}
+
 /** True when a session usable override must ride the wire: only when it
- * differs from the skill file's original. "inherit"/unset means "follow
- * the original", so it never differs and the key is omitted (the daemon
- * inherits the file default from the missing key). */
-export function usableDiffers(sessionUsable: string | undefined, originalUsable: string | undefined): boolean {
+ * differs from the skill file's original. At session level,
+ * "inherit"/unset means "follow the original" (no override), so it never
+ * differs and the key is omitted; the daemon then applies the file
+ * original (deny when the file itself omits the key). */
+export function usableDiffers(sessionUsable: string | undefined, original: string | undefined): boolean {
   if (!sessionUsable || sessionUsable === "inherit") return false;
-  return sessionUsable !== (originalUsable || "inherit");
+  return sessionUsable !== originalUsable(original);
 }

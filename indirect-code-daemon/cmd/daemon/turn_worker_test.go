@@ -20,7 +20,7 @@ import (
 func TestWorkerApprovalViaActor(t *testing.T) {
 	dir := t.TempDir()
 	store := newDiskStore(dir)
-	rec := &SessionRecord{ID: "w2", CWD: "/tmp", Title: "t", Model: "m", Status: "idle", Options: SessionOptions{Access: "ask"}, CreatedAt: 1, UpdatedAt: 1}
+	rec := &SessionRecord{ID: "w2", CWD: "/tmp", Title: "t", Model: "m", Status: "idle", Options: SessionOptions{Mode: "build", Access: "ask"}, Skills: installGrantingTestSkills(t), CreatedAt: 1, UpdatedAt: 1}
 	act := newSessionActor("w2", rec, store, nil, nil, nil)
 	act.supCfg = new(configCell)
 	act.supCfg.store(&DaemonConfig{GatewayURL: "http://127.0.0.1:1", HostID: "h"})

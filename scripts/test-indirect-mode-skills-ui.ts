@@ -102,6 +102,7 @@ try {
     plan: { name: "plan", description: "p", body: "", enabled: true, usable: "never", mode: "agentic" },
     talk: { name: "talk", description: "Daemon Talk desc", body: "", enabled: true, usable: "deny", mode: "talk", approvalMode: "yolo" },
     custom: { name: "custom", description: "Custom skill", body: "", enabled: true, usable: "ask", mode: "agentic" },
+    plain: { name: "plain", description: "No usable key", body: "", enabled: true, mode: "agentic" },
   }); a.setLoaded(true); }`);
   await page.getByText("Talk about cats").click();
   await page.waitForFunction(() => !(window as any).modeSkillsUI.draftMode());
@@ -110,6 +111,9 @@ try {
   assert.equal(talkRadios.length, 1, `talk session picker must only offer talk, got ${JSON.stringify(talkRadios)}`);
   assert(talkRadios[0].includes("Daemon Talk desc"), "official description must replace the cache one");
   assert.equal(await page.getByRole("button", { name: "Agent permissions" }).count(), 0, "selector must hide: talk approvalMode is yolo");
+  // A skill.md WITHOUT the usable key has deny as its original: locked
+  // hidden badge, no usable cycle button (session inherit != file value).
+  assert.equal(await page.getByRole("button", { name: "Change activation policy for plain" }).count(), 0, "no-usable-key skill must not offer a usable cycle (original = deny)");
   // Additional skill of the OTHER mode stays available, but the wire mode
   // never leaves talk; usable omitted vs differing rules still apply.
   await page.getByRole("menuitemcheckbox").filter({ hasText: "custom" }).click();

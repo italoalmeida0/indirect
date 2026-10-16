@@ -65,7 +65,7 @@ func TestSkillsDescriptionListsAvailableSkills(t *testing.T) {
 	prev := skillRegistry
 	defer func() { skillRegistry = prev }()
 	skillRegistry = &skillStore{list: map[string]skills.Skill{
-		"plan":   {Name: "plan", Description: "planning", Mode: "agentic"},
+		"plan":   {Name: "plan", Description: "planning", Mode: "agentic", Usable: "ask"},
 		"secret": {Name: "secret", Description: "hidden", Mode: "agentic", Usable: "deny"},
 		"talky":  {Name: "talky", Description: "chat", Mode: "talk"},
 	}}

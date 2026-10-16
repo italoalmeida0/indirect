@@ -130,12 +130,12 @@ func (s *skillStore) resolveSession(active map[string]skills.SessionSkill, mode 
 // normalizeSessionSkills relaxes one set of session skill entries into a
 // persisted copy. Ingestion is PASSIVE — the frontend owns validation:
 // unknown names drop silently (a deleted skill never breaks a session), a
-// missing active means false, a missing usable means inherit (stored "",
-// expanded from the skill file's default at resolve time), a present
-// usable is stored VERBATIM (never validated or second-guessed here),
-// and daemon-owned markers (once/inContext/byAI) are never accepted from
-// the wire. Base-only skills (file default usable "never") cannot be
-// direct selections and drop.
+// missing active means false, a missing usable means no session override
+// (stored "", resolving to the skill file's original at resolve time), a
+// present usable is stored VERBATIM (never validated or second-guessed
+// here), and daemon-owned markers (once/inContext/byAI) are never
+// accepted from the wire. Base-only skills (file original usable "never")
+// cannot be direct selections and drop.
 func (s *skillStore) normalizeSessionSkills(in map[string]skills.SessionSkill) map[string]skills.SessionSkill {
 	store := s.all()
 	out := make(map[string]skills.SessionSkill, len(in))
@@ -186,8 +186,7 @@ func (s *skillStore) skillsDescription(mode string, active map[string]skills.Ses
 		}
 		usable, err := skills.UsableValue(sk, active[name].Usable)
 		if err != nil || usable == "deny" || usable == "never" {
-			continue // AI cannot activate it directly (inherit resolves to
-			// ask/yolo at use time via the session approval mode)
+			continue // AI cannot activate it directly
 		}
 		entries = append(entries, entry{name, sk.Description})
 	}
@@ -211,9 +210,13 @@ func skillsListing() map[string]any {
 	list := skillRegistry.all()
 	out := make(map[string]any, len(list))
 	for name, sk := range list {
-		usable := sk.Usable
-		if usable == "" {
-			usable = "inherit"
+		// The official list carries the file ORIGINAL: no usable key (or a
+		// legacy direct value) resolves through UsableValue, whose missing
+		// key fallback is deny.
+		usable, err := skills.UsableValue(sk, "")
+		if err != nil {
+			trace("skills.load.error", map[string]any{"err": err.Error()})
+			continue
 		}
 		if usable == "never" {
 			continue // base-only: the user must never see it

@@ -9,18 +9,19 @@ import (
 // record under `skills` (keyed by skill name).
 //
 // Wire rules (create/update): the client sends only what CHANGED. A missing
-// active key means false; a missing usable key means "inherit" (the skill
-// file's default); priority is daemon-assigned (create order / reorder)
-// and never accepted as a per-skill edit. once, inContext and byAI are
-// daemon-owned markers.
+// active key means false; a missing usable key (or explicit "inherit")
+// means the session carries no override and the skill file's original
+// applies; priority is daemon-assigned (create order / reorder) and never
+// accepted as a per-skill edit. once, inContext and byAI are daemon-owned
+// markers.
 type SessionSkill struct {
 	Priority int  `json:"priority,omitempty"`
 	Active   bool `json:"active,omitempty"`
-	// Usable is the session's activation policy for this skill. It starts
-	// from the skill file's default and can only move within the locks of
-	// the usability table: a "deny" default is locked to deny, a "yolo"
-	// default is locked to yolo, and an "ask" default may be set to
-	// ask, yolo or deny.
+	// Usable is the session's OVERRIDE of the skill file's original
+	// activation policy. "" and "inherit" both mean no override (the
+	// original applies). An explicit value still moves only within the
+	// locks of the usability table: deny/never/yolo originals are locked,
+	// and an ask original may be pinned to ask, yolo or deny.
 	Usable string `json:"usable,omitempty"`
 	// Once marks an AI activation with once=true: deactivated at turn end.
 	// A user (re)activation of the skill always clears the flag.
@@ -149,10 +150,10 @@ func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string
 	}
 
 	// Model-facing listing: every skill the AI may activate with use_skill
-	// — effective usable ask/yolo/inherit only (deny/never stay hidden —
-	// inherit resolves to ask/yolo at use time via the session approval
-	// mode), across the whole store (use_skill activates skills that are
-	// not active yet). Skills pinned to another mode never show.
+	// — effective usable (file original + session override) ask/yolo only;
+	// deny/never stay hidden. Across the whole store (use_skill activates
+	// skills that are not active yet). Skills pinned to another mode
+	// never show.
 	eff.Delivered = map[string]bool{}
 	for name, sk := range store {
 		usable, err := UsableValue(sk, active[name].Usable)
@@ -233,42 +234,41 @@ func (eff Effective) ArgDecision(tool, argKey string) Policy {
 }
 
 // UsableValue resolves a session's usable override for one skill against
-// the skill file's default, enforcing the locks of the usability table.
+// the skill file's ORIGINAL, enforcing the locks of the usability table.
 //
-// The default (file omits `usable`, or says "inherit") is "inherit": the
-// skill follows the session's resolved approvalMode at activation time
-// (approvalMode yolo -> free use, ask -> human approval). Locked values:
+// The file original is ask, yolo, deny or never — there is no file-level
+// "inherit": when skill.md omits `usable` the original is deny. At session
+// level, an empty override and an explicit "inherit" both mean NO
+// override: the original applies untouched. Locked originals win over any
+// explicit session value:
 //
-//	default deny    -> locked "deny" (hidden from the AI; the user may
-//	                   still activate it from the frontend)
-//	default never   -> locked "never" (base-only: invisible to the AI AND
+//	original deny  (incl. key omitted) -> locked "deny" (hidden from the
+//	                   AI; the user may still activate it from the frontend)
+//	original never -> locked "never" (base-only: invisible to the AI AND
 //	                   to the user's frontend; only `inherit:` deps use it)
-//	default yolo    -> locked "yolo"
-//	default ask     -> "ask" | "yolo" | "deny"
-//	default inherit -> "inherit" | "ask" | "yolo" | "deny"
+//	original yolo  -> locked "yolo"
+//	original ask   -> "ask" | "yolo" | "deny"
 //
-// An empty override falls back to the skill default. "inherit" as a session
-// override means "reset to the skill default" — the client round-trips
-// selection entries as inherit before the user pins ask/yolo/deny on them.
-// Invalid values are reported as errors.
+// The result is therefore never "inherit": it is the effective activation
+// policy. Invalid file or session values are reported as errors.
 func UsableValue(sk Skill, override string) (string, error) {
 	base := sk.Usable
 	if base == "" {
-		base = "inherit"
+		base = "deny"
 	}
 	switch base {
 	case "deny", "never", "yolo":
 		// Locked: any override is ignored (the lock wins).
 		return base, nil
-	}
-	if override == "" {
-		return base, nil
+	case "ask":
+	default:
+		return "", fmt.Errorf("skill usable must be ask, yolo, deny or never, got %q", sk.Usable)
 	}
 	switch override {
+	case "", "inherit":
+		return base, nil
 	case "ask", "yolo", "deny":
 		return override, nil
-	case "inherit":
-		return base, nil
 	}
-	return "", fmt.Errorf("usable must be inherit, ask, yolo or deny, got %q", override)
+	return "", fmt.Errorf("usable override must be inherit, ask, yolo or deny, got %q", override)
 }

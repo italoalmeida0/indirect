@@ -131,9 +131,13 @@ func extractTestText(m provider.Message) string {
 }
 
 func TestModeCompletionTool(t *testing.T) {
+	// The completion tool exists only in agentic sessions. Legacy mode
+	// names canonicalize to agentic; empty/invalid modes fall back to
+	// talk (the daemon's mode contract), which has no completion tool.
 	for mode, want := range map[string]string{
-		"build": "finish_entire_request", "learning": "finish_entire_request",
-		"plan": "finish_entire_request", "talk": "", "": "finish_entire_request",
+		"agentic": "finish_entire_request",
+		"build":   "finish_entire_request", "learning": "finish_entire_request",
+		"plan": "finish_entire_request", "talk": "", "": "", "bogus": "",
 	} {
 		if got := modeCompletionTool(mode); got != want {
 			t.Fatalf("%q completion tool = %q; want %q", mode, got, want)

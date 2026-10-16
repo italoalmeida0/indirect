@@ -129,8 +129,11 @@ export interface SkillConfig {
   description: string;
   body: string;
   enabled: boolean;
-  /** Activation policy: "deny" (hidden/locked), "ask", "yolo" (locked) or
-   * "inherit" (follows the session approval mode). */
+  /** The skill file's ORIGINAL activation policy: "ask", "yolo", "deny"
+   * (AI-hidden, user-activatable) or "never" (omitted by the daemon).
+   * There is no file-level "inherit": a file without the key resolves to
+   * "deny". Session entries use "inherit" (or omit the key) to mean "use
+   * this original without overriding it". */
   usable?: string;
   /** Skill main mode ("agentic" | "talk"); omitted = inherit. */
   mode?: string;

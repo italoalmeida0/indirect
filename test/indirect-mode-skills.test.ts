@@ -4,6 +4,7 @@ import {
   deriveSessionMode,
   effectiveModeSkills,
   ensureModeSkill,
+  originalUsable,
   usableDiffers,
 } from "../web/src/indirect-code/utils/modeSkills";
 import type { SkillConfig } from "../web/src/indirect-code/types";
@@ -101,5 +102,12 @@ describe("usableDiffers (omit the key when it equals the original)", () => {
     expect(usableDiffers("deny", "ask")).toBe(true);
     expect(usableDiffers("yolo", undefined)).toBe(true);
     expect(usableDiffers("yolo", "yolo")).toBe(false);
+  });
+
+  test("a file without the usable key has deny as its original (not inherit)", () => {
+    expect(originalUsable(undefined)).toBe("deny");
+    expect(originalUsable("")).toBe("deny");
+    expect(originalUsable("inherit")).toBe("deny"); // session-only value, never a file original
+    expect(usableDiffers("deny", undefined)).toBe(false);
   });
 });

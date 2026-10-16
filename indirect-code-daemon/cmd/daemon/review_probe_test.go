@@ -36,6 +36,7 @@ func reviewActor(t *testing.T) *sessionActor {
 	st := newDiskStore(t.TempDir())
 	rec := newTestRecord("review")
 	rec.CWD = t.TempDir()
+	rec.Skills = installGrantingTestSkills(t)
 	if err := st.saveSessionSync(rec); err != nil {
 		t.Fatal(err)
 	}

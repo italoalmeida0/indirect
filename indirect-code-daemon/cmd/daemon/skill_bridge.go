@@ -17,12 +17,13 @@ type skillUseRecord struct {
 }
 
 // LoadSkill implements tools.UseSkillHost: returns the skill body after the
-// usable policy check. "usable: deny" skills are invisible; "ask" requires
-// human approval (the caller-approval route via approveTool); "yolo" and
-// "inherit" (when the session approval mode is yolo) run free. A skill
-// whose body already rode a use_skill tool_result THIS turn is not
-// re-sent: the tool answers with a short delivered ack instead (the body
-// text appears exactly once per turn).
+// usable policy check (effective usable = file original + session
+// override; a missing file usable is a deny original). "usable: deny"
+// skills are invisible; "ask" requires human approval (the caller-approval
+// route via approveTool); "yolo" runs free. The approvalMode never takes
+// part here. A skill whose body already rode a use_skill tool_result THIS
+// turn is not re-sent: the tool answers with a short delivered ack instead
+// (the body text appears exactly once per turn).
 func (w *turnBridge) LoadSkill(name string) (string, error) {
 	sk, ok := skillRegistry.get(name)
 	if !ok {
@@ -60,12 +61,10 @@ func (w *turnBridge) skillUsableOverride(name string) string {
 // tool_result). Turn-end bookkeeping (once deactivation, artifact drop,
 // marker reset) is the actor's job.
 func (w *turnBridge) RecordSkillUse(name string, once bool) string {
+	// The session override rides through VERBATIM: an empty/"inherit"
+	// override stays an override-less entry (the file original keeps
+	// applying) instead of being frozen to today's resolved value.
 	usable := w.skillUsableOverride(name)
-	if sk, ok := skillRegistry.get(name); ok {
-		if v, err := skills.UsableValue(sk, usable); err == nil && v != "" && v != "inherit" {
-			usable = v
-		}
-	}
 	w.sendInbox(w.stamp(skillActivateMsg{gen: w.snap.gen, name: name, once: once, usable: usable}))
 	w.skillUses = append(w.skillUses, skillUseRecord{name: name, once: once})
 	return name

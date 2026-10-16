@@ -48,12 +48,14 @@ type PermSpec struct {
 type Skill struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
-	// Usable gates WHO may activate the skill: inherit (default — follows
-	// the session's resolved approvalMode), deny (AI-hidden and blocked
-	// from use_skill, but the user may still activate it from the
-	// frontend), never (base-only: not even the user sees it — it
-	// contributes exclusively as an `inherit:` dependency), ask (human
-	// approval), yolo (free use).
+	// Usable is the skill file's ORIGINAL activation policy: ask (human
+	// approval), yolo (free use), deny (AI-hidden and blocked from
+	// use_skill, but the user may still activate it from the frontend) or
+	// never (base-only: not even the user sees it — it contributes
+	// exclusively as an `inherit:` dependency). There is no file-level
+	// "inherit" value: if skill.md omits the key, the original is deny.
+	// "inherit" exists only at session level, where it means "use this
+	// original" (no override).
 	Usable string `json:"usable,omitempty"`
 	// Mode is the skill's declared base mode ("agentic" or "talk"; empty =
 	// unpinned). The FRONTEND derives the session mode from the primary
@@ -109,6 +111,9 @@ func Parse(filename string, data []byte) (Skill, error) {
 	}
 	if s.Description == "" {
 		return Skill{}, fmt.Errorf("skill %s: header key 'description' is required", filepath.Base(filename))
+	}
+	if s.Usable == "" {
+		s.Usable = "deny" // no usable key in skill.md: deny is the original
 	}
 	return s, nil
 }
@@ -199,7 +204,7 @@ func (p *headerParser) topLevel(line string, lineNo int) error {
 		}
 		p.s.Inherit = list
 	case "usable":
-		if err := checkPolicyValue(value, []string{"inherit", "deny", "never", "ask", "yolo"}); err != nil {
+		if err := checkPolicyValue(value, []string{"deny", "never", "ask", "yolo"}); err != nil {
 			return fmt.Errorf("skill %s line %d: %v", filepath.Base(p.s.Path), lineNo, err)
 		}
 		p.s.Usable = value

@@ -75,6 +75,11 @@ func tracedActor(t *testing.T, id string, worker func(snap workerSnapshot, env w
 	dir := withTrace(t)
 	store := newDiskStore(filepath.Join(dir, "data"))
 	rec := newTestRecord(id)
+	rec.Skills = installGrantingTestSkills(t)
+	// The trace scenarios simulate a workspace (build) session: without an
+	// agentic mode the approval gate refuses workspace tools outright and
+	// no approval ever pends.
+	rec.Options.Mode = "build"
 	act := newSessionActor(id, rec, store, nil, nil, nil)
 	act.supCfg = new(configCell)
 	act.supCfg.store(&DaemonConfig{})

@@ -1,6 +1,6 @@
 import type { DaemonCommand } from "../daemon-protocol";
 import { normalizeSkillSelection } from "../utils/settingsValidation";
-import { MODE_SKILL_NAMES, deriveSessionMode, ensureModeSkill, usableDiffers } from "../utils/modeSkills";
+import { MODE_SKILL_NAMES, deriveSessionMode, ensureModeSkill, originalUsable, usableDiffers } from "../utils/modeSkills";
 import { createSignal } from "solid-js";
 
 /** Session options (model/effort/mode/skills/access) + reconciliation with the
@@ -165,15 +165,13 @@ export function createSessionOptions(opts: {
   }
 
   /** Cycles one skill's session usable override within the locks of the
-   * skill file's default (usable table): ask/inherit skills cycle through
-   * their allowed values, deny/yolo defaults are locked (the badge is
-   * static). "inherit" always means "reset to the skill default". */
+   * skill file's ORIGINAL (usable table): only an "ask" original may be
+   * pinned (ask/yolo/deny); deny/yolo/never originals — including a file
+   * with no usable key, whose original is deny — are locked (static
+   * badge). The session value "inherit" means "no override". */
   function cycleSkillUsable(name: string, defaultUsable?: string) {
-    const base = defaultUsable || "inherit";
-    const order =
-      base === "ask"
-        ? ["ask", "yolo", "deny"]
-        : ["inherit", "ask", "yolo", "deny"]; // inherit default: full cycle
+    if (originalUsable(defaultUsable) !== "ask") return;
+    const order = ["ask", "yolo", "deny"];
     const cur = skillUsables()[name] || "inherit";
     const idx = order.indexOf(cur);
     const next = order[idx < 0 ? 0 : (idx + 1) % order.length];

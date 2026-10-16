@@ -57,6 +57,7 @@ func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 	cases := map[string]string{
 		"unknown key":  "---\nname: x\ndescription: d\nbanana: 1\n---\nb\n",
 		"bad usable":   "---\nname: x\ndescription: d\nusable: sometimes\n---\nb\n",
+		"file inherit": "---\nname: x\ndescription: d\nusable: inherit\n---\nb\n",
 		"bad mode":     "---\nname: x\ndescription: d\nmode: build\n---\nb\n",
 		"missing name": "---\ndescription: d\n---\nb\n",
 		"inline tools": "---\nname: x\ndescription: d\ntools: all\n---\nb\n",
@@ -341,7 +342,7 @@ func TestResolveInheritDeps(t *testing.T) {
 			Permissions: map[string]PermSpec{"widget_read": {Policy: PolicyAsk}},
 		},
 		"main": {
-			Name: "main", Body: "main body",
+			Name: "main", Body: "main body", Usable: "ask",
 			Inherit: []string{"base", "hidden"},
 			Permissions: map[string]PermSpec{
 				"bash": {Policy: PolicyYolo},
@@ -391,14 +392,17 @@ func TestUsableValueLocks(t *testing.T) {
 		def, override, want string
 		wantErr             bool
 	}{
-		{"", "", "inherit", false},
-		{"inherit", "ask", "ask", false},
+		{"", "", "deny", false},         // no usable key in skill.md: deny fallback
+		{"", "inherit", "deny", false},  // session inherit = the file original (deny here)
+		{"", "ask", "deny", false},      // fallback deny is the locked original
 		{"deny", "yolo", "deny", false}, // locked
 		{"never", "ask", "never", false},
 		{"yolo", "deny", "yolo", false}, // locked
+		{"ask", "", "ask", false},
 		{"ask", "deny", "deny", false},
-		{"ask", "inherit", "ask", false}, // inherit = reset to default
-		{"inherit", "inherit", "inherit", false},
+		{"ask", "yolo", "yolo", false},
+		{"ask", "inherit", "ask", false}, // session inherit = no override
+		{"inherit", "", "", true},        // inherit is not a skill.md value
 		{"ask", "sometimes", "", true},
 	}
 	for _, c := range cases {

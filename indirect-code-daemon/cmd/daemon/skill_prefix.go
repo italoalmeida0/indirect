@@ -77,8 +77,9 @@ func markTurnPrompt(meta map[string]string) {
 // skillActivateMsg asks the actor to apply a use_skill activation
 // immediately (mid-turn): the skill joins the session's skill map marked
 // active + inContext (its body rode the tool_result) + byAI, with the once
-// marker when requested. The activation is persisted at turn end only —
-// never mid-turn.
+// marker when requested. The map change is persisted and mirrored to the
+// frontend right away (the UI shows the skill active mid-turn); only the
+// tool call/result pair is ephemeral (stripped before commit).
 type skillActivateMsg struct {
 	gen  int
 	name string
