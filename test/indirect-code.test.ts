@@ -578,12 +578,12 @@ describe("Indirect Code Relay and Pairing", () => {
       expect(folders.parent).toBe(path.dirname(workDir));
       expect(Array.isArray(folders.folders)).toBe(true);
 
-      send({ type: "configure_session", sessionId: sid, model: "gpt-4o", options: { effort: "low", mode: "build", skills: [], access: "ask" } });
+      send({ type: "configure_session", sessionId: sid, model: "gpt-4o", options: { effort: "low", mode: "agentic", skills: [], access: "ask" } });
       const configured = await waitFor((m) => m.type === "session_data" && m.session?.id === sid && m.session.options?.effort === "low");
       expect(configured.session.options.access).toBe("ask");
       send({ type: "pull", id: 1234, collection: "config" });
       const preferences = await waitFor((m) => m.type === "pull-response" && m.id === 1234);
-      expect(preferences.items[0].lastSelection).toEqual({ model: "gpt-4o", effort: "low", mode: "build", skills: [], access: "ask" });
+      expect(preferences.items[0].lastSelection).toEqual({ model: "gpt-4o", effort: "low", mode: "agentic", skills: [], access: "ask" });
 
       // Rename + pin round-trip
       send({ type: "rename_session", sessionId: sid, title: "Renamed Session" });

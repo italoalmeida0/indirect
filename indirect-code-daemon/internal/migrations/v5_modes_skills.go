@@ -6,18 +6,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
 // v5 collapses the four legacy session modes (build/plan/learning/talk) to
 // the two base modes (agentic/talk). The legacy behavioral prompts become
-// BUILTIN SKILLS (builtin_skills/*.md, embedded in the daemon binary and
+// BUILTIN SKILLS (builtin_skills/*.lua, embedded in the daemon binary and
 // never written to the machine): a migrated build/plan/learning session
 // becomes an agentic session whose main skill is the old mode, so its
 // behavior is preserved exactly — the skill name resolves to the builtin
 // at runtime. talk stays talk (no skill needed).
 //
-// Two rewrites:
+// Three rewrites:
 //
 //  1. Every session meta line: options.mode build|plan|learning -> agentic
 //     plus a "skills" entry naming the migrated mode as the main skill
@@ -26,16 +27,21 @@ import (
 //     rewritten to the user's home directory. Talk has no workspace — the
 //     cwd only decided which project grouped the conversation — and new
 //     talk sessions are created in Home, so existing ones join them.
+//  3. User skills switch from Markdown to Lua: every parseable
+//     skills/*.md becomes an equivalent same-stem .lua module and the
+//     .md is removed. Unparseable files (already dropped by the old
+//     loader) and same-stem .md+.lua collisions stay untouched.
 //
-// Skill DEFINITIONS are never seeded to disk: builtin names are reserved
-// and a same-name file in the skills directory is ignored at load.
+// Builtin skill DEFINITIONS are never seeded to disk: builtin names are
+// reserved and a same-name file in the skills directory is ignored at
+// load (it still converts — the user's content is never deleted).
 //
 // Idempotent: a second run finds no legacy mode and writes nothing. Meta lines are preserved byte-for-byte
-// apart from the two fields above (unknown fields untouched); rewrite is
+// apart from the two fields above (unknown fields untouched); rewrites are
 // atomic via tmp + rename.
 
 func init() {
-	register(Migration{Version: 5, Name: "collapse modes to agentic/talk, mode skills, talk sessions to Home", Apply: applyV5, Verify: verifyV5})
+	register(Migration{Version: 5, Name: "collapse modes to agentic/talk, mode skills, talk sessions to Home, Lua skills", Apply: applyV5, Verify: verifyV5})
 }
 
 // v5LegacyModes maps the legacy mode enum to its replacement base mode and
@@ -47,7 +53,7 @@ var v5LegacyModes = map[string]string{
 }
 
 // v5LegacySkill maps a legacy mode to the builtin skill carrying its
-// behavior (embedded in the daemon binary from builtin_skills/*.md —
+// behavior (embedded in the daemon binary from builtin_skills/*.lua —
 // migrations never embed prompt strings).
 var v5LegacySkill = map[string]string{
 	"build":    "build",
@@ -56,10 +62,14 @@ var v5LegacySkill = map[string]string{
 }
 
 func applyV5(slotDir string) error {
-	// Skill DEFINITIONS are never seeded anywhere: they live embedded in
-	// the daemon binary (builtin_skills/*.md) and builtin names are
-	// reserved at load. This migration only rewrites session meta:
-	// collapse legacy modes and move talk sessions to Home.
+	// Builtin skill definitions are never seeded anywhere: they live
+	// embedded in the daemon binary (builtin_skills/*.lua) and builtin
+	// names are reserved at load. USER skills on disk convert in place
+	// from the retired Markdown format to Lua; session meta then gets
+	// its mode collapse and the talk-to-Home move.
+	if err := convertLegacySkills(slotDir); err != nil {
+		return err
+	}
 	home, _ := os.UserHomeDir()
 	sessions := filepath.Join(slotDir, "sessions")
 	entries, err := os.ReadDir(sessions)
@@ -75,6 +85,143 @@ func applyV5(slotDir string) error {
 		}
 		if err := migrateSessionModes(filepath.Join(sessions, e.Name()), home); err != nil {
 			return fmt.Errorf("%s: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+// convertLegacySkills converts every parseable top-level skills/*.md in
+// the slot to an equivalent same-stem .lua and removes the .md. Files the
+// retired parser rejects stay untouched (the old loader dropped them
+// too), and a same-stem .lua that differs from the conversion wins: both
+// files stay. A .lua byte-identical to the conversion means an earlier
+// run crashed between write and remove — finishing the remove keeps the
+// migration idempotent. Symlinks are never followed or replaced.
+func convertLegacySkills(slotDir string) error {
+	dir := filepath.Join(slotDir, "skills")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || e.Type()&os.ModeSymlink != 0 || !strings.EqualFold(filepath.Ext(e.Name()), ".md") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		mdPath := filepath.Join(dir, name)
+		data, err := os.ReadFile(mdPath)
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		sk, err := parseLegacySkill(mdPath, data)
+		if err != nil {
+			continue // unparseable: already dropped by the old loader
+		}
+		rendered := renderLegacySkillLua(sk)
+		stem := name[:len(name)-len(filepath.Ext(name))]
+		luaPath := filepath.Join(dir, stem+".lua")
+		if info, statErr := os.Lstat(luaPath); statErr == nil {
+			if !info.Mode().IsRegular() {
+				continue // collision with something else: leave both
+			}
+			existing, err := os.ReadFile(luaPath)
+			if err != nil {
+				return fmt.Errorf("%s: %w", stem+".lua", err)
+			}
+			if bytes.Equal(existing, rendered) {
+				if err := os.Remove(mdPath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("%s: %w", name, err)
+				}
+			}
+			continue // differing .lua wins; the .md stays untouched
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("%s: %w", stem+".lua", statErr)
+		}
+		perm := os.FileMode(0o644)
+		if info, err := os.Stat(mdPath); err == nil {
+			perm = info.Mode().Perm()
+		}
+		if err := writeSkillFileAtomic(luaPath, rendered, perm); err != nil {
+			return fmt.Errorf("%s: %w", stem+".lua", err)
+		}
+		if err := os.Remove(mdPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+// writeSkillFileAtomic writes via a temp file in the same directory plus
+// rename, so a crash never leaves a torn .lua behind.
+func writeSkillFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".skill-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// verifyLegacySkills confirms every convertible Markdown skill was
+// converted: a parseable .md with no same-stem .lua (or with only the
+// byte-identical conversion still beside it) means apply did not finish.
+// Unparseable files and differing collisions are allowed leftovers.
+func verifyLegacySkills(slotDir string) error {
+	dir := filepath.Join(slotDir, "skills")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || e.Type()&os.ModeSymlink != 0 || !strings.EqualFold(filepath.Ext(e.Name()), ".md") {
+			continue
+		}
+		mdPath := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(mdPath)
+		if err != nil {
+			return fmt.Errorf("%s: %w", e.Name(), err)
+		}
+		sk, err := parseLegacySkill(mdPath, data)
+		if err != nil {
+			continue
+		}
+		stem := e.Name()[:len(e.Name())-len(filepath.Ext(e.Name()))]
+		luaPath := filepath.Join(dir, stem+".lua")
+		existing, err := os.ReadFile(luaPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("%s: legacy Markdown skill was not converted to Lua", e.Name())
+			}
+			return fmt.Errorf("%s: %w", stem+".lua", err)
+		}
+		if bytes.Equal(existing, renderLegacySkillLua(sk)) {
+			return fmt.Errorf("%s: converted Markdown skill was not removed", e.Name())
 		}
 	}
 	return nil
@@ -203,9 +350,12 @@ func rewriteMetaMode(line []byte, home string) (bool, []byte) {
 	return true, out
 }
 
-// verifyV5 confirms no legacy mode survived the collapse and every talk
-// session sits in Home.
+// verifyV5 confirms no legacy mode survived the collapse, every talk
+// session sits in Home, and every convertible Markdown skill became Lua.
 func verifyV5(slotDir string) error {
+	if err := verifyLegacySkills(slotDir); err != nil {
+		return err
+	}
 	home, _ := os.UserHomeDir()
 	sessions := filepath.Join(slotDir, "sessions")
 	entries, err := os.ReadDir(sessions)

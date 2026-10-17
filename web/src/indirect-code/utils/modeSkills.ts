@@ -89,7 +89,7 @@ export function deriveSessionMode(
 }
 
 /** The skill file's ORIGINAL usable, canonicalized: ask/yolo/deny/never.
- * There is no file-level "inherit" — a skill.md without the key (or a
+ * There is no file-level "inherit" — a Lua skill without the key (or a
  * legacy catalog value) resolves to "deny". */
 export function originalUsable(usable: string | undefined): string {
   return usable === "ask" || usable === "yolo" || usable === "never" ? usable : "deny";

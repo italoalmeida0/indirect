@@ -7,25 +7,31 @@ import (
 	"testing"
 )
 
-const validSkill = `---
-name: revisor-estrito
-description: Analisa codigo sem permissao de alterar nada ou rodar scripts.
-usable: ask
-mode: agentic
-tools:
-  approvalMode: ask
-  permissions:
-    read: inherit
-    edit: deny
-    bash: deny
-    custom_tool: inherit { param_a: ask, param_b: deny }
----
-Instrucoes detalhadas da skill ate o fim do arquivo .md.
+const validSkill = `
+return {
+  name = "revisor-estrito",
+  description = "Analisa codigo sem permissao de alterar nada ou rodar scripts.",
+  usable = "ask",
+  mode = "agentic",
+  approvalMode = "ask",
+  permissions = {
+    read = "inherit",
+    edit = "deny",
+    bash = "deny",
+    custom_tool = {
+      policy = "inherit",
+      args = { param_a = "ask", param_b = "deny" },
+    },
+  },
+  body = [[
+Instrucoes detalhadas da skill ate o fim do arquivo Lua.
 Apenas este corpo de texto sera carregado dentro da tag <skill></skill>.
+]],
+}
 `
 
 func TestParseValidSkill(t *testing.T) {
-	s, err := Parse("revisor-estrito.md", []byte(validSkill))
+	s, err := Parse("revisor-estrito.lua", []byte(validSkill))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,46 +47,79 @@ func TestParseValidSkill(t *testing.T) {
 	if s.Body == "" || !strings.HasPrefix(s.Body, "Instrucoes detalhadas") {
 		t.Fatalf("body lost: %q", s.Body)
 	}
+	if strings.HasSuffix(s.Body, "\n") {
+		t.Fatalf("body must not keep the long-string closing newline: %q", s.Body)
+	}
 }
 
-func TestParseEnforcesKeyOrder(t *testing.T) {
-	// name must come before description, tools last.
-	if _, err := Parse("x.md", []byte("---\ndescription: d\nname: x\n---\nb\n")); err == nil {
-		t.Fatal("expected error for reversed keys")
+func TestParseToolsAliasAndDefaults(t *testing.T) {
+	s, err := Parse("alias.lua", []byte(`
+return {
+  name = "alias",
+  description = "nested tools shape",
+  _meta = { version = 1, experimental = true },
+  tools = {
+    approvalMode = "yolo",
+    permissions = {
+      widget_set = { policy = "inherit", src_file = "deny" },
+    },
+  },
+  body = "body",
+}
+`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := Parse("x.md", []byte("---\nname: x\ntools:\n  permissions:\n    bash: deny\ndescription: d\n---\nb\n")); err == nil {
-		t.Fatal("expected error for description after tools")
+	if s.Usable != "deny" {
+		t.Fatalf("missing usable = %q, want deny fallback", s.Usable)
+	}
+	if s.ApprovalMode != "yolo" {
+		t.Fatalf("tools.approvalMode lost: %q", s.ApprovalMode)
+	}
+	if got := s.Permissions["widget_set"]; got.Policy != PolicyInherit || got.Args["src_file"] != PolicyDeny {
+		t.Fatalf("direct arg-key override lost: %+v", got)
 	}
 }
 
 func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 	cases := map[string]string{
-		"unknown key":  "---\nname: x\ndescription: d\nbanana: 1\n---\nb\n",
-		"bad usable":   "---\nname: x\ndescription: d\nusable: sometimes\n---\nb\n",
-		"file inherit": "---\nname: x\ndescription: d\nusable: inherit\n---\nb\n",
-		"bad mode":     "---\nname: x\ndescription: d\nmode: build\n---\nb\n",
-		"missing name": "---\ndescription: d\n---\nb\n",
-		"inline tools": "---\nname: x\ndescription: d\ntools: all\n---\nb\n",
+		"unknown key":          `return { name = "x", description = "d", banana = 1, body = "b" }`,
+		"bad usable":           `return { name = "x", description = "d", usable = "sometimes", body = "b" }`,
+		"file inherit":         `return { name = "x", description = "d", usable = "inherit", body = "b" }`,
+		"bad mode":             `return { name = "x", description = "d", mode = "build", body = "b" }`,
+		"missing name":         `return { description = "d", body = "b" }`,
+		"missing description":  `return { name = "x", body = "b" }`,
+		"inline tools":         `return { name = "x", description = "d", tools = "all", body = "b" }`,
+		"duplicate tools":      `return { name = "x", description = "d", approvalMode = "ask", tools = { approvalMode = "ask" }, body = "b" }`,
+		"numeric name":         `return { name = 42, description = "d", body = "b" }`,
+		"boolean description":  `return { name = "x", description = true, body = "b" }`,
+		"function body":        `return { name = "x", description = "d", body = function() return "b" end }`,
+		"no return":            `local x = 1`,
+		"non-table return":     `return "x"`,
+		"returned metatable":   `return setmetatable({ name = "x", description = "d", body = "b" }, {})`,
+		"cyclic returned data": `local t = { name = "x", description = "d", body = "b" }; t._self = t; return t`,
+		"markdown frontmatter": "---\nname: x\ndescription: d\n---\nb\n",
 	}
 	for label, src := range cases {
-		if _, err := Parse("x.md", []byte(src)); err == nil {
+		if _, err := Parse("x.lua", []byte(src)); err == nil {
 			t.Fatalf("%s: expected error", label)
 		}
 	}
 }
 
 func TestParseInheritAndValuedEntries(t *testing.T) {
-	sk, err := Parse("x.md", []byte(`---
-name: x
-description: d
-inherit: [a, b, c]
-tools:
-  permissions:
-    bash: ask
-    edit: deny
-    yolo_tool: yolo
----
-body
+	sk, err := Parse("x.lua", []byte(`
+return {
+  name = "x",
+  description = "d",
+  inherit = { "a", "b", "c" },
+  permissions = {
+    bash = "ask",
+    edit = "deny",
+    yolo_tool = "yolo",
+  },
+  body = "body",
+}
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -97,28 +136,33 @@ body
 	if p := sk.Permissions["yolo_tool"].Policy; p != PolicyYolo {
 		t.Fatalf("yolo entry policy = %q", p)
 	}
-	// A listed key MUST carry a value: bare `tool:` and bare `arg:` are
-	// errors (leave the key out to inherit).
+	// A listed tool or argument key MUST carry a policy value: a table
+	// without `policy`, an empty string and non-string values are errors
+	// (leave the key out to inherit).
 	for _, src := range []string{
-		"---\nname: x\ndescription: d\ntools:\n  permissions:\n    bash:\n---\nb\n",
-		"---\nname: x\ndescription: d\ntools:\n  permissions:\n    bash: ask { cmd: }\n---\nb\n",
+		`return { name = "x", description = "d", permissions = { bash = { args = { cmd = "deny" } } }, body = "b" }`,
+		`return { name = "x", description = "d", permissions = { bash = "" }, body = "b" }`,
+		`return { name = "x", description = "d", permissions = { bash = true }, body = "b" }`,
+		`return { name = "x", description = "d", permissions = { bash = { policy = "ask", args = { cmd = false } } }, body = "b" }`,
 	} {
-		if _, err := Parse("x.md", []byte(src)); err == nil {
+		if _, err := Parse("x.lua", []byte(src)); err == nil {
 			t.Fatalf("expected error for value-less key in %q", src)
 		}
 	}
 }
 
 func TestParseArgKeyOverridesOnly(t *testing.T) {
-	src := `---
-name: x
-description: d
-tools:
-  permissions:
-    bash: inherit { cmd: deny }
----
-b`
-	s, err := Parse("x.md", []byte(src))
+	src := `
+return {
+  name = "x",
+  description = "d",
+  permissions = {
+    bash = { policy = "inherit", args = { cmd = "deny" } },
+  },
+  body = "b",
+}
+`
+	s, err := Parse("x.lua", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +172,38 @@ b`
 	}
 	if _, ok := spec.Args["other"]; ok {
 		t.Fatal("unlisted args must not carry overrides")
+	}
+
+	// Direct arg keys and an `args` table may combine (skill.extend can
+	// deep-merge specs written in either form); a conflicting duplicate
+	// policy for the same argument is an error.
+	mixed, err := Parse("mixed.lua", []byte(`
+return {
+  name = "mixed",
+  description = "d",
+  permissions = {
+    bash = { policy = "ask", timeout = "yolo", args = { cmd = "deny" } },
+  },
+  body = "b",
+}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mixed.Permissions["bash"]; got.Args["cmd"] != PolicyDeny || got.Args["timeout"] != PolicyYolo {
+		t.Fatalf("mixed arg forms must merge: %+v", got)
+	}
+	if _, err := Parse("conflict.lua", []byte(`
+return {
+  name = "conflict",
+  description = "d",
+  permissions = {
+    bash = { policy = "ask", cmd = "yolo", args = { cmd = "deny" } },
+  },
+  body = "b",
+}
+`)); err == nil {
+		t.Fatal("conflicting duplicate argument policies must be rejected")
 	}
 }
 
@@ -392,7 +468,7 @@ func TestUsableValueLocks(t *testing.T) {
 		def, override, want string
 		wantErr             bool
 	}{
-		{"", "", "deny", false},         // no usable key in skill.md: deny fallback
+		{"", "", "deny", false},         // no usable key in the Lua skill: deny fallback
 		{"", "inherit", "deny", false},  // session inherit = the file original (deny here)
 		{"", "ask", "deny", false},      // fallback deny is the locked original
 		{"deny", "yolo", "deny", false}, // locked
@@ -402,7 +478,7 @@ func TestUsableValueLocks(t *testing.T) {
 		{"ask", "deny", "deny", false},
 		{"ask", "yolo", "yolo", false},
 		{"ask", "inherit", "ask", false}, // session inherit = no override
-		{"inherit", "", "", true},        // inherit is not a skill.md value
+		{"inherit", "", "", true},        // inherit is not a skill file value
 		{"ask", "sometimes", "", true},
 	}
 	for _, c := range cases {
@@ -419,16 +495,44 @@ func TestUsableValueLocks(t *testing.T) {
 	}
 }
 
-func TestLoadSkipsInvalidFiles(t *testing.T) {
+func TestLoadSkipsInvalidFilesAndIgnoresMarkdown(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "good.md"), []byte(validSkill), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "good.lua"), []byte(validSkill), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "bad.md"), []byte("---\nname: x\n---\nb\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "bad.lua"), []byte(`return { name = "x" }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Markdown skills are no longer supported at all: even a formerly
+	// valid .md file is ignored (not loaded, not an error).
+	legacy := "---\nname: legacy\ndescription: old markdown skill\n---\nlegacy body\n"
+	if err := os.WriteFile(filepath.Join(dir, "legacy.md"), []byte(legacy), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	list, errs := Load(dir)
 	if len(list) != 1 || len(errs) != 1 {
-		t.Fatalf("list=%d errs=%d, want 1/1", len(list), len(errs))
+		t.Fatalf("list=%v errs=%v, want one Lua skill and one load error", list, errs)
+	}
+	if _, ok := list["legacy"]; ok {
+		t.Fatal("markdown skill must not load")
+	}
+}
+
+func TestLoadDuplicateNamesFirstFileWins(t *testing.T) {
+	dir := t.TempDir()
+	first := `return { name = "dup", description = "first", body = "first body" }`
+	second := `return { name = "dup", description = "second", body = "second body" }`
+	if err := os.WriteFile(filepath.Join(dir, "a.lua"), []byte(first), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.lua"), []byte(second), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, errs := Load(dir)
+	if got := list["dup"]; got.Description != "first" || got.Body != "first body" {
+		t.Fatalf("duplicate winner = %+v, want the first file", got)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "duplicate") {
+		t.Fatalf("duplicate errors = %v", errs)
 	}
 }

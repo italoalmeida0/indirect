@@ -34,9 +34,9 @@ func installGrantingTestSkills(t *testing.T) map[string]skills.SessionSkill {
 
 // The use_skill usable gate (spec §1): the approvalMode never influences
 // it. yolo runs free; ask always asks the human; deny/never refuse. There
-// is no file-level "inherit": a missing usable key in skill.md falls back
-// to deny. At session level, a missing usable or explicit "inherit" means
-// "use the skill.md original" (no override).
+// is no file-level "inherit": a missing usable key in the Lua skill falls
+// back to deny. At session level, a missing usable or explicit "inherit"
+// means "use the skill file original" (no override).
 func TestUseSkillUsableGate(t *testing.T) {
 	prev := skillRegistry
 	defer func() { skillRegistry = prev }()
@@ -45,7 +45,7 @@ func TestUseSkillUsableGate(t *testing.T) {
 		"gate":   {Name: "gate", Usable: "ask"},
 		"hidden": {Name: "hidden", Usable: "deny"},
 		"base":   {Name: "base", Usable: "never"},
-		"plain":  {Name: "plain"}, // no usable key in skill.md: deny fallback
+		"plain":  {Name: "plain"}, // no usable key in the Lua skill: deny fallback
 		"pinned": {Name: "pinned", Usable: "ask"},
 	}}
 	args := func(name string) []byte { return []byte(`{"name":"` + name + `"}`) }

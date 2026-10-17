@@ -1,15 +1,15 @@
----
-name: generative_ui
-description: Interactive generative-UI widgets (charts, calculators, games) design system.
-usable: never
-tools:
-  permissions:
-    widget_set: yolo
-    widget_list: yolo
-    widget_lint: yolo
-    widget_read: yolo
-    widget_edit: yolo
----
+return {
+  name = "generative_ui",
+  description = "Interactive generative-UI widgets (charts, calculators, games) design system.",
+  usable = "never",
+  permissions = {
+    widget_set = "yolo",
+    widget_list = "yolo",
+    widget_lint = "yolo",
+    widget_read = "yolo",
+    widget_edit = "yolo",
+  },
+  body = [[
 # Interactive widgets (generative_ui)
 
 Render interactive widgets (charts, calculators, comparison tables, forms,
@@ -290,3 +290,5 @@ depends on viewport size. Use `image-rendering: pixelated` for pixel art.
 * **Sandbox still applies:** No network requests, navigation, `eval`/`Function`,
 or HTML-injection sinks. Web Audio, `requestAnimationFrame`, and custom CSS
 are fully allowed.
+]],
+}

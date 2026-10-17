@@ -150,7 +150,7 @@ func TestModeRegistryExcludesForeignModeTools(t *testing.T) {
 		t.Errorf("agentic must advertise finish_entire_request")
 	}
 	// Completion and summary are mode machinery: always present on
-	// agentic, immune to skill rules (they are not configurable in .md).
+	// agentic, immune to skill rules (they are not configurable in skill files).
 	eff := skills.Effective{Mode: "agentic", HasVisible: true, Chain: []skills.Skill{
 		{Name: "x", Permissions: map[string]skills.PermSpec{
 			"summary":               {Policy: skills.PolicyDeny},
@@ -205,24 +205,28 @@ func TestSessionSystemPromptIsModeClean(t *testing.T) {
 	// The BARE system prompt no longer names the completion tool — the
 	// behavioral instructions live in skills (agentic_base carries the
 	// completion contract; talk_base must never mention it).
-	agenticBase := mustBuiltinSkill(t, "agentic_base.md")
+	agenticBase := mustBuiltinSkill(t, "agentic_base")
 	if !strings.Contains(agenticBase, "finish_entire_request") {
 		t.Error("agentic_base skill must name the completion tool")
 	}
-	talkBase := mustBuiltinSkill(t, "talk_base.md")
+	talkBase := mustBuiltinSkill(t, "talk")
 	if strings.Contains(talkBase, "finish_entire_request") {
 		t.Error("talk_base must not name a completion tool")
 	}
 }
 
-// mustBuiltinSkill reads one builtin skill definition from the embedded FS.
+// mustBuiltinSkill returns one parsed builtin skill body by skill name.
 func mustBuiltinSkill(t *testing.T, name string) string {
 	t.Helper()
-	data, err := builtinSkillsFS.ReadFile("builtin_skills/" + name)
-	if err != nil {
-		t.Fatalf("builtin skill %s: %v", name, err)
+	list, errs := builtinSkills()
+	if len(errs) > 0 {
+		t.Fatalf("builtin parse errors: %v", errs)
 	}
-	return string(data)
+	sk, ok := list[name]
+	if !ok {
+		t.Fatalf("builtin skill %q missing", name)
+	}
+	return sk.Body
 }
 
 // The completion tool description is mode-specific: the learning variant

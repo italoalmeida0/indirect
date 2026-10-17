@@ -111,7 +111,7 @@ try {
   assert.equal(talkRadios.length, 1, `talk session picker must only offer talk, got ${JSON.stringify(talkRadios)}`);
   assert(talkRadios[0].includes("Daemon Talk desc"), "official description must replace the cache one");
   assert.equal(await page.getByRole("button", { name: "Agent permissions" }).count(), 0, "selector must hide: talk approvalMode is yolo");
-  // A skill.md WITHOUT the usable key has deny as its original: locked
+  // A Lua skill WITHOUT the usable key has deny as its original: locked
   // hidden badge, no usable cycle button (session inherit != file value).
   assert.equal(await page.getByRole("button", { name: "Change activation policy for plain" }).count(), 0, "no-usable-key skill must not offer a usable cycle (original = deny)");
   // Additional skill of the OTHER mode stays available, but the wire mode

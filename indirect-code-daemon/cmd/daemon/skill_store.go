@@ -10,7 +10,7 @@ import (
 	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
-// skillStore is the daemon's per-installation skill registry: *.md skill
+// skillStore is the daemon's per-installation skill registry: *.lua skill
 // definitions in <data-dir>/skills. Each daemon (each machine) owns its own
 // skill files — custom skills are individual per installation. The store is
 // read-mostly: reload() re-scans the directory, readers get snapshots.
@@ -40,8 +40,9 @@ func (s *skillStore) initFrom(dataDir string) {
 }
 
 // reload re-scans the skill directory and rebuilds the merged view:
-// embedded builtin skills first, then the disk's *.md for every name a
-// builtin does not already take. Builtin names are RESERVED — a user
+// embedded builtin skills first, then the disk's *.lua for every name a
+// builtin does not already take. Disk skills may require/extend builtin
+// modules. Builtin names are RESERVED — a user
 // skill with the same name as a builtin is ignored (builtins cannot be
 // overridden from the skills directory) and reported as a load error.
 // Parse errors are kept for listing (a hand-edited broken file must not
@@ -56,7 +57,7 @@ func (s *skillStore) reload() []error {
 		merged[k] = v
 	}
 	if dir != "" {
-		list, loadErrs := skills.Load(dir)
+		list, loadErrs := skills.LoadWithModules(dir, builtinSkillSources())
 		errs = append(errs, loadErrs...)
 		for k, v := range list {
 			if _, isBuiltin := builtins[k]; isBuiltin {

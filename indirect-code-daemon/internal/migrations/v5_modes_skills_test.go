@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
 func TestV5SeedsSkillsAndCollapsesModes(t *testing.T) {
@@ -39,9 +41,9 @@ func TestV5SeedsSkillsAndCollapsesModes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The migration is META-ONLY: skill DEFINITIONS live embedded in the
-	// daemon binary (builtin_skills/*.md) and are never written to disk —
-	// so no skills/ file may appear here.
+	// Skill DEFINITIONS live embedded in the daemon binary
+	// (builtin_skills/*.lua) and are never seeded to disk — with no
+	// pre-existing user skills to convert, no skills/ file may appear.
 	if _, err := os.Stat(filepath.Join(dir, "skills")); err == nil {
 		entries, _ := os.ReadDir(filepath.Join(dir, "skills"))
 		if len(entries) > 0 {
@@ -162,24 +164,114 @@ func TestV5MovesTalkSessionsHome(t *testing.T) {
 	}
 }
 
-func TestV5DoesNotTouchSkillFiles(t *testing.T) {
+// v5 retires Markdown skills: every parseable user skills/*.md becomes an
+// equivalent .lua (same fields, body verbatim) and the .md is removed.
+// Unparseable files (already dropped by the old loader) and same-stem
+// .md+.lua collisions are left untouched rather than destroying data.
+func TestV5ConvertsMarkdownSkillsToLua(t *testing.T) {
 	dir := t.TempDir()
-	skills := filepath.Join(dir, "skills")
-	if err := os.MkdirAll(skills, 0o755); err != nil {
+	skillsDir := filepath.Join(dir, "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	custom := "---\nname: plan\ndescription: mine\n---\ncustom body\n"
-	if err := os.WriteFile(filepath.Join(skills, "plan.md"), []byte(custom), 0o644); err != nil {
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(skillsDir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(name string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(skillsDir, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		return string(data)
+	}
+	exists := func(name string) bool {
+		_, err := os.Stat(filepath.Join(skillsDir, name))
+		return err == nil
+	}
+
+	customBody := "Review body with ]] and ]=] sequences.\nSecond line."
+	write("custom.md", "---\nname: custom_review\ndescription: Review \"strict\" code\nusable: ask\nmode: agentic\ninherit: [agentic_base, other_base]\ntools:\n  approvalMode: yolo\n  permissions:\n    read: inherit\n    edit: deny\n    widget_set: inherit { src_file: deny }\n---\n"+customBody+"\n")
+	// A reserved builtin name still converts (the runtime ignores it, the
+	// user's content is not deleted).
+	write("plan.md", "---\nname: plan\ndescription: mine\n---\ncustom plan body\n")
+	broken := "---\nname: broken\n---\nno description\n"
+	write("broken.md", broken)
+	collideMD := "---\nname: collide\ndescription: markdown side\n---\nmd body\n"
+	collideLua := "return { name = \"collide\", description = \"lua side\", body = \"lua body\" }\n"
+	write("collide.md", collideMD)
+	write("collide.lua", collideLua)
+
+	if err := applyV5(dir); err != nil {
 		t.Fatal(err)
+	}
+	if err := verifyV5(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if exists("custom.md") || exists("plan.md") {
+		t.Fatal("converted .md files must be removed")
+	}
+	generated := read("custom.lua")
+	if !strings.Contains(generated, "[==[") {
+		t.Fatalf("body with ]] and ]=] must use a level-2 long bracket:\n%s", generated)
+	}
+	sk, err := skills.Parse("custom.lua", []byte(generated))
+	if err != nil {
+		t.Fatalf("converted skill must load with the Lua loader: %v\n%s", err, generated)
+	}
+	if sk.Name != "custom_review" || sk.Description != `Review "strict" code` || sk.Usable != "ask" || sk.Mode != "agentic" || sk.ApprovalMode != "yolo" {
+		t.Fatalf("converted fields drifted: %+v", sk)
+	}
+	if strings.Join(sk.Inherit, ",") != "agentic_base,other_base" {
+		t.Fatalf("converted inherit drifted: %v", sk.Inherit)
+	}
+	if sk.Permissions["read"].Policy != skills.PolicyInherit || sk.Permissions["edit"].Policy != skills.PolicyDeny ||
+		sk.Permissions["widget_set"].Policy != skills.PolicyInherit || sk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
+		t.Fatalf("converted permissions drifted: %+v", sk.Permissions)
+	}
+	if sk.Body != customBody {
+		t.Fatalf("converted body drifted: %q", sk.Body)
+	}
+	plan, err := skills.Parse("plan.lua", []byte(read("plan.lua")))
+	if err != nil || plan.Name != "plan" || plan.Usable != "deny" || plan.Body != "custom plan body" {
+		t.Fatalf("reserved-name conversion drifted: %+v (%v)", plan, err)
+	}
+	if read("broken.md") != broken || exists("broken.lua") {
+		t.Fatal("unparseable .md must stay untouched with no .lua")
+	}
+	if read("collide.md") != collideMD || read("collide.lua") != collideLua {
+		t.Fatal("same-stem .md+.lua collision must stay untouched")
+	}
+
+	// Idempotent: a second run changes nothing.
+	before := map[string]string{}
+	entries, err := os.ReadDir(skillsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		before[e.Name()] = read(e.Name())
 	}
 	if err := applyV5(dir); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(skills, "plan.md"))
+	entries, err = os.ReadDir(skillsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(data) != custom {
-		t.Fatalf("hand-edited skill was clobbered:\n%s", data)
+	if len(entries) != len(before) {
+		t.Fatalf("second run changed the file set: %v", entries)
+	}
+	for _, e := range entries {
+		if read(e.Name()) != before[e.Name()] {
+			t.Fatalf("second run rewrote %s", e.Name())
+		}
+	}
+	if err := verifyV5(dir); err != nil {
+		t.Fatal(err)
 	}
 }

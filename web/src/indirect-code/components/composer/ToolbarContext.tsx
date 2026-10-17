@@ -118,7 +118,7 @@ export function ToolbarContext() {
   const additionalSkillList = (
     <>
       <ul ref={(el) => attachSortable(el, { onReorder: reorderAdditional })}>
-        <For each={additionalSkills()} fallback={<li class="p-2 text-ink-500">Create custom skills in Settings.</li>}>
+        <For each={additionalSkills()} fallback={<li class="p-2 text-ink-500">No additional skills on this host.</li>}>
           {([name, skill]) => (
             <li data-id={name} class="flex items-center gap-1">
               <button data-handle aria-label={`Reorder ${name}`} class="shrink-0 px-1 py-2 text-ink-600 hover:text-ink-300 cursor-grab" onClick={(e) => e.stopPropagation()}>

@@ -13,6 +13,16 @@ frontend + daemon. Run checks from the appropriate project root.
   gateway or browser an alternate source of truth.
 - Indirect Code frontend: `web/src/indirect-code/`; daemon: `indirect-code-daemon/`
   (`cmd/daemon`, `packages/agent|core|provider|runner|…`, Go 1.26).
+- Skills are Lua modules (`packages/skills`, gopher-lua): each `.lua` chunk
+  returns one skill table. Builtins are embedded `builtin_skills/*.lua` with
+  reserved names; user skills live in `<slot>/skills/*.lua` and may
+  `require` (by skill name or file stem, builtins included — always a copy)
+  and `skill.extend` other skills (deep metadata/permission merge, bases
+  registered in `inherit`, base bodies not copied). Lua is restricted and
+  pure (base/table/string/math, custom skill-only require, no host or
+  dynamic-code access, fresh VM per module, cycle detection, timeout).
+  Markdown skills are retired: the runtime ignores `.md`; only storage
+  migration v5 still parses it, to convert user files to Lua in place.
 - Browser mirror: SignalDB in `store/sessions.ts` / `hooks/useMirror.ts`, one
   store per hostId, persisted in IndexedDB. Mutations are daemon commands;
   `saveSession`/`saveProjects`/`saveConfig`/`purgeSession` send debounced (300ms)

@@ -13,16 +13,16 @@ import (
 func TestWidgetToolPayloadsPerMode(t *testing.T) {
 	// Which widget tools belong to which delivery context is decided by
 	// the BUILTIN SKILL FILES (their permissions entries grant the tools),
-	// not by hardcoded lists in Go: load them from builtin_skills/ and
-	// validate the schemas of exactly the tools each one grants.
-	for _, skillFile := range []string{"generative_ui_agentic.md", "generative_ui_talk.md"} {
-		data, err := builtinSkillsFS.ReadFile("builtin_skills/" + skillFile)
-		if err != nil {
-			t.Fatalf("%s: %v", skillFile, err)
-		}
-		sk, err := skills.Parse(skillFile, data)
-		if err != nil {
-			t.Fatalf("%s: %v", skillFile, err)
+	// not by hardcoded lists in Go: load the embedded Lua set and validate
+	// the schemas of exactly the tools each skill grants.
+	builtins, errs := builtinSkills()
+	if len(errs) > 0 {
+		t.Fatalf("builtin parse errors: %v", errs)
+	}
+	for _, skillFile := range []string{"generative_ui_agentic", "generative_ui_talk"} {
+		sk, ok := builtins[skillFile]
+		if !ok {
+			t.Fatalf("builtin %q missing", skillFile)
 		}
 		modeReg := core.Registry{}
 		for name, spec := range sk.Permissions {
