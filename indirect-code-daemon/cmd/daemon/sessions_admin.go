@@ -38,14 +38,16 @@ func listSessionSummaries(dataDir string) []SessionSummary {
 }
 
 func summaryFromMeta(meta metaLine) SessionSummary {
-	var lastTurnStartedAt int64
+	var lastTurnStartedAt, lastTurnEndedAt int64
 	if meta.Turn != nil {
 		lastTurnStartedAt = meta.Turn.StartedAt
+		lastTurnEndedAt = meta.Turn.EndedAt
 	}
 	return SessionSummary{ID: meta.ID, CWD: resolvePath(meta.CWD), Title: meta.Title,
 		Model: meta.Model, Status: meta.Status, Pinned: meta.Pinned,
 		CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt,
 		LastTurnStartedAt: lastTurnStartedAt,
+		LastTurnEndedAt:   lastTurnEndedAt,
 		TodosOpen:         meta.TodosOpen, Options: &meta.Options}
 }
 
@@ -55,6 +57,7 @@ func sessionListItem(s SessionSummary) map[string]any {
 		"status": s.Status, "pinned": s.Pinned,
 		"createdAt": s.CreatedAt, "updatedAt": s.UpdatedAt,
 		"lastTurnStartedAt": s.LastTurnStartedAt,
+		"lastTurnEndedAt":   s.LastTurnEndedAt,
 		"todosOpen":         s.TodosOpen, "options": s.Options,
 	}
 }

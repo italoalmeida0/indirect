@@ -1,6 +1,6 @@
 import type { DaemonCommand } from "../daemon-protocol";
 import { createEffect, createMemo, createSignal, Show } from "solid-js";
-import { projectForDirectory, sessionRecency } from "../paths";
+import { projectForDirectory, compareSessions } from "../paths";
 import type { Project, SessionSummary } from "../types";
 import type { FoldersEvent, ProjectCreatedEvent, SearchResultsEvent } from "../daemon-protocol";
 
@@ -30,14 +30,14 @@ export function createProjects(opts: {
 
   // Default project: the one holding the newest conversation (computed from
   // the mirrored data — same answer on every device), else the first one.
-  // Recency is the start of the session's most recent turn.
+  // "Newest" follows sidebar order: the session sorting first wins.
   const newestSessionProjectId = createMemo(() => {
     let best: SessionSummary | null = null;
     for (const s of opts.sessions()) {
       // Talk sessions live in Home by construction; they must not pull
       // the default project for the next agentic conversation.
       if (isTalkSession(s)) continue;
-      if (!best || sessionRecency(s) > sessionRecency(best)) best = s;
+      if (!best || compareSessions(s, best) < 0) best = s;
     }
     if (!best) return "";
     return projectForDirectory(best.cwd, opts.projects())?.id || "";
@@ -192,14 +192,13 @@ export function createProjects(opts: {
 
   const [expandedSessionLists, setExpandedSessionLists] = createSignal<Record<string, boolean>>({});
   function sortedSessions(list: SessionSummary[]) {
-    const arr = [...list];
-    // Recency: start of the session's most recent turn (updatedAt fallback).
-    arr.sort((a, b) => sessionRecency(b) - sessionRecency(a) || b.createdAt - a.createdAt || a.id.localeCompare(b.id));
-    return arr;
+    // Live sessions first (running turn start, tie-break: session
+    // creation), then finished ones (last turn end, tie-break: creation).
+    return [...list].sort(compareSessions);
   }
   function visibleSessions(key: string, list: SessionSummary[]) {
     if (expandedSessionLists()[key]) return list;
-    return sortedSessions([...list].sort((a, b) => sessionRecency(b) - sessionRecency(a)).slice(0, 10));
+    return sortedSessions(list).slice(0, 10);
   }
   function sessionListToggle(key: string, count: number) {
     return <Show when={count > 10}><button class="px-3 py-2 text-xs text-ink-500 hover:text-ink-200 cursor-pointer" aria-expanded={!!expandedSessionLists()[key]}

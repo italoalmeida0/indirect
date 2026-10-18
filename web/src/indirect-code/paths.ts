@@ -87,19 +87,56 @@ export function absoluteRemotePath(path: string, cwd: string, home = ""): string
   return /^[a-z]:[\\/]/i.test(cwd) || cwd.startsWith("\\\\") ? value.replace(/\//g, "\\") : value;
 }
 
-/** Recency stamp for session ordering and the sidebar time label: the
- * start time of the session's most recent turn. Sessions that never ran a
- * turn fall back to updatedAt. */
-export function sessionRecency(s: {lastTurnStartedAt?: number; updatedAt: number}): number {
-  return s.lastTurnStartedAt && s.lastTurnStartedAt > 0 ? s.lastTurnStartedAt : s.updatedAt;
+/** True while the session has a turn in flight (sidebar "happening"
+ * group). Only the mirrored `status` decides — never timestamps. */
+export function isLiveSession(s: {status?: string}): boolean {
+  return s.status === "running";
 }
 
-/** Projects ordered by activity: each project ranks by the newest turn
- * start among its 10 most recent sessions (newest first), falling back to
- * creation date when it has no sessions. */
-export function projectsByActivity<T extends {id:string; path:string; createdAt:number}>(projects:T[], sessions:{cwd:string; updatedAt:number; lastTurnStartedAt?:number}[]): T[] {
+function positiveStamp(n: unknown): number {
+  return typeof n === "number" && n > 0 ? n : 0;
+}
+
+/** Order key of a live session: start of the running turn (updatedAt
+ * fallback for sessions that never ran a turn). */
+export function sessionLiveKey(s: {lastTurnStartedAt?: number; updatedAt: number}): number {
+  return positiveStamp(s.lastTurnStartedAt) || s.updatedAt;
+}
+
+/** Order key of a finished session: end of the last turn — never its
+ * start. Sessions without a recorded turn end (never ran, or finished
+ * before the daemon tracked it) fall back to updatedAt. */
+export function sessionFinishedKey(s: {lastTurnStartedAt?: number; lastTurnEndedAt?: number; updatedAt: number}): number {
+  return positiveStamp(s.lastTurnEndedAt) || s.updatedAt;
+}
+
+/** Sidebar order: live sessions first (running turn start, newest first;
+ * session creation breaks ties), then finished sessions (last turn end,
+ * newest first; creation breaks ties). Final `id` tie-break keeps the
+ * order stable. */
+export function compareSessions<
+  T extends {id: string; status?: string; createdAt: number; updatedAt: number; lastTurnStartedAt?: number; lastTurnEndedAt?: number},
+>(a: T, b: T): number {
+  const aLive = isLiveSession(a);
+  const bLive = isLiveSession(b);
+  if (aLive !== bLive) return aLive ? -1 : 1;
+  const key = aLive ? sessionLiveKey : sessionFinishedKey;
+  return key(b) - key(a) || b.createdAt - a.createdAt || a.id.localeCompare(b.id);
+}
+
+/** Stamp shown next to a sidebar/history row: the same stamp the row is
+ * ordered by (turn start while live, turn end once finished). */
+export function sessionTimeLabel(s: {status?: string; lastTurnStartedAt?: number; lastTurnEndedAt?: number; updatedAt: number}): number {
+  return isLiveSession(s) ? sessionLiveKey(s) : sessionFinishedKey(s);
+}
+
+/** Projects ordered by activity: each project ranks by the newest
+ * session order key among its 10 most ordered sessions (live sessions
+ * contribute their turn start, finished ones their turn end), falling
+ * back to creation date when it has no sessions. */
+export function projectsByActivity<T extends {id:string; path:string; createdAt:number}>(projects:T[], sessions:{cwd:string; status?:string; updatedAt:number; lastTurnStartedAt?:number; lastTurnEndedAt?:number}[]): T[] {
   const activity = new Map(projects.map((p) => [p.id, p.createdAt]));
-  const byProject = new Map<string, {updatedAt:number; lastTurnStartedAt?:number}[]>();
+  const byProject = new Map<string, {status?:string; updatedAt:number; lastTurnStartedAt?:number; lastTurnEndedAt?:number}[]>();
   for (const session of sessions) {
     const project = projectForDirectory(session.cwd, projects);
     if (!project) continue;
@@ -108,10 +145,10 @@ export function projectsByActivity<T extends {id:string; path:string; createdAt:
     byProject.set(project.id, list);
   }
   for (const [id, list] of byProject) {
-    // Only the 10 most recent sessions of the project count for its rank.
-    list.sort((a, b) => sessionRecency(b) - sessionRecency(a));
+    // Only the 10 most ordered sessions of the project count for its rank.
+    list.sort((a, b) => sessionTimeLabel(b) - sessionTimeLabel(a));
     let rank = 0;
-    for (const s of list.slice(0, 10)) rank = Math.max(rank, sessionRecency(s));
+    for (const s of list.slice(0, 10)) rank = Math.max(rank, sessionTimeLabel(s));
     activity.set(id, Math.max(activity.get(id) || 0, rank));
   }
   return [...projects].sort((a,b) => (activity.get(b.id) || 0) - (activity.get(a.id) || 0) || a.id.localeCompare(b.id));

@@ -261,3 +261,123 @@ func TestCompactSplitTurn(t *testing.T) {
 		t.Fatalf("compaction usage should be recorded, got %+v", chain.Usage)
 	}
 }
+
+// Threshold trigger: with an 80% setting on a 200k window, the projected
+// context must compact at 80% — the legacy fixed reserve (~92%) would
+// let the turn run past the configured limit.
+func TestMaybeAutoCompactAtHonorsThreshold(t *testing.T) {
+	newSeeded := func() *Agent {
+		client := &scriptableFakeClient{summaries: []string{"auto summary"}}
+		a := NewAgent(client, "m", "", nil)
+		a.SetMessages(bigTokenHistory(8)) // ~24k counted tokens
+		return a
+	}
+	// ~24k over a 30k window: above 80% (24k target) but below the
+	// legacy reserve line (30k-16k = 14k... wait, over both). Use a
+	// window where the two rulers disagree: target = 80% of 200k =
+	// 160k; legacy line = 200k-16k = 184k. A 170k transcript must
+	// compact under the threshold ruler and no-op under the legacy one.
+	_ = newSeeded
+	mkMsgs := func() []provider.Message {
+		// ~170k counted tokens: 15 pairs x ~11k each (btdby4 ~0.37 tok/char).
+		// Sits between the 80% target (160k) and the legacy reserve
+		// line (200k-16k = 184k): threshold fires, legacy no-ops.
+		var msgs []provider.Message
+		for i := 0; i < 15; i++ {
+			msgs = append(msgs, textMsg(provider.RoleUser, "user message "+strings.Repeat("x", 30000)))
+			msgs = append(msgs, textMsg(provider.RoleAssistant, "assistant reply "+strings.Repeat("y", 30000)))
+		}
+		return msgs
+	}
+	mkAgent := func() *Agent {
+		client := &scriptableFakeClient{summaries: []string{"s1", "s2", "s3", "s4"}}
+		a := NewAgent(client, "m", "", nil)
+		a.SetMessages(mkMsgs())
+		return a
+	}
+	probe := mkMsgs()
+	system, tools := "m", ([]provider.Tool)(nil)
+	used := provider.ContextTokens(system, tools, probe)
+	t.Logf("probe transcript = %d counted tokens", used)
+	if ShouldCompact(200000, used) {
+		t.Fatalf("precondition broken: legacy ruler must NOT fire at %d/200k", used)
+	}
+	if !ShouldCompactAt(200000, used, 80) {
+		t.Fatalf("threshold ruler must fire at %d/200k with 80%% setting", used)
+	}
+	a := mkAgent()
+	did, err := a.MaybeAutoCompactAt(context.Background(), 200000, 80, nil)
+	if err != nil {
+		t.Fatalf("MaybeAutoCompactAt: %v", err)
+	}
+	if !did {
+		t.Fatalf("expected compaction at 170k/200k with 80%% threshold")
+	}
+	if a.CompactionChain() == nil {
+		t.Fatalf("chain head missing after threshold auto-compact")
+	}
+
+	// Same transcript under the legacy entry point still no-ops
+	// (back-compat for threshold <= 0): the fixed reserve line sits at
+	// 184k, above this transcript.
+	b := mkAgent()
+	did, err = b.MaybeAutoCompact(context.Background(), 200000, nil)
+	if err != nil {
+		t.Fatalf("MaybeAutoCompact: %v", err)
+	}
+	if did || b.CompactionChain() != nil {
+		t.Fatalf("legacy path must keep fixed-reserve behavior (no-op at 170k/200k)")
+	}
+}
+
+// Repeat-until-fit: a single pass over a huge transcript can still sit
+// over the target; the hook must compact again (bounded) instead of
+// leaving the turn over the limit until the next model request.
+func TestMaybeAutoCompactAtRepeatsUntilFit(t *testing.T) {
+	// ~340k counted tokens on a 200k window with 80% (160k target):
+	// one pass keeping 40k + summary still exceeds 160k only if the
+	// summarizer emits something huge — instead assert the loop
+	// re-evaluates: seed summaries so the first pass lands over target
+	// by using a tiny window where one pass cannot fit.
+	client := &scriptableFakeClient{summaries: []string{"s1", "s2", "s3", "s4", "s5"}}
+	a := NewAgent(client, "m", "", nil)
+	a.SetMessages(bigTokenHistory(8)) // ~24k counted tokens
+	// Window 26k, threshold 80% -> target ~20.8k: first pass keeps up
+	// to 40k-capped floor... exercise the loop plumbing: it must
+	// return did=true and leave the projection at or under target, or
+	// stop after the bounded attempts without error.
+	did, err := a.MaybeAutoCompactAt(context.Background(), 26000, 80, nil)
+	if err != nil {
+		t.Fatalf("MaybeAutoCompactAt: %v", err)
+	}
+	if !did {
+		t.Fatalf("expected compaction above the 80%% target")
+	}
+	system, tools := a.System, a.Tools.Specs()
+	msgs := projectMessages(append([]provider.Message(nil), a.History()...), a.CompactionChain())
+	after := provider.ContextTokens(system, tools, msgs)
+	if after > compactTargetTokens(26000, 80) && client.calls < 3 {
+		t.Fatalf("still over target (%d > %d) after a single pass without retry", after, compactTargetTokens(26000, 80))
+	}
+}
+
+// Keep-floor cap: a 500k transcript must not keep ~150k verbatim; the
+// landing stays near small-session landings.
+func TestHybridKeepFloorCapsLargeTranscripts(t *testing.T) {
+	var msgs []provider.Message
+	for i := 0; i < 48; i++ {
+		msgs = append(msgs, textMsg(provider.RoleUser, "user message "+strings.Repeat("x", 30000)))
+		msgs = append(msgs, textMsg(provider.RoleAssistant, "assistant reply "+strings.Repeat("y", 30000)))
+	}
+	total := provider.ContextTokens("", nil, msgs)
+	if total < 400000 {
+		t.Fatalf("precondition broken: want a ~500k transcript, got %d tokens", total)
+	}
+	floor := hybridKeepFloor(msgs)
+	if floor > CompactionKeepMaxTokens {
+		t.Fatalf("keep floor must be capped at %d, got %d", CompactionKeepMaxTokens, floor)
+	}
+	if floor < CompactionKeepRecentTokens {
+		t.Fatalf("keep floor must keep the 20k baseline, got %d", floor)
+	}
+}

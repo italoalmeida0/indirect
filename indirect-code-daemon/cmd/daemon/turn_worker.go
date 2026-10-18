@@ -936,12 +936,12 @@ func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEven
 	msgs := w.agent.Messages()
 	system, tls := w.agent.ContextTools()
 	used := provider.ContextTokens(system, tls, msgs)
-	needs := core.ShouldCompact(window, used)
-	if !needs {
-		if threshold := w.cfg.Settings.AutoCompactThreshold; threshold > 0 {
-			needs = used*100 >= threshold*window
-		}
-	}
+	threshold := w.cfg.Settings.AutoCompactThreshold
+	// One ruler for gate and action: the threshold percent decides, so
+	// the configured 80% fires at 80% — not at the legacy fixed
+	// reserve (~92% on a 200k window), which let turns run past the
+	// limit. threshold <= 0 keeps the legacy fixed-reserve behavior.
+	needs := core.ShouldCompactAt(window, used, threshold)
 	if !needs {
 		if usable := window - maxOutputTokens(w.modelInfo) - 20000; usable > 0 {
 			needs = used >= usable
@@ -951,7 +951,7 @@ func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEven
 		return nil
 	}
 	esink(core.EvToolProgress{Text: "Compacting older context…"})
-	_, err := w.agent.MaybeAutoCompact(cctx, window, func(delta string) {
+	_, err := w.agent.MaybeAutoCompactAt(cctx, window, threshold, func(delta string) {
 		esink(core.EvToolProgress{Text: delta})
 	})
 	return err

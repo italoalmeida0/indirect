@@ -1,7 +1,7 @@
 import { createSignal, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { timeAgo } from "../utils/format";
-import { sessionRecency } from "../paths";
+import { sessionTimeLabel } from "../paths";
 import type { SessionSummary } from "../types";
 
 export function SessionStopButton(props: {
@@ -131,7 +131,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
             </Show>
             <div class="relative flex items-center justify-end shrink-0 min-w-[34px]">
               <span class="text-[10px] text-ink-600 transition-opacity group-hover:opacity-0 group-hover:pointer-events-none">
-                {timeAgo(sessionRecency(s))}
+                {timeAgo(sessionTimeLabel(s))}
               </span>
               <Show when={!ctx.selectionMode()}>
                 <div class="absolute right-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">

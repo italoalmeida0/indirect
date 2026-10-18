@@ -231,9 +231,14 @@ type SessionSummary struct {
 	CreatedAt int64  `json:"createdAt"`
 	UpdatedAt int64  `json:"updatedAt"`
 	// LastTurnStartedAt is the start time of the most recent turn
-	// (Turn.StartedAt). The sidebar orders sessions and projects by this
-	// stamp instead of UpdatedAt, which moves on every event.
-	LastTurnStartedAt int64           `json:"lastTurnStartedAt,omitempty"`
-	TodosOpen         *bool           `json:"todosOpen,omitempty"`
-	Options           *SessionOptions `json:"options,omitempty"`
+	// (Turn.StartedAt). The sidebar orders live sessions and project
+	// ranks by this stamp instead of UpdatedAt, which moves on every
+	// event.
+	LastTurnStartedAt int64 `json:"lastTurnStartedAt,omitempty"`
+	// LastTurnEndedAt is the end time of the most recent finished turn
+	// (Turn.EndedAt). Finished sessions order by this stamp (end of the
+	// last turn), never by its start.
+	LastTurnEndedAt int64           `json:"lastTurnEndedAt,omitempty"`
+	TodosOpen       *bool           `json:"todosOpen,omitempty"`
+	Options         *SessionOptions `json:"options,omitempty"`
 }

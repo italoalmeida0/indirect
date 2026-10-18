@@ -9,7 +9,7 @@ import {
   sanitizeUserText,
   stripLeadingSystemPrompt,
 } from "../web/src/indirect-code/live";
-import { absoluteRemotePath, collapseCwd, projectForDirectory, projectsByActivity, sameRemotePath, sessionRecency } from "../web/src/indirect-code/paths";
+import { absoluteRemotePath, collapseCwd, projectForDirectory, projectsByActivity, sameRemotePath, compareSessions, sessionFinishedKey, sessionLiveKey, sessionTimeLabel } from "../web/src/indirect-code/paths";
 import {
   blockTurnDuration, buildRenderBlocks, createRenderBlockBuilder, cacheHitPct, fmtUsd, isHeaderOnlySleep, isTurnStartMessage, latestShortTurnMessage, mapBalloonsToBlocks, terminalPresentation, toolSummary, usageCosts,
 } from "../web/src/indirect-code/transcript";
@@ -73,27 +73,57 @@ test("orders projects by their own conversations' most recent activity", () => {
   expect(ordered.map((p) => p.id)).toEqual(["first","second","home"]);
 });
 
-test("ranks sessions and projects by the start of the last turn", () => {
-  // updatedAt churns on every event; only the last turn's start counts.
-  expect(sessionRecency({updatedAt: 500})).toBe(500);
-  expect(sessionRecency({updatedAt: 500, lastTurnStartedAt: 0})).toBe(500);
-  expect(sessionRecency({updatedAt: 500, lastTurnStartedAt: 120})).toBe(120);
+test("orders live sessions first, finished sessions by last turn end", () => {
+  // updatedAt churns on every event: live rows sort by the running turn's
+  // start (tie-break: session creation), finished rows by the last turn's
+  // end (same tie-break). Never by turn start vs turn end across groups.
+  expect(sessionLiveKey({updatedAt: 500})).toBe(500);
+  expect(sessionLiveKey({updatedAt: 500, lastTurnStartedAt: 0})).toBe(500);
+  expect(sessionLiveKey({updatedAt: 500, lastTurnStartedAt: 120})).toBe(120);
+  expect(sessionFinishedKey({updatedAt: 500})).toBe(500);
+  expect(sessionFinishedKey({updatedAt: 500, lastTurnEndedAt: 0})).toBe(500);
+  expect(sessionFinishedKey({updatedAt: 500, lastTurnStartedAt: 999, lastTurnEndedAt: 120})).toBe(120);
+  expect(sessionTimeLabel({status: "running", updatedAt: 500, lastTurnStartedAt: 120, lastTurnEndedAt: 400})).toBe(120);
+  expect(sessionTimeLabel({status: "idle", updatedAt: 500, lastTurnStartedAt: 999, lastTurnEndedAt: 400})).toBe(400);
+  type Row = {id: string; status?: string; createdAt: number; updatedAt: number; lastTurnStartedAt?: number; lastTurnEndedAt?: number};
+  const rows: Row[] = [
+    // Live session with an older turn start than the finished one's end.
+    {id: "live-old", status: "running", createdAt: 10, updatedAt: 999, lastTurnStartedAt: 100},
+    // Live session with a newer turn start wins among live ones.
+    {id: "live-new", status: "running", createdAt: 5, updatedAt: 100, lastTurnStartedAt: 200},
+    // Same turn start as live-new: creation breaks the tie (9 > 5).
+    {id: "live-tie", status: "running", createdAt: 9, updatedAt: 100, lastTurnStartedAt: 200},
+    // Finished sessions order by turn end, not by start (fin-old's start
+    // 950 is the newest stamp of all, its end is the oldest).
+    {id: "fin-old", status: "idle", createdAt: 1, updatedAt: 50, lastTurnStartedAt: 950, lastTurnEndedAt: 60},
+    {id: "fin-new", status: "idle", createdAt: 2, updatedAt: 50, lastTurnStartedAt: 300, lastTurnEndedAt: 800},
+    // No recorded turn end falls back to updatedAt.
+    {id: "fin-never", status: "idle", createdAt: 3, updatedAt: 700},
+  ];
+  expect([...rows].sort(compareSessions).map((r) => r.id)).toEqual([
+    "live-tie", "live-new", "live-old", "fin-new", "fin-never", "fin-old",
+  ]);
+});
+
+test("ranks projects by the session display stamp", () => {
+  // Each session contributes the same stamp its sidebar row is ordered
+  // and labeled by (live: turn start, finished: turn end).
   const projects = [{id:"old",path:"/old",createdAt:1},{id:"fresh",path:"/fresh",createdAt:1}];
   const sessions = [
-    {cwd:"/old", updatedAt: 900, lastTurnStartedAt: 400},
-    {cwd:"/fresh", updatedAt: 300, lastTurnStartedAt: 500},
+    {cwd:"/old", status: "running", updatedAt: 900, lastTurnStartedAt: 400},
+    {cwd:"/fresh", status: "idle", updatedAt: 300, lastTurnStartedAt: 500, lastTurnEndedAt: 500},
   ];
   expect(projectsByActivity(projects, sessions).map((p) => p.id)).toEqual(["fresh","old"]);
 });
 
-test("ranks a project by the newest turn start among its recent sessions", () => {
+test("ranks a project by the newest display stamp among its recent sessions", () => {
   const projects = [{id:"many",path:"/many",createdAt:1},{id:"one",path:"/one",createdAt:1}];
-  const sessions: {cwd:string; updatedAt:number; lastTurnStartedAt?:number}[] = [
-    // A churned updatedAt (huge) with an old turn start must not lift the
-    // project: rank comes from the newest turn start of its recent sessions.
-    ...Array.from({length: 10}, (_, i) => ({cwd:"/many", updatedAt: 1000 - i, lastTurnStartedAt: 100 + i})),
-    {cwd:"/many", updatedAt: 99999, lastTurnStartedAt: 5},
-    {cwd:"/one", updatedAt: 300, lastTurnStartedAt: 300},
+  const sessions: {cwd:string; status?:string; updatedAt:number; lastTurnStartedAt?:number; lastTurnEndedAt?:number}[] = [
+    // A churned updatedAt (huge) with an old turn end must not lift the
+    // project: rank comes from the newest row stamp of its recent sessions.
+    ...Array.from({length: 10}, (_, i) => ({cwd:"/many", status: "idle", updatedAt: 1000 - i, lastTurnStartedAt: 90 + i, lastTurnEndedAt: 100 + i})),
+    {cwd:"/many", status: "idle", updatedAt: 99999, lastTurnStartedAt: 5, lastTurnEndedAt: 5},
+    {cwd:"/one", status: "idle", updatedAt: 300, lastTurnStartedAt: 290, lastTurnEndedAt: 300},
   ];
   expect(projectsByActivity(projects, sessions).map((p) => p.id)).toEqual(["one","many"]);
 });

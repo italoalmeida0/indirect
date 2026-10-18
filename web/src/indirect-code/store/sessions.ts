@@ -29,9 +29,13 @@ export interface RcSession {
   pinned: boolean;
   createdAt: number;
   updatedAt: number;
-  /** Start time of the most recent turn (sidebar recency); 0/absent on
-   * sessions that never ran a turn — callers fall back to updatedAt. */
+  /** Start time of the most recent turn (live-session ordering); 0/absent
+   * on sessions that never ran a turn — callers fall back to updatedAt. */
   lastTurnStartedAt?: number;
+  /** End time of the most recent finished turn (finished-session
+   * ordering); 0/absent on running sessions — callers fall back to
+   * updatedAt. */
+  lastTurnEndedAt?: number;
   todosOpen?: boolean;
   options?: { effort: string; mode: string; skills: { name: string; usable?: string }[]; access: string };
   /** Session skill selection (daemon SessionRecord.Skills, complete
@@ -130,6 +134,7 @@ interface RawSessionRow {
   createdAt?: number;
   updatedAt?: number;
   lastTurnStartedAt?: number;
+  lastTurnEndedAt?: number;
   todosOpen?: boolean;
   options?: { effort?: string; mode?: string; skills?: { name: string; usable?: string }[]; access?: string };
   skills?: Record<string, { priority?: number; active?: boolean; usable?: string }>;
@@ -150,6 +155,7 @@ export function normalizeSession(r: RawSessionRow, hostId: string): RcSession {
     createdAt: typeof r.createdAt === "number" && r.createdAt > 0 ? r.createdAt : CORRUPT_TIMESTAMP,
     updatedAt: typeof r.updatedAt === "number" && r.updatedAt > 0 ? r.updatedAt : CORRUPT_TIMESTAMP,
     lastTurnStartedAt: typeof r.lastTurnStartedAt === "number" && r.lastTurnStartedAt > 0 ? r.lastTurnStartedAt : undefined,
+    lastTurnEndedAt: typeof r.lastTurnEndedAt === "number" && r.lastTurnEndedAt > 0 ? r.lastTurnEndedAt : undefined,
     todosOpen: typeof r.todosOpen === "boolean" ? r.todosOpen : undefined,
     options: r.options ? {
       effort: r.options.effort || "medium",

@@ -238,11 +238,24 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 // the projected context, so a previous compaction's discarded prefix
 // cannot inflate the estimate.
 //
+// thresholdPct carries the auto-compact setting (percent of the window
+// the projected context must fit under; <= 0 keeps the legacy
+// fixed-reserve behavior). After one compaction, the projection is
+// re-evaluated and compaction repeats (bounded) until the projection
+// fits under the target — a single pass can otherwise leave a huge
+// transcript still over the threshold, and the next check would only
+// fire on the following model request, mid-turn past the limit.
+//
 // window <= 0 (unknown context window) disables the trigger. A failed
 // summarization does NOT abort the run: false is returned and the
 // request proceeds; the reactive overflow retry stays as the safety
 // net.
 func (a *Agent) MaybeAutoCompact(ctx context.Context, window int, sink func(delta string)) (bool, error) {
+	return a.MaybeAutoCompactAt(ctx, window, 0, sink)
+}
+
+// MaybeAutoCompactAt is MaybeAutoCompact honoring a threshold percent.
+func (a *Agent) MaybeAutoCompactAt(ctx context.Context, window int, thresholdPct int, sink func(delta string)) (bool, error) {
 	if window <= 0 {
 		return false, nil
 	}
@@ -258,14 +271,32 @@ func (a *Agent) MaybeAutoCompact(ctx context.Context, window int, sink func(delt
 	// Single ruler: the counted request payload. Provider usage is
 	// metrics only and never feeds this decision.
 	system, tools := a.System, a.Tools.Specs()
-	if !ShouldCompact(window, provider.ContextTokens(system, tools, msgs)) {
+	if !ShouldCompactAt(window, provider.ContextTokens(system, tools, msgs), thresholdPct) {
 		return false, nil
 	}
-	summary, err := a.Compact(ctx, 0, sink)
-	if err != nil || summary == "" {
-		return false, nil
+	for attempt := 0; ; attempt++ {
+		summary, err := a.Compact(ctx, 0, sink)
+		if err != nil || summary == "" {
+			return attempt > 0, nil
+		}
+		a.mu.Lock()
+		history = append([]provider.Message(nil), a.messages...)
+		state = a.compactionStateLocked()
+		a.mu.Unlock()
+		msgs = projectMessages(history, state)
+		if !ShouldCompactAt(window, provider.ContextTokens(system, tools, msgs), thresholdPct) {
+			return true, nil
+		}
+		// One compaction per hook firing used to be enough when the
+		// keep floor was small relative to the window; with large
+		// transcripts a single pass can still sit over the target.
+		// Retry bounded: each pass must shrink the projection, and
+		// the loop never spans more than two extra passes, so a
+		// pathological summarizer cannot stall the turn.
+		if attempt >= 2 {
+			return true, nil
+		}
 	}
-	return true, nil
 }
 
 // runSummarizer issues one summarization request with tool use disabled
@@ -409,15 +440,21 @@ func (a *Agent) setCompactionStateLocked(state *CompactionState) {
 }
 
 // hybridKeepFloor computes the keep floor: a 20k-token floor, raised
-// to 30% of the transcript when the transcript is large (so 1M-token
-// windows keep working context instead of summarizing 98% away).
-// Counts are btdby4 payload tokens (system/tools excluded here: the
-// floor only walks the message tail).
+// toward 30% of the transcript on large histories (so 1M-token windows
+// keep working context instead of summarizing 98% away), but capped at
+// CompactionKeepMaxTokens so a huge transcript does not land at a huge
+// size after compacting: without the cap, a 500k transcript keeps ~150k
+// verbatim plus the summary, while a small one lands near 20k — the
+// wide variance users see. Counts are btdby4 payload tokens
+// (system/tools excluded here: the floor only walks the message tail).
 func hybridKeepFloor(msgs []provider.Message) int {
 	total := provider.ContextTokens("", nil, msgs)
 	floor := CompactionKeepRecentTokens
 	if thirty := total * 30 / 100; thirty > floor {
 		floor = thirty
+	}
+	if floor > CompactionKeepMaxTokens {
+		floor = CompactionKeepMaxTokens
 	}
 	return floor
 }

@@ -23,6 +23,14 @@ const (
 	// CompactionKeepRecentTokens is the floor of recent context that is
 	// never summarized away. KEEP_RECENT_TOKENS = 20000.
 	CompactionKeepRecentTokens = 20000
+	// CompactionKeepMaxTokens caps the hybrid keep floor (which raises
+	// the 20k floor toward 30% of the transcript on large histories) so
+	// compacting a huge transcript lands near the same size as
+	// compacting a small one. Without the cap, a 500k transcript keeps
+	// ~150k tokens verbatim while a 60k one keeps ~20k — the wide
+	// landing variance users see. 40k keeps roughly one solid working
+	// turn verbatim on top of the incremental summary chain.
+	CompactionKeepMaxTokens = 40000
 	// CompactionMinMessages is the minimum history length worth
 	// compacting. Below this there is nothing meaningful to summarize.
 	CompactionMinMessages = 6
@@ -136,16 +144,45 @@ func contextTokens(system string, tools []provider.Tool, msgs []provider.Message
 	return provider.ContextTokens(system, tools, msgs)
 }
 
+// compactTargetTokens converts a context window and a threshold percent
+// into the absolute token budget the projected context must fit under.
+// The headroom above the threshold is the space the next turns may
+// consume before the next check fires; it is floored at
+// CompactionReserveTokens so small windows and high thresholds still
+// leave room for the summarizer and one more request. thresholdPct <= 0
+// (setting off) falls back to the legacy fixed reserve.
+func compactTargetTokens(window int, thresholdPct int) int {
+	if thresholdPct > 0 && thresholdPct < 100 {
+		target := window * thresholdPct / 100
+		if headroom := window - target; headroom < CompactionReserveTokens {
+			target = window - CompactionReserveTokens
+		}
+		if target < 1 {
+			target = 1
+		}
+		return target
+	}
+	return window - CompactionReserveTokens
+}
+
 // ShouldCompact reports whether the session should auto-compact before the
 // next model call: counted context vs window minus reserve.
 //
 // window <= 0 means unknown: fall back to false and let the caller
 // apply its own heuristic.
 func ShouldCompact(window int, countedContext int) bool {
+	return ShouldCompactAt(window, countedContext, 0)
+}
+
+// ShouldCompactAt is ShouldCompact honoring a threshold percent (the
+// auto-compact setting): the projected context must fit under
+// thresholdPct% of the window instead of window minus the fixed reserve.
+// thresholdPct <= 0 keeps the legacy fixed-reserve behavior.
+func ShouldCompactAt(window int, countedContext int, thresholdPct int) bool {
 	if window <= 0 {
 		return false
 	}
-	return countedContext > window-CompactionReserveTokens
+	return countedContext > compactTargetTokens(window, thresholdPct)
 }
 
 // SerializeConversation renders messages into a <conversation> XML-ish
