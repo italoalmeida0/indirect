@@ -14,7 +14,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import path, { join } from "node:path";
 import { $ } from "bun";
 
 export const ZIG_VERSION = "0.17.0";
@@ -88,14 +88,19 @@ function sha256File(p: string): string {
 }
 
 async function which(bin: string): Promise<string | null> {
-  try {
-    const res = await $`command -v ${bin}`.quiet().nothrow();
-    if (res.exitCode !== 0) return null;
-    const p = res.stdout.toString().trim().split("\n")[0]?.trim();
-    return p && existsSync(p) ? p : null;
-  } catch {
-    return null;
+  const exts = process.platform === "win32" ? [".exe", ".cmd", ""] : [""];
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const candidate = path.join(dir, bin + ext);
+      try {
+        if (statSync(candidate).isFile()) return candidate;
+      } catch {
+        // not there: keep looking
+      }
+    }
   }
+  return null;
 }
 
 let cached: string | null = null;
