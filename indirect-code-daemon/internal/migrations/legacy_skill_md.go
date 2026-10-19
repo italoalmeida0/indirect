@@ -8,7 +8,7 @@ import (
 )
 
 // Legacy Markdown skill support, retained ONLY so storage migration v5 can
-// convert a user's old skills/*.md files to Lua. The daemon runtime does
+// convert a user's old skills/*.md files to JavaScript. The daemon runtime does
 // not load Markdown skills anymore: this parser never runs outside the v5
 // conversion, and a file it cannot parse is left untouched on disk (the old
 // loader dropped invalid files too).
@@ -289,34 +289,34 @@ func legacyUnquote(s string) string {
 	return s
 }
 
-// renderLegacySkillLua renders one parsed legacy skill as a canonical Lua
-// module (a chunk returning the skill table). Keys are sorted inside
+// renderLegacySkillJS renders one parsed legacy skill as a canonical ES
+// module (default export carrying the skill object). Keys are sorted inside
 // permissions/args so the output is deterministic.
-func renderLegacySkillLua(s legacySkill) []byte {
+func renderLegacySkillJS(s legacySkill) []byte {
 	var b strings.Builder
-	b.WriteString("-- Converted from a Markdown skill by storage migration v5.\n")
-	b.WriteString("return {\n")
-	fmt.Fprintf(&b, "  name = %s,\n", luaQuote(s.Name))
-	fmt.Fprintf(&b, "  description = %s,\n", luaQuote(s.Description))
-	fmt.Fprintf(&b, "  usable = %s,\n", luaQuote(s.Usable))
+	b.WriteString("// Converted from a Markdown skill by storage migration v5.\n")
+	b.WriteString("export default {\n")
+	fmt.Fprintf(&b, "  name: %s,\n", jsQuote(s.Name))
+	fmt.Fprintf(&b, "  description: %s,\n", jsQuote(s.Description))
+	fmt.Fprintf(&b, "  usable: %s,\n", jsQuote(s.Usable))
 	if s.Mode != "" {
-		fmt.Fprintf(&b, "  mode = %s,\n", luaQuote(s.Mode))
+		fmt.Fprintf(&b, "  mode: %s,\n", jsQuote(s.Mode))
 	}
 	if s.ApprovalMode != "" {
-		fmt.Fprintf(&b, "  approvalMode = %s,\n", luaQuote(s.ApprovalMode))
+		fmt.Fprintf(&b, "  approvalMode: %s,\n", jsQuote(s.ApprovalMode))
 	}
 	if len(s.Inherit) > 0 {
-		b.WriteString("  inherit = { ")
+		b.WriteString("  inherit: [")
 		for i, name := range s.Inherit {
 			if i > 0 {
 				b.WriteString(", ")
 			}
-			b.WriteString(luaQuote(name))
+			b.WriteString(jsQuote(name))
 		}
-		b.WriteString(" },\n")
+		b.WriteString("],\n")
 	}
 	if len(s.Permissions) > 0 {
-		b.WriteString("  permissions = {\n")
+		b.WriteString("  permissions: {\n")
 		tools := make([]string, 0, len(s.Permissions))
 		for tool := range s.Permissions {
 			tools = append(tools, tool)
@@ -325,7 +325,7 @@ func renderLegacySkillLua(s legacySkill) []byte {
 		for _, tool := range tools {
 			spec := s.Permissions[tool]
 			if len(spec.Args) == 0 {
-				fmt.Fprintf(&b, "    %s = %s,\n", luaKey(tool), luaQuote(spec.Policy))
+				fmt.Fprintf(&b, "    %s: %s,\n", jsKey(tool), jsQuote(spec.Policy))
 				continue
 			}
 			args := make([]string, 0, len(spec.Args))
@@ -333,37 +333,37 @@ func renderLegacySkillLua(s legacySkill) []byte {
 				args = append(args, arg)
 			}
 			sort.Strings(args)
-			fmt.Fprintf(&b, "    %s = { policy = %s, args = { ", luaKey(tool), luaQuote(spec.Policy))
+			fmt.Fprintf(&b, "    %s: { policy: %s, args: { ", jsKey(tool), jsQuote(spec.Policy))
 			for i, arg := range args {
 				if i > 0 {
 					b.WriteString(", ")
 				}
-				fmt.Fprintf(&b, "%s = %s", luaKey(arg), luaQuote(spec.Args[arg]))
+				fmt.Fprintf(&b, "%s: %s", jsKey(arg), jsQuote(spec.Args[arg]))
 			}
 			b.WriteString(" } },\n")
 		}
 		b.WriteString("  },\n")
 	}
-	open, close := luaLongBracket(s.Body)
-	fmt.Fprintf(&b, "  body = %s\n%s\n%s,\n", open, s.Body, close)
-	b.WriteString("}\n")
+	fmt.Fprintf(&b, "  body: `%s`,\n", escapeJSTemplate(s.Body))
+	b.WriteString("};\n")
 	return []byte(b.String())
 }
 
-// luaLongBracket picks a long-bracket level whose closing sequence never
-// occurs inside body, so any prompt text survives the conversion verbatim.
-func luaLongBracket(body string) (open, close string) {
-	for level := 0; ; level++ {
-		eq := strings.Repeat("=", level)
-		close = "]" + eq + "]"
-		if !strings.Contains(body, close) {
-			return "[" + eq + "[", close
-		}
-	}
+// escapeJSTemplate escapes the three sequences a backtick literal cannot
+// carry verbatim (backslash, backtick and ${). Every other byte of the body
+// survives untouched.
+func escapeJSTemplate(body string) string {
+	body = strings.ReplaceAll(body, "\\", "\\\\")
+	body = strings.ReplaceAll(body, "`", "\\`")
+	body = strings.ReplaceAll(body, "${", "\\${")
+	return body
 }
 
-// luaQuote renders a short Lua string literal, preserving UTF-8 bytes.
-func luaQuote(s string) string {
+
+// jsQuote renders a double-quoted JavaScript string literal, preserving
+// UTF-8 bytes; every control byte becomes an escape so the module always
+// parses.
+func jsQuote(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')
 	for _, r := range s {
@@ -378,9 +378,13 @@ func luaQuote(s string) string {
 			b.WriteString(`\r`)
 		case '\t':
 			b.WriteString(`\t`)
+		case '\u2028':
+			b.WriteString(`\u2028`)
+		case '\u2029':
+			b.WriteString(`\u2029`)
 		default:
 			if r < 0x20 || r == 0x7f {
-				fmt.Fprintf(&b, `\%03d`, r)
+				fmt.Fprintf(&b, `\u%04x`, r)
 			} else {
 				b.WriteRune(r)
 			}
@@ -390,23 +394,17 @@ func luaQuote(s string) string {
 	return b.String()
 }
 
-// luaKey renders a table key: bare for Lua identifiers, bracketed string
-// otherwise (tool and argument names are user-controlled).
-func luaKey(s string) string {
-	switch s {
-	case "and", "break", "do", "else", "elseif", "end", "false", "for",
-		"function", "if", "in", "local", "nil", "not", "or", "repeat",
-		"return", "then", "true", "until", "while":
-		return "[" + luaQuote(s) + "]"
-	}
+// jsKey renders an object literal key: bare when it is a plain identifier,
+// quoted otherwise (tool and argument names are user-controlled).
+func jsKey(s string) string {
 	if s == "" {
-		return "[" + luaQuote(s) + "]"
+		return jsQuote(s)
 	}
 	for i, r := range s {
-		isAlpha := r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+		isAlpha := r == '_' || r == '$' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 		isDigit := r >= '0' && r <= '9'
 		if (!isAlpha && !isDigit) || (i == 0 && isDigit) {
-			return "[" + luaQuote(s) + "]"
+			return jsQuote(s)
 		}
 	}
 	return s

@@ -10,7 +10,7 @@ import (
 	"llm-gateway/indirect-code-daemon/packages/skills"
 )
 
-// Builtin skills live ONLY in the binary: builtin_skills/*.lua is embedded
+// Builtin skills live ONLY in the binary: builtin_skills/*.js is embedded
 // and parsed from RAM, never written to the machine's skills directory.
 func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	entries, err := fs.ReadDir(builtinSkillsFS, "builtin_skills")
@@ -21,8 +21,8 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 		t.Fatalf("embedded builtin files = %d, want 8", len(entries))
 	}
 	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".lua") {
-			t.Fatalf("builtin skill file %q is not Lua (Markdown skills are retired)", e.Name())
+		if !strings.HasSuffix(e.Name(), ".js") {
+			t.Fatalf("builtin skill file %q is not a JavaScript module", e.Name())
 		}
 	}
 
@@ -39,7 +39,7 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 		}
 	}
 
-	// The Lua conversion must preserve the graph, policies and bodies.
+	// The module conversion must preserve the graph, policies and bodies.
 	agentic := list["agentic_base"]
 	if agentic.Usable != "never" || agentic.Mode != "agentic" || strings.Join(agentic.Inherit, ",") != "generative_ui_agentic" || len(agentic.Permissions) != 15 {
 		t.Fatalf("agentic_base conversion drifted: %+v", agentic)
@@ -78,12 +78,12 @@ func TestSkillStoreBuiltinsShadowDisk(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := `return { name = "build", description = "MINE", usable = "yolo", body = "my body" }`
-	if err := os.WriteFile(filepath.Join(dir, "skills", "build.lua"), []byte(body), 0o644); err != nil {
+	body := `export default { name: "build", description: "MINE", usable: "yolo", body: "my body" };`
+	if err := os.WriteFile(filepath.Join(dir, "skills", "build.js"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	custom := `return { name = "minha_skill", description = "custom", permissions = { read = "yolo" }, body = "custom body" }`
-	if err := os.WriteFile(filepath.Join(dir, "skills", "minha.lua"), []byte(custom), 0o644); err != nil {
+	custom := `export default { name: "minha_skill", description: "custom", permissions: { read: "yolo" }, body: "custom body" };`
+	if err := os.WriteFile(filepath.Join(dir, "skills", "minha.js"), []byte(custom), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -136,15 +136,15 @@ func TestSkillStoreDiskSkillCanExtendBuiltin(t *testing.T) {
 		t.Fatal(err)
 	}
 	combo := `
-return skill.extend(require("agentic_base"), {
-  name = "custom_combo",
-  description = "combo over a builtin",
-  usable = "ask",
-  permissions = { edit = "deny" },
-  body = "combo body",
-})
+export default skill.extend(require("agentic_base"), {
+  name: "custom_combo",
+  description: "combo over a builtin",
+  usable: "ask",
+  permissions: { edit: "deny" },
+  body: "combo body",
+});
 `
-	if err := os.WriteFile(filepath.Join(dir, "skills", "combo.lua"), []byte(combo), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "skills", "combo.js"), []byte(combo), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var store skillStore
@@ -164,8 +164,8 @@ return skill.extend(require("agentic_base"), {
 	}
 }
 
-// The embedded set must parse with the same Lua loader as disk skills (a
-// syntax change in packages/skills breaks the builtins loudly).
+// The embedded set must parse with the same module loader as disk skills
+// (a syntax change in packages/skills breaks the builtins loudly).
 func TestBuiltinSkillsFollowDiskParser(t *testing.T) {
 	list, errs := builtinSkills()
 	if len(errs) > 0 {

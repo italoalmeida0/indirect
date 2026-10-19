@@ -14,6 +14,7 @@
 import { readFileSync, existsSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { verifyDaemonBinary } from "./verify-daemon-binary";
 
 export const EXPECTED_PLATFORMS = [
   "linux-amd64",
@@ -97,6 +98,21 @@ export function verifyDist(distDir: string, expectedVersion?: string) {
   const listedBinaries = Object.keys(sums).filter((n) => n.startsWith("indirect-code-"));
   if (listedBinaries.length !== EXPECTED_PLATFORMS.length) {
     bad(`SHA256SUMS lists ${listedBinaries.length} binaries, want ${EXPECTED_PLATFORMS.length}`);
+  }
+
+  // 4. Each artifact must really carry the engine and the platform flavor
+  //    the daemon needs: static glibc-free ELF on linux, a Mach-O with the
+  //    QuickJS symbols defined and the CoreFoundation/Security frameworks
+  //    linked on darwin, the right PE machine on windows. A checksum alone
+  //    cannot tell a stale or mis-linked binary from a good one.
+  for (const plat of EXPECTED_PLATFORMS) {
+    const name = assets[plat];
+    const [goos, goarch] = plat.split("-");
+    try {
+      verifyDaemonBinary(join(distDir, name), goos, goarch);
+    } catch (e) {
+      bad(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   return { version, assets, checked: EXPECTED_PLATFORMS.length };

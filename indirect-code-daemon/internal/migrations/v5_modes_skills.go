@@ -12,7 +12,7 @@ import (
 
 // v5 collapses the four legacy session modes (build/plan/learning/talk) to
 // the two base modes (agentic/talk). The legacy behavioral prompts become
-// BUILTIN SKILLS (builtin_skills/*.lua, embedded in the daemon binary and
+// BUILTIN SKILLS (builtin_skills/*.js, embedded in the daemon binary and
 // never written to the machine): a migrated build/plan/learning session
 // becomes an agentic session whose main skill is the old mode, so its
 // behavior is preserved exactly — the skill name resolves to the builtin
@@ -27,10 +27,10 @@ import (
 //     rewritten to the user's home directory. Talk has no workspace — the
 //     cwd only decided which project grouped the conversation — and new
 //     talk sessions are created in Home, so existing ones join them.
-//  3. User skills switch from Markdown to Lua: every parseable
-//     skills/*.md becomes an equivalent same-stem .lua module and the
-//     .md is removed. Unparseable files (already dropped by the old
-//     loader) and same-stem .md+.lua collisions stay untouched.
+//  3. User skills switch from Markdown to JavaScript: every parseable
+//     skills/*.md becomes an equivalent same-stem .js module and the .md
+//     is removed. Unparseable files (already dropped by the old loader)
+//     and same-stem .md+.js collisions stay untouched.
 //
 // Builtin skill DEFINITIONS are never seeded to disk: builtin names are
 // reserved and a same-name file in the skills directory is ignored at
@@ -41,7 +41,7 @@ import (
 // atomic via tmp + rename.
 
 func init() {
-	register(Migration{Version: 5, Name: "collapse modes to agentic/talk, mode skills, talk sessions to Home, Lua skills", Apply: applyV5, Verify: verifyV5})
+	register(Migration{Version: 5, Name: "collapse modes to agentic/talk, mode skills, talk sessions to Home, JS skills", Apply: applyV5, Verify: verifyV5})
 }
 
 // v5LegacyModes maps the legacy mode enum to its replacement base mode and
@@ -53,7 +53,7 @@ var v5LegacyModes = map[string]string{
 }
 
 // v5LegacySkill maps a legacy mode to the builtin skill carrying its
-// behavior (embedded in the daemon binary from builtin_skills/*.lua —
+// behavior (embedded in the daemon binary from builtin_skills/*.js —
 // migrations never embed prompt strings).
 var v5LegacySkill = map[string]string{
 	"build":    "build",
@@ -63,10 +63,10 @@ var v5LegacySkill = map[string]string{
 
 func applyV5(slotDir string) error {
 	// Builtin skill definitions are never seeded anywhere: they live
-	// embedded in the daemon binary (builtin_skills/*.lua) and builtin
+	// embedded in the daemon binary (builtin_skills/*.js) and builtin
 	// names are reserved at load. USER skills on disk convert in place
-	// from the retired Markdown format to Lua; session meta then gets
-	// its mode collapse and the talk-to-Home move.
+	// from the retired Markdown format to JavaScript; session meta then
+	// gets its mode collapse and the talk-to-Home move.
 	if err := convertLegacySkills(slotDir); err != nil {
 		return err
 	}
@@ -91,11 +91,11 @@ func applyV5(slotDir string) error {
 }
 
 // convertLegacySkills converts every parseable top-level skills/*.md in
-// the slot to an equivalent same-stem .lua and removes the .md. Files the
+// the slot to an equivalent same-stem .js and removes the .md. Files the
 // retired parser rejects stay untouched (the old loader dropped them
-// too), and a same-stem .lua that differs from the conversion wins: both
-// files stay. A .lua byte-identical to the conversion means an earlier
-// run crashed between write and remove — finishing the remove keeps the
+// too), and a same-stem .js that differs from the conversion wins: both
+// files stay. A .js byte-identical to the conversion means an earlier run
+// crashed between write and remove — finishing the remove keeps the
 // migration idempotent. Symlinks are never followed or replaced.
 func convertLegacySkills(slotDir string) error {
 	dir := filepath.Join(slotDir, "skills")
@@ -124,32 +124,32 @@ func convertLegacySkills(slotDir string) error {
 		if err != nil {
 			continue // unparseable: already dropped by the old loader
 		}
-		rendered := renderLegacySkillLua(sk)
+		rendered := renderLegacySkillJS(sk)
 		stem := name[:len(name)-len(filepath.Ext(name))]
-		luaPath := filepath.Join(dir, stem+".lua")
-		if info, statErr := os.Lstat(luaPath); statErr == nil {
+		jsPath := filepath.Join(dir, stem+".js")
+		if info, statErr := os.Lstat(jsPath); statErr == nil {
 			if !info.Mode().IsRegular() {
 				continue // collision with something else: leave both
 			}
-			existing, err := os.ReadFile(luaPath)
+			existing, err := os.ReadFile(jsPath)
 			if err != nil {
-				return fmt.Errorf("%s: %w", stem+".lua", err)
+				return fmt.Errorf("%s: %w", stem+".js", err)
 			}
 			if bytes.Equal(existing, rendered) {
 				if err := os.Remove(mdPath); err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf("%s: %w", name, err)
 				}
 			}
-			continue // differing .lua wins; the .md stays untouched
+			continue // differing .js wins; the .md stays untouched
 		} else if !os.IsNotExist(statErr) {
-			return fmt.Errorf("%s: %w", stem+".lua", statErr)
+			return fmt.Errorf("%s: %w", stem+".js", statErr)
 		}
 		perm := os.FileMode(0o644)
 		if info, err := os.Stat(mdPath); err == nil {
 			perm = info.Mode().Perm()
 		}
-		if err := writeSkillFileAtomic(luaPath, rendered, perm); err != nil {
-			return fmt.Errorf("%s: %w", stem+".lua", err)
+		if err := writeSkillFileAtomic(jsPath, rendered, perm); err != nil {
+			return fmt.Errorf("%s: %w", stem+".js", err)
 		}
 		if err := os.Remove(mdPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("%s: %w", name, err)
@@ -159,7 +159,7 @@ func convertLegacySkills(slotDir string) error {
 }
 
 // writeSkillFileAtomic writes via a temp file in the same directory plus
-// rename, so a crash never leaves a torn .lua behind.
+// rename, so a crash never leaves a torn .js behind.
 func writeSkillFileAtomic(path string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".skill-*.tmp")
 	if err != nil {
@@ -186,7 +186,7 @@ func writeSkillFileAtomic(path string, data []byte, perm os.FileMode) error {
 }
 
 // verifyLegacySkills confirms every convertible Markdown skill was
-// converted: a parseable .md with no same-stem .lua (or with only the
+// converted: a parseable .md with no same-stem .js (or with only the
 // byte-identical conversion still beside it) means apply did not finish.
 // Unparseable files and differing collisions are allowed leftovers.
 func verifyLegacySkills(slotDir string) error {
@@ -212,15 +212,15 @@ func verifyLegacySkills(slotDir string) error {
 			continue
 		}
 		stem := e.Name()[:len(e.Name())-len(filepath.Ext(e.Name()))]
-		luaPath := filepath.Join(dir, stem+".lua")
-		existing, err := os.ReadFile(luaPath)
+		jsPath := filepath.Join(dir, stem+".js")
+		existing, err := os.ReadFile(jsPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("%s: legacy Markdown skill was not converted to Lua", e.Name())
+				return fmt.Errorf("%s: legacy Markdown skill was not converted to JavaScript", e.Name())
 			}
-			return fmt.Errorf("%s: %w", stem+".lua", err)
+			return fmt.Errorf("%s: %w", stem+".js", err)
 		}
-		if bytes.Equal(existing, renderLegacySkillLua(sk)) {
+		if bytes.Equal(existing, renderLegacySkillJS(sk)) {
 			return fmt.Errorf("%s: converted Markdown skill was not removed", e.Name())
 		}
 	}
@@ -351,7 +351,7 @@ func rewriteMetaMode(line []byte, home string) (bool, []byte) {
 }
 
 // verifyV5 confirms no legacy mode survived the collapse, every talk
-// session sits in Home, and every convertible Markdown skill became Lua.
+// session sits in Home, and every convertible Markdown skill became JavaScript.
 func verifyV5(slotDir string) error {
 	if err := verifyLegacySkills(slotDir); err != nil {
 		return err

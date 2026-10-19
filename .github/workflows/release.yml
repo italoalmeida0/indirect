@@ -79,6 +79,15 @@ jobs:
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "Resolved version: $V"
 
+      # The daemon links the prebuilt QuickJS archives (packages/qjs/lib)
+      # through cgo, so the pinned zig toolchain provides every cross target:
+      # musl for linux, Mach-O + framework stubs for darwin, GNU for windows.
+      - name: Cache the pinned zig toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/indirect-code/toolchains
+          key: indirect-zig-${{ runner.os }}-${{ runner.arch }}
+
       - name: Build multi-call app (all platforms)
         run: bun ./scripts/build-indirect-all.ts "${{ steps.ver.outputs.version }}"
 

@@ -13,16 +13,30 @@ frontend + daemon. Run checks from the appropriate project root.
   gateway or browser an alternate source of truth.
 - Indirect Code frontend: `web/src/indirect-code/`; daemon: `indirect-code-daemon/`
   (`cmd/daemon`, `packages/agent|core|provider|runner|…`, Go 1.26).
-- Skills are Lua modules (`packages/skills`, gopher-lua): each `.lua` chunk
-  returns one skill table. Builtins are embedded `builtin_skills/*.lua` with
-  reserved names; user skills live in `<slot>/skills/*.lua` and may
-  `require` (by skill name or file stem, builtins included — always a copy)
-  and `skill.extend` other skills (deep metadata/permission merge, bases
-  registered in `inherit`, base bodies not copied). Lua is restricted and
-  pure (base/table/string/math, custom skill-only require, no host or
-  dynamic-code access, fresh VM per module, cycle detection, timeout).
+- Skills are JavaScript ES modules (`packages/skills` over `packages/qjs`):
+  each `.js` module's default export is one skill object. Builtins are
+  embedded `builtin_skills/*.js` with reserved names; user skills live in
+  `<slot>/skills/*.js` and may `require` (by skill name or file stem,
+  builtins included — always a copy) and `skill.extend` other skills (deep
+  metadata/permission merge, bases registered in `inherit`, base bodies not
+  copied). The sandbox is restricted and pure: the skill-only `require` is a
+  callback into Go, and a fresh QuickJS runtime per module exposes no file,
+  process, network, timing or dynamic-code access (`eval`, `Function` and the
+  derived constructors are removed before module code runs), with cycle
+  detection, a memory cap and a per-module timeout. The snapshot boundary
+  accepts plain data only (functions, symbols, class instances, accessors,
+  cycles and non-finite numbers are rejected with a load error).
   Markdown skills are retired: the runtime ignores `.md`; only storage
-  migration v5 still parses it, to convert user files to Lua in place.
+  migration v5 still parses it, to convert user files to JS in place.
+- QuickJS is linked LATE: `packages/qjs/lib/<platform>/libquickjs.a` holds the
+  prebuilt engine (fastcompiled once, never rebuilt here) and
+  `link_<os>_<arch>.go` files select it per target. `packages/qjs/shim.c` is
+  the only C compiled by this repo and it never recompiles QuickJS. That makes
+  the daemon a cgo binary: every build/test needs `CGO_ENABLED=1` and a C
+  linker driver matching the archive's ABI, which `scripts/indirect-zig.ts`
+  provides (pinned zig, cached under `~/.cache/indirect-code/toolchains`).
+  Never set `CGO_ENABLED=0` for daemon builds, and keep linux artifacts
+  static/glibc-free (`musl,static` tags — CI runs them on bare Alpine).
 - Browser mirror: SignalDB in `store/sessions.ts` / `hooks/useMirror.ts`, one
   store per hostId, persisted in IndexedDB. Mutations are daemon commands;
   `saveSession`/`saveProjects`/`saveConfig`/`purgeSession` send debounced (300ms)
@@ -164,13 +178,18 @@ frontend + daemon. Run checks from the appropriate project root.
 ## Commands and handoff
 
 - Gateway root: `bun run lint`, `bun run typecheck`, `bun test`,
-  `bun run build:web`. Daemon root: `go test ./...` (real child processes;
-  no Go linter configured). Add black-box tests when adding gateway routes.
+  `bun run build:web`. Daemon root: `CGO_ENABLED=1 go test ./...` (real child
+  processes; no Go linter configured; zig provides the C linker driver when
+  needed). Add black-box tests when adding gateway routes.
 - After implementation changes leave local builds: `bun run build:web` for SPA;
-  `bun run build:daemon` for local daemon; `bun run build:daemon:all` for daemon
-  changes (refreshes committed `indirect-code-daemon/dist/` and SHA256SUMS.txt);
-  `bun run build` builds both SPA and all daemon platforms.
-  `dist/` and `indirect-code-daemon/bin/` are gitignored local builds.
+  `bun run build:daemon` for local daemon (via the pinned zig toolchain);
+  `bun run build:daemon:all` for daemon changes (refreshes committed
+  `indirect-code-daemon/dist/` and SHA256SUMS.txt; each artifact is verified
+  by `scripts/verify-daemon-binary.ts` — format, machine, static linking and
+  linked engine symbols); `bun run build` builds both SPA and all daemon
+  platforms. `dist/` and `indirect-code-daemon/bin/` are gitignored local
+  builds; `packages/qjs/lib/**` IS committed (the engine archives are part of
+  the source tree).
 - `bun run dev` / `bun run dev:web` start backend :3000 / frontend :5700;
   `bun start` starts backend without a separate build.
 - Browser UI checks are external Playwright scripts, not `bun test`:

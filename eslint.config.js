@@ -34,6 +34,18 @@ export default tseslint.config(
     rules: { "@typescript-eslint/no-require-imports": "off" },
   },
   {
+    // The QuickJS sandbox prelude: NOT a Node/CommonJS module. It runs inside
+    // a bare JS runtime where `require` is a host function installed by
+    // packages/qjs/shim.c (the only module loader the sandbox has), so the
+    // CommonJS import rule and the undefined-global check do not apply.
+    files: ["indirect-code-daemon/packages/qjs/prelude.js"],
+    languageOptions: {
+      sourceType: "script",
+      globals: { require: "readonly" },
+    },
+    rules: { "@typescript-eslint/no-require-imports": "off", "no-undef": "off" },
+  },
+  {
     files: ["scripts/*.cjs"],
     languageOptions: {
       sourceType: "commonjs",

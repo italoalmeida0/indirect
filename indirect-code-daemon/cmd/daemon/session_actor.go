@@ -2033,7 +2033,7 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 	// skill) and is never governed by skill permission entries or by the
 	// session approvalMode: usable "ask" forces human approval even under
 	// session YOLO; "yolo" runs free even in ask mode; "deny"/"never"
-	// (including a Lua skill without a usable key) refuse.
+	// (including a skill module without a usable key) refuse.
 	forceHuman := false
 	if m.tool == "use_skill" {
 		switch verdict, reason := useSkillUsableGate(a.rec.Skills, m.args); verdict {

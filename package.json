@@ -9,7 +9,7 @@
     "start": "bun server/index.ts",
     "build": "bun run build:daemon:all && bun run build:web",
     "build:web": "NODE_ENV=production bun ./build.ts",
-    "build:daemon": "go build -C indirect-code-daemon -o bin/indirect-code ./cmd/daemon",
+    "build:daemon": "bun ./scripts/build-indirect-daemon.ts",
     "build:daemon:all": "bun ./scripts/build-indirect-all.ts",
     "release": "bun ./scripts/release.ts",
     "update": "bun ./scripts/release.ts",

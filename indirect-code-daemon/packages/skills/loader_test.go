@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func writeLuaSkill(t *testing.T, dir, name, src string) {
+func writeSkill(t *testing.T, dir, name, src string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
@@ -25,28 +25,31 @@ func errorsText(errs []error) string {
 
 // require resolves a skill by its DECLARED name even when the requiring
 // file sorts first and the dependency lives in a differently named file.
-// The returned table is a copy: mutating it must not change the base skill.
+// The returned object is a copy: mutating it must not change the base
+// skill.
 func TestLoadRequireByDeclaredNameReturnsCopy(t *testing.T) {
 	dir := t.TempDir()
-	writeLuaSkill(t, dir, "z_base_file.lua", `
-return {
-  name = "base",
-  description = "base skill",
-  usable = "ask",
-  mode = "agentic",
-  permissions = { read = "ask", bash = "ask" },
-  body = "base body",
-}
+	writeSkill(t, dir, "z_base_file.js", `
+export default {
+  name: "base",
+  description: "base skill",
+  usable: "ask",
+  mode: "agentic",
+  permissions: { read: "ask", bash: "ask" },
+  body: "base body",
+};
 `)
-	writeLuaSkill(t, dir, "a_combo.lua", `
-local by_name = require("base")
-local by_stem = require("z_base_file")
-if by_stem.name ~= "base" then error("stem require returned the wrong module") end
-by_name.name = "combo"
-by_name.description = "combo skill"
-by_name.body = by_name.body .. "\ncombo body"
-by_name.permissions.bash = "deny"
-return by_name
+	writeSkill(t, dir, "a_combo.js", `
+const byName = require("base");
+const byStem = require("z_base_file");
+if (byStem.name !== "base") {
+  throw new Error("stem require returned the wrong module");
+}
+byName.name = "combo";
+byName.description = "combo skill";
+byName.body = byName.body + "\ncombo body";
+byName.permissions.bash = "deny";
+export default byName;
 `)
 
 	list, errs := Load(dir)
@@ -68,36 +71,36 @@ return by_name
 // base bodies arrive through Resolve's inherit chain, never twice.
 func TestLoadSkillExtendMergesAndRegistersInherit(t *testing.T) {
 	dir := t.TempDir()
-	writeLuaSkill(t, dir, "a.lua", `
-return {
-  name = "a",
-  description = "a skill",
-  usable = "never",
-  mode = "agentic",
-  permissions = { read = "ask", edit = "ask" },
-  body = "a body",
-}
+	writeSkill(t, dir, "a.js", `
+export default {
+  name: "a",
+  description: "a skill",
+  usable: "never",
+  mode: "agentic",
+  permissions: { read: "ask", edit: "ask" },
+  body: "a body",
+};
 `)
-	writeLuaSkill(t, dir, "b.lua", `
-return {
-  name = "b",
-  description = "b skill",
-  usable = "never",
-  tools = {
-    approvalMode = "ask",
-    permissions = { bash = "ask", edit = "deny" },
+	writeSkill(t, dir, "b.js", `
+export default {
+  name: "b",
+  description: "b skill",
+  usable: "never",
+  tools: {
+    approvalMode: "ask",
+    permissions: { bash: "ask", edit: "deny" },
   },
-  body = "b body",
-}
+  body: "b body",
+};
 `)
-	writeLuaSkill(t, dir, "combo.lua", `
-return skill.extend("a", require("b"), {
-  name = "combo",
-  description = "combo skill",
-  usable = "yolo",
-  permissions = { write = "yolo" },
-  body = "combo body",
-})
+	writeSkill(t, dir, "combo.js", `
+export default skill.extend("a", require("b"), {
+  name: "combo",
+  description: "combo skill",
+  usable: "yolo",
+  permissions: { write: "yolo" },
+  body: "combo body",
+});
 `)
 
 	list, errs := Load(dir)
@@ -131,17 +134,17 @@ return skill.extend("a", require("b"), {
 
 func TestLoadRequireCycleAndMissingModule(t *testing.T) {
 	dir := t.TempDir()
-	writeLuaSkill(t, dir, "a.lua", `
-local b = require("b")
-return { name = "a", description = "a", body = b.body }
+	writeSkill(t, dir, "a.js", `
+const b = require("b");
+export default { name: "a", description: "a", body: b.body };
 `)
-	writeLuaSkill(t, dir, "b.lua", `
-local a = require("a")
-return { name = "b", description = "b", body = a.body }
+	writeSkill(t, dir, "b.js", `
+const a = require("a");
+export default { name: "b", description: "b", body: a.body };
 `)
-	writeLuaSkill(t, dir, "c.lua", `
-local missing = require("does_not_exist")
-return { name = "c", description = "c", body = missing.body }
+	writeSkill(t, dir, "c.js", `
+const missing = require("does_not_exist");
+export default { name: "c", description: "c", body: missing.body };
 `)
 
 	done := make(chan struct{})
@@ -166,18 +169,24 @@ return { name = "c", description = "c", body = missing.body }
 	}
 }
 
+// Nothing outside the skill set is reachable: no host globals, no filesystem,
+// no process, no network and no way to compile code. Every attempt below
+// must fail to load, not silently read the host.
 func TestLoadSandboxDeniesHostAccess(t *testing.T) {
 	dir := t.TempDir()
 	cases := map[string]string{
-		"os.lua":        `return { name = "osbad", description = os.getenv("HOME"), body = "b" }`,
-		"io.lua":        `local f = io.open("/etc/passwd"); return { name = "iobad", description = "d", body = "b" }`,
-		"package.lua":   `local m = require("os"); return { name = "pkgbad", description = "d", body = "b" }`,
-		"dofile.lua":    `dofile("/tmp/evil.lua"); return { name = "dobad", description = "d", body = "b" }`,
-		"load.lua":      `local f = loadstring("return 1"); return { name = "loadbad", description = "d", body = "b" }`,
-		"globalenv.lua": `return { name = "envbad", description = getfenv(0).os.date(), body = "b" }`,
+		"env.js":     `export default { name: "envbad", description: process.env.HOME, body: "b" };`,
+		"file.js":    `const f = File; export default { name: "filebad", description: "d", body: "b" };`,
+		"require.js": `const os = require("node:os"); export default { name: "pkgbad", description: os.hostname(), body: "b" };`,
+		"fetch.js":   `const r = fetch("http://example.com"); export default { name: "netbad", description: "d", body: "b" };`,
+		"eval.js":    `export default { name: "evalbad", description: String(eval("1 + 1")), body: "b" };`,
+		"function.js": `const f = new Function("return 1");
+export default { name: "funcbad", description: String(f()), body: "b" };`,
+		"import.js": `import * as os from "node:os";
+export default { name: "importbad", description: os.hostname(), body: "b" };`,
 	}
 	for file, src := range cases {
-		writeLuaSkill(t, dir, file, src)
+		writeSkill(t, dir, file, src)
 	}
 	list, errs := Load(dir)
 	if len(list) != 0 {
@@ -188,20 +197,20 @@ func TestLoadSandboxDeniesHostAccess(t *testing.T) {
 	}
 }
 
-func TestParseLuaTimeout(t *testing.T) {
+func TestParseTimeout(t *testing.T) {
 	old := moduleTimeout
 	moduleTimeout = 100 * time.Millisecond
 	defer func() { moduleTimeout = old }()
 
 	start := time.Now()
-	_, err := Parse("loop.lua", []byte(`while true do end`))
+	_, err := Parse("loop.js", []byte(`while (true) {} export default { name: "loop", description: "d", body: "b" };`))
 	if err == nil {
-		t.Fatal("infinite Lua loop must be reported as a load error")
+		t.Fatal("infinite JavaScript loop must be reported as a load error")
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("timeout took too long: %v", time.Since(start))
 	}
-	if !strings.Contains(err.Error(), "loop.lua") {
+	if !strings.Contains(err.Error(), "loop.js") {
 		t.Fatalf("timeout error must name the skill file: %v", err)
 	}
 }
@@ -210,25 +219,25 @@ func TestParseLuaTimeout(t *testing.T) {
 // skills but are not returned as disk skills themselves.
 func TestLoadWithModulesRequiresExtraLayer(t *testing.T) {
 	dir := t.TempDir()
-	writeLuaSkill(t, dir, "combo.lua", `
-return skill.extend(require("embedded_base"), {
-  name = "disk_combo",
-  description = "disk combo",
-  usable = "ask",
-  body = "disk body",
-})
+	writeSkill(t, dir, "combo.js", `
+export default skill.extend(require("embedded_base"), {
+  name: "disk_combo",
+  description: "disk combo",
+  usable: "ask",
+  body: "disk body",
+});
 `)
 	modules := []Source{{
-		Path: "builtin_skills/embedded_base.lua",
+		Path: "builtin_skills/embedded_base.js",
 		Data: []byte(`
-return {
-  name = "embedded_base",
-  description = "embedded base",
-  usable = "never",
-  mode = "talk",
-  permissions = { search_web = "yolo" },
-  body = "embedded body",
-}
+export default {
+  name: "embedded_base",
+  description: "embedded base",
+  usable: "never",
+  mode: "talk",
+  permissions: { search_web: "yolo" },
+  body: "embedded body",
+};
 `),
 	}}
 	list, errs := LoadWithModules(dir, modules)
@@ -247,17 +256,19 @@ return {
 	}
 }
 
-// A shared-subtable DAG must hit the extend size budget instead of
-// expanding exponentially inside the host deep-copy.
+// A shared-subtree DAG must hit the extend size budget instead of
+// expanding exponentially inside the copy.
 func TestSkillExtendRejectsOversizedSharedTable(t *testing.T) {
 	src := `
-local t = { leaf = "x" }
-for _ = 1, 24 do t = { t, t } end
-return skill.extend(t, { name = "big", description = "d", body = "b" })
+let t = { leaf: "x" };
+for (let i = 0; i < 24; i++) {
+  t = { a: t, b: t };
+}
+export default skill.extend(t, { name: "big", description: "d", body: "b" });
 `
 	start := time.Now()
-	if _, err := Parse("big.lua", []byte(src)); err == nil {
-		t.Fatal("oversized shared table must be rejected")
+	if _, err := Parse("big.js", []byte(src)); err == nil {
+		t.Fatal("oversized shared subtree must be rejected")
 	}
 	if time.Since(start) > 2*time.Second {
 		t.Fatalf("oversized extend took too long: %v", time.Since(start))

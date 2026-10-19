@@ -1,39 +1,42 @@
-// Package skills loads agent skills written as Lua modules. A skill file
-// is a .lua chunk that RETURNS one table describing the skill:
+// Package skills loads agent skills written as JavaScript modules. A skill
+// file is a .js ES module whose default export describes the skill:
 //
-//	return {
-//	  name = "review",
-//	  description = "Strict read-only code review.",
-//	  usable = "ask",          -- deny (default) | never | ask | yolo
-//	  mode = "agentic",        -- optional: agentic | talk
-//	  approvalMode = "ask",    -- optional: ask | yolo
-//	  inherit = { "agentic_base" },
-//	  permissions = {
-//	    read = "inherit",
-//	    edit = "deny",
-//	    widget_set = { policy = "inherit", args = { src_file = "deny" } },
+//	export default {
+//	  name: "review",
+//	  description: "Strict read-only code review.",
+//	  usable: "ask",           // deny (default) | never | ask | yolo
+//	  mode: "agentic",         // optional: agentic | talk
+//	  approvalMode: "ask",     // optional: ask | yolo
+//	  inherit: ["agentic_base"],
+//	  permissions: {
+//	    read: "inherit",
+//	    edit: "deny",
+//	    widget_set: { policy: "inherit", args: { src_file: "deny" } },
 //	  },
-//	  body = [[ ...prompt text injected inside <skill>...</skill>... ]],
-//	}
+//	  body: `...prompt text injected inside <skill>...</skill>...`,
+//	};
 //
-// Skills compose in Lua instead of Go. require("other_skill") returns a
-// deep copy of another skill's returned table (resolved by declared skill
-// name or by file stem; builtin skills are requireable from disk skills),
-// and skill.extend(base..., { overrides }) deep-merges metadata and
-// permissions while registering every named base in `inherit`. Only the
-// override table's body stays on the new skill — base bodies arrive once
+// Skills compose in JavaScript instead of Go. require("other_skill")
+// returns a deep copy of another skill's default export (resolved by
+// declared skill name or by file stem; builtin skills are requireable from
+// disk skills), and skill.extend(base..., { ...overrides }) deep-merges
+// metadata and permissions while registering every named base in `inherit`.
+// Only the overrides body stays on the new skill — base bodies arrive once
 // through the inherit chain at resolve time.
 //
-// Lua runs restricted and pure: only base/table/string/math, a custom
-// require limited to skill modules, no filesystem, network, os/io/package
-// access, no dynamic code loading, a fresh VM per module, cycle detection
-// and a per-module timeout. A broken or hostile .lua file is dropped with
-// a load error — never a crash: a hand-edited skill must not take the
-// daemon down. Markdown skills are not supported anymore; storage
-// migration v5 converts old .md files to this format.
+// JavaScript runs restricted and pure inside QuickJS: one fresh runtime and
+// context per module, a custom require limited to skill modules, no
+// filesystem, network, process, os/io or package access, no way to compile
+// code (eval, Function and the derived constructors are removed), cycle
+// detection, a per-module timeout and a plain-data snapshot boundary. A
+// broken or hostile .js file is dropped with a load error — never a crash:
+// a hand-edited skill must not take the daemon down. Markdown skills are
+// not supported anymore; storage migration v5 converts old .md files to
+// this format.
 package skills
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -41,6 +44,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"llm-gateway/indirect-code-daemon/packages/qjs"
 )
 
 // Policy is how a tool (or one of its argument keys) may run.
@@ -76,9 +81,9 @@ type Skill struct {
 	// use_skill, but the user may still activate it from the frontend) or
 	// never (base-only: not even the user sees it — it contributes
 	// exclusively as an inherit dependency). There is no file-level
-	// "inherit" value: if the Lua table omits the key, the original is
-	// deny. "inherit" exists only at session level, where it means "use
-	// this original" (no override).
+	// "inherit" value: if the module omits the key, the original is deny.
+	// "inherit" exists only at session level, where it means "use this
+	// original" (no override).
 	Usable string `json:"usable,omitempty"`
 	// Mode is the skill's declared base mode ("agentic" or "talk"; empty =
 	// unpinned). The FRONTEND derives the session mode from the primary
@@ -103,16 +108,21 @@ type Skill struct {
 	Path        string              `json:"path,omitempty"`
 }
 
-// Source is one in-memory Lua skill module: Path is the display/identity
-// path used in errors and as the module stem, Data is the .lua chunk.
+// Source is one in-memory JavaScript skill module: Path is the
+// display/identity path used in errors and as the module stem, Data is the
+// module source.
 type Source struct {
 	Path string
 	Data []byte
 }
 
-// Parse loads one standalone Lua skill. It can compute freely, but require
-// has no other module to resolve against — cross-skill imports need one of
-// the set loaders below.
+// moduleTimeout bounds one module evaluation, requires included. Tests
+// shrink it to prove a runaway module cannot stall the daemon.
+var moduleTimeout = qjs.DefaultTimeout
+
+// Parse loads one standalone JavaScript skill. It can compute freely, but
+// require has no other module to resolve against — cross-skill imports need
+// one of the set loaders below.
 func Parse(filename string, data []byte) (Skill, error) {
 	list, errs := LoadSet([]Source{{Path: filename, Data: data}}, nil)
 	for _, sk := range list {
@@ -130,12 +140,12 @@ func Parse(filename string, data []byte) (Skill, error) {
 // require-only sources — the builtin layer disk skills may import — and
 // never appear in the result. Invalid files are reported and skipped.
 func LoadSet(roots, modules []Source) (map[string]Skill, []error) {
-	return newLuaLoader(roots, modules).load()
+	return newSkillLoader(roots, modules).load()
 }
 
-// Load parses every top-level *.lua in dir. A missing directory is an
-// empty store, not an error. Other extensions (including legacy .md) are
-// ignored entirely.
+// Load parses every top-level *.js in dir. A missing directory is an empty
+// store, not an error. Other extensions (including legacy .md) are ignored
+// entirely.
 func Load(dir string) (map[string]Skill, []error) {
 	return LoadWithModules(dir, nil)
 }
@@ -150,37 +160,15 @@ func LoadWithModules(dir string, modules []Source) (map[string]Skill, []error) {
 	return list, append(errs, loadErrs...)
 }
 
-// LoadFS parses every top-level *.lua of dir inside fsys (embedded
-// builtin skills). Paths in errors keep the fsys form (dir/name.lua).
+// LoadFS parses every top-level *.js of dir inside fsys (embedded builtin
+// skills). Paths in errors keep the fsys form (dir/name.js).
 func LoadFS(fsys fs.FS, dir string) (map[string]Skill, []error) {
-	entries, err := fs.ReadDir(fsys, dir)
-	if err != nil {
-		return map[string]Skill{}, []error{err}
-	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !isLuaFile(e.Name()) {
-			continue
-		}
-		names = append(names, e.Name())
-	}
-	sort.Strings(names)
-	roots := make([]Source, 0, len(names))
-	var errs []error
-	for _, name := range names {
-		p := pathpkg.Join(dir, name)
-		data, err := fs.ReadFile(fsys, p)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		roots = append(roots, Source{Path: p, Data: data})
-	}
+	roots, errs := SourcesFS(fsys, dir)
 	list, loadErrs := LoadSet(roots, nil)
 	return list, append(errs, loadErrs...)
 }
 
-// SourcesFS reads the top-level *.lua files of dir inside fsys as raw
+// SourcesFS reads the top-level *.js files of dir inside fsys as raw
 // sources (for LoadWithModules layering).
 func SourcesFS(fsys fs.FS, dir string) ([]Source, []error) {
 	entries, err := fs.ReadDir(fsys, dir)
@@ -189,7 +177,7 @@ func SourcesFS(fsys fs.FS, dir string) ([]Source, []error) {
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() || !isLuaFile(e.Name()) {
+		if e.IsDir() || !isSkillFile(e.Name()) {
 			continue
 		}
 		names = append(names, e.Name())
@@ -209,7 +197,7 @@ func SourcesFS(fsys fs.FS, dir string) ([]Source, []error) {
 	return out, errs
 }
 
-// readDirSources reads the top-level *.lua files of an OS directory.
+// readDirSources reads the top-level *.js files of an OS directory.
 // ok=false means "no store here": a missing dir (empty, no error) or an
 // unreadable one (the error rides errs).
 func readDirSources(dir string) (roots []Source, errs []error, ok bool) {
@@ -222,7 +210,7 @@ func readDirSources(dir string) (roots []Source, errs []error, ok bool) {
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() || !isLuaFile(e.Name()) {
+		if e.IsDir() || !isSkillFile(e.Name()) {
 			continue
 		}
 		names = append(names, e.Name())
@@ -241,28 +229,44 @@ func readDirSources(dir string) (roots []Source, errs []error, ok bool) {
 	return roots, errs, true
 }
 
-func isLuaFile(name string) bool {
-	return strings.HasSuffix(strings.ToLower(name), ".lua")
+// isSkillFile reports whether name is a JavaScript skill module. Legacy
+// .md files are ignored; migration v5 rewrites them.
+func isSkillFile(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".js")
 }
 
-// decodeSkill validates one module's returned table snapshot into a Skill.
-// The rules mirror the retired frontmatter contract: name and description
-// are required; usable has no file-level "inherit" and defaults to deny;
+// moduleStem is the file stem a require() name may match.
+func moduleStem(p string) string {
+	base := displayBase(p)
+	if strings.HasSuffix(strings.ToLower(base), ".js") {
+		return base[:len(base)-len(".js")]
+	}
+	return base
+}
+
+// displayBase is the file label used in errors, for OS and FS paths alike.
+func displayBase(p string) string {
+	base := pathpkg.Base(strings.ReplaceAll(p, "\\", "/"))
+	if base == "." || base == "/" || base == "" {
+		return p
+	}
+	return base
+}
+
+// decodeSkill validates one module's returned snapshot into a Skill. The
+// rules mirror the retired frontmatter contract: name and description are
+// required; usable has no file-level "inherit" and defaults to deny;
 // mode/approvalMode are closed enums; a listed tool or argument key must
 // carry an explicit policy; unknown keys are errors. Keys starting with
 // "_" are private composition metadata and are ignored everywhere — bases
 // can publish values for combos without polluting the skill schema.
 // approvalMode/permissions may sit at the top level (canonical) or under a
-// nested `tools` table (the old frontmatter grouping), never both.
+// nested `tools` object (the old frontmatter grouping), never both.
 func decodeSkill(path string, v any) (Skill, error) {
 	file := displayBase(path)
-	tbl, ok := v.(*tableSnapshot)
+	top, ok := v.(map[string]any)
 	if !ok {
-		return Skill{}, fmt.Errorf("skill %s: module must return a table, got %s", file, snapshotType(v))
-	}
-	top, err := stringMap(tbl, file, "skill table")
-	if err != nil {
-		return Skill{}, err
+		return Skill{}, fmt.Errorf("skill %s: module must export one object, got %s", file, snapshotType(v))
 	}
 	allowed := map[string]bool{
 		"name": true, "description": true, "usable": true, "mode": true,
@@ -278,6 +282,7 @@ func decodeSkill(path string, v any) (Skill, error) {
 		}
 	}
 
+	var err error
 	sk := Skill{Path: path}
 	if sk.Name, err = stringField(top, "name", file); err != nil {
 		return Skill{}, err
@@ -318,13 +323,9 @@ func decodeSkill(path string, v any) (Skill, error) {
 	approval, hasApproval := top["approvalMode"]
 	perms, hasPerms := top["permissions"]
 	if toolsVal, present := top["tools"]; present {
-		toolsTbl, ok := toolsVal.(*tableSnapshot)
+		tools, ok := toolsVal.(map[string]any)
 		if !ok {
-			return Skill{}, fmt.Errorf("skill %s: `tools` must be a table, got %s", file, snapshotType(toolsVal))
-		}
-		tools, err := stringMap(toolsTbl, file, "tools table")
-		if err != nil {
-			return Skill{}, err
+			return Skill{}, fmt.Errorf("skill %s: `tools` must be an object, got %s", file, snapshotType(toolsVal))
 		}
 		for key := range tools {
 			if strings.HasPrefix(key, "_") {
@@ -371,17 +372,24 @@ func decodeSkill(path string, v any) (Skill, error) {
 	return sk, nil
 }
 
-// stringMap flattens a snapshot table that must be keyed by strings only.
-func stringMap(tbl *tableSnapshot, file, what string) (map[string]any, error) {
-	out := make(map[string]any, len(tbl.entries))
-	for _, e := range tbl.entries {
-		key, ok := e.key.(string)
-		if !ok {
-			return nil, fmt.Errorf("skill %s: %s keys must be strings, got %s", file, what, snapshotType(e.key))
-		}
-		out[key] = e.value
+// snapshotType names a decoded snapshot value in error messages.
+func snapshotType(v any) string {
+	switch v.(type) {
+	case nil:
+		return "null"
+	case string:
+		return "string"
+	case float64:
+		return "number"
+	case bool:
+		return "boolean"
+	case map[string]any:
+		return "object"
+	case []any:
+		return "array"
+	default:
+		return fmt.Sprintf("%T", v)
 	}
-	return out, nil
 }
 
 func stringField(top map[string]any, key, file string) (string, error) {
@@ -405,60 +413,73 @@ func checkEnum(what, value string, allowed []string) error {
 	return fmt.Errorf("%s must be one of %s, got %q", what, strings.Join(allowed, "|"), value)
 }
 
-// decodeInherit accepts one skill name or an array of names.
+// decodeInherit accepts one skill name or an array of names. An object with
+// consecutive 1-based numeric keys is accepted as a list too, so a module
+// written that way loads unchanged.
 func decodeInherit(v any, file string) ([]string, error) {
-	if s, ok := v.(string); ok {
-		if strings.TrimSpace(s) == "" {
+	switch value := v.(type) {
+	case string:
+		if strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("skill %s: `inherit` names must not be empty", file)
 		}
-		return []string{s}, nil
-	}
-	tbl, ok := v.(*tableSnapshot)
-	if !ok {
+		return []string{value}, nil
+	case []any:
+		out := make([]string, 0, len(value))
+		for i, raw := range value {
+			s, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("skill %s: `inherit[%d]` must be a string, got %s", file, i+1, snapshotType(raw))
+			}
+			if strings.TrimSpace(s) == "" {
+				return nil, fmt.Errorf("skill %s: `inherit` names must not be empty", file)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	case map[string]any:
+		if len(value) == 0 {
+			return nil, nil
+		}
+		byIndex := make(map[int]string, len(value))
+		for key, raw := range value {
+			var n int
+			if _, err := fmt.Sscanf(key, "%d", &n); err != nil || n < 1 {
+				return nil, fmt.Errorf("skill %s: `inherit` must be an array of skill names", file)
+			}
+			s, ok := raw.(string)
+			if !ok {
+				return nil, fmt.Errorf("skill %s: `inherit[%d]` must be a string, got %s", file, n, snapshotType(raw))
+			}
+			if strings.TrimSpace(s) == "" {
+				return nil, fmt.Errorf("skill %s: `inherit` names must not be empty", file)
+			}
+			byIndex[n] = s
+		}
+		out := make([]string, 0, len(byIndex))
+		for i := 1; i <= len(byIndex); i++ {
+			s, ok := byIndex[i]
+			if !ok {
+				return nil, fmt.Errorf("skill %s: `inherit` array has a hole at index %d", file, i)
+			}
+			out = append(out, s)
+		}
+		return out, nil
+	default:
 		return nil, fmt.Errorf("skill %s: `inherit` must be a string or an array of strings, got %s", file, snapshotType(v))
 	}
-	if len(tbl.entries) == 0 {
-		return nil, nil
-	}
-	byIndex := make(map[int]any, len(tbl.entries))
-	for _, e := range tbl.entries {
-		n, ok := e.key.(float64)
-		if !ok || n != float64(int(n)) || int(n) < 1 {
-			return nil, fmt.Errorf("skill %s: `inherit` must be an array of skill names", file)
-		}
-		byIndex[int(n)] = e.value
-	}
-	out := make([]string, 0, len(byIndex))
-	for i := 1; i <= len(byIndex); i++ {
-		raw, ok := byIndex[i]
-		if !ok {
-			return nil, fmt.Errorf("skill %s: `inherit` array has a hole at index %d", file, i)
-		}
-		s, ok := raw.(string)
-		if !ok {
-			return nil, fmt.Errorf("skill %s: `inherit[%d]` must be a string, got %s", file, i, snapshotType(raw))
-		}
-		if strings.TrimSpace(s) == "" {
-			return nil, fmt.Errorf("skill %s: `inherit` names must not be empty", file)
-		}
-		out = append(out, s)
-	}
-	return out, nil
 }
 
-// decodePermissions reads the permissions map. Each entry is a policy
-// string, or a table with `policy` plus argument-key policies — in an
-// `args` table, as direct keys of the spec table, or both merged
+// decodePermissions reads the permissions object. Each entry is a policy
+// string, or an object with `policy` plus argument-key policies — in an
+// `args` object, as direct keys of the spec object, or both merged
 // (skill.extend deep-merges specs, so the two forms can meet; conflicting
 // policies for one argument are an error).
+// decodePermissions reads the permissions map: tool name to permission
+// entry. Keys starting with "_" are private composition metadata.
 func decodePermissions(v any, file string) (map[string]PermSpec, error) {
-	tbl, ok := v.(*tableSnapshot)
+	raw, ok := v.(map[string]any)
 	if !ok {
-		return nil, fmt.Errorf("skill %s: `permissions` must be a table, got %s", file, snapshotType(v))
-	}
-	raw, err := stringMap(tbl, file, "permissions")
-	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("skill %s: `permissions` must be an object, got %s", file, snapshotType(v))
 	}
 	out := make(map[string]PermSpec, len(raw))
 	for tool, entry := range raw {
@@ -477,22 +498,21 @@ func decodePermissions(v any, file string) (map[string]PermSpec, error) {
 	return out, nil
 }
 
-func decodePermSpec(v any, file, tool string) (PermSpec, error) {
-	if s, ok := v.(string); ok {
+// decodePermSpec reads one permission entry: a policy string, or an object
+// with `policy` plus argument-key policies. A listed tool or argument key
+// must carry an explicit policy — that is what makes an entry a GRANT.
+func decodePermSpec(entry any, file, tool string) (PermSpec, error) {
+	if s, ok := entry.(string); ok {
 		if err := checkEnum("policy for tool "+tool, s, []string{"deny", "inherit", "ask", "yolo"}); err != nil {
 			return PermSpec{}, fmt.Errorf("skill %s: %v (a listed tool must carry a value; leave the key out to inherit)", file, err)
 		}
 		return PermSpec{Policy: Policy(s)}, nil
 	}
-	tbl, ok := v.(*tableSnapshot)
+	spec, ok := entry.(map[string]any)
 	if !ok {
-		return PermSpec{}, fmt.Errorf("skill %s: permission for tool %q must be a policy string or a table, got %s", file, tool, snapshotType(v))
+		return PermSpec{}, fmt.Errorf("skill %s: permission for tool %q must be a policy string or an object, got %s", file, tool, snapshotType(entry))
 	}
-	m, err := stringMap(tbl, file, "permission spec for tool "+tool)
-	if err != nil {
-		return PermSpec{}, err
-	}
-	policyRaw, present := m["policy"]
+	policyRaw, present := spec["policy"]
 	if !present {
 		return PermSpec{}, fmt.Errorf("skill %s: permission for tool %q must carry a `policy` value (leave the tool out to inherit)", file, tool)
 	}
@@ -503,19 +523,14 @@ func decodePermSpec(v any, file, tool string) (PermSpec, error) {
 	if err := checkEnum("policy for tool "+tool, policy, []string{"deny", "inherit", "ask", "yolo"}); err != nil {
 		return PermSpec{}, fmt.Errorf("skill %s: %v", file, err)
 	}
-	spec := PermSpec{Policy: Policy(policy)}
+	out := PermSpec{Policy: Policy(policy)}
 	args := map[string]Policy{}
-	_, hasArgsTable := m["args"]
-	if hasArgsTable {
-		argsTbl, ok := m["args"].(*tableSnapshot)
+	if rawArgs, hasArgs := spec["args"]; hasArgs {
+		inner, ok := rawArgs.(map[string]any)
 		if !ok {
-			return PermSpec{}, fmt.Errorf("skill %s: `args` for tool %q must be a table, got %s", file, tool, snapshotType(m["args"]))
+			return PermSpec{}, fmt.Errorf("skill %s: `args` for tool %q must be an object, got %s", file, tool, snapshotType(rawArgs))
 		}
-		rawArgs, err := stringMap(argsTbl, file, "args for tool "+tool)
-		if err != nil {
-			return PermSpec{}, err
-		}
-		for arg, raw := range rawArgs {
+		for arg, raw := range inner {
 			if strings.HasPrefix(arg, "_") {
 				continue
 			}
@@ -526,7 +541,10 @@ func decodePermSpec(v any, file, tool string) (PermSpec, error) {
 			args[arg] = p
 		}
 	}
-	for key, raw := range m {
+	// skill.extend deep-merges specs, so direct argument keys and an `args`
+	// object can meet on one entry; equal policies collapse, conflicting
+	// ones are an error rather than a silent winner.
+	for key, raw := range spec {
 		if key == "policy" || key == "args" || strings.HasPrefix(key, "_") {
 			continue
 		}
@@ -539,12 +557,14 @@ func decodePermSpec(v any, file, tool string) (PermSpec, error) {
 		}
 		args[key] = p
 	}
-	if hasArgsTable || len(args) > 0 {
-		spec.Args = args
+	if _, hasArgs := spec["args"]; hasArgs || len(args) > 0 {
+		out.Args = args
 	}
-	return spec, nil
+	return out, nil
 }
 
+// decodeArgPolicy reads one argument-key policy: an explicit value always,
+// never a value inspection.
 func decodeArgPolicy(v any, file, tool, arg string) (Policy, error) {
 	s, ok := v.(string)
 	if !ok {
@@ -554,4 +574,242 @@ func decodeArgPolicy(v any, file, tool, arg string) (Policy, error) {
 		return "", fmt.Errorf("skill %s: %v (a listed argument must carry a value; leave the key out to inherit)", file, err)
 	}
 	return Policy(s), nil
+}
+
+// moduleResult caches one module evaluation: the JSON snapshot handed to
+// require, the decoded value used for decoding, and the error.
+type moduleResult struct {
+	json  string
+	value any
+	err   error
+	done  bool
+}
+
+// moduleSource is one module in the resolution set.
+type moduleSource struct {
+	src  Source
+	stem string
+	root bool
+}
+
+// skillLoader evaluates one set of skill modules with cross-file require.
+// It is single-goroutine: evaluation is recursive (require evaluates its
+// target in a fresh VM on the same goroutine), never parallel.
+type skillLoader struct {
+	roots        []*moduleSource
+	resolveOrder []*moduleSource // require-only modules first, then roots
+	orderIndex   map[*moduleSource]int
+	byStem       map[string]*moduleSource
+	byName       map[string]*moduleSource
+	results      map[*moduleSource]*moduleResult
+	loading      map[*moduleSource]bool
+	stack        []*moduleSource
+}
+
+func newSkillLoader(roots, modules []Source) *skillLoader {
+	l := &skillLoader{
+		orderIndex: map[*moduleSource]int{},
+		byStem:     map[string]*moduleSource{},
+		byName:     map[string]*moduleSource{},
+		results:    map[*moduleSource]*moduleResult{},
+		loading:    map[*moduleSource]bool{},
+	}
+	makeSources := func(list []Source, root bool) []*moduleSource {
+		out := make([]*moduleSource, 0, len(list))
+		for _, s := range list {
+			out = append(out, &moduleSource{src: s, stem: moduleStem(s.Path), root: root})
+		}
+		sort.SliceStable(out, func(i, j int) bool {
+			bi, bj := displayBase(out[i].src.Path), displayBase(out[j].src.Path)
+			if bi != bj {
+				return bi < bj
+			}
+			return out[i].src.Path < out[j].src.Path
+		})
+		return out
+	}
+	mods := makeSources(modules, false)
+	l.roots = makeSources(roots, true)
+	l.resolveOrder = append(l.resolveOrder, mods...)
+	l.resolveOrder = append(l.resolveOrder, l.roots...)
+	for i, ms := range l.resolveOrder {
+		l.orderIndex[ms] = i
+		if ms.stem != "" {
+			if _, taken := l.byStem[ms.stem]; !taken {
+				l.byStem[ms.stem] = ms
+			}
+		}
+	}
+	return l
+}
+
+func (l *skillLoader) load() (map[string]Skill, []error) {
+	out := map[string]Skill{}
+	var errs []error
+	for _, root := range l.roots {
+		res := l.evalSource(root)
+		if res.err != nil {
+			errs = append(errs, res.err)
+			continue
+		}
+		sk, err := decodeSkill(root.src.Path, res.value)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if _, dup := out[sk.Name]; dup {
+			errs = append(errs, fmt.Errorf("skill %s: duplicate name %q (already defined by an earlier file)", displayBase(root.src.Path), sk.Name))
+			continue
+		}
+		out[sk.Name] = sk
+	}
+	return out, errs
+}
+
+// evalSource evaluates one module once per load, caching value and error.
+// Re-entering a module that is still loading is a require cycle: the
+// caller gets the cycle error (its own evaluation then fails with it),
+// while the ancestor's result is cached by its own frame.
+func (l *skillLoader) evalSource(ms *moduleSource) *moduleResult {
+	if res, ok := l.results[ms]; ok && res.done {
+		return res
+	}
+	if l.loading[ms] {
+		chain := make([]string, 0, len(l.stack)+1)
+		for _, s := range l.stack {
+			chain = append(chain, displayBase(s.src.Path))
+		}
+		chain = append(chain, displayBase(ms.src.Path))
+		return &moduleResult{err: fmt.Errorf("require cycle detected: %s", strings.Join(chain, " -> "))}
+	}
+	l.loading[ms] = true
+	l.stack = append(l.stack, ms)
+	jsonText, err := l.runModule(ms)
+	l.stack = l.stack[:len(l.stack)-1]
+	delete(l.loading, ms)
+	res := &moduleResult{json: jsonText, err: err, done: true}
+	if err == nil {
+		var value any
+		dec := json.NewDecoder(strings.NewReader(jsonText))
+		dec.UseNumber()
+		if err := dec.Decode(&value); err != nil {
+			res.err = fmt.Errorf("skill %s: module snapshot is not valid JSON: %w", displayBase(ms.src.Path), err)
+		} else {
+			res.value = normalizeJSON(value)
+			if name := declaredName(res.value); name != "" {
+				// The earliest source in resolution order owns a
+				// declared name (the builtin layer wins over disk).
+				if cur, taken := l.byName[name]; !taken || l.orderIndex[ms] < l.orderIndex[cur] {
+					l.byName[name] = ms
+				}
+			}
+		}
+	}
+	l.results[ms] = res
+	return res
+}
+
+// declaredName reads the name a module published, used to resolve require
+// by skill name.
+func declaredName(value any) string {
+	top, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := top["name"].(string)
+	return name
+}
+
+// normalizeJSON converts decoded JSON into the value language the decoder
+// uses: objects are map[string]any, arrays []any, numbers float64.
+func normalizeJSON(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, raw := range v {
+			v[key] = normalizeJSON(raw)
+		}
+		return v
+	case []any:
+		for i, raw := range v {
+			v[i] = normalizeJSON(raw)
+		}
+		return v
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return f
+		}
+		return v.String()
+	default:
+		return v
+	}
+}
+
+// resolveModule finds a require target by declared skill name or file
+// stem. Names are only known after evaluation, so a miss evaluates still
+// pending sources in resolution order until the name registers — every
+// root is evaluated during a load anyway.
+func (l *skillLoader) resolveModule(name string) (*moduleSource, error) {
+	clean := name
+	if strings.HasSuffix(strings.ToLower(clean), ".js") {
+		clean = clean[:len(clean)-len(".js")]
+	}
+	if clean == "" || strings.ContainsAny(clean, "/\\") || strings.Contains(clean, "..") || strings.ContainsRune(clean, '\x00') {
+		return nil, fmt.Errorf("invalid module name %q (require takes a skill name or file stem)", name)
+	}
+	if ms, ok := l.byName[clean]; ok {
+		return ms, nil
+	}
+	if ms, ok := l.byStem[clean]; ok {
+		return ms, nil
+	}
+	for _, cand := range l.resolveOrder {
+		if l.loading[cand] {
+			continue
+		}
+		if res, done := l.results[cand]; done && res.done {
+			continue
+		}
+		l.evalSource(cand)
+		if ms, ok := l.byName[clean]; ok {
+			return ms, nil
+		}
+	}
+	if ms, ok := l.byName[clean]; ok {
+		return ms, nil
+	}
+	return nil, fmt.Errorf("module %q not found (require is limited to skill modules)", name)
+}
+
+// runModule executes one module in a fresh QuickJS sandbox and returns the
+// JSON snapshot of its default export. Panics in the engine become load
+// errors — a skill file must never crash the daemon.
+func (l *skillLoader) runModule(ms *moduleSource) (out string, err error) {
+	file := displayBase(ms.src.Path)
+	defer func() {
+		if r := recover(); r != nil {
+			out = ""
+			err = fmt.Errorf("skill %s: %v", file, r)
+		}
+	}()
+	req := func(name string) (string, error) {
+		target, err := l.resolveModule(name)
+		if err != nil {
+			return "", err
+		}
+		res := l.evalSource(target)
+		if res.err != nil {
+			return "", fmt.Errorf("require %q: %w", name, res.err)
+		}
+		return res.json, nil
+	}
+	snapshot, err := qjs.EvalModule(qjs.Module{
+		Name:    ms.src.Path,
+		Source:  ms.src.Data,
+		Timeout: moduleTimeout,
+		Require: req,
+	})
+	if err != nil {
+		return "", fmt.Errorf("skill %s: %w", file, err)
+	}
+	return snapshot, nil
 }

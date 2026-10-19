@@ -1,8 +1,25 @@
 #!/usr/bin/env bun
+// scripts/build-indirect-all.ts — build the shipped daemon assets.
+//
+// ONE multi-call binary per platform (boot + worker roles, see
+// cmd/daemon/main.go), six platforms, all cross-built from the current host
+// through the pinned zig toolchain (scripts/indirect-zig.ts) because the
+// daemon links the prebuilt QuickJS static libraries in
+// indirect-code-daemon/packages/qjs/lib:
+//
+//   linux   x86_64/aarch64 *-linux-musl   -> static, glibc-free, tags musl,static
+//   darwin  x86_64/aarch64 *-macos        -> Mach-O, framework stubs + dynamic_lookup
+//   windows x86_64/aarch64 *-windows-gnu  -> PE/COFF MinGW ABI
+//
+// The .a files are NOT recompiled here (that is the point of the late-link
+// scheme): QuickJS ships prebuilt per target and this script only drives the
+// linker, so no QuickJS source or C compiler for it is required.
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { $ } from "bun";
+import { ensureZig, macosFrameworkDir } from "./indirect-zig";
+import { verifyDaemonBinary } from "./verify-daemon-binary";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const DAEMON_DIR = path.join(ROOT, "indirect-code-daemon");
@@ -31,25 +48,67 @@ console.log(`==> Building Indirect Code v${version}`);
 
 const daemonLdflags = `-s -w -X main.Version=${version} -X main.launcherVersion=${version}`;
 
-const TARGETS = [
-  { goos: "linux", goarch: "amd64" },
-  { goos: "linux", goarch: "arm64" },
-  { goos: "darwin", goarch: "amd64" },
-  { goos: "darwin", goarch: "arm64" },
-  { goos: "windows", goarch: "amd64" },
-  { goos: "windows", goarch: "arm64" },
+interface Target {
+  goos: string;
+  goarch: string;
+  /** zig -target triple: selects the ABI the matching libquickjs.a was built for. */
+  triple: string;
+  /** Build tags: linux musl builds are statically linked against musl. */
+  tags: string;
+  /** Go linker mode: the prebuilt archive is a foreign object, so external. */
+  linkmode: string;
+}
+
+const TARGETS: Target[] = [
+  { goos: "linux", goarch: "amd64", triple: "x86_64-linux-musl", tags: "musl,static", linkmode: "external" },
+  { goos: "linux", goarch: "arm64", triple: "aarch64-linux-musl", tags: "musl,static", linkmode: "external" },
+  { goos: "darwin", goarch: "amd64", triple: "x86_64-macos", tags: "netgo", linkmode: "external" },
+  { goos: "darwin", goarch: "arm64", triple: "aarch64-macos", tags: "netgo", linkmode: "external" },
+  { goos: "windows", goarch: "amd64", triple: "x86_64-windows-gnu", tags: "", linkmode: "external" },
+  { goos: "windows", goarch: "arm64", triple: "aarch64-windows-gnu", tags: "", linkmode: "external" },
 ];
 
-for (const { goos, goarch } of TARGETS) {
-  const ext = goos === "windows" ? ".exe" : "";
-  const name = `indirect-code-${goos}-${goarch}${ext}`;
+const zig = await ensureZig();
+const frameworkDir = macosFrameworkDir(DAEMON_DIR);
 
-  // ONE multi-call binary per target (boot + worker roles, see cmd/daemon
-  // main.go) — launcher and daemon used to be two builds.
+for (const target of TARGETS) {
+  const ext = target.goos === "windows" ? ".exe" : "";
+  const name = `indirect-code-${target.goos}-${target.goarch}${ext}`;
+  const ldflags = `${daemonLdflags} -linkmode ${target.linkmode}`;
+  const env: Record<string, string> = {
+    ...process.env,
+    CGO_ENABLED: "1",
+    GOOS: target.goos,
+    GOARCH: target.goarch,
+    CC: `${zig} cc -target ${target.triple}`,
+  };
+  if (target.goos === "darwin") {
+    // Go links crypto/x509's CoreFoundation/Security frameworks on darwin;
+    // cross-linking has no SDK, so the repo's stub .tbd descriptors point at
+    // the framework names and dynamic_lookup defers symbol binding to load
+    // time on macOS (the real frameworks are there).
+    env.CGO_LDFLAGS = `-F${frameworkDir} -Wl,-undefined,dynamic_lookup`;
+  }
   console.log(`==> ${name} (multi-call: boot + worker)`);
-  await $`go build -trimpath -ldflags ${daemonLdflags} -o ${path.join(OUT, name)} ./cmd/daemon`
-    .cwd(DAEMON_DIR)
-    .env({ ...process.env, CGO_ENABLED: "0", GOOS: goos, GOARCH: goarch });
+  const args = ["go", "build", "-trimpath", "-ldflags", ldflags, "-o", path.join(OUT, name)];
+  if (target.tags) args.push("-tags", target.tags);
+  args.push("./cmd/daemon");
+  const result = await $`${args}`.cwd(DAEMON_DIR).env(env).nothrow();
+  if (result.exitCode !== 0) {
+    console.error(result.stderr.toString());
+    throw new Error(`build failed for ${name}`);
+  }
+  // The engine is linked late from a prebuilt archive: assert it actually
+  // landed in the artifact, in the format and static flavor the platform
+  // requires (see scripts/verify-daemon-binary.ts).
+  const report = verifyDaemonBinary(path.join(OUT, name), target.goos, target.goarch);
+  const extra =
+    target.goos === "linux"
+      ? "statically linked"
+      : target.goos === "darwin"
+        ? `${report.engineSymbols} engine symbols, frameworks: ${(report.dylibs ?? []).length}`
+        : "PE";
+  console.log(`    ok: ${report.format}/${report.machine} (${extra})`);
 }
 
 // 2. Prune any deprecated versioned copies and legacy launcher duplicates

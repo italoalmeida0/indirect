@@ -129,7 +129,7 @@ export interface SkillConfig {
   description: string;
   body: string;
   enabled: boolean;
-  /** The Lua skill file's ORIGINAL activation policy: "ask", "yolo",
+  /** The skill module's ORIGINAL activation policy: "ask", "yolo",
    * "deny" (AI-hidden, user-activatable) or "never" (omitted by the
    * daemon). There is no file-level "inherit": a file without the key
    * resolves to "deny". Session entries use "inherit" (or omit the key)

@@ -48,7 +48,15 @@ jobs:
           go-version-file: indirect-code-daemon/go.mod
           cache-dependency-path: indirect-code-daemon/go.sum
 
+      - name: Cache the pinned zig toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/indirect-code/toolchains
+          key: indirect-zig-${{ runner.os }}-${{ runner.arch }}
+
       - name: Build daemon for integration tests
+        # Downloads (and caches) the pinned zig toolchain: the daemon links
+        # QuickJS through cgo, so a bare `go build` is no longer enough.
         run: bun run build:daemon
 
       - name: Unit + integration tests
@@ -132,6 +140,37 @@ jobs:
           echo "$RUNNER_TEMP/unish-bin" >> "$GITHUB_PATH"
           echo "UNISH_TEST_BINARY=$RUNNER_TEMP/unish-bin/$shell_binary" >> "$GITHUB_ENV"
 
+      # The daemon links the prebuilt QuickJS static archives in
+      # packages/qjs/lib, so every lane builds with cgo enabled and a C
+      # linker driver matching that archive's ABI (musl for linux, Mach-O
+      # for macOS, GNU for windows). Zig is the pinned provider
+      # (scripts/indirect-zig.ts) and macOS links with its own clang, which
+      # has the real frameworks and SDK.
+      - name: Install the pinned zig toolchain
+        if: runner.os != 'macOS'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Select the cgo toolchain
+        # Explicit bash: the Windows runner defaults to pwsh and this is a
+        # POSIX shell snippet.
+        shell: bash
+        run: |
+          case "$RUNNER_OS-$RUNNER_ARCH" in
+            Linux-X64)     triple=x86_64-linux-gnu ;;
+            Linux-ARM64)   triple=aarch64-linux-gnu ;;
+            Windows-X64)   triple=x86_64-windows-gnu ;;
+            Windows-ARM64) triple=aarch64-windows-gnu ;;
+            macOS-X64)     triple=x86_64-macos ;;
+            macOS-ARM64)   triple=aarch64-macos ;;
+            *) echo "no cgo toolchain for $RUNNER_OS-$RUNNER_ARCH" >&2; exit 1 ;;
+          esac
+          echo "CGO_ENABLED=1" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" != "macOS" ]; then
+            echo "CC=zig cc -target $triple" >> "$GITHUB_ENV"
+          fi
+
       - name: Vet
         run: go vet ./...
 
@@ -175,12 +214,16 @@ jobs:
       #    glibc distros / macOS / Windows.
       - name: Tests (musl userland, Alpine)
         run: |
+          # build-base is required now that the daemon links QuickJS through
+          # cgo; the archive is musl-built, so Alpine's own toolchain is the
+          # exact match for it.
           docker run --rm -v "$PWD:/src" -w /src/indirect-code-daemon golang:1.26-alpine \
-            sh -c "apk add --no-cache git bash >/dev/null && go vet ./... && go test ./... -count=1 -timeout 900s"
+            sh -c "apk add --no-cache git bash build-base >/dev/null && CGO_ENABLED=1 go vet ./... && CGO_ENABLED=1 go test ./... -count=1 -timeout 900s"
 
       # 2) Build the REAL shipped artifacts — same script the release uses
-      #    (CGO_ENABLED=0, -trimpath, all six GOOS/GOARCH targets), so this
-      #    also proves every cross target still compiles.
+      #    (zig cross toolchain, cgo, -trimpath, all six GOOS/GOARCH
+      #    targets), so this also proves every cross target still links
+      #    against its prebuilt QuickJS archive.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.2"
@@ -189,6 +232,12 @@ jobs:
         with:
           go-version-file: indirect-code-daemon/go.mod
           cache-dependency-path: indirect-code-daemon/go.sum
+
+      - name: Cache the pinned zig toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/indirect-code/toolchains
+          key: indirect-zig-${{ runner.os }}-${{ runner.arch }}
 
       - name: Build release artifacts (all targets)
         run: bun run build:daemon:all
@@ -231,4 +280,6 @@ jobs:
           cache-dependency-path: indirect-code-daemon/go.sum
 
       - name: Tests (race detector, full)
+        env:
+          CGO_ENABLED: "1"
         run: go test -race -count=1 ./... -timeout 1200s

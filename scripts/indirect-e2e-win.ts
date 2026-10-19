@@ -8,8 +8,9 @@
 //   import { IS_WIN, PLAT, DAEMON_BIN, GO_BIN, buildBin, killAll, copyDir, exe } from "./indirect-e2e-win";
 //   import { cdpFrontend } from "./indirect-e2e-win"; // browser phases
 import { execFileSync, spawn } from "node:child_process";
-import { mkdirSync, copyFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 
 export const IS_WIN = process.platform === "win32";
 
@@ -76,12 +77,54 @@ export function bunBin(): string {
 
 // `go build -trimpath -ldflags "-s -w -X main.<vvar>=<ver>" -o <out> <pkg>`
 // in the daemon dir. Returns the actual output path (with .exe on win).
+//
+// CGO is mandatory: the daemon links the prebuilt QuickJS archive under
+// packages/qjs/lib, so the E2E builds need a C linker driver. $CC wins when
+// it is already exported (every CI lane sets it); otherwise the pinned zig
+// toolchain from scripts/build-indirect-daemon.ts is used, and the target
+// triple follows GOOS/GOARCH so a cross lane still produces a runnable host
+// binary.
 export function buildBin(pkg: string, ver: string, out: string, vvar: string | string[], daemonDir: string): string {
   const finalOut = exe(out);
   const vars = Array.isArray(vvar) ? vvar : [vvar];
   const ldflags = ["-s", "-w", ...vars.map((v) => `-X main.${v}=${ver}`)].join(" ");
-  execFileSync(GO_BIN, ["build", "-trimpath", "-ldflags", ldflags, "-o", finalOut, pkg], { cwd: daemonDir, stdio: "pipe" });
+  execFileSync(GO_BIN, ["build", "-trimpath", "-ldflags", ldflags, "-o", finalOut, pkg], {
+    cwd: daemonDir,
+    stdio: "pipe",
+    env: { ...process.env, CGO_ENABLED: "1", CC: process.env.CC || defaultCgoCompiler() },
+  });
   return finalOut;
+}
+
+// defaultCgoCompiler picks the zig toolchain matching the HOST, so local
+// E2E runs need no exported env.
+function defaultCgoCompiler(): string {
+  const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
+  const triple =
+    process.platform === "darwin"
+      ? `${arch}-macos`
+      : process.platform === "win32"
+        ? `${arch}-windows-gnu`
+        : `${arch}-linux-gnu`;
+  return `${ensureZigSync()} cc -target ${triple}`;
+}
+
+function ensureZigSync(): string {
+  // Reuse the toolchain cache scripts/indirect-zig.ts maintains; a missing
+  // cache degrades to `zig` on PATH (CI installs it, developers usually have
+  // a compiler of their own via $CC).
+  const cache =
+    process.env.INDIRECT_TOOLCHAIN_DIR ??
+    join(process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"), "indirect-code", "toolchains");
+  if (process.env.ZIG) return process.env.ZIG;
+  try {
+    for (const entry of readdirSync(cache)) {
+      for (const candidate of [join(cache, entry, "zig"), join(cache, entry, "zig.exe")]) {
+        if (existsSync(candidate)) return candidate;
+      }
+    }
+  } catch {}
+  return "zig";
 }
 
 // Recursive dir copy (node:fs only — no `cp -r`, missing on Windows).

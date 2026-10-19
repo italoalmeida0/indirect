@@ -8,30 +8,30 @@ import (
 )
 
 const validSkill = `
-return {
-  name = "revisor-estrito",
-  description = "Analisa codigo sem permissao de alterar nada ou rodar scripts.",
-  usable = "ask",
-  mode = "agentic",
-  approvalMode = "ask",
-  permissions = {
-    read = "inherit",
-    edit = "deny",
-    bash = "deny",
-    custom_tool = {
-      policy = "inherit",
-      args = { param_a = "ask", param_b = "deny" },
+export default {
+  name: "revisor-estrito",
+  description: "Analisa codigo sem permissao de alterar nada ou rodar scripts.",
+  usable: "ask",
+  mode: "agentic",
+  approvalMode: "ask",
+  permissions: {
+    read: "inherit",
+    edit: "deny",
+    bash: "deny",
+    custom_tool: {
+      policy: "inherit",
+      args: { param_a: "ask", param_b: "deny" },
     },
   },
-  body = [[
-Instrucoes detalhadas da skill ate o fim do arquivo Lua.
-Apenas este corpo de texto sera carregado dentro da tag <skill></skill>.
-]],
-}
+  body: [
+    "Instrucoes detalhadas da skill ate o fim do arquivo JavaScript.",
+    "Apenas este corpo de texto sera carregado dentro da tag <skill></skill>.",
+  ].join("\n"),
+};
 `
 
 func TestParseValidSkill(t *testing.T) {
-	s, err := Parse("revisor-estrito.lua", []byte(validSkill))
+	s, err := Parse("revisor-estrito.js", []byte(validSkill))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,19 +53,19 @@ func TestParseValidSkill(t *testing.T) {
 }
 
 func TestParseToolsAliasAndDefaults(t *testing.T) {
-	s, err := Parse("alias.lua", []byte(`
-return {
-  name = "alias",
-  description = "nested tools shape",
-  _meta = { version = 1, experimental = true },
-  tools = {
-    approvalMode = "yolo",
-    permissions = {
-      widget_set = { policy = "inherit", src_file = "deny" },
+	s, err := Parse("alias.js", []byte(`
+export default {
+  name: "alias",
+  description: "nested tools shape",
+  _meta: { version: 1, experimental: true },
+  tools: {
+    approvalMode: "yolo",
+    permissions: {
+      widget_set: { policy: "inherit", src_file: "deny" },
     },
   },
-  body = "body",
-}
+  body: "body",
+};
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -83,43 +83,43 @@ return {
 
 func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 	cases := map[string]string{
-		"unknown key":          `return { name = "x", description = "d", banana = 1, body = "b" }`,
-		"bad usable":           `return { name = "x", description = "d", usable = "sometimes", body = "b" }`,
-		"file inherit":         `return { name = "x", description = "d", usable = "inherit", body = "b" }`,
-		"bad mode":             `return { name = "x", description = "d", mode = "build", body = "b" }`,
-		"missing name":         `return { description = "d", body = "b" }`,
-		"missing description":  `return { name = "x", body = "b" }`,
-		"inline tools":         `return { name = "x", description = "d", tools = "all", body = "b" }`,
-		"duplicate tools":      `return { name = "x", description = "d", approvalMode = "ask", tools = { approvalMode = "ask" }, body = "b" }`,
-		"numeric name":         `return { name = 42, description = "d", body = "b" }`,
-		"boolean description":  `return { name = "x", description = true, body = "b" }`,
-		"function body":        `return { name = "x", description = "d", body = function() return "b" end }`,
-		"no return":            `local x = 1`,
-		"non-table return":     `return "x"`,
-		"returned metatable":   `return setmetatable({ name = "x", description = "d", body = "b" }, {})`,
-		"cyclic returned data": `local t = { name = "x", description = "d", body = "b" }; t._self = t; return t`,
+		"unknown key":          `export default { name: "x", description: "d", banana: 1, body: "b" };`,
+		"bad usable":           `export default { name: "x", description: "d", usable: "sometimes", body: "b" };`,
+		"file inherit":         `export default { name: "x", description: "d", usable: "inherit", body: "b" };`,
+		"bad mode":             `export default { name: "x", description: "d", mode: "build", body: "b" };`,
+		"missing name":         `export default { description: "d", body: "b" };`,
+		"missing description":  `export default { name: "x", body: "b" };`,
+		"inline tools":         `export default { name: "x", description: "d", tools: "all", body: "b" };`,
+		"duplicate tools":      `export default { name: "x", description: "d", approvalMode: "ask", tools: { approvalMode: "ask" }, body: "b" };`,
+		"numeric name":         `export default { name: 42, description: "d", body: "b" };`,
+		"boolean description":  `export default { name: "x", description: true, body: "b" };`,
+		"function body":        `export default { name: "x", description: "d", body: function () { return "b"; } };`,
+		"no default export":    `const x = 1;`,
+		"non-object export":    `export default "x";`,
+		"class instance":       `class Box {} export default new Box();`,
+		"cyclic returned data": `const t = { name: "x", description: "d", body: "b" }; t._self = t; export default t;`,
 		"markdown frontmatter": "---\nname: x\ndescription: d\n---\nb\n",
 	}
 	for label, src := range cases {
-		if _, err := Parse("x.lua", []byte(src)); err == nil {
+		if _, err := Parse("x.js", []byte(src)); err == nil {
 			t.Fatalf("%s: expected error", label)
 		}
 	}
 }
 
 func TestParseInheritAndValuedEntries(t *testing.T) {
-	sk, err := Parse("x.lua", []byte(`
-return {
-  name = "x",
-  description = "d",
-  inherit = { "a", "b", "c" },
-  permissions = {
-    bash = "ask",
-    edit = "deny",
-    yolo_tool = "yolo",
+	sk, err := Parse("x.js", []byte(`
+export default {
+  name: "x",
+  description: "d",
+  inherit: ["a", "b", "c"],
+  permissions: {
+    bash: "ask",
+    edit: "deny",
+    yolo_tool: "yolo",
   },
-  body = "body",
-}
+  body: "body",
+};
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -136,16 +136,16 @@ return {
 	if p := sk.Permissions["yolo_tool"].Policy; p != PolicyYolo {
 		t.Fatalf("yolo entry policy = %q", p)
 	}
-	// A listed tool or argument key MUST carry a policy value: a table
+	// A listed tool or argument key MUST carry a policy value: an object
 	// without `policy`, an empty string and non-string values are errors
 	// (leave the key out to inherit).
 	for _, src := range []string{
-		`return { name = "x", description = "d", permissions = { bash = { args = { cmd = "deny" } } }, body = "b" }`,
-		`return { name = "x", description = "d", permissions = { bash = "" }, body = "b" }`,
-		`return { name = "x", description = "d", permissions = { bash = true }, body = "b" }`,
-		`return { name = "x", description = "d", permissions = { bash = { policy = "ask", args = { cmd = false } } }, body = "b" }`,
+		`export default { name: "x", description: "d", permissions: { bash: { args: { cmd: "deny" } } }, body: "b" };`,
+		`export default { name: "x", description: "d", permissions: { bash: "" }, body: "b" };`,
+		`export default { name: "x", description: "d", permissions: { bash: true }, body: "b" };`,
+		`export default { name: "x", description: "d", permissions: { bash: { policy: "ask", args: { cmd: false } } }, body: "b" };`,
 	} {
-		if _, err := Parse("x.lua", []byte(src)); err == nil {
+		if _, err := Parse("x.js", []byte(src)); err == nil {
 			t.Fatalf("expected error for value-less key in %q", src)
 		}
 	}
@@ -153,16 +153,16 @@ return {
 
 func TestParseArgKeyOverridesOnly(t *testing.T) {
 	src := `
-return {
-  name = "x",
-  description = "d",
-  permissions = {
-    bash = { policy = "inherit", args = { cmd = "deny" } },
+export default {
+  name: "x",
+  description: "d",
+  permissions: {
+    bash: { policy: "inherit", args: { cmd: "deny" } },
   },
-  body = "b",
-}
+  body: "b",
+};
 `
-	s, err := Parse("x.lua", []byte(src))
+	s, err := Parse("x.js", []byte(src))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,15 +177,15 @@ return {
 	// Direct arg keys and an `args` table may combine (skill.extend can
 	// deep-merge specs written in either form); a conflicting duplicate
 	// policy for the same argument is an error.
-	mixed, err := Parse("mixed.lua", []byte(`
-return {
-  name = "mixed",
-  description = "d",
-  permissions = {
-    bash = { policy = "ask", timeout = "yolo", args = { cmd = "deny" } },
+	mixed, err := Parse("mixed.js", []byte(`
+export default {
+  name: "mixed",
+  description: "d",
+  permissions: {
+    bash: { policy: "ask", timeout: "yolo", args: { cmd: "deny" } },
   },
-  body = "b",
-}
+  body: "b",
+};
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -193,15 +193,15 @@ return {
 	if got := mixed.Permissions["bash"]; got.Args["cmd"] != PolicyDeny || got.Args["timeout"] != PolicyYolo {
 		t.Fatalf("mixed arg forms must merge: %+v", got)
 	}
-	if _, err := Parse("conflict.lua", []byte(`
-return {
-  name = "conflict",
-  description = "d",
-  permissions = {
-    bash = { policy = "ask", cmd = "yolo", args = { cmd = "deny" } },
+	if _, err := Parse("conflict.js", []byte(`
+export default {
+  name: "conflict",
+  description: "d",
+  permissions: {
+    bash: { policy: "ask", cmd: "yolo", args: { cmd: "deny" } },
   },
-  body = "b",
-}
+  body: "b",
+};
 `)); err == nil {
 		t.Fatal("conflicting duplicate argument policies must be rejected")
 	}
@@ -468,7 +468,7 @@ func TestUsableValueLocks(t *testing.T) {
 		def, override, want string
 		wantErr             bool
 	}{
-		{"", "", "deny", false},         // no usable key in the Lua skill: deny fallback
+		{"", "", "deny", false},         // no usable key in the skill module: deny fallback
 		{"", "inherit", "deny", false},  // session inherit = the file original (deny here)
 		{"", "ask", "deny", false},      // fallback deny is the locked original
 		{"deny", "yolo", "deny", false}, // locked
@@ -497,10 +497,10 @@ func TestUsableValueLocks(t *testing.T) {
 
 func TestLoadSkipsInvalidFilesAndIgnoresMarkdown(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "good.lua"), []byte(validSkill), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "good.js"), []byte(validSkill), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "bad.lua"), []byte(`return { name = "x" }`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "bad.js"), []byte(`export default { name: "x" };`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Markdown skills are no longer supported at all: even a formerly
@@ -511,7 +511,7 @@ func TestLoadSkipsInvalidFilesAndIgnoresMarkdown(t *testing.T) {
 	}
 	list, errs := Load(dir)
 	if len(list) != 1 || len(errs) != 1 {
-		t.Fatalf("list=%v errs=%v, want one Lua skill and one load error", list, errs)
+		t.Fatalf("list=%v errs=%v, want one JavaScript skill and one load error", list, errs)
 	}
 	if _, ok := list["legacy"]; ok {
 		t.Fatal("markdown skill must not load")
@@ -520,12 +520,12 @@ func TestLoadSkipsInvalidFilesAndIgnoresMarkdown(t *testing.T) {
 
 func TestLoadDuplicateNamesFirstFileWins(t *testing.T) {
 	dir := t.TempDir()
-	first := `return { name = "dup", description = "first", body = "first body" }`
-	second := `return { name = "dup", description = "second", body = "second body" }`
-	if err := os.WriteFile(filepath.Join(dir, "a.lua"), []byte(first), 0o644); err != nil {
+	first := `export default { name: "dup", description: "first", body: "first body" };`
+	second := `export default { name: "dup", description: "second", body: "second body" };`
+	if err := os.WriteFile(filepath.Join(dir, "a.js"), []byte(first), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "b.lua"), []byte(second), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "b.js"), []byte(second), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	list, errs := Load(dir)

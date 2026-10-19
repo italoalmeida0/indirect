@@ -13,7 +13,7 @@ import (
 func TestWidgetToolPayloadsPerMode(t *testing.T) {
 	// Which widget tools belong to which delivery context is decided by
 	// the BUILTIN SKILL FILES (their permissions entries grant the tools),
-	// not by hardcoded lists in Go: load the embedded Lua set and validate
+	// not by hardcoded lists in Go: load the embedded JS set and validate
 	// the schemas of exactly the tools each skill grants.
 	builtins, errs := builtinSkills()
 	if len(errs) > 0 {

@@ -237,7 +237,7 @@ func (eff Effective) ArgDecision(tool, argKey string) Policy {
 // the skill file's ORIGINAL, enforcing the locks of the usability table.
 //
 // The file original is ask, yolo, deny or never — there is no file-level
-// "inherit": when the Lua skill omits `usable` the original is deny. At session
+// "inherit": when the skill module omits `usable` the original is deny. At session
 // level, an empty override and an explicit "inherit" both mean NO
 // override: the original applies untouched. Locked originals win over any
 // explicit session value:

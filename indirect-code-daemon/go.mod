@@ -12,7 +12,4 @@ require github.com/italoalmeida0/btdby4 v0.0.0-20260916133140-b9fc87cf9fe9
 
 require github.com/gorilla/websocket v1.5.3
 
-require (
-	github.com/yuin/gopher-lua v1.1.2
-	golang.org/x/sys v0.49.0
-)
+require golang.org/x/sys v0.49.0

@@ -42,7 +42,7 @@ func TestV5SeedsSkillsAndCollapsesModes(t *testing.T) {
 	}
 
 	// Skill DEFINITIONS live embedded in the daemon binary
-	// (builtin_skills/*.lua) and are never seeded to disk — with no
+	// (builtin_skills/*.js) and are never seeded to disk — with no
 	// pre-existing user skills to convert, no skills/ file may appear.
 	if _, err := os.Stat(filepath.Join(dir, "skills")); err == nil {
 		entries, _ := os.ReadDir(filepath.Join(dir, "skills"))
@@ -165,10 +165,11 @@ func TestV5MovesTalkSessionsHome(t *testing.T) {
 }
 
 // v5 retires Markdown skills: every parseable user skills/*.md becomes an
-// equivalent .lua (same fields, body verbatim) and the .md is removed.
-// Unparseable files (already dropped by the old loader) and same-stem
-// .md+.lua collisions are left untouched rather than destroying data.
-func TestV5ConvertsMarkdownSkillsToLua(t *testing.T) {
+// equivalent .js module (same fields, body verbatim) and the .md is
+// removed. Unparseable files (already dropped by the old loader) and
+// same-stem .md+.js collisions are left untouched rather than destroying
+// data.
+func TestV5ConvertsMarkdownSkillsToJS(t *testing.T) {
 	dir := t.TempDir()
 	skillsDir := filepath.Join(dir, "skills")
 	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
@@ -193,7 +194,7 @@ func TestV5ConvertsMarkdownSkillsToLua(t *testing.T) {
 		return err == nil
 	}
 
-	customBody := "Review body with ]] and ]=] sequences.\nSecond line."
+	customBody := "Review body with ` and ${ sequences, plus </script>.\nSecond line."
 	write("custom.md", "---\nname: custom_review\ndescription: Review \"strict\" code\nusable: ask\nmode: agentic\ninherit: [agentic_base, other_base]\ntools:\n  approvalMode: yolo\n  permissions:\n    read: inherit\n    edit: deny\n    widget_set: inherit { src_file: deny }\n---\n"+customBody+"\n")
 	// A reserved builtin name still converts (the runtime ignores it, the
 	// user's content is not deleted).
@@ -201,9 +202,9 @@ func TestV5ConvertsMarkdownSkillsToLua(t *testing.T) {
 	broken := "---\nname: broken\n---\nno description\n"
 	write("broken.md", broken)
 	collideMD := "---\nname: collide\ndescription: markdown side\n---\nmd body\n"
-	collideLua := "return { name = \"collide\", description = \"lua side\", body = \"lua body\" }\n"
+	collideJS := "export default { name: \"collide\", description: \"js side\", body: \"js body\" };\n"
 	write("collide.md", collideMD)
-	write("collide.lua", collideLua)
+	write("collide.js", collideJS)
 
 	if err := applyV5(dir); err != nil {
 		t.Fatal(err)
@@ -215,13 +216,13 @@ func TestV5ConvertsMarkdownSkillsToLua(t *testing.T) {
 	if exists("custom.md") || exists("plan.md") {
 		t.Fatal("converted .md files must be removed")
 	}
-	generated := read("custom.lua")
-	if !strings.Contains(generated, "[==[") {
-		t.Fatalf("body with ]] and ]=] must use a level-2 long bracket:\n%s", generated)
+	generated := read("custom.js")
+	if !strings.Contains(generated, "\\`") || !strings.Contains(generated, "\\${") {
+		t.Fatalf("body with a backtick and ${{ must be escaped in the template literal:\n%s", generated)
 	}
-	sk, err := skills.Parse("custom.lua", []byte(generated))
+	sk, err := skills.Parse("custom.js", []byte(generated))
 	if err != nil {
-		t.Fatalf("converted skill must load with the Lua loader: %v\n%s", err, generated)
+		t.Fatalf("converted skill must load with the JS loader: %v\n%s", err, generated)
 	}
 	if sk.Name != "custom_review" || sk.Description != `Review "strict" code` || sk.Usable != "ask" || sk.Mode != "agentic" || sk.ApprovalMode != "yolo" {
 		t.Fatalf("converted fields drifted: %+v", sk)
@@ -236,15 +237,15 @@ func TestV5ConvertsMarkdownSkillsToLua(t *testing.T) {
 	if sk.Body != customBody {
 		t.Fatalf("converted body drifted: %q", sk.Body)
 	}
-	plan, err := skills.Parse("plan.lua", []byte(read("plan.lua")))
+	plan, err := skills.Parse("plan.js", []byte(read("plan.js")))
 	if err != nil || plan.Name != "plan" || plan.Usable != "deny" || plan.Body != "custom plan body" {
 		t.Fatalf("reserved-name conversion drifted: %+v (%v)", plan, err)
 	}
-	if read("broken.md") != broken || exists("broken.lua") {
-		t.Fatal("unparseable .md must stay untouched with no .lua")
+	if read("broken.md") != broken || exists("broken.js") {
+		t.Fatal("unparseable .md must stay untouched with no .js")
 	}
-	if read("collide.md") != collideMD || read("collide.lua") != collideLua {
-		t.Fatal("same-stem .md+.lua collision must stay untouched")
+	if read("collide.md") != collideMD || read("collide.js") != collideJS {
+		t.Fatal("same-stem .md+.js collision must stay untouched")
 	}
 
 	// Idempotent: a second run changes nothing.
