@@ -100,13 +100,26 @@ export function verifyDist(distDir: string, expectedVersion?: string) {
     bad(`SHA256SUMS lists ${listedBinaries.length} binaries, want ${EXPECTED_PLATFORMS.length}`);
   }
 
-  // 4. Each artifact must really carry the engine and the platform flavor
-  //    the daemon needs: static glibc-free ELF on linux, a Mach-O with the
-  //    QuickJS symbols defined and the CoreFoundation/Security frameworks
-  //    linked on darwin, the right PE machine on windows. A checksum alone
-  //    cannot tell a stale or mis-linked binary from a good one.
+  return { version, assets, checked: EXPECTED_PLATFORMS.length };
+}
+
+/**
+ * verifyDistBinaries inspects what is INSIDE the shipped artifacts: object
+ * format and machine must match the platform, linux must stay statically
+ * linked and glibc-free, darwin must carry the QuickJS engine as DEFINED
+ * symbols with CoreFoundation/Security really linked, and windows must be the
+ * right PE machine. Checksums and the manifest cannot tell a stale,
+ * mis-linked or swapped binary from a good one, so this runs on artifacts a
+ * build just produced — kept separate from verifyDist because a test dist
+ * carries placeholder bytes, not real executables.
+ */
+export function verifyDistBinaries(distDir: string): void {
+  const manifestPath = join(distDir, "versions.json");
+  if (!existsSync(manifestPath)) bad("versions.json missing");
+  const assets: Record<string, string> = JSON.parse(readFileSync(manifestPath, "utf8"))?.daemon?.assets ?? {};
   for (const plat of EXPECTED_PLATFORMS) {
     const name = assets[plat];
+    if (!name) bad(`manifest missing platform asset ${plat}`);
     const [goos, goarch] = plat.split("-");
     try {
       verifyDaemonBinary(join(distDir, name), goos, goarch);
@@ -114,8 +127,6 @@ export function verifyDist(distDir: string, expectedVersion?: string) {
       bad(`${name}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-
-  return { version, assets, checked: EXPECTED_PLATFORMS.length };
 }
 
 if (import.meta.main) {
@@ -123,6 +134,7 @@ if (import.meta.main) {
   const distDir = distArg ?? "indirect-code-daemon/dist";
   try {
     const rep = verifyDist(distDir, versionArg);
+    verifyDistBinaries(distDir);
     console.log(
       `verify-release-dist: OK v${rep.version} — ${rep.checked} platform assets verified (${distDir})`,
     );

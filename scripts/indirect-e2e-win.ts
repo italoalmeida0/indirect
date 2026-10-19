@@ -88,17 +88,21 @@ export function buildBin(pkg: string, ver: string, out: string, vvar: string | s
   const finalOut = exe(out);
   const vars = Array.isArray(vvar) ? vvar : [vvar];
   const ldflags = ["-s", "-w", ...vars.map((v) => `-X main.${v}=${ver}`)].join(" ");
+  const cc = process.env.CC || defaultCgoCompiler();
   execFileSync(GO_BIN, ["build", "-trimpath", "-ldflags", ldflags, "-o", finalOut, pkg], {
     cwd: daemonDir,
     stdio: "pipe",
-    env: { ...process.env, CGO_ENABLED: "1", CC: process.env.CC || defaultCgoCompiler() },
+    env: { ...process.env, CGO_ENABLED: "1", ...(cc ? { CC: cc } : {}) },
   });
   return finalOut;
 }
 
-// defaultCgoCompiler picks the zig toolchain matching the HOST, so local
-// E2E runs need no exported env.
-function defaultCgoCompiler(): string {
+// defaultCgoCompiler picks the C toolchain matching the HOST so local E2E
+// runs need no exported env. macOS keeps its own clang (the SDK has the real
+// frameworks, and the engine archive is Mach-O for that platform); every
+// other host uses the pinned zig toolchain, whose triple follows the host.
+function defaultCgoCompiler(): string | null {
+  if (process.platform === "darwin" && !process.env.ZIG) return null;
   const arch = process.arch === "arm64" ? "aarch64" : "x86_64";
   const triple =
     process.platform === "darwin"
