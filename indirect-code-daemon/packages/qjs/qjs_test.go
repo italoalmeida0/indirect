@@ -376,3 +376,42 @@ func TestImportMutualCycleNamesThePath(t *testing.T) {
 		t.Fatalf("cycle error must name the path: %v", err)
 	}
 }
+
+// A self import and a multi-hop cycle are both refused, and the message
+// shows the loop so a skill author can see which files point at each other.
+func TestImportCyclePaths(t *testing.T) {
+	cases := []struct {
+		name string
+		root string
+		mods map[string]string
+		want string
+	}{
+		{
+			name: "self",
+			root: `import a from "skill:a"; export default { a };`,
+			mods: map[string]string{
+				"skill:a": `import self from "skill:a"; export default { self };`,
+			},
+			want: "skill:a -> skill:a",
+		},
+		{
+			name: "three hops",
+			root: `import a from "skill:a"; export default { a };`,
+			mods: map[string]string{
+				"skill:a": `import b from "skill:b"; export default { b };`,
+				"skill:b": `import c from "skill:c"; export default { c };`,
+				"skill:c": `import a from "skill:a"; export default { a };`,
+			},
+			want: "skill:a -> skill:b -> skill:c -> skill:a",
+		},
+	}
+	for _, tc := range cases {
+		_, err := EvalModule(Module{Name: "root.js", Source: []byte(tc.root), Resolve: skillSet(tc.mods)})
+		if err == nil {
+			t.Fatalf("%s: cycle was accepted", tc.name)
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("%s: error %q should show the loop %q", tc.name, err, tc.want)
+		}
+	}
+}

@@ -92,7 +92,7 @@ func (e *entry) addEdge(from, to string) (string, bool) {
 	if !found {
 		return "", false
 	}
-	return from + " -> " + path, true
+	return path + " -> " + to, true
 }
 
 // findPath returns a short path from start to target (breadth first, bounded
