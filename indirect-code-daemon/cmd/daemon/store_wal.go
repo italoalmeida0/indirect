@@ -100,28 +100,28 @@ type BgFinish struct {
 // interface and only rehydrate through core.HydrateMessageObject, the
 // same path disk loads use. Replay hydrates it back.
 type walEvent struct {
-	V           int                     `json:"v"`
-	Type        string                  `json:"type"`
-	Header      *walHeader              `json:"header,omitempty"`
-	Msg         json.RawMessage         `json:"msg,omitempty"`
-	Usage       *provider.Usage         `json:"usage,omitempty"`
-	Context     *SessionContext         `json:"context,omitempty"`
-	Compaction  *core.CompactionState   `json:"compaction,omitempty"`
-	Todos       []tools.TodoItem        `json:"todos,omitempty"`
-	Incoming    []filetrack.TrackedFile `json:"incoming,omitempty"`
-	Queue       []QueuedMessage         `json:"queue,omitempty"`
-	Title       string                  `json:"title,omitempty"`
-	TitleSource string                  `json:"titleSource,omitempty"`
-	Model       string                  `json:"model,omitempty"`
-	Options     *SessionOptions         `json:"options,omitempty"`
-	TurnStatus  string                  `json:"turnStatus,omitempty"`
-	Attachments []AttachmentRef         `json:"attachments,omitempty"`
-	Widgets     []tools.WidgetFile      `json:"widgets,omitempty"`
+	V           int                            `json:"v"`
+	Type        string                         `json:"type"`
+	Header      *walHeader                     `json:"header,omitempty"`
+	Msg         json.RawMessage                `json:"msg,omitempty"`
+	Usage       *provider.Usage                `json:"usage,omitempty"`
+	Context     *SessionContext                `json:"context,omitempty"`
+	Compaction  *core.CompactionState          `json:"compaction,omitempty"`
+	Todos       []tools.TodoItem               `json:"todos,omitempty"`
+	Incoming    []filetrack.TrackedFile        `json:"incoming,omitempty"`
+	Queue       []QueuedMessage                `json:"queue,omitempty"`
+	Title       string                         `json:"title,omitempty"`
+	TitleSource string                         `json:"titleSource,omitempty"`
+	Model       string                         `json:"model,omitempty"`
+	Options     *SessionOptions                `json:"options,omitempty"`
+	TurnStatus  string                         `json:"turnStatus,omitempty"`
+	Attachments []AttachmentRef                `json:"attachments,omitempty"`
+	Widgets     []tools.WidgetFile             `json:"widgets,omitempty"`
 	Skills      map[string]skills.SessionSkill `json:"skills,omitempty"`
-	BgTask      *BgTask                 `json:"bgTask,omitempty"`
-	BgChunk     *BgChunk                `json:"bgChunk,omitempty"`
-	BgFinish    *BgFinish               `json:"bgFinish,omitempty"`
-	UpdatedAt   int64                   `json:"updatedAt,omitempty"`
+	BgTask      *BgTask                        `json:"bgTask,omitempty"`
+	BgChunk     *BgChunk                       `json:"bgChunk,omitempty"`
+	BgFinish    *BgFinish                      `json:"bgFinish,omitempty"`
+	UpdatedAt   int64                          `json:"updatedAt,omitempty"`
 	// ApprovalDeadlineUnix persists the 15-min decision deadline inside the
 	// WAL: a respawn recomputes the remainder instead of
 	// restarting the timer.

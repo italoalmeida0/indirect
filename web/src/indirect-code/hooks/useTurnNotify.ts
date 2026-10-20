@@ -107,9 +107,53 @@ function playChime(): void {
   } catch {}
 }
 
+/** Mirror rows the notifier reads: base mode plus the session skill map
+ * (the v5 wire mode is only "agentic" | "talk", so the primary skill name
+ * is what still tells Plan/Learning/Talk apart). */
+export interface NotifySession {
+  id: string;
+  title: string;
+  hostId?: string;
+  options?: { mode?: string };
+  skills?: Record<string, { priority?: number; active?: boolean }>;
+}
+
+/** Mode skills watched up-close: their sessions are conversational or
+ * tutor-style, so sounds + popups would only annoy. */
+const SILENT_MODE = new Set(["talk", "learning"]);
+
+/** The primary skill is the lowest-priority active entry (first in the
+ * selection). */
+function primarySkillName(session: NotifySession | undefined): string | undefined {
+  let best: { name: string; priority: number } | undefined;
+  for (const [name, st] of Object.entries(session?.skills || {})) {
+    if (!st || st.active === false) continue;
+    const priority = typeof st.priority === "number" ? st.priority : 0;
+    if (!best || priority < best.priority) best = { name, priority };
+  }
+  return best?.name;
+}
+
+/** Whether a finished turn on this session deserves a notification.
+ *
+ * Workspace work (Build/Plan) notifies; Talk and Learning stay silent
+ * because they are used up-close. Since storage v5 the wire mode collapses
+ * every workspace session to "agentic", so the base mode decides first and
+ * the primary skill then separates Learning from Build/Plan. Legacy
+ * "build"/"plan"/"learning" modes (older mirrors) keep working. An empty
+ * mode or a session not in the mirror yet notifies: better loud than
+ * silent. */
+export function notifiesOnTurnEnd(session: NotifySession | undefined): boolean {
+  if (!session) return true;
+  const mode = (session.options?.mode || "").toLowerCase();
+  if (!mode) return true;
+  if (SILENT_MODE.has(mode)) return false;
+  return !SILENT_MODE.has(primarySkillName(session) || "");
+}
+
 export function createTurnNotify(opts: {
   hosts: () => RemoteHostDto[];
-  sessions: () => { id: string; title: string; hostId?: string; options?: { mode?: string } }[];
+  sessions: () => NotifySession[];
   toast: (message: string, kind?: "ok" | "err") => void;
   onOpenSession: (hostId: string, sessionId: string) => void;
 }) {
@@ -201,16 +245,11 @@ export function createTurnNotify(opts: {
     };
   }
 
-  /**
-   * Only build/plan turns notify: learning/talk sessions are used up-close
-   * (watching the chat), so sounds + popups would just annoy. Unknown mode
-   * (session not in the mirror yet) still notifies — better loud than silent.
-   */
+  /** Workspace (Build/Plan) turns notify; Talk/Learning stay silent. See
+   * notifiesOnTurnEnd for how the primary skill and the base mode combine. */
   function shouldNotify(hostId: string, sessionId: string): boolean {
     const session = opts.sessions().find((s) => s.id === sessionId && (!s.hostId || s.hostId === hostId));
-    const mode = session?.options?.mode;
-    if (!mode) return true;
-    return mode === "build" || mode === "plan";
+    return notifiesOnTurnEnd(session);
   }
 
   function showNotification(target: TurnNotifyTarget): void {

@@ -1724,8 +1724,8 @@ describe("Notification tags are unique per event", () => {
   });
 });
 
-describe("Notify only for build/plan modes", () => {
-  test("learning/talk sessions stay silent, unknown mode still notifies", async () => {
+describe("Turn notifications follow the primary skill, not the collapsed mode", () => {
+  test("workspace turns notify, talk/learning stay silent, unknown session still notifies", async () => {
     const { createTurnNotify } = await import("../web/src/indirect-code/hooks/useTurnNotify");
     const shown: string[] = [];
     (globalThis as any).Notification = class {
@@ -1736,11 +1736,17 @@ describe("Notify only for build/plan modes", () => {
       }
       close() {}
     };
+    // Storage v5 collapses every workspace session to mode "agentic"; the
+    // primary skill is what still separates Plan from Learning/Talk.
     const mkSessions = () => [
-      { id: "build-s", title: "Build", hostId: "h1", options: { mode: "build" } },
-      { id: "plan-s", title: "Plan", hostId: "h1", options: { mode: "plan" } },
-      { id: "talk-s", title: "Talk", hostId: "h1", options: { mode: "talk" } },
-      { id: "learn-s", title: "Learn", hostId: "h1", options: { mode: "learning" } },
+      { id: "build-s", title: "Build", hostId: "h1", options: { mode: "agentic" }, skills: { build: { priority: 0, active: true } } },
+      { id: "plan-s", title: "Plan", hostId: "h1", options: { mode: "agentic" }, skills: { plan: { priority: 0, active: true } } },
+      { id: "talk-s", title: "Talk", hostId: "h1", options: { mode: "talk" }, skills: { talk: { priority: 0, active: true } } },
+      { id: "learn-s", title: "Learn", hostId: "h1", options: { mode: "agentic" }, skills: { learning: { priority: 0, active: true } } },
+      // Legacy mirrors (pre-v5 rows) only carry the mode.
+      { id: "legacy-build", title: "Legacy build", hostId: "h1", options: { mode: "build" } },
+      { id: "legacy-plan", title: "Legacy plan", hostId: "h1", options: { mode: "plan" } },
+      { id: "legacy-learn", title: "Legacy learn", hostId: "h1", options: { mode: "learning" } },
     ];
     const n = createTurnNotify({
       hosts: () => [],
@@ -1750,14 +1756,29 @@ describe("Notify only for build/plan modes", () => {
     });
     const idle = (sid: string) => ({ type: "session_status", hostId: "h1", sessionId: sid, status: "idle" }) as any;
     const run = (sid: string) => ({ type: "session_status", hostId: "h1", sessionId: sid, status: "running" }) as any;
-    for (const sid of ["build-s", "plan-s", "talk-s", "learn-s", "unknown-s"]) n.noteMessage(run(sid));
-    for (const sid of ["build-s", "plan-s", "talk-s", "learn-s", "unknown-s"]) n.noteMessage(idle(sid));
+    const ids = ["build-s", "plan-s", "talk-s", "learn-s", "legacy-build", "legacy-plan", "legacy-learn", "unknown-s"];
+    for (const sid of ids) n.noteMessage(run(sid));
+    for (const sid of ids) n.noteMessage(idle(sid));
     expect(shown.filter((t) => t.includes("Build"))).toHaveLength(1);
     expect(shown.filter((t) => t.includes("Plan"))).toHaveLength(1);
     expect(shown.filter((t) => t.includes("Talk"))).toHaveLength(0);
     expect(shown.filter((t) => t.includes("Learn"))).toHaveLength(0);
+    expect(shown.filter((t) => t.includes("Legacy build"))).toHaveLength(1);
+    expect(shown.filter((t) => t.includes("Legacy plan"))).toHaveLength(1);
+    expect(shown.filter((t) => t.includes("Legacy learn"))).toHaveLength(0);
     expect(shown.filter((t) => t.includes("unknown"))).toHaveLength(1);
     delete (globalThis as any).Notification;
+  });
+
+  test("notifiesOnTurnEnd resolves an inactive primary away", async () => {
+    const { notifiesOnTurnEnd } = await import("../web/src/indirect-code/hooks/useTurnNotify");
+    expect(notifiesOnTurnEnd(undefined)).toBe(true);
+    expect(notifiesOnTurnEnd({ id: "s", title: "t" })).toBe(true);
+    // talk primary kept inactive: the agentic mode decides again.
+    expect(notifiesOnTurnEnd({ id: "s", title: "t", options: { mode: "agentic" }, skills: { talk: { priority: 0, active: false } } })).toBe(true);
+    expect(notifiesOnTurnEnd({ id: "s", title: "t", options: { mode: "talk" }, skills: { build: { priority: 0, active: true } } })).toBe(false);
+    // Lowest priority wins as the primary.
+    expect(notifiesOnTurnEnd({ id: "s", title: "t", options: { mode: "agentic" }, skills: { build: { priority: 2, active: true }, learning: { priority: 1, active: true } } })).toBe(false);
   });
 });
 

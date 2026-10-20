@@ -159,7 +159,10 @@ export function normalizeSession(r: RawSessionRow, hostId: string): RcSession {
     todosOpen: typeof r.todosOpen === "boolean" ? r.todosOpen : undefined,
     options: r.options ? {
       effort: r.options.effort || "medium",
-      mode: r.options.mode || "build",
+      // The daemon collapses every unknown/absent mode to "talk"
+      // (canonicalSessionMode); mirror the same default here instead of the
+      // retired "build" name.
+      mode: r.options.mode || "talk",
       skills: Array.isArray(r.options.skills) ? r.options.skills : [],
       access: r.options.access || "full",
     } : undefined,
