@@ -90,7 +90,13 @@ for (const target of TARGETS) {
     env.CGO_LDFLAGS = `-F${frameworkDir} -Wl,-undefined,dynamic_lookup`;
   }
   console.log(`==> ${name} (multi-call: boot + worker)`);
-  const args = ["go", "build", "-trimpath", "-ldflags", ldflags, "-o", path.join(OUT, name)];
+  // -buildvcs=false: the artifacts are committed to the repo, so their bytes
+  // must depend on SOURCE and toolchain only. With VCS stamping on, every
+  // rebuild after a new commit rewrites the binaries (and marks them
+  // vcs.modified=true), making "did the release change?" impossible to answer
+  // and the committed dist churn on every unrelated commit. The version the
+  // updater reads is stamped by -X main.Version below.
+  const args = ["go", "build", "-trimpath", "-buildvcs=false", "-ldflags", ldflags, "-o", path.join(OUT, name)];
   if (target.tags) args.push("-tags", target.tags);
   args.push("./cmd/daemon");
   const result = await $`${args}`.cwd(DAEMON_DIR).env(env).nothrow();
