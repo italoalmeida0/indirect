@@ -484,7 +484,7 @@ func TestUsableValueLocks(t *testing.T) {
 	}
 }
 
-func TestLoadSkipsInvalidFilesAndIgnoresMarkdown(t *testing.T) {
+func TestLoadSkipsInvalidFilesAndIgnoresOtherExtensions(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "good.js"), []byte(validSkill), 0o644); err != nil {
 		t.Fatal(err)
@@ -492,10 +492,10 @@ func TestLoadSkipsInvalidFilesAndIgnoresMarkdown(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "bad.js"), []byte(`export default { name: "x" };`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Markdown skills are no longer supported at all: even a formerly
-	// valid .md file is ignored (not loaded, not an error).
-	legacy := "---\nname: legacy\ndescription: old markdown skill\n---\nlegacy body\n"
-	if err := os.WriteFile(filepath.Join(dir, "legacy.md"), []byte(legacy), 0o644); err != nil {
+	// Only .js modules are skills: anything else in the directory is
+	// ignored (not loaded, not an error).
+	other := "---\nname: legacy\ndescription: not a module\n---\nlegacy body\n"
+	if err := os.WriteFile(filepath.Join(dir, "legacy.md"), []byte(other), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	list, errs := Load(dir)
@@ -503,7 +503,7 @@ func TestLoadSkipsInvalidFilesAndIgnoresMarkdown(t *testing.T) {
 		t.Fatalf("list=%v errs=%v, want one JavaScript skill and one load error", list, errs)
 	}
 	if _, ok := list["legacy"]; ok {
-		t.Fatal("markdown skill must not load")
+		t.Fatal("a non-module file must not load")
 	}
 }
 

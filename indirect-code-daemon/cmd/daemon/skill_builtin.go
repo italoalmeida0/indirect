@@ -27,7 +27,7 @@ var (
 )
 
 // builtinSkills parses every embedded builtin_skills/*.js as one module
-// set (builtins may require/extend each other), keyed by skill name. The
+// set (builtins import each other with `skill:<stem>`), keyed by skill name. The
 // files live ONLY in the binary — they are never copied to the machine's
 // skills directory. A builtin that fails to parse is reported and skipped
 // (a build bug must never crash the daemon). Parsed once per process: the
@@ -40,7 +40,7 @@ func builtinSkills() (map[string]skills.Skill, []error) {
 }
 
 // builtinSkillSources returns the raw embedded module sources so disk
-// skills can require/extend builtin modules. The parsed builtin still wins
+// skills can import builtin modules by stem. The parsed builtin still wins
 // by name in the merged store.
 func builtinSkillSources() []skills.Source {
 	builtinSkills()

@@ -41,8 +41,8 @@ func (s *skillStore) initFrom(dataDir string) {
 
 // reload re-scans the skill directory and rebuilds the merged view:
 // embedded builtin skills first, then the disk's *.js for every name a
-// builtin does not already take. Disk skills may require/extend builtin
-// modules. Builtin names are RESERVED — a user
+// builtin does not already take. Disk skills may import builtin modules by
+// stem. Builtin names are RESERVED — a user
 // skill with the same name as a builtin is ignored (builtins cannot be
 // overridden from the skills directory) and reported as a load error.
 // Parse errors are kept for listing (a hand-edited broken file must not

@@ -39,9 +39,8 @@
 // code (eval, Function and the derived constructors are removed), graph
 // cycle and size limits, a per-graph timeout and a plain-data snapshot
 // boundary. A broken or hostile .js file is dropped with a load error —
-// never a crash: a hand-edited skill must not take the daemon down. Markdown
-// skills are not supported anymore; storage migration v5 converts old .md
-// files to this format.
+// never a crash: a hand-edited skill must not take the daemon down. Only
+// .js modules are skills; any other file in the directory is ignored.
 package skills
 
 import (
@@ -147,8 +146,7 @@ func LoadSet(roots, modules []Source) (map[string]Skill, []error) {
 }
 
 // Load parses every top-level *.js in dir. A missing directory is an empty
-// store, not an error. Other extensions (including legacy .md) are ignored
-// entirely.
+// store, not an error. Other extensions are ignored entirely.
 func Load(dir string) (map[string]Skill, []error) {
 	return LoadWithModules(dir, nil)
 }
@@ -232,8 +230,7 @@ func readDirSources(dir string) (roots []Source, errs []error, ok bool) {
 	return roots, errs, true
 }
 
-// isSkillFile reports whether name is a JavaScript skill module. Legacy
-// .md files are ignored; migration v5 rewrites them.
+// isSkillFile reports whether name is a JavaScript skill module.
 func isSkillFile(name string) bool {
 	return strings.HasSuffix(strings.ToLower(name), ".js")
 }

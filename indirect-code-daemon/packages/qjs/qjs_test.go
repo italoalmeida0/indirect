@@ -318,3 +318,61 @@ func TestTopLevelAwaitIsRejected(t *testing.T) {
 		t.Fatal("top-level await was accepted")
 	}
 }
+
+// A diamond graph links the shared module ONCE: two importers of the same
+// base must not be mistaken for a cycle.
+func TestImportDiamondLinksOnce(t *testing.T) {
+	loads := 0
+	resolve := func(specifier string) ([]byte, error) {
+		loads++
+		src, ok := map[string]string{
+			"skill:base": `globalThis.__baseEvaluations = (globalThis.__baseEvaluations || 0) + 1;
+export default { name: "base", body: "BASE" };`,
+			"skill:left":  `import base from "skill:base"; export default { body: "L(" + base.body + ")" };`,
+			"skill:right": `import base from "skill:base"; export default { body: "R(" + base.body + ")" };`,
+		}[specifier]
+		if !ok {
+			return nil, errors.New("no module " + specifier)
+		}
+		return []byte(src), nil
+	}
+	out, err := EvalModule(Module{
+		Name: "top.js",
+		Source: []byte(`import left from "skill:left";
+import right from "skill:right";
+export default { body: left.body + right.body, baseEvaluations: globalThis.__baseEvaluations };`),
+		Resolve: resolve,
+	})
+	if err != nil {
+		t.Fatalf("diamond import: %v", err)
+	}
+	if !strings.Contains(out, `"body":"L(BASE)R(BASE)"`) {
+		t.Fatalf("shared base reached both importers: %s", out)
+	}
+	if !strings.Contains(out, `"baseEvaluations":1`) {
+		t.Fatalf("the shared base must evaluate exactly once: %s", out)
+	}
+	if loads != 3 {
+		t.Fatalf("loader calls = %d, want 3 (base, left, right)", loads)
+	}
+}
+
+// Two modules importing each other is refused, not resolved: an ES module
+// cycle would hand one side a half-initialized binding.
+func TestImportMutualCycleNamesThePath(t *testing.T) {
+	resolve := skillSet(map[string]string{
+		"skill:a": `import b from "skill:b"; export default { name: "a", b };`,
+		"skill:b": `import a from "skill:a"; export default { name: "b", a };`,
+	})
+	_, err := EvalModule(Module{
+		Name:    "a.js",
+		Source:  []byte(`import a from "skill:a"; export default { a };`),
+		Resolve: resolve,
+	})
+	if err == nil {
+		t.Fatal("mutual import was accepted")
+	}
+	if !strings.Contains(err.Error(), "import cycle") || !strings.Contains(err.Error(), "skill:a") {
+		t.Fatalf("cycle error must name the path: %v", err)
+	}
+}

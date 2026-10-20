@@ -33,9 +33,10 @@ frontend + daemon. Run checks from the appropriate project root.
   The snapshot boundary accepts plain data only (functions, symbols, class
   instances, accessors, cycles and non-finite numbers are rejected with a
   load error).
-  Markdown skills are retired: the runtime ignores `.md`; only storage
-  migration v5 still parses it, to convert user files to JS in place (it
-  renders `inherit: [...]` as imports plus spreads).
+  Only `.js` files in `skills/` are skills; any other file is ignored. The
+  first shipped format WAS JavaScript, so there is no earlier skill format
+  and no conversion step — storage migration v5 only rewrites session meta
+  (mode collapse, talk sessions to Home).
 - QuickJS is linked LATE: `packages/qjs/lib/<platform>/libquickjs.a` holds the
   prebuilt engine (fastcompiled once, never rebuilt here) and
   `link_<os>_<arch>.go` files select it per target. `packages/qjs/shim.c` is
