@@ -34,9 +34,14 @@ frontend + daemon. Run checks from the appropriate project root.
   the only C compiled by this repo and it never recompiles QuickJS. That makes
   the daemon a cgo binary: every build/test needs `CGO_ENABLED=1` and a C
   linker driver matching the archive's ABI, which `scripts/indirect-zig.ts`
-  provides (pinned zig, cached under `~/.cache/indirect-code/toolchains`).
-  Never set `CGO_ENABLED=0` for daemon builds, and keep linux artifacts
-  static/glibc-free (`musl,static` tags — CI runs them on bare Alpine).
+  provides: zig is PINNED (0.17.0, per-host SHA256) and resolved from `$ZIG`,
+  a vendored `scripts/toolchains/` archive, `~/.cache/indirect-code/toolchains`,
+  a matching `zig` on PATH, or a verified download — in that order.
+  `bun run toolchains:vendor [--all]` prefetches for offline builds; the
+  vendored archives are gitignored on purpose (the six host toolchains are
+  ~400 MB and the Windows build alone is at GitHub's per-file limit), so never
+  commit them. Never set `CGO_ENABLED=0` for daemon builds, and keep linux
+  artifacts static/glibc-free (`musl,static` tags — CI runs them on bare Alpine).
 - Browser mirror: SignalDB in `store/sessions.ts` / `hooks/useMirror.ts`, one
   store per hostId, persisted in IndexedDB. Mutations are daemon commands;
   `saveSession`/`saveProjects`/`saveConfig`/`purgeSession` send debounced (300ms)

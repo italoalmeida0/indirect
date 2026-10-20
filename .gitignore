@@ -15,6 +15,11 @@ indirect-code-daemon/indirect-code
 indirect-code-daemon/cmd/daemon/daemon
 remote-code-ref/
 dist/
+# Vendored build toolchains (`bun run toolchains:vendor`). They are per-machine
+# downloads (the six zig host archives total ~400 MB, the Windows build alone
+# is 95 MB), so they stay out of git; scripts/indirect-zig.ts prefers them over
+# the network when present.
+scripts/toolchains/
 # Web build output (gitignored) — but the daemon release binaries ARE committed.
 !indirect-code-daemon/dist/
 !indirect-code-daemon/dist/indirect-code-*

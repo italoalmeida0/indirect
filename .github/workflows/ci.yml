@@ -236,8 +236,13 @@ jobs:
       - name: Cache the pinned zig toolchain
         uses: actions/cache@v4
         with:
-          path: ~/.cache/indirect-code/toolchains
-          key: indirect-zig-${{ runner.os }}-${{ runner.arch }}
+          # Both locations the resolver checks: the vendored archives (a repo
+          # checkout of a previous run) and the downloaded/extracted cache.
+          path: |
+            ~/.cache/indirect-code/toolchains
+            scripts/toolchains
+          key: indirect-zig-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/indirect-zig.ts') }}
+          restore-keys: indirect-zig-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build release artifacts (all targets)
         run: bun run build:daemon:all
