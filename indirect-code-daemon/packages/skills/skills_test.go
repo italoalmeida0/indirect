@@ -98,7 +98,7 @@ func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 		"non-object export":    `export default "x";`,
 		"class instance":       `class Box {} export default new Box();`,
 		"cyclic returned data": `const t = { name: "x", description: "d", body: "b" }; t._self = t; export default t;`,
-		"markdown frontmatter": "---\nname: x\ndescription: d\n---\nb\n",
+		"not a module":         "---\nname: x\ndescription: d\n---\nb\n",
 	}
 	for label, src := range cases {
 		if _, err := Parse("x.js", []byte(src)); err == nil {
