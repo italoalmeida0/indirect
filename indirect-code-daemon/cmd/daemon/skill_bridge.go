@@ -37,7 +37,7 @@ func (w *turnBridge) LoadSkill(name string) (string, error) {
 	case "deny", "never":
 		// deny: AI cannot load it (the user may still activate it from the
 		// frontend). never: base-only — not even the user sees it, it
-		// contributes exclusively through another skill's inherit list.
+		// only contributes when another module imports it.
 		return "", fmt.Errorf("skill is not available")
 	}
 	if w.skillEff.Delivered[name] {

@@ -1,8 +1,9 @@
 /* shim.h declares the C half of the QuickJS host used by packages/qjs.
-   One QjsRun owns one runtime plus one context and evaluates exactly one ES
-   module (a skill file): the Go side answers module resolution, module
-   source and require() through exported callbacks, and the prelude installs
-   the sandbox surface (require, skill.extend, __gu_snapshot). */
+   One QjsRun owns one runtime plus one context and evaluates one ES module
+   graph rooted at a skill file: imports (`import base from
+   "skill:agentic_base"`) are resolved by the Go side through an exported
+   callback and linked into that same context, and the prelude installs the
+   snapshot boundary (__gu_snapshot). */
 #ifndef INDIRECT_QJS_SHIM_H
 #define INDIRECT_QJS_SHIM_H
 

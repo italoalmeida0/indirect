@@ -16,18 +16,26 @@ frontend + daemon. Run checks from the appropriate project root.
 - Skills are JavaScript ES modules (`packages/skills` over `packages/qjs`):
   each `.js` module's default export is one skill object. Builtins are
   embedded `builtin_skills/*.js` with reserved names; user skills live in
-  `<slot>/skills/*.js` and may `require` (by skill name or file stem,
-  builtins included — always a copy) and `skill.extend` other skills (deep
-  metadata/permission merge, bases registered in `inherit`, base bodies not
-  copied). The sandbox is restricted and pure: the skill-only `require` is a
-  callback into Go, and a fresh QuickJS runtime per module exposes no file,
-  process, network, timing or dynamic-code access (`eval`, `Function` and the
-  derived constructors are removed before module code runs), with cycle
-  detection, a memory cap and a per-module timeout. The snapshot boundary
-  accepts plain data only (functions, symbols, class instances, accessors,
-  cycles and non-finite numbers are rejected with a load error).
+  `<slot>/skills/*.js`. **Composition is JavaScript, not Go**: a module imports
+  another skill with `import base from "skill:<file stem>"` (builtins
+  included) and decides what to keep with spread and concatenation
+  (`{ ...base, name, permissions: { ...base.permissions, edit: "deny" }, body:
+  base.body + "…" }`). There is no `inherit` key, no `require` and no
+  `skill.extend`, and the loader/`Effective` chain never merges skill objects:
+  a base reaches the model because the importing module put its body there.
+  Base-only skills stay in the store as ordinary modules (`usable: "never"`)
+  and are not injected by anything. The sandbox is restricted and pure: a
+  fresh QuickJS runtime per module graph exposes no file, process, network,
+  timing or dynamic-code access (`eval`, `Function` and the derived
+  constructors are removed before module code runs), imports resolve only
+  through the Go callback for `skill:` specifiers, and cycle detection, a
+  graph budget, a memory cap and a per-graph timeout bound a hostile file.
+  The snapshot boundary accepts plain data only (functions, symbols, class
+  instances, accessors, cycles and non-finite numbers are rejected with a
+  load error).
   Markdown skills are retired: the runtime ignores `.md`; only storage
-  migration v5 still parses it, to convert user files to JS in place.
+  migration v5 still parses it, to convert user files to JS in place (it
+  renders `inherit: [...]` as imports plus spreads).
 - QuickJS is linked LATE: `packages/qjs/lib/<platform>/libquickjs.a` holds the
   prebuilt engine (fastcompiled once, never rebuilt here) and
   `link_<os>_<arch>.go` files select it per target. `packages/qjs/shim.c` is

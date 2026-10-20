@@ -52,14 +52,14 @@ type Effective struct {
 	// (default) shows human approval, "yolo" auto-approves (it bypasses
 	// the user's own ask rules). It never changes availability.
 	AskAutoApprove bool
-	// Chain is the resolution chain, flattened HIGHEST scope first: the
-	// last active skill, its `inherit:` deps (highest index first), then
-	// the earlier active skills (lower priority) and their deps. The
-	// first scope with an explicit entry for a tool/arg decides; the
-	// universal fallback is deny.
+	// Chain is the resolution chain, HIGHEST scope first: the active
+	// skills in reverse priority order. The first scope with an explicit
+	// entry for a tool/arg decides; the universal fallback is deny. Bases
+	// are not separate scopes: a skill that imports a base decides which
+	// of its values to keep, so what arrives here is the final object.
 	Chain []Skill
 	// Order lists contributing skill names in prefix order (user
-	// selection by priority, each followed by its inherited deps).
+	// selection by priority).
 	Order []string
 	// Bodies maps skill name -> body text for the ephemeral <skill> prefix.
 	Bodies map[string]string
@@ -84,7 +84,7 @@ type Effective struct {
 // name is missing from the store is skipped (its file may have been
 // deleted from the daemon's skill dir); usable:never skills are base-only
 // and are ignored as direct selections (they contribute only through
-// another skill's `inherit:`).
+// another module imports them).
 func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string) (Effective, error) {
 	eff := Effective{
 		Bodies: map[string]string{},
@@ -125,28 +125,21 @@ func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string
 		eff.AskAutoApprove = store[names[0]].ApprovalMode == "yolo"
 	}
 
-	// emit contributes one skill (and, recursively, its `inherit:` deps,
-	// highest dep index first) to a name/body view.
+	// Prefix order is the user's selection by priority: a skill's body is
+	// its own (a base body it wants to keep is concatenated in JS, so it
+	// is already part of that body).
 	seen := map[string]bool{}
-	var emit func(name string)
-	emit = func(name string) {
+	for _, name := range names {
 		if seen[name] {
-			return
+			continue
 		}
 		sk, ok := store[name]
 		if !ok {
-			return // deleted dep never breaks a session
+			continue // deleted skill never breaks a session
 		}
 		seen[name] = true
 		eff.Order = append(eff.Order, name)
 		eff.Bodies[name] = sk.Body
-		for i := len(sk.Inherit) - 1; i >= 0; i-- {
-			emit(sk.Inherit[i])
-		}
-	}
-	// Prefix order: user selection by priority, each with its deps.
-	for _, name := range names {
-		emit(name)
 	}
 
 	// Model-facing listing: every skill the AI may activate with use_skill
@@ -173,27 +166,20 @@ func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string
 		}
 	}
 
-	// Resolution chain: HIGHEST scope first. A skill's fallback is its
-	// deps (highest index first), then lower-index session skills and
-	// theirs. First explicit entry wins; universal fallback is deny.
+	// Resolution chain: HIGHEST scope first (last active skill first). The
+	// first explicit entry wins; the universal fallback is deny.
 	chainSeen := map[string]bool{}
-	var chainAdd func(name string)
-	chainAdd = func(name string) {
+	for i := len(names) - 1; i >= 0; i-- {
+		name := names[i]
 		if chainSeen[name] {
-			return
+			continue
 		}
 		sk, ok := store[name]
 		if !ok {
-			return
+			continue
 		}
 		chainSeen[name] = true
 		eff.Chain = append(eff.Chain, sk)
-		for i := len(sk.Inherit) - 1; i >= 0; i-- {
-			chainAdd(sk.Inherit[i])
-		}
-	}
-	for i := len(names) - 1; i >= 0; i-- {
-		chainAdd(names[i])
 	}
 	return eff, nil
 }
@@ -245,7 +231,7 @@ func (eff Effective) ArgDecision(tool, argKey string) Policy {
 //	original deny  (incl. key omitted) -> locked "deny" (hidden from the
 //	                   AI; the user may still activate it from the frontend)
 //	original never -> locked "never" (base-only: invisible to the AI AND
-//	                   to the user's frontend; only `inherit:` deps use it)
+//	                   to the user's frontend)
 //	original yolo  -> locked "yolo"
 //	original ask   -> "ask" | "yolo" | "deny"
 //

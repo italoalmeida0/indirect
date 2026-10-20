@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -39,16 +40,30 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 		}
 	}
 
-	// The module conversion must preserve the graph, policies and bodies.
+	// Composition happens in JavaScript: each mode imports its base, spreads
+	// it and appends its own body, so the loaded skill carries the complete
+	// result — there is no dependency list left for Go to walk.
+	for name, sk := range list {
+		if strings.Contains(fmt.Sprint(sk.Permissions), "inherit") {
+			t.Fatalf("%s still carries an unresolved inherit policy: %+v", name, sk.Permissions)
+		}
+	}
 	agentic := list["agentic_base"]
-	if agentic.Usable != "never" || agentic.Mode != "agentic" || strings.Join(agentic.Inherit, ",") != "generative_ui_agentic" || len(agentic.Permissions) != 15 {
+	if agentic.Usable != "never" || agentic.Mode != "agentic" || len(agentic.Permissions) != 20 {
 		t.Fatalf("agentic_base conversion drifted: %+v", agentic)
 	}
+	if agentic.Permissions["read"].Policy != skills.PolicyAsk || agentic.Permissions["widget_read"].Policy != skills.PolicyDeny {
+		t.Fatalf("agentic_base must keep the base grants and the agentic widget rules: %+v", agentic.Permissions)
+	}
 	talk := list["talk"]
-	if talk.Mode != "talk" || talk.ApprovalMode != "yolo" || talk.Usable != "deny" || strings.Join(talk.Inherit, ",") != "generative_ui_talk" || talk.Permissions["search_web"].Policy != skills.PolicyYolo || !strings.HasPrefix(talk.Body, "You are a helpful AI assistant.") {
+	if talk.Mode != "talk" || talk.ApprovalMode != "yolo" || talk.Usable != "deny" || talk.Permissions["search_web"].Policy != skills.PolicyYolo || !strings.HasPrefix(talk.Body, "You are a helpful AI assistant.") {
 		t.Fatalf("talk conversion drifted: %+v", talk)
 	}
-	if build := list["build"]; build.Mode != "agentic" || build.Usable != "deny" || strings.Join(build.Inherit, ",") != "agentic_base" || len(build.Permissions) != 0 {
+	if talk.Permissions["widget_set"].Policy != skills.PolicyYolo || talk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
+		t.Fatalf("talk widget_set must keep the concrete policy plus the denied argument: %+v", talk.Permissions["widget_set"])
+	}
+	build := list["build"]
+	if build.Mode != "agentic" || build.Usable != "deny" || build.Permissions["read"].Policy != skills.PolicyAsk {
 		t.Fatalf("build conversion drifted: %+v", build)
 	}
 	gen := list["generative_ui"]
@@ -56,7 +71,9 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 		t.Fatalf("generative_ui conversion drifted: usable=%q body=%q...%q", gen.Usable, gen.Body[:min(40, len(gen.Body))], gen.Body[max(0, len(gen.Body)-40):])
 	}
 	genTalk := list["generative_ui_talk"]
-	if genTalk.Usable != "deny" || genTalk.Permissions["widget_set"].Policy != skills.PolicyInherit || genTalk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
+	// The base grants widget_set as "yolo"; talk narrows one argument, so the
+	// policy is restated as the concrete value a chain would have resolved to.
+	if genTalk.Usable != "deny" || genTalk.Permissions["widget_set"].Policy != skills.PolicyYolo || genTalk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
 		t.Fatalf("generative_ui_talk conversion drifted: %+v", genTalk)
 	}
 	if genAgentic := list["generative_ui_agentic"]; genAgentic.Usable != "yolo" || genAgentic.Permissions["widget_read"].Policy != skills.PolicyDeny {
@@ -128,21 +145,25 @@ func TestSkillStoreBuiltinsShadowDisk(t *testing.T) {
 	}
 }
 
-// Disk skills compose ON TOP of builtins: require/skill.extend can import
-// an embedded module even though its name stays reserved.
-func TestSkillStoreDiskSkillCanExtendBuiltin(t *testing.T) {
+// Disk skills compose ON TOP of builtins: a disk file imports an embedded
+// module by its stem, even though the builtin name stays reserved.
+func TestSkillStoreDiskSkillImportsBuiltin(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	combo := `
-export default skill.extend(require("agentic_base"), {
+import agenticBase from "skill:agentic_base";
+
+export default {
+  ...agenticBase,
   name: "custom_combo",
   description: "combo over a builtin",
   usable: "ask",
-  permissions: { edit: "deny" },
-  body: "combo body",
-});
+  mode: "agentic",
+  permissions: { ...agenticBase.permissions, edit: "deny" },
+  body: agenticBase.body + "\ncombo body",
+};
 `
 	if err := os.WriteFile(filepath.Join(dir, "skills", "combo.js"), []byte(combo), 0o644); err != nil {
 		t.Fatal(err)
@@ -153,14 +174,11 @@ export default skill.extend(require("agentic_base"), {
 	if !ok {
 		t.Fatalf("disk combo missing (load errors: %v)", store.loadErrors())
 	}
-	if strings.Join(sk.Inherit, ",") != "generative_ui_agentic,agentic_base" {
-		t.Fatalf("combo inherit = %v, want the builtin chain registered", sk.Inherit)
-	}
 	if sk.Mode != "agentic" || sk.Permissions["read"].Policy != skills.PolicyAsk || sk.Permissions["edit"].Policy != skills.PolicyDeny {
-		t.Fatalf("combo lost the builtin merge: %+v", sk)
+		t.Fatalf("combo lost the imported base: %+v", sk)
 	}
-	if sk.Body != "combo body" {
-		t.Fatalf("combo body must be only its own delta, got %q", sk.Body)
+	if !strings.HasSuffix(sk.Body, "combo body") || !strings.Contains(sk.Body, "You are an expert autonomous AI software engineering agent") {
+		t.Fatalf("combo body must concatenate the imported base body, got %q", sk.Body)
 	}
 }
 

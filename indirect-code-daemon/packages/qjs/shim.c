@@ -1,9 +1,10 @@
 /* shim.c is the C half of packages/qjs: it owns one QuickJS runtime plus
    context per module evaluation and exposes the three primitives the Go
-   loader needs — create a sandbox, evaluate one ES module, tear down. The
-   sandbox prelude (installed here, written in JS) owns require() and
-   skill.extend(); module resolution, module evaluation and every limit live
-   on the Go side, reached through the guQjsRequire/guQjsInterrupt exports.
+   loader needs — create a sandbox, evaluate one ES module graph, tear down.
+   Imports are real ES module imports: QuickJS's module loader callback is
+   wired to the Go side (guQjsModuleSource), so `import base from
+   "skill:agentic_base"` links a second module into the SAME context and the
+   skill composes with ordinary JavaScript (spread, concatenation).
 
    Nothing in this file re-implements QuickJS: it only wires the public API
    (no eval intrinsic, no host modules, no file or process access). */
@@ -15,11 +16,13 @@
 #include "quickjs.h"
 #include "shim.h"
 
-/* Exported by the Go side (package qjs). guQjsRequire resolves and
-   evaluates one module on the loader's goroutine and answers with the JSON
-   snapshot of its default export; guQjsInterrupt answers non-zero once the
-   module deadline has passed. */
-extern int guQjsRequire(uintptr_t handle, const char *name, char **out_json, char **out_err);
+/* Exported by the Go side (package qjs). guQjsModuleSource resolves one
+   import specifier to the module source on the loader's goroutine;
+   guQjsInterrupt answers non-zero once the module deadline has passed. */
+extern int guQjsModuleSource(uintptr_t handle, const char *name, char **out_src, char **out_err);
+/* guQjsModuleEdge records one import edge (importer -> import) and answers
+   non-zero when the edge would close an import cycle. */
+extern int guQjsModuleEdge(uintptr_t handle, const char *base, const char *name, char **out_err);
 extern int guQjsInterrupt(uintptr_t handle);
 
 /* Hard ceilings enforced in C as well: Go re-checks the real budgets, but a
@@ -115,44 +118,65 @@ static int gu_interrupt(JSContext *ctx, void *opaque)
     return guQjsInterrupt(run->handle);
 }
 
-/* gu_js_require is the sandbox's require(): the Go loader resolves the name
-   against the skill set (declared name first, then file stem), evaluates the
-   target in its own fresh VM and answers with the snapshot of its default
-   export. Each call materializes a NEW object tree, so callers may mutate
-   the result freely — the cached snapshot and other skills never see it. */
-static JSValue gu_js_require(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
+/* gu_module_normalize keeps the specifier verbatim: QuickJS must not join
+   "skill:agentic_base" onto the importing file's path. Every import passes
+   through here with its importer, so the Go side records the graph and
+   refuses a cycle with the path that closes it instead of letting module
+   instantiation fail later with an unexplained "not initialized". */
+static char *gu_module_normalize(JSContext *ctx, const char *module_base_name,
+                                 const char *module_name, void *opaque)
 {
-    QjsRun *run;
-    const char *name;
-    char *json = NULL, *err = NULL;
-    JSValue out;
+    QjsRun *run = (QjsRun *)opaque;
+    char *err = NULL;
 
-    (void)this_val;
-    run = (QjsRun *)JS_GetContextOpaque(ctx);
-    if (!run) {
-        return JS_ThrowInternalError(ctx, "module sandbox is gone");
-    }
-    if (argc < 1 || !JS_IsString(argv[0])) {
-        return JS_ThrowTypeError(ctx, "module name must be a string");
-    }
-    name = JS_ToCString(ctx, argv[0]);
-    if (!name) {
-        return JS_EXCEPTION;
-    }
-    if (guQjsRequire(run->handle, name, &json, &err) != 0) {
-        JSValue exc = JS_ThrowInternalError(ctx, "%s", err ? err : "require failed");
+    if (run && guQjsModuleEdge(run->handle, module_base_name, module_name, &err) != 0) {
+        JS_ThrowSyntaxError(ctx, "%s", err ? err : "import cycle");
         free(err);
-        free(json);
-        JS_FreeCString(ctx, name);
-        return exc;
+        return NULL;
     }
-    JS_FreeCString(ctx, name);
-    if (!json) {
-        return JS_ThrowInternalError(ctx, "require returned no module");
+    return js_strdup(ctx, module_name);
+}
+
+/* gu_module_loader compiles one imported module into the current context.
+   QuickJS calls it while linking; the source comes from Go, so every module
+   in the graph shares one VM, one deadline and one memory limit, exactly
+   like a real ES module graph. */
+static JSModuleDef *gu_module_loader(JSContext *ctx, const char *module_name, void *opaque)
+{
+    QjsRun *run = (QjsRun *)opaque;
+    char *src = NULL, *err = NULL;
+    JSValue compiled;
+    JSModuleDef *m;
+
+    if (!run) {
+        JS_ThrowInternalError(ctx, "module sandbox is gone");
+        return NULL;
     }
-    out = JS_ParseJSON(ctx, json, strlen(json), "<skill module>");
-    free(json);
-    return out;
+    if (guQjsModuleSource(run->handle, module_name, &src, &err) != 0) {
+        JS_ThrowInternalError(ctx, "%s", err ? err : "module not found");
+        free(err);
+        free(src);
+        return NULL;
+    }
+    if (!src) {
+        JS_ThrowInternalError(ctx, "module %s has no source", module_name);
+        return NULL;
+    }
+    compiled = JS_Eval(ctx, src, strlen(src), module_name,
+                       JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    free(src);
+    if (JS_IsException(compiled)) {
+        return NULL; /* the pending exception carries the parse error */
+    }
+    if (JS_VALUE_GET_TAG(compiled) != JS_TAG_MODULE) {
+        JS_FreeValue(ctx, compiled);
+        JS_ThrowInternalError(ctx, "module %s did not compile to a module", module_name);
+        return NULL;
+    }
+    /* The context keeps its own reference while the graph is instantiated. */
+    m = (JSModuleDef *)JS_VALUE_GET_PTR(compiled);
+    JS_FreeValue(ctx, compiled);
+    return m;
 }
 
 QjsRun *qjs_new(uintptr_t handle, const char *prelude, char **err)
@@ -188,9 +212,8 @@ QjsRun *qjs_new(uintptr_t handle, const char *prelude, char **err)
     JS_SetInterruptHandler(rt, gu_interrupt, run);
     /* Raw context: only the intrinsics a plain-data skill module needs.
        Base objects carry Object/Array/String/Number/Math; JSON is needed by
-       require and the snapshot, Promise is required by the module
-       machinery, RegExp, BigInt and Map/Set keep ordinary authoring
-       comfortable. */
+       the snapshot, Promise is required by the module machinery, RegExp,
+       BigInt and Map/Set keep ordinary authoring comfortable. */
     ctx = JS_NewContextRaw(rt);
     if (!ctx) {
         JS_FreeRuntime(rt);
@@ -216,9 +239,8 @@ QjsRun *qjs_new(uintptr_t handle, const char *prelude, char **err)
     JS_AddIntrinsicEval(ctx);
     JS_SetContextOpaque(ctx, run);
 
-    global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "require", JS_NewCFunction(ctx, gu_js_require, "require", 1));
-    JS_FreeValue(ctx, global);
+    /* One module graph per sandbox: imports link into this same context. */
+    JS_SetModuleLoaderFunc(rt, gu_module_normalize, gu_module_loader, run);
 
     if (prelude) {
         script = JS_Eval(ctx, prelude, strlen(prelude), "<skill sandbox>", JS_EVAL_TYPE_GLOBAL);
@@ -268,9 +290,8 @@ void qjs_free_str(char *s)
     free(s);
 }
 
-/* qjs_module_export evaluates one ES module and returns the snapshot of its
-   default export. The module name is used for stack traces only; resolution
-   happens through the Go loader. */
+/* qjs_eval_module evaluates one ES module graph and returns the snapshot of
+   the root module's default export. Imports resolve through the Go loader. */
 int qjs_eval_module(QjsRun *run, const char *name, const char *src, size_t srclen, char **out_json, char **err)
 {
     JSContext *ctx;

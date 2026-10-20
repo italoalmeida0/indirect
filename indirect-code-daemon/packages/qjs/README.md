@@ -16,15 +16,41 @@ lib/macos_frameworks/*.framework  stub .tbd descriptors for the frameworks
                                   Go's crypto/x509 links on darwin
 lib/macos_link_stubs/<platform>/  resolver stub used by cross links
 shim.c / shim.h                   the sandbox bridge (one runtime+context per
-                                  module evaluation, interrupt handler,
-                                  memory/stack caps, module loader callback)
-prelude.js                        the JS surface: require(), skill.extend()
-                                  and the plain-data snapshot boundary
+                                  module graph, interrupt handler,
+                                  memory/stack caps, ES module loader)
+prelude.js                        the JS surface: no host API at all, only the
+                                  plain-data snapshot boundary and the removal
+                                  of the dynamic-code surface
 qjs.go / qjs_export.go            Go side of the bridge
 ```
 
 Platform keys: `x86_64_linux_musl`, `aarch64_linux_musl`, `x86_64_macos`,
 `aarch64_macos`, `x86_64_windows_gnu`, `aarch64_windows_gnu`.
+
+## How a skill module runs
+
+One `EvalModule` call is one module graph:
+
+1. `qjs_new` creates the runtime and context, evaluates `prelude.js`, and
+   installs `JS_SetModuleLoaderFunc` with `gu_module_normalize` /
+   `gu_module_loader`.
+2. The root module is compiled as an ES module (`JS_EVAL_TYPE_MODULE`) and
+   evaluated. Every `import` it performs is normalized **verbatim** (never
+   joined onto a path) and answered by the Go side:
+   - `guQjsModuleEdge(handle, base, name)` records the import graph and
+     refuses the edge that would close a cycle (`a -> b -> a`);
+   - `guQjsModuleSource(handle, name)` asks the loader for that module's
+     source, which is compiled into the **same** context.
+   So a graph shares one VM, one deadline and one memory limit, and
+   `import base from "skill:agentic_base"` is an ordinary ES module import —
+   the skill composes with spread and concatenation in JavaScript, and Go
+   never merges skill objects.
+3. Only `skill:<name>` resolves. `node:fs`, a bare package name, a relative
+   or absolute path and a `skill:` name containing a path separator are
+   rejected with the reason; there is no filesystem in the sandbox to reach.
+4. The default export of the ROOT module crosses the snapshot boundary as
+   plain JSON data (functions, symbols, class instances, accessors, cycles
+   and non-finite numbers are refused, with a size budget).
 
 ## Regenerating the archives
 

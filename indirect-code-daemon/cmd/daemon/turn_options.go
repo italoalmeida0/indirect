@@ -285,7 +285,7 @@ func modeRegistry(reg core.Registry, mode string) core.Registry {
 
 // skillsRegistry projects the resolved skill policy onto the model-facing
 // registry: the mode's auto tools plus every tool the CHAIN GRANTS (an
-// explicit ask/yolo entry somewhere in the inherit chain). The base is
+// explicit ask/yolo entry somewhere in the skill chain). The base is
 // deny: a tool no scope lists never appears. An arg-level deny never
 // removes the tool — it blocks the call (skillsArgRestriction). The
 // use_skill loader disappears entirely when no contributing skill is
@@ -319,7 +319,7 @@ func skillsRegistry(reg core.Registry, eff skills.Effective) core.Registry {
 // chain denies. Overrides scope to the argument KEY only — they decide
 // whether the tool may use that argument at all and never inspect the
 // argument's value or content. A missing entry follows the chain (arg ->
-// tool -> inherit list -> earlier skills -> deny).
+// tool -> earlier skills -> deny).
 func skillsArgRestriction(eff skills.Effective, tool string, args json.RawMessage) string {
 	var m map[string]json.RawMessage
 	if len(args) > 0 {

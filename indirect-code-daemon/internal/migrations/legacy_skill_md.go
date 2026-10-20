@@ -24,10 +24,13 @@ type legacySkill struct {
 	Usable       string
 	Mode         string
 	ApprovalMode string
-	Inherit      []string
-	Permissions  map[string]legacyPermSpec
-	Body         string
-	Path         string
+	// Bases is the retired `inherit:` list in file order — highest priority
+	// first, exactly how the old chain read it. The conversion turns it into
+	// imports plus a spread.
+	Bases       []string
+	Permissions map[string]legacyPermSpec
+	Body        string
+	Path        string
 }
 
 var legacyHeaderKeys = []string{"name", "description", "usable", "mode", "inherit", "tools"}
@@ -137,7 +140,7 @@ func (p *legacyHeaderParser) topLevel(line string, lineNo int) error {
 		if err != nil {
 			return err
 		}
-		p.s.Inherit = list
+		p.s.Bases = list
 	case "usable":
 		if err := checkLegacyPolicyValue(value, []string{"deny", "never", "ask", "yolo"}); err != nil {
 			return fmt.Errorf("skill %s line %d: %v", filepath.Base(p.s.Path), lineNo, err)
@@ -290,12 +293,31 @@ func legacyUnquote(s string) string {
 }
 
 // renderLegacySkillJS renders one parsed legacy skill as a canonical ES
-// module (default export carrying the skill object). Keys are sorted inside
-// permissions/args so the output is deterministic.
+// module (default export carrying the skill object). The retired `inherit:`
+// list becomes real imports plus spreads, so the converted file composes the
+// way every other skill does: lowest-priority base first, own values last.
+// Keys are sorted inside permissions/args so the output is deterministic.
 func renderLegacySkillJS(s legacySkill) []byte {
 	var b strings.Builder
 	b.WriteString("// Converted from a Markdown skill by storage migration v5.\n")
-	b.WriteString("export default {\n")
+	for i, name := range s.Bases {
+		fmt.Fprintf(&b, "import base%d from %s;\n", i, jsQuote("skill:"+name))
+	}
+	grant := len(s.Bases) > 0 && legacyHasArgEntries(s.Permissions)
+	if grant {
+		// A base entry is either a bare policy ("ask") or a spec object, so
+		// an own argument override has to keep whatever the base granted.
+		b.WriteString("\n// A base permission entry is either a bare policy or a spec object.\n")
+		b.WriteString("const grant = (base, tool) => {\n")
+		b.WriteString("  const entry = (base.permissions || {})[tool];\n")
+		b.WriteString("  if (entry === undefined) return {};\n")
+		b.WriteString("  return typeof entry === \"string\" ? { policy: entry } : entry;\n")
+		b.WriteString("};\n")
+	}
+	b.WriteString("\nexport default {\n")
+	for i := len(s.Bases) - 1; i >= 0; i-- {
+		fmt.Fprintf(&b, "  ...base%d,\n", i)
+	}
 	fmt.Fprintf(&b, "  name: %s,\n", jsQuote(s.Name))
 	fmt.Fprintf(&b, "  description: %s,\n", jsQuote(s.Description))
 	fmt.Fprintf(&b, "  usable: %s,\n", jsQuote(s.Usable))
@@ -305,48 +327,92 @@ func renderLegacySkillJS(s legacySkill) []byte {
 	if s.ApprovalMode != "" {
 		fmt.Fprintf(&b, "  approvalMode: %s,\n", jsQuote(s.ApprovalMode))
 	}
-	if len(s.Inherit) > 0 {
-		b.WriteString("  inherit: [")
-		for i, name := range s.Inherit {
-			if i > 0 {
-				b.WriteString(", ")
-			}
-			b.WriteString(jsQuote(name))
-		}
-		b.WriteString("],\n")
-	}
-	if len(s.Permissions) > 0 {
+	if entries := legacyPermissionLines(s, grant); len(entries) > 0 {
 		b.WriteString("  permissions: {\n")
-		tools := make([]string, 0, len(s.Permissions))
-		for tool := range s.Permissions {
-			tools = append(tools, tool)
-		}
-		sort.Strings(tools)
-		for _, tool := range tools {
-			spec := s.Permissions[tool]
-			if len(spec.Args) == 0 {
-				fmt.Fprintf(&b, "    %s: %s,\n", jsKey(tool), jsQuote(spec.Policy))
-				continue
-			}
-			args := make([]string, 0, len(spec.Args))
-			for arg := range spec.Args {
-				args = append(args, arg)
-			}
-			sort.Strings(args)
-			fmt.Fprintf(&b, "    %s: { policy: %s, args: { ", jsKey(tool), jsQuote(spec.Policy))
-			for i, arg := range args {
-				if i > 0 {
-					b.WriteString(", ")
-				}
-				fmt.Fprintf(&b, "%s: %s", jsKey(arg), jsQuote(spec.Args[arg]))
-			}
-			b.WriteString(" } },\n")
+		for _, line := range entries {
+			b.WriteString(line)
 		}
 		b.WriteString("  },\n")
 	}
-	fmt.Fprintf(&b, "  body: `%s`,\n", escapeJSTemplate(s.Body))
+	if len(s.Bases) == 0 {
+		fmt.Fprintf(&b, "  body: `%s`,\n", escapeJSTemplate(s.Body))
+	} else {
+		parts := make([]string, 0, len(s.Bases)+1)
+		if s.Body != "" {
+			parts = append(parts, "`"+escapeJSTemplate(s.Body)+"`")
+		}
+		for i := range s.Bases {
+			parts = append(parts, fmt.Sprintf("base%d.body", i))
+		}
+		fmt.Fprintf(&b, "  body: %s,\n", strings.Join(parts, " + "))
+	}
 	b.WriteString("};\n")
 	return []byte(b.String())
+}
+
+// legacyPermissionLines renders the permissions object body: the base grants
+// lowest-priority first, then the skill's own entries. An `inherit` policy
+// means "use what the base granted", which the spread of that base already
+// supplies, so the key is dropped; an argument override keeps the base policy
+// through grant().
+func legacyPermissionLines(s legacySkill, grant bool) []string {
+	var lines []string
+	for i := len(s.Bases) - 1; i >= 0; i-- {
+		lines = append(lines, fmt.Sprintf("    ...base%d.permissions,\n", i))
+	}
+	tools := make([]string, 0, len(s.Permissions))
+	for tool := range s.Permissions {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	for _, tool := range tools {
+		spec := s.Permissions[tool]
+		args := make([]string, 0, len(spec.Args))
+		for arg := range spec.Args {
+			args = append(args, arg)
+		}
+		sort.Strings(args)
+		if len(args) == 0 {
+			if spec.Policy == "inherit" {
+				continue // the base spread already carries the granted policy
+			}
+			lines = append(lines, fmt.Sprintf("    %s: %s,\n", jsKey(tool), jsQuote(spec.Policy)))
+			continue
+		}
+		var entry strings.Builder
+		fmt.Fprintf(&entry, "    %s: {", jsKey(tool))
+		if grant {
+			for i := len(s.Bases) - 1; i >= 0; i-- {
+				fmt.Fprintf(&entry, " ...grant(base%d, %s),", i, jsQuote(tool))
+			}
+		}
+		if spec.Policy != "inherit" {
+			fmt.Fprintf(&entry, " policy: %s,", jsQuote(spec.Policy))
+		}
+		entry.WriteString(" args: {")
+		if grant {
+			for i := len(s.Bases) - 1; i >= 0; i-- {
+				fmt.Fprintf(&entry, " ...(grant(base%d, %s).args || {}),", i, jsQuote(tool))
+			}
+		}
+		for _, arg := range args {
+			fmt.Fprintf(&entry, " %s: %s,", jsKey(arg), jsQuote(spec.Args[arg]))
+		}
+		entry.WriteString(" } },\n")
+		lines = append(lines, entry.String())
+	}
+	return lines
+}
+
+// legacyHasArgEntries reports whether any own permission carries an argument
+// override (the case that needs the grant() helper).
+func legacyHasArgEntries(perms map[string]legacyPermSpec) bool {
+	for _, spec := range perms {
+		if len(spec.Args) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // escapeJSTemplate escapes the three sequences a backtick literal cannot
@@ -358,7 +424,6 @@ func escapeJSTemplate(body string) string {
 	body = strings.ReplaceAll(body, "${", "\\${")
 	return body
 }
-
 
 // jsQuote renders a double-quoted JavaScript string literal, preserving
 // UTF-8 bytes; every control byte becomes an escape so the module always

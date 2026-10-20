@@ -107,12 +107,11 @@ func TestParseRejectsUnknownKeysAndBadValues(t *testing.T) {
 	}
 }
 
-func TestParseInheritAndValuedEntries(t *testing.T) {
+func TestParseValuedEntries(t *testing.T) {
 	sk, err := Parse("x.js", []byte(`
 export default {
   name: "x",
   description: "d",
-  inherit: ["a", "b", "c"],
   permissions: {
     bash: "ask",
     edit: "deny",
@@ -123,9 +122,6 @@ export default {
 `))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(sk.Inherit) != 3 || sk.Inherit[2] != "c" {
-		t.Fatalf("inherit lost: %v", sk.Inherit)
 	}
 	if p := sk.Permissions["bash"].Policy; p != PolicyAsk {
 		t.Fatalf("ask entry policy = %q", p)
@@ -207,8 +203,9 @@ export default {
 	}
 }
 
-// The chain: arg -> tool -> inherit (highest index first) -> lower-index
-// session skills and their deps -> DENY (the universal base).
+// The chain: arg -> tool -> the high-priority skill -> lower-priority
+// skills -> DENY (the universal base). A base is composed in JavaScript, so
+// there is no dependency list to walk.
 func TestResolveChainFallbackToDeny(t *testing.T) {
 	store := map[string]Skill{
 		"base": {
@@ -217,18 +214,20 @@ func TestResolveChainFallbackToDeny(t *testing.T) {
 		},
 		"main": {
 			Name: "main", ApprovalMode: "ask",
-			Inherit: []string{"base"},
 			Permissions: map[string]PermSpec{
 				"bash": {Policy: PolicyYolo},
 				"edit": {Policy: PolicyDeny},
 			},
 		},
 	}
-	eff, err := Resolve(store, map[string]SessionSkill{"main": {Priority: 1, Active: true}}, "")
+	eff, err := Resolve(store, map[string]SessionSkill{
+		"base": {Priority: 1, Active: true},
+		"main": {Priority: 2, Active: true},
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// main (higher scope) wins where it speaks; base answers the rest.
+	// main (higher priority) wins where it speaks; base answers the rest.
 	if p := eff.ToolDecision("bash"); p != PolicyYolo {
 		t.Errorf("bash = %v, want yolo (main beats base)", p)
 	}
@@ -238,13 +237,13 @@ func TestResolveChainFallbackToDeny(t *testing.T) {
 	if p := eff.ToolDecision("edit"); p != PolicyDeny {
 		t.Errorf("edit = %v, want deny (explicit)", p)
 	}
-	// Unlisted tools hit the base: deny. There is no implicit "everyone
-	// gets everything".
+	// Unlisted tools fall through the chain to deny. There is no implicit
+	// "everyone gets everything".
 	if p := eff.ToolDecision("read"); p != PolicyDeny {
-		t.Errorf("read = %v, want deny (base fallback)", p)
+		t.Errorf("read = %v, want deny (chain fallback)", p)
 	}
 	if p := eff.ToolDecision("search_web"); p != PolicyDeny {
-		t.Errorf("search_web = %v, want deny (base fallback)", p)
+		t.Errorf("search_web = %v, want deny (chain fallback)", p)
 	}
 	// Arg decision: arg -> tool -> chain -> deny. An unlisted arg of an
 	// explicitly granted tool follows THAT tool's policy (arg -> tool).
@@ -257,7 +256,7 @@ func TestResolveChainFallbackToDeny(t *testing.T) {
 }
 
 // An arg override inside a scope beats that scope's tool policy; the chain
-// walks on inherit/missing entries.
+// walks on down to lower-priority skills and then deny.
 func TestResolveArgOverridesWalkChain(t *testing.T) {
 	store := map[string]Skill{
 		"low": {
@@ -267,14 +266,16 @@ func TestResolveArgOverridesWalkChain(t *testing.T) {
 			},
 		},
 		"high": {
-			Name:    "high",
-			Inherit: []string{"low"},
+			Name: "high",
 			Permissions: map[string]PermSpec{
 				"custom": {Policy: PolicyYolo},
 			},
 		},
 	}
-	eff, err := Resolve(store, map[string]SessionSkill{"high": {Priority: 1, Active: true}}, "")
+	eff, err := Resolve(store, map[string]SessionSkill{
+		"low":  {Priority: 1, Active: true},
+		"high": {Priority: 2, Active: true},
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,71 +380,59 @@ func TestResolveModeIsCallerSupplied(t *testing.T) {
 	}
 }
 
-// usable:never skills are base-only: a stale selection entry is ignored —
-// they contribute exclusively through another skill's inherit list.
+// usable:never skills are base-only: a stale selection entry is ignored,
+// because they only contribute when another module imports them.
 func TestResolveSkipsNeverSkillsAsDirectSelection(t *testing.T) {
 	store := map[string]Skill{
 		"base": {Name: "base", Body: "b", Usable: "never"},
-		"dep":  {Name: "dep", Body: "d", Inherit: []string{"base"}},
+		"main": {Name: "main", Body: "m", Usable: "ask"},
 	}
 	eff, err := Resolve(store, map[string]SessionSkill{
 		"base": {Priority: 1, Active: true},
-		"dep":  {Priority: 2, Active: true},
+		"main": {Priority: 2, Active: true},
 	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(eff.Order) != 2 || eff.Order[0] != "dep" {
-		t.Fatalf("order = %v, want dep first with base pulled in", eff.Order)
-	}
-	if eff.Bodies["base"] == "" {
-		t.Error("base must contribute through dep's inherit")
+	if len(eff.Order) != 1 || eff.Order[0] != "main" {
+		t.Fatalf("order = %v, want only the visible skill", eff.Order)
 	}
 	if _, listed := eff.Listed["base"]; listed {
-		t.Error("never dep must stay unlisted to the AI")
+		t.Error("never base must stay unlisted to the AI")
+	}
+	if _, contributed := eff.Bodies["base"]; contributed {
+		t.Error("an imported base contributes through its importer's body, never on its own")
 	}
 }
 
-// Dependency skills contribute bodies and policy regardless of their own
-// `usable` (that only gates DIRECT activation) and stay hidden when usable
-// is deny/never.
-func TestResolveInheritDeps(t *testing.T) {
+// Imported bases are not separate scopes: the importing module produced the
+// final body and permissions, so Resolve sees exactly one skill and lists
+// only the skills the session actually selected.
+func TestResolveImportedBaseIsOneScope(t *testing.T) {
 	store := map[string]Skill{
-		"base": {
-			Name: "base", Body: "base body", Usable: "never",
-			Permissions: map[string]PermSpec{"widget_set": {Policy: PolicyInherit}},
-		},
-		"hidden": {
-			Name: "hidden", Body: "hidden body", Usable: "deny",
-			Permissions: map[string]PermSpec{"widget_read": {Policy: PolicyAsk}},
-		},
-		"main": {
-			Name: "main", Body: "main body", Usable: "ask",
-			Inherit: []string{"base", "hidden"},
+		"base": {Name: "base", Body: "base body", Usable: "never",
+			Permissions: map[string]PermSpec{"widget_set": {Policy: PolicyYolo}}},
+		"main": {Name: "main", Body: "main body\nbase body", Usable: "ask",
 			Permissions: map[string]PermSpec{
-				"bash": {Policy: PolicyYolo},
-			},
-		},
+				"bash":       {Policy: PolicyYolo},
+				"widget_set": {Policy: PolicyYolo},
+			}},
 	}
 	eff, err := Resolve(store, map[string]SessionSkill{"main": {Priority: 1, Active: true}}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"main", "base", "hidden"} {
-		if eff.Bodies[name] == "" {
-			t.Errorf("body of %q must contribute", name)
-		}
+	if len(eff.Order) != 1 || eff.Order[0] != "main" {
+		t.Fatalf("order = %v, want just the selected skill", eff.Order)
 	}
-	// Policy from deps reaches the chain.
-	if p := eff.ToolDecision("widget_read"); p != PolicyAsk {
-		t.Errorf("widget_read = %v, want ask (hidden dep answers)", p)
+	if eff.Bodies["main"] != "main body\nbase body" {
+		t.Fatalf("body = %q", eff.Bodies["main"])
 	}
-	// The usable deny/never deps stay unlisted to the AI.
-	if eff.Listed["hidden"] {
-		t.Error("deny dep must not be listed")
+	if p := eff.ToolDecision("widget_set"); p != PolicyYolo {
+		t.Errorf("widget_set = %v, want the merged yolo", p)
 	}
 	if eff.Listed["base"] {
-		t.Error("never base must not be listed")
+		t.Error("an imported base must never be listed")
 	}
 	if !eff.Listed["main"] || !eff.HasVisible {
 		t.Error("the visible skill must be listed")

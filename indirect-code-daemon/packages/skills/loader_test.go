@@ -23,11 +23,10 @@ func errorsText(errs []error) string {
 	return strings.Join(parts, "\n")
 }
 
-// require resolves a skill by its DECLARED name even when the requiring
-// file sorts first and the dependency lives in a differently named file.
-// The returned object is a copy: mutating it must not change the base
-// skill.
-func TestLoadRequireByDeclaredNameReturnsCopy(t *testing.T) {
+// A skill imports another module by file stem and composes it with plain
+// JavaScript: spreading the base copies its values, and the copy is
+// independent (mutating the derived skill must not touch the base).
+func TestLoadImportByStemComposesInJS(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "z_base_file.js", `
 export default {
@@ -40,16 +39,16 @@ export default {
 };
 `)
 	writeSkill(t, dir, "a_combo.js", `
-const byName = require("base");
-const byStem = require("z_base_file");
-if (byStem.name !== "base") {
-  throw new Error("stem require returned the wrong module");
-}
-byName.name = "combo";
-byName.description = "combo skill";
-byName.body = byName.body + "\ncombo body";
-byName.permissions.bash = "deny";
-export default byName;
+import base from "skill:z_base_file";
+
+const permissions = { ...base.permissions, bash: "deny" };
+export default {
+  ...base,
+  name: "combo",
+  description: "combo skill",
+  permissions,
+  body: base.body + "\ncombo body",
+};
 `)
 
 	list, errs := Load(dir)
@@ -58,92 +57,105 @@ export default byName;
 	}
 	combo := list["combo"]
 	if combo.Body != "base body\ncombo body" || combo.Permissions["bash"].Policy != PolicyDeny {
-		t.Fatalf("combo lost required copy edits: %+v", combo)
+		t.Fatalf("combo lost the composed values: %+v", combo)
+	}
+	if combo.Permissions["read"].Policy != PolicyAsk {
+		t.Fatalf("spread dropped an inherited permission: %+v", combo.Permissions)
 	}
 	base := list["base"]
 	if base.Body != "base body" || base.Permissions["bash"].Policy != PolicyAsk {
-		t.Fatalf("require mutation leaked into the base skill: %+v", base)
+		t.Fatalf("composed skill mutated the base skill: %+v", base)
 	}
 }
 
-// skill.extend merges metadata/permissions, registers every base as an
-// inherit dependency, and keeps only the override body on the new skill:
-// base bodies arrive through Resolve's inherit chain, never twice.
-func TestLoadSkillExtendMergesAndRegistersInherit(t *testing.T) {
+// A specifier names the MODULE (its file stem), not the skill name the module
+// declares: resolution must not need another module evaluated first.
+func TestLoadImportUsesTheFileStem(t *testing.T) {
 	dir := t.TempDir()
-	writeSkill(t, dir, "a.js", `
-export default {
-  name: "a",
-  description: "a skill",
-  usable: "never",
-  mode: "agentic",
-  permissions: { read: "ask", edit: "ask" },
-  body: "a body",
-};
-`)
-	writeSkill(t, dir, "b.js", `
-export default {
-  name: "b",
-  description: "b skill",
-  usable: "never",
-  tools: {
-    approvalMode: "ask",
-    permissions: { bash: "ask", edit: "deny" },
-  },
-  body: "b body",
-};
+	writeSkill(t, dir, "z_file.js", `
+export default { name: "published", description: "d", usable: "ask", body: "published body" };
 `)
 	writeSkill(t, dir, "combo.js", `
-export default skill.extend("a", require("b"), {
-  name: "combo",
-  description: "combo skill",
-  usable: "yolo",
-  permissions: { write: "yolo" },
-  body: "combo body",
-});
+import published from "skill:published";
+export default { ...published, name: "combo", description: "c", body: published.body + "!" };
 `)
+	list, errs := Load(dir)
+	if len(list) != 1 || list["published"].Body != "published body" {
+		t.Fatalf("only the base file may load, got %v", list)
+	}
+	text := errorsText(errs)
+	if !strings.Contains(text, `no skill module "published"`) || !strings.Contains(text, "z_file") {
+		t.Fatalf("the error must name the specifier and the modules that exist:\n%s", text)
+	}
+}
 
+// Stem matching ignores case, so a hand-written import does not fail on
+// capitalization.
+func TestLoadImportStemIsCaseInsensitive(t *testing.T) {
+	dir := t.TempDir()
+	writeSkill(t, dir, "Agentic_Base.js", `
+export default { name: "agentic_base", description: "d", usable: "never", body: "base body" };
+`)
+	writeSkill(t, dir, "combo.js", `
+import base from "skill:agentic_base";
+export default { ...base, name: "combo", description: "c", body: base.body + "!" };
+`)
 	list, errs := Load(dir)
 	if len(errs) > 0 {
 		t.Fatalf("load errors: %s", errorsText(errs))
 	}
-	combo := list["combo"]
-	if strings.Join(combo.Inherit, ",") != "a,b" {
-		t.Fatalf("extend inherit = %v, want [a b]", combo.Inherit)
+	if got := list["combo"].Body; got != "base body!" {
+		t.Fatalf("case-insensitive import gave %q", got)
 	}
-	if combo.Body != "combo body" || combo.Mode != "agentic" || combo.ApprovalMode != "ask" {
-		t.Fatalf("extend result lost merged fields: %+v", combo)
+}
+
+// The removed features are gone on purpose: `inherit` is refused with a
+// message that shows the replacement, and require()/skill.extend() no
+// longer exist in the sandbox.
+func TestLoadRejectsRetiredComposition(t *testing.T) {
+	cases := map[string]string{
+		"inherit.js": `export default {
+  name: "inheritbad",
+  description: "d",
+  body: "b",
+  inherit: ["agentic_base"],
+};
+`,
+		"require.js": `const base = require("agentic_base");
+export default { name: "requirebad", description: "d", body: base.body };
+`,
+		"extend.js": `export default skill.extend({ name: "extendsbad", description: "d", body: "b" });
+`,
 	}
-	for tool, want := range map[string]Policy{
-		"read": PolicyAsk, "bash": PolicyAsk, "edit": PolicyDeny, "write": PolicyYolo,
-	} {
-		if got := combo.Permissions[tool].Policy; got != want {
-			t.Fatalf("extend permission %s = %q, want %q (%+v)", tool, got, want, combo.Permissions)
+	for file, src := range cases {
+		dir := t.TempDir()
+		writeSkill(t, dir, file, src)
+		list, errs := Load(dir)
+		if len(list) != 0 {
+			t.Fatalf("%s: retired composition still loaded as a skill: %v", file, list)
 		}
-	}
-	eff, err := Resolve(list, map[string]SessionSkill{"combo": {Priority: 1, Active: true}}, "agentic")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"combo", "a", "b"} {
-		if eff.Bodies[name] == "" {
-			t.Fatalf("resolved bodies missing %q: %v", name, eff.Order)
+		text := errorsText(errs)
+		if text == "" {
+			t.Fatalf("%s: retired composition was accepted silently", file)
+		}
+		if file == "inherit.js" && !strings.Contains(text, "skill:agentic_base") {
+			t.Fatalf("the inherit error must show the import replacement:\n%s", text)
 		}
 	}
 }
 
-func TestLoadRequireCycleAndMissingModule(t *testing.T) {
+func TestLoadImportCycleAndMissingModule(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "a.js", `
-const b = require("b");
+import b from "skill:b";
 export default { name: "a", description: "a", body: b.body };
 `)
 	writeSkill(t, dir, "b.js", `
-const a = require("a");
+import a from "skill:a";
 export default { name: "b", description: "b", body: a.body };
 `)
 	writeSkill(t, dir, "c.js", `
-const missing = require("does_not_exist");
+import missing from "skill:does_not_exist";
 export default { name: "c", description: "c", body: missing.body };
 `)
 
@@ -155,8 +167,8 @@ export default { name: "c", description: "c", body: missing.body };
 			t.Errorf("cycle/missing skills must not load, got %v", list)
 		}
 		text := errorsText(errs)
-		if !strings.Contains(text, "cycle") {
-			t.Errorf("errors must name the require cycle:\n%s", text)
+		if !strings.Contains(text, "cyclic") && !strings.Contains(text, "cycle") {
+			t.Errorf("errors must name the import cycle:\n%s", text)
 		}
 		if !strings.Contains(text, "does_not_exist") {
 			t.Errorf("errors must name the missing module:\n%s", text)
@@ -164,8 +176,30 @@ export default { name: "c", description: "c", body: missing.body };
 	}()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("Load hung on a require cycle")
+	case <-time.After(10 * time.Second):
+		t.Fatal("Load hung on an import cycle")
+	}
+}
+
+// Only `skill:<name>` resolves. Everything else — a package, a node:
+// builtin, a relative or absolute path — is refused at link time.
+func TestLoadImportSchemeIsLimited(t *testing.T) {
+	cases := map[string]string{
+		"package.js":  `import os from "node:os"; export default { name: "pkg", description: os.hostname(), body: "b" };`,
+		"relative.js": `import x from "./a.js"; export default { name: "rel", description: "d", body: "b" };`,
+		"absolute.js": `import x from "/etc/passwd"; export default { name: "abs", description: "d", body: "b" };`,
+		"bare.js":     `import x from "agentic_base"; export default { name: "bare", description: "d", body: "b" };`,
+	}
+	for file, src := range cases {
+		dir := t.TempDir()
+		writeSkill(t, dir, file, src)
+		list, errs := Load(dir)
+		if len(list) != 0 {
+			t.Fatalf("%s: non-skill import loaded: %v", file, list)
+		}
+		if text := errorsText(errs); !strings.Contains(text, "skill:") {
+			t.Fatalf("%s: error should point at the skill: scheme, got:\n%s", file, text)
+		}
 	}
 }
 
@@ -175,15 +209,15 @@ export default { name: "c", description: "c", body: missing.body };
 func TestLoadSandboxDeniesHostAccess(t *testing.T) {
 	dir := t.TempDir()
 	cases := map[string]string{
-		"env.js":     `export default { name: "envbad", description: process.env.HOME, body: "b" };`,
-		"file.js":    `const f = File; export default { name: "filebad", description: "d", body: "b" };`,
-		"require.js": `const os = require("node:os"); export default { name: "pkgbad", description: os.hostname(), body: "b" };`,
-		"fetch.js":   `const r = fetch("http://example.com"); export default { name: "netbad", description: "d", body: "b" };`,
-		"eval.js":    `export default { name: "evalbad", description: String(eval("1 + 1")), body: "b" };`,
-		"function.js": `const f = new Function("return 1");
-export default { name: "funcbad", description: String(f()), body: "b" };`,
-		"import.js": `import * as os from "node:os";
-export default { name: "importbad", description: os.hostname(), body: "b" };`,
+		"env.js":      `export default { name: "envbad", description: process.env.HOME, body: "b" };`,
+		"file.js":     `const f = File; export default { name: "filebad", description: "d", body: "b" };`,
+		"os.js":       `const os = require("node:os"); export default { name: "osbad", description: os.hostname(), body: "b" };`,
+		"fetch.js":    `const r = fetch("http://example.com"); export default { name: "netbad", description: "d", body: "b" };`,
+		"eval.js":     `export default { name: "evalbad", description: String(eval("1 + 1")), body: "b" };`,
+		"func.js":     `const f = new Function("return 1"); export default { name: "funcbad", description: String(f()), body: "b" };`,
+		"import.js":   `import * as os from "node:os"; export default { name: "importbad", description: os.hostname(), body: "b" };`,
+		"dynamic.js":  `const m = await import("skill:agentic_base"); export default { name: "dynbad", description: "d", body: "b" };`,
+		"importer.js": `import x from "skill:../agentic_base"; export default { name: "pathbad", description: "d", body: "b" };`,
 	}
 	for file, src := range cases {
 		writeSkill(t, dir, file, src)
@@ -215,17 +249,20 @@ func TestParseTimeout(t *testing.T) {
 	}
 }
 
-// Extra module sources (the builtin layer) are requireable from disk
-// skills but are not returned as disk skills themselves.
-func TestLoadWithModulesRequiresExtraLayer(t *testing.T) {
+// Extra module sources (the builtin layer) are importable from disk skills
+// but are not returned as disk skills themselves.
+func TestLoadWithModulesImportsExtraLayer(t *testing.T) {
 	dir := t.TempDir()
 	writeSkill(t, dir, "combo.js", `
-export default skill.extend(require("embedded_base"), {
+import base from "skill:embedded_base";
+
+export default {
+  ...base,
   name: "disk_combo",
   description: "disk combo",
   usable: "ask",
-  body: "disk body",
-});
+  body: base.body + " + disk body",
+};
 `)
 	modules := []Source{{
 		Path: "builtin_skills/embedded_base.js",
@@ -249,28 +286,54 @@ export default {
 	}
 	combo := list["disk_combo"]
 	if combo.Mode != "talk" || combo.Permissions["search_web"].Policy != PolicyYolo {
-		t.Fatalf("extra-layer extend lost fields: %+v", combo)
+		t.Fatalf("extra-layer import lost fields: %+v", combo)
 	}
-	if strings.Join(combo.Inherit, ",") != "embedded_base" {
-		t.Fatalf("extra-layer inherit = %v", combo.Inherit)
+	if combo.Body != "embedded body + disk body" {
+		t.Fatalf("extra-layer body = %q", combo.Body)
 	}
 }
 
-// A shared-subtree DAG must hit the extend size budget instead of
-// expanding exponentially inside the copy.
-func TestSkillExtendRejectsOversizedSharedTable(t *testing.T) {
+// Imported modules share one VM and one deadline, so a runaway IMPORT is
+// interrupted instead of stalling the loader.
+func TestLoadImportSharesTheTimeout(t *testing.T) {
+	old := moduleTimeout
+	moduleTimeout = 150 * time.Millisecond
+	defer func() { moduleTimeout = old }()
+
+	dir := t.TempDir()
+	writeSkill(t, dir, "spin.js", `while (true) {} export default { name: "spin", description: "d", body: "b" };`)
+	writeSkill(t, dir, "root.js", `
+import spin from "skill:spin";
+export default { ...spin, name: "root" };
+`)
+	start := time.Now()
+	list, errs := Load(dir)
+	if len(list) != 0 {
+		t.Fatalf("a runaway import loaded: %v", list)
+	}
+	if !strings.Contains(errorsText(errs), "timeout") {
+		t.Fatalf("errors should report the timeout: %s", errorsText(errs))
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("interrupt took %s", time.Since(start))
+	}
+}
+
+// The snapshot boundary still rejects oversized values: a shared-subtree
+// DAG is charged every visit instead of expanding without bound.
+func TestSnapshotRejectsOversizedSharedTable(t *testing.T) {
 	src := `
 let t = { leaf: "x" };
 for (let i = 0; i < 24; i++) {
   t = { a: t, b: t };
 }
-export default skill.extend(t, { name: "big", description: "d", body: "b" });
+export default { name: "big", description: "d", body: "b", extra: t };
 `
 	start := time.Now()
 	if _, err := Parse("big.js", []byte(src)); err == nil {
 		t.Fatal("oversized shared subtree must be rejected")
 	}
 	if time.Since(start) > 2*time.Second {
-		t.Fatalf("oversized extend took too long: %v", time.Since(start))
+		t.Fatalf("oversized snapshot took too long: %v", time.Since(start))
 	}
 }

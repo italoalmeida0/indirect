@@ -220,22 +220,59 @@ func TestV5ConvertsMarkdownSkillsToJS(t *testing.T) {
 	if !strings.Contains(generated, "\\`") || !strings.Contains(generated, "\\${") {
 		t.Fatalf("body with a backtick and ${{ must be escaped in the template literal:\n%s", generated)
 	}
-	sk, err := skills.Parse("custom.js", []byte(generated))
-	if err != nil {
-		t.Fatalf("converted skill must load with the JS loader: %v\n%s", err, generated)
+	// `inherit:` became real imports plus spreads: the converted file must
+	// load through the real module loader against the bases it names, and
+	// compose to the same grants and body order the old chain produced.
+	if strings.Contains(generated, "inherit:") {
+		t.Fatalf("converted module still carries the retired inherit key:\n%s", generated)
+	}
+	bases := []skills.Source{
+		{Path: "builtin_skills/agentic_base.js", Data: []byte(`
+export default {
+  name: "agentic_base",
+  description: "agentic base",
+  usable: "never",
+  permissions: { read: "ask", edit: "ask", widget_set: "yolo" },
+  body: "agentic base body",
+};
+`)},
+		{Path: "builtin_skills/other_base.js", Data: []byte(`
+export default {
+  name: "other_base",
+  description: "other base",
+  usable: "never",
+  permissions: { read: "deny", widget_set: { policy: "ask", args: { other: "deny" } } },
+  body: "other base body",
+};
+`)},
+	}
+	list, loadErrs := skills.LoadSet([]skills.Source{{Path: "custom.js", Data: []byte(generated)}}, bases)
+	if len(loadErrs) > 0 {
+		t.Fatalf("converted skill must load with the JS loader: %v\n%s", loadErrs, generated)
+	}
+	sk, ok := list["custom_review"]
+	if !ok {
+		t.Fatalf("converted skill missing from the load result:\n%s", generated)
 	}
 	if sk.Name != "custom_review" || sk.Description != `Review "strict" code` || sk.Usable != "ask" || sk.Mode != "agentic" || sk.ApprovalMode != "yolo" {
 		t.Fatalf("converted fields drifted: %+v", sk)
 	}
-	if strings.Join(sk.Inherit, ",") != "agentic_base,other_base" {
-		t.Fatalf("converted inherit drifted: %v", sk.Inherit)
+	// The higher-priority base (base0 = agentic_base) grants the policy, the
+	// own argument override survives, and the base order is lowest first.
+	if got := sk.Permissions["read"].Policy; got != skills.PolicyAsk {
+		t.Fatalf("read policy = %q, want the agentic_base grant", got)
 	}
-	if sk.Permissions["read"].Policy != skills.PolicyInherit || sk.Permissions["edit"].Policy != skills.PolicyDeny ||
-		sk.Permissions["widget_set"].Policy != skills.PolicyInherit || sk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
-		t.Fatalf("converted permissions drifted: %+v", sk.Permissions)
+	if got := sk.Permissions["widget_set"].Policy; got != skills.PolicyYolo {
+		t.Fatalf("widget_set policy = %q, want the agentic_base grant", got)
 	}
-	if sk.Body != customBody {
-		t.Fatalf("converted body drifted: %q", sk.Body)
+	if got := sk.Permissions["widget_set"].Args; got["src_file"] != skills.PolicyDeny || got["other"] != skills.PolicyDeny {
+		t.Fatalf("widget_set args drifted: %v", got)
+	}
+	if sk.Permissions["edit"].Policy != skills.PolicyDeny {
+		t.Fatalf("own deny lost: %+v", sk.Permissions["edit"])
+	}
+	if want := customBody + "agentic base bodyother base body"; sk.Body != want {
+		t.Fatalf("converted body = %q, want %q", sk.Body, want)
 	}
 	plan, err := skills.Parse("plan.js", []byte(read("plan.js")))
 	if err != nil || plan.Name != "plan" || plan.Usable != "deny" || plan.Body != "custom plan body" {

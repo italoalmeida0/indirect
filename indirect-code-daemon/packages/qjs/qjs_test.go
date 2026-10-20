@@ -55,90 +55,194 @@ func TestSandboxHasNoHostAccess(t *testing.T) {
 	}
 }
 
-func TestRequireReachesGo(t *testing.T) {
-	req := func(name string) (string, error) {
-		if name != "base" {
-			return "", errors.New(`module "` + name + `" not found`)
+// skillSet is a tiny module registry shaped like the real one: specifier ->
+// module source, keyed by `skill:<name>`.
+func skillSet(mods map[string]string) ResolveModule {
+	return func(specifier string) ([]byte, error) {
+		src, ok := mods[specifier]
+		if !ok {
+			return nil, errors.New("no skill module " + specifier)
 		}
-		return `{"name":"base","permissions":{"read":"ask"}}`, nil
+		return []byte(src), nil
 	}
+}
+
+func TestImportReachesGo(t *testing.T) {
+	resolve := skillSet(map[string]string{
+		"skill:base": `export default { name: "base", permissions: { read: "ask" }, body: "BASE" };`,
+	})
 	out, err := EvalModule(Module{
-		Name:    "combo.js",
-		Source:  []byte(`export default { name: "combo", base: require("base"), missing: 1 };`),
-		Require: req,
+		Name: "combo.js",
+		Source: []byte(`import base from "skill:base";
+export default { ...base, name: "combo", permissions: { ...base.permissions, write: "deny" }, body: base.body + " OWN" };`),
+		Resolve: resolve,
 	})
 	if err != nil {
 		t.Fatalf("EvalModule: %v", err)
 	}
-	if !strings.Contains(out, `"read":"ask"`) {
-		t.Fatalf("required snapshot missing: %s", out)
-	}
-	if _, err := EvalModule(Module{
-		Name:    "broken.js",
-		Source:  []byte(`export default { base: require("nope") };`),
-		Require: req,
-	}); err == nil || !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("require error not propagated: %v", err)
-	}
-}
-
-func TestRequireWithoutLoader(t *testing.T) {
-	if _, err := EvalModule(Module{Name: "lonely.js", Source: []byte(`export default { x: require("base") };`)}); err == nil {
-		t.Fatal("require succeeded without a loader")
-	}
-}
-
-func TestExtendMergesAndKeepsOverrides(t *testing.T) {
-	src := "const base = { name: \"base\", description: \"b\", permissions: { read: \"ask\", write: \"deny\" }, body: \"BASE\" };\n" +
-		"const over = { name: \"combo\", description: \"c\", permissions: { write: \"yolo\" }, body: \"OWN\" };\n" +
-		"export default skill.extend(base, over);\n"
-	out := eval(t, src)
 	var got map[string]any
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("snapshot is not JSON: %v (%s)", err, out)
 	}
-	if got["name"] != "combo" || got["body"] != "OWN" || got["description"] != "c" {
-		t.Fatalf("override metadata lost: %s", out)
-	}
 	perms, _ := got["permissions"].(map[string]any)
-	if perms["read"] != "ask" || perms["write"] != "yolo" {
-		t.Fatalf("permissions did not merge: %s", out)
+	if got["name"] != "combo" || got["body"] != "BASE OWN" {
+		t.Fatalf("imported module not composed: %s", out)
 	}
-	inherit, _ := got["inherit"].([]any)
-	if len(inherit) != 1 || inherit[0] != "base" {
-		t.Fatalf("inherit should name the base: %s", out)
+	if perms["read"] != "ask" || perms["write"] != "deny" {
+		t.Fatalf("spread did not carry the base permissions: %s", out)
+	}
+	if _, ok := got["inherit"]; ok {
+		t.Fatalf("import must not fabricate an inherit list: %s", out)
 	}
 }
 
-func TestExtendSingleArgumentCopies(t *testing.T) {
-	src := "const base = { name: \"base\", description: \"b\" };\n" +
-		"const copy = skill.extend(base);\n" +
-		"copy.name = \"renamed\";\n" +
-		"export default { original: base.name, copied: copy.name };\n"
-	out := eval(t, src)
-	if !strings.Contains(out, `"original":"base"`) || !strings.Contains(out, `"copied":"renamed"`) {
-		t.Fatalf("copy aliased the original: %s", out)
+func TestImportLinksTransitively(t *testing.T) {
+	resolve := skillSet(map[string]string{
+		"skill:base":  `export default { body: "base" };`,
+		"skill:mid":   `import base from "skill:base"; export default { body: base.body + "/mid" };`,
+		"skill:other": `export const marker = "ok";`,
+	})
+	out, err := EvalModule(Module{
+		Name: "leaf.js",
+		Source: []byte(`import mid from "skill:mid";
+import { marker } from "skill:other";
+export default { body: mid.body + "/leaf", marker };`),
+		Resolve: resolve,
+	})
+	if err != nil {
+		t.Fatalf("EvalModule: %v", err)
+	}
+	if !strings.Contains(out, `"body":"base/mid/leaf"`) || !strings.Contains(out, `"marker":"ok"`) {
+		t.Fatalf("transitive import failed: %s", out)
+	}
+}
+
+func TestImportErrorsNameTheSpecifier(t *testing.T) {
+	resolve := skillSet(map[string]string{"skill:base": `export default {};`})
+	cases := map[string]struct {
+		src  string
+		want string
+	}{
+		"missing module": {`import x from "skill:nope"; export default { x };`, "skill:nope"},
+		"relative path":  {`import x from "./base.js"; export default { x };`, "skill:name"},
+		"bare name":      {`import x from "base"; export default { x };`, "skill:name"},
+		"host module":    {`import fs from "node:fs"; export default { fs };`, "skill:name"},
+		"absolute path":  {`import x from "/etc/passwd"; export default { x };`, "skill:name"},
+		"path traversal": {`import x from "skill:../base"; export default { x };`, "not a path"},
+		"empty name":     {`import x from "skill:"; export default { x };`, "no module name"},
+	}
+	for name, tc := range cases {
+		_, err := EvalModule(Module{Name: "wild.js", Source: []byte(tc.src), Resolve: resolve})
+		if err == nil {
+			t.Errorf("%s: import was accepted", name)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: error %q should mention %q", name, err, tc.want)
+		}
+	}
+}
+
+func TestImportWithoutResolver(t *testing.T) {
+	_, err := EvalModule(Module{Name: "lonely.js", Source: []byte(`import base from "skill:base"; export default { base };`)})
+	if err == nil || !strings.Contains(err.Error(), "imports nothing") {
+		t.Fatalf("import without a resolver should be reported: %v", err)
+	}
+}
+
+func TestImportCycleIsReported(t *testing.T) {
+	resolve := skillSet(map[string]string{
+		"skill:a": `import b from "skill:b"; export default { name: "a", b };`,
+		"skill:b": `import a from "skill:a"; export default { name: "b", a };`,
+	})
+	start := time.Now()
+	_, err := EvalModule(Module{
+		Name:    "a.js",
+		Source:  []byte(`import a from "skill:a"; export default { a };`),
+		Resolve: resolve,
+	})
+	if err == nil {
+		t.Fatal("a cyclic import graph was accepted")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("cycle detection took %s; the graph budget must stop it", elapsed)
+	}
+}
+
+func TestImportBudgetBoundsTheGraph(t *testing.T) {
+	// Every module imports the next; the 128-module budget must stop it
+	// instead of linking thousands of modules.
+	resolve := func(specifier string) ([]byte, error) {
+		return []byte(`import next from "skill:` + specifier + `x";
+export default { name: "m" };`), nil
+	}
+	_, err := EvalModule(Module{
+		Name:    "deep.js",
+		Source:  []byte(`import first from "skill:m"; export default { first };`),
+		Resolve: resolve,
+	})
+	if err == nil || !strings.Contains(err.Error(), "too large or cyclic") {
+		t.Fatalf("unbounded graph should be refused: %v", err)
+	}
+}
+
+func TestImportedModuleGetsTheSameLimits(t *testing.T) {
+	// The deadline covers the whole graph: a runaway IMPORT is interrupted,
+	// not only the root module.
+	resolve := skillSet(map[string]string{
+		"skill:spin": `while (true) {} export default { name: "spin" };`,
+	})
+	start := time.Now()
+	_, err := EvalModule(Module{
+		Name:    "root.js",
+		Source:  []byte(`import spin from "skill:spin"; export default { spin };`),
+		Resolve: resolve,
+		Timeout: 150 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("a runaway import was not interrupted")
+	}
+	if !errors.Is(err, ErrTimeout) {
+		t.Fatalf("expected a timeout error, got %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("interrupt took %s", elapsed)
+	}
+}
+
+func TestSandboxHasNoRequireOrExtend(t *testing.T) {
+	for _, src := range []string{
+		`export default { x: typeof require };`,
+		`export default { x: typeof skill };`,
+	} {
+		out, err := EvalModule(Module{Name: "surface.js", Source: []byte(src)})
+		if err != nil {
+			t.Fatalf("EvalModule: %v", err)
+		}
+		if !strings.Contains(out, `"x":"undefined"`) {
+			t.Fatalf("sandbox still exposes a retired helper: %s", out)
+		}
 	}
 }
 
 func TestSnapshotRejectsNonData(t *testing.T) {
 	cases := map[string]string{
-		"function":     `export default { f: function () {} };`,
-		"symbol":       `export default { s: Symbol("x") };`,
-		"class":        `class Box { constructor() { this.v = 1; } } export default new Box();`,
-		"date":         `export default { d: new Date() };`,
-		"regexp":       `export default { r: /x/ };`,
-		"map":          `export default { m: new Map() };`,
-		"cycle":        `const a = { name: "a" }; a.self = a; export default a;`,
-		"sparse":       `const a = [1]; a[3] = 4; export default { a };`,
-		"nan":          `export default { n: NaN };`,
-		"infinity":     `export default { n: Infinity };`,
-		"bigint":       `export default { n: 10n };`,
-		"accessor":     `export default { get x() { return 1; } };`,
-		"depth":        strings.Repeat("export default ", 1) + strings.Repeat("[", 40) + "1" + strings.Repeat("]", 40) + ";",
-		"undefined":    `export default { x: [1, undefined] };`,
-		"hole":         `const a = [1, 2]; delete a[0]; export default { a };`,
-		"hiddenKey":    `const o = {}; Object.defineProperty(o, "x", { value: 1, enumerable: false }); export default o;`,
+		"function":      `export default { f: function () {} };`,
+		"symbol":        `export default { s: Symbol("x") };`,
+		"class":         `class Box { constructor() { this.v = 1; } } export default new Box();`,
+		"date":          `export default { d: new Date() };`,
+		"regexp":        `export default { r: /x/ };`,
+		"map":           `export default { m: new Map() };`,
+		"cycle":         `const a = { name: "a" }; a.self = a; export default a;`,
+		"sparse":        `const a = [1]; a[3] = 4; export default { a };`,
+		"nan":           `export default { n: NaN };`,
+		"infinity":      `export default { n: Infinity };`,
+		"bigint":        `export default { n: 10n };`,
+		"accessor":      `export default { get x() { return 1; } };`,
+		"depth":         strings.Repeat("export default ", 1) + strings.Repeat("[", 40) + "1" + strings.Repeat("]", 40) + ";",
+		"undefined":     `export default { x: [1, undefined] };`,
+		"hole":          `const a = [1, 2]; delete a[0]; export default { a };`,
+		"hiddenKey":     `const o = {}; Object.defineProperty(o, "x", { value: 1, enumerable: false }); export default o;`,
 		"nonPlainProto": `const o = Object.create({ inherited: 1 }); o.name = "a"; export default o;`,
 	}
 	for name, src := range cases {
