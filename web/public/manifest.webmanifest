@@ -1,7 +1,8 @@
 {
   "name": "Indirect",
   "short_name": "Indirect",
-  "description": "LLM API gateway with a personal dashboard and an Code agent workspace.",
+  "description": "LLM API gateway with a personal dashboard and a Code agent workspace.",
+  "id": "/",
   "icons": [
     {
       "src": "/icon-192.png",

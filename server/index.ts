@@ -12,6 +12,7 @@ import { handleIndirectCodeRestRoute } from "./routes/indirect-code";
 import { handleGenUiRoute } from "./routes/gen-ui";
 import { ensureObscuraBrowser } from "./routes/obscura";
 import { handlePushRoute } from "./routes/push";
+import { handleManifestRoute } from "./routes/manifest";
 import { handleIndirectCodeUpgrade, remoteRelayWsHandlers, type WsData } from "./routes/relay";
 import { handleProxy } from "./proxy/index";
 import { serveStatic } from "./static";
@@ -133,6 +134,10 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
     const viaAdmin = await handleAdminRoute(path, req, url);
     if (viaAdmin) return viaAdmin;
     return err(404, "not found", req);
+  }
+
+  if (path === "/manifest.webmanifest" || path === "/manifest.json") {
+    return handleManifestRoute(req, url);
   }
 
   if (req.method === "GET" || req.method === "HEAD") {

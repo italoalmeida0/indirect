@@ -1486,13 +1486,32 @@ describe("gateway end-to-end", () => {
     expect(man.headers.get("content-type")).toContain("application/manifest+json");
     const manifest = (await man.json()) as {
       name: string;
+      id?: string;
+      scope?: string;
+      start_url?: string;
       display_override: string[];
       icons: Array<{ src: string; sizes: string }>;
     };
     expect(manifest.name).toBeTruthy();
+    expect(manifest.id).toBe(`${GW}/`);
+    expect(manifest.scope).toBe(`${GW}/`);
+    expect(manifest.start_url).toBe(`${GW}/#/code`);
     expect(manifest.display_override).toContain("window-controls-overlay");
     expect(manifest.icons.some((i) => i.sizes === "192x192")).toBe(true);
     expect(manifest.icons.some((i) => i.sizes === "512x512")).toBe(true);
+
+    // Forwarded headers dynamically customize manifest id, scope and start_url to match origin.
+    const fwdMan = await fetch(`${GW}/manifest.webmanifest`, {
+      headers: {
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "deconuno.hezz.it",
+      },
+    });
+    expect(fwdMan.status).toBe(200);
+    const fwdManifest = await fwdMan.json();
+    expect(fwdManifest.id).toBe("https://deconuno.hezz.it/");
+    expect(fwdManifest.scope).toBe("https://deconuno.hezz.it/");
+    expect(fwdManifest.start_url).toBe("https://deconuno.hezz.it/#/code");
     for (const icon of manifest.icons) {
       const r = await fetch(`${GW}${icon.src}`);
       expect(r.status).toBe(200);
