@@ -117,6 +117,25 @@ func (h *wsHarness) mkSession(t *testing.T, id string) {
 	}
 }
 
+func TestPullConfigReturnsSkills(t *testing.T) {
+	skillRegistry.initFrom(t.TempDir())
+	h := newWSHarness(t)
+	h.send(map[string]any{"type": "pull", "collection": "config", "id": float64(1)})
+	got := h.lastType("pull-response")
+	if got == nil {
+		t.Fatalf("no pull response")
+	}
+	items, _ := got["items"].([]map[string]any)
+	if len(items) == 0 {
+		t.Fatalf("no items in pull response: %+v", got)
+	}
+	skills, _ := items[0]["skills"].(map[string]any)
+	t.Logf("skills in pull response: %+v", skills)
+	if len(skills) == 0 {
+		t.Fatalf("skills is empty in pull response!")
+	}
+}
+
 func TestWSCreatePromptCancel(t *testing.T) {
 	h := newWSHarness(t)
 	h.send(map[string]any{"type": "create_session", "requestId": "r1", "cwd": "/tmp", "title": "s", "model": "m", "options": map[string]any{}})

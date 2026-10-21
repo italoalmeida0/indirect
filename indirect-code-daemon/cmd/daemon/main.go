@@ -329,6 +329,9 @@ func (l *link) connectLoop(ctx context.Context) error {
 	if l.server != nil && l.server.updates != nil {
 		go l.server.updates.checkForUpdates("reconnect")
 	}
+	if l.server != nil {
+		l.server.notifyChange("config")
+	}
 	defer func() {
 		_ = conn.Close()
 		l.clearConn(conn)
