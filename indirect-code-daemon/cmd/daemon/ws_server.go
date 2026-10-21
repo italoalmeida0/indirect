@@ -954,6 +954,13 @@ func (s *wsServer) handleRaw(raw []byte) {
 		if s.updates != nil {
 			go s.updates.debugMirror(raw)
 		}
+	case "get_session_debug":
+		var req struct {
+			SessionID string `json:"sessionId"`
+			RequestID string `json:"requestId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.handleGetSessionDebug(req.SessionID, req.RequestID)
 	case "test_mcp":
 		// Removed (MCP deleted): silent no-op. Emitting a replyTo-less
 		// error would toast on the generic handler for no user benefit.
@@ -1729,4 +1736,70 @@ func (s *wsServer) rememberSelection(model string, options SessionOptions) error
 	s.cfg.store(&next)
 	s.notifyChange("config")
 	return nil
+}
+
+func (s *wsServer) handleGetSessionDebug(sessionID, requestID string) {
+	hostID := s.host()
+	cfg := s.cfg.load()
+	var dcfg DaemonConfig
+	if cfg != nil {
+		dcfg = *cfg
+	}
+
+	resp := map[string]any{
+		"type":      "session_debug_data",
+		"hostId":    hostID,
+		"sessionId": sessionID,
+		"requestId": requestID,
+	}
+
+	if sessionID != "" {
+		res := s.sessions.route(sessionID, true)
+		if res.Error == "" {
+			rr := make(chan any, 1)
+			select {
+			case res.Inbox <- Envelope{Payload: readReqMsg{What: "session", Reply: rr}}:
+				select {
+				case r := <-rr:
+					if rd, ok := r.(readResult); ok && rd.Error == "" {
+						if rec, ok := rd.Payload.(*SessionRecord); ok && rec != nil {
+							brainDir := s.sessions.disk().ensureBrainDir(rec.ID)
+							sysPrompt := systemPromptWithBrain(dcfg, rec.CWD, rec.Options, brainDir)
+							resp["systemPrompt"] = sysPrompt
+							resp["session"] = map[string]any{
+								"id":      rec.ID,
+								"title":   rec.Title,
+								"cwd":     rec.CWD,
+								"model":   rec.Model,
+								"mode":    rec.Options.Mode,
+								"effort":  rec.Options.Effort,
+								"access":  rec.Options.Access,
+								"status":  rec.Status,
+								"pinned":  rec.Pinned,
+								"turnSeq": rec.TurnSeq,
+							}
+							resp["tools"] = buildNativeToolsList(rec.CWD, rec.Options.Mode)
+							resp["recentPayloads"] = getSessionDebugPayloads(rec.ID)
+							s.emit(resp)
+							return
+						}
+					}
+				case <-time.After(replyTimeout):
+				}
+			case <-time.After(replyTimeout):
+			}
+		}
+	}
+
+	// Fallback when no session found or sessionID is empty
+	defaultMode := "agentic"
+	defaultSysPrompt := systemPromptWithBrain(dcfg, "", SessionOptions{Mode: defaultMode}, "")
+	resp["systemPrompt"] = defaultSysPrompt
+	resp["tools"] = buildNativeToolsList("", defaultMode)
+	if sessionID != "" {
+		resp["recentPayloads"] = getSessionDebugPayloads(sessionID)
+	} else {
+		resp["recentPayloads"] = []SessionDebugPayload{}
+	}
+	s.emit(resp)
 }

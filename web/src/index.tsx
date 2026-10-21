@@ -36,6 +36,7 @@ import LoginPage from "./pages/Login";
 import SetPasswordPage from "./pages/SetPassword";
 import DashboardPage from "./pages/Dashboard";
 import IndirectCodePage from "./indirect-code/IndirectCodePage";
+import CodeDevPage from "./indirect-code/CodeDevPage";
 import KeysPage from "./pages/Keys";
 import UsagePage from "./pages/Usage";
 import SettingsPage from "./pages/Settings";
@@ -375,7 +376,10 @@ function Root() {
   createEffect(() => {
     const p = route().path;
     try {
-      if (p.startsWith("/code")) {
+      if (p === "/code-dev" || p.startsWith("/code-dev")) {
+        document.title = "Indirect Code — Dev Mode";
+        (window as any).__pageIcon = "/indirect-icon.svg";
+      } else if (p.startsWith("/code")) {
         document.title = "Indirect Code";
         (window as any).__pageIcon = "/indirect-icon.svg";
       } else {
@@ -412,6 +416,9 @@ function Root() {
         >
           {(() => {
             const p = route().path;
+            if (p === "/code-dev" || p.startsWith("/code-dev")) {
+              return <CodeDevPage />;
+            }
             if (p.startsWith("/code")) {
               return <IndirectCodePage />;
             }

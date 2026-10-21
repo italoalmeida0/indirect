@@ -258,3 +258,78 @@ func TestHealthDispatch(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+func TestWSGetSessionDebug(t *testing.T) {
+	h := newWSHarness(t)
+	h.mkSession(t, "s_dbg")
+	recordSessionDebugPayload("s_dbg", SessionDebugPayload{
+		TurnIndex: 1,
+		Step:      0,
+		Model:     "test-model",
+		System:    "test-system",
+	})
+
+	// Test with session ID
+	h.send(map[string]any{
+		"type":      "get_session_debug",
+		"sessionId": "s_dbg",
+		"requestId": "req1",
+	})
+	deadline := time.Now().Add(3 * time.Second)
+	var found map[string]any
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		for _, m := range h.sent {
+			if m["type"] == "session_debug_data" && m["requestId"] == "req1" {
+				found = m
+			}
+		}
+		h.mu.Unlock()
+		if found != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if found == nil {
+		t.Fatalf("no session_debug_data reply for session s_dbg")
+	}
+	if found["systemPrompt"] == "" {
+		t.Errorf("expected non-empty systemPrompt")
+	}
+	tools, ok := found["tools"].([]DebugToolInfo)
+	if !ok || len(tools) == 0 {
+		t.Errorf("expected tools list, got %+v", found["tools"])
+	}
+	payloads, ok := found["recentPayloads"].([]SessionDebugPayload)
+	if !ok || len(payloads) == 0 {
+		t.Errorf("expected recorded payloads, got %+v", found["recentPayloads"])
+	}
+
+	// Test without session ID (global tools + default prompt)
+	h.send(map[string]any{
+		"type":      "get_session_debug",
+		"sessionId": "",
+		"requestId": "req2",
+	})
+	found = nil
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		for _, m := range h.sent {
+			if m["type"] == "session_debug_data" && m["requestId"] == "req2" {
+				found = m
+			}
+		}
+		h.mu.Unlock()
+		if found != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if found == nil {
+		t.Fatalf("no session_debug_data reply for empty session")
+	}
+	if found["systemPrompt"] == "" {
+		t.Errorf("expected default systemPrompt")
+	}
+}

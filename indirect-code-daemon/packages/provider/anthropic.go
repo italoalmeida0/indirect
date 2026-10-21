@@ -27,11 +27,24 @@ const anthropicVersion = "2023-06-01"
 // are dropped exactly as before.
 const anthropicEmptyTextPlaceholder = "..."
 
+// PayloadHook is invoked before sending an HTTP request, carrying the target endpoint,
+// raw wire JSON body bytes, and the provider Request struct.
+type PayloadHook func(endpoint string, reqBody []byte, req Request)
+
 type anthropicClient struct {
 	apiKey        string
 	baseURL       string
 	http          *http.Client
 	modelOverride *Model // gateway registry metadata, scoped to this client
+	onPayload     PayloadHook
+}
+
+// WithPayloadHook attaches a PayloadHook to the client.
+func WithPayloadHook(c Client, hook PayloadHook) Client {
+	if v, ok := c.(*anthropicClient); ok {
+		v.onPayload = hook
+	}
+	return c
 }
 
 // NewGatewayAnthropic creates a client speaking the Anthropic Messages API
@@ -452,6 +465,9 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 	body, err := json.Marshal(wire)
 	if err != nil {
 		return nil, err
+	}
+	if c.onPayload != nil {
+		c.onPayload(endpoint, body, req)
 	}
 	newReq := func() (*http.Request, error) {
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))

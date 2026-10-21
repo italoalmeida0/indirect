@@ -182,6 +182,7 @@ type turnBridge struct {
 	reg             core.Registry
 	tfc             *turnFileChanges
 	live            *liveTracker
+	currentStep     int
 }
 
 func (w *turnBridge) run() error {
@@ -196,10 +197,7 @@ func (w *turnBridge) run() error {
 	if effort := canonicalReasoning(w.snap.options.Effort); effort != "" && effort != "none" {
 		w.modelInfo.Reasoning = true
 	}
-	w.client = provider.NewGatewayAnthropic(cfg.APIKey, apiBase, w.modelInfo)
-	// Honor the transport settings: TLS verification opt-out and explicit
-	// upstream proxy apply to the provider client only.
-	w.client = provider.WithHTTPClient(w.client, provider.NewHTTPClientWithProxy(cfg.Settings.Insecure, cfg.Settings.HTTPProxy))
+	w.client = w.wrapClient(provider.NewGatewayAnthropic(cfg.APIKey, apiBase, w.modelInfo))
 	w.modelToUse = w.modelInfo.ID
 
 	sb := tools.NewSandbox(w.sessionCWD)
@@ -487,8 +485,7 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 		requestModel.Reasoning = true
 	}
 	apiBase := strings.TrimRight(w.cfg.GatewayURL, "/") + "/anthropic/v1"
-	w.client = provider.NewGatewayAnthropic(w.cfg.APIKey, apiBase, requestModel)
-	w.client = provider.WithHTTPClient(w.client, provider.NewHTTPClientWithProxy(w.cfg.Settings.Insecure, w.cfg.Settings.HTTPProxy))
+	w.client = w.wrapClient(provider.NewGatewayAnthropic(w.cfg.APIKey, apiBase, requestModel))
 	w.modelToUse = w.modelInfo.ID
 	w.agent.Client, w.agent.Model, w.agent.Reasoning = w.client, w.modelToUse, rf.options.Effort
 	w.agent.MaxTokens = maxOutputTokens(w.modelInfo)
@@ -505,6 +502,47 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 	w.agent.SetTools(w.effectiveRegistry())
 	w.agent.CompletionTool = modeCompletionTool(w.skillEff.Mode)
 	return nil
+}
+
+func (w *turnBridge) wrapClient(c provider.Client) provider.Client {
+	c = provider.WithHTTPClient(c, provider.NewHTTPClientWithProxy(w.cfg.Settings.Insecure, w.cfg.Settings.HTTPProxy))
+	return provider.WithPayloadHook(c, func(endpoint string, reqBody []byte, req provider.Request) {
+		debugReq := SessionDebugPayload{
+			TurnIndex:  w.snap.turnIndex,
+			Step:       w.currentStep,
+			Endpoint:   endpoint,
+			Model:      req.Model,
+			System:     req.System,
+			Reasoning:  req.Reasoning,
+			MaxTokens:  req.MaxTokens,
+			SessionID:  w.env.actorID,
+			Tools:      req.Tools,
+			Messages:   req.Messages,
+			RawPayload: json.RawMessage(reqBody),
+			Timestamp:  time.Now().UnixMilli(),
+		}
+		recordSessionDebugPayload(w.env.actorID, debugReq)
+
+		w.emit(map[string]any{
+			"type":      "agent_event",
+			"hostId":    w.cfg.HostID,
+			"sessionId": w.env.actorID,
+			"event": map[string]any{
+				"type":       "debug_llm_request",
+				"turnIndex":  w.snap.turnIndex,
+				"step":       w.currentStep,
+				"endpoint":   endpoint,
+				"model":      req.Model,
+				"system":     req.System,
+				"reasoning":  req.Reasoning,
+				"maxTokens":  req.MaxTokens,
+				"tools":      req.Tools,
+				"messages":   req.Messages,
+				"rawPayload": json.RawMessage(reqBody),
+				"timestamp":  time.Now().UnixMilli(),
+			},
+		})
+	})
 }
 
 // approveTool blocks the worker until the human answers (or timeout/cancel).
@@ -982,6 +1020,7 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 	payload := map[string]any{"type": "agent_event", "hostId": w.cfg.HostID, "sessionId": w.env.actorID}
 	switch e := ev.(type) {
 	case core.EvTurnStart:
+		w.currentStep = e.Step
 		payload["event"] = map[string]any{"type": "turn_start", "step": e.Step}
 	case core.EvUserMessage:
 		payload["event"] = map[string]any{"type": "user_message", "message": sanitizeMessagesForFrontend(w.snap.options.Mode, []provider.Message{e.Message})[0]}
