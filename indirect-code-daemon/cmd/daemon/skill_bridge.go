@@ -88,7 +88,7 @@ func (w *turnBridge) resolveSkillPolicy() error {
 // skill policy: denied tools vanish from the model-facing registry. The
 // use_skill tool carries the live skill listing (ask/yolo only).
 func (w *turnBridge) effectiveRegistry() core.Registry {
-	reg := skillsRegistry(modeRegistry(w.reg, w.skillEff.Mode), w.skillEff)
+	reg := skillsRegistry(w.reg, w.skillEff)
 	if t, ok := reg["use_skill"].(*tools.UseSkillTool); ok {
 		t.Listing = skillRegistry.skillsDescription(w.skillEff.Mode, w.snap.skills)
 	}

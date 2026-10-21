@@ -1772,9 +1772,11 @@ function anthropicStreamParser(event: string, data: string): IRStreamDelta[] {
         // of trusting the zero. A nonzero figure always flows through.
         const outTok = Number(j.usage.output_tokens ?? 0) || 0;
         const cache = Number(j.usage.cache_read_input_tokens ?? 0) || 0;
-        if (outTok > 0 || cache > 0) {
+        const inTok = Number(j.usage.input_tokens ?? 0) || 0;
+        const reasonTok = Number(j.usage.output_tokens_details?.thinking_tokens ?? j.usage.output_tokens_details?.reasoning_tokens ?? j.usage.reasoning_tokens ?? 0) || 0;
+        if (outTok > 0 || cache > 0 || inTok > 0) {
           out.push({
-            usage: { inTok: 0, cacheTok: cache, outTok },
+            usage: { inTok, cacheTok: cache, outTok: Math.max(0, outTok - reasonTok), reasonTok },
           });
         }
       }
@@ -2016,7 +2018,18 @@ class AnthropicStreamWriter implements IRStreamWriter {
       if (d.finish) {
         for (const index of this.open) ev("content_block_stop", { index });
         this.open.clear();
-        ev("message_delta", { delta: { stop_reason: d.finish === "length" ? "max_tokens" : d.finish === "tool_calls" || this.calls.size ? "tool_use" : "end_turn", stop_sequence: null }, usage: { input_tokens: this.usage.inTok, cache_read_input_tokens: this.usage.cacheTok - this.usage.cacheCreation, cache_creation_input_tokens: this.usage.cacheCreation, output_tokens: this.usage.outTok } });
+        ev("message_delta", {
+          delta: {
+            stop_reason: d.finish === "length" ? "max_tokens" : d.finish === "tool_calls" || this.calls.size ? "tool_use" : "end_turn",
+            stop_sequence: null,
+          },
+          usage: {
+            input_tokens: this.usage.inTok,
+            cache_read_input_tokens: this.usage.cacheTok - this.usage.cacheCreation,
+            cache_creation_input_tokens: this.usage.cacheCreation,
+            output_tokens: this.usage.outTok,
+          },
+        });
         ev("message_stop", {});
       }
     }
@@ -2420,7 +2433,7 @@ export class IRStreamTranslator {
     if (m && !this.model) this.model = m;
   }
 
-  result(): { inTok: number; cacheTok: number; outTok: number; model: string; estimated: boolean } {
+  result(): { inTok: number; cacheTok: number; outTok: number; reasonTok?: number; model: string; estimated: boolean } {
     // sawUsage now ALSO means "bytes crossed the wire" (text/tool deltas
     // mark it — see feed()). The second branch below therefore covers the
     // lying-zero stream: upstream usage said 0/0/0 but content flowed.
@@ -2437,17 +2450,18 @@ export class IRStreamTranslator {
         outTok = this.estimateOutTok();
         estimated = true;
       }
-      return { inTok: this.inTok, cacheTok: this.cacheTok, outTok, model: this.model, estimated };
+      return { inTok: this.inTok, cacheTok: this.cacheTok, outTok, reasonTok: this.reasonTok, model: this.model, estimated };
     }
     // Anthropic reports input usage at message_start; tool-only streams may
     // carry no text — still bill the reported counters, not an estimate.
     if (this.sawUsage) {
-      return { inTok: this.inTok, cacheTok: this.cacheTok, outTok: this.outTok, model: this.model, estimated: false };
+      return { inTok: this.inTok, cacheTok: this.cacheTok, outTok: this.outTok, reasonTok: this.reasonTok, model: this.model, estimated: false };
     }
     return {
       inTok: 0,
       cacheTok: 0,
       outTok: this.outChars > 0 && this.outSampleLen > 0 ? this.estimateOutTok() : 0,
+      reasonTok: this.reasonTok,
       model: this.model,
       estimated: true,
     };

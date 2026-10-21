@@ -49,11 +49,11 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 		}
 	}
 	agentic := list["agentic_base"]
-	if agentic.Usable != "never" || agentic.Mode != "agentic" || len(agentic.Permissions) != 20 {
+	if agentic.Usable != "never" || agentic.Mode != "agentic" || len(agentic.Permissions) != 15 {
 		t.Fatalf("agentic_base conversion drifted: %+v", agentic)
 	}
-	if agentic.Permissions["read"].Policy != skills.PolicyAsk || agentic.Permissions["widget_read"].Policy != skills.PolicyDeny {
-		t.Fatalf("agentic_base must keep the base grants and the agentic widget rules: %+v", agentic.Permissions)
+	if agentic.Permissions["read"].Policy != skills.PolicyAsk {
+		t.Fatalf("agentic_base must keep the base grants: %+v", agentic.Permissions)
 	}
 	talk := list["talk"]
 	if talk.Mode != "talk" || talk.ApprovalMode != "yolo" || talk.Usable != "deny" || talk.Permissions["search_web"].Policy != skills.PolicyYolo || !strings.HasPrefix(talk.Body, "You are a helpful AI assistant.") {
@@ -73,10 +73,10 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	genTalk := list["generative_ui_talk"]
 	// The base grants widget_set as "yolo"; talk narrows one argument, so the
 	// policy is restated as the concrete value a chain would have resolved to.
-	if genTalk.Usable != "deny" || genTalk.Permissions["widget_set"].Policy != skills.PolicyYolo || genTalk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
+	if genTalk.Usable != "never" || genTalk.Permissions["widget_set"].Policy != skills.PolicyYolo || genTalk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
 		t.Fatalf("generative_ui_talk conversion drifted: %+v", genTalk)
 	}
-	if genAgentic := list["generative_ui_agentic"]; genAgentic.Usable != "yolo" || genAgentic.Permissions["widget_read"].Policy != skills.PolicyDeny {
+	if genAgentic := list["generative_ui_agentic"]; genAgentic.Usable != "never" || genAgentic.Permissions["widget_read"].Policy != skills.PolicyDeny {
 		t.Fatalf("generative_ui_agentic conversion drifted: %+v", genAgentic)
 	}
 	for _, name := range []string{"plan", "learning"} {

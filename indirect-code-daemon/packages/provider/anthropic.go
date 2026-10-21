@@ -647,8 +647,8 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 			// upstream figures when present, gateway estimate otherwise.
 			// Preferred over body usage — apply verbatim, keep streaming.
 			if ev.Event == gatewayUsageCommentPrefix {
-				if inTok, cacheTok, outTok, ok := parseGatewayUsage(ev.Data); ok {
-					applyGatewayUsage(&usage, inTok, cacheTok, outTok)
+				if inTok, cacheTok, outTok, reasonTok, ok := parseGatewayUsage(ev.Data); ok {
+					applyGatewayUsage(&usage, inTok, cacheTok, outTok, reasonTok)
 					gatewayUsageSeen = true
 				}
 				continue
@@ -773,10 +773,15 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 						StopReason string `json:"stop_reason"`
 					} `json:"delta"`
 					Usage struct {
-						OutputTokens     int  `json:"output_tokens"`
-						InputTokens      *int `json:"input_tokens"`
-						CacheReadTokens  *int `json:"cache_read_input_tokens"`
-						CacheWriteTokens *int `json:"cache_creation_input_tokens"`
+						OutputTokens        int  `json:"output_tokens"`
+						InputTokens         *int `json:"input_tokens"`
+						CacheReadTokens     *int `json:"cache_read_input_tokens"`
+						CacheWriteTokens    *int `json:"cache_creation_input_tokens"`
+						ReasoningTokens     *int `json:"reasoning_tokens"`
+						OutputTokensDetails *struct {
+							ThinkingTokens  int `json:"thinking_tokens"`
+							ReasoningTokens int `json:"reasoning_tokens"`
+						} `json:"output_tokens_details"`
 					} `json:"usage"`
 				}
 				if err := json.Unmarshal([]byte(ev.Data), &md); err != nil {
@@ -784,6 +789,21 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				}
 				if md.Usage.OutputTokens != 0 && !gatewayUsageSeen {
 					usage.OutputTokens = md.Usage.OutputTokens
+				}
+				var rTok int
+				if md.Usage.OutputTokensDetails != nil {
+					if md.Usage.OutputTokensDetails.ThinkingTokens > 0 {
+						rTok = md.Usage.OutputTokensDetails.ThinkingTokens
+					} else if md.Usage.OutputTokensDetails.ReasoningTokens > 0 {
+						rTok = md.Usage.OutputTokensDetails.ReasoningTokens
+					}
+				}
+				if rTok == 0 && md.Usage.ReasoningTokens != nil && *md.Usage.ReasoningTokens > 0 {
+					rTok = *md.Usage.ReasoningTokens
+				}
+				if rTok > 0 && usage.ReasoningTokens == 0 {
+					usage.ReasoningTokens = rTok
+					usage.ReasoningTokensKnown = true
 				}
 				if !gatewayUsageSeen {
 					if md.Usage.InputTokens != nil {

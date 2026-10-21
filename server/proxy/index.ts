@@ -710,6 +710,7 @@ interface UsageResult {
   inTok: number;
   cacheTok: number;
   outTok: number;
+  reasonTok?: number;
   model: string;
   estimated: boolean;
 }
@@ -1395,7 +1396,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           if (counted) return;
           counted = true;
           const u = translator.result();
-          if (u.estimated && bodyJson) u.inTok = estimateBodyTokens(bodyJson, proto);
+          if ((u.estimated || u.inTok === 0) && bodyJson) u.inTok = estimateBodyTokens(bodyJson, proto);
           finalUsage = u;
           record(u, translator.failed && status === 200 ? 502 : status, Math.round(performance.now() - started), true, cand);
         };
@@ -1403,7 +1404,8 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           if (!finalUsage || usageTailSent) return null;
           usageTailSent = true;
           const u = finalUsage;
-          return new TextEncoder().encode(`: x-gateway-usage in=${u.inTok},cache=${u.cacheTok},out=${u.outTok}\n\n`);
+          const reasonPart = (u.reasonTok ?? 0) > 0 ? `,reason=${u.reasonTok}` : "";
+          return new TextEncoder().encode(`: x-gateway-usage in=${u.inTok},cache=${u.cacheTok},out=${u.outTok}${reasonPart}\n\n`);
         };
 
         const idleLimit = LIMITS.proxyStreamIdleMs;
