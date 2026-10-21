@@ -961,6 +961,14 @@ func (s *wsServer) handleRaw(raw []byte) {
 		}
 		_ = json.Unmarshal(raw, &req)
 		s.handleGetSessionDebug(req.SessionID, req.RequestID)
+	case "preview_prompt":
+		var req struct {
+			SessionID string `json:"sessionId"`
+			Text      string `json:"text"`
+			RequestID string `json:"requestId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.handlePreviewPrompt(req.SessionID, req.Text, req.RequestID)
 	case "test_mcp":
 		// Removed (MCP deleted): silent no-op. Emitting a replyTo-less
 		// error would toast on the generic handler for no user benefit.
@@ -1802,4 +1810,75 @@ func (s *wsServer) handleGetSessionDebug(sessionID, requestID string) {
 		resp["recentPayloads"] = []SessionDebugPayload{}
 	}
 	s.emit(resp)
+}
+
+func (s *wsServer) handlePreviewPrompt(sessionID, text, requestID string) {
+	hostID := s.host()
+	cfg := s.cfg.load()
+	var dcfg DaemonConfig
+	if cfg != nil {
+		dcfg = *cfg
+	}
+
+	sendResult := func(p *SessionDebugPayload, errStr string) {
+		resp := map[string]any{
+			"type":      "preview_prompt_result",
+			"hostId":    hostID,
+			"sessionId": sessionID,
+			"requestId": requestID,
+			"simulated": true,
+		}
+		if errStr != "" {
+			resp["error"] = errStr
+		} else if p != nil {
+			resp["payload"] = p
+		}
+		s.emit(resp)
+	}
+
+	var rec *SessionRecord
+	var brainDir string
+
+	if sessionID != "" {
+		res := s.sessions.route(sessionID, true)
+		if res.Error == "" {
+			rr := make(chan any, 1)
+			select {
+			case res.Inbox <- Envelope{Payload: readReqMsg{What: "session", Reply: rr}}:
+				select {
+				case r := <-rr:
+					if rd, ok := r.(readResult); ok && rd.Error == "" {
+						if rRec, ok := rd.Payload.(*SessionRecord); ok && rRec != nil {
+							rec = rRec
+							brainDir = s.sessions.disk().ensureBrainDir(rec.ID)
+						}
+					}
+				case <-time.After(replyTimeout):
+				}
+			case <-time.After(replyTimeout):
+			}
+		}
+	}
+
+	if rec == nil {
+		model := ""
+		if cfg != nil && cfg.LastSelection != nil {
+			model = cfg.LastSelection.Model
+		}
+		if model == "" {
+			model = "default"
+		}
+		rec = &SessionRecord{
+			ID:      sessionID,
+			Model:   model,
+			Options: SessionOptions{Mode: "agentic", Effort: "default", Access: "full"},
+		}
+	}
+
+	payload, err := simulateSessionPrompt(dcfg, rec, text, brainDir)
+	if err != nil {
+		sendResult(nil, err.Error())
+		return
+	}
+	sendResult(payload, "")
 }

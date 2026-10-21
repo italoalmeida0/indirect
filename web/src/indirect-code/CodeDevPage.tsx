@@ -37,6 +37,7 @@ interface CapturedRequest {
   timestamp: number;
   usage?: any;
   stopReason?: string;
+  isSimulated?: boolean;
 }
 
 interface LiveEvent {
@@ -58,6 +59,185 @@ interface RawFrame {
   payload: any;
 }
 
+/**
+ * Tokenize and format a single line of JSON with Chrome DevTools-style syntax highlighting.
+ */
+function highlightJsonLine(line: string, searchMatch?: string): string {
+  let escaped = line
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+  escaped = escaped.replace(
+    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)/g,
+    (match) => {
+      if (/^"/.test(match)) {
+        if (/:$/.test(match)) {
+          const colonIdx = match.lastIndexOf(":");
+          const keyPart = match.slice(0, colonIdx);
+          const colonPart = match.slice(colonIdx);
+          return `<span class="text-sky-300 font-semibold">${keyPart}</span><span class="text-ink-400">${colonPart}</span>`;
+        }
+        return `<span class="text-emerald-300">${match}</span>`;
+      }
+      if (/true|false/.test(match)) {
+        return `<span class="text-amber-400 font-bold">${match}</span>`;
+      }
+      if (/null/.test(match)) {
+        return `<span class="text-rose-400 italic font-semibold">${match}</span>`;
+      }
+      return `<span class="text-purple-300 font-mono">${match}</span>`;
+    },
+  );
+
+  if (searchMatch && searchMatch.trim()) {
+    const q = searchMatch.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(${q})`, "gi");
+    escaped = escaped.replace(re, `<mark class="bg-amber-400 text-ink-950 rounded px-0.5 font-bold">$1</mark>`);
+  }
+
+  return escaped;
+}
+
+/**
+ * Chrome DevTools-inspired JSON Viewer with line numbers, syntax highlighting, search, and copy.
+ */
+function JsonHighlightViewer(props: {
+  data: any;
+  title?: string;
+  maxHeight?: string;
+  class?: string;
+}) {
+  const [search, setSearch] = createSignal("");
+  const [isCompact, setIsCompact] = createSignal(false);
+
+  const formattedStr = createMemo(() => {
+    try {
+      if (typeof props.data === "string") {
+        return isCompact()
+          ? JSON.stringify(JSON.parse(props.data))
+          : JSON.stringify(JSON.parse(props.data), null, 2);
+      }
+      return isCompact()
+        ? JSON.stringify(props.data)
+        : JSON.stringify(props.data, null, 2);
+    } catch {
+      return String(props.data);
+    }
+  });
+
+  const lines = createMemo(() => formattedStr().split("\n"));
+
+  function copyJson() {
+    navigator.clipboard.writeText(formattedStr());
+    toast("JSON copied to clipboard", "ok");
+  }
+
+  function downloadJson() {
+    const blob = new Blob([formattedStr()], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `payload_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast("Downloaded JSON", "ok");
+  }
+
+  return (
+    <div class={`flex flex-col border border-line rounded-lg bg-ink-900/90 overflow-hidden font-mono text-xs ${props.class || ""}`}>
+      {/* Viewer toolbar */}
+      <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 gap-2 text-[11px]">
+        <div class="flex items-center gap-2">
+          <Show when={props.title}>
+            <span class="font-bold text-ink-300 uppercase tracking-wider text-[10px]">
+              {props.title}
+            </span>
+          </Show>
+          <span class="text-ink-500 text-[10px]">
+            {lines().length} lines • {new Blob([formattedStr()]).size} bytes
+          </span>
+        </div>
+
+        <div class="flex items-center gap-2">
+          {/* Quick search input */}
+          <div class="relative flex items-center">
+            <input
+              type="text"
+              placeholder="Find in JSON..."
+              value={search()}
+              onInput={(e) => setSearch(e.currentTarget.value)}
+              class="bg-ink-950 border border-line rounded px-2 py-0.5 text-[11px] text-ink-200 placeholder-ink-600 focus:outline-none focus:border-brand-500 w-36"
+            />
+            <Show when={search()}>
+              <button
+                onClick={() => setSearch("")}
+                class="absolute right-1 text-ink-400 hover:text-ink-200 text-xs cursor-pointer"
+              >
+                ×
+              </button>
+            </Show>
+          </div>
+
+          {/* Pretty / Compact toggle */}
+          <button
+            onClick={() => setIsCompact(!isCompact())}
+            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-[10px] cursor-pointer"
+            title="Toggle compact or pretty JSON"
+          >
+            {isCompact() ? "Pretty" : "Compact"}
+          </button>
+
+          {/* Copy Button */}
+          <button
+            onClick={copyJson}
+            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-brand-400 rounded border border-line text-[10px] flex items-center gap-1 cursor-pointer"
+            title="Copy full JSON"
+          >
+            <Icon name={Icons.copy} size={11} />
+            Copy
+          </button>
+
+          {/* Download Button */}
+          <button
+            onClick={downloadJson}
+            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-[10px] flex items-center gap-1 cursor-pointer"
+            title="Download JSON file"
+          >
+            <Icon name={Icons.save} size={11} />
+            Download
+          </button>
+        </div>
+      </div>
+
+      {/* Code body with line numbers */}
+      <div
+        class="overflow-auto bg-ink-950 p-2 text-[12px] leading-relaxed select-text"
+        style={{ "max-height": props.maxHeight || "none" }}
+      >
+        <table class="border-collapse w-full">
+          <tbody>
+            <For each={lines()}>
+              {(line, idx) => (
+                <tr class="hover:bg-ink-900/60 transition-colors">
+                  <td class="select-none text-right pr-3 text-ink-600 font-mono text-[11px] w-12 align-top tabular-nums border-r border-line/30">
+                    {idx() + 1}
+                  </td>
+                  <td
+                    class="pl-3 whitespace-pre font-mono text-ink-200 align-top"
+                    // eslint-disable-next-line solid/no-innerhtml
+                    innerHTML={highlightJsonLine(line, search())}
+                  />
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function CodeDevPage() {
   const [activeTab, setActiveTab] = createSignal<
     "payloads" | "stream" | "system" | "tools" | "frames"
@@ -65,18 +245,22 @@ export default function CodeDevPage() {
   const [selectedSessionId, setSelectedSessionId] = createSignal<string>("");
   const [selectedPayloadId, setSelectedPayloadId] = createSignal<string>("");
   const [payloadSubTab, setPayloadSubTab] = createSignal<
-    "raw" | "system" | "messages" | "tools"
+    "raw" | "system" | "messages" | "tools" | "headers"
   >("raw");
 
-  // Debug data from daemon
-  const [systemPrompt, setSystemPrompt] = createSignal<string>("");
-  const [nativeTools, setNativeTools] = createSignal<DebugTool[]>([]);
+  // State managed purely in frontend (like Chrome DevTools Network Tab)
   const [capturedPayloads, setCapturedPayloads] = createSignal<CapturedRequest[]>([]);
   const [liveEvents, setLiveEvents] = createSignal<LiveEvent[]>([]);
   const [rawFrames, setRawFrames] = createSignal<RawFrame[]>([]);
+  const [preserveLog, setPreserveLog] = createSignal<boolean>(true);
+
+  // Debug session data loaded from daemon
+  const [systemPrompt, setSystemPrompt] = createSignal<string>("");
+  const [nativeTools, setNativeTools] = createSignal<DebugTool[]>([]);
   const [sessionMeta, setSessionMeta] = createSignal<any>(null);
 
   // Filters & controls
+  const [requestFilter, setRequestFilter] = createSignal<string>("");
   const [eventFilter, setEventFilter] = createSignal<string>("all");
   const [toolSearch, setToolSearch] = createSignal<string>("");
   const [autoScroll, setAutoScroll] = createSignal<boolean>(true);
@@ -85,6 +269,7 @@ export default function CodeDevPage() {
   const [expandedTools, setExpandedTools] = createSignal<Record<string, boolean>>({});
   const [liveThinking, setLiveThinking] = createSignal<string>("");
   const [liveText, setLiveText] = createSignal<string>("");
+  const [isSimulating, setIsSimulating] = createSignal<boolean>(false);
 
   let streamContainerRef: HTMLDivElement | undefined;
 
@@ -104,7 +289,7 @@ export default function CodeDevPage() {
       const now = Date.now();
       const rawStr = JSON.stringify(msg);
 
-      // Record raw frame
+      // Record raw frame (frontend-only, up to 300)
       setRawFrames((prev) => [
         {
           id: `frame_${now}_${Math.random().toString(36).slice(2, 7)}`,
@@ -117,37 +302,39 @@ export default function CodeDevPage() {
         ...prev.slice(0, 300),
       ]);
 
-      // Handle session debug data response
+      // Handle session debug data
       if (msg.type === "session_debug_data") {
         if (msg.systemPrompt) setSystemPrompt(msg.systemPrompt);
         if (msg.tools && Array.isArray(msg.tools)) setNativeTools(msg.tools);
         if (msg.session) setSessionMeta(msg.session);
-        if (msg.recentPayloads && Array.isArray(msg.recentPayloads)) {
-          const recs: CapturedRequest[] = msg.recentPayloads.map((r: any, idx: number) => ({
-            id: `payload_${r.turnIndex || 0}_${r.step || 0}_${idx}_${r.timestamp || now}`,
-            turnIndex: r.turnIndex ?? 0,
-            step: r.step ?? 0,
-            endpoint: r.endpoint || "",
-            model: r.model || "",
-            system: r.system || "",
-            reasoning: r.reasoning || "",
-            maxTokens: r.maxTokens || 0,
-            sessionId: r.sessionId || msg.sessionId || "",
-            tools: r.tools || [],
-            messages: r.messages || [],
-            rawPayload: r.rawPayload,
-            timestamp: r.timestamp || now,
-          }));
-          setCapturedPayloads((prev) => {
-            const map = new Map<string, CapturedRequest>();
-            for (const item of recs) map.set(`${item.turnIndex}:${item.step}:${item.timestamp}`, item);
-            for (const item of prev) map.set(`${item.turnIndex}:${item.step}:${item.timestamp}`, item);
-            const combined = Array.from(map.values()).sort((a, b) => b.timestamp - a.timestamp);
-            return combined;
-          });
-          if (recs.length > 0 && !selectedPayloadId()) {
-            setSelectedPayloadId(recs[0].id);
-          }
+      }
+
+      // Handle Smoke Simulation Result
+      if (msg.type === "preview_prompt_result") {
+        setIsSimulating(false);
+        const p = msg.payload;
+        if (p) {
+          const item: CapturedRequest = {
+            id: `smoke_${now}_${Math.random().toString(36).slice(2, 6)}`,
+            turnIndex: p.turnIndex ?? 1,
+            step: p.step ?? 0,
+            endpoint: p.endpoint || "/messages",
+            model: p.model || "simulated",
+            system: p.system || "",
+            reasoning: p.reasoning || "",
+            maxTokens: p.maxTokens || 0,
+            sessionId: msg.sessionId || selectedSessionId(),
+            tools: p.tools || [],
+            messages: p.messages || [],
+            rawPayload: p.rawPayload,
+            timestamp: now,
+            isSimulated: true,
+          };
+          setCapturedPayloads((prev) => [item, ...prev]);
+          setSelectedPayloadId(item.id);
+          toast("🔥 Smoke simulation payload captured (0 tokens billed)", "ok");
+        } else if (msg.error) {
+          toast(`Simulation error: ${msg.error}`, "err");
         }
       }
 
@@ -156,7 +343,7 @@ export default function CodeDevPage() {
         const ev = msg.event;
         const sid = msg.sessionId || "";
 
-        // Track live events
+        // Record live events (frontend-only)
         setLiveEvents((prev) => [
           {
             id: `ev_${now}_${Math.random().toString(36).slice(2, 7)}`,
@@ -176,7 +363,7 @@ export default function CodeDevPage() {
           }, 20);
         }
 
-        // Live stream deltas
+        // Live streaming deltas
         if (ev.type === "reasoning_delta") {
           setLiveThinking((prev) => prev + (ev.delta || ""));
         } else if (ev.type === "text_delta") {
@@ -187,7 +374,6 @@ export default function CodeDevPage() {
             setLiveText("");
           }
         } else if (ev.type === "turn_end") {
-          // Update last captured payload with usage/finish
           setCapturedPayloads((prev) => {
             if (prev.length === 0) return prev;
             const updated = [...prev];
@@ -200,7 +386,7 @@ export default function CodeDevPage() {
           });
         }
 
-        // Captured LLM request right when sent to AI
+        // Captured real LLM request right when sent to AI
         if (ev.type === "debug_llm_request") {
           const reqItem: CapturedRequest = {
             id: `payload_${ev.turnIndex || 0}_${ev.step || 0}_${now}`,
@@ -216,6 +402,7 @@ export default function CodeDevPage() {
             messages: ev.messages || [],
             rawPayload: ev.rawPayload,
             timestamp: ev.timestamp || now,
+            isSimulated: false,
           };
 
           batch(() => {
@@ -279,6 +466,9 @@ export default function CodeDevPage() {
   // When session selection changes
   createEffect(() => {
     void selectedSessionId();
+    if (!preserveLog()) {
+      clearAllNetworkLogs();
+    }
     requestSessionDebug();
   });
 
@@ -286,10 +476,22 @@ export default function CodeDevPage() {
   createEffect(() => {
     const list = sessions();
     if (list.length > 0 && !selectedSessionId()) {
-      // Find running or first session
       const running = list.find((s) => s.status === "running");
       setSelectedSessionId((running ?? list[0]).id);
     }
+  });
+
+  const filteredCapturedPayloads = createMemo(() => {
+    const q = requestFilter().trim().toLowerCase();
+    const list = capturedPayloads();
+    if (!q) return list;
+    return list.filter(
+      (p) =>
+        p.model.toLowerCase().includes(q) ||
+        p.endpoint.toLowerCase().includes(q) ||
+        String(p.turnIndex).includes(q) ||
+        (p.isSimulated && "smoke".includes(q)),
+    );
   });
 
   const selectedPayload = createMemo(() => {
@@ -304,6 +506,23 @@ export default function CodeDevPage() {
     return sessions().find((s) => s.id === sid) ?? null;
   });
 
+  /**
+   * Chrome DevTools Network Tab Clear Button:
+   * Wipes the frontend-captured requests, live events, and frames!
+   */
+  function clearAllNetworkLogs() {
+    setCapturedPayloads([]);
+    setSelectedPayloadId("");
+    setLiveEvents([]);
+    setRawFrames([]);
+    setLiveThinking("");
+    setLiveText("");
+    toast("Network log cleared", "ok");
+  }
+
+  /**
+   * Quick Prompt: dispatches real turn prompt to the session.
+   */
   function sendQuickPrompt() {
     const text = promptInput().trim();
     const sid = selectedSessionId();
@@ -322,23 +541,32 @@ export default function CodeDevPage() {
       requestId: `prompt_${Date.now()}`,
     } as any);
     setPromptInput("");
-    toast("Prompt dispatched", "ok");
+    toast("Prompt dispatched to session", "ok");
+  }
+
+  /**
+   * Smoke Simulation Mode:
+   * Requests daemon to simulate the exact payload that WOULD be sent to the AI,
+   * without calling the LLM or billing any tokens!
+   */
+  function runSmokeSimulation() {
+    const sid = selectedSessionId();
+    const hid = hosts.activeHostId();
+    if (!hid) return;
+
+    setIsSimulating(true);
+    relay.send({
+      type: "preview_prompt" as any,
+      sessionId: sid,
+      text: promptInput().trim(),
+      hostId: hid,
+      requestId: `smoke_${Date.now()}`,
+    } as any);
   }
 
   function copyText(val: string, label = "Copied") {
     navigator.clipboard.writeText(val);
     toast(`${label} to clipboard`, "ok");
-  }
-
-  function formatJson(val: any): string {
-    try {
-      if (typeof val === "string") {
-        return JSON.stringify(JSON.parse(val), null, 2);
-      }
-      return JSON.stringify(val, null, 2);
-    } catch {
-      return String(val);
-    }
   }
 
   const filteredEvents = createMemo(() => {
@@ -366,21 +594,21 @@ export default function CodeDevPage() {
   return (
     <div class="flex flex-col h-screen w-screen bg-ink-950 text-ink-100 font-sans select-text overflow-hidden">
       {/* ===== TOP BAR / HEADER ===== */}
-      <header class="flex items-center justify-between px-4 py-2.5 bg-ink-900 border-b border-line shrink-0 gap-3 z-20">
+      <header class="flex items-center justify-between px-4 py-2 bg-ink-900 border-b border-line shrink-0 gap-3 z-20">
         <div class="flex items-center gap-3 min-w-0">
           <div class="flex items-center gap-2">
-            <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-brand-500/20 text-brand-400 font-mono font-bold text-xs border border-brand-500/40">
+            <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-brand-500/20 text-brand-400 font-mono font-bold text-xs border border-brand-500/40 shadow-sm">
               DEV
             </span>
             <div class="flex flex-col">
               <span class="font-bold text-sm tracking-tight flex items-center gap-1.5 font-mono">
-                INDIRECT CODE // DEV MODE
-                <span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-mono font-normal">
-                  RAW INSPECTOR
+                INDIRECT CODE // NETWORK INSPECTOR
+                <span class="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-mono font-normal">
+                  CHROME DEVTOOLS STYLE
                 </span>
               </span>
               <span class="text-[11px] text-ink-400 font-mono">
-                Full AI Payloads, System Prompt & Native Tools
+                Exact AI Wire Payloads, Full System Prompt & Native Tools
               </span>
             </div>
           </div>
@@ -446,6 +674,30 @@ export default function CodeDevPage() {
 
         {/* Action Controls */}
         <div class="flex items-center gap-2">
+          {/* Preserve Log Toggle */}
+          <label
+            class="flex items-center gap-1 text-[11px] text-ink-400 hover:text-ink-200 cursor-pointer font-mono mr-2"
+            title="Preserve captured logs across session switches"
+          >
+            <input
+              type="checkbox"
+              checked={preserveLog()}
+              onChange={(e) => setPreserveLog(e.currentTarget.checked)}
+              class="rounded bg-ink-800 border-line"
+            />
+            Preserve log
+          </label>
+
+          {/* Chrome-Style Clear Network Log Button */}
+          <button
+            onClick={clearAllNetworkLogs}
+            class="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-ink-800 hover:bg-rose-950/40 hover:text-rose-400 text-ink-300 rounded border border-line font-mono transition-colors cursor-pointer"
+            title="Clear all recorded network payloads and events (Frontend-only)"
+          >
+            <span class="text-rose-400 font-bold">🚫</span>
+            Clear Log
+          </button>
+
           {/* WS Connection Indicator */}
           <span
             class={`text-[10px] font-mono px-2 py-0.5 rounded flex items-center gap-1 ${
@@ -463,18 +715,11 @@ export default function CodeDevPage() {
           <button
             onClick={requestSessionDebug}
             class="flex items-center gap-1 px-2.5 py-1 text-xs bg-ink-800 hover:bg-ink-700 text-ink-200 rounded border border-line font-mono transition-colors cursor-pointer"
-            title="Refresh session debug state from daemon"
+            title="Refresh daemon debug state"
           >
             <Icon name={Icons.refresh} size={13} />
             Refresh
           </button>
-
-          <a
-            href="#/code"
-            class="flex items-center gap-1 px-2.5 py-1 text-xs bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line font-mono transition-colors"
-          >
-            To Normal UI ↗
-          </a>
         </div>
       </header>
 
@@ -489,7 +734,7 @@ export default function CodeDevPage() {
           }`}
         >
           <Icon name={Icons.bolt} size={14} />
-          LLM Payloads & Wire ({capturedPayloads().length})
+          Network Payloads ({capturedPayloads().length})
         </button>
 
         <button
@@ -546,57 +791,98 @@ export default function CodeDevPage() {
 
       {/* ===== BODY CONTENT PANES ===== */}
       <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
-        {/* 1. LLM PAYLOADS TAB */}
+        {/* 1. LLM PAYLOADS TAB (Chrome DevTools Network Style) */}
         <Show when={activeTab() === "payloads"}>
           <div class="flex-1 min-h-0 flex overflow-hidden">
-            {/* Sidebar: Captured requests list */}
-            <div class="w-80 border-r border-line bg-ink-900/60 flex flex-col shrink-0">
-              <div class="px-3 py-2 border-b border-line flex items-center justify-between text-xs font-mono text-ink-400">
-                <span>CAPTURED LLM REQUESTS</span>
-                <span>{capturedPayloads().length} total</span>
+            {/* Left Pane: Requests Network Table / List */}
+            <div class="w-88 border-r border-line bg-ink-900/60 flex flex-col shrink-0">
+              {/* Table search & counter */}
+              <div class="p-2 border-b border-line flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="Filter requests..."
+                  value={requestFilter()}
+                  onInput={(e) => setRequestFilter(e.currentTarget.value)}
+                  class="bg-ink-950 border border-line rounded px-2.5 py-1 text-xs font-mono text-ink-200 placeholder-ink-600 focus:outline-none focus:border-brand-500 flex-1"
+                />
+                <button
+                  onClick={clearAllNetworkLogs}
+                  class="p-1 hover:bg-rose-900/40 rounded text-ink-400 hover:text-rose-400 cursor-pointer"
+                  title="Clear requests log"
+                >
+                  <Icon name={Icons.trash} size={14} />
+                </button>
               </div>
 
-              <div class="flex-1 overflow-y-auto divide-y divide-line/40">
+              {/* Request rows */}
+              <div class="flex-1 overflow-y-auto divide-y divide-line/30 font-mono text-xs">
                 <Show
-                  when={capturedPayloads().length > 0}
+                  when={filteredCapturedPayloads().length > 0}
                   fallback={
-                    <div class="p-6 text-center text-xs font-mono text-ink-500">
-                      No LLM payloads captured yet. Send a prompt to see the exact payload sent to AI!
+                    <div class="p-8 text-center text-xs text-ink-500 flex flex-col items-center gap-2">
+                      <span>No requests captured yet.</span>
+                      <span class="text-[11px] text-ink-600">
+                        Recordings stay in your browser until you clear them. Disparate a real prompt or click "🔥 Smoke Test" below!
+                      </span>
                     </div>
                   }
                 >
-                  <For each={capturedPayloads()}>
+                  <For each={filteredCapturedPayloads()}>
                     {(req) => (
                       <button
                         onClick={() => setSelectedPayloadId(req.id)}
-                        class={`w-full text-left p-2.5 transition-colors font-mono cursor-pointer flex flex-col gap-1 ${
+                        class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-3 ${
                           selectedPayload()?.id === req.id
-                            ? "bg-brand-500/15 border-l-2 border-brand-500 text-ink-100"
-                            : "hover:bg-ink-800/40 text-ink-300"
+                            ? req.isSimulated
+                              ? "bg-amber-500/15 border-amber-500 text-ink-100"
+                              : "bg-brand-500/15 border-brand-500 text-ink-100"
+                            : req.isSimulated
+                              ? "border-amber-500/40 hover:bg-ink-800/40 text-ink-300"
+                              : "border-transparent hover:bg-ink-800/40 text-ink-300"
                         }`}
                       >
                         <div class="flex items-center justify-between text-[11px]">
-                          <span class="font-bold text-brand-400">
-                            Turn #{req.turnIndex} / Step #{req.step}
-                          </span>
-                          <span class="text-[10px] text-ink-500">
+                          <div class="flex items-center gap-1.5">
+                            <span
+                              class={`w-2 h-2 rounded-full ${
+                                req.isSimulated
+                                  ? "bg-amber-400"
+                                  : req.stopReason === "error"
+                                    ? "bg-rose-500"
+                                    : "bg-emerald-400"
+                              }`}
+                            />
+                            <span class="font-bold text-ink-200">
+                              POST /messages
+                            </span>
+                          </div>
+                          <span class="text-[10px] text-ink-500 tabular-nums">
                             {new Date(req.timestamp).toLocaleTimeString()}
                           </span>
                         </div>
-                        <div class="text-[11px] truncate text-ink-200">
-                          {req.model || "model"}
+
+                        <div class="flex items-center justify-between text-[11px]">
+                          <span class="truncate text-ink-400">
+                            {req.model || "default"}
+                          </span>
+                          <Show when={req.isSimulated}>
+                            <span class="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                              🔥 SMOKE
+                            </span>
+                          </Show>
                         </div>
-                        <div class="flex items-center gap-2 text-[10px] text-ink-400">
+
+                        <div class="flex items-center gap-1.5 text-[10px] text-ink-500 mt-0.5">
+                          <span>T#{req.turnIndex} S#{req.step}</span>
+                          <span>•</span>
                           <span>{req.tools?.length || 0} tools</span>
                           <span>•</span>
                           <span>{req.messages?.length || 0} msgs</span>
-                          <Show when={req.reasoning}>
+                          <Show when={req.usage?.outputTokens}>
                             <span>•</span>
-                            <span class="text-amber-400">{req.reasoning}</span>
-                          </Show>
-                          <Show when={req.stopReason}>
-                            <span>•</span>
-                            <span class="text-emerald-400">{req.stopReason}</span>
+                            <span class="text-emerald-400 font-medium">
+                              {req.usage.outputTokens} tok
+                            </span>
                           </Show>
                         </div>
                       </button>
@@ -606,41 +892,52 @@ export default function CodeDevPage() {
               </div>
             </div>
 
-            {/* Main Payload Inspector */}
+            {/* Right Pane: Inspector / Chrome DevTools Network Style */}
             <div class="flex-1 min-h-0 flex flex-col bg-ink-950 overflow-hidden">
               <Show
                 when={selectedPayload()}
                 fallback={
-                  <div class="flex-1 flex items-center justify-center text-xs font-mono text-ink-500">
-                    Select a captured request from the sidebar
+                  <div class="flex-1 flex flex-col items-center justify-center text-xs font-mono text-ink-500 gap-2">
+                    <Icon name={Icons.bolt} size={28} />
+                    <span>Select a captured request or run a Smoke Simulation below</span>
                   </div>
                 }
               >
                 {(req) => (
                   <div class="flex-1 flex flex-col min-h-0">
-                    {/* Payload Header details */}
+                    {/* Header banner info */}
                     <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 font-mono text-xs">
                       <div class="flex items-center gap-3">
+                        <Show when={req().isSimulated}>
+                          <span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 text-[11px] flex items-center gap-1">
+                            🔥 SMOKE SIMULATION (0 TOKENS)
+                          </span>
+                        </Show>
                         <span class="font-bold text-brand-400">
-                          POST {req().endpoint || "/messages"}
+                          {req().endpoint || "POST /messages"}
                         </span>
-                        <span class="text-ink-400">Model: <strong class="text-ink-200">{req().model}</strong></span>
-                        <span class="text-ink-400">Reasoning: <strong class="text-amber-300">{req().reasoning || "default"}</strong></span>
-                        <span class="text-ink-400">MaxTokens: <strong class="text-ink-200">{req().maxTokens}</strong></span>
+                        <span class="text-ink-400">
+                          Model: <strong class="text-ink-200">{req().model}</strong>
+                        </span>
+                        <Show when={req().reasoning}>
+                          <span class="text-ink-400">
+                            Effort: <strong class="text-amber-300">{req().reasoning}</strong>
+                          </span>
+                        </Show>
+                        <span class="text-ink-400">
+                          MaxTokens: <strong class="text-ink-200">{req().maxTokens}</strong>
+                        </span>
                       </div>
+
                       <div class="flex items-center gap-2">
-                        <button
-                          onClick={() => copyText(formatJson(req().rawPayload), "Wire payload JSON")}
-                          class="px-2.5 py-1 bg-ink-800 hover:bg-ink-700 text-brand-400 rounded border border-line text-[11px] flex items-center gap-1 transition-colors cursor-pointer"
-                        >
-                          <Icon name={Icons.copy} size={12} />
-                          Copy Raw JSON
-                        </button>
+                        <span class="text-ink-500 text-[11px]">
+                          {new Date(req().timestamp).toLocaleTimeString()}
+                        </span>
                       </div>
                     </div>
 
-                    {/* Payload Sub-tabs */}
-                    <div class="flex items-center px-4 bg-ink-900/50 border-b border-line shrink-0 gap-1 text-[11px] font-mono">
+                    {/* Inspector Sub-Tabs (Chrome Network style) */}
+                    <div class="flex items-center px-4 bg-ink-900/60 border-b border-line shrink-0 gap-1 text-[11px] font-mono">
                       <button
                         onClick={() => setPayloadSubTab("raw")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
@@ -649,8 +946,9 @@ export default function CodeDevPage() {
                             : "border-transparent text-ink-400 hover:text-ink-200"
                         }`}
                       >
-                        Exact Wire JSON Body
+                        Wire Payload (Raw HTTP Body)
                       </button>
+
                       <button
                         onClick={() => setPayloadSubTab("system")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
@@ -661,6 +959,7 @@ export default function CodeDevPage() {
                       >
                         System Prompt in Request
                       </button>
+
                       <button
                         onClick={() => setPayloadSubTab("messages")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
@@ -669,8 +968,9 @@ export default function CodeDevPage() {
                             : "border-transparent text-ink-400 hover:text-ink-200"
                         }`}
                       >
-                        Messages Array ({req().messages?.length || 0})
+                        Messages ({req().messages?.length || 0})
                       </button>
+
                       <button
                         onClick={() => setPayloadSubTab("tools")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
@@ -679,72 +979,104 @@ export default function CodeDevPage() {
                             : "border-transparent text-ink-400 hover:text-ink-200"
                         }`}
                       >
-                        Tools Provided ({req().tools?.length || 0})
+                        Tools in Request ({req().tools?.length || 0})
+                      </button>
+
+                      <button
+                        onClick={() => setPayloadSubTab("headers")}
+                        class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
+                          payloadSubTab() === "headers"
+                            ? "border-brand-500 text-brand-400"
+                            : "border-transparent text-ink-400 hover:text-ink-200"
+                        }`}
+                      >
+                        Headers & Summary
                       </button>
                     </div>
 
-                    {/* Sub-tab view */}
+                    {/* Sub-tab view body */}
                     <div class="flex-1 min-h-0 overflow-auto p-4 font-mono text-xs">
-                      {/* Sub-tab 1: Raw JSON body */}
+                      {/* Sub-tab 1: Raw Wire Payload JSON */}
                       <Show when={payloadSubTab() === "raw"}>
-                        <pre class="bg-ink-900 p-4 rounded-lg border border-line text-emerald-300 overflow-x-auto whitespace-pre font-mono text-[12px] leading-relaxed">
-                          {formatJson(req().rawPayload)}
-                        </pre>
+                        <JsonHighlightViewer
+                          data={req().rawPayload}
+                          title="Exact HTTP POST Request Body"
+                          class="h-full"
+                        />
                       </Show>
 
-                      {/* Sub-tab 2: System prompt */}
+                      {/* Sub-tab 2: System Prompt */}
                       <Show when={payloadSubTab() === "system"}>
-                        <div class="flex flex-col gap-2">
-                          <div class="flex items-center justify-between text-xs text-ink-400">
-                            <span>Chars: {req().system?.length || 0} • Words: {req().system?.split(/\s+/).length || 0} • Est. Tokens: ~{Math.round((req().system?.length || 0) / 4)}</span>
+                        <div class="flex flex-col gap-3 h-full">
+                          <div class="flex items-center justify-between text-xs text-ink-400 bg-ink-900/60 p-2.5 rounded border border-line">
+                            <div class="flex items-center gap-3">
+                              <span>Chars: <strong class="text-ink-200">{req().system?.length || 0}</strong></span>
+                              <span>•</span>
+                              <span>Words: <strong class="text-ink-200">{req().system?.split(/\s+/).length || 0}</strong></span>
+                              <span>•</span>
+                              <span>Est. Tokens: <strong class="text-amber-400">~{Math.round((req().system?.length || 0) / 4)}</strong></span>
+                            </div>
                             <button
                               onClick={() => copyText(req().system, "System prompt")}
-                              class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-brand-400 rounded border border-line text-[11px]"
+                              class="px-2.5 py-1 bg-ink-800 hover:bg-ink-700 text-brand-400 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
                             >
+                              <Icon name={Icons.copy} size={12} />
                               Copy Prompt
                             </button>
                           </div>
-                          <pre class="bg-ink-900 p-4 rounded-lg border border-line text-ink-200 overflow-x-auto whitespace-pre-wrap font-mono text-[12px] leading-relaxed select-text">
+                          <pre class="bg-ink-950 p-4 rounded-lg border border-line text-ink-200 overflow-x-auto whitespace-pre-wrap font-mono text-[12px] leading-relaxed flex-1 select-text">
                             {req().system || "(No system prompt in this request)"}
                           </pre>
                         </div>
                       </Show>
 
-                      {/* Sub-tab 3: Messages array */}
+                      {/* Sub-tab 3: Messages Array */}
                       <Show when={payloadSubTab() === "messages"}>
                         <div class="flex flex-col gap-3">
                           <For each={req().messages}>
                             {(m: any, idx) => (
-                              <div class="border border-line rounded-lg bg-ink-900/60 overflow-hidden">
+                              <div class="border border-line rounded-lg bg-ink-900/50 overflow-hidden">
                                 <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex items-center justify-between text-[11px]">
-                                  <span class="font-bold flex items-center gap-1.5">
-                                    <span class="text-ink-500">#{idx()}</span>
+                                  <span class="font-bold flex items-center gap-2">
+                                    <span class="text-ink-500 font-mono">#{idx()}</span>
                                     <span
-                                      class={`px-1.5 py-0.2 rounded text-[10px] uppercase font-mono ${
+                                      class={`px-2 py-0.5 rounded text-[10px] uppercase font-mono font-bold ${
                                         m.role === "user"
-                                          ? "bg-blue-500/20 text-blue-400"
+                                          ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
                                           : m.role === "assistant"
-                                            ? "bg-purple-500/20 text-purple-400"
-                                            : "bg-amber-500/20 text-amber-400"
+                                            ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                                            : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
                                       }`}
                                     >
                                       {m.role}
                                     </span>
                                   </span>
                                   <span class="text-ink-500 text-[10px]">
-                                    {Array.isArray(m.content) ? `${m.content.length} blocks` : "string content"}
+                                    {Array.isArray(m.content) ? `${m.content.length} blocks` : "raw text"}
                                   </span>
                                 </div>
                                 <div class="p-3 text-[11px] overflow-x-auto">
-                                  <Show when={Array.isArray(m.content)} fallback={<pre class="whitespace-pre-wrap">{String(m.content)}</pre>}>
+                                  <Show
+                                    when={Array.isArray(m.content)}
+                                    fallback={
+                                      <pre class="whitespace-pre-wrap text-ink-200">{String(m.content)}</pre>
+                                    }
+                                  >
                                     <div class="flex flex-col gap-2">
                                       <For each={m.content}>
                                         {(block: any) => (
-                                          <div class="bg-ink-950 p-2.5 rounded border border-line/60">
+                                          <div class="bg-ink-950 p-3 rounded border border-line/60">
                                             <div class="text-[10px] text-ink-400 mb-1 font-bold">
-                                              BLOCK TYPE: {block.type || (block.Text ? "text" : "unknown")}
+                                              BLOCK: {block.type || (block.Text ? "text" : "data")}
                                             </div>
-                                            <pre class="whitespace-pre-wrap text-ink-200">{formatJson(block)}</pre>
+                                            <Show
+                                              when={block.type === "text" || block.Text}
+                                              fallback={<JsonHighlightViewer data={block} maxHeight="200px" />}
+                                            >
+                                              <pre class="whitespace-pre-wrap text-ink-200 text-[12px] leading-relaxed">
+                                                {block.text || block.Text}
+                                              </pre>
+                                            </Show>
                                           </div>
                                         )}
                                       </For>
@@ -757,26 +1089,63 @@ export default function CodeDevPage() {
                         </div>
                       </Show>
 
-                      {/* Sub-tab 4: Tools provided */}
+                      {/* Sub-tab 4: Tools in Request */}
                       <Show when={payloadSubTab() === "tools"}>
                         <div class="flex flex-col gap-3">
                           <For each={req().tools}>
                             {(t: any) => (
-                              <div class="border border-line rounded-lg bg-ink-900/60 p-3">
+                              <div class="border border-line rounded-lg bg-ink-900/50 p-3">
                                 <div class="flex items-center justify-between mb-1.5">
                                   <span class="font-bold text-brand-400 text-xs font-mono">{t.name || t.Name}</span>
-                                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-ink-800 text-ink-400">
+                                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-ink-800 text-ink-400 font-mono">
                                     {t.deferred || t.Deferred ? "DEFERRED" : "ACTIVE"}
                                   </span>
                                 </div>
                                 <p class="text-xs text-ink-300 mb-2">{t.description || t.Description}</p>
-                                <div class="text-[10px] text-ink-500 mb-1 font-bold">INPUT SCHEMA:</div>
-                                <pre class="bg-ink-950 p-2 rounded border border-line text-[11px] overflow-x-auto text-emerald-300">
-                                  {formatJson(t.schema || t.Schema || t.input_schema)}
-                                </pre>
+                                <JsonHighlightViewer
+                                  data={t.schema || t.Schema || t.input_schema}
+                                  title="Parameter JSON Schema"
+                                  maxHeight="250px"
+                                />
                               </div>
                             )}
                           </For>
+                        </div>
+                      </Show>
+
+                      {/* Sub-tab 5: Headers & Summary */}
+                      <Show when={payloadSubTab() === "headers"}>
+                        <div class="flex flex-col gap-3">
+                          <div class="bg-ink-900/60 p-4 rounded-lg border border-line flex flex-col gap-2">
+                            <span class="font-bold text-ink-200 text-xs border-b border-line pb-1 mb-1">
+                              General Request Details
+                            </span>
+                            <div class="grid grid-cols-2 gap-2 text-xs">
+                              <div><span class="text-ink-400">Request URL:</span> {req().endpoint}</div>
+                              <div><span class="text-ink-400">Request Method:</span> POST</div>
+                              <div><span class="text-ink-400">Model ID:</span> {req().model}</div>
+                              <div><span class="text-ink-400">Reasoning Tier:</span> {req().reasoning || "default"}</div>
+                              <div><span class="text-ink-400">Max Tokens:</span> {req().maxTokens}</div>
+                              <div><span class="text-ink-400">Session ID:</span> {req().sessionId}</div>
+                              <div><span class="text-ink-400">Turn Index:</span> #{req().turnIndex}</div>
+                              <div><span class="text-ink-400">Step Index:</span> #{req().step}</div>
+                              <div><span class="text-ink-400">Simulated:</span> {req().isSimulated ? "Yes (Smoke Test)" : "No (Live Wire)"}</div>
+                            </div>
+                          </div>
+
+                          <Show when={req().usage}>
+                            <div class="bg-ink-900/60 p-4 rounded-lg border border-line flex flex-col gap-2">
+                              <span class="font-bold text-ink-200 text-xs border-b border-line pb-1 mb-1">
+                                Token Usage & Costs
+                              </span>
+                              <div class="grid grid-cols-2 gap-2 text-xs">
+                                <div><span class="text-ink-400">Input Tokens:</span> {req().usage.inputTokens ?? req().usage.input ?? 0}</div>
+                                <div><span class="text-ink-400">Output Tokens:</span> {req().usage.outputTokens ?? req().usage.output ?? 0}</div>
+                                <div><span class="text-ink-400">Cache Read:</span> {req().usage.cacheReadTokens ?? 0}</div>
+                                <div><span class="text-ink-400">Cache Write:</span> {req().usage.cacheWriteTokens ?? 0}</div>
+                              </div>
+                            </div>
+                          </Show>
                         </div>
                       </Show>
                     </div>
@@ -824,7 +1193,7 @@ export default function CodeDevPage() {
                     setLiveThinking("");
                     setLiveText("");
                   }}
-                  class="px-2.5 py-1 bg-ink-800 hover:bg-ink-700 text-rose-400 rounded border border-line text-xs flex items-center gap-1"
+                  class="px-2.5 py-1 bg-ink-800 hover:bg-rose-950/40 hover:text-rose-400 text-ink-300 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
                 >
                   <Icon name={Icons.trash} size={12} />
                   Clear Stream
@@ -832,7 +1201,7 @@ export default function CodeDevPage() {
               </div>
             </div>
 
-            {/* Live Streaming Chains (if model actively reasoning or writing) */}
+            {/* Live Streaming Chains */}
             <Show when={liveThinking() || liveText()}>
               <div class="p-3 bg-ink-900/80 border-b border-line shrink-0 flex flex-col gap-2 max-h-48 overflow-y-auto">
                 <Show when={liveThinking()}>
@@ -867,7 +1236,7 @@ export default function CodeDevPage() {
                 when={filteredEvents().length > 0}
                 fallback={
                   <div class="p-8 text-center text-ink-500">
-                    No events captured in this session yet. Events will appear here in real time as the turn runs.
+                    No events captured in this session yet. Events appear here in real time while a turn is running.
                   </div>
                 }
               >
@@ -884,7 +1253,7 @@ export default function CodeDevPage() {
                           class="px-3 py-2 bg-ink-900/80 hover:bg-ink-800/80 flex items-center justify-between cursor-pointer select-none"
                         >
                           <div class="flex items-center gap-2">
-                            <span class="text-[10px] text-ink-500">
+                            <span class="text-[10px] text-ink-500 tabular-nums">
                               {new Date(ev.timestamp).toLocaleTimeString()}
                             </span>
                             <span
@@ -911,17 +1280,14 @@ export default function CodeDevPage() {
                               </span>
                             </Show>
                           </div>
-                          <div class="flex items-center gap-2">
-                            <span class="text-[10px] text-ink-500">
-                              {isExpanded() ? "▲ collapse" : "▼ expand"}
-                            </span>
-                          </div>
+                          <span class="text-[10px] text-ink-500">
+                            {isExpanded() ? "▲ collapse" : "▼ expand"}
+                          </span>
                         </div>
 
-                        {/* Collapsible raw details */}
                         <Show when={isExpanded()}>
-                          <div class="p-3 bg-ink-950 border-t border-line text-[11px] overflow-x-auto">
-                            <pre class="text-emerald-300">{formatJson(ev.data)}</pre>
+                          <div class="p-3 bg-ink-950 border-t border-line">
+                            <JsonHighlightViewer data={ev.data} maxHeight="300px" />
                           </div>
                         </Show>
                       </div>
@@ -980,7 +1346,7 @@ export default function CodeDevPage() {
                 />
               </div>
               <span class="text-ink-400 text-[11px]">
-                Showing tools available in Indirect Code daemon
+                Registered tools available in Indirect Code Go daemon
               </span>
             </div>
 
@@ -1026,18 +1392,11 @@ export default function CodeDevPage() {
 
                       <Show when={isExp()}>
                         <div class="p-3 bg-ink-950 border-t border-line">
-                          <div class="flex items-center justify-between mb-1.5 text-[10px] text-ink-400 font-bold">
-                            <span>PARAMETER JSON SCHEMA</span>
-                            <button
-                              onClick={() => copyText(formatJson(t.schema), `${t.name} schema`)}
-                              class="text-brand-400 hover:underline cursor-pointer"
-                            >
-                              Copy Schema
-                            </button>
-                          </div>
-                          <pre class="p-2.5 bg-ink-900 rounded border border-line text-emerald-300 text-[11px] overflow-x-auto">
-                            {formatJson(t.schema)}
-                          </pre>
+                          <JsonHighlightViewer
+                            data={t.schema}
+                            title={`${t.name} Input Schema`}
+                            maxHeight="300px"
+                          />
                         </div>
                       </Show>
                     </div>
@@ -1057,7 +1416,7 @@ export default function CodeDevPage() {
               </span>
               <button
                 onClick={() => setRawFrames([])}
-                class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-rose-400 rounded border border-line text-xs"
+                class="px-2 py-0.5 bg-ink-800 hover:bg-rose-950/40 hover:text-rose-400 text-ink-300 rounded border border-line text-xs cursor-pointer"
               >
                 Clear Frames
               </button>
@@ -1069,7 +1428,7 @@ export default function CodeDevPage() {
                   <div class="border border-line rounded-lg bg-ink-900/40 p-2.5 text-xs">
                     <div class="flex items-center justify-between mb-1 text-[11px]">
                       <div class="flex items-center gap-2">
-                        <span class="text-ink-500">
+                        <span class="text-ink-500 tabular-nums">
                           {new Date(f.timestamp).toLocaleTimeString()}
                         </span>
                         <span class="font-bold text-brand-400">{f.type}</span>
@@ -1081,9 +1440,7 @@ export default function CodeDevPage() {
                       </div>
                       <span class="text-[10px] text-ink-500">{f.size} bytes</span>
                     </div>
-                    <pre class="p-2 bg-ink-950 rounded border border-line/60 text-ink-300 text-[11px] overflow-x-auto max-h-48">
-                      {formatJson(f.payload)}
-                    </pre>
+                    <JsonHighlightViewer data={f.payload} maxHeight="180px" />
                   </div>
                 )}
               </For>
@@ -1092,28 +1449,47 @@ export default function CodeDevPage() {
         </Show>
       </div>
 
-      {/* ===== BOTTOM BAR / QUICK PROMPT SENDER ===== */}
-      <footer class="px-4 py-2 bg-ink-900 border-t border-line shrink-0 flex items-center gap-3 font-mono text-xs">
-        <span class="text-ink-400 shrink-0">Quick Prompt Test:</span>
+      {/* ===== BOTTOM BAR: SMOKE SIMULATOR & PROMPT SENDER ===== */}
+      <footer class="px-4 py-2.5 bg-ink-900 border-t border-line shrink-0 flex items-center gap-2.5 font-mono text-xs z-20">
+        <span class="text-ink-400 shrink-0 font-bold">PROMPT ACTION:</span>
         <input
           type="text"
-          placeholder="Send prompt to selected session..."
+          placeholder="Type a prompt to send or simulate (Smoke Test)..."
           value={promptInput()}
           onInput={(e) => setPromptInput(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            if (e.key === "Enter") {
               e.preventDefault();
-              sendQuickPrompt();
+              if (e.shiftKey) {
+                runSmokeSimulation();
+              } else {
+                sendQuickPrompt();
+              }
             }
           }}
           class="flex-1 bg-ink-950 border border-line rounded px-3 py-1.5 text-xs text-ink-100 placeholder-ink-600 focus:outline-none focus:border-brand-500"
         />
+
+        {/* Smoke Simulation Button */}
+        <button
+          onClick={runSmokeSimulation}
+          disabled={isSimulating()}
+          class="px-3.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold rounded border border-amber-500/40 text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-sm"
+          title="Simulate prompt right now without calling LLM (0 tokens billed)"
+        >
+          <span>🔥</span>
+          {isSimulating() ? "Simulating..." : "Smoke Test (Simulate Payload)"}
+        </button>
+
+        {/* Live Send Button */}
         <button
           onClick={sendQuickPrompt}
           disabled={!promptInput().trim() || !selectedSessionId()}
-          class="px-4 py-1.5 bg-brand-500 hover:bg-brand-600 disabled:opacity-40 disabled:cursor-not-allowed text-ink-950 font-bold rounded text-xs transition-colors cursor-pointer shrink-0"
+          class="px-3.5 py-1.5 bg-brand-500 hover:bg-brand-600 disabled:opacity-40 disabled:cursor-not-allowed text-ink-950 font-bold rounded text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+          title="Send real turn prompt to the session"
         >
-          Send
+          <Icon name={Icons.send} size={13} />
+          Send Prompt
         </button>
       </footer>
     </div>

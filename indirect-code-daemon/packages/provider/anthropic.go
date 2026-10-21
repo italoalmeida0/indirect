@@ -47,6 +47,27 @@ func WithPayloadHook(c Client, hook PayloadHook) Client {
 	return c
 }
 
+// BuildWireRequest exports wire building for any Client that supports it.
+func BuildWireRequest(c Client, req Request) (any, []byte, error) {
+	if ac, ok := c.(*anthropicClient); ok {
+		return ac.BuildWireRequest(req)
+	}
+	return nil, nil, fmt.Errorf("client does not support BuildWireRequest")
+}
+
+// BuildWireRequest formats the request as an Anthropic API payload and serializes it to JSON without streaming.
+func (c *anthropicClient) BuildWireRequest(req Request) (any, []byte, error) {
+	wire, err := c.buildRequest(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	body, err := json.Marshal(wire)
+	if err != nil {
+		return nil, nil, err
+	}
+	return wire, body, nil
+}
+
 // NewGatewayAnthropic creates a client speaking the Anthropic Messages API
 // against the gateway. baseURL must be the gateway's forced Anthropic
 // surface (…/anthropic/v1). There is no OpenAI fallback: providers without a

@@ -333,3 +333,49 @@ func TestWSGetSessionDebug(t *testing.T) {
 		t.Errorf("expected default systemPrompt")
 	}
 }
+
+func TestWSPreviewPrompt(t *testing.T) {
+	h := newWSHarness(t)
+	h.mkSession(t, "s_smoke")
+
+	h.send(map[string]any{
+		"type":      "preview_prompt",
+		"sessionId": "s_smoke",
+		"text":      "hello smoke test",
+		"requestId": "smoke_1",
+	})
+	deadline := time.Now().Add(3 * time.Second)
+	var found map[string]any
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		for _, m := range h.sent {
+			if m["type"] == "preview_prompt_result" && m["requestId"] == "smoke_1" {
+				found = m
+			}
+		}
+		h.mu.Unlock()
+		if found != nil {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if found == nil {
+		t.Fatalf("no preview_prompt_result reply")
+	}
+	if found["error"] != nil && found["error"] != "" {
+		t.Fatalf("unexpected error: %v", found["error"])
+	}
+	p, ok := found["payload"].(*SessionDebugPayload)
+	if !ok || p == nil {
+		t.Fatalf("expected payload in result, got %+v", found["payload"])
+	}
+	if p.System == "" {
+		t.Errorf("expected non-empty simulated system prompt")
+	}
+	if len(p.Tools) == 0 {
+		t.Errorf("expected non-empty simulated tools")
+	}
+	if len(p.RawPayload) == 0 {
+		t.Errorf("expected non-empty raw wire payload")
+	}
+}
