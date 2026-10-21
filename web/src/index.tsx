@@ -221,9 +221,13 @@ function AppShell(props: { children: JSX.Element }) {
     <div class="gw-shell min-h-screen">
       {/* ===== desktop icon rail ===== */}
       <aside class="gateway-rail hidden md:flex fixed inset-y-0 left-0 w-16 lg:w-64 flex-col items-center py-4 border-r border-line z-30">
-        <a href="#/" class="gw-rail-brand flex items-center gap-2.5 lg:w-60 lg:px-2" aria-label="LLM Gateway home">
-          <LogoMark class="gw-rail-logo w-8 h-8 shrink-0" />
-          <span class="hidden lg:block truncate text-[13px] font-semibold tracking-tight">LLM Gateway</span>
+        <a href="#/" class="gw-rail-brand flex items-center gap-2.5 lg:w-60 lg:px-2" aria-label="Indirect Gateway">
+          <img
+        src="/indirect-icon.svg"
+        alt="Indirect"
+        class="w-8 h-8 shrink-0 object-contain rounded"
+      />
+          <span class="hidden lg:block truncate text-[13px] font-semibold tracking-tight font-mono uppercase">Indirect Gateway</span>
         </a>
         <nav
           class="flex-1 min-h-0 overflow-y-auto flex flex-col items-center gap-1 mt-6"
@@ -266,7 +270,7 @@ function AppShell(props: { children: JSX.Element }) {
           <a href="#/" class="gw-mobile-brand flex items-center gap-2.5">
             <LogoMark class="w-8 h-8 rounded-lg" />
             <span class="text-sm font-semibold tracking-tight">
-              LLM Gateway
+              Indirect
             </span>
           </a>
           <div class="gw-mobile-actions flex items-center gap-1">
@@ -375,7 +379,7 @@ function Root() {
         document.title = "Indirect Code";
         (window as any).__pageIcon = "/indirect-icon.svg";
       } else {
-        document.title = "LLM Gateway";
+        document.title = "Indirect Gateway";
         delete (window as any).__pageIcon;
       }
       // Re-run the init-script sync (theme observer keeps working after).

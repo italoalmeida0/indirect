@@ -1,16 +1,16 @@
 # Build the gateway straight from the GitHub repo — no local source needed.
 #
-#   docker build -f Dockerfile.github -t llm-gateway .
-#   docker build -f Dockerfile.github --build-arg REF=v1.2.3 -t llm-gateway .
+#   docker build -f Dockerfile.github -t indirect .
+#   docker build -f Dockerfile.github --build-arg REF=v1.2.3 -t indirect .
 #
 # Run:
-#   docker run -p 3000:3000 -e GATEWAY_SECRET="$(openssl rand -hex 32)" \
-#     -v llgw-data:/data llm-gateway
+#   docker run -p 3000:3000 -e INDIRECT_SECRET="$(openssl rand -hex 32)" \
+#     -v indirect-data:/data indirect
 #
 # REF accepts a branch or tag. The local build context is only used to read
 # this file; the actual source is always cloned from the remote.
 
-ARG REPO=https://github.com/italoalmeida0/llm-gateway.git
+ARG REPO=https://github.com/italoalmeida0/indirect.git
 ARG REF=main
 
 # ===== Fetch stage: clone the repo =====

@@ -58,7 +58,7 @@ export function WorkspaceSidebar() {
         alt="Indirect"
         class="w-5 h-5 shrink-0 object-contain rounded"
       />
-      <span class="text-[13px] font-semibold tracking-tight text-ink-100 truncate">
+      <span class="text-[13px] font-semibold tracking-tight text-ink-100 truncate font-mono uppercase">
         Indirect Code
       </span>
     </div>
@@ -70,7 +70,6 @@ export function WorkspaceSidebar() {
     <a
       href="#/"
       class="w-full flex items-center gap-2 px-3 py-1.5 mb-1 rounded-lg text-xs text-ink-500 hover:text-ink-300 hover:bg-ink-900/60 transition-colors"
-      data-rc-tip="Back to LLM Gateway"
     >
       <Iconify icon="lucide:arrow-left" size={13} />
       <span>Back to Gateway</span>

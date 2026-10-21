@@ -1,7 +1,7 @@
 {
-  "name": "llm-gateway",
+  "name": "indirect",
   "version": "2.1.2",
-  "description": "Self-hosted LLM Gateway: multi-tenant API keys with budgets, proxying to one upstream OpenAI/Anthropic-compatible provider.",
+  "description": "LLM API gateway with a personal dashboard and a Code agent workspace.",
   "type": "module",
   "scripts": {
     "dev": "NODE_ENV=development bun run --watch server/index.ts",

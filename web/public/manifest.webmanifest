@@ -1,7 +1,7 @@
 {
-  "name": "LLM Gateway",
-  "short_name": "Gateway",
-  "description": "Self-hosted LLM API gateway: dashboard plus Indirect Code agent workspace.",
+  "name": "Indirect",
+  "short_name": "Indirect",
+  "description": "LLM API gateway with a personal dashboard and an Code agent workspace.",
   "icons": [
     {
       "src": "/icon-192.png",

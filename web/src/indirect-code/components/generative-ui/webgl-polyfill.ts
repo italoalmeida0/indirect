@@ -673,9 +673,9 @@ export const WEBGL_POLYFILL_JS = String.raw`(function () {
       switch (pname) {
         case CONST.VERSION: return "WebGL 2.0 (generative-ui lint polyfill)";
         case CONST.SHADING_LANGUAGE_VERSION: return "WebGL GLSL ES 3.00 (generative-ui lint polyfill)";
-        case CONST.VENDOR: return "llm-gateway";
+        case CONST.VENDOR: return "indirect";
         case CONST.RENDERER: return "generative-ui WebGL polyfill";
-        case CONST.UNMASKED_VENDOR_WEBGL: return "llm-gateway";
+        case CONST.UNMASKED_VENDOR_WEBGL: return "indirect";
         case CONST.UNMASKED_RENDERER_WEBGL: return "generative-ui WebGL polyfill (software)";
         case CONST.MAX_TEXTURE_SIZE: return MAX_TEXTURE_SIZE;
         case CONST.MAX_CUBE_MAP_TEXTURE_SIZE: return MAX_TEXTURE_SIZE;

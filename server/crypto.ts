@@ -187,7 +187,7 @@ export async function totpVerify(secret: string, code: string, timestampMs = Dat
   return ok;
 }
 
-export function totpUri(secret: string, email: string, issuer = "LLM Gateway"): string {
+export function totpUri(secret: string, email: string, issuer = "Indirect"): string {
   return (
     `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(email)}` +
     `?secret=${secret}&issuer=${encodeURIComponent(issuer)}&digits=6&period=30`

@@ -1,4 +1,4 @@
-# LLM Gateway
+# Indirect
 
 Self-hosted, single-process **LLM API gateway** written for [Bun](https://bun.sh).
 You own one upstream provider (e.g. your provider exposing `/openai/v1` and
@@ -40,16 +40,16 @@ client ──(gw_ key)──> gateway ──(real key)──> your LLM provider
 ## Quick start (Docker)
 
 ```bash
-docker build -t llm-gateway .
-docker run -d --name llm-gateway \
+docker build -t indirect .
+docker run -d --name indirect \
   -p 3000:3000 \
-  -v gateway-data:/data \
-  -e GATEWAY_SECRET="$(openssl rand -hex 32)" \
+  -v indirect-data:/data \
+  -e INDIRECT_SECRET="$(openssl rand -hex 32)" \
   -e ADMIN_EMAIL="you@example.com" \
   -e ADMIN_PASSWORD="use-a-long-random-password" \
   -e PUBLIC_URL="https://gateway.example.com" \
   -e TRUST_PROXY="true" \
-  llm-gateway
+  indirect
 ```
 
 Open `http://localhost:3000`, sign in as the admin, add your provider
@@ -93,7 +93,7 @@ Highlights:
 
 | Var | Purpose |
 |---|---|
-| `GATEWAY_SECRET` | **required in prod** — signs JWTs, encrypts upstream keys (32+ bytes) |
+| `INDIRECT_SECRET` | **required in prod** — signs JWTs, encrypts upstream keys (32+ bytes; `GATEWAY_SECRET` supported as fallback) |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | first-admin bootstrap (only when the DB is empty) |
 | `GOOGLE_CLIENT_ID` | enables Google sign-in (Web client; JS origin = `PUBLIC_URL`) |
 | `SMTP_*` | invite/reset/security emails; without it, action links are printed to the log and shown to the admin |

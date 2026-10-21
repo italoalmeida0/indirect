@@ -34,7 +34,7 @@ export const SMTP = {
   port: Number(process.env.SMTP_PORT || 587),
   user: process.env.SMTP_USER || "",
   pass: process.env.SMTP_PASS || "",
-  from: process.env.SMTP_FROM || '"LLM Gateway" <no-reply@localhost>',
+  from: process.env.SMTP_FROM || '"Indirect" <no-reply@localhost>',
   secure: process.env.SMTP_SECURE === "true",
 };
 export const SMTP_ENABLED = !!SMTP.host;
@@ -45,12 +45,12 @@ export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 // ===== Secret bootstrap =====
 
 function loadSecret(): string {
-  const envSecret = process.env.GATEWAY_SECRET || "";
+  const envSecret = process.env.INDIRECT_SECRET || process.env.GATEWAY_SECRET || "";
   if (envSecret && envSecret.length >= 32) return envSecret;
 
   if (IS_PROD) {
     console.error(
-      "[BOOT] FATAL: GATEWAY_SECRET is missing or shorter than 32 chars in production.\n" +
+      "[BOOT] FATAL: INDIRECT_SECRET (or GATEWAY_SECRET) is missing or shorter than 32 chars in production.\n" +
         "       Generate one with: openssl rand -hex 32",
     );
     process.exit(1);
@@ -68,12 +68,13 @@ function loadSecret(): string {
     chmodSync(secretFile, 0o600);
   } catch {}
   console.warn(
-    `[BOOT] dev mode: generated GATEWAY_SECRET and stored it in ${secretFile}`,
+    `[BOOT] dev mode: generated INDIRECT_SECRET and stored it in ${secretFile}`,
   );
   return generated;
 }
 
-export const GATEWAY_SECRET = loadSecret();
+export const INDIRECT_SECRET = loadSecret();
+export const GATEWAY_SECRET = INDIRECT_SECRET;
 
 // ===== Limits (tunable via env for stress tests) =====
 

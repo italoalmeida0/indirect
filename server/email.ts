@@ -29,7 +29,7 @@ function page(title: string, bodyHtml: string): string {
   <div style="max-width:480px;margin:40px auto;padding:32px;background:#141419;border:1px solid #27272a;border-radius:12px">
     <h1 style="font-size:20px;margin:0 0 16px;color:#fafafa">${title}</h1>
     <div style="font-size:14px;line-height:1.6;color:#a1a1aa">${bodyHtml}</div>
-    <p style="font-size:12px;color:#52525b;margin-top:24px">LLM Gateway</p>
+    <p style="font-size:12px;color:#52525b;margin-top:24px">Indirect</p>
   </div></body></html>`;
 }
 
@@ -56,11 +56,11 @@ export async function sendInviteEmail(to: string, name: string, token: string): 
   const url = `${PUBLIC_URL}/#/set-password?token=${encodeURIComponent(token)}`;
   return send(
     to,
-    "You've been invited to LLM Gateway",
+    "You've been invited to Indirect",
     page(
       "Welcome",
       `<p>Hi ${escapeHtml(name || to)},</p>
-       <p>An administrator created an account for you on this LLM Gateway. Set your password to activate it:</p>
+       <p>An administrator created an account for you on this Indirect. Set your password to activate it:</p>
        ${button(url, "Set your password")}
        <p>This link expires in 24 hours. If you didn't expect this, ignore this email.</p>`,
     ),
@@ -71,7 +71,7 @@ export async function sendResetEmail(to: string, token: string): Promise<boolean
   const url = `${PUBLIC_URL}/#/set-password?token=${encodeURIComponent(token)}`;
   return send(
     to,
-    "Password reset — LLM Gateway",
+    "Password reset — Indirect",
     page(
       "Password reset",
       `<p>We received a request to reset your password.</p>

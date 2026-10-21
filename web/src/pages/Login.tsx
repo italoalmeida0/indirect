@@ -1,7 +1,6 @@
 import { createSignal, onMount, Show } from "solid-js";
 
 import { publicApi, setSession } from "../api";
-import { LogoMark } from "../index";
 import { usal, usalItems } from "../motion";
 import { Btn, Input, Spinner, Card, Icon, Icons, ThemeToggle, capitalize } from "../ui";
 import { renderGoogleButton } from "../google";
@@ -134,12 +133,16 @@ export default function LoginPage() {
       <div class="relative w-full max-w-sm">
         <div class="flex flex-col items-center mb-6" {...usal("fade-d duration-700")}>
           <div {...usal("zoomin-30 duration-700")}>
-            <LogoMark class="w-10 h-10 rounded-xl mb-4" />
+            <img
+        src="/indirect-icon.svg"
+        alt="Indirect"
+        class="object-contain w-10 h-10 rounded-xl mb-4"
+      />
           </div>
           <h1
-            class="text-2xl font-semibold tracking-tight"
+            class="text-2xl font-semibold tracking-tight font-mono uppercase"
           >
-            LLM Gateway
+            Indirect
           </h1>
           <p class="text-sm text-ink-500 mt-1.5">Sign in to your account</p>
         </div>

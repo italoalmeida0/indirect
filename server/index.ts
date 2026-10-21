@@ -170,7 +170,7 @@ const server: Server<WsData> = Bun.serve<WsData>({
   },
 });
 
-console.log(`[BOOT] llm-gateway listening on http://${server.hostname}:${server.port} (${IS_PROD ? "prod" : "dev"})`);
+console.log(`[BOOT] indirect listening on http://${server.hostname}:${server.port} (${IS_PROD ? "prod" : "dev"})`);
 console.log(`[BOOT] data dir: ${DATA_DIR}`);
 // Generative-ui lint browser (obscura): fetched into DATA_DIR on first use,
 // eagerly here so the first widget lint never waits on the download.
