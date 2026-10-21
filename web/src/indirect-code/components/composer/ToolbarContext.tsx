@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, untrack, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { attachSortable } from "../../../sortable";
 import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
@@ -24,6 +24,66 @@ export function ToolbarContext() {
   // Mobile submenu navigation inside the "+" menu
   const [subView, setSubView] = createSignal<"main" | "model" | "mode" | "access">("main");
 
+  // Local draft state while the Mode & Skills popup is open: avoids lag/stutter
+  // by deferring network sync and session re-snapshots until "Done" or close.
+  const [draftSkills, setDraftSkills] = createSignal<string[]>([]);
+  const [draftUsables, setDraftUsables] = createSignal<Record<string, string>>({});
+  const [draftAgentMode, setDraftAgentMode] = createSignal<string>("");
+  const [isEditing, setIsEditing] = createSignal(false);
+
+  const isMenuOpen = () => c.modeMenuOpen() || (c.addContextOpen() && subView() === "mode");
+  const effectiveSelectedSkills = () => (isEditing() ? draftSkills() : c.selectedSkills());
+  const effectiveSkillUsables = () => (isEditing() ? draftUsables() : c.skillUsables());
+  const effectiveAgentMode = () => (isEditing() ? draftAgentMode() : c.agentMode());
+
+  const arraysEqual = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
+  const recordsEqual = (a: Record<string, string>, b: Record<string, string>) => {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((k) => a[k] === b[k]);
+  };
+
+  createEffect(() => {
+    const open = isMenuOpen();
+    if (open) {
+      untrack(() => {
+        setDraftSkills([...c.selectedSkills()]);
+        setDraftUsables({ ...c.skillUsables() });
+        setDraftAgentMode(c.agentMode());
+        setIsEditing(true);
+      });
+    } else if (isEditing()) {
+      untrack(() => {
+        applyDraft();
+      });
+    }
+  });
+
+  function applyDraft() {
+    if (!isEditing()) return;
+    setIsEditing(false);
+    const targetSkills = draftSkills();
+    const targetUsables = draftUsables();
+    const targetMode = draftAgentMode();
+
+    const currentSkills = c.selectedSkills();
+    const currentUsables = c.skillUsables();
+    const currentMode = c.agentMode();
+
+    const skillsChanged = !arraysEqual(targetSkills, currentSkills);
+    const usablesChanged = !recordsEqual(targetUsables, currentUsables);
+    const modeChanged = targetMode !== "" && targetMode !== currentMode;
+
+    if (skillsChanged || usablesChanged || modeChanged) {
+      if (modeChanged) {
+        c.setAgentMode(targetMode as any);
+      }
+      c.syncSkills(targetSkills, targetUsables);
+      c.configureSession();
+    }
+  }
+
   // Reset to main view whenever the menu closes
   createEffect(() => {
     if (!c.addContextOpen()) {
@@ -39,7 +99,7 @@ export function ToolbarContext() {
   function modeSkills() {
     const list = effectiveModeSkills(m.savedSkills(), m.skillsLoaded());
     if (s.draftMode()) return list;
-    const base = baseMode(c.agentMode());
+    const base = baseMode(effectiveAgentMode());
     return list.filter((spec) => baseMode(spec.mode) === base);
   }
 
@@ -48,7 +108,7 @@ export function ToolbarContext() {
    * catalog (the daemon-sent approvalMode of an existing session is the
    * fallback for skills the catalog no longer knows). */
   function approvalSelectorHidden() {
-    const primary = c.selectedSkills()[0];
+    const primary = effectiveSelectedSkills()[0];
     const ap = primary
       ? m.savedSkills()[primary]?.approvalMode ?? modeSkills().find((s) => s.name === primary)?.approvalMode
       : undefined;
@@ -56,21 +116,25 @@ export function ToolbarContext() {
   }
 
   /** Chooses one of the mode skills as the session's primary skill: it goes
-   * first in the active order (lowest priority number) and its mode is
-   * re-sent via configure (the daemon takes the wire mode as-is). Other
-   * mode skills drop out (single choice). */
+   * first in the active order (lowest priority number). */
   function chooseModeSkill(name: string) {
     const spec = modeSkills().find((s) => s.name === name);
     if (!spec) return;
-    c.setAgentMode(baseMode(spec.mode));
-    c.syncSkills([name, ...c.selectedSkills().filter((n) => n !== name && !isModeSkill(n))]);
-    c.configureSession();
+    if (isEditing()) {
+      setDraftAgentMode(baseMode(spec.mode));
+      const rest = draftSkills().filter((n) => n !== name && !isModeSkill(n));
+      setDraftSkills([name, ...rest]);
+    } else {
+      c.setAgentMode(baseMode(spec.mode));
+      c.syncSkills([name, ...c.selectedSkills().filter((n) => n !== name && !isModeSkill(n))]);
+      c.configureSession();
+    }
   }
 
   /** Additional skills = everything except the 4 mode skills. Displayed
    * order: selected (session priority order) first, then the rest by name. */
   function additionalSkills(): [string, any][] {
-    const sel = c.selectedSkills().filter((n) => !isModeSkill(n));
+    const sel = effectiveSelectedSkills().filter((n) => !isModeSkill(n));
     const rest = Object.entries(m.savedSkills())
       .filter(([n, skill]) => !isModeSkill(n) && skill.enabled && originalUsable(skill.usable) !== "never")
       .map(([n]) => n)
@@ -82,21 +146,47 @@ export function ToolbarContext() {
   /** Drag-to-sort of the additional list: active skills keep their order
    * under the primary (mode) skill; unusued rows are ignored. */
   function reorderAdditional(ids: string[]) {
-    const sel = c.selectedSkills();
-    const primary = sel.filter(isModeSkill);
-    const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n));
-    c.syncSkills([...primary, ...rest]);
+    if (isEditing()) {
+      const sel = draftSkills();
+      const primary = sel.filter(isModeSkill);
+      const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n));
+      setDraftSkills([...primary, ...rest]);
+    } else {
+      const sel = c.selectedSkills();
+      const primary = sel.filter(isModeSkill);
+      const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n));
+      c.syncSkills([...primary, ...rest]);
+    }
   }
 
   function toggleAdditional(name: string) {
-    const sel = c.selectedSkills();
-    c.syncSkills(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
+    if (isEditing()) {
+      const sel = draftSkills();
+      setDraftSkills(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
+    } else {
+      const sel = c.selectedSkills();
+      c.syncSkills(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
+    }
+  }
+
+  function cycleSkillUsable(name: string, defaultUsable?: string) {
+    if (originalUsable(defaultUsable) !== "ask") return;
+    const order = ["ask", "yolo", "deny"];
+    const cur = (isEditing() ? draftUsables() : c.skillUsables())[name] || "inherit";
+    const idx = order.indexOf(cur);
+    const next = order[idx < 0 ? 0 : (idx + 1) % order.length];
+    if (isEditing()) {
+      setDraftUsables({ ...draftUsables(), [name]: next });
+    } else {
+      const map = { ...c.skillUsables(), [name]: next };
+      c.syncSkills(c.selectedSkills(), map);
+    }
   }
 
   function activeModeSkillName(): string {
-    const sel0 = c.selectedSkills()[0];
+    const sel0 = effectiveSelectedSkills()[0];
     if (sel0 && isModeSkill(sel0)) return sel0;
-    const base = baseMode(c.agentMode());
+    const base = baseMode(effectiveAgentMode());
     return modeSkills().find((m) => baseMode(m.mode) === base)?.name ?? (base === "talk" ? "talk" : "build");
   }
 
@@ -142,7 +232,7 @@ export function ToolbarContext() {
               </button>
               <button
                 role="menuitemcheckbox"
-                aria-checked={c.selectedSkills().includes(name)}
+                aria-checked={effectiveSelectedSkills().includes(name)}
                 onClick={() => toggleAdditional(name)}
                 class="flex-1 rounded-lg px-2 py-2 flex items-center gap-2 text-left hover:bg-elev cursor-pointer"
               >
@@ -151,13 +241,13 @@ export function ToolbarContext() {
                   <span class="text-ink-200">{name}</span>
                   <span class="block text-[11px] text-ink-500">{skill?.description}</span>
                 </span>
-                <Show when={c.selectedSkills().includes(name)}>
+                <Show when={effectiveSelectedSkills().includes(name)}>
                   <Iconify icon="lucide:check" size={14} />
                 </Show>
               </button>
               <Show when={originalUsable(skill?.usable) === "ask"}>
-                <button aria-label={`Change activation policy for ${name}`} onClick={(e) => { e.stopPropagation(); c.cycleSkillUsable(name, skill?.usable); }} class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-300 hover:bg-elev cursor-pointer">
-                  {c.skillUsables()[name] ?? "inherit"}
+                <button aria-label={`Change activation policy for ${name}`} onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }} class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-300 hover:bg-elev cursor-pointer">
+                  {effectiveSkillUsables()[name] ?? "inherit"}
                 </button>
               </Show>
               <Show when={originalUsable(skill?.usable) === "yolo"}>
@@ -370,8 +460,11 @@ export function ToolbarContext() {
             </button>
             <span class="font-semibold text-xs text-ink-200">Agent mode</span>
             <button
-              onClick={() => c.setAddContextOpen(false)}
-              class="px-1.5 py-1 rounded-md hover:bg-ink-800 text-ink-400 hover:text-ink-100 text-xs cursor-pointer"
+              onClick={() => {
+                applyDraft();
+                c.setAddContextOpen(false);
+              }}
+              class="px-2 py-0.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white font-medium text-xs cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -455,6 +548,18 @@ export function ToolbarContext() {
     <Iconify icon="lucide:chevron-down" size={11} />
   </button>
   <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} placement="top-start" width="20rem">
+    <div class="flex items-center justify-between px-2 py-1.5 border-b border-line/60 mb-1">
+      <span class="font-semibold text-xs text-ink-200">Mode & Skills</span>
+      <button
+        onClick={() => {
+          applyDraft();
+          c.setModeMenuOpen(false);
+        }}
+        class="px-2.5 py-0.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white font-medium text-xs cursor-pointer transition-colors"
+      >
+        Done
+      </button>
+    </div>
     <Show when={modeSkills().length > 0}>
       <p class="px-2 py-1.5 font-medium text-ink-400">Mode</p>
       {modeSkillList()}
