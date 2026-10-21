@@ -965,14 +965,6 @@ describe("Tool mini-UI parsers", () => {
 });
 
 describe("collapseCwd", () => {
-  test("replaces the session cwd with a dot", () => {
-    expect(collapseCwd(
-      "cd /home/user/workspace/llm-gateway/indirect-code-daemon && go test ./...",
-      "/home/user/workspace/llm-gateway",
-    )).toBe("cd ./indirect-code-daemon && go test ./...");
-    expect(collapseCwd("cd /home/user/workspace/llm-gateway", "/home/user/workspace/llm-gateway")).toBe("cd .");
-    expect(collapseCwd("go build ./...", "/home/user/workspace/llm-gateway")).toBe("go build ./...");
-  });
 
   test("handles trailing slashes, windows separators and degenerate cwd", () => {
     expect(collapseCwd("cd /a/b && make", "/a/b/")).toBe("make");

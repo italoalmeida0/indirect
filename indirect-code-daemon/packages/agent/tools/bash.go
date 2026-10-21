@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // BashTool runs a shell command in the agent's cwd: {command} with merged

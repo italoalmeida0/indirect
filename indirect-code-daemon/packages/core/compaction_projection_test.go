@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // scriptableFakeClient answers summarizer calls with summaries[idx]

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 func TestPythonAvailableFindsInterpreter(t *testing.T) {
@@ -133,7 +133,7 @@ func TestPythonSandboxJail(t *testing.T) {
 	}
 	// Workdir outside the jail must be rejected.
 	if _, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code":    "print(1)",
+		"code":     "print(1)",
 		"work_dir": "..",
 	}), nil); err == nil {
 		t.Fatal("expected jail rejection for work_dir ..")

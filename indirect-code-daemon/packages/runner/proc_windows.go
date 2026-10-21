@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/proctable"
+	"indirect/indirect-code-daemon/packages/proctable"
 )
 
 // setProcessGroup is a no-op on Windows: the tree kill below owns the

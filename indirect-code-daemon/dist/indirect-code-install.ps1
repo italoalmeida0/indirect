@@ -1,5 +1,5 @@
 # Indirect Code installer (Windows PowerShell).
-# Usage: powershell -ExecutionPolicy Bypass -NoProfile -Command "& ([scriptblock]::Create((irm '<gateway>/r/indirect-install.ps1'))) <gateway-url> <token>"
+# Usage: powershell -ExecutionPolicy Bypass -NoProfile -Command "& ([scriptblock]::Create((irm '<gateway>/r/indirect-code-install.ps1'))) <gateway-url> <token>"
 param(
   [Parameter(Mandatory = $true)][string]$GatewayUrl,
   [Parameter(Mandatory = $true)][string]$Token,

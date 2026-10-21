@@ -1,4 +1,4 @@
-# AGENTS.md — llm-gateway
+# AGENTS.md — indirect
 
 Two projects: Bun gateway (`server/`, `web/`) and Indirect Code Go daemon
 (`indirect-code-daemon/`, separate `go.mod`). Current focus: Indirect Code

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Run an actual tool in a disposable daemon process, then exit without

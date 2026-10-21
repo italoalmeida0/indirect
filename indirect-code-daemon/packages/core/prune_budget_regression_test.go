@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Regression (audit bug 15): PruneOldToolResults counted the WHOLE tool

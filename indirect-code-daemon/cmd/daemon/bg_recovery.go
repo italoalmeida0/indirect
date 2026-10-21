@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // Recovery runs on the session actor. A notice is never acknowledged before

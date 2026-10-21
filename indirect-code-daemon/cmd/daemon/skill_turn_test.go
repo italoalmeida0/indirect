@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // installGrantingTestSkills swaps the global skill registry for one whose

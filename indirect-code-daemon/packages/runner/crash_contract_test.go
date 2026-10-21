@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/processutil"
-	"llm-gateway/indirect-code-daemon/packages/proctable"
+	"indirect/indirect-code-daemon/packages/processutil"
+	"indirect/indirect-code-daemon/packages/proctable"
 )
 
 func TestCrashContractCopyFailureIsNotSuccess(t *testing.T) {

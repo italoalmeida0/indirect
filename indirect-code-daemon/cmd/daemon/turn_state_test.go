@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/agent/tools"
 )
 
 func TestFormatRunningBgSection(t *testing.T) {

@@ -3,11 +3,11 @@ package main
 import (
 	"encoding/json"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/filetrack"
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/filetrack"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // HarnessSettings stores user-tunable agent behavior and runtime flags.

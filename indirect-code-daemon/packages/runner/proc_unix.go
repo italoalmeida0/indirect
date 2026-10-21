@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/proctable"
+	"indirect/indirect-code-daemon/packages/proctable"
 )
 
 // setProcessGroup puts the command in its own process group so the kill

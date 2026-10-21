@@ -74,7 +74,7 @@ async function build() {
 
     if (existsSync(staged)) {
       for (const f of readdirSync(staged)) {
-        if (/^(indirect-(code|launcher)-|versions\.json|SHA256SUMS\.txt|indirect-install\.)/.test(f)) {
+        if (/^(indirect-(code|launcher)-|versions\.json|SHA256SUMS\.txt|indirect-code-install\.)/.test(f)) {
           cpSync(path.join(staged, f), path.join(dest, f));
           copied.add(f);
           rCount++;
@@ -84,7 +84,7 @@ async function build() {
 
     if (existsSync(daemonDist)) {
       for (const f of readdirSync(daemonDist)) {
-        if (!copied.has(f) && /^(indirect-(code|launcher)-|versions\.json|SHA256SUMS\.txt|indirect-install\.)/.test(f)) {
+        if (!copied.has(f) && /^(indirect-(code|launcher)-|versions\.json|SHA256SUMS\.txt|indirect-code-install\.)/.test(f)) {
           cpSync(path.join(daemonDist, f), path.join(dest, f));
           rCount++;
         }

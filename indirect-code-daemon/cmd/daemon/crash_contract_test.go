@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/processutil"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/processutil"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 func TestMain(m *testing.M) {

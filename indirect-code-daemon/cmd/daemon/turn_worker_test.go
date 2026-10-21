@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Tests in this file drive the worker<->actor bridge WITHOUT network: the

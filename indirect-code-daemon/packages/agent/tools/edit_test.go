@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 func editDisplay(t *testing.T, res core.ToolResult) string {

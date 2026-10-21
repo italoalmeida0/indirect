@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 // v3 wraps legacy tool_result bodies in the pseudo-XML envelope. Starting

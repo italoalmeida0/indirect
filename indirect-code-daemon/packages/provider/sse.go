@@ -4,7 +4,7 @@ import (
 	"io"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/linereader"
+	"indirect/indirect-code-daemon/packages/linereader"
 )
 
 // sseEvent is one parsed event from a text/event-stream.

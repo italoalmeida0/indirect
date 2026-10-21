@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Compact summarizes the conversation and records the result as a

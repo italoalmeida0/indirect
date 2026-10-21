@@ -3,9 +3,9 @@ package main
 import (
 	"fmt"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // skillUseRecord notes one use_skill call of this turn (kept on the worker

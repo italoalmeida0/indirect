@@ -3,7 +3,7 @@ package core
 import (
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Context pipeline: live transcript -> derived request context.

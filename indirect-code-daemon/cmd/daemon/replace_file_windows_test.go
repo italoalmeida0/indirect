@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"indirect/indirect-code-daemon/internal/durable"
+
 	"golang.org/x/sys/windows"
-	"llm-gateway/indirect-code-daemon/internal/durable"
 )
 
 // Exercise the exact cancellation boundary with a session file held open by

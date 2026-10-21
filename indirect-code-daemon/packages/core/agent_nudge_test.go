@@ -2,12 +2,12 @@ package core
 
 import (
 	"context"
-	"strings"
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // emptyThenDoneFakeClient ends its first turn with a thinking-only

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 func TestRegressionRunnerPythonStdin(t *testing.T) {
@@ -107,7 +107,6 @@ func TestRegressionRunnerRecoveryKeepsExitStatus(t *testing.T) {
 	}
 }
 
-
 func TestRegressionWSResyncSurvivesAnotherFullQueue(t *testing.T) {
 	a := reviewActor(t)
 	ws := newWSActor()
@@ -150,4 +149,3 @@ func TestRegressionNoticeDoesNotAckFailedPersistence(t *testing.T) {
 	default:
 	}
 }
-

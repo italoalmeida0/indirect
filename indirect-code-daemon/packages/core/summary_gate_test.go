@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // gateTool is a minimal tool used to exercise the summary gate. When fail is

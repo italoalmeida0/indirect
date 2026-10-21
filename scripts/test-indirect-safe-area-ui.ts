@@ -120,7 +120,7 @@ try {
   await page.evaluate(() => (window as any).collapseUI.setCollapsed(true));
   await page.screenshot({ path: "/tmp/pwa-safe-working.png" });
 
-  await page.addInitScript(() => localStorage.setItem("llm_gateway_session", JSON.stringify({ accessToken: "fixture", refreshToken: "fixture", user: { id: "fixture", name: "Layout tester", email: "layout@example.test", role: "user", hasPassword: true, googleLinked: false, totpEnabled: false, status: "active", createdAt: 0 } })));
+  await page.addInitScript(() => localStorage.setItem("cache_code_session", JSON.stringify({ accessToken: "fixture", refreshToken: "fixture", user: { id: "fixture", name: "Layout tester", email: "layout@example.test", role: "user", hasPassword: true, googleLinked: false, totpEnabled: false, status: "active", createdAt: 0 } })));
   await page.route("**/api/**", (route: any) => route.fulfill({ json: { success: true, keys: [], sessions: [], googleClientId: null } }));
   await page.goto(`${server.url}#/settings`);
   await page.waitForSelector(".gw-shell");

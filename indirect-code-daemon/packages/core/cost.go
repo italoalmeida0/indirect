@@ -1,6 +1,6 @@
 package core
 
-import "llm-gateway/indirect-code-daemon/packages/provider"
+import "indirect/indirect-code-daemon/packages/provider"
 
 // CostTracker accumulates usage across turns in a session.
 //

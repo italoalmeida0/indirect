@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // fakeWidgetStore is the WidgetStore the widget tools talk to (the daemon

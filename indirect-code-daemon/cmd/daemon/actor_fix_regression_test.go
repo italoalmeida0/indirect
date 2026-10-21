@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // unhandledControlMsg is control-lane filler: a message type the actor

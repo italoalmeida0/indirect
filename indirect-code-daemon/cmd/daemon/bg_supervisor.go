@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // Background job kinds + statuses (same wire values as v1).

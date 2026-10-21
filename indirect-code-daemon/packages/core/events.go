@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // AgentEvent is the superset of events emitted by an Agent run.

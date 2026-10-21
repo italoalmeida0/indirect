@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Message queue: while a turn is running, new user messages wait here
@@ -77,4 +77,3 @@ func (a *sessionActor) buildQueuedUserMessage(q QueuedMessage) provider.Message 
 		Meta:      meta,
 	}
 }
-

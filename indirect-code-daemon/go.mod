@@ -1,4 +1,4 @@
-module llm-gateway/indirect-code-daemon
+module indirect/indirect-code-daemon
 
 go 1.26.0
 

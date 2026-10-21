@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 // AutoBackgroundAfter is the fixed threshold after which a still-running

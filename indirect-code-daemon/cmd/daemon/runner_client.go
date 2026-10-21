@@ -11,10 +11,10 @@ import (
 	"strconv"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/internal/durable"
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/processutil"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/internal/durable"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/processutil"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // Parent-side runner plumbing: self-copy the

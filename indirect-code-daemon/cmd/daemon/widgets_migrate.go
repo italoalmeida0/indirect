@@ -3,7 +3,7 @@ package main
 import (
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // migrateLegacyWidgets converts pre-id generative_ui fences in a session's

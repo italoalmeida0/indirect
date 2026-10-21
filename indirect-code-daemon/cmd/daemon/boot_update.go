@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/internal/migrations"
+	"indirect/indirect-code-daemon/internal/migrations"
 )
 
 // Brutal update mode (--update), invoked by the --update-start daemon as

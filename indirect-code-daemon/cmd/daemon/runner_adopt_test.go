@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // Runner adoption tests (T2/T3/T5/T7/T10): real

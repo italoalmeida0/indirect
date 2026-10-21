@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Exact-duplicate background guard: reissuing the identical bash or

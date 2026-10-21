@@ -191,7 +191,7 @@ async function openSessionPage(ctx: any, sessionId: string, shot: string) {
   page.on("pageerror", (e: Error) => pageErrors.push(String(e).slice(0, 300)));
   page.on("console", (m: any) => { if (m.type() === "error") consoleErrors.push(String(m.text()).slice(0, 300)); });
   await page.addInitScript(({ sess, hid, sid }: any) => {
-    localStorage.setItem("llm_gateway_session", JSON.stringify(sess));
+    localStorage.setItem("cache_code_session", JSON.stringify(sess));
     localStorage.setItem(`llmgw-rc-session:${hid}`, sid);
   }, {
     sess: { accessToken: ctx.login.accessToken, refreshToken: ctx.login.refreshToken, user: ctx.login.user },
@@ -263,7 +263,7 @@ async function seedHeavyHistory(ctx: any, sessionId: string, turns = 3) {
   const { copyFileSync } = await import("fs");
   for (let i = 0; i < turns; i++) {
     const book = BOOKS[i % BOOKS.length];
-    copyFileSync(`/home/user/workspace/llm-gateway/test/books/${book}`, `${ctx.workDir}/${book}`);
+    copyFileSync(path.join(WS, "test", "books", book), `${ctx.workDir}/${book}`);
     ctx.ws.send(JSON.stringify({
       type: "prompt", hostId: ctx.hostId, sessionId, model: MODEL,
       text: `Read the file ${book} fully with the read tool, then write a detailed chapter-by-chapter summary (be thorough, quote key passages). End your reply with HEAVY-${i}-DONE.`,

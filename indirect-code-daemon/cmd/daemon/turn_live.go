@@ -8,10 +8,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // liveBlock is a transient replay of only the current assistant response.

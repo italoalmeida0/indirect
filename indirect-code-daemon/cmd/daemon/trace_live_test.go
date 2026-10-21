@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/agent/tools"
 )
 
 // Live golden generation (review items 1+2): instead of hand-written

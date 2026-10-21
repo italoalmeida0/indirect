@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/internal/durable"
+	"indirect/indirect-code-daemon/internal/durable"
 )
 
 // Transport is the optional IPC endpoint (absent = file-only mode).

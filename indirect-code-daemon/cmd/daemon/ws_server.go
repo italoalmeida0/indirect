@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // wsServer is the v2 WS boundary: one read loop (JSON dispatch, NO global

@@ -51,6 +51,7 @@ export const Icons = {
   search: "lucide:search",
   edit: "lucide:edit-3",
   home: "lucide:home",
+  idc: "lucide:folder-code",
   sun: "lucide:sun",
   moon: "lucide:moon",
   monitor: "lucide:monitor",

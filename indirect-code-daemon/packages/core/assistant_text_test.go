@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 func TestAssistantTextDiscardedBeforePersistenceAndNextRequest(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 // BgAwaitArgs are the model-facing arguments of the bg_await tool.

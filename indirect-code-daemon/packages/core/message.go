@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // ---- content (de)serialization ----
@@ -197,7 +197,7 @@ func repairToolUseResultPairs(msgs []provider.Message) []provider.Message {
 				continue
 			}
 			stubs = append(stubs, provider.ToolResultBlock{
-				CallID: id,
+				CallID:  id,
 				Content: []provider.Content{provider.TextBlock{Text: ErrorEnvelope("Tool outcome is unknown: execution may have occurred before interruption. Verify its effects or execution log before repeating a mutating action.")}},
 				IsError: true,
 			})

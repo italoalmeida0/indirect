@@ -2,12 +2,12 @@ package main
 
 import (
 	"os"
-	"sync"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/filetrack"
+	"indirect/indirect-code-daemon/packages/filetrack"
 )
 
 func testSupervisor(t *testing.T) (*sessionSupervisor, *diskStore, string) {
@@ -150,8 +150,6 @@ func TestEvictIdle(t *testing.T) {
 		<-res2.Done
 	}
 }
-
-
 
 func TestResumeFromWAL(t *testing.T) {
 	sup, st, _ := testSupervisor(t)

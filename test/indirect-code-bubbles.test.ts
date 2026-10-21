@@ -170,7 +170,7 @@ describe("Bug 57 — setBalloons reconcile keys stay unique", () => {
 describe("Bug 32 — relay reconnect survives a failing auth refresh", () => {
   test("a rejecting ensureAuth still schedules the next connect attempt", async () => {
     const storage = stubBrowserGlobals();
-    storage.set("llm_gateway_session", JSON.stringify({
+    storage.set("cache_code_session", JSON.stringify({
       accessToken: "token", refreshToken: "refresh", user: { id: "u" },
     }));
     class FakeWebSocket {

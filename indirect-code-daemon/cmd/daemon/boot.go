@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/internal/migrations"
+	"indirect/indirect-code-daemon/internal/migrations"
 )
 
 // launcherVersion is stamped at build time via ldflags

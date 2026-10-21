@@ -1,7 +1,7 @@
 package core
 
 import (
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 const (

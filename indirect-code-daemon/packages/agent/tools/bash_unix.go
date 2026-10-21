@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/proctable"
+	"indirect/indirect-code-daemon/packages/proctable"
 )
 
 // isExecutableFile reports whether path can be executed (unix exec bits).

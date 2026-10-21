@@ -12,9 +12,9 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/ignore"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/ignore"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 type SearchArgs struct {

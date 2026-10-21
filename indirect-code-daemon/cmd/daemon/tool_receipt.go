@@ -11,10 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/internal/durable"
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/internal/durable"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 type executionReceipt struct {

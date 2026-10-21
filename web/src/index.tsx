@@ -73,7 +73,7 @@ interface NavItem {
 
 const USER_NAV: NavItem[] = [
   { path: "/", label: "Overview", icon: Icons.home },
-  { path: "/code", label: "Indirect Code", icon: "indirect-code" },
+  { path: "/code", label: "Indirect Code", icon: Icons.idc },
   { path: "/keys", label: "API Keys", icon: Icons.key },
   { path: "/usage", label: "Usage", icon: Icons.chart },
   { path: "/settings", label: "Settings", icon: Icons.cog },
@@ -380,7 +380,7 @@ function Root() {
         (window as any).__pageIcon = "/indirect-icon.svg";
       } else {
         document.title = "Indirect Gateway";
-        delete (window as any).__pageIcon;
+        (window as any).__pageIcon = "/indirect-icon.svg";
       }
       // Re-run the init-script sync (theme observer keeps working after).
       (window as any).__syncFavicon?.();

@@ -1,6 +1,6 @@
 package main
 
-import "llm-gateway/indirect-code-daemon/packages/provider"
+import "indirect/indirect-code-daemon/packages/provider"
 
 // turnGroup is one transcript turn (TurnIndex > 0) with the absolute
 // message indices that belong to it, in transcript order.

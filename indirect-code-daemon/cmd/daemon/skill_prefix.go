@@ -3,8 +3,8 @@ package main
 import (
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // skillPrefixMetaKey marks the current turn's user message: the ephemeral

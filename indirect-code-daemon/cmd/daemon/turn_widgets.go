@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/agent/tools"
 )
 
 // widgetStoreBridge exposes the session's widget store to the widget

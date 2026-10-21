@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 func writeRaw(t *testing.T, path, content string) *os.File {
@@ -317,7 +317,6 @@ func TestCommitWALReplacesTurnWithoutDuplicating(t *testing.T) {
 		t.Fatalf("expected 2 messages loaded, got %d", len(loaded.Messages))
 	}
 }
-
 
 // Widgets must survive EVERY meta rewrite: the meta line is their only
 // durable copy after the WAL commits and is removed. Dropping them there

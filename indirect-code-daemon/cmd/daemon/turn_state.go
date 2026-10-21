@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/agent/tools"
 )
 
 // Live session-state sections folded into model-facing reminders:

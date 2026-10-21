@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/filetrack"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/filetrack"
 )
 
 // Turn file-change tracking: snapshot-based, no git. One TurnTracker per
@@ -164,7 +164,6 @@ type undoFileResult struct {
 
 // undoTurnChanges is re-wired in V2.3 (WS command path).
 
-
 func undoOneFile(cwd string, f *filetrack.ChangedFile) undoFileResult {
 	res := undoFileResult{Path: f.Path, Rel: f.Rel, OK: true}
 	switch f.Status {
@@ -255,6 +254,7 @@ func undoOneFile(cwd string, f *filetrack.ChangedFile) undoFileResult {
 func fileBalloonPayload(b filetrack.TurnChanges) map[string]any {
 	return map[string]any{"turnIndex": b.TurnIndex, "files": b.Files, "messageIndex": b.MessageIndex}
 }
+
 // lastBalloon returns the finished turn's balloon (the one finishTurn just
 // appended), or nil when the turn touched no files.
 func lastBalloon(rec *SessionRecord) *filetrack.TurnChanges {

@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // ContinueNudgeText is the synthetic user message the agent loop appends

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Regression: persistEdited/truncateTail must survive the meta line's
@@ -28,7 +28,7 @@ func TestPersistEditedWithTurnActivityMeta(t *testing.T) {
 			provider.Message{ID: "a" + string(rune('0'+i)), Role: provider.RoleAssistant,
 				Content: []provider.Content{provider.TextBlock{Text: "EXACTLY: ALPHA"}}, TurnIndex: i},
 			provider.Message{ID: "tr" + string(rune('0'+i)), Role: provider.RoleTool,
-				Content:  []provider.Content{provider.ToolResultBlock{CallID: "call_" + string(rune('0'+i)), Content: []provider.Content{provider.TextBlock{Text: "./ (0 entries)\n"}}, StartedAt: 1, DurationMs: 3}},
+				Content:   []provider.Content{provider.ToolResultBlock{CallID: "call_" + string(rune('0'+i)), Content: []provider.Content{provider.TextBlock{Text: "./ (0 entries)\n"}}, StartedAt: 1, DurationMs: 3}},
 				TurnIndex: i},
 		)
 	}

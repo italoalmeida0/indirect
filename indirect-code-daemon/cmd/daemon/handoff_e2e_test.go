@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Brutal update primitives against the fake mirror (no WS needed):
@@ -177,8 +177,6 @@ func TestAbortHandoffResumesPausedTurn(t *testing.T) {
 		t.Fatalf("reason lost: %q", st.lastError)
 	}
 }
-
-
 
 func TestCopyToSlotCopiesLiveStateAsIs(t *testing.T) {
 	// Brutal protocol: --update-start SIGKILLs the old daemon first, so a

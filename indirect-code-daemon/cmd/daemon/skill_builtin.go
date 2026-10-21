@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // builtinSkillsFS holds the builtin skill DEFINITIONS as real .js modules

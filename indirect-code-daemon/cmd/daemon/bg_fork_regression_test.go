@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // BUG-BG-01 regression: sessionInboxDurable retries under mailbox pressure

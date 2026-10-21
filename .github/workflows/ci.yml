@@ -1,6 +1,6 @@
 name: CI
 
-# Cross-platform CI for llm-gateway:
+# Cross-platform CI for indirect:
 #   - gateway: Bun-side gates on Linux only (lint, typecheck, unit+integration
 #     tests, SPA build sanity).
 #   - daemon: Go gates NATIVE on every OS/arch we ship — linux amd64/arm64,

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/filetrack"
+	"indirect/indirect-code-daemon/packages/filetrack"
 )
 
 // Session lifecycle TTLs.

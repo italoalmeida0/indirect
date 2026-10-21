@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "llm-gateway",
+      "name": "indirect",
       "dependencies": {
         "@bjorn3/browser_wasi_shim": "^0.4.2",
         "@floating-ui/dom": "^1.8.0",

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Regression (audit bug 6): keepRecent <= 0 left idx at len(msgs) and the

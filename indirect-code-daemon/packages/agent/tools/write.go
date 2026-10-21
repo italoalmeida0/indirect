@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 // WriteTool writes content to a file, creating parent directories.

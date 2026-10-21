@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 // BgCancelArgs are the model-facing arguments of the bg_cancel tool.

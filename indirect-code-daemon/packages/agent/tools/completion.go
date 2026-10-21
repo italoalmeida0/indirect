@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // FinishEntireRequestTool is the ONLY way a turn ends with a user-visible

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 func TestBgFingerprint(t *testing.T) {

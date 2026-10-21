@@ -478,7 +478,7 @@ async function main() {
     const page = await desktop.newPage();
     const { pageErrors, consoleErrors } = watchPage(page);
     await page.addInitScript(({ sess, hid, sid }: any) => {
-      try { localStorage.setItem("llm_gateway_session", JSON.stringify(sess));
+      try { localStorage.setItem("cache_code_session", JSON.stringify(sess));
         localStorage.setItem(`llmgw-rc-session:${hid}`, sid); } catch {}
     }, {
       sess: { accessToken: ctx.login.accessToken, refreshToken: ctx.login.refreshToken, user: ctx.login.user },
@@ -517,7 +517,7 @@ async function main() {
     const mpage = await mobile.newPage();
     const mwatch = watchPage(mpage);
     await mpage.addInitScript(({ sess, hid, sid }: any) => {
-      try { localStorage.setItem("llm_gateway_session", JSON.stringify(sess));
+      try { localStorage.setItem("cache_code_session", JSON.stringify(sess));
         localStorage.setItem(`llmgw-rc-session:${hid}`, sid); } catch {}
     }, {
       sess: { accessToken: ctx.login.accessToken, refreshToken: ctx.login.refreshToken, user: ctx.login.user },

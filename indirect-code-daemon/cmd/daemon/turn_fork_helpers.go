@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 func copyForkAttachment(source, target string) error {

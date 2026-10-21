@@ -13,12 +13,12 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/internal/durable"
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/filetrack"
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/internal/durable"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/filetrack"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // Session store: one JSONL file per session, one line per finished turn,
@@ -181,9 +181,9 @@ func splitRecord(rec *SessionRecord) ([]turnLine, metaLine) {
 		Attachments: rec.Attachments, LastDate: rec.LastDate, LastMode: rec.LastMode,
 		Compaction: rec.Compaction, TurnSeq: rec.TurnSeq, Queue: rec.Queue,
 		ApprovalDeadlineUnix: rec.ApprovalDeadlineUnix,
-		BgTasks: rec.BgTasks,
-		Widgets: rec.Widgets,
-		Skills:  rec.Skills,
+		BgTasks:              rec.BgTasks,
+		Widgets:              rec.Widgets,
+		Skills:               rec.Skills,
 	}
 	// Group message indices by turn with the shared rule (turnGroups):
 	// zero-index messages attach to the FOLLOWING turn, trailing zeros to
@@ -375,11 +375,11 @@ func assembleRecord(lines []turnLine, meta metaLine) *SessionRecord {
 		Status: meta.Status, Pinned: meta.Pinned, Jailed: meta.Jailed,
 		CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt,
 		Attachments: meta.Attachments, Compaction: meta.Compaction,
-		Skills: meta.Skills,
+		Skills:  meta.Skills,
 		TurnSeq: meta.TurnSeq, Queue: meta.Queue,
 		ApprovalDeadlineUnix: meta.ApprovalDeadlineUnix,
-		BgTasks: meta.BgTasks,
-		Widgets: meta.Widgets,
+		BgTasks:              meta.BgTasks,
+		Widgets:              meta.Widgets,
 	}
 	// Merge turn lines by message identity instead of "last line wins":
 	// lines sharing a Turn merge in order, deduped by message ID (the

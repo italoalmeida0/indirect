@@ -26,16 +26,14 @@ export interface Session {
   user: PublicUser;
 }
 
-const LS = "indirect_session";
-const LEGACY_LS = "llm_gateway_session";
+const LS = "cache_code_session";
 
 function loadStored(): Session | null {
   try {
-    const raw = localStorage.getItem(LS) || localStorage.getItem(LEGACY_LS);
+    const raw = localStorage.getItem(LS);
     return raw ? JSON.parse(raw) : null;
   } catch {
     localStorage.removeItem(LS);
-    localStorage.removeItem(LEGACY_LS);
     return null;
   }
 }
@@ -67,13 +65,8 @@ export function setSession(s: Session | null): void {
   // found an empty store, zeroed the signal back to null mid-render (killing
   // the fresh session: no setItem, no reload, a 401 without a bearer), which
   // is exactly what happened when signing in from "/" (no #/login hash).
-  if (s) {
-    localStorage.setItem(LS, JSON.stringify(s));
-    localStorage.removeItem(LEGACY_LS);
-  } else {
-    localStorage.removeItem(LS);
-    localStorage.removeItem(LEGACY_LS);
-  }
+  if (s) localStorage.setItem(LS, JSON.stringify(s));
+  else localStorage.removeItem(LS);
   setSessionSignal(s);
   for (const fn of listeners) fn(session());
 }

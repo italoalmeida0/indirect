@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // runnerMain is the RUNNER role of the multi-call binary: it executes ONE

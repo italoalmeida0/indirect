@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // Session creation is passive: the MODE comes from the wire (the frontend

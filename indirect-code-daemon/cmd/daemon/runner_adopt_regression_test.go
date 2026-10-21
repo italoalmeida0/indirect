@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // Regression (audit bug 28): repairTerminalCopy re-copied the brain log but

@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/internal/durable"
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
-	"llm-gateway/indirect-code-daemon/packages/processutil"
-	"llm-gateway/indirect-code-daemon/packages/provider"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/internal/durable"
+	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/processutil"
+	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // Runner adoption, orphan policy and GC (F5/F5b/F6/F8).

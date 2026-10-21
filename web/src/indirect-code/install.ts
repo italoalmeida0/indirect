@@ -24,7 +24,7 @@ export function indirectInstallCommands(connectUrl: string): {
   // resolves it: hostname(1) on unix; the registry ComputerName on
   // Windows, which keeps the real mixed case, unlike $env:COMPUTERNAME).
   return {
-    unix: `curl -fsSL ${gw}/r/indirect-install.sh | bash -s -- ${gw} ${tok}`,
-    windows: `powershell -ExecutionPolicy Bypass -NoProfile -Command "& ([scriptblock]::Create((irm '${gw}/r/indirect-install.ps1'))) ${gw} ${tok}"`,
+    unix: `curl -fsSL ${gw}/r/indirect-code-install.sh | bash -s -- ${gw} ${tok}`,
+    windows: `powershell -ExecutionPolicy Bypass -NoProfile -Command "& ([scriptblock]::Create((irm '${gw}/r/indirect-code-install.ps1'))) ${gw} ${tok}"`,
   };
 }

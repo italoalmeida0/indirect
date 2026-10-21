@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Indirect Code installer (Linux/macOS).
-# Usage: curl -fsSL <gateway>/r/indirect-install.sh | bash -s -- <gateway-url> <token>
+# Usage: curl -fsSL <gateway>/r/indirect-code-install.sh | bash -s -- <gateway-url> <token>
 
 set -euo pipefail
 
-GW="${1:?usage: indirect-install.sh <gateway-url> <token> [host-name]}"
-TOK="${2:?usage: indirect-install.sh <gateway-url> <token> [host-name]}"
+GW="${1:?usage: indirect-code-install.sh <gateway-url> <token> [host-name]}"
+TOK="${2:?usage: indirect-code-install.sh <gateway-url> <token> [host-name]}"
 HOST_NAME="${3:-$(hostname 2>/dev/null || echo "")}"
 GW="${GW%/}"
 

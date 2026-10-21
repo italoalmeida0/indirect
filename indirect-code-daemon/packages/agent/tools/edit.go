@@ -10,7 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 // EditTool edits a single file using exact text replacement: every
@@ -268,7 +268,7 @@ func normalizeForFuzzyMatch(text string) string {
 // (a smart quote is 3 UTF-8 bytes normalizing to 1) or the original may
 // expand the normalized (trailing whitespace is dropped entirely).
 type fuzzyRune struct {
-	r   rune
+	r     rune
 	start int
 	end   int
 }

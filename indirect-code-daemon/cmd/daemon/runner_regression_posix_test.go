@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 func TestRegressionRunnerKillEscalatesAfterLeaderExits(t *testing.T) {

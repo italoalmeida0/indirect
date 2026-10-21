@@ -3,7 +3,7 @@ package core
 import (
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 func testMsg(role provider.Role, text string) provider.Message {

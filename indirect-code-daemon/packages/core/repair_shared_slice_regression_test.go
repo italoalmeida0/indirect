@@ -21,7 +21,7 @@ import (
 	"sync"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // regressionOrphanTranscript builds [assistant(tool_use t1), tool(result for

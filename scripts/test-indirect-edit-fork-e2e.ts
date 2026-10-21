@@ -209,7 +209,7 @@ async function openSessionPage(ctx: any, sessionId: string) {
   page.on("pageerror", (e: Error) => pageErrors.push(String(e).slice(0, 300)));
   page.on("console", (m: any) => { if (m.type() === "error") consoleErrors.push(String(m.text()).slice(0, 300)); });
   await page.addInitScript(({ sess, hid, sid }: any) => {
-    localStorage.setItem("llm_gateway_session", JSON.stringify(sess));
+    localStorage.setItem("cache_code_session", JSON.stringify(sess));
     localStorage.setItem(`llmgw-rc-session:${hid}`, sid);
   }, {
     sess: { accessToken: ctx.login.accessToken, refreshToken: ctx.login.refreshToken, user: ctx.login.user },

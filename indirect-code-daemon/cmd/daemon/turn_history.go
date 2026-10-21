@@ -1,8 +1,8 @@
 package main
 
 import (
-	"llm-gateway/indirect-code-daemon/packages/filetrack"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/filetrack"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Turn-granular history pagination: the transcript is append-only and
@@ -24,19 +24,18 @@ const (
 
 // historyBlock is one page of transcript: whole turns, newest last.
 type historyBlock struct {
-	Messages   []provider.Message
-	Balloons   []filetrack.TurnChanges
+	Messages    []provider.Message
+	Balloons    []filetrack.TurnChanges
 	Attachments []AttachmentRef
 	// Mode mirrors the session mode at page time so the ws page path can
 	// apply the same assistant-text sanitization as the payload paths.
-	Mode string
+	Mode       string
 	OldestTurn int  // smallest TurnIndex in the block (cursor for beforeTurn)
 	NewestTurn int  // largest TurnIndex in the block
 	HasOlder   bool // more turns exist below OldestTurn
 	TotalTurns int  // distinct turn count in the full transcript
 	FirstIndex int  // raw transcript offset of Messages[0] (srcIdx base)
 }
-
 
 // sliceHistoryBlock returns the tail block (beforeTurn <= 0) or the block
 // of turns strictly below beforeTurn. Turns are grouped with the shared

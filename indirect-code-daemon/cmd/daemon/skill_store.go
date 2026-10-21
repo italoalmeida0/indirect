@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // skillStore is the daemon's per-installation skill registry: *.js skill

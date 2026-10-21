@@ -6,9 +6,9 @@ import (
 	"syscall"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/processutil"
-	"llm-gateway/indirect-code-daemon/packages/proctable"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/processutil"
+	"indirect/indirect-code-daemon/packages/proctable"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // reapStoredCommand kills the command's group from the durable state

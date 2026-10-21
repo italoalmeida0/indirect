@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 // pinHost fakes BgAwaitHost + BgAwaitCheckHost: one pinned task with a

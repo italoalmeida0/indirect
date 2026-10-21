@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/core"
 )
 
 type fakeBgCheckHost struct {

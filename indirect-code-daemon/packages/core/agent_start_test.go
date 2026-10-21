@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // startFakeClient answers the first model call with a tool use (resolves

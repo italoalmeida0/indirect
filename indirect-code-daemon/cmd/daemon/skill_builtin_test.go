@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // Builtin skills live ONLY in the binary: builtin_skills/*.js is embedded

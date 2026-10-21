@@ -5,7 +5,7 @@ import (
 	"maps"
 	"slices"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Strings and value blocks are immutable; copy only mutable containers at

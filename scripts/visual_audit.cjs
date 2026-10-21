@@ -249,9 +249,9 @@ async function runAudit() {
       db.prepare('UPDATE users SET totp_secret = ? WHERE role = ?').run('JBSWY3DPEHPK3PXP', 'admin');
     "`);
     await page.evaluate(() => {
-      const s = JSON.parse(localStorage.getItem('llm_gateway_session') || '{}');
+      const s = JSON.parse(localStorage.getItem('cache_code_session') || '{}');
       if (s.user) s.user.totpEnabled = true;
-      localStorage.setItem('llm_gateway_session', JSON.stringify(s));
+      localStorage.setItem('cache_code_session', JSON.stringify(s));
     });
     await page.goto('http://localhost:4991/#/settings');
     await page.reload();

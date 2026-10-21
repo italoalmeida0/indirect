@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/agent/tools"
 )
 
 // pidfile recovery: on (re)start the supervisor scans pidfiles.
@@ -22,7 +22,9 @@ func (b *bgSupervisor) writePidfile(j *bgJob) error {
 	}
 	pf := bgPidfile{JobID: j.ID, PID: j.PID, Identity: j.Identity, Runner: j.Runner, SessionID: j.SessionID, Kind: j.Kind, Label: j.Label, LogPath: j.LogPath, StderrPath: j.StderrPath, StartedAt: j.StartedAt}
 	data, err := json.Marshal(pf)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	return writeAtomicFile(b.pidPath(j.ID), append(data, '\n'))
 }
 
@@ -113,12 +115,18 @@ func bgReadTailPath(path string, max int) (string, bool) {
 	if path == "" {
 		return "", false
 	}
-	if max <= 0 || max > 256*1024 { max = 64*1024 }
+	if max <= 0 || max > 256*1024 {
+		max = 64 * 1024
+	}
 	f, err := os.Open(path)
-	if err != nil { return "", false }
+	if err != nil {
+		return "", false
+	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil { return "", false }
+	if err != nil {
+		return "", false
+	}
 	n := min(int64(max), info.Size())
 	buf := make([]byte, n)
 	read, err := f.ReadAt(buf, info.Size()-n)

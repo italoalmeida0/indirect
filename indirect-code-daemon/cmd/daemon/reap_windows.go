@@ -3,8 +3,8 @@
 package main
 
 import (
-	"llm-gateway/indirect-code-daemon/packages/processutil"
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/processutil"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 // The runner's non-inherited Job Object handle owns the whole tree. Its

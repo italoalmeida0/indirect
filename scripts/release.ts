@@ -81,6 +81,6 @@ console.log(`
 🎉 Release v${version} published!
 The VPS auto-deploy listener will detect the push, rebuild images, and serve the new binaries at:
   <gateway-url>/r/versions.json
-  <gateway-url>/r/indirect-install.sh
-  <gateway-url>/r/indirect-install.ps1
+  <gateway-url>/r/indirect-code-install.sh
+  <gateway-url>/r/indirect-code-install.ps1
 `);

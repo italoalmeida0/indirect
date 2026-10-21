@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"llm-gateway/indirect-code-daemon/internal/durable"
+	"indirect/indirect-code-daemon/internal/durable"
 )
 
 // configRevision hashes editor-owned fields. v2: settings only

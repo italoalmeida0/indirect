@@ -151,7 +151,7 @@ try {
 
   // Use the built dashboard shell with fixture-only API responses.
   await page.addInitScript(() => {
-    localStorage.setItem("llm_gateway_session", JSON.stringify({
+    localStorage.setItem("cache_code_session", JSON.stringify({
       accessToken: "fixture", refreshToken: "fixture", user: {
         id: "fixture", name: "Layout tester", email: "layout@example.test", role: "user",
         hasPassword: true, googleLinked: false, totpEnabled: false, status: "active", createdAt: 0,

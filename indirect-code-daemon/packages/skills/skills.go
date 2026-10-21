@@ -53,7 +53,7 @@ import (
 	"sort"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/qjs"
+	"indirect/indirect-code-daemon/packages/qjs"
 )
 
 // Policy is how a tool (or one of its argument keys) may run.

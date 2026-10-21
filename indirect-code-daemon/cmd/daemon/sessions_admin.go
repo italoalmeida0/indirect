@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // sessionsAdmin implements create/delete/rename/pin + summaries + purge.

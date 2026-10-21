@@ -8,8 +8,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"indirect/indirect-code-daemon/packages/runner"
 	"io"
-	"llm-gateway/indirect-code-daemon/packages/runner"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,8 +22,9 @@ import (
 	"syscall"
 	"time"
 
+	"indirect/indirect-code-daemon/packages/agent/tools"
+
 	"github.com/gorilla/websocket"
-	"llm-gateway/indirect-code-daemon/packages/agent/tools"
 )
 
 // Version is set at build time via -ldflags "-X main.Version=...".

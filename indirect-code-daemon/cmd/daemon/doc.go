@@ -1,5 +1,5 @@
 // Package main is the indirect-code daemon v2: an actor-model rewrite of the
-// v1 daemon (llm-gateway/indirect-code-daemon).
+// v1 daemon (indirect/indirect-code-daemon).
 //
 // Architecture:
 //

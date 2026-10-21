@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // Tool result envelope: every builtin tool result reaches the model wrapped in

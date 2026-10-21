@@ -1,7 +1,7 @@
 package main
 
 import (
-	"llm-gateway/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/runner"
 	"os"
 	"strings"
 	"sync"

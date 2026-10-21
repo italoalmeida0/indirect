@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"strings"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/skills"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // canonicalReasoning normalizes a reasoning-effort string. Pure function.

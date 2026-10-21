@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // recordingTool captures the args it was invoked with so the test

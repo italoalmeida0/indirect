@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"llm-gateway/indirect-code-daemon/packages/core"
-	"llm-gateway/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // UseSkillHost is the daemon bridge: look up a skill, run its activation
