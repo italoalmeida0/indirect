@@ -28,7 +28,8 @@ export function createSessionOptions(opts: {
   // sent is derived from the selection in sessionOptions(); this signal is
   // kept in sync from daemon snapshots and picker choices for the UI.
   const [agentMode, setAgentMode] = createSignal("agentic");
-  const [selectedSkills, setSelectedSkills] = createSignal<string[]>([]);
+  const arraysEqual = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
+  const [selectedSkills, setSelectedSkills] = createSignal<string[]>([], { equals: arraysEqual });
   /** Resolved approval mode from the daemon ("ask" | "yolo"). "yolo" hides
    * the YOLO/ASK selector (spec 4.2). */
   const [approvalMode, setApprovalMode] = createSignal<"ask" | "yolo">("ask");
@@ -46,9 +47,15 @@ export function createSessionOptions(opts: {
   /** Applies the invariant to the live selection state (draft bootstrap:
    * a fresh draft with no mode skill picks the first available one). */
   function ensureSelection() {
-    const next = ensuredSelection(selectedSkills());
-    setSelectedSkills(next);
-    setAgentMode(deriveSessionMode(next, (n) => opts.getSkill?.(n)?.mode));
+    const current = selectedSkills();
+    const next = ensuredSelection(current);
+    if (!arraysEqual(current, next)) {
+      setSelectedSkills(next);
+    }
+    const derived = deriveSessionMode(next, (n) => opts.getSkill?.(n)?.mode);
+    if (agentMode() !== derived) {
+      setAgentMode(derived);
+    }
     return next;
   }
   /** The wire usable for one skill: only present when the session value
@@ -107,7 +114,13 @@ export function createSessionOptions(opts: {
   /** Per-skill usable override for the session ("inherit" | "ask" | "yolo" |
    * "deny"); "deny" = AI-hidden but user-activatable, "never" skills are
    * base-only and never appear here. */
-  const [skillUsables, setSkillUsables] = createSignal<Record<string, string>>({});
+  const recordsEqual = (a: Record<string, string>, b: Record<string, string>) => {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((k) => a[k] === b[k]);
+  };
+  const [skillUsables, setSkillUsables] = createSignal<Record<string, string>>({}, { equals: recordsEqual });
 
   /** Applies the session skill map from the daemon snapshot (complete
    * replace): active skills ordered by priority become the selection, and

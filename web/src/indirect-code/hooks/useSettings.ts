@@ -47,9 +47,10 @@ export function createSettings(opts: {
     () => configDoc()?.skills || {},
   );
   /** Whether the daemon's OFFICIAL skill list has been received for this
-   * host (config mirror present). Before that, the mode picker renders its
-   * temporary 4-skill cache; afterwards the official list rules. */
-  const skillsLoaded = () => configDoc() != null;
+   * host (config mirror present and skills field populated). Before that, the
+   * mode picker renders its temporary 4-skill cache; afterwards the official
+   * list rules. */
+  const skillsLoaded = () => configDoc()?.skills != null;
   const settingsChanged = createMemo(
     () =>
       !!(

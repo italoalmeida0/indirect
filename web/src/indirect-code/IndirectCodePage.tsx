@@ -1347,7 +1347,9 @@ export default function IndirectCodePage() {
     options.applyOptions(selection);
     // Draft bootstrap (same as startNewConversation): the mandatory mode
     // skill is in place before the first picker render or creation.
-    options.ensureSelection();
+    untrack(() => {
+      options.ensureSelection();
+    });
   });
 
   // Auto-poll hosts while waiting for initial daemon pairing

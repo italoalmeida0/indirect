@@ -93,12 +93,28 @@ export function ToolbarContext() {
     c.syncSkills(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
   }
 
-  const modeSkillList = (
+  function activeModeSkillName(): string {
+    const sel0 = c.selectedSkills()[0];
+    if (sel0 && isModeSkill(sel0)) return sel0;
+    const base = baseMode(c.agentMode());
+    return modeSkills().find((m) => baseMode(m.mode) === base)?.name ?? (base === "talk" ? "talk" : "build");
+  }
+
+  function currentModeSpec() {
+    const name = activeModeSkillName();
+    return modeSkills().find((s) => s.name === name) || modeSkills()[0];
+  }
+
+  function additionalCount() {
+    return c.selectedSkills().filter((name) => !isModeSkill(name) && m.savedSkills()[name]?.enabled).length;
+  }
+
+  const modeSkillList = () => (
     <For each={modeSkills()}>
       {(mode) => (
         <button
           role="menuitemradio"
-          aria-checked={c.selectedSkills()[0] === mode.name}
+          aria-checked={activeModeSkillName() === mode.name}
           onClick={() => chooseModeSkill(mode.name)}
           class="w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-elev cursor-pointer"
         >
@@ -107,7 +123,7 @@ export function ToolbarContext() {
             <span class="font-medium text-ink-100">{mode.label}</span>
             <span class="block text-[11px] text-ink-500 mt-0.5">{mode.description}</span>
           </span>
-          <Show when={c.selectedSkills()[0] === mode.name}>
+          <Show when={activeModeSkillName() === mode.name}>
             <Iconify icon="lucide:check" size={14} />
           </Show>
         </button>
@@ -115,7 +131,7 @@ export function ToolbarContext() {
     </For>
   );
 
-  const additionalSkillList = (
+  const additionalSkillList = () => (
     <>
       <ul ref={(el) => attachSortable(el, { onReorder: reorderAdditional })}>
         <For each={additionalSkills()} fallback={<li class="p-2 text-ink-500">No additional skills on this host.</li>}>
@@ -291,14 +307,14 @@ export function ToolbarContext() {
           </MenuItem>
 
           <MenuItem
-            icon={c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer"}
+            icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")}
             onClick={() => setSubView("mode")}
           >
             <span class="flex-1">Mode</span>
             <span class="text-ink-300 font-medium text-[11px] capitalize">
-              {c.agentMode()}
-              <Show when={c.selectedSkills().filter((name) => m.savedSkills()[name]?.enabled).length > 0}>
-                <span class="text-ink-500"> (+{c.selectedSkills().filter((name) => m.savedSkills()[name]?.enabled).length})</span>
+              {currentModeSpec()?.label ?? c.agentMode()}
+              <Show when={additionalCount() > 0}>
+                <span class="text-ink-500"> (+{additionalCount()})</span>
               </Show>
             </span>
             <Iconify icon="lucide:chevron-right" size={13} class="text-ink-500 shrink-0 ml-1" />
@@ -362,11 +378,11 @@ export function ToolbarContext() {
           </div>
           <Show when={modeSkills().length > 0}>
             <p class="px-2 py-1.5 font-medium text-ink-400">Mode</p>
-            {modeSkillList}
+            {modeSkillList()}
           </Show>
           <div class="mt-1 border-t border-line pt-2">
             <p class="px-2 pb-1 font-medium text-ink-400">Additional skills</p>
-            {additionalSkillList}
+            {additionalSkillList()}
           </div>
         </div>
       </Show>
@@ -434,17 +450,17 @@ export function ToolbarContext() {
   <button ref={c.modeBtn} data-menubtn aria-label="Agent mode and skills" aria-expanded={c.modeMenuOpen()}
     onClick={() => { const next = !c.modeMenuOpen(); ui.closeMenus(); c.setModeMenuOpen(next); }}
     class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs hover:bg-elev cursor-pointer">
-    <Iconify icon={c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer"} size={14} />
-    <span class="capitalize">{c.agentMode()}</span><Show when={c.selectedSkills().filter((name) => m.savedSkills()[name]?.enabled).length > 0}><span class="text-ink-500">+{c.selectedSkills().filter((name) => m.savedSkills()[name]?.enabled).length}</span></Show>
+    <Iconify icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")} size={14} />
+    <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}</span><Show when={additionalCount() > 0}><span class="text-ink-500">+{additionalCount()}</span></Show>
     <Iconify icon="lucide:chevron-down" size={11} />
   </button>
   <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} placement="top-start" width="20rem">
     <Show when={modeSkills().length > 0}>
       <p class="px-2 py-1.5 font-medium text-ink-400">Mode</p>
-      {modeSkillList}
+      {modeSkillList()}
     </Show>
     <div class="mt-1 border-t border-line pt-2"><p class="px-2 pb-1 font-medium text-ink-400">Additional skills</p>
-      {additionalSkillList}
+      {additionalSkillList()}
     </div>
   </FloatMenu>
 </div>
