@@ -1,7 +1,5 @@
 import agenticBase from "skill:agentic_base";
 
-/* Learning mode: Socratic tutoring. Writing and editing are denied;
-   reading and running commands stay available to verify hypotheses. */
 export default {
   ...agenticBase,
   name: "learning",

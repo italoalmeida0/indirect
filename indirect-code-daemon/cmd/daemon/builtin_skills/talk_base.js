@@ -1,8 +1,5 @@
 import generativeUITalk from "skill:generative_ui_talk";
 
-/* talk is the conversational mode: no workspace access at all, web research
-   free, and widgets delivered as source text in the reply. approvalMode is
-   yolo because talk has no confirmation step. */
 export default {
   ...generativeUITalk,
   name: "talk",

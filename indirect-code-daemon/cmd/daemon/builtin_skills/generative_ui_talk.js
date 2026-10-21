@@ -1,14 +1,10 @@
 import generativeUI from "skill:generative_ui";
 
-/* A talk session has no workspace, so a widget arrives as source text inside
-   the reply: the design-system base applies, with the src_file argument
-   denied. The base grants widget_set as the bare policy "yolo"; here it grows
-   an argument override, so the granted policy is restated explicitly. */
 export default {
   ...generativeUI,
   name: "generative_ui_talk",
   description: "Generative UI delivery for talk sessions (the block lives in the reply text).",
-  usable: "deny",
+  usable: "never",
   permissions: {
     ...generativeUI.permissions,
     widget_set: {

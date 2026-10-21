@@ -1,7 +1,5 @@
 import agenticBase from "skill:agentic_base";
 
-/* Build mode: implement and validate. Every workspace grant of
-   agentic_base stays as it is, so this module only spreads the base. */
 export default {
   ...agenticBase,
   name: "build",

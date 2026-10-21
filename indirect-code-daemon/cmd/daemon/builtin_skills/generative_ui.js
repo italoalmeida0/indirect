@@ -1,7 +1,3 @@
-/* generative_ui is the widget design-system base. It carries no delivery
-   rules and no mode: the agentic and talk modules import it, append their own
-   delivery paragraph in front of this body and narrow the permissions they
-   need. It is `never` usable — nobody selects it directly. */
 export default {
   name: "generative_ui",
   description: "Interactive generative-UI widgets (charts, calculators, games) design system.",

@@ -1,7 +1,5 @@
 import agenticBase from "skill:agentic_base";
 
-/* Plan mode: inspect only. The two mutating tools are denied on top
-   of the base's grants. */
 export default {
   ...agenticBase,
   name: "plan",
