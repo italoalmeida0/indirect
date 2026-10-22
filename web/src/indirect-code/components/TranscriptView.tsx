@@ -216,7 +216,9 @@ export function TranscriptView() {
                     onBlur={() => {t.editMentions.setFocused(false);}}
                     onKeyDown={(e) => {
                       if (e.isComposing || t.editMentions.keyDown(e)) return;
-                      if (!ui.isMobile() && (e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                        // Works on mobile too (hardware keyboards); plain Enter
+                        // keeps inserting newlines there.
                         e.preventDefault();
                         t.saveEditMsg(rawIdx(), msg);
                       } else if (e.key === "Escape") {

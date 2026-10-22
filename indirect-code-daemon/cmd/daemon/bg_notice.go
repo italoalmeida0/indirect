@@ -14,10 +14,11 @@ type bgNoticeMsg struct {
 // The actor owns the BgTask record from here: chunks stream in via
 // bgTaskChunkMsg regardless of turn state.
 type bgTaskRegisterMsg struct {
-	JobID string
-	Kind  string
-	Label string
-	Reply chan any
+	JobID     string
+	Kind      string
+	Label     string
+	StartedAt int64
+	Reply     chan any
 }
 
 type bgTaskRegisterResult struct {

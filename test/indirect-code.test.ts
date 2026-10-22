@@ -615,12 +615,11 @@ describe("Indirect Code Relay and Pairing", () => {
         expect(forked.session.options).toEqual(configured.session.options);
       }
 
-      // Search backend was deliberately removed in v2 (plan §D2): the
-      // handler answers with an empty result set so the inert UI never
-      // errors. Assert the documented contract, not v1 full-text behavior.
+      // Search was restored in v2.1.7 to return matches across session titles and transcript.
       send({ type: "search", query: "Slash Commands" });
       const hits = await waitFor((m) => m.type === "search_results");
-      expect(hits.results).toEqual([]);
+      expect(hits.results.length).toBeGreaterThanOrEqual(1);
+      expect(hits.results.some((r: any) => r.title.includes("Renamed Session"))).toBe(true);
 
       // Saved edits truncate stale replies and survive a fresh snapshot.
       send({ type: "edit_message", sessionId: sid, index: 0, text: "edited hello", regenerate: false });

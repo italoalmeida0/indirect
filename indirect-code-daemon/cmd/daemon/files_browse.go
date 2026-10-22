@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -19,6 +20,13 @@ func browseFolders(path string) (string, string, []FolderEntry, error) {
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			parent := filepath.Dir(path)
+			if pInfo, pErr := os.Stat(parent); pErr == nil && !pInfo.IsDir() {
+				return "", "", nil, fmt.Errorf("parent is not a directory: %s", parent)
+			}
+			return path, parent, []FolderEntry{}, nil
+		}
 		return "", "", nil, err
 	}
 	folders := []FolderEntry{}

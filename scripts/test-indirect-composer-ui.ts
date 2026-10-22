@@ -318,6 +318,46 @@ try {
       (c: any) => c.type === "prompt" && c.text === "/jail",
     ),
   );
+  // Mobile keeps plain Enter as a newline but Ctrl/Cmd+Enter must still send
+  // (hardware keyboards on phones/tablets).
+  await reset();
+  await page.evaluate(() => {
+    (window as any).composerUI.mobile = true;
+  });
+  await page.locator("#rc-composer").fill("mobile draft");
+  await page.locator("#rc-composer").press("Enter");
+  snapshot = await state();
+  assert.equal(
+    snapshot.text,
+    "mobile draft\n",
+    "plain Enter on mobile must insert a line break, not send",
+  );
+  assert(
+    !snapshot.commands.some((c: any) => c.type === "prompt"),
+    "plain Enter on mobile sent a prompt",
+  );
+  await page.locator("#rc-composer").press("Control+Enter");
+  snapshot = await state();
+  assert(
+    snapshot.commands.some(
+      (c: any) => c.type === "prompt" && c.text === "mobile draft",
+    ),
+    "Ctrl+Enter on mobile must send the prompt",
+  );
+  await reset();
+  await page.locator("#rc-composer").fill("mobile meta draft");
+  await page.locator("#rc-composer").press("Meta+Enter");
+  snapshot = await state();
+  assert(
+    snapshot.commands.some(
+      (c: any) => c.type === "prompt" && c.text === "mobile meta draft",
+    ),
+    "Cmd+Enter on mobile must send the prompt",
+  );
+  await page.evaluate(() => {
+    (window as any).composerUI.mobile = false;
+  });
+  await reset();
   // Preview responses are broadcast; only the current request may open a modal.
   await page.evaluate(() => {
     const a = (window as any).composerUI;

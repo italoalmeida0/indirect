@@ -25,6 +25,12 @@ function taskState(status: string) {
   }
 }
 
+function exitBadgeTone(code: number) {
+  if (code === 0) return "border-line/60 text-ink-500";
+  if (code === 130 || code === 143) return "border-amber-500/40 text-amber-400";
+  return "border-rose-500/40 text-rose-400";
+}
+
 /**
  * Background tasks card (below the transcript, above the queue).
  *
@@ -119,6 +125,14 @@ export function BackgroundCard(props: { contextKey?: string }) {
                   <span class="truncate text-ink-200 min-w-0 flex-1 text-[12.5px]">
                     <ShellCmd text={shortLabel(job.label || job.id)} />
                   </span>
+                  <Show when={job.status !== "running" && job.exitCode !== undefined}>
+                    <span
+                      class={`shrink-0 rounded border px-1 py-px font-mono text-[10px] leading-tight tabular-nums ${exitBadgeTone(job.exitCode!)}`}
+                      data-bg-exit-code={job.exitCode}
+                    >
+                      exit {job.exitCode}
+                    </span>
+                  </Show>
                   <span class="text-[11px] text-ink-500 tabular-nums shrink-0" data-bg-duration>
                     {duration(job)}
                   </span>

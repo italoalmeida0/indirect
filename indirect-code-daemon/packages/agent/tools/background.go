@@ -91,6 +91,7 @@ type BackgroundProcess struct {
 	BrainLog   string
 	StderrPath string
 	Stop       func()
+	StartedAt  int64
 }
 
 type SlowHook func(kind, label string, process BackgroundProcess) (jobID string, logPath string, stream func(chunk string), deliver func(result string, isError bool, exitCode int))

@@ -247,7 +247,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		}
 	}
 	// From here the job owns the process lifetime.
-	jobID, fullLog, stream, deliver := t.Slow("bash", a.Command, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, Stop: func() {
+	jobID, fullLog, stream, deliver := t.Slow("bash", a.Command, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, StartedAt: start.UnixMilli(), Stop: func() {
 		runCancel()
 		proc.Stop()
 	}})

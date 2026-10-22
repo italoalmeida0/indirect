@@ -33,7 +33,11 @@
           var android = /Android/.test(ua);
           var touch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
           var flag = function () {
-            document.documentElement.classList.toggle("mobile", (ios || android) && touch && window.innerWidth <= 768);
+            // Short edge, not innerWidth: rotating a phone must not turn the
+            // drawer layout into the desktop sidebar on a 390px-tall screen.
+            var height = typeof window.innerHeight === "number" ? window.innerHeight : window.innerWidth;
+            var shortEdge = Math.min(window.innerWidth, height);
+            document.documentElement.classList.toggle("mobile", (ios || android) && touch && shortEdge <= 768);
           };
           flag();
           // UA/touch are device-intrinsic, but screen dims change when the

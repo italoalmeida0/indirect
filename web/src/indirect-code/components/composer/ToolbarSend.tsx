@@ -27,7 +27,7 @@ export function ToolbarSend() {
             ? !c.inputPrompt().trim() && c.pendingAttachments().length === 0
             : (!c.inputPrompt().trim() && c.pendingAttachments().length === 0) || !s.activeProject())
         }
-        class="ui-button ui-button-primary ui-button-sm w-8 h-8 p-0"
+        class="rc-composer-send ui-button ui-button-primary ui-button-sm w-8 h-8 p-0"
         data-rc-tip={c.sending() ? "Uploading attachments..." : !s.activeSessionId() ? "Start conversation" : "Send"}
         aria-label={!s.activeSessionId() ? "Start conversation" : "Send"}
       >

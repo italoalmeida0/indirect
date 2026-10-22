@@ -78,7 +78,7 @@ export function createBackground(opts: {
           kind: String(msg.kind || ""),
           label: String(msg.label || ""),
           status: "running",
-          startedAt: typeof msg.startedAt === "number" ? msg.startedAt : Date.now(),
+          startedAt: typeof msg.startedAt === "number" && msg.startedAt > 0 ? msg.startedAt : Date.now(),
         });
       } else if (msg.type === "bg_task_finished") {
         list[i] = {

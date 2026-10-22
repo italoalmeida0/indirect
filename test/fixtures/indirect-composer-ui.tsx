@@ -81,7 +81,7 @@ render(() => {
       queue={{ queues: () => ({}), queueOf: () => [] } as any}
       background={{ jobs: () => [], sessionJobs: () => [], running: () => [], output: () => ({}), clock: () => 0 } as any}
       modal={review as any}
-      ui={{ isMobile: () => false } as any}
+      ui={{ isMobile: () => !!api.mobile } as any}
     >
       <ScrollOverlays />
       <ComposerInput />

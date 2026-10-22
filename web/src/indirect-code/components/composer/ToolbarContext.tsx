@@ -275,7 +275,7 @@ export function ToolbarContext() {
       c.setAddContextOpen(!c.addContextOpen());
       ui.setModelMenuOpen(false);
     }}
-    class="w-6 h-6 rounded-full hover:bg-ink-800 flex items-center justify-center cursor-pointer"
+    class="rc-composer-add w-6 h-6 rounded-full hover:bg-ink-800 flex items-center justify-center cursor-pointer"
     data-rc-tip={ui.isMobile() ? "Add & Settings" : "Add context"}
     aria-label={ui.isMobile() ? "Add & Settings" : "Add context"}
   >

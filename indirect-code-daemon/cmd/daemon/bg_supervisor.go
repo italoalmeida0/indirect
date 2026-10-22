@@ -103,8 +103,9 @@ type bgRegisterMsg struct {
 	// BrainLog is the readable final log destination (the runner copies
 	// there at terminal). The completion notice points HERE so a jailed
 	// session can read it (V2R-010); the live tail keeps using LogPath.
-	BrainLog string
-	Stop     func()
+	BrainLog  string
+	StartedAt int64
+	Stop      func()
 	Reply    chan any
 }
 
@@ -278,6 +279,10 @@ func (b *bgSupervisor) onRegister(m bgRegisterMsg) {
 	if jobID == "" {
 		jobID = "bg_" + randomID8()
 	}
+	startedAt := m.StartedAt
+	if startedAt <= 0 {
+		startedAt = time.Now().UnixMilli() - 10000
+	}
 	j := &bgJob{
 		ID:          jobID,
 		Kind:        m.Kind,
@@ -287,7 +292,7 @@ func (b *bgSupervisor) onRegister(m bgRegisterMsg) {
 		PID:         m.PID, Identity: tools.ProcessIdentity(m.PID),
 		Runner:    m.JobID != "",
 		Status:    BgStatusRunning,
-		StartedAt: time.Now().UnixMilli(),
+		StartedAt: startedAt,
 		LogPath:   m.LogPath, StderrPath: m.StderrPath, BrainLog: m.BrainLog,
 		ctx:    jobCtx,
 		cancel: cancel,

@@ -92,6 +92,43 @@ func needsAutoTitle(rec *SessionRecord) bool {
 	return rec.Title == ""
 }
 
+// isTitleRefusal reports whether a candidate title is a model refusal or technical tool disclaimer.
+func isTitleRefusal(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	refusalPatterns := []string{
+		"can't invoke",
+		"cannot invoke",
+		"can not invoke",
+		"unable to invoke",
+		"don't have access to",
+		"dont have access to",
+		"do not have access to",
+		"doesn't have access to",
+		"does not have access to",
+		"as an ai",
+		"as a language model",
+		"as a large language model",
+		"i cannot",
+		"i can't",
+		"i am unable to",
+		"i'm unable to",
+		"finish_entire_request",
+		"not able to",
+	}
+	for _, p := range refusalPatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	if strings.Contains(lower, "tool") && (strings.Contains(lower, "invoke") || strings.Contains(lower, "call") || strings.Contains(lower, "access") || strings.Contains(lower, "execute")) {
+		return true
+	}
+	return false
+}
+
 // autoTitleFor asks the model for a short title. Pure worker-side helper.
 func autoTitleFor(firstText string, client provider.Client, model string) string {
 	if strings.TrimSpace(firstText) == "" {
@@ -138,6 +175,13 @@ func autoTitleFor(firstText string, client provider.Client, model string) string
 	title = strings.Trim(strings.TrimSpace(title), "\"'`…")
 	if runes := []rune(title); len(runes) > 80 {
 		title = strings.TrimSpace(string(runes[:80]))
+	}
+	if isTitleRefusal(title) {
+		fallback := instantTitle(firstText)
+		if fallback != "" && !isTitleRefusal(fallback) {
+			return fallback
+		}
+		return ""
 	}
 	return title
 }

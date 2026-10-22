@@ -172,7 +172,7 @@ export type DaemonEvent = EventBase &
     | { type: "discard_and_resend_result"; sessionId?: string; hostId?: string; requestId?: string; ok?: boolean; error?: string; queued?: boolean }
     | { type: "fork_and_resend_result"; sessionId?: string; hostId?: string; requestId?: string; ok?: boolean; error?: string; newSessionId?: string }
     | { type: "edit_message_result"; sessionId?: string; hostId?: string; ok?: boolean; error?: string }
-    | { type: "bg_task_registered"; sessionId?: string; jobId?: string; kind?: string; label?: string }
+    | { type: "bg_task_registered"; sessionId?: string; jobId?: string; kind?: string; label?: string; startedAt?: number }
     | { type: "bg_task_finished"; sessionId?: string; jobId?: string; status?: string; exitCode?: number }
     | { type: "error"; id?: number; requestId?: string; sessionId?: string; message?: string; replyTo?: string }
   );

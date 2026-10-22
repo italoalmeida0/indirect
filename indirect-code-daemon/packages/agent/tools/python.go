@@ -313,7 +313,7 @@ func (t *PythonTool) Execute(ctx context.Context, raw json.RawMessage, progress 
 			return core.ToolResult{}, fmt.Errorf("could not persist background disposition; process stopped, inspect it with bg_check (job_id %q): %w", proc.JobID, err)
 		}
 	}
-	jobID, fullLog, sink, deliver := t.Slow("python", label, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, StderrPath: proc.ErrLogPath, Stop: stop})
+	jobID, fullLog, sink, deliver := t.Slow("python", label, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, StderrPath: proc.ErrLogPath, StartedAt: start.UnixMilli(), Stop: stop})
 	if jobID == "" {
 		stop()
 		<-doneCh

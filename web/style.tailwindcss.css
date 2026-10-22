@@ -1138,6 +1138,27 @@ html:not(.mobile) .rc-message-actions { opacity: 0; }
 html:not(.mobile) .group\/msg:hover .rc-message-actions,
 html:not(.mobile) .group\/msg:focus-within .rc-message-actions { opacity: 1; }
 html.mobile .rc-message-actions { opacity: 1; }
+
+/* Sidebar rows: pin/delete are hover-revealed on desktop. Touch devices have
+ * no hover, so the actions stay visible, in flow, and the timestamp is
+ * dropped to leave room for a comfortable target. */
+html.mobile .rc-sidebar .rc-row-actions {
+  opacity: 1;
+  position: static;
+  gap: 0.125rem;
+}
+html.mobile .rc-sidebar .rc-row-time { display: none; }
+html.mobile .rc-sidebar .rc-row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+}
+/* Minimum comfortable touch targets for the composer/workspace chrome. */
+html.mobile .rc-sidebar-toggle,
+html.mobile .rc-composer-add,
+html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
 .rc-markdown blockquote {
   margin: 0 0 0.6rem; padding: 0.15rem 0 0.15rem 0.8rem;
   border-left: 2px solid var(--line); color: var(--ink-400);

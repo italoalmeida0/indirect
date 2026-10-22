@@ -18,6 +18,8 @@ func undoTurnBalloon(cwd string, b *filetrack.TurnChanges, onlyPath string) ([]u
 		results = append(results, res)
 		if !res.OK {
 			complete = false
+		} else {
+			f.Undone = true
 		}
 	}
 	return results, complete

@@ -103,3 +103,43 @@ describe("html.mobile — real script from web/index.html (UA + touch + width)",
     expect(classes.has("mobile")).toBe(true);
   });
 });
+
+// Touch affordances: on phones there is no hover, so anything revealed by
+// `group-hover` is unreachable, and taps need real hit areas. These read the
+// shipped sources/CSS so a refactor can't silently drop the mobile behaviour.
+describe("mobile touch affordances (drawer, row actions, hit targets)", () => {
+  const read = (rel: string) => readFileSync(path.join(import.meta.dir, "..", rel), "utf-8");
+  const css = read("web/style.tailwindcss.css");
+
+  test("phone drawer is bounded and leaves the backdrop tappable", () => {
+    const src = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
+    // A full-width inset-0 panel covers its own backdrop: dismissal needs a close
+    // button only, and the dimmed area lies to the user.
+    expect(src).not.toContain("fixed inset-0 z-40 w-full");
+    expect(src).toMatch(/fixed inset-y-0 left-0 z-40 w-\[85vw\] max-w-xs/);
+    // The backdrop must dismiss on tap.
+    expect(src).toMatch(/fixed inset-0 z-30[^"]*"[\s\S]{0,120}setSidebarOpen\(false\)/);
+  });
+
+  test("session row pin/delete are visible and sized on touch", () => {
+    const src = read("web/src/indirect-code/components/SessionSidebar.tsx");
+    expect(src).toContain("rc-row-actions");
+    expect(src).toContain("rc-row-action ");
+    // Desktop keeps the hover reveal; mobile overrides it in CSS.
+    expect(css).toContain("html.mobile .rc-sidebar .rc-row-actions");
+    expect(css).toMatch(/html\.mobile \.rc-sidebar \.rc-row-actions \{[\s\S]*?opacity: 1;/);
+    expect(css).toMatch(/html\.mobile \.rc-sidebar \.rc-row-action \{[\s\S]*?min-width: 2\.25rem;[\s\S]*?min-height: 2\.25rem;/);
+  });
+
+  test("sidebar toggle, composer add and send meet the 36px touch target", () => {
+    expect(read("web/src/indirect-code/components/SidebarToggle.tsx")).toContain("rc-sidebar-toggle");
+    expect(read("web/src/indirect-code/components/composer/ToolbarContext.tsx")).toContain("rc-composer-add");
+    expect(read("web/src/indirect-code/components/composer/ToolbarSend.tsx")).toContain("rc-composer-send");
+    expect(css).toMatch(/html\.mobile \.rc-sidebar-toggle,[\s\S]*?min-width: 2\.25rem;[\s\S]*?min-height: 2\.25rem;/);
+  });
+
+  test("composer keeps Enter = newline on touch, Ctrl/Cmd+Enter sends", () => {
+    const src = read("web/src/indirect-code/components/composer/ComposerInput.tsx");
+    expect(src).toMatch(/\(!ui\.isMobile\(\) \|\| e\.ctrlKey \|\| e\.metaKey\)/);
+  });
+});

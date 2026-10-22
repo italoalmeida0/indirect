@@ -45,7 +45,7 @@ export function WorkspaceSidebar() {
   class={`rc-sidebar border-r border-line flex flex-col shrink-0 transition-all duration-200 ${
     ui.sidebarOpen()
       ? ui.isMobile()
-        ? "fixed inset-0 z-40 w-full shadow-2xl border-r-0"
+        ? "fixed inset-y-0 left-0 z-40 w-[85vw] max-w-xs shadow-2xl"
         : "w-64"
       : "w-0 overflow-hidden border-r-0"
   }`}
@@ -225,11 +225,11 @@ export function WorkspaceSidebar() {
                       <Iconify icon="lucide:folder" size={14} class="shrink-0 text-ink-500" />
                       <span class="truncate flex-1 font-medium">{p.name}</span>
                       <button aria-label={`New conversation in ${p.name}`} data-rc-tip="New conversation in this project" onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
-                        class="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 p-1 text-ink-500 hover:text-ink-100 cursor-pointer"><Iconify icon="lucide:plus" size={14} /></button>
+                        class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 p-1 text-ink-500 hover:text-ink-100 cursor-pointer"><Iconify icon="lucide:plus" size={14} /></button>
                       <Show when={!p.protected}>
                         <button
                           onClick={(e) => s.deleteProject(p.id, e)}
-                          class="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-0.5 text-ink-600 hover:text-rose-400 cursor-pointer shrink-0"
+                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-0.5 text-ink-600 hover:text-rose-400 cursor-pointer shrink-0"
                           data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
                         >
                           <Iconify icon="lucide:x" size={12} />
@@ -311,6 +311,7 @@ export function WorkspaceSidebar() {
         directly would feed the MouseEvent in as the section. */}
     <button
       onClick={() => m.openSettings()}
+      aria-label="Host & agent settings"
       class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-ink-500 hover:text-ink-200 hover:bg-ink-900/60 transition-colors cursor-pointer"
     >
       <Iconify icon="lucide:settings" size={14} />

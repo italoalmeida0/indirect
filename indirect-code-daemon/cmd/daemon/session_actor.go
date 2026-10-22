@@ -440,12 +440,19 @@ func (a *sessionActor) handleData(env Envelope) {
 		m.Reply <- a.onUndo(m)
 	case workerTitleMsg:
 		if m.gen == a.gen && a.rec.Title == m.original && needsAutoTitle(a.rec) {
-			a.rec.Title = m.title
+			title := m.title
+			if isTitleRefusal(title) {
+				title = instantTitle(firstUserText(a.rec))
+			}
+			if title == "" || isTitleRefusal(title) {
+				break
+			}
+			a.rec.Title = title
 			a.rec.TitleSource = "generated"
 			a.rec.UpdatedAt = time.Now().UnixMilli()
-			a.saveOrAppend(walEvent{Type: walTypeTitle, Title: m.title, TitleSource: "generated"})
+			a.saveOrAppend(walEvent{Type: walTypeTitle, Title: title, TitleSource: "generated"})
 			a.pingChange()
-			a.emit(map[string]any{"type": "session_renamed", "sessionId": a.id, "title": m.title, "auto": true})
+			a.emit(map[string]any{"type": "session_renamed", "sessionId": a.id, "title": title, "auto": true})
 		}
 	case tickFlushMsg:
 		if a.wal != nil {
@@ -2188,11 +2195,15 @@ func (a *sessionActor) applyBgWAL(ev walEvent) {
 func (a *sessionActor) onBgTaskRegister(m bgTaskRegisterMsg) {
 	a.touch()
 	if findBgTask(a.rec, m.JobID) < 0 {
-		task := &BgTask{ID: m.JobID, Kind: m.Kind, Label: m.Label, Status: BgStatusRunning, StartedAt: time.Now().UnixMilli()}
+		startedAt := m.StartedAt
+		if startedAt <= 0 {
+			startedAt = time.Now().UnixMilli() - 10000
+		}
+		task := &BgTask{ID: m.JobID, Kind: m.Kind, Label: m.Label, Status: BgStatusRunning, StartedAt: startedAt}
 		upsertBgTask(a.rec, task)
 		a.saveOrAppend(walEvent{Type: walTypeBgTask, BgTask: task})
 		a.pingChange()
-		a.emit(map[string]any{"type": "bg_task_registered", "hostId": a.hostID(), "sessionId": a.id, "jobId": m.JobID, "kind": m.Kind, "label": m.Label})
+		a.emit(map[string]any{"type": "bg_task_registered", "hostId": a.hostID(), "sessionId": a.id, "jobId": m.JobID, "kind": m.Kind, "label": m.Label, "startedAt": task.StartedAt})
 	}
 	if m.Reply != nil {
 		select {

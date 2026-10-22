@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, on, Show } from "solid-js";
 import { DisclosureBody } from "./Disclosure";
 import { Icon as Iconify } from "../../components/icon";
 import { DiffView } from "./CodeBlock";
@@ -34,12 +34,27 @@ function statusMeta(status: TurnChangedFile["status"]) {
 /** One file row inside the balloon: collapsed header by default, click to
  *  reveal the highlighted diff (like edit tool results). */
 function FileChangesRow(props: { f: TurnChangedFile; scrollKey: string }) {
+  let rowRef: HTMLDivElement | undefined;
   const [open, setOpen] = createSignal(false);
   const meta = () => statusMeta(props.f.status);
   const hasDiff = () => Boolean(props.f.diff);
 
+  createEffect(
+    on(
+      open,
+      (isOpen) => {
+        if (isOpen) {
+          requestAnimationFrame(() => {
+            rowRef?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          });
+        }
+      },
+      { defer: true },
+    ),
+  );
+
   return (
-    <div class="rounded-lg border border-line/50 overflow-hidden">
+    <div ref={rowRef} class="rounded-lg border border-line/50 overflow-hidden">
       <div
         onClick={() => setOpen(!open())}
         class={`flex items-center gap-2 px-2.5 py-1.5 bg-ink-900/60 transition-colors select-none ${

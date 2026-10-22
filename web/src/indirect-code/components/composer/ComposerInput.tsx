@@ -144,8 +144,14 @@ export function ComposerInput() {
       }
 
       // On desktop, Enter sends the message (Shift+Enter for newline).
-      // On mobile, Enter never sends — it inserts a line break and user must tap send.
-      if (!ui.isMobile() && e.key === "Enter" && !e.shiftKey) {
+      // On mobile, plain Enter never sends — it inserts a line break and the
+      // user taps send. Ctrl/Cmd+Enter still sends so a hardware keyboard
+      // (iPad, Android tablet, phone with a keyboard) keeps the shortcut.
+      if (
+        e.key === "Enter" &&
+        !e.shiftKey &&
+        (!ui.isMobile() || e.ctrlKey || e.metaKey)
+      ) {
         e.preventDefault();
         if (textareaRef) textareaRef.style.height = "";
         c.sendPrompt();

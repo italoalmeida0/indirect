@@ -229,7 +229,7 @@ export function createTurnChanges(opts: {
       opts.toast(`Turn changes undone (${results.length} file(s)).`, "ok");
     }
     if (results.length > 0) {
-      const okPaths = new Set(results.filter((r) => r.ok).map((r) => r.path));
+      const okPaths = new Set(results.filter((r) => r.ok).flatMap((r) => [r.path, r.rel].filter(Boolean) as string[]));
       if (okPaths.size > 0 && typeof msg?.turnIndex === "number") {
         setBalloons((prev) =>
           prev.map((b) =>
@@ -237,7 +237,7 @@ export function createTurnChanges(opts: {
               ? b
               : {
                   ...b,
-                  files: b.files.map((f) => (okPaths.has(f.path) ? { ...f, undone: true } : f)),
+                  files: b.files.map((f) => (okPaths.has(f.path) || (f.rel && okPaths.has(f.rel)) ? { ...f, undone: true } : f)),
                 },
           ),
         );

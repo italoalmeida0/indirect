@@ -2,12 +2,18 @@ import { For, Show } from "solid-js";
 import { Btn, Modal, ModalNotice } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useSession } from "../ctx";
+import { sameRemotePath } from "../paths";
 
 export function NewProjectModal() {
   const s = useSession();
 
-  const isCurrentValid = () =>
-    !s.folderLoading() && !!s.folderCurrent() && s.newProjectPath() === s.folderCurrent();
+  const isCurrentValid = () => {
+    if (s.folderLoading()) return false;
+    const path = s.newProjectPath().trim();
+    if (!path) return false;
+    if (s.folderCurrent() && sameRemotePath(path, s.folderCurrent())) return true;
+    return /^(?:[a-zA-Z]:[\\/]|[\\/]|~)/.test(path);
+  };
 
   return (
     <Modal
@@ -52,7 +58,10 @@ export function NewProjectModal() {
             class="flex-1 min-w-0 bg-transparent px-2 py-1.5 text-xs sm:text-sm font-mono text-ink-100 placeholder:text-ink-500 outline-none"
             value={s.newProjectPath()}
             placeholder="/home/user/my-project"
-            onInput={(e) => s.setNewProjectPath(e.currentTarget.value)}
+            onInput={(e) => {
+              s.setNewProjectPath(e.currentTarget.value);
+              if (s.folderError()) s.setFolderError("");
+            }}
           />
           <button
             type="submit"

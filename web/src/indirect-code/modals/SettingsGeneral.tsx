@@ -200,14 +200,6 @@ export function SettingsGeneralSection() {
 
 <div class="border-b border-line pb-4 last:border-0 last:pb-0 space-y-3">
   <h3 class="text-sm font-semibold text-ink-100 flex items-center gap-2">
-    <Iconify icon="lucide:bot" size={15} class="text-ink-500" />
-    <span>Agent</span>
-
-  </h3>
-</div>
-
-<div class="border-b border-line pb-4 last:border-0 last:pb-0 space-y-3">
-  <h3 class="text-sm font-semibold text-ink-100 flex items-center gap-2">
     <Iconify icon="lucide:arrow-down-to-line" size={15} class="text-ink-500" />
     <span>Updates</span>
   </h3>
@@ -245,12 +237,12 @@ export function SettingsGeneralSection() {
       </span>
     </div>
     <div class="flex items-center gap-2">
-      <button class="btn btn-xs" onClick={() => du.checkNow()}>
+      <button class="cursor-pointer text-ink-300 hover:text-ink-100 text-xs font-medium transition-colors" onClick={() => du.checkNow()}>
         Check now
       </button>
       <Show when={(() => { const i = du.info(); return !!i && !!i.available && i.available !== i.current && hostStatus() !== "updating"; })()}>
         <button
-          class="btn btn-xs btn-primary"
+          class="cursor-pointer text-brand-400 hover:text-brand-300 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={du.applying()}
           onClick={() => { du.apply(); m.cancelSettings(); }}
         >

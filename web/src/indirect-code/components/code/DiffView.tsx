@@ -189,7 +189,12 @@ export function DiffView(props: {
       </div>
       <Show when={hidden() > 0}>
         <button
-          onClick={() => setExpanded(true)}
+          onClick={() => {
+            setExpanded(true);
+            requestAnimationFrame(() => {
+              containerRef?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            });
+          }}
           class="px-3 py-1 text-[11px] text-ink-500 hover:text-ink-200 cursor-pointer"
         >
           +{hidden()} more lines
