@@ -155,7 +155,11 @@ frontend + daemon. Run checks from the appropriate project root.
   includes FK cascades: count deletions by existence. Never log/serialize
   provider keys, plaintext gateway keys, TOTP secrets or `GATEWAY_SECRET`.
 - `/v1/*` errors use the matching OpenAI/Anthropic envelope; dashboard errors
-  use `{success:false,error}`. Audit every admin/user mutation. Budgets are
+  use `{success:false,error}`. Upstream error bodies pass through
+  byte-for-byte only when they are same-protocol JSON; a different client
+  protocol or a non-JSON body (HTML interstitial, plain-text banner) is
+  re-enveloped, since the response content-type is always clamped to JSON.
+  Audit every admin/user mutation. Budgets are
   SQLite-backed and cap OUTPUT tokens only; report input/cache/output separately.
   Gateway key delete is soft by default; usage ledger survives deletion.
 - Failover (`server/failover.ts`) only before first byte reaches client. Never

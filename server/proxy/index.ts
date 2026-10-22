@@ -740,21 +740,67 @@ function withChatStreamOptions(attemptBody: string): string {
   return attemptBody;
 }
 
+/** Does this upstream error body look like JSON we can hand to an SDK? */
+function isJsonErrorBody(body: string): boolean {
+  const t = body.trim();
+  if (!t) return false;
+  try {
+    const parsed = JSON.parse(t) as unknown;
+    return parsed !== null && typeof parsed === "object";
+  } catch {
+    return false;
+  }
+}
+
+/** Turn a non-JSON upstream error body (HTML page, plain-text banner) into
+ *  the protocol's error envelope: markup stripped, whitespace collapsed,
+ *  capped — the client still reads WHY the upstream failed, but through a
+ *  body it can actually parse. */
+function wrapErrorBody(proto: Proto, status: number, body: string): string {
+  const text = body
+    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 2000);
+  const message = text || `upstream error (HTTP ${status})`;
+  const type = status === 401 ? "authentication_error" : status >= 500 ? "api_error" : "invalid_request_error";
+  if (proto === "openai" || proto === "responses") {
+    return JSON.stringify({ error: { message, type, code: null } });
+  }
+  return JSON.stringify({ type: "error", error: { type: status === 429 ? "rate_limit_error" : type, message } });
+}
+
 /**
  * Re-envelope an upstream error to the client's protocol. Chat and
  * Responses share the OpenAI `{error:{…}}` envelope (passthrough either
  * way); only the Anthropic direction converts.
+ *
+ * Same-protocol bodies are byte-faithful ONLY when they are actually JSON
+ * (or empty): the client is promised `application/json` (the response
+ * content-type is clamped to the safe set), so an upstream HTML/plain-text
+ * page — CDN interstitial, gateway 502 landing page, a provider serving
+ * `text/html` on an error — is wrapped into the protocol envelope with its
+ * text preserved instead of being sprayed at a JSON parser.
  */
 function reEnvelopeError(proto: Proto, via: Proto, status: number, body: string): string {
-  if (via === proto) return body;
+  // Byte-faithful passthrough only for bodies a JSON client can parse.
+  const fallback = () => (!body.trim() || isJsonErrorBody(body) ? body : wrapErrorBody(proto, status, body));
+  if (via === proto) return fallback();
   // All error re-envelopes go through the gateway IR: extract the upstream
   // message once, envelope in the client protocol. Protocol N+1 only needs
-  // its message extractor in errorMessageFromBody. No legacy fallback: if
-  // the IR cannot parse the error, the raw upstream body is delivered.
+  // its message extractor in errorMessageFromBody. If the IR cannot parse
+  // the error, fall back to the (sanitized) upstream body.
   try {
     return reEnvelopeErrorIR(proto as IRProto, via as IRProto, status, body);
   } catch {
-    return body;
+    return fallback();
   }
 }
 
