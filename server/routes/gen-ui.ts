@@ -392,7 +392,12 @@ export async function handleGenUiRoute(
     const body = await readJsonBody(req, 2_500_000);
     const theme: "dark" | "light" = body?.theme === "light" ? "light" : "dark";
     const jsx = typeof body?.jsx === "string" ? body.jsx : "";
-    const stateJSON = typeof body?.stateJSON === "string" ? body.stateJSON : "{}";
+    const stateJSON = typeof body?.stateJSON === "string" ? body.stateJSON.trim() || "{}" : "{}";
+    try {
+      JSON.parse(stateJSON);
+    } catch {
+      return err(400, "invalid stateJSON", req);
+    }
     if (!jsx.trim()) return err(400, "empty widget", req);
     const total = jsx.length + stateJSON.length;
     if (total > 1_500_000) return err(413, "widget too large", req);

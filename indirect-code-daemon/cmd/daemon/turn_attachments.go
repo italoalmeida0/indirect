@@ -237,6 +237,8 @@ func (a *sessionActor) onQueueSendNow(m queueSendNowMsg) {
 			a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
 			a.sendNow = true
 		}
+		a.pingChange()
+		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 		return
 	}
 	// Running: flag send-now for live mid-turn steering. The next model

@@ -153,13 +153,13 @@ func (a *sessionActor) saveSkills() {
 func (a *sessionActor) endTurnSkills() bool {
 	changed := false
 	for name, st := range a.rec.Skills {
-		if !st.Once && !st.InContext && !st.ByAI {
+		if !st.Once && !st.InContext {
 			continue
 		}
 		if st.Once {
 			st.Active = false
 		}
-		st.Once, st.InContext, st.ByAI = false, false, false
+		st.Once, st.InContext = false, false
 		a.rec.Skills[name] = st
 		changed = true
 	}
@@ -207,27 +207,48 @@ func stripSkillArtifacts(msgs []provider.Message, turnIdx int) []provider.Messag
 	return out
 }
 
+func skillNameFromDetails(details any) string {
+	switch d := details.(type) {
+	case map[string]any:
+		if s, ok := d["skill"].(string); ok {
+			return s
+		}
+	case json.RawMessage:
+		var m map[string]any
+		if err := json.Unmarshal(d, &m); err == nil {
+			if s, ok := m["skill"].(string); ok {
+				return s
+			}
+		}
+	case []byte:
+		var m map[string]any
+		if err := json.Unmarshal(d, &m); err == nil {
+			if s, ok := m["skill"].(string); ok {
+				return s
+			}
+		}
+	case string:
+		var m map[string]any
+		if err := json.Unmarshal([]byte(d), &m); err == nil {
+			if s, ok := m["skill"].(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
 // isUseSkillResult reports whether a tool result belongs to any use_skill
 // call. Matching rides on the Details marker stamped by the tool result
 // envelope (never on body text).
 func isUseSkillResult(res provider.ToolResultBlock) bool {
-	if d, ok := res.Details.(map[string]any); ok {
-		if _, ok := d["skill"].(string); ok {
-			return true
-		}
-	}
-	return false
+	return skillNameFromDetails(res.Details) != ""
 }
 
 // isUseSkillResultFor reports whether a tool result belongs to a use_skill
 // call of the named skill.
 func isUseSkillResultFor(res provider.ToolResultBlock, name string) bool {
-	if d, ok := res.Details.(map[string]any); ok {
-		if n, ok := d["skill"].(string); ok {
-			return n == name
-		}
-	}
-	return false
+	return skillNameFromDetails(res.Details) == name
 }
 
 // sortSkillsByNamePriority orders names by their stored priority (then

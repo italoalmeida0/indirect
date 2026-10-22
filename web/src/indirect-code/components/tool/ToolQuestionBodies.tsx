@@ -68,15 +68,30 @@ export function ToolQuestionBodies(props: ToolPartProps) {
                         )}
                       </For>
                       <For each={custom()}>
-                        {(c) => (
-                          <li class="flex items-start gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-2 py-1.5 text-[12px] leading-snug text-ink-100">
-                            <Iconify icon="lucide:pencil" size={13} class="mt-0.5 shrink-0 text-emerald-400" />
-                            <span class="min-w-0">
-                              <span class="block font-medium">{c}</span>
-                              <span class="block text-[11px] text-ink-500">Custom answer</span>
-                            </span>
-                          </li>
-                        )}
+                        {(c) => {
+                          const isDecideLater = c.startsWith("Decide later");
+                          return (
+                            <li
+                              class={`flex items-start gap-2 rounded-lg border px-2 py-1.5 text-[12px] leading-snug ${
+                                isDecideLater
+                                  ? "border-accent-500/40 bg-accent-500/10 text-ink-100"
+                                  : "border-emerald-500/40 bg-emerald-500/10 text-ink-100"
+                              }`}
+                            >
+                              <Iconify
+                                icon={isDecideLater ? "lucide:sparkles" : "lucide:pencil"}
+                                size={13}
+                                class={`mt-0.5 shrink-0 ${isDecideLater ? "text-accent-400" : "text-emerald-400"}`}
+                              />
+                              <span class="min-w-0">
+                                <span class="block font-medium">{c}</span>
+                                <span class="block text-[11px] text-ink-500">
+                                  {isDecideLater ? "Delegated to assistant" : "Custom answer"}
+                                </span>
+                              </span>
+                            </li>
+                          );
+                        }}
                       </For>
                     </ul>
                   </Show>

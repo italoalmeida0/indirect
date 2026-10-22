@@ -98,7 +98,7 @@ function QueueEditRow(props: { queueId: string }) {
               <span class="flex items-center gap-1 text-[11px] bg-ink-950 border border-line/70 px-2 py-1 rounded-lg text-ink-300">
                 <FileIcon path={a.name} size={13} />
                 <button
-                  onClick={() => m.openStoredPreview(s.activeSessionId(), a.serverId || "")}
+                  onClick={() => a.serverId ? m.openStoredPreview(s.activeSessionId(), a.serverId) : m.previewPending(a)}
                   class="hover:underline truncate max-w-40"
                 >
                   {a.name}

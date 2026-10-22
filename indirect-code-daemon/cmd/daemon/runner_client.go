@@ -153,7 +153,13 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 			stopRunner(root, jobID, cmd.Process.Pid, runnerIdentity)
 		},
 		Pump:    tools.TailLog(outPath),
-		Cleanup: func(bool) {},
+		Cleanup: func(remove bool) {
+			if remove || runner.ReadDisposition(root, jobID) == runner.DispInline {
+				_ = os.Remove(runner.StatePath(root, jobID))
+				_ = os.Remove(runner.DispositionPath(root, jobID))
+				_ = os.Remove(filepath.Join(runner.RunnersDir(root), jobID+".launch"))
+			}
+		},
 		Disposition: func(jid, disp string) error {
 			return runner.WriteDisposition(root, jid, disp)
 		},

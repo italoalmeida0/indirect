@@ -37,8 +37,7 @@ type userPromptMsg struct {
 // the list replaces the item's attachments ([] clears them) and Text is
 // applied along with it ("" clears the item's text). With AttachmentIDs ==
 // nil, Text is applied only when non-empty ("" = "no change"). So: a
-// text-only edit omits AttachmentIDs and sends a non-empty Text; clearing
-// the text resends the full attachment list ([] when the item has none).
+// text-only edit omits AttachmentIDs; empty Text clears the text.
 // A tri-state YOLO for "update" would need the same pointer discipline: a
 // defaulted bool must never clobber the stored flag.
 type queueOpMsg struct {

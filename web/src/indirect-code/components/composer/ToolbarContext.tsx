@@ -120,15 +120,16 @@ export function ToolbarContext() {
   function chooseModeSkill(name: string) {
     const spec = modeSkills().find((s) => s.name === name);
     if (!spec) return;
+    const mode = baseMode(spec.mode);
+    const rest = (isEditing() ? draftSkills() : c.selectedSkills()).filter((n) => n !== name && !isModeSkill(n));
+    const nextSkills = [name, ...rest];
     if (isEditing()) {
-      setDraftAgentMode(baseMode(spec.mode));
-      const rest = draftSkills().filter((n) => n !== name && !isModeSkill(n));
-      setDraftSkills([name, ...rest]);
-    } else {
-      c.setAgentMode(baseMode(spec.mode));
-      c.syncSkills([name, ...c.selectedSkills().filter((n) => n !== name && !isModeSkill(n))]);
-      c.configureSession();
+      setDraftAgentMode(mode);
+      setDraftSkills(nextSkills);
     }
+    c.setAgentMode(mode);
+    c.syncSkills(nextSkills, isEditing() ? draftUsables() : undefined);
+    c.configureSession();
   }
 
   /** Additional skills = everything except the 4 mode skills. Displayed

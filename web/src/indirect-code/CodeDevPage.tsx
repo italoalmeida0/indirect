@@ -3,6 +3,7 @@ import {
   createMemo,
   createEffect,
   onMount,
+  onCleanup,
   Show,
   For,
   batch,
@@ -91,9 +92,27 @@ function highlightJsonLine(line: string, searchMatch?: string): string {
   );
 
   if (searchMatch && searchMatch.trim()) {
-    const q = searchMatch.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`(${q})`, "gi");
-    escaped = escaped.replace(re, `<mark class="bg-amber-400 text-ink-950 rounded px-0.5 font-bold">$1</mark>`);
+    const escapedQuery = searchMatch
+      .trim()
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+    const q = escapedQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (q) {
+      const re = new RegExp(`(${q})`, "gi");
+      escaped = escaped
+        .split(/(<[^>]+>)/g)
+        .map((part) => {
+          if (part.startsWith("<") && part.endsWith(">")) {
+            return part;
+          }
+          return part.replace(
+            re,
+            `<mark class="bg-amber-400 text-ink-950 rounded px-0.5 font-bold">$1</mark>`,
+          );
+        })
+        .join("");
+    }
   }
 
   return escaped;
@@ -113,34 +132,49 @@ function JsonHighlightViewer(props: {
 
   const formattedStr = createMemo(() => {
     try {
-      if (typeof props.data === "string") {
-        return isCompact()
-          ? JSON.stringify(JSON.parse(props.data))
-          : JSON.stringify(JSON.parse(props.data), null, 2);
+      if (props.data === undefined) {
+        return "";
       }
-      return isCompact()
-        ? JSON.stringify(props.data)
-        : JSON.stringify(props.data, null, 2);
+      if (typeof props.data === "string") {
+        return (
+          (isCompact()
+            ? JSON.stringify(JSON.parse(props.data))
+            : JSON.stringify(JSON.parse(props.data), null, 2)) ?? ""
+        );
+      }
+      const val = props.data ?? null;
+      return (
+        (isCompact()
+          ? JSON.stringify(val)
+          : JSON.stringify(val, null, 2)) ?? ""
+      );
     } catch {
-      return String(props.data);
+      return String(props.data ?? "");
     }
   });
 
-  const lines = createMemo(() => formattedStr().split("\n"));
+  const lines = createMemo(() => {
+    const str = formattedStr();
+    return str ? str.split("\n") : [];
+  });
 
   function copyJson() {
-    navigator.clipboard.writeText(formattedStr());
-    toast("JSON copied to clipboard", "ok");
+    navigator.clipboard
+      .writeText(formattedStr())
+      .then(() => toast("JSON copied to clipboard", "ok"))
+      .catch(() => toast("Failed to copy JSON to clipboard", "err"));
   }
 
   function downloadJson() {
-    const blob = new Blob([formattedStr()], { type: "application/json" });
+    const blob = new Blob([formattedStr() || "{}"], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `payload_${Date.now()}.json`;
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
     toast("Downloaded JSON", "ok");
   }
 
@@ -272,6 +306,7 @@ export default function CodeDevPage() {
   const [isSimulating, setIsSimulating] = createSignal<boolean>(false);
 
   let streamContainerRef: HTMLDivElement | undefined;
+  let smokeTimeout: ReturnType<typeof setTimeout> | undefined;
 
   // Initialize Hosts
   const hosts = createHosts({
@@ -302,15 +337,47 @@ export default function CodeDevPage() {
         ...prev.slice(0, 300),
       ]);
 
+      // Forward daemon events to SignalDB data layer
+      mirror.dataLayer.handleMessage(msg);
+
       // Handle session debug data
       if (msg.type === "session_debug_data") {
         if (msg.systemPrompt) setSystemPrompt(msg.systemPrompt);
         if (msg.tools && Array.isArray(msg.tools)) setNativeTools(msg.tools);
         if (msg.session) setSessionMeta(msg.session);
+        if (msg.recentPayloads && Array.isArray(msg.recentPayloads) && msg.recentPayloads.length > 0) {
+          const items: CapturedRequest[] = msg.recentPayloads.map((p: any, idx: number) => ({
+            id: `recent_${p.sessionId || msg.sessionId || selectedSessionId()}_${p.turnIndex ?? 0}_${p.step ?? 0}_${p.timestamp || now}_${idx}`,
+            turnIndex: p.turnIndex ?? 0,
+            step: p.step ?? 0,
+            endpoint: p.endpoint || "/messages",
+            model: p.model || "",
+            system: p.system || "",
+            reasoning: p.reasoning || "",
+            maxTokens: p.maxTokens || 0,
+            sessionId: p.sessionId || msg.sessionId || selectedSessionId(),
+            tools: p.tools || [],
+            messages: p.messages || [],
+            rawPayload: p.rawPayload,
+            timestamp: p.timestamp || now,
+            isSimulated: false,
+          }));
+          items.reverse();
+          setCapturedPayloads((prev) => {
+            const existingKeys = new Set(prev.map((x) => `${x.sessionId}_${x.turnIndex}_${x.step}_${x.timestamp}`));
+            const fresh = items.filter((x) => !existingKeys.has(`${x.sessionId}_${x.turnIndex}_${x.step}_${x.timestamp}`));
+            return [...fresh, ...prev];
+          });
+          setSelectedPayloadId((current) => current || (items[0] ? items[0].id : ""));
+        }
       }
 
       // Handle Smoke Simulation Result
       if (msg.type === "preview_prompt_result") {
+        if (smokeTimeout) {
+          clearTimeout(smokeTimeout);
+          smokeTimeout = undefined;
+        }
         setIsSimulating(false);
         const p = msg.payload;
         if (p) {
@@ -336,6 +403,15 @@ export default function CodeDevPage() {
         } else if (msg.error) {
           toast(`Simulation error: ${msg.error}`, "err");
         }
+      }
+
+      if (msg.type === "error" && isSimulating()) {
+        if (smokeTimeout) {
+          clearTimeout(smokeTimeout);
+          smokeTimeout = undefined;
+        }
+        setIsSimulating(false);
+        toast(`Simulation error: ${msg.message || msg.error || "Request failed"}`, "err");
       }
 
       // Handle live agent_events
@@ -455,6 +531,13 @@ export default function CodeDevPage() {
     }
   });
 
+  onCleanup(() => {
+    if (smokeTimeout) {
+      clearTimeout(smokeTimeout);
+      smokeTimeout = undefined;
+    }
+  });
+
   createEffect(() => {
     const hid = hosts.activeHostId();
     if (hid) {
@@ -490,7 +573,7 @@ export default function CodeDevPage() {
         p.model.toLowerCase().includes(q) ||
         p.endpoint.toLowerCase().includes(q) ||
         String(p.turnIndex).includes(q) ||
-        (p.isSimulated && "smoke".includes(q)),
+        (p.isSimulated && (q.includes("smoke") || (q.length >= 3 && "smoke".startsWith(q)))),
     );
   });
 
@@ -529,6 +612,12 @@ export default function CodeDevPage() {
     const hid = hosts.activeHostId();
     if (!text || !sid || !hid) return;
 
+    const currentSession = sessions().find((s) => s.id === sid);
+    const mode = sessionMeta()?.mode || currentSession?.options?.mode || "agentic";
+    const effort = sessionMeta()?.effort || currentSession?.options?.effort || "default";
+    const access = sessionMeta()?.access || currentSession?.options?.access || "full";
+    const skills = currentSession?.options?.skills || [];
+
     relay.send({
       type: "prompt",
       sessionId: sid,
@@ -536,7 +625,7 @@ export default function CodeDevPage() {
       hostId: hid,
       model: "",
       yolo: true,
-      options: { mode: "agentic", effort: "default", access: "full", skills: [] },
+      options: { mode, effort, access, skills },
       attachmentIds: [],
       requestId: `prompt_${Date.now()}`,
     } as any);
@@ -554,19 +643,47 @@ export default function CodeDevPage() {
     const hid = hosts.activeHostId();
     if (!hid) return;
 
-    setIsSimulating(true);
-    relay.send({
-      type: "preview_prompt" as any,
-      sessionId: sid,
-      text: promptInput().trim(),
-      hostId: hid,
-      requestId: `smoke_${Date.now()}`,
-    } as any);
+    if (smokeTimeout) {
+      clearTimeout(smokeTimeout);
+      smokeTimeout = undefined;
+    }
+
+    try {
+      if (!relay.wsOpen()) {
+        toast("Relay not connected", "err");
+        setIsSimulating(false);
+        return;
+      }
+
+      setIsSimulating(true);
+
+      smokeTimeout = setTimeout(() => {
+        setIsSimulating(false);
+        toast("Smoke simulation timed out", "err");
+      }, 10000);
+
+      relay.send({
+        type: "preview_prompt" as any,
+        sessionId: sid,
+        text: promptInput().trim(),
+        hostId: hid,
+        requestId: `smoke_${Date.now()}`,
+      } as any);
+    } catch (err) {
+      if (smokeTimeout) {
+        clearTimeout(smokeTimeout);
+        smokeTimeout = undefined;
+      }
+      setIsSimulating(false);
+      toast(`Failed to run smoke simulation: ${err instanceof Error ? err.message : String(err)}`, "err");
+    }
   }
 
   function copyText(val: string, label = "Copied") {
-    navigator.clipboard.writeText(val);
-    toast(`${label} to clipboard`, "ok");
+    navigator.clipboard
+      .writeText(val)
+      .then(() => toast(`${label} to clipboard`, "ok"))
+      .catch(() => toast("Failed to copy", "err"));
   }
 
   const filteredEvents = createMemo(() => {
@@ -831,7 +948,7 @@ export default function CodeDevPage() {
                     {(req) => (
                       <button
                         onClick={() => setSelectedPayloadId(req.id)}
-                        class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-3 ${
+                        class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-[3px] ${
                           selectedPayload()?.id === req.id
                             ? req.isSimulated
                               ? "bg-amber-500/15 border-amber-500 text-ink-100"

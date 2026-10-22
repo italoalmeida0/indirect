@@ -634,7 +634,7 @@ func (s *diskStore) commitWAL(id string, rec *SessionRecord, wal *walWriter) err
 				return err
 			}
 		}
-	} else if len(turnMsgs) > 0 || turnIdx > 0 {
+	} else if len(turnMsgs) > 0 {
 		raw := make([]json.RawMessage, 0, len(turnMsgs))
 		for _, m := range turnMsgs {
 			data, err := json.Marshal(m)

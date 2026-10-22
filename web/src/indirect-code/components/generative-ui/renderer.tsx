@@ -214,6 +214,7 @@ export function GenerativeUiWidget(props: {
           } else {
             setMissing(true);
             setSource("");
+            setFinalUrl("");
           }
         });
       },
@@ -247,8 +248,7 @@ export function GenerativeUiWidget(props: {
     });
     if (!ok) return;
     deleteSavedState(id);
-    // stateJSON() now falls back to the fence default, so the content key
-    // changes and finalize() really re-publishes (no dedupe no-op).
+    forcePublish = true;
     void finalize();
   };
 
@@ -262,7 +262,10 @@ export function GenerativeUiWidget(props: {
   let forcePublish = false;
   const finalize = async () => {
     const d = data();
-    if (!d.id || !source() || publishInFlight || frozen()) return;
+    if (!d.id || !source() || publishInFlight || frozen()) {
+      if (!source()) setFinalUrl("");
+      return;
+    }
     // Snapshot reconciliation can re-trigger this with semantically identical
     // content (escaped text resolves, footers strip): publishing the same
     // content again is a no-op worth keeping — a second POST would only
@@ -464,7 +467,7 @@ export function GenerativeUiWidget(props: {
           </div>
         </Show>
         <Show
-          when={!frozen() && !streaming() && !!finalUrl()}
+          when={!frozen() && !streaming() && !missing() && !!finalUrl()}
           fallback={
             /* Widgets compile at publish time: this thin inert surface keeps
                the placeholder visible while streaming/loading; the frame

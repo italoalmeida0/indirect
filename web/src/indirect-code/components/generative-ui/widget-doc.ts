@@ -422,7 +422,14 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     prefillPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "prefillPrompt", text: String(text).slice(0, 4000) }, "*"); },
     openLink: function (url) { if (typeof url === "string") window.parent.postMessage({ __gu: "openLink", url: String(url).slice(0, 2048) }, "*"); },
     resize: function (height) { window.parent.postMessage({ __gu: "resize", height: Number(height) }, "*"); },
-    saveState: function (s) { try { window.parent.postMessage({ __gu: "state", state: JSON.stringify(s === undefined ? window.__gu.state : s).slice(0, 20000) }, "*"); } catch {} }
+    saveState: function (s) {
+      try {
+        var str = JSON.stringify(s === undefined ? window.__gu.state : s);
+        if (typeof str === "string" && str.length <= 20000) {
+          window.parent.postMessage({ __gu: "state", state: str }, "*");
+        }
+      } catch {}
+    }
   };
   window.indirectUi = Object.freeze(__host);
   var __lastHeight = 0;

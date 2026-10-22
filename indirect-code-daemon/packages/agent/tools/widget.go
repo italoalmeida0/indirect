@@ -70,15 +70,11 @@ func checkWidgetID(id string) error {
 	if len(id) > widgetIDMaxLen {
 		return fmt.Errorf("id too long (max %d chars)", widgetIDMaxLen)
 	}
-	for i, r := range id {
+	for _, r := range id {
 		ok := r == '-' || r == '_' || r == ':' || r == '.' ||
 			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 		if !ok {
 			return fmt.Errorf("invalid id %q: use letters, digits, '-', '_', ':' or '.'", id)
-		}
-		if i == 0 && !(r == '-' || r == '_' || r == ':' || r == '.' ||
-			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
-			return fmt.Errorf("invalid id %q", id)
 		}
 	}
 	return nil

@@ -183,6 +183,9 @@ func (p *projectsActor) onCreate(m projCreateMsg) {
 		fail("Project path cannot be resolved")
 		return
 	}
+	if abs, err := filepath.Abs(filepath.Clean(path)); err == nil {
+		path = abs
+	}
 	_ = os.MkdirAll(path, 0o755)
 	name := strings.TrimSpace(m.Name)
 	home, _ := os.UserHomeDir()
@@ -288,8 +291,14 @@ func projectPayload(pr ProjectEntry) map[string]any {
 
 func projectForDirectory(cwd string, projects []ProjectEntry) *ProjectEntry {
 	cwd = resolvePath(cwd)
+	if abs, err := filepath.Abs(filepath.Clean(cwd)); err == nil {
+		cwd = abs
+	}
 	normalize := func(path string) string {
 		path = filepath.Clean(path)
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
 		if runtime.GOOS == "windows" {
 			path = strings.ToLower(path)
 		}
@@ -302,7 +311,7 @@ func projectForDirectory(cwd string, projects []ProjectEntry) *ProjectEntry {
 		if projects[i].Path == "" {
 			continue
 		}
-		path := normalize(projects[i].Path)
+		path := normalize(resolvePath(projects[i].Path))
 		prefix := strings.TrimRight(path, string(filepath.Separator)) + string(filepath.Separator)
 		if (cwd == path || strings.HasPrefix(cwd, prefix)) && len(path) > length {
 			match = &projects[i]

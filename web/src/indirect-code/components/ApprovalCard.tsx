@@ -23,7 +23,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
         const args = tryParseArgs(pa().args);
         const name = pa().tool || "tool";
         return (
-          <div class={`${props.convWidthClass()} mx-auto rounded-2xl p-4 shadow-xl`}>
+          <div class={`${props.convWidthClass()} mx-auto rounded-2xl border border-line/70 bg-ink-900 p-4 shadow-xl`}>
             <div class="flex items-center gap-2 text-[13px]">
               <Iconify icon="lucide:shield" size={15} class="text-brand-500 shrink-0" />
               <span class="font-semibold text-ink-100">Review tool call</span>

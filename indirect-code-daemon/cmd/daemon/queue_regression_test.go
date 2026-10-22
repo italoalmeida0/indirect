@@ -91,8 +91,7 @@ func TestQueueOpsValidateAttachments(t *testing.T) {
 	}
 }
 
-// BUG-QUEUE-03 regression: a full-item update (attachments present) with empty
-// text clears the item; a partial update (no attachments) leaves text alone.
+// BUG-QUEUE-03 regression: update with empty text clears the item even in a partial update.
 func TestQueueUpdateCanClearText(t *testing.T) {
 	a := queueTestActor(t)
 	res := queueOp(t, a, queueOpMsg{Op: "add", Text: "original"})
@@ -100,15 +99,19 @@ func TestQueueUpdateCanClearText(t *testing.T) {
 		t.Fatal(res.Error)
 	}
 	id := res.Items[0].ID
-	// Partial update: empty text, no attachments -> no change.
+	// Partial update: empty text, no attachments -> text cleared.
 	res = queueOp(t, a, queueOpMsg{Op: "update", ID: id, Text: ""})
 	if res.Error != "" {
 		t.Fatal(res.Error)
 	}
-	if res.Items[0].Text != "original" {
-		t.Fatalf("partial update must not clear text, got %q", res.Items[0].Text)
+	if res.Items[0].Text != "" {
+		t.Fatalf("partial update must allow clearing text, got %q", res.Items[0].Text)
 	}
 	// Full update: empty text + explicit attachment list -> text cleared.
+	res = queueOp(t, a, queueOpMsg{Op: "update", ID: id, Text: "new text"})
+	if res.Error != "" {
+		t.Fatal(res.Error)
+	}
 	res = queueOp(t, a, queueOpMsg{Op: "update", ID: id, Text: "", AttachmentIDs: []string{}})
 	if res.Error != "" {
 		t.Fatal(res.Error)

@@ -41,7 +41,7 @@ export function ToolUnitHeader(props: ToolPartProps) {
           <Show when={props.m.name() === "bash" || props.m.name() === "python"} fallback={
             <span class="truncate text-ink-200 font-medium min-w-0">{props.m.name() === "bg_await" ? props.m.sleepLabel() : props.m.sum().target}</span>
           }>
-            <span class="truncate text-ink-200 min-w-0 text-[12.5px]"><ShellCmd text={collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "")} /></span>
+            <span class="truncate text-ink-200 min-w-0 text-[12.5px]"><ShellCmd prompt={props.m.name() === "python" ? ">>> " : "$ "} text={collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "")} /></span>
           </Show>
         </span>
       </span>

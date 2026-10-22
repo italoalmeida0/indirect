@@ -135,7 +135,7 @@ export function createSessionOptions(opts: {
     }
     active.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
     setSkillUsables(map);
-    setSelectedSkills(active.map((s) => s.name));
+    setSelectedSkills(ensuredSelection(active.map((s) => s.name)));
   }
 
   /** Persists a granular skill edit (daemon `update_skills`): per-skill
@@ -163,6 +163,13 @@ export function createSessionOptions(opts: {
       // still rides along so it survives); `unset` stays reserved for
       // true removal from the session map.
       if (!nextSet.has(name)) set[name] = { active: false, ...usableEntry(name, (usables ?? skillUsables())[name]) };
+    }
+    // Ensure mutual exclusion between base modes (build, plan, learning, talk)
+    const modeSkillsList = opts.listModeSkills?.() ?? MODE_SKILL_NAMES;
+    for (const m of modeSkillsList) {
+      if (!nextSet.has(m) && !set[m]) {
+        set[m] = { active: false, ...usableEntry(m, (usables ?? skillUsables())[m]) };
+      }
     }
     if (usables) {
       for (const [name, usable] of Object.entries(usables)) {

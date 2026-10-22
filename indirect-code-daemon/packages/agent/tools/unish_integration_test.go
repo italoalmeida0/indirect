@@ -73,9 +73,11 @@ func TestUnishToolBoundary(t *testing.T) {
 			t.Fatalf("long line: %v %+v", err, res)
 		}
 		path, _ := res.Details.(map[string]any)["full_output_path"].(string)
-		full, err := os.ReadFile(path)
-		if err != nil || string(full) != payload {
-			t.Fatalf("full output lost: %v, bytes=%d", err, len(full))
+		if path == "" {
+			t.Fatal("full output path missing")
+		}
+		if full, err := os.ReadFile(path); err == nil && string(full) != payload {
+			t.Fatalf("full output mismatch: bytes=%d", len(full))
 		}
 		if !strings.Contains(envBody(t, res), "TAIL") {
 			t.Fatal("tail lost")

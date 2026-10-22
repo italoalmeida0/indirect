@@ -1172,16 +1172,20 @@ func buildTurnPrompt(attachments []AttachmentRef, promptText string, attachmentI
 				contextParts = append(contextParts, fmt.Sprintf("[Attached image: %s]", ref.Name))
 				continue
 			}
+			isText := isTextMime(ref.Mime, ref.Name)
 			text := ""
+			hasText := false
 			if ref.TextPath != "" {
 				if tdata, err := os.ReadFile(ref.TextPath); err == nil {
 					text = string(tdata)
+					hasText = true
 				}
 			}
-			if text == "" && isTextMime(ref.Mime, ref.Name) {
+			if !hasText && isText {
 				text = string(data)
+				hasText = true
 			}
-			if text != "" {
+			if hasText {
 				runes := []rune(text)
 				note := ""
 				if len(runes) > maxInlineChars {

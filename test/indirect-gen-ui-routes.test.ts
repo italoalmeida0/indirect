@@ -121,6 +121,16 @@ describe("gen-ui widget routes", () => {
     expect(res.status).toBe(400);
   });
 
+  test("malformed stateJSON is refused", async () => {
+    const res = await post("/api/indirect-code/gen-ui/widgets", {
+      jsx: APP,
+      stateJSON: "{not valid json",
+    });
+    expect(res.status).toBe(400);
+    const out: any = await res.json();
+    expect(out.error).toBe("invalid stateJSON");
+  });
+
   test("sources that do not compile are refused with the compiler message", async () => {
     const res = await post("/api/indirect-code/gen-ui/widgets", {
       jsx: "export default function App( { return <div/>;",
@@ -152,6 +162,8 @@ describe("gen-ui widget routes", () => {
       ["d3", "d3.js"],
       ["gsap", "gsap.js"],
       ["chart", "chart.js"],
+      ["chart.js", "chart.js"],
+      ["chart.js/auto", "chart.js"],
       ["leaflet", "leaflet.js"],
       ["cannon-es", "cannon-es.js"],
       ["cannon", "cannon-es.js"],

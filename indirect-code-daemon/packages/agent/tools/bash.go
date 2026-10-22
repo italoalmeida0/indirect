@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"runtime"
 	"strings"
 	"sync"
@@ -80,14 +81,21 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	// runCancel in the watcher/cancel paths once the process is done.
 	runCtx, runCancel := context.WithCancel(context.WithoutCancel(ctx))
 	sh := currentShell()
+	env := os.Environ()
+	if os.Getenv("USER") == "" {
+		if u, err := user.Current(); err == nil && u.Username != "" {
+			env = append(env, "USER="+u.Username)
+		}
+	}
 	proc, err := startWith(runCtx, t.Starter, ExecSpec{
-		JobID:   core.ExecutionID(ctx),
-		Kind:    "bash",
-		Command: a.Command,
-		Argv:    []string{sh.path, sh.flag, a.Command},
-		CWD:     cwd,
-		Env:     os.Environ(),
-		LogDir:  t.LogDir,
+		JobID:       core.ExecutionID(ctx),
+		Kind:        "bash",
+		Command:     a.Command,
+		Argv:        []string{sh.path, sh.flag, a.Command},
+		CWD:         cwd,
+		Env:         env,
+		LogDir:      t.LogDir,
+		SplitStderr: true,
 	})
 	if err != nil {
 		runCancel()
@@ -98,6 +106,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	output := newOutputAccumulator(defaultMaxLines, defaultMaxBytes)
 	// Head buffer for the frontend's terminal-log display.
 	var head bytes.Buffer
+	var stderrHead bytes.Buffer
 	done := make(chan struct{})
 	// detached flips once the command outlives AutoBackgroundAfter: from
 	// then on the turn-context watcher stands down (the background job owns
@@ -156,8 +165,10 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			progress(string(chunk))
 		}
 	}
+	var pumpWG sync.WaitGroup
+	pumpWG.Add(1)
 	go func() {
-		defer close(done)
+		defer pumpWG.Done()
 		proc.Pump(processExited, func(chunk []byte) {
 			output.append(chunk)
 			if room := defaultMaxBytes - head.Len(); room > 0 {
@@ -165,6 +176,23 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			}
 			emit(chunk)
 		})
+	}()
+	if proc.PumpErr != nil {
+		pumpWG.Add(1)
+		go func() {
+			defer pumpWG.Done()
+			proc.PumpErr(processExited, func(chunk []byte) {
+				output.append(chunk)
+				if room := defaultMaxBytes - stderrHead.Len(); room > 0 {
+					stderrHead.Write(chunk[:min(room, len(chunk))])
+				}
+				emit(chunk)
+			})
+		}()
+	}
+	go func() {
+		pumpWG.Wait()
+		close(done)
 	}()
 
 	waitCh := make(chan error, 1)
@@ -182,7 +210,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 				return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", err)
 			}
 		}
-		return finishBashCommand(a, cwd, start, output, &head, waitErr, ctx.Err(), runErr, progress)
+		return finishBashCommand(a, cwd, start, output, &head, &stderrHead, waitErr, ctx.Err(), runErr, progress)
 	}
 	select {
 	case waitErr := <-waitCh:
@@ -249,7 +277,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		proc.Cleanup(false)
 		runErr := runCtx.Err()
 		runCancel()
-		res, err := finishBashCommand(a, cwd, start, output, &head, waitErr, nil, runErr, nil)
+		res, err := finishBashCommand(a, cwd, start, output, &head, &stderrHead, waitErr, nil, runErr, nil)
 		text := ""
 		// Job failure is the COMMAND's outcome (non-zero exit, abort,
 		// stop), not tool misuse: exit≠0 is type=ok exit=N but the job
@@ -305,7 +333,7 @@ func bashBackgroundNotice(jobID, cmd string, fullLog ...string) string {
 	return b.String()
 }
 
-func finishBashCommand(a bashArgs, cwd string, start time.Time, output *outputAccumulator, head *bytes.Buffer, waitErr error, ctxErr, runCtxErr error, progress func(string)) (core.ToolResult, error) {
+func finishBashCommand(a bashArgs, cwd string, start time.Time, output *outputAccumulator, head, stderrHead *bytes.Buffer, waitErr error, ctxErr, runCtxErr error, progress func(string)) (core.ToolResult, error) {
 	_ = progress
 	exitCode := 0
 	if waitErr != nil {
@@ -357,7 +385,18 @@ func finishBashCommand(a bashArgs, cwd string, start time.Time, output *outputAc
 
 	// Frontend-only rendering: the terminal-log view ($ command,
 	// output, [exit N] Took Xs) shown by the UI transcript.
-	display := renderBashDisplay(a.Command, head.String(), exitCode, elapsed)
+	stderrText := ""
+	if stderrHead != nil {
+		stderrText = stderrHead.String()
+	}
+	displayHead := head.String()
+	if stderrText != "" {
+		if displayHead != "" && !strings.HasSuffix(displayHead, "\n") {
+			displayHead += "\n"
+		}
+		displayHead += stderrText
+	}
+	display := renderBashDisplay(a.Command, displayHead, exitCode, elapsed)
 
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: outputText}},
@@ -366,7 +405,7 @@ func finishBashCommand(a bashArgs, cwd string, start time.Time, output *outputAc
 			"display":   display,
 			"exit_code": exitCode,
 			"stdout":    head.String(),
-			"stderr":    "",
+			"stderr":    stderrText,
 			"truncated": snapshot.truncated,
 			// UI-only (Details never reach the LLM): the full output file
 			// for the frontend's copy/inspect affordances. The model-visible
@@ -540,6 +579,9 @@ func (a *outputAccumulator) redirectToFile(path string) {
 	// log reflects the output produced before the detach.
 	if a.tempFile != nil {
 		_ = a.tempFile.Close()
+		if a.tempPath != "" {
+			_ = os.Remove(a.tempPath)
+		}
 		a.tempFile = nil
 		a.tempPath = ""
 	}
@@ -621,6 +663,10 @@ func (a *outputAccumulator) closeTempFile() {
 	if a.tempFile != nil {
 		_ = a.tempFile.Close()
 		a.tempFile = nil
+	}
+	if a.tempPath != "" {
+		_ = os.Remove(a.tempPath)
+		a.tempPath = ""
 	}
 }
 

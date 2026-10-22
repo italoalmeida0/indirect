@@ -8,7 +8,7 @@ import { For } from "solid-js";
  * parent uses CSS `truncate`, so the ellipsis follows the space actually
  * available; `title` keeps the full command for hover.
  */
-export function ShellCmd(props: { text: string }) {
+export function ShellCmd(props: { text: string; prompt?: string }) {
   // Tokenize: comments | strings | vars | operators | flags | numbers.
   const parts = () => {
     const src = props.text || "";
@@ -36,7 +36,7 @@ export function ShellCmd(props: { text: string }) {
   };
   return (
     <code class="font-mono truncate min-w-0">
-      <span class="text-ink-600 select-none">$ </span>
+      <span class="text-ink-600 select-none">{props.prompt ?? "$ "}</span>
       <For each={parts()}>{(p) =>
         p.c ? <span class={p.c}>{p.t}</span> : <span>{p.t}</span>
       }</For>

@@ -507,10 +507,14 @@ export function toolSummary(u: ToolUnit): ToolSummary {
     }
     case "bg_await": {
       const s = Number(args.max_wait_seconds);
+      const elapsedMs = u.result?.toolDurationMs;
+      const target = u.result && elapsedMs != null
+        ? formatDurationSecs(Math.round(elapsedMs / 1000))
+        : (Number.isFinite(s) ? formatDurationSecs(s) : "");
       return {
         icon: "lucide:timer",
         verb: u.result ? "Waited" : "Awaiting",
-        target: Number.isFinite(s) ? formatDurationSecs(s) : "",
+        target,
       };
     }
     case "bg_cancel": {

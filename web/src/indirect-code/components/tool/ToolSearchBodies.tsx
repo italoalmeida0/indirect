@@ -205,7 +205,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 onScroll={(e) => recordToolScroll(props.m.key(), e.currentTarget)}
                 class="px-3 py-2 text-[12.5px] leading-relaxed text-ink-200 article-body"
               >
-                <StreamingMarkdown>{String(props.m.fetchDetails()?.content || "")}</StreamingMarkdown>
+                <StreamingMarkdown basic={true}>{String(props.m.fetchDetails()?.content || "")}</StreamingMarkdown>
               </div>
               <Show when={props.m.fetchDetails()?.truncated}>
                 <p class="px-3 pb-1 text-[10px] text-ink-600">Truncated</p>

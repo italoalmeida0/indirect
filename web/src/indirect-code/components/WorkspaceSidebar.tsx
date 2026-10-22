@@ -230,7 +230,7 @@ export function WorkspaceSidebar() {
                         <button
                           onClick={(e) => s.deleteProject(p.id, e)}
                           class="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-0.5 text-ink-600 hover:text-rose-400 cursor-pointer shrink-0"
-                          data-rc-tip="Remove project" aria-label="Remove project"
+                          data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
                         >
                           <Iconify icon="lucide:x" size={12} />
                         </button>

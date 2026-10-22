@@ -64,6 +64,8 @@ export const GEN_UI_LIB_FILES: Record<string, string> = {
   d3: "d3.js",
   gsap: "gsap.js",
   chart: "chart.js",
+  "chart.js": "chart.js",
+  "chart.js/auto": "chart.js",
   three: "three.js",
   leaflet: "leaflet.js",
   "cannon-es": "cannon-es.js",

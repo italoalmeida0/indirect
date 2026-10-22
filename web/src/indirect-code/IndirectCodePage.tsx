@@ -753,6 +753,7 @@ export default function IndirectCodePage() {
         transcript.noteForkSessionResult(msg);
         mirror.dataLayer.storeFor(hosts.activeHostId()).syncAll().catch((e) => console.warn("[rc-sync] syncAll:", e));
         selectSession(msg.session.id);
+        if (msg.session.skills) options.applySessionSkills(msg.session.skills);
         if (msg.resent) {
           transcript.setSessionStatus("running");
           if (forkKind === "regenerate") {
@@ -781,6 +782,8 @@ export default function IndirectCodePage() {
         composer.setInputPrompt(firstDraft);
         try { localStorage.removeItem(`llmgw-draft:${hosts.activeHostId()}:new`); } catch {}
         options.applyOptions(options.getLastLocalSelection() || r.options);
+        if (r.approvalMode) options.applyApprovalMode(r.approvalMode);
+        options.applySessionSkills(r.skills);
         // Attachments stay in the draft until upload succeeds on this new session.
         void composer.sendPrompt();
         break;

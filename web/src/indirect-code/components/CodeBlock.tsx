@@ -54,7 +54,8 @@ export function CodeBlock(props: {
   const [rows, setRows] = createSignal<CodeRow[] | null>(null);
   const [rawHtml, setRawHtml] = createSignal<string | null>(null);
 
-  const clean = () => cleanNotice(props.text || "");
+  // eslint-disable-next-line no-control-regex -- strip terminal ANSI color sequences
+  const clean = () => cleanNotice(props.text || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
   // Strip a trailing `\r` per line (CRLF file read on a Windows host):
   // it would otherwise leak into highlight/copy and break gutter parsing.
   const rawLines = () => clean().split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));

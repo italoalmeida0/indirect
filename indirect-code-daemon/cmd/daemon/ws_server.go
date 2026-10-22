@@ -128,6 +128,9 @@ func (s *wsServer) scheduleResyncFlush() {
 }
 
 func (s *wsServer) host() string {
+	if s.cfg == nil {
+		return ""
+	}
 	if cfg := s.cfg.load(); cfg != nil {
 		return cfg.HostID
 	}
@@ -874,12 +877,12 @@ func (s *wsServer) handleRaw(raw []byte) {
 		s.onSearchFiles(req.RequestID, req.SessionID, req.ProjectID, req.Query)
 
 	case "search":
-		// Removed in v2: frontend keeps the UI inert.
 		var req struct {
 			Query string `json:"query"`
+			Limit int    `json:"limit"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.emit(map[string]any{"type": "search_results", "hostId": s.host(), "query": req.Query, "results": []any{}})
+		s.onSearch(req.Query, req.Limit)
 
 	case "browse_folders":
 		var req struct {
@@ -1359,6 +1362,12 @@ func (s *wsServer) onForkAndResend(sessionID, requestID string, msg forkAndResen
 }
 
 func (s *wsServer) readRecord(sessionID string) *SessionRecord {
+	if s.sessions == nil {
+		if rec, _, err := newDiskStore(s.dataDir).loadSessionFused(sessionID); err == nil {
+			return rec
+		}
+		return nil
+	}
 	res := s.sessions.route(sessionID, true)
 	if res.Error != "" {
 		return nil
@@ -1566,6 +1575,104 @@ func (s *wsServer) onSearchFiles(requestID, sessionID, projectID, query string) 
 		payload["truncated"] = truncated
 	}
 	s.emit(payload)
+}
+
+func (s *wsServer) onSearch(query string, limit int) {
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	trimmed := strings.TrimSpace(query)
+	if len(trimmed) < 2 {
+		s.emit(map[string]any{"type": "search_results", "hostId": s.host(), "query": query, "results": []any{}})
+		return
+	}
+	lQuery := strings.ToLower(trimmed)
+	summaries := listSessionSummaries(s.dataDir)
+	st := newDiskStore(s.dataDir)
+
+	var results []any
+
+	for _, sum := range summaries {
+		matchCount := 0
+		firstSnippet := ""
+
+		// Check session title
+		lTitle := strings.ToLower(sum.Title)
+		if strings.Contains(lTitle, lQuery) {
+			matchCount++
+			firstSnippet = sum.Title
+		}
+
+		// Check transcript message texts
+		rec := s.readRecord(sum.ID)
+		if rec == nil {
+			if r, _, err := st.loadSessionFused(sum.ID); err == nil {
+				rec = r
+			}
+		}
+		if rec != nil {
+			for _, msg := range rec.Messages {
+				for _, c := range msg.Content {
+					if tb, ok := c.(provider.TextBlock); ok && tb.Text != "" {
+						lText := strings.ToLower(tb.Text)
+						curr := 0
+						for {
+							idx := strings.Index(lText[curr:], lQuery)
+							if idx < 0 {
+								break
+							}
+							matchCount++
+							actualIdx := curr + idx
+							if firstSnippet == "" {
+								start := actualIdx - 40
+								if start < 0 {
+									start = 0
+								}
+								end := actualIdx + len(lQuery) + 40
+								if end > len(tb.Text) {
+									end = len(tb.Text)
+								}
+								snip := strings.TrimSpace(tb.Text[start:end])
+								if start > 0 {
+									snip = "…" + snip
+								}
+								if end < len(tb.Text) {
+									snip = snip + "…"
+								}
+								firstSnippet = snip
+							}
+							curr += idx + len(lQuery)
+						}
+					}
+				}
+			}
+		}
+
+		if matchCount > 0 {
+			results = append(results, map[string]any{
+				"sessionId":  sum.ID,
+				"title":      sum.Title,
+				"cwd":        sum.CWD,
+				"updatedAt":  sum.UpdatedAt,
+				"snippet":    firstSnippet,
+				"matchCount": matchCount,
+			})
+			if len(results) >= limit {
+				break
+			}
+		}
+	}
+
+	if results == nil {
+		results = []any{}
+	}
+
+	s.emit(map[string]any{
+		"type":    "search_results",
+		"hostId":  s.host(),
+		"query":   query,
+		"results": results,
+	})
 }
 
 func (s *wsServer) onCheckWorkspace(requestID, sessionID, projectID string) {

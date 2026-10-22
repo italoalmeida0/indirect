@@ -396,6 +396,7 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.rec.TodosOpen = &open
 		a.rec.UpdatedAt = time.Now().UnixMilli()
 		a.saveOrAppend(walEvent{Type: walTypeMeta})
+		a.pingChange()
 	case configureMsg:
 		a.touch()
 		// The session MODE is the wire's mode (the frontend re-derives it
@@ -615,12 +616,9 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 						m.Reply <- queueOpResult{Error: err.Error()}
 						return
 					}
-					a.rec.Queue[i].Text = m.Text
 					a.rec.Queue[i].AttachmentIDs = m.AttachmentIDs
-				} else if m.Text != "" {
-					// Partial update: empty text means "no change".
-					a.rec.Queue[i].Text = m.Text
 				}
+				a.rec.Queue[i].Text = m.Text
 				if m.Model != "" {
 					a.rec.Queue[i].Model = m.Model
 				}
@@ -1053,6 +1051,9 @@ func (a *sessionActor) onApprovalResponse(m approvalResponseMsg) {
 		if err := a.saveOrAppend(walEvent{Type: walTypeOptions, Options: &opts}); err != nil {
 			a.rec.Options.Access = previous
 			approved = false
+		} else {
+			a.pingChange()
+			a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": pagedHistoryBlock(sessionPayload(a.rec), a.rec)})
 		}
 	}
 	trace("actor.approval", map[string]any{"sid": a.id, "id": m.ID, "approved": approved})
@@ -1710,12 +1711,36 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 		end++
 	}
 	now := time.Now().UnixMilli()
+	newID := "sess_" + randomID8() + randomID8()
+	if m.NewID != "" {
+		newID = m.NewID
+	}
+	title := a.rec.Title + " (fork)"
+	if m.Title != "" {
+		title = m.Title
+	}
 	rec := &SessionRecord{
-		ID: "sess_" + randomID8() + randomID8(), CWD: resolvePath(a.rec.CWD),
-		Title: a.rec.Title + " (fork)", TitleSource: "manual", Model: a.rec.Model,
+		ID: newID, CWD: resolvePath(a.rec.CWD),
+		Title: title, TitleSource: "manual", Model: a.rec.Model,
 		Options: normalizedOptions(a.rec.Options), Status: "idle", Jailed: a.rec.Jailed,
-		CreatedAt: now, UpdatedAt: now, TurnSeq: a.rec.TurnSeq,
+		CreatedAt: now, UpdatedAt: now,
 		LastDate: a.rec.LastDate, LastMode: a.rec.LastMode,
+	}
+	if a.rec.Skills != nil {
+		rec.Skills = make(map[string]skills.SessionSkill, len(a.rec.Skills))
+		for k, v := range a.rec.Skills {
+			rec.Skills[k] = v
+		}
+	}
+	if a.rec.Widgets != nil {
+		rec.Widgets = append([]tools.WidgetFile(nil), a.rec.Widgets...)
+	}
+	if a.rec.Todos != nil {
+		rec.Todos = append([]tools.TodoItem(nil), a.rec.Todos...)
+	}
+	if a.rec.TodosOpen != nil {
+		v := *a.rec.TodosOpen
+		rec.TodosOpen = &v
 	}
 	brainDir := a.store.brainDir(a.id)
 	for _, b := range stripBrainBalloonFiles(a.rec.FileBalloons, brainDir) {
@@ -1737,6 +1762,13 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 		}
 		rec.Messages = append(rec.Messages, cp)
 	}
+	maxTurn := 0
+	for _, msg := range rec.Messages {
+		if msg.TurnIndex > maxTurn {
+			maxTurn = msg.TurnIndex
+		}
+	}
+	rec.TurnSeq = maxTurn
 	if st := a.rec.Compaction; st != nil && st.KeepFrom >= 0 && st.KeepFrom <= end {
 		cp := *st
 		rec.Compaction = &cp
@@ -2243,6 +2275,11 @@ func (a *sessionActor) onBgTaskFinish(m bgTaskFinishMsg) {
 func (a *sessionActor) onBgTaskRead(m bgTaskReadMsg) {
 	res := bgTaskReadResult{}
 	i := findBgTask(a.rec, m.JobID)
+	if i < 0 {
+		if _, err := a.restoreRunnerTask(m.JobID); err == nil {
+			i = findBgTask(a.rec, m.JobID)
+		}
+	}
 	if i < 0 {
 		res.Error = "unknown background task " + m.JobID + "." + listBgTaskIDs(a.rec)
 	} else {

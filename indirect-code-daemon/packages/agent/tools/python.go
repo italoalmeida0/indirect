@@ -342,10 +342,13 @@ func (t *PythonTool) Execute(ctx context.Context, raw json.RawMessage, progress 
 		}
 		// Stamp the delivery so the frontend knows this result belongs to
 		// a detached background job.
-		if det, ok := res.Details.(map[string]any); ok {
-			det["background_job_id"] = jobID
-			det["detached"] = true
+		det, ok := res.Details.(map[string]any)
+		if !ok || det == nil {
+			det = make(map[string]any)
+			res.Details = det
 		}
+		det["background_job_id"] = jobID
+		det["detached"] = true
 		deliver(text, commandFailed(res.Attrs), commandExitCode(res.Attrs))
 	}()
 	return core.ToolResult{

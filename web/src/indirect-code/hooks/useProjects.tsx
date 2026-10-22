@@ -54,10 +54,12 @@ export function createProjects(opts: {
   const [folderLoading, setFolderLoading] = createSignal(false);
   const [folderError, setFolderError] = createSignal("");
   let folderRequestId = "";
+  let requestedPath = "";
   let projectCreationId = "";
   const [pendingProjectId, setPendingProjectId] = createSignal("");
 
   function requestFolders(path: string) {
+    requestedPath = path;
     setNewProjectPath(path);
     if (!opts.isOpen() || !opts.isHostOnline()) { setFolderError("Connect this host to browse its folders."); return; }
     setFolderLoading(true); setFolderError("");
@@ -121,7 +123,10 @@ export function createProjects(opts: {
     setFolderEntries(msg.folders || []);
     setFolderParent(msg.parent || "");
     setFolderCurrent(msg.path || "");
-    setNewProjectPath(msg.path || "");
+    const cur = newProjectPath().trim();
+    if (!cur || cur === requestedPath.trim()) {
+      setNewProjectPath(msg.path || "");
+    }
   }
   /** requestId guard for the folder browser (page dispatcher). */
   function isFolderRequest(requestId: string | undefined) {
@@ -313,12 +318,16 @@ export function createProjects(opts: {
     if (ids.length === 0) return;
     const allPinned = ids.every((id) => opts.sessions().find((s) => s.id === id)?.pinned);
     const target = !allPinned;
+    let modifiedCount = 0;
     for (const id of ids) {
       const cur = opts.sessions().find((s) => s.id === id);
       if (!cur || !!cur.pinned === target) continue;
       if (opts.isOpen()) opts.send({ type: "toggle_pin", sessionId: id });
+      modifiedCount++;
     }
-    opts.toast(`${ids.length} conversation${ids.length === 1 ? "" : "s"} ${target ? "pinned" : "unpinned"}`, "ok");
+    if (modifiedCount > 0) {
+      opts.toast(`${modifiedCount} conversation${modifiedCount === 1 ? "" : "s"} ${target ? "pinned" : "unpinned"}`, "ok");
+    }
     exitSelectionMode();
   }
   async function deleteSelected() {

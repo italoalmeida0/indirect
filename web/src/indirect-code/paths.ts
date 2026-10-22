@@ -115,8 +115,9 @@ export function sessionFinishedKey(s: {lastTurnStartedAt?: number; lastTurnEnded
  * newest first; creation breaks ties). Final `id` tie-break keeps the
  * order stable. */
 export function compareSessions<
-  T extends {id: string; status?: string; createdAt: number; updatedAt: number; lastTurnStartedAt?: number; lastTurnEndedAt?: number},
+  T extends {id: string; status?: string; createdAt: number; updatedAt: number; lastTurnStartedAt?: number; lastTurnEndedAt?: number; pinned?: boolean},
 >(a: T, b: T): number {
+  if ((a.pinned ?? false) !== (b.pinned ?? false)) return a.pinned ? -1 : 1;
   const aLive = isLiveSession(a);
   const bLive = isLiveSession(b);
   if (aLive !== bLive) return aLive ? -1 : 1;

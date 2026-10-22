@@ -85,6 +85,7 @@ func (b *bgSupervisor) adoptRunners() {
 			}
 		case pidAlive(pidString(st.PID)) && !processutil.Matches(st.PID, st.ProcessIdentity):
 			trace("runner.identity.unverified", map[string]any{"job": st.JobID})
+			b.cleanupRunnerIdentity(st.JobID)
 			continue
 		case processutil.Matches(st.PID, st.ProcessIdentity):
 			if b.orphaned(st, now) {
@@ -217,6 +218,31 @@ ready:
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
 	buf := make([]byte, 32*1024)
+	drain := func() {
+		f, err := os.Open(st.LogPath)
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		for {
+			select {
+			case <-b.done:
+				return
+			default:
+			}
+			n, readErr := f.ReadAt(buf, offset)
+			if n > 0 {
+				if !b.sessionInboxReliable(st.SessionID, bgTaskRecoverChunkMsg{JobID: st.JobID, Text: string(buf[:n]), Offset: offset}) {
+					return
+				}
+				offset += int64(n)
+			}
+			if readErr != nil || n == 0 {
+				break
+			}
+		}
+	}
+	defer drain()
 	for {
 		select {
 		case <-jobDone:
@@ -267,6 +293,7 @@ ready:
 func (b *bgSupervisor) watchAdopted(jobID string, st *runner.State) {
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
+	unverifiedCount := 0
 	for {
 		select {
 		case <-b.done:
@@ -278,6 +305,9 @@ func (b *bgSupervisor) watchAdopted(jobID string, st *runner.State) {
 			return // state gone (GC or explicit clean)
 		}
 		if cur.Terminal() {
+			if err := repairTerminalCopy(b.rootDir(), cur); err != nil {
+				trace("runner.copy.repair_failed", map[string]any{"job": cur.JobID, "error": err.Error()})
+			}
 			status := BgStatusDone
 			if cur.Status != runner.StatusDone || (cur.ExitCode != nil && *cur.ExitCode != 0) {
 				status = BgStatusError
@@ -286,13 +316,23 @@ func (b *bgSupervisor) watchAdopted(jobID string, st *runner.State) {
 			return
 		}
 		if pidAlive(pidString(cur.PID)) && !processutil.Matches(cur.PID, cur.ProcessIdentity) {
-			// Identity race (pid recycling window / slow identity write):
-			// NOT fatal — keep watching. Giving up here left the job
-			// running forever with no finish and no notice (regression:
-			// TestBgWatchAdoptedSurvivesIdentityRace).
-			trace("runner.identity.unverified", map[string]any{"job": cur.JobID})
+			unverifiedCount++
+			trace("runner.identity.unverified", map[string]any{"job": cur.JobID, "count": unverifiedCount})
+			if unverifiedCount >= 5 {
+				// Recycled PID: process is alive but belongs to an unrelated binary.
+				// The runner is gone; treat as crashed instead of infinite loop.
+				reapStoredCommand(cur)
+				code := -1
+				end := time.Now().UnixMilli()
+				cur.Status, cur.ExitCode, cur.EndedAt = runner.StatusKilled, &code, &end
+				cur.OutcomeUnknown = true
+				_ = runner.WriteState(b.rootDir(), cur)
+				b.finishAdopted(jobID, BgStatusError, runnerNoticeText(cur))
+				return
+			}
 			continue
 		}
+		unverifiedCount = 0
 		if !pidAlive(pidString(cur.PID)) {
 			// F6 mid-watch: crash, not a silent hang. The state records
 			// the failure before the notice leaves.

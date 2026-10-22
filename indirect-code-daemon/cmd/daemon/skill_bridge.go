@@ -65,7 +65,7 @@ func (w *turnBridge) RecordSkillUse(name string, once bool) string {
 	// override stays an override-less entry (the file original keeps
 	// applying) instead of being frozen to today's resolved value.
 	usable := w.skillUsableOverride(name)
-	w.sendInbox(w.stamp(skillActivateMsg{gen: w.snap.gen, name: name, once: once, usable: usable}))
+	w.sendInbox(skillActivateMsg{gen: w.snap.gen, name: name, once: once, usable: usable})
 	w.skillUses = append(w.skillUses, skillUseRecord{name: name, once: once})
 	return name
 }
