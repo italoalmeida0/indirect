@@ -30,11 +30,41 @@ export function ToolbarContext() {
   const [draftUsables, setDraftUsables] = createSignal<Record<string, string>>({});
   const [draftAgentMode, setDraftAgentMode] = createSignal<string>("");
   const [isEditing, setIsEditing] = createSignal(false);
+  const [optimisticModeSkill, setOptimisticModeSkill] = createSignal<string | null>(null);
+
+  createEffect(() => {
+    s.activeSessionId();
+    setOptimisticModeSkill(null);
+  });
+
+  createEffect(() => {
+    const opt = optimisticModeSkill();
+    if (!opt) return;
+    if (c.selectedSkills()[0] === opt) {
+      setOptimisticModeSkill(null);
+    }
+  });
 
   const isMenuOpen = () => c.modeMenuOpen() || (c.addContextOpen() && subView() === "mode");
-  const effectiveSelectedSkills = () => (isEditing() ? draftSkills() : c.selectedSkills());
+  const effectiveSelectedSkills = () => {
+    if (isEditing()) return draftSkills();
+    const opt = optimisticModeSkill();
+    if (opt) {
+      const rest = c.selectedSkills().filter((n) => n !== opt && !isModeSkill(n));
+      return [opt, ...rest];
+    }
+    return c.selectedSkills();
+  };
   const effectiveSkillUsables = () => (isEditing() ? draftUsables() : c.skillUsables());
-  const effectiveAgentMode = () => (isEditing() ? draftAgentMode() : c.agentMode());
+  const effectiveAgentMode = () => {
+    if (isEditing()) return draftAgentMode();
+    const opt = optimisticModeSkill();
+    if (opt) {
+      const spec = modeSkills().find((m) => m.name === opt);
+      if (spec) return baseMode(spec.mode);
+    }
+    return c.agentMode();
+  };
 
   const arraysEqual = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
   const recordsEqual = (a: Record<string, string>, b: Record<string, string>) => {
@@ -66,6 +96,11 @@ export function ToolbarContext() {
     const targetSkills = draftSkills();
     const targetUsables = draftUsables();
     const targetMode = draftAgentMode();
+
+    const primaryMode = targetSkills.find(isModeSkill);
+    if (primaryMode) {
+      setOptimisticModeSkill(primaryMode);
+    }
 
     const currentSkills = c.selectedSkills();
     const currentUsables = c.skillUsables();
@@ -123,6 +158,7 @@ export function ToolbarContext() {
     const mode = baseMode(spec.mode);
     const rest = (isEditing() ? draftSkills() : c.selectedSkills()).filter((n) => n !== name && !isModeSkill(n));
     const nextSkills = [name, ...rest];
+    setOptimisticModeSkill(name);
     if (isEditing()) {
       setDraftAgentMode(mode);
       setDraftSkills(nextSkills);

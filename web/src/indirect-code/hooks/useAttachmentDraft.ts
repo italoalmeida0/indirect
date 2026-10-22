@@ -2,7 +2,8 @@ import { createSignal, onCleanup } from "solid-js";
 import type { DaemonCommand } from "../daemon-protocol";
 import type { PendingAttachment, StoredAttachment } from "../viewTypes";
 
-export const MAX_ATTACHMENTS = 30;
+export const MAX_ATTACHMENTS = 10;
+export const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 2.5 * 1024 * 1024;
 
@@ -17,6 +18,7 @@ export function createAttachmentDraft(opts: {
     PendingAttachment[]
   >([]);
   const [preparingAttachments, setPreparingAttachments] = createSignal(0);
+  let inFlightBytes = 0;
   let epoch = 0;
   const waiters = new Map<
     string,
@@ -32,18 +34,31 @@ export function createAttachmentDraft(opts: {
   async function handleFiles(files: FileList | File[]) {
     const generation = epoch;
     // Reserve slots before the first await, including simultaneous paste/drop events.
-    const room = Math.max(
-      0,
-      MAX_ATTACHMENTS -
-        pendingAttachments().length -
-        preparingAttachments() -
-        (opts.additionalCount?.() || 0),
-    );
-    const list = Array.from(files).slice(0, room);
-    if (files.length > room)
+    const currentCount =
+      pendingAttachments().length +
+      preparingAttachments() +
+      (opts.additionalCount?.() || 0);
+    const room = Math.max(0, MAX_ATTACHMENTS - currentCount);
+    if (files.length > room) {
       opts.toast(`Max ${MAX_ATTACHMENTS} attachments per message`, "err");
+      return;
+    }
+    const currentBytes = pendingAttachments().reduce(
+      (sum, a) => sum + (a.size || 0),
+      0,
+    );
+    const incomingBytes = Array.from(files).reduce(
+      (sum, f) => sum + (f.size || 0),
+      0,
+    );
+    if (currentBytes + inFlightBytes + incomingBytes > MAX_TOTAL_BYTES) {
+      opts.toast("Total attachments exceed 25MB limit", "err");
+      return;
+    }
+    const list = Array.from(files);
     if (!list.length) return;
     setPreparingAttachments((n) => n + list.length);
+    inFlightBytes += incomingBytes;
     try {
       const { sniffFile, extractText, uint8ToB64 } = await import(
         "../../office"
@@ -87,12 +102,14 @@ export function createAttachmentDraft(opts: {
               "err",
             );
         } finally {
+          inFlightBytes = Math.max(0, inFlightBytes - file.size);
           if (generation === epoch)
             setPreparingAttachments((n) => Math.max(0, n - 1));
         }
       }
     } catch (e) {
       if (generation === epoch) {
+        inFlightBytes = 0;
         setPreparingAttachments(0);
         opts.toast(
           e instanceof Error ? e.message : "Could not load file conversion",
@@ -199,6 +216,7 @@ export function createAttachmentDraft(opts: {
   }
   function clearAttachments() {
     epoch++;
+    inFlightBytes = 0;
     cancelUploads("Attachment draft changed");
     for (const p of pendingAttachments())
       if (p.objectUrl) URL.revokeObjectURL(p.objectUrl);

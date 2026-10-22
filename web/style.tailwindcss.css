@@ -100,7 +100,7 @@ html[data-theme="light"] {
   --ink-850: #eef0f3;
   --ink-800: #e7e9ed;
   --ink-700: #dde0e5;
-  --ink-600: #c9ccd3;
+  --ink-600: #595e68;
   --ink-500: #747983;
   --ink-400: #626873;
   --ink-300: #565963;
@@ -256,7 +256,7 @@ html:not([data-theme]) {
   --ink-850: #eef0f3;
   --ink-800: #e7e9ed;
   --ink-700: #dde0e5;
-  --ink-600: #c9ccd3;
+  --ink-600: #595e68;
   --ink-500: #747983;
   --ink-400: #626873;
   --ink-300: #565963;

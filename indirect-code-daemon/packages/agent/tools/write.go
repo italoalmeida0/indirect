@@ -60,10 +60,15 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 	// are never tracked: they are not user-facing changes.
 	if t.Changes != nil && !t.isBrainPath(path) {
 		if old, err := os.ReadFile(path); err == nil {
+			capped, tooLarge := cappedSnapshot(old)
 			if looksBinary(old) {
-				t.Changes.NoteBinaryNew(path)
-			} else if capped, tooLarge := cappedSnapshot(old); tooLarge {
-				t.Changes.NoteBinaryNew(path)
+				if tooLarge {
+					t.Changes.NoteBinaryEdit(path, "")
+				} else {
+					t.Changes.NoteBinaryEdit(path, capped)
+				}
+			} else if tooLarge {
+				t.Changes.NoteBinaryEdit(path, "")
 			} else {
 				t.Changes.NoteWrite(path, true, capped)
 			}

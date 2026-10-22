@@ -158,6 +158,14 @@ func TestCanRetryErrorOnlyRefusesCancel(t *testing.T) {
 			t.Errorf("canRetryError(%q) = %v; want %v", tc.msg, got, tc.want)
 		}
 	}
+	// PersistentTurns = true (as used in daemon sessions) must still refuse non-retryable errors
+	a.PersistentTurns = true
+	for _, tc := range cases {
+		if got := a.canRetryError(errors.New(tc.msg), 0); got != tc.want {
+			t.Errorf("PersistentTurns canRetryError(%q) = %v; want %v", tc.msg, got, tc.want)
+		}
+	}
+	a.PersistentTurns = false
 	if a.canRetryError(nil, 0) {
 		t.Error("canRetryError(nil) = true; want false")
 	}
@@ -286,5 +294,36 @@ func TestRetryScheduleShape(t *testing.T) {
 		if got := a.retryDelay(i); got != h {
 			t.Fatalf("retryDelay(%d) = %v; want steady %v", i, got, h)
 		}
+	}
+}
+
+func TestNonRetryableUpstreamErrorTerminatesTurnImmediately(t *testing.T) {
+	cases := []struct {
+		name string
+		err  string
+	}{
+		{"http 400", "anthropic: http 400: bad request"},
+		{"http 401", "gateway: http 401: invalid_api_key"},
+		{"unsupported parameter", "codex error: unsupported parameter: reasoning"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &codexRetryFakeClient{firstErr: tc.err}
+			a := NewAgent(client, "fake-model", "system", Registry{})
+			a.PersistentTurns = true
+			a.RetrySchedule = []time.Duration{time.Millisecond}
+
+			err := a.Prompt(context.Background(), "hello", nil, nil)
+			if err == nil {
+				t.Fatalf("Prompt succeeded; want non-retryable error")
+			}
+			if !strings.Contains(err.Error(), tc.err) {
+				t.Fatalf("expected error containing %q, got %v", tc.err, err)
+			}
+			if got := atomic.LoadInt32(&client.calls); got != 1 {
+				t.Fatalf("Stream calls = %d; want exactly 1 (no retries)", got)
+			}
+		})
 	}
 }

@@ -1034,7 +1034,7 @@ export function Modal(props: {
       const items = focusable();
       const first = items[0] || panel;
       const last = items.at(-1) || panel;
-      if (!panel.contains(document.activeElement) || (e.shiftKey && document.activeElement === first)) {
+      if (!panel.contains(document.activeElement) || document.activeElement === panel || (e.shiftKey && document.activeElement === first)) {
         e.preventDefault(); (e.shiftKey ? last : first).focus();
       } else if (!e.shiftKey && document.activeElement === last) {
         e.preventDefault(); first.focus();

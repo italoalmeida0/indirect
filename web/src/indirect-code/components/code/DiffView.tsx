@@ -126,22 +126,24 @@ export function DiffView(props: {
                             : "text-ink-400"
                   }`}
                 >
-                  <Show when={hasGutter()}>
-                    <span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">
-                      {r.lineNum || ""}
+                  <div class="sticky left-0 z-10 flex items-start bg-inherit shrink-0">
+                    <Show when={hasGutter()}>
+                      <span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">
+                        {r.lineNum || ""}
+                      </span>
+                    </Show>
+                    <span
+                      class={`select-none w-3.5 shrink-0 text-center font-bold ${
+                        r.kind === "add"
+                          ? "text-emerald-400"
+                          : r.kind === "del"
+                            ? "text-rose-400"
+                            : "text-transparent"
+                      }`}
+                    >
+                      {r.marker || " "}
                     </span>
-                  </Show>
-                  <span
-                    class={`select-none w-3.5 shrink-0 text-center font-bold ${
-                      r.kind === "add"
-                        ? "text-emerald-400"
-                        : r.kind === "del"
-                          ? "text-rose-400"
-                          : "text-transparent"
-                    }`}
-                  >
-                    {r.marker || " "}
-                  </span>
+                  </div>
                   {/* eslint-disable-next-line solid/no-innerhtml */}
                   <code class="tok flex-1" innerHTML={escapeHtml(r.code || " ")} />
                 </div>
@@ -164,22 +166,24 @@ export function DiffView(props: {
                           : "text-ink-400"
                 }`}
               >
-                <Show when={hasGutter()}>
-                  <span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">
-                    {r.lineNum || ""}
+                <div class="sticky left-0 z-10 flex items-start bg-inherit shrink-0">
+                  <Show when={hasGutter()}>
+                    <span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">
+                      {r.lineNum || ""}
+                    </span>
+                  </Show>
+                  <span
+                    class={`select-none w-3.5 shrink-0 text-center font-bold ${
+                      r.kind === "add"
+                        ? "text-emerald-400"
+                        : r.kind === "del"
+                          ? "text-rose-400"
+                          : "text-transparent"
+                    }`}
+                  >
+                    {r.marker || " "}
                   </span>
-                </Show>
-                <span
-                  class={`select-none w-3.5 shrink-0 text-center font-bold ${
-                    r.kind === "add"
-                      ? "text-emerald-400"
-                      : r.kind === "del"
-                        ? "text-rose-400"
-                        : "text-transparent"
-                  }`}
-                >
-                  {r.marker || " "}
-                </span>
+                </div>
                 {/* eslint-disable-next-line solid/no-innerhtml */}
                 <code class="tok flex-1" innerHTML={r.codeHtml || " "} />
               </div>

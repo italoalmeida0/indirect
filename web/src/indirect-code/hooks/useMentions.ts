@@ -74,6 +74,7 @@ export function createMentions(opts: {
     const next = insertMention(opts.text(), current, path);
     opts.setText(next.text);
     setCaret(next.caret);
+    setDismissed(JSON.stringify(activeMention(next.text, next.caret)));
     queueMicrotask(() => {
       const input = document.getElementById(
         opts.inputId,
@@ -100,7 +101,14 @@ export function createMentions(opts: {
       return true;
     }
     if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-      if (!files().length) return false;
+      if (!files().length) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          setDismissed(key());
+          return true;
+        }
+        return false;
+      }
       e.preventDefault();
       const file = files()[index()];
       if (file) pick(file);

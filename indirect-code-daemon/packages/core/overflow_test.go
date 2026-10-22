@@ -1,8 +1,11 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"testing"
+
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 func TestIsContextOverflow(t *testing.T) {
@@ -78,4 +81,55 @@ func TestIsRetryableUpstream(t *testing.T) {
 			t.Fatalf("must NOT retry: %q", msg)
 		}
 	}
+}
+
+func TestContextOverflowRecoveryOnShortTranscript(t *testing.T) {
+	calls := 0
+	c := &scriptableFakeClient{
+		summaries: []string{"Compacted summary."},
+	}
+	client := &overflowMockClient{
+		onStream: func(req provider.Request) (<-chan provider.Event, error) {
+			calls++
+			if calls == 1 {
+				return nil, errors.New("prompt is too long for requested model")
+			}
+			return c.Stream(context.Background(), req)
+		},
+	}
+	a := NewAgent(client, "m", "", Registry{})
+	a.messages = []provider.Message{
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "first user"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "first reply"}}},
+		{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: "second user"}}},
+	}
+
+	err := a.Prompt(context.Background(), "third user", nil, nil)
+	if err != nil {
+		t.Fatalf("Prompt failed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 calls (1 overflow, 1 success after compact), got %d", calls)
+	}
+	if a.compactionState == nil {
+		t.Fatal("expected compaction state to be set after overflow recovery")
+	}
+}
+
+type overflowMockClient struct {
+	onStream func(provider.Request) (<-chan provider.Event, error)
+}
+
+func (m *overflowMockClient) Name() string { return "overflow-mock" }
+func (m *overflowMockClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	if req.System == SummarizationSystemPrompt {
+		out := make(chan provider.Event, 8)
+		out <- provider.EventStart{Provider: "overflow-mock", Model: req.Model}
+		out <- provider.EventTextDelta{Delta: "Summary."}
+		out <- provider.EventUsage{Usage: provider.Usage{InputTokens: 10, OutputTokens: 5}}
+		out <- provider.EventDone{Stop: provider.StopEnd, Message: provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "Summary."}}}}
+		close(out)
+		return out, nil
+	}
+	return m.onStream(req)
 }

@@ -87,7 +87,7 @@ func TestPersistentTurnRetriesRequestDeadlineAndCompaction(t *testing.T) {
 }
 
 func TestPersistentRequestFailureDoesNotCancelTheParentTurn(t *testing.T) {
-	for _, failure := range []error{context.Canceled, context.DeadlineExceeded, errors.New("anthropic: http 401: unauthorized")} {
+	for _, failure := range []error{context.Canceled, context.DeadlineExceeded} {
 		t.Run(failure.Error(), func(t *testing.T) {
 			calls := 0
 			client := persistentClient{stream: func(context.Context, provider.Request) (<-chan provider.Event, error) {
@@ -102,6 +102,32 @@ func TestPersistentRequestFailureDoesNotCancelTheParentTurn(t *testing.T) {
 			a.RetrySchedule = []time.Duration{0}
 			if err := a.Prompt(context.Background(), "continue", nil, nil); err != nil || calls != 2 {
 				t.Fatalf("request failure ended the turn: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestPersistentTurnFailsFastOnNonRetryableUpstreamError(t *testing.T) {
+	for _, msg := range []string{
+		"anthropic: http 401: unauthorized",
+		"codex error: unsupported parameter: reasoning",
+		"http 400: invalid_request_error",
+	} {
+		t.Run(msg, func(t *testing.T) {
+			calls := 0
+			client := persistentClient{stream: func(context.Context, provider.Request) (<-chan provider.Event, error) {
+				calls++
+				return nil, errors.New(msg)
+			}}
+			a := NewAgent(client, "m", "", Registry{})
+			a.PersistentTurns = true
+			a.RetrySchedule = []time.Duration{0}
+			err := a.Prompt(context.Background(), "work", nil, nil)
+			if err == nil {
+				t.Fatalf("expected non-retryable error, got nil")
+			}
+			if calls != 1 {
+				t.Fatalf("expected 1 call before fail-fast, got calls=%d", calls)
 			}
 		})
 	}

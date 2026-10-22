@@ -101,4 +101,37 @@ describe("Bug 80 — question submit failure is recoverable", () => {
       dispose();
     });
   });
+
+  test("showQuestion preserves recommend and decide_later during normalization", async () => {
+    stubBrowserGlobals();
+    const { createTranscript } = await import("../web/src/indirect-code/hooks/useTranscript");
+    const t = createTranscript({
+      send: () => {},
+      isOpen: () => true,
+      getSessionId: () => "s1",
+      getHostId: () => "h1",
+      toast: () => {},
+      showChoice: async () => null,
+      onTurnIdle: () => {},
+      onUsageContext: () => {},
+    });
+    createRoot((dispose) => {
+      t.showQuestion({
+        id: "q-rec",
+        questions: [{
+          header: "Choice",
+          question: "Pick one?",
+          options: [{ label: "Opt1" }, { label: "Opt2" }],
+          multiple: false,
+          recommend: "Opt1",
+          decide_later: true,
+        }],
+      } as any);
+      const pending = t.pendingQuestion();
+      expect(pending).not.toBeNull();
+      expect(pending?.questions[0].recommend).toBe("Opt1");
+      expect(pending?.questions[0].decide_later).toBe(true);
+      dispose();
+    });
+  });
 });

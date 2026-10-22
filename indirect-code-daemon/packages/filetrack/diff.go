@@ -255,9 +255,9 @@ func BuildChanged(tracked []TrackedFile, cwd string) []ChangedFile {
 			})
 			continue
 		}
-		if cur.binary || cur.tooLarge {
+		if cur.binary || cur.tooLarge || tf.Binary || tf.TooLarge {
 			status := "binary"
-			if cur.tooLarge {
+			if cur.tooLarge || tf.TooLarge {
 				status = "too_large"
 			}
 			out = append(out, ChangedFile{

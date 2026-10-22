@@ -42,7 +42,8 @@ export function parseDiffLine(line: string): ParsedDiffLine {
 
 /** Split a diff into renderable rows, deriving @@-based numbers when absent. */
 export function diffRows(text: string): ParsedDiffLine[] {
-  const clean = cleanNotice(text);
+  const clean = cleanNotice(text).replace(/\r?\n+$/, "");
+  if (!clean) return [];
   const lines = clean
     .split("\n")
     .filter((l) => !l.startsWith("---") && !l.startsWith("+++"));
@@ -67,7 +68,8 @@ export function cleanNotice(text: string): string {
  * parsed numbers in that case.
  */
 export function deriveLineNumbers(text: string): string[] | null {
-  const lines = (text || "").split("\n").filter((l) => !l.startsWith("---") && !l.startsWith("+++"));
+  const clean = (text || "").replace(/\r?\n+$/, "");
+  const lines = clean.split("\n").filter((l) => !l.startsWith("---") && !l.startsWith("+++"));
   if (!lines.some((l) => l.startsWith("@@"))) return null;
 
   const nums: string[] = [];

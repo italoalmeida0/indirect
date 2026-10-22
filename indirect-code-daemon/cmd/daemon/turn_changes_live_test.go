@@ -7,10 +7,14 @@ package main
 // disappear until the next tool event repainted it.
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/filetrack"
 )
 
@@ -74,5 +78,45 @@ func TestTurnChangesNoLiveWithoutTracking(t *testing.T) {
 	out := (<-reply).(readResult).Payload.(map[string]any)
 	if _, has := out["live"]; has {
 		t.Fatal("empty tracker must not produce a live balloon")
+	}
+}
+
+func TestBinaryFileUndoRestoresContentAndNeverRemoves(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "image.png")
+	origBytes := []byte{0x89, 'P', 'N', 'G', 0x00, 0x01, 0x02}
+	if err := os.WriteFile(binPath, origBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tracker := filetrack.NewTurnTracker()
+	tool := &tools.WriteTool{CWD: dir, Changes: tracker}
+	rawArgs, _ := json.Marshal(map[string]any{"path": binPath, "content": "plain text overwrite"})
+	if _, err := tool.Execute(context.Background(), rawArgs, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	changed := filetrack.BuildChanged(tracker.Snapshot(), dir)
+	if len(changed) != 1 {
+		t.Fatalf("expected 1 changed file, got %d", len(changed))
+	}
+	if changed[0].Status != "binary" {
+		t.Fatalf("expected status binary, got %s", changed[0].Status)
+	}
+	if changed[0].Before != string(origBytes) {
+		t.Fatalf("expected Before to hold original binary bytes")
+	}
+
+	res := undoOneFile(dir, &changed[0])
+	if !res.OK {
+		t.Fatalf("undoOneFile failed: %s", res.Message)
+	}
+
+	restored, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("file should exist after undo: %v", err)
+	}
+	if !bytes.Equal(restored, origBytes) {
+		t.Fatalf("restored bytes %v != orig bytes %v", restored, origBytes)
 	}
 }

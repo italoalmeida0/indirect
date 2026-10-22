@@ -6,6 +6,10 @@ import {
 } from "../web/src/indirect-code/utils/composerTokens";
 import { normalizeSessionMessages } from "../web/src/indirect-code/transcript/updaters";
 import { sniffFile } from "../web/src/office";
+import {
+  MAX_ATTACHMENTS,
+  MAX_TOTAL_BYTES,
+} from "../web/src/indirect-code/hooks/useAttachmentDraft";
 
 describe("composer tokens and attachments", () => {
   test("mentions preserve surrounding text, spaces and mid-message insertion", () => {
@@ -19,6 +23,9 @@ describe("composer tokens and attachments", () => {
     expect(activeMention("Contact test@example.com", 24)).toBeNull();
     expect(activeMention('Read @"My File', 14)?.query).toBe("My File");
     expect(activeMention('Read @"My File" ', 16)).toBeNull();
+    // BUG-T1-04: unquoted mentions allow spaces
+    expect(activeMention("@file with spaces", 17)?.query).toBe("file with spaces");
+    expect(activeMention("Read @My Documents/notes.txt", 30)?.query).toBe("My Documents/notes.txt");
   });
   test("command recognition does not consume absolute paths or unknown prompt words", () => {
     expect(slashCommand("/compact\n")).toBe("/compact");
@@ -82,5 +89,10 @@ describe("composer tokens and attachments", () => {
         new TextEncoder().encode("<svg/>"),
       ).blocked,
     ).toContain("PNG, JPEG, GIF, WebP or BMP");
+  });
+
+  test("attachment draft limits: max 10 attachments and 25MB cumulative cap", () => {
+    expect(MAX_ATTACHMENTS).toBe(10);
+    expect(MAX_TOTAL_BYTES).toBe(25 * 1024 * 1024);
   });
 });

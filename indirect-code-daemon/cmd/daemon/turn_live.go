@@ -99,6 +99,9 @@ func (t *liveTracker) track(event core.AgentEvent) {
 			t.dirty = true
 		}
 	case core.EvToolProgress:
+		if e.ID == "" {
+			break
+		}
 		if t.toolProgress == nil {
 			t.toolProgress = map[string]string{}
 		}

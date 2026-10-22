@@ -280,3 +280,42 @@ func TestToolDescriptionsDoNotEnumerateModes(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerFinishToolModePreservedForPlanAndLearning(t *testing.T) {
+	// Plan mode via skills (canonicalized options mode was "agentic")
+	snapPlan := workerSnapshot{
+		options: SessionOptions{Mode: "agentic"},
+		skills:  map[string]skills.SessionSkill{"plan": {Active: true, Priority: 1}},
+	}
+	modePlan := determineFinishMode(snapPlan)
+	if modePlan != "plan" {
+		t.Fatalf("expected finishMode plan, got: %s", modePlan)
+	}
+	finishPlan := &tools.FinishEntireRequestTool{Mode: modePlan}
+	if !strings.Contains(finishPlan.Description(), "implementation plan") {
+		t.Fatalf("expected plan finish tool description, got: %s", finishPlan.Description())
+	}
+
+	// Learning mode via raw options
+	snapLearn := workerSnapshot{
+		options: SessionOptions{Mode: "learning"},
+	}
+	modeLearn := determineFinishMode(snapLearn)
+	if modeLearn != "learning" {
+		t.Fatalf("expected finishMode learning, got: %s", modeLearn)
+	}
+	finishLearn := &tools.FinishEntireRequestTool{Mode: modeLearn}
+	if !strings.Contains(finishLearn.Description(), "report to the learner") {
+		t.Fatalf("expected learning finish tool description, got: %s", finishLearn.Description())
+	}
+
+	// Build mode defaults to agentic finish description
+	snapBuild := workerSnapshot{
+		options: SessionOptions{Mode: "build"},
+	}
+	modeBuild := determineFinishMode(snapBuild)
+	finishBuild := &tools.FinishEntireRequestTool{Mode: modeBuild}
+	if !strings.Contains(finishBuild.Description(), "all requested changes implemented") {
+		t.Fatalf("expected default finish tool description, got: %s", finishBuild.Description())
+	}
+}

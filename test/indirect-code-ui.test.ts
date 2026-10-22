@@ -1101,6 +1101,10 @@ describe("unified diff parsing (edit results and turn-change balloons)", () => {
       "", "1", "2", "3",
     ]);
 
+    // Trailing newline does not produce phantom empty line or fake line number.
+    expect(deriveLineNumbers(unified + "\n")).toEqual(deriveLineNumbers(unified));
+    expect(diffRows(unified + "\n")).toEqual(rows);
+
     // No @@ headers (edit-tool numbered format) -> null, numbers kept as parsed.
     expect(deriveLineNumbers("12:+const x = 1;\n13:-old")).toBeNull();
   });

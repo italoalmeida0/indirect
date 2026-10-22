@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
 )
 
@@ -244,5 +245,46 @@ func TestWorkerTodoAndMessageAppend(t *testing.T) {
 	got2 := (<-rr2).(readResult)
 	if rec := got2.Payload.(*SessionRecord); len(rec.Todos) != 1 {
 		t.Fatalf("todos lost across commit: %+v", rec.Todos)
+	}
+}
+
+func TestCompactionProgressEmitsCompactProgressEvent(t *testing.T) {
+	var emitted []map[string]any
+	w := &turnBridge{
+		cfg: DaemonConfig{HostID: "test-host"},
+		env: workerEnv{
+			actorID: "test-session",
+			emit: func(v any) {
+				if m, ok := v.(map[string]any); ok {
+					emitted = append(emitted, m)
+				}
+			},
+		},
+	}
+
+	// 1. Compaction progress with empty ID
+	w.handleEvent(core.EvToolProgress{Text: "Compacting older context…"})
+	if len(emitted) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(emitted))
+	}
+	ev1, ok := emitted[0]["event"].(map[string]any)
+	if !ok || ev1["type"] != "compact_progress" {
+		t.Fatalf("expected compact_progress event type, got: %+v", emitted[0])
+	}
+	if ev1["text"] != "Compacting older context…" {
+		t.Fatalf("expected compact text, got: %v", ev1["text"])
+	}
+
+	// 2. Regular tool progress with non-empty ID
+	w.handleEvent(core.EvToolProgress{ID: "call-123", Text: "Running bash..."})
+	if len(emitted) != 2 {
+		t.Fatalf("expected 2 events, got %d", len(emitted))
+	}
+	ev2, ok := emitted[1]["event"].(map[string]any)
+	if !ok || ev2["type"] != "tool_progress" {
+		t.Fatalf("expected tool_progress event type, got: %+v", emitted[1])
+	}
+	if ev2["id"] != "call-123" {
+		t.Fatalf("expected tool call id, got: %v", ev2["id"])
 	}
 }

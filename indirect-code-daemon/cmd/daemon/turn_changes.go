@@ -168,6 +168,11 @@ func undoOneFile(cwd string, f *filetrack.ChangedFile) undoFileResult {
 	res := undoFileResult{Path: f.Path, Rel: f.Rel, OK: true}
 	switch f.Status {
 	case "new":
+		if f.Before != "" {
+			res.OK = false
+			res.Message = "file has previous content; not removed"
+			return res
+		}
 		// New file: remove it only if the current content still matches what
 		// the turn left behind (never delete user changes made afterwards).
 		data, err := os.ReadFile(f.Path)
@@ -236,6 +241,24 @@ func undoOneFile(cwd string, f *filetrack.ChangedFile) undoFileResult {
 			return res
 		}
 		if err := os.WriteFile(f.Path, []byte(restored), 0o644); err != nil {
+			res.OK = false
+			res.Message = fmt.Sprintf("write failed: %s", err)
+			return res
+		}
+		res.Message = "restored"
+		return res
+	case "binary", "too_large":
+		if f.Before == "" {
+			res.OK = false
+			res.Message = "file without snapshot cannot be restored"
+			return res
+		}
+		if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
+			res.OK = false
+			res.Message = fmt.Sprintf("mkdir failed: %s", err)
+			return res
+		}
+		if err := os.WriteFile(f.Path, []byte(f.Before), 0o644); err != nil {
 			res.OK = false
 			res.Message = fmt.Sprintf("write failed: %s", err)
 			return res

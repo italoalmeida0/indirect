@@ -191,6 +191,7 @@ export default function IndirectCodePage() {
     toast: notice.toast,
     showConfirm: modals.showConfirm,
     onHostRemoved: (id) => { void mirror.dataLayer.disposeHost(id); daemonUpdate.forgetHost(id); },
+    reconnect: (id) => { relay.resetBackoff(); relay.connect(id); },
   });
 
   const relay = createRelay({
@@ -1156,6 +1157,7 @@ export default function IndirectCodePage() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "k") {
+        if (document.querySelector('[role="dialog"]') || modals.confirmState()) return;
         e.preventDefault();
         setHistoryView(true);
         return;
@@ -1222,7 +1224,6 @@ export default function IndirectCodePage() {
         setActiveSessionId("");
         projects.setActiveProjectId("");
         composer.clearAttachments();
-        composer.setInputPrompt("");
         relay.resetBackoff();
         mirror.dataLayer.disconnect();
         relay.connect(hid);

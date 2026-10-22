@@ -10,7 +10,7 @@ export function slashCommand(text: string) {
 /** A mention is a standalone token at the caret, never an email address. */
 export function activeMention(text: string, caret: number) {
   const before = text.slice(0, caret);
-  const match = /(?:^|\s)@([^\s@"`]*|"[^"\n]*)$/.exec(before);
+  const match = /(?:^|\s)@([^\n@"`]*|"[^"\n]*)$/.exec(before);
   if (!match) return null;
   const query = match[1].replace(/^"/, "");
   const tail = text.slice(caret);

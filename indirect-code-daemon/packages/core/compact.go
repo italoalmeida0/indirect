@@ -117,6 +117,13 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 			} else {
 				plan.Prompt = InitialSummarizationPrompt(conversation)
 			}
+		} else if state != nil && state.PreviousSummary != "" {
+			plan.Incremental = true
+			merged := FileOps{
+				Read:     MergeFileOps(state.ReadFiles, ops.Read),
+				Modified: MergeFileOps(state.ModifiedFiles, ops.Modified),
+			}
+			plan.FileOpsNote = FormatFileOperations(merged)
 		}
 		if plan.SplitTurn && len(prefixWindow) > 0 {
 			plan.TurnPrefixPrompt = TurnPrefixSummarizationPrompt(SerializeConversation(prefixWindow))
@@ -141,6 +148,8 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 			}
 			histSummary = strings.TrimSpace(s)
 			totalUsage = totalUsage.Add(u)
+		} else if state != nil && strings.TrimSpace(state.PreviousSummary) != "" {
+			histSummary = strings.TrimSpace(state.PreviousSummary)
 		} else {
 			histSummary = "No prior history."
 		}

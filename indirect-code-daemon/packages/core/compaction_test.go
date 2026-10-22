@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -199,4 +200,37 @@ func mustRaw(s string) json.RawMessage {
 	}
 	b, _ := json.Marshal(v)
 	return b
+}
+
+func TestSplitTurnCompactionPreservesPreviousSummary(t *testing.T) {
+	state := &CompactionState{
+		PreviousSummary: "Initial accumulated knowledge.",
+		Count:           1,
+	}
+
+	prepPlan := PrepareCompaction([]provider.Message{
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "huge tool result"}}},
+	}, state, 1)
+	if !prepPlan.Incremental {
+		t.Errorf("expected plan to be marked Incremental when state.PreviousSummary is present")
+	}
+
+	client := &scriptableFakeClient{summaries: []string{"Prefix summary result."}}
+	a := NewAgent(client, "m", "", Registry{})
+	a.compactionState = state
+	a.messages = []provider.Message{
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "prefix message"}}},
+		{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "tail message"}}},
+	}
+
+	summary, err := a.Compact(context.Background(), 1, nil)
+	if err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+	if !strings.Contains(summary, "Initial accumulated knowledge.") {
+		t.Fatalf("expected summary to contain 'Initial accumulated knowledge.', got: %s", summary)
+	}
+	if strings.Contains(summary, "No prior history.") {
+		t.Fatalf("summary should not contain 'No prior history.', got: %s", summary)
+	}
 }

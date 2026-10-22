@@ -274,6 +274,7 @@ func (c *countTracker) NoteRead(absPath, content string)                   { c.r
 func (c *countTracker) NoteWrite(absPath string, existed bool, old string) { c.writes++ }
 func (c *countTracker) NoteEditBefore(absPath, beforeContent string)       { c.edits++ }
 func (c *countTracker) NoteBinaryNew(absPath string)                       { c.writes++ }
+func (c *countTracker) NoteBinaryEdit(absPath, oldContent string)          { c.writes++ }
 
 func TestWriteBrainSkipsChangeTracking(t *testing.T) {
 	dir := t.TempDir()

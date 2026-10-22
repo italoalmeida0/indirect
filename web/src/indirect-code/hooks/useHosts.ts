@@ -7,6 +7,7 @@ export function createHosts(opts: {
   showConfirm: (o: { title?: string; message?: string; confirmText?: string; cancelText?: string; danger?: boolean }) => Promise<boolean>;
   /** After successful removal: the page releases the host mirror. */
   onHostRemoved?: (id: string) => void;
+  reconnect?: (hostId: string) => void;
 }) {
   const [hosts, setHosts] = createSignal<RemoteHostDto[]>([]);
   const [activeHostId, setActiveHostId] = createSignal<string>((() => {
@@ -95,10 +96,18 @@ export function createHosts(opts: {
     setHosts((prev) => prev.map((h) => h.id === activeHostId() ? { ...h, status: "offline" as const } : h));
   }
 
+  function reconnect() {
+    void loadHosts();
+    const hid = activeHostId();
+    if (hid && opts.reconnect) {
+      opts.reconnect(hid);
+    }
+  }
+
   return {
     hosts, activeHostId, setActiveHostId, activeHost,
     hostMenuOpen, setHostMenuOpen, hostMenuAnchor, setHostMenuAnchor,
-    loadHosts, removeHost, noteHostStatus, markActiveHostOffline,
+    loadHosts, removeHost, noteHostStatus, markActiveHostOffline, reconnect,
   };
 }
 

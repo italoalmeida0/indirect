@@ -376,7 +376,7 @@ function Root() {
   createEffect(() => {
     const p = route().path;
     try {
-      if (p === "/code-dev" || p.startsWith("/code-dev")) {
+      if (p === "/code-dev" || p.startsWith("/code-dev") || p === "/codedev" || p.startsWith("/codedev")) {
         document.title = "Indirect Code — Dev Mode";
         (window as any).__pageIcon = "/indirect-icon.svg";
       } else if (p.startsWith("/code")) {
@@ -416,7 +416,7 @@ function Root() {
         >
           {(() => {
             const p = route().path;
-            if (p === "/code-dev" || p.startsWith("/code-dev")) {
+            if (p === "/code-dev" || p.startsWith("/code-dev") || p === "/codedev" || p.startsWith("/codedev")) {
               return <CodeDevPage />;
             }
             if (p.startsWith("/code")) {

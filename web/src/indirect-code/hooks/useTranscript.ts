@@ -136,9 +136,9 @@ export function createTranscript(opts: {
     if (question) {
       const raw = (question as any).questions ?? (question as any).question;
       const normalized: PendingQuestion["questions"] = Array.isArray(raw)
-        ? raw.map((q: any) => typeof q === "string" ? { header: "Question", question: q, options: [] } : { header: q?.header || "Question", question: q?.question || "", options: Array.isArray(q?.options) ? q.options : [], multiple: !!q?.multiple, custom: q?.custom })
+        ? raw.map((q: any) => typeof q === "string" ? { header: "Question", question: q, options: [] } : { header: q?.header || "Question", question: q?.question || "", options: Array.isArray(q?.options) ? q.options : [], multiple: !!q?.multiple, custom: q?.custom, recommend: q?.recommend, decide_later: q?.decide_later })
         : raw && typeof raw === "object"
-          ? [{ header: raw.header || "Question", question: raw.question || "", options: Array.isArray(raw.options) ? raw.options : [], multiple: !!raw.multiple, custom: raw.custom }]
+          ? [{ header: raw.header || "Question", question: raw.question || "", options: Array.isArray(raw.options) ? raw.options : [], multiple: !!raw.multiple, custom: raw.custom, recommend: raw.recommend, decide_later: raw.decide_later }]
           : typeof raw === "string" && raw.trim()
             ? [{ header: "Question", question: raw.trim(), options: [] }]
             : [];

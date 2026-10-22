@@ -667,7 +667,8 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			// compact the transcript and retry immediately instead of hard-failing the turn.
 			if IsContextOverflow(err) && attempt == 0 {
 				sink(EvToolProgress{Text: "Context limit reached upstream; automatically compacting older context…"})
-				if summary, compactErr := a.Compact(ctx, 0, nil); compactErr == nil && summary != "" {
+				keepTail := max(1, len(a.Messages())/2)
+				if summary, compactErr := a.Compact(ctx, keepTail, nil); compactErr == nil && summary != "" {
 					continue
 				}
 			}
@@ -829,20 +830,20 @@ func (a *Agent) canRetryError(err error, _ int) bool {
 	if errors.Is(err, ErrRepetitionLoop) {
 		return true
 	}
-	// The caller checks the TURN context before retrying. An individual
-	// request deadline/cancellation is not an explicit stop of that turn.
-	if a.PersistentTurns {
-		return true
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return false
-	}
 	// Non-retryable upstream rejections: retrying forever burns quota and
 	// hangs the turn until the user notices. This includes bad-request
 	// errors (400 invalid_request_error — e.g. a model rejecting tools +
 	// reasoning, bad params) and auth errors. Rate limits (429) and 5xx
 	// still retry forever (transient by nature).
 	if !isRetryableUpstream(err) {
+		return false
+	}
+	// The caller checks the TURN context before retrying. An individual
+	// request deadline/cancellation is not an explicit stop of that turn.
+	if a.PersistentTurns {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	return true

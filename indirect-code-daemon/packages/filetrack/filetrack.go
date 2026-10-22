@@ -126,6 +126,24 @@ func (t *TurnTracker) NoteBinaryNew(absPath string) {
 	t.files[p] = &TrackedFile{Path: p, HasBefore: false, CreatedWithWrite: true, Binary: true}
 }
 
+// NoteBinaryEdit marks a pre-existing binary or oversized file that was modified/overwritten.
+// First sighting only.
+func (t *TurnTracker) NoteBinaryEdit(absPath string, oldContent string) {
+	defer func() {
+		if t.OnChange != nil {
+			t.OnChange()
+		}
+	}()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	p := cleanPath(absPath)
+	if _, ok := t.files[p]; ok {
+		return
+	}
+	tooLarge := len(oldContent) == 0
+	t.files[p] = &TrackedFile{Path: p, Before: oldContent, HasBefore: true, Binary: true, TooLarge: tooLarge}
+}
+
 // Snapshot returns a copy of the tracked files for changed computation.
 func (t *TurnTracker) Snapshot() []TrackedFile {
 	t.mu.Lock()

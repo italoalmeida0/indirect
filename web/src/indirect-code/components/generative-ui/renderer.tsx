@@ -298,7 +298,7 @@ export function GenerativeUiWidget(props: {
         setFinalHeight(resolved.height);
         setError("");
       } else {
-        setError(`Widget could not be published (HTTP ${res.status}).`);
+        setError(out?.error || `Widget could not be published (HTTP ${res.status}).`);
       }
     } catch {
       setError("Widget could not be published (network error).");

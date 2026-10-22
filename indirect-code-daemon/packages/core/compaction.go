@@ -757,6 +757,13 @@ func PrepareCompaction(msgs []provider.Message, state *CompactionState, keepRece
 		} else {
 			plan.Prompt = InitialSummarizationPrompt(conversation)
 		}
+	} else if state != nil && state.PreviousSummary != "" {
+		plan.Incremental = true
+		merged := FileOps{
+			Read:     MergeFileOps(state.ReadFiles, ops.Read),
+			Modified: MergeFileOps(state.ModifiedFiles, ops.Modified),
+		}
+		plan.FileOpsNote = FormatFileOperations(merged)
 	}
 
 	if plan.SplitTurn && len(turnPrefixWindow) > 0 {

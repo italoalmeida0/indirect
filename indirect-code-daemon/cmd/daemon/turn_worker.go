@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -121,6 +122,36 @@ func (a *sessionActor) recordOptions() SessionOptions { return a.rec.Options }
 
 // cfgRef exposes the supervisor config cell to the worker.
 func (a *sessionActor) cfgRef() *configCell { return a.supCfg }
+
+func determineFinishMode(snap workerSnapshot) string {
+	finishMode := normalizedOptions(snap.options).Mode
+	if raw := strings.ToLower(strings.TrimSpace(snap.options.Mode)); raw == "plan" || raw == "learning" {
+		return raw
+	}
+	if snap.lastMode == "plan" || snap.lastMode == "learning" {
+		return snap.lastMode
+	}
+	type modeSkill struct {
+		name     string
+		priority int
+	}
+	var activeModes []modeSkill
+	for name, s := range snap.skills {
+		if s.Active && (name == "plan" || name == "learning" || name == "build") {
+			activeModes = append(activeModes, modeSkill{name: name, priority: s.Priority})
+		}
+	}
+	sort.Slice(activeModes, func(i, j int) bool {
+		if activeModes[i].priority != activeModes[j].priority {
+			return activeModes[i].priority < activeModes[j].priority
+		}
+		return activeModes[i].name < activeModes[j].name
+	})
+	if len(activeModes) > 0 && (activeModes[0].name == "plan" || activeModes[0].name == "learning") {
+		return activeModes[0].name
+	}
+	return finishMode
+}
 
 // runTurnWorker executes the agent loop. Terminal: exactly one
 // workerFinishedMsg to env.inbox.
@@ -255,7 +286,7 @@ func (w *turnBridge) run() error {
 	widgetLintTool := &tools.WidgetLintTool{Store: widgetStore, Lint: widgetLint}
 	widgetReadTool := &tools.WidgetReadTool{Store: widgetStore}
 	widgetEditTool := &tools.WidgetEditTool{Store: widgetStore}
-	finishTool := &tools.FinishEntireRequestTool{Mode: normalizedOptions(w.snap.options).Mode, OnFinish: func() error { return nil }, IncompleteCheck: w.finishBlockWarning}
+	finishTool := &tools.FinishEntireRequestTool{Mode: determineFinishMode(w.snap), OnFinish: func() error { return nil }, IncompleteCheck: w.finishBlockWarning}
 	summaryTool := &tools.SummaryTool{}
 	useSkillTool := &tools.UseSkillTool{Host: w}
 	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool, bgCheckTool), widgetSetTool, widgetListTool, widgetLintTool, widgetReadTool, widgetEditTool, useSkillTool)...)
@@ -318,6 +349,7 @@ func (w *turnBridge) run() error {
 	w.sendInbox(walAppendMsg{ev: walEvent{Type: walTypeMeta, LastDate: w.snap.lastDate, LastMode: w.snap.lastMode}})
 	sink := func(ev core.AgentEvent) { w.handleEvent(ev) }
 	if w.snap.compact {
+		w.handleEvent(core.EvToolProgress{Text: "Compacting older context…"})
 		_, err := w.agent.Compact(w.ctx, max(2, len(w.agent.Messages())*7/10), func(delta string) { w.handleEvent(core.EvToolProgress{Text: delta}) })
 		return err
 	}
@@ -1044,7 +1076,11 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 	case core.EvToolUseEnd:
 		payload["event"] = map[string]any{"type": "tool_use_end", "id": e.ID}
 	case core.EvToolProgress:
-		payload["event"] = map[string]any{"type": "tool_progress", "id": e.ID, "text": e.Text}
+		if e.ID == "" && strings.HasPrefix(e.Text, "Compacting") {
+			payload["event"] = map[string]any{"type": "compact_progress", "text": e.Text}
+		} else {
+			payload["event"] = map[string]any{"type": "tool_progress", "id": e.ID, "text": e.Text}
+		}
 	case core.EvToolCall:
 		payload["event"] = map[string]any{"type": "tool_call", "id": e.ID, "name": e.Name, "args": e.Args}
 	case core.EvToolResult:
