@@ -185,7 +185,10 @@ export interface DailyPoint {
   cache_tok: number;
   out_tok: number;
   reqs: number;
-  /** Cost in USD (when model pricing is known). */
+  /** Cost in USD split by bucket + total. */
+  cost_in?: number;
+  cost_cache?: number;
+  cost_out?: number;
   cost?: number;
   /** Hour buckets carry a short tick label ("13:00"); day buckets don't. */
   label?: string;

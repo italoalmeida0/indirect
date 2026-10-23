@@ -3,6 +3,7 @@ import { ok } from "../http";
 import { userDailySeries, userEvents, userSummary, keyDailySeries, hourlySeries, userUsageBreakdown, queryUserUsageBreakdown } from "../usage";
 import { db, type ApiKeyRow } from "../db";
 import { parseGridQuery, parseCursor } from "../gridql";
+import { modelPricingJoins, costAggFieldsSql } from "../pricing";
 
 /** /api/usage — the authenticated user's own consumption data. */
 export async function handleUsageRoute(path: string, req: Request, url: URL): Promise<Response | null> {
@@ -114,23 +115,25 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     const clauses: string[] = [];
     const params: (string | number)[] = [];
     if (keyId) {
-      clauses.push("key_id = ?");
+      clauses.push("m.key_id = ?");
       params.push(keyId);
     }
-    clauses.push("user_id = ?");
+    clauses.push("m.user_id = ?");
     params.push(ctx.user.id);
     if (daysParam !== "all") {
-      clauses.push("date >= date('now', ?)");
+      clauses.push("m.date >= date('now', ?)");
       params.push(`-${Math.min(Math.max(Number(daysParam) || 14, 1), 365)} days`);
     }
     const rows = db
       .prepare(
-        `SELECT model, proto,
-                SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(reqs) AS reqs
-         FROM usage_model_daily
+        `SELECT m.model, m.proto,
+                SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs,
+                ${costAggFieldsSql("m")}
+         FROM usage_model_provider_daily m
+         ${modelPricingJoins("m")}
          WHERE ${clauses.join(" AND ")}
-         GROUP BY model, proto
-         ORDER BY (SUM(in_tok) + SUM(cache_tok) + SUM(out_tok)) DESC
+         GROUP BY m.model, m.proto
+         ORDER BY (SUM(m.in_tok) + SUM(m.cache_tok) + SUM(m.out_tok)) DESC
          LIMIT 25`,
       )
       .all(...(params as [string, string])) as any[];
@@ -143,6 +146,10 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
           cache_tok: r.cache_tok,
           out_tok: r.out_tok,
           reqs: r.reqs,
+          cost_in: r.cost_in,
+          cost_cache: r.cost_cache,
+          cost_out: r.cost_out,
+          cost: r.cost,
         })),
       },
       req,

@@ -40,16 +40,17 @@ function deltaPct(
 
 function HeroHeader(props: {
   icon: string;
-  count: number;
+  count?: number;
+  cost?: number;
   label: string;
   delta: number | null;
 }) {
   return (
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0">
-        <div class="text-xs font-medium text-ink-500 mb-2">{props.label}</div>
-        <div class="text-[40px] leading-tight font-light tracking-tight">
-          <CountUp value={props.count} />
+        <div class="text-xs font-medium text-ink-500 mb-2 truncate">{props.label}</div>
+        <div class="text-[32px] sm:text-[38px] leading-tight font-light tracking-tight truncate">
+          {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
         </div>
       </div>
       <div class="flex items-center gap-2 shrink-0">
@@ -62,25 +63,25 @@ function HeroHeader(props: {
   );
 }
 
-/** One token bucket: big number on top, colored dot + label + delta beneath. */
+/** One token/cost bucket: big number on top, colored dot + label + delta beneath. */
 function BucketStat(props: {
   label: string;
-  count: number;
+  count?: number;
+  cost?: number;
   delta: number | null;
   color: string;
 }) {
   return (
     <div class="min-w-0">
-      <div class="text-[28px] leading-tight font-light tracking-tight truncate">
-        <CountUp value={props.count} />
+      <div class="text-[17px] sm:text-[20px] md:text-[22px] leading-tight font-light tracking-tight truncate">
+        {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
       </div>
-      <div class="mt-1.5 flex sm:items-center max-sm:flex-col gap-1.5 text-[11px] text-ink-500 min-h-[22px]">
-        <span class="flex items-center gap-1.5">
+      <div class="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-ink-500 min-h-[22px]">
+        <span class="flex items-center gap-1.5 min-w-0">
           <span
             class="w-2 h-2 rounded-sm inline-block shrink-0"
             style={{ background: props.color }}
           />
-
           <span class="truncate">{props.label}</span>
         </span>
         <Show when={props.delta !== null}>
@@ -141,6 +142,15 @@ export default function DashboardPage() {
   const winCost = createMemo(() =>
     view().reduce((s, d) => s + (d.cost ?? 0), 0),
   );
+  const winCostIn = createMemo(() =>
+    view().reduce((s, d) => s + (d.cost_in ?? 0), 0),
+  );
+  const winCostCache = createMemo(() =>
+    view().reduce((s, d) => s + (d.cost_cache ?? 0), 0),
+  );
+  const winCostOut = createMemo(() =>
+    view().reduce((s, d) => s + (d.cost_out ?? 0), 0),
+  );
   const inDelta = createMemo(() =>
     deltaPct(series() ?? [], (d) => d.in_tok ?? 0),
   );
@@ -152,6 +162,18 @@ export default function DashboardPage() {
   );
   const reqDelta = createMemo(() =>
     deltaPct(series() ?? [], (d) => d.reqs ?? 0),
+  );
+  const costDelta = createMemo(() =>
+    deltaPct(series() ?? [], (d) => d.cost ?? 0),
+  );
+  const costInDelta = createMemo(() =>
+    deltaPct(series() ?? [], (d) => d.cost_in ?? 0),
+  );
+  const costCacheDelta = createMemo(() =>
+    deltaPct(series() ?? [], (d) => d.cost_cache ?? 0),
+  );
+  const costOutDelta = createMemo(() =>
+    deltaPct(series() ?? [], (d) => d.cost_out ?? 0),
   );
 
   const budget = createMemo(() => {
@@ -197,35 +219,79 @@ export default function DashboardPage() {
         <Show when={series()} keyed>
           {(_series) => (
           <div
-            class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5"
+            class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 mb-5"
             {...usalItems("fade-u", 110)}
           >
-            <Card interactive class="p-5">
-              <div class="flex items-start justify-between gap-3">
-                <div class="text-xs font-medium text-ink-500">
-                  Tokens · {windowLabel(days())}
+            <Card interactive class="p-5 flex flex-col justify-between">
+              <div>
+                <HeroHeader
+                  icon={Icons.dollarSign}
+                  cost={winCost()}
+                  label={`Estimated spend · ${windowLabel(days())}`}
+                  delta={costDelta()}
+                />
+                <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
+                  <BucketStat
+                    label="Input"
+                    cost={winCostIn()}
+                    delta={costInDelta()}
+                    color={IN_COLOR}
+                  />
+                  <BucketStat
+                    label="Cache"
+                    cost={winCostCache()}
+                    delta={costCacheDelta()}
+                    color={CACHE_COLOR}
+                  />
+                  <BucketStat
+                    label="Output"
+                    cost={winCostOut()}
+                    delta={costOutDelta()}
+                    color={OUT_COLOR}
+                  />
                 </div>
-                <IconTile icon={Icons.chart} class="w-10 h-10" />
               </div>
-              <div class="grid grid-cols-3 gap-3">
-                <BucketStat
-                  label="Input"
-                  count={winIn()}
-                  delta={inDelta()}
-                  color={IN_COLOR}
+              <div
+                class="mt-4"
+                {...usal("fade-u delay-200 duration-700 threshold-5")}
+              >
+                <DailyChart
+                  series={view()}
+                  metric="cost"
+                  unit={days() === "1" ? "hour" : "day"}
+                  resetKey={`spend:${days()}`}
                 />
-                <BucketStat
-                  label="Input cache"
-                  count={winCache()}
-                  delta={cacheDelta()}
-                  color={CACHE_COLOR}
-                />
-                <BucketStat
-                  label="Output"
-                  count={winOut()}
-                  delta={outDelta()}
-                  color={OUT_COLOR}
-                />
+              </div>
+            </Card>
+
+            <Card interactive class="p-5 flex flex-col justify-between">
+              <div>
+                <div class="flex items-start justify-between gap-3 mb-2">
+                  <div class="text-xs font-medium text-ink-500">
+                    Tokens · {windowLabel(days())}
+                  </div>
+                  <IconTile icon={Icons.chart} class="w-10 h-10" />
+                </div>
+                <div class="grid grid-cols-3 gap-2">
+                  <BucketStat
+                    label="Input"
+                    count={winIn()}
+                    delta={inDelta()}
+                    color={IN_COLOR}
+                  />
+                  <BucketStat
+                    label="Cache"
+                    count={winCache()}
+                    delta={cacheDelta()}
+                    color={CACHE_COLOR}
+                  />
+                  <BucketStat
+                    label="Output"
+                    count={winOut()}
+                    delta={outDelta()}
+                    color={OUT_COLOR}
+                  />
+                </div>
               </div>
               <div
                 class="mt-4"
@@ -233,47 +299,50 @@ export default function DashboardPage() {
               >
                 <DailyChart
                   series={view()}
+                  metric="tokens"
                   unit={days() === "1" ? "hour" : "day"}
-                  resetKey={days()}
+                  resetKey={`tokens:${days()}`}
                 />
               </div>
             </Card>
 
-            <Card interactive class="p-5">
-              <HeroHeader
-                icon={Icons.bolt}
-                count={winReqs()}
-                label={`Requests · ${windowLabel(days())}`}
-                delta={reqDelta()}
-              />
-              <div class="mt-5 pt-4 border-t border-line flex items-center justify-between gap-2.5">
-                <div class="flex items-center gap-2.5">
-                  <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
-                    <Icon name={Icons.key} size={13} />
-                  </span>
-                  <span class="text-xs text-ink-500">Active keys</span>
-                  <span class="text-sm font-semibold text-ink-100 tabular-nums ml-1">
-                    {activeKeys()}
-                  </span>
-                </div>
-                <div class="flex items-center gap-2.5">
-                  <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
-                    <Icon name={Icons.dollarSign} size={13} />
-                  </span>
-                  <span class="text-xs text-ink-500">Est. spend</span>
-                  <span class="text-sm font-semibold text-ink-100 tabular-nums ml-1">
-                    {fmtCost(winCost())}
-                  </span>
+            <Card interactive class="p-5 flex flex-col justify-between md:col-span-2 xl:col-span-1">
+              <div>
+                <HeroHeader
+                  icon={Icons.bolt}
+                  count={winReqs()}
+                  label={`Requests · ${windowLabel(days())}`}
+                  delta={reqDelta()}
+                />
+                <div class="mt-4 pt-3 border-t border-line flex items-center justify-between gap-2.5">
+                  <div class="flex items-center gap-2">
+                    <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
+                      <Icon name={Icons.key} size={13} />
+                    </span>
+                    <span class="text-xs text-ink-500">Active keys</span>
+                    <span class="text-sm font-semibold text-ink-100 tabular-nums ml-0.5">
+                      {activeKeys()}
+                    </span>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
+                      <Icon name={Icons.dollarSign} size={13} />
+                    </span>
+                    <span class="text-xs text-ink-500">Avg/req</span>
+                    <span class="text-xs font-semibold text-ink-100 ml-0.5">
+                      {winReqs() > 0 ? fmtCost(winCost() / winReqs()) : "$0.00"}
+                    </span>
+                  </div>
                 </div>
               </div>
               <div
                 class="mt-4"
-                {...usal("fade-u delay-350 duration-700 threshold-5")}
+                {...usal("fade-u delay-300 duration-700 threshold-5")}
               >
                 <AreaChart
                   values={view().map((d) => d.reqs ?? 0)}
                   labels={view().map((d) => pointLabel(d))}
-                  resetKey={days()}
+                  resetKey={`reqs:${days()}`}
                 />
               </div>
             </Card>

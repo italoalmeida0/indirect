@@ -308,6 +308,9 @@ export interface GridTotals {
   cache_tok: number;
   out_tok: number;
   reqs: number;
+  cost_in?: number;
+  cost_cache?: number;
+  cost_out?: number;
   cost?: number;
 }
 
@@ -529,7 +532,17 @@ export function UsageGrid(props: {
                 <span>Out <strong class="font-semibold text-ink-200">{fmtNum(totals().out_tok)}</strong></span>
                 <span>Requests <strong class="font-semibold text-ink-200">{fmtNum(totals().reqs)}</strong></span>
                 <Show when={totals().cost != null}>
-                  <span>Cost <strong class="font-semibold text-ink-200">{fmtCost(totals().cost)}</strong></span>
+                  <span class="text-ink-600">|</span>
+                  <Show when={totals().cost_in != null}>
+                    <span>In Cost <strong class="font-semibold text-ink-200">{fmtCost(totals().cost_in)}</strong></span>
+                  </Show>
+                  <Show when={totals().cost_cache != null}>
+                    <span>Cache Cost <strong class="font-semibold text-ink-200">{fmtCost(totals().cost_cache)}</strong></span>
+                  </Show>
+                  <Show when={totals().cost_out != null}>
+                    <span>Out Cost <strong class="font-semibold text-ink-200">{fmtCost(totals().cost_out)}</strong></span>
+                  </Show>
+                  <span>Total Cost <strong class="font-semibold text-emerald-400">{fmtCost(totals().cost)}</strong></span>
                 </Show>
               </div>
             )}

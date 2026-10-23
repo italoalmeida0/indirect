@@ -1,6 +1,14 @@
 import { db } from "./db";
 import { buildGridWhere, buildGridOrder, gridPage, type ColSpec, type GridFilterEntry, type GridSort } from "./gridql";
-import { modelPricingJoins, costExprSql, costRowSql, costAggSql } from "./pricing";
+import {
+  modelPricingJoins,
+  costInExprSql,
+  costCacheExprSql,
+  costOutExprSql,
+  costExprSql,
+  costRowFieldsSql,
+  costAggFieldsSql,
+} from "./pricing";
 
 /**
  * Usage accounting.
@@ -192,6 +200,9 @@ export interface HourlyPoint {
   cache_tok: number;
   out_tok: number;
   reqs: number;
+  cost_in: number;
+  cost_cache: number;
+  cost_out: number;
   cost: number;
 }
 
@@ -222,13 +233,13 @@ export function hourlySeries(userId: string | null, keyId: string | null, hours:
     params.push(providerId);
   }
   const rows = db
-    .prepare<{ hbucket: number; in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost: number }, any[]>(
+    .prepare<{ hbucket: number; in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost_in: number; cost_cache: number; cost_out: number; cost: number }, any[]>(
       `SELECT (e.ts / ?) AS hbucket,
               COALESCE(SUM(e.in_tok), 0) AS in_tok,
               COALESCE(SUM(e.cache_tok), 0) AS cache_tok,
               COALESCE(SUM(e.out_tok), 0) AS out_tok,
               COUNT(*) AS reqs,
-              ${costAggSql("e")}
+              ${costAggFieldsSql("e")}
        FROM usage_events e
        ${modelPricingJoins("e")}
        WHERE ${clauses.join(" AND ")}
@@ -248,6 +259,9 @@ export function hourlySeries(userId: string | null, keyId: string | null, hours:
       cache_tok: r?.cache_tok ?? 0,
       out_tok: r?.out_tok ?? 0,
       reqs: r?.reqs ?? 0,
+      cost_in: r?.cost_in ?? 0,
+      cost_cache: r?.cost_cache ?? 0,
+      cost_out: r?.cost_out ?? 0,
       cost: r?.cost ?? 0,
     });
   }
@@ -265,7 +279,7 @@ export function userDailySeries(userId: string, days: number | "all") {
               SUM(m.cache_tok) AS cache_tok,
               SUM(m.out_tok) AS out_tok,
               SUM(m.reqs) AS reqs,
-              ${costAggSql("m")}
+              ${costAggFieldsSql("m")}
        FROM usage_model_provider_daily m
        ${modelPricingJoins("m")}
        WHERE ${where}
@@ -284,7 +298,7 @@ export function keyDailySeries(keyId: string, days: number | "all") {
               SUM(m.cache_tok) AS cache_tok,
               SUM(m.out_tok) AS out_tok,
               SUM(m.reqs) AS reqs,
-              ${costAggSql("m")}
+              ${costAggFieldsSql("m")}
        FROM usage_model_provider_daily m
        ${modelPricingJoins("m")}
        WHERE ${where}
@@ -294,19 +308,19 @@ export function keyDailySeries(keyId: string, days: number | "all") {
 }
 
 export function userSummary(userId: string) {
-  const baseSql = `SELECT COALESCE(SUM(m.in_tok),0) AS in_tok, COALESCE(SUM(m.cache_tok),0) AS cache_tok, COALESCE(SUM(m.out_tok),0) AS out_tok, COALESCE(SUM(m.reqs),0) AS reqs, ${costAggSql("m")} FROM usage_model_provider_daily m ${modelPricingJoins("m")}`;
+  const baseSql = `SELECT COALESCE(SUM(m.in_tok),0) AS in_tok, COALESCE(SUM(m.cache_tok),0) AS cache_tok, COALESCE(SUM(m.out_tok),0) AS out_tok, COALESCE(SUM(m.reqs),0) AS reqs, ${costAggFieldsSql("m")} FROM usage_model_provider_daily m ${modelPricingJoins("m")}`;
   const today = db
-    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost: number }, [string]>(
+    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost_in: number; cost_cache: number; cost_out: number; cost: number }, [string]>(
       `${baseSql} WHERE m.user_id = ? AND m.date = date('now')`,
     )
     .get(userId)!;
   const month = db
-    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost: number }, [string]>(
+    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost_in: number; cost_cache: number; cost_out: number; cost: number }, [string]>(
       `${baseSql} WHERE m.user_id = ? AND m.date >= date('now', 'start of month')`,
     )
     .get(userId)!;
   const total = db
-    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost: number }, [string]>(
+    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost_in: number; cost_cache: number; cost_out: number; cost: number }, [string]>(
       `${baseSql} WHERE m.user_id = ?`,
     )
     .get(userId)!;
@@ -332,6 +346,10 @@ export interface UsageBreakdownRow {
   cache_tok: number;
   out_tok: number;
   reqs: number;
+  cost_in: number;
+  cost_cache: number;
+  cost_out: number;
+  cost: number;
 }
 
 function usageBreakdownScope(
@@ -369,6 +387,10 @@ const USER_BREAKDOWN_COLS: Record<string, ColSpec> = {
   cache_tok: { col: "cache_tok", kind: "number" },
   out_tok: { col: "out_tok", kind: "number" },
   reqs: { col: "reqs", kind: "number" },
+  cost_in: { col: "cost_in", kind: "number" },
+  cost_cache: { col: "cost_cache", kind: "number" },
+  cost_out: { col: "cost_out", kind: "number" },
+  cost: { col: "cost", kind: "number" },
 };
 
 export function userUsageBreakdown(
@@ -381,11 +403,13 @@ export function userUsageBreakdown(
       `SELECT m.key_id, COALESCE(k.name, substr(m.key_id, 1, 8)) AS key_name, m.model, m.proto,
               m.provider_id, p.name AS provider_name, m.provider_key_id, pk.label AS provider_key_label,
               m.upstream_model,
-              SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs
+              SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs,
+              ${costAggFieldsSql("m")}
        FROM usage_model_provider_daily m
        LEFT JOIN api_keys k ON k.id = m.key_id
        LEFT JOIN providers p ON p.id = m.provider_id
        LEFT JOIN provider_keys pk ON pk.id = m.provider_key_id
+       ${modelPricingJoins("m")}
        WHERE ${where}
        GROUP BY m.key_id, m.model, m.proto, m.provider_id, m.provider_key_id, m.upstream_model
        ORDER BY (SUM(m.in_tok) + SUM(m.cache_tok) + SUM(m.out_tok)) DESC
@@ -405,7 +429,20 @@ export function queryUserUsageBreakdown(
     sort?: GridSort[];
     filters?: Record<string, GridFilterEntry>;
   },
-): { rows: UsageBreakdownRow[]; total: number; totals: { in_tok: number; cache_tok: number; out_tok: number; reqs: number } } {
+): {
+  rows: UsageBreakdownRow[];
+  total: number;
+  totals: {
+    in_tok: number;
+    cache_tok: number;
+    out_tok: number;
+    reqs: number;
+    cost_in?: number;
+    cost_cache?: number;
+    cost_out?: number;
+    cost?: number;
+  };
+} {
   const { where, params } = usageBreakdownScope(userId, opts);
   const baseSql = `
     SELECT m.key_id,
@@ -413,11 +450,13 @@ export function queryUserUsageBreakdown(
            m.model, m.proto, m.provider_id, p.name AS provider_name,
            m.provider_key_id, pk.label AS provider_key_label, m.upstream_model,
            SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok,
-           SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs
+           SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs,
+           ${costAggFieldsSql("m")}
     FROM usage_model_provider_daily m
     LEFT JOIN api_keys k ON k.id = m.key_id
     LEFT JOIN providers p ON p.id = m.provider_id
     LEFT JOIN provider_keys pk ON pk.id = m.provider_key_id
+    ${modelPricingJoins("m")}
     WHERE ${where}
     GROUP BY m.key_id, m.model, m.proto, m.provider_id, m.provider_key_id, m.upstream_model`;
   return gridPage({
@@ -427,8 +466,21 @@ export function queryUserUsageBreakdown(
     grid: opts,
     defaultOrder: "(in_tok + cache_tok + out_tok) DESC",
     tieBreak: "key_id DESC, model DESC, provider_id DESC, provider_key_id DESC, upstream_model DESC",
-    sumCols: ["in_tok", "cache_tok", "out_tok", "reqs"],
-  }) as { rows: UsageBreakdownRow[]; total: number; totals: { in_tok: number; cache_tok: number; out_tok: number; reqs: number } };
+    sumCols: ["in_tok", "cache_tok", "out_tok", "reqs", "cost_in", "cost_cache", "cost_out", "cost"],
+  }) as {
+    rows: UsageBreakdownRow[];
+    total: number;
+    totals: {
+      in_tok: number;
+      cache_tok: number;
+      out_tok: number;
+      reqs: number;
+      cost_in?: number;
+      cost_cache?: number;
+      cost_out?: number;
+      cost?: number;
+    };
+  };
 }
 
 // ===== Server-driven events query (AG Grid infinite row model) =====
@@ -446,6 +498,9 @@ const EVENT_COLS: Record<string, ColSpec> = {
   in_tok: { col: "e.in_tok", kind: "number" },
   cache_tok: { col: "e.cache_tok", kind: "number" },
   out_tok: { col: "e.out_tok", kind: "number" },
+  cost_in: { col: costInExprSql("e"), kind: "number" },
+  cost_cache: { col: costCacheExprSql("e"), kind: "number" },
+  cost_out: { col: costOutExprSql("e"), kind: "number" },
   cost: { col: costExprSql("e"), kind: "number" },
   status: { col: "e.status", kind: "number" },
 };
@@ -498,7 +553,7 @@ export function userEvents(
               e.in_tok, e.cache_tok, e.out_tok, e.latency_ms, e.status, e.stream, e.estimated,
               e.provider_id, p.name AS provider_name, e.provider_key_id, pk.label AS provider_key_label,
               e.upstream_model,
-              ${costRowSql("e")}
+              ${costRowFieldsSql("e")}
        FROM usage_events e
        LEFT JOIN api_keys k ON k.id = e.key_id
        LEFT JOIN providers p ON p.id = e.provider_id

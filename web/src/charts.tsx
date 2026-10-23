@@ -14,7 +14,7 @@ import { curveMonotoneX } from "solid-charts/curves";
 import { Show, createMemo, createUniqueId, type JSX } from "solid-js";
 
 import type { DailyPoint } from "./api";
-import { fmtNum } from "./ui";
+import { fmtCost, fmtNum } from "./ui";
 
 const IN_BAR = "var(--chart-strong)";
 const CACHE_BAR = "var(--chart-mid)";
@@ -49,6 +49,13 @@ function axisNum(value: number): string {
   return fmtNum(Math.round(Number(value)));
 }
 
+function axisCost(value: number): string {
+  if (value >= 100) return `$${fmtNum(Math.round(value))}`;
+  if (value >= 1) return `$${value.toFixed(1)}`;
+  if (value >= 0.01) return `$${value.toFixed(2)}`;
+  return `$${value.toFixed(3)}`;
+}
+
 function ChartFrame(props: { height: number; children: JSX.Element }) {
   return (
     <div class="relative w-full" style={{ height: `${props.height}px` }}>
@@ -59,47 +66,79 @@ function ChartFrame(props: { height: number; children: JSX.Element }) {
 
 function DailyTooltip(props: {
   data: DailyChartPoint;
-  metric: "tokens" | "requests";
+  metric: "tokens" | "requests" | "cost";
 }) {
   return (
-    <div class="z-20 min-w-32 rounded-xl border border-line bg-elev px-3 py-2 text-[11px] text-ink-200 shadow-xl shadow-black/10">
+    <div class="z-20 min-w-36 rounded-xl border border-line bg-elev px-3 py-2 text-[11px] text-ink-200 shadow-xl shadow-black/10">
       <div class="mb-1.5 font-semibold text-ink-100">
         {props.data.label ?? props.data.date}
       </div>
       <Show
-        when={props.metric === "tokens"}
+        when={props.metric === "cost"}
         fallback={
-          <div class="flex items-center justify-between gap-4">
-            <span>Requests</span>
-            <strong class="font-semibold text-ink-100">
-              {fmtNum(props.data.reqs ?? 0)}
-            </strong>
-          </div>
+          <Show
+            when={props.metric === "tokens"}
+            fallback={
+              <div class="flex items-center justify-between gap-4">
+                <span>Requests</span>
+                <strong class="font-semibold text-ink-100">
+                  {fmtNum(props.data.reqs ?? 0)}
+                </strong>
+              </div>
+            }
+          >
+            <div class="space-y-1">
+              <div class="flex items-center justify-between gap-4">
+                <span>Input</span>
+                <strong class="font-semibold text-ink-100">
+                  {fmtNum(props.data.in_tok)}
+                </strong>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <span>Input cache</span>
+                <strong class="font-semibold text-ink-100">
+                  {fmtNum(props.data.cache_tok ?? 0)}
+                </strong>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <span>Output</span>
+                <strong class="font-semibold text-ink-100">
+                  {fmtNum(props.data.out_tok)}
+                </strong>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <span>Requests</span>
+                <strong class="font-semibold text-ink-100">
+                  {fmtNum(props.data.reqs ?? 0)}
+                </strong>
+              </div>
+            </div>
+          </Show>
         }
       >
         <div class="space-y-1">
           <div class="flex items-center justify-between gap-4">
-            <span>Input</span>
+            <span>Input cost</span>
             <strong class="font-semibold text-ink-100">
-              {fmtNum(props.data.in_tok)}
+              {fmtCost(props.data.cost_in ?? 0)}
             </strong>
           </div>
           <div class="flex items-center justify-between gap-4">
-            <span>Input cache</span>
+            <span>Cache cost</span>
             <strong class="font-semibold text-ink-100">
-              {fmtNum(props.data.cache_tok ?? 0)}
+              {fmtCost(props.data.cost_cache ?? 0)}
             </strong>
           </div>
           <div class="flex items-center justify-between gap-4">
-            <span>Output</span>
+            <span>Output cost</span>
             <strong class="font-semibold text-ink-100">
-              {fmtNum(props.data.out_tok)}
+              {fmtCost(props.data.cost_out ?? 0)}
             </strong>
           </div>
-          <div class="flex items-center justify-between gap-4">
-            <span>Requests</span>
-            <strong class="font-semibold text-ink-100">
-              {fmtNum(props.data.reqs ?? 0)}
+          <div class="flex items-center justify-between gap-4 border-t border-line/60 pt-1">
+            <span class="font-medium text-ink-100">Total cost</span>
+            <strong class="font-semibold text-emerald-400">
+              {fmtCost(props.data.cost ?? 0)}
             </strong>
           </div>
         </div>
@@ -111,7 +150,7 @@ function DailyTooltip(props: {
 export function DailyChart(props: {
   series: DailyPoint[];
   height?: number;
-  metric?: "tokens" | "requests";
+  metric?: "tokens" | "requests" | "cost";
   unit?: "day" | "hour";
   /** External filter key; changing it clears solid-charts hover state. */
   resetKey?: string;
@@ -142,6 +181,10 @@ export function DailyChart(props: {
           point.cache_tok ?? 0,
           point.out_tok,
           point.reqs ?? 0,
+          point.cost_in ?? 0,
+          point.cost_cache ?? 0,
+          point.cost_out ?? 0,
+          point.cost ?? 0,
         ].join(":"),
       )
       .join("|"),
@@ -176,7 +219,11 @@ export function DailyChart(props: {
                     <AxisLabel
                       fill="var(--chart-tick)"
                       font-size="10"
-                      format={(value) => axisNum(Number(value))}
+                      format={(value) =>
+                        metric() === "cost"
+                          ? axisCost(Number(value))
+                          : axisNum(Number(value))
+                      }
                     />
                     <AxisGrid stroke="var(--chart-grid)" />
                   </Axis>
@@ -202,12 +249,36 @@ export function DailyChart(props: {
                   <Show
                     when={metric() === "tokens"}
                     fallback={
-                      <Bar
-                        dataKey="reqs"
-                        fill={OUT_BAR}
-                        rx={4}
-                        class="chart-bar chart-bar-requests"
-                      />
+                      <Show
+                        when={metric() === "cost"}
+                        fallback={
+                          <Bar
+                            dataKey="reqs"
+                            fill={OUT_BAR}
+                            rx={4}
+                            class="chart-bar chart-bar-requests"
+                          />
+                        }
+                      >
+                        <Bar
+                          dataKey="cost_in"
+                          fill={IN_BAR}
+                          rx={3}
+                          class="chart-bar chart-bar-input"
+                        />
+                        <Bar
+                          dataKey="cost_cache"
+                          fill={CACHE_BAR}
+                          rx={3}
+                          class="chart-bar"
+                        />
+                        <Bar
+                          dataKey="cost_out"
+                          fill={OUT_BAR}
+                          rx={3}
+                          class="chart-bar"
+                        />
+                      </Show>
                     }
                   >
                     <Bar
@@ -239,13 +310,42 @@ export function DailyChart(props: {
         <Show
           when={metric() === "tokens"}
           fallback={
-            <span class="inline-flex items-center gap-1.5">
-              <span
-                class="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ background: OUT_BAR }}
-              />
-              Requests
-            </span>
+            <Show
+              when={metric() === "cost"}
+              fallback={
+                <span class="inline-flex items-center gap-1.5">
+                  <span
+                    class="inline-block h-2.5 w-2.5 rounded-sm"
+                    style={{ background: OUT_BAR }}
+                  />
+                  Requests
+                </span>
+              }
+            >
+              <>
+                <span class="inline-flex items-center gap-1.5">
+                  <span
+                    class="inline-block h-2.5 w-2.5 rounded-sm"
+                    style={{ background: IN_BAR }}
+                  />
+                  Input cost
+                </span>
+                <span class="inline-flex items-center gap-1.5">
+                  <span
+                    class="inline-block h-2.5 w-2.5 rounded-sm"
+                    style={{ background: CACHE_BAR }}
+                  />
+                  Cache cost
+                </span>
+                <span class="inline-flex items-center gap-1.5">
+                  <span
+                    class="inline-block h-2.5 w-2.5 rounded-sm"
+                    style={{ background: OUT_BAR }}
+                  />
+                  Output cost
+                </span>
+              </>
+            </Show>
           }
         >
           <>

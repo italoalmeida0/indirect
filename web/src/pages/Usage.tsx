@@ -44,7 +44,10 @@ interface BreakdownRow {
   cache_tok: number;
   out_tok: number;
   reqs: number;
-  cost: number;
+  cost_in?: number;
+  cost_cache?: number;
+  cost_out?: number;
+  cost?: number;
 }
 
 const fmtOrDash = (v: unknown) => (v == null || v === "" ? "—" : String(v));
@@ -81,11 +84,14 @@ const byModelCols: ColDef<BreakdownRow>[] = [
     valueGetter: (p) => p.data?.provider_key_label || p.data?.provider_key_id?.slice(0, 8) || "—",
     valueFormatter: (p) => p.value,
   },
-  { field: "reqs", headerName: "Requests", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "in_tok", headerName: "In", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cost", headerName: "Cost", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "reqs", headerName: "Requests", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "in_tok", headerName: "In", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cache_tok", headerName: "Cache", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "out_tok", headerName: "Out", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cost_in", headerName: "In Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost_cache", headerName: "Cache Cost", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost_out", headerName: "Out Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost", headerName: "Total Cost", width: 105, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
 ];
 
 const eventCols: ColDef[] = [
@@ -97,18 +103,21 @@ const eventCols: ColDef[] = [
   { field: "provider_name", headerName: "Provider", width: 150, flex: 1, valueFormatter: (p) => fmtOrDash(p.value) },
   { field: "model", headerName: "Model", flex: 1.2, valueFormatter: (p) => fmtOrDash(p.value) },
   { field: "upstream_model", headerName: "Upstream", width: 150, valueFormatter: (p) => fmtOrDash(p.value) },
-  { field: "in_tok", headerName: "In", width: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cost", headerName: "Cost", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "latency_ms", headerName: "Latency", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: latencyFormatter },
-  { field: "status", headerName: "Status", width: 90, type: "rightAligned", filter: "agNumberColumnFilter", cellRenderer: StatusCell },
+  { field: "in_tok", headerName: "In", width: 85, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cache_tok", headerName: "Cache", width: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "out_tok", headerName: "Out", width: 85, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cost_in", headerName: "In Cost", width: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost_cache", headerName: "Cache Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost_out", headerName: "Out Cost", width: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost", headerName: "Total Cost", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "latency_ms", headerName: "Latency", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: latencyFormatter },
+  { field: "status", headerName: "Status", width: 85, type: "rightAligned", filter: "agNumberColumnFilter", cellRenderer: StatusCell },
 ];
 
 export default function UsagePage() {
   const [keyId, setKeyId] = createSignal("");
   const [days, setDays] = createSignal("14");
-  const [chartMetric, setChartMetric] = createSignal<"tokens" | "requests">(
+  const [chartMetric, setChartMetric] = createSignal<"tokens" | "requests" | "cost">(
     "tokens",
   );
 
@@ -234,6 +243,7 @@ export default function UsagePage() {
               options={[
                 { value: "tokens", label: "Tokens" },
                 { value: "requests", label: "Requests" },
+                { value: "cost", label: "Cost" },
               ]}
             />
             <Segmented

@@ -34,6 +34,9 @@ interface Buckets {
   cache_tok: number;
   out_tok: number;
   reqs: number;
+  cost_in?: number;
+  cost_cache?: number;
+  cost_out?: number;
   cost?: number;
 }
 
@@ -81,11 +84,14 @@ const fmtOrDash = (v: unknown) => (v == null || v === "" ? "—" : String(v));
 
 const userCols: ColDef<UserRow>[] = [
   { field: "email", headerName: "User", flex: 1.4 },
-  { field: "in_tok", headerName: "In", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 120, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 120, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "reqs", headerName: "Requests", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: countFormatter },
-  { field: "cost", headerName: "Cost", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "in_tok", headerName: "In", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cache_tok", headerName: "Cache", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "out_tok", headerName: "Out", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "reqs", headerName: "Requests", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: countFormatter },
+  { field: "cost_in", headerName: "In Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost_cache", headerName: "Cache Cost", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost_out", headerName: "Out Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost", headerName: "Total Cost", width: 105, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
 ];
 
 const modelCols: ColDef<ModelRow>[] = [
@@ -100,11 +106,14 @@ const modelCols: ColDef<ModelRow>[] = [
     valueGetter: (p) => p.data?.provider_key_label || p.data?.provider_key_id?.slice(0, 8) || "—",
     valueFormatter: (p) => p.value,
   },
-  { field: "reqs", headerName: "Requests", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: countFormatter },
-  { field: "in_tok", headerName: "In", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cost", headerName: "Cost", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "reqs", headerName: "Requests", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: countFormatter },
+  { field: "in_tok", headerName: "In", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cache_tok", headerName: "Cache", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "out_tok", headerName: "Out", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cost_in", headerName: "In Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost_cache", headerName: "Cache Cost", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost_out", headerName: "Out Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "cost", headerName: "Total Cost", width: 105, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
 ];
 
 /** Compact MB formatter for the KV chip (10.4/400 MB). */
@@ -240,6 +249,16 @@ export default function AdminStatsPage() {
   const winCost = createMemo(() =>
     (stats()?.series ?? []).reduce((s, d) => s + (d.cost ?? 0), 0),
   );
+  const winCostIn = createMemo(() =>
+    (stats()?.series ?? []).reduce((s, d) => s + (d.cost_in ?? 0), 0),
+  );
+  const winCostCache = createMemo(() =>
+    (stats()?.series ?? []).reduce((s, d) => s + (d.cost_cache ?? 0), 0),
+  );
+  const winCostOut = createMemo(() =>
+    (stats()?.series ?? []).reduce((s, d) => s + (d.cost_out ?? 0), 0),
+  );
+  const [chartMetric, setChartMetric] = createSignal<"tokens" | "requests" | "cost">("tokens");
 
   return (
     <div>
@@ -302,7 +321,11 @@ export default function AdminStatsPage() {
             icon={Icons.dollarSign}
             label={<CardLabel title="Est. spend" window={windowLabel(days())} />}
             value={fmtCost(winCost())}
-            sub={<span>all models in window</span>}
+            sub={
+              <span>
+                In {fmtCost(winCostIn())} · Cache {fmtCost(winCostCache())} · Out {fmtCost(winCostOut())}
+              </span>
+            }
           />
           <StatCard
             icon={Icons.users}
@@ -321,11 +344,23 @@ export default function AdminStatsPage() {
         <Card class="mb-5">
           <CardHeader
             title={days() === "1" ? "Hourly usage" : "Daily usage"}
-            subtitle={`Tokens per ${days() === "1" ? "hour" : "day"} (UTC)`}
+            subtitle={`${chartMetric() === "tokens" ? "Tokens" : chartMetric() === "cost" ? "Spend ($)" : "Requests"} per ${days() === "1" ? "hour" : "day"} (UTC)`}
+            right={
+              <Segmented
+                value={chartMetric()}
+                onChange={setChartMetric}
+                options={[
+                  { value: "tokens", label: "Tokens" },
+                  { value: "requests", label: "Requests" },
+                  { value: "cost", label: "Cost" },
+                ]}
+              />
+            }
           />
           <div class="px-4 pb-4">
             <DailyChart
               series={stats()!.series}
+              metric={chartMetric()}
               unit={days() === "1" ? "hour" : "day"}
               resetKey={`${days()}:${providerId()}`}
             />

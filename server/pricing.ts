@@ -72,16 +72,53 @@ export function modelPricingJoins(prefix = "m"): string {
   `;
 }
 
-/** Single-row cost expression in USD. */
-export function costExprSql(prefix = "e"): string {
+/** Single-row input cost expression in USD. */
+export function costInExprSql(prefix = "e"): string {
   const mdUp = `${prefix}_md_up`;
   const md = `${prefix}_md`;
   const mdId = `${prefix}_md_id`;
-  return `(
-    ${prefix}.in_tok * COALESCE(${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0) +
-    ${prefix}.cache_tok * COALESCE(${md}.pricing_input_cache, ${mdId}.pricing_input_cache, ${mdUp}.pricing_input_cache, ${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0) +
-    ${prefix}.out_tok * COALESCE(${md}.pricing_output, ${mdId}.pricing_output, ${mdUp}.pricing_output, 0)
-  )`;
+  return `(${prefix}.in_tok * COALESCE(${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0))`;
+}
+
+/** Single-row cache input cost expression in USD. */
+export function costCacheExprSql(prefix = "e"): string {
+  const mdUp = `${prefix}_md_up`;
+  const md = `${prefix}_md`;
+  const mdId = `${prefix}_md_id`;
+  return `(${prefix}.cache_tok * COALESCE(${md}.pricing_input_cache, ${mdId}.pricing_input_cache, ${mdUp}.pricing_input_cache, ${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0))`;
+}
+
+/** Single-row output cost expression in USD. */
+export function costOutExprSql(prefix = "e"): string {
+  const mdUp = `${prefix}_md_up`;
+  const md = `${prefix}_md`;
+  const mdId = `${prefix}_md_id`;
+  return `(${prefix}.out_tok * COALESCE(${md}.pricing_output, ${mdId}.pricing_output, ${mdUp}.pricing_output, 0))`;
+}
+
+/** Single-row total cost expression in USD. */
+export function costExprSql(prefix = "e"): string {
+  return `(${costInExprSql(prefix)} + ${costCacheExprSql(prefix)} + ${costOutExprSql(prefix)})`;
+}
+
+/** Single-row cost fields with column aliases `cost_in`, `cost_cache`, `cost_out`, `cost`. */
+export function costRowFieldsSql(prefix = "e"): string {
+  return `
+    COALESCE(${costInExprSql(prefix)}, 0) AS cost_in,
+    COALESCE(${costCacheExprSql(prefix)}, 0) AS cost_cache,
+    COALESCE(${costOutExprSql(prefix)}, 0) AS cost_out,
+    COALESCE(${costExprSql(prefix)}, 0) AS cost
+  `;
+}
+
+/** Aggregated cost fields with column aliases `cost_in`, `cost_cache`, `cost_out`, `cost`. */
+export function costAggFieldsSql(prefix = "m"): string {
+  return `
+    COALESCE(SUM(${costInExprSql(prefix)}), 0) AS cost_in,
+    COALESCE(SUM(${costCacheExprSql(prefix)}), 0) AS cost_cache,
+    COALESCE(SUM(${costOutExprSql(prefix)}), 0) AS cost_out,
+    COALESCE(SUM(${costExprSql(prefix)}), 0) AS cost
+  `;
 }
 
 /** Single-row cost with column alias `AS cost`. */
