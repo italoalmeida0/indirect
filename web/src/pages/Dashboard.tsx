@@ -49,7 +49,10 @@ function HeroHeader(props: {
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0">
         <div class="text-xs font-medium text-ink-500 mb-2 truncate">{props.label}</div>
-        <div class="text-[32px] sm:text-[38px] leading-tight font-light tracking-tight truncate">
+        <div
+          class="text-[32px] sm:text-[38px] leading-tight font-light tracking-tight truncate"
+          title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
+        >
           {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
         </div>
       </div>
@@ -73,7 +76,10 @@ function BucketStat(props: {
 }) {
   return (
     <div class="min-w-0">
-      <div class="text-[17px] sm:text-[20px] md:text-[22px] leading-tight font-light tracking-tight truncate">
+      <div
+        class="text-[17px] sm:text-[20px] md:text-[22px] leading-tight font-light tracking-tight truncate"
+        title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
+      >
         {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
       </div>
       <div class="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-ink-500 min-h-[22px]">

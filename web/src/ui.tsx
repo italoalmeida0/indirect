@@ -1274,16 +1274,39 @@ export function fmtNum(n: number | null | undefined): string {
   return neg ? String(-v) : String(v);
 }
 
-/** Formatter for monetary amounts / spending in USD. */
-export function fmtCost(val: number | null | undefined): string {
+/** Formatter for monetary amounts / spending in USD. Compacts at >= $100K ($836K, $1.25M, $1.50B)
+ *  unless { compact: false } is explicitly requested. */
+export function fmtCost(val: number | null | undefined, opts?: { compact?: boolean }): string {
   if (val === null || val === undefined) return "—";
   if (!Number.isFinite(val)) return "—";
   if (val === 0) return "$0.00";
-  if (val < 0.01) {
-    if (val < 0.0001) return `$${val.toFixed(6)}`;
-    return `$${val.toFixed(4)}`;
+  const neg = val < 0;
+  const abs = Math.abs(val);
+  if (abs < 0.01) {
+    if (abs < 0.0001) return `${neg ? "-" : ""}$${abs.toFixed(6)}`;
+    return `${neg ? "-" : ""}$${abs.toFixed(4)}`;
   }
-  return `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (opts?.compact !== false && abs >= 100_000) {
+    if (abs >= 1_000_000_000_000) {
+      const t = abs / 1_000_000_000_000;
+      const digits = t >= 100 ? 0 : t >= 10 ? 1 : 2;
+      return `${neg ? "-" : ""}$${t.toFixed(digits)}T`;
+    }
+    if (abs >= 1_000_000_000) {
+      const b = abs / 1_000_000_000;
+      const digits = b >= 100 ? 0 : b >= 10 ? 1 : 2;
+      return `${neg ? "-" : ""}$${b.toFixed(digits)}B`;
+    }
+    if (abs >= 1_000_000) {
+      const m = abs / 1_000_000;
+      const digits = m >= 100 ? 0 : m >= 10 ? 1 : 2;
+      return `${neg ? "-" : ""}$${m.toFixed(digits)}M`;
+    }
+    const k = abs / 1_000;
+    const digits = k >= 100 ? 0 : 1;
+    return `${neg ? "-" : ""}$${k.toFixed(digits)}K`;
+  }
+  return `${neg ? "-" : ""}$${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /** Human window name for the shared day selectors ("1" = hourly 24h view,
