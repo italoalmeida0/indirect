@@ -341,7 +341,7 @@ func (a *sessionActor) onCompactNow() {
 	}
 	a.touch()
 	if len(a.rec.Messages) < 4 {
-		a.emit(map[string]any{"type": "notice", "sessionId": a.id, "message": "Not enough history to compact"})
+		a.emit(map[string]any{"type": "notice", "sessionId": a.id, "message": "Not enough history to compact", "level": "warn"})
 		return
 	}
 	_ = a.startTurnWithMeta("", nil, "", map[string]string{"operation": "compact"})

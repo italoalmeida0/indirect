@@ -165,6 +165,11 @@ export function ToolEditBodies(props: ToolPartProps) {
               <CodeBlock embedded follow={() => props.m.open() && props.running} text={String(props.m.args().code || "")} language="python" wrap={false} scrollKey={`${props.m.key()}:code`} />
             </Show>
             <div class="border-t border-line/40">
+              <Show when={props.u.result?.toolDetails?.truncated}>
+                <div class="px-3 py-1 bg-ink-900/60 border-b border-line/30 text-[10px] text-ink-500 font-mono">
+                  Output truncated (showing last {String(props.u.result?.toolDetails?.page || "portion")})
+                </div>
+              </Show>
               <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.bgRunning() ? (props.m.bgStream() || props.m.prog() || "Running in background…") : props.m.output() || "No output"} language={undefined} plain wrap={false} scrollKey={`${props.m.key()}:out`} />
             </div>
           </Show>

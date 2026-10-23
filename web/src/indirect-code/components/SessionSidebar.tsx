@@ -130,14 +130,14 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
               />
             </Show>
             <div class="relative flex items-center justify-end shrink-0 min-w-[48px]">
-              <span class="rc-row-time text-[10px] text-ink-600 transition-opacity group-hover:opacity-0 group-hover:pointer-events-none">
+              <span class="rc-row-time text-[10px] text-ink-500 transition-opacity group-hover:opacity-0 group-hover:pointer-events-none">
                 {timeAgo(sessionTimeLabel(s))}
               </span>
               <Show when={!ctx.selectionMode()}>
                 <div class="rc-row-actions absolute right-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     onClick={(e) => ctx.togglePin(s.id, e)}
-                    class="rc-row-action p-0.5 text-ink-600 hover:text-ink-200 cursor-pointer"
+                    class="rc-row-action p-0.5 text-ink-500 hover:text-ink-200 cursor-pointer"
                     data-rc-tip={s.pinned ? "Unpin" : "Pin"} aria-label={s.pinned ? "Unpin" : "Pin"}
                   >
                     <Iconify icon={s.pinned ? "lucide:pin-off" : "lucide:pin"} size={11} />

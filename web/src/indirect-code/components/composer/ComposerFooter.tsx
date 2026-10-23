@@ -134,7 +134,7 @@ export function ComposerFooter() {
         </Show>
       </div>
     </FloatMenu>
-    <Tooltip content="Conversation context and session usage">
+    <Tooltip content="Conversation context and session usage" disabled={ui.usageOpen()}>
       <button ref={ui.contextBtn} data-menubtn aria-label={`Conversation context: ${c.activeContext().label}`} aria-expanded={ui.usageOpen()}
         onClick={() => { const next = !ui.usageOpen(); ui.closeMenus(); ui.setUsageOpen(next); }}
         class="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] tabular-nums text-ink-400 hover:bg-elev hover:text-ink-200 cursor-pointer">

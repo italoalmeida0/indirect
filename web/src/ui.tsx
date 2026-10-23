@@ -107,33 +107,36 @@ export function Icon(props: {
 // THEME (white / dark + system follow)
 // ==========================================
 
-export type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "high-contrast";
 /** User-facing choice: an explicit theme, or follow the OS (`system`).
  *  Stored in localStorage under THEME_KEY; missing/unknown also means
  *  `system` (fresh installs follow the OS by default). */
-export type ThemeMode = "light" | "dark" | "system";
+export type ThemeMode = "light" | "dark" | "high-contrast" | "system";
 const THEME_KEY = "llmgw-theme";
 
 /** Theme-color meta values (page chrome / PWA task switcher), kept in sync
  *  with the effective theme — tweakgrid does the same from its theme
  *  subscriber. Values mirror the page bg of each theme (ink-950). */
-const THEME_COLORS: Record<Theme, string> = { light: "#ffffff", dark: "#111315" };
+const THEME_COLORS: Record<Theme, string> = { light: "#ffffff", dark: "#111315", "high-contrast": "#000000" };
 
 export function getThemeMode(): ThemeMode {
   let stored: string | null = null;
   try {
     stored = localStorage.getItem(THEME_KEY);
   } catch {}
-  return stored === "light" || stored === "dark" ? stored : "system";
+  return stored === "light" || stored === "dark" || stored === "high-contrast" ? stored : "system";
 }
 
 export function getTheme(): Theme {
+  if (document.documentElement.dataset.theme === "high-contrast") return "high-contrast";
   if (document.documentElement.dataset.theme === "dark") return "dark";
   if (document.documentElement.dataset.theme === "light") return "light";
   // Unset (pre-init): resolve like the inline init script in index.html.
   try {
-    if (localStorage.getItem(THEME_KEY) === "dark") return "dark";
-    if (localStorage.getItem(THEME_KEY) === "light") return "light";
+    const s = localStorage.getItem(THEME_KEY);
+    if (s === "high-contrast") return "high-contrast";
+    if (s === "dark") return "dark";
+    if (s === "light") return "light";
   } catch {}
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
@@ -721,6 +724,7 @@ export function Tooltip(props: {
   placement?: Placement;
   /** Hover-intent delay in ms (default 150). */
   delay?: number;
+  disabled?: boolean;
   children: JSX.Element;
 }) {
   const [show, setShow] = createSignal(false);
@@ -728,6 +732,7 @@ export function Tooltip(props: {
   let showTimer: number | undefined;
 
   const open = () => {
+    if (props.disabled) return;
     // Touch devices don't hover — a tap shouldn't pin a tooltip on screen.
     // Same source of truth as the CSS: the pre-paint html.mobile flag.
     if (document.documentElement.classList.contains("mobile")) return;

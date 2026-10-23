@@ -320,6 +320,7 @@ export function ToolbarContext() {
   <FloatMenu
     anchor={() => c.addBtn}
     open={c.addContextOpen()}
+    onClose={() => c.setAddContextOpen(false)}
     placement="top-start"
     width={
       ui.isMobile()
@@ -584,7 +585,7 @@ export function ToolbarContext() {
     <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}</span><Show when={additionalCount() > 0}><span class="text-ink-500">+{additionalCount()}</span></Show>
     <Iconify icon="lucide:chevron-down" size={11} />
   </button>
-  <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} placement="top-start" width="20rem">
+  <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} onClose={() => c.setModeMenuOpen(false)} placement="top-start" width="20rem">
     <div class="flex items-center justify-between px-2 py-1.5 border-b border-line/60 mb-1">
       <span class="font-semibold text-xs text-ink-200">Mode & Skills</span>
       <button
@@ -615,7 +616,7 @@ export function ToolbarContext() {
     }`}>
     <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={14} class={c.yoloMode() ? "text-brand-500" : ""} /><span class={`hidden sm:inline ${c.yoloMode() ? "text-brand-500" : ""}`}>{c.yoloMode() ? "Full access" : "Ask for approval"}</span>
   </button>
-  <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} placement="top-start" width="22rem">
+  <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="22rem">
     <p class="px-2 py-2 text-ink-400">How should actions be approved?</p>
     <For each={[{full:false, label:"Ask for approval", description:"Ask before every tool call, including reads and commands.", icon:"lucide:hand"}, {full:true, label:"Full access", description:"Allow all tool calls without asking (YOLO).", icon:"lucide:shield-alert"}]}>{(access) =>
       <button role="menuitemradio" aria-checked={c.yoloMode() === access.full} onClick={() => { c.setYoloMode(access.full); c.configureSession(); c.setAccessMenuOpen(false); }} class="w-full flex items-center gap-3 px-2 py-3 text-left rounded-lg hover:bg-elev cursor-pointer">

@@ -68,9 +68,12 @@ function renderThinkingRow(
           : "Thinking";
   return (
     <div style={hidden() ? { display: "none" } : undefined} data-thinking-row={key}>
-      <div
+      <button
+        type="button"
         onClick={toggle}
-        class="group/tool w-full flex items-center gap-2 pl-1 pr-1.5 py-1 rounded-lg cursor-pointer hover:bg-ink-900/70 text-[13px]"
+        aria-expanded={open()}
+        aria-label={label()}
+        class="group/tool w-full flex items-center gap-2 pl-1 pr-1.5 py-1 rounded-lg cursor-pointer hover:bg-ink-900/70 text-[13px] text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500"
       >
         <span class="text-ink-500 shrink-0">{label()}</span>
         <span class="flex-1" />
@@ -79,7 +82,7 @@ function renderThinkingRow(
           size={12}
           class={`shrink-0 text-ink-600 transition-transform ${open() ? "rotate-180" : ""}`}
         />
-      </div>
+      </button>
       <DisclosureBody open={open()}>
         <div
           ref={(el) => onCleanup(followTail(el, () => open() && streaming()))}
@@ -131,6 +134,7 @@ function renderTurnAggregate(
   const tailIsThinking = () => series.entries?.[lastEntryIdx()]?.kind === "thinking";
   const thinkingHidden = () => !ctx.verboseChat();
   const visibleRuns = createMemo(() => groupToolRuns(series.entries));
+  const onlyThinking = createMemo(() => series.entries.every((e) => e.kind === "thinking") && series.units.length === 0);
   return (
     <div class="w-full border-t border-line/60 overflow-hidden mt-1">
       <button
@@ -175,7 +179,7 @@ function renderTurnAggregate(
                 const live = () => tail() && tailIsThinking() && running() && entry.isNewest &&
                   entry.msg.id === lastTurnId() && ctx.thinkingStart() !== null;
                 const content = () => (entry.block.reasoning || "").trim() !== "";
-                return renderThinkingRow(ctx, entry, () => live() && content(), thinkingHidden, live, live, running);
+                return renderThinkingRow(ctx, entry, () => (live() && content()) || (open() && onlyThinking()), thinkingHidden, live, live, running);
               }
               return renderImageBlock(ctx, entry.block);
             }}

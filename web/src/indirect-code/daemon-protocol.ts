@@ -146,7 +146,7 @@ export type DaemonEvent = EventBase &
     | { type: "turn_changes_undone"; sessionId: string; requestId?: string; turnIndex?: number; results?: WireRecord[]; complete?: boolean; warning?: string; error?: string }
     | { type: "attachment_uploaded"; requestId?: string; sessionId?: string; attachment?: WireRecord }
     | { type: "search_results"; query?: string; results?: WireRecord[] }
-    | { type: "notice"; message?: string }
+    | { type: "notice"; message?: string; level?: string }
     | { type: "file_matches"; requestId: string; sessionId?: string; files?: string[]; error?: string; truncated?: boolean }
     | { type: "attachment_data"; requestId?: string; sessionId: string; attachment?: WireRecord }
     | { type: "widget_data"; requestId?: string; sessionId?: string; widgetId?: string; widget?: WireRecord }

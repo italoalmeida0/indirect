@@ -22,6 +22,15 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
       .replace(/^## Context Summary \(compacted\)\n\n/, "")
       .trim();
 
+  const previewSnippet = () =>
+    cleanedSummary()
+      .replace(/^#+\s+/gm, "")
+      .replace(/[*_~`]/g, "")
+      .replace(/^[-\s*]{3,}$/gm, "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/\s+/g, " ")
+      .trim();
+
   const isSplitTurn = () =>
     cleanedSummary().includes("**Turn Context (split turn):**");
 
@@ -123,12 +132,12 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
         </div>
 
         {/* Collapsed Snippet */}
-        <Show when={!expanded() && cleanedSummary()}>
+        <Show when={!expanded() && previewSnippet()}>
           <div
             onClick={() => setExpanded(true)}
             class="mt-2 text-[11px] text-ink-400 hover:text-ink-300 line-clamp-2 cursor-pointer select-none"
           >
-            {cleanedSummary().replace(/\n+/g, " ")}
+            {previewSnippet()}
           </div>
         </Show>
 

@@ -444,9 +444,17 @@ func finishPythonCommand(runErr error, stdout, stderr bytes.Buffer, start time.T
 		b.WriteString(errOut)
 	}
 	text := b.String()
+	truncation := truncateTail(text, defaultMaxLines, defaultMaxBytes)
+	outputText := truncation.content
 	var attrs []core.Attr
-	if text == "" {
+	if outputText == "" {
 		attrs = append(attrs, core.Attr{Key: "info", Value: "no output"})
+	}
+	if truncation.truncated {
+		attrs = append(attrs, core.Attr{Key: "truncated", Value: "true"})
+		startLine := truncation.totalLines - truncation.outputLines + 1
+		endLine := truncation.totalLines
+		attrs = append(attrs, core.Attr{Key: "page", Value: fmt.Sprintf("%d-%d/%d", startLine, endLine, truncation.totalLines)})
 	}
 	// Command outcome is a FACT (attr), not an error: a non-zero exit is
 	// type="ok" exit="N". Only tool misuse is type="error".
@@ -462,9 +470,18 @@ func finishPythonCommand(runErr error, stdout, stderr bytes.Buffer, start time.T
 	}
 	attrs = append(attrs, core.Attr{Key: "duration", Value: humanDuration(duration)})
 
+	var details any
+	if truncation.truncated {
+		details = map[string]any{
+			"truncated": true,
+			"page":      fmt.Sprintf("%d-%d/%d", truncation.totalLines-truncation.outputLines+1, truncation.totalLines, truncation.totalLines),
+		}
+	}
+
 	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: text}},
+		Content: []provider.Content{provider.TextBlock{Text: outputText}},
 		Attrs:   attrs,
+		Details: details,
 	}, nil
 }
 

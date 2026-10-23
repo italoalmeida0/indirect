@@ -35,8 +35,17 @@ export function ComposerInput() {
     <For each={c.pendingAttachments()}>
       {(att) => (
         <div
+          role="button"
+          tabIndex={0}
           onClick={() => m.previewPending(att)}
-          class="relative group flex items-center gap-1.5 bg-ink-950 rounded-lg border border-line/70 pl-1.5 pr-2 py-1 text-xs max-w-[180px] cursor-pointer hover:border-ink-500 transition-colors"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              m.previewPending(att);
+            }
+          }}
+          aria-label={`Preview ${att.name}`}
+          class="relative group flex items-center gap-1.5 bg-ink-950 rounded-lg border border-line/70 pl-1.5 pr-2 py-1 text-xs max-w-[180px] cursor-pointer hover:border-ink-500 transition-colors focus:outline-none focus:ring-1 focus:ring-brand-500"
           data-rc-tip={`${att.name} (${Math.round(att.size / 1024)}KB) — click to preview`}
         >
           <Show

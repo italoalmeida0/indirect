@@ -54,7 +54,7 @@ const CLS: Record<string, string> = {
   "ordered-list": "ml-4 list-outside list-decimal whitespace-normal",
   "unordered-list": "ml-4 list-outside list-disc whitespace-normal",
   "list-item": "py-1",
-  "horizontal-rule": "my-6 border-border",
+  "horizontal-rule": "my-6 border-(--line)",
   strong: "font-semibold",
   link: "wrap-anywhere font-medium text-primary underline",
   "heading-1": "mt-6 mb-2 font-semibold text-3xl",
@@ -63,16 +63,16 @@ const CLS: Record<string, string> = {
   "heading-4": "mt-6 mb-2 font-semibold text-lg",
   "heading-5": "mt-6 mb-2 font-semibold text-base",
   "heading-6": "mt-6 mb-2 font-semibold text-sm",
-  table: "w-full border-collapse border border-border",
-  "table-header": "bg-muted/80",
-  "table-body": "divide-y divide-border bg-muted/40",
-  "table-row": "border-border border-b",
-  "table-header-cell": "whitespace-nowrap px-4 py-2 text-left font-semibold text-sm",
-  "table-cell": "px-4 py-2 text-sm",
-  blockquote: "my-4 border-muted-foreground/30 border-l-4 pl-4 text-muted-foreground italic",
+  table: "w-full border-collapse border border-(--line)",
+  "table-header": "bg-(--ink-900)",
+  "table-body": "divide-y divide-(--line) bg-(--card)/40",
+  "table-row": "border-(--line) border-b",
+  "table-header-cell": "whitespace-nowrap px-4 py-2 text-left font-semibold text-sm text-(--ink-100)",
+  "table-cell": "px-4 py-2 text-sm text-(--ink-200)",
+  blockquote: "my-4 border-l-4 border-(--line) pl-4 text-ink-400 italic",
   superscript: "text-sm",
   subscript: "text-sm",
-  "inline-code": "rounded bg-muted px-1.5 py-0.5 font-mono text-sm",
+  "inline-code": "rounded bg-(--ink-800) px-1.5 py-0.5 font-mono text-sm text-(--ink-100)",
   image: "max-w-full rounded-lg",
 };
 
@@ -134,6 +134,70 @@ const COPY_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
 
 const CHECK_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
+
+const DOWNLOAD_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>';
+
+function tableToCSV(table: HTMLTableElement): string {
+  const rows = Array.from(table.querySelectorAll("tr"));
+  return rows.map((tr) => {
+    const cells = Array.from(tr.querySelectorAll("th, td"));
+    return cells.map((c) => {
+      const text = (c.textContent ?? "").trim().replace(/"/g, '""');
+      return `"${text}"`;
+    }).join(",");
+  }).join("\n");
+}
+
+function tableToMarkdown(table: HTMLTableElement): string {
+  const rows = Array.from(table.querySelectorAll("tr"));
+  if (rows.length === 0) return "";
+  const tableData = rows.map((tr) => Array.from(tr.querySelectorAll("th, td")).map((c) => (c.textContent ?? "").trim()));
+  const colCount = Math.max(...tableData.map((r) => r.length), 0);
+  if (colCount === 0) return "";
+  const mdRows: string[] = [];
+  tableData.forEach((row, i) => {
+    const padded = [...row];
+    while (padded.length < colCount) padded.push("");
+    const line = `| ${padded.join(" | ")} |`;
+    mdRows.push(line);
+    if (i === 0) {
+      const sep = `| ${padded.map(() => "---").join(" | ")} |`;
+      mdRows.push(sep);
+    }
+  });
+  return mdRows.join("\n");
+}
+
+function makeDownloadButton(getTable: () => HTMLTableElement, label: string, cleanup: (() => void)[]): HTMLButtonElement {
+  const btn = document.createElement("button");
+  btn.className = "rc-markdown-control";
+  btn.setAttribute("data-rc-tip", label);
+  btn.setAttribute("aria-label", label);
+  btn.setAttribute("type", "button");
+  const icon = btn.appendChild(document.createElement("span"));
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = DOWNLOAD_SVG;
+  let disposed = false;
+  cleanup.push(() => { disposed = true; });
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (disposed) return;
+    try {
+      const csv = tableToCSV(getTable());
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "table.csv";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch { /* download fallback */ }
+  });
+  return btn;
+}
 
 function makeCopyButton(copyText: () => string, label: string, cleanup: (() => void)[]): HTMLButtonElement {
   const btn = document.createElement("button");
@@ -263,11 +327,15 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         const wrap = document.createElement("div");
         wrap.className = "rc-table-wrap";
         wrap.setAttribute("data-streamdown", "table-wrapper");
+        const toolbar = wrap.appendChild(document.createElement("div"));
+        toolbar.className = "flex items-center justify-end gap-1 pb-1 text-xs text-(--ink-400)";
         const scroller = wrap.appendChild(document.createElement("div"));
         scroller.className = "rc-table-scroll overflow-x-auto";
         const table = scroller.appendChild(document.createElement("table"));
         table.setAttribute("data-streamdown", "table");
         table.className = CLS.table;
+        toolbar.appendChild(makeCopyButton(() => tableToMarkdown(table), "Copy table", data.cleanup));
+        toolbar.appendChild(makeDownloadButton(() => table, "Download CSV", data.cleanup));
         current().appendChild(wrap);
         data.nodes[++data.index] = table;
         return;

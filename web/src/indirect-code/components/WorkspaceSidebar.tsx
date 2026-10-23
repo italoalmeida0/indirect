@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
+import { copyWithToast } from "../../ui";
 import { useHost, useModal, useSession, useTranscriptCtx, useUI } from "../ctx";
 import { SessionRow, type SessionRowCtx } from "./SessionSidebar";
 import { FloatMenu } from "./FloatMenu";
@@ -255,6 +256,17 @@ export function WorkspaceSidebar() {
                       </button>
                       <Iconify icon="lucide:folder" size={14} class="shrink-0 text-ink-500" />
                       <span class="truncate flex-1 font-medium">{p.name}</span>
+                      <button
+                        aria-label={`Copy path for ${p.name}`}
+                        data-rc-tip="Copy project path"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void copyWithToast(p.path);
+                        }}
+                        class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 p-1 text-ink-500 hover:text-ink-100 cursor-pointer"
+                      >
+                        <Iconify icon="lucide:copy" size={12} />
+                      </button>
                       <button aria-label={`New conversation in ${p.name}`} data-rc-tip="New conversation in this project" onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
                         class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 p-1 text-ink-500 hover:text-ink-100 cursor-pointer"><Iconify icon="lucide:plus" size={14} /></button>
                       <Show when={!p.protected}>

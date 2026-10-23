@@ -248,6 +248,75 @@ html[data-theme="dark"] {
   --glow-brand: color-mix(in oklab, var(--brand-500) 20%, transparent);
 }
 
+html[data-theme="high-contrast"] {
+  color-scheme: dark;
+  --ink-950: #000000;
+  --ink-900: #0a0a0a;
+  --ink-850: #141414;
+  --ink-800: #1f1f1f;
+  --ink-700: #333333;
+  --ink-600: #888888;
+  --ink-500: #b0b0b0;
+  --ink-400: #d0d0d0;
+  --ink-300: #e5e5e5;
+  --ink-200: #f5f5f5;
+  --ink-100: #ffffff;
+
+  --brand-300: #55ffff;
+  --brand-400: #22ffee;
+  --brand-500: #00ffcc;
+  --brand-600: #00cc99;
+
+  --accent: #ffffff;
+  --accent-strong: #ffffff;
+  --accent-fg: #000000;
+
+  --card: #080808;
+  --elev: #141414;
+  --line: #ffffff;
+  --control-border: #ffffff;
+  --control-top: #1a1a1a;
+  --control-bottom: #0a0a0a;
+  --surface-edge: #ffffff;
+  --field: #000000;
+  --shadow-panel: 0 0 0 1px #ffffff;
+  --shadow-floating: 0 0 0 1px #ffffff, 0 12px 36px rgb(0 0 0 / 60%);
+  --shadow-dialog: 0 0 0 1px #ffffff, 0 24px 80px rgb(0 0 0 / 80%);
+
+  --chart-grid: #444444;
+  --chart-tick: #cccccc;
+  --chart-strong: #ffffff;
+  --chart-mid: #cccccc;
+  --chart-soft: #888888;
+  --chart-brand: var(--brand-500);
+
+  --code-base: #ffffff;
+  --code-kw: #ff79c6;
+  --code-builtin: #8be9fd;
+  --code-type: #50fa7b;
+  --code-lit: #ffb86c;
+  --code-num: #bd93f9;
+  --code-str: #f1fa8c;
+  --code-regex: #ff5555;
+  --code-com: #888888;
+  --code-doc: #ff79c6;
+  --code-fn: #8be9fd;
+  --code-class: #50fa7b;
+  --code-title: #ffffff;
+  --code-params: #f8f8f2;
+  --code-var: #ffb86c;
+  --code-name: #8be9fd;
+  --code-attr: #50fa7b;
+  --code-sel: #ff79c6;
+  --code-op: #ffffff;
+  --code-punct: #ffffff;
+  --code-meta: #888888;
+  --code-add: #50fa7b;
+  --code-del: #ff5555;
+  --code-inline: #f1fa8c;
+  --glow-brand: transparent;
+}
+
 /* Fallback before the init script / JS runs. */
 html:not([data-theme]) {
   color-scheme: light dark;

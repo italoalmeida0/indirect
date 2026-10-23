@@ -47,10 +47,11 @@ export function SettingsGeneralSection() {
       <Segmented
         value={themeMode()}
         onChange={setThemeMode}
-        class="grid grid-cols-3"
+        class="grid grid-cols-4"
         options={[
           { value: "light", label: "Light" },
           { value: "dark", label: "Dark" },
+          { value: "high-contrast", label: "Contrast" },
           { value: "system", label: "System" },
         ]}
       />
@@ -204,8 +205,9 @@ export function SettingsGeneralSection() {
     <span>Updates</span>
   </h3>
   <div class="space-y-3 text-xs">
-    <label class="flex items-start gap-2 cursor-pointer select-none">
+    <label for="settings-auto-update" class="flex items-start gap-2 cursor-pointer select-none">
       <input
+        id="settings-auto-update"
         type="checkbox"
         checked={du.info()?.autoUpdate ?? true}
         onChange={(e) => du.toggle(e.currentTarget.checked)}
@@ -325,10 +327,11 @@ export function SettingsGeneralSection() {
       />
     </div>
     <div>
-      <label class="block font-medium text-ink-200 mb-1">
+      <label for="settings-upstream-proxy" class="block font-medium text-ink-200 mb-1">
         Upstream proxy
       </label>
       <input
+        id="settings-upstream-proxy"
         type="text"
         value={m.daemonSettings().httpProxy ?? ""}
         onInput={(e) =>
@@ -350,8 +353,9 @@ export function SettingsGeneralSection() {
     <Iconify icon="lucide:type" size={15} class="text-ink-500" />
     <span>Title Generator</span>
   </h3>
-  <label class="flex items-start gap-2 cursor-pointer select-none text-xs">
+  <label for="settings-auto-title" class="flex items-start gap-2 cursor-pointer select-none text-xs">
     <input
+      id="settings-auto-title"
       type="checkbox"
       checked={!(m.daemonSettings().noAutoTitle ?? false)}
       onChange={(e) =>

@@ -863,7 +863,10 @@ export default function IndirectCodePage() {
       }
 
       case "notice": {
-        if (msg.message) notice.toast(msg.message, "ok");
+        if (msg.message) {
+          const kind: "ok" | "err" = msg.level === "warn" || msg.level === "warning" || msg.level === "error" || msg.level === "err" || /not enough|fail|error|cannot|unable/i.test(msg.message) ? "err" : "ok";
+          notice.toast(msg.message, kind);
+        }
         break;
       }
 

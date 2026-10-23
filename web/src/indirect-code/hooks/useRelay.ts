@@ -42,7 +42,30 @@ export function createRelay(opts: {
   });
   const onVisibility = () => { if (!document.hidden) inbox.flush(); };
   document.addEventListener("visibilitychange", onVisibility);
-  onCleanup(() => { inbox.clear(); document.removeEventListener("visibilitychange", onVisibility); });
+
+  const onOnline = () => {
+    if (disposed) return;
+    clearTimeout(reconnectTimer);
+    reconnectAttempt = 0;
+    const currentHost = opts.getHostId();
+    if (currentHost) {
+      connect(currentHost);
+    }
+  };
+  const onOffline = () => {
+    if (disposed) return;
+    clearTimeout(reconnectTimer);
+    setConnectionState("disconnected");
+  };
+  window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
+
+  onCleanup(() => {
+    inbox.clear();
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.removeEventListener("online", onOnline);
+    window.removeEventListener("offline", onOffline);
+  });
 
   function wsOpen() {
     connectionState();

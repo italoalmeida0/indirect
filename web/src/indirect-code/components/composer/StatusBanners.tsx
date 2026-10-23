@@ -94,7 +94,7 @@ export function StatusBanners() {
   <div class="rc-delayed-banner">
     <div role="status" class="rounded-xl border border-line bg-elev p-3 text-xs text-ink-300 flex items-start gap-2">
       <Iconify icon="lucide:unplug" size={15} class="text-ink-500" />
-      <div class="flex-1"><p class="font-medium">{h.connectionState() !== "connected" ? "Reconnecting to the gateway…" : `${h.activeHost()?.name || "Host"} is offline`}</p><p class="mt-1 text-ink-500">{h.connectionState() !== "connected" ? "Restoring connection to gateway..." : "Start the daemon on this host to continue."}</p></div>
+      <div class="flex-1"><p class="font-medium">{typeof navigator !== "undefined" && !navigator.onLine ? "Network offline" : h.connectionState() !== "connected" ? "Reconnecting to the gateway…" : `${h.activeHost()?.name || "Host"} is offline`}</p><p class="mt-1 text-ink-500">{typeof navigator !== "undefined" && !navigator.onLine ? "Check your internet connection to continue." : h.connectionState() !== "connected" ? "Restoring connection to gateway..." : "Start the daemon on this host to continue."}</p></div>
       <button onClick={h.reconnect || h.loadHosts} class="text-ink-200 hover:underline cursor-pointer">Retry</button>
     </div>
   </div>
