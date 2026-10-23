@@ -18,7 +18,10 @@ export function NewProjectModal() {
   return (
     <Modal
       open={s.showNewProjectModal()}
-      onClose={() => s.setShowNewProjectModal(false)}
+      onClose={() => {
+        s.setShowNewProjectModal(false);
+        s.newProjBtn?.focus();
+      }}
       title="Select project folder"
       subtitle="Browse the host filesystem to choose or initialize a workspace for your agent sessions."
       width="max-w-2xl"
@@ -27,7 +30,10 @@ export function NewProjectModal() {
           <Btn
             variant="outline"
             size="sm"
-            onClick={() => s.setShowNewProjectModal(false)}
+            onClick={() => {
+              s.setShowNewProjectModal(false);
+              s.newProjBtn?.focus();
+            }}
           >
             Cancel
           </Btn>

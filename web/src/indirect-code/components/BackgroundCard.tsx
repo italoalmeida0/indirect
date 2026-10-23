@@ -45,18 +45,85 @@ export function BackgroundCard(props: { contextKey?: string }) {
   const [showArchived, setShowArchived] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
   const [open, setOpen] = createSignal<Record<string, boolean>>({});
+  const [recentlyFinished, setRecentlyFinished] = createSignal<Record<string, number>>({});
+  let prevStatuses = new Map<string, string>();
+  const graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
   const tasks = createMemo(() => bg.sessionJobs()
     .filter((j) => j.kind === "bash" || j.kind === "python")
     .sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id)));
   const running = createMemo(() => tasks().filter((j) => j.status === "running"));
   const archived = createMemo(() => tasks().filter((j) => j.status !== "running"));
-  const selected = createMemo(() => showArchived() ? archived() : running());
+  const activeTasks = createMemo(() => tasks().filter((j) => j.status === "running" || !!recentlyFinished()[j.id]));
+  const selected = createMemo(() => showArchived() ? archived() : activeTasks());
   const visible = createMemo(() => expanded() ? selected() : selected().slice(0, 3));
+
+  createEffect(() => {
+    const currentTasks = tasks();
+    const nextStatuses = new Map<string, string>();
+    const newlyFinished: string[] = [];
+    for (const job of currentTasks) {
+      nextStatuses.set(job.id, job.status);
+      const prev = prevStatuses.get(job.id);
+      if (prev === "running" && job.status !== "running") {
+        newlyFinished.push(job.id);
+      }
+    }
+    prevStatuses = nextStatuses;
+
+    if (newlyFinished.length > 0) {
+      const now = Date.now();
+      setRecentlyFinished((prev) => {
+        const next = { ...prev };
+        for (const id of newlyFinished) {
+          next[id] = now;
+        }
+        return next;
+      });
+
+      for (const id of newlyFinished) {
+        if (graceTimers.has(id)) clearTimeout(graceTimers.get(id));
+        const t = setTimeout(() => {
+          graceTimers.delete(id);
+          setRecentlyFinished((prev) => {
+            if (!prev[id]) return prev;
+            if (isOpen(id)) return prev;
+            const copy = { ...prev };
+            delete copy[id];
+            return copy;
+          });
+        }, 15000);
+        graceTimers.set(id, t);
+      }
+    }
+  });
+
+  onCleanup(() => {
+    for (const t of graceTimers.values()) clearTimeout(t);
+    graceTimers.clear();
+  });
+
+  function dismiss(id: string) {
+    if (graceTimers.has(id)) {
+      clearTimeout(graceTimers.get(id));
+      graceTimers.delete(id);
+    }
+    setRecentlyFinished((prev) => {
+      if (!prev[id]) return prev;
+      const copy = { ...prev };
+      delete copy[id];
+      return copy;
+    });
+  }
 
   createEffect(on(() => props.contextKey, () => {
     setShowArchived(false);
     setExpanded(false);
     setOpen({});
+    setRecentlyFinished({});
+    for (const t of graceTimers.values()) clearTimeout(t);
+    graceTimers.clear();
+    prevStatuses.clear();
   }));
 
   function toggleArchive() {
@@ -72,7 +139,18 @@ export function BackgroundCard(props: { contextKey?: string }) {
   }
 
   const isOpen = (id: string) => open()[id] === true;
-  const toggle = (id: string) => setOpen((prev) => ({ ...prev, [id]: !prev[id] }));
+  const toggle = (id: string) => {
+    setOpen((prev) => {
+      const nextOpen = !prev[id];
+      if (!nextOpen && recentlyFinished()[id]) {
+        const finishedAt = recentlyFinished()[id];
+        if (finishedAt && Date.now() - finishedAt >= 15000) {
+          dismiss(id);
+        }
+      }
+      return { ...prev, [id]: nextOpen };
+    });
+  };
   const logText = (job: SessionBgTask) => {
     // Session tail (authoritative) + live output not covered by the snapshot.
     const sess = typeof job.content === "string" ? job.content : bg.sessionContent(job.id) || "";
@@ -108,7 +186,10 @@ export function BackgroundCard(props: { contextKey?: string }) {
           <For each={visible()}>
             {(job) => (
               <div class="rounded-lg bg-card" data-bg-row={job.id}>
-                <div class="flex items-center gap-2 px-2.5 py-1.5">
+                <div
+                  class="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-elev/50 rounded-lg transition-colors"
+                  onClick={() => toggle(job.id)}
+                >
                   <span
                     class={`inline-flex shrink-0 ${taskState(job.status).color}`}
                     role="img"
@@ -140,17 +221,37 @@ export function BackgroundCard(props: { contextKey?: string }) {
                     <button
                       type="button"
                       class="shrink-0 inline-flex items-center justify-center rounded p-1 text-ink-500 hover:text-ink-100 hover:bg-elev cursor-pointer"
-                      onClick={() => bg.stop(job.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        bg.stop(job.id);
+                      }}
                       aria-label="Stop task"
                       data-bg-stop={job.id}
                     >
                       <Iconify icon="lucide:square" size={12} />
                     </button>
                   </Show>
+                  <Show when={!showArchived() && job.status !== "running"}>
+                    <button
+                      type="button"
+                      class="shrink-0 inline-flex items-center justify-center rounded p-1 text-ink-500 hover:text-ink-100 hover:bg-elev cursor-pointer"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        dismiss(job.id);
+                      }}
+                      aria-label="Dismiss task"
+                      data-bg-dismiss={job.id}
+                    >
+                      <Iconify icon="lucide:x" size={12} />
+                    </button>
+                  </Show>
                   <button
                     type="button"
                     class="shrink-0 inline-flex items-center justify-center rounded p-1 text-ink-500 hover:text-ink-100 hover:bg-elev cursor-pointer"
-                    onClick={() => toggle(job.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggle(job.id);
+                    }}
                     aria-expanded={isOpen(job.id)}
                     aria-label={isOpen(job.id) ? "Hide logs" : "Show logs"}
                   >

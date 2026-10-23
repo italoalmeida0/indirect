@@ -122,9 +122,17 @@ export function WorkspaceSidebar() {
             </div>
           }
         >
-          <span class="text-[11px] font-medium text-ink-300">
-            {s.selectedSessions().size} selected
-          </span>
+          <div class="flex items-center gap-2">
+            <span class="text-[11px] font-medium text-ink-300">
+              {s.selectedSessions().size} selected
+            </span>
+            <button
+              onClick={() => s.selectAllSessions()}
+              class="px-1.5 py-0.5 rounded text-[11px] font-medium text-ink-400 hover:text-ink-100 hover:bg-ink-800/60 cursor-pointer transition-colors"
+            >
+              {s.sessions().length > 0 && s.selectedSessions().size === s.sessions().length ? "Deselect All" : "Select All"}
+            </button>
+          </div>
         </Show>
         <div class="flex items-center gap-0.5">
           {/* Selection mode toggle (chatbot) */}
@@ -140,7 +148,7 @@ export function WorkspaceSidebar() {
           </button>
         <div>
           <button
-            ref={s.newProjBtn}
+            ref={(el) => (s.newProjBtn = el)}
             data-menubtn
             onClick={(e) => {
               e.stopPropagation();
@@ -154,6 +162,7 @@ export function WorkspaceSidebar() {
           <FloatMenu anchor={() => s.newProjBtn} open={s.newProjectMenuOpen()} placement="bottom-start" width="11rem">
               <button
                 onClick={() => {
+                  s.newProjBtn?.focus();
                   s.setNewProjectMenuOpen(false);
                   s.openNewProjectModal();
                 }}
@@ -164,6 +173,7 @@ export function WorkspaceSidebar() {
               </button>
               <button
                 onClick={() => {
+                  s.newProjBtn?.focus();
                   s.setNewProjectMenuOpen(false);
                   s.quickStartProject();
                 }}
@@ -206,22 +216,43 @@ export function WorkspaceSidebar() {
                 return (
                   <div>
                     <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={p.name}
                       onClick={() => {
                         s.pickProject(p.id);
-                        s.toggleProjectExpanded(p.id);
                       }}
-                      class={`group flex items-center gap-1.5 px-2 py-1.5 rounded-lg cursor-pointer text-[13px] transition-colors ${
-                        p.id === (s.activeProject()?.id || "")
-                          ? "text-ink-100"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          if (e.target === e.currentTarget) {
+                            e.preventDefault();
+                            s.pickProject(p.id);
+                          }
+                        }
+                      }}
+                      class={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 ${
+                        s.activeProjectId() === p.id || p.id === (s.activeProject()?.id || "")
+                          ? "bg-ink-800/60 font-medium text-ink-100 rounded-md"
                           : "text-ink-400 hover:bg-ink-900/60 hover:text-ink-200"
                       }`}
                       data-rc-tip={p.path}
                     >
-                      <Iconify
-                        icon="lucide:chevron-right"
-                        size={12}
-                        class={`shrink-0 text-ink-600 transition-transform ${s.isProjectExpanded(p) ? "rotate-90" : ""}`}
-                      />
+                      <button
+                        type="button"
+                        aria-label="Toggle project"
+                        aria-expanded={s.isProjectExpanded(p)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          s.toggleProjectExpanded(p.id);
+                        }}
+                        class="p-0.5 -ml-0.5 rounded text-ink-500 hover:text-ink-200 hover:bg-ink-800/60 cursor-pointer shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500"
+                      >
+                        <Iconify
+                          icon="lucide:chevron-right"
+                          size={12}
+                          class={`shrink-0 transition-transform ${s.isProjectExpanded(p) ? "rotate-90" : ""}`}
+                        />
+                      </button>
                       <Iconify icon="lucide:folder" size={14} class="shrink-0 text-ink-500" />
                       <span class="truncate flex-1 font-medium">{p.name}</span>
                       <button aria-label={`New conversation in ${p.name}`} data-rc-tip="New conversation in this project" onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
@@ -266,22 +297,34 @@ export function WorkspaceSidebar() {
       </Show>
     </div>
   {/* Batch bar (chatbot selection mode) */}
-  <Show when={s.selectionMode() && s.selectedSessions().size > 0}>
+  <Show when={s.selectionMode()}>
     <div class="p-2 border-t border-line/70 bg-ink-950/95">
       <div class="flex items-center justify-between gap-2">
-        <span class="text-[11px] text-ink-500 pl-1">
-          {s.selectedSessions().size} selected
+        <span class="text-[11px] text-ink-500 pl-1 truncate">
+          {s.selectedSessions().size > 0
+            ? `${s.selectedSessions().size} selected`
+            : "Select conversations to delete"}
         </span>
-        <div class="flex items-center gap-1.5">
+        <div class="flex items-center gap-1.5 shrink-0">
           <button
             onClick={s.pinSelected}
-            class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-ink-900 border border-line/70 text-ink-300 hover:text-ink-100 cursor-pointer"
+            disabled={s.selectedSessions().size === 0}
+            class={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border border-line/70 transition-colors ${
+              s.selectedSessions().size > 0
+                ? "bg-ink-900 text-ink-300 hover:text-ink-100 cursor-pointer"
+                : "opacity-50 cursor-not-allowed bg-ink-900 text-ink-500"
+            }`}
           >
             Pin / Unpin
           </button>
           <button
             onClick={s.deleteSelected}
-            class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-rose-500/10 border border-rose-500/30 text-rose-300 hover:bg-rose-500/20 cursor-pointer"
+            disabled={s.selectedSessions().size === 0}
+            class={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${
+              s.selectedSessions().size > 0
+                ? "bg-rose-500/10 border-rose-500/30 text-rose-300 hover:bg-rose-500/20 cursor-pointer"
+                : "opacity-50 cursor-not-allowed bg-ink-900 border-line/70 text-ink-500"
+            }`}
           >
             Delete
           </button>

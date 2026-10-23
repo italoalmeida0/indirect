@@ -55,8 +55,16 @@ interface RawFrame {
   id: string;
   timestamp: number;
   type: string;
+  direction?: "in" | "out";
   sessionId?: string;
   size: number;
+  payload: any;
+}
+
+interface WalEventItem {
+  seq: number;
+  type: string;
+  timestamp?: number;
   payload: any;
 }
 
@@ -274,7 +282,7 @@ function JsonHighlightViewer(props: {
 
 export default function CodeDevPage() {
   const [activeTab, setActiveTab] = createSignal<
-    "payloads" | "stream" | "system" | "tools" | "frames"
+    "payloads" | "stream" | "system" | "tools" | "frames" | "wal"
   >("payloads");
   const [selectedSessionId, setSelectedSessionId] = createSignal<string>("");
   const [selectedPayloadId, setSelectedPayloadId] = createSignal<string>("");
@@ -287,6 +295,11 @@ export default function CodeDevPage() {
   const [liveEvents, setLiveEvents] = createSignal<LiveEvent[]>([]);
   const [rawFrames, setRawFrames] = createSignal<RawFrame[]>([]);
   const [preserveLog, setPreserveLog] = createSignal<boolean>(true);
+
+  // WAL State
+  const [walEvents, setWalEvents] = createSignal<WalEventItem[]>([]);
+  const [selectedWalSeq, setSelectedWalSeq] = createSignal<number | null>(null);
+  const [walFilter, setWalFilter] = createSignal<string>("");
 
   // Debug session data loaded from daemon
   const [systemPrompt, setSystemPrompt] = createSignal<string>("");
@@ -315,7 +328,7 @@ export default function CodeDevPage() {
   });
 
   // Relay connection
-  const relay = createRelay({
+  const rawRelay = createRelay({
     getHostId: () => hosts.activeHostId(),
     onMessage: (data: unknown) => {
       const msg = data as any;
@@ -324,12 +337,13 @@ export default function CodeDevPage() {
       const now = Date.now();
       const rawStr = JSON.stringify(msg);
 
-      // Record raw frame (frontend-only, up to 300)
+      // Record incoming raw frame (frontend-only, up to 300)
       setRawFrames((prev) => [
         {
           id: `frame_${now}_${Math.random().toString(36).slice(2, 7)}`,
           timestamp: now,
           type: msg.type || "unknown",
+          direction: "in",
           sessionId: msg.sessionId || msg.session?.id,
           size: rawStr.length,
           payload: msg,
@@ -345,6 +359,7 @@ export default function CodeDevPage() {
         if (msg.systemPrompt) setSystemPrompt(msg.systemPrompt);
         if (msg.tools && Array.isArray(msg.tools)) setNativeTools(msg.tools);
         if (msg.session) setSessionMeta(msg.session);
+        if (msg.walEvents && Array.isArray(msg.walEvents)) setWalEvents(msg.walEvents);
         if (msg.recentPayloads && Array.isArray(msg.recentPayloads) && msg.recentPayloads.length > 0) {
           const items: CapturedRequest[] = msg.recentPayloads.map((p: any, idx: number) => ({
             id: `recent_${p.sessionId || msg.sessionId || selectedSessionId()}_${p.turnIndex ?? 0}_${p.step ?? 0}_${p.timestamp || now}_${idx}`,
@@ -399,7 +414,7 @@ export default function CodeDevPage() {
           };
           setCapturedPayloads((prev) => [item, ...prev]);
           setSelectedPayloadId(item.id);
-          toast("🔥 Smoke simulation payload captured (0 tokens billed)", "ok");
+          toast("Smoke simulation payload captured (0 tokens billed)", "ok");
         } else if (msg.error) {
           toast(`Simulation error: ${msg.error}`, "err");
         }
@@ -504,6 +519,31 @@ export default function CodeDevPage() {
     isActiveHost: (hostId) => hosts.activeHostId() === hostId,
   });
 
+  const recordOutgoingFrame = (payload: any) => {
+    const now = Date.now();
+    const rawStr = JSON.stringify(payload ?? {});
+    setRawFrames((prev) => [
+      {
+        id: `frame_out_${now}_${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: now,
+        type: payload?.type || "unknown",
+        direction: "out",
+        sessionId: payload?.sessionId || payload?.session?.id,
+        size: rawStr.length,
+        payload,
+      },
+      ...prev.slice(0, 300),
+    ]);
+  };
+
+  const relay = {
+    ...rawRelay,
+    send: (payload: any) => {
+      recordOutgoingFrame(payload);
+      return rawRelay.send(payload);
+    },
+  };
+
   const mirror = createMirror({
     send: (payload) => relay.send(payload),
     isOpen: () => relay.wsOpen(),
@@ -524,6 +564,14 @@ export default function CodeDevPage() {
   }
 
   onMount(async () => {
+    (window as any).__devTest = {
+      relay,
+      setRawFrames,
+      setWalEvents,
+      rawFrames,
+      walEvents,
+      recordOutgoingFrame,
+    };
     await hosts.loadHosts();
     const hid = hosts.activeHostId();
     if (hid) {
@@ -589,6 +637,111 @@ export default function CodeDevPage() {
     return sessions().find((s) => s.id === sid) ?? null;
   });
 
+  const derivedWalEvents = createMemo<WalEventItem[]>(() => {
+    if (walEvents().length > 0) return walEvents();
+
+    const s = activeSession();
+    const meta = sessionMeta();
+    if (!s && !meta) return [];
+
+    const items: WalEventItem[] = [];
+    let seq = 1;
+
+    items.push({
+      seq: seq++,
+      type: "header",
+      timestamp: s?.createdAt || Date.now(),
+      payload: {
+        turnIndex: meta?.turnSeq || 1,
+        startedAt: s?.createdAt || Date.now(),
+        model: meta?.model || s?.model || "default",
+        executionScope: meta?.cwd || s?.cwd || "/",
+      },
+    });
+
+    if (meta?.mode || s?.options) {
+      items.push({
+        seq: seq++,
+        type: "options",
+        timestamp: s?.createdAt || Date.now(),
+        payload: {
+          mode: meta?.mode || s?.options?.mode || "agentic",
+          effort: meta?.effort || s?.options?.effort || "high",
+          access: meta?.access || s?.options?.access || "full",
+        },
+      });
+    }
+
+    if (meta?.title || s?.title) {
+      items.push({
+        seq: seq++,
+        type: "title",
+        timestamp: s?.createdAt || Date.now(),
+        payload: {
+          title: meta?.title || s?.title,
+          titleSource: "session",
+        },
+      });
+    }
+
+    const payloads = capturedPayloads();
+    for (const p of payloads) {
+      items.push({
+        seq: seq++,
+        type: "msg",
+        timestamp: p.timestamp,
+        payload: {
+          turnIndex: p.turnIndex,
+          step: p.step,
+          model: p.model,
+          endpoint: p.endpoint,
+          messages: p.messages,
+          tools: p.tools,
+          isSimulated: p.isSimulated,
+        },
+      });
+      if (p.usage) {
+        items.push({
+          seq: seq++,
+          type: "usage",
+          timestamp: p.timestamp,
+          payload: p.usage,
+        });
+      }
+    }
+
+    items.push({
+      seq: seq,
+      type: "meta",
+      timestamp: s?.updatedAt || Date.now(),
+      payload: {
+        status: meta?.status || s?.status || "idle",
+        pinned: meta?.pinned ?? s?.pinned ?? false,
+        updatedAt: s?.updatedAt || Date.now(),
+      },
+    });
+
+    return items;
+  });
+
+  const filteredWalEvents = createMemo(() => {
+    const filter = walFilter().toLowerCase().trim();
+    const list = derivedWalEvents();
+    if (!filter) return list;
+    return list.filter(
+      (ev) =>
+        ev.type.toLowerCase().includes(filter) ||
+        JSON.stringify(ev.payload || {}).toLowerCase().includes(filter),
+    );
+  });
+
+  const selectedWalEvent = createMemo(() => {
+    const seq = selectedWalSeq();
+    const list = filteredWalEvents();
+    if (seq === null && list.length > 0) return list[0];
+    return list.find((e) => e.seq === seq) ?? list[0] ?? null;
+  });
+
   /**
    * Chrome DevTools Network Tab Clear Button:
    * Wipes the frontend-captured requests, live events, and frames!
@@ -598,6 +751,8 @@ export default function CodeDevPage() {
     setSelectedPayloadId("");
     setLiveEvents([]);
     setRawFrames([]);
+    setWalEvents([]);
+    setSelectedWalSeq(null);
     setLiveThinking("");
     setLiveText("");
     toast("Network log cleared", "ok");
@@ -811,7 +966,7 @@ export default function CodeDevPage() {
             class="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-ink-800 hover:bg-rose-950/40 hover:text-rose-400 text-ink-300 rounded border border-line font-mono transition-colors cursor-pointer"
             title="Clear all recorded network payloads and events (Frontend-only)"
           >
-            <span class="text-rose-400 font-bold">🚫</span>
+            <Icon name="lucide:ban" size={13} class="text-rose-400" />
             Clear Log
           </button>
 
@@ -894,6 +1049,18 @@ export default function CodeDevPage() {
         </button>
 
         <button
+          onClick={() => setActiveTab("wal")}
+          class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
+            activeTab() === "wal"
+              ? "border-brand-500 text-brand-400 bg-brand-500/10"
+              : "border-transparent text-ink-400 hover:text-ink-200"
+          }`}
+        >
+          <Icon name="lucide:database" size={14} />
+          WAL State ({derivedWalEvents().length})
+        </button>
+
+        <button
           onClick={() => setActiveTab("frames")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "frames"
@@ -939,7 +1106,7 @@ export default function CodeDevPage() {
                     <div class="p-8 text-center text-xs text-ink-500 flex flex-col items-center gap-2">
                       <span>No requests captured yet.</span>
                       <span class="text-[11px] text-ink-600">
-                        Recordings stay in your browser until you clear them. Disparate a real prompt or click "🔥 Smoke Test" below!
+                        Recordings stay in your browser until you clear them. Dispatch a real prompt or click "Smoke Test" below!
                       </span>
                     </div>
                   }
@@ -983,8 +1150,8 @@ export default function CodeDevPage() {
                             {req.model || "default"}
                           </span>
                           <Show when={req.isSimulated}>
-                            <span class="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
-                              🔥 SMOKE
+                            <span class="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 flex items-center gap-1">
+                              <Icon name="lucide:flame" size={10} /> SMOKE
                             </span>
                           </Show>
                         </div>
@@ -1027,7 +1194,7 @@ export default function CodeDevPage() {
                       <div class="flex items-center gap-3">
                         <Show when={req().isSimulated}>
                           <span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 text-[11px] flex items-center gap-1">
-                            🔥 SMOKE SIMULATION (0 TOKENS)
+                            <Icon name="lucide:flame" size={12} /> SMOKE SIMULATION (0 TOKENS)
                           </span>
                         </Show>
                         <span class="font-bold text-brand-400">
@@ -1548,6 +1715,15 @@ export default function CodeDevPage() {
                         <span class="text-ink-500 tabular-nums">
                           {new Date(f.timestamp).toLocaleTimeString()}
                         </span>
+                        <span
+                          class={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                            f.direction === "out"
+                              ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                              : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                          }`}
+                        >
+                          {f.direction === "out" ? "OUT" : "IN"}
+                        </span>
                         <span class="font-bold text-brand-400">{f.type}</span>
                         <Show when={f.sessionId}>
                           <span class="text-ink-400 text-[10px]">
@@ -1561,6 +1737,126 @@ export default function CodeDevPage() {
                   </div>
                 )}
               </For>
+            </div>
+          </div>
+        </Show>
+
+        {/* 6. WAL STATE TAB */}
+        <Show when={activeTab() === "wal"}>
+          <div class="flex-1 min-h-0 flex overflow-hidden font-mono text-xs">
+            {/* Left list: WAL event sequence */}
+            <div class="w-80 border-r border-line bg-ink-900/60 flex flex-col shrink-0">
+              <div class="px-3 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0">
+                <span class="font-bold text-ink-200 text-xs">WAL EVENT LOG ({filteredWalEvents().length})</span>
+                <input
+                  type="text"
+                  placeholder="Filter events..."
+                  value={walFilter()}
+                  onInput={(e) => setWalFilter(e.currentTarget.value)}
+                  class="bg-ink-800 border border-line rounded px-2 py-0.5 text-[11px] text-ink-200 focus:outline-none w-32"
+                />
+              </div>
+
+              <div class="flex-1 overflow-y-auto divide-y divide-line/30">
+                <Show
+                  when={filteredWalEvents().length > 0}
+                  fallback={
+                    <div class="p-8 text-center text-xs text-ink-500">
+                      No WAL events available for this session.
+                    </div>
+                  }
+                >
+                  <For each={filteredWalEvents()}>
+                    {(ev) => {
+                      const isSel = () => selectedWalSeq() === ev.seq || (selectedWalSeq() === null && filteredWalEvents()[0]?.seq === ev.seq);
+                      const typeBadgeColor = (type: string) => {
+                        switch (type) {
+                          case "header": return "bg-amber-500/20 text-amber-300 border-amber-500/40";
+                          case "options": return "bg-purple-500/20 text-purple-300 border-purple-500/40";
+                          case "msg": return "bg-emerald-500/20 text-emerald-300 border-emerald-500/40";
+                          case "title": return "bg-sky-500/20 text-sky-300 border-sky-500/40";
+                          case "usage": return "bg-teal-500/20 text-teal-300 border-teal-500/40";
+                          case "todos": return "bg-indigo-500/20 text-indigo-300 border-indigo-500/40";
+                          case "widgets": return "bg-pink-500/20 text-pink-300 border-pink-500/40";
+                          default: return "bg-ink-700/40 text-ink-300 border-line";
+                        }
+                      };
+
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedWalSeq(ev.seq)}
+                          class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-[3px] ${
+                            isSel()
+                              ? "bg-brand-500/15 border-brand-500 text-ink-100"
+                              : "border-transparent hover:bg-ink-800/40 text-ink-300"
+                          }`}
+                        >
+                          <div class="flex items-center justify-between text-[11px]">
+                            <div class="flex items-center gap-1.5">
+                              <span class="text-ink-500 font-bold">#{ev.seq}</span>
+                              <span class={`px-1.5 py-0.2 rounded text-[10px] font-bold border ${typeBadgeColor(ev.type)}`}>
+                                {ev.type.toUpperCase()}
+                              </span>
+                            </div>
+                            <Show when={ev.timestamp}>
+                              <span class="text-[10px] text-ink-500 tabular-nums">
+                                {new Date(ev.timestamp!).toLocaleTimeString()}
+                              </span>
+                            </Show>
+                          </div>
+                          <div class="text-[11px] text-ink-400 truncate">
+                            {ev.type === "msg" ? (ev.payload?.model || ev.payload?.endpoint || "turn message") :
+                             ev.type === "header" ? `turnSeq ${ev.payload?.turnIndex || 1} • ${ev.payload?.model || ""}` :
+                             ev.type === "options" ? `mode ${ev.payload?.mode || "agentic"}` :
+                             ev.type === "title" ? (ev.payload?.title || "") :
+                             JSON.stringify(ev.payload || {}).slice(0, 40)}
+                          </div>
+                        </button>
+                      );
+                    }}
+                  </For>
+                </Show>
+              </div>
+            </div>
+
+            {/* Right Pane: Structured Payload Inspector */}
+            <div class="flex-1 min-h-0 flex flex-col bg-ink-950 overflow-hidden">
+              <Show
+                when={selectedWalEvent()}
+                fallback={
+                  <div class="flex-1 flex flex-col items-center justify-center text-xs text-ink-500 gap-2">
+                    <Icon name="lucide:database" size={28} />
+                    <span>Select a WAL event on the left to inspect its state</span>
+                  </div>
+                }
+              >
+                {(ev) => (
+                  <div class="flex-1 flex flex-col min-h-0">
+                    <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
+                      <div class="flex items-center gap-3">
+                        <span class="font-bold text-ink-400">EVENT #{ev().seq}</span>
+                        <span class="font-bold text-brand-400 uppercase">{ev().type}</span>
+                        <Show when={ev().timestamp}>
+                          <span class="text-ink-500 text-[11px]">
+                            {new Date(ev().timestamp!).toLocaleTimeString()} ({new Date(ev().timestamp!).toISOString()})
+                          </span>
+                        </Show>
+                      </div>
+                      <span class="text-[11px] text-ink-400">WAL Append-Only State</span>
+                    </div>
+
+                    <div class="flex-1 overflow-hidden p-4">
+                      <JsonHighlightViewer
+                        data={ev().payload}
+                        title={`WAL Event #${ev().seq} (${ev().type}) Payload`}
+                        maxHeight="calc(100vh - 230px)"
+                        class="h-full"
+                      />
+                    </div>
+                  </div>
+                )}
+              </Show>
             </div>
           </div>
         </Show>
@@ -1594,7 +1890,7 @@ export default function CodeDevPage() {
           class="px-3.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold rounded border border-amber-500/40 text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-sm"
           title="Simulate prompt right now without calling LLM (0 tokens billed)"
         >
-          <span>🔥</span>
+          <Icon name="lucide:flame" size={13} />
           {isSimulating() ? "Simulating..." : "Smoke Test (Simulate Payload)"}
         </button>
 

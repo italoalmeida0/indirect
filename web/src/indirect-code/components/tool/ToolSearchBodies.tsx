@@ -236,7 +236,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
             <CodeBlock embedded numbered follow={() => props.m.open() && props.running} text={props.m.output() || props.m.prog() || ""} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
           </Show>
         </Show>
-        <Show when={props.m.name() === "bg_cancel" && !!props.m.output()}>
+        <Show when={props.m.name() === "bg_cancel" && !props.m.running()}>
           <div class="px-3 py-2 text-[11px] text-ink-500">Background task canceled.</div>
           {/* Canceled body stays minimal — the header says it all. */}
         </Show>
@@ -250,7 +250,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
           >
             <CodeBlock embedded
               follow={() => props.m.open() && props.running}
-              text={props.m.bgRunning() || props.m.isDetachedBg()
+              text={props.m.bgRunning()
                 ? (props.m.bgStream() || props.m.prog() || "Running in background…")
                 : props.m.output() || props.m.prog() || "No output"}
               language={undefined}

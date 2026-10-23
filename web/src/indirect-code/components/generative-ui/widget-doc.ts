@@ -43,6 +43,28 @@ body {
    so a widget reads as native transcript content, not an embedded page. */
 :root {
   color-scheme: dark;
+  --ink-950: #111315;
+  --ink-900: #17191c;
+  --ink-850: #1d2024;
+  --ink-800: #25282d;
+  --ink-700: #30343a;
+  --ink-600: #41464e;
+  --ink-500: #858b95;
+  --ink-400: #9ba1ab;
+  --ink-300: #b4bac3;
+  --ink-200: #d4d8df;
+  --ink-100: #eff1f4;
+  --accent: #f2f2f5;
+  --accent-500: #f2f2f5;
+  --accent-strong: #ffffff;
+  --accent-fg: #1c1c1e;
+  --brand-300: #8cd8ca;
+  --brand-400: #78c9bb;
+  --brand-500: #65b8a9;
+  --brand-600: #4ba393;
+  --card: #1b1e21;
+  --elev: #24272b;
+  --line: #30343a;
   --gu-bg: #1b1e21;
   --gu-elev: #24272b;
   --gu-fill: #25282d;
@@ -70,6 +92,28 @@ body {
 }
 [data-theme="light"] {
   color-scheme: light;
+  --ink-950: #ffffff;
+  --ink-900: #f5f6f8;
+  --ink-850: #eef0f3;
+  --ink-800: #e7e9ed;
+  --ink-700: #dde0e5;
+  --ink-600: #595e68;
+  --ink-500: #747983;
+  --ink-400: #626873;
+  --ink-300: #565963;
+  --ink-200: #3a3d44;
+  --ink-100: #1c1c1e;
+  --accent: #1c1c1e;
+  --accent-500: #1c1c1e;
+  --accent-strong: #000000;
+  --accent-fg: #ffffff;
+  --brand-300: #0d9488;
+  --brand-400: #0f766e;
+  --brand-500: #115e59;
+  --brand-600: #134e4a;
+  --card: #fafbfc;
+  --elev: #ffffff;
+  --line: #e3e6ea;
   --gu-bg: #fafbfc;
   --gu-elev: #ffffff;
   --gu-fill: #eef0f3;
@@ -556,9 +600,20 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     var root = document.querySelector(".gu-root") || document.body;
     __syncSliders(document);
     __proxyImages(document);
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(function () {
+        __scheduleHeight();
+      });
+    }
     __scheduleHeight();
+    setTimeout(__scheduleHeight, 350);
     try {
-      if (typeof ResizeObserver === "function") new ResizeObserver(__scheduleHeight).observe(root);
+      if (typeof ResizeObserver === "function") {
+        var ro = new ResizeObserver(__scheduleHeight);
+        if (root) ro.observe(root);
+        if (document.body && document.body !== root) ro.observe(document.body);
+        if (document.documentElement) ro.observe(document.documentElement);
+      }
     } catch {}
     try {
       // childList only: observing style/class attributes self-triggers on

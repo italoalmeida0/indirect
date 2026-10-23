@@ -537,14 +537,43 @@ export function createTranscript(opts: {
   // answer arrives; the session guard still rejects foreign-session snapshots.
   const pendingFetchIds = new Set<string>();
   let initialScrollSession = "";
+  let pendingScrollMsgIdx: number | null = null;
   function fetchSession(sessionId: string) {
     const requestId = crypto.randomUUID();
     pendingFetchIds.add(requestId);
     opts.send({ type: "get_session", sessionId, requestId });
   }
   /** Marks the session whose next full snapshot triggers initial scroll. */
-  function beginLoad(sessionId: string) {
+  function beginLoad(sessionId: string, targetMsgIdx?: number) {
     initialScrollSession = sessionId;
+    pendingScrollMsgIdx = typeof targetMsgIdx === "number" ? targetMsgIdx : null;
+  }
+  function scrollToMessage(msgIdx: number) {
+    transcriptScroll.detach();
+    const tryScroll = () => {
+      const container = chatContainerRef();
+      if (!container) return false;
+      const elements = Array.from(container.querySelectorAll<HTMLElement>("[data-raw-idx]"));
+      let targetEl: HTMLElement | null = null;
+      for (const el of elements) {
+        const raw = parseInt(el.getAttribute("data-raw-idx") || "-1", 10);
+        if (raw === msgIdx) {
+          targetEl = el;
+          break;
+        }
+        if (raw < msgIdx) {
+          targetEl = el;
+        }
+      }
+      if (targetEl) {
+        targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        return true;
+      }
+      return false;
+    };
+    if (!tryScroll()) {
+      setTimeout(tryScroll, 100);
+    }
   }
   const transcriptOrder = createTranscriptOrder(() => { const sid=opts.getSessionId(); if(sid && opts.isOpen()) fetchSession(sid); });
   let contextVersion = 0;
@@ -597,7 +626,13 @@ export function createTranscript(opts: {
     });
     if (initialScrollSession === sessionId) {
       initialScrollSession = "";
-      if (transcriptScroll.isPinned()) scrollToBottom(true);
+      if (pendingScrollMsgIdx != null) {
+        const target = pendingScrollMsgIdx;
+        pendingScrollMsgIdx = null;
+        setTimeout(() => scrollToMessage(target), 50);
+      } else {
+        if (transcriptScroll.isPinned()) scrollToBottom(true);
+      }
     } else scrollToBottom();
   }
   onCleanup(() => {
@@ -1346,7 +1381,7 @@ export function createTranscript(opts: {
     editingMsgIdx, editingMsgText, updateEditingMsgText,
     isAtBottom,
     chatContainerRef, setChatContainerRef, chatContentRef, setChatContentRef,
-    transcriptScroll, scrollToBottom, pinAtBottom, onChatScroll,
+    transcriptScroll, scrollToBottom, scrollToMessage, pinAtBottom, onChatScroll,
     renderBlocks, visibleBlocks, hiddenSeals, revealSeal,
     loadOlder, historyHasOlder, historyHiddenTurns, historyOldestTurn, loadingOlder,
     noteHistoryPage, requestOlderHistory,

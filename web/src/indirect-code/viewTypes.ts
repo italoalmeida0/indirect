@@ -35,6 +35,7 @@ export interface SearchHit {
   updatedAt: number;
   snippet: string;
   matchCount: number;
+  messageIdx?: number;
 }
 
 export interface StoredAttachment {

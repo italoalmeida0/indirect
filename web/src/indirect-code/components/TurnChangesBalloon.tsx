@@ -10,7 +10,7 @@ export interface TurnChangesBalloonProps {
   expanded: boolean;
   onToggle: () => void;
   undoBusy: boolean;
-  onUndo: () => void;
+  onUndo: (path?: string) => void;
   live?: boolean;
   /** Refresh the live view on demand (visible only while the turn runs). */
   onReview?: () => void;
@@ -33,11 +33,18 @@ function statusMeta(status: TurnChangedFile["status"]) {
 
 /** One file row inside the balloon: collapsed header by default, click to
  *  reveal the highlighted diff (like edit tool results). */
-function FileChangesRow(props: { f: TurnChangedFile; scrollKey: string }) {
+function FileChangesRow(props: {
+  f: TurnChangedFile;
+  scrollKey: string;
+  onUndo?: (path: string) => void;
+  undoBusy?: boolean;
+  live?: boolean;
+}) {
   let rowRef: HTMLDivElement | undefined;
   const [open, setOpen] = createSignal(false);
   const meta = () => statusMeta(props.f.status);
   const hasDiff = () => Boolean(props.f.diff);
+  const isExpandable = () => hasDiff() || props.f.status === "binary";
 
   createEffect(
     on(
@@ -56,12 +63,12 @@ function FileChangesRow(props: { f: TurnChangedFile; scrollKey: string }) {
   return (
     <div ref={rowRef} class="rounded-lg border border-line/50 overflow-hidden">
       <div
-        onClick={() => setOpen(!open())}
+        onClick={() => { if (isExpandable()) setOpen(!open()); }}
         class={`flex items-center gap-2 px-2.5 py-1.5 bg-ink-900/60 transition-colors select-none ${
-          hasDiff() ? "cursor-pointer hover:bg-ink-900" : ""
+          isExpandable() ? "cursor-pointer hover:bg-ink-900" : ""
         }`}
       >
-        <Show when={hasDiff()}>
+        <Show when={isExpandable()}>
           <Iconify
             icon="lucide:chevron-right"
             size={12}
@@ -86,17 +93,32 @@ function FileChangesRow(props: { f: TurnChangedFile; scrollKey: string }) {
             undone
           </span>
         </Show>
+        <Show when={!props.live && !props.f.undone && props.onUndo}>
+          <button
+            type="button"
+            disabled={props.undoBusy}
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onUndo!(props.f.path);
+            }}
+            class="text-[10px] px-1.5 py-0.5 rounded border border-line/70 text-ink-300 hover:text-ink-100 hover:bg-ink-800 transition-colors cursor-pointer disabled:opacity-50 shrink-0 ml-1.5 flex items-center gap-1"
+            aria-label={`Undo changes to ${props.f.rel || props.f.path}`}
+          >
+            <Iconify icon="lucide:undo-2" size={11} />
+            Undo
+          </button>
+        </Show>
       </div>
       <DisclosureBody open={open() && hasDiff()}>
         <div class="border-t border-line/30 bg-ink-950/40">
           <DiffView text={props.f.diff || ""} name={props.f.rel || props.f.path} scrollKey={props.scrollKey} />
         </div>
       </DisclosureBody>
-      <Show when={open() && !hasDiff()}>
+      <DisclosureBody open={open() && !hasDiff()}>
         <div class="px-2.5 py-1.5 text-[11px] text-ink-500 border-t border-line/30">
           {props.f.status === "binary" ? "Binary file — no textual diff." : "File too large for a textual diff."}
         </div>
-      </Show>
+      </DisclosureBody>
     </div>
   );
 }
@@ -157,15 +179,20 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
           <Show when={!props.live}>
             <button
               type="button"
-              disabled={props.undoBusy}
+              disabled={props.undoBusy || undoneCount() === files().length}
               onClick={(e) => {
                 e.stopPropagation();
+                if (undoneCount() === files().length) return;
                 props.onUndo();
               }}
-              class="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border border-line/70 text-ink-300 hover:text-ink-100 hover:bg-ink-800 transition-colors cursor-pointer disabled:opacity-50"
+              class={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border border-line/70 transition-colors ${
+                undoneCount() === files().length
+                  ? "text-ink-600 border-line/40 cursor-default opacity-50"
+                  : "text-ink-300 hover:text-ink-100 hover:bg-ink-800 cursor-pointer disabled:opacity-50"
+              }`}
             >
               <Iconify icon={props.undoBusy ? "lucide:loader-circle" : "lucide:undo-2"} size={13} class={props.undoBusy ? "animate-spin" : ""} />
-              {props.undoBusy ? "Undoing…" : "Undo"}
+              {props.undoBusy ? "Undoing…" : undoneCount() === files().length ? "Undone" : "Undo"}
             </button>
           </Show>
         </div>
@@ -177,6 +204,9 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                 <FileChangesRow
                   f={f}
                   scrollKey={`turn-${props.balloon.turnIndex}:${f.path}`}
+                  onUndo={(p) => props.onUndo(p)}
+                  undoBusy={props.undoBusy}
+                  live={props.live}
                 />
               )}
             </For>

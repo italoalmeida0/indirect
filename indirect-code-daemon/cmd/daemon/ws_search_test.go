@@ -85,6 +85,9 @@ func TestWSSearch(t *testing.T) {
 			if snip == "" {
 				t.Fatal("sess_test_2 expected non-empty snippet")
 			}
+			if rm["messageIdx"] != 0 {
+				t.Fatalf("sess_test_2 expected messageIdx == 0, got %v", rm["messageIdx"])
+			}
 		}
 	}
 	if !foundSess1 || !foundSess2 {

@@ -2,6 +2,7 @@ import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-
 import { MsgIconBtn } from "../MsgActions";
 import { useModal } from "../../ctx";
 import { claimLiveWidget, releaseLiveWidget } from "./widget-live";
+import { CodeBlock } from "../CodeBlock";
 
 import {
   attachGuBridge,
@@ -60,6 +61,9 @@ export function GenerativeUiWidget(props: {
   const [unfrozen, setUnfrozen] = createSignal(false);
   const [deactivated, setDeactivated] = createSignal(false);
   const [superseded, setSuperseded] = createSignal(false);
+  const [showSource, setShowSource] = createSignal(false);
+  const [copiedSource, setCopiedSource] = createSignal(false);
+  const liveToken = Symbol("gu-live");
   /** Immersive fullscreen overlay (games/3D widgets on small screens). */
   const [expanded, setExpanded] = createSignal(false);
   /** Global confirm modal (promise-based) for the destructive reset. */
@@ -74,6 +78,22 @@ export function GenerativeUiWidget(props: {
   const reactivate = () => {
     setDeactivated(false);
     setUnfrozen(true);
+    setSuperseded(false);
+    const wid = data().id;
+    if (wid) {
+      claimLiveWidget(
+        wid,
+        {
+          token: liveToken,
+          onSupersede: () => {
+            setUnfrozen(false);
+            setSuperseded(true);
+          },
+          onReactivate: () => setSuperseded(false),
+        },
+        props.ctx?.sessionId,
+      );
+    }
     void finalize();
   };
   /** Hard reload: re-fetch the source from the daemon, then republish (fresh
@@ -164,33 +184,39 @@ export function GenerativeUiWidget(props: {
     onCleanup(() => observer.disconnect());
   });
 
-  // ---- one live instance per widget id (transcript-wide) ----
-  // Claim order is effect order (document order): the newest fence for an
-  // id wins, earlier ones go superseded; releasing the active one (message
-  // deleted, session switch) reactivates the newest survivor.
+  // ---- one live instance per session (transcript-wide) ----
+  // Claim order is effect order (document order): the newest fence in the
+  // session wins, earlier ones go superseded; releasing the active one
+  // reactivates the newest survivor.
   {
-    const token = Symbol("gu-live");
     let claimed = "";
     createEffect(
       on(
-        () => data().id,
-        (id) => {
+        () => [data().id, props.ctx?.sessionId] as const,
+        ([id, sessId]) => {
           const wid = id ?? "";
           if (wid === claimed) return;
-          if (claimed) releaseLiveWidget(claimed, token);
+          if (claimed) releaseLiveWidget(claimed, liveToken, sessId);
           claimed = wid;
           if (wid) {
-            claimLiveWidget(wid, {
-              token,
-              onSupersede: () => setSuperseded(true),
-              onReactivate: () => setSuperseded(false),
-            });
+            claimLiveWidget(
+              wid,
+              {
+                token: liveToken,
+                onSupersede: () => {
+                  setUnfrozen(false);
+                  setSuperseded(true);
+                },
+                onReactivate: () => setSuperseded(false),
+              },
+              sessId,
+            );
           }
         },
       ),
     );
     onCleanup(() => {
-      if (claimed) releaseLiveWidget(claimed, token);
+      if (claimed) releaseLiveWidget(claimed, liveToken, props.ctx?.sessionId);
     });
   }
 
@@ -389,6 +415,14 @@ export function GenerativeUiWidget(props: {
                     onClick={resetState}
                   />
                 </Show>
+                <Show when={!!source()}>
+                  <MsgIconBtn
+                    tip="Inspect source code"
+                    icon="lucide:code"
+                    compact
+                    onClick={() => setShowSource(!showSource())}
+                  />
+                </Show>
                 <MsgIconBtn tip="Reload widget" icon="lucide:refresh-cw" compact onClick={reload} />
                 <MsgIconBtn
                   tip={expanded() ? "Exit fullscreen" : "Fullscreen widget"}
@@ -416,6 +450,38 @@ export function GenerativeUiWidget(props: {
               : "gu-card-host relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]"
           }
         >
+        <Show when={showSource() && !!source()}>
+          <div class="border-b border-line bg-elev/95 backdrop-blur p-3 text-ink-100">
+            <div class="mb-2 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="text-[12px] font-semibold text-ink-200">Source code</span>
+                <span class="rounded bg-ink-800 px-1.5 py-0.5 text-[11px] text-ink-400 gu-mono">{data().id}.tsx</span>
+              </div>
+              <div class="flex items-center gap-1">
+                <MsgIconBtn
+                  tip={copiedSource() ? "Copied" : "Copy source code"}
+                  icon="lucide:copy"
+                  compact
+                  copied={copiedSource()}
+                  onClick={() => {
+                    void navigator.clipboard.writeText(source());
+                    setCopiedSource(true);
+                    setTimeout(() => setCopiedSource(false), 2000);
+                  }}
+                />
+                <MsgIconBtn
+                  tip="Close source view"
+                  icon="lucide:x"
+                  compact
+                  onClick={() => setShowSource(false)}
+                />
+              </div>
+            </div>
+            <div class="max-h-80 overflow-auto rounded-lg border border-line bg-card p-2 text-[12px]">
+              <CodeBlock text={source()} language="tsx" wrap={false} maxH="max-h-72" />
+            </div>
+          </div>
+        </Show>
         <Show when={frozen() && !streaming()}>
           <div class="ui-card-mode flex items-center justify-center gap-2 px-3 py-1.5">
             <span class="truncate text-[11px] text-ink-500 gu-mono">{data().id || "widget"}</span>

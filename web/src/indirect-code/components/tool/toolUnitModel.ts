@@ -86,7 +86,7 @@ const sleepRemaining = () => {
   if (!Number.isFinite(total) || total <= 0) return "";
   const start = ctx.toolStarts()[u.call?.toolId || ""];
   if (!start) return "";
-  return `${formatDurationSecs(Math.max(0, Math.ceil(total - (ctx.turnClock() - start) / 1000)))} left`;
+  return `${formatDurationSecs(Math.min(total, Math.max(0, Math.ceil(total - Math.max(0, (ctx.turnClock() - start) / 1000)))))} left`;
 };
 /** Header label for a bg_await row (the row is header-only): the time/counter
  * followed by the human-readable reason when the model passed one, e.g.
@@ -136,7 +136,9 @@ const bgStream = () => {
 /** True once the call carries a background job — the row renders as a
  * background run (badge, spinner while running). */
 const isDetachedBg = () => bgJobId() !== "";
-  return { key, open, openBody, expandable, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, terminal, output, footer, exitCode, webDetails, fetchDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg };
+/** True while this tool unit is currently executing (no result yet and turn is running). */
+const runningTool = () => !u.result && running();
+  return { key, open, openBody, expandable, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, terminal, output, footer, exitCode, webDetails, fetchDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg, running: runningTool };
 }
 
 export type ToolModel = ReturnType<typeof useToolUnitModel>;

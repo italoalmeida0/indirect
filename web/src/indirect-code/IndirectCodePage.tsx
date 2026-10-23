@@ -528,7 +528,28 @@ export default function IndirectCodePage() {
     } catch {}
   };
 
-  const [historyView, setHistoryView] = createSignal(false);
+  const [historyView, setHistoryViewSignal] = createSignal(false);
+  let previousActiveElement: HTMLElement | null = null;
+  function setHistoryView(v: boolean | ((p: boolean) => boolean)) {
+    const next = typeof v === "function" ? v(historyView()) : v;
+    if (next && !historyView()) {
+      if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+        previousActiveElement = document.activeElement;
+      }
+    } else if (!next && historyView()) {
+      const el = previousActiveElement;
+      previousActiveElement = null;
+      queueMicrotask(() => {
+        if (el && document.contains(el)) {
+          el.focus();
+        } else {
+          const composer = document.querySelector<HTMLElement>('textarea[aria-label="Prompt"], textarea, input[type="text"]');
+          composer?.focus();
+        }
+      });
+    }
+    setHistoryViewSignal(next);
+  }
   const [modelMenuOpen, setModelMenuOpen] = createSignal(false);
   const [usageOpen, setUsageOpen] = createSignal(false);
   const [modelFilter, setModelFilter] = createSignal("");
@@ -605,8 +626,12 @@ export default function IndirectCodePage() {
   }
 
   // --- Session orchestration (composes the domains) ---
-  function selectSession(id: string) {
+  function selectSession(id: string, messageIdx?: number) {
     if (creatingSession()) return;
+    if (activeSessionId() === id && typeof messageIdx === "number") {
+      transcript.scrollToMessage(messageIdx);
+      return;
+    }
     options.resetPending();
     setDraftMode(false);
     transcript.resetForSession();
@@ -616,7 +641,7 @@ export default function IndirectCodePage() {
     invalidateWidgetSources(id);
     turnChanges.reset();
     notice.setAppNotice(null);
-    transcript.beginLoad(id);
+    transcript.beginLoad(id, messageIdx);
     setActiveSessionId(id);
     try {
       const hid = hosts.activeHostId();
@@ -1159,7 +1184,7 @@ export default function IndirectCodePage() {
       if (mod && e.key.toLowerCase() === "k") {
         if (document.querySelector('[role="dialog"]') || modals.confirmState()) return;
         e.preventDefault();
-        setHistoryView(true);
+        setHistoryView((prev) => !prev);
         return;
       }
       if (mod && e.key.toLowerCase() === "n") {

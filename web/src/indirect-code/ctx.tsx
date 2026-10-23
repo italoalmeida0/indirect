@@ -38,7 +38,7 @@ export interface SessionCtxValue extends Projects {
   activeSessionId: () => string;
   draftMode: () => boolean;
   creatingSession: () => boolean;
-  selectSession: (id: string) => void;
+  selectSession: (id: string, messageIdx?: number) => void;
   startNewConversation: (projectId?: string) => void;
   deleteSession: (id: string, e?: MouseEvent) => void;
   newestSessionProjectId: () => string;

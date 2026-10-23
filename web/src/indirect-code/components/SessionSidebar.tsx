@@ -129,7 +129,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                 onCancel={(e) => ctx.cancelTurnForSession(s.id, e)}
               />
             </Show>
-            <div class="relative flex items-center justify-end shrink-0 min-w-[34px]">
+            <div class="relative flex items-center justify-end shrink-0 min-w-[48px]">
               <span class="rc-row-time text-[10px] text-ink-600 transition-opacity group-hover:opacity-0 group-hover:pointer-events-none">
                 {timeAgo(sessionTimeLabel(s))}
               </span>
@@ -141,6 +141,17 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                     data-rc-tip={s.pinned ? "Unpin" : "Pin"} aria-label={s.pinned ? "Unpin" : "Pin"}
                   >
                     <Iconify icon={s.pinned ? "lucide:pin-off" : "lucide:pin"} size={11} />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      ctx.setRenamingId(s.id);
+                      ctx.setRenameText(s.title);
+                    }}
+                    class="rc-row-action p-0.5 text-ink-600 hover:text-ink-200 cursor-pointer"
+                    data-rc-tip="Rename" aria-label="Rename"
+                  >
+                    <Iconify icon="lucide:pencil" size={11} />
                   </button>
                   <button
                     onClick={(e) => ctx.deleteSession(s.id, e)}
@@ -164,6 +175,15 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
             e.stopPropagation();
             if (e.key === "Enter") ctx.submitRename(s.id);
             if (e.key === "Escape") ctx.setRenamingId(null);
+          }}
+          onBlur={() => {
+            if (ctx.renamingId() === s.id) {
+              if (ctx.renameText().trim() && ctx.renameText().trim() !== s.title) {
+                ctx.submitRename(s.id);
+              } else {
+                ctx.setRenamingId(null);
+              }
+            }
           }}
           onClick={(e) => e.stopPropagation()}
           ref={(el) => setTimeout(() => el?.select(), 30)}

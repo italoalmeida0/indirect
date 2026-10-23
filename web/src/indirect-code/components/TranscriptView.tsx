@@ -84,6 +84,7 @@ export function TranscriptView() {
       selectSession={s.selectSession}
       sessions={s.sessions}
       matchQuery={s.matchQuery}
+      matchedByCwd={s.matchedByCwd}
       sortedSessions={s.sortedSessions}
       isMobile={ui.isMobile}
     />
@@ -156,6 +157,7 @@ export function TranscriptView() {
           </Show>
           <div
             data-transcript-id={block.id || block.msg.id}
+            data-raw-idx={rawIdx()}
             class={`group/msg flex flex-col w-full ${ui.convWidthClass()} mx-auto ${
               msg.role === "user" && !isEditing() ? "items-end" : "items-start"
             }`}
@@ -311,13 +313,13 @@ export function TranscriptView() {
         {/* Persistent per-turn file-changes balloon (never deleted) */}
         <For each={balloonsForBlock(block).filter((b) => (b.files?.length || 0) > 0)}>
           {(b) => (
-            <div class={`w-full ${ui.convWidthClass()} mx-auto`}>
+            <div class={`w-full ${ui.convWidthClass()} mx-auto ${isLast() ? "pb-28" : ""}`}>
               <TurnChangesBalloon
                 balloon={b}
                 expanded={tc.isExpanded(`turn-${b.turnIndex}`)}
                 onToggle={() => tc.toggleExpanded(`turn-${b.turnIndex}`)}
                 undoBusy={tc.undoBusy() === b.turnIndex}
-                onUndo={() => tc.undoTurn(b.turnIndex)}
+                onUndo={(path?: string) => tc.undoTurn(b.turnIndex, path)}
                 live={b.live}
                 onReview={() => tc.requestBalloons()}
               />

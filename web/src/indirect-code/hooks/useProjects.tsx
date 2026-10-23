@@ -251,6 +251,11 @@ export function createProjects(opts: {
       s.model.toLowerCase().includes(q)
     );
   }
+  function matchedByCwd(s: SessionSummary) {
+    const q = sessionFilter().toLowerCase().trim();
+    if (!q) return false;
+    return !s.title.toLowerCase().includes(q) && s.cwd.toLowerCase().includes(q);
+  }
   const [searchResults, setSearchResults] = createSignal<import("../viewTypes").SearchHit[]>([]);
   let searchTimer: any = null;
   // Debounced daemon full-text search (transcripts live on the host).
@@ -276,6 +281,7 @@ export function createProjects(opts: {
         updatedAt: r.updatedAt ?? 0,
         snippet: r.snippet || "",
         matchCount: r.matchCount ?? 0,
+        messageIdx: typeof r.messageIdx === "number" ? r.messageIdx : (typeof r.index === "number" ? r.index : undefined),
       })),
     );
   }
@@ -303,6 +309,15 @@ export function createProjects(opts: {
       else next.add(id);
       return next;
     });
+  }
+  function selectAllSessions() {
+    const all = opts.sessions();
+    if (all.length === 0) return;
+    if (selectedSessions().size === all.length) {
+      setSelectedSessions(new Set<string>());
+    } else {
+      setSelectedSessions(new Set<string>(all.map((s) => s.id)));
+    }
   }
   function exitSelectionMode() {
     setSelectionMode(false);
@@ -369,11 +384,11 @@ export function createProjects(opts: {
     sortedSessions, visibleSessions, sessionListToggle,
     sessionsOfProject, projectSessions, looseSessions, talkSessions, isTalkSession,
     sidebarView, setSidebarView,
-    sessionFilter, setSessionFilter, matchQuery,
+    sessionFilter, setSessionFilter, matchQuery, matchedByCwd,
     searchResults, setSearchResults, queueDaemonSearch, noteSearchResults,
     renamingId, setRenamingId, renameText, setRenameText, submitRename,
     selectionMode, setSelectionMode, selectedSessions, setSelectedSessions,
-    toggleSessionSelect, exitSelectionMode, togglePin, pinSelected, deleteSelected,
+    toggleSessionSelect, selectAllSessions, exitSelectionMode, togglePin, pinSelected, deleteSelected,
     dropVanishedSession,
   };
 }

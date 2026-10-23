@@ -182,4 +182,41 @@ describe("widget-live registry (one live instance per widget id)", () => {
     // Releasing an unknown token is a no-op.
     releaseLiveWidget("w1", a.token);
   });
+
+  test("session-scoped single active widget supersedes across distinct widget ids", async () => {
+    const { claimLiveWidget, releaseLiveWidget, liveWidgetCount } = await import(
+      "../web/src/indirect-code/components/generative-ui/widget-live"
+    );
+    const events: string[] = [];
+    const mk = (name: string) => {
+      const token = Symbol(name);
+      return {
+        token,
+        entry: {
+          token,
+          onSupersede: () => events.push(`supersede:${name}`),
+          onReactivate: () => events.push(`reactivate:${name}`),
+        },
+      };
+    };
+    const greeter = mk("greeter");
+    const counter = mk("counter");
+
+    // Mount greeter-widget in session-1
+    claimLiveWidget("greeter-widget", greeter.entry, "session-1");
+    expect(events).toEqual([]);
+
+    // Mount counter-widget in session-1 -> greeter is superseded
+    claimLiveWidget("counter-widget", counter.entry, "session-1");
+    expect(events).toEqual(["supersede:greeter"]);
+    expect(liveWidgetCount("counter-widget", "session-1")).toBe(1);
+    expect(liveWidgetCount("greeter-widget", "session-1")).toBe(1);
+
+    // Release counter-widget in session-1 -> greeter is reactivated
+    releaseLiveWidget("counter-widget", counter.token, "session-1");
+    expect(events.at(-1)).toBe("reactivate:greeter");
+
+    releaseLiveWidget("greeter-widget", greeter.token, "session-1");
+    expect(liveWidgetCount("", "session-1")).toBe(0);
+  });
 });

@@ -1595,6 +1595,7 @@ func (s *wsServer) onSearch(query string, limit int) {
 	for _, sum := range summaries {
 		matchCount := 0
 		firstSnippet := ""
+		firstMsgIdx := -1
 
 		// Check session title
 		lTitle := strings.ToLower(sum.Title)
@@ -1611,7 +1612,7 @@ func (s *wsServer) onSearch(query string, limit int) {
 			}
 		}
 		if rec != nil {
-			for _, msg := range rec.Messages {
+			for msgIdx, msg := range rec.Messages {
 				for _, c := range msg.Content {
 					if tb, ok := c.(provider.TextBlock); ok && tb.Text != "" {
 						lText := strings.ToLower(tb.Text)
@@ -1640,6 +1641,9 @@ func (s *wsServer) onSearch(query string, limit int) {
 									snip = snip + "…"
 								}
 								firstSnippet = snip
+								firstMsgIdx = msgIdx
+							} else if firstMsgIdx < 0 {
+								firstMsgIdx = msgIdx
 							}
 							curr += idx + len(lQuery)
 						}
@@ -1649,14 +1653,18 @@ func (s *wsServer) onSearch(query string, limit int) {
 		}
 
 		if matchCount > 0 {
-			results = append(results, map[string]any{
+			res := map[string]any{
 				"sessionId":  sum.ID,
 				"title":      sum.Title,
 				"cwd":        sum.CWD,
 				"updatedAt":  sum.UpdatedAt,
 				"snippet":    firstSnippet,
 				"matchCount": matchCount,
-			})
+			}
+			if firstMsgIdx >= 0 {
+				res["messageIdx"] = firstMsgIdx
+			}
+			results = append(results, res)
 			if len(results) >= limit {
 				break
 			}
