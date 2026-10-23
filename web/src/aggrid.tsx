@@ -12,7 +12,7 @@ import type {
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
 
-import { Badge, Btn, Icon, Icons, fmtDate, fmtNum, getTheme, theme } from "./ui";
+import { Badge, Btn, Icon, Icons, fmtCost, fmtDate, fmtNum, getTheme, theme } from "./ui";
 
 /**
  * AG Grid usage tables (ag-grid-community + solid-ag-grid, user-sanctioned).
@@ -69,6 +69,12 @@ export function timeFormatter(p: { value?: unknown }) {
 /** Latency cell formatter ("1234 ms"). */
 export function latencyFormatter(p: { value?: unknown }) {
   return `${fmtNum(Number(p.value ?? 0))}ms`;
+}
+
+/** Cost numeric cell formatter ("$0.0042", "$12.34"). */
+export function costFormatter(p: { value?: unknown }) {
+  if (p.value == null || p.value === "") return "—";
+  return fmtCost(Number(p.value));
 }
 
 // Module-level constants — see the gotcha note above (stable identities keep
@@ -302,6 +308,7 @@ export interface GridTotals {
   cache_tok: number;
   out_tok: number;
   reqs: number;
+  cost?: number;
 }
 
 export function UsageGrid(props: {
@@ -521,6 +528,9 @@ export function UsageGrid(props: {
                 <span>Cache <strong class="font-semibold text-ink-200">{fmtNum(totals().cache_tok)}</strong></span>
                 <span>Out <strong class="font-semibold text-ink-200">{fmtNum(totals().out_tok)}</strong></span>
                 <span>Requests <strong class="font-semibold text-ink-200">{fmtNum(totals().reqs)}</strong></span>
+                <Show when={totals().cost != null}>
+                  <span>Cost <strong class="font-semibold text-ink-200">{fmtCost(totals().cost)}</strong></span>
+                </Show>
               </div>
             )}
           </Show>

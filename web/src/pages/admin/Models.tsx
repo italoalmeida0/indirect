@@ -238,6 +238,20 @@ export default function AdminModelsPage() {
   const [fToolCallMode, setFToolCallMode] = createSignal<ToolCallMode>("fallback");
   const [fPricing, setFPricing] = createSignal<Record<string, string>>({});
 
+  const [enriching, setEnriching] = createSignal(false);
+  const enrichAllMissing = async () => {
+    setEnriching(true);
+    try {
+      const res = await api<{ updated: number; message: string }>("POST", "/api/admin/models/enrich-missing");
+      toast(res.message || `Enriched ${res.updated} model(s)`, "ok");
+      refreshGrid();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "enrichment failed", "err");
+    } finally {
+      setEnriching(false);
+    }
+  };
+
   const providerOptions = createMemo(() =>
     (providers() ?? []).map((p) => ({ value: p.id, label: p.name })),
   );
@@ -580,6 +594,14 @@ export default function AdminModelsPage() {
               <span class="text-xs text-ink-500">Routing</span>
               <Segmented value={routingMode()} onChange={changeRouting} options={ROUTING_OPTIONS} />
             </div>
+            <Btn
+              variant="outline"
+              onClick={enrichAllMissing}
+              disabled={enriching() || busy() || (modelCount() ?? 0) === 0}
+              title="Look up and auto-fill missing pricing and metadata for models via OpenRouter"
+            >
+              <Icon name={Icons.sparkles} /> {enriching() ? "Enriching…" : "Auto-enrich missing"}
+            </Btn>
             <Btn onClick={() => openEditor("new")} disabled={(providers() ?? []).length === 0}>
               <Icon name={Icons.plus} /> New model
             </Btn>

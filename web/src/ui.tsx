@@ -71,6 +71,7 @@ export const Icons = {
   git: "lucide:git-branch",
   sparkles: "lucide:sparkles",
   save: "lucide:save",
+  dollarSign: "lucide:dollar-sign",
 } as const;
 
 export function Icon(props: {
@@ -1271,6 +1272,18 @@ export function fmtNum(n: number | null | undefined): string {
     }
   }
   return neg ? String(-v) : String(v);
+}
+
+/** Formatter for monetary amounts / spending in USD. */
+export function fmtCost(val: number | null | undefined): string {
+  if (val === null || val === undefined) return "—";
+  if (!Number.isFinite(val)) return "—";
+  if (val === 0) return "$0.00";
+  if (val < 0.01) {
+    if (val < 0.0001) return `$${val.toFixed(6)}`;
+    return `$${val.toFixed(4)}`;
+  }
+  return `$${val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /** Human window name for the shared day selectors ("1" = hourly 24h view,

@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { buildGridWhere, buildGridOrder, gridPage, type ColSpec, type GridFilterEntry, type GridSort } from "./gridql";
+import { modelPricingJoins, costExprSql, costRowSql, costAggSql } from "./pricing";
 
 /**
  * Usage accounting.
@@ -191,6 +192,7 @@ export interface HourlyPoint {
   cache_tok: number;
   out_tok: number;
   reqs: number;
+  cost: number;
 }
 
 const HOUR_MS = 3_600_000;
@@ -205,28 +207,31 @@ const pad2 = (n: number) => String(n).padStart(2, "0");
 export function hourlySeries(userId: string | null, keyId: string | null, hours: number, providerId?: string): HourlyPoint[] {
   const h = Math.min(Math.max(Math.floor(hours) || 24, 1), 168);
   const startHour = Math.floor(Date.now() / HOUR_MS) * HOUR_MS - (h - 1) * HOUR_MS;
-  const clauses = ["ts >= ?"];
+  const clauses = ["e.ts >= ?"];
   const params: Array<string | number> = [startHour];
   if (userId !== null) {
-    clauses.push("user_id = ?");
+    clauses.push("e.user_id = ?");
     params.push(userId);
   }
   if (keyId !== null) {
-    clauses.push("key_id = ?");
+    clauses.push("e.key_id = ?");
     params.push(keyId);
   }
   if (providerId) {
-    clauses.push("provider_id = ?");
+    clauses.push("e.provider_id = ?");
     params.push(providerId);
   }
   const rows = db
-    .prepare<{ hbucket: number; in_tok: number; cache_tok: number; out_tok: number; reqs: number }, any[]>(
-      `SELECT (ts / ?) AS hbucket,
-              COALESCE(SUM(in_tok), 0) AS in_tok,
-              COALESCE(SUM(cache_tok), 0) AS cache_tok,
-              COALESCE(SUM(out_tok), 0) AS out_tok,
-              COUNT(*) AS reqs
-       FROM usage_events WHERE ${clauses.join(" AND ")}
+    .prepare<{ hbucket: number; in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost: number }, any[]>(
+      `SELECT (e.ts / ?) AS hbucket,
+              COALESCE(SUM(e.in_tok), 0) AS in_tok,
+              COALESCE(SUM(e.cache_tok), 0) AS cache_tok,
+              COALESCE(SUM(e.out_tok), 0) AS out_tok,
+              COUNT(*) AS reqs,
+              ${costAggSql("e")}
+       FROM usage_events e
+       ${modelPricingJoins("e")}
+       WHERE ${clauses.join(" AND ")}
        GROUP BY hbucket`,
     )
     .all(HOUR_MS, ...params);
@@ -243,6 +248,7 @@ export function hourlySeries(userId: string | null, keyId: string | null, hours:
       cache_tok: r?.cache_tok ?? 0,
       out_tok: r?.out_tok ?? 0,
       reqs: r?.reqs ?? 0,
+      cost: r?.cost ?? 0,
     });
   }
   return out;
@@ -250,56 +256,58 @@ export function hourlySeries(userId: string | null, keyId: string | null, hours:
 
 /** Daily series over the trailing `days` days — or the full history ("all"). */
 export function userDailySeries(userId: string, days: number | "all") {
-  if (days === "all") {
-    return db
-      .prepare(
-        `SELECT date, SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(reqs) AS reqs
-         FROM usage_daily WHERE user_id = ? GROUP BY date ORDER BY date`,
-      )
-      .all(userId);
-  }
+  const where = days === "all" ? "m.user_id = ?" : "m.user_id = ? AND m.date >= date('now', ?)";
+  const params = days === "all" ? [userId] : [userId, `-${days} days`];
   return db
     .prepare(
-      `SELECT date, SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(reqs) AS reqs
-       FROM usage_daily WHERE user_id = ? AND date >= date('now', ?)
-       GROUP BY date ORDER BY date`,
+      `SELECT m.date,
+              SUM(m.in_tok) AS in_tok,
+              SUM(m.cache_tok) AS cache_tok,
+              SUM(m.out_tok) AS out_tok,
+              SUM(m.reqs) AS reqs,
+              ${costAggSql("m")}
+       FROM usage_model_provider_daily m
+       ${modelPricingJoins("m")}
+       WHERE ${where}
+       GROUP BY m.date ORDER BY m.date`,
     )
-    .all(userId, `-${days} days`);
+    .all(...params);
 }
 
 export function keyDailySeries(keyId: string, days: number | "all") {
-  if (days === "all") {
-    return db
-      .prepare(
-        `SELECT date, in_tok, cache_tok, out_tok, reqs FROM usage_daily
-         WHERE key_id = ? ORDER BY date`,
-      )
-      .all(keyId);
-  }
+  const where = days === "all" ? "m.key_id = ?" : "m.key_id = ? AND m.date >= date('now', ?)";
+  const params = days === "all" ? [keyId] : [keyId, `-${days} days`];
   return db
     .prepare(
-      `SELECT date, in_tok, cache_tok, out_tok, reqs FROM usage_daily
-       WHERE key_id = ? AND date >= date('now', ?) ORDER BY date`,
+      `SELECT m.date,
+              SUM(m.in_tok) AS in_tok,
+              SUM(m.cache_tok) AS cache_tok,
+              SUM(m.out_tok) AS out_tok,
+              SUM(m.reqs) AS reqs,
+              ${costAggSql("m")}
+       FROM usage_model_provider_daily m
+       ${modelPricingJoins("m")}
+       WHERE ${where}
+       GROUP BY m.date ORDER BY m.date`,
     )
-    .all(keyId, `-${days} days`);
+    .all(...params);
 }
 
-const SUMMARY_COLS = `COALESCE(SUM(in_tok),0) AS in_tok, COALESCE(SUM(cache_tok),0) AS cache_tok, COALESCE(SUM(out_tok),0) AS out_tok, COALESCE(SUM(reqs),0) AS reqs`;
-
 export function userSummary(userId: string) {
+  const baseSql = `SELECT COALESCE(SUM(m.in_tok),0) AS in_tok, COALESCE(SUM(m.cache_tok),0) AS cache_tok, COALESCE(SUM(m.out_tok),0) AS out_tok, COALESCE(SUM(m.reqs),0) AS reqs, ${costAggSql("m")} FROM usage_model_provider_daily m ${modelPricingJoins("m")}`;
   const today = db
-    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number }, [string]>(
-      `SELECT ${SUMMARY_COLS} FROM usage_daily WHERE user_id = ? AND date = date('now')`,
+    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost: number }, [string]>(
+      `${baseSql} WHERE m.user_id = ? AND m.date = date('now')`,
     )
     .get(userId)!;
   const month = db
-    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number }, [string]>(
-      `SELECT ${SUMMARY_COLS} FROM usage_daily WHERE user_id = ? AND date >= date('now', 'start of month')`,
+    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost: number }, [string]>(
+      `${baseSql} WHERE m.user_id = ? AND m.date >= date('now', 'start of month')`,
     )
     .get(userId)!;
   const total = db
-    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number }, [string]>(
-      `SELECT ${SUMMARY_COLS} FROM usage_daily WHERE user_id = ?`,
+    .prepare<{ in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost: number }, [string]>(
+      `${baseSql} WHERE m.user_id = ?`,
     )
     .get(userId)!;
   return { today, month, total };
@@ -438,6 +446,7 @@ const EVENT_COLS: Record<string, ColSpec> = {
   in_tok: { col: "e.in_tok", kind: "number" },
   cache_tok: { col: "e.cache_tok", kind: "number" },
   out_tok: { col: "e.out_tok", kind: "number" },
+  cost: { col: costExprSql("e"), kind: "number" },
   status: { col: "e.status", kind: "number" },
 };
 
@@ -488,11 +497,13 @@ export function userEvents(
       `SELECT e.id, e.key_id, COALESCE(k.name, substr(e.key_id, 1, 8)) AS key_name, e.ts, e.proto, e.model,
               e.in_tok, e.cache_tok, e.out_tok, e.latency_ms, e.status, e.stream, e.estimated,
               e.provider_id, p.name AS provider_name, e.provider_key_id, pk.label AS provider_key_label,
-              e.upstream_model
+              e.upstream_model,
+              ${costRowSql("e")}
        FROM usage_events e
        LEFT JOIN api_keys k ON k.id = e.key_id
        LEFT JOIN providers p ON p.id = e.provider_id
        LEFT JOIN provider_keys pk ON pk.id = e.provider_key_id
+       ${modelPricingJoins("e")}
        WHERE ${pageClauses.join(" AND ")}
        ORDER BY ${order} LIMIT ?${useCursor ? "" : " OFFSET ?"}`,
     )
@@ -502,14 +513,14 @@ export function userEvents(
   // api_keys/providers for EVERY row of the user's whole history (~85ms at
   // 3.65M events, measured — 10x the page query). The joins only DECORATE
   // the page with names, they filter nothing, so the count runs on
-  // usage_events alone; joined-name filters (key_name, provider_name) are
+  // usage_events alone; joined-name filters (key_name, provider_name, cost) are
   // the only case that needs the joins back. A short TTL cache absorbs
   // repeat counts for the same view while the grid scrolls. The footer
   // token sums ride the SAME query and the SAME scope (never the cursor
   // predicate) — one pass, and totals always agree with `total`.
   const joinedFilter =
     opts.filters &&
-    Object.keys(opts.filters).some((c) => c === "key_name" || c === "provider_name");
+    Object.keys(opts.filters).some((c) => c === "key_name" || c === "provider_name" || c === "cost");
   const cacheKey = `u:${userId}|k:${opts.keyId ?? ""}|f:${(opts.filters ? JSON.stringify(opts.filters) : "")}`;
   const now = Date.now();
   const cached = joinedFilter ? null : eventCountCache.get(cacheKey);
@@ -527,6 +538,7 @@ export function userEvents(
                FROM usage_events e
                LEFT JOIN api_keys k ON k.id = e.key_id
                LEFT JOIN providers p ON p.id = e.provider_id
+               ${modelPricingJoins("e")}
                WHERE ${scopeClauses.join(" AND ")}`,
             )
         : db

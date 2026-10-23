@@ -23,6 +23,7 @@ import {
   latencyFormatter,
   timeFormatter,
   tokenFormatter,
+  costFormatter,
   type GridTotals,
 } from "../aggrid";
 import type { ColDef } from "ag-grid-community";
@@ -43,6 +44,7 @@ interface BreakdownRow {
   cache_tok: number;
   out_tok: number;
   reqs: number;
+  cost: number;
 }
 
 const fmtOrDash = (v: unknown) => (v == null || v === "" ? "—" : String(v));
@@ -83,6 +85,7 @@ const byModelCols: ColDef<BreakdownRow>[] = [
   { field: "in_tok", headerName: "In", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
   { field: "cache_tok", headerName: "Cache", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
   { field: "out_tok", headerName: "Out", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cost", headerName: "Cost", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
 ];
 
 const eventCols: ColDef[] = [
@@ -97,6 +100,7 @@ const eventCols: ColDef[] = [
   { field: "in_tok", headerName: "In", width: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
   { field: "cache_tok", headerName: "Cache", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
   { field: "out_tok", headerName: "Out", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cost", headerName: "Cost", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
   { field: "latency_ms", headerName: "Latency", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: latencyFormatter },
   { field: "status", headerName: "Status", width: 90, type: "rightAligned", filter: "agNumberColumnFilter", cellRenderer: StatusCell },
 ];

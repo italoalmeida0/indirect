@@ -51,3 +51,46 @@ export function pricingColumns(pricing: PricingValues | null): {
     output: first(pricing, ["completion", "output", "output_price"]),
   };
 }
+
+/**
+ * Dynamic LEFT JOINs to resolve model pricing from registry `models`.
+ * Matches on requested model ID, upstream model ID, or upstream model name.
+ * Uses GROUP BY on the upstream subquery to guarantee 1-to-1 matching (no row duplication).
+ */
+export function modelPricingJoins(prefix = "m"): string {
+  const mdUp = `${prefix}_md_up`;
+  const md = `${prefix}_md`;
+  const mdId = `${prefix}_md_id`;
+  return `
+    LEFT JOIN models ${md} ON ${md}.id = ${prefix}.model
+    LEFT JOIN models ${mdId} ON ${mdId}.id = ${prefix}.upstream_model
+    LEFT JOIN (
+      SELECT upstream_model, pricing_input, pricing_input_cache, pricing_output
+      FROM models WHERE upstream_model != ''
+      GROUP BY upstream_model
+    ) ${mdUp} ON ${mdUp}.upstream_model = ${prefix}.upstream_model
+  `;
+}
+
+/** Single-row cost expression in USD. */
+export function costExprSql(prefix = "e"): string {
+  const mdUp = `${prefix}_md_up`;
+  const md = `${prefix}_md`;
+  const mdId = `${prefix}_md_id`;
+  return `(
+    ${prefix}.in_tok * COALESCE(${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0) +
+    ${prefix}.cache_tok * COALESCE(${md}.pricing_input_cache, ${mdId}.pricing_input_cache, ${mdUp}.pricing_input_cache, ${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0) +
+    ${prefix}.out_tok * COALESCE(${md}.pricing_output, ${mdId}.pricing_output, ${mdUp}.pricing_output, 0)
+  )`;
+}
+
+/** Single-row cost with column alias `AS cost`. */
+export function costRowSql(prefix = "e"): string {
+  return `COALESCE(${costExprSql(prefix)}, 0) AS cost`;
+}
+
+/** Aggregated cost expression: SUM(...) in USD with column alias `AS cost`. */
+export function costAggSql(prefix = "m"): string {
+  return `COALESCE(SUM(${costExprSql(prefix)}), 0) AS cost`;
+}
+

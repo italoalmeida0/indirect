@@ -13,6 +13,7 @@ import { keyUsable } from "./failover";
 import { apiFamilyForBaseUrl } from "./proxy/target-profile";
 import { normalizePricing, pricingColumns } from "./pricing";
 import { normalizeToolCallMode } from "./tool-call-mode";
+import { fetchOpenRouterCatalog, matchOpenRouterModel, type OpenRouterModel } from "./openrouter";
 
 /**
  * Model registry & routing.
@@ -243,6 +244,49 @@ export async function previewProviderModels(
   return out;
 }
 
+export function enrichParsedModel(m: ParsedModel, catalog: OpenRouterModel[]): boolean {
+  const match = matchOpenRouterModel(m.id, catalog);
+  if (!match) return false;
+  let enriched = false;
+  if (!m.pricing && match.pricing) {
+    m.pricing = match.pricing;
+    enriched = true;
+  }
+  if (!m.context_length && match.context_length) {
+    m.context_length = match.context_length;
+    enriched = true;
+  }
+  if (!m.max_output_length && match.max_output_length) {
+    m.max_output_length = match.max_output_length;
+    enriched = true;
+  }
+  if (!m.description && match.description) {
+    m.description = match.description;
+    enriched = true;
+  }
+  if ((!m.input_modalities || (m.input_modalities.length === 1 && m.input_modalities[0] === "text")) && match.input_modalities && match.input_modalities.length > 1) {
+    m.input_modalities = match.input_modalities;
+    enriched = true;
+  }
+  if ((!m.output_modalities || (m.output_modalities.length === 1 && m.output_modalities[0] === "text")) && match.output_modalities && match.output_modalities.length > 1) {
+    m.output_modalities = match.output_modalities;
+    enriched = true;
+  }
+  if ((!m.sampling_params || m.sampling_params.length === 0) && match.sampling_params && match.sampling_params.length > 0) {
+    m.sampling_params = match.sampling_params;
+    enriched = true;
+  }
+  if ((!m.features || m.features.length === 0) && match.features && match.features.length > 0) {
+    m.features = match.features;
+    enriched = true;
+  }
+  if (!m.reasoning_efforts && match.reasoning_efforts) {
+    m.reasoning_efforts = match.reasoning_efforts;
+    enriched = true;
+  }
+  return enriched;
+}
+
 /**
  * Import models for every capability the provider exposes (union of the
  * configured lists — registry entries carry no protocol). Returns
@@ -261,6 +305,7 @@ export async function syncProviderModels(
     ["anthropic", provider.anthropic_base_url],
   ];
   const now = Date.now();
+  const openRouterCatalog = await fetchOpenRouterCatalog();
   for (const [proto, base] of caps) {
     if (!base) continue;
     const r = await fetchCapabilityModels(provider, proto, plaintextKey);
@@ -272,6 +317,9 @@ export async function syncProviderModels(
     let added = 0;
     db.transaction(() => {
       for (const m of parsed) {
+        if (openRouterCatalog && openRouterCatalog.length > 0) {
+          enrichParsedModel(m, openRouterCatalog);
+        }
         const prices = pricingColumns(m.pricing);
         const r2 = insertModel.run(
           m.id,

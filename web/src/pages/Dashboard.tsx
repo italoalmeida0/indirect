@@ -19,6 +19,7 @@ import {
   Icons,
   ProgressBar,
   Segmented,
+  fmtCost,
   fmtNum,
   pointLabel,
   windowLabel,
@@ -137,6 +138,9 @@ export default function DashboardPage() {
   const winReqs = createMemo(() =>
     view().reduce((s, d) => s + (d.reqs ?? 0), 0),
   );
+  const winCost = createMemo(() =>
+    view().reduce((s, d) => s + (d.cost ?? 0), 0),
+  );
   const inDelta = createMemo(() =>
     deltaPct(series() ?? [], (d) => d.in_tok ?? 0),
   );
@@ -242,14 +246,25 @@ export default function DashboardPage() {
                 label={`Requests · ${windowLabel(days())}`}
                 delta={reqDelta()}
               />
-              <div class="mt-5 pt-4 border-t border-line flex items-center gap-2.5">
-                <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
-                  <Icon name={Icons.key} size={13} />
-                </span>
-                <span class="text-xs text-ink-500">Active keys</span>
-                <span class="ml-auto text-base font-semibold text-ink-100 tabular-nums">
-                  {activeKeys()}
-                </span>
+              <div class="mt-5 pt-4 border-t border-line flex items-center justify-between gap-2.5">
+                <div class="flex items-center gap-2.5">
+                  <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
+                    <Icon name={Icons.key} size={13} />
+                  </span>
+                  <span class="text-xs text-ink-500">Active keys</span>
+                  <span class="text-sm font-semibold text-ink-100 tabular-nums ml-1">
+                    {activeKeys()}
+                  </span>
+                </div>
+                <div class="flex items-center gap-2.5">
+                  <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
+                    <Icon name={Icons.dollarSign} size={13} />
+                  </span>
+                  <span class="text-xs text-ink-500">Est. spend</span>
+                  <span class="text-sm font-semibold text-ink-100 tabular-nums ml-1">
+                    {fmtCost(winCost())}
+                  </span>
+                </div>
               </div>
               <div
                 class="mt-4"

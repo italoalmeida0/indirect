@@ -25,7 +25,6 @@ import {
 import {
   Icon,
   Icons,
-  ThemeToggle,
   Toasts,
   Tooltip,
   toast,
@@ -251,8 +250,7 @@ function AppShell(props: { children: JSX.Element }) {
             </For>
           </Show>
         </nav>
-        <div class="flex flex-col lg:flex-row items-center lg:justify-between lg:w-60 lg:px-1 gap-1.5 pt-3">
-          <ThemeToggle tooltipPlacement="right" />
+        <div class="flex items-center justify-center lg:justify-start lg:w-60 lg:px-2 pt-3">
           <Tooltip content="Sign out" placement="right" delay={50}>
             <button
               onClick={logout}
@@ -279,7 +277,6 @@ function AppShell(props: { children: JSX.Element }) {
             </span>
           </a>
           <div class="gw-mobile-actions flex items-center gap-1">
-            <ThemeToggle />
             <button
               class="flex h-10 w-10 items-center justify-center rounded-xl text-ink-300 hover:bg-ink-800/60 transition-colors cursor-pointer"
               onClick={() => setMobileNav(!mobileNav())}

@@ -14,6 +14,7 @@ import {
   Select,
   StatCard,
   Tooltip,
+  fmtCost,
   fmtNum,
   windowLabel,
 } from "../../ui";
@@ -21,6 +22,7 @@ import {
   UsageGrid,
   ProtoCell,
   serverDatasource,
+  costFormatter,
   countFormatter,
   tokenFormatter,
   type GridTotals,
@@ -32,6 +34,7 @@ interface Buckets {
   cache_tok: number;
   out_tok: number;
   reqs: number;
+  cost?: number;
 }
 
 interface StatsDto {
@@ -82,6 +85,7 @@ const userCols: ColDef<UserRow>[] = [
   { field: "cache_tok", headerName: "Cache", width: 120, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
   { field: "out_tok", headerName: "Out", width: 120, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
   { field: "reqs", headerName: "Requests", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: countFormatter },
+  { field: "cost", headerName: "Cost", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
 ];
 
 const modelCols: ColDef<ModelRow>[] = [
@@ -100,6 +104,7 @@ const modelCols: ColDef<ModelRow>[] = [
   { field: "in_tok", headerName: "In", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
   { field: "cache_tok", headerName: "Cache", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
   { field: "out_tok", headerName: "Out", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
+  { field: "cost", headerName: "Cost", width: 110, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
 ];
 
 /** Compact MB formatter for the KV chip (10.4/400 MB). */
@@ -232,6 +237,9 @@ export default function AdminStatsPage() {
   const winReqs = createMemo(() =>
     (stats()?.series ?? []).reduce((s, d) => s + (d.reqs ?? 0), 0),
   );
+  const winCost = createMemo(() =>
+    (stats()?.series ?? []).reduce((s, d) => s + (d.cost ?? 0), 0),
+  );
 
   return (
     <div>
@@ -269,7 +277,7 @@ export default function AdminStatsPage() {
 
       <Show when={stats() && !stats.loading}>
         <div
-          class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-5"
+          class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-5"
           {...usalItems("fade-u", 90)}
         >
           <StatCard
@@ -289,6 +297,12 @@ export default function AdminStatsPage() {
             label={<CardLabel title="Output" window={windowLabel(days())} />}
             countValue={winOut()}
             sub={<span>{fmtNum(winReqs())} requests in window</span>}
+          />
+          <StatCard
+            icon={Icons.dollarSign}
+            label={<CardLabel title="Est. spend" window={windowLabel(days())} />}
+            value={fmtCost(winCost())}
+            sub={<span>all models in window</span>}
           />
           <StatCard
             icon={Icons.users}

@@ -24,8 +24,9 @@ import { hourlySeries, utcDate } from "../usage";
 import { kvSnapshotCached } from "../tokens";
 import { gridPage, parseGridQuery, parseCursor, buildGridWhere, type ColSpec } from "../gridql";
 import { queryKeys } from "../keys";
-import { normalizePricing, pricingColumns } from "../pricing";
+import { normalizePricing, pricingColumns, modelPricingJoins, costAggSql } from "../pricing";
 import { TOOL_CALL_MODES, type ToolCallMode } from "../tool-call-mode";
+import { fetchOpenRouterCatalog, matchOpenRouterModel } from "../openrouter";
 
 /**
  * /api/admin/* — everything requires role=admin. Every mutation is audited.
@@ -994,6 +995,46 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const f = modelFields(body);
     const upstreamModel =
       targets?.[0]?.upstreamModel ?? f.upstream_model ?? id;
+
+    // Auto-enrich missing pricing and metadata from OpenRouter on creation only
+    const openRouterCatalog = await fetchOpenRouterCatalog();
+    if (openRouterCatalog && openRouterCatalog.length > 0) {
+      const match = matchOpenRouterModel(id, openRouterCatalog) || matchOpenRouterModel(upstreamModel, openRouterCatalog);
+      if (match) {
+        if (f.pricing === null && match.pricing) {
+          f.pricing = JSON.stringify(match.pricing);
+          f.pricing_input = match.pricing_input ?? null;
+          f.pricing_input_cache = match.pricing_input_cache ?? null;
+          f.pricing_input_cache_write = match.pricing_input_cache_write ?? null;
+          f.pricing_output = match.pricing_output ?? null;
+        }
+        if (f.context_length === null && match.context_length != null) {
+          f.context_length = match.context_length;
+        }
+        if (f.max_output_length === null && match.max_output_length != null) {
+          f.max_output_length = match.max_output_length;
+        }
+        if (!f.description && match.description) {
+          f.description = match.description;
+        }
+        if (f.input_modalities === '["text"]' && match.input_modalities && match.input_modalities.length > 1) {
+          f.input_modalities = JSON.stringify(match.input_modalities);
+        }
+        if (f.output_modalities === '["text"]' && match.output_modalities && match.output_modalities.length > 1) {
+          f.output_modalities = JSON.stringify(match.output_modalities);
+        }
+        if (f.sampling_params === '[]' && match.sampling_params && match.sampling_params.length > 0) {
+          f.sampling_params = JSON.stringify(match.sampling_params);
+        }
+        if (f.features === '[]' && match.features && match.features.length > 0) {
+          f.features = JSON.stringify(match.features);
+        }
+        if (f.reasoning_efforts === null && match.reasoning_efforts) {
+          f.reasoning_efforts = JSON.stringify(match.reasoning_efforts);
+        }
+      }
+    }
+
     // Default is passive 'fallback' when the admin did not pick a strategy.
     const toolCallMode = f.tool_call_mode;
     const now = Date.now();
@@ -1058,6 +1099,75 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     invalidateModelCache();
     auditAdmin(ctx.user, "models.bulk_deleted", undefined, { requested: ids.length, deleted }, ip);
     return ok({ deleted }, req);
+  }
+
+  if (path === "/api/admin/models/lookup-openrouter" && req.method === "GET") {
+    const q = url.searchParams.get("id") || url.searchParams.get("q") || "";
+    const catalog = await fetchOpenRouterCatalog();
+    const match = catalog ? matchOpenRouterModel(q, catalog) : null;
+    return ok({ match }, req);
+  }
+
+  if (path === "/api/admin/models/enrich-missing" && req.method === "POST") {
+    const catalog = await fetchOpenRouterCatalog();
+    if (!catalog || catalog.length === 0) return ok({ count: 0 }, req);
+    const rows = db
+      .prepare<ModelRow, []>(
+        "SELECT * FROM models WHERE pricing IS NULL OR pricing_input IS NULL OR context_length IS NULL",
+      )
+      .all();
+    let count = 0;
+    db.transaction(() => {
+      const upd = db.prepare(
+        `UPDATE models SET pricing = COALESCE(?, pricing),
+                           pricing_input = COALESCE(?, pricing_input),
+                           pricing_input_cache = COALESCE(?, pricing_input_cache),
+                           pricing_input_cache_write = COALESCE(?, pricing_input_cache_write),
+                           pricing_output = COALESCE(?, pricing_output),
+                           context_length = COALESCE(?, context_length),
+                           max_output_length = COALESCE(?, max_output_length),
+                           description = CASE WHEN description = '' THEN ? ELSE description END,
+                           updated_at = ?
+         WHERE id = ?`,
+      );
+      const now = Date.now();
+      for (const row of rows) {
+        const match = matchOpenRouterModel(row.id, catalog) || matchOpenRouterModel(row.upstream_model, catalog);
+        if (!match) continue;
+        const pricingJson = !row.pricing && match.pricing ? JSON.stringify(match.pricing) : null;
+        const pricingInput = row.pricing_input == null && match.pricing_input != null ? match.pricing_input : null;
+        const pricingInputCache =
+          row.pricing_input_cache == null && match.pricing_input_cache != null ? match.pricing_input_cache : null;
+        const pricingInputCacheWrite =
+          row.pricing_input_cache_write == null && match.pricing_input_cache_write != null
+            ? match.pricing_input_cache_write
+            : null;
+        const pricingOutput =
+          row.pricing_output == null && match.pricing_output != null ? match.pricing_output : null;
+        const ctxLen = row.context_length == null && match.context_length != null ? match.context_length : null;
+        const maxOut =
+          row.max_output_length == null && match.max_output_length != null ? match.max_output_length : null;
+        const desc = !row.description && match.description ? match.description : "";
+        if (pricingJson || pricingInput != null || ctxLen != null || desc) {
+          upd.run(
+            pricingJson,
+            pricingInput,
+            pricingInputCache,
+            pricingInputCacheWrite,
+            pricingOutput,
+            ctxLen,
+            maxOut,
+            desc,
+            now,
+            row.id,
+          );
+          count++;
+        }
+      }
+    })();
+    if (count > 0) invalidateModelCache();
+    auditAdmin(ctx.user, "models.enriched_from_openrouter", "all", { count }, ip);
+    return ok({ count }, req);
   }
 
   const modelTargetsMatch = path.match(/^\/api\/admin\/models\/(.+)\/targets$/);
@@ -1457,50 +1567,71 @@ if (path === "/api/admin/stats" && req.method === "GET") {
           ? days === "all"
             ? db
                 .prepare(
-                  `SELECT date, SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(reqs) AS reqs
-                   FROM usage_model_provider_daily WHERE provider_id = ? GROUP BY date ORDER BY date`,
+                  `SELECT m.date, SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs,
+                          ${costAggSql("m")}
+                   FROM usage_model_provider_daily m
+                   ${modelPricingJoins("m")}
+                   WHERE m.provider_id = ? GROUP BY m.date ORDER BY m.date`,
                 )
                 .all(providerId)
             : db
                 .prepare(
-                  `SELECT date, SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(reqs) AS reqs
-                   FROM usage_model_provider_daily WHERE provider_id = ? AND date >= date('now', ?) GROUP BY date ORDER BY date`,
+                  `SELECT m.date, SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs,
+                          ${costAggSql("m")}
+                   FROM usage_model_provider_daily m
+                   ${modelPricingJoins("m")}
+                   WHERE m.provider_id = ? AND m.date >= date('now', ?) GROUP BY m.date ORDER BY m.date`,
                 )
                 .all(providerId, `-${days} days`)
           : days === "all"
           ? db
               .prepare(
-                `SELECT date, SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(reqs) AS reqs
-                 FROM usage_daily GROUP BY date ORDER BY date`,
+                `SELECT m.date, SUM(m.in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(reqs) AS reqs,
+                        ${costAggSql("m")}
+                 FROM usage_model_provider_daily m
+                 ${modelPricingJoins("m")}
+                 GROUP BY m.date ORDER BY m.date`,
               )
               .all()
           : db
               .prepare(
-                `SELECT date, SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(reqs) AS reqs
-                 FROM usage_daily WHERE date >= date('now', ?) GROUP BY date ORDER BY date`,
+                `SELECT m.date, SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs,
+                        ${costAggSql("m")}
+                 FROM usage_model_provider_daily m
+                 ${modelPricingJoins("m")}
+                 WHERE m.date >= date('now', ?) GROUP BY m.date ORDER BY m.date`,
               )
               .all(`-${days} days`);
     const perUser =
       hours !== null
         ? db
             .prepare(
-`SELECT ue.user_id, COALESCE(u.email, ue.user_id) AS email, SUM(ue.in_tok) AS in_tok, SUM(ue.cache_tok) AS cache_tok, SUM(ue.out_tok) AS out_tok, COUNT(*) AS reqs
-                FROM usage_events ue LEFT JOIN users u ON u.id = ue.user_id
-                WHERE ue.ts >= ? GROUP BY ue.user_id ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 50`,
+              `SELECT ue.user_id, COALESCE(u.email, ue.user_id) AS email, SUM(ue.in_tok) AS in_tok, SUM(ue.cache_tok) AS cache_tok, SUM(ue.out_tok) AS out_tok, COUNT(*) AS reqs,
+                      ${costAggSql("ue")}
+               FROM usage_events ue
+               LEFT JOIN users u ON u.id = ue.user_id
+               ${modelPricingJoins("ue")}
+               WHERE ue.ts >= ? GROUP BY ue.user_id ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 50`,
             )
             .all(Date.now() - hours * 3_600_000)
         : days === "all"
           ? db
               .prepare(
-                `SELECT ud.user_id, COALESCE(u.email, ud.user_id) AS email, SUM(ud.in_tok) AS in_tok, SUM(ud.cache_tok) AS cache_tok, SUM(ud.out_tok) AS out_tok, SUM(ud.reqs) AS reqs
-                 FROM usage_daily ud LEFT JOIN users u ON u.id = ud.user_id
+                `SELECT ud.user_id, COALESCE(u.email, ud.user_id) AS email, SUM(ud.in_tok) AS in_tok, SUM(ud.cache_tok) AS cache_tok, SUM(ud.out_tok) AS out_tok, SUM(ud.reqs) AS reqs,
+                        ${costAggSql("ud")}
+                 FROM usage_model_provider_daily ud
+                 LEFT JOIN users u ON u.id = ud.user_id
+                 ${modelPricingJoins("ud")}
                  GROUP BY ud.user_id ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 50`,
               )
               .all()
           : db
               .prepare(
-                `SELECT ud.user_id, COALESCE(u.email, ud.user_id) AS email, SUM(ud.in_tok) AS in_tok, SUM(ud.cache_tok) AS cache_tok, SUM(ud.out_tok) AS out_tok, SUM(ud.reqs) AS reqs
-                 FROM usage_daily ud LEFT JOIN users u ON u.id = ud.user_id
+                `SELECT ud.user_id, COALESCE(u.email, ud.user_id) AS email, SUM(ud.in_tok) AS in_tok, SUM(ud.cache_tok) AS cache_tok, SUM(ud.out_tok) AS out_tok, SUM(ud.reqs) AS reqs,
+                        ${costAggSql("ud")}
+                 FROM usage_model_provider_daily ud
+                 LEFT JOIN users u ON u.id = ud.user_id
+                 ${modelPricingJoins("ud")}
                  WHERE ud.date >= date('now', ?) GROUP BY ud.user_id ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 50`,
               )
               .all(`-${days} days`);
@@ -1512,36 +1643,49 @@ if (path === "/api/admin/stats" && req.method === "GET") {
       hours !== null
         ? db
             .prepare(
-              `SELECT model, proto, COALESCE(SUM(in_tok),0) AS in_tok, COALESCE(SUM(cache_tok),0) AS cache_tok, COALESCE(SUM(out_tok),0) AS out_tok, COUNT(*) AS reqs
-               FROM usage_events WHERE ts >= ?
-               GROUP BY model, proto ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 20`,
+              `SELECT ue.model, ue.proto, COALESCE(SUM(ue.in_tok),0) AS in_tok, COALESCE(SUM(ue.cache_tok),0) AS cache_tok, COALESCE(SUM(ue.out_tok),0) AS out_tok, COUNT(*) AS reqs,
+                      ${costAggSql("ue")}
+               FROM usage_events ue
+               ${modelPricingJoins("ue")}
+               WHERE ue.ts >= ?
+               GROUP BY ue.model, ue.proto ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 20`,
             )
             .all(Date.now() - hours * 3_600_000)
         : days === "all"
           ? db
               .prepare(
-                `SELECT model, proto, COALESCE(SUM(in_tok),0) AS in_tok, COALESCE(SUM(cache_tok),0) AS cache_tok, COALESCE(SUM(out_tok),0) AS out_tok, COALESCE(SUM(reqs),0) AS reqs
-                 FROM usage_model_daily
-                 GROUP BY model, proto ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 20`,
+                `SELECT m.model, m.proto, COALESCE(SUM(m.in_tok),0) AS in_tok, COALESCE(SUM(m.cache_tok),0) AS cache_tok, COALESCE(SUM(m.out_tok),0) AS out_tok, COALESCE(SUM(m.reqs),0) AS reqs,
+                        ${costAggSql("m")}
+                 FROM usage_model_provider_daily m
+                 ${modelPricingJoins("m")}
+                 GROUP BY m.model, m.proto ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 20`,
               )
               .all()
           : db
               .prepare(
-                `SELECT model, proto, COALESCE(SUM(in_tok),0) AS in_tok, COALESCE(SUM(cache_tok),0) AS cache_tok, COALESCE(SUM(out_tok),0) AS out_tok, COALESCE(SUM(reqs),0) AS reqs
-                 FROM usage_model_daily WHERE date >= date('now', ?)
-                 GROUP BY model, proto ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 20`,
+                `SELECT m.model, m.proto, COALESCE(SUM(m.in_tok),0) AS in_tok, COALESCE(SUM(m.cache_tok),0) AS cache_tok, COALESCE(SUM(m.out_tok),0) AS out_tok, COALESCE(SUM(m.reqs),0) AS reqs,
+                        ${costAggSql("m")}
+                 FROM usage_model_provider_daily m
+                 ${modelPricingJoins("m")}
+                 WHERE m.date >= date('now', ?)
+                 GROUP BY m.model, m.proto ORDER BY (in_tok + cache_tok + out_tok) DESC LIMIT 20`,
               )
               .all(`-${days} days`);
     const totals = db
       .prepare(
-        `SELECT COALESCE(SUM(in_tok),0) AS in_tok, COALESCE(SUM(cache_tok),0) AS cache_tok, COALESCE(SUM(out_tok),0) AS out_tok, COALESCE(SUM(reqs),0) AS reqs
-         FROM usage_daily`,
+        `SELECT COALESCE(SUM(m.in_tok),0) AS in_tok, COALESCE(SUM(m.cache_tok),0) AS cache_tok, COALESCE(SUM(m.out_tok),0) AS out_tok, COALESCE(SUM(m.reqs),0) AS reqs,
+                ${costAggSql("m")}
+         FROM usage_model_provider_daily m
+         ${modelPricingJoins("m")}`,
       )
       .get();
     const todayRow = db
       .prepare(
-        `SELECT COALESCE(SUM(in_tok),0) AS in_tok, COALESCE(SUM(cache_tok),0) AS cache_tok, COALESCE(SUM(out_tok),0) AS out_tok, COALESCE(SUM(reqs),0) AS reqs
-         FROM usage_daily WHERE date = ?`,
+        `SELECT COALESCE(SUM(m.in_tok),0) AS in_tok, COALESCE(SUM(m.cache_tok),0) AS cache_tok, COALESCE(SUM(m.out_tok),0) AS out_tok, COALESCE(SUM(m.reqs),0) AS reqs,
+                ${costAggSql("m")}
+         FROM usage_model_provider_daily m
+         ${modelPricingJoins("m")}
+         WHERE m.date = ?`,
       )
       .get(utcDate(Date.now()));
     const counts = {
@@ -1593,9 +1737,11 @@ if (path === "/api/admin/stats" && req.method === "GET") {
         baseSql: `
           SELECT ud.user_id, COALESCE(u.email, ud.user_id) AS email,
                  SUM(ud.in_tok) AS in_tok, SUM(ud.cache_tok) AS cache_tok,
-                 SUM(ud.out_tok) AS out_tok, SUM(ud.reqs) AS reqs
+                 SUM(ud.out_tok) AS out_tok, SUM(ud.reqs) AS reqs,
+                 ${costAggSql("ud")}
           FROM usage_model_provider_daily ud
           LEFT JOIN users u ON u.id = ud.user_id
+          ${modelPricingJoins("ud")}
           ${where}
           GROUP BY ud.user_id`,
         baseParams: params,
@@ -1606,11 +1752,12 @@ if (path === "/api/admin/stats" && req.method === "GET") {
           cache_tok: { col: "cache_tok", kind: "number" },
           out_tok: { col: "out_tok", kind: "number" },
           reqs: { col: "reqs", kind: "number" },
+          cost: { col: "cost", kind: "number" },
         },
         grid,
         defaultOrder: "(in_tok + cache_tok + out_tok) DESC",
         tieBreak: "user_id DESC",
-        sumCols: ["in_tok", "cache_tok", "out_tok", "reqs"],
+        sumCols: ["in_tok", "cache_tok", "out_tok", "reqs", "cost"],
       });
       return ok({ users: page.rows, total: page.total, limit: grid.limit, offset: grid.offset, totals: page.totals }, req);
     }
@@ -1622,10 +1769,12 @@ if (path === "/api/admin/stats" && req.method === "GET") {
         SELECT m.model, m.proto, m.provider_id, p.name AS provider_name,
                m.provider_key_id, pk.label AS provider_key_label, m.upstream_model,
                SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok,
-               SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs
+               SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs,
+               ${costAggSql("m")}
         FROM usage_model_provider_daily m
         LEFT JOIN providers p ON p.id = m.provider_id
         LEFT JOIN provider_keys pk ON pk.id = m.provider_key_id
+        ${modelPricingJoins("m")}
         ${modelWhere}
         GROUP BY m.model, m.proto, m.provider_id, m.provider_key_id, m.upstream_model`,
       baseParams: modelParams,
@@ -1641,11 +1790,12 @@ if (path === "/api/admin/stats" && req.method === "GET") {
         cache_tok: { col: "cache_tok", kind: "number" },
         out_tok: { col: "out_tok", kind: "number" },
         reqs: { col: "reqs", kind: "number" },
+        cost: { col: "cost", kind: "number" },
       },
       grid,
       defaultOrder: "(in_tok + cache_tok + out_tok) DESC",
       tieBreak: "model DESC, provider_id DESC, provider_key_id DESC, upstream_model DESC",
-      sumCols: ["in_tok", "cache_tok", "out_tok", "reqs"],
+      sumCols: ["in_tok", "cache_tok", "out_tok", "reqs", "cost"],
     });
     return ok({ models: page.rows, total: page.total, limit: grid.limit, offset: grid.offset, totals: page.totals }, req);
   }
@@ -1679,8 +1829,11 @@ if (path === "/api/admin/stats" && req.method === "GET") {
     const users = db
       .prepare(
         `SELECT ud.user_id, COALESCE(u.email, ud.user_id) AS email,
-                SUM(ud.in_tok) AS in_tok, SUM(ud.cache_tok) AS cache_tok, SUM(ud.out_tok) AS out_tok, SUM(ud.reqs) AS reqs
-         FROM usage_model_provider_daily ud LEFT JOIN users u ON u.id = ud.user_id
+                SUM(ud.in_tok) AS in_tok, SUM(ud.cache_tok) AS cache_tok, SUM(ud.out_tok) AS out_tok, SUM(ud.reqs) AS reqs,
+                ${costAggSql("ud")}
+         FROM usage_model_provider_daily ud
+         LEFT JOIN users u ON u.id = ud.user_id
+         ${modelPricingJoins("ud")}
          ${uWhere}
          GROUP BY ud.user_id
          ORDER BY (SUM(ud.in_tok) + SUM(ud.cache_tok) + SUM(ud.out_tok)) DESC
@@ -1708,10 +1861,12 @@ if (path === "/api/admin/stats" && req.method === "GET") {
       .prepare(
         `SELECT m.model, m.proto, m.provider_id, p.name AS provider_name,
                 m.provider_key_id, pk.label AS provider_key_label, m.upstream_model,
-                SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs
+                SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.reqs) AS reqs,
+                ${costAggSql("m")}
          FROM usage_model_provider_daily m
          LEFT JOIN providers p ON p.id = m.provider_id
          LEFT JOIN provider_keys pk ON pk.id = m.provider_key_id
+         ${modelPricingJoins("m")}
          ${mWhere}
          GROUP BY m.model, m.proto, m.provider_id, m.provider_key_id, m.upstream_model
          ORDER BY (SUM(m.in_tok) + SUM(m.cache_tok) + SUM(m.out_tok)) DESC
