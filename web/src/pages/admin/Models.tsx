@@ -4,7 +4,7 @@ import { api, type ModelDto, type ProviderDto, type RoutingMode, type SyncOutcom
 import { PageTitle } from "../../index";
 import { usalItems } from "../../motion";
 import { attachSortable } from "../../sortable";
-import { Badge, Btn, Card, EmptyState, Icon, IconBtn, Icons, Modal, ModalField, ModalNotice, ModalSection, Segmented, Select, SwitchCard, toast, fmtNum } from "../../ui";
+import { Badge, Btn, Card, EmptyState, FilterChip, Icon, IconBtn, Icons, Modal, ModalField, ModalNotice, ModalSection, Segmented, Select, SwitchCard, toast, fmtNum } from "../../ui";
 import { UsageGrid, serverDatasource } from "../../aggrid";
 import type { ColDef, GridApi } from "ag-grid-community";
 
@@ -185,11 +185,66 @@ export default function AdminModelsPage() {
     const j = await api<{ total: number }>("GET", "/api/admin/models?limit=1");
     return j.total;
   });
+  const [providers] = createResource(async () => {
+    const j = await api<{ providers: ProviderDto[] }>("GET", "/api/admin/providers");
+    return j.providers;
+  });
   const [gridVersion, setGridVersion] = createSignal(0);
+  const [modelsList, { refetch: refetchModelsList }] = createResource(gridVersion, async () => {
+    try {
+      const j = await api<{ models: ModelDto[] }>("GET", "/api/admin/models?limit=100");
+      return j.models;
+    } catch {
+      return [];
+    }
+  });
   const refreshGrid = () => {
     clearSelection();
     setGridVersion((v) => v + 1);
     refetchModelCount();
+    refetchModelsList();
+  };
+
+  const [cardSearch, setCardSearch] = createSignal("");
+  const [cardStatusFilter, setCardStatusFilter] = createSignal<"all" | "active" | "disabled">("all");
+  const [cardProviderFilter, setCardProviderFilter] = createSignal<string>("all");
+
+  const providerFilterOptions = createMemo(() => [
+    { value: "all", label: "All providers" },
+    ...(providers() ?? []).map((p) => ({ value: p.id, label: p.name })),
+  ]);
+
+  const filteredModels = createMemo(() => {
+    let list = modelsList() ?? [];
+    const st = cardStatusFilter();
+    if (st === "active") list = list.filter((m) => m.enabled);
+    if (st === "disabled") list = list.filter((m) => !m.enabled);
+
+    const prov = cardProviderFilter();
+    if (prov !== "all") list = list.filter((m) => m.providerId === prov || m.providerName === prov);
+
+    const q = cardSearch().trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (m) =>
+          m.id.toLowerCase().includes(q) ||
+          (m.name && m.name.toLowerCase().includes(q)) ||
+          (m.upstreamModel && m.upstreamModel.toLowerCase().includes(q)) ||
+          (m.providerName && m.providerName.toLowerCase().includes(q)),
+      );
+    }
+    return list;
+  });
+
+  const activeModelCount = createMemo(() => (modelsList() ?? []).filter((m) => m.enabled).length);
+  const disabledModelCount = createMemo(() => (modelsList() ?? []).filter((m) => !m.enabled).length);
+
+  const modelsGridHeight = () => {
+    const count = modelCount() ?? 0;
+    if (count <= 2) return "h-[200px]";
+    if (count <= 4) return "h-[280px]";
+    if (count <= 8) return "h-[380px]";
+    return "h-[540px]";
   };
   const modelsDatasource = serverDatasource<ModelDto>(async (params) => {
     const qs = new URLSearchParams({
@@ -203,10 +258,6 @@ export default function AdminModelsPage() {
     }
     const j = await api<{ models: ModelDto[]; total: number }>("GET", `/api/admin/models?${qs}`);
     return { rows: j.models, total: j.total };
-  });
-  const [providers] = createResource(async () => {
-    const j = await api<{ providers: ProviderDto[] }>("GET", "/api/admin/providers");
-    return j.providers;
   });
 
   const [routingMode, setRoutingMode] = createSignal<RoutingMode>("passthrough");
@@ -532,7 +583,7 @@ export default function AdminModelsPage() {
     {
       colId: "pricing_cache",
       headerName: "Cache read / 1M",
-      width: 130,
+      width: 145,
       cellRenderer: (p: { data?: ModelDto }) => (
         <code class="text-ink-400">
           {pricePerMillion(p.data?.pricingInputCache)}
@@ -545,7 +596,7 @@ export default function AdminModelsPage() {
     {
       colId: "pricing_cache_write",
       headerName: "Cache write / 1M",
-      width: 135,
+      width: 145,
       cellRenderer: (p: { data?: ModelDto }) => (
         <code class="text-ink-400">
           {pricePerMillion(p.data?.pricingInputCacheWrite)}
@@ -579,7 +630,7 @@ export default function AdminModelsPage() {
       filter: false,
       floatingFilter: false,
       resizable: false,
-      pinned: "right",
+      pinned: typeof window !== "undefined" && window.innerWidth >= 1024 ? "right" : undefined,
     },
   ];
 
@@ -587,7 +638,7 @@ export default function AdminModelsPage() {
     <div>
       <PageTitle
         title="Models"
-        subtitle="The public model ids this gateway serves — each with an ordered failover chain of provider targets"
+        subtitle="Public model registry and provider failover chains"
         right={
           <div class="flex items-center gap-3 flex-wrap">
             <div class="flex items-center gap-2">
@@ -609,7 +660,7 @@ export default function AdminModelsPage() {
         }
       />
 
-      <Show when={(modelCount() ?? 0) > 0}>
+      <Show when={selected().size > 0 || selectedOnly()}>
         <Card class="p-3 mb-4 flex items-center justify-between">
           <span class="text-xs text-ink-300">{selected().size} selected</span>
           <div class="flex gap-2">
@@ -662,7 +713,8 @@ export default function AdminModelsPage() {
         }
       >
         <Card class="overflow-hidden" {...usalItems("fade-u", 60)}>
-          <div class="p-2">
+          {/* Desktop & Tablet AG Grid */}
+          <div class="hidden md:block p-2">
             {/* Selecting a row is local state and must not purge the infinite
                 cache. Only changing Selected only mode or a real model
                 mutation needs to reload rows. */}
@@ -672,7 +724,7 @@ export default function AdminModelsPage() {
               cacheBlockSize={100}
               refreshDeps={`${gridVersion()}:${selectedOnly()}:${selectedOnly() ? [...selected()].sort().join(",") : ""}`}
               storageKey="llmgw-grid:admin.models"
-              heightClass="h-[560px]"
+              heightClass={modelsGridHeight()}
               rowSelection="multiple"
               suppressRowClickSelection
               getRowId={(p) => p.data.id}
@@ -683,6 +735,176 @@ export default function AdminModelsPage() {
               onModelUpdated={(e) => applyLoadedSelection(e.api as GridApi<ModelDto>)}
               onSelectionChanged={syncLoadedSelection}
             />
+          </div>
+
+          {/* Touch / Mobile Card List */}
+          <div class="md:hidden p-3 space-y-3">
+            {/* Search & Filter Toolbar */}
+            <div class="p-3 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
+              <div class="relative">
+                <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-ink-500">
+                  <Icon name={Icons.search} size={15} />
+                </span>
+                <input
+                  type="text"
+                  value={cardSearch()}
+                  onInput={(e) => setCardSearch(e.currentTarget.value)}
+                  placeholder="Search models by name, id or provider…"
+                  class="w-full rounded-lg border border-line bg-card pl-9 pr-8 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                />
+                <Show when={cardSearch()}>
+                  <button
+                    type="button"
+                    onClick={() => setCardSearch("")}
+                    class="absolute inset-y-0 right-0 pr-2.5 flex items-center text-ink-400 hover:text-ink-200 cursor-pointer"
+                  >
+                    <Icon name={Icons.x} size={14} />
+                  </button>
+                </Show>
+              </div>
+
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div class="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+                  <FilterChip
+                    selected={cardStatusFilter() === "all"}
+                    onClick={() => setCardStatusFilter("all")}
+                    class="shrink-0"
+                  >
+                    All ({(modelsList() ?? []).length})
+                  </FilterChip>
+                  <FilterChip
+                    selected={cardStatusFilter() === "active"}
+                    onClick={() => setCardStatusFilter("active")}
+                    class="shrink-0"
+                  >
+                    Active ({activeModelCount()})
+                  </FilterChip>
+                  <Show when={disabledModelCount() > 0}>
+                    <FilterChip
+                      selected={cardStatusFilter() === "disabled"}
+                      onClick={() => setCardStatusFilter("disabled")}
+                      class="shrink-0"
+                    >
+                      Disabled ({disabledModelCount()})
+                    </FilterChip>
+                  </Show>
+                  <Show when={(providers() ?? []).length > 1}>
+                    <select
+                      value={cardProviderFilter()}
+                      onChange={(e) => setCardProviderFilter(e.currentTarget.value)}
+                      class="h-6 shrink-0 rounded-md border border-line bg-card px-2 text-[11px] text-ink-300 focus:border-brand-500 focus:outline-none"
+                    >
+                      <For each={providerFilterOptions()}>
+                        {(opt) => <option value={opt.value}>{opt.label}</option>}
+                      </For>
+                    </select>
+                  </Show>
+                </div>
+                <span class="text-[11px] text-ink-500 tabular-nums shrink-0">
+                  Showing {filteredModels().length} of {(modelsList() ?? []).length}
+                </span>
+              </div>
+            </div>
+
+            <Show
+              when={filteredModels().length > 0}
+              fallback={
+                <div class="p-8 text-center rounded-xl border border-line/60 bg-elev space-y-2">
+                  <p class="text-xs text-ink-400">
+                    No models match your filters.
+                  </p>
+                  <Show when={cardSearch() || cardStatusFilter() !== "all"}>
+                    <button
+                      type="button"
+                      onClick={() => { setCardSearch(""); setCardStatusFilter("all"); }}
+                      class="text-xs text-brand-400 hover:underline cursor-pointer"
+                    >
+                      Reset filters
+                    </button>
+                  </Show>
+                </div>
+              }
+            >
+              <div class="space-y-3">
+                <For each={filteredModels()}>
+                  {(m) => (
+                    <div class="p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
+                      <div class="flex items-start justify-between gap-2">
+                        <div class="min-w-0">
+                          <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-sm font-semibold font-mono text-ink-100 truncate">{m.id}</span>
+                            <Badge tone={m.enabled ? "green" : "zinc"}>
+                              {m.enabled ? "Active" : "Disabled"}
+                            </Badge>
+                          </div>
+                          <div class="text-xs text-ink-400 mt-1 flex items-center gap-2">
+                            <span class="px-2 py-0.5 rounded bg-card border border-line text-ink-300">{m.providerName || "No provider"}</span>
+                            <Show when={m.upstreamModel && m.upstreamModel !== m.id}>
+                              <span class="font-mono text-ink-500 truncate">{m.upstreamModel}</span>
+                            </Show>
+                          </div>
+                        </div>
+                        <div class="text-right shrink-0 text-xs text-ink-400">
+                          <div>{m.contextLength ? `${fmtNum(m.contextLength)} ctx` : "—"}</div>
+                        </div>
+                      </div>
+
+                      {/* Pricing row */}
+                      <div class="pt-2 border-t border-line/50 grid grid-cols-3 gap-2 text-[11px] text-ink-400">
+                        <div>
+                          <span class="text-ink-500 block">Input</span>
+                          <span class="font-mono text-ink-200">{pricePerMillion(m.pricingInput)}</span>
+                        </div>
+                        <div>
+                          <span class="text-ink-500 block">Cache read</span>
+                          <span class="font-mono text-ink-200">{pricePerMillion(m.pricingInputCache)}</span>
+                        </div>
+                        <div>
+                          <span class="text-ink-500 block">Output</span>
+                          <span class="font-mono text-ink-200">{pricePerMillion(m.pricingOutput)}</span>
+                        </div>
+                      </div>
+
+                      {/* Actions */}
+                      <div class="pt-2 border-t border-line flex items-center justify-between">
+                        <button
+                          type="button"
+                          class="text-xs text-ink-400 hover:text-ink-200 cursor-pointer"
+                          onClick={() => toggleEnabled(m)}
+                        >
+                          {m.enabled ? "Disable" : "Enable"}
+                        </button>
+                        <div class="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            class="h-9 px-3 rounded-lg flex items-center gap-1.5 text-xs text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer transition-colors"
+                            onClick={() => openEditor(m)}
+                          >
+                            <Icon name={Icons.edit} size={14} /> Edit
+                          </button>
+                          <button
+                            type="button"
+                            class="h-9 w-9 rounded-lg flex items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-card border border-line cursor-pointer transition-colors"
+                            title="Clone model"
+                            onClick={() => cloneModel(m)}
+                          >
+                            <Icon name={Icons.copy} size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            class="h-9 w-9 rounded-lg flex items-center justify-center text-rose-500 hover:bg-rose-500/10 border border-rose-500/30 cursor-pointer transition-colors"
+                            title="Delete model"
+                            onClick={() => setConfirmDelete(m)}
+                          >
+                            <Icon name={Icons.trash} size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
           </div>
         </Card>
       </Show>
@@ -714,25 +936,22 @@ export default function AdminModelsPage() {
           </>
         }
       >
-        <div class="space-y-6">
-          <ModalSection
-            title="Public Model Identity"
-            subtitle="The model identifier expected in client API request payloads."
-          >
+        <div class="space-y-5">
+          <ModalSection title="Model ID & Status">
             <div class="space-y-3.5">
               <ModalField
-                label="Public model ID"
+                label="Identifier"
                 hint={
                   editing() === "new"
                     ? "What clients send as `model` parameter"
-                    : "Renaming updates the ID in-place; client applications must point to the new ID"
+                    : "Renaming updates the ID in-place"
                 }
               >
                 <input
                   type="text"
                   value={fId()}
                   onInput={(e) => setFId(e.currentTarget.value)}
-                  placeholder="e.g. hf:zai-org/GLM-5.2 or gpt-4o"
+                  placeholder="e.g. gpt-4o, claude-3-7-sonnet"
                   class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
                 />
               </ModalField>
@@ -741,7 +960,6 @@ export default function AdminModelsPage() {
                 checked={fEnabled()}
                 onChange={setFEnabled}
                 title="Model active in registry"
-                description="When disabled, client requests targeting this model in router mode will immediately return a 404 response."
               />
             </div>
           </ModalSection>
@@ -750,7 +968,6 @@ export default function AdminModelsPage() {
           <ModalSection
             title="Routing Targets · Fallback Order"
             info="The gateway cascades requests top-down. If an upstream provider hits billing (402) or transient rate limits, the gateway rewrites the model and cascades to the next candidate."
-            subtitle="Requests walk targets top-down. Fallback occurs before the first response byte reaches the client."
           >
             <div class="space-y-2.5">
               {/* Column header (desktop / tablet) */}
@@ -883,15 +1100,12 @@ export default function AdminModelsPage() {
                 }
               >
                 <Icon name={Icons.plus} size={13} />
-                <span>+ Add another fallback target</span>
+                <span>Add fallback target</span>
               </button>
             </div>
           </ModalSection>
 
-          <ModalSection
-            title="Tool Calling"
-            subtitle="How the gateway handles tool calls for this model."
-          >
+          <ModalSection title="Capabilities">
             <Select
               label="Tool calling mode"
               value={fToolCallMode()}
@@ -902,32 +1116,28 @@ export default function AdminModelsPage() {
                 { value: "workaround", label: "Workaround (XML)" },
                 { value: "own", label: "Own workaround (fenced JSON)" },
               ]}
-              hint="Native only: native tools, no markup recovery. Fallback: native tools kept, but markup tool calls are recovered from every format. Workaround: strips tools and teaches the xiaomi XML format. Own workaround: strips tools and teaches a fenced tool_call JSON block — use when the provider rewrites the XML format (e.g. OpenAI)."
+              hint="Fallback recovers tool calls from markup formats if provider lacks native support."
             />
           </ModalSection>
 
-          <ModalSection
-            title="Advanced Metadata & Pricing"
-            subtitle="Parameters advertised to clients querying GET /v1/models."
-          >
-            <div class="rounded-xl border border-line bg-ink-900/40 p-4 space-y-4">
-              <button
-                type="button"
-                onClick={() => setShowAdvanced(!showAdvanced())}
-                class="w-full flex items-center justify-between text-xs font-medium text-ink-300 hover:text-ink-100 transition-colors cursor-pointer"
-              >
-                <span class="flex items-center gap-2">
-                  <Icon
-                    name={Icons.chevronDown}
-                    size={14}
-                    class={`transition-transform duration-200 ${showAdvanced() ? "rotate-180" : ""}`}
-                  />
-                  <span>{showAdvanced() ? "Hide advanced metadata" : "Show advanced metadata & pricing parameters"}</span>
-                </span>
-                <span class="text-[11px] text-ink-500">Optional</span>
-              </button>
-              <Show when={showAdvanced()}>
-                <div class="space-y-4 pt-3 border-t border-line">
+          <div class="rounded-xl border border-line bg-elev/70 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced())}
+              class="w-full flex items-center justify-between px-4 py-3 text-xs font-medium text-ink-300 hover:text-ink-100 hover:bg-card/40 transition-colors cursor-pointer"
+            >
+              <span class="flex items-center gap-2">
+                <Icon
+                  name={Icons.chevronDown}
+                  size={14}
+                  class={`transition-transform duration-200 ${showAdvanced() ? "rotate-180" : ""}`}
+                />
+                <span>Advanced parameters & pricing</span>
+              </span>
+              <span class="text-[10px] text-ink-500 bg-ink-950/60 px-2 py-0.5 rounded border border-line/60">Optional</span>
+            </button>
+            <Show when={showAdvanced()}>
+              <div class="p-4 pt-3 border-t border-line space-y-4 bg-card/20">
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <ModalField label="Display name">
                       <input
@@ -1035,7 +1245,6 @@ export default function AdminModelsPage() {
                 </div>
               </Show>
             </div>
-          </ModalSection>
         </div>
       </Modal>
 

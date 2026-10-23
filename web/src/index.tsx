@@ -152,7 +152,7 @@ function RailItem(props: { item: NavItem; current: string; badge?: number }) {
         </Show>
         <span class="hidden lg:block text-xs font-medium truncate">{props.item.label}</span>
         <Show when={(props.badge ?? 0) > 0}>
-          <span class="absolute top-0.5 right-0.5 lg:static lg:ml-auto min-w-4 h-4 px-1 rounded-md bg-brand-500/10 text-brand-500 text-[9px] font-medium leading-4 text-center tabular-nums">
+          <span class="hidden lg:inline-flex lg:ml-auto min-w-4 h-4 px-1.5 items-center justify-center rounded-md bg-elev border border-line text-ink-400 text-[10px] font-mono leading-none tabular-nums">
             {props.badge}
           </span>
         </Show>

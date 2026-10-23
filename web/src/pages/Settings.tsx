@@ -8,6 +8,16 @@ import {
   Badge, Btn, Card, IconBtn, CardHeader, Icon, Icons, Input, Modal, ModalField, ModalNotice, Segmented, Spinner, copyWithToast, fmtDate, setThemeMode, themeMode, toast,
 } from "../ui";
 
+function parseUa(ua?: string) {
+  if (!ua) return null;
+  if (ua.includes("Bun/")) return `Bun runtime · ${ua}`;
+  if (ua.includes("Chrome") && !ua.includes("Edg")) return "Google Chrome";
+  if (ua.includes("Safari") && !ua.includes("Chrome")) return "Safari";
+  if (ua.includes("Firefox")) return "Firefox";
+  if (ua.includes("Edg")) return "Microsoft Edge";
+  return ua;
+}
+
 export default function SettingsPage() {
   const me = () => currentSession()!.user;
   const [name, setName] = createSignal(me().name);
@@ -180,26 +190,28 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <PageTitle title="Settings" subtitle="Profile, security and active sessions" />
+      <PageTitle title="Settings" />
 
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" {...usalItems("fade-u", 90)}>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>
-          <CardHeader title="Profile & Appearance" subtitle="Personal details and interface theme" />
+          <CardHeader title="Profile & Appearance" />
           <div class="px-5 pb-5 space-y-5">
             <div class="space-y-4">
-              <Input label="Display name" value={name()} onInput={setName} />
-              <div>
-                <span class="block text-xs font-medium text-ink-300 mb-1.5">Email</span>
-                <div class="text-sm text-ink-400">{me().email}</div>
+              <div class="flex items-end gap-3">
+                <div class="flex-1">
+                  <Input label="Display name" value={name()} onInput={setName} />
+                </div>
+                <Btn onClick={saveName} disabled={busy() || !name().trim() || name() === me().name}>Save</Btn>
               </div>
-              <div class="flex justify-end">
-                <Btn onClick={saveName} disabled={busy() || !name().trim()}>Save</Btn>
+              <div>
+                <span class="block text-xs font-medium text-ink-300 mb-1">Email</span>
+                <div class="text-sm text-ink-400 font-mono text-xs">{me().email}</div>
               </div>
             </div>
 
             <div class="pt-4 border-t border-line">
               <span class="block text-xs font-medium text-ink-300 mb-0.5">Appearance</span>
-              <p class="text-xs text-ink-400 mb-3">White, dark, or follow the system automatically</p>
+              <p class="text-xs text-ink-400 mb-3">Light, dark, or follow system automatically</p>
               <Segmented
                 value={themeMode()}
                 onChange={setThemeMode}
@@ -214,7 +226,7 @@ export default function SettingsPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Password" subtitle={me().hasPassword ? "Change your password" : "You don't have a password yet — set one"} />
+          <CardHeader title="Password" subtitle={me().hasPassword ? undefined : "Set account password"} />
           <div class="px-5 pb-5 space-y-4">
             <Show when={me().hasPassword}>
               <Input label="Current password" type="password" value={curPw()} onInput={setCurPw} autocomplete="current-password" />
@@ -228,17 +240,13 @@ export default function SettingsPage() {
         </Card>
 
         <Card class="lg:col-span-2">
-          <CardHeader
-            title="Two-factor authentication & Google account"
-            subtitle="Two-factor verification and linked sign-in accounts"
-          />
-          <div class="px-5 pb-5">
+          <div class="p-5">
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div class="space-y-4">
                 <div class="flex items-start justify-between gap-3">
                   <div>
                     <h3 class="text-sm font-semibold text-ink-100">Two-factor authentication</h3>
-                    <p class="text-xs text-ink-400 mt-0.5">TOTP (Google Authenticator, Aegis, 1Password…)</p>
+                    <p class="text-xs text-ink-400 mt-0.5">Authenticator app (TOTP)</p>
                   </div>
                   <Badge tone={me().totpEnabled ? "green" : "zinc"}>{me().totpEnabled ? "Enabled" : "Disabled"}</Badge>
                 </div>
@@ -246,41 +254,20 @@ export default function SettingsPage() {
                 <Show
                   when={me().totpEnabled}
                   fallback={
-                    <Show
-                      when={totpSetup()}
-                      fallback={
-                        <Btn variant="outline" onClick={startTotp} disabled={busy()}>
-                          <Icon name={Icons.shield} /> Set up 2FA
-                        </Btn>
-                      }
-                    >
-                      <div class="flex flex-col sm:flex-row gap-4 items-start">
-                        <img src={totpSetup()!.qrDataUrl} alt="TOTP QR code" class="w-36 h-36 rounded-xl border border-line bg-white p-1.5 shadow-sm" />
-                        <div class="flex-1 space-y-3 min-w-0">
-                          <p class="text-xs text-ink-400">Scan with your authenticator, or enter this secret manually:</p>
-                          <div class="flex items-center gap-2">
-                            <code class="text-xs text-emerald-500 break-all select-all">{totpSetup()!.secret}</code>
-                            <Btn variant="ghost" size="sm" onClick={() => copyWithToast(totpSetup()!.secret)}>
-                              <Icon name={Icons.copy} />
-                            </Btn>
-                          </div>
-                          <Input label="Enter the 6-digit code to confirm" value={totpCode()} onInput={setTotpCode}
-                            placeholder="123456" autocomplete="one-time-code" />
-                          <div class="flex gap-2">
-                            <Btn variant="ghost" onClick={() => { setTotpSetup(null); setTotpCode(""); }}>Cancel</Btn>
-                            <Btn onClick={enableTotp} disabled={busy() || totpCode().length !== 6}>
-                              {busy() ? <Spinner /> : "Enable 2FA"}
-                            </Btn>
-                          </div>
-                        </div>
-                      </div>
-                    </Show>
+                    <div class="space-y-3">
+                      <p class="text-xs text-ink-400">Add an extra layer of security using an authenticator app.</p>
+                      <Btn variant="outline" onClick={startTotp} disabled={busy()}>
+                        <Icon name={Icons.shield} /> Set up 2FA
+                      </Btn>
+                    </div>
                   }
                 >
-                  <p class="text-sm text-ink-300">Your account requires a 6-digit code at sign-in.</p>
-                  <Btn variant="ghost" class="text-rose-500 bg-rose-500/10 hover:bg-rose-500/25" onClick={() => setDisableTotpOpen(true)}>
-                    Disable 2FA
-                  </Btn>
+                  <div class="space-y-3">
+                    <p class="text-xs text-ink-300">Your account requires a 6-digit code at sign-in.</p>
+                    <Btn variant="ghost" class="text-rose-400 bg-rose-500/10 hover:bg-rose-500/20" onClick={() => setDisableTotpOpen(true)}>
+                      Disable 2FA
+                    </Btn>
+                  </div>
                 </Show>
               </div>
 
@@ -288,7 +275,6 @@ export default function SettingsPage() {
                 <div class="flex items-start justify-between gap-3">
                   <div>
                     <h3 class="text-sm font-semibold text-ink-100">Google account</h3>
-                    <p class="text-xs text-ink-400 mt-0.5">Sign in faster with a linked Google account</p>
                   </div>
                   <Badge tone={me().googleLinked ? "green" : "zinc"}>{me().googleLinked ? "Linked" : "Not linked"}</Badge>
                 </div>
@@ -314,53 +300,64 @@ export default function SettingsPage() {
       </div>
 
       <Card class="mt-6">
-        <CardHeader title="Active sessions" subtitle="Devices currently signed in" />
+        <CardHeader title="Active sessions" />
         <div class="px-5 pb-5">
           <ul class="divide-y divide-line" {...usalItems("fade-u", 40)}>
             <For each={sessions() ?? []}>
               {(s) => (
-                <li class="py-3 flex items-center justify-between gap-3">
+                <li class="py-3.5 flex items-center justify-between gap-3">
                   <div class="min-w-0">
-                    {s.current ? <Badge tone="indigo">This session</Badge> : null}
-                    <div class={`text-sm flex items-center gap-2 ${s.current ? "mt-2": ""}`}>
+                    <div class="flex items-center gap-2 flex-wrap">
                       <Show
                         when={namingJti() === s.jti}
                         fallback={
-                            <span class={`truncate ${s.current ? "text-brand-500": "text-ink-200"}`}>{s.label || <span class={`truncate ${s.current ? "text-brand-500/70": "text-ink-500"}`}>Unnamed device</span>}</span>
+                          <div class="flex items-center gap-2">
+                            <span class={`text-sm truncate font-medium ${s.current ? "text-brand-400" : "text-ink-200"}`}>
+                              {s.label || "Unnamed device"}
+                            </span>
+                            <button
+                              type="button"
+                              class="text-ink-400 hover:text-ink-200 p-0.5 rounded hover:bg-elev cursor-pointer transition-colors"
+                              title={s.label ? "Rename device" : "Name this device"}
+                              onClick={() => { setNamingJti(s.jti); setSessionLabel(s.label ?? ""); }}
+                            >
+                              <Icon name={Icons.edit} size={13} />
+                            </button>
+                          </div>
                         }
                       >
-                        <input
-                          value={sessionLabel()}
-                          onInput={(e) => setSessionLabel(e.currentTarget.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") saveSessionLabel();
-                            if (e.key === "Escape") setNamingJti(null);
-                          }}
-                          placeholder="e.g. My laptop"
-                          class="rounded-lg border border-line bg-elev px-2.5 py-1.5 text-xs text-ink-100 w-44 focus:border-ink-500 focus:outline-none focus:ring-2 focus:ring-ink-500/10"
-                        />
-                        <Btn size="sm" onClick={saveSessionLabel}>Save</Btn>
-                        <Btn size="sm" variant="ghost" onClick={() => setNamingJti(null)}>Cancel</Btn>
+                        <div class="flex items-center gap-1.5">
+                          <input
+                            value={sessionLabel()}
+                            onInput={(e) => setSessionLabel(e.currentTarget.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveSessionLabel();
+                              if (e.key === "Escape") setNamingJti(null);
+                            }}
+                            placeholder="e.g. My laptop"
+                            class="rounded-lg border border-line bg-elev px-2.5 py-1 text-xs text-ink-100 w-44 focus:border-ink-500 focus:outline-none focus:ring-2 focus:ring-ink-500/10"
+                          />
+                          <Btn size="sm" onClick={saveSessionLabel}>Save</Btn>
+                          <Btn size="sm" variant="ghost" onClick={() => setNamingJti(null)}>Cancel</Btn>
+                        </div>
                       </Show>
+                      {s.current ? <Badge tone="indigo">This session</Badge> : null}
                     </div>
-                     <div class="text-ink-600 mt-0.5 text-xs truncate">
-                      {s.ip ?? "unknown ip"}
+
+                    <div class="text-[11px] text-ink-500 mt-1 space-x-1.5">
+                      <span class="font-mono text-ink-400">{s.ip ?? "unknown ip"}</span>
+                      <span>·</span>
+                      <span>created {fmtDate(s.createdAt)}</span>
+                      <span>·</span>
+                      <span>last used {fmtDate(s.lastUsedAt)}</span>
                     </div>
-                    <div class="text-[11px] text-ink-500 mt-0.5">
-                      created {fmtDate(s.createdAt)} · last used {fmtDate(s.lastUsedAt)} · expires {fmtDate(s.expiresAt)}
-                    </div>
-                    <Show when={s.ua}>
-                      <div class="text-[11px] text-ink-600 truncate max-w-md">{s.ua}</div>
+
+                    <Show when={parseUa(s.ua)}>
+                      <div class="text-[11px] text-ink-500 truncate max-w-md mt-0.5">{parseUa(s.ua)}</div>
                     </Show>
                   </div>
+
                   <div class="flex gap-1 shrink-0">
-                    <Show when={namingJti() !== s.jti}>
-                      <IconBtn
-                          icon={Icons.edit}
-                          title={s.label ? "Rename" : "Name this device"}
-                          onClick={() => { setNamingJti(s.jti); setSessionLabel(s.label ?? ""); }}
-                        />
-                    </Show>
                     <Show when={!s.current}>
                       <IconBtn
                         icon={Icons.logout}
@@ -375,6 +372,76 @@ export default function SettingsPage() {
           </ul>
         </div>
       </Card>
+
+      {/* 2FA Setup Modal */}
+      <Modal
+        open={!!totpSetup()}
+        onClose={() => { setTotpSetup(null); setTotpCode(""); }}
+        title="Set up two-factor authentication"
+        subtitle="Scan the QR code with your authenticator app (1Password, Google Authenticator, Aegis…)"
+        footer={
+          <>
+            <Btn variant="ghost" onClick={() => { setTotpSetup(null); setTotpCode(""); }}>Cancel</Btn>
+            <Btn onClick={enableTotp} disabled={busy() || totpCode().length !== 6}>
+              {busy() ? <Spinner /> : "Enable 2FA"}
+            </Btn>
+          </>
+        }
+      >
+        <div class="space-y-4">
+          <div class="p-4 rounded-xl border border-line bg-elev flex flex-col sm:flex-row gap-5 items-center sm:items-start">
+            <div class="flex flex-col items-center shrink-0">
+              <img
+                src={totpSetup()?.qrDataUrl}
+                alt="TOTP QR code"
+                class="w-36 h-36 rounded-lg border border-line bg-white p-2 shrink-0 shadow-xs"
+              />
+              <span class="text-[11px] text-ink-500 mt-2">Scan with your app</span>
+            </div>
+            <div class="flex-1 w-full space-y-3.5 min-w-0">
+              <div>
+                <div class="flex items-center justify-between mb-1">
+                  <span class="text-xs font-medium text-ink-300">Manual setup key</span>
+                  <button
+                    type="button"
+                    class="p-1 rounded text-ink-400 hover:text-ink-100 hover:bg-elev cursor-pointer transition-colors"
+                    title="Copy secret key"
+                    onClick={() => copyWithToast(totpSetup()?.secret ?? "")}
+                  >
+                    <Icon name={Icons.copy} size={13} />
+                  </button>
+                </div>
+                <div
+                  onClick={() => copyWithToast(totpSetup()?.secret ?? "")}
+                  class="rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-center cursor-pointer hover:border-brand-500/50 transition-colors group"
+                  title="Click to copy secret key"
+                >
+                  <code class="text-[11px] sm:text-xs font-mono text-emerald-400 tracking-wider select-all block break-all">
+                    {totpSetup()?.secret?.match(/.{1,4}/g)?.join(" ") ?? totpSetup()?.secret}
+                  </code>
+                </div>
+              </div>
+
+              <div>
+                <span class="block text-xs font-medium text-ink-300 mb-1">Verification code</span>
+                <input
+                  type="text"
+                  value={totpCode()}
+                  onInput={(e) => setTotpCode(e.currentTarget.value.trim())}
+                  placeholder="000 000"
+                  autocomplete="one-time-code"
+                  maxlength={6}
+                  autofocus
+                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-center text-base tracking-widest font-mono text-ink-100 placeholder:text-ink-600 focus:border-brand-500 focus:outline-none transition-colors"
+                />
+                <span class="text-[11px] text-ink-500 mt-1 block text-center sm:text-left">
+                  Enter the 6-digit code from your authenticator app
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={disableTotpOpen()}

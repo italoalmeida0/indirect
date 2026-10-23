@@ -516,7 +516,6 @@ export default function AdminProvidersPage() {
         open={!!editing()}
         onClose={() => setEditing(null)}
         title={editing() === "new" ? "New provider" : `Edit ${name()}`}
-        subtitle="Configure upstream API endpoints, capability authentication headers, and failover priority."
         width="max-w-xl"
         footer={
           <>
@@ -541,11 +540,8 @@ export default function AdminProvidersPage() {
           </>
         }
       >
-        <div class="space-y-6">
-          <ModalSection
-            title="Provider Identity & State"
-            subtitle="Display label and failover priority ranking."
-          >
+        <div class="space-y-5">
+          <ModalSection title="General">
             <div class="space-y-3.5">
               <ModalField label="Provider name">
                 <input
@@ -560,13 +556,13 @@ export default function AdminProvidersPage() {
               <SwitchCard
                 checked={enabled()}
                 onChange={setEnabled}
-                title="Provider active in routing table"
-                description="When disabled, all routes, models, and keys linked to this provider are skipped during failover."
+                title="Active in routing"
+                description="When disabled, this provider and its models are skipped during failover."
               />
 
               <ModalField
-                label="Priority ranking (lower number = preferred)"
-                hint="Order in which this provider is attempted during failover cascades."
+                label="Priority"
+                hint="Lower number = preferred in failover cascades."
               >
                 <input
                   type="number"
@@ -580,11 +576,8 @@ export default function AdminProvidersPage() {
             </div>
           </ModalSection>
 
-          <ModalSection
-            title="Upstream Protocol Endpoints"
-            subtitle="Configure API base URLs and authentication header styles. Leave empty if a protocol is not supported."
-          >
-            <div class="space-y-3.5 rounded-xl border border-line bg-ink-900/40 p-4">
+          <ModalSection title="Protocol Endpoints">
+            <div class="space-y-3.5 rounded-xl border border-line bg-ink-900/40 p-3.5">
               <div class="space-y-2">
                 <ModalField label="OpenAI-compatible base URL">
                   <input
@@ -596,7 +589,7 @@ export default function AdminProvidersPage() {
                   />
                 </ModalField>
                 <div class="flex items-center justify-between gap-3 pt-0.5">
-                  <span class="text-xs text-ink-400">Send OpenAI key as</span>
+                  <span class="text-xs text-ink-400">Auth style</span>
                   <Segmented value={openaiAuth()} onChange={setOpenaiAuth} options={AUTH_STYLE_OPTIONS} />
                 </div>
               </div>
@@ -612,7 +605,7 @@ export default function AdminProvidersPage() {
                   />
                 </ModalField>
                 <div class="flex items-center justify-between gap-3 pt-0.5">
-                  <span class="text-xs text-ink-400">Send Anthropic key as</span>
+                  <span class="text-xs text-ink-400">Auth style</span>
                   <Segmented value={anthropicAuth()} onChange={setAnthropicAuth} options={AUTH_STYLE_OPTIONS} />
                 </div>
               </div>
@@ -628,22 +621,19 @@ export default function AdminProvidersPage() {
                   />
                 </ModalField>
                 <div class="flex items-center justify-between gap-3 pt-0.5">
-                  <span class="text-xs text-ink-400">Send Responses key as</span>
+                  <span class="text-xs text-ink-400">Auth style</span>
                   <Segmented value={responsesAuth()} onChange={setResponsesAuth} options={AUTH_STYLE_OPTIONS} />
                 </div>
               </div>
             </div>
           </ModalSection>
 
-          <ModalSection
-            title="Credentials & Sanitization"
-            subtitle="Upstream API key and request parameter filtering."
-          >
+          <ModalSection title="Credentials & Filters">
             <div class="space-y-3.5">
               <Show when={editing() === "new"}>
                 <ModalField
                   label="Upstream API key"
-                  hint="Stored with AES-256-GCM encryption. Fallback keys can be added after saving."
+                  hint="Encrypted with AES-256-GCM. Additional keys can be added after saving."
                 >
                   <input
                     type="password"
@@ -657,8 +647,8 @@ export default function AdminProvidersPage() {
               </Show>
 
               <ModalField
-                label="Blocked upstream params"
-                hint="Comma-separated keys stripped before forwarding upstream (for providers that reject unexpected flags)."
+                label="Blocked parameters"
+                hint="Comma-separated query/body keys stripped before forwarding upstream."
               >
                 <input
                   type="text"

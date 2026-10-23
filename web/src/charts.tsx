@@ -50,10 +50,12 @@ function axisNum(value: number): string {
 }
 
 function axisCost(value: number): string {
+  if (value === 0 || Math.abs(value) < 0.0001) return "$0";
   if (value >= 100) return `$${fmtNum(Math.round(value))}`;
-  if (value >= 1) return `$${value.toFixed(1)}`;
+  if (value >= 10) return `$${Math.round(value)}`;
+  if (value >= 1) return `$${value % 1 === 0 ? value.toFixed(0) : value.toFixed(1)}`;
   if (value >= 0.01) return `$${value.toFixed(2)}`;
-  return `$${value.toFixed(3)}`;
+  return `$${value.toFixed(2)}`;
 }
 
 function ChartFrame(props: { height: number; children: JSX.Element }) {
@@ -156,7 +158,6 @@ export function DailyChart(props: {
   resetKey?: string;
 }) {
   const metric = () => props.metric ?? "tokens";
-  const unit = () => props.unit ?? "day";
   const data = createMemo<DailyChartPoint[]>(() =>
     props.series.slice(-30).map((point) => ({
       ...point,
@@ -306,81 +307,41 @@ export function DailyChart(props: {
           </ChartFrame>
         )}
       </Show>
-      <div class="flex min-h-[18px] flex-wrap items-center gap-x-4 gap-y-1 px-2 pt-1 text-[11px] text-ink-400">
+      <div class="flex min-h-[18px] items-center gap-x-4 gap-y-1 px-1 pt-1.5 text-[11px] text-ink-400">
         <Show
-          when={metric() === "tokens"}
+          when={metric() === "requests"}
           fallback={
-            <Show
-              when={metric() === "cost"}
-              fallback={
-                <span class="inline-flex items-center gap-1.5">
-                  <span
-                    class="inline-block h-2.5 w-2.5 rounded-sm"
-                    style={{ background: OUT_BAR }}
-                  />
-                  Requests
-                </span>
-              }
-            >
-              <>
-                <span class="inline-flex items-center gap-1.5">
-                  <span
-                    class="inline-block h-2.5 w-2.5 rounded-sm"
-                    style={{ background: IN_BAR }}
-                  />
-                  Input cost
-                </span>
-                <span class="inline-flex items-center gap-1.5">
-                  <span
-                    class="inline-block h-2.5 w-2.5 rounded-sm"
-                    style={{ background: CACHE_BAR }}
-                  />
-                  Cache cost
-                </span>
-                <span class="inline-flex items-center gap-1.5">
-                  <span
-                    class="inline-block h-2.5 w-2.5 rounded-sm"
-                    style={{ background: OUT_BAR }}
-                  />
-                  Output cost
-                </span>
-              </>
-            </Show>
+            <>
+              <span class="inline-flex items-center gap-1.5">
+                <span
+                  class="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ background: IN_BAR }}
+                />
+                Input
+              </span>
+              <span class="inline-flex items-center gap-1.5">
+                <span
+                  class="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ background: CACHE_BAR }}
+                />
+                Cache
+              </span>
+              <span class="inline-flex items-center gap-1.5">
+                <span
+                  class="inline-block h-2.5 w-2.5 rounded-sm"
+                  style={{ background: OUT_BAR }}
+                />
+                Output
+              </span>
+            </>
           }
         >
-          <>
-            <span class="inline-flex items-center gap-1.5">
-              <span
-                class="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ background: IN_BAR }}
-              />
-              Input
-            </span>
-            <span class="inline-flex items-center gap-1.5">
-              <span
-                class="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ background: CACHE_BAR }}
-              />
-              Input cache
-            </span>
-            <span class="inline-flex items-center gap-1.5">
-              <span
-                class="inline-block h-2.5 w-2.5 rounded-sm"
-                style={{ background: OUT_BAR }}
-              />
-              Output
-            </span>
-          </>
-        </Show>
-        <span class="inline-flex items-center gap-1.5">
-          <span class="inline-block h-2.5 w-2.5 rounded-sm bg-brand-500" />
-          Latest {unit()}
-        </span>
-        <Show when={metric() === "tokens"}>
-          <span
-            class="text-[10px] text-ink-500"
-          >
-            Balanced scale
+          <span class="inline-flex items-center gap-1.5">
+            <span
+              class="inline-block h-2.5 w-2.5 rounded-sm"
+              style={{ background: OUT_BAR }}
+            />
+            Requests
           </span>
         </Show>
       </div>
@@ -451,7 +412,7 @@ export function AreaChart(props: {
                     <AxisLabel
                       fill="var(--chart-tick)"
                       font-size="10"
-                      interval={Math.max(1, Math.ceil(chartPoints.length / 4))}
+                      interval={Math.max(1, Math.ceil(chartPoints.length / 6))}
                     />
                     <AxisLine stroke="var(--chart-grid)" />
                     <AxisCursor

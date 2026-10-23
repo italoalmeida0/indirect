@@ -5,7 +5,6 @@ import { PageTitle } from "../../index";
 import { usalItems } from "../../motion";
 import { DailyChart } from "../../charts";
 import {
-  Badge,
   Card,
   CardHeader,
   EmptyState,
@@ -13,7 +12,6 @@ import {
   Segmented,
   Select,
   StatCard,
-  Tooltip,
   fmtCost,
   fmtNum,
   windowLabel,
@@ -116,49 +114,6 @@ const modelCols: ColDef<ModelRow>[] = [
   { field: "cost", headerName: "Total Cost", width: 105, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
 ];
 
-/** Compact MB formatter for the KV chip (10.4/400 MB). */
-function fmtMB(bytes: number): string {
-  const mb = bytes / (1024 * 1024);
-  return mb >= 100 ? String(Math.round(mb)) : mb.toFixed(1);
-}
-
-/** KV-cache chip for the Global overview header: used/cap % + TTL.
- * The snapshot rides the stats payload (memoized server-side for 60s),
- * so the chip never polls — it renders what arrived with the page. */
-function KvCacheChip(props: { snapshot?: KvCacheSnapshot }) {
-  const snap = () => props.snapshot;
-  const used = () => snap()?.bytes ?? 0;
-  const cap = () => Math.max(1, snap()?.max_bytes ?? 1);
-  const pct = () => Math.min(100, (used() / cap()) * 100);
-  const ttlMin = () => Math.round((snap()?.ttl_seconds ?? 600) / 60);
-  const tone = () => (pct() >= 90 ? "red" : pct() >= 70 ? "amber" : "zinc");
-  const tip = () => {
-    const s = snap();
-    if (!s) return "KV cache snapshot unavailable";
-    const age = Math.max(0, Math.round((Date.now() - s.captured_at) / 1000));
-    return (
-      <span>
-        Prefix-cache kept inside btdby4 for zero-usage inference
-        <br />
-        {s.namespaces} namespace(s) · {s.nodes} node(s) · {s.branches} branche(s) · {fmtNum(s.tokens)} token(s)
-        <br />
-        Snapshot {age}s old (refreshes every 60s)
-      </span>
-    );
-  };
-  return (
-    <Show when={snap()}>
-      <Tooltip content={tip()}>
-        <span class="inline-flex items-center">
-          <Badge tone={tone()}>
-            KV {fmtMB(used())}/{fmtMB(cap())} MB {pct() < 10 && pct() > 0 ? pct().toFixed(1) : Math.round(pct())}% · TTL {ttlMin()} MIN
-          </Badge>
-        </span>
-      </Tooltip>
-    </Show>
-  );
-}
-
 /** Card heading split in two tight spans so long windows never wrap. */
 function CardLabel(props: { title: string; window: string }) {
   return (
@@ -260,6 +215,20 @@ export default function AdminStatsPage() {
   );
   const [chartMetric, setChartMetric] = createSignal<"tokens" | "requests" | "cost">("tokens");
 
+  const usersGridHeight = () => {
+    const c = breakdownCounts()?.users ?? 0;
+    if (c <= 2) return "h-[190px]";
+    if (c <= 4) return "h-[250px]";
+    return "h-[420px]";
+  };
+
+  const modelsGridHeight = () => {
+    const c = breakdownCounts()?.models ?? 0;
+    if (c <= 2) return "h-[190px]";
+    if (c <= 4) return "h-[260px]";
+    return "h-[420px]";
+  };
+
   return (
     <div>
       <PageTitle
@@ -267,12 +236,8 @@ export default function AdminStatsPage() {
         subtitle="All users, all keys"
         right={
           <div class="flex flex-wrap items-end gap-3">
-            <div class="pb-0.5">
-              <KvCacheChip snapshot={stats()?.kvCache} />
-            </div>
             <div class="w-56">
               <Select
-                label="Provider"
                 value={providerId()}
                 onChange={setProviderId}
                 options={providerOptions()}
@@ -296,7 +261,7 @@ export default function AdminStatsPage() {
 
       <Show when={stats() && !stats.loading}>
         <div
-          class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 mb-5"
+          class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-4 mb-5"
           {...usalItems("fade-u", 90)}
         >
           <StatCard
@@ -329,13 +294,13 @@ export default function AdminStatsPage() {
           />
           <StatCard
             icon={Icons.users}
-            label={<CardLabel title="Users" window={" "} />}
+            label="Users"
             countValue={stats()!.counts.users}
-            sub={<span>{stats()!.counts.providers} provider(s)</span>}
+            sub={<span>Registered accounts</span>}
           />
           <StatCard
             icon={Icons.key}
-            label={<CardLabel title="API keys" window={" "} />}
+            label="API keys"
             value={`${stats()!.counts.activeKeys}/${stats()!.counts.keys}`}
             sub={<span>active / total</span>}
           />
@@ -391,6 +356,7 @@ export default function AdminStatsPage() {
                     datasource={usersDatasource}
                     cacheBlockSize={100}
                     refreshDeps={`${days()}:${providerId()}`}
+                    heightClass={usersGridHeight()}
                     storageKey="llmgw-grid:admin.stats.users"
                     totals={usersTotals()}
                   />
@@ -422,6 +388,7 @@ export default function AdminStatsPage() {
                     datasource={modelsDatasource}
                     cacheBlockSize={100}
                     refreshDeps={`${days()}:${providerId()}`}
+                    heightClass={modelsGridHeight()}
                     storageKey="llmgw-grid:admin.stats.models"
                     totals={modelsTotals()}
                   />

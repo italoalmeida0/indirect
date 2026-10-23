@@ -1,4 +1,4 @@
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 
 import { api, type ApiKeyDto } from "../api";
 import { PageTitle } from "../index";
@@ -73,10 +73,44 @@ export default function KeysPage() {
     return j.total;
   });
   const [gridVersion, setGridVersion] = createSignal(0);
+  const [keysList, { refetch: refetchKeysList }] = createResource(gridVersion, async () => {
+    try {
+      const j = await api<{ keys: ApiKeyDto[] }>("GET", "/api/keys?limit=100");
+      return j.keys;
+    } catch {
+      return [];
+    }
+  });
   const refreshGrid = () => {
     setGridVersion((v) => v + 1);
     refetchKeyCount();
+    refetchKeysList();
   };
+
+  const [cardSearch, setCardSearch] = createSignal("");
+  const [cardStatusFilter, setCardStatusFilter] = createSignal<"all" | "active" | "revoked" | "exhausted">("all");
+
+  const filteredKeys = createMemo(() => {
+    let list = keysList() ?? [];
+    const st = cardStatusFilter();
+    if (st !== "all") {
+      list = list.filter((k) => k.status === st);
+    }
+    const q = cardSearch().trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (k) =>
+          k.name.toLowerCase().includes(q) ||
+          k.prefix.toLowerCase().includes(q) ||
+          (k.id && k.id.toLowerCase().includes(q)),
+      );
+    }
+    return list;
+  });
+
+  const activeCount = createMemo(() => (keysList() ?? []).filter((k) => k.status === "active").length);
+  const revokedCount = createMemo(() => (keysList() ?? []).filter((k) => k.status === "revoked").length);
+  const exhaustedCount = createMemo(() => (keysList() ?? []).filter((k) => k.status === "exhausted").length);
   const keysDatasource = serverDatasource<ApiKeyDto>(async (params) => {
     const qs = new URLSearchParams({
       limit: String(Math.min(params.endRow - params.startRow, 500)),
@@ -249,16 +283,18 @@ export default function KeysPage() {
     const used = today ? k.outputToday : k.outputTotal;
     const limit = today ? k.dailyLimit : k.totalLimit;
     return (
-      <div class="flex items-center justify-end gap-2">
-        <span class="tabular-nums whitespace-nowrap">
+      <div class="flex items-center justify-end gap-2 w-full pr-1">
+        <span class="tabular-nums whitespace-nowrap text-xs text-right">
           {fmtNum(used)}
-          {limit ? <span class="text-ink-500"> / {fmtNum(limit)}</span> : ""}
+          <span class="text-ink-500 font-normal"> / {limit ? fmtNum(limit) : "Unlimited"}</span>
         </span>
-        {limit ? (
-          <div class="w-16 shrink-0">
+        <div class="w-16 shrink-0 flex items-center justify-center">
+          {limit ? (
             <ProgressBar danger value={used} max={limit} />
-          </div>
-        ) : null}
+          ) : (
+            <span class="text-[10px] text-ink-600 font-mono leading-none">—</span>
+          )}
+        </div>
       </div>
     );
   }
@@ -354,7 +390,7 @@ export default function KeysPage() {
       filter: false,
       floatingFilter: false,
       resizable: false,
-      pinned: "right",
+      pinned: typeof window !== "undefined" && window.innerWidth >= 1024 ? "right" : undefined,
     },
   ];
 
@@ -362,7 +398,6 @@ export default function KeysPage() {
     <div>
       <PageTitle
         title="API Keys"
-        subtitle="Keys authenticate your requests to the gateway endpoints"
         right={
           <Btn onClick={() => setShowCreate(true)}>
             <Icon name={Icons.plus} /> New key
@@ -381,7 +416,8 @@ export default function KeysPage() {
             />
           }
         >
-          <div class="p-2">
+          {/* Desktop & Tablet AG Grid (table view on md+ screens) */}
+          <div class="hidden md:block p-2">
             <UsageGrid
               columnDefs={cols}
               datasource={keysDatasource}
@@ -389,6 +425,176 @@ export default function KeysPage() {
               refreshDeps={gridVersion()}
               storageKey="llmgw-grid:keys.user"
             />
+          </div>
+
+          {/* Touch / Mobile Card List */}
+          <div class="md:hidden p-3 space-y-3">
+            {/* Search & Filter Toolbar */}
+            <div class="p-3 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
+              <div class="relative">
+                <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-ink-500">
+                  <Icon name={Icons.search} size={15} />
+                </span>
+                <input
+                  type="text"
+                  value={cardSearch()}
+                  onInput={(e) => setCardSearch(e.currentTarget.value)}
+                  placeholder="Search keys by name or prefix…"
+                  class="w-full rounded-lg border border-line bg-card pl-9 pr-8 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                />
+                <Show when={cardSearch()}>
+                  <button
+                    type="button"
+                    onClick={() => setCardSearch("")}
+                    class="absolute inset-y-0 right-0 pr-2.5 flex items-center text-ink-400 hover:text-ink-200 cursor-pointer"
+                  >
+                    <Icon name={Icons.x} size={14} />
+                  </button>
+                </Show>
+              </div>
+
+              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div class="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
+                  <FilterChip
+                    selected={cardStatusFilter() === "all"}
+                    onClick={() => setCardStatusFilter("all")}
+                    class="shrink-0"
+                  >
+                    All ({(keysList() ?? []).length})
+                  </FilterChip>
+                  <FilterChip
+                    selected={cardStatusFilter() === "active"}
+                    onClick={() => setCardStatusFilter("active")}
+                    class="shrink-0"
+                  >
+                    Active ({activeCount()})
+                  </FilterChip>
+                  <Show when={revokedCount() > 0}>
+                    <FilterChip
+                      selected={cardStatusFilter() === "revoked"}
+                      onClick={() => setCardStatusFilter("revoked")}
+                      class="shrink-0"
+                    >
+                      Revoked ({revokedCount()})
+                    </FilterChip>
+                  </Show>
+                  <Show when={exhaustedCount() > 0}>
+                    <FilterChip
+                      selected={cardStatusFilter() === "exhausted"}
+                      onClick={() => setCardStatusFilter("exhausted")}
+                      class="shrink-0"
+                    >
+                      Exhausted ({exhaustedCount()})
+                    </FilterChip>
+                  </Show>
+                </div>
+                <span class="text-[11px] text-ink-500 tabular-nums shrink-0">
+                  Showing {filteredKeys().length} of {(keysList() ?? []).length}
+                </span>
+              </div>
+            </div>
+
+            <Show
+              when={filteredKeys().length > 0}
+              fallback={
+                <div class="p-8 text-center rounded-xl border border-line/60 bg-elev space-y-2">
+                  <p class="text-xs text-ink-400">
+                    No keys match your filters.
+                  </p>
+                  <Show when={cardSearch() || cardStatusFilter() !== "all"}>
+                    <button
+                      type="button"
+                      onClick={() => { setCardSearch(""); setCardStatusFilter("all"); }}
+                      class="text-xs text-brand-400 hover:underline cursor-pointer"
+                    >
+                      Reset filters
+                    </button>
+                  </Show>
+                </div>
+              }
+            >
+              <div class="space-y-3">
+                <For each={filteredKeys()}>
+                  {(k) => (
+                    <div class="p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
+                      {/* Key name full width without premature ellipsis */}
+                      <div class="space-y-1.5">
+                        <div class="flex items-start justify-between gap-2">
+                          <h4 class="text-sm font-semibold text-ink-100 break-normal min-w-0">{k.name}</h4>
+                          <span class="text-[11px] text-ink-400 shrink-0 font-mono">
+                            {k.expiresAt ? `Exp: ${fmtDate(k.expiresAt)}` : "Permanent"}
+                          </span>
+                        </div>
+                        <div class="flex items-center justify-between text-xs gap-2">
+                          <div class="flex items-center gap-2">
+                            <code class="text-xs font-mono text-ink-300 bg-ink-950/60 px-2 py-0.5 rounded border border-line/60">{k.prefix}…</code>
+                            <Badge tone={k.status === "active" ? "green" : k.status === "exhausted" ? "amber" : "zinc"}>
+                              {k.status}
+                            </Badge>
+                          </div>
+                          <span class="text-[11px] text-ink-500">
+                            {k.lastUsedAt ? `Used: ${fmtDate(k.lastUsedAt)}` : "Never used"}
+                          </span>
+                        </div>
+                      </div>
+
+                      <Show when={k.totalLimit || k.dailyLimit}>
+                        <div class="pt-2 border-t border-line/50 space-y-1.5 text-xs text-ink-400">
+                          <Show when={k.dailyLimit}>
+                            <div class="flex justify-between">
+                              <span>Daily limit</span>
+                              <span class="font-mono text-ink-200">{fmtNum(k.dailyLimit!)} tok</span>
+                            </div>
+                          </Show>
+                          <Show when={k.totalLimit}>
+                            <div class="flex justify-between">
+                              <span>Total cap</span>
+                              <span class="font-mono text-ink-200">{fmtNum(k.outputTotal ?? 0)} / {fmtNum(k.totalLimit!)}</span>
+                            </div>
+                          </Show>
+                        </div>
+                      </Show>
+
+                      <div class="pt-2 border-t border-line/60 flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          class="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer disabled:opacity-30 transition-colors"
+                          disabled={!k.revealable}
+                          onClick={() => copyKey(k)}
+                        >
+                          <Icon name={Icons.copy} size={13} /> Copy
+                        </button>
+                        <button
+                          type="button"
+                          class="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer disabled:opacity-30 transition-colors"
+                          disabled={k.status === "revoked"}
+                          onClick={() => openEdit(k)}
+                        >
+                          <Icon name={Icons.edit} size={13} /> Edit
+                        </button>
+                        <Show when={k.status !== "revoked"}>
+                          <button
+                            type="button"
+                            class="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-ink-400 hover:text-amber-400 hover:bg-amber-500/10 hover:border-amber-500/30 border border-line cursor-pointer transition-colors"
+                            onClick={() => setConfirmRevoke(k)}
+                          >
+                            <Icon name={Icons.ban} size={13} /> Revoke
+                          </button>
+                        </Show>
+                        <button
+                          type="button"
+                          class="h-8 w-8 rounded-lg flex items-center justify-center text-ink-400 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 border border-line cursor-pointer transition-colors"
+                          onClick={() => setConfirmDelete(k)}
+                          aria-label="Delete key"
+                        >
+                          <Icon name={Icons.trash} size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
           </div>
         </Show>
       </Card>
@@ -398,7 +604,6 @@ export default function KeysPage() {
         open={showCreate()}
         onClose={() => setShowCreate(false)}
         title="Create API key"
-        subtitle="Connect an application to your gateway."
         width="max-w-xl"
         footer={
           <>
@@ -412,36 +617,24 @@ export default function KeysPage() {
         }
       >
         <div class="space-y-4">
-          <ModalSection
-            title="Name"
-            subtitle="Choose a name you will recognize later."
-          >
-            <ModalField label="Key name">
-              <input
-                type="text"
-                value={form().name}
-                onInput={(e) => setForm({ ...form(), name: e.currentTarget.value })}
-                placeholder="e.g. production-agent-01"
-                class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-              />
-            </ModalField>
-          </ModalSection>
+          <ModalField label="Key name">
+            <input
+              type="text"
+              value={form().name}
+              onInput={(e) => setForm({ ...form(), name: e.currentTarget.value })}
+              placeholder="e.g. production-agent-01"
+              class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+            />
+          </ModalField>
 
-          <ModalSection
-            title="Expiration"
-            subtitle="Choose how long this key can be used."
-          >
+          <ModalSection title="Expiration">
             <div class="space-y-2.5">
-              <label class="block text-xs font-normal text-ink-300">
-                Select an expiration preset:
-              </label>
               <div class="flex flex-wrap gap-2">
                 <For each={EXPIRY_PRESETS.filter((p) => p.value !== "custom")}>
                   {(preset) => (
                     <FilterChip
                       selected={form().preset === preset.value}
                       onClick={() => setForm({ ...form(), preset: preset.value, customDate: "" })}
-                      onRemove={() => setForm({ ...form(), preset: "never", customDate: "" })}
                     >
                       {preset.label}
                     </FilterChip>
@@ -482,7 +675,6 @@ export default function KeysPage() {
           <ModalSection
             title="Output token budgets"
             info="Key budgets cap output tokens only. Input and cached tokens are tracked for visibility and never deplete key budget."
-            subtitle="Limit the output tokens this key can use."
           >
             <div class="space-y-3">
               <div class="flex items-center justify-between flex-wrap gap-2">
@@ -515,7 +707,7 @@ export default function KeysPage() {
               </div>
 
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <ModalField label="Daily output limit" hint="Output tokens · resets 00:00 UTC">
+                <ModalField label="Daily output limit" hint="Resets 00:00 UTC">
                   <input
                     type="number"
                     min={1}
@@ -525,7 +717,7 @@ export default function KeysPage() {
                     class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
                   />
                 </ModalField>
-                <ModalField label="Total output limit" hint="Output tokens · permanent cap">
+                <ModalField label="Total output limit" hint="Permanent cap">
                   <input
                     type="number"
                     min={1}
@@ -539,16 +731,12 @@ export default function KeysPage() {
             </div>
           </ModalSection>
 
-          <ModalSection
-            title="Request limits"
-            subtitle="Control how frequently this key can send requests."
-          >
+          <ModalSection title="Request limits">
             <div class="space-y-3">
               <SwitchCard
                 checked={form().rpm !== ""}
                 onChange={(checked) => setForm({ ...form(), rpm: checked ? (form().rpm || "120") : "" })}
                 title="Enable per-minute rate limiting (RPM)"
-                description="Set the maximum requests allowed per minute."
               />
               <Show when={form().rpm !== ""}>
                 <div class="pl-12">
@@ -597,24 +785,17 @@ export default function KeysPage() {
         }
       >
         <div class="space-y-4">
-          <ModalSection
-            title="Name"
-            subtitle="Choose a name you will recognize later."
-          >
-            <ModalField label="Key name">
-              <input
-                type="text"
-                value={form().name}
-                onInput={(e) => setForm({ ...form(), name: e.currentTarget.value })}
-                class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-              />
-            </ModalField>
-          </ModalSection>
+          <ModalField label="Key name">
+            <input
+              type="text"
+              value={form().name}
+              onInput={(e) => setForm({ ...form(), name: e.currentTarget.value })}
+              placeholder="e.g. production-agent-01"
+              class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+            />
+          </ModalField>
 
-          <ModalSection
-            title="Expiration"
-            subtitle="Update key expiration timestamp or leave permanent."
-          >
+          <ModalSection title="Expiration">
             <div class="space-y-2.5">
               <div class="flex flex-wrap gap-2">
                 <For each={EXPIRY_PRESETS.filter((p) => p.value !== "custom")}>
@@ -622,7 +803,6 @@ export default function KeysPage() {
                     <FilterChip
                       selected={form().preset === preset.value}
                       onClick={() => setForm({ ...form(), preset: preset.value, customDate: "" })}
-                      onRemove={() => setForm({ ...form(), preset: "never", customDate: "" })}
                     >
                       {preset.label}
                     </FilterChip>
@@ -663,7 +843,6 @@ export default function KeysPage() {
           <ModalSection
             title="Output token budgets"
             info="Budgets only cap output tokens; prompt and cache tokens are tracked separately."
-            subtitle="Adjust quota thresholds. Increasing the total limit immediately reactivates an exhausted key."
           >
             <div class="space-y-3">
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -691,16 +870,12 @@ export default function KeysPage() {
             </div>
           </ModalSection>
 
-          <ModalSection
-            title="Request limits"
-            subtitle="Per-minute request throttling across this credential."
-          >
+          <ModalSection title="Request limits">
             <div class="space-y-3">
               <SwitchCard
                 checked={form().rpm !== ""}
                 onChange={(checked) => setForm({ ...form(), rpm: checked ? (form().rpm || "120") : "" })}
                 title="Enable per-minute rate limiting (RPM)"
-                description="Limit sliding-window request concurrency for this API key."
               />
               <Show when={form().rpm !== ""}>
                 <div class="pl-12">
@@ -737,7 +912,7 @@ export default function KeysPage() {
               onClick={() => copyWithToast(newToken())}
             >
               <Icon name={Icons.copy} size={13} />
-              <span>Copy key</span>
+              <span>Copy</span>
             </Btn>
             <Btn
               size="sm"

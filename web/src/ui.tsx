@@ -356,7 +356,7 @@ export function IconBtn(props: {
 }
 
 /** Green/red pill showing a percent change vs the previous period (▲/▼). */
-export function DeltaPill(props: { pct: number }) {
+export function DeltaPill(props: { pct: number; class?: string }) {
   const up = () => props.pct >= 0;
   return (
     <span
@@ -364,7 +364,7 @@ export function DeltaPill(props: { pct: number }) {
         up()
           ? "bg-emerald-500/10 text-emerald-500"
           : "bg-rose-500/10 text-rose-500"
-      }`}
+      } ${props.class ?? ""}`}
     >
       <span class="text-[7px] leading-none">{up() ? "▲" : "▼"}</span>
       {`${Math.abs(Math.round(props.pct))}%`}
@@ -434,12 +434,11 @@ export function CountUp(props: { value: number; class?: string }) {
   return (
     <Show when={parts().count} keyed>
       {(count) => (
-        <span
-          class={`tabular-nums inline-block ${props.class ?? ""}`}
-          {...usalCount(count)}
-        >
-          {count}
-          {compactParts(Math.round(Math.max(0, props.value))).suffix}
+        <span class={`tabular-nums inline-flex items-baseline ${props.class ?? ""}`}>
+          <span {...usalCount(count)}>{count}</span>
+          <Show when={parts().suffix}>
+            <span class="text-[0.85em] font-medium ml-0.5">{parts().suffix}</span>
+          </Show>
         </span>
       )}
     </Show>
@@ -460,7 +459,10 @@ export function StatCard(props: {
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
           <div class="text-xs font-medium text-ink-500 mb-2">{props.label}</div>
-          <div class="text-[28px] leading-8 font-medium tracking-tight truncate">
+          <div
+            class="text-2xl 2xl:text-[28px] leading-tight font-medium tracking-tight whitespace-nowrap"
+            title={props.value ?? (props.countValue !== undefined ? String(props.countValue) : undefined)}
+          >
             <Show when={props.countValue !== undefined} fallback={props.value}>
               <CountUp value={props.countValue!} />
             </Show>
@@ -1074,7 +1076,7 @@ export function Modal(props: {
             tabindex="-1"
             class={`ui-dialog anim-pop-in flex max-h-[calc(100dvh-2rem)] sm:max-h-[90dvh] my-auto min-h-0 w-full flex-col ${
               props.width ?? "max-w-xl"
-            } ${props.fullOnMobile ? "ui-dialog-full" : ""} outline-none overflow-hidden`}
+            } ${props.fullOnMobile !== false ? "max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-sm:rounded-none max-sm:my-0 max-sm:border-0" : ""} outline-none overflow-hidden`}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >

@@ -1,7 +1,7 @@
 import { createSignal, onMount, Show } from "solid-js";
 
 import { publicApi, setSession } from "../api";
-import { usal, usalItems } from "../motion";
+import { usal } from "../motion";
 import { Btn, Input, Spinner, Card, Icon, Icons, ThemeToggle, capitalize } from "../ui";
 import { renderGoogleButton } from "../google";
 
@@ -127,7 +127,7 @@ export default function LoginPage() {
   return (
     <div class="relative min-h-screen flex items-center justify-center px-4 py-10 overflow-hidden">
       <div class="absolute top-4 right-4 z-10">
-        <ThemeToggle />
+        <ThemeToggle class="rounded-full bg-card/80 border border-line shadow-xs backdrop-blur" />
       </div>
 
       <div class="relative w-full max-w-sm">
@@ -144,23 +144,26 @@ export default function LoginPage() {
           >
             Indirect
           </h1>
-          <p class="text-sm text-ink-500 mt-1.5">Sign in to your account</p>
+          <p class="text-sm text-ink-400 mt-1.5">
+            {mode() === "forgot" ? "Reset your password" : mode() === "2fa" ? "Two-factor verification" : "Sign in to your account"}
+          </p>
         </div>
 
         <Card class="p-5 sm:p-6" {...usal("zoomin-15 duration-600 delay-150")}>
           <Show when={error()}>
-            <div class="mb-4 rounded-xl border border-rose-500/25 bg-rose-500/8 px-3.5 py-2.5 text-sm text-rose-500 anim-fade-in">
-              {capitalize(error())}
+            <div class="mb-4 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3.5 py-2.5 text-sm text-rose-300 dark:text-rose-200 flex items-center gap-2.5 anim-fade-in shadow-xs">
+              <Icon name={Icons.warning} size={16} class="shrink-0 text-rose-400" />
+              <span>{capitalize(error())}</span>
             </div>
           </Show>
           <Show when={info()}>
-            <div class="mb-4 rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-3.5 py-2.5 text-sm text-emerald-500 anim-fade-in">
+            <div class="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/15 px-3.5 py-2.5 text-sm text-emerald-300 dark:text-emerald-200 anim-fade-in shadow-xs">
               {info()}
             </div>
           </Show>
 
           <Show when={mode() === "login"}>
-            <form onSubmit={submitLogin} class="space-y-4" {...usalItems("fade-u", 80)}>
+            <form onSubmit={submitLogin} class="space-y-4">
               <Input label="Email" type="email" value={email()} onInput={setEmail} autocomplete="email" required />
               <Input label="Password" type="password" value={password()} onInput={setPassword} autocomplete="current-password" required />
               <Btn type="submit" class="w-full" disabled={busy()}>
@@ -168,7 +171,7 @@ export default function LoginPage() {
               </Btn>
               <button
                 type="button"
-                class="w-full text-center text-xs text-ink-500 hover:text-ink-200 transition-colors cursor-pointer"
+                class="w-full text-center text-xs text-ink-400 hover:text-ink-200 transition-colors cursor-pointer py-1"
                 onClick={() => { setMode("forgot"); setError(""); setInfo(""); }}
               >
                 Forgot your password?
@@ -177,8 +180,8 @@ export default function LoginPage() {
           </Show>
 
           <Show when={mode() === "2fa"}>
-            <form onSubmit={submit2fa} class="space-y-4" {...usalItems("fade-u", 80)}>
-              <div class="flex items-center gap-2 text-sm text-ink-300">
+            <form onSubmit={submit2fa} class="space-y-4">
+              <div class="flex items-center gap-2 text-sm text-ink-200">
                 <span class="text-brand-500">
                   <Icon name={Icons.shield} size={16} />
                 </span>
@@ -197,7 +200,7 @@ export default function LoginPage() {
               </Btn>
               <button
                 type="button"
-                class="w-full text-center text-xs text-ink-500 hover:text-ink-200 cursor-pointer"
+                class="w-full text-center text-xs text-ink-400 hover:text-ink-200 cursor-pointer py-1"
                 onClick={() => { setMode("login"); setError(""); }}
               >
                 Back
@@ -206,15 +209,15 @@ export default function LoginPage() {
           </Show>
 
           <Show when={mode() === "forgot"}>
-            <form onSubmit={submitForgot} class="space-y-4" {...usalItems("fade-u", 80)}>
-              <p class="text-sm text-ink-300">We'll email you a link to reset your password.</p>
+            <form onSubmit={submitForgot} class="space-y-4">
+              <p class="text-sm text-ink-200">We'll email you a link to reset your password.</p>
               <Input label="Email" type="email" value={email()} onInput={setEmail} autocomplete="email" required />
               <Btn type="submit" class="w-full" disabled={busy()}>
                 {busy() ? <Spinner /> : "Send reset link"}
               </Btn>
               <button
                 type="button"
-                class="w-full text-center text-xs text-ink-500 hover:text-ink-200 cursor-pointer"
+                class="w-full text-center text-xs text-ink-400 hover:text-ink-200 cursor-pointer py-1"
                 onClick={() => { setMode("login"); setError(""); setInfo(""); }}
               >
                 Back to sign in

@@ -1,4 +1,4 @@
-import { createResource, createSignal, Show } from "solid-js";
+import { createResource, createSignal, For, Show } from "solid-js";
 
 import { api, currentSession, type AdminUserDto } from "../../api";
 import { PageTitle } from "../../index";
@@ -29,9 +29,18 @@ export default function AdminUsersPage() {
     return j.total;
   });
   const [gridVersion, setGridVersion] = createSignal(0);
+  const [usersList, { refetch: refetchUsersList }] = createResource(gridVersion, async () => {
+    try {
+      const j = await api<{ users: AdminUserDto[] }>("GET", "/api/admin/users?limit=50");
+      return j.users;
+    } catch {
+      return [];
+    }
+  });
   const refreshGrid = () => {
     setGridVersion((v) => v + 1);
     refetchUserCount();
+    refetchUsersList();
   };
   const usersDatasource = serverDatasource<AdminUserDto>(async (params) => {
     const qs = new URLSearchParams({
@@ -174,7 +183,7 @@ export default function AdminUsersPage() {
   function NameCell(props: { data?: AdminUserDto }) {
     return (
       <span class="text-sm text-ink-100 truncate block">
-        {props.data?.name || props.data?.email}
+        {props.data?.name || <span class="text-ink-500 font-normal italic">—</span>}
       </span>
     );
   }
@@ -204,11 +213,26 @@ export default function AdminUsersPage() {
     const u = props.data;
     if (!u) return null;
     return (
-      <span class="text-ink-400 whitespace-nowrap">
-        <span class={u.hasPassword ? "" : "opacity-40"}>*</span>{" "}
-        <span class={u.totpEnabled ? "" : "opacity-40"}>2</span>{" "}
-        <span class={u.googleLinked ? "" : "opacity-40"}>G</span>
-      </span>
+      <div class="flex items-center gap-1.5 whitespace-nowrap">
+        <Show when={u.hasPassword}>
+          <span title="Password configured" class="inline-flex text-ink-300">
+            <Icon name={Icons.key} size={13} />
+          </span>
+        </Show>
+        <Show when={u.totpEnabled}>
+          <span title="Two-factor authentication active" class="inline-flex text-emerald-400">
+            <Icon name={Icons.shield} size={13} />
+          </span>
+        </Show>
+        <Show when={u.googleLinked}>
+          <span title="Google account linked" class="inline-flex text-indigo-400 font-semibold text-[11px]">
+            G
+          </span>
+        </Show>
+        <Show when={!u.hasPassword && !u.totpEnabled && !u.googleLinked}>
+          <span class="text-[11px] text-ink-500">—</span>
+        </Show>
+      </div>
     );
   }
 
@@ -281,7 +305,7 @@ export default function AdminUsersPage() {
       filter: false,
       floatingFilter: false,
       resizable: false,
-      pinned: "right",
+      pinned: typeof window !== "undefined" && window.innerWidth >= 1024 ? "right" : undefined,
     },
   ];
 
@@ -289,7 +313,6 @@ export default function AdminUsersPage() {
     <div>
       <PageTitle
         title="Users"
-        subtitle="Only you can create accounts — people sign in with the invite you send"
         right={
           <Btn onClick={() => setShowCreate(true)}>
             <Icon name={Icons.plus} /> New user
@@ -302,7 +325,8 @@ export default function AdminUsersPage() {
           when={(userCount() ?? 0) > 0}
           fallback={<EmptyState icon={Icons.users} title="No users" />}
         >
-          <div class="p-2">
+          {/* Desktop & Tablet AG Grid */}
+          <div class="hidden md:block p-2">
             <UsageGrid
               columnDefs={cols}
               datasource={usersDatasource}
@@ -310,6 +334,63 @@ export default function AdminUsersPage() {
               refreshDeps={gridVersion()}
               storageKey="llmgw-grid:admin.users.list"
             />
+          </div>
+
+          {/* Touch / Mobile Card List */}
+          <div class="md:hidden space-y-3 p-3">
+            <For each={usersList() ?? []}>
+              {(u) => (
+                <div class="p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
+                  <div class="flex items-start justify-between gap-2">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span class="text-sm font-semibold text-ink-100 truncate">{u.name || u.email}</span>
+                        <Badge tone={u.role === "admin" ? "indigo" : "zinc"}>{u.role}</Badge>
+                      </div>
+                      <div class="text-xs text-ink-400 truncate mt-0.5">{u.email}</div>
+                    </div>
+                    <div class="text-right shrink-0 text-[11px] text-ink-400">
+                      <div>Keys: {u.keyCount}</div>
+                      <div>{u.lastLoginAt ? fmtDate(u.lastLoginAt) : "Never logged in"}</div>
+                    </div>
+                  </div>
+
+                  <div class="pt-2 border-t border-line flex items-center justify-between text-xs text-ink-400">
+                    <div class="flex items-center gap-1.5">
+                      <span class="text-[11px]">Security:</span>
+                      <SecurityCell data={u} />
+                    </div>
+                    <div class="flex items-center gap-1">
+                      <button
+                        type="button"
+                        class="h-9 px-2.5 rounded-lg flex items-center gap-1 text-xs text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer"
+                        onClick={() => setEditing({ ...u })}
+                      >
+                        <Icon name={Icons.edit} size={14} /> Edit
+                      </button>
+                      <button
+                        type="button"
+                        class="h-9 w-9 rounded-lg flex items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-card border border-line cursor-pointer"
+                        title="Send password reset link"
+                        onClick={() => sendReset(u)}
+                      >
+                        <Icon name={Icons.key} size={14} />
+                      </button>
+                      <Show when={u.id !== meId()}>
+                        <button
+                          type="button"
+                          class="h-9 w-9 rounded-lg flex items-center justify-center text-rose-500 hover:bg-rose-500/10 border border-rose-500/30 cursor-pointer"
+                          title="Delete user"
+                          onClick={() => setConfirmDelete(u)}
+                        >
+                          <Icon name={Icons.trash} size={14} />
+                        </button>
+                      </Show>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </For>
           </div>
         </Show>
       </Card>
@@ -372,13 +453,13 @@ export default function AdminUsersPage() {
                     selected={role() === "user"}
                     onClick={() => setRole("user")}
                   >
-                    User (Keys & budgets)
+                    User
                   </FilterChip>
                   <FilterChip
                     selected={role() === "admin"}
                     onClick={() => setRole("admin")}
                   >
-                    Admin (Full access)
+                    Admin
                   </FilterChip>
                 </div>
               </ModalField>
@@ -471,7 +552,7 @@ export default function AdminUsersPage() {
                         selected={u().status === "banned"}
                         onClick={() => setEditing({ ...u(), status: "banned" })}
                       >
-                        Banned (all keys blocked)
+                        Banned
                       </FilterChip>
                     </div>
                   </ModalField>

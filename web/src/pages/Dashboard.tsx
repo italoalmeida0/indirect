@@ -19,6 +19,7 @@ import {
   Icons,
   ProgressBar,
   Segmented,
+  copyWithToast,
   fmtCost,
   fmtNum,
   pointLabel,
@@ -75,23 +76,23 @@ function BucketStat(props: {
   color: string;
 }) {
   return (
-    <div class="min-w-0">
+    <div class="min-w-0 flex-1">
+      <div class="flex items-center gap-1.5 text-[11px] text-ink-400 font-medium">
+        <span
+          class="w-1.5 h-1.5 rounded-full inline-block shrink-0"
+          style={{ background: props.color }}
+        />
+        <span class="whitespace-nowrap shrink-0">{props.label}</span>
+      </div>
       <div
-        class="text-[17px] sm:text-[20px] md:text-[22px] leading-tight font-light tracking-tight truncate"
+        class="text-sm sm:text-base font-semibold text-ink-100 tabular-nums leading-tight mt-1 whitespace-nowrap"
         title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
       >
         {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
       </div>
-      <div class="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-ink-500 min-h-[22px]">
-        <span class="flex items-center gap-1.5 min-w-0">
-          <span
-            class="w-2 h-2 rounded-sm inline-block shrink-0"
-            style={{ background: props.color }}
-          />
-          <span class="truncate">{props.label}</span>
-        </span>
-        <Show when={props.delta !== null}>
-          <DeltaPill pct={props.delta!} />
+      <div class="mt-1 h-4 flex items-center">
+        <Show when={props.delta !== null} fallback={<span class="text-[10px] text-ink-600 leading-none">—</span>}>
+          <DeltaPill pct={props.delta!} class="text-[10px] px-1 py-0 leading-none shrink-0" />
         </Show>
       </div>
     </div>
@@ -166,6 +167,9 @@ export default function DashboardPage() {
   const outDelta = createMemo(() =>
     deltaPct(series() ?? [], (d) => d.out_tok ?? 0),
   );
+  const tokensDelta = createMemo(() =>
+    deltaPct(series() ?? [], (d) => (d.in_tok ?? 0) + (d.out_tok ?? 0)),
+  );
   const reqDelta = createMemo(() =>
     deltaPct(series() ?? [], (d) => d.reqs ?? 0),
   );
@@ -202,8 +206,8 @@ export default function DashboardPage() {
   return (
     <div>
       <PageTitle
-        title="Usage overview"
-        subtitle={`${todayStr} · Live from your gateway keys`}
+        title="Overview"
+        subtitle={todayStr}
         right={
           <Segmented
             value={days()}
@@ -233,7 +237,7 @@ export default function DashboardPage() {
                 <HeroHeader
                   icon={Icons.dollarSign}
                   cost={winCost()}
-                  label={`Estimated spend · ${windowLabel(days())}`}
+                  label={`Spend · ${windowLabel(days())}`}
                   delta={costDelta()}
                 />
                 <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
@@ -272,13 +276,13 @@ export default function DashboardPage() {
 
             <Card interactive class="p-5 flex flex-col justify-between">
               <div>
-                <div class="flex items-start justify-between gap-3 mb-2">
-                  <div class="text-xs font-medium text-ink-500">
-                    Tokens · {windowLabel(days())}
-                  </div>
-                  <IconTile icon={Icons.chart} class="w-10 h-10" />
-                </div>
-                <div class="grid grid-cols-3 gap-2">
+                <HeroHeader
+                  icon={Icons.chart}
+                  count={winIn() + winOut()}
+                  label={`Tokens · ${windowLabel(days())}`}
+                  delta={tokensDelta()}
+                />
+                <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
                   <BucketStat
                     label="Input"
                     count={winIn()}
@@ -367,7 +371,6 @@ export default function DashboardPage() {
               <h2 class="text-sm font-semibold text-ink-100">
                 Output token budget
               </h2>
-              <p class="text-xs text-ink-500 mt-0.5">Across all your keys</p>
             </div>
             <IconTile icon={Icons.key} class="w-9 h-9 rounded-xl" />
           </div>
@@ -396,7 +399,7 @@ export default function DashboardPage() {
             <ProgressBar value={budget().used} max={budget().cap} danger />
             <div class="mt-2.5 text-[11px] text-ink-500 tabular-nums">
               {budget().cap > 0
-                ? `${Math.min(100, Math.round((budget().used / budget().cap) * 100))}% of the combined caps consumed`
+                ? `${Math.min(100, Math.round((budget().used / budget().cap) * 100))}% consumed · ${fmtNum(budget().cap - budget().used)} remaining`
                 : ""}
             </div>
           </Show>
@@ -407,9 +410,6 @@ export default function DashboardPage() {
             <h2 class="text-sm font-semibold text-ink-100">
               Endpoint configuration
             </h2>
-            <p class="text-xs text-ink-500 mt-0.5">
-              Point your tools at this gateway
-            </p>
           </div>
           <div class="grid gap-3">
             <EndpointRow
@@ -444,10 +444,20 @@ export default function DashboardPage() {
 function EndpointRow(props: { label: string; value: string }): JSX.Element {
   return (
     <div>
-      <div class="text-xs font-medium text-ink-500 mb-1.5">{props.label}</div>
-      <code class="block rounded-xl bg-elev border border-line px-3.5 py-2.5 text-xs text-ink-200 select-all break-all transition-colors hover:border-ink-600">
-        {props.value}
-      </code>
+      <div class="text-xs font-medium text-ink-400 mb-1.5">{props.label}</div>
+      <div class="flex items-center justify-between rounded-xl bg-elev border border-line pl-3.5 pr-1.5 py-1.5 gap-2 transition-colors hover:border-ink-600 focus-within:border-brand-500">
+        <span class="text-xs text-ink-200 select-all font-mono truncate min-w-0">
+          {props.value}
+        </span>
+        <button
+          type="button"
+          onClick={() => copyWithToast(props.value)}
+          class="h-7 w-7 shrink-0 rounded-lg bg-card/60 border border-line/60 flex items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-card transition-colors cursor-pointer"
+          title="Copy endpoint URL"
+        >
+          <Icon name={Icons.copy} size={13} />
+        </button>
+      </div>
     </div>
   );
 }

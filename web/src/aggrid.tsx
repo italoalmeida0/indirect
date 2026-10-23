@@ -504,7 +504,7 @@ export function UsageGrid(props: {
           />
         </Show>
       </div>
-      <div class="flex items-center justify-between gap-2 overflow-x-auto px-1.5 py-1 shrink-0">
+      <div class="flex flex-wrap items-center justify-between gap-2 overflow-x-auto px-1.5 py-1 shrink-0">
         <div class="flex items-center gap-1 shrink-0">
           <For each={changedColumns()}>
             {(colId) => (
@@ -521,28 +521,46 @@ export function UsageGrid(props: {
             )}
           </For>
         </div>
-        <div class="flex items-center gap-3 shrink-0">
+        <div class="flex flex-wrap items-center gap-3">
           <Show when={props.totals}>
             {(totals) => (
-              <div
-                class="flex items-center gap-2.5 whitespace-nowrap text-[11px] text-ink-400"
-              >
-                <span>In <strong class="font-semibold text-ink-200">{fmtNum(totals().in_tok)}</strong></span>
-                <span>Cache <strong class="font-semibold text-ink-200">{fmtNum(totals().cache_tok)}</strong></span>
-                <span>Out <strong class="font-semibold text-ink-200">{fmtNum(totals().out_tok)}</strong></span>
-                <span>Requests <strong class="font-semibold text-ink-200">{fmtNum(totals().reqs)}</strong></span>
-                <Show when={totals().cost != null}>
-                  <span class="text-ink-600">|</span>
-                  <Show when={totals().cost_in != null}>
-                    <span>In Cost <strong class="font-semibold text-ink-200">{fmtCost(totals().cost_in)}</strong></span>
-                  </Show>
-                  <Show when={totals().cost_cache != null}>
-                    <span>Cache Cost <strong class="font-semibold text-ink-200">{fmtCost(totals().cost_cache)}</strong></span>
-                  </Show>
-                  <Show when={totals().cost_out != null}>
-                    <span>Out Cost <strong class="font-semibold text-ink-200">{fmtCost(totals().cost_out)}</strong></span>
-                  </Show>
-                  <span>Total Cost <strong class="font-semibold text-emerald-400">{fmtCost(totals().cost)}</strong></span>
+              <div class="hidden sm:flex items-center gap-1.5 text-[11px] font-mono">
+                {/* Tokens with paired costs */}
+                <div class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-card/80 border border-line text-ink-300">
+                  <span>
+                    In <strong class="text-ink-100 font-semibold">{fmtNum(totals().in_tok)}</strong>
+                    <Show when={totals().cost_in !== undefined && totals().cost_in !== null}>
+                      <span class="text-emerald-400 font-medium ml-1">({fmtCost(totals().cost_in)})</span>
+                    </Show>
+                  </span>
+                  <span class="text-ink-600">·</span>
+                  <span>
+                    Cache <strong class="text-ink-100 font-semibold">{fmtNum(totals().cache_tok)}</strong>
+                    <Show when={totals().cost_cache !== undefined && totals().cost_cache !== null}>
+                      <span class="text-emerald-400 font-medium ml-1">({fmtCost(totals().cost_cache)})</span>
+                    </Show>
+                  </span>
+                  <span class="text-ink-600">·</span>
+                  <span>
+                    Out <strong class="text-ink-100 font-semibold">{fmtNum(totals().out_tok)}</strong>
+                    <Show when={totals().cost_out !== undefined && totals().cost_out !== null}>
+                      <span class="text-emerald-400 font-medium ml-1">({fmtCost(totals().cost_out)})</span>
+                    </Show>
+                  </span>
+                </div>
+
+                {/* Requests */}
+                <div class="flex items-center gap-1 px-2 py-0.5 rounded-md bg-card/80 border border-line text-ink-300">
+                  <strong class="text-ink-100 font-semibold">{fmtNum(totals().reqs)}</strong>
+                  <span class="text-ink-500 font-sans text-[10px]">reqs</span>
+                </div>
+
+                {/* Total Cost */}
+                <Show when={totals().cost !== undefined && totals().cost !== null}>
+                  <div class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-card/80 border border-line text-ink-300">
+                    <span class="text-ink-400">Total:</span>
+                    <strong class="text-emerald-400 font-semibold">{fmtCost(totals().cost)}</strong>
+                  </div>
                 </Show>
               </div>
             )}
