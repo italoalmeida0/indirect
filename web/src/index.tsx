@@ -268,10 +268,14 @@ function AppShell(props: { children: JSX.Element }) {
       {/* ===== mobile top bar ===== */}
       <div class="gw-header md:hidden sticky top-0 z-40 border-b border-line bg-ink-950/90 backdrop-blur">
         <div class="gw-mobile-header flex items-center justify-between h-14 px-4">
-          <a href="#/" class="gw-mobile-brand flex items-center gap-2.5">
-            <LogoMark class="w-8 h-8 rounded-lg" />
-            <span class="text-sm font-semibold tracking-tight">
-              Indirect
+          <a href="#/" class="gw-mobile-brand flex items-center gap-2.5" aria-label="Indirect Gateway">
+            <img
+              src="/indirect-icon.svg"
+              alt="Indirect"
+              class="w-8 h-8 shrink-0 object-contain rounded"
+            />
+            <span class="truncate text-[13px] font-semibold tracking-tight font-mono uppercase">
+              Indirect Gateway
             </span>
           </a>
           <div class="gw-mobile-actions flex items-center gap-1">
@@ -289,8 +293,8 @@ function AppShell(props: { children: JSX.Element }) {
           <div class="border-t border-line anim-fade-in px-3 py-3 space-y-0.5 max-h-[70vh] overflow-y-auto">
             <For each={USER_NAV}>{mobileLink}</For>
             <Show when={user().role === "admin"}>
-              <div class="px-4 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-ink-500">
-                Admin
+              <div class="px-4 pt-3 pb-1 text-[10px] font-medium uppercase tracking-wider text-ink-500">
+                Administration
               </div>
               <For each={ADMIN_NAV}>{mobileLink}</For>
             </Show>

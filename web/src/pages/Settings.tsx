@@ -184,30 +184,31 @@ export default function SettingsPage() {
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" {...usalItems("fade-u", 90)}>
         <Card>
-          <CardHeader title="Appearance" subtitle="White, dark, or follow the system automatically" />
-          <div class="px-5 pb-5">
-            <Segmented
-              value={themeMode()}
-              onChange={setThemeMode}
-              options={[
-                { value: "light", label: "Light" },
-                { value: "dark", label: "Dark" },
-                { value: "system", label: "System" },
-              ]}
-            />
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader title="Profile" />
-          <div class="px-5 pb-5 space-y-4">
-            <Input label="Display name" value={name()} onInput={setName} />
-            <div>
-              <span class="block text-xs font-medium text-ink-300 mb-1.5">Email</span>
-              <div class="text-sm text-ink-400">{me().email}</div>
+          <CardHeader title="Profile & Appearance" subtitle="Personal details and interface theme" />
+          <div class="px-5 pb-5 space-y-5">
+            <div class="space-y-4">
+              <Input label="Display name" value={name()} onInput={setName} />
+              <div>
+                <span class="block text-xs font-medium text-ink-300 mb-1.5">Email</span>
+                <div class="text-sm text-ink-400">{me().email}</div>
+              </div>
+              <div class="flex justify-end">
+                <Btn onClick={saveName} disabled={busy() || !name().trim()}>Save</Btn>
+              </div>
             </div>
-            <div class="flex justify-end">
-              <Btn onClick={saveName} disabled={busy() || !name().trim()}>Save</Btn>
+
+            <div class="pt-4 border-t border-line">
+              <span class="block text-xs font-medium text-ink-300 mb-0.5">Appearance</span>
+              <p class="text-xs text-ink-400 mb-3">White, dark, or follow the system automatically</p>
+              <Segmented
+                value={themeMode()}
+                onChange={setThemeMode}
+                options={[
+                  { value: "light", label: "Light" },
+                  { value: "dark", label: "Dark" },
+                  { value: "system", label: "System" },
+                ]}
+              />
             </div>
           </div>
         </Card>
@@ -226,80 +227,88 @@ export default function SettingsPage() {
           </div>
         </Card>
 
-        <Card>
+        <Card class="lg:col-span-2">
           <CardHeader
-            title="Two-factor authentication"
-            subtitle="TOTP (Google Authenticator, Aegis, 1Password…)"
-            right={
-              <Badge tone={me().totpEnabled ? "green" : "zinc"}>{me().totpEnabled ? "Enabled" : "Disabled"}</Badge>
-            }
+            title="Two-factor authentication & Google account"
+            subtitle="Two-factor verification and linked sign-in accounts"
           />
-          <div class="px-5 pb-5 space-y-4">
-            <Show
-              when={me().totpEnabled}
-              fallback={
+          <div class="px-5 pb-5">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div class="space-y-4">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 class="text-sm font-semibold text-ink-100">Two-factor authentication</h3>
+                    <p class="text-xs text-ink-400 mt-0.5">TOTP (Google Authenticator, Aegis, 1Password…)</p>
+                  </div>
+                  <Badge tone={me().totpEnabled ? "green" : "zinc"}>{me().totpEnabled ? "Enabled" : "Disabled"}</Badge>
+                </div>
+
                 <Show
-                  when={totpSetup()}
+                  when={me().totpEnabled}
                   fallback={
-                    <Btn variant="outline" onClick={startTotp} disabled={busy()}>
-                      <Icon name={Icons.shield} /> Set up 2FA
-                    </Btn>
+                    <Show
+                      when={totpSetup()}
+                      fallback={
+                        <Btn variant="outline" onClick={startTotp} disabled={busy()}>
+                          <Icon name={Icons.shield} /> Set up 2FA
+                        </Btn>
+                      }
+                    >
+                      <div class="flex flex-col sm:flex-row gap-4 items-start">
+                        <img src={totpSetup()!.qrDataUrl} alt="TOTP QR code" class="w-36 h-36 rounded-xl border border-line bg-white p-1.5 shadow-sm" />
+                        <div class="flex-1 space-y-3 min-w-0">
+                          <p class="text-xs text-ink-400">Scan with your authenticator, or enter this secret manually:</p>
+                          <div class="flex items-center gap-2">
+                            <code class="text-xs text-emerald-500 break-all select-all">{totpSetup()!.secret}</code>
+                            <Btn variant="ghost" size="sm" onClick={() => copyWithToast(totpSetup()!.secret)}>
+                              <Icon name={Icons.copy} />
+                            </Btn>
+                          </div>
+                          <Input label="Enter the 6-digit code to confirm" value={totpCode()} onInput={setTotpCode}
+                            placeholder="123456" autocomplete="one-time-code" />
+                          <div class="flex gap-2">
+                            <Btn variant="ghost" onClick={() => { setTotpSetup(null); setTotpCode(""); }}>Cancel</Btn>
+                            <Btn onClick={enableTotp} disabled={busy() || totpCode().length !== 6}>
+                              {busy() ? <Spinner /> : "Enable 2FA"}
+                            </Btn>
+                          </div>
+                        </div>
+                      </div>
+                    </Show>
                   }
                 >
-                  <div class="flex flex-col sm:flex-row gap-4 items-start">
-                    <img src={totpSetup()!.qrDataUrl} alt="TOTP QR code" class="w-36 h-36 rounded-xl border border-line bg-white p-1.5 shadow-sm" />
-                    <div class="flex-1 space-y-3 min-w-0">
-                      <p class="text-xs text-ink-400">Scan with your authenticator, or enter this secret manually:</p>
-                      <div class="flex items-center gap-2">
-                        <code class="text-xs text-emerald-500 break-all select-all">{totpSetup()!.secret}</code>
-                        <Btn variant="ghost" size="sm" onClick={() => copyWithToast(totpSetup()!.secret)}>
-                          <Icon name={Icons.copy} />
-                        </Btn>
-                      </div>
-                      <Input label="Enter the 6-digit code to confirm" value={totpCode()} onInput={setTotpCode}
-                        placeholder="123456" autocomplete="one-time-code" />
-                      <div class="flex gap-2">
-                        <Btn variant="ghost" onClick={() => { setTotpSetup(null); setTotpCode(""); }}>Cancel</Btn>
-                        <Btn onClick={enableTotp} disabled={busy() || totpCode().length !== 6}>
-                          {busy() ? <Spinner /> : "Enable 2FA"}
-                        </Btn>
-                      </div>
-                    </div>
-                  </div>
+                  <p class="text-sm text-ink-300">Your account requires a 6-digit code at sign-in.</p>
+                  <Btn variant="ghost" class="text-rose-500 bg-rose-500/10 hover:bg-rose-500/25" onClick={() => setDisableTotpOpen(true)}>
+                    Disable 2FA
+                  </Btn>
                 </Show>
-              }
-            >
-              <p class="text-sm text-ink-300">Your account requires a 6-digit code at sign-in.</p>
-              <Btn variant="ghost" class="text-rose-500 bg-rose-500/10 hover:bg-rose-500/25" onClick={() => setDisableTotpOpen(true)}>
-                Disable 2FA
-              </Btn>
-            </Show>
-          </div>
-        </Card>
+              </div>
 
-        <Card>
-          <CardHeader
-            title="Google account"
-            subtitle="Sign in faster with a linked Google account"
-            right={
-              <Badge tone={me().googleLinked ? "green" : "zinc"}>{me().googleLinked ? "Linked" : "Not linked"}</Badge>
-            }
-          />
-          <div class="px-5 pb-5 space-y-4">
-            <Show
-              when={me().googleLinked}
-              fallback={
-                <Show when={googleClientId()} fallback={<p class="text-xs text-ink-500">Google sign-in is not configured on this gateway.</p>}>
-                  <p class="text-xs text-ink-400">Link any Google account to sign in with it — the email does not need to match:</p>
-                  <div ref={googleDiv} class="inline-flex overflow-hidden rounded-full" />
+              <div class="space-y-4 pt-5 lg:pt-0 border-t lg:border-t-0 lg:border-l border-line lg:pl-6">
+                <div class="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 class="text-sm font-semibold text-ink-100">Google account</h3>
+                    <p class="text-xs text-ink-400 mt-0.5">Sign in faster with a linked Google account</p>
+                  </div>
+                  <Badge tone={me().googleLinked ? "green" : "zinc"}>{me().googleLinked ? "Linked" : "Not linked"}</Badge>
+                </div>
+
+                <Show
+                  when={me().googleLinked}
+                  fallback={
+                    <Show when={googleClientId()} fallback={<p class="text-xs text-ink-500">Google sign-in is not configured on this gateway.</p>}>
+                      <p class="text-xs text-ink-400">Link any Google account to sign in with it — the email does not need to match:</p>
+                      <div ref={googleDiv} class="inline-flex overflow-hidden rounded-full" />
+                    </Show>
+                  }
+                >
+                  <p class="text-sm text-ink-300">You can sign in using your Google account.</p>
+                  <Btn variant="ghost" class="text-rose-500 bg-rose-500/10 hover:bg-rose-500/25" onClick={unlinkGoogle} disabled={busy()}>
+                    Unlink Google
+                  </Btn>
                 </Show>
-              }
-            >
-              <p class="text-sm text-ink-300">You can sign in using your Google account.</p>
-              <Btn variant="ghost" class="text-rose-500 bg-rose-500/10 hover:bg-rose-500/25" onClick={unlinkGoogle} disabled={busy()}>
-                Unlink Google
-              </Btn>
-            </Show>
+              </div>
+            </div>
           </div>
         </Card>
       </div>
