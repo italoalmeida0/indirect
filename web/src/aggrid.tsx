@@ -369,6 +369,9 @@ export function UsageGrid(props: {
   // ---- per-grid user prefs (filters, column size/order/visibility, sort) ----
   let gridRef: AgGridSolidRef | undefined;
   let defaultColumnState: ColumnState[] = [];
+  let userResizedCols = new Set<string>();
+  let autoSizeTimer: ReturnType<typeof setTimeout> | undefined;
+
   const columnLabels = new Map(
     props.columnDefs.flatMap((column) =>
       "children" in column
@@ -376,17 +379,55 @@ export function UsageGrid(props: {
         : [[column.colId ?? column.field ?? "", column.headerName ?? column.colId ?? column.field ?? "Column"]],
     ),
   );
+
+  /**
+   * Auto-sizes columns to fit their content (the largest text + header in the column),
+   * strictly skipping any column the user has manually resized.
+   */
+  const autoSizeUnadjustedColumns = (specificCols?: string[]) => {
+    const api = gridRef?.api;
+    if (!api || api.isDestroyed?.()) return;
+    if (autoSizeTimer) clearTimeout(autoSizeTimer);
+    autoSizeTimer = setTimeout(() => {
+      if (!api || api.isDestroyed?.()) return;
+      if (api.getDisplayedRowCount() === 0) return;
+
+      const allDisplayed = api.getAllDisplayedColumns();
+      if (!allDisplayed || allDisplayed.length === 0) return;
+
+      const targetColIds = specificCols ? new Set(specificCols) : null;
+
+      const colsToSize = allDisplayed.filter((col) => {
+        const colId = col.getColId();
+        if (targetColIds && !targetColIds.has(colId)) return false;
+        // Never override columns the user manually adjusted
+        if (userResizedCols.has(colId)) return false;
+        const def = col.getColDef();
+        // Skip explicitly fixed / unresizable columns or actions/selection without field/header
+        if (def.resizable === false) return false;
+        if (!def.field && !def.headerName) return false;
+        return true;
+      });
+
+      if (colsToSize.length > 0) {
+        api.autoSizeColumns(colsToSize, false);
+      }
+    }, 60);
+  };
+
   const updateChangedColumns = (api: GridApi) => {
     const defaults = new Map(defaultColumnState.map((state) => [state.colId, state]));
     const changed = api
       .getColumnState()
       .filter((state) =>
         (state.hide ?? false) !== (defaults.get(state.colId)?.hide ?? false) ||
-        api.getColumnFilterModel(state.colId) != null,
+        api.getColumnFilterModel(state.colId) != null ||
+        userResizedCols.has(state.colId),
       )
       .map((state) => state.colId);
     setChangedColumns(changed);
   };
+
   const saveState = () => {
     const api = gridRef?.api;
     if (!api) return;
@@ -396,22 +437,41 @@ export function UsageGrid(props: {
         JSON.stringify({
           columnState: api.getColumnState(),
           filterModel: api.getFilterModel(),
+          userResizedColumns: Array.from(userResizedCols),
         }),
       );
     } catch {}
   };
+
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   const saveSoon = () => {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(saveState, 250);
   };
+
   const onGridChanged = () => {
     if (gridRef?.api) updateChangedColumns(gridRef.api);
     saveSoon();
   };
+
+  const onColumnResized = (e: any) => {
+    if (e?.source === "uiColumnResized") {
+      const cols = e.columns ?? (e.column ? [e.column] : []);
+      for (const c of cols) {
+        const colId = typeof c === "string" ? c : c?.getColId?.();
+        if (colId) {
+          userResizedCols.add(colId);
+        }
+      }
+    }
+    onGridChanged();
+  };
+
   onCleanup(() => {
     if (saveTimer) clearTimeout(saveTimer);
+    if (autoSizeTimer) clearTimeout(autoSizeTimer);
   });
+
   const restoreState = () => {
     const api = gridRef?.api;
     if (!api) return;
@@ -419,6 +479,9 @@ export function UsageGrid(props: {
       const raw = localStorage.getItem(props.storageKey);
       if (!raw) return;
       const j = JSON.parse(raw);
+      if (Array.isArray(j.userResizedColumns)) {
+        userResizedCols = new Set(j.userResizedColumns);
+      }
       if (Array.isArray(j.columnState)) {
         api.applyColumnState({ state: j.columnState, applyOrder: true });
       }
@@ -431,15 +494,17 @@ export function UsageGrid(props: {
   const resetColumn = async (colId: string) => {
     const api = gridRef?.api;
     if (!api) return;
+    userResizedCols.delete(colId);
     const defaultState = defaultColumnState.find((state) => state.colId === colId);
     if (defaultState) {
       api.applyColumnState({
-        state: [{ colId, hide: defaultState.hide ?? false }],
+        state: [{ colId, hide: defaultState.hide ?? false, width: defaultState.width, flex: defaultState.flex }],
       });
     }
     await api.setColumnFilterModel(colId, null);
     api.onFilterChanged("api");
     updateChangedColumns(api);
+    autoSizeUnadjustedColumns([colId]);
     saveState();
   };
 
@@ -448,11 +513,13 @@ export function UsageGrid(props: {
     try {
       localStorage.removeItem(props.storageKey);
     } catch {}
+    userResizedCols.clear();
     const api = gridRef?.api;
     if (!api) return;
     api.resetColumnState();
     api.setFilterModel(null);
     updateChangedColumns(api);
+    autoSizeUnadjustedColumns();
   };
 
   return (
@@ -491,11 +558,17 @@ export function UsageGrid(props: {
               updateChangedColumns(e.api);
               props.onGridReady?.(e);
             }}
-            onModelUpdated={props.onModelUpdated}
+            onFirstDataRendered={() => {
+              autoSizeUnadjustedColumns();
+            }}
+            onModelUpdated={(e) => {
+              autoSizeUnadjustedColumns();
+              props.onModelUpdated?.(e);
+            }}
             onFilterChanged={onGridChanged}
             onSortChanged={onGridChanged}
             onColumnMoved={onGridChanged}
-            onColumnResized={onGridChanged}
+            onColumnResized={onColumnResized}
             onColumnVisible={onGridChanged}
             rowSelection={props.rowSelection}
             suppressRowClickSelection={props.suppressRowClickSelection}
