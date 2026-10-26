@@ -23,9 +23,9 @@ const server = createServer((req, res) => {
 });
 await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const serverUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
-const models = ["Claude Sonnet 4.5", "GPT-5", "Gemini 2.5 Pro", "Kimi K2", "DeepSeek V3.2", ...Array.from({ length: 35 }, (_, i) => `Model ${String(i + 1).padStart(2, "0")}`)];
+const models = ["Claude Sonnet 4.5", "GPT-5", "Gemini 2.5 Pro", "Kimi K2", "DeepSeek V3.2", ...Array.from({ length: 135 }, (_, i) => `Model ${String(i + 1).padStart(2, "0")}`)];
 const categories = [
-  { id: "model", label: "Model", options: models.map((label, i) => ({ value: `model/${i}`, label, count: 1230 - i * 23 })) },
+  { id: "model", label: "Model", options: models.map((label, i) => ({ value: `model/${i}`, label, count: 5000 - i * 23 })) },
   { id: "provider_id", label: "Provider", options: [{ value: "primary", label: "Primary", count: 724 }, { value: "backup", label: "Backup", count: 382 }] },
   { id: "key_id", label: "API key", options: [{ value: "production", label: "Production", count: 704 }, { value: "development", label: "Development", count: 402 }] },
   { id: "proto", label: "Protocol", options: [{ value: "openai", label: "OpenAI", count: 845 }, { value: "anthropic", label: "Anthropic", count: 261 }] },
@@ -37,13 +37,18 @@ const row = { key_id: "production", key_name: "Production", proto: "openai", mod
 const totals = { ...row, reqs: 73 };
 console.log("[filters-ui] Launching Chromium");
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true, timeout: 20_000 });
+let activePage: any;
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1040 }, deviceScaleFactor: 1 });
+  activePage = page;
+  page.setDefaultTimeout(10_000);
   const errors: string[] = [];
   const requests: URL[] = [];
   let holdAnalytics = false;
+  let holdDateMetadata = false;
   const pendingResponses = new Set<() => void>();
-  page.on("pageerror", (error: Error) => errors.push(String(error)));
+  const pendingMetadata = new Set<() => void>();
+  page.on("pageerror", (error: Error) => { errors.push(String(error)); console.error("[browser]", error); });
   await page.addInitScript(() => {
     localStorage.setItem("cache_code_session", JSON.stringify({ accessToken: "ui-test", refreshToken: "ui-test", user: { id: "user", name: "Alex Morgan", email: "alex@example.com", role: "admin", status: "active" } }));
     localStorage.setItem("llmgw-theme", "dark");
@@ -58,11 +63,35 @@ try {
   await page.route("**/api/**", async (route: any) => {
     const url = new URL(route.request().url());
     requests.push(url);
-    if (holdAnalytics && (url.pathname.startsWith("/api/usage/") || url.pathname === "/api/admin/stats" || url.pathname.includes("usage-breakdown/"))) {
+    if (holdDateMetadata && url.pathname.endsWith("filter-options") && !url.searchParams.has("field")) await new Promise<void>((resolve) => pendingMetadata.add(resolve));
+    if (holdAnalytics && !url.pathname.endsWith("filter-options") && (url.pathname.startsWith("/api/usage/") || url.pathname === "/api/admin/stats" || url.pathname.includes("usage-breakdown/"))) {
       await new Promise<void>((resolve) => pendingResponses.add(resolve));
     }
     let data: Record<string, unknown> = {};
-    if (url.pathname.endsWith("filter-options")) data = { categories: url.pathname.startsWith("/api/admin") ? [...categories, { id: "user_id", label: "User", options: [{ value: "user", label: "alex@example.com", count: 1106 }] }] : categories };
+    if (url.pathname.endsWith("filter-options")) {
+      let domain = url.pathname.startsWith("/api/admin") ? [...categories, { id: "user_id", label: "User", options: [{ value: "user", label: "alex@example.com", count: 1106 }] }] : categories;
+      if (new Date(Number(url.searchParams.get("from"))).getFullYear() === 2020) domain = domain.map((category) => ({ ...category, options: category.options.filter((option) => category.id !== "model" || option.value === "model/1") }));
+      const field = url.searchParams.get("field");
+      if (field) {
+        const q = (url.searchParams.get("q") ?? "").toLowerCase();
+        const options = (domain.find((category) => category.id === field)?.options ?? []).filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(q));
+        const offset = Number(url.searchParams.get("offset") ?? 0);
+        const limit = Number(url.searchParams.get("limit") ?? 60);
+        data = { field, options: options.slice(offset, offset + limit), total: options.length, offset, limit };
+      } else {
+        const current = JSON.parse(url.searchParams.get("selection") ?? "{}");
+        const selection: Record<string, unknown> = {};
+        const selectedOptions: Record<string, unknown> = {};
+        for (const category of domain) {
+          const entry = current[category.id];
+          if (!entry) continue;
+          const values = new Set(category.options.map((option) => option.value));
+          const next = { include: entry.include.filter((v: string) => values.has(v)), exclude: entry.exclude.filter((v: string) => values.has(v)) };
+          if (next.include.length || next.exclude.length) { selection[category.id] = next; selectedOptions[category.id] = category.options.filter((option) => next.include.includes(option.value) || next.exclude.includes(option.value)); }
+        }
+        data = { categories: domain.map(({ options: _, ...category }) => category), selection, selectedOptions };
+      }
+    }
     else if (url.pathname === "/api/usage/daily") data = { series };
     else if (url.pathname === "/api/admin/stats") data = { series, counts: { users: 8, keys: 12, activeKeys: 9, providers: 3 } };
     else if (url.pathname === "/api/keys") data = { keys: [] };
@@ -72,7 +101,7 @@ try {
       const limit = Number(url.searchParams.get("limit") ?? 25);
       data = { events: Array.from({ length: Math.min(limit, 73 - offset) }, (_, i) => ({ ...row, id: offset + i, ts: Date.now() - (offset + i) * 60_000, latency_ms: 1200, status: 200 })), total: 73, totals };
     } else if (url.pathname.includes("usage-breakdown/")) data = { [url.pathname.endsWith("users") ? "users" : "models"]: [{ ...row, user_id: "user", email: "alex@example.com" }], total: 1, totals };
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true, ...data }) });
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true, ...data }) }).catch(() => {});
   });
   const assertFits = async (label: string) => {
     // Floating UI repositions on the next frame when the panel changes size.
@@ -101,6 +130,7 @@ try {
     const current = await popupPosition();
     assert(Math.abs(current.x - left) < 1, `${label}: popup moved from ${left} to ${current.x}`);
   };
+  const settleResults = () => page.waitForFunction(() => document.querySelector(".analytics-toolbar")?.parentElement?.getAttribute("aria-busy") === "false");
   const assertGridFiltersDisabled = async (keys: string[]) => {
     await page.locator(".ag-row").first().waitFor();
     assert.equal(await page.locator(".ag-floating-filter").count(), 0, "AG Grid floating filters are still visible");
@@ -118,12 +148,17 @@ try {
   const openingPosition = await popupPosition();
   await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
   await assertStableLeft(openingPosition.x, "Expanding a category");
+  await page.getByRole("button", { name: "Next filter options", exact: true }).click();
+  await page.getByRole("button", { name: "Previous filter options", exact: true }).click();
+  assert((await page.locator(".analytics-option").count()) <= 60, "A category rendered an unbounded option list");
   await page.getByRole("textbox", { name: "Search model…", exact: true }).fill("Claude");
   await assertStableLeft(openingPosition.x, "Searching options");
   const option = page.getByRole("dialog").getByRole("button", { name: /Claude Sonnet 4.5/ });
   holdAnalytics = true;
+  const firstSelection = page.waitForRequest((req: any) => { const url = new URL(req.url()); return url.pathname === "/api/usage/daily" && url.searchParams.get("selection")?.includes("model/0"); }, { timeout: 5000 }).then(() => true, () => false);
   try {
     await option.click();
+    assert(await firstSelection, `Selection did not reach results: ${requests.slice(-8).map((url) => url.pathname + url.search).join("\n")}`);
     await page.waitForFunction(() => document.querySelector(".analytics-toolbar")?.parentElement?.getAttribute("aria-busy") === "true");
     assert.equal(await page.locator(".ag-root-wrapper").count(), 2, "Usage grids disappeared while filters were loading");
     await assertStableLeft(openingPosition.x, "Applying a filter while data loads");
@@ -136,6 +171,7 @@ try {
   await page.getByRole("button", { name: "Exclude", exact: true }).click();
   await assertStableLeft(openingPosition.x, "Switching include/exclude");
   await option.click();
+  await settleResults();
   const last = requests.filter((url) => url.pathname === "/api/usage/daily").at(-1)!;
   const selection = JSON.parse(last.searchParams.get("selection")!);
   assert.deepEqual(selection.model, { include: [], exclude: ["model/0"] });
@@ -169,6 +205,7 @@ try {
   await page.getByLabel("Start date and time").fill("2026-09-08T00:00");
   await page.getByLabel("End date and time").fill("2026-09-25T23:59");
   await page.getByRole("button", { name: "Apply range" }).click();
+  await settleResults();
   assert.match(await time().getAttribute("aria-label") ?? "", /Custom range/);
   const query = requests.filter((url) => url.pathname === "/api/usage/daily").at(-1)!.searchParams;
   assert.equal(await page.evaluate((raw: string) => new Date(Number(raw)).getDate(), query.get("from")!), 8);
@@ -194,6 +231,7 @@ try {
   await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
   await page.getByRole("textbox", { name: "Search model…", exact: true }).fill("GPT");
   await page.getByRole("button", { name: /GPT-5/ }).click();
+  await settleResults();
   await assertFits("Mobile filters");
   await page.screenshot({ path: path.join(output, "mobile-filters-dark.png") });
   await page.keyboard.press("Escape");
@@ -253,10 +291,57 @@ try {
   await page.getByRole("button", { name: "Cancel", exact: true }).scrollIntoViewIfNeeded();
   await assertFits("Small screen calendar actions");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  console.log("[filters-ui] Checking date → options → results");
+  await page.setViewportSize({ width: 1440, height: 1040 });
+  await page.goto(`${serverUrl}#/usage`);
+  await page.getByRole("button", { name: "Filter usage", exact: true }).click();
+  await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
+  await page.getByRole("textbox", { name: "Search model…", exact: true }).fill("Claude");
+  await page.getByRole("dialog").getByRole("button", { name: /Claude Sonnet/ }).click();
+  await settleResults();
+  await page.keyboard.press("Escape");
+  await time().click();
+  await page.getByRole("button", { name: "Custom range…", exact: true }).click();
+  await page.getByLabel("Start date and time").fill("2020-01-01T00:00");
+  await page.getByLabel("End date and time").fill("2020-01-31T23:59");
+  holdDateMetadata = true;
+  const changedMetadata = page.waitForRequest((req: any) => { const url = new URL(req.url()); return url.pathname.endsWith("filter-options") && !url.searchParams.has("field") && new Date(Number(url.searchParams.get("from"))).getFullYear() === 2020; });
+  try {
+    await page.getByRole("button", { name: "Apply range" }).click();
+    await changedMetadata;
+    assert(!requests.some((url) => url.pathname === "/api/usage/daily" && new Date(Number(url.searchParams.get("from"))).getFullYear() === 2020), "Results ran before old selections were validated");
+    await page.getByRole("button", { name: "Filter usage", exact: true }).click();
+    assert.equal(await page.locator(".analytics-option").count(), 0, "Options from the previous period stayed visible");
+  } finally {
+    holdDateMetadata = false;
+    for (const resolve of pendingMetadata) resolve();
+    pendingMetadata.clear();
+  }
+  await settleResults();
+  assert.equal(await page.getByRole("button", { name: "Remove Model include filter" }).count(), 0);
+  await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: /GPT-5/ }).waitFor();
+  assert.equal(await page.getByRole("dialog").getByRole("button", { name: /Claude Sonnet/ }).count(), 0);
+  const metadataRequests = requests.filter((url) => url.pathname.endsWith("filter-options") && !url.searchParams.has("field")).length;
+  await page.getByRole("dialog").getByRole("button", { name: /GPT-5/ }).click();
+  await settleResults();
+  assert.equal(requests.filter((url) => url.pathname.endsWith("filter-options") && !url.searchParams.has("field")).length, metadataRequests, "Toggling a result filter reloaded the date domain");
+  const beforeSearch = requests.length;
+  const searched = page.waitForResponse((response: any) => { const url = new URL(response.url()); return url.pathname.endsWith("filter-options") && url.searchParams.get("q") === "GPT"; });
+  await page.getByRole("textbox", { name: "Search model…", exact: true }).evaluate((input: HTMLInputElement) => {
+    for (const value of ["G", "GP", "GPT"]) { input.value = value; input.dispatchEvent(new Event("input", { bubbles: true })); }
+  });
+  await searched;
+  assert.deepEqual(requests.slice(beforeSearch).filter((url) => url.pathname.endsWith("filter-options") && url.searchParams.has("field")).map((url) => url.searchParams.get("q")), ["GPT"], "Typeahead did not coalesce rapid input");
+  await page.keyboard.press("Escape");
   assert(requests.filter((url) => url.pathname === "/api/usage/events" || url.pathname === "/api/usage/breakdown" || url.pathname.includes("usage-breakdown/")).every((url) => !url.searchParams.has("filters")), "A grid forwarded column filters to the API");
   assert.deepEqual(errors, [], "Browser runtime errors");
   console.log(`Gateway filters UI passed: stable popup positioning, grids without column filters, preserved layout, include/exclude, shared queries, keyboard, calendar, responsive themes and all three pages. Screenshots: ${output}`);
 } catch (error) {
+  if (activePage) {
+    await activePage.screenshot({ path: path.join(output, "failure.png") });
+    console.error(await activePage.locator(".analytics-popover").allTextContents());
+  }
   console.error("[filters-ui] Failed", error);
   throw error;
 } finally {

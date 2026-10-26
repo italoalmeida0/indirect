@@ -10,7 +10,7 @@ describe("analytics time ranges", () => {
     expect(rangeUnit(range)).toBe("minute");
     expect(rangeUnit(presetRange("2d", now))).toBe("hour");
     expect(rangeUnit(presetRange("1mo", now))).toBe("day");
-    expect(rangeUnit(presetRange("all", now))).toBe("day");
+    expect(rangeUnit(presetRange("all", now))).toBe("month");
   });
 
   test("month and year subtraction clamp leap days and month ends", () => {

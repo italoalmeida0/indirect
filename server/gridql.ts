@@ -232,15 +232,19 @@ export interface GridPageArgs {
    *  cols map, never request input; still validated as bare identifiers
    *  before splicing into SQL. */
   sumCols?: string[];
+  /** Analytics headers need only the summary; subsequent pages can reuse it. */
+  includeRows?: boolean;
+  summary?: { total: number; totals?: Record<string, number> };
 }
 
 export function gridPage(a: GridPageArgs): { rows: any[]; total: number; totals?: Record<string, number> } {
   const { clauses, params } = buildGridWhere(a.grid.filters, a.cols);
   const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
   const order = buildGridOrder(a.grid.sort, a.cols, a.defaultOrder, a.tieBreak);
-  const rows = db
+  const rows = a.includeRows === false ? [] : db
     .prepare(`SELECT * FROM (${a.baseSql})${where} ORDER BY ${order} LIMIT ? OFFSET ?`)
     .all(...a.baseParams, ...params, a.grid.limit, a.grid.offset);
+  if (a.summary) return { rows, ...a.summary };
   const sumCols = (a.sumCols ?? []).filter((c) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c));
   if (sumCols.length > 0) {
     // One combined COUNT+SUM pass over the same WHERE as the page (not the

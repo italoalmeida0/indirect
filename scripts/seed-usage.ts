@@ -102,6 +102,7 @@ if (!keep) {
   db.exec("DELETE FROM usage_daily");
   db.exec("DELETE FROM usage_model_daily");
   db.exec("DELETE FROM usage_model_provider_daily");
+  db.exec("DELETE FROM usage_model_provider_monthly");
 }
 
 const insertEvent = db.prepare(
@@ -131,6 +132,13 @@ const upsertModelProviderDaily = db.prepare(
                  cache_tok = cache_tok + excluded.cache_tok,
                  out_tok = out_tok + excluded.out_tok,
                  reqs = reqs + excluded.reqs`,
+);
+const upsertModelProviderMonthly = db.prepare(
+  `INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
+   VALUES (?, ?, ?, ?, '', '', ?, '', ?, ?, ?, ?)
+   ON CONFLICT(key_id, month, proto, provider_id, provider_key_id, model, upstream_model)
+   DO UPDATE SET in_tok = in_tok + excluded.in_tok, cache_tok = cache_tok + excluded.cache_tok,
+                 out_tok = out_tok + excluded.out_tok, reqs = reqs + excluded.reqs`,
 );
 
 const MS_DAY = 86_400_000;
@@ -231,6 +239,7 @@ db.transaction(() => {
   for (const a of modelDaily.values()) {
     upsertModelDaily.run(a.keyId, a.userId, a.date, a.proto, a.model, a.inTok, a.cacheTok, a.outTok, a.reqs);
     upsertModelProviderDaily.run(a.keyId, a.userId, a.date, a.proto, a.model, a.inTok, a.cacheTok, a.outTok, a.reqs);
+    upsertModelProviderMonthly.run(a.keyId, a.userId, a.date.slice(0, 7), a.proto, a.model, a.inTok, a.cacheTok, a.outTok, a.reqs);
   }
 })();
 

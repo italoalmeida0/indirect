@@ -186,12 +186,12 @@ export default function DashboardPage() {
   });
 
   return (
-    <div aria-busy={series.loading}>
+    <div aria-busy={filters.pending() || series.loading}>
       <PageTitle
         title="Overview"
         subtitle={todayStr}
       />
-      <AnalyticsToolbar filters={filters} />
+      <AnalyticsToolbar filters={filters} loading={series.loading} />
 
       {/* Keep the previous window visible while refreshing. The keyed resource
           mounts CountUp with resolved values so USAL always owns fresh nodes. */}

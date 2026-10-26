@@ -128,7 +128,7 @@ export default function UsagePage() {
     return j.series;
   });
   const [breakdownCount] = createResource(query, async (q) => {
-    const j = await api<{ total: number }>("GET", `/api/usage/breakdown?${q}&limit=1`);
+    const j = await api<{ total: number }>("GET", `/api/usage/breakdown?${q}&summary=1`);
     return j.total;
   });
   const [breakdownTotals, setBreakdownTotals] = createSignal<GridTotals | null>(null);
@@ -145,7 +145,7 @@ export default function UsagePage() {
 
   // Every count and page shares the same exact scope as the chart.
   const [eventCount] = createResource(query, async (q) => {
-    const j = await api<{ total: number }>("GET", `/api/usage/events?${q}&limit=1`);
+    const j = await api<{ total: number }>("GET", `/api/usage/events?${q}&summary=1`);
     return j.total;
   });
   const [mobilePage, setMobilePage] = createSignal(1);
@@ -206,16 +206,16 @@ export default function UsagePage() {
   })());
 
   return (
-    <div aria-busy={series.loading || breakdownCount.loading || eventCount.loading}>
+    <div aria-busy={filters.pending() || series.loading || breakdownCount.loading || eventCount.loading}>
       <PageTitle
         title="Usage"
         subtitle="Inspect consumption per key, provider, model and request"
       />
 
-      <AnalyticsToolbar filters={filters} />
+      <AnalyticsToolbar filters={filters} loading={series.loading || breakdownCount.loading || eventCount.loading} />
       <Card class="mb-5">
         <div class="px-4 py-3 border-b border-line/60 flex items-center justify-between gap-3">
-          <div><h2 class="text-sm font-semibold text-ink-100">Consumption</h2><p class="text-[11px] text-ink-500 mt-0.5">{filters.label()} &middot; {filters.unit() === "day" ? "Daily" : filters.unit() === "hour" ? "Hourly" : "Minute"} buckets (UTC)</p></div>
+          <div><h2 class="text-sm font-semibold text-ink-100">Consumption</h2><p class="text-[11px] text-ink-500 mt-0.5">{filters.label()} &middot; {filters.unit() === "month" ? "Monthly" : filters.unit() === "day" ? "Daily" : filters.unit() === "hour" ? "Hourly" : "Minute"} buckets (UTC)</p></div>
           <Segmented value={chartMetric()} onChange={setChartMetric} options={[
             { value: "tokens", label: "Tokens" }, { value: "requests", label: "Requests" }, { value: "cost", label: "Cost" },
           ]} />

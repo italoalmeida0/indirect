@@ -698,7 +698,8 @@ describe("gateway end-to-end", () => {
     const own = await api("/api/usage/filter-options", { token: userToken });
     expect(own.status).toBe(200);
     expect(own.json.categories.map((c: any) => c.id)).not.toContain("user_id");
-    expect(own.json.categories.find((c: any) => c.id === "model").options.some((o: any) => o.value === "fake-llm-1")).toBe(true);
+    const ownModels = await api("/api/usage/filter-options?field=model", { token: userToken });
+    expect(ownModels.json.options.some((o: any) => o.value === "fake-llm-1")).toBe(true);
     expect(JSON.stringify(own.json)).not.toContain(UPSTREAM_KEY);
     expect(JSON.stringify(own.json)).not.toContain(gatewayKey);
     const global = await api("/api/admin/usage-filter-options", { token: adminToken });
@@ -720,12 +721,41 @@ describe("gateway end-to-end", () => {
       for (const ts of [from - 1, from, from + 12 * 3_600_000, from + 36 * 3_600_000, from + 60 * 3_600_000, to - 1, to]) insert.run(key.id, user.id, ts, a);
       insert.run(key.id, user.id, from + 36 * 3_600_000, b);
       insert.run(key.id, user.id, from + 36 * 3_600_000, literal);
+      insert.run(key.id, user.id, from - 1, "filter-fixture/outside-before");
+      insert.run(key.id, user.id, to, "filter-fixture/outside-after");
       // Another user's matching model must never enter this user's scope.
       insert.run("filter-fixture/foreign-key", "filter-fixture/foreign-user", from + 36 * 3_600_000, a);
       fixtureDb.run(`INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, model, in_tok, cache_tok, out_tok, reqs)
         SELECT key_id, user_id, date(ts / 1000, 'unixepoch'), proto, model, SUM(in_tok), SUM(cache_tok), SUM(out_tok), COUNT(*)
         FROM usage_events WHERE model LIKE 'filter-fixture/%' GROUP BY key_id, user_id, date(ts / 1000, 'unixepoch'), proto, model`);
       const params = new URLSearchParams({ from: String(from), to: String(to), selection: JSON.stringify({ model: { include: [a, b], exclude: [b] } }) });
+      const facetParams = new URLSearchParams(params);
+      facetParams.set("field", "model");
+      const facets = await api(`/api/usage/filter-options?${facetParams}`, { token: userToken });
+      expect(facets.status).toBe(200);
+      expect(facets.json.total).toBe(3);
+      expect(facets.json.options[0]).toMatchObject({ value: a, count: 5 });
+      expect(facets.json.options.some((o: any) => o.value === b)).toBe(true); // date → available options → result filters
+      expect(facets.json.options.some((o: any) => o.value.includes("outside"))).toBe(false);
+      facetParams.set("limit", "1"); facetParams.set("offset", "1");
+      const secondFacet = await api(`/api/usage/filter-options?${facetParams}`, { token: userToken });
+      expect(secondFacet.json.options).toHaveLength(1);
+      expect(secondFacet.json.total).toBe(3);
+      expect(secondFacet.json.options[0].value).not.toBe(a);
+      facetParams.set("offset", "999");
+      const pastEnd = await api(`/api/usage/filter-options?${facetParams}`, { token: userToken });
+      expect(pastEnd.json.options).toHaveLength(0);
+      expect(pastEnd.json.total).toBe(3);
+      facetParams.set("offset", "0"); facetParams.set("q", "_%");
+      const literalSearch = await api(`/api/usage/filter-options?${facetParams}`, { token: userToken });
+      expect(literalSearch.json.options.map((o: any) => o.value)).toEqual([literal]);
+      const validation = new URLSearchParams(params);
+      validation.set("selection", JSON.stringify({ model: { include: [a, "filter-fixture/outside-before"], exclude: [b, "filter-fixture/outside-after"] } }));
+      const valid = await api(`/api/usage/filter-options?${validation}`, { token: userToken });
+      expect(valid.json.selection).toEqual({ model: { include: [a], exclude: [b] } });
+      expect(valid.json.selectedOptions.model.map((o: any) => o.value).sort()).toEqual([a, b]);
+      const adminFacets = await api(`/api/admin/usage-filter-options?${params}&field=model`, { token: adminToken });
+      expect(adminFacets.json.options.find((o: any) => o.value === a).count).toBe(6);
       const series = await api(`/api/usage/daily?${params}`, { token: userToken });
       expect(series.status).toBe(200);
       expect(series.json.granularity).toBe("day");
@@ -734,12 +764,15 @@ describe("gateway end-to-end", () => {
       expect(breakdown.status).toBe(200);
       expect(breakdown.json.total).toBe(1);
       expect(breakdown.json.totals).toMatchObject({ reqs: 5, in_tok: 50, cache_tok: 100, out_tok: 150 });
+      const summary = await api(`/api/usage/breakdown?${params}&summary=1`, { token: userToken });
+      expect(summary.json.rows).toEqual([]);
+      expect(summary.json.totals).toEqual(breakdown.json.totals);
       for (const [start, end, expected, granularity] of [
         [from, from + 15 * 60_000, 1, "minute"],
         [from, from + 13 * 3_600_000, 2, "hour"],
         [from + 1, from + 12 * 3_600_000, 0, "hour"],
         [Date.parse("2024-01-02T00:00:00Z"), Date.parse("2024-01-05T00:00:00Z"), 3, "hour"],
-        ["all", to, 6, "day"],
+        ["all", to, 6, "month"],
       ] as const) {
         const window = new URLSearchParams({ from: String(start), to: String(end), selection: JSON.stringify({ model: { include: [a], exclude: [] } }) });
         const points = await api(`/api/usage/daily?${window}`, { token: userToken });
@@ -754,6 +787,9 @@ describe("gateway end-to-end", () => {
       expect(events.status).toBe(200);
       expect(events.json.total).toBe(5);
       expect(events.json.totals).toMatchObject({ reqs: 5, in_tok: 50, cache_tok: 100, out_tok: 150 });
+      const eventSummary = await api(`/api/usage/events?${params}&summary=1`, { token: userToken });
+      expect(eventSummary.json.events).toEqual([]);
+      expect(eventSummary.json.total).toBe(5);
       const last = events.json.events.at(-1);
       const next = await api(`/api/usage/events?${params}&limit=5&cursor=${last.ts}:${last.id}`, { token: userToken });
       expect(next.json.total).toBe(5);
@@ -780,6 +816,11 @@ describe("gateway end-to-end", () => {
       params.set("selection", JSON.stringify({ model: { include: [a], exclude: [] } }));
       const retained = await api(`/api/usage/breakdown?${params}`, { token: userToken });
       expect(retained.json.totals.reqs).toBe(5);
+      const retainedFacets = await api(`/api/usage/filter-options?${params}&field=model`, { token: userToken });
+      expect(retainedFacets.json.options[0].count).toBe(5);
+      insert.run(key.id, user.id, from + 10 * 60_000, a);
+      const afterExternalWrite = await api(`/api/usage/filter-options?${params}&field=model`, { token: userToken });
+      expect(afterExternalWrite.json.options[0].count).toBe(6);
     } finally {
       fixtureDb.run("DELETE FROM usage_events WHERE model LIKE 'filter-fixture/%'");
       fixtureDb.run("DELETE FROM usage_model_provider_daily WHERE model LIKE 'filter-fixture/%'");
@@ -800,6 +841,58 @@ describe("gateway end-to-end", () => {
     expect((await api(`/api/usage/events?${base}`, { token: userToken })).status).toBe(400);
     base.set("from", "NaN");
     expect((await api(`/api/usage/breakdown?${base}`, { token: userToken })).status).toBe(400);
+    for (const query of ["field=user_id", "field=unknown", "field=model&limit=101", "field=model&offset=-1", `field=model&q=${"a".repeat(201)}`]) {
+      expect((await api(`/api/usage/filter-options?${query}`, { token: userToken })).status).toBe(400);
+    }
+  });
+
+  test("monthly, daily and raw boundaries agree through leap February and preserve pricing", async () => {
+    const fixture = new Database(path.join(dataDir, "gateway.db"));
+    const user = fixture.query("SELECT id FROM users WHERE email = ?").get(userEmail) as { id: string };
+    const key = fixture.query("SELECT id FROM api_keys WHERE user_id = ? LIMIT 1").get(user.id) as { id: string };
+    const model = "monthly-fixture/model";
+    const from = Date.parse("2023-12-31T12:30:00Z");
+    const to = Date.parse("2024-03-01T09:00:00Z");
+    try {
+      fixture.run("INSERT INTO models (id, upstream_model, name, created_at, updated_at, pricing_input, pricing_input_cache, pricing_output) VALUES (?, '', ?, 0, 0, 0.000002, 0.0000005, 0.000004)", [model, model]);
+      const insert = fixture.query("INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, cache_tok, out_tok) VALUES (?, ?, ?, 'openai', ?, 10, 20, 30)");
+      for (const ts of [from - 1, from, Date.parse("2024-01-01T00:00:00Z"), Date.parse("2024-01-31T23:59:59.999Z"), Date.parse("2024-02-01T00:00:00Z"), Date.parse("2024-02-29T23:59:59.999Z"), to - 1, to]) insert.run(key.id, user.id, ts, model);
+      fixture.run(`INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, model, in_tok, cache_tok, out_tok, reqs)
+        SELECT key_id, user_id, date(ts/1000,'unixepoch'), proto, model, SUM(in_tok), SUM(cache_tok), SUM(out_tok), COUNT(*) FROM usage_events WHERE model = ? GROUP BY key_id, date(ts/1000,'unixepoch'), proto, model`, [model]);
+      fixture.run(`INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
+        SELECT key_id, user_id, substr(date,1,7), proto, provider_id, provider_key_id, model, upstream_model, SUM(in_tok), SUM(cache_tok), SUM(out_tok), SUM(reqs)
+        FROM usage_model_provider_daily WHERE model = ? GROUP BY key_id, substr(date,1,7), proto, provider_id, provider_key_id, model, upstream_model`, [model]);
+      const params = new URLSearchParams({ from: String(from), to: String(to), selection: JSON.stringify({ model: { include: [model], exclude: [] } }) });
+      for (const suffix of ["daily", "breakdown"]) {
+        const result = await api(`/api/usage/${suffix}?${params}`, { token: userToken });
+        expect(result.status).toBe(200);
+        const buckets = suffix === "daily" ? result.json.series : result.json.rows;
+        expect(buckets.reduce((sum: number, row: any) => sum + row.reqs, 0)).toBe(6);
+        expect(buckets.reduce((sum: number, row: any) => sum + row.cost, 0)).toBeCloseTo(.0009, 10);
+      }
+      fixture.run("DELETE FROM usage_events WHERE model = ? AND ts >= ? AND ts < ?", [model, Date.parse("2024-01-01T00:00:00Z"), Date.parse("2024-03-01T00:00:00Z")]);
+      const facets = await api(`/api/usage/filter-options?${params}&field=model&q=monthly-fixture`, { token: userToken });
+      expect(facets.json.options[0].count).toBe(6);
+      const archived = await api(`/api/usage/breakdown?${params}`, { token: userToken });
+      expect(archived.json.totals.reqs).toBe(6);
+      expect(archived.json.totals.cost).toBeCloseTo(.0009, 10);
+    } finally {
+      for (const table of ["usage_events", "usage_model_provider_daily", "usage_model_provider_monthly"]) fixture.run(`DELETE FROM ${table} WHERE model = ?`, [model]);
+      fixture.run("DELETE FROM models WHERE id = ?", [model]);
+      fixture.close();
+    }
+  });
+
+  test("range facet caches observe buffered ingestion without waiting for TTL", async () => {
+    const params = new URLSearchParams({ from: String(Date.now() - 60_000), to: String(Date.now() + 60_000), field: "model", q: "fake-llm-1" });
+    const before = await api(`/api/usage/filter-options?${params}`, { token: userToken });
+    const count = before.json.options.find((o: any) => o.value === "fake-llm-1")?.count ?? 0;
+    const response = await llm("/v1/chat/completions", gatewayKey, { model: "fake-llm-1", messages: [{ role: "user", content: "range cache invalidation probe" }] });
+    expect(response.status).toBe(200);
+    await response.text();
+    await Bun.sleep(1500);
+    const after = await api(`/api/usage/filter-options?${params}`, { token: userToken });
+    expect(after.json.options.find((o: any) => o.value === "fake-llm-1").count).toBe(count + 1);
   });
 
   test("usage carries the upstream provider dimension", async () => {

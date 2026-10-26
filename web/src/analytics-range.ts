@@ -62,9 +62,9 @@ export function presetRange(preset: string, now = Date.now()): AnalyticsRange {
   return { preset, from: start.getTime(), to: end.getTime() };
 }
 
-export function rangeUnit(range: AnalyticsRange): "minute" | "hour" | "day" {
+export function rangeUnit(range: AnalyticsRange): "minute" | "hour" | "day" | "month" {
   const span = range.from === null ? Infinity : range.to - range.from;
-  return span <= 3_600_000 ? "minute" : span <= 3 * 86_400_000 ? "hour" : "day";
+  return span <= 3_600_000 ? "minute" : span <= 3 * 86_400_000 ? "hour" : span > 400 * 86_400_000 ? "month" : "day";
 }
 
 export function localDateTime(ts: number): string {

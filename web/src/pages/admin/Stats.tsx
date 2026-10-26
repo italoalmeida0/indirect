@@ -132,7 +132,7 @@ export default function AdminStatsPage() {
 
   const [breakdownCounts] = createResource(statsQuery, async (q) => {
     const params = new URLSearchParams(q);
-    params.set("limit", "1");
+    params.set("summary", "1");
     const [users, models] = await Promise.all([
       api<{ total: number }>("GET", `/api/admin/usage-breakdown/users?${params.toString()}`),
       api<{ total: number }>("GET", `/api/admin/usage-breakdown/models?${params.toString()}`),
@@ -206,12 +206,12 @@ export default function AdminStatsPage() {
   };
 
   return (
-    <div aria-busy={stats.loading || breakdownCounts.loading}>
+    <div aria-busy={filters.pending() || stats.loading || breakdownCounts.loading}>
       <PageTitle
         title="Global overview"
         subtitle="Explore usage across users, keys and providers"
       />
-      <AnalyticsToolbar filters={filters} />
+      <AnalyticsToolbar filters={filters} loading={stats.loading || breakdownCounts.loading} />
 
       <Show when={stats()}>
         <div
@@ -262,7 +262,7 @@ export default function AdminStatsPage() {
 
         <Card class="mb-5">
           <CardHeader
-            title={filters.unit() === "day" ? "Daily usage" : filters.unit() === "hour" ? "Hourly usage" : "Usage by minute"}
+            title={filters.unit() === "month" ? "Monthly usage" : filters.unit() === "day" ? "Daily usage" : filters.unit() === "hour" ? "Hourly usage" : "Usage by minute"}
             subtitle={`${chartMetric() === "tokens" ? "Tokens" : chartMetric() === "cost" ? "Spend ($)" : "Requests"} per ${filters.unit()} (UTC)`}
             right={
               <Segmented

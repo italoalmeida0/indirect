@@ -119,7 +119,7 @@ export class ApiFail extends Error {
   }
 }
 
-async function rawCall<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function rawCall<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {};
   const s = latestSession();
   if (s) headers.Authorization = `Bearer ${s.accessToken}`;
@@ -128,22 +128,24 @@ async function rawCall<T>(method: string, path: string, body?: unknown): Promise
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   });
   let j: any = null;
   try {
     j = await res.json();
   } catch {}
+  signal?.throwIfAborted();
   if (!res.ok) throw new ApiFail(res.status, j?.error ?? `HTTP ${res.status}`);
   return j as T;
 }
 
-export async function api<T = any>(method: string, path: string, body?: unknown): Promise<T> {
+export async function api<T = any>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   try {
-    return await rawCall<T>(method, path, body);
+    return await rawCall<T>(method, path, body, signal);
   } catch (e) {
     if (e instanceof ApiFail && e.status === 401 && latestSession()) {
       const ok = await refreshSingleFlight();
-      if (ok) return rawCall<T>(method, path, body);
+      if (ok) return rawCall<T>(method, path, body, signal);
       setSession(null);
     }
     throw e;

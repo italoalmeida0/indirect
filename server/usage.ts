@@ -1,5 +1,6 @@
 import { db } from "./db";
 import { usageScopeWhere } from "./usage-filters";
+import { cachedUsageQuery, invalidateUsageQueries } from "./usage-cache";
 import { buildGridWhere, buildGridOrder, gridPage, type ColSpec, type GridFilterEntry, type GridSort } from "./gridql";
 import {
   modelPricingJoins,
@@ -103,15 +104,24 @@ const upsertModelProviderDaily = db.prepare(
                  out_tok = out_tok + excluded.out_tok,
                  reqs = reqs + 1`,
 );
+const upsertModelProviderMonthly = db.prepare(
+  `INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+   ON CONFLICT(key_id, month, proto, provider_id, provider_key_id, model, upstream_model)
+   DO UPDATE SET in_tok = in_tok + excluded.in_tok, cache_tok = cache_tok + excluded.cache_tok,
+                 out_tok = out_tok + excluded.out_tok, reqs = reqs + 1`,
+);
 
 export function flushUsage(): void {
   flushScheduled = false;
   if (buffer.length === 0) return;
   const batch = buffer.splice(0, buffer.length);
   const affectedKeys = new Set<string>();
+  const changedWindows: Array<{ userId: string; ts: number }> = [];
   db.transaction(() => {
     for (const ev of batch) {
       const ts = ev.ts ?? Date.now();
+      changedWindows.push({ userId: ev.userId, ts });
       const model = ev.model.slice(0, 128);
       insertEvent.run(
         ev.keyId,
@@ -146,13 +156,12 @@ export function flushUsage(): void {
         ev.cacheTok,
         ev.outTok,
       );
+      upsertModelProviderMonthly.run(ev.keyId, ev.userId, date.slice(0, 7), ev.proto, ev.providerId ?? "", ev.providerKeyId ?? "", model, ev.upstreamModel ?? "", ev.inTok, ev.cacheTok, ev.outTok);
       affectedKeys.add(ev.keyId);
     }
   })();
   for (const k of affectedKeys) spendCache.delete(k);
-  // New rows just landed: every view's total changed. Clearing beats keying
-  // precisely — flushes are ≤1/s and the TTL cache rebuilds on next read.
-  if (batch.length > 0) eventCountCache.clear();
+  invalidateUsageQueries(changedWindows);
 }
 
 // ===== Budget reads (cached) =====
@@ -520,6 +529,7 @@ export function userEvents(
      *  default (ts DESC, id DESC) ordering; custom sorts keep OFFSET. */
     cursor?: { ts: number; id: number };
     scope?: import("./usage-filters").UsageScope;
+    summaryOnly?: boolean;
   },
 ): { rows: any[]; total: number; totals: { in_tok: number; cache_tok: number; out_tok: number; reqs: number } } {
   // Scope (user + filters) shared by the page query and the total-count;
@@ -553,7 +563,7 @@ export function userEvents(
     pageParams.push(opts.cursor!.ts, opts.cursor!.ts, opts.cursor!.id);
   }
   const order = buildGridOrder(opts.sort, EVENT_COLS, "e.ts DESC", "e.id DESC");
-  const rows = db
+  const rows = opts.summaryOnly ? [] : db
     .prepare(
       // LEFT JOINs: hard-deleted keys/providers must not hide their history.
       `SELECT e.id, e.key_id, COALESCE(k.name, substr(e.key_id, 1, 8)) AS key_name, e.ts, e.proto, e.model,
@@ -582,17 +592,9 @@ export function userEvents(
   // predicate) — one pass, and totals always agree with `total`.
   const joinedFilter =
     opts.filters &&
-    Object.keys(opts.filters).some((c) => c === "key_name" || c === "provider_name" || c === "cost");
-  const cacheKey = `u:${userId}|k:${opts.keyId ?? ""}|f:${(opts.filters ? JSON.stringify(opts.filters) : "")}|s:${opts.scope ? JSON.stringify(opts.scope) : ""}`;
-  const now = Date.now();
-  const cached = joinedFilter ? null : eventCountCache.get(cacheKey);
-  let total: number;
-  let sums: { in_tok: number; cache_tok: number; out_tok: number };
-  if (cached && now - cached.at < EVENT_COUNT_TTL_MS) {
-    total = cached.n;
-    sums = { in_tok: cached.in_tok, cache_tok: cached.cache_tok, out_tok: cached.out_tok };
-  } else {
-    const agg = (
+    Object.keys(opts.filters).some((c) => c === "key_name" || c === "provider_name" || c.startsWith("cost"));
+  const cacheScope = opts.scope ?? { from: null, to: Infinity, selection: {} };
+  const agg = cachedUsageQuery("events-summary", cacheScope, userId, () => (
       joinedFilter
         ? db
             .prepare<{ n: number; in_tok: number; cache_tok: number; out_tok: number }, any[]>(
@@ -608,20 +610,6 @@ export function userEvents(
               `SELECT COUNT(*) AS n, COALESCE(SUM(e.in_tok),0) AS in_tok, COALESCE(SUM(e.cache_tok),0) AS cache_tok, COALESCE(SUM(e.out_tok),0) AS out_tok
                FROM usage_events e WHERE ${scopeClauses.join(" AND ")}`,
             )
-    ).get(...scopeParams)!;
-    total = agg.n;
-    sums = { in_tok: agg.in_tok, cache_tok: agg.cache_tok, out_tok: agg.out_tok };
-    if (!joinedFilter) eventCountCache.set(cacheKey, { n: total, at: now, ...sums });
-    if (eventCountCache.size > 512) eventCountCache.clear();
-  }
-  return { rows, total, totals: { ...sums, reqs: total } };
+    ).get(...scopeParams)!, [opts.keyId, opts.filters]);
+  return { rows, total: agg.n, totals: { in_tok: agg.in_tok, cache_tok: agg.cache_tok, out_tok: agg.out_tok, reqs: agg.n } };
 }
-
-/** Recent-request grid counts + footer token sums, TTL-cached: `total` only
- *  changes when the usage flush lands, so repeat blocks within seconds reuse
- *  the numbers. */
-const EVENT_COUNT_TTL_MS = 10_000;
-const eventCountCache = new Map<
-  string,
-  { n: number; at: number; in_tok: number; cache_tok: number; out_tok: number }
->();

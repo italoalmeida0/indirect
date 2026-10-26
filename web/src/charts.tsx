@@ -153,7 +153,7 @@ export function DailyChart(props: {
   series: DailyPoint[];
   height?: number;
   metric?: "tokens" | "requests" | "cost";
-  unit?: "day" | "hour" | "minute";
+  unit?: "day" | "hour" | "minute" | "month";
   /** External filter key; changing it clears solid-charts hover state. */
   resetKey?: string;
 }) {

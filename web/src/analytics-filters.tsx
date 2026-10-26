@@ -1,38 +1,118 @@
-import { For, Show, createMemo, createResource, createSignal, createUniqueId, onCleanup, onMount, type JSX } from "solid-js";
+import { For, Show, batch, createMemo, createResource, createSignal, createUniqueId, onCleanup, onMount, untrack, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 import { shift } from "@floating-ui/dom";
 import { api } from "./api";
 import { anchorFloat } from "./floating";
 import { Icon, Icons } from "./ui";
-import { calendarPeriods, localDateTime, presetRange, rangeLabel, rangeUnit, relativePeriods } from "./analytics-range";
+import { calendarPeriods, localDateTime, presetRange, rangeLabel, rangeUnit, relativePeriods, type AnalyticsRange } from "./analytics-range";
 
 interface FilterOption { value: string; label: string; count: number }
-interface FilterCategory { id: string; label: string; icon: string; options: FilterOption[] }
+interface FilterCategory { id: string; label: string; icon: string }
 const categoryIcons: Record<string, string> = { model: "lucide:box", provider_id: "lucide:server", key_id: "lucide:key", proto: "lucide:arrow-left-right", upstream_model: "lucide:layers", provider_key_id: "lucide:shield", user_id: "lucide:users" };
 type Mode = "include" | "exclude";
 type Selection = Record<string, { include: string[]; exclude: string[] }>;
+interface FilterMetadata { categories: FilterCategory[]; selection: Selection; selectedOptions: Record<string, FilterOption[]> }
+interface FilterPage { field: string; options: FilterOption[]; total: number; offset: number; limit: number }
 
 export function createAnalyticsFilters(admin = false) {
-  const [range, setRange] = createSignal(presetRange("14d"));
+  const [range, setRangeValue] = createSignal(presetRange("14d"));
   const [selection, setSelection] = createSignal<Selection>({});
-  const [options, { refetch }] = createResource(async () => {
-    const result = await api<{ categories: FilterCategory[] }>("GET", admin ? "/api/admin/usage-filter-options" : "/api/usage/filter-options");
-    return result.categories;
+  const [applied, setApplied] = createSignal({ range: range(), selection: {} as Selection });
+  const [labels, setLabels] = createSignal<Record<string, string>>({});
+  const [field, setFieldValue] = createSignal("");
+  const [search, setSearchValue] = createSignal("");
+  const [settledSearch, setSettledSearch] = createSignal("");
+  const [offset, setOffset] = createSignal(0);
+  let metadataAbort: AbortController | undefined;
+  let pageAbort: AbortController | undefined;
+  let selectionTimer: ReturnType<typeof setTimeout> | undefined;
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  const endpoint = admin ? "/api/admin/usage-filter-options" : "/api/usage/filter-options";
+  const paramsFor = (period: AnalyticsRange, selected: Selection = {}) => new URLSearchParams({ from: period.from === null ? "all" : String(period.from), to: String(period.to), selection: JSON.stringify(selected) });
+  const keepLabels = (selected: Selection, supplied: Record<string, FilterOption[]> = {}) => setLabels((previous) => {
+    const next: Record<string, string> = {};
+    for (const [id, entry] of Object.entries(selected)) {
+      for (const value of [...entry.include, ...entry.exclude]) {
+        next[`${id}:${value}`] = supplied[id]?.find((option) => option.value === value)?.label ?? previous[`${id}:${value}`] ?? value;
+      }
+    }
+    return next;
   });
-  const categories = () => options.error ? [] : options() ?? [];
-  const query = createMemo(() => {
-    const period = range();
-    return new URLSearchParams({ from: period.from === null ? "all" : String(period.from), to: String(period.to), selection: JSON.stringify(selection()) }).toString();
+  const [options, { refetch }] = createResource(range, async (period) => {
+    metadataAbort?.abort();
+    const controller = metadataAbort = new AbortController();
+    const result = await api<FilterMetadata>("GET", `${endpoint}?${paramsFor(period, untrack(selection))}`, undefined, controller.signal);
+    if (!controller.signal.aborted && period === range()) {
+      const next: Selection = {};
+      for (const [id, current] of Object.entries(selection())) {
+        const valid = result.selection[id];
+        const values = new Set([...(valid?.include ?? []), ...(valid?.exclude ?? [])]);
+        const entry = { include: current.include.filter((v) => values.has(v)), exclude: current.exclude.filter((v) => values.has(v)) };
+        if (entry.include.length || entry.exclude.length) next[id] = entry;
+      }
+      batch(() => { setSelection(next); keepLabels(next, result.selectedOptions); setApplied({ range: period, selection: next }); });
+    }
+    return { ...result, period };
   });
-  const toggle = (field: string, mode: Mode, value: string) => setSelection((current) => {
+  const categories = () => options.error || options.latest?.period !== range() ? [] : options.latest?.categories ?? [];
+  const query = createMemo(() => paramsFor(applied().range, applied().selection).toString());
+  const commitSelection = () => {
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(() => {
+      if (!options.error && options.latest?.period === range()) setApplied({ range: range(), selection: selection() });
+    }, 120);
+  };
+  const setRange = (next: AnalyticsRange) => {
+    clearTimeout(selectionTimer);
+    setField("");
+    batch(() => {
+      setRangeValue(next);
+      if (!Object.keys(selection()).length) setApplied({ range: next, selection: {} });
+    });
+  };
+  const setField = (next: string) => {
+    if (next === field() && !search() && !offset()) return;
+    clearTimeout(searchTimer); pageAbort?.abort();
+    batch(() => { setFieldValue(next); setSearchValue(""); setSettledSearch(""); setOffset(0); });
+  };
+  const setSearch = (value: string) => {
+    setSearchValue(value); clearTimeout(searchTimer); pageAbort?.abort();
+    searchTimer = setTimeout(() => {
+      const samePage = value === settledSearch() && offset() === 0;
+      batch(() => { setSettledSearch(value); setOffset(0); });
+      if (samePage && field()) void refetchPage();
+    }, 150);
+  };
+  const pageQuery = createMemo(() => {
+    if (!field() || !categories().length) return false;
+    const params = paramsFor(range());
+    params.set("field", field()); params.set("q", settledSearch()); params.set("offset", String(offset())); params.set("limit", "60");
+    return params.toString();
+  });
+  const [facet, { refetch: refetchPage }] = createResource(pageQuery, async (requestKey) => {
+    pageAbort?.abort();
+    const controller = pageAbort = new AbortController();
+    const result = await api<FilterPage>("GET", `${endpoint}?${requestKey}`, undefined, controller.signal);
+    return { ...result, requestKey };
+  });
+  const page = () => facet.error || facet.latest?.requestKey !== pageQuery() ? undefined : facet.latest;
+  const pageLoading = () => facet.loading || search() !== settledSearch() || options.loading;
+  const pending = () => (!options.error && range() !== applied().range) || JSON.stringify(selection()) !== JSON.stringify(applied().selection);
+  onCleanup(() => { metadataAbort?.abort(); pageAbort?.abort(); clearTimeout(selectionTimer); clearTimeout(searchTimer); });
+  const toggle = (field: string, mode: Mode, value: string, label: string) => {
+    setLabels((current) => ({ ...current, [`${field}:${value}`]: label }));
+    setSelection((current) => {
     const existing = current[field] ?? { include: [], exclude: [] };
     const other = mode === "include" ? "exclude" : "include";
     const next = { ...existing, [mode]: existing[mode].includes(value) ? existing[mode].filter((v) => v !== value) : [...existing[mode], value], [other]: existing[other].filter((v) => v !== value) };
     const result = { ...current, [field]: next };
     if (!next.include.length && !next.exclude.length) delete result[field];
     return result;
-  });
-  const clear = (field?: string, mode?: Mode) => setSelection((current) => {
+    });
+    keepLabels(selection()); commitSelection();
+  };
+  const clear = (field?: string, mode?: Mode) => {
+    setSelection((current) => {
     if (!field) return {};
     const result = { ...current };
     if (mode && result[field]) {
@@ -40,8 +120,13 @@ export function createAnalyticsFilters(admin = false) {
       if (!result[field]!.include.length && !result[field]!.exclude.length) delete result[field];
     } else delete result[field];
     return result;
-  });
-  return { range, setRange, selection, query, categories, options, refetch, toggle, clear, label: () => rangeLabel(range()), unit: () => rangeUnit(range()) };
+    });
+    keepLabels(selection()); commitSelection();
+  };
+  return { range, setRange, selection, query, categories, options, refetch, toggle, clear, pending,
+    field, setField, search, setSearch, offset, setOffset, facet, page, pageLoading, refetchPage,
+    optionLabel: (field: string, value: string) => labels()[`${field}:${value}`] ?? (value || "Unknown"),
+    label: () => rangeLabel(range()), unit: () => rangeUnit(range()) };
 }
 
 function FloatingPanel(props: { anchor: HTMLElement; label: string; wide?: boolean; expandable?: boolean; close: (focus?: boolean) => void; children: JSX.Element }) {
@@ -164,13 +249,12 @@ function Calendar(props: { from: string; to: string; setFrom: (value: string) =>
   </div>;
 }
 
-export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnalyticsFilters> }) {
+export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnalyticsFilters>; loading?: boolean }) {
   const f = props.filters;
   const [open, setOpen] = createSignal<"filters" | "period" | null>(null);
   const [active, setActive] = createSignal("");
   const [mode, setMode] = createSignal<Mode>("include");
   const [categorySearch, setCategorySearch] = createSignal("");
-  const [optionSearch, setOptionSearch] = createSignal("");
   const [custom, setCustom] = createSignal(false);
   const [draftFrom, setDraftFrom] = createSignal("");
   const [draftTo, setDraftTo] = createSignal("");
@@ -181,19 +265,20 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
   const count = () => Object.values(f.selection()).reduce((sum, entry) => sum + entry.include.length + entry.exclude.length, 0);
   const current = () => f.categories().find((category) => category.id === active());
   const categories = () => f.categories().filter((category) => category.label.toLowerCase().includes(categorySearch().toLowerCase()));
-  const visibleOptions = createMemo(() => (current()?.options ?? []).filter((option) => `${option.label} ${option.value}`.toLowerCase().includes(optionSearch().toLowerCase())));
+  const visibleOptions = () => f.page()?.options ?? [];
   const chips = createMemo(() => Object.entries(f.selection()).flatMap(([field, selection]) => (["include", "exclude"] as const).flatMap((mode) => {
     const category = f.categories().find((c) => c.id === field);
-    const labels = selection[mode].map((value) => category?.options.find((option) => option.value === value)?.label ?? value);
+    const labels = selection[mode].map((value) => f.optionLabel(field, value));
     return labels.length ? [{ field, mode, category: category?.label ?? field, labels }] : [];
   })));
   const close = (focus = false) => {
     const button = open() === "filters" ? filterButton : periodButton;
+    f.setField("");
     setOpen(null);
     if (focus) button.focus({ preventScroll: true });
   };
   const chooseCategory = (field: string) => {
-    setActive(field); setOptionSearch("");
+    setActive(field); f.setField(field);
     requestAnimationFrame(() => document.getElementById(`${id}-filters`)?.querySelector<HTMLInputElement>(".analytics-options input")?.focus({ preventScroll: true }));
   };
   const periodText = () => {
@@ -223,13 +308,14 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
 
   return <div class="analytics-toolbar" aria-label="Analytics filters">
     <div class="analytics-controls">
-      <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label="Filter usage" aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onClick={() => { if (open() === "filters") close(); else { setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
+      <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label="Filter usage" aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
         <Icon name="lucide:list-filter" size={16} /><span>Filter</span><Show when={count()}><span class="analytics-filter-count">{count()}</span></Show>
       </button>
       <button ref={periodButton} type="button" class={`analytics-control analytics-period-trigger ${open() === "period" ? "is-active" : ""}`} title={exactRange()} aria-label={`Time range: ${f.label()}`} aria-haspopup="dialog" aria-expanded={open() === "period"} aria-controls={`${id}-period`} onClick={() => { if (open() === "period") close(); else { setCustom(false); setOpen("period"); } }}>
         <Icon name="lucide:calendar-days" size={15} /><span class="analytics-range-name">{f.label()}</span><span class="analytics-range-dates">{periodText()}</span><Icon name={Icons.chevronDown} size={13} class="text-ink-500" />
       </button>
       <span class="analytics-timezone" title="Calendar dates and times use your local timezone; charts use UTC"><Icon name="lucide:globe" size={12} />{timezone}</span>
+      <span class="analytics-timezone" role="status" style={{ width: "16px", height: "16px", padding: "0" }}><Show when={props.loading || f.pending()}><Icon name={Icons.refresh} size={12} class="animate-spin motion-reduce:animate-none" /><span class="sr-only">Updating…</span></Show></span>
     </div>
     <Show when={chips().length}>
       <div class="analytics-chips" aria-live="polite">
@@ -259,20 +345,31 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
             <div class="analytics-menu-footer"><span>Narrow your view</span><kbd>esc</kbd></div>
           </div>
           <Show when={current()}>{(category) => <div class="analytics-options">
-            <div class="analytics-option-heading"><button type="button" class="analytics-icon-button" aria-label="Back to filters" onClick={() => setActive("")}><Icon name="lucide:chevron-left" size={15} /></button><span>{category().label}</span><span class="analytics-result-count">{category().options.length.toLocaleString()} available</span></div>
+            <div class="analytics-option-heading"><button type="button" class="analytics-icon-button" aria-label="Back to filters" onClick={() => { setActive(""); f.setField(""); }}><Icon name="lucide:chevron-left" size={15} /></button><span>{category().label}</span><span class="analytics-result-count">{f.pageLoading() ? "Loading…" : `${(f.page()?.total ?? 0).toLocaleString()} available`}</span></div>
             <div class="analytics-mode" role="group" aria-label="Filter mode"><For each={["include", "exclude"] as const}>{(value) => <button type="button" aria-pressed={mode() === value} class={mode() === value ? "is-selected" : ""} onClick={() => setMode(value)}><Icon name={value === "include" ? "lucide:plus" : "lucide:minus"} size={13} />{value === "include" ? "Include" : "Exclude"}</button>}</For></div>
-            <SearchField value={optionSearch()} onInput={setOptionSearch} placeholder={`Search ${category().label.toLowerCase()}…`} />
+            <SearchField value={f.search()} onInput={f.setSearch} placeholder={`Search ${category().label.toLowerCase()}…`} />
             <div class="analytics-option-list" role="group" aria-label={`${mode() === "include" ? "Include" : "Exclude"} ${category().label}`}>
+              <Show when={!f.pageLoading()} fallback={<p class="analytics-empty" role="status">Loading options for this period…</p>}>
+              <Show when={!f.facet.error} fallback={<div class="analytics-empty">Could not load options.<button type="button" class="analytics-clear block mx-auto mt-2" onClick={() => void f.refetchPage()}>Try again</button></div>}>
               <For each={visibleOptions()}>{(option) => {
                 const selected = () => f.selection()[category().id]?.[mode()].includes(option.value) ?? false;
                 const other = () => f.selection()[category().id]?.[mode() === "include" ? "exclude" : "include"].includes(option.value) ?? false;
-                return <button type="button" data-nav class={`analytics-menu-row analytics-option ${selected() ? "is-active" : ""}`} aria-pressed={selected()} title={option.value || "Unknown"} onClick={() => f.toggle(category().id, mode(), option.value)}>
+                return <button type="button" data-nav class={`analytics-menu-row analytics-option ${selected() ? "is-active" : ""}`} aria-pressed={selected()} disabled={!selected() && !other() && count() >= 250} title={option.value || "Unknown"} onClick={() => f.toggle(category().id, mode(), option.value, option.label)}>
                   <span class={`analytics-checkbox ${selected() ? "is-checked" : ""}`}><Show when={selected()}><Icon name={mode() === "include" ? Icons.check : "lucide:minus"} size={11} strokeWidth={2.5} /></Show></span>
                   <span class="analytics-option-name">{option.label}</span><Show when={other()}><Icon name={mode() === "include" ? "lucide:minus" : "lucide:plus"} size={12} class="text-ink-500" /></Show><span class="analytics-option-count">{option.count.toLocaleString()}</span>
                 </button>;
               }}</For>
-              <Show when={!visibleOptions().length}><div class="analytics-empty"><Icon name={Icons.search} size={22} class="mb-2 text-ink-500" /><p>{optionSearch() ? "No matches found" : "No usage recorded yet"}</p><p class="mt-1 text-ink-500">{optionSearch() ? "Try a different search." : "Options appear as requests arrive."}</p></div></Show>
+              <Show when={!visibleOptions().length}><div class="analytics-empty"><Icon name={Icons.search} size={22} class="mb-2 text-ink-500" /><p>{f.search() ? "No matches in this period" : "No usage in this period"}</p><p class="mt-1 text-ink-500">Choose another period or search.</p></div></Show>
+              </Show>
+              </Show>
             </div>
+            <Show when={(f.page()?.total ?? 0) > 60}>
+              <div class="analytics-menu-footer" aria-label="Filter option pages">
+                <button type="button" class="analytics-clear" aria-label="Previous filter options" disabled={f.pageLoading() || !f.offset()} onClick={() => f.setOffset((value) => Math.max(0, value - 60))}>Previous</button>
+                <span>{f.offset() + 1}–{Math.min(f.offset() + 60, f.page()?.total ?? 0)} of {f.page()?.total.toLocaleString()}</span>
+                <button type="button" class="analytics-clear" aria-label="Next filter options" disabled={f.pageLoading() || f.offset() + 60 >= (f.page()?.total ?? 0)} onClick={() => f.setOffset((value) => value + 60)}>Next</button>
+              </div>
+            </Show>
             <div class="analytics-menu-footer"><span>{f.selection()[category().id]?.[mode()].length ?? 0} {mode() === "include" ? "included" : "excluded"}</span><button type="button" class="analytics-clear" disabled={!f.selection()[category().id]?.[mode()].length} onClick={() => f.clear(category().id, mode())}>Reset</button></div>
           </div>}</Show>
         </div>

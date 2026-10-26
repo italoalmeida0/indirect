@@ -27,7 +27,8 @@ import { queryKeys } from "../keys";
 import { normalizePricing, pricingColumns, modelPricingJoins, costAggFieldsSql } from "../pricing";
 import { TOOL_CALL_MODES, type ToolCallMode } from "../tool-call-mode";
 import { fetchOpenRouterCatalog, matchOpenRouterModel } from "../openrouter";
-import { filteredUsageBreakdown, filteredUsageSeries, readUsageScope, usageFilterOptions } from "../usage-filters";
+import { readUsageScope } from "../usage-filters";
+import { readUsage } from "../usage-reader";
 
 /**
  * /api/admin/* — everything requires role=admin. Every mutation is audited.
@@ -1550,7 +1551,8 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
   // ================= stats =================
 
   if (path === "/api/admin/usage-filter-options" && req.method === "GET") {
-    return ok({ categories: usageFilterOptions(null) }, req);
+    const scope = readUsageScope(url, true) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
+    return ok(await readUsage({ kind: "facets", userId: null, scope, search: url.searchParams.toString() }), req);
   }
 
   if (path === "/api/admin/stats" && req.method === "GET") {
@@ -1562,7 +1564,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         activeKeys: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM api_keys WHERE status = 'active'").get()!.n,
         providers: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM providers").get()!.n,
       };
-      return ok({ ...filteredUsageSeries(scope, null), counts, kvCache: kvSnapshotCached() }, req);
+      return ok({ ...await readUsage({ kind: "series", scope, userId: null }), counts, kvCache: kvSnapshotCached() }, req);
     }
     // Hour granularity ("1D"): the window tables come from usage_events so
     // series/top-lists stay consistent with the trailing-N-hours chart.
@@ -1730,7 +1732,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const grid = parseGridQuery(url);
     const scope = readUsageScope(url, true);
     if (scope) {
-      const page = filteredUsageBreakdown(scope, null, grid, path.endsWith("/users"));
+      const page = await readUsage({ kind: "breakdown", scope, userId: null, grid, users: path.endsWith("/users"), summaryOnly: url.searchParams.get("summary") === "1" });
       return ok({ [path.endsWith("/users") ? "users" : "models"]: page.rows, total: page.total, totals: page.totals, limit: grid.limit, offset: grid.offset }, req);
     }
     const daysAll = url.searchParams.get("days") === "all";

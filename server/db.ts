@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import path from "path";
+import { isMainThread, workerData } from "node:worker_threads";
 
 import { DATA_DIR } from "./config";
 import { normalizePricing, pricingColumns } from "./pricing";
@@ -10,9 +11,10 @@ import { normalizePricing, pricingColumns } from "./pricing";
  * statements are prepared once at module scope.
  */
 
-export const db = new Database(path.join(DATA_DIR, "gateway.db"), { create: true });
+const usageReader = !isMainThread && workerData?.usageReader === true;
+export const db = new Database(path.join(DATA_DIR, "gateway.db"), usageReader ? { readonly: true } : { create: true });
 
-db.exec("PRAGMA journal_mode = WAL");
+if (!usageReader) db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA foreign_keys = ON");
 db.exec("PRAGMA busy_timeout = 5000");
 
@@ -608,6 +610,40 @@ const MIGRATIONS: Migration[] = [
       UPDATE models SET tool_call_mode = 'fallback';
     `,
   },
+  {
+    name: "023_usage_range_indexes",
+    // WITHOUT ROWID secondary indexes already carry every primary-key
+    // dimension. Adding reqs makes range-scoped facets covering reads without
+    // duplicating the token metrics or maintaining another aggregate table.
+    up: `
+      DROP INDEX idx_usage_mpd_user;
+      CREATE INDEX idx_usage_mpd_user ON usage_model_provider_daily(user_id, date, reqs);
+      CREATE INDEX idx_usage_mpd_date ON usage_model_provider_daily(date, user_id, reqs);
+      CREATE INDEX idx_usage_user_model_ts_id ON usage_events(user_id, model, ts, id);
+    `,
+  },
+  {
+    name: "024_usage_monthly_rollup",
+    // Bound long-history reads by months rather than individual days. Backfill
+    // from the durable daily ledger, including history whose raw logs expired.
+    up: `
+      CREATE TABLE usage_model_provider_monthly (
+        key_id TEXT NOT NULL, user_id TEXT NOT NULL, month TEXT NOT NULL,
+        proto TEXT NOT NULL, provider_id TEXT NOT NULL DEFAULT '', provider_key_id TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL, upstream_model TEXT NOT NULL DEFAULT '',
+        in_tok INTEGER NOT NULL DEFAULT 0, cache_tok INTEGER NOT NULL DEFAULT 0,
+        out_tok INTEGER NOT NULL DEFAULT 0, reqs INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (key_id, month, proto, provider_id, provider_key_id, model, upstream_model)
+      ) WITHOUT ROWID;
+      INSERT INTO usage_model_provider_monthly
+        SELECT key_id, user_id, substr(date, 1, 7), proto, provider_id, provider_key_id, model, upstream_model,
+               SUM(in_tok), SUM(cache_tok), SUM(out_tok), SUM(reqs)
+        FROM usage_model_provider_daily
+        GROUP BY key_id, substr(date, 1, 7), proto, provider_id, provider_key_id, model, upstream_model;
+      CREATE INDEX idx_usage_mpm_user ON usage_model_provider_monthly(user_id, month, reqs);
+      CREATE INDEX idx_usage_mpm_month ON usage_model_provider_monthly(month, user_id, reqs);
+    `,
+  },
 ];
 
 export function migrate(): void {
@@ -631,7 +667,7 @@ export function migrate(): void {
   db.exec("PRAGMA optimize");
 }
 
-migrate();
+if (!usageReader) migrate();
 
 // ===== Row types =====
 
@@ -817,6 +853,9 @@ export const stmts = {
   ),
 };
 
+/** In-process dashboard cache invalidation for audited metadata mutations. */
+export let auditRevision = 0;
+
 export function audit(
   action: string,
   opts: { actorId?: string | null; target?: string | null; meta?: unknown; ip?: string | null } = {},
@@ -831,4 +870,5 @@ export function audit(
     opts.meta === undefined ? null : JSON.stringify(opts.meta),
     opts.ip ?? null,
   );
+  auditRevision++;
 }
