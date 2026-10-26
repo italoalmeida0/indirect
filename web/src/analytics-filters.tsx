@@ -314,7 +314,6 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
       <button ref={periodButton} type="button" class={`analytics-control analytics-period-trigger ${open() === "period" ? "is-active" : ""}`} title={exactRange()} aria-label={`Time range: ${f.label()}`} aria-haspopup="dialog" aria-expanded={open() === "period"} aria-controls={`${id}-period`} onClick={() => { if (open() === "period") close(); else { setCustom(false); setOpen("period"); } }}>
         <Icon name="lucide:calendar-days" size={15} /><span class="analytics-range-name">{f.label()}</span><span class="analytics-range-dates">{periodText()}</span><Icon name={Icons.chevronDown} size={13} class="text-ink-500" />
       </button>
-      <span class="analytics-timezone" title="Calendar dates and times use your local timezone; charts use UTC"><Icon name="lucide:globe" size={12} />{timezone}</span>
       <span class="analytics-timezone" role="status" style={{ width: "16px", height: "16px", padding: "0" }}><Show when={props.loading || f.pending()}><Icon name={Icons.refresh} size={12} class="animate-spin motion-reduce:animate-none" /><span class="sr-only">Updating…</span></Show></span>
     </div>
     <Show when={chips().length}>

@@ -191,7 +191,7 @@ export function filteredTopModels(scope: UsageScope, userId: string) {
     SELECT r.model, COALESCE(NULLIF(m.name, ''), r.model) AS model_name,
       r.model_reqs AS reqs, r.provider_id, p.name AS provider_name, r.upstream_model, r.route_count
     FROM ranked r LEFT JOIN providers p ON p.id = r.provider_id LEFT JOIN models m ON m.id = r.model
-    WHERE r.route_rank = 1 ORDER BY r.model_reqs DESC, r.model LIMIT 5`).all(...source.params);
+    WHERE r.route_rank = 1 ORDER BY r.model_reqs DESC, r.model LIMIT 3`).all(...source.params);
   });
 }
 
