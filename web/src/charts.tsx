@@ -153,17 +153,30 @@ export function DailyChart(props: {
   series: DailyPoint[];
   height?: number;
   metric?: "tokens" | "requests" | "cost";
-  unit?: "day" | "hour";
+  unit?: "day" | "hour" | "minute";
   /** External filter key; changing it clears solid-charts hover state. */
   resetKey?: string;
 }) {
   const metric = () => props.metric ?? "tokens";
-  const data = createMemo<DailyChartPoint[]>(() =>
-    props.series.slice(-30).map((point) => ({
-      ...point,
-      tick: point.label ?? point.date.slice(5),
-    })),
-  );
+  const data = createMemo<DailyChartPoint[]>(() => {
+    const series = props.series;
+    const size = Math.max(1, Math.ceil(series.length / 60));
+    const points: DailyChartPoint[] = [];
+    for (let i = 0; i < series.length; i += size) {
+      const chunk = series.slice(i, i + size);
+      const first = chunk[0]!;
+      const last = chunk[chunk.length - 1]!;
+      const tick = first.label ?? first.date.slice(5);
+      const point: DailyChartPoint = { ...first, tick, date: chunk.length > 1 ? `${first.date} – ${last.date}` : first.date };
+      // Preserve every request in long ranges while keeping bars readable.
+      for (const key of ["in_tok", "cache_tok", "out_tok", "reqs", "cost_in", "cost_cache", "cost_out", "cost"] as const) {
+        point[key] = chunk.reduce((sum, row) => sum + (row[key] ?? 0), 0);
+      }
+      if (chunk.length > 1) point.label = point.date;
+      points.push(point);
+    }
+    return points;
+  });
   const tokenData = createMemo<TokenChartPoint[]>(() =>
     data().map((point) => ({
       ...point,

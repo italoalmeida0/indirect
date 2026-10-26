@@ -1,11 +1,11 @@
 import {
   createMemo,
   createResource,
-  createSignal,
   Show,
   type JSX,
 } from "solid-js";
 
+import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
 import { api, type ApiKeyDto, type DailyPoint } from "../api";
 import { PageTitle, navigate } from "../index";
 import { DailyChart, AreaChart } from "../charts";
@@ -18,25 +18,16 @@ import {
   IconTile,
   Icons,
   ProgressBar,
-  Segmented,
   copyWithToast,
   fmtCost,
   fmtNum,
   pointLabel,
-  windowLabel,
 } from "../ui";
 
-/** % change of the second half vs the first half of `series`; null if no base. */
-function deltaPct(
-  series: DailyPoint[],
-  pick: (d: DailyPoint) => number,
-): number | null {
-  const half = Math.floor(series.length / 2);
-  if (half < 1) return null;
-  const prev = series.slice(0, half).reduce((s, d) => s + pick(d), 0);
-  const cur = series.slice(-half).reduce((s, d) => s + pick(d), 0);
-  if (prev <= 0) return null;
-  return ((cur - prev) / prev) * 100;
+/** Compare the selected window with the immediately preceding equal window. */
+function deltaPct(current: DailyPoint[], previous: DailyPoint[], pick: (d: DailyPoint) => number): number | null {
+  const base = previous.reduce((sum, d) => sum + pick(d), 0);
+  return base > 0 ? ((current.reduce((sum, d) => sum + pick(d), 0) - base) / base) * 100 : null;
 }
 
 function HeroHeader(props: {
@@ -104,35 +95,26 @@ const CACHE_COLOR = "var(--chart-mid)";
 const OUT_COLOR = "var(--chart-soft)";
 
 export default function DashboardPage() {
-  const [days, setDays] = createSignal("14");
-
-  // Fetch double the window so the delta can compare against the previous
-  // period — for the 1D view that means 48 hourly buckets (last 24h shown).
-  // "all" is already unbounded, nothing to double.
-  const [series] = createResource(days, async (d) => {
-    const query =
-      d === "1"
-        ? "hours=48"
-        : d === "all"
-          ? "days=all"
-          : `days=${Number(d) * 2}`;
-    const j = await api<{ series: DailyPoint[] }>(
-      "GET",
-      `/api/usage/daily?${query}`,
-    );
+  const filters = createAnalyticsFilters();
+  const [series] = createResource(filters.query, async (query) => {
+    const j = await api<{ series: DailyPoint[] }>("GET", `/api/usage/daily?${query}`);
+    return j.series;
+  });
+  const [previous] = createResource(filters.query, async (query) => {
+    const range = filters.range();
+    if (range.from === null || range.from === 0) return [];
+    const params = new URLSearchParams(query);
+    params.set("from", String(Math.max(0, range.from - (range.to - range.from))));
+    params.set("to", String(range.from));
+    const j = await api<{ series: DailyPoint[] }>("GET", `/api/usage/daily?${params}`);
     return j.series;
   });
   const [keys] = createResource(async () => {
     const j = await api<{ keys: ApiKeyDto[] }>("GET", "/api/keys");
     return j.keys;
   });
-
-  const view = createMemo(() => {
-    const s = series() ?? [];
-    if (days() === "1") return s.slice(-24);
-    if (days() === "all") return s;
-    return s.slice(-Number(days()));
-  });
+  const view = () => series() ?? [];
+  const comparison = () => previous.loading ? [] : previous() ?? [];
   // Three separate buckets — never one lumped "total tokens" number.
   const winIn = createMemo(() =>
     view().reduce((s, d) => s + (d.in_tok ?? 0), 0),
@@ -159,31 +141,31 @@ export default function DashboardPage() {
     view().reduce((s, d) => s + (d.cost_out ?? 0), 0),
   );
   const inDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => d.in_tok ?? 0),
+    deltaPct(view(), comparison(), (d) => d.in_tok ?? 0),
   );
   const cacheDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => d.cache_tok ?? 0),
+    deltaPct(view(), comparison(), (d) => d.cache_tok ?? 0),
   );
   const outDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => d.out_tok ?? 0),
+    deltaPct(view(), comparison(), (d) => d.out_tok ?? 0),
   );
   const tokensDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => (d.in_tok ?? 0) + (d.out_tok ?? 0)),
+    deltaPct(view(), comparison(), (d) => (d.in_tok ?? 0) + (d.out_tok ?? 0)),
   );
   const reqDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => d.reqs ?? 0),
+    deltaPct(view(), comparison(), (d) => d.reqs ?? 0),
   );
   const costDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => d.cost ?? 0),
+    deltaPct(view(), comparison(), (d) => d.cost ?? 0),
   );
   const costInDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => d.cost_in ?? 0),
+    deltaPct(view(), comparison(), (d) => d.cost_in ?? 0),
   );
   const costCacheDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => d.cost_cache ?? 0),
+    deltaPct(view(), comparison(), (d) => d.cost_cache ?? 0),
   );
   const costOutDelta = createMemo(() =>
-    deltaPct(series() ?? [], (d) => d.cost_out ?? 0),
+    deltaPct(view(), comparison(), (d) => d.cost_out ?? 0),
   );
 
   const budget = createMemo(() => {
@@ -208,20 +190,8 @@ export default function DashboardPage() {
       <PageTitle
         title="Overview"
         subtitle={todayStr}
-        right={
-          <Segmented
-            value={days()}
-            onChange={setDays}
-            options={[
-              { value: "1", label: "1D" },
-              { value: "7", label: "7D" },
-              { value: "14", label: "14D" },
-              { value: "30", label: "30D" },
-              { value: "all", label: "ALL" },
-            ]}
-          />
-        }
       />
+      <AnalyticsToolbar filters={filters} />
 
       {/* Gate on the resource: CountUp mounts once with final values — a
           late series() update would hit a text node USAL already replaced. */}
@@ -237,7 +207,7 @@ export default function DashboardPage() {
                 <HeroHeader
                   icon={Icons.dollarSign}
                   cost={winCost()}
-                  label={`Spend · ${windowLabel(days())}`}
+                  label={`Spend · ${filters.label()}`}
                   delta={costDelta()}
                 />
                 <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
@@ -268,8 +238,8 @@ export default function DashboardPage() {
                 <DailyChart
                   series={view()}
                   metric="cost"
-                  unit={days() === "1" ? "hour" : "day"}
-                  resetKey={`spend:${days()}`}
+                  unit={filters.unit()}
+                  resetKey={`spend:${filters.query()}`}
                 />
               </div>
             </Card>
@@ -279,7 +249,7 @@ export default function DashboardPage() {
                 <HeroHeader
                   icon={Icons.chart}
                   count={winIn() + winOut()}
-                  label={`Tokens · ${windowLabel(days())}`}
+                  label={`Tokens · ${filters.label()}`}
                   delta={tokensDelta()}
                 />
                 <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
@@ -310,8 +280,8 @@ export default function DashboardPage() {
                 <DailyChart
                   series={view()}
                   metric="tokens"
-                  unit={days() === "1" ? "hour" : "day"}
-                  resetKey={`tokens:${days()}`}
+                  unit={filters.unit()}
+                  resetKey={`tokens:${filters.query()}`}
                 />
               </div>
             </Card>
@@ -321,7 +291,7 @@ export default function DashboardPage() {
                 <HeroHeader
                   icon={Icons.bolt}
                   count={winReqs()}
-                  label={`Requests · ${windowLabel(days())}`}
+                  label={`Requests · ${filters.label()}`}
                   delta={reqDelta()}
                 />
                 <div class="mt-4 pt-3 border-t border-line flex items-center justify-between gap-2.5">
@@ -352,7 +322,7 @@ export default function DashboardPage() {
                 <AreaChart
                   values={view().map((d) => d.reqs ?? 0)}
                   labels={view().map((d) => pointLabel(d))}
-                  resetKey={`reqs:${days()}`}
+                  resetKey={`reqs:${filters.query()}`}
                 />
               </div>
             </Card>

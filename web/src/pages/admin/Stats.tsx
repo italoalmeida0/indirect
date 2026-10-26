@@ -1,6 +1,7 @@
 import { createMemo, createResource, createSignal, Show } from "solid-js";
 
-import { api, type DailyPoint, type ProviderDto } from "../../api";
+import { api, type DailyPoint } from "../../api";
+import { AnalyticsToolbar, createAnalyticsFilters } from "../../analytics-filters";
 import { PageTitle } from "../../index";
 import { usalItems } from "../../motion";
 import { DailyChart } from "../../charts";
@@ -10,11 +11,9 @@ import {
   EmptyState,
   Icons,
   Segmented,
-  Select,
   StatCard,
   fmtCost,
   fmtNum,
-  windowLabel,
 } from "../../ui";
 import {
   UsageGrid,
@@ -127,30 +126,13 @@ function CardLabel(props: { title: string; window: string }) {
 }
 
 export default function AdminStatsPage() {
-  const [days, setDays] = createSignal("14");
-  const [providerId, setProviderId] = createSignal("");
-
-  const statsQuery = createMemo(() => ({ d: days(), p: providerId() }));
-  const [stats] = createResource(statsQuery, async (q) => {
-    const params = new URLSearchParams(
-      q.d === "1" ? { hours: "24" } : { days: q.d },
-    );
-    if (q.p) params.set("provider_id", q.p);
-    return api<StatsDto>("GET", `/api/admin/stats?${params.toString()}`);
-  });
-
-  const [providers] = createResource(async () => {
-    const j = await api<{ providers: ProviderDto[] }>("GET", "/api/admin/providers");
-    return j.providers;
-  });
-  const providerOptions = createMemo(() => [
-    { value: "", label: "All providers" },
-    ...(providers() ?? []).map((p) => ({ value: p.id, label: p.name })),
-  ]);
+  const filters = createAnalyticsFilters(true);
+  const statsQuery = filters.query;
+  const [stats] = createResource(statsQuery, (q) => api<StatsDto>("GET", `/api/admin/stats?${q}`));
 
   const [breakdownCounts] = createResource(statsQuery, async (q) => {
-    const params = new URLSearchParams({ days: q.d, limit: "1" });
-    if (q.p) params.set("provider_id", q.p);
+    const params = new URLSearchParams(q);
+    params.set("limit", "1");
     const [users, models] = await Promise.all([
       api<{ total: number }>("GET", `/api/admin/usage-breakdown/users?${params.toString()}`),
       api<{ total: number }>("GET", `/api/admin/usage-breakdown/models?${params.toString()}`),
@@ -160,29 +142,25 @@ export default function AdminStatsPage() {
   const [usersTotals, setUsersTotals] = createSignal<GridTotals | null>(null);
   const [modelsTotals, setModelsTotals] = createSignal<GridTotals | null>(null);
   const usersDatasource = serverDatasource<UserRow>(async (params) => {
-    const qs = new URLSearchParams({
-      days: days(),
-      limit: String(Math.min(params.endRow - params.startRow, 500)),
-      offset: String(params.startRow),
-    });
-    if (providerId()) qs.set("provider_id", providerId());
+    const scope = statsQuery();
+    const qs = new URLSearchParams(scope);
+    qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
+    qs.set("offset", String(params.startRow));
     if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
     if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
     const j = await api<{ users: UserRow[]; total: number; totals?: GridTotals }>("GET", `/api/admin/usage-breakdown/users?${qs}`);
-    if (j.totals) setUsersTotals(j.totals);
+    if (j.totals && scope === statsQuery()) setUsersTotals(j.totals);
     return { rows: j.users, total: j.total };
   });
   const modelsDatasource = serverDatasource<ModelRow>(async (params) => {
-    const qs = new URLSearchParams({
-      days: days(),
-      limit: String(Math.min(params.endRow - params.startRow, 500)),
-      offset: String(params.startRow),
-    });
-    if (providerId()) qs.set("provider_id", providerId());
+    const scope = statsQuery();
+    const qs = new URLSearchParams(scope);
+    qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
+    qs.set("offset", String(params.startRow));
     if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
     if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
     const j = await api<{ models: ModelRow[]; total: number; totals?: GridTotals }>("GET", `/api/admin/usage-breakdown/models?${qs}`);
-    if (j.totals) setModelsTotals(j.totals);
+    if (j.totals && scope === statsQuery()) setModelsTotals(j.totals);
     return { rows: j.models, total: j.total };
   });
 
@@ -233,31 +211,9 @@ export default function AdminStatsPage() {
     <div>
       <PageTitle
         title="Global overview"
-        subtitle="All users, all keys"
-        right={
-          <div class="flex flex-wrap items-end gap-3">
-            <div class="w-56">
-              <Select
-                value={providerId()}
-                onChange={setProviderId}
-                options={providerOptions()}
-              />
-            </div>
-            <Segmented
-              value={days()}
-              onChange={setDays}
-              options={[
-                { value: "1", label: "1D" },
-                { value: "7", label: "7D" },
-                { value: "14", label: "14D" },
-                { value: "30", label: "30D" },
-                { value: "90", label: "90D" },
-                { value: "all", label: "ALL" },
-              ]}
-            />
-          </div>
-        }
+        subtitle="Explore usage across users, keys and providers"
       />
+      <AnalyticsToolbar filters={filters} />
 
       <Show when={stats() && !stats.loading}>
         <div
@@ -266,25 +222,25 @@ export default function AdminStatsPage() {
         >
           <StatCard
             icon={Icons.chart}
-            label={<CardLabel title="Input" window={windowLabel(days())} />}
+            label={<CardLabel title="Input" window={filters.label()} />}
             countValue={winIn()}
           />
           <StatCard
             icon={Icons.bolt}
             label={
-              <CardLabel title="Input cache" window={windowLabel(days())} />
+              <CardLabel title="Input cache" window={filters.label()} />
             }
             countValue={winCache()}
           />
           <StatCard
             icon={Icons.arrowUpRight}
-            label={<CardLabel title="Output" window={windowLabel(days())} />}
+            label={<CardLabel title="Output" window={filters.label()} />}
             countValue={winOut()}
             sub={<span>{fmtNum(winReqs())} requests in window</span>}
           />
           <StatCard
             icon={Icons.dollarSign}
-            label={<CardLabel title="Est. spend" window={windowLabel(days())} />}
+            label={<CardLabel title="Est. spend" window={filters.label()} />}
             value={fmtCost(winCost())}
             sub={
               <span>
@@ -308,8 +264,8 @@ export default function AdminStatsPage() {
 
         <Card class="mb-5">
           <CardHeader
-            title={days() === "1" ? "Hourly usage" : "Daily usage"}
-            subtitle={`${chartMetric() === "tokens" ? "Tokens" : chartMetric() === "cost" ? "Spend ($)" : "Requests"} per ${days() === "1" ? "hour" : "day"} (UTC)`}
+            title={filters.unit() === "day" ? "Daily usage" : filters.unit() === "hour" ? "Hourly usage" : "Usage by minute"}
+            subtitle={`${chartMetric() === "tokens" ? "Tokens" : chartMetric() === "cost" ? "Spend ($)" : "Requests"} per ${filters.unit()} (UTC)`}
             right={
               <Segmented
                 value={chartMetric()}
@@ -326,8 +282,8 @@ export default function AdminStatsPage() {
             <DailyChart
               series={stats()!.series}
               metric={chartMetric()}
-              unit={days() === "1" ? "hour" : "day"}
-              resetKey={`${days()}:${providerId()}`}
+              unit={filters.unit()}
+              resetKey={statsQuery()}
             />
           </div>
         </Card>
@@ -336,7 +292,7 @@ export default function AdminStatsPage() {
           <Card>
             <CardHeader
               title="Top users"
-              subtitle={`By category · ${windowLabel(days())}`}
+              subtitle={`By category · ${filters.label()}`}
             />
             <Show
               when={!breakdownCounts.loading}
@@ -355,7 +311,7 @@ export default function AdminStatsPage() {
                     columnDefs={userCols}
                     datasource={usersDatasource}
                     cacheBlockSize={100}
-                    refreshDeps={`${days()}:${providerId()}`}
+                    refreshDeps={statsQuery()}
                     heightClass={usersGridHeight()}
                     storageKey="llmgw-grid:admin.stats.users"
                     totals={usersTotals()}
@@ -368,7 +324,7 @@ export default function AdminStatsPage() {
           <Card>
             <CardHeader
               title="Models by provider"
-              subtitle={`Model × provider breakdown · ${windowLabel(days())}`}
+              subtitle={`Model × provider breakdown · ${filters.label()}`}
             />
             <Show
               when={!breakdownCounts.loading}
@@ -387,7 +343,7 @@ export default function AdminStatsPage() {
                     columnDefs={modelCols}
                     datasource={modelsDatasource}
                     cacheBlockSize={100}
-                    refreshDeps={`${days()}:${providerId()}`}
+                    refreshDeps={statsQuery()}
                     heightClass={modelsGridHeight()}
                     storageKey="llmgw-grid:admin.stats.models"
                     totals={modelsTotals()}

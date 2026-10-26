@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { usageScopeWhere } from "./usage-filters";
 import { buildGridWhere, buildGridOrder, gridPage, type ColSpec, type GridFilterEntry, type GridSort } from "./gridql";
 import {
   modelPricingJoins,
@@ -518,6 +519,7 @@ export function userEvents(
      *  deep forward pages O(page) instead of O(offset). Only honored for the
      *  default (ts DESC, id DESC) ordering; custom sorts keep OFFSET. */
     cursor?: { ts: number; id: number };
+    scope?: import("./usage-filters").UsageScope;
   },
 ): { rows: any[]; total: number; totals: { in_tok: number; cache_tok: number; out_tok: number; reqs: number } } {
   // Scope (user + filters) shared by the page query and the total-count;
@@ -526,6 +528,11 @@ export function userEvents(
   // remain after this cursor".
   const scopeClauses = [opts.keyId ? "e.user_id = ? AND e.key_id = ?" : "e.user_id = ?"];
   const scopeParams: Array<string | number> = opts.keyId ? [userId, opts.keyId] : [userId];
+  if (opts.scope) {
+    const extra = usageScopeWhere(opts.scope, "e", null);
+    scopeClauses.push(...extra.clauses);
+    scopeParams.push(...extra.params);
+  }
   if (opts.filters) {
     const { clauses: fc, params: fp } = buildGridWhere(opts.filters, EVENT_COLS);
     scopeClauses.push(...fc);
@@ -576,7 +583,7 @@ export function userEvents(
   const joinedFilter =
     opts.filters &&
     Object.keys(opts.filters).some((c) => c === "key_name" || c === "provider_name" || c === "cost");
-  const cacheKey = `u:${userId}|k:${opts.keyId ?? ""}|f:${(opts.filters ? JSON.stringify(opts.filters) : "")}`;
+  const cacheKey = `u:${userId}|k:${opts.keyId ?? ""}|f:${(opts.filters ? JSON.stringify(opts.filters) : "")}|s:${opts.scope ? JSON.stringify(opts.scope) : ""}`;
   const now = Date.now();
   const cached = joinedFilter ? null : eventCountCache.get(cacheKey);
   let total: number;

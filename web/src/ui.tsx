@@ -1311,13 +1311,6 @@ export function fmtCost(val: number | null | undefined, opts?: { compact?: boole
   return `${neg ? "-" : ""}$${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-/** Human window name for the shared day selectors ("1" = hourly 24h view,
- *  "all" = unbounded). */
-export function windowLabel(days: string): string {
-  if (days === "all") return "all time";
-  return days === "1" ? "last 24 hours" : `last ${days} days`;
-}
-
 /** Per-hour axis label when the point is an hour bucket, else MM-DD. */
 export function pointLabel(d: { date: string; label?: string }): string {
   return d.label ?? d.date.slice(5);

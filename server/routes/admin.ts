@@ -27,6 +27,7 @@ import { queryKeys } from "../keys";
 import { normalizePricing, pricingColumns, modelPricingJoins, costAggFieldsSql } from "../pricing";
 import { TOOL_CALL_MODES, type ToolCallMode } from "../tool-call-mode";
 import { fetchOpenRouterCatalog, matchOpenRouterModel } from "../openrouter";
+import { filteredUsageBreakdown, filteredUsageSeries, readUsageScope, usageFilterOptions } from "../usage-filters";
 
 /**
  * /api/admin/* — everything requires role=admin. Every mutation is audited.
@@ -1548,7 +1549,21 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   // ================= stats =================
 
-if (path === "/api/admin/stats" && req.method === "GET") {
+  if (path === "/api/admin/usage-filter-options" && req.method === "GET") {
+    return ok({ categories: usageFilterOptions(null) }, req);
+  }
+
+  if (path === "/api/admin/stats" && req.method === "GET") {
+    const scope = readUsageScope(url, true);
+    if (scope) {
+      const counts = {
+        users: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM users").get()!.n,
+        keys: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM api_keys").get()!.n,
+        activeKeys: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM api_keys WHERE status = 'active'").get()!.n,
+        providers: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM providers").get()!.n,
+      };
+      return ok({ ...filteredUsageSeries(scope, null), counts, kvCache: kvSnapshotCached() }, req);
+    }
     // Hour granularity ("1D"): the window tables come from usage_events so
     // series/top-lists stay consistent with the trailing-N-hours chart.
     // provider_id narrows the SERIES (and so the window cards) — usage_daily
@@ -1713,6 +1728,11 @@ if (path === "/api/admin/stats" && req.method === "GET") {
 
   if ((path === "/api/admin/usage-breakdown/users" || path === "/api/admin/usage-breakdown/models") && req.method === "GET") {
     const grid = parseGridQuery(url);
+    const scope = readUsageScope(url, true);
+    if (scope) {
+      const page = filteredUsageBreakdown(scope, null, grid, path.endsWith("/users"));
+      return ok({ [path.endsWith("/users") ? "users" : "models"]: page.rows, total: page.total, totals: page.totals, limit: grid.limit, offset: grid.offset }, req);
+    }
     const daysAll = url.searchParams.get("days") === "all";
     const days = daysAll ? "all" : Math.min(Number(url.searchParams.get("days") || 14), 365);
     const providerId = url.searchParams.get("provider_id");

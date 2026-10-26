@@ -692,6 +692,116 @@ describe("gateway end-to-end", () => {
     expect(m.in_tok + m.cache_tok + m.out_tok).toBeGreaterThan(0);
   });
 
+  test("analytics filter options require authentication and respect user visibility", async () => {
+    expect((await api("/api/usage/filter-options")).status).toBe(401);
+    expect((await api("/api/admin/usage-filter-options", { token: userToken })).status).toBe(403);
+    const own = await api("/api/usage/filter-options", { token: userToken });
+    expect(own.status).toBe(200);
+    expect(own.json.categories.map((c: any) => c.id)).not.toContain("user_id");
+    expect(own.json.categories.find((c: any) => c.id === "model").options.some((o: any) => o.value === "fake-llm-1")).toBe(true);
+    expect(JSON.stringify(own.json)).not.toContain(UPSTREAM_KEY);
+    expect(JSON.stringify(own.json)).not.toContain(gatewayKey);
+    const global = await api("/api/admin/usage-filter-options", { token: adminToken });
+    expect(global.status).toBe(200);
+    expect(global.json.categories.map((c: any) => c.id)).toContain("user_id");
+  });
+
+  test("analytics exact ranges and include/exclude agree across series, grids, events and admin views", async () => {
+    const fixtureDb = new Database(path.join(dataDir, "gateway.db"));
+    const user = fixtureDb.query("SELECT id FROM users WHERE email = ?").get(userEmail) as { id: string };
+    const key = fixtureDb.query("SELECT id FROM api_keys WHERE user_id = ? LIMIT 1").get(user.id) as { id: string };
+    const a = "filter-fixture/model-a";
+    const b = "filter-fixture/model-b";
+    const literal = "filter-fixture/quoted'_% OR 1=1 --";
+    const from = Date.parse("2024-01-01T12:00:00Z");
+    const to = Date.parse("2024-01-05T12:00:00Z");
+    const insert = fixtureDb.query("INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, cache_tok, out_tok) VALUES (?, ?, ?, 'openai', ?, 10, 20, 30)");
+    try {
+      for (const ts of [from - 1, from, from + 12 * 3_600_000, from + 36 * 3_600_000, from + 60 * 3_600_000, to - 1, to]) insert.run(key.id, user.id, ts, a);
+      insert.run(key.id, user.id, from + 36 * 3_600_000, b);
+      insert.run(key.id, user.id, from + 36 * 3_600_000, literal);
+      // Another user's matching model must never enter this user's scope.
+      insert.run("filter-fixture/foreign-key", "filter-fixture/foreign-user", from + 36 * 3_600_000, a);
+      fixtureDb.run(`INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, model, in_tok, cache_tok, out_tok, reqs)
+        SELECT key_id, user_id, date(ts / 1000, 'unixepoch'), proto, model, SUM(in_tok), SUM(cache_tok), SUM(out_tok), COUNT(*)
+        FROM usage_events WHERE model LIKE 'filter-fixture/%' GROUP BY key_id, user_id, date(ts / 1000, 'unixepoch'), proto, model`);
+      const params = new URLSearchParams({ from: String(from), to: String(to), selection: JSON.stringify({ model: { include: [a, b], exclude: [b] } }) });
+      const series = await api(`/api/usage/daily?${params}`, { token: userToken });
+      expect(series.status).toBe(200);
+      expect(series.json.granularity).toBe("day");
+      expect(series.json.series.reduce((sum: number, r: any) => sum + r.reqs, 0)).toBe(5);
+      const breakdown = await api(`/api/usage/breakdown?${params}&limit=50`, { token: userToken });
+      expect(breakdown.status).toBe(200);
+      expect(breakdown.json.total).toBe(1);
+      expect(breakdown.json.totals).toMatchObject({ reqs: 5, in_tok: 50, cache_tok: 100, out_tok: 150 });
+      for (const [start, end, expected, granularity] of [
+        [from, from + 15 * 60_000, 1, "minute"],
+        [from, from + 13 * 3_600_000, 2, "hour"],
+        [from + 1, from + 12 * 3_600_000, 0, "hour"],
+        [Date.parse("2024-01-02T00:00:00Z"), Date.parse("2024-01-05T00:00:00Z"), 3, "hour"],
+        ["all", to, 6, "day"],
+      ] as const) {
+        const window = new URLSearchParams({ from: String(start), to: String(end), selection: JSON.stringify({ model: { include: [a], exclude: [] } }) });
+        const points = await api(`/api/usage/daily?${window}`, { token: userToken });
+        expect(points.status).toBe(200);
+        expect(points.json.granularity).toBe(granularity);
+        expect(points.json.series.reduce((sum: number, r: any) => sum + r.reqs, 0)).toBe(expected);
+        const grid = await api(`/api/usage/breakdown?${window}`, { token: userToken });
+        expect(grid.status).toBe(200);
+        expect(grid.json.totals.reqs).toBe(expected);
+      }
+      const events = await api(`/api/usage/events?${params}&limit=2`, { token: userToken });
+      expect(events.status).toBe(200);
+      expect(events.json.total).toBe(5);
+      expect(events.json.totals).toMatchObject({ reqs: 5, in_tok: 50, cache_tok: 100, out_tok: 150 });
+      const last = events.json.events.at(-1);
+      const next = await api(`/api/usage/events?${params}&limit=5&cursor=${last.ts}:${last.id}`, { token: userToken });
+      expect(next.json.total).toBe(5);
+      expect(next.json.events).toHaveLength(3);
+      expect(next.json.events.every((row: any) => row.ts >= from && row.ts < to && row.model === a)).toBe(true);
+      const global = await api(`/api/admin/stats?${params}`, { token: adminToken });
+      expect(global.status).toBe(200);
+      expect(global.json.series.reduce((sum: number, r: any) => sum + r.reqs, 0)).toBe(6);
+      params.set("selection", JSON.stringify({ model: { include: [a, b], exclude: [b] }, user_id: { include: [user.id], exclude: [] } }));
+      for (const suffix of ["users", "models"]) {
+        const globalGrid = await api(`/api/admin/usage-breakdown/${suffix}?${params}&limit=50`, { token: adminToken });
+        expect(globalGrid.status).toBe(200);
+        expect(globalGrid.json.totals.reqs).toBe(5);
+      }
+      params.set("selection", JSON.stringify({ model: { include: [literal], exclude: [] } }));
+      const quoted = await api(`/api/usage/breakdown?${params}`, { token: userToken });
+      expect(quoted.status).toBe(200);
+      expect(quoted.json.total).toBe(1);
+      expect(quoted.json.rows[0].model).toBe(literal);
+      const ownOptions = await api("/api/usage/filter-options", { token: userToken });
+      expect(JSON.stringify(ownOptions.json)).not.toContain("filter-fixture/foreign");
+      // Prove full days use durable rollups even after raw events are pruned.
+      fixtureDb.run("DELETE FROM usage_events WHERE model = ? AND ts >= ? AND ts < ?", [a, Date.parse("2024-01-02T00:00:00Z"), Date.parse("2024-01-05T00:00:00Z")]);
+      params.set("selection", JSON.stringify({ model: { include: [a], exclude: [] } }));
+      const retained = await api(`/api/usage/breakdown?${params}`, { token: userToken });
+      expect(retained.json.totals.reqs).toBe(5);
+    } finally {
+      fixtureDb.run("DELETE FROM usage_events WHERE model LIKE 'filter-fixture/%'");
+      fixtureDb.run("DELETE FROM usage_model_provider_daily WHERE model LIKE 'filter-fixture/%'");
+      fixtureDb.close();
+    }
+  });
+
+  test("analytics rejects malformed ranges and unknown or excessive filters", async () => {
+    const base = new URLSearchParams({ from: String(Date.now() - 60_000), to: String(Date.now()) });
+    for (const selection of ["not-json", "[]", JSON.stringify({ unknown: { include: ["x"] } }), JSON.stringify({ user_id: { include: ["x"] } }), JSON.stringify({ model: { include: [123] } }), JSON.stringify({ model: { include: Array.from({ length: 251 }, (_, i) => String(i)) } })]) {
+      base.set("selection", selection);
+      const result = await api(`/api/usage/daily?${base}`, { token: userToken });
+      expect(result.status).toBe(400);
+      expect(result.json.success).toBe(false);
+    }
+    base.delete("selection");
+    base.set("from", base.get("to")!);
+    expect((await api(`/api/usage/events?${base}`, { token: userToken })).status).toBe(400);
+    base.set("from", "NaN");
+    expect((await api(`/api/usage/breakdown?${base}`, { token: userToken })).status).toBe(400);
+  });
+
   test("usage carries the upstream provider dimension", async () => {
     // /api/usage/breakdown — fine-grained per model × provider × upstream key
     const bd = await api("/api/usage/breakdown?days=7", { token: userToken });

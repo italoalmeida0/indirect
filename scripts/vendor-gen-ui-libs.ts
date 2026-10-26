@@ -143,7 +143,7 @@ async function bundleLib(lib: { name: string; entry: string; global: string }): 
     mkdirSync(outDir, { recursive: true });
     const styled = STYLED.find((s) => s.jsName === lib.name);
     const extra = styled ? styleInjection(inlineStyle(styled)) : "";
-    Bun.write(dest, bundled + extra);
+    await Bun.write(dest, bundled + extra);
     console.log(
       `[vendor-gen-ui] ${lib.name} (${((bundled.length + extra.length) / 1024).toFixed(0)} KB, ESM ${lib.global}${extra ? " + css" : ""})`,
     );

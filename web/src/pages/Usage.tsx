@@ -1,20 +1,18 @@
-import { For, createMemo, createResource, createSignal, Show } from "solid-js";
+import { For, createEffect, on, createMemo, createResource, createSignal, Show } from "solid-js";
 
-import { api, type ApiKeyDto } from "../api";
+import { api } from "../api";
+import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
 import { PageTitle } from "../index";
 import { DailyChart } from "../charts";
 import {
   Card,
   CardHeader,
   EmptyState,
-  FilterChip,
   Icon,
   Icons,
   Segmented,
-  Select,
   fmtCost,
   fmtNum,
-  windowLabel,
 } from "../ui";
 import {
   UsageGrid,
@@ -123,98 +121,46 @@ const eventCols: ColDef[] = [
 ];
 
 export default function UsagePage() {
-  const [keyId, setKeyId] = createSignal("");
-  const [days, setDays] = createSignal("14");
+  const filters = createAnalyticsFilters();
   const [chartMetric, setChartMetric] = createSignal<"tokens" | "requests" | "cost">(
     "tokens",
   );
 
-  const [keys] = createResource(async () => {
-    const j = await api<{ keys: ApiKeyDto[] }>("GET", "/api/keys");
-    return j.keys;
-  });
-
-  const query = createMemo(() => ({ k: keyId(), d: days() }));
-
+  const query = filters.query;
   const [series] = createResource(query, async (q) => {
-    const hourly = q.d === "1";
-    const j = await api<{ series: any[] }>(
-      "GET",
-      `/api/usage/daily?${hourly ? "hours=24" : `days=${q.d}`}${q.k ? `&key_id=${q.k}` : ""}`,
-    );
+    const j = await api<{ series: any[] }>("GET", `/api/usage/daily?${q}`);
     return j.series;
   });
-
   const [breakdownCount] = createResource(query, async (q) => {
-    const j = await api<{ total: number }>(
-      "GET",
-      `/api/usage/breakdown?days=${q.d}&limit=1${q.k ? `&key_id=${q.k}` : ""}`,
-    );
+    const j = await api<{ total: number }>("GET", `/api/usage/breakdown?${q}&limit=1`);
     return j.total;
   });
   const [breakdownTotals, setBreakdownTotals] = createSignal<GridTotals | null>(null);
   const breakdownDatasource = serverDatasource<BreakdownRow>(async (params) => {
-    const qs = new URLSearchParams({
-      days: days(),
-      limit: String(Math.min(params.endRow - params.startRow, 500)),
-      offset: String(params.startRow),
-    });
-    if (keyId()) qs.set("key_id", keyId());
+    const scope = query();
+    const qs = new URLSearchParams(scope);
+    qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
+    qs.set("offset", String(params.startRow));
     if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
     if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
     const j = await api<{ rows: BreakdownRow[]; total: number; totals?: GridTotals }>("GET", `/api/usage/breakdown?${qs}`);
-    if (j.totals) setBreakdownTotals(j.totals);
+    if (j.totals && scope === query()) setBreakdownTotals(j.totals);
     return { rows: j.rows, total: j.total };
   });
 
-  // Header count only — LIMIT 1 (the grid below pulls its own blocks).
+  // Every count and page shares the same exact scope as the chart.
   const [eventCount] = createResource(query, async (q) => {
-    const j = await api<{ total: number }>(
-      "GET",
-      `/api/usage/events?limit=1${q.k ? `&key_id=${q.k}` : ""}`,
-    );
+    const j = await api<{ total: number }>("GET", `/api/usage/events?${q}&limit=1`);
     return j.total;
   });
-
   const [mobilePage, setMobilePage] = createSignal(1);
   const [expandedEventKey, setExpandedEventKey] = createSignal<string | null>(null);
-  const [mobileSearch, setMobileSearch] = createSignal("");
-  const [mobileStatusFilter, setMobileStatusFilter] = createSignal<"all" | "success" | "errors">("all");
-  const [mobileProtoFilter, setMobileProtoFilter] = createSignal<"all" | "openai" | "anthropic">("all");
-  const mobileQuery = createMemo(() => ({ k: keyId(), p: mobilePage() }));
-
+  createEffect(on(query, () => { setMobilePage(1); setExpandedEventKey(null); }));
+  const mobileQuery = createMemo(() => ({ scope: query(), page: mobilePage() }));
   const [recentEventsList] = createResource(mobileQuery, async (q) => {
-    try {
-      const offset = (q.p - 1) * 25;
-      const j = await api<{ events: any[] }>("GET", `/api/usage/events?limit=25&offset=${offset}${q.k ? `&key_id=${q.k}` : ""}`);
-      return j.events;
-    } catch {
-      return [];
-    }
+    const j = await api<{ events: any[] }>("GET", `/api/usage/events?${q.scope}&limit=25&offset=${(q.page - 1) * 25}`);
+    return j.events;
   });
-
-  const filteredMobileEvents = createMemo(() => {
-    let list = recentEventsList() ?? [];
-    const st = mobileStatusFilter();
-    if (st === "success") list = list.filter((e) => e.status >= 200 && e.status < 300);
-    if (st === "errors") list = list.filter((e) => e.status >= 400);
-
-    const proto = mobileProtoFilter();
-    if (proto !== "all") list = list.filter((e) => e.proto === proto);
-
-    const q = mobileSearch().trim().toLowerCase();
-    if (q) {
-      list = list.filter(
-        (e) =>
-          (e.model && e.model.toLowerCase().includes(q)) ||
-          (e.upstream_model && e.upstream_model.toLowerCase().includes(q)) ||
-          (e.key_name && e.key_name.toLowerCase().includes(q)) ||
-          (e.provider_name && e.provider_name.toLowerCase().includes(q)),
-      );
-    }
-    return list;
-  });
-
   const totalMobilePages = createMemo(() => Math.max(1, Math.ceil((eventCount() ?? 0) / 25)));
 
   const byModelHeight = () => {
@@ -234,17 +180,17 @@ export default function UsagePage() {
   const eventsDatasource = serverDatasource<any>((() => {
     const cursors = new Map<string, Map<number, { ts: number; id: number }>>();
     return async (params) => {
-      const ctx = JSON.stringify([keyId(), params.sortModel, params.filterModel]);
+      const ctx = JSON.stringify([query(), params.sortModel, params.filterModel]);
       let ctxCursors = cursors.get(ctx);
       if (!ctxCursors) {
         ctxCursors = new Map();
+        if (cursors.size >= 8) cursors.clear();
         cursors.set(ctx, ctxCursors);
       }
-      const qs = new URLSearchParams({
-        limit: String(Math.min(params.endRow - params.startRow, 500)),
-        offset: String(params.startRow),
-      });
-      if (keyId()) qs.set("key_id", keyId());
+      const scope = query();
+      const qs = new URLSearchParams(scope);
+      qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
+      qs.set("offset", String(params.startRow));
       if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
       if (Object.keys(params.filterModel).length > 0) {
         qs.set("filters", JSON.stringify(params.filterModel));
@@ -258,7 +204,7 @@ export default function UsagePage() {
         "GET",
         `/api/usage/events?${qs.toString()}`,
       );
-      if (j.totals) setEventsTotals(j.totals);
+      if (j.totals && scope === query()) setEventsTotals(j.totals);
       const last = j.events[j.events.length - 1];
       if (last && typeof last.ts === "number" && typeof last.id === "number") {
         ctxCursors.set(params.startRow + j.events.length - 1, { ts: last.ts, id: last.id });
@@ -267,14 +213,6 @@ export default function UsagePage() {
     };
   })());
 
-  const keyOptions = createMemo(() => [
-    { value: "", label: "All keys" },
-    ...(keys() ?? []).map((k) => ({
-      value: k.id,
-      label: `${k.name} (${k.prefix}…)`,
-    })),
-  ]);
-
   return (
     <div>
       <PageTitle
@@ -282,47 +220,21 @@ export default function UsagePage() {
         subtitle="Inspect consumption per key, provider, model and request"
       />
 
+      <AnalyticsToolbar filters={filters} />
       <Card class="mb-5">
-        <div class="p-4 border-b border-line/60 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div class="w-full md:w-64">
-            <Select
-              label="API Key"
-              value={keyId()}
-              onChange={setKeyId}
-              options={keyOptions()}
-            />
-          </div>
-          <div class="flex items-center gap-2.5 overflow-x-auto pb-1 md:pb-0 scrollbar-none">
-            <Segmented
-              value={chartMetric()}
-              onChange={setChartMetric}
-              options={[
-                { value: "tokens", label: "Tokens" },
-                { value: "requests", label: "Requests" },
-                { value: "cost", label: "Cost" },
-              ]}
-            />
-            <Segmented
-              value={days()}
-              onChange={setDays}
-              options={[
-                { value: "1", label: "1D" },
-                { value: "7", label: "7D" },
-                { value: "14", label: "14D" },
-                { value: "30", label: "30D" },
-                { value: "90", label: "90D" },
-                { value: "all", label: "ALL" },
-              ]}
-            />
-          </div>
+        <div class="px-4 py-3 border-b border-line/60 flex items-center justify-between gap-3">
+          <div><h2 class="text-sm font-semibold text-ink-100">Consumption</h2><p class="text-[11px] text-ink-500 mt-0.5">{filters.label()} &middot; {filters.unit() === "day" ? "Daily" : filters.unit() === "hour" ? "Hourly" : "Minute"} buckets (UTC)</p></div>
+          <Segmented value={chartMetric()} onChange={setChartMetric} options={[
+            { value: "tokens", label: "Tokens" }, { value: "requests", label: "Requests" }, { value: "cost", label: "Cost" },
+          ]} />
         </div>
         <div class="px-4 pb-4 pt-2">
           <Show when={series() && !series.loading} fallback={<div class="h-32" />}>
             <DailyChart
               series={series()!}
               metric={chartMetric()}
-              unit={days() === "1" ? "hour" : "day"}
-              resetKey={`${days()}:${keyId()}`}
+              unit={filters.unit()}
+              resetKey={query()}
             />
           </Show>
         </div>
@@ -331,7 +243,7 @@ export default function UsagePage() {
       <Card class="mb-5">
         <CardHeader
           title="By model"
-          subtitle={`Model × provider breakdown · ${windowLabel(days())}`}
+          subtitle={`Model × provider breakdown · ${filters.label()}`}
         />
         <Show
           when={!breakdownCount.loading}
@@ -346,7 +258,7 @@ export default function UsagePage() {
                 columnDefs={byModelCols}
                 datasource={breakdownDatasource}
                 cacheBlockSize={100}
-                refreshDeps={`${days()}:${keyId()}`}
+                refreshDeps={query()}
                 heightClass={byModelHeight()}
                 storageKey="llmgw-grid:usage.by-model"
                 totals={breakdownTotals()}
@@ -375,7 +287,7 @@ export default function UsagePage() {
                 columnDefs={eventCols}
                 datasource={eventsDatasource}
                 cacheBlockSize={EVENTS_BLOCK}
-                refreshDeps={keyId()}
+                refreshDeps={query()}
                 heightClass="h-[560px]"
                 storageKey="llmgw-grid:usage.recent"
                 totals={eventsTotals()}
@@ -384,88 +296,9 @@ export default function UsagePage() {
 
             {/* Mobile Card List with Filters & Pagination */}
             <div class="md:hidden p-3 space-y-3">
-              {/* Search & Filter Toolbar */}
-              <div class="p-3 rounded-xl border border-line bg-elev space-y-2.5 shadow-xs">
-                <div class="relative">
-                  <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-ink-500">
-                    <Icon name={Icons.search} size={15} />
-                  </span>
-                  <input
-                    type="text"
-                    value={mobileSearch()}
-                    onInput={(e) => setMobileSearch(e.currentTarget.value)}
-                    placeholder="Search model, key or error…"
-                    class="w-full rounded-lg border border-line bg-card pl-9 pr-8 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                  />
-                  <Show when={mobileSearch()}>
-                    <button
-                      type="button"
-                      onClick={() => setMobileSearch("")}
-                      class="absolute inset-y-0 right-0 pr-2.5 flex items-center text-ink-400 hover:text-ink-200 cursor-pointer"
-                    >
-                      <Icon name={Icons.x} size={14} />
-                    </button>
-                  </Show>
-                </div>
-
-                <div class="space-y-2">
-                  <div class="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none">
-                    <FilterChip
-                      selected={mobileStatusFilter() === "all" && mobileProtoFilter() === "all"}
-                      onClick={() => { setMobileStatusFilter("all"); setMobileProtoFilter("all"); }}
-                      class="shrink-0"
-                    >
-                      All
-                    </FilterChip>
-                    <FilterChip
-                      selected={mobileStatusFilter() === "success"}
-                      onClick={() => setMobileStatusFilter(mobileStatusFilter() === "success" ? "all" : "success")}
-                      class="shrink-0"
-                    >
-                      200 OK
-                    </FilterChip>
-                    <FilterChip
-                      selected={mobileStatusFilter() === "errors"}
-                      onClick={() => setMobileStatusFilter(mobileStatusFilter() === "errors" ? "all" : "errors")}
-                      class="shrink-0"
-                    >
-                      Errors
-                    </FilterChip>
-                    <FilterChip
-                      selected={mobileProtoFilter() === "openai"}
-                      onClick={() => setMobileProtoFilter(mobileProtoFilter() === "openai" ? "all" : "openai")}
-                      class="shrink-0"
-                    >
-                      OpenAI
-                    </FilterChip>
-                    <FilterChip
-                      selected={mobileProtoFilter() === "anthropic"}
-                      onClick={() => setMobileProtoFilter(mobileProtoFilter() === "anthropic" ? "all" : "anthropic")}
-                      class="shrink-0"
-                    >
-                      Anthropic
-                    </FilterChip>
-                  </div>
-
-                  <div class="flex items-center justify-between text-[11px] text-ink-500 pt-1 border-t border-line/40">
-                    <span class="tabular-nums">
-                      Showing {filteredMobileEvents().length} of {fmtNum(eventCount() ?? 0)} requests
-                    </span>
-                    <Show when={mobileSearch() || mobileStatusFilter() !== "all" || mobileProtoFilter() !== "all"}>
-                      <button
-                        type="button"
-                        onClick={() => { setMobileSearch(""); setMobileStatusFilter("all"); setMobileProtoFilter("all"); }}
-                        class="text-brand-400 hover:underline cursor-pointer"
-                      >
-                        Clear filters
-                      </button>
-                    </Show>
-                  </div>
-                </div>
-              </div>
-
+              <p class="text-[11px] text-ink-500" aria-live="polite">{recentEventsList.loading ? "Loading requests…" : `Showing ${(recentEventsList() ?? []).length} of ${fmtNum(eventCount() ?? 0)} requests`}</p>
               <div class="space-y-2">
-                <For each={filteredMobileEvents()}>
+                <For each={recentEventsList() ?? []}>
                   {(ev, idx) => {
                     const rowKey = () => `${ev.ts}:${ev.id ?? idx()}`;
                     const isExpanded = () => expandedEventKey() === rowKey();

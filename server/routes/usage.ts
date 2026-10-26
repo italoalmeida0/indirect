@@ -4,9 +4,14 @@ import { userDailySeries, userEvents, userSummary, keyDailySeries, hourlySeries,
 import { db, type ApiKeyRow } from "../db";
 import { parseGridQuery, parseCursor } from "../gridql";
 import { modelPricingJoins, costAggFieldsSql } from "../pricing";
+import { filteredUsageBreakdown, filteredUsageSeries, readUsageScope, usageFilterOptions } from "../usage-filters";
 
 /** /api/usage — the authenticated user's own consumption data. */
 export async function handleUsageRoute(path: string, req: Request, url: URL): Promise<Response | null> {
+  if (path === "/api/usage/filter-options" && req.method === "GET") {
+    const ctx = await requireAuth(req);
+    return ok({ categories: usageFilterOptions(ctx.user.id) }, req);
+  }
   if (path === "/api/usage/summary" && req.method === "GET") {
     const ctx = await requireAuth(req);
     return ok({ summary: userSummary(ctx.user.id) }, req);
@@ -14,6 +19,8 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
 
   if (path === "/api/usage/daily" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    const scope = readUsageScope(url);
+    if (scope) return ok(filteredUsageSeries(scope, ctx.user.id), req);
     const keyId = url.searchParams.get("key_id");
     if (keyId) {
       // Ownership check only — the queries below key off keyId itself.
@@ -70,12 +77,19 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     } catch {
       /* malformed sort/filters fall back to unfiltered default */
     }
-    const { rows, total, totals } = userEvents(ctx.user.id, { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined });
+    const scope = readUsageScope(url);
+    const { rows, total, totals } = userEvents(ctx.user.id, { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined, scope: scope ?? undefined });
     return ok({ events: rows, total, limit, offset, totals }, req);
   }
 
   if (path === "/api/usage/breakdown" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    const scope = readUsageScope(url);
+    if (scope) {
+      const grid = parseGridQuery(url);
+      const page = filteredUsageBreakdown(scope, ctx.user.id, grid);
+      return ok({ ...page, limit: grid.limit, offset: grid.offset }, req);
+    }
     const daysParam = url.searchParams.get("days");
     const keyId = url.searchParams.get("key_id");
     if (keyId) {
