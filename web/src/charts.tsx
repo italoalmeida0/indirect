@@ -1,5 +1,4 @@
 import {
-  Area,
   Axis,
   AxisCursor,
   AxisGrid,
@@ -9,12 +8,13 @@ import {
   Bar,
   Chart,
   Line,
+  Point,
 } from "solid-charts";
 import { curveMonotoneX } from "solid-charts/curves";
-import { Show, createMemo, createUniqueId, type JSX } from "solid-js";
+import { Show, createMemo, type JSX } from "solid-js";
 
 import type { DailyPoint } from "./api";
-import { fmtCost, fmtNum } from "./ui";
+import { fmtCost, fmtNum, pointLabel } from "./ui";
 
 const IN_BAR = "var(--chart-strong)";
 const CACHE_BAR = "var(--chart-mid)";
@@ -152,12 +152,14 @@ function DailyTooltip(props: {
 export function DailyChart(props: {
   series: DailyPoint[];
   height?: number;
+  variant?: "bar" | "line";
   metric?: "tokens" | "requests" | "cost";
   unit?: "day" | "hour" | "minute" | "month";
   /** External filter key; changing it clears solid-charts hover state. */
   resetKey?: string;
 }) {
   const metric = () => props.metric ?? "tokens";
+  const lines = () => metric() === "cost" && props.variant === "line";
   const data = createMemo<DailyChartPoint[]>(() => {
     const series = props.series;
     const size = Math.max(1, Math.ceil(series.length / 60));
@@ -166,7 +168,7 @@ export function DailyChart(props: {
       const chunk = series.slice(i, i + size);
       const first = chunk[0]!;
       const last = chunk[chunk.length - 1]!;
-      const tick = first.label ?? first.date.slice(5);
+      const tick = pointLabel(first);
       const point: DailyChartPoint = { ...first, tick, date: chunk.length > 1 ? `${first.date} – ${last.date}` : first.date };
       // Preserve every request in long ranges while keeping bars readable.
       for (const key of ["in_tok", "cache_tok", "out_tok", "reqs", "cost_in", "cost_cache", "cost_out", "cost"] as const) {
@@ -261,58 +263,30 @@ export function DailyChart(props: {
                   </Axis>
 
                   <Show
-                    when={metric() === "tokens"}
+                    when={lines()}
                     fallback={
                       <Show
-                        when={metric() === "cost"}
+                        when={metric() === "requests"}
                         fallback={
-                          <Bar
-                            dataKey="reqs"
-                            fill={OUT_BAR}
-                            rx={4}
-                            class="chart-bar chart-bar-requests"
-                          />
+                          <>
+                            <Bar dataKey={metric() === "tokens" ? "in_visual" : "cost_in"} fill={IN_BAR} rx={3} class="chart-bar chart-bar-input" />
+                            <Bar dataKey={metric() === "tokens" ? "cache_visual" : "cost_cache"} fill={CACHE_BAR} rx={3} class="chart-bar" />
+                            <Bar dataKey={metric() === "tokens" ? "out_visual" : "cost_out"} fill={OUT_BAR} rx={3} class="chart-bar" />
+                          </>
                         }
                       >
-                        <Bar
-                          dataKey="cost_in"
-                          fill={IN_BAR}
-                          rx={3}
-                          class="chart-bar chart-bar-input"
-                        />
-                        <Bar
-                          dataKey="cost_cache"
-                          fill={CACHE_BAR}
-                          rx={3}
-                          class="chart-bar"
-                        />
-                        <Bar
-                          dataKey="cost_out"
-                          fill={OUT_BAR}
-                          rx={3}
-                          class="chart-bar"
-                        />
+                        <Bar dataKey="reqs" fill={OUT_BAR} rx={4} class="chart-bar chart-bar-requests" />
                       </Show>
                     }
                   >
-                    <Bar
-                      dataKey="in_visual"
-                      fill={IN_BAR}
-                      rx={3}
-                      class="chart-bar chart-bar-input"
-                    />
-                    <Bar
-                      dataKey="cache_visual"
-                      fill={CACHE_BAR}
-                      rx={3}
-                      class="chart-bar"
-                    />
-                    <Bar
-                      dataKey="out_visual"
-                      fill={OUT_BAR}
-                      rx={3}
-                      class="chart-bar"
-                    />
+                    <Line dataKey="cost_in" stroke={IN_BAR} stroke-width={2} fill="none" class="spend-line spend-line-input" curve={curveMonotoneX} />
+                    <Line dataKey="cost_cache" stroke={CACHE_BAR} stroke-width={2} stroke-dasharray="4 4" fill="none" class="spend-line spend-line-cache" curve={curveMonotoneX} />
+                    <Line dataKey="cost_out" stroke="var(--chart-brand)" stroke-width={2.25} fill="none" class="spend-line spend-line-output" curve={curveMonotoneX} />
+                    <Show when={chartData.length === 1}>
+                      <Point dataKey="cost_in" r={3} fill={IN_BAR} class="spend-point" />
+                      <Point dataKey="cost_cache" r={3} fill={CACHE_BAR} class="spend-point" />
+                      <Point dataKey="cost_out" r={3} fill="var(--chart-brand)" class="spend-point" />
+                    </Show>
                   </Show>
                 </Chart>
               )}
@@ -342,7 +316,7 @@ export function DailyChart(props: {
               <span class="inline-flex items-center gap-1.5">
                 <span
                   class="inline-block h-2.5 w-2.5 rounded-sm"
-                  style={{ background: OUT_BAR }}
+                  style={{ background: lines() ? "var(--chart-brand)" : OUT_BAR }}
                 />
                 Output
               </span>
@@ -358,119 +332,6 @@ export function DailyChart(props: {
           </span>
         </Show>
       </div>
-    </Show>
-  );
-}
-
-export function AreaChart(props: {
-  values: number[];
-  labels?: string[];
-  height?: number;
-  /** External filter key; changing it clears solid-charts hover state. */
-  resetKey?: string;
-}) {
-  const points = createMemo(() => {
-    const labels = props.labels ?? [];
-    return props.values
-      .map((value, index) => ({
-        value,
-        tick: labels[index] ?? "",
-      }))
-      .filter((point) => Number.isFinite(point.value));
-  });
-  const dataKey = createMemo(() =>
-    points()
-      .map((point) => `${point.tick}:${point.value}`)
-      .join("|"),
-  );
-  const gradientId = `chart-area-gradient-${createUniqueId()}`;
-
-  return (
-    <Show
-      when={points().length > 0}
-      fallback={
-        <div class="flex h-32 items-center justify-center text-xs text-ink-500">
-          No data yet
-        </div>
-      }
-    >
-      <Show when={`${props.resetKey ?? "default"}:${dataKey()}`} keyed>
-        {(_resetKey) => (
-          <ChartFrame height={props.height ?? 170}>
-            <Show when={points()} keyed>
-              {(chartPoints) => (
-                <Chart data={chartPoints} class="chart-root">
-                  <defs>
-                    <linearGradient
-                      id={gradientId}
-                      x1="0"
-                      y1="0"
-                      x2="0"
-                      y2="1"
-                      gradientUnits="objectBoundingBox"
-                    >
-                      <stop offset="0%" stop-color="var(--chart-brand)" stop-opacity="0.3" />
-                      <stop offset="100%" stop-color="var(--chart-brand)" stop-opacity="0" />
-                    </linearGradient>
-                  </defs>
-                  <Axis axis="y" position="left" tickCount={5}>
-                    <AxisLabel
-                      fill="var(--chart-tick)"
-                      font-size="10"
-                      format={(value) => axisNum(Number(value))}
-                    />
-                    <AxisGrid stroke="var(--chart-grid)" />
-                  </Axis>
-                  <Axis axis="x" position="bottom" dataKey="tick">
-                    <AxisLabel
-                      fill="var(--chart-tick)"
-                      font-size="10"
-                      interval={Math.max(1, Math.ceil(chartPoints.length / 6))}
-                    />
-                    <AxisLine stroke="var(--chart-grid)" />
-                    <AxisCursor
-                      stroke="var(--chart-grid)"
-                      stroke-dasharray="3 3"
-                      class="chart-cursor"
-                    />
-                    <AxisTooltip class="chart-tooltip">
-                      {(tooltip) => (
-                        <div class="z-20 min-w-28 rounded-xl border border-line bg-elev px-3 py-2 text-[11px] text-ink-200 shadow-xl shadow-black/10">
-                          <div class="mb-1 font-semibold text-ink-100">
-                            {tooltip.data.tick}
-                          </div>
-                          <div class="flex items-center justify-between gap-4">
-                            <span>Requests</span>
-                            <strong class="font-semibold text-ink-100">
-                              {fmtNum(tooltip.data.value)}
-                            </strong>
-                          </div>
-                        </div>
-                      )}
-                    </AxisTooltip>
-                  </Axis>
-                  <Area
-                    dataKey="value"
-                    fill={`url(#${gradientId})`}
-                    fill-opacity={1}
-                    class="chart-area"
-                    curve={curveMonotoneX}
-                  />
-                  <Line
-                    dataKey="value"
-                    stroke="var(--chart-brand)"
-                    stroke-width={2}
-                    fill="none"
-                    pathLength={1}
-                    class="chart-line"
-                    curve={curveMonotoneX}
-                  />
-                </Chart>
-              )}
-            </Show>
-          </ChartFrame>
-        )}
-      </Show>
     </Show>
   );
 }

@@ -130,7 +130,7 @@ try {
     const current = await popupPosition();
     assert(Math.abs(current.x - left) < 1, `${label}: popup moved from ${left} to ${current.x}`);
   };
-  const settleResults = () => page.waitForFunction(() => document.querySelector(".analytics-toolbar")?.parentElement?.getAttribute("aria-busy") === "false");
+  const settleResults = () => page.waitForFunction(() => document.querySelector(".analytics-toolbar")?.closest("[aria-busy]")?.getAttribute("aria-busy") === "false");
   const assertGridFiltersDisabled = async (keys: string[]) => {
     await page.locator(".ag-row").first().waitFor();
     assert.equal(await page.locator(".ag-floating-filter").count(), 0, "AG Grid floating filters are still visible");
@@ -159,7 +159,7 @@ try {
   try {
     await option.click();
     assert(await firstSelection, `Selection did not reach results: ${requests.slice(-8).map((url) => url.pathname + url.search).join("\n")}`);
-    await page.waitForFunction(() => document.querySelector(".analytics-toolbar")?.parentElement?.getAttribute("aria-busy") === "true");
+    await page.waitForFunction(() => document.querySelector(".analytics-toolbar")?.closest("[aria-busy]")?.getAttribute("aria-busy") === "true");
     assert.equal(await page.locator(".ag-root-wrapper").count(), 2, "Usage grids disappeared while filters were loading");
     await assertStableLeft(openingPosition.x, "Applying a filter while data loads");
   } finally {

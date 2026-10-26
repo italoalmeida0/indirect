@@ -8,7 +8,10 @@ import {
 import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
 import { api, type ApiKeyDto, type DailyPoint } from "../api";
 import { PageTitle, navigate } from "../index";
-import { DailyChart, AreaChart } from "../charts";
+import { DailyChart } from "../charts";
+import { rangeUnit } from "../analytics-range";
+import { RequestHeatmap } from "../RequestHeatmap";
+import type { ActivityScope } from "../overview-activity";
 import { usal, usalItems } from "../motion";
 import {
   Card,
@@ -21,7 +24,6 @@ import {
   copyWithToast,
   fmtCost,
   fmtNum,
-  pointLabel,
 } from "../ui";
 
 /** Compare the selected window with the immediately preceding equal window. */
@@ -33,6 +35,7 @@ function deltaPct(current: DailyPoint[], previous: DailyPoint[], pick: (d: Daily
 function HeroHeader(props: {
   icon: string;
   count?: number;
+  countLabel?: string;
   cost?: number;
   label: string;
   delta: number | null;
@@ -46,6 +49,7 @@ function HeroHeader(props: {
           title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
         >
           {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
+          <Show when={props.countLabel}><span class="ml-2 text-xs font-normal tracking-normal text-ink-500">{props.countLabel}</span></Show>
         </div>
       </div>
       <div class="flex items-center gap-2 shrink-0">
@@ -97,13 +101,17 @@ const OUT_COLOR = "var(--chart-soft)";
 export default function DashboardPage() {
   const filters = createAnalyticsFilters();
   const [series] = createResource(filters.query, async (query) => {
-    const j = await api<{ series: DailyPoint[] }>("GET", `/api/usage/daily?${query}`);
-    return j.series;
+    const params = new URLSearchParams(query);
+    const range = { preset: "custom", from: params.get("from") === "all" ? null : Number(params.get("from")), to: Number(params.get("to")) };
+    const j = await api<{ series: DailyPoint[]; granularity?: ActivityScope["unit"] }>("GET", `/api/usage/daily?${query}`);
+    // Keep counts and their resolved scope together while the next window loads.
+    return { points: j.series, scope: { from: range.from, to: range.to, unit: j.granularity ?? rangeUnit(range) } };
   });
   const [previous] = createResource(filters.query, async (query) => {
-    const range = filters.range();
-    if (range.from === null || range.from === 0) return [];
     const params = new URLSearchParams(query);
+    if (params.get("from") === "all") return [];
+    const range = { from: Number(params.get("from")), to: Number(params.get("to")) };
+    if (range.from === 0) return [];
     params.set("from", String(Math.max(0, range.from - (range.to - range.from))));
     params.set("to", String(range.from));
     const j = await api<{ series: DailyPoint[] }>("GET", `/api/usage/daily?${params}`);
@@ -113,7 +121,7 @@ export default function DashboardPage() {
     const j = await api<{ keys: ApiKeyDto[] }>("GET", "/api/keys");
     return j.keys;
   });
-  const view = () => series() ?? [];
+  const view = () => series()?.points ?? [];
   const comparison = () => previous.loading ? [] : previous() ?? [];
   // Three separate buckets — never one lumped "total tokens" number.
   const winIn = createMemo(() =>
@@ -148,9 +156,6 @@ export default function DashboardPage() {
   );
   const outDelta = createMemo(() =>
     deltaPct(view(), comparison(), (d) => d.out_tok ?? 0),
-  );
-  const tokensDelta = createMemo(() =>
-    deltaPct(view(), comparison(), (d) => (d.in_tok ?? 0) + (d.out_tok ?? 0)),
   );
   const reqDelta = createMemo(() =>
     deltaPct(view(), comparison(), (d) => d.reqs ?? 0),
@@ -187,11 +192,10 @@ export default function DashboardPage() {
 
   return (
     <div aria-busy={filters.pending() || series.loading}>
-      <PageTitle
-        title="Overview"
-        subtitle={todayStr}
-      />
-      <AnalyticsToolbar filters={filters} loading={series.loading} />
+      <div class="overview-header">
+        <PageTitle title="Overview" subtitle={todayStr} />
+        <AnalyticsToolbar filters={filters} loading={series.loading} align="end" />
+      </div>
 
       {/* Keep the previous window visible while refreshing. The keyed resource
           mounts CountUp with resolved values so USAL always owns fresh nodes. */}
@@ -199,10 +203,10 @@ export default function DashboardPage() {
         <Show when={series()} keyed>
           {(_series) => (
           <div
-            class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 mb-5"
+            class="overview-charts grid grid-cols-1 md:grid-cols-2 gap-5 mb-5"
             {...usalItems("fade-u", 110)}
           >
-            <Card interactive class="p-5 flex flex-col justify-between">
+            <Card class="overview-spend p-5 min-w-0 flex flex-col justify-between">
               <div>
                 <HeroHeader
                   icon={Icons.dollarSign}
@@ -227,7 +231,7 @@ export default function DashboardPage() {
                     label="Output"
                     cost={winCostOut()}
                     delta={costOutDelta()}
-                    color={OUT_COLOR}
+                    color="var(--chart-brand)"
                   />
                 </div>
               </div>
@@ -238,19 +242,22 @@ export default function DashboardPage() {
                 <DailyChart
                   series={view()}
                   metric="cost"
+                  variant="line"
+                  height={200}
                   unit={filters.unit()}
                   resetKey={`spend:${filters.query()}`}
                 />
               </div>
             </Card>
 
-            <Card interactive class="p-5 flex flex-col justify-between">
+            <Card class="overview-tokens p-5 min-w-0 flex flex-col justify-between">
               <div>
                 <HeroHeader
                   icon={Icons.chart}
-                  count={winIn() + winOut()}
+                  count={winOut()}
+                  countLabel="output"
                   label={`Tokens · ${filters.label()}`}
-                  delta={tokensDelta()}
+                  delta={outDelta()}
                 />
                 <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
                   <BucketStat
@@ -280,51 +287,24 @@ export default function DashboardPage() {
                 <DailyChart
                   series={view()}
                   metric="tokens"
+                  height={200}
                   unit={filters.unit()}
                   resetKey={`tokens:${filters.query()}`}
                 />
               </div>
             </Card>
 
-            <Card interactive class="p-5 flex flex-col justify-between md:col-span-2 xl:col-span-1">
-              <div>
-                <HeroHeader
-                  icon={Icons.bolt}
-                  count={winReqs()}
-                  label={`Requests · ${filters.label()}`}
-                  delta={reqDelta()}
-                />
-                <div class="mt-4 pt-3 border-t border-line flex items-center justify-between gap-2.5">
-                  <div class="flex items-center gap-2">
-                    <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
-                      <Icon name={Icons.key} size={13} />
-                    </span>
-                    <span class="text-xs text-ink-500">Active keys</span>
-                    <span class="text-sm font-semibold text-ink-100 tabular-nums ml-0.5">
-                      {activeKeys()}
-                    </span>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="w-7 h-7 rounded-lg bg-elev border border-line inline-flex items-center justify-center text-ink-400 shrink-0">
-                      <Icon name={Icons.dollarSign} size={13} />
-                    </span>
-                    <span class="text-xs text-ink-500">Avg/req</span>
-                    <span class="text-xs font-semibold text-ink-100 ml-0.5">
-                      {winReqs() > 0 ? fmtCost(winCost() / winReqs()) : "$0.00"}
-                    </span>
-                  </div>
+            <Card class="overview-requests p-5 min-w-0 md:col-span-2">
+              <div class="activity-card-header">
+                <div class="activity-card-total">
+                  <HeroHeader icon={Icons.bolt} count={winReqs()} label={`Requests · ${filters.label()}`} delta={reqDelta()} />
+                </div>
+                <div class="activity-card-meta">
+                  <span><Icon name={Icons.key} size={13} /><span>Active keys</span><strong>{activeKeys()}</strong></span>
+                  <span><span>Avg/req</span><strong>{winReqs() > 0 ? fmtCost(winCost() / winReqs()) : "$0.00"}</strong></span>
                 </div>
               </div>
-              <div
-                class="mt-4"
-                {...usal("fade-u delay-300 duration-700 threshold-5")}
-              >
-                <AreaChart
-                  values={view().map((d) => d.reqs ?? 0)}
-                  labels={view().map((d) => pointLabel(d))}
-                  resetKey={`reqs:${filters.query()}`}
-                />
-              </div>
+              <RequestHeatmap series={view()} scope={series()!.scope} />
             </Card>
           </div>
           )}
@@ -335,7 +315,7 @@ export default function DashboardPage() {
         class="grid grid-cols-1 lg:grid-cols-2 gap-5"
         {...usalItems("fade-u", 110)}
       >
-        <Card class="p-5">
+        <Card class="p-5 min-w-0">
           <div class="flex items-start justify-between gap-3 mb-4">
             <div>
               <h2 class="text-sm font-semibold text-ink-100">
@@ -375,7 +355,7 @@ export default function DashboardPage() {
           </Show>
         </Card>
 
-        <Card class="p-5">
+        <Card class="p-5 min-w-0">
           <div class="mb-4">
             <h2 class="text-sm font-semibold text-ink-100">
               Endpoint configuration
@@ -413,10 +393,10 @@ export default function DashboardPage() {
 
 function EndpointRow(props: { label: string; value: string }): JSX.Element {
   return (
-    <div>
+    <div class="min-w-0">
       <div class="text-xs font-medium text-ink-400 mb-1.5">{props.label}</div>
-      <div class="flex items-center justify-between rounded-xl bg-elev border border-line pl-3.5 pr-1.5 py-1.5 gap-2 transition-colors hover:border-ink-600 focus-within:border-brand-500">
-        <span class="text-xs text-ink-200 select-all font-mono truncate min-w-0">
+      <div class="min-w-0 flex items-center justify-between rounded-xl bg-elev border border-line pl-3.5 pr-1.5 py-1.5 gap-2 transition-colors hover:border-ink-600 focus-within:border-brand-500">
+        <span class="text-xs text-ink-200 select-all font-mono truncate min-w-0 flex-1">
           {props.value}
         </span>
         <button

@@ -4,6 +4,8 @@
  * gateway views. Floating layers are portaled and positioned with left/top. */
 .analytics-toolbar { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; margin-bottom: 20px; }
 .analytics-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; }
+.analytics-toolbar-end { align-items: flex-end; }
+.analytics-toolbar-end .analytics-controls, .analytics-toolbar-end .analytics-chips { justify-content: flex-end; }
 .analytics-control { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink-300); font-size: 12px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow-control); transition: border-color 160ms, background 160ms, color 160ms; }
 .analytics-control:hover { background: var(--elev); color: var(--ink-100); border-color: var(--ink-600); }
 .analytics-control.is-active { border-color: color-mix(in srgb, var(--brand-400) 45%, var(--line)); color: var(--brand-400); background: color-mix(in srgb, var(--brand-400) 5%, var(--card)); }
@@ -968,6 +970,71 @@ html.mobile * {
 }
 
 /* solid-charts renders plain SVG, so keep its entrance motion in CSS. */
+/* Overview activity stays on the same analytics scope as the charts. */
+.overview-header { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 18px 24px; margin-bottom: 20px; }
+.overview-header > div:first-child { margin-bottom: 0; }
+.overview-header .analytics-toolbar { flex: 1; margin-bottom: 0; }
+.spend-line { stroke-linecap: round; stroke-linejoin: round; animation: chart-area-in .55s ease-out backwards; }
+.activity-card-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 18px 32px; }
+.activity-card-total { width: 280px; max-width: 100%; }
+.activity-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 24px; font-size: 11px; color: var(--ink-500); }
+.activity-card-meta > span { display: inline-flex; align-items: center; gap: 7px; }
+.activity-card-meta strong { font-weight: 500; color: var(--ink-200); font-variant-numeric: tabular-nums; }
+.request-activity { min-width: 0; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.activity-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--ink-500); }
+.activity-heading > span:first-child { color: var(--ink-300); font-weight: 500; }
+.activity-utc { margin-left: 5px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; font-size: 8px; font-weight: 400; color: var(--ink-500); }
+.activity-scroll { max-height: 300px; overflow: auto; overscroll-behavior: contain; margin-top: 16px; padding: 3px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.activity-board { display: grid; grid-template-columns: 30px repeat(var(--activity-columns), minmax(12px, 1fr)); grid-template-rows: 18px repeat(var(--activity-rows), auto); align-items: center; gap: 4px; min-width: calc(34px + var(--activity-columns) * 17px); }
+.activity-column-label { grid-row: 1; align-self: start; white-space: nowrap; font-size: 10px; line-height: 14px; color: var(--ink-500); }
+.activity-row-label { position: sticky; left: -3px; z-index: 1; grid-column: 1; display: flex; align-items: center; align-self: stretch; background: var(--card); font-size: 9px; color: var(--ink-500); }
+.activity-cell { display: block; min-width: 0; width: 100%; aspect-ratio: 1; border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); border-radius: 3px; background: var(--elev); transition: border-color .12s ease, box-shadow .12s ease; }
+button.activity-cell { cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.activity-cell.is-outside { background: color-mix(in srgb, var(--line) 20%, transparent); border-color: color-mix(in srgb, var(--line) 40%, transparent); opacity: .45; }
+.activity-level-1 { background: color-mix(in srgb, var(--chart-brand) 20%, var(--card)); border-color: color-mix(in srgb, var(--chart-brand) 24%, var(--line)); }
+.activity-level-2 { background: color-mix(in srgb, var(--chart-brand) 40%, var(--card)); border-color: color-mix(in srgb, var(--chart-brand) 40%, var(--line)); }
+.activity-level-3 { background: color-mix(in srgb, var(--chart-brand) 65%, var(--card)); border-color: color-mix(in srgb, var(--chart-brand) 60%, var(--line)); }
+.activity-level-4 { background: var(--chart-brand); border-color: var(--chart-brand); }
+button.activity-cell:hover, .activity-cell.is-selected { border-color: var(--ink-200); box-shadow: 0 0 0 1px var(--card), 0 0 0 2px var(--ink-400); }
+.activity-cell:focus-visible { outline: 2px solid var(--ink-200); outline-offset: 2px; }
+.activity-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 14px; font-size: 10px; color: var(--ink-500); }
+.activity-readout { min-height: 15px; }
+.activity-readout strong { color: var(--ink-200); font-weight: 500; }
+.activity-outside-note { color: var(--ink-600); }
+.activity-legend { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.activity-legend > .activity-cell { width: 11px; height: 11px; border-radius: 2px; }
+.activity-legend > span:first-child { margin-right: 3px; }
+.activity-legend > span:last-child { margin-left: 3px; }
+.activity-summary { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.activity-summary > div { display: flex; flex-direction: column; gap: 6px; }
+.activity-summary > div > span { font-size: 10px; color: var(--ink-500); }
+.activity-summary strong { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; font-size: 16px; font-weight: 500; color: var(--ink-100); font-variant-numeric: tabular-nums; }
+.activity-summary small { font-size: 10px; font-weight: 400; color: var(--ink-500); }
+.activity-tooltip { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--elev); box-shadow: var(--shadow-floating); font-size: 11px; pointer-events: none; }
+.activity-tooltip strong { color: var(--ink-100); font-weight: 500; }
+.activity-tooltip > span { font-size: 10px; color: var(--ink-400); }
+.is-monthly .activity-board { grid-template-rows: 18px repeat(var(--activity-rows), 24px); min-width: 600px; }
+.is-monthly .activity-board::before { content: ''; position: sticky; top: -3px; z-index: 2; grid-column: 1 / -1; grid-row: 1; height: 24px; align-self: start; background: var(--card); }
+.is-monthly .activity-column-label { position: sticky; top: -3px; z-index: 3; height: 24px; padding-top: 3px; background: var(--card); }
+.is-monthly .activity-cell { aspect-ratio: auto; height: 24px; }
+.is-monthly .activity-legend .activity-cell { height: 11px; }
+@media (max-width: 600px) {
+  .overview-header .analytics-toolbar { flex-basis: 100%; }
+  .activity-card-total { width: 100%; }
+  .activity-card-meta { gap: 10px 20px; }
+  .activity-heading > span:last-child { font-size: 10px; }
+  .activity-outside-note { display: block; margin-top: 3px; }
+  .activity-summary { grid-template-columns: 1fr 1fr; gap: 14px; }
+  .activity-summary > div:last-child { grid-column: 1 / -1; }
+}
+@media (pointer: coarse) {
+  .activity-board { min-width: calc(34px + var(--activity-columns) * 22px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spend-line { animation: none; }
+  .activity-cell { transition: none; }
+}
+
 .chart-bar {
   transform-box: fill-box;
   transform-origin: bottom;
