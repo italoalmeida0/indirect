@@ -16,8 +16,6 @@ import {
 } from "../ui";
 import {
   UsageGrid,
-  DateTimeFilter,
-  DateTimeFloatingFilter,
   ProtoCell,
   serverDatasource,
   StatusCell,
@@ -90,34 +88,32 @@ const byModelCols: ColDef<BreakdownRow>[] = [
     valueGetter: (p) => p.data?.provider_key_label || p.data?.provider_key_id?.slice(0, 8) || "—",
     valueFormatter: (p) => p.value,
   },
-  { field: "reqs", headerName: "Requests", width: 100, minWidth: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "in_tok", headerName: "In", width: 95, minWidth: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 95, minWidth: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 95, minWidth: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cost_in", headerName: "In Cost", width: 100, minWidth: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost_cache", headerName: "Cache Cost", width: 105, minWidth: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost_out", headerName: "Out Cost", width: 100, minWidth: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost", headerName: "Total Cost", width: 110, minWidth: 105, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "reqs", headerName: "Requests", width: 100, minWidth: 95, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "in_tok", headerName: "In", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "cache_tok", headerName: "Cache", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "out_tok", headerName: "Out", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "cost_in", headerName: "In Cost", width: 100, minWidth: 95, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost_cache", headerName: "Cache Cost", width: 105, minWidth: 100, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost_out", headerName: "Out Cost", width: 100, minWidth: 95, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost", headerName: "Total Cost", width: 110, minWidth: 105, type: "rightAligned", valueFormatter: costFormatter },
 ];
 
 const eventCols: ColDef[] = [
-  // Custom From/To datetime-local filter (menu + floating row); the epoch-ms
-  // bounds are translated server-side by the gridql "datetime" branch.
-  { field: "ts", headerName: "Time", width: 170, minWidth: 160, filter: DateTimeFilter, floatingFilterComponent: DateTimeFloatingFilter, valueFormatter: timeFormatter },
+  { field: "ts", headerName: "Time", width: 170, minWidth: 160, valueFormatter: timeFormatter },
   { field: "key_name", headerName: "Key", width: 150, minWidth: 130, flex: 0.8 },
   { field: "proto", headerName: "Protocol", width: 110, minWidth: 100, cellRenderer: ProtoCell },
   { field: "provider_name", headerName: "Provider", width: 150, minWidth: 130, flex: 1, valueFormatter: (p) => fmtOrDash(p.value) },
   { field: "model", headerName: "Model", flex: 1.2, minWidth: 150, valueFormatter: (p) => fmtOrDash(p.value) },
   { field: "upstream_model", headerName: "Upstream", width: 150, minWidth: 130, valueFormatter: (p) => fmtOrDash(p.value) },
-  { field: "in_tok", headerName: "In", width: 90, minWidth: 85, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 95, minWidth: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 90, minWidth: 85, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cost_in", headerName: "In Cost", width: 95, minWidth: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost_cache", headerName: "Cache Cost", width: 105, minWidth: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost_out", headerName: "Out Cost", width: 95, minWidth: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost", headerName: "Total Cost", width: 110, minWidth: 105, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "latency_ms", headerName: "Latency", width: 95, minWidth: 90, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: latencyFormatter },
-  { field: "status", headerName: "Status", width: 90, minWidth: 85, type: "rightAligned", filter: "agNumberColumnFilter", cellRenderer: StatusCell },
+  { field: "in_tok", headerName: "In", width: 90, minWidth: 85, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "cache_tok", headerName: "Cache", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "out_tok", headerName: "Out", width: 90, minWidth: 85, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "cost_in", headerName: "In Cost", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost_cache", headerName: "Cache Cost", width: 105, minWidth: 100, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost_out", headerName: "Out Cost", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost", headerName: "Total Cost", width: 110, minWidth: 105, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "latency_ms", headerName: "Latency", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: latencyFormatter },
+  { field: "status", headerName: "Status", width: 90, minWidth: 85, type: "rightAligned", cellRenderer: StatusCell },
 ];
 
 export default function UsagePage() {
@@ -142,7 +138,6 @@ export default function UsagePage() {
     qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
     qs.set("offset", String(params.startRow));
     if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-    if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
     const j = await api<{ rows: BreakdownRow[]; total: number; totals?: GridTotals }>("GET", `/api/usage/breakdown?${qs}`);
     if (j.totals && scope === query()) setBreakdownTotals(j.totals);
     return { rows: j.rows, total: j.total };
@@ -180,7 +175,7 @@ export default function UsagePage() {
   const eventsDatasource = serverDatasource<any>((() => {
     const cursors = new Map<string, Map<number, { ts: number; id: number }>>();
     return async (params) => {
-      const ctx = JSON.stringify([query(), params.sortModel, params.filterModel]);
+      const ctx = JSON.stringify([query(), params.sortModel]);
       let ctxCursors = cursors.get(ctx);
       if (!ctxCursors) {
         ctxCursors = new Map();
@@ -192,9 +187,6 @@ export default function UsagePage() {
       qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
       qs.set("offset", String(params.startRow));
       if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-      if (Object.keys(params.filterModel).length > 0) {
-        qs.set("filters", JSON.stringify(params.filterModel));
-      }
       const cursor = params.startRow > 0 ? ctxCursors.get(params.startRow - 1) : undefined;
       // Keep `offset` in the query: the server only honors the cursor for the
       // DEFAULT (ts DESC) ordering — with a column sort or a malformed cursor
@@ -214,7 +206,7 @@ export default function UsagePage() {
   })());
 
   return (
-    <div>
+    <div aria-busy={series.loading || breakdownCount.loading || eventCount.loading}>
       <PageTitle
         title="Usage"
         subtitle="Inspect consumption per key, provider, model and request"
@@ -229,7 +221,7 @@ export default function UsagePage() {
           ]} />
         </div>
         <div class="px-4 pb-4 pt-2">
-          <Show when={series() && !series.loading} fallback={<div class="h-32" />}>
+          <Show when={series()} fallback={<div class="h-32" />}>
             <DailyChart
               series={series()!}
               metric={chartMetric()}
@@ -246,7 +238,7 @@ export default function UsagePage() {
           subtitle={`Model × provider breakdown · ${filters.label()}`}
         />
         <Show
-          when={!breakdownCount.loading}
+          when={breakdownCount() !== undefined}
           fallback={<div class="p-5 text-xs text-ink-500">Loading…</div>}
         >
           <Show
@@ -255,6 +247,7 @@ export default function UsagePage() {
           >
             <div class="px-1 py-1">
               <UsageGrid
+                filterable={false}
                 columnDefs={byModelCols}
                 datasource={breakdownDatasource}
                 cacheBlockSize={100}
@@ -274,7 +267,7 @@ export default function UsagePage() {
             subtitle={eventCount.loading ? "Loading…" : `${fmtNum(eventCount() ?? 0)} events`}
           />
         <Show
-          when={!eventCount.loading}
+          when={eventCount() !== undefined}
           fallback={<div class="p-5 text-xs text-ink-500">Loading…</div>}
         >
           <Show
@@ -284,6 +277,7 @@ export default function UsagePage() {
             {/* Desktop AG Grid */}
             <div class="hidden md:block px-2 py-2">
               <UsageGrid
+                filterable={false}
                 columnDefs={eventCols}
                 datasource={eventsDatasource}
                 cacheBlockSize={EVENTS_BLOCK}

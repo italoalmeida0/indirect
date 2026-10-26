@@ -33,6 +33,9 @@ export const Z = {
 
 export interface AnchorOptions {
   placement?: Placement;
+  /** Disable automatic side/alignment changes for panels that retain their
+   *  opening placement while their contents change. */
+  flip?: boolean;
   /** Gap between trigger and floating element, px (default 6). */
   gap?: number;
   /** Clearance kept from every viewport edge, px (default 8). */
@@ -86,7 +89,7 @@ export function anchorFloat(
       placement: opts.placement ?? "bottom",
       middleware: [
         offset(opts.gap ?? 6),
-        flip({ padding }),
+        ...(opts.flip === false ? [] : [flip({ padding })]),
         shift({ padding }),
         ...(opts.matchWidth || opts.maxHeight
           ? [

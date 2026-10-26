@@ -41,14 +41,26 @@ try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1040 }, deviceScaleFactor: 1 });
   const errors: string[] = [];
   const requests: URL[] = [];
+  let holdAnalytics = false;
+  const pendingResponses = new Set<() => void>();
   page.on("pageerror", (error: Error) => errors.push(String(error)));
   await page.addInitScript(() => {
     localStorage.setItem("cache_code_session", JSON.stringify({ accessToken: "ui-test", refreshToken: "ui-test", user: { id: "user", name: "Alex Morgan", email: "alex@example.com", role: "admin", status: "active" } }));
     localStorage.setItem("llmgw-theme", "dark");
+    for (const key of ["usage.by-model", "usage.recent", "admin.stats.users", "admin.stats.models"]) {
+      const colId = key.endsWith("users") ? "email" : "model";
+      localStorage.setItem(`llmgw-grid:${key}`, JSON.stringify({
+        columnState: [{ colId, width: 244 }], userResizedColumns: [colId],
+        filterModel: { [colId]: { filterType: "text", type: "equals", filter: "stale-column-filter" } },
+      }));
+    }
   });
   await page.route("**/api/**", async (route: any) => {
     const url = new URL(route.request().url());
     requests.push(url);
+    if (holdAnalytics && (url.pathname.startsWith("/api/usage/") || url.pathname === "/api/admin/stats" || url.pathname.includes("usage-breakdown/"))) {
+      await new Promise<void>((resolve) => pendingResponses.add(resolve));
+    }
     let data: Record<string, unknown> = {};
     if (url.pathname.endsWith("filter-options")) data = { categories: url.pathname.startsWith("/api/admin") ? [...categories, { id: "user_id", label: "User", options: [{ value: "user", label: "alex@example.com", count: 1106 }] }] : categories };
     else if (url.pathname === "/api/usage/daily") data = { series };
@@ -78,16 +90,51 @@ try {
     assert(rect && rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= viewport.width && rect.y + rect.height <= viewport.height, `${label} extends outside the viewport`);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${label} creates horizontal overflow`);
   };
+  const popupPosition = async () => {
+    await assertFits("Popup");
+    await page.getByRole("dialog").evaluate(async (el: HTMLElement) => {
+      await Promise.all(el.getAnimations().map((animation) => animation.finished.catch(() => {})));
+    });
+    return (await page.getByRole("dialog").boundingBox())!;
+  };
+  const assertStableLeft = async (left: number, label: string) => {
+    const current = await popupPosition();
+    assert(Math.abs(current.x - left) < 1, `${label}: popup moved from ${left} to ${current.x}`);
+  };
+  const assertGridFiltersDisabled = async (keys: string[]) => {
+    await page.locator(".ag-row").first().waitFor();
+    assert.equal(await page.locator(".ag-floating-filter").count(), 0, "AG Grid floating filters are still visible");
+    assert(await page.evaluate((keys: string[]) => keys.every((key) => Object.keys(JSON.parse(localStorage.getItem(`llmgw-grid:${key}`) ?? "{}").filterModel ?? {}).length === 0), keys), "Legacy AG Grid filters were restored");
+  };
   console.log("[filters-ui] Opening Usage");
   await page.goto(`${serverUrl}#/usage`);
+  await assertGridFiltersDisabled(["usage.by-model", "usage.recent"]);
+  const modelHeader = page.locator(".ag-header-cell[col-id='model']").first();
+  assert.equal(Math.round((await modelHeader.boundingBox())!.width), 244, "Saved column widths were lost");
+  await modelHeader.click();
+  await page.waitForFunction(() => document.querySelector(".ag-header-cell[col-id='model']")?.getAttribute("aria-sort") === "ascending");
   console.log("[filters-ui] Checking include/exclude");
   await page.getByRole("button", { name: "Filter usage", exact: true }).click();
+  const openingPosition = await popupPosition();
   await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
+  await assertStableLeft(openingPosition.x, "Expanding a category");
   await page.getByRole("textbox", { name: "Search model…", exact: true }).fill("Claude");
+  await assertStableLeft(openingPosition.x, "Searching options");
   const option = page.getByRole("dialog").getByRole("button", { name: /Claude Sonnet 4.5/ });
-  await option.click();
+  holdAnalytics = true;
+  try {
+    await option.click();
+    await page.waitForFunction(() => document.querySelector(".analytics-toolbar")?.parentElement?.getAttribute("aria-busy") === "true");
+    assert.equal(await page.locator(".ag-root-wrapper").count(), 2, "Usage grids disappeared while filters were loading");
+    await assertStableLeft(openingPosition.x, "Applying a filter while data loads");
+  } finally {
+    holdAnalytics = false;
+    for (const resolve of pendingResponses) resolve();
+    pendingResponses.clear();
+  }
   assert.equal(await option.getAttribute("aria-pressed"), "true");
   await page.getByRole("button", { name: "Exclude", exact: true }).click();
+  await assertStableLeft(openingPosition.x, "Switching include/exclude");
   await option.click();
   const last = requests.filter((url) => url.pathname === "/api/usage/daily").at(-1)!;
   const selection = JSON.parse(last.searchParams.get("selection")!);
@@ -167,14 +214,33 @@ try {
 
   for (const route of ["/", "/admin/stats"]) {
     await page.goto(`${serverUrl}#${route}`);
+    if (route === "/admin/stats") await assertGridFiltersDisabled(["admin.stats.users", "admin.stats.models"]);
+    // Exercise a trigger near the right edge, where the expanded panel needs
+    // more room than the initial category menu.
+    await page.locator(".analytics-controls").evaluate((el: HTMLElement) => { el.style.width = "100%"; el.style.justifyContent = "flex-end"; });
     await page.getByRole("button", { name: "Filter usage", exact: true }).click();
+    const beforeExpansion = await popupPosition();
     await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
+    await assertStableLeft(beforeExpansion.x, `${route}: expansion near the viewport edge`);
     await page.getByRole("textbox", { name: "Search model…", exact: true }).fill("Gemini");
+    await assertStableLeft(beforeExpansion.x, `${route}: searching near the viewport edge`);
     await page.getByRole("button", { name: /Gemini 2.5 Pro/ }).click();
     await page.keyboard.press("Escape");
     await time().click();
+    const periodPosition = await popupPosition();
+    await page.getByRole("button", { name: "Custom range…", exact: true }).click();
+    await assertStableLeft(periodPosition.x, `${route}: switching to custom dates`);
+    await page.getByRole("button", { name: "Back to presets", exact: true }).click();
     await page.getByRole("button", { name: "15m Past 15 minutes", exact: true }).click();
     assert.match(await time().getAttribute("aria-label") ?? "", /Past 15 minutes/);
+  }
+  for (const width of [608, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.getByRole("button", { name: "Filter usage", exact: true }).click();
+    const beforeExpansion = await popupPosition();
+    await page.getByRole("button", { name: "Filter by Provider", exact: true }).click();
+    await assertStableLeft(beforeExpansion.x, `${width}px: expanding beside the responsive breakpoint`);
+    await page.keyboard.press("Escape");
   }
   await page.setViewportSize({ width: 320, height: 568 });
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -187,8 +253,9 @@ try {
   await page.getByRole("button", { name: "Cancel", exact: true }).scrollIntoViewIfNeeded();
   await assertFits("Small screen calendar actions");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert(requests.filter((url) => url.pathname === "/api/usage/events" || url.pathname === "/api/usage/breakdown" || url.pathname.includes("usage-breakdown/")).every((url) => !url.searchParams.has("filters")), "A grid forwarded column filters to the API");
   assert.deepEqual(errors, [], "Browser runtime errors");
-  console.log(`Gateway filters UI passed: include/exclude, shared queries, keyboard, presets, calendar, mobile pagination, light/dark themes, all three pages. Screenshots: ${output}`);
+  console.log(`Gateway filters UI passed: stable popup positioning, grids without column filters, preserved layout, include/exclude, shared queries, keyboard, calendar, responsive themes and all three pages. Screenshots: ${output}`);
 } catch (error) {
   console.error("[filters-ui] Failed", error);
   throw error;

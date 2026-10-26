@@ -86,6 +86,12 @@ const DEFAULT_COL_DEF: ColDef = {
   floatingFilter: true,
   minWidth: 72,
 };
+const UNFILTERED_COL_DEF: ColDef = { ...DEFAULT_COL_DEF, filter: false, floatingFilter: false };
+
+function withoutColumnFilters(column: ColDef | ColGroupDef): ColDef | ColGroupDef {
+  if ("children" in column) return { ...column, children: column.children.map(withoutColumnFilters) };
+  return { ...column, filter: false, floatingFilter: false, floatingFilterComponent: undefined };
+}
 const PAGE_SIZE_SELECTOR: number[] = [15, 20, 25, 50, 100, 250];
 // The datetime floating filter stacks TWO datetime-local inputs — grids whose
 // colDefs use it get a taller floating row (module constants, see gotcha above).
@@ -325,6 +331,9 @@ export function UsageGrid(props: {
   /** localStorage key for user prefs (column order/size/visibility, sort,
    *  filters). Column defs must be stable for the state to map back. */
   storageKey: string;
+  /** Disable column filters and discard their persisted state when a page
+   *  supplies its own filtering controls. Sorting and layout prefs remain. */
+  filterable?: boolean;
   /** Optional passthroughs for selection-enabled grids (e.g. Models). */
   rowSelection?: "single" | "multiple";
   suppressRowClickSelection?: boolean;
@@ -346,6 +355,9 @@ export function UsageGrid(props: {
   /** Filtered-set aggregates rendered in the footer (null/absent = footer as today). */
   totals?: GridTotals | null;
 }) {
+  const filteringEnabled = props.filterable !== false;
+  const columnDefs = filteringEnabled ? props.columnDefs : props.columnDefs.map(withoutColumnFilters);
+  const defaultColDef = filteringEnabled ? DEFAULT_COL_DEF : UNFILTERED_COL_DEF;
   const [changedColumns, setChangedColumns] = createSignal<string[]>([]);
   createEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- read inside the effect so refreshDeps re-triggers the purge
@@ -353,7 +365,7 @@ export function UsageGrid(props: {
     gridRef?.api?.purgeInfiniteCache?.();
   });
   // props.columnDefs are stable module constants per page, so this picks once.
-  const tallFloating = props.columnDefs.some(
+  const tallFloating = filteringEnabled && columnDefs.some(
     (c) =>
       !("children" in c) &&
       ((c as ColDef).filter === DateTimeFilter ||
@@ -421,7 +433,7 @@ export function UsageGrid(props: {
       .getColumnState()
       .filter((state) =>
         (state.hide ?? false) !== (defaults.get(state.colId)?.hide ?? false) ||
-        api.getColumnFilterModel(state.colId) != null ||
+        (filteringEnabled && api.getColumnFilterModel(state.colId) != null) ||
         userResizedCols.has(state.colId),
       )
       .map((state) => state.colId);
@@ -436,7 +448,7 @@ export function UsageGrid(props: {
         props.storageKey,
         JSON.stringify({
           columnState: api.getColumnState(),
-          filterModel: api.getFilterModel(),
+          filterModel: filteringEnabled ? api.getFilterModel() : {},
           userResizedColumns: Array.from(userResizedCols),
         }),
       );
@@ -486,7 +498,10 @@ export function UsageGrid(props: {
         api.applyColumnState({ state: j.columnState, applyOrder: true });
       }
       if (j.filterModel && typeof j.filterModel === "object") {
-        api.setFilterModel(j.filterModel);
+        if (filteringEnabled) api.setFilterModel(j.filterModel);
+        else if (Object.keys(j.filterModel).length) {
+          localStorage.setItem(props.storageKey, JSON.stringify({ ...j, filterModel: {} }));
+        }
       }
     } catch {}
   };
@@ -501,8 +516,10 @@ export function UsageGrid(props: {
         state: [{ colId, hide: defaultState.hide ?? false, width: defaultState.width, flex: defaultState.flex }],
       });
     }
-    await api.setColumnFilterModel(colId, null);
-    api.onFilterChanged("api");
+    if (filteringEnabled) {
+      await api.setColumnFilterModel(colId, null);
+      api.onFilterChanged("api");
+    }
     updateChangedColumns(api);
     autoSizeUnadjustedColumns([colId]);
     saveState();
@@ -517,7 +534,7 @@ export function UsageGrid(props: {
     const api = gridRef?.api;
     if (!api) return;
     api.resetColumnState();
-    api.setFilterModel(null);
+    if (filteringEnabled) api.setFilterModel(null);
     updateChangedColumns(api);
     autoSizeUnadjustedColumns();
   };
@@ -531,8 +548,8 @@ export function UsageGrid(props: {
           <AgGridSolid
             ref={gridRef}
             rowData={props.rowData!}
-            columnDefs={props.columnDefs}
-            defaultColDef={DEFAULT_COL_DEF}
+            columnDefs={columnDefs}
+            defaultColDef={defaultColDef}
             {...(props.datasource
               ? {
                   rowModelType: "infinite" as const,

@@ -44,10 +44,33 @@ export function createAnalyticsFilters(admin = false) {
   return { range, setRange, selection, query, categories, options, refetch, toggle, clear, label: () => rangeLabel(range()), unit: () => rangeUnit(range()) };
 }
 
-function FloatingPanel(props: { anchor: HTMLElement; label: string; wide?: boolean; close: (focus?: boolean) => void; children: JSX.Element }) {
+function FloatingPanel(props: { anchor: HTMLElement; label: string; wide?: boolean; expandable?: boolean; close: (focus?: boolean) => void; children: JSX.Element }) {
   let panel!: HTMLDivElement;
   onMount(() => {
-    const cleanup = anchorFloat(props.anchor, panel, { placement: "bottom-end", gap: 8, padding: 12, maxHeight: 640, middleware: [shift({ padding: 12, crossAxis: true })] });
+    const anchor = props.anchor.getBoundingClientRect();
+    const below = document.documentElement.clientHeight - anchor.bottom;
+    // Pick the vertical side once. Expanding a category, searching or opening
+    // the calendar must not flip the panel to the other side of its trigger.
+    const placement = below >= 640 || below >= anchor.top ? "bottom-start" : "top-start";
+    const cleanup = anchorFloat(props.anchor, panel, {
+      placement, flip: false, gap: 8, padding: 12, maxHeight: 640,
+      middleware: [
+        {
+          name: "analyticsAnchor",
+          fn({ rects }) {
+            const viewportWidth = document.documentElement.clientWidth;
+            // Reserve room for the expanded menu from its first frame. Its
+            // left edge stays put even near the viewport's right boundary.
+            const width = props.expandable ? (window.matchMedia("(max-width: 600px)").matches ? 350 : 560) : 330;
+            const reservedWidth = Math.min(width, viewportWidth - 24);
+            const anchorLeft = props.anchor.getBoundingClientRect().left;
+            const left = Math.max(12, Math.min(anchorLeft, viewportWidth - reservedWidth - 12));
+            return { x: rects.reference.x + left - anchorLeft };
+          },
+        },
+        shift({ padding: 12, crossAxis: true }),
+      ],
+    });
     const outside = (event: PointerEvent | FocusEvent) => {
       if (event.target instanceof Node && !panel.contains(event.target) && !props.anchor.contains(event.target)) props.close();
     };
@@ -218,7 +241,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
       </div>
     </Show>
     <Show when={open() === "filters"}>
-      <FloatingPanel anchor={filterButton} label="Usage filters" wide={!!active()} close={close}>
+      <FloatingPanel anchor={filterButton} label="Usage filters" wide={!!active()} expandable close={close}>
         <div id={`${id}-filters`} class={`analytics-filter-layout ${active() ? "has-detail" : ""}`}>
           <div class="analytics-categories">
             <SearchField value={categorySearch()} onInput={setCategorySearch} placeholder="Search filters…" initial />

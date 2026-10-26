@@ -81,14 +81,14 @@ const fmtOrDash = (v: unknown) => (v == null || v === "" ? "—" : String(v));
 
 const userCols: ColDef<UserRow>[] = [
   { field: "email", headerName: "User", flex: 1.4 },
-  { field: "in_tok", headerName: "In", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "reqs", headerName: "Requests", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: countFormatter },
-  { field: "cost_in", headerName: "In Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost_cache", headerName: "Cache Cost", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost_out", headerName: "Out Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost", headerName: "Total Cost", width: 105, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "in_tok", headerName: "In", width: 95, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "cache_tok", headerName: "Cache", width: 100, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "out_tok", headerName: "Out", width: 95, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "reqs", headerName: "Requests", width: 95, type: "rightAligned", valueFormatter: countFormatter },
+  { field: "cost_in", headerName: "In Cost", width: 95, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost_cache", headerName: "Cache Cost", width: 100, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost_out", headerName: "Out Cost", width: 95, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost", headerName: "Total Cost", width: 105, type: "rightAligned", valueFormatter: costFormatter },
 ];
 
 const modelCols: ColDef<ModelRow>[] = [
@@ -103,14 +103,14 @@ const modelCols: ColDef<ModelRow>[] = [
     valueGetter: (p) => p.data?.provider_key_label || p.data?.provider_key_id?.slice(0, 8) || "—",
     valueFormatter: (p) => p.value,
   },
-  { field: "reqs", headerName: "Requests", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: countFormatter },
-  { field: "in_tok", headerName: "In", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: tokenFormatter },
-  { field: "cost_in", headerName: "In Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost_cache", headerName: "Cache Cost", width: 100, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost_out", headerName: "Out Cost", width: 95, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
-  { field: "cost", headerName: "Total Cost", width: 105, type: "rightAligned", filter: "agNumberColumnFilter", valueFormatter: costFormatter },
+  { field: "reqs", headerName: "Requests", width: 95, type: "rightAligned", valueFormatter: countFormatter },
+  { field: "in_tok", headerName: "In", width: 95, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "cache_tok", headerName: "Cache", width: 95, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "out_tok", headerName: "Out", width: 95, type: "rightAligned", valueFormatter: tokenFormatter },
+  { field: "cost_in", headerName: "In Cost", width: 95, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost_cache", headerName: "Cache Cost", width: 100, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost_out", headerName: "Out Cost", width: 95, type: "rightAligned", valueFormatter: costFormatter },
+  { field: "cost", headerName: "Total Cost", width: 105, type: "rightAligned", valueFormatter: costFormatter },
 ];
 
 /** Card heading split in two tight spans so long windows never wrap. */
@@ -147,7 +147,6 @@ export default function AdminStatsPage() {
     qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
     qs.set("offset", String(params.startRow));
     if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-    if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
     const j = await api<{ users: UserRow[]; total: number; totals?: GridTotals }>("GET", `/api/admin/usage-breakdown/users?${qs}`);
     if (j.totals && scope === statsQuery()) setUsersTotals(j.totals);
     return { rows: j.users, total: j.total };
@@ -158,7 +157,6 @@ export default function AdminStatsPage() {
     qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
     qs.set("offset", String(params.startRow));
     if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-    if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
     const j = await api<{ models: ModelRow[]; total: number; totals?: GridTotals }>("GET", `/api/admin/usage-breakdown/models?${qs}`);
     if (j.totals && scope === statsQuery()) setModelsTotals(j.totals);
     return { rows: j.models, total: j.total };
@@ -208,14 +206,14 @@ export default function AdminStatsPage() {
   };
 
   return (
-    <div>
+    <div aria-busy={stats.loading || breakdownCounts.loading}>
       <PageTitle
         title="Global overview"
         subtitle="Explore usage across users, keys and providers"
       />
       <AnalyticsToolbar filters={filters} />
 
-      <Show when={stats() && !stats.loading}>
+      <Show when={stats()}>
         <div
           class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6 gap-4 mb-5"
           {...usalItems("fade-u", 90)}
@@ -295,7 +293,7 @@ export default function AdminStatsPage() {
               subtitle={`By category · ${filters.label()}`}
             />
             <Show
-              when={!breakdownCounts.loading}
+              when={breakdownCounts() !== undefined}
               fallback={<div class="p-5 text-xs text-ink-500">Loading…</div>}
             >
               <Show
@@ -308,6 +306,7 @@ export default function AdminStatsPage() {
               >
                 <div class="p-2">
                   <UsageGrid
+                    filterable={false}
                     columnDefs={userCols}
                     datasource={usersDatasource}
                     cacheBlockSize={100}
@@ -327,7 +326,7 @@ export default function AdminStatsPage() {
               subtitle={`Model × provider breakdown · ${filters.label()}`}
             />
             <Show
-              when={!breakdownCounts.loading}
+              when={breakdownCounts() !== undefined}
               fallback={<div class="p-5 text-xs text-ink-500">Loading…</div>}
             >
               <Show
@@ -340,6 +339,7 @@ export default function AdminStatsPage() {
               >
                 <div class="p-2">
                   <UsageGrid
+                    filterable={false}
                     columnDefs={modelCols}
                     datasource={modelsDatasource}
                     cacheBlockSize={100}

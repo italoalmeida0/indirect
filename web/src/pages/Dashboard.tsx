@@ -186,16 +186,16 @@ export default function DashboardPage() {
   });
 
   return (
-    <div>
+    <div aria-busy={series.loading}>
       <PageTitle
         title="Overview"
         subtitle={todayStr}
       />
       <AnalyticsToolbar filters={filters} />
 
-      {/* Gate on the resource: CountUp mounts once with final values — a
-          late series() update would hit a text node USAL already replaced. */}
-      <Show when={!series.loading}>
+      {/* Keep the previous window visible while refreshing. The keyed resource
+          mounts CountUp with resolved values so USAL always owns fresh nodes. */}
+      <Show when={series() !== undefined}>
         <Show when={series()} keyed>
           {(_series) => (
           <div
