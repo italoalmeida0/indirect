@@ -4,6 +4,14 @@ const DAY = 86_400_000;
 const dateFormat = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 const monthFormat = new Intl.DateTimeFormat("en", { month: "short", year: "numeric", timeZone: "UTC" });
 const monthName = new Intl.DateTimeFormat("en", { month: "short", timeZone: "UTC" });
+const weekName = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" });
+
+interface ActivityPanel {
+  columns: number;
+  rowLabels: string[];
+  columnLabels: { column: number; label: string }[];
+  cells: ActivityCell[];
+}
 
 export interface ActivityCell {
   key: string;
@@ -30,7 +38,7 @@ function monthIndex(time: number): number {
 function monthTime(index: number): number { return Date.UTC(Math.floor(index / 12), index % 12, 1); }
 
 /** Reuse the bounded analytics series. Never infer daily traffic from monthly rollups. */
-export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope) {
+export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope, columnBudget = 26) {
   const monthly = scope.unit === "month";
   const counts = new Map<number, number>();
   for (const point of points) {
@@ -50,7 +58,7 @@ export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope)
   const cells: ActivityCell[] = [];
   const columnLabels: { column: number; label: string }[] = [];
   const rowLabels: string[] = monthly ? [] : ["Mon", "", "Wed", "", "Fri", "", ""];
-  let columns = monthly ? 12 : 53;
+  let columns = monthly ? 12 : 1;
   if (valid) {
     if (monthly) {
       const firstYear = Math.floor(start / 12);
@@ -65,7 +73,7 @@ export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope)
         }
       }
     } else {
-      const firstWeek = Math.min(monday(start), monday(end) - 52 * 7 * DAY);
+      const firstWeek = monday(start);
       const lastDay = monday(end) + 6 * DAY;
       columns = Math.round((lastDay - firstWeek + DAY) / (7 * DAY));
       let lastMonth = -1;
@@ -92,8 +100,37 @@ export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope)
   }
   const total = selected.reduce((sum, cell) => sum + cell.count!, 0);
   const peak = selected.reduce<ActivityCell | null>((best, cell) => !best || cell.count! >= best.count! ? cell : best, null);
+  const short = !monthly && columns <= 4;
+  const panels: ActivityPanel[] = [];
+  const maxColumns = Math.max(7, Math.min(52, Math.floor(columnBudget) || 26));
+  if (cells.length && short) {
+    const firstWeek = monday(start);
+    panels.push({
+      columns: 7,
+      rowLabels: Array.from({ length: columns }, (_, week) => weekName.format(firstWeek + week * 7 * DAY)),
+      columnLabels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label, column) => ({ column, label })),
+      cells: cells.map((cell) => ({ ...cell, column: cell.row, row: cell.column })),
+    });
+  } else if (cells.length) {
+    const size = monthly ? maxColumns >= 12 ? 12 : 6 : maxColumns;
+    for (let offset = 0; offset < columns; offset += size) {
+      const panelColumns = Math.min(size, columns - offset);
+      const panelCells = cells.filter((cell) => cell.column >= offset && cell.column < offset + size).map((cell) => ({ ...cell, column: cell.column - offset }));
+      const labels = monthly
+        ? columnLabels.filter((entry) => entry.column >= offset && entry.column < offset + size).map((entry) => ({ ...entry, column: entry.column - offset }))
+        : columnLabels.filter((entry) => entry.column >= offset && entry.column < offset + panelColumns - 1).map((entry) => ({ ...entry, column: entry.column - offset }));
+      if (!monthly && labels[0]?.column !== 0) {
+        const date = Date.parse(`${panelCells[0]!.key}T00:00:00Z`);
+        labels.unshift({ column: 0, label: monthFormat.format(date) });
+      }
+      for (let index = labels.length - 2; !monthly && index >= 0; index--) {
+        if (labels[index + 1]!.column - labels[index]!.column < 3) labels.splice(index, 1);
+      }
+      panels.push({ columns: panelColumns, cells: panelCells, columnLabels: labels, rowLabels });
+    }
+  }
   return {
-    monthly, cells, columns, rowLabels, columnLabels, total,
+    monthly, short, panels, cells, columns, rowLabels, columnLabels, total,
     active: positive.length, periods: selected.length,
     average: selected.length ? total / selected.length : 0,
     peak: peak?.count ? peak : null,

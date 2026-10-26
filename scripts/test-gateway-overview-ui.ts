@@ -81,7 +81,10 @@ try {
     await page.getByRole("button", { name: new RegExp(`${name}$`) }).click();
     await settled();
   };
-  const fits = async (label: string) => assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${label} causes page overflow`);
+  const fits = async (label: string) => {
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${label} causes page overflow`);
+    assert(await page.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth + 1), `${label} requires horizontal heatmap scrolling`);
+  };
   const cells = () => page.locator("button.activity-cell");
   const counts = () => cells().evaluateAll((buttons: HTMLButtonElement[]) => buttons.reduce((sum, button) => sum + Number(button.dataset.count), 0));
   const capture = async (name: string) => {
@@ -120,6 +123,13 @@ try {
   const total = points.reduce((sum, row) => sum + row.in_tok + row.cache_tok + row.out_tok, 0);
   assert.equal(Number((await page.locator(".overview-tokens [title]").first().getAttribute("title")).replaceAll(",", "")), total, "Token headline does not include all three buckets");
   assert.match(await page.locator(".activity-cache-rate").innerText(), /88.1%/);
+  assert.equal(await page.locator(".activity-panels .activity-cell").count(), 21, "Two weeks still contain unused yearly context");
+  for (const width of [1440, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 1100 });
+    await fits(`Two weeks at ${width}px`);
+    await capture(`two-weeks-${width}.png`);
+  }
+  await page.setViewportSize({ width: 1440, height: 1100 });
   const last = cells().last();
   await last.focus();
   await page.getByRole("tooltip").waitFor();
@@ -127,7 +137,7 @@ try {
   const scrollBeforeKeys = await page.evaluate(() => scrollY);
   await page.keyboard.press("ArrowLeft");
   const focusedKey = await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.date);
-  assert.equal(Date.parse(latestKey) - Date.parse(focusedKey), 7 * 86_400_000, "Calendar keyboard navigation is not weekly");
+  assert.equal(Date.parse(latestKey) - Date.parse(focusedKey), 86_400_000, "Short calendar keyboard navigation is not daily");
   await page.keyboard.press("Home");
   assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.date), await cells().first().getAttribute("data-date"));
   await page.keyboard.press("End");
@@ -144,8 +154,6 @@ try {
     await page.setViewportSize({ width, height: 1100 });
     await fits(`${width}px`);
     await capture(`responsive-${width}.png`);
-    const frame = await page.locator(".activity-scroll").evaluate((element: HTMLElement) => ({ left: element.scrollLeft, max: element.scrollWidth - element.clientWidth }));
-    assert(Math.abs(frame.left - frame.max) < 2, "The latest activity is hidden after resizing");
     await cells().last().click();
     assert.equal(await cells().last().getAttribute("aria-pressed"), "true");
     await page.mouse.move(0, 0);
@@ -174,6 +182,7 @@ try {
   assert.equal(await page.locator(".request-activity.is-monthly").count(), 1);
   assert(await cells().count() >= 120 && await cells().count() < 140);
   assert((await cells().first().getAttribute("data-date"))!.length === 7, "Monthly counts were fabricated into daily cells");
+  await fits("Monthly history");
   await page.evaluate(() => document.documentElement.dataset.theme = "dark");
   await capture("monthly.png");
   const oldKeys = await cells().evaluateAll((buttons: HTMLButtonElement[]) => buttons.map((button) => button.dataset.date));
@@ -206,7 +215,15 @@ try {
   assert.equal(await mobile.locator("button.activity-cell").last().getAttribute("aria-pressed"), "true");
   assert(await mobile.locator(".activity-readout").innerText(), "Touch did not show activity details");
   assert(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Touch layout causes page overflow");
+  assert(await mobile.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth + 1), "Touch heatmap requires horizontal scrolling");
   await mobile.screenshot({ path: path.join(output, "phone-touch.png") });
+  await mobile.getByRole("button", { name: /^Time range:/ }).click();
+  await mobile.getByRole("button", { name: /All time$/ }).click();
+  await mobile.locator(".request-activity.is-monthly").waitFor();
+  assert(await mobile.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth + 1), "Monthly touch heatmap requires horizontal scrolling");
+  assert.equal(await mobile.locator(".activity-board").count(), 2, "Narrow monthly history did not reflow");
+  await mobile.locator(".request-activity").scrollIntoViewIfNeeded();
+  await mobile.screenshot({ path: path.join(output, "monthly-touch.png") });
   await mobile.close();
   assert(reads.every((url) => url.pathname.endsWith("filter-options") || url.pathname === "/api/usage/daily" || url.pathname === "/api/usage/overview" || url.pathname === "/api/keys"), "Overview introduced an extra analytics endpoint");
   assert.deepEqual(errors, [], "Browser runtime errors");

@@ -6,6 +6,42 @@ const point = (date: string, reqs: number): DailyPoint => ({ date, reqs, in_tok:
 const time = (date: string) => Date.parse(date);
 
 describe("overview request activity", () => {
+  test("two weeks render only their calendar weeks instead of a padded year", () => {
+    const view = buildRequestActivity([], { from: time("2026-10-12T10:00Z"), to: time("2026-10-26T10:00Z"), unit: "day" });
+    expect(view.columns).toBe(3);
+    expect(view.cells).toHaveLength(21);
+    expect(view.periods).toBe(15);
+    expect(view.short).toBe(true);
+    expect(view.panels).toHaveLength(1);
+    expect(view.panels[0]!.columns).toBe(7);
+    expect(view.panels[0]!.rowLabels).toHaveLength(3);
+    expect(view.panels[0]!.cells.find((cell) => cell.key === "2026-10-26")).toMatchObject({ column: 0, row: 2 });
+  });
+
+  test("narrow layouts wrap every selected day without dropping or duplicating traffic", () => {
+    const from = time("2025-01-01T00:00Z");
+    const series = Array.from({ length: 365 }, (_, index) => point(new Date(from + index * 86_400_000).toISOString().slice(0, 10), index));
+    const view = buildRequestActivity(series, { from, to: time("2026-01-01T00:00Z"), unit: "day" }, 10);
+    const cells = view.panels.flatMap((panel) => panel.cells).filter((cell) => cell.count !== null);
+    expect(view.short).toBe(false);
+    expect(view.panels.length).toBeGreaterThan(1);
+    expect(view.panels.every((panel) => panel.columns <= 10 && panel.rowLabels.length === 7)).toBe(true);
+    expect(cells).toHaveLength(365);
+    expect(new Set(cells.map((cell) => cell.key)).size).toBe(365);
+    expect(cells.reduce((sum, cell) => sum + cell.count!, 0)).toBe(view.total);
+  });
+
+  test("monthly history splits into half-year panels on narrow screens", () => {
+    const series = Array.from({ length: 120 }, (_, month) => point(new Date(Date.UTC(2016, month, 1)).toISOString().slice(0, 10), month));
+    const view = buildRequestActivity(series, { from: null, to: time("2026-01-01T00:00Z"), unit: "month" }, 7);
+    expect(view.panels).toHaveLength(2);
+    expect(view.panels.every((panel) => panel.columns === 6)).toBe(true);
+    const cells = view.panels.flatMap((panel) => panel.cells);
+    expect(cells).toHaveLength(120);
+    expect(new Set(cells.map((cell) => cell.key)).size).toBe(120);
+    expect(cells.reduce((sum, cell) => sum + (cell.count ?? 0), 0)).toBe(view.total);
+  });
+
   test("folds minute and hour buckets into UTC days without losing requests", () => {
     const view = buildRequestActivity([
       point("2026-10-25 23:00 UTC", 13), point("2026-10-25 23:59 UTC", 2), point("2026-10-26 00:00 UTC", 7),

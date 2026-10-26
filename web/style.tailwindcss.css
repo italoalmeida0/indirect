@@ -1001,14 +1001,21 @@ html.mobile * {
 .top-models-empty { display: flex; min-height: 250px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; color: var(--ink-500); }
 .top-models-empty > strong { font-size: 12px; font-weight: 500; color: var(--ink-300); }
 .top-models-empty > span { max-width: 220px; font-size: 11px; line-height: 1.7; }
-.request-activity { min-width: 0; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
+.overview-requests { display: flex; flex-direction: column; container-type: inline-size; }
+.request-activity { display: flex; flex: 1; flex-direction: column; min-width: 0; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); }
 .activity-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--ink-500); }
 .activity-heading > span:first-child { color: var(--ink-300); font-weight: 500; }
 .activity-utc { margin-left: 5px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 4px; font-size: 8px; font-weight: 400; color: var(--ink-500); }
-.activity-scroll { max-height: 300px; overflow: auto; overscroll-behavior: contain; margin-top: 16px; padding: 3px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-.activity-board { display: grid; grid-template-columns: 30px repeat(var(--activity-columns), minmax(12px, 1fr)); grid-template-rows: 18px repeat(var(--activity-rows), auto); align-items: center; gap: 4px; min-width: calc(34px + var(--activity-columns) * 17px); }
-.overview-requests .request-activity:not(.is-monthly) .activity-board { grid-template-columns: 30px repeat(var(--activity-columns), minmax(10px, 1fr)); gap: 3px; min-width: calc(33px + var(--activity-columns) * 13px); }
-.activity-column-label { grid-row: 1; align-self: start; white-space: nowrap; font-size: 10px; line-height: 14px; color: var(--ink-500); }
+.activity-scroll { max-height: 300px; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; margin-top: 16px; padding: 3px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.activity-panels { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.activity-board { --activity-label-width: 30px; display: grid; grid-template-columns: var(--activity-label-width) repeat(var(--activity-columns), minmax(0, 1fr)); grid-template-rows: 18px repeat(var(--activity-rows), auto); align-items: center; gap: 4px; width: 100%; max-width: calc(34px + var(--activity-columns) * 24px); }
+.is-short .activity-board { --activity-label-width: 42px; max-width: 380px; margin-inline: auto; gap: 6px; }
+.is-short .activity-scroll { max-height: none; }
+.is-short .activity-column-label { text-align: center; }
+.is-short .activity-row-label { font-size: 10px; }
+.activity-cell-date { display: grid; place-items: center; width: 100%; height: 100%; font-size: 11px; font-weight: 500; color: var(--ink-100); }
+.activity-level-3 .activity-cell-date, .activity-level-4 .activity-cell-date { color: var(--accent-fg); }
+.activity-column-label { grid-row: 1; align-self: start; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; line-height: 14px; color: var(--ink-500); }
 .activity-row-label { position: sticky; left: -3px; z-index: 1; grid-column: 1; display: flex; align-items: center; align-self: stretch; background: var(--card); font-size: 9px; color: var(--ink-500); }
 .activity-cell { display: block; min-width: 0; width: 100%; aspect-ratio: 1; border: 1px solid color-mix(in srgb, var(--line) 75%, transparent); border-radius: 3px; background: var(--elev); transition: border-color .12s ease, box-shadow .12s ease; }
 button.activity-cell { cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -1019,7 +1026,7 @@ button.activity-cell { cursor: pointer; -webkit-tap-highlight-color: transparent
 .activity-level-4 { background: var(--chart-brand); border-color: var(--chart-brand); }
 button.activity-cell:hover, .activity-cell.is-selected { border-color: var(--ink-200); box-shadow: 0 0 0 1px var(--card), 0 0 0 2px var(--ink-400); }
 .activity-cell:focus-visible { outline: 2px solid var(--ink-200); outline-offset: 2px; }
-.activity-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 14px; font-size: 10px; color: var(--ink-500); }
+.activity-footer { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 14px; margin-bottom: 22px; font-size: 11px; color: var(--ink-500); }
 .activity-readout { min-height: 15px; }
 .activity-readout strong { color: var(--ink-200); font-weight: 500; }
 .activity-outside-note { color: var(--ink-600); }
@@ -1027,15 +1034,19 @@ button.activity-cell:hover, .activity-cell.is-selected { border-color: var(--ink
 .activity-legend > .activity-cell { width: 11px; height: 11px; border-radius: 2px; }
 .activity-legend > span:first-child { margin-right: 3px; }
 .activity-legend > span:last-child { margin-left: 3px; }
-.activity-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
-.activity-summary > div { display: flex; flex-direction: column; gap: 6px; }
-.activity-summary > div > span { font-size: 10px; color: var(--ink-500); }
-.activity-summary strong { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; font-size: 16px; font-weight: 500; color: var(--ink-100); font-variant-numeric: tabular-nums; }
-.activity-summary small { font-size: 10px; font-weight: 400; color: var(--ink-500); }
+.activity-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px 16px; margin-top: auto; min-height: 104px; padding: 22px 0 4px; border-top: 1px solid var(--line); }
+.activity-summary > div { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.activity-summary > div > span { font-size: 11px; color: var(--ink-500); }
+.activity-summary strong { display: flex; flex-wrap: wrap; align-items: baseline; gap: 5px; font-size: 23px; line-height: 1.15; font-weight: 500; letter-spacing: -.025em; color: var(--ink-100); font-variant-numeric: tabular-nums; }
+.activity-summary small { font-size: 11px; line-height: 1.5; letter-spacing: 0; font-weight: 400; color: var(--ink-500); }
+.activity-peak-date { flex-basis: 100%; }
+@container (max-width: 420px) {
+  .activity-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .activity-tooltip { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--elev); box-shadow: var(--shadow-floating); font-size: 11px; pointer-events: none; }
 .activity-tooltip strong { color: var(--ink-100); font-weight: 500; }
 .activity-tooltip > span { font-size: 10px; color: var(--ink-400); }
-.is-monthly .activity-board { grid-template-rows: 18px repeat(var(--activity-rows), 24px); min-width: 600px; }
+.is-monthly .activity-board { grid-template-rows: 18px repeat(var(--activity-rows), 24px); max-width: none; }
 .is-monthly .activity-board::before { content: ''; position: sticky; top: -3px; z-index: 2; grid-column: 1 / -1; grid-row: 1; height: 24px; align-self: start; background: var(--card); }
 .is-monthly .activity-column-label { position: sticky; top: -3px; z-index: 3; height: 24px; padding-top: 3px; background: var(--card); }
 .is-monthly .activity-cell { aspect-ratio: auto; height: 24px; }
@@ -1045,10 +1056,6 @@ button.activity-cell:hover, .activity-cell.is-selected { border-color: var(--ink
   .activity-heading > span:last-child { font-size: 10px; }
   .activity-outside-note { display: block; margin-top: 3px; }
   .activity-summary { grid-template-columns: 1fr 1fr; gap: 14px; }
-}
-@media (pointer: coarse) {
-  .activity-board { min-width: calc(34px + var(--activity-columns) * 22px); }
-  .overview-requests .request-activity:not(.is-monthly) .activity-board { min-width: calc(33px + var(--activity-columns) * 22px); }
 }
 @media (prefers-reduced-motion: reduce) {
   .spend-line { animation: none; }

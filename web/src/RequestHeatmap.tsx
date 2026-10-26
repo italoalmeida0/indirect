@@ -18,7 +18,8 @@ function ActivityTooltip(props: { cell: ActivityCell; anchor: HTMLButtonElement;
 }
 
 export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivityScope; cacheHitRate: number | null }) {
-  const model = createMemo(() => buildRequestActivity(props.series, props.scope));
+  const [columnBudget, setColumnBudget] = createSignal(20);
+  const model = createMemo(() => buildRequestActivity(props.series, props.scope, columnBudget()));
   const [active, setActive] = createSignal<{ cell: ActivityCell; anchor: HTMLButtonElement } | null>(null);
   const [selected, setSelected] = createSignal<ActivityCell | null>(null);
   const [focusKey, setFocusKey] = createSignal("");
@@ -35,6 +36,7 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
     if (event.key === "Escape") { setActive(null); setSelected(null); return; }
     const movement: Record<string, number> = model().monthly
       ? { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -12, ArrowDown: 12 }
+      : model().short ? { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }
       : { ArrowLeft: -7, ArrowRight: 7, ArrowUp: -1, ArrowDown: 1 };
     const offset = movement[event.key];
     if (offset === undefined && event.key !== "Home" && event.key !== "End") return;
@@ -49,51 +51,49 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
     if (button) {
       const bounds = button.getBoundingClientRect();
       const viewport = scroll.getBoundingClientRect();
-      if (bounds.left < viewport.left + 5) scroll.scrollLeft += bounds.left - viewport.left - 5;
-      if (bounds.right > viewport.right - 5) scroll.scrollLeft += bounds.right - viewport.right + 5;
       if (bounds.top < viewport.top + 30) scroll.scrollTop += bounds.top - viewport.top - 30;
       if (bounds.bottom > viewport.bottom - 5) scroll.scrollTop += bounds.bottom - viewport.bottom + 5;
     }
   };
   onMount(() => {
-    let previousMax = 0;
     let previousBottom = 0;
+    let frame = 0;
     const resize = () => {
-      const atEnd = scroll.scrollLeft >= previousMax - 2;
       const atBottom = scroll.scrollTop >= previousBottom - 2;
-      previousMax = scroll.scrollWidth - scroll.clientWidth;
-      previousBottom = scroll.scrollHeight - scroll.clientHeight;
-      if (atEnd) scroll.scrollLeft = previousMax;
-      if (atBottom) scroll.scrollTop = previousBottom;
+      const cellWidth = window.matchMedia("(pointer: coarse)").matches ? 24 : 20;
+      const next = Math.max(7, Math.min(26, Math.floor((scroll.clientWidth - 38) / (cellWidth + 4))));
+      const focused = !model().short && next !== columnBudget() && board.contains(document.activeElement) ? focusKey() : null;
+      // Short calendars always have seven weekday columns. Resizing them only
+      // changes CSS dimensions, preserving their focused and hovered cells.
+      if (!model().short && next !== columnBudget()) { setActive(null); setColumnBudget(next); }
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        previousBottom = scroll.scrollHeight - scroll.clientHeight;
+        if (atBottom) scroll.scrollTop = previousBottom;
+        if (focused) board.querySelector<HTMLButtonElement>(`[data-date="${focused}"]`)?.focus({ preventScroll: true });
+      });
     };
     const observer = new ResizeObserver(resize);
     observer.observe(scroll);
-    const frame = requestAnimationFrame(() => {
-      scroll.scrollLeft = scroll.scrollWidth; scroll.scrollTop = scroll.scrollHeight;
-      previousMax = scroll.scrollWidth - scroll.clientWidth;
-      previousBottom = scroll.scrollHeight - scroll.clientHeight;
-    });
+    resize();
     onCleanup(() => { observer.disconnect(); cancelAnimationFrame(frame); });
   });
 
-  return <div class={`request-activity ${model().monthly ? "is-monthly" : ""}`}>
+  return <div class={`request-activity ${model().monthly ? "is-monthly" : ""} ${model().short ? "is-short" : ""}`}>
     <div class="activity-heading">
       <span>{model().monthly ? "Monthly" : "Daily"} activity <span class="activity-utc">UTC</span></span>
       <span>{model().first === model().last ? model().first : `${model().first ?? ""} – ${model().last ?? ""}`}</span>
     </div>
     <p id={`${id}-hint`} class="sr-only">Request activity by {noun()}. Use arrow keys to explore, Home for the first {noun()}, or End for the last. Muted cells are outside the selected range.</p>
     <div ref={scroll} class="activity-scroll" onPointerLeave={() => setActive(null)}>
-      <div
-        ref={board}
-        role="group"
-        aria-label="Request activity calendar"
-        aria-describedby={`${id}-hint`}
-        class="activity-board"
-        style={{ "--activity-columns": model().columns, "--activity-rows": model().monthly ? Math.max(1, model().rowLabels.length) : 7 }}
-      >
-        <For each={model().columnLabels}>{(entry) => <span class="activity-column-label" style={{ "grid-column": entry.column + 2 }}>{entry.label}</span>}</For>
-        <For each={model().rowLabels}>{(label, row) => <span class="activity-row-label" style={{ "grid-row": row() + 2 }}>{label}</span>}</For>
-        <For each={model().cells}>{(cell) => <Show
+      <div ref={board} role="group" aria-label="Request activity calendar" aria-describedby={`${id}-hint`} class="activity-panels">
+        <For each={model().panels}>{(panel) => <div
+          class="activity-board"
+          style={{ "--activity-columns": panel.columns, "--activity-rows": panel.rowLabels.length }}
+        >
+        <For each={panel.columnLabels}>{(entry) => <span class="activity-column-label" title={entry.label} style={{ "grid-column": `${entry.column + 2} / span ${model().short || model().monthly ? 1 : Math.min(3, panel.columns - entry.column)}` }}>{entry.label}</span>}</For>
+        <For each={panel.rowLabels}>{(label, row) => <span class="activity-row-label" style={{ "grid-row": row() + 2 }}>{label}</span>}</For>
+        <For each={panel.cells}>{(cell) => <Show
           when={cell.count !== null}
           fallback={<span aria-hidden="true" class="activity-cell is-outside" style={{ "grid-column": cell.column + 2, "grid-row": cell.row + 2 }} />}
         >
@@ -113,8 +113,9 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
             onBlur={() => setActive(null)}
             onKeyDown={(event) => handleKey(event, cell)}
             onClick={(event) => { setSelected(cell); showCell(cell, event.currentTarget); }}
-          />
+          ><Show when={model().short}><span aria-hidden="true" class="activity-cell-date">{Number(cell.key.slice(-2))}</span></Show></button>
         </Show>}</For>
+        </div>}</For>
       </div>
     </div>
     <div class="activity-footer">
@@ -130,7 +131,7 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
     <div class="activity-summary">
       <div><span>Active {noun()}s</span><strong>{fmtNum(model().active)} <small>/ {fmtNum(model().periods)}</small></strong></div>
       <div><span>{model().monthly ? "Monthly" : "Daily"} average</span><strong>{fmtNum(Math.round(model().average))}<small> requests</small></strong></div>
-      <div><span>Busiest {noun()}</span><strong>{model().peak ? fmtNum(model().peak!.count!) : "—"}<small>{model().peak ? ` · ${model().peak!.label}` : "No requests in this period"}</small></strong></div>
+      <div><span>Busiest {noun()}</span><strong>{model().peak ? fmtNum(model().peak!.count!) : "—"}<small class="activity-peak-date">{model().peak ? model().peak!.label : "No requests in this period"}</small></strong></div>
       <div class="activity-cache-rate" title="Cached input tokens divided by cached and uncached input tokens"><span>Cache hit rate</span><strong>{props.cacheHitRate === null ? "—" : `${props.cacheHitRate.toLocaleString("en", { maximumFractionDigits: 1 })}%`}<Show when={props.cacheHitRate === null}><small>No input tokens</small></Show></strong></div>
     </div>
     <Show when={active()} keyed>{(item) => <Portal><ActivityTooltip cell={item.cell} anchor={item.anchor} id={`${id}-tooltip`} /></Portal>}</Show>
