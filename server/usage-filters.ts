@@ -170,6 +170,31 @@ function buildUsageSeries(scope: UsageScope, userId: string | null) {
   return { series: points, granularity: monthly ? "month" : unit === DAY ? "day" : unit === 60_000 ? "minute" : "hour" };
 }
 
+/** Rank public models across keys/protocols, retaining the busiest route for
+ * attribution. The same segmented rollups preserve exact partial-day bounds. */
+export function filteredTopModels(scope: UsageScope, userId: string) {
+  return cachedUsageQuery("top-models", scope, userId, () => {
+    const source = usageSource(scope, userId);
+    return db.prepare<{
+      model: string; model_name: string; reqs: number; provider_id: string;
+      provider_name: string | null; upstream_model: string; route_count: number;
+    }, Array<string | number>>(`WITH routes AS (
+      SELECT s.model, s.provider_id, s.upstream_model, SUM(s.reqs) AS reqs
+      FROM ${source.sql} s GROUP BY s.model, s.provider_id, s.upstream_model
+      HAVING SUM(s.reqs) > 0
+    ), ranked AS (
+      SELECT *, SUM(reqs) OVER (PARTITION BY model) AS model_reqs,
+        COUNT(*) OVER (PARTITION BY model) AS route_count,
+        ROW_NUMBER() OVER (PARTITION BY model ORDER BY reqs DESC, provider_id, upstream_model) AS route_rank
+      FROM routes
+    )
+    SELECT r.model, COALESCE(NULLIF(m.name, ''), r.model) AS model_name,
+      r.model_reqs AS reqs, r.provider_id, p.name AS provider_name, r.upstream_model, r.route_count
+    FROM ranked r LEFT JOIN providers p ON p.id = r.provider_id LEFT JOIN models m ON m.id = r.model
+    WHERE r.route_rank = 1 ORDER BY r.model_reqs DESC, r.model LIMIT 5`).all(...source.params);
+  });
+}
+
 export function filteredUsageBreakdown(scope: UsageScope, userId: string | null, grid: ReturnType<typeof parseGridQuery>, users = false, summaryOnly = false) {
   const source = usageSource(scope, userId);
   const cols: Record<string, ColSpec> = {};

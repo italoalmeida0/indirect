@@ -31,7 +31,7 @@ try {
   let empty = false;
   let hold = false;
   const pending = new Set<() => void>();
-  const datasets = new Map<string, { date: string; reqs: number }[]>();
+  const datasets = new Map<string, { date: string; reqs: number; in_tok: number; cache_tok: number; out_tok: number }[]>();
   page.on("pageerror", (error: Error) => errors.push(String(error)));
   const authenticate = () => {
     localStorage.setItem("cache_code_session", JSON.stringify({ accessToken: "ui-test", refreshToken: "ui-test", user: { id: "user", name: "Alex Morgan", email: "alex@example.com", role: "admin", status: "active" } }));
@@ -46,7 +46,7 @@ try {
       data = url.searchParams.has("field")
         ? { field: "model", options: [{ value: "model/test", label: "Production model", count: 440 }], total: 1, offset: 0, limit: 60 }
         : { categories: [{ id: "model", label: "Model", icon: "lucide:box" }], selection: JSON.parse(url.searchParams.get("selection") ?? "{}"), selectedOptions: {} };
-    } else if (url.pathname === "/api/usage/daily") {
+    } else if ((url.pathname === "/api/usage/daily" || url.pathname === "/api/usage/overview")) {
       if (hold) await new Promise<void>((resolve) => pending.add(resolve));
       const to = Number(url.searchParams.get("to"));
       const from = url.searchParams.get("from") === "all" ? Date.UTC(2016, 0, 1) : Number(url.searchParams.get("from"));
@@ -65,7 +65,12 @@ try {
         time = granularity === "month" ? Date.UTC(new Date(time).getUTCFullYear(), new Date(time).getUTCMonth() + 1, 1) : time + step;
       }
       datasets.set(url.search, series);
-      data = { series, granularity };
+      const totalRequests = series.reduce((sum, point) => sum + point.reqs, 0);
+      const names = ["Claude Sonnet 4.5", "GPT-5", "Gemini 2.5 Pro", "Kimi K2", "DeepSeek V3.2"];
+      let models = totalRequests ? names.map((name, index) => ({ model: index === 0 ? "model/test" : `model/${index}`, model_name: name, reqs: Math.floor(totalRequests * [.38, .25, .16, .1, .06][index]!), provider_id: "primary", provider_name: "Primary", upstream_model: `upstream/${name.toLowerCase().replaceAll(" ", "-")}`, route_count: index === 0 ? 2 : 1 })) : [];
+      if (duration <= 3 * 86_400_000) models = models.slice(0, 2);
+      if (Object.keys(JSON.parse(url.searchParams.get("selection") ?? "{}")).length) models = models.slice(0, 1);
+      data = { series, granularity, models };
     } else if (url.pathname === "/api/keys") data = { keys: [{ id: "production", status: "active" }] };
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ success: true, ...data }) }).catch(() => {});
   };
@@ -95,11 +100,22 @@ try {
   const tokens = await page.locator(".overview-tokens").boundingBox();
   const requests = await page.locator(".overview-requests").boundingBox();
   assert(Math.abs(spend.y - tokens.y) < 1 && requests.y > spend.y + spend.height, "Requests is not below both charts");
-  assert(Math.abs(requests.width - (spend.width + tokens.width + 20)) < 2, "Requests does not span the chart row");
+  const topModels = await page.locator(".overview-top-models").boundingBox();
+  assert(topModels.x >= requests.x + requests.width && Math.abs(topModels.y - requests.y) < 1, "Top models is not to the right of Requests");
+  assert(Math.abs(requests.width + topModels.width + 20 - (spend.width + tokens.width + 20)) < 2, "Activity row does not span both charts");
+  assert.equal(await page.getByText("Active keys", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("Avg/req", { exact: true }).count(), 0);
+  assert.equal(await page.locator(".top-model-row").count(), 5);
+  assert.match(await page.locator(".top-model-route").first().innerText(), /by Primary.*upstream\//);
+  assert(await page.locator(".overview-requests .activity-cache-rate").innerText(), "Cache rate is outside Requests");
   const align = await page.locator(".analytics-toolbar").evaluate((toolbar: HTMLElement) => ({ right: toolbar.getBoundingClientRect().right, controlsRight: toolbar.querySelector(".analytics-controls")!.getBoundingClientRect().right }));
   assert(Math.abs(align.right - align.controlsRight) < 1, "Filters are not aligned right");
-  const primary = reads.find((url) => url.pathname === "/api/usage/daily")!;
+  const primary = reads.find((url) => url.pathname === "/api/usage/overview")!;
   assert.equal(await counts(), datasets.get(primary.search)!.reduce((sum, row) => sum + row.reqs, 0));
+  const points = datasets.get(primary.search)!;
+  const total = points.reduce((sum, row) => sum + row.in_tok + row.cache_tok + row.out_tok, 0);
+  assert.equal(Number((await page.locator(".overview-tokens [title]").first().getAttribute("title")).replaceAll(",", "")), total, "Token headline does not include all three buckets");
+  assert.match(await page.locator(".activity-cache-rate").innerText(), /88.1%/);
   const last = cells().last();
   await last.focus();
   await page.getByRole("tooltip").waitFor();
@@ -142,6 +158,7 @@ try {
   console.log("[overview-ui] Checking hourly, empty, monthly and pending scopes");
   await period("Past 24 hours");
   assert(await cells().count() <= 2);
+  assert.equal(await page.locator(".top-model-row").count(), 2, "Top models ignored the selected range");
   await page.getByRole("button", { name: /^Time range:/ }).click();
   await page.getByRole("button", { name: "Custom range…", exact: true }).click();
   await page.getByLabel("Start date and time").fill("2026-10-26T10:00");
@@ -171,6 +188,8 @@ try {
   assert.equal(await counts(), 0);
   assert.equal(await page.locator("button.activity-cell:not(.activity-level-0)").count(), 0);
   assert(await page.getByText("No requests in this period", { exact: true }).isVisible());
+  assert.equal(await page.locator(".top-model-row").count(), 0);
+  assert.match(await page.locator(".activity-cache-rate").innerText(), /No input tokens/);
   await fits("Empty state");
   await capture("empty.png");
   empty = false;
@@ -185,7 +204,7 @@ try {
   assert(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Touch layout causes page overflow");
   await mobile.screenshot({ path: path.join(output, "phone-touch.png") });
   await mobile.close();
-  assert(reads.every((url) => url.pathname.endsWith("filter-options") || url.pathname === "/api/usage/daily" || url.pathname === "/api/keys"), "Overview introduced an extra analytics endpoint");
+  assert(reads.every((url) => url.pathname.endsWith("filter-options") || url.pathname === "/api/usage/daily" || url.pathname === "/api/usage/overview" || url.pathname === "/api/keys"), "Overview introduced an extra analytics endpoint");
   assert.deepEqual(errors, [], "Browser runtime errors");
   console.log(`Overview UI passed: three spend lines, token bars, request heatmap, date scopes, keyboard, responsive layouts, themes, reduced motion, monthly and empty data. Screenshots: ${output}`);
 } catch (error) {

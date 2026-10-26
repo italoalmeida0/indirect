@@ -6,11 +6,12 @@ import {
 } from "solid-js";
 
 import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
-import { api, type ApiKeyDto, type DailyPoint } from "../api";
+import { api, type ApiKeyDto, type DailyPoint, type TopModelDto } from "../api";
 import { PageTitle, navigate } from "../index";
 import { DailyChart } from "../charts";
 import { rangeUnit } from "../analytics-range";
 import { RequestHeatmap } from "../RequestHeatmap";
+import { TopModelsCard } from "../OverviewInsights";
 import type { ActivityScope } from "../overview-activity";
 import { usal, usalItems } from "../motion";
 import {
@@ -35,7 +36,6 @@ function deltaPct(current: DailyPoint[], previous: DailyPoint[], pick: (d: Daily
 function HeroHeader(props: {
   icon: string;
   count?: number;
-  countLabel?: string;
   cost?: number;
   label: string;
   delta: number | null;
@@ -49,7 +49,6 @@ function HeroHeader(props: {
           title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
         >
           {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
-          <Show when={props.countLabel}><span class="ml-2 text-xs font-normal tracking-normal text-ink-500">{props.countLabel}</span></Show>
         </div>
       </div>
       <div class="flex items-center gap-2 shrink-0">
@@ -103,9 +102,9 @@ export default function DashboardPage() {
   const [series] = createResource(filters.query, async (query) => {
     const params = new URLSearchParams(query);
     const range = { preset: "custom", from: params.get("from") === "all" ? null : Number(params.get("from")), to: Number(params.get("to")) };
-    const j = await api<{ series: DailyPoint[]; granularity?: ActivityScope["unit"] }>("GET", `/api/usage/daily?${query}`);
+    const j = await api<{ series: DailyPoint[]; granularity: ActivityScope["unit"]; models: TopModelDto[] }>("GET", `/api/usage/overview?${query}`);
     // Keep counts and their resolved scope together while the next window loads.
-    return { points: j.series, scope: { from: range.from, to: range.to, unit: j.granularity ?? rangeUnit(range) } };
+    return { points: j.series, models: j.models, scope: { from: range.from, to: range.to, unit: j.granularity ?? rangeUnit(range) } };
   });
   const [previous] = createResource(filters.query, async (query) => {
     const params = new URLSearchParams(query);
@@ -123,7 +122,7 @@ export default function DashboardPage() {
   });
   const view = () => series()?.points ?? [];
   const comparison = () => previous.loading ? [] : previous() ?? [];
-  // Three separate buckets — never one lumped "total tokens" number.
+  // Keep the three buckets visible alongside the requested combined headline.
   const winIn = createMemo(() =>
     view().reduce((s, d) => s + (d.in_tok ?? 0), 0),
   );
@@ -157,6 +156,10 @@ export default function DashboardPage() {
   const outDelta = createMemo(() =>
     deltaPct(view(), comparison(), (d) => d.out_tok ?? 0),
   );
+  const tokensDelta = createMemo(() =>
+    deltaPct(view(), comparison(), (d) => (d.in_tok ?? 0) + (d.cache_tok ?? 0) + (d.out_tok ?? 0)),
+  );
+  const cacheHitRate = createMemo(() => winIn() + winCache() > 0 ? winCache() / (winIn() + winCache()) * 100 : null);
   const reqDelta = createMemo(() =>
     deltaPct(view(), comparison(), (d) => d.reqs ?? 0),
   );
@@ -180,9 +183,6 @@ export default function DashboardPage() {
       used: ks.reduce((s, k) => s + (k.outputTotal ?? 0), 0),
     };
   });
-  const activeKeys = createMemo(
-    () => (keys() ?? []).filter((k) => k.status === "active").length,
-  );
 
   const todayStr = new Date().toLocaleDateString(undefined, {
     weekday: "long",
@@ -254,10 +254,9 @@ export default function DashboardPage() {
               <div>
                 <HeroHeader
                   icon={Icons.chart}
-                  count={winOut()}
-                  countLabel="output"
+                  count={winIn() + winCache() + winOut()}
                   label={`Tokens · ${filters.label()}`}
-                  delta={outDelta()}
+                  delta={tokensDelta()}
                 />
                 <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
                   <BucketStat
@@ -294,18 +293,13 @@ export default function DashboardPage() {
               </div>
             </Card>
 
-            <Card class="overview-requests p-5 min-w-0 md:col-span-2">
-              <div class="activity-card-header">
-                <div class="activity-card-total">
-                  <HeroHeader icon={Icons.bolt} count={winReqs()} label={`Requests · ${filters.label()}`} delta={reqDelta()} />
-                </div>
-                <div class="activity-card-meta">
-                  <span><Icon name={Icons.key} size={13} /><span>Active keys</span><strong>{activeKeys()}</strong></span>
-                  <span><span>Avg/req</span><strong>{winReqs() > 0 ? fmtCost(winCost() / winReqs()) : "$0.00"}</strong></span>
-                </div>
-              </div>
-              <RequestHeatmap series={view()} scope={series()!.scope} />
-            </Card>
+            <div class="overview-activity-row">
+              <Card class="overview-requests p-5 min-w-0">
+                <HeroHeader icon={Icons.bolt} count={winReqs()} label={`Requests · ${filters.label()}`} delta={reqDelta()} />
+                <RequestHeatmap series={view()} scope={series()!.scope} cacheHitRate={cacheHitRate()} />
+              </Card>
+              <TopModelsCard models={series()!.models} requests={winReqs()} label={filters.label()} />
+            </div>
           </div>
           )}
         </Show>

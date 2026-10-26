@@ -92,7 +92,7 @@ try {
         data = { categories: domain.map(({ options: _, ...category }) => category), selection, selectedOptions };
       }
     }
-    else if (url.pathname === "/api/usage/daily") data = { series };
+    else if (url.pathname === "/api/usage/daily" || url.pathname === "/api/usage/overview") data = { series, models: [] };
     else if (url.pathname === "/api/admin/stats") data = { series, counts: { users: 8, keys: 12, activeKeys: 9, providers: 3 } };
     else if (url.pathname === "/api/keys") data = { keys: [] };
     else if (url.pathname === "/api/usage/breakdown") data = { rows: [row], total: 1, totals };

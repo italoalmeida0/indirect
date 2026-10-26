@@ -1,13 +1,14 @@
 import { parentPort } from "node:worker_threads";
 import { ApiError } from "./http";
-import { filteredUsageBreakdown, filteredUsageSeries, usageFilterOptions } from "./usage-filters";
+import { filteredTopModels, filteredUsageBreakdown, filteredUsageSeries, usageFilterOptions } from "./usage-filters";
 import { userEvents } from "./usage";
 import { db } from "./db";
 import type { UsageReadRequest } from "./usage-reader";
 
 parentPort!.on("message", ({ id, request: r }: { id: number; request: UsageReadRequest }) => {
   try {
-    const result = db.transaction(() => r.kind === "series" ? filteredUsageSeries(r.scope, r.userId)
+    const result = db.transaction(() => r.kind === "overview" ? { ...filteredUsageSeries(r.scope, r.userId), models: filteredTopModels(r.scope, r.userId) }
+      : r.kind === "series" ? filteredUsageSeries(r.scope, r.userId)
       : r.kind === "facets" ? usageFilterOptions(r.userId, r.scope, new URLSearchParams(r.search))
       : r.kind === "events" ? userEvents(r.userId, { ...r.opts, scope: r.scope })
       : filteredUsageBreakdown(r.scope, r.userId, r.grid, r.users, r.summaryOnly))();

@@ -828,6 +828,79 @@ describe("gateway end-to-end", () => {
     }
   });
 
+  test("overview ranks distinct models within the exact scope and preserves historical routes", async () => {
+    expect((await api("/api/usage/overview")).status).toBe(401);
+    const fixture = new Database(path.join(dataDir, "gateway.db"));
+    const user = fixture.query("SELECT id FROM users WHERE email = ?").get(userEmail) as { id: string };
+    const key = fixture.query("SELECT id FROM api_keys WHERE user_id = ? LIMIT 1").get(user.id) as { id: string };
+    const provider = fixture.query("SELECT id, name FROM providers LIMIT 1").get() as { id: string; name: string };
+    const prefix = "overview-fixture/";
+    const models = ["a", "b", "c", "d", "e", "f"].map((name) => prefix + name);
+    const secondary = "overview-fixture/deleted-provider";
+    const from = Date.parse("2024-01-01T12:00:00Z");
+    const to = Date.parse("2024-03-02T12:00:00Z");
+    const daily = fixture.query(`INSERT INTO usage_model_provider_daily
+      (key_id, user_id, date, proto, provider_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const add = (model: string, date: string, reqs: number, upstream = "primary/a", pid = provider.id, proto = "openai", kid = key.id, uid = user.id) => daily.run(kid, uid, date, proto, pid, model, upstream, reqs * 10, reqs * 20, reqs * 30, reqs);
+    const raw = fixture.query(`INSERT INTO usage_events (key_id, user_id, ts, proto, provider_id, model, upstream_model, in_tok, cache_tok, out_tok)
+      VALUES (?, ?, ?, 'openai', ?, ?, ?, 10, 20, 30)`);
+    const params = new URLSearchParams({ from: String(from), to: String(to), selection: JSON.stringify({ model: { include: models, exclude: [] } }) });
+    try {
+      fixture.run("INSERT INTO models (id, upstream_model, name, created_at, updated_at) VALUES (?, '', 'Overview Alpha', 0, 0)", [models[0]!]);
+      add(models[0]!, "2024-01-01", 1);
+      add(models[0]!, "2024-01-02", 6);
+      add(models[0]!, "2024-01-02", 5, "primary/a", provider.id, "openai", "overview-fixture/second-key");
+      add(models[0]!, "2024-01-03", 4, "primary/a", provider.id, "anthropic");
+      add(models[0]!, "2024-02-07", 9, "secondary/a", secondary);
+      add(models[0]!, "2024-03-02", 1, "secondary/a", secondary);
+      add(models[1]!, "2024-01-02", 22);
+      add(models[2]!, "2024-02-07", 15);
+      add(models[3]!, "2024-03-01", 8);
+      add(models[4]!, "2024-01-04", 5);
+      add(models[5]!, "2024-01-05", 5);
+      add(models[1]!, "2024-01-02", 1000, "foreign/model", provider.id, "openai", "overview-fixture/foreign-key", "overview-fixture/foreign-user");
+      raw.run(key.id, user.id, from, provider.id, models[0]!, "primary/a");
+      raw.run(key.id, user.id, to - 1, secondary, models[0]!, "secondary/a");
+      raw.run(key.id, user.id, from - 1, provider.id, prefix + "before", "before");
+      raw.run(key.id, user.id, to, provider.id, prefix + "after", "after");
+      fixture.run(`INSERT INTO usage_model_provider_monthly
+        SELECT key_id, user_id, substr(date,1,7), proto, provider_id, provider_key_id, model, upstream_model,
+          SUM(in_tok), SUM(cache_tok), SUM(out_tok), SUM(reqs)
+        FROM usage_model_provider_daily WHERE model LIKE 'overview-fixture/%'
+        GROUP BY key_id, user_id, substr(date,1,7), proto, provider_id, provider_key_id, model, upstream_model`);
+      const result = await api(`/api/usage/overview?${params}`, { token: userToken });
+      expect(result.status).toBe(200);
+      expect(result.json.models.map((model: any) => [model.model, model.reqs])).toEqual(models.slice(0, 5).map((model, index) => [model, [26, 22, 15, 8, 5][index]]));
+      expect(result.json.models[0]).toMatchObject({ model_name: "Overview Alpha", provider_name: provider.name, upstream_model: "primary/a", route_count: 2 });
+      expect(result.json.series.reduce((sum: number, point: any) => sum + point.reqs, 0)).toBe(81);
+      expect(JSON.stringify(result.json)).not.toContain(UPSTREAM_KEY);
+      expect(JSON.stringify(result.json)).not.toContain(gatewayKey);
+      expect(JSON.stringify(result.json)).not.toContain("foreign");
+      const selected = new URLSearchParams(params);
+      selected.set("selection", JSON.stringify({ model: { include: models, exclude: [] }, provider_id: { include: [secondary], exclude: [] } }));
+      const route = await api(`/api/usage/overview?${selected}`, { token: userToken });
+      expect(route.json.models).toHaveLength(1);
+      expect(route.json.models[0]).toMatchObject({ model: models[0], reqs: 10, provider_id: secondary, provider_name: null, upstream_model: "secondary/a", route_count: 1 });
+      selected.set("selection", JSON.stringify({ model: { include: [models[4], models[5]], exclude: [models[4]] } }));
+      expect((await api(`/api/usage/overview?${selected}`, { token: userToken })).json.models.map((model: any) => model.model)).toEqual([models[5]]);
+      selected.set("selection", JSON.stringify({ model: { include: [prefix + "before", prefix + "after"], exclude: [] } }));
+      expect((await api(`/api/usage/overview?${selected}`, { token: userToken })).json.models).toEqual([]);
+      fixture.run("DELETE FROM usage_events WHERE model LIKE 'overview-fixture/%'");
+      fixture.run("DELETE FROM usage_model_provider_daily WHERE model LIKE 'overview-fixture/%' AND date >= '2024-02-01' AND date < '2024-03-01'");
+      params.set("from", "all"); params.set("to", String(Date.parse("2024-03-01T00:00:00Z")));
+      const archived = await api(`/api/usage/overview?${params}`, { token: userToken });
+      expect(archived.json.models[0].reqs).toBe(25);
+      expect(archived.json.series.reduce((sum: number, point: any) => sum + point.reqs, 0)).toBe(72);
+      expect((await api("/api/usage/overview?from=NaN&to=1", { token: userToken })).status).toBe(400);
+      expect((await api(`/api/usage/overview?from=0&to=1&selection=${encodeURIComponent('{"user_id":{"include":["other"]}}')}`, { token: userToken })).status).toBe(400);
+    } finally {
+      for (const table of ["usage_events", "usage_model_provider_daily", "usage_model_provider_monthly"]) fixture.run(`DELETE FROM ${table} WHERE model LIKE 'overview-fixture/%'`);
+      fixture.run("DELETE FROM models WHERE id = ?", [models[0]!]);
+      fixture.close();
+    }
+  });
+
   test("analytics rejects malformed ranges and unknown or excessive filters", async () => {
     const base = new URLSearchParams({ from: String(Date.now() - 60_000), to: String(Date.now()) });
     for (const selection of ["not-json", "[]", JSON.stringify({ unknown: { include: ["x"] } }), JSON.stringify({ user_id: { include: ["x"] } }), JSON.stringify({ model: { include: [123] } }), JSON.stringify({ model: { include: Array.from({ length: 251 }, (_, i) => String(i)) } })]) {

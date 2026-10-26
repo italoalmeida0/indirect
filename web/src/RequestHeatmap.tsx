@@ -17,7 +17,7 @@ function ActivityTooltip(props: { cell: ActivityCell; anchor: HTMLButtonElement;
   </div>;
 }
 
-export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivityScope }) {
+export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivityScope; cacheHitRate: number | null }) {
   const model = createMemo(() => buildRequestActivity(props.series, props.scope));
   const [active, setActive] = createSignal<{ cell: ActivityCell; anchor: HTMLButtonElement } | null>(null);
   const [selected, setSelected] = createSignal<ActivityCell | null>(null);
@@ -131,6 +131,7 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
       <div><span>Active {noun()}s</span><strong>{fmtNum(model().active)} <small>/ {fmtNum(model().periods)}</small></strong></div>
       <div><span>{model().monthly ? "Monthly" : "Daily"} average</span><strong>{fmtNum(Math.round(model().average))}<small> requests</small></strong></div>
       <div><span>Busiest {noun()}</span><strong>{model().peak ? fmtNum(model().peak!.count!) : "—"}<small>{model().peak ? ` · ${model().peak!.label}` : "No requests in this period"}</small></strong></div>
+      <div class="activity-cache-rate" title="Cached input tokens divided by cached and uncached input tokens"><span>Cache hit rate</span><strong>{props.cacheHitRate === null ? "—" : `${props.cacheHitRate.toLocaleString("en", { maximumFractionDigits: 1 })}%`}<Show when={props.cacheHitRate === null}><small>No input tokens</small></Show></strong></div>
     </div>
     <Show when={active()} keyed>{(item) => <Portal><ActivityTooltip cell={item.cell} anchor={item.anchor} id={`${id}-tooltip`} /></Portal>}</Show>
   </div>;

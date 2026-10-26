@@ -9,6 +9,11 @@ import { readUsage } from "../usage-reader";
 
 /** /api/usage — the authenticated user's own consumption data. */
 export async function handleUsageRoute(path: string, req: Request, url: URL): Promise<Response | null> {
+  if (path === "/api/usage/overview" && req.method === "GET") {
+    const ctx = await requireAuth(req);
+    const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
+    return ok(await readUsage({ kind: "overview", scope, userId: ctx.user.id }), req);
+  }
   if (path === "/api/usage/filter-options" && req.method === "GET") {
     const ctx = await requireAuth(req);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };

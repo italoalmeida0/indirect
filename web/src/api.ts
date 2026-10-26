@@ -196,6 +196,17 @@ export interface DailyPoint {
   label?: string;
 }
 
+export interface TopModelDto {
+  model: string;
+  model_name: string;
+  reqs: number;
+  provider_id: string;
+  provider_name: string | null;
+  upstream_model: string;
+  /** Distinct provider/upstream routes; the displayed route has the most requests. */
+  route_count: number;
+}
+
 export type AuthStyle = "bearer" | "x-api-key";
 
 /** One upstream key of a provider (failover order). The key material itself

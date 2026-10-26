@@ -176,7 +176,8 @@ frontend + daemon. Run checks from the appropriate project root.
 - `server/usage.ts`: rollups drive breakdown queries, not raw events. OpenAI
   prompt tokens INCLUDE cached tokens; Anthropic input tokens do not. Estimate
   only all-zero upstream usage when content crosses the wire; never replace
-  nonzero upstream figures. No summed "total tokens" display.
+  nonzero upstream figures. Keep input/cache/output separate; the Overview
+  headline also shows their sum, as explicitly requested.
 - Model registry (`server/models.ts`): `passthrough` forwards names; `router`
   rejects unknown/disabled (404) and orphaned/unavailable (503), rewrites model
   per target, records public ids. Mutations invalidate `routerSnapshot()`.
