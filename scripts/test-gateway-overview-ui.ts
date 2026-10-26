@@ -66,7 +66,7 @@ try {
       }
       datasets.set(url.search, series);
       const totalRequests = series.reduce((sum, point) => sum + point.reqs, 0);
-      const names = ["Claude Sonnet 4.5", "GPT-5", "Gemini 2.5 Pro"];
+      const names = ["Claude Sonnet 4.5", "GPT-5", "Gemini 2.5 Pro", "Kimi K2", "DeepSeek V3.2"];
       let models = totalRequests ? names.map((name, index) => ({ model: index === 0 ? "model/test" : `model/${index}`, model_name: name, reqs: Math.floor(totalRequests * [.38, .25, .16, .1, .06][index]!), provider_id: "primary", provider_name: "Primary", upstream_model: `upstream/${name.toLowerCase().replaceAll(" ", "-")}`, route_count: index === 0 ? 2 : 1 })) : [];
       if (duration <= 3 * 86_400_000) models = models.slice(0, 2);
       if (Object.keys(JSON.parse(url.searchParams.get("selection") ?? "{}")).length) models = models.slice(0, 1);
@@ -102,11 +102,13 @@ try {
   assert(Math.abs(spend.y - tokens.y) < 1 && requests.y > spend.y + spend.height, "Requests is not below both charts");
   const topModels = await page.locator(".overview-top-models").boundingBox();
   assert(topModels.x >= requests.x + requests.width && Math.abs(topModels.y - requests.y) < 1, "Top models is not to the right of Requests");
+  assert(Math.abs(requests.width - topModels.width) < 1, "Requests and models do not occupy equal halves");
   assert(Math.abs(requests.width + topModels.width + 20 - (spend.width + tokens.width + 20)) < 2, "Activity row does not span both charts");
   assert.equal(await page.getByText("Active keys", { exact: true }).count(), 0);
   assert.equal(await page.getByText("Avg/req", { exact: true }).count(), 0);
-  assert.equal(await page.locator(".top-model-row").count(), 3);
-  assert(await page.getByRole("heading", { name: "Top 3 models", exact: true }).isVisible());
+  assert.equal(await page.locator(".top-model-row").count(), 5);
+  assert(await page.getByRole("heading", { name: "Top 5 models", exact: true }).isVisible());
+  assert.equal(await page.locator(".analytics-timezone").count(), 0, "Timezone element still exists");
   assert(!/GMT|UTC/.test(await page.locator(".analytics-controls").innerText()), "Timezone still appears outside the filters");
   assert.match(await page.locator(".top-model-route").first().innerText(), /by Primary.*upstream\//);
   assert(await page.locator(".overview-requests .activity-cache-rate").innerText(), "Cache rate is outside Requests");

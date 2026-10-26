@@ -871,7 +871,7 @@ describe("gateway end-to-end", () => {
         GROUP BY key_id, user_id, substr(date,1,7), proto, provider_id, provider_key_id, model, upstream_model`);
       const result = await api(`/api/usage/overview?${params}`, { token: userToken });
       expect(result.status).toBe(200);
-      expect(result.json.models.map((model: any) => [model.model, model.reqs])).toEqual(models.slice(0, 3).map((model, index) => [model, [26, 22, 15][index]]));
+      expect(result.json.models.map((model: any) => [model.model, model.reqs])).toEqual(models.slice(0, 5).map((model, index) => [model, [26, 22, 15, 8, 5][index]]));
       expect(result.json.models[0]).toMatchObject({ model_name: "Overview Alpha", provider_name: provider.name, upstream_model: "primary/a", route_count: 2 });
       expect(result.json.series.reduce((sum: number, point: any) => sum + point.reqs, 0)).toBe(81);
       expect(JSON.stringify(result.json)).not.toContain(UPSTREAM_KEY);

@@ -308,13 +308,12 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
 
   return <div class={`analytics-toolbar ${props.align === "end" ? "analytics-toolbar-end" : ""}`} aria-label="Analytics filters">
     <div class="analytics-controls">
-      <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label="Filter usage" aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
-        <Icon name="lucide:list-filter" size={16} /><span>Filter</span><Show when={count()}><span class="analytics-filter-count">{count()}</span></Show>
+      <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label="Filter usage" aria-busy={props.loading || f.pending()} aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
+        <Icon name={props.loading || f.pending() ? Icons.refresh : "lucide:list-filter"} size={16} class={props.loading || f.pending() ? "animate-spin motion-reduce:animate-none" : ""} /><span>Filter</span><Show when={count()}><span class="analytics-filter-count">{count()}</span></Show>
       </button>
       <button ref={periodButton} type="button" class={`analytics-control analytics-period-trigger ${open() === "period" ? "is-active" : ""}`} title={exactRange()} aria-label={`Time range: ${f.label()}`} aria-haspopup="dialog" aria-expanded={open() === "period"} aria-controls={`${id}-period`} onClick={() => { if (open() === "period") close(); else { setCustom(false); setOpen("period"); } }}>
         <Icon name="lucide:calendar-days" size={15} /><span class="analytics-range-name">{f.label()}</span><span class="analytics-range-dates">{periodText()}</span><Icon name={Icons.chevronDown} size={13} class="text-ink-500" />
       </button>
-      <span class="analytics-timezone" role="status" style={{ width: "16px", height: "16px", padding: "0" }}><Show when={props.loading || f.pending()}><Icon name={Icons.refresh} size={12} class="animate-spin motion-reduce:animate-none" /><span class="sr-only">Updating…</span></Show></span>
     </div>
     <Show when={chips().length}>
       <div class="analytics-chips" aria-live="polite">

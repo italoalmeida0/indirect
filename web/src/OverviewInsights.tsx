@@ -9,7 +9,7 @@ export function TopModelsCard(props: { models: TopModelDto[]; requests: number; 
   const share = (model: TopModelDto) => props.requests > 0 ? Math.min(100, model.reqs / props.requests * 100) : 0;
   return <Card class="overview-top-models p-5 min-w-0">
     <div class="overview-insight-heading">
-      <div><h2>Top 3 models</h2><p>By requests · {props.label}</p></div>
+      <div><h2>Top 5 models</h2><p>By requests · {props.label}</p></div>
       <Icon name="lucide:layers-2" size={17} class="text-ink-500" />
     </div>
     <Show when={props.models.length} fallback={<div class="top-models-empty"><Icon name="lucide:box" size={25} /><strong>No model activity</strong><span>Models used in this period will appear here.</span></div>}>
