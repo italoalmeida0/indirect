@@ -18,8 +18,7 @@ function ActivityTooltip(props: { cell: ActivityCell; anchor: HTMLButtonElement;
 }
 
 export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivityScope; cacheHitRate: number | null }) {
-  const [columnBudget, setColumnBudget] = createSignal(20);
-  const model = createMemo(() => buildRequestActivity(props.series, props.scope, columnBudget()));
+  const model = createMemo(() => buildRequestActivity(props.series, props.scope));
   const [active, setActive] = createSignal<{ cell: ActivityCell; anchor: HTMLButtonElement } | null>(null);
   const [selected, setSelected] = createSignal<ActivityCell | null>(null);
   const [focusKey, setFocusKey] = createSignal("");
@@ -51,31 +50,25 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
     if (button) {
       const bounds = button.getBoundingClientRect();
       const viewport = scroll.getBoundingClientRect();
-      if (bounds.top < viewport.top + 30) scroll.scrollTop += bounds.top - viewport.top - 30;
+      const inset = Number.parseFloat(getComputedStyle(board).getPropertyValue("--activity-label-width")) + 8;
+      if (bounds.left < viewport.left + inset) scroll.scrollLeft += bounds.left - viewport.left - inset;
+      if (bounds.right > viewport.right - 5) scroll.scrollLeft += bounds.right - viewport.right + 5;
+      if (bounds.top < viewport.top + 24) scroll.scrollTop += bounds.top - viewport.top - 24;
       if (bounds.bottom > viewport.bottom - 5) scroll.scrollTop += bounds.bottom - viewport.bottom + 5;
+      if (event.key === "Home") scroll.scrollLeft = 0;
+      if (event.key === "End") scroll.scrollLeft = scroll.scrollWidth;
     }
   };
   onMount(() => {
-    let previousBottom = 0;
-    let frame = 0;
+    let previousEnd = 0;
     const resize = () => {
-      const atBottom = scroll.scrollTop >= previousBottom - 2;
-      const cellWidth = window.matchMedia("(pointer: coarse)").matches ? 24 : 20;
-      const next = Math.max(7, Math.min(26, Math.floor((scroll.clientWidth - 38) / (cellWidth + 4))));
-      const focused = !model().short && next !== columnBudget() && board.contains(document.activeElement) ? focusKey() : null;
-      // Short calendars always have seven weekday columns. Resizing them only
-      // changes CSS dimensions, preserving their focused and hovered cells.
-      if (!model().short && next !== columnBudget()) { setActive(null); setColumnBudget(next); }
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        previousBottom = scroll.scrollHeight - scroll.clientHeight;
-        if (atBottom) scroll.scrollTop = previousBottom;
-        if (focused) board.querySelector<HTMLButtonElement>(`[data-date="${focused}"]`)?.focus({ preventScroll: true });
-      });
+      const atEnd = scroll.scrollLeft >= previousEnd - 2;
+      previousEnd = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
+      if (atEnd) scroll.scrollLeft = previousEnd;
     };
     const observer = new ResizeObserver(resize);
     observer.observe(scroll);
-    resize();
+    const frame = requestAnimationFrame(resize);
     onCleanup(() => { observer.disconnect(); cancelAnimationFrame(frame); });
   });
 
@@ -86,14 +79,14 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
     </div>
     <p id={`${id}-hint`} class="sr-only">Request activity by {noun()}. Use arrow keys to explore, Home for the first {noun()}, or End for the last. Muted cells are outside the selected range.</p>
     <div ref={scroll} class="activity-scroll" onPointerLeave={() => setActive(null)}>
-      <div ref={board} role="group" aria-label="Request activity calendar" aria-describedby={`${id}-hint`} class="activity-panels">
-        <For each={model().panels}>{(panel) => <div
-          class="activity-board"
-          style={{ "--activity-columns": panel.columns, "--activity-rows": panel.rowLabels.length }}
-        >
-        <For each={panel.columnLabels}>{(entry) => <span class="activity-column-label" title={entry.label} style={{ "grid-column": `${entry.column + 2} / span ${model().short || model().monthly ? 1 : Math.min(3, panel.columns - entry.column)}` }}>{entry.label}</span>}</For>
-        <For each={panel.rowLabels}>{(label, row) => <span class="activity-row-label" style={{ "grid-row": row() + 2 }}>{label}</span>}</For>
-        <For each={panel.cells}>{(cell) => <Show
+      <div
+        ref={board} role="group" aria-label="Request activity calendar" aria-describedby={`${id}-hint`}
+        class="activity-board"
+        style={{ "--activity-columns": model().calendar.columns, "--activity-rows": model().calendar.rowLabels.length }}
+      >
+        <For each={model().calendar.columnLabels}>{(entry) => <span class="activity-column-label" title={entry.label} style={{ "grid-column": `${entry.column + 2} / span ${model().short || model().monthly ? 1 : Math.min(3, model().calendar.columns - entry.column)}` }}>{entry.label}</span>}</For>
+        <For each={model().calendar.rowLabels}>{(label, row) => <span class="activity-row-label" style={{ "grid-row": row() + 2 }}>{label}</span>}</For>
+        <For each={model().calendar.cells}>{(cell) => <Show
           when={cell.count !== null}
           fallback={<span aria-hidden="true" class="activity-cell is-outside" style={{ "grid-column": cell.column + 2, "grid-row": cell.row + 2 }} />}
         >
@@ -115,7 +108,6 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
             onClick={(event) => { setSelected(cell); showCell(cell, event.currentTarget); }}
           ><Show when={model().short}><span aria-hidden="true" class="activity-cell-date">{Number(cell.key.slice(-2))}</span></Show></button>
         </Show>}</For>
-        </div>}</For>
       </div>
     </div>
     <div class="activity-footer">

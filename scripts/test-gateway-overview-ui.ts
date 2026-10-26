@@ -84,6 +84,7 @@ try {
   const fits = async (label: string) => {
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${label} causes page overflow`);
     assert(await page.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth + 1), `${label} requires horizontal heatmap scrolling`);
+    assert.equal(await page.locator(".activity-board").count(), 1, `${label} splits the heatmap into blocks`);
   };
   const cells = () => page.locator("button.activity-cell");
   const counts = () => cells().evaluateAll((buttons: HTMLButtonElement[]) => buttons.reduce((sum, button) => sum + Number(button.dataset.count), 0));
@@ -123,7 +124,7 @@ try {
   const total = points.reduce((sum, row) => sum + row.in_tok + row.cache_tok + row.out_tok, 0);
   assert.equal(Number((await page.locator(".overview-tokens [title]").first().getAttribute("title")).replaceAll(",", "")), total, "Token headline does not include all three buckets");
   assert.match(await page.locator(".activity-cache-rate").innerText(), /88.1%/);
-  assert.equal(await page.locator(".activity-panels .activity-cell").count(), 21, "Two weeks still contain unused yearly context");
+  assert.equal(await page.locator(".activity-board .activity-cell").count(), 21, "Two weeks still contain unused yearly context");
   for (const width of [1440, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 1100 });
     await fits(`Two weeks at ${width}px`);
@@ -149,6 +150,9 @@ try {
 
   await period("Past year");
   assert(await cells().count() >= 365 && await cells().count() <= 367);
+  assert.equal(await cells().evaluateAll((buttons: HTMLButtonElement[]) => new Set(buttons.map((button) => button.style.gridRow)).size), 7, "The year no longer has seven continuous weekday rows");
+  assert(await page.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollHeight <= element.clientHeight + 1), "The year does not fit vertically");
+  await fits("Full year");
   await capture("desktop-dark.png");
   for (const width of [1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 1100 });
@@ -218,10 +222,21 @@ try {
   assert(await mobile.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth + 1), "Touch heatmap requires horizontal scrolling");
   await mobile.screenshot({ path: path.join(output, "phone-touch.png") });
   await mobile.getByRole("button", { name: /^Time range:/ }).click();
+  await mobile.getByRole("button", { name: /Past year$/ }).click();
+  await mobile.locator(".request-activity:not(.is-short)").waitFor();
+  assert.equal(await mobile.locator(".activity-board").count(), 1);
+  assert(await mobile.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollHeight <= element.clientHeight + 1 && getComputedStyle(element).scrollbarWidth === "none"), "Touch year has vertical scrolling or a visible scrollbar");
+  assert.equal(await mobile.locator("button.activity-cell").evaluateAll((buttons: HTMLButtonElement[]) => new Set(buttons.map((button) => button.style.gridRow)).size), 7);
+  await mobile.locator("button.activity-cell").last().focus();
+  await mobile.keyboard.press("Home");
+  assert(await mobile.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollLeft < 2), "The first date cannot be reached horizontally");
+  await mobile.keyboard.press("End");
+  await mobile.screenshot({ path: path.join(output, "year-touch.png") });
+  await mobile.getByRole("button", { name: /^Time range:/ }).click();
   await mobile.getByRole("button", { name: /All time$/ }).click();
   await mobile.locator(".request-activity.is-monthly").waitFor();
-  assert(await mobile.locator(".activity-scroll").evaluate((element: HTMLElement) => element.scrollWidth <= element.clientWidth + 1), "Monthly touch heatmap requires horizontal scrolling");
-  assert.equal(await mobile.locator(".activity-board").count(), 2, "Narrow monthly history did not reflow");
+  assert(await mobile.locator(".activity-scroll").evaluate((element: HTMLElement) => getComputedStyle(element).overflowY === "auto" && getComputedStyle(element).scrollbarWidth === "none"), "Monthly history does not permit internal scrolling with hidden bars");
+  assert.equal(await mobile.locator(".activity-board").count(), 1, "Monthly history is split into blocks");
   await mobile.locator(".request-activity").scrollIntoViewIfNeeded();
   await mobile.screenshot({ path: path.join(output, "monthly-touch.png") });
   await mobile.close();

@@ -6,7 +6,7 @@ const monthFormat = new Intl.DateTimeFormat("en", { month: "short", year: "numer
 const monthName = new Intl.DateTimeFormat("en", { month: "short", timeZone: "UTC" });
 const weekName = new Intl.DateTimeFormat("en", { month: "short", day: "numeric", timeZone: "UTC" });
 
-interface ActivityPanel {
+interface ActivityCalendar {
   columns: number;
   rowLabels: string[];
   columnLabels: { column: number; label: string }[];
@@ -38,7 +38,7 @@ function monthIndex(time: number): number {
 function monthTime(index: number): number { return Date.UTC(Math.floor(index / 12), index % 12, 1); }
 
 /** Reuse the bounded analytics series. Never infer daily traffic from monthly rollups. */
-export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope, columnBudget = 26) {
+export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope) {
   const monthly = scope.unit === "month";
   const counts = new Map<number, number>();
   for (const point of points) {
@@ -83,7 +83,7 @@ export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope,
         if (index % 7 === 0 && date.getUTCMonth() !== lastMonth) {
           lastMonth = date.getUTCMonth();
           // Leave room for the final month label instead of overflowing the grid.
-          if (column < columns - 1) columnLabels.push({ column, label: `${monthName.format(time)}${date.getUTCMonth() === 0 ? ` ${date.getUTCFullYear()}` : ""}` });
+          if (column < columns - 1) columnLabels.push({ column, label: monthName.format(time) });
         }
         cells.push({ key: date.toISOString().slice(0, 10), label: dateFormat.format(time), count: time >= start && time <= end ? counts.get(time) ?? 0 : null, level: 0, column, row: index % 7 });
       }
@@ -101,36 +101,15 @@ export function buildRequestActivity(points: DailyPoint[], scope: ActivityScope,
   const total = selected.reduce((sum, cell) => sum + cell.count!, 0);
   const peak = selected.reduce<ActivityCell | null>((best, cell) => !best || cell.count! >= best.count! ? cell : best, null);
   const short = !monthly && columns <= 4;
-  const panels: ActivityPanel[] = [];
-  const maxColumns = Math.max(7, Math.min(52, Math.floor(columnBudget) || 26));
-  if (cells.length && short) {
-    const firstWeek = monday(start);
-    panels.push({
-      columns: 7,
-      rowLabels: Array.from({ length: columns }, (_, week) => weekName.format(firstWeek + week * 7 * DAY)),
-      columnLabels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label, column) => ({ column, label })),
-      cells: cells.map((cell) => ({ ...cell, column: cell.row, row: cell.column })),
-    });
-  } else if (cells.length) {
-    const size = monthly ? maxColumns >= 12 ? 12 : 6 : maxColumns;
-    for (let offset = 0; offset < columns; offset += size) {
-      const panelColumns = Math.min(size, columns - offset);
-      const panelCells = cells.filter((cell) => cell.column >= offset && cell.column < offset + size).map((cell) => ({ ...cell, column: cell.column - offset }));
-      const labels = monthly
-        ? columnLabels.filter((entry) => entry.column >= offset && entry.column < offset + size).map((entry) => ({ ...entry, column: entry.column - offset }))
-        : columnLabels.filter((entry) => entry.column >= offset && entry.column < offset + panelColumns - 1).map((entry) => ({ ...entry, column: entry.column - offset }));
-      if (!monthly && labels[0]?.column !== 0) {
-        const date = Date.parse(`${panelCells[0]!.key}T00:00:00Z`);
-        labels.unshift({ column: 0, label: monthFormat.format(date) });
-      }
-      for (let index = labels.length - 2; !monthly && index >= 0; index--) {
-        if (labels[index + 1]!.column - labels[index]!.column < 3) labels.splice(index, 1);
-      }
-      panels.push({ columns: panelColumns, cells: panelCells, columnLabels: labels, rowLabels });
-    }
-  }
+  // A single continuous calendar: resize cells instead of wrapping weeks.
+  const calendar: ActivityCalendar = short && cells.length ? {
+    columns: 7,
+    rowLabels: Array.from({ length: columns }, (_, week) => weekName.format(monday(start) + week * 7 * DAY)),
+    columnLabels: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label, column) => ({ column, label })),
+    cells: cells.map((cell) => ({ ...cell, column: cell.row, row: cell.column })),
+  } : { columns, rowLabels, columnLabels, cells };
   return {
-    monthly, short, panels, cells, columns, rowLabels, columnLabels, total,
+    monthly, short, calendar, cells, columns, rowLabels, columnLabels, total,
     active: positive.length, periods: selected.length,
     average: selected.length ? total / selected.length : 0,
     peak: peak?.count ? peak : null,

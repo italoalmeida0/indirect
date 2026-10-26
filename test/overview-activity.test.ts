@@ -12,31 +12,32 @@ describe("overview request activity", () => {
     expect(view.cells).toHaveLength(21);
     expect(view.periods).toBe(15);
     expect(view.short).toBe(true);
-    expect(view.panels).toHaveLength(1);
-    expect(view.panels[0]!.columns).toBe(7);
-    expect(view.panels[0]!.rowLabels).toHaveLength(3);
-    expect(view.panels[0]!.cells.find((cell) => cell.key === "2026-10-26")).toMatchObject({ column: 0, row: 2 });
+    expect(view.calendar.columns).toBe(7);
+    expect(view.calendar.rowLabels).toHaveLength(3);
+    expect(view.calendar.cells.find((cell) => cell.key === "2026-10-26")).toMatchObject({ column: 0, row: 2 });
   });
 
-  test("narrow layouts wrap every selected day without dropping or duplicating traffic", () => {
+  test("a full year stays in one continuous calendar with seven weekday rows", () => {
     const from = time("2025-01-01T00:00Z");
     const series = Array.from({ length: 365 }, (_, index) => point(new Date(from + index * 86_400_000).toISOString().slice(0, 10), index));
-    const view = buildRequestActivity(series, { from, to: time("2026-01-01T00:00Z"), unit: "day" }, 10);
-    const cells = view.panels.flatMap((panel) => panel.cells).filter((cell) => cell.count !== null);
+    const view = buildRequestActivity(series, { from, to: time("2026-01-01T00:00Z"), unit: "day" });
+    const cells = view.calendar.cells.filter((cell) => cell.count !== null);
     expect(view.short).toBe(false);
-    expect(view.panels.length).toBeGreaterThan(1);
-    expect(view.panels.every((panel) => panel.columns <= 10 && panel.rowLabels.length === 7)).toBe(true);
+    expect(view.calendar.columns).toBe(53);
+    expect(view.calendar.rowLabels).toHaveLength(7);
+    expect(view.calendar.cells.every((cell) => cell.row < 7)).toBe(true);
+    expect(cells.find((cell) => cell.key === "2025-12-31")).toMatchObject({ column: 52, row: 2 });
     expect(cells).toHaveLength(365);
     expect(new Set(cells.map((cell) => cell.key)).size).toBe(365);
     expect(cells.reduce((sum, cell) => sum + cell.count!, 0)).toBe(view.total);
   });
 
-  test("monthly history splits into half-year panels on narrow screens", () => {
+  test("monthly history keeps one complete matrix without splitting months", () => {
     const series = Array.from({ length: 120 }, (_, month) => point(new Date(Date.UTC(2016, month, 1)).toISOString().slice(0, 10), month));
-    const view = buildRequestActivity(series, { from: null, to: time("2026-01-01T00:00Z"), unit: "month" }, 7);
-    expect(view.panels).toHaveLength(2);
-    expect(view.panels.every((panel) => panel.columns === 6)).toBe(true);
-    const cells = view.panels.flatMap((panel) => panel.cells);
+    const view = buildRequestActivity(series, { from: null, to: time("2026-01-01T00:00Z"), unit: "month" });
+    expect(view.calendar.columns).toBe(12);
+    expect(view.calendar.rowLabels).toHaveLength(10);
+    const cells = view.calendar.cells;
     expect(cells).toHaveLength(120);
     expect(new Set(cells.map((cell) => cell.key)).size).toBe(120);
     expect(cells.reduce((sum, cell) => sum + (cell.count ?? 0), 0)).toBe(view.total);
