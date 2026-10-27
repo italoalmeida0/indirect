@@ -1,8 +1,8 @@
-import { For, Show, batch, createEffect, createMemo, createResource, createSignal, onCleanup, type Accessor, type JSX } from "solid-js";
+import { Show, batch, createEffect, createMemo, createResource, createSignal, onCleanup, type Accessor, type JSX } from "solid-js";
 import { api } from "./api";
 import { AnalyticsToolbar, createAnalyticsFilters } from "./analytics-filters";
 import { serverDatasource } from "./aggrid";
-import { Icon, Icons, fmtNum } from "./ui";
+import { Icon, Icons, Select, fmtNum } from "./ui";
 
 type Sort = Array<{ colId: string; sort: string }>;
 interface SortOption { value: string; label: string }
@@ -98,15 +98,32 @@ export function createCatalog<T>(config: { path: string; result: string; label: 
 type CatalogView = ReturnType<typeof createCatalog<any>>;
 export function CatalogToolbar(props: { view: CatalogView; right?: JSX.Element }) {
   const view = props.view;
+  let searchInput!: HTMLInputElement;
   const selectedSort = () => view.sort()[0] ? `${view.sort()[0]!.colId}:${view.sort()[0]!.sort}` : "";
-  const customSort = () => selectedSort() && !view.config.sort.some((option) => option.value === selectedSort());
+  const sortOptions = createMemo(() => {
+    const current = view.sort()[0];
+    const custom = current && !view.config.sort.some((option) => option.value === selectedSort());
+    return [
+      { value: "", label: "Default order" },
+      ...(custom ? [{ value: selectedSort(), label: `${current.colId.replace(/_/g, " ").replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase())} · ${current.sort === "asc" ? "Ascending" : "Descending"}` }] : []),
+      ...view.config.sort,
+    ];
+  });
   return <div class="catalog-toolbar" aria-label={`${view.config.label} controls`}>
     <div class="catalog-tools">
-      <label class="catalog-search"><Icon name={Icons.search} size={16} /><input type="search" maxLength={200} value={view.search()} onInput={(event) => view.setSearch(event.currentTarget.value)} placeholder={`Search ${view.config.label.toLowerCase()}…`} aria-label={`Search ${view.config.label.toLowerCase()}`} /></label>
-      <label class="catalog-sort"><Icon name="lucide:arrow-down-wide-narrow" size={15} /><span class="sr-only">Sort {view.config.label.toLowerCase()}</span><select aria-label={`Sort ${view.config.label.toLowerCase()}`} value={selectedSort()} onChange={(event) => { const [colId, sort] = event.currentTarget.value.split(":"); view.setSort(colId && sort ? [{ colId, sort }] : []); }}><option value="">Default order</option><Show when={customSort()}><option value={selectedSort()}>{view.sort()[0]!.colId.replace(/([A-Z])/g, " $1")} · {view.sort()[0]!.sort === "asc" ? "Ascending" : "Descending"}</option></Show><For each={view.config.sort}>{(option) => <option value={option.value}>{option.label}</option>}</For></select></label>
+      <div class="catalog-search">
+        <Icon name={Icons.search} size={16} />
+        <input ref={searchInput} type="search" maxLength={200} value={view.search()} onInput={(event) => view.setSearch(event.currentTarget.value)} placeholder={`Search ${view.config.label.toLowerCase()}…`} aria-label={`Search ${view.config.label.toLowerCase()}`} />
+        <Show when={view.search()}><button type="button" class="analytics-icon-button" aria-label={`Clear ${view.config.label.toLowerCase()} search`} onClick={() => { view.setSearch(""); searchInput.focus({ preventScroll: true }); }}><Icon name={Icons.x} size={14} /></button></Show>
+      </div>
       {props.right}
     </div>
-    <AnalyticsToolbar filters={view.filters} label={view.config.label.toLowerCase()} dateLabel={view.config.result === "entries" ? undefined : "Created"} loading={view.loading()} align="end" />
+    <AnalyticsToolbar filters={view.filters} label={view.config.label.toLowerCase()} dateLabel={view.config.result === "entries" ? undefined : "Created"} loading={view.loading()} align="end"
+      leadingControl={<Select variant="toolbar" ariaLabel={`Sort ${view.config.label.toLowerCase()}`} menuTitle="Sort order"
+        icon={view.sort()[0]?.sort === "asc" ? "lucide:arrow-up-narrow-wide" : "lucide:arrow-down-wide-narrow"}
+        value={selectedSort()} triggerLabel={selectedSort() ? undefined : "Sort"} options={sortOptions()}
+        onChange={(value) => { const [colId, sort] = value.split(":"); view.setSort(colId && sort ? [{ colId, sort }] : []); }} />}
+    />
     <div class="catalog-result-count" role="status" aria-live="polite">{view.records.error ? "Results unavailable" : view.loading() ? "Updating results…" : `${fmtNum(view.total())} ${view.config.label.toLowerCase()}`}</div>
   </div>;
 }

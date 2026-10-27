@@ -766,6 +766,7 @@ export default function AdminModelsPage() {
                         </span>
                         <div class="flex-1 sm:w-full min-w-0">
                           <Select
+                            ariaLabel={`Provider for target ${i() + 1}`}
                             value={t.providerId}
                             onChange={(v) => updateTarget(i(), { providerId: v })}
                             options={providerOptions()}

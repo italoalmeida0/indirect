@@ -250,7 +250,7 @@ function Calendar(props: { from: string; to: string; setFrom: (value: string) =>
   </div>;
 }
 
-export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnalyticsFilters>; loading?: boolean; align?: "start" | "end"; label?: string; dateLabel?: string }) {
+export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnalyticsFilters>; loading?: boolean; align?: "start" | "end"; label?: string; dateLabel?: string; leadingControl?: JSX.Element }) {
   const f = props.filters;
   const [open, setOpen] = createSignal<"filters" | "period" | null>(null);
   const [active, setActive] = createSignal("");
@@ -309,6 +309,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
 
   return <div class={`analytics-toolbar ${props.align === "end" ? "analytics-toolbar-end" : ""}`} aria-label="Analytics filters">
     <div class="analytics-controls">
+      {props.leadingControl}
       <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label={`Filter ${props.label ?? "usage"}`} aria-busy={props.loading || f.pending()} aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
         <Icon name={props.loading || f.pending() ? Icons.refresh : "lucide:list-filter"} size={16} class={props.loading || f.pending() ? "animate-spin motion-reduce:animate-none" : ""} /><span>Filter</span><Show when={count()}><span class="analytics-filter-count">{count()}</span></Show>
       </button>

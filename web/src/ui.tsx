@@ -505,177 +505,153 @@ export function Input(props: {
 
 /**
  * Custom dropdown select — no native <select> popup. Keyboard: ↑/↓ move,
- * Enter/Space pick, Esc close; clicks outside close. Same API as before.
- * The listbox mounts in a Portal anchored by floating-ui, so it flips above
- * the trigger near the viewport edge, shrinks to the available height, and
- * is never clipped by an ancestor's overflow (e.g. inside a Modal).
+ * Enter/Space pick, Home/End jump, typing finds an option, Esc restores focus.
+ * A portaled listbox chooses its opening side once and stays anchored while
+ * scrolling or resizing, including inside a Modal. Listeners exist only while
+ * open; keyboard navigation scrolls the menu without moving the page.
  */
 export function Select(props: {
   label?: string;
+  ariaLabel?: string;
   value: string;
   onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
   hint?: string;
+  variant?: "toolbar";
+  icon?: string;
+  triggerLabel?: string;
+  menuTitle?: string;
 }) {
+  const id = createUniqueId();
   const [open, setOpen] = createSignal(false);
   const [highlight, setHighlight] = createSignal(0);
-  let root: HTMLDivElement | undefined;
-  let btnRef: HTMLButtonElement | undefined;
-  let listRef: HTMLDivElement | undefined;
-
-  const current = () =>
-    props.options.find((o) => o.value === props.value) ?? {
-      value: props.value,
-      label: props.value || "Select…",
-    };
-
-  const onDocClick = (e: MouseEvent) => {
-    const t = e.target as Node;
-    if (root?.contains(t) || listRef?.contains(t)) return;
+  let root!: HTMLDivElement;
+  let button!: HTMLButtonElement;
+  let list: HTMLDivElement | undefined;
+  let typeahead = "";
+  let typeTimer: ReturnType<typeof setTimeout> | undefined;
+  const current = () => props.options.find((option) => option.value === props.value) ?? { value: props.value, label: props.value || "Select…" };
+  const close = (restoreFocus = false) => {
     setOpen(false);
+    typeahead = "";
+    clearTimeout(typeTimer);
+    if (restoreFocus) button.focus({ preventScroll: true });
   };
-  const onDocKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") setOpen(false);
-  };
-  onMount(() => {
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onDocKey);
-  });
-  onCleanup(() => {
-    document.removeEventListener("mousedown", onDocClick);
-    document.removeEventListener("keydown", onDocKey);
-  });
-
   const openMenu = () => {
-    setHighlight(
-      Math.max(
-        0,
-        props.options.findIndex((o) => o.value === props.value),
-      ),
-    );
+    setHighlight(Math.max(0, props.options.findIndex((option) => option.value === props.value)));
     setOpen(true);
   };
-
-  const pick = (v: string) => {
-    props.onChange(v);
-    setOpen(false);
+  const pick = (value: string) => {
+    close(true);
+    props.onChange(value);
   };
-
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (
-      !open() &&
-      (e.key === "Enter" || e.key === " " || e.key === "ArrowDown")
-    ) {
-      e.preventDefault();
-      openMenu();
-      return;
-    }
-    if (!open()) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setHighlight((h) => Math.min(props.options.length - 1, h + 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setHighlight((h) => Math.max(0, h - 1));
-    } else if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      const opt = props.options[highlight()];
-      if (opt) pick(opt.value);
-    } else if (e.key === "Tab") {
-      setOpen(false);
-    }
-  };
-
   createEffect(() => {
     if (!open()) return;
-    highlight();
-    queueMicrotask(() => {
-      listRef
-        ?.querySelector("[data-hl='1']")
-        ?.scrollIntoView({ block: "nearest" });
+    const outside = (event: PointerEvent | FocusEvent) => {
+      if (event.target instanceof Node && !root.contains(event.target) && !list?.contains(event.target)) close();
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("focusin", outside);
+    onCleanup(() => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("focusin", outside);
     });
   });
-
-  return (
-    <label class="block">
-      <Show when={props.label}>
-        <span class="block text-xs font-medium text-ink-300 mb-1.5">
-          {props.label}
-        </span>
-      </Show>
-      <div ref={root} class="relative" onKeyDown={onKeyDown}>
-        <button
-          ref={btnRef}
-          type="button"
-          onClick={() => (open() ? setOpen(false) : openMenu())}
-          aria-haspopup="listbox"
-          aria-expanded={open()}
-          class={`ui-field text-left flex items-center justify-between gap-2 cursor-pointer ${
-            open() ? "border-brand-500" : ""
-          }`}
-        >
-          <span class="truncate">{current().label}</span>
-          <Icon
-            name={Icons.chevronDown}
-            size={14}
-            class={`text-ink-400 transition-transform duration-300 ${open() ? "rotate-180" : ""}`}
-          />
-        </button>
-        <Show when={open()}>
-          {/* Portal + floating-ui: escapes overflow-clipping ancestors and
-              the modal layer. Width tracks the trigger (matchWidth), height
-              shrinks to the resolved side (maxHeight 256 = the old max-h-64).
-              The anchorFloat cleanup is owned by this <Show> — autoUpdate
-              stops the moment the menu closes. */}
-          <Portal>
-            <div
-              ref={(el) => {
-                listRef = el;
-                onCleanup(
-                  anchorFloat(btnRef!, el, {
-                    placement: "bottom-start",
-                    gap: 6,
-                    matchWidth: true,
-                    maxHeight: 256,
-                  }),
-                );
-              }}
-              role="listbox"
-              class="ui-popover anim-float-in overflow-y-auto p-1"
-            >
-            <For each={props.options}>
-              {(o, i) => (
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={o.value === props.value}
-                  data-hl={i() === highlight() ? "1" : "0"}
-                  onClick={() => pick(o.value)}
-                  onMouseEnter={() => setHighlight(i())}
-                  class={`w-full flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-[13px] text-left transition-colors cursor-pointer ${
-                    o.value === props.value
-                      ? "bg-brand-500/10 text-brand-500 font-medium"
-                      : i() === highlight()
-                        ? "bg-ink-800/70 text-ink-100"
-                        : "text-ink-200"
-                  }`}
-                >
-                  <span class="truncate">{o.label}</span>
-                  <Show when={o.value === props.value}>
-                    <Icon name={Icons.check} size={14} class="shrink-0" />
-                  </Show>
-                </button>
-              )}
-            </For>
-            </div>
-          </Portal>
-        </Show>
-      </div>
-      <Show when={props.hint}>
-        <span class="block text-xs text-ink-500 mt-1.5">{props.hint}</span>
-      </Show>
-    </label>
-  );
+  onCleanup(() => clearTimeout(typeTimer));
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape" && open()) {
+      event.preventDefault();
+      event.stopPropagation();
+      close(true);
+      return;
+    }
+    if (event.key === "Tab") {
+      close();
+      return;
+    }
+    if (!open() && ["Enter", " ", "ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      openMenu();
+      if (event.key === "Home") setHighlight(0);
+      if (event.key === "End") setHighlight(props.options.length - 1);
+      return;
+    }
+    if (open() && ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const length = props.options.length;
+      setHighlight((index) => event.key === "Home" ? 0 : event.key === "End" ? length - 1 : (index + (event.key === "ArrowDown" ? 1 : -1) + length) % Math.max(1, length));
+    } else if (open() && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      const option = props.options[highlight()];
+      if (option) pick(option.value);
+    } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      event.preventDefault();
+      if (!open()) openMenu();
+      clearTimeout(typeTimer);
+      typeahead += event.key.toLocaleLowerCase();
+      const query = [...typeahead].every((char) => char === typeahead[0]) ? typeahead[0]! : typeahead;
+      const start = query.length === 1 ? highlight() + 1 : highlight();
+      for (let offset = 0; offset < props.options.length; offset++) {
+        const index = (start + offset) % props.options.length;
+        if (props.options[index]!.label.toLocaleLowerCase().startsWith(query)) {
+          setHighlight(index);
+          break;
+        }
+      }
+      typeTimer = setTimeout(() => { typeahead = ""; }, 650);
+    }
+  };
+  createEffect(() => {
+    if (!open()) return;
+    const index = highlight();
+    queueMicrotask(() => {
+      const option = list?.querySelector<HTMLElement>(`[data-option-index="${index}"]`);
+      if (!list?.isConnected || !option) return;
+      const top = option.offsetTop, bottom = top + option.offsetHeight;
+      if (top < list.scrollTop) list.scrollTop = top;
+      else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+    });
+  });
+  return <div class={`ui-select ${props.variant === "toolbar" ? "ui-select-toolbar" : "block"}`}>
+    <Show when={props.label}><span id={`${id}-label`} class="block text-xs font-medium text-ink-300 mb-1.5">{props.label}</span></Show>
+    <div ref={root} class="relative" onKeyDown={onKeyDown}>
+      <button ref={button} type="button" role="combobox" aria-label={props.ariaLabel} aria-labelledby={!props.ariaLabel && props.label ? `${id}-label` : undefined}
+        aria-haspopup="listbox" aria-expanded={open()} aria-controls={open() ? `${id}-list` : undefined} aria-activedescendant={open() ? `${id}-option-${highlight()}` : undefined} aria-describedby={`${id}-value${props.hint ? ` ${id}-hint` : ""}`}
+        title={current().label} onClick={() => open() ? close() : openMenu()}
+        class={props.variant === "toolbar" ? `analytics-control ui-select-trigger ${open() || props.value ? "is-active" : ""}` : `ui-field text-left flex items-center justify-between gap-2 cursor-pointer ${open() ? "border-brand-500" : ""}`}>
+        <Show when={props.icon}><Icon name={props.icon!} size={15} /></Show>
+        <span class="min-w-0 truncate">{props.triggerLabel ?? current().label}</span>
+        <Icon name={Icons.chevronDown} size={13} class={`ui-select-chevron text-ink-500 ${open() ? "is-open" : ""}`} />
+      </button>
+      <span id={`${id}-value`} class="sr-only">{current().label}</span>
+      <Show when={open()}><Portal><div id={`${id}-list`} ref={(element) => {
+        list = element;
+        const anchor = button.getBoundingClientRect();
+        const maxHeight = props.variant === "toolbar" ? 400 : 320;
+        const expectedHeight = Math.min(maxHeight, props.options.length * (window.matchMedia("(pointer: coarse)").matches ? 44 : 36) + (props.menuTitle ? 44 : 8));
+        const below = document.documentElement.clientHeight - anchor.bottom;
+        onCleanup(anchorFloat(button, element, {
+          placement: below >= expectedHeight + 16 || below >= anchor.top ? "bottom-start" : "top-start",
+          flip: false,
+          gap: 8,
+          padding: 12,
+          matchWidth: props.variant !== "toolbar",
+          maxHeight,
+        }));
+        onCleanup(() => { list = undefined; });
+      }} role="listbox" aria-label={props.ariaLabel ?? props.label ?? "Options"} onKeyDown={onKeyDown}
+        class={`${props.variant === "toolbar" ? "analytics-popover ui-select-toolbar-menu" : "ui-popover"} ui-select-menu anim-float-in overflow-y-auto p-1`}>
+        <Show when={props.menuTitle}><div class="ui-select-menu-title" role="presentation">{props.menuTitle}</div></Show>
+        <For each={props.options}>{(option, index) => <button id={`${id}-option-${index()}`} type="button" role="option" tabIndex={-1} aria-selected={option.value === props.value} data-option-index={index()} data-hl={index() === highlight() ? "1" : "0"}
+          onClick={() => pick(option.value)} onPointerEnter={() => setHighlight(index())}
+          onPointerDown={(event) => { if (event.pointerType === "mouse") event.preventDefault(); }}
+          class={`ui-select-option ${option.value === props.value ? "is-selected" : ""}`}>
+          <span class="min-w-0 truncate">{option.label}</span><Show when={option.value === props.value}><Icon name={Icons.check} size={14} /></Show>
+        </button>}</For>
+      </div></Portal></Show>
+    </div>
+    <Show when={props.hint}><span id={`${id}-hint`} class="block text-xs text-ink-500 mt-1.5">{props.hint}</span></Show>
+  </div>;
 }
 
 /**

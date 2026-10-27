@@ -100,11 +100,36 @@ try {
   };
   const settled = (target = page) => target.waitForFunction(() => document.querySelector(".catalog-page")?.getAttribute("aria-busy") === "false" && !!document.querySelector(".catalog-results"));
   const fits = async (label: string) => assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${label}: page overflow`);
+  const openSort = async (target: any, label: string, touch = false) => {
+    const trigger = target.getByRole("combobox", { name: `Sort ${label}`, exact: true });
+    assert.equal(await trigger.evaluate((element: HTMLElement) => element.tagName), "BUTTON", `${label}: native sort selector`);
+    assert.equal(await target.locator(".catalog-toolbar select").count(), 0);
+    if (touch) await trigger.tap(); else await trigger.click();
+    const menu = target.getByRole("listbox", { name: `Sort ${label}`, exact: true });
+    await menu.waitFor({ state: "visible" });
+    await menu.evaluate(async (element: HTMLElement) => { await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))); });
+    assert.equal(await trigger.getAttribute("aria-expanded"), "true");
+    assert.equal(await trigger.getAttribute("aria-controls"), await menu.getAttribute("id"));
+    assert(await menu.evaluate((element: HTMLElement) => { const rect = element.getBoundingClientRect(); return rect.left >= 11 && rect.right <= innerWidth - 11 && rect.top >= 0 && rect.bottom <= innerHeight; }), `${label}: sort menu left viewport`);
+    return { trigger, menu };
+  };
   const cases = [{ route: "keys", label: "api keys" }, { route: "admin/providers", label: "providers" }, { route: "admin/models", label: "models" }, { route: "admin/users", label: "users" }, { route: "admin/keys", label: "all api keys" }, { route: "admin/audit", label: "audit events" }];
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" }); await setup(page);
   for (const item of cases) {
     console.log(`[catalog-ui] Desktop ${item.label}`);
     await page.goto(`${serverUrl}#/${item.route}`); await settled();
+    const { trigger, menu } = await openSort(page, item.label);
+    assert.equal(await menu.getByRole("option", { name: "Default order", exact: true }).getAttribute("aria-selected"), "true");
+    const optionLabel = await menu.getByRole("option").nth(1).innerText();
+    await menu.getByRole("option").nth(1).click(); await settled();
+    assert.equal(await trigger.getAttribute("aria-expanded"), "false");
+    assert(await trigger.evaluate((element: HTMLElement) => element === document.activeElement), "Sort did not restore trigger focus");
+    const reopened = await openSort(page, item.label);
+    assert.equal(await reopened.menu.getByRole("option", { name: optionLabel, exact: true }).getAttribute("aria-selected"), "true");
+    if (item.label === "models") await page.screenshot({ path: path.join(output, "models-sort-desktop.png") });
+    await page.keyboard.press("Escape");
+    await trigger.press("ArrowDown"); await trigger.press("Home"); await trigger.press("Enter"); await settled();
+    assert.equal(await trigger.innerText(), "Sort");
     assert.equal(await page.locator(".ag-floating-filter").count(), 0);
     assert.equal(await page.getByRole("button", { name: /Reset layout|^Reset Model/ }).count(), 0);
     if (!item.route.endsWith("providers")) {
@@ -139,6 +164,9 @@ try {
       await page.getByRole("searchbox", { name: `Search ${item.label}`, exact: true }).fill("124"); await settled();
       await page.waitForFunction(() => /^1 /.test(document.querySelector(".catalog-result-count")?.textContent ?? ""));
       assert((await page.locator(".catalog-mobile").innerText()).includes("124"), `${item.label}: search did not reach records beyond the first page`);
+      await page.getByRole("button", { name: `Clear ${item.label} search`, exact: true }).click();
+      assert.equal(await page.getByRole("searchbox", { name: `Search ${item.label}`, exact: true }).inputValue(), "");
+      assert(await page.getByRole("searchbox", { name: `Search ${item.label}`, exact: true }).evaluate((element: HTMLElement) => element === document.activeElement));
     }
     await page.setViewportSize({ width: 320, height: 844 }); await fits(`Small ${item.label}`); await page.setViewportSize({ width: 390, height: 844 });
   }
@@ -163,11 +191,35 @@ try {
   await page.setViewportSize({ width: 390, height: 844 }); await settled();
   assert(await page.getByRole("checkbox", { name: "Select model test/model-000", exact: true }).isChecked());
   await page.screenshot({ path: path.join(output, "models-selection-mobile.png") });
-  await page.getByRole("combobox", { name: "Sort models", exact: true }).selectOption("name:asc"); await settled();
+  const mobileSort = await openSort(page, "models");
+  const initialScroll = await page.evaluate(() => scrollY);
+  await mobileSort.trigger.press("End");
+  assert.match(await mobileSort.menu.locator('[data-hl="1"]').innerText(), /Lowest output price/);
+  assert.equal(await page.evaluate(() => scrollY), initialScroll, "Sort keyboard navigation moved the page");
+  await mobileSort.trigger.press("Home"); await mobileSort.trigger.press("n");
+  assert.equal(await mobileSort.menu.locator('[data-hl="1"]').innerText(), "Name A–Z");
+  await mobileSort.trigger.press("Enter"); await settled();
+  const preservedSort = await openSort(page, "models");
+  await preservedSort.trigger.press("Tab");
+  assert.equal(await page.getByRole("listbox").count(), 0, "Tab did not dismiss sort menu");
+  await openSort(page, "models");
+  await page.getByRole("searchbox", { name: "Search models", exact: true }).focus();
+  assert.equal(await page.getByRole("listbox").count(), 0, "Moving focus outside did not dismiss sort menu");
+  await openSort(page, "models");
+  await page.getByRole("button", { name: "Filter models", exact: true }).click();
+  assert.equal(await page.getByRole("listbox").count(), 0, "Opening filters left sort menu open");
+  await page.keyboard.press("Escape");
   await page.setViewportSize({ width: 768, height: 1000 }); await settled(); await fits("Tablet models");
   await page.waitForFunction(() => document.querySelector(".ag-header-cell[col-id='name']")?.getAttribute("aria-sort") === "ascending");
+  await page.locator(".ag-header-cell[col-id='name'] .ag-header-cell-label").click(); await settled();
+  await page.waitForFunction(() => document.querySelector(".ag-header-cell[col-id='name']")?.getAttribute("aria-sort") === "descending");
+  const customSort = await openSort(page, "models");
+  assert.match(await customSort.menu.locator('[aria-selected="true"]').innerText(), /Descending/);
+  await page.keyboard.press("Escape");
   await page.screenshot({ path: path.join(output, "models-tablet.png") });
-  await page.evaluate(() => document.documentElement.dataset.theme = "light"); await page.screenshot({ path: path.join(output, "models-light.png") });
+  await page.evaluate(() => document.documentElement.dataset.theme = "light");
+  await openSort(page, "models"); await page.screenshot({ path: path.join(output, "models-sort-light.png") }); await page.keyboard.press("Escape");
+  await page.screenshot({ path: path.join(output, "models-light.png") });
   await page.evaluate(() => document.documentElement.dataset.theme = "high-contrast"); await fits("High contrast models");
   failList = true; await page.getByRole("searchbox", { name: "Search models", exact: true }).fill("failure");
   await page.getByRole("alert").waitFor();
@@ -175,6 +227,21 @@ try {
   assert(await page.getByText("No matching models", { exact: true }).isVisible());
   const touch = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, reducedMotion: "reduce" }); await setup(touch);
   await touch.goto(`${serverUrl}#/admin/models`); await settled(touch);
+  const touchSort = await openSort(touch, "models", true);
+  assert(await touchSort.menu.getByRole("option").first().evaluate((element: HTMLElement) => element.getBoundingClientRect().height >= 44), "Sort options are too small for touch");
+  assert(await touchSort.menu.evaluate((element: HTMLElement) => element.scrollHeight <= element.clientHeight + 1), "Short sort menu unnecessarily scrolls on mobile");
+  await touch.screenshot({ path: path.join(output, "models-sort-touch.png") });
+  await touchSort.menu.getByRole("option", { name: "Name A–Z", exact: true }).tap(); await settled(touch);
+  await touch.getByRole("button", { name: "New model", exact: true }).tap();
+  const providerSelect = touch.getByRole("combobox", { name: "Provider for target 1", exact: true });
+  await providerSelect.tap();
+  await touch.getByRole("listbox", { name: "Provider for target 1", exact: true }).waitFor({ state: "visible" });
+  await touch.keyboard.press("Escape");
+  assert.equal(await touch.getByRole("dialog", { name: "Register model", exact: true }).count(), 1, "Escape on select dismissed its parent modal");
+  await providerSelect.tap();
+  await touch.getByRole("option", { name: /Provider 1/, exact: false }).tap();
+  assert.match(await providerSelect.innerText(), /Provider 1/);
+  await touch.getByRole("button", { name: "Cancel", exact: true }).tap();
   await touch.getByRole("checkbox", { name: "Select model test/model-000", exact: true }).tap();
   assert.equal(await touch.locator(".catalog-selection strong").innerText(), "1 selected");
   await touch.getByRole("button", { name: "Selected only", exact: true }).tap(); await settled(touch);
@@ -191,7 +258,7 @@ try {
   await touch.close();
   assert.deepEqual(errors, [], "Browser runtime errors");
   assert(!reads.some((url) => url.searchParams.has("filters")), "A page still sends AG Grid column filters");
-  console.log(`Catalog UI passed: six pages, external filters, fixed grids, sorting, mobile paging, full-inventory search, model bulk selection across devices, touch, retry and themes. Screenshots: ${output}`);
+  console.log(`Catalog UI passed: six pages, custom sorting, keyboard navigation, typeahead, focus return, modal selects, touch targets, external filters, fixed grids, mobile paging, full-inventory search, model bulk selection across devices, retry and themes. Screenshots: ${output}`);
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(output, "failure.png") });
   throw error;
