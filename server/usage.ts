@@ -96,20 +96,22 @@ const upsertModelDaily = db.prepare(
 // (filter by provider / upstream model / provider key) without scanning
 // usage_events. Written alongside the two shallower rollups.
 const upsertModelProviderDaily = db.prepare(
-  `INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
    ON CONFLICT(key_id, date, proto, provider_id, provider_key_id, model, upstream_model)
    DO UPDATE SET in_tok = in_tok + excluded.in_tok,
                  cache_tok = cache_tok + excluded.cache_tok,
                  out_tok = out_tok + excluded.out_tok,
-                 reqs = reqs + 1`,
+                 reqs = reqs + 1, success_reqs = success_reqs + excluded.success_reqs,
+                 error_reqs = error_reqs + excluded.error_reqs`,
 );
 const upsertModelProviderMonthly = db.prepare(
-  `INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
    ON CONFLICT(key_id, month, proto, provider_id, provider_key_id, model, upstream_model)
    DO UPDATE SET in_tok = in_tok + excluded.in_tok, cache_tok = cache_tok + excluded.cache_tok,
-                 out_tok = out_tok + excluded.out_tok, reqs = reqs + 1`,
+                 out_tok = out_tok + excluded.out_tok, reqs = reqs + 1,
+                 success_reqs = success_reqs + excluded.success_reqs, error_reqs = error_reqs + excluded.error_reqs`,
 );
 
 export function flushUsage(): void {
@@ -155,8 +157,11 @@ export function flushUsage(): void {
         ev.inTok,
         ev.cacheTok,
         ev.outTok,
+        ev.status >= 200 && ev.status < 300 ? 1 : 0,
+        ev.status < 200 || ev.status >= 300 ? 1 : 0,
       );
-      upsertModelProviderMonthly.run(ev.keyId, ev.userId, date.slice(0, 7), ev.proto, ev.providerId ?? "", ev.providerKeyId ?? "", model, ev.upstreamModel ?? "", ev.inTok, ev.cacheTok, ev.outTok);
+      upsertModelProviderMonthly.run(ev.keyId, ev.userId, date.slice(0, 7), ev.proto, ev.providerId ?? "", ev.providerKeyId ?? "", model, ev.upstreamModel ?? "", ev.inTok, ev.cacheTok, ev.outTok,
+        ev.status >= 200 && ev.status < 300 ? 1 : 0, ev.status < 200 || ev.status >= 300 ? 1 : 0);
       affectedKeys.add(ev.keyId);
     }
   })();

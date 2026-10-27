@@ -254,7 +254,7 @@ try {
 
   for (const route of ["/", "/admin/stats"]) {
     await page.goto(`${serverUrl}#${route}`);
-    if (route === "/admin/stats") { await page.locator(".analytics-summary").waitFor(); assert.equal(await page.locator(".ag-root-wrapper").count(), 0, "Global Stats still renders a grid"); }
+    if (route === "/admin/stats") { await page.locator(".analytics-summary").first().waitFor(); assert.equal(await page.locator(".ag-root-wrapper").count(), 0, "Global Stats still renders a grid"); }
     // Exercise a trigger near the right edge, where the expanded panel needs
     // more room than the initial category menu.
     await page.locator(".analytics-controls").evaluate((el: HTMLElement) => { el.style.width = "100%"; el.style.justifyContent = "flex-end"; });

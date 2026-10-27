@@ -85,7 +85,7 @@ export function usageSource(scope: UsageScope, userId: string | null, field?: Fi
   const segments: string[] = [];
   const params: Array<string | number> = [];
   const dimensions = field ?? "key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model";
-  const metrics = field ? "" : "in_tok, cache_tok, out_tok, ";
+  const metrics = field ? "" : "in_tok, cache_tok, out_tok, success_reqs, error_reqs, ";
   if (start === null || start < end) {
     const monthStart = (ts: number) => { const d = new Date(ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); };
     const nextMonth = (ts: number) => { const d = new Date(ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); };
@@ -115,7 +115,7 @@ export function usageSource(scope: UsageScope, userId: string | null, field?: Fi
     : [...(scope.from !== null && start !== scope.from ? [[scope.from, start!] as [number, number]] : []), ...(end < scope.to ? [[end, scope.to] as [number, number]] : [])];
   for (const [from, to] of intervals) {
     const where = usageScopeWhere({ ...scope, from, to }, "e", userId);
-    const sums = field ? "" : "SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, ";
+    const sums = field ? "" : "SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(status >= 200 AND status < 300) AS success_reqs, SUM(status < 200 OR status >= 300) AS error_reqs, ";
     segments.push(`SELECT ${dimensions}, date(ts / 1000, 'unixepoch') AS date, ${sums}COUNT(*) AS reqs FROM usage_events e WHERE ${where.clauses.join(" AND ")} GROUP BY ${dimensions}, date`);
     params.push(...where.params);
   }

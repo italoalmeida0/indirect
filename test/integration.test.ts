@@ -876,7 +876,7 @@ describe("gateway end-to-end", () => {
       raw.run(key.id, user.id, to - 1, secondary, models[0]!, "secondary/a");
       raw.run(key.id, user.id, from - 1, provider.id, prefix + "before", "before");
       raw.run(key.id, user.id, to, provider.id, prefix + "after", "after");
-      fixture.run(`INSERT INTO usage_model_provider_monthly
+      fixture.run(`INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
         SELECT key_id, user_id, substr(date,1,7), proto, provider_id, provider_key_id, model, upstream_model,
           SUM(in_tok), SUM(cache_tok), SUM(out_tok), SUM(reqs)
         FROM usage_model_provider_daily WHERE model LIKE 'overview-fixture/%'
@@ -892,6 +892,10 @@ describe("gateway end-to-end", () => {
       const analytics = await api(`/api/usage/analytics?${params}`, { token: userToken });
       expect(analytics.status).toBe(200);
       expect(analytics.json.users).toEqual([]);
+      expect(analytics.json.keys.reduce((sum: number, key: any) => sum + key.reqs, 0)).toBe(81);
+      expect(analytics.json.keys.some((key: any) => key.id === "overview-fixture/second-key")).toBe(true);
+      expect(analytics.json.outcomes.length).toBeLessThanOrEqual(48);
+      expect(analytics.json.outcomes.reduce((sum: number, point: any) => sum + point.success + point.errors + point.unknown, 0)).toBe(81);
       expect(analytics.json.series.reduce((sum: number, point: any) => sum + point.reqs, 0)).toBe(81);
       expect(analytics.json.series.reduce((sum: number, point: any) => sum + point.cost, 0)).toBeCloseTo(.0039, 10);
       for (const metric of ["modelSpend", "modelRequests"]) {
@@ -907,6 +911,9 @@ describe("gateway end-to-end", () => {
       const globalAnalytics = await api(`/api/admin/analytics?${params}`, { token: adminToken });
       expect(globalAnalytics.status).toBe(200);
       expect(globalAnalytics.json.activeUsers).toBe(12);
+      expect(globalAnalytics.json.keys).toHaveLength(9);
+      expect(globalAnalytics.json.keys.at(-1).id).toBeNull();
+      expect(globalAnalytics.json.keys.reduce((sum: number, key: any) => sum + key.reqs, 0)).toBe(2081);
       expect(globalAnalytics.json.users).toHaveLength(9);
       expect(globalAnalytics.json.users.at(-1)).toMatchObject({ id: null, members: 4 });
       expect(globalAnalytics.json.users.reduce((sum: number, row: any) => sum + row.reqs, 0)).toBe(2081);

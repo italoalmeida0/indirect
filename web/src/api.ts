@@ -227,6 +227,8 @@ export interface AnalyticsReport {
   modelSpend: ModelTimeline;
   modelRequests: ModelTimeline;
   users: AnalyticsEntity[];
+  keys: AnalyticsEntity[];
+  outcomes: { date: string; lastDate?: string; label: string; success: number; errors: number; unknown: number }[];
   providers: AnalyticsEntity[];
   protocols: AnalyticsEntity[];
   activeUsers: number;

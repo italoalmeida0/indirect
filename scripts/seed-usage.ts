@@ -125,20 +125,20 @@ const upsertModelDaily = db.prepare(
 // Deepest rollup (migration 011): seeded passthrough-style mock data carries
 // no provider dimension, so these rows aggregate per (key, date, model).
 const upsertModelProviderDaily = db.prepare(
-  `INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
-   VALUES (?, ?, ?, ?, '', '', ?, '', ?, ?, ?, ?)
+  `INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs)
+   VALUES (?, ?, ?, ?, '', '', ?, '', ?, ?, ?, ?, ?, ?)
    ON CONFLICT(key_id, date, proto, provider_id, provider_key_id, model, upstream_model)
    DO UPDATE SET in_tok = in_tok + excluded.in_tok,
                  cache_tok = cache_tok + excluded.cache_tok,
                  out_tok = out_tok + excluded.out_tok,
-                 reqs = reqs + excluded.reqs`,
+                 reqs = reqs + excluded.reqs, success_reqs = success_reqs + excluded.success_reqs, error_reqs = error_reqs + excluded.error_reqs`,
 );
 const upsertModelProviderMonthly = db.prepare(
-  `INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
-   VALUES (?, ?, ?, ?, '', '', ?, '', ?, ?, ?, ?)
+  `INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs)
+   VALUES (?, ?, ?, ?, '', '', ?, '', ?, ?, ?, ?, ?, ?)
    ON CONFLICT(key_id, month, proto, provider_id, provider_key_id, model, upstream_model)
    DO UPDATE SET in_tok = in_tok + excluded.in_tok, cache_tok = cache_tok + excluded.cache_tok,
-                 out_tok = out_tok + excluded.out_tok, reqs = reqs + excluded.reqs`,
+                 out_tok = out_tok + excluded.out_tok, reqs = reqs + excluded.reqs, success_reqs = success_reqs + excluded.success_reqs, error_reqs = error_reqs + excluded.error_reqs`,
 );
 
 const MS_DAY = 86_400_000;
@@ -155,7 +155,7 @@ const daily = new Map<
 >();
 const modelDaily = new Map<
   string,
-  { keyId: string; userId: string; date: string; proto: string; model: string; inTok: number; cacheTok: number; outTok: number; reqs: number }
+  { keyId: string; userId: string; date: string; proto: string; model: string; inTok: number; cacheTok: number; outTok: number; reqs: number; success: number; errors: number }
 >();
 
 db.transaction(() => {
@@ -223,12 +223,13 @@ db.transaction(() => {
         const mKey = `${key.id}|${date}|${m.proto}|${m.model}`;
         const mAgg = modelDaily.get(mKey) ?? {
           keyId: key.id, userId: key.user_id, date, proto: m.proto, model: m.model,
-          inTok: 0, cacheTok: 0, outTok: 0, reqs: 0,
+          inTok: 0, cacheTok: 0, outTok: 0, reqs: 0, success: 0, errors: 0,
         };
         mAgg.inTok += inTok;
         mAgg.cacheTok += cacheTok;
         mAgg.outTok += outTok;
         mAgg.reqs += 1;
+        if (status >= 200 && status < 300) mAgg.success++; else mAgg.errors++;
         modelDaily.set(mKey, mAgg);
       }
     }
@@ -238,8 +239,8 @@ db.transaction(() => {
   }
   for (const a of modelDaily.values()) {
     upsertModelDaily.run(a.keyId, a.userId, a.date, a.proto, a.model, a.inTok, a.cacheTok, a.outTok, a.reqs);
-    upsertModelProviderDaily.run(a.keyId, a.userId, a.date, a.proto, a.model, a.inTok, a.cacheTok, a.outTok, a.reqs);
-    upsertModelProviderMonthly.run(a.keyId, a.userId, a.date.slice(0, 7), a.proto, a.model, a.inTok, a.cacheTok, a.outTok, a.reqs);
+    upsertModelProviderDaily.run(a.keyId, a.userId, a.date, a.proto, a.model, a.inTok, a.cacheTok, a.outTok, a.reqs, a.success, a.errors);
+    upsertModelProviderMonthly.run(a.keyId, a.userId, a.date.slice(0, 7), a.proto, a.model, a.inTok, a.cacheTok, a.outTok, a.reqs, a.success, a.errors);
   }
 })();
 

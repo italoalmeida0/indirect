@@ -1,6 +1,6 @@
 import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js";
-import { Axis, AxisCursor, AxisGrid, AxisLabel, AxisLine, AxisTooltip, Bar, Chart } from "solid-charts";
-import type { AnalyticsEntity, DailyPoint, ModelTimeline } from "./api";
+import { Axis, AxisCursor, AxisGrid, AxisLabel, AxisLine, AxisTooltip, Bar, Chart, Line, Point } from "solid-charts";
+import type { AnalyticsEntity, AnalyticsReport, DailyPoint, ModelTimeline } from "./api";
 import { analyticsBuckets, analyticsTotals, cachePercent } from "./analytics-data";
 import { Card, Icon, fmtCost, fmtNum, pointLabel } from "./ui";
 
@@ -89,6 +89,56 @@ export function UserSpendChart(props: { users: AnalyticsEntity[]; period: string
       <span class="analytics-user-identity"><strong title={user.label}>{user.label}</strong><small title={user.detail}>{user.detail || `${user.members} users`}</small><span class="analytics-user-bar"><i style={{ width: `${max() > 0 ? (user.cost ?? 0) / max() * 100 : 0}%`, background: user.id === null ? colors[5] : colors[index() % 5] }} /></span></span>
       <span class="analytics-user-amount"><strong>{fmtCost(user.cost ?? 0)}</strong><small>{fmtNum(user.reqs)} requests</small><small>{percent(cachePercent(user.in_tok, user.cache_tok))} cached</small></span>
     </button>}</For></div></Show>
+  </Card>;
+}
+
+export function ApiKeyUsageCard(props: { keys: AnalyticsEntity[]; period: string; onSelect: (id: string, label: string) => void }) {
+  const total = () => props.keys.reduce((sum, key) => sum + (key.cost ?? 0), 0);
+  return <Card class="analytics-keys-card p-5 min-w-0">
+    <ChartHeading title="Usage by API key" subtitle={`Top 8 by spend + other · ${props.period}`} value={fmtNum(props.keys.reduce((sum, key) => sum + key.members, 0))} note="keys with activity" />
+    <Show when={props.keys.length} fallback={<ChartEmpty />}><div class="analytics-key-grid"><For each={props.keys}>{(key, index) => <button type="button" class="analytics-key-tile" disabled={key.id === null} aria-label={`Filter by API key ${key.label}`} onClick={() => key.id !== null && props.onSelect(key.id, key.label)}>
+      <span class="analytics-key-heading"><Icon name="lucide:key-round" size={16} /><span><strong title={key.label}>{key.label}</strong><small title={key.detail}>{key.id === null ? `${key.members} more keys` : key.detail}</small></span><Show when={key.id !== null}><Icon name="lucide:arrow-up-right" size={13} /></Show></span>
+      <span class="analytics-key-metrics"><span><small>Spend</small><strong>{fmtCost(key.cost ?? 0)}</strong></span><span><small>Requests</small><strong>{fmtNum(key.reqs)}</strong></span></span>
+      <span class="analytics-user-bar"><i style={{ width: `${total() > 0 ? (key.cost ?? 0) / total() * 100 : 0}%`, background: key.id === null ? colors[5] : colors[index() % 5] }} /></span>
+      <span class="analytics-key-footnote"><span>{percent(cachePercent(key.in_tok, key.cache_tok))} cache hit rate</span><span>{percent(total() > 0 ? (key.cost ?? 0) / total() * 100 : null)} of spend</span></span>
+    </button>}</For></div></Show>
+  </Card>;
+}
+
+export function RequestOutcomesChart(props: { outcomes: AnalyticsReport["outcomes"]; period: string }) {
+  const totals = createMemo(() => props.outcomes.reduce((sum, point) => ({ success: sum.success + point.success, errors: sum.errors + point.errors, unknown: sum.unknown + point.unknown }), { success: 0, errors: 0, unknown: 0 }));
+  const known = () => totals().success + totals().errors;
+  const data = createMemo(() => props.outcomes.map((point) => ({ ...point,
+    success_rate: point.success + point.errors ? point.success / (point.success + point.errors) * 100 : null,
+    error_rate: point.success + point.errors ? point.errors / (point.success + point.errors) * 100 : null,
+  })));
+  return <Card class="analytics-outcomes-chart p-5 min-w-0">
+    <ChartHeading title="Request success & errors" subtitle={`HTTP response rates over time · ${props.period} · UTC`} value={percent(known() ? totals().success / known() * 100 : null)} note="success rate" />
+    <Show when={known() > 0} fallback={<ChartEmpty label={totals().unknown ? "No retained response statuses" : undefined} />}>
+      <Show when={data()} keyed>{(points) => <div class="analytics-timeseries chart-root" style={{ height: "240px" }}>
+        <Chart data={points}>
+          <Axis axis="y" position="left" tickCount={3} axisRange={[0, 100]}>
+            <AxisLabel fill="var(--chart-tick)" font-size="10" format={(value) => `${Math.round(Number(value))}%`} />
+            <AxisGrid stroke="var(--chart-grid)" stroke-dasharray="3 4" />
+          </Axis>
+          <Axis axis="x" position="bottom" dataKey="label">
+            <AxisLabel fill="var(--chart-tick)" font-size="10" interval="preserveStartEnd" labelGap={24} />
+            <AxisLine stroke="var(--chart-grid)" /><AxisCursor stroke="var(--ink-500)" stroke-dasharray="3 4" class="chart-cursor" />
+            <AxisTooltip class="chart-tooltip">{(tooltip) => <div class="analytics-chart-tooltip">
+              <strong>{bucketDate(tooltip.data.date)}{tooltip.data.lastDate && tooltip.data.lastDate !== tooltip.data.date ? ` – ${bucketDate(tooltip.data.lastDate)}` : ""} · UTC</strong>
+              <div><span><i style={{ background: "var(--chart-success)" }} />Success (2xx)</span><b>{percent(tooltip.data.success_rate)} · {fmtNum(tooltip.data.success)}</b></div>
+              <div><span><i style={{ background: "var(--chart-error)" }} />Errors</span><b>{percent(tooltip.data.error_rate)} · {fmtNum(tooltip.data.errors)}</b></div>
+              <Show when={tooltip.data.unknown}><div><span>Status unavailable</span><b>{fmtNum(tooltip.data.unknown)}</b></div></Show>
+            </div>}</AxisTooltip>
+          </Axis>
+          <Line dataKey="success_rate" stroke="var(--chart-success)" stroke-width={2.2} fill="none" class="analytics-outcome-line is-success" />
+          <Line dataKey="error_rate" stroke="var(--chart-error)" stroke-width={2.2} stroke-dasharray="5 4" fill="none" class="analytics-outcome-line is-error" />
+          <Point dataKey="success_rate" fill="var(--chart-success)" r={2.2} /><Point dataKey="error_rate" fill="var(--chart-error)" r={2.2} />
+        </Chart>
+      </div>}</Show>
+    </Show>
+    <div class="analytics-outcome-totals"><span><i class="is-success" />Success (2xx)<strong>{fmtNum(totals().success)}</strong></span><span><i class="is-error" />Errors<strong>{fmtNum(totals().errors)}</strong></span></div>
+    <Show when={totals().unknown}><p class="analytics-chart-hint analytics-outcome-coverage">{fmtNum(totals().unknown)} archived requests have no retained status and are excluded from these rates.</p></Show>
   </Card>;
 }
 

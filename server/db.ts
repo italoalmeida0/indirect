@@ -644,6 +644,39 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_usage_mpm_month ON usage_model_provider_monthly(month, user_id, reqs);
     `,
   },
+  {
+    name: "025_usage_response_outcomes",
+    // Keep HTTP outcomes in the existing rollups, with no additional write
+    // statement per request. Only retained events can classify old history;
+    // archived requests without a status remain explicitly unclassified.
+    up: `
+      ALTER TABLE usage_model_provider_daily ADD COLUMN success_reqs INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE usage_model_provider_daily ADD COLUMN error_reqs INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE usage_model_provider_monthly ADD COLUMN success_reqs INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE usage_model_provider_monthly ADD COLUMN error_reqs INTEGER NOT NULL DEFAULT 0;
+
+      INSERT INTO usage_model_provider_daily
+        (key_id, user_id, date, proto, provider_id, provider_key_id, model, upstream_model,
+         in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs)
+      SELECT key_id, user_id, date(ts / 1000, 'unixepoch'), proto, provider_id, provider_key_id, model, upstream_model,
+        SUM(in_tok), SUM(cache_tok), SUM(out_tok), COUNT(*),
+        SUM(status >= 200 AND status < 300), SUM(status < 200 OR status >= 300)
+      FROM usage_events
+      GROUP BY key_id, date(ts / 1000, 'unixepoch'), proto, provider_id, provider_key_id, model, upstream_model
+      ON CONFLICT(key_id, date, proto, provider_id, provider_key_id, model, upstream_model)
+      DO UPDATE SET success_reqs = excluded.success_reqs, error_reqs = excluded.error_reqs;
+
+      INSERT INTO usage_model_provider_monthly
+        (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model,
+         in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs)
+      SELECT key_id, user_id, substr(date, 1, 7), proto, provider_id, provider_key_id, model, upstream_model,
+        SUM(in_tok), SUM(cache_tok), SUM(out_tok), SUM(reqs), SUM(success_reqs), SUM(error_reqs)
+      FROM usage_model_provider_daily
+      GROUP BY key_id, substr(date, 1, 7), proto, provider_id, provider_key_id, model, upstream_model
+      ON CONFLICT(key_id, month, proto, provider_id, provider_key_id, model, upstream_model)
+      DO UPDATE SET success_reqs = excluded.success_reqs, error_reqs = excluded.error_reqs;
+    `,
+  },
 ];
 
 export function migrate(): void {

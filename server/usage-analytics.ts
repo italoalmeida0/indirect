@@ -6,10 +6,11 @@ const DAY = 86_400_000;
 interface Metrics { in_tok: number; cache_tok: number; out_tok: number; reqs: number; cost_in: number; cost_cache: number; cost_out: number; cost: number }
 const sums = (alias: string) => ["in_tok", "cache_tok", "out_tok", "reqs", "cost_in", "cost_cache", "cost_out", "cost"].map((field) => `SUM(${alias}.${field}) AS ${field}`).join(", ");
 
-function breakdown(scope: UsageScope, userId: string | null, dimension: "user_id" | "provider_id" | "proto", limit: number) {
+function breakdown(scope: UsageScope, userId: string | null, dimension: "user_id" | "provider_id" | "proto" | "key_id", limit: number) {
   const source = usageSource(scope, userId);
-  const join = dimension === "user_id" ? "LEFT JOIN users d ON d.id = r.id" : dimension === "provider_id" ? "LEFT JOIN providers d ON d.id = r.id" : "";
-  const label = dimension === "user_id" ? "COALESCE(NULLIF(d.name, ''), d.email, r.id)" : dimension === "provider_id" ? "COALESCE(NULLIF(d.name, ''), NULLIF(r.id, ''), 'Unattributed')" : "CASE r.id WHEN 'openai' THEN 'OpenAI' WHEN 'anthropic' THEN 'Anthropic' ELSE r.id END";
+  const join = dimension === "user_id" ? "LEFT JOIN users d ON d.id = r.id" : dimension === "provider_id" ? "LEFT JOIN providers d ON d.id = r.id" : dimension === "key_id" ? "LEFT JOIN api_keys d ON d.id = r.id LEFT JOIN users owner ON owner.id = d.user_id" : "";
+  const label = dimension === "user_id" ? "COALESCE(NULLIF(d.name, ''), d.email, r.id)" : dimension === "provider_id" ? "COALESCE(NULLIF(d.name, ''), NULLIF(r.id, ''), 'Unattributed')" : dimension === "key_id" ? "COALESCE(NULLIF(d.name, ''), CASE WHEN d.id IS NULL THEN 'Deleted key' ELSE 'Unnamed key' END)" : "CASE r.id WHEN 'openai' THEN 'OpenAI' WHEN 'anthropic' THEN 'Anthropic' ELSE r.id END";
+  const detail = dimension === "user_id" ? "COALESCE(d.email, r.id)" : dimension === "key_id" ? userId === null ? "COALESCE(owner.email, 'Deleted user')" : "substr(r.id, 1, 8)" : "''";
   return db.prepare<Metrics & { id: string | null; label: string; detail: string; members: number }, Array<string | number>>(`
     WITH targets AS (
       SELECT s.${dimension} AS id, s.model, s.upstream_model, SUM(s.in_tok) AS in_tok,
@@ -24,7 +25,7 @@ function breakdown(scope: UsageScope, userId: string | null, dimension: "user_id
     )
     SELECT CASE WHEN r.rank <= ${limit} THEN r.id ELSE NULL END AS id,
       CASE WHEN r.rank <= ${limit} THEN ${label} ELSE 'Other' END AS label,
-      ${dimension === "user_id" ? `CASE WHEN r.rank <= ${limit} THEN COALESCE(d.email, r.id) ELSE '' END` : "''"} AS detail,
+      CASE WHEN r.rank <= ${limit} THEN ${detail} ELSE '' END AS detail,
       COUNT(*) AS members, ${sums("r")} FROM ranked r ${join}
     GROUP BY CASE WHEN r.rank <= ${limit} THEN r.id ELSE NULL END
     ORDER BY (CASE WHEN r.rank <= ${limit} THEN r.id ELSE NULL END) IS NULL,
@@ -53,7 +54,9 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null)
     const where = usageScopeWhere(scope, "e", userId);
     sourceSql = `SELECT CAST((CAST(e.ts / ${unit} AS INTEGER) - ${startIndex}) / ${step} AS INTEGER) AS bucket,
       e.model, e.upstream_model, SUM(e.in_tok) AS in_tok, SUM(e.cache_tok) AS cache_tok,
-      SUM(e.out_tok) AS out_tok, COUNT(*) AS reqs FROM usage_events e WHERE ${where.clauses.join(" AND ")}
+      SUM(e.out_tok) AS out_tok, COUNT(*) AS reqs,
+      SUM(e.status >= 200 AND e.status < 300) AS success_reqs, SUM(e.status < 200 OR e.status >= 300) AS error_reqs
+      FROM usage_events e WHERE ${where.clauses.join(" AND ")}
       GROUP BY bucket, e.model, e.upstream_model`;
     params = where.params;
   } else {
@@ -61,10 +64,11 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null)
     const index = monthly ? "CAST(substr(s.date, 1, 4) AS INTEGER) * 12 + CAST(substr(s.date, 6, 2) AS INTEGER) - 1" : `CAST(strftime('%s', s.date) AS INTEGER) * 1000 / ${unit}`;
     sourceSql = `SELECT CAST((${index} - ${startIndex}) / ${step} AS INTEGER) AS bucket,
       s.model, s.upstream_model, SUM(s.in_tok) AS in_tok, SUM(s.cache_tok) AS cache_tok,
-      SUM(s.out_tok) AS out_tok, SUM(s.reqs) AS reqs FROM ${source.sql} s GROUP BY bucket, s.model, s.upstream_model`;
+      SUM(s.out_tok) AS out_tok, SUM(s.reqs) AS reqs, SUM(s.success_reqs) AS success_reqs, SUM(s.error_reqs) AS error_reqs
+      FROM ${source.sql} s GROUP BY bucket, s.model, s.upstream_model`;
     params = source.params;
   }
-  const rows = db.prepare<{ metric: "cost" | "reqs"; bucket: number; model: string | null; name: string; rank: number; cost: number; reqs: number }, Array<string | number>>(`
+  const rows = db.prepare<{ metric: "cost" | "reqs"; bucket: number; model: string | null; name: string; rank: number; cost: number; reqs: number; success_reqs: number; error_reqs: number }, Array<string | number>>(`
     WITH grouped AS (${sourceSql}), priced AS MATERIALIZED (
       SELECT m.*, ${costRowFieldsSql("m")} FROM grouped m ${modelPricingJoins("m")}
     ), totals AS (
@@ -75,13 +79,14 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null)
     )
     SELECT 'cost' AS metric, p.bucket, CASE WHEN r.spend_rank <= 5 THEN p.model ELSE NULL END AS model,
       CASE WHEN r.spend_rank <= 5 THEN COALESCE(NULLIF(md.name, ''), p.model) ELSE 'Other' END AS name,
-      MIN(r.spend_rank, 6) AS rank, SUM(p.cost) AS cost, SUM(p.reqs) AS reqs
+      MIN(r.spend_rank, 6) AS rank, SUM(p.cost) AS cost, SUM(p.reqs) AS reqs,
+      SUM(p.success_reqs) AS success_reqs, SUM(p.error_reqs) AS error_reqs
     FROM priced p JOIN ranked r ON r.model = p.model LEFT JOIN models md ON md.id = p.model
     GROUP BY p.bucket, CASE WHEN r.spend_rank <= 5 THEN p.model ELSE NULL END
     UNION ALL
     SELECT 'reqs', p.bucket, CASE WHEN r.volume_rank <= 5 THEN p.model ELSE NULL END,
       CASE WHEN r.volume_rank <= 5 THEN COALESCE(NULLIF(md.name, ''), p.model) ELSE 'Other' END,
-      MIN(r.volume_rank, 6), SUM(p.cost), SUM(p.reqs)
+      MIN(r.volume_rank, 6), SUM(p.cost), SUM(p.reqs), SUM(p.success_reqs), SUM(p.error_reqs)
     FROM priced p JOIN ranked r ON r.model = p.model LEFT JOIN models md ON md.id = p.model
     GROUP BY p.bucket, CASE WHEN r.volume_rank <= 5 THEN p.model ELSE NULL END
     ORDER BY metric, rank, bucket
@@ -109,7 +114,17 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null)
   };
   const previous = scope.from === null || scope.from === 0 ? [] : filteredUsageSeries({ ...scope, from: Math.max(0, scope.from - span), to: scope.from }, userId).series;
   const users = userId === null ? breakdown(scope, null, "user_id", 8) : [];
+  const outcomes = dates.map((date) => ({ ...date, success: 0, errors: 0, unknown: 0 }));
+  for (const row of rows) {
+    if (row.metric !== "reqs") continue;
+    const point = outcomes[row.bucket];
+    if (!point) continue;
+    point.success += row.success_reqs;
+    point.errors += row.error_reqs;
+    point.unknown += Math.max(0, row.reqs - row.success_reqs - row.error_reqs);
+  }
   return { ...current, previous, modelSpend: modelChart("cost"), modelRequests: modelChart("reqs"),
-    users, providers: breakdown(scope, userId, "provider_id", 5), protocols: breakdown(scope, userId, "proto", 2),
+    users, keys: breakdown(scope, userId, "key_id", 8), outcomes,
+    providers: breakdown(scope, userId, "provider_id", 5), protocols: breakdown(scope, userId, "proto", 2),
     activeUsers: users.reduce((sum, row) => sum + row.members, 0), scope: { from: scope.from, to: scope.to } };
 }

@@ -44,7 +44,7 @@ try {
     db.prepare(`WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x+1 < ?)
       INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, model, in_tok, cache_tok, out_tok, reqs)
       SELECT 'archive-key', 'bench-user-0', date((? + (x % ?) * ?) / 1000, 'unixepoch'), 'openai', printf('archive-model-%06d', x), 100, 200, 50, 1 FROM n`).run(cardinality, start, days - 1 || 1, DAY);
-    db.exec(`INSERT INTO usage_model_provider_monthly
+    db.exec(`INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs)
       SELECT key_id, user_id, substr(date,1,7), proto, provider_id, provider_key_id, model, upstream_model, SUM(in_tok), SUM(cache_tok), SUM(out_tok), SUM(reqs)
       FROM usage_model_provider_daily GROUP BY key_id, substr(date,1,7), proto, provider_id, provider_key_id, model, upstream_model`);
   })();

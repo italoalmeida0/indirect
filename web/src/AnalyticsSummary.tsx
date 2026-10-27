@@ -66,7 +66,7 @@ export function AnalyticsBucket(props: {
   );
 }
 
-export function AnalyticsSummary(props: { report: AnalyticsReport; label: string; query: string }) {
+export function AnalyticsSummary(props: { report: AnalyticsReport; label: string; query: string; section: "spend" | "tokens" | "requests" | "costs" }) {
   const totals = createMemo(() => analyticsTotals(props.report.series));
   const previous = createMemo(() => analyticsTotals(props.report.previous));
   const value = (field: AnalyticsMetric) => totals()[field];
@@ -81,20 +81,20 @@ export function AnalyticsSummary(props: { report: AnalyticsReport; label: string
     { label: "Cache", token: "cache_tok", cost: "cost_cache", color: "var(--chart-mid)" },
     { label: "Output", token: "out_tok", cost: "cost_out", color: "var(--chart-brand)" },
   ] as const;
-  return <div class="analytics-summary">
-    <Card class="analytics-summary-spend p-5 min-w-0 flex flex-col">
+  return <div class={`analytics-summary ${props.section === "costs" ? "is-pair" : "is-single"}`}>
+    <Show when={props.section === "spend" || props.section === "costs"}><Card class="analytics-summary-spend p-5 min-w-0 flex flex-col">
       <AnalyticsHero icon={Icons.dollarSign} cost={value("cost")} label={`Spend · ${props.label}`} delta={delta(["cost"])} />
       <div class="analytics-summary-buckets"><For each={buckets}>{(bucket) => <AnalyticsBucket label={bucket.label} cost={value(bucket.cost)} color={bucket.color} delta={delta([bucket.cost])} />}</For></div>
       <div class="analytics-summary-chart"><DailyChart series={props.report.series} metric="cost" variant="line" height={160} resetKey={props.query} /></div>
-    </Card>
-    <Card class="analytics-summary-tokens p-5 min-w-0 flex flex-col">
+    </Card></Show>
+    <Show when={props.section === "tokens" || props.section === "costs"}><Card class="analytics-summary-tokens p-5 min-w-0 flex flex-col">
       <AnalyticsHero icon={Icons.chart} count={value("in_tok") + value("cache_tok") + value("out_tok")} label={`Tokens · ${props.label}`} delta={delta(["in_tok", "cache_tok", "out_tok"])} />
       <div class="analytics-summary-buckets"><For each={buckets}>{(bucket) => <AnalyticsBucket label={bucket.label} count={value(bucket.token)} color={bucket.token === "out_tok" ? "var(--chart-soft)" : bucket.color} delta={delta([bucket.token])} />}</For></div>
       <div class="analytics-summary-chart"><TokenBucketsChart series={props.report.series} /></div>
-    </Card>
-    <Card class="analytics-summary-requests overview-requests p-5 min-w-0">
+    </Card></Show>
+    <Show when={props.section === "requests"}><Card class="analytics-summary-requests overview-requests p-5 min-w-0">
       <AnalyticsHero icon={Icons.bolt} count={value("reqs")} label={`Requests · ${props.label}`} delta={delta(["reqs"])} />
-      <RequestHeatmap series={props.report.series} scope={{ ...props.report.scope, unit: props.report.granularity }} cacheHitRate={cacheRate()} compact />
-    </Card>
+      <RequestHeatmap series={props.report.series} scope={{ ...props.report.scope, unit: props.report.granularity }} cacheHitRate={cacheRate()} />
+    </Card></Show>
   </div>;
 }

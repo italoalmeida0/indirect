@@ -54,6 +54,8 @@ export function analyticsFixture(series: DailyPoint[], url: URL, admin = false, 
   return { series: points, previous: points.map((point) => ({ ...point, ...Object.fromEntries(metricFields.map((field) => [field, (point[field] ?? 0) * .8])) })),
     granularity, scope: { from: url.searchParams.get("from") === "all" ? null : Number(url.searchParams.get("from")), to: Number(url.searchParams.get("to")) },
     modelSpend: modelChart("cost"), modelRequests: modelChart("reqs"), users,
+    keys: entities([{ id: "production", label: "Production", detail: admin ? "alex@example.com" : "production" }, { id: "development", label: "Development", detail: admin ? "jamie@example.com" : "development" }, { id: "staging", label: "Staging", detail: admin ? "sam@example.com" : "staging" }], "key_id"),
+    outcomes: timeline.map((point, index) => { const errors = Math.floor(point.reqs * ((index % 5 + 1) / 100)); return { date: point.date, label: point.label ?? point.date.slice(5), lastDate: point.lastDate, success: point.reqs - errors, errors, unknown: 0 }; }),
     providers: entities([{ id: "primary", label: "Primary" }, { id: "backup", label: "Backup" }], "provider_id"),
     protocols: entities([{ id: "openai", label: "OpenAI" }, { id: "anthropic", label: "Anthropic" }], "proto"), activeUsers: users.length };
 }

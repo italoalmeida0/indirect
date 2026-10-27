@@ -34,6 +34,7 @@ try {
   let hold = false;
   let failNext = false;
   let failEvents = false;
+  let unknownStatuses = false;
   const pending = new Set<() => void>();
   page.on("pageerror", (error: Error) => errors.push(String(error)));
   await page.addInitScript(() => {
@@ -63,6 +64,7 @@ try {
   const categories = [
     { id: "model", label: "Model", icon: "lucide:box", options: ["Claude Sonnet 4.5", "GPT-5", "Gemini 2.5 Pro", "Kimi K2", "DeepSeek V3.2"].map((label, index) => ({ value: `model/${index}`, label, count: 500 - index * 50 })) },
     { id: "provider_id", label: "Provider", icon: "lucide:server", options: [{ value: "primary", label: "Primary", count: 500 }, { value: "backup", label: "Backup", count: 200 }] },
+    { id: "key_id", label: "API key", icon: "lucide:key-round", options: [{ value: "production", label: "Production", count: 500 }, { value: "development", label: "Development", count: 200 }, { value: "staging", label: "Staging", count: 100 }] },
     { id: "proto", label: "Protocol", icon: "lucide:network", options: [{ value: "openai", label: "OpenAI", count: 500 }, { value: "anthropic", label: "Anthropic", count: 200 }] },
     { id: "user_id", label: "User", icon: "lucide:users", options: [{ value: "user", label: "Alex Morgan", count: 500 }, { value: "jamie", label: "Jamie Chen", count: 200 }, { value: "sam", label: "Sam Rivera", count: 150 }] },
   ];
@@ -79,6 +81,7 @@ try {
       if (failNext) { failNext = false; await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ success: false, error: "Analytics is busy" }) }); return; }
       const fixture = seriesFor(url);
       const report = analyticsFixture(fixture.series, url, url.pathname.startsWith("/api/admin"), fixture.unit);
+      if (unknownStatuses) report.outcomes = report.outcomes.map((point) => ({ ...point, success: 0, errors: 0, unknown: point.success + point.errors + point.unknown }));
       reports.set(url.pathname + url.search, report);
       data = report as unknown as Record<string, unknown>;
     } else if (url.pathname === "/api/usage/events") {
@@ -105,7 +108,12 @@ try {
   assert.equal(await page.locator(".ag-floating-filter").count(), 0);
   assert.equal(await page.locator(".analytics-summary > .ui-card").count(), 3);
   const boxes = await page.locator(".analytics-summary > .ui-card").evaluateAll((elements: HTMLElement[]) => elements.map((element) => ({ y: element.getBoundingClientRect().y, width: element.getBoundingClientRect().width })));
-  assert(boxes.every((box: any) => Math.abs(box.y - boxes[0].y) < 1 && Math.abs(box.width - boxes[0].width) < 1), "Summary cards do not share the full-width row");
+  assert(boxes.every((box: any, index: number) => Math.abs(box.width - boxes[0].width) < 1 && (index === 0 || box.y > boxes[index - 1].y + 250)), "Usage summaries are not isolated in context sections");
+  assert.equal(await page.locator(".usage-request-history").getByText("reqs", { exact: true }).count(), 0, "Request grid still repeats request totals");
+  assert.equal(await page.locator(".usage-request-history").getByText("Total:", { exact: true }).count(), 0, "Request grid still repeats spend totals");
+  assert.equal(await page.locator(".analytics-key-tile").count(), 3);
+  assert.equal(await page.locator(".analytics-outcome-line").count(), 2);
+  assert(!/NaN/.test((await page.locator(".analytics-outcome-line").first().getAttribute("d")) ?? ""));
   assert.equal(reads.filter((url) => url.pathname === "/api/usage/analytics").length, 1, "Initial charts did not share a consolidated report");
   assert(!reads.some((url) => url.pathname.includes("usage/breakdown")), "Removed model grid still queries the API");
   assert(await page.locator(".analytics-model-chart.is-spend rect.analytics-series-bar").count() > 0);
@@ -115,6 +123,9 @@ try {
   const requestColors = await legendColors(".is-volume");
   for (const model of Object.keys(spendColors)) assert.equal(requestColors[model], spendColors[model], `${model} changed color between charts`);
   const initial = [...reports.values()][0]!;
+  const successes = initial.outcomes.reduce((sum, point) => sum + point.success, 0);
+  const failures = initial.outcomes.reduce((sum, point) => sum + point.errors, 0);
+  assert.equal(await page.locator(".analytics-outcomes-chart .analytics-chart-value > strong").innerText(), `${(successes / (successes + failures) * 100).toLocaleString("en", { maximumFractionDigits: 1 })}%`);
   const totalTokens = initial.series.reduce((sum, point) => sum + point.in_tok + point.cache_tok + point.out_tok, 0);
   assert.equal(Number((await page.locator(".analytics-summary-tokens [title]").first().getAttribute("title")).replaceAll(",", "")), totalTokens);
   await fits("Usage desktop"); await capture("usage-desktop-dark.png");
@@ -136,6 +147,10 @@ try {
   await page.getByRole("button", { name: "Clear all", exact: true }).click(); await settled();
   await choosePeriod("Past 24 hours");
   await fits("Hourly usage");
+  await page.getByRole("button", { name: "Filter by API key Production", exact: true }).click(); await settled();
+  assert.equal(await page.locator(".analytics-key-tile").count(), 1);
+  assert(reads.filter((url) => url.pathname === "/api/usage/analytics").at(-1)!.searchParams.get("selection")?.includes("production"));
+  await page.getByRole("button", { name: "Clear all", exact: true }).click(); await settled();
   await choosePeriod("All time"); await fits("All-history usage");
   await choosePeriod("Past 2 weeks");
   for (const width of [1024, 768, 390, 320]) {
@@ -156,12 +171,18 @@ try {
   assert.equal(await page.locator(".analytics-donut-segment").count(), 2);
   assert.equal(await page.locator(".analytics-scatter circle").count(), 3);
   assert(!reads.some((url) => url.pathname.includes("usage-breakdown")), "Global Stats still queries removed grids");
+  const globalBoxes = await page.locator(".analytics-summary > .ui-card").evaluateAll((elements: HTMLElement[]) => elements.map((element) => ({ y: element.getBoundingClientRect().y, width: element.getBoundingClientRect().width })));
+  assert(Math.abs(globalBoxes[0].y - globalBoxes[1].y) < 1 && globalBoxes[2].y > globalBoxes[1].y + 250 && globalBoxes[2].width > globalBoxes[0].width * 1.9, "Global Requests is not isolated from Spend and Tokens");
+  assert.equal(await page.locator(".analytics-outcome-line").count(), 2);
   await fits("Global desktop"); await capture("global-desktop-dark.png");
   await page.getByRole("button", { name: "Filter by user Alex Morgan", exact: true }).click(); await settled();
   assert.equal(await page.locator(".analytics-user-row").count(), 1);
   assert.equal(await page.locator(".analytics-scatter circle").count(), 1);
   const userQuery = reads.filter((url) => url.pathname === "/api/admin/analytics").at(-1)!;
   assert.deepEqual(JSON.parse(userQuery.searchParams.get("selection")!).user_id.include, ["user"]);
+  await page.getByRole("button", { name: "Clear all", exact: true }).click(); await settled();
+  await page.getByRole("button", { name: "Filter by API key Production", exact: true }).click(); await settled();
+  assert.equal(await page.locator(".analytics-key-tile").count(), 1);
   await page.getByRole("button", { name: "Clear all", exact: true }).click(); await settled();
   await page.locator(".analytics-provider-legend button").first().click(); await settled();
   assert.equal(await page.locator(".analytics-donut-segment").count(), 1);
@@ -173,6 +194,12 @@ try {
   await page.setViewportSize({ width: 1440, height: 1100 });
   await page.evaluate(() => document.documentElement.dataset.theme = "light"); await capture("global-desktop-light.png");
   await page.evaluate(() => document.documentElement.dataset.theme = "high-contrast"); await fits("Global high contrast");
+  unknownStatuses = true; await choosePeriod("Past year");
+  assert.equal(await page.locator(".analytics-outcome-line").count(), 0, "Unknown statuses became artificial success/error points");
+  assert(await page.getByText("No retained response statuses", { exact: true }).isVisible());
+  assert(await page.locator(".analytics-outcome-coverage").isVisible());
+  assert.equal(await page.locator(".analytics-outcomes-chart .analytics-chart-value > strong").innerText(), "—");
+  unknownStatuses = false; await choosePeriod("Past 2 weeks");
   failNext = true; await page.getByRole("button", { name: /^Time range:/ }).click(); await page.getByRole("button", { name: /Past month$/ }).click();
   await page.locator(".analytics-error").waitFor();
   await page.getByRole("button", { name: "Retry", exact: true }).click(); await settled();
@@ -201,7 +228,7 @@ try {
   });
   await touch.route("**/api/**", mockApi);
   await touch.goto(`${serverUrl}#/admin/stats`);
-  await touch.locator(".analytics-summary").waitFor();
+  await touch.locator(".analytics-summary").first().waitFor();
   await touch.locator(".analytics-scatter circle").first().tap();
   await touch.waitForFunction(() => document.querySelectorAll(".analytics-user-row").length === 1 && document.querySelector(".analytics-page")?.getAttribute("aria-busy") === "false");
   await touch.getByRole("button", { name: "Clear all", exact: true }).tap();
@@ -214,7 +241,7 @@ try {
   await touch.screenshot({ path: path.join(output, "global-touch.png"), fullPage: true });
   await touch.close();
   assert.deepEqual(errors, [], "Browser runtime errors");
-  console.log(`Analytics UI passed: summary cards, model bars, cache data, one request grid, global visualizations, user/provider/model drilldowns, pending states, retry, empty data and responsive themes. Screenshots: ${output}`);
+  console.log(`Analytics UI passed: context sections, model bars, cache data, API key cards, two response-rate lines, request grid without duplicate totals, global visualizations, shared drilldowns, retries, touch and responsive themes. Screenshots: ${output}`);
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(output, "failure.png"), fullPage: true });
   throw error;
