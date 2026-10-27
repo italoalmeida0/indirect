@@ -69,6 +69,11 @@ frontend + daemon. Run checks from the appropriate project root.
   on Modal/toasts: retained transforms break fixed positioning. Modal entrance
   uses fill-mode `backwards`, not `both`. Solid memos evaluate eagerly: declare
   dependencies above `createMemo` (typecheck cannot catch initial-render TDZ).
+- Gateway catalog screens share `web/src/catalog.tsx` and external include/exclude
+  filters. Desktop blocks and mobile pages use the same server query. AG Grid is
+  fixed-order, automatically sized and sort-only; persist sort state only.
+  Model selections are shared across cards and tables, capped at 10,000 IDs;
+  Selected only queries send IDs in a POST body. Audit reads use bounded workers.
 - Daemon process helpers: `packages/proctable` powers `KillTree` (including
   setsid'd descendants); `packages/linereader` replaces `bufio.Scanner` for
   unbounded input such as SSE. Kills escalate TERM → grace → KILL + tree sweep;

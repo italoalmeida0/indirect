@@ -9,13 +9,14 @@ import { calendarPeriods, localDateTime, presetRange, rangeLabel, rangeUnit, rel
 interface FilterOption { value: string; label: string; count: number }
 interface FilterCategory { id: string; label: string; icon: string }
 const categoryIcons: Record<string, string> = { model: "lucide:box", provider_id: "lucide:server", key_id: "lucide:key", proto: "lucide:arrow-left-right", upstream_model: "lucide:layers", provider_key_id: "lucide:shield", user_id: "lucide:users" };
+Object.assign(categoryIcons, { key: "lucide:key-round", provider: "lucide:server", user: "lucide:user-round", owner: "lucide:users", status: "lucide:circle-check", role: "lucide:shield", expiry: "lucide:calendar-clock", budget: "lucide:gauge", source: "lucide:database", tool_mode: "lucide:wrench", feature: "lucide:sparkles", modality: "lucide:layers", two_factor: "lucide:shield-check", password: "lucide:key-round", google: "lucide:log-in", action: "lucide:activity", actor: "lucide:user-round", target: "lucide:crosshair", ip: "lucide:network", protocol: "lucide:arrow-left-right" });
 type Mode = "include" | "exclude";
 type Selection = Record<string, { include: string[]; exclude: string[] }>;
 interface FilterMetadata { categories: FilterCategory[]; selection: Selection; selectedOptions: Record<string, FilterOption[]> }
 interface FilterPage { field: string; options: FilterOption[]; total: number; offset: number; limit: number }
 
-export function createAnalyticsFilters(admin = false) {
-  const [range, setRangeValue] = createSignal(presetRange("14d"));
+export function createAnalyticsFilters(admin = false, config?: { endpoint: string; initialPreset?: string }) {
+  const [range, setRangeValue] = createSignal(presetRange(config?.initialPreset ?? "14d"));
   const [selection, setSelection] = createSignal<Selection>({});
   const [applied, setApplied] = createSignal({ range: range(), selection: {} as Selection });
   const [labels, setLabels] = createSignal<Record<string, string>>({});
@@ -27,7 +28,7 @@ export function createAnalyticsFilters(admin = false) {
   let pageAbort: AbortController | undefined;
   let selectionTimer: ReturnType<typeof setTimeout> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
-  const endpoint = admin ? "/api/admin/usage-filter-options" : "/api/usage/filter-options";
+  const endpoint = config?.endpoint ?? (admin ? "/api/admin/usage-filter-options" : "/api/usage/filter-options");
   const paramsFor = (period: AnalyticsRange, selected: Selection = {}) => new URLSearchParams({ from: period.from === null ? "all" : String(period.from), to: String(period.to), selection: JSON.stringify(selected) });
   const keepLabels = (selected: Selection, supplied: Record<string, FilterOption[]> = {}) => setLabels((previous) => {
     const next: Record<string, string> = {};
@@ -249,7 +250,7 @@ function Calendar(props: { from: string; to: string; setFrom: (value: string) =>
   </div>;
 }
 
-export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnalyticsFilters>; loading?: boolean; align?: "start" | "end" }) {
+export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnalyticsFilters>; loading?: boolean; align?: "start" | "end"; label?: string; dateLabel?: string }) {
   const f = props.filters;
   const [open, setOpen] = createSignal<"filters" | "period" | null>(null);
   const [active, setActive] = createSignal("");
@@ -308,11 +309,11 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
 
   return <div class={`analytics-toolbar ${props.align === "end" ? "analytics-toolbar-end" : ""}`} aria-label="Analytics filters">
     <div class="analytics-controls">
-      <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label="Filter usage" aria-busy={props.loading || f.pending()} aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
+      <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label={`Filter ${props.label ?? "usage"}`} aria-busy={props.loading || f.pending()} aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
         <Icon name={props.loading || f.pending() ? Icons.refresh : "lucide:list-filter"} size={16} class={props.loading || f.pending() ? "animate-spin motion-reduce:animate-none" : ""} /><span>Filter</span><Show when={count()}><span class="analytics-filter-count">{count()}</span></Show>
       </button>
       <button ref={periodButton} type="button" class={`analytics-control analytics-period-trigger ${open() === "period" ? "is-active" : ""}`} title={exactRange()} aria-label={`Time range: ${f.label()}`} aria-haspopup="dialog" aria-expanded={open() === "period"} aria-controls={`${id}-period`} onClick={() => { if (open() === "period") close(); else { setCustom(false); setOpen("period"); } }}>
-        <Icon name="lucide:calendar-days" size={15} /><span class="analytics-range-name">{f.label()}</span><span class="analytics-range-dates">{periodText()}</span><Icon name={Icons.chevronDown} size={13} class="text-ink-500" />
+        <Icon name="lucide:calendar-days" size={15} /><span class="analytics-range-name">{props.dateLabel ? `${props.dateLabel}: ` : ""}{f.label()}</span><span class="analytics-range-dates">{periodText()}</span><Icon name={Icons.chevronDown} size={13} class="text-ink-500" />
       </button>
     </div>
     <Show when={chips().length}>
@@ -325,7 +326,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
       </div>
     </Show>
     <Show when={open() === "filters"}>
-      <FloatingPanel anchor={filterButton} label="Usage filters" wide={!!active()} expandable close={close}>
+      <FloatingPanel anchor={filterButton} label={`${props.label ?? "Usage"} filters`} wide={!!active()} expandable close={close}>
         <div id={`${id}-filters`} class={`analytics-filter-layout ${active() ? "has-detail" : ""}`}>
           <div class="analytics-categories">
             <SearchField value={categorySearch()} onInput={setCategorySearch} placeholder="Search filters…" initial />
@@ -334,7 +335,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
                 <Show when={!f.options.error} fallback={<div class="analytics-empty">Could not load filters.<button type="button" class="analytics-clear block mx-auto mt-2" onClick={() => void f.refetch()}>Try again</button></div>}>
                   <For each={categories()}>{(category) => {
                     const selected = () => (f.selection()[category.id]?.include.length ?? 0) + (f.selection()[category.id]?.exclude.length ?? 0);
-                    return <button type="button" data-nav class={`analytics-menu-row ${active() === category.id ? "is-active" : ""}`} aria-label={`Filter by ${category.label}`} aria-pressed={active() === category.id} onClick={() => chooseCategory(category.id)}><Icon name={categoryIcons[category.id] ?? Icons.layers} size={15} class="text-ink-400" /><span>{category.label}</span><Show when={selected()}><span class="analytics-category-count">{selected()}</span></Show><Icon name={Icons.chevronRight} size={14} class="ml-auto text-ink-500" /></button>;
+                    return <button type="button" data-nav class={`analytics-menu-row ${active() === category.id ? "is-active" : ""}`} aria-label={`Filter by ${category.label}`} aria-pressed={active() === category.id} onClick={() => chooseCategory(category.id)}><Icon name={categoryIcons[category.id] || category.icon || Icons.layers} size={15} class="text-ink-400" /><span>{category.label}</span><Show when={selected()}><span class="analytics-category-count">{selected()}</span></Show><Icon name={Icons.chevronRight} size={14} class="ml-auto text-ink-500" /></button>;
                   }}</For>
                   <Show when={!categories().length}><p class="analytics-empty">No filters found.</p></Show>
                 </Show>
@@ -357,7 +358,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
                   <span class="analytics-option-name">{option.label}</span><Show when={other()}><Icon name={mode() === "include" ? "lucide:minus" : "lucide:plus"} size={12} class="text-ink-500" /></Show><span class="analytics-option-count">{option.count.toLocaleString()}</span>
                 </button>;
               }}</For>
-              <Show when={!visibleOptions().length}><div class="analytics-empty"><Icon name={Icons.search} size={22} class="mb-2 text-ink-500" /><p>{f.search() ? "No matches in this period" : "No usage in this period"}</p><p class="mt-1 text-ink-500">Choose another period or search.</p></div></Show>
+              <Show when={!visibleOptions().length}><div class="analytics-empty"><Icon name={Icons.search} size={22} class="mb-2 text-ink-500" /><p>{f.search() ? "No matches in this period" : props.label ? "No records in this period" : "No usage in this period"}</p><p class="mt-1 text-ink-500">Choose another period or search.</p></div></Show>
               </Show>
               </Show>
             </div>

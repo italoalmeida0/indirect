@@ -1112,6 +1112,95 @@ describe("gateway end-to-end", () => {
     expect(all.json.rows.length).toBeGreaterThanOrEqual(bd.json.rows.length);
   });
 
+  test("catalog filters share exact scopes, isolate owners and paginate complete inventories", async () => {
+    const fixture = new Database(path.join(dataDir, "gateway.db"));
+    const user = fixture.query("SELECT id FROM users WHERE email = ?").get(userEmail) as { id: string };
+    const provider = fixture.query("SELECT id FROM providers LIMIT 1").get() as { id: string };
+    const from = Date.UTC(2022, 0, 1), to = Date.UTC(2023, 0, 1);
+    const params = (selection: Record<string, unknown> = {}) => new URLSearchParams({ from: String(from), to: String(to), selection: JSON.stringify(selection), limit: "25" });
+    const prefix = "catalog-fixture/";
+    const keyIds = Array.from({ length: 65 }, (_, index) => `ca${String(index).padStart(22, "0")}`);
+    try {
+      fixture.run("INSERT INTO users (id, email, name, created_at) VALUES ('catalog-fixture-foreign', 'catalog-foreign@example.com', 'Catalog foreign', ?)", [from]);
+      const key = fixture.query("INSERT INTO api_keys (id, user_id, name, prefix, hash, status, created_at) VALUES (?, ?, ?, 'sk-catalog', ?, ?, ?)");
+      for (let index = 0; index < 65; index++) key.run(keyIds[index]!, user.id, `Catalog fixture ${index}`, prefix + index, index % 3 ? "active" : "revoked", from + index);
+      key.run("cb0000000000000000000000", "catalog-fixture-foreign", "Catalog foreign", prefix + "foreign", "active", from);
+      fixture.run("INSERT INTO providers (id, name, api_key_enc, enabled, openai_base_url, created_at) VALUES ('catalog-fixture-provider', 'Catalog backup', 'fixture-only', 0, 'https://upstream.example', ?)", [from]);
+      const model = fixture.query("INSERT INTO models (id, upstream_model, name, provider_id, enabled, source, features, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      for (let index = 0; index < 65; index++) model.run(prefix + index, prefix + index, `Catalog model ${index}`, provider.id, index % 2, index % 2 ? "manual" : "auto", JSON.stringify(index % 2 ? ["tools"] : ["vision"]), from + index, from + index);
+      fixture.run("INSERT INTO models (id, upstream_model, name, created_at, updated_at) VALUES (?, '', 'Literal model', ?, ?)", [prefix + "quoted'_%", from, from]);
+      for (const kind of ["models", "users", "keys", "providers", "audit"]) {
+        expect((await api(`/api/admin/${kind}/filter-options?${params()}`, { token: userToken })).status).toBe(403);
+        expect((await api(`/api/admin/${kind}/filter-options?${params()}`, { token: adminToken })).status).toBe(200);
+      }
+      expect((await api(`/api/keys/filter-options?${params()}`)).status).toBe(401);
+      const own = await api(`/api/keys/filter-options?${params()}`, { token: userToken });
+      expect(own.json.categories.map((category: any) => category.id)).not.toContain("owner");
+      expect((await api(`/api/keys/filter-options?${params()}&field=owner`, { token: userToken })).status).toBe(400);
+      const options = await api(`/api/keys/filter-options?${params()}&field=key&offset=60`, { token: userToken });
+      expect(options.status).toBe(200); expect(options.json.total).toBe(65); expect(options.json.options).toHaveLength(5);
+      expect(JSON.stringify(options.json)).not.toContain("Catalog foreign");
+      expect(JSON.stringify(options.json)).not.toContain(gatewayKey);
+      const ownPage = await api(`/api/keys?${params()}&offset=50`, { token: userToken });
+      expect(ownPage.status).toBe(200); expect(ownPage.json.total).toBe(65); expect(ownPage.json.keys).toHaveLength(15);
+      const filtered = params({ status: { include: ["active", "revoked"], exclude: ["revoked"] } });
+      expect((await api(`/api/keys?${filtered}`, { token: userToken })).json.total).toBe(43);
+      expect((await api(`/api/admin/keys?${params()}`, { token: adminToken })).json.total).toBe(66);
+      const byFeature = params({ feature: { include: ["tools"], exclude: [] } });
+      const models = await api(`/api/admin/models?${byFeature}&offset=25`, { token: adminToken });
+      expect(models.status).toBe(200); expect(models.json.total).toBe(32); expect(models.json.models).toHaveLength(7);
+      const ids = await api(`/api/admin/models/selection?${byFeature}`, { token: adminToken });
+      expect(ids.status).toBe(200); expect(ids.json.ids).toHaveLength(32);
+      expect(ids.json.ids).toContain(prefix + "63");
+      const selectedPage = await api(`/api/admin/models/query?${params()}`, { method: "POST", token: adminToken, body: { selected_ids: [prefix + "0", prefix + "64"] } });
+      expect(selectedPage.status).toBe(200); expect(selectedPage.json.total).toBe(2);
+      const largeIds = [...Array.from({ length: 65 }, (_, index) => prefix + index), ...Array.from({ length: 9935 }, (_, index) => `missing-${String(index).padStart(60, "0")}`)];
+      const largeSelection = await api(`/api/admin/models/query?${params()}`, { method: "POST", token: adminToken, body: { selected_ids: largeIds } });
+      expect(largeSelection.status).toBe(200); expect(largeSelection.json.total).toBe(65);
+      expect((await api(`/api/admin/models/query?${params()}`, { method: "POST", token: userToken, body: { selected_ids: [] } })).status).toBe(403);
+      const literal = await api(`/api/admin/models/filter-options?${params()}&field=model&q=${encodeURIComponent("'_%")}`, { token: adminToken });
+      expect(literal.status).toBe(200); expect(literal.json.options.map((option: any) => option.value)).toEqual([prefix + "quoted'_%"]);
+      const byProvider = params({ provider: { include: [provider.id], exclude: [] } });
+      expect((await api(`/api/admin/models?${byProvider}`, { token: adminToken })).json.total).toBe(65);
+      fixture.run("INSERT INTO model_targets (model_id, provider_id, upstream_model, priority, enabled, created_at) VALUES (?, 'catalog-fixture-provider', 'fallback', 0, 1, ?)", [prefix + "0", from]);
+      const fallbackProvider = params({ provider: { include: ["catalog-fixture-provider"], exclude: [] } });
+      expect((await api(`/api/admin/models?${fallbackProvider}`, { token: adminToken })).json.total).toBe(1);
+      expect((await api(`/api/admin/providers?${params()}&search=Catalog`, { token: adminToken })).json.total).toBe(1);
+      const byRole = params({ role: { include: ["user"], exclude: [] } });
+      const users = await api(`/api/admin/users?${byRole}`, { token: adminToken });
+      expect(users.status).toBe(200); expect(users.json.users.map((user: any) => user.id)).toEqual(["catalog-fixture-foreign"]);
+      const insertAudit = fixture.query("INSERT INTO audit_log (ts, actor_id, action, target, ip) VALUES (?, ?, 'catalog.fixture', ?, '192.0.2.1')");
+      for (let index = 0; index < 65; index++) insertAudit.run(from + index, user.id, prefix + index);
+      const auditQuery = params({ action: { include: ["catalog.fixture"], exclude: [] } });
+      const auditPage = await api(`/api/admin/audit?${auditQuery}`, { token: adminToken });
+      expect(auditPage.status).toBe(200); expect(auditPage.json.total).toBe(65); expect(auditPage.json.entries).toHaveLength(25);
+      const last = auditPage.json.entries.at(-1);
+      const nextAudit = await api(`/api/admin/audit?${auditQuery}&offset=25&cursor=${last.ts}:${last.id}`, { token: adminToken });
+      expect(nextAudit.status).toBe(200); expect(nextAudit.json.total).toBe(65);
+      expect(nextAudit.json.entries.some((entry: any) => auditPage.json.entries.some((first: any) => first.id === entry.id))).toBe(false);
+      const actorScope = params({ actor: { include: [userEmail], exclude: [] } });
+      expect((await api(`/api/admin/audit?${actorScope}`, { token: adminToken })).json.total).toBe(65);
+      const actorOptions = await api(`/api/admin/audit/filter-options?${params()}&field=actor`, { token: adminToken });
+      expect(actorOptions.json.options).toContainEqual({ value: userEmail, label: userEmail, count: 65 });
+      const outside = params({ model: { include: [prefix + "0", "missing"], exclude: [] } });
+      const valid = await api(`/api/admin/models/filter-options?${outside}`, { token: adminToken });
+      expect(valid.json.selection.model.include).toEqual([prefix + "0"]);
+      for (const bad of ["[]", "not-json", JSON.stringify({ unknown: { include: ["x"], exclude: [] } }), JSON.stringify({ status: { include: Array(251).fill("active"), exclude: [] } })]) {
+        const query = params(); query.set("selection", bad);
+        expect((await api(`/api/admin/models?${query}`, { token: adminToken })).status).toBe(400);
+      }
+      const query = params(); query.set("from", "NaN");
+      expect((await api(`/api/admin/audit?${query}`, { token: adminToken })).status).toBe(400);
+    } finally {
+      fixture.run("DELETE FROM models WHERE id LIKE 'catalog-fixture/%'");
+      fixture.run("DELETE FROM providers WHERE id = 'catalog-fixture-provider'");
+      fixture.run("DELETE FROM audit_log WHERE action = 'catalog.fixture'");
+      fixture.run("DELETE FROM api_keys WHERE hash LIKE 'catalog-fixture/%'");
+      fixture.run("DELETE FROM users WHERE id = 'catalog-fixture-foreign'");
+      fixture.close();
+    }
+  });
+
   test("server-driven grids paginate, filter and sort", async () => {
     const query = (pathname: string, params: Record<string, string>) =>
       `${pathname}?${new URLSearchParams(params).toString()}`;

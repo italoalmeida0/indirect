@@ -105,15 +105,7 @@ export function publicKey(row: ApiKeyRow, userEmail?: string, spend?: { today: n
   };
 }
 
-/**
- * Server-driven key listing (AG Grid blocks). userId narrows to one owner
- * (null = admin/global). The output-token counters become SQL columns via
- * correlated subqueries so they're sortable/filterable alongside the rest.
- */
-export function queryKeys(
-  userId: string | null,
-  grid: { limit: number; offset: number; sort?: Array<{ colId: string; sort: string }>; filters?: Record<string, { filterType?: string; type?: string; filter?: unknown; filterTo?: unknown }> },
-): { keys: ReturnType<typeof publicKey>[]; total: number } {
+export function keyQuerySource(userId: string | null) {
   const sourceSql = userId
     ? `SELECT k.*, u.email AS userEmail,
               COALESCE((SELECT out_tok FROM usage_daily WHERE key_id = k.id AND date = date('now')), 0) AS _out_today,
@@ -123,7 +115,7 @@ export function queryKeys(
               COALESCE((SELECT out_tok FROM usage_daily WHERE key_id = k.id AND date = date('now')), 0) AS _out_today,
               COALESCE((SELECT SUM(out_tok) FROM usage_daily WHERE key_id = k.id), 0) AS _out_total
        FROM api_keys k LEFT JOIN users u ON u.id = k.user_id`;
-  const baseSql = `
+  const sql = `
     SELECT q.*,
            CASE
              WHEN q.status = 'revoked' THEN 'revoked'
@@ -134,6 +126,21 @@ export function queryKeys(
              ELSE 'active'
            END AS effective_status
     FROM (${sourceSql}) q`;
+  return { sql, params: userId ? [userId] : [] };
+}
+
+/**
+ * Server-driven key listing (AG Grid blocks). userId narrows to one owner
+ * (null = admin/global). The output-token counters become SQL columns via
+ * correlated subqueries so they're sortable/filterable alongside the rest.
+ */
+export function queryKeys(
+  userId: string | null,
+  grid: { limit: number; offset: number; sort?: Array<{ colId: string; sort: string }>; filters?: Record<string, { filterType?: string; type?: string; filter?: unknown; filterTo?: unknown }> },
+  extra?: { clauses: string[]; params: Array<string | number> },
+): { keys: ReturnType<typeof publicKey>[]; total: number } {
+  const source = keyQuerySource(userId);
+  const baseSql = extra ? `SELECT r.* FROM (${source.sql}) r WHERE ${extra.clauses.join(" AND ") || "1"}` : source.sql;
   const cols: Record<string, ColSpec> = {
     name: { col: "name" },
     userEmail: { col: "userEmail" },
@@ -148,7 +155,7 @@ export function queryKeys(
   };
   const { rows, total } = gridPage({
     baseSql,
-    baseParams: userId ? [userId] : [],
+    baseParams: [...source.params, ...(extra?.params ?? [])],
     cols,
     grid,
     defaultOrder: "created_at DESC",

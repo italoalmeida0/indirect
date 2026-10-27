@@ -1,37 +1,9 @@
-import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { Show, createEffect, onCleanup } from "solid-js";
 import AgGridSolid, { type AgGridSolidRef } from "solid-ag-grid";
-import type {
-  ColDef,
-  ColGroupDef,
-  ColumnState,
-  GridApi,
-  IFilterParams,
-  IFloatingFilterParams,
-} from "ag-grid-community";
-
+import type { ColDef, ColGroupDef, GridApi } from "ag-grid-community";
 import "ag-grid-community/styles/ag-grid.css";
 import "ag-grid-community/styles/ag-theme-quartz.css";
-
-import { Badge, Btn, Icon, Icons, fmtCost, fmtDate, fmtNum, getTheme, theme } from "./ui";
-
-/**
- * AG Grid usage tables (ag-grid-community + solid-ag-grid, user-sanctioned).
- *
- * The theme follows the app's white/dark system: the wrapper toggles the
- * ag-theme-quartz / ag-theme-quartz-dark class, and the --ag-* CSS variables
- * are remapped to the project's semantic tokens in style.tailwindcss.css so
- * both themes stay in sync with the rest of the UI.
- *
- * Gotchas around solid-ag-grid@0.0.230:
- *  - Every option prop is diffed in an effect that can fire BEFORE the grid's
- *    internal api exists (its api is assigned in a later microtask); a prop
- *    change inside that window crashes with
- *    `Cannot read properties of undefined ('__internalUpdateGridOptions')`.
- *    So: option props are MODULE CONSTANTS (not inline literals, which would
- *    be new identities every render) and the grid only mounts once rowData
- *    is a real array (never in the resource-pending window).
- *  - Custom cell renderers are Solid components passed as `cellRenderer`.
- */
+import { Badge, fmtCost, fmtDate, fmtNum, getTheme, theme } from "./ui";
 
 /** OpenAI / Anthropic protocol badge cell. */
 export function ProtoCell(props: { value?: string }) {
@@ -72,46 +44,6 @@ export function costFormatter(p: { value?: unknown }) {
   return fmtCost(Number(p.value));
 }
 
-// Module-level constants — see the gotcha note above (stable identities keep
-// the grid's internal prop-diff effect from firing spurious change updates).
-const DEFAULT_COL_DEF: ColDef = {
-  sortable: true,
-  resizable: true,
-  filter: "agTextColumnFilter",
-  floatingFilter: true,
-  minWidth: 72,
-};
-const UNFILTERED_COL_DEF: ColDef = { ...DEFAULT_COL_DEF, filter: false, floatingFilter: false };
-
-function withoutColumnFilters(column: ColDef | ColGroupDef): ColDef | ColGroupDef {
-  if ("children" in column) return { ...column, children: column.children.map(withoutColumnFilters) };
-  return { ...column, filter: false, floatingFilter: false, floatingFilterComponent: undefined };
-}
-const PAGE_SIZE_SELECTOR: number[] = [15, 20, 25, 50, 100, 250];
-// The datetime floating filter stacks TWO datetime-local inputs — grids whose
-// colDefs use it get a taller floating row (module constants, see gotcha above).
-const FLOATING_FILTERS_TALL = { floatingFiltersHeight: 48 };
-const FLOATING_FILTERS_DEFAULT = {};
-
-/** AG Grid date filters receive native Date values by default. Our API DTOs
- * carry epoch milliseconds, so compare their local calendar day explicitly. */
-export const EPOCH_DATE_FILTER_PARAMS = {
-  browserDatePicker: true,
-  comparator: (filterLocalDateAtMidnight: Date, cellValue: unknown) => {
-    const timestamp = Number(cellValue);
-    if (!Number.isFinite(timestamp)) return -1;
-    const cellDate = new Date(timestamp);
-    const cellDay = new Date(
-      cellDate.getFullYear(),
-      cellDate.getMonth(),
-      cellDate.getDate(),
-    );
-    if (cellDay < filterLocalDateAtMidnight) return -1;
-    if (cellDay > filterLocalDateAtMidnight) return 1;
-    return 0;
-  },
-};
-
 export interface GridRowsParams {
   startRow: number;
   endRow: number;
@@ -119,162 +51,6 @@ export interface GridRowsParams {
   filterModel: Record<string, unknown>;
   successCallback: (rowsThisBlock: unknown[], lastRow: number) => void;
   failCallback: () => void;
-}
-
-/** Custom datetime filter model — also the server contract (gridql "datetime"
- *  branch): from/to are epoch MILLISECONDS, timezone-corrected client-side
- *  (datetime-local parses in the browser's local zone). */
-interface DateTimeFilterModel {
-  filterType: "datetime";
-  from: number | null;
-  to: number | null;
-}
-
-function parseLocalDateTime(value: string): number | null {
-  if (!value) return null;
-  const ms = Date.parse(value); // no offset → browser-local
-  return Number.isFinite(ms) ? ms : null;
-}
-
-function toLocalDateTimeInput(ms: number | null): string {
-  if (ms == null) return "";
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-}
-
-/** From/To datetime-local range filter (vanilla AG Grid IFilter). The grids
- *  run the infinite row model — the SERVER filters (gridql datetime branch);
- *  doesFilterPass exists only to satisfy the interface. */
-export class DateTimeFilter {
-  private params!: IFilterParams;
-  private eGui!: HTMLDivElement;
-  private fromInput!: HTMLInputElement;
-  private toInput!: HTMLInputElement;
-  private from: number | null = null;
-  private to: number | null = null;
-
-  init(params: IFilterParams): void {
-    this.params = params;
-    this.eGui = document.createElement("div");
-    this.eGui.className = "llmgw-dtfilter";
-    const row = (label: string): HTMLInputElement => {
-      const wrap = document.createElement("label");
-      wrap.className = "llmgw-dtfilter-row";
-      const span = document.createElement("span");
-      span.textContent = label;
-      const input = document.createElement("input");
-      input.type = "datetime-local";
-      input.className = "llmgw-dt-input";
-      input.addEventListener("input", () => this.onChanged());
-      wrap.append(span, input);
-      this.eGui.appendChild(wrap);
-      return input;
-    };
-    this.fromInput = row("From");
-    this.toInput = row("To");
-    const clear = document.createElement("button");
-    clear.type = "button";
-    clear.className = "llmgw-dt-clear";
-    clear.textContent = "Clear";
-    clear.addEventListener("click", () => {
-      this.fromInput.value = "";
-      this.toInput.value = "";
-      this.onChanged();
-    });
-    this.eGui.appendChild(clear);
-  }
-
-  private onChanged(): void {
-    this.from = parseLocalDateTime(this.fromInput.value);
-    this.to = parseLocalDateTime(this.toInput.value);
-    this.params.filterChangedCallback();
-  }
-
-  getGui(): HTMLElement {
-    return this.eGui;
-  }
-
-  isFilterActive(): boolean {
-    return this.from != null || this.to != null;
-  }
-
-  doesFilterPass(): boolean {
-    return true;
-  }
-
-  getModel(): DateTimeFilterModel | null {
-    if (!this.isFilterActive()) return null;
-    return { filterType: "datetime", from: this.from, to: this.to };
-  }
-
-  setModel(model: DateTimeFilterModel | null): void {
-    const valid = model != null && model.filterType === "datetime";
-    this.from = valid && Number.isFinite(model!.from) ? model!.from : null;
-    this.to = valid && Number.isFinite(model!.to) ? model!.to : null;
-    this.fromInput.value = toLocalDateTimeInput(this.from);
-    this.toInput.value = toLocalDateTimeInput(this.to);
-  }
-
-  /** Floating-filter edits land here — one source of truth for the bounds. */
-  setRangeFromFloating(from: number | null, to: number | null): void {
-    this.from = from;
-    this.to = to;
-    this.fromInput.value = toLocalDateTimeInput(from);
-    this.toInput.value = toLocalDateTimeInput(to);
-    this.params.filterChangedCallback();
-  }
-}
-
-/** Floating row companion: two compact datetime-local inputs that push bounds
- *  into the parent DateTimeFilter. AG Grid instantiates the parent filter
- *  alongside the floating filter, so parentFilterInstance always resolves. */
-export class DateTimeFloatingFilter {
-  private params!: IFloatingFilterParams;
-  private eGui!: HTMLDivElement;
-  private fromInput!: HTMLInputElement;
-  private toInput!: HTMLInputElement;
-
-  init(params: IFloatingFilterParams): void {
-    this.params = params;
-    this.eGui = document.createElement("div");
-    this.eGui.className = "llmgw-dtfloating";
-    const input = (): HTMLInputElement => {
-      const el = document.createElement("input");
-      el.type = "datetime-local";
-      el.className = "llmgw-dt-input";
-      el.addEventListener("input", () => this.onChanged());
-      this.eGui.appendChild(el);
-      return el;
-    };
-    this.fromInput = input();
-    this.toInput = input();
-  }
-
-  private onChanged(): void {
-    const from = parseLocalDateTime(this.fromInput.value);
-    const to = parseLocalDateTime(this.toInput.value);
-    this.params.parentFilterInstance?.((instance: any) => {
-      instance?.setRangeFromFloating?.(from, to);
-    });
-  }
-
-  getGui(): HTMLElement {
-    return this.eGui;
-  }
-
-  onParentModelChanged(model: DateTimeFilterModel | null): void {
-    const valid = model != null && model.filterType === "datetime";
-    const from = valid && Number.isFinite(model!.from) ? model!.from : null;
-    const to = valid && Number.isFinite(model!.to) ? model!.to : null;
-    const nextFrom = toLocalDateTimeInput(from);
-    const nextTo = toLocalDateTimeInput(to);
-    // Only write when different: this fires right after every floating edit
-    // (parent → filterChangedCallback → back here); rewriting the same value
-    // is a no-op but keeps the loop provably terminal.
-    if (this.fromInput.value !== nextFrom) this.fromInput.value = nextFrom;
-    if (this.toInput.value !== nextTo) this.toInput.value = nextTo;
-  }
 }
 
 export function serverDatasource<T>(
@@ -302,367 +78,88 @@ export function serverDatasource<T>(
   };
 }
 
-/** Filtered-set aggregates for the grid footer: server-computed over the
- *  same WHERE as the grid page — buckets stay separate, never a lump sum. */
-export interface GridTotals {
-  in_tok: number;
-  cache_tok: number;
-  out_tok: number;
-  reqs: number;
-  cost_in?: number;
-  cost_cache?: number;
-  cost_out?: number;
-  cost?: number;
-}
+const DEFAULT_COL_DEF: ColDef = { sortable: true, resizable: false, filter: false, floatingFilter: false, suppressMovable: true, suppressMenu: true, lockVisible: true, minWidth: 72, maxWidth: 640 };
+const PAGE_SIZE_SELECTOR = [15, 25, 50, 100];
+const plainColumn = (column: ColDef | ColGroupDef): ColDef | ColGroupDef => "children" in column
+  ? { ...column, marryChildren: true, children: column.children.map(plainColumn) }
+  : { ...column, resizable: false, suppressMovable: true, lockVisible: true, filter: false, floatingFilter: false, floatingFilterComponent: undefined, suppressMenu: true };
+const leaves = (columns: Array<ColDef | ColGroupDef>): ColDef[] => columns.flatMap((column) => "children" in column ? leaves(column.children) : [column]);
 
+/** A fixed-order table: external filters own the scope; headers only sort.
+ * Content widths grow as blocks arrive. Old layout/filter preferences are
+ * deliberately discarded; only validated sort state survives. */
 export function UsageGrid(props: {
   columnDefs: Array<ColDef | ColGroupDef>;
-  /** undefined = data still loading (grid mounts only when ready). Optional in
-   *  datasource (infinite row model) mode. */
-  rowData?: unknown[] | undefined;
+  rowData?: unknown[];
   pageSize?: number;
-  /** Tailwind height class for the grid wrapper (default h-[420px]). */
   heightClass?: string;
-  /** localStorage key for user prefs (column order/size/visibility, sort,
-   *  filters). Column defs must be stable for the state to map back. */
   storageKey: string;
-  /** Disable column filters and discard their persisted state when a page
-   *  supplies its own filtering controls. Sorting and layout prefs remain. */
-  filterable?: boolean;
-  /** Optional passthroughs for selection-enabled grids (e.g. Models). */
   rowSelection?: "single" | "multiple";
   suppressRowClickSelection?: boolean;
   getRowId?: (p: { data: any }) => string;
-  onSelectionChanged?: (e: any) => void;
-  onGridReady?: (e: any) => void;
-  onModelUpdated?: (e: any) => void;
-  /** Infinite row model (server-driven blocks; mutually exclusive with
-   *  pagination props). The datasource maps startRow/endRow to
-   *  limit/offset API calls with sort/filter forwarded to SQL. */
-  datasource?: {
-    getRows: (params: GridRowsParams) => void;
-  };
-  /** Block size the grid requests per fetch (default 100). */
+  onSelectionChanged?: (event: any) => void;
+  onGridReady?: (event: any) => void;
+  onGridDestroyed?: () => void;
+  onModelUpdated?: (event: any) => void;
+  onSortChanged?: (sort: Array<{ colId: string; sort: string }>) => void;
+  sort?: Array<{ colId: string; sort: string }>;
+  datasource?: { getRows: (params: GridRowsParams) => void };
   cacheBlockSize?: number;
-  /** Increment to force the grid to re-pull its row cache (e.g. top-level
-   *  filter changed). */
   refreshDeps?: unknown;
-  /** Filtered-set aggregates rendered in the footer (null/absent = footer as today). */
-  totals?: GridTotals | null;
 }) {
-  const filteringEnabled = props.filterable !== false;
-  const columnDefs = filteringEnabled ? props.columnDefs : props.columnDefs.map(withoutColumnFilters);
-  const defaultColDef = filteringEnabled ? DEFAULT_COL_DEF : UNFILTERED_COL_DEF;
-  const [changedColumns, setChangedColumns] = createSignal<string[]>([]);
-  createEffect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- read inside the effect so refreshDeps re-triggers the purge
-    props.refreshDeps;
-    gridRef?.api?.purgeInfiniteCache?.();
-  });
-  // props.columnDefs are stable module constants per page, so this picks once.
-  const tallFloating = filteringEnabled && columnDefs.some(
-    (c) =>
-      !("children" in c) &&
-      ((c as ColDef).filter === DateTimeFilter ||
-        (c as ColDef).floatingFilterComponent === DateTimeFloatingFilter),
-  );
-  const darkClass = () => {
-    // Track the signal (updates live on toggle) but trust the DOM attribute —
-    // it is the single source of truth that the whole app already styles by.
-    theme();
-    return getTheme() === "dark" ? "ag-theme-quartz-dark" : "ag-theme-quartz";
-  };
-
-  // ---- per-grid user prefs (filters, column size/order/visibility, sort) ----
+  const columns = props.columnDefs.map(plainColumn);
+  const original = leaves(props.columnDefs);
+  const allowedSort = new Set(original.filter((column) => column.sortable !== false).map((column) => column.colId ?? column.field ?? ""));
+  const contentColumns = new Set(original.filter((column) => column.resizable !== false && !column.checkboxSelection && !column.headerCheckboxSelection && (column.field || column.colId) && column.headerName).map((column) => column.colId ?? column.field!));
+  const widths = new Map<string, number>();
   let gridRef: AgGridSolidRef | undefined;
-  let defaultColumnState: ColumnState[] = [];
-  let userResizedCols = new Set<string>();
-  let autoSizeTimer: ReturnType<typeof setTimeout> | undefined;
-
-  const columnLabels = new Map(
-    props.columnDefs.flatMap((column) =>
-      "children" in column
-        ? []
-        : [[column.colId ?? column.field ?? "", column.headerName ?? column.colId ?? column.field ?? "Column"]],
-    ),
-  );
-
-  /**
-   * Auto-sizes columns to fit their content (the largest text + header in the column),
-   * strictly skipping any column the user has manually resized.
-   */
-  const autoSizeUnadjustedColumns = (specificCols?: string[]) => {
-    const api = gridRef?.api;
-    if (!api || api.isDestroyed?.()) return;
-    if (autoSizeTimer) clearTimeout(autoSizeTimer);
-    autoSizeTimer = setTimeout(() => {
-      if (!api || api.isDestroyed?.()) return;
-      if (api.getDisplayedRowCount() === 0) return;
-
-      const allDisplayed = api.getAllDisplayedColumns();
-      if (!allDisplayed || allDisplayed.length === 0) return;
-
-      const targetColIds = specificCols ? new Set(specificCols) : null;
-
-      const colsToSize = allDisplayed.filter((col) => {
-        const colId = col.getColId();
-        if (targetColIds && !targetColIds.has(colId)) return false;
-        // Never override columns the user manually adjusted
-        if (userResizedCols.has(colId)) return false;
-        const def = col.getColDef();
-        // Skip explicitly fixed / unresizable columns or actions/selection without field/header
-        if (def.resizable === false) return false;
-        if (!def.field && !def.headerName) return false;
-        return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const darkClass = () => { theme(); return getTheme() === "dark" ? "ag-theme-quartz-dark" : "ag-theme-quartz"; };
+  const sortState = (api: GridApi) => api.getColumnState().filter((column) => column.sort).sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0)).map((column) => ({ colId: column.colId, sort: column.sort! }));
+  const saveSort = (api: GridApi) => {
+    const sort = sortState(api);
+    try { localStorage.setItem(props.storageKey, JSON.stringify({ sortModel: sort })); } catch {}
+    props.onSortChanged?.(sort);
+  };
+  const applySort = (api: GridApi, sort: Array<{ colId: string; sort: string }>) => {
+    if (JSON.stringify(sortState(api)) === JSON.stringify(sort)) return;
+    api.applyColumnState({ state: sort.filter((column) => allowedSort.has(column.colId) && (column.sort === "asc" || column.sort === "desc")).map((column, index) => ({ colId: column.colId, sort: column.sort as "asc" | "desc", sortIndex: index })), defaultState: { sort: null, sortIndex: null } });
+  };
+  createEffect(() => { const sort = props.sort; if (sort && gridRef?.api && !gridRef.api.isDestroyed()) applySort(gridRef.api, sort); });
+  const autoSize = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const api = gridRef?.api;
+      if (!api || api.isDestroyed() || !api.getDisplayedRowCount()) return;
+      const ids = api.getAllDisplayedColumns().filter((column) => contentColumns.has(column.getColId())).map((column) => column.getColId());
+      api.autoSizeColumns(ids, false);
+      const grow = ids.map((id) => {
+        const width = Math.max(widths.get(id) ?? 0, api.getColumn(id)?.getActualWidth() ?? 72);
+        widths.set(id, width); return { key: id, newWidth: width };
       });
-
-      if (colsToSize.length > 0) {
-        api.autoSizeColumns(colsToSize, false);
-      }
+      api.setColumnWidths(grow, true);
     }, 60);
   };
-
-  const updateChangedColumns = (api: GridApi) => {
-    const defaults = new Map(defaultColumnState.map((state) => [state.colId, state]));
-    const changed = api
-      .getColumnState()
-      .filter((state) =>
-        (state.hide ?? false) !== (defaults.get(state.colId)?.hide ?? false) ||
-        (filteringEnabled && api.getColumnFilterModel(state.colId) != null) ||
-        userResizedCols.has(state.colId),
-      )
-      .map((state) => state.colId);
-    setChangedColumns(changed);
-  };
-
-  const saveState = () => {
-    const api = gridRef?.api;
-    if (!api) return;
-    try {
-      localStorage.setItem(
-        props.storageKey,
-        JSON.stringify({
-          columnState: api.getColumnState(),
-          filterModel: filteringEnabled ? api.getFilterModel() : {},
-          userResizedColumns: Array.from(userResizedCols),
-        }),
-      );
-    } catch {}
-  };
-
-  let saveTimer: ReturnType<typeof setTimeout> | undefined;
-  const saveSoon = () => {
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveState, 250);
-  };
-
-  const onGridChanged = () => {
-    if (gridRef?.api) updateChangedColumns(gridRef.api);
-    saveSoon();
-  };
-
-  const onColumnResized = (e: any) => {
-    if (e?.source === "uiColumnResized") {
-      const cols = e.columns ?? (e.column ? [e.column] : []);
-      for (const c of cols) {
-        const colId = typeof c === "string" ? c : c?.getColId?.();
-        if (colId) {
-          userResizedCols.add(colId);
-        }
-      }
-    }
-    onGridChanged();
-  };
-
-  onCleanup(() => {
-    if (saveTimer) clearTimeout(saveTimer);
-    if (autoSizeTimer) clearTimeout(autoSizeTimer);
+  createEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-expressions -- reactive cache invalidation
+    props.refreshDeps;
+    gridRef?.api?.purgeInfiniteCache();
   });
-
-  const restoreState = () => {
-    const api = gridRef?.api;
-    if (!api) return;
-    try {
-      const raw = localStorage.getItem(props.storageKey);
-      if (!raw) return;
-      const j = JSON.parse(raw);
-      if (Array.isArray(j.userResizedColumns)) {
-        userResizedCols = new Set(j.userResizedColumns);
-      }
-      if (Array.isArray(j.columnState)) {
-        api.applyColumnState({ state: j.columnState, applyOrder: true });
-      }
-      if (j.filterModel && typeof j.filterModel === "object") {
-        if (filteringEnabled) api.setFilterModel(j.filterModel);
-        else if (Object.keys(j.filterModel).length) {
-          localStorage.setItem(props.storageKey, JSON.stringify({ ...j, filterModel: {} }));
-        }
-      }
-    } catch {}
-  };
-
-  const resetColumn = async (colId: string) => {
-    const api = gridRef?.api;
-    if (!api) return;
-    userResizedCols.delete(colId);
-    const defaultState = defaultColumnState.find((state) => state.colId === colId);
-    if (defaultState) {
-      api.applyColumnState({
-        state: [{ colId, hide: defaultState.hide ?? false, width: defaultState.width, flex: defaultState.flex }],
-      });
-    }
-    if (filteringEnabled) {
-      await api.setColumnFilterModel(colId, null);
-      api.onFilterChanged("api");
-    }
-    updateChangedColumns(api);
-    autoSizeUnadjustedColumns([colId]);
-    saveState();
-  };
-
-  /** Wipe persisted prefs and put the grid back on the column defs. */
-  const resetLayout = () => {
-    try {
-      localStorage.removeItem(props.storageKey);
-    } catch {}
-    userResizedCols.clear();
-    const api = gridRef?.api;
-    if (!api) return;
-    api.resetColumnState();
-    if (filteringEnabled) api.setFilterModel(null);
-    updateChangedColumns(api);
-    autoSizeUnadjustedColumns();
-  };
-
-  return (
-    <div
-      class={`w-full max-h-[72vh] ${darkClass()} ${props.heightClass ?? "h-[420px]"} flex flex-col`}
-    >
-      <div class="min-h-0 flex-1">
-        <Show when={props.rowData ?? props.datasource}>
-          <AgGridSolid
-            ref={gridRef}
-            rowData={props.rowData!}
-            columnDefs={columnDefs}
-            defaultColDef={defaultColDef}
-            {...(props.datasource
-              ? {
-                  rowModelType: "infinite" as const,
-                  datasource: props.datasource,
-                  cacheBlockSize: props.cacheBlockSize ?? 100,
-                  maxBlocksInCache: 8,
-                  maxConcurrentDatasourceRequests: 2,
-                  infiniteInitialRowCount: 1,
-                  blockLoadDebounceMillis: 50,
-                }
-              : {
-                  pagination: true,
-                  paginationPageSize: props.pageSize ?? 25,
-                  paginationPageSizeSelector: PAGE_SIZE_SELECTOR,
-                })}
-            {...(tallFloating ? FLOATING_FILTERS_TALL : FLOATING_FILTERS_DEFAULT)}
-            animateRows
-            rowHeight={38}
-            suppressCellFocus
-            onGridReady={(e) => {
-              defaultColumnState = e.api.getColumnState().map((state: ColumnState) => ({ ...state }));
-              restoreState();
-              updateChangedColumns(e.api);
-              props.onGridReady?.(e);
-            }}
-            onFirstDataRendered={() => {
-              autoSizeUnadjustedColumns();
-            }}
-            onModelUpdated={(e) => {
-              autoSizeUnadjustedColumns();
-              props.onModelUpdated?.(e);
-            }}
-            onFilterChanged={onGridChanged}
-            onSortChanged={onGridChanged}
-            onColumnMoved={onGridChanged}
-            onColumnResized={onColumnResized}
-            onColumnVisible={onGridChanged}
-            rowSelection={props.rowSelection}
-            suppressRowClickSelection={props.suppressRowClickSelection}
-            getRowId={props.getRowId}
-            onSelectionChanged={props.onSelectionChanged}
-          />
-        </Show>
-      </div>
-      <div class="flex flex-wrap items-center justify-between gap-2 overflow-x-auto px-1.5 py-1 shrink-0">
-        <div class="flex items-center gap-1 shrink-0">
-          <For each={changedColumns()}>
-            {(colId) => (
-              <Btn
-                variant="ghost"
-                size="sm"
-                class="max-h-5 min-h-5 max-w-fit min-w-fit !px-2 border border-brand-500/30 bg-brand-500/10 text-[11px] text-brand-400 hover:border-brand-500/50 hover:bg-brand-500/20 hover:text-brand-300"
-                title={`Reset ${columnLabels.get(colId) ?? colId}`}
-                onClick={() => resetColumn(colId)}
-              >
-                <Icon name={Icons.refresh} size={12} />
-                Reset {columnLabels.get(colId) ?? colId}
-              </Btn>
-            )}
-          </For>
-        </div>
-        <div class="flex flex-wrap items-center gap-3">
-          <Show when={props.totals}>
-            {(totals) => (
-              <div class="hidden sm:flex items-center gap-1.5 text-[11px] font-mono">
-                {/* Tokens with paired costs */}
-                <div class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-card/80 border border-line text-ink-300">
-                  <span>
-                    In <strong class="text-ink-100 font-semibold">{fmtNum(totals().in_tok)}</strong>
-                    <Show when={totals().cost_in !== undefined && totals().cost_in !== null}>
-                      <span class="text-emerald-400 font-medium ml-1">({fmtCost(totals().cost_in)})</span>
-                    </Show>
-                  </span>
-                  <span class="text-ink-600">·</span>
-                  <span>
-                    Cache <strong class="text-ink-100 font-semibold">{fmtNum(totals().cache_tok)}</strong>
-                    <Show when={totals().cost_cache !== undefined && totals().cost_cache !== null}>
-                      <span class="text-emerald-400 font-medium ml-1">({fmtCost(totals().cost_cache)})</span>
-                    </Show>
-                  </span>
-                  <span class="text-ink-600">·</span>
-                  <span>
-                    Out <strong class="text-ink-100 font-semibold">{fmtNum(totals().out_tok)}</strong>
-                    <Show when={totals().cost_out !== undefined && totals().cost_out !== null}>
-                      <span class="text-emerald-400 font-medium ml-1">({fmtCost(totals().cost_out)})</span>
-                    </Show>
-                  </span>
-                </div>
-
-                {/* Requests */}
-                <div class="flex items-center gap-1 px-2 py-0.5 rounded-md bg-card/80 border border-line text-ink-300">
-                  <strong class="text-ink-100 font-semibold">{fmtNum(totals().reqs)}</strong>
-                  <span class="text-ink-500 font-sans text-[10px]">reqs</span>
-                </div>
-
-                {/* Total Cost */}
-                <Show when={totals().cost !== undefined && totals().cost !== null}>
-                  <div class="flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-card/80 border border-line text-ink-300">
-                    <span class="text-ink-400">Total:</span>
-                    <strong class="text-emerald-400 font-semibold">{fmtCost(totals().cost)}</strong>
-                  </div>
-                </Show>
-              </div>
-            )}
-          </Show>
-          <Btn
-            variant="ghost"
-            size="sm"
-            class="max-h-5 min-h-5 max-w-fit min-w-fit !px-2 text-[11px] text-ink-500 hover:text-ink-200"
-            title="Reset column order, sizes, sorting and filters to the default layout"
-            disabled={!props.rowData && !props.datasource}
-            onClick={resetLayout}
-          >
-            <Icon name={Icons.refresh} size={12} />
-            Reset layout
-          </Btn>
-        </div>
-      </div>
-    </div>
-  );
+  onCleanup(() => { clearTimeout(timer); props.onGridDestroyed?.(); });
+  return <div class={`basic-grid w-full max-h-[72vh] ${darkClass()} ${props.heightClass ?? "h-[480px]"}`}>
+    <Show when={props.rowData ?? props.datasource}><AgGridSolid ref={gridRef} columnDefs={columns} defaultColDef={DEFAULT_COL_DEF} rowData={props.rowData!}
+      {...(props.datasource ? { rowModelType: "infinite" as const, datasource: props.datasource, cacheBlockSize: props.cacheBlockSize ?? 100, maxBlocksInCache: 8, maxConcurrentDatasourceRequests: 2, infiniteInitialRowCount: 1, blockLoadDebounceMillis: 50 }
+        : { pagination: true, paginationPageSize: props.pageSize ?? 25, paginationPageSizeSelector: PAGE_SIZE_SELECTOR })}
+      suppressMovableColumns suppressDragLeaveHidesColumns rowHeight={40} suppressCellFocus rowSelection={props.rowSelection} suppressRowClickSelection={props.suppressRowClickSelection} getRowId={props.getRowId} onSelectionChanged={props.onSelectionChanged}
+      onGridReady={(event) => {
+        try {
+          const saved = JSON.parse(localStorage.getItem(props.storageKey) ?? "{}");
+          const sort = (Array.isArray(saved.sortModel) ? saved.sortModel : Array.isArray(saved.columnState) ? saved.columnState : []).filter((column: any) => allowedSort.has(column.colId) && (column.sort === "asc" || column.sort === "desc"));
+          applySort(event.api, props.sort ?? sort);
+        } catch {}
+        saveSort(event.api); props.onGridReady?.(event); autoSize();
+      }}
+      onFirstDataRendered={autoSize} onModelUpdated={(event) => { autoSize(); props.onModelUpdated?.(event); }} onSortChanged={(event) => saveSort(event.api)}
+    /></Show>
+  </div>;
 }

@@ -1,4 +1,5 @@
-import { createResource, createSignal, Show } from "solid-js";
+import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
+import { createSignal, For, Show } from "solid-js";
 
 import { api, type ApiKeyDto } from "../../api";
 import { PageTitle } from "../../index";
@@ -17,7 +18,7 @@ import {
   fmtNum,
   timeUntil,
 } from "../../ui";
-import { EPOCH_DATE_FILTER_PARAMS, UsageGrid, serverDatasource } from "../../aggrid";
+import { UsageGrid } from "../../aggrid";
 import type { ColDef } from "ag-grid-community";
 
 const TONE: Record<
@@ -34,25 +35,12 @@ const TONE: Record<
 };
 
 export default function AdminKeysPage() {
-  const [keyCount, { refetch: refetchKeyCount }] = createResource(async () => {
-    const j = await api<{ total: number }>("GET", "/api/admin/keys?limit=1");
-    return j.total;
-  });
-  const [gridVersion, setGridVersion] = createSignal(0);
-  const refreshGrid = () => {
-    setGridVersion((v) => v + 1);
-    refetchKeyCount();
-  };
-  const keysDatasource = serverDatasource<ApiKeyDto>(async (params) => {
-    const qs = new URLSearchParams({
-      limit: String(Math.min(params.endRow - params.startRow, 500)),
-      offset: String(params.startRow),
-    });
-    if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-    if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
-    const j = await api<{ keys: ApiKeyDto[]; total: number }>("GET", `/api/admin/keys?${qs}`);
-    return { rows: j.keys, total: j.total };
-  });
+  const view = createCatalog<ApiKeyDto>({ storageKey: "llmgw-grid:admin.keys", path: "/api/admin/keys", result: "keys", label: "All API keys", sort: [
+    { value: "name:asc", label: "Name A–Z" }, { value: "userEmail:asc", label: "Owner A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "outputTotal:desc", label: "Highest output usage" },
+  ] });
+  const keyCount = view.total;
+  const refreshGrid = view.refresh;
+  const keysDatasource = view.datasource;
   const [confirmRevoke, setConfirmRevoke] = createSignal<ApiKeyDto | null>(
     null,
   );
@@ -194,7 +182,6 @@ export default function AdminKeysPage() {
       headerName: "Expires",
       width: 210,
       filter: "agDateColumnFilter",
-      filterParams: EPOCH_DATE_FILTER_PARAMS,
       valueFormatter: (p) =>
         p.value ? `${fmtDate(p.value)} (${timeUntil(p.value)})` : "Never",
     },
@@ -203,7 +190,6 @@ export default function AdminKeysPage() {
       headerName: "Last used",
       width: 160,
       filter: "agDateColumnFilter",
-      filterParams: EPOCH_DATE_FILTER_PARAMS,
       valueFormatter: (p) => (p.value ? fmtDate(p.value) : "Never"),
     },
     {
@@ -220,30 +206,24 @@ export default function AdminKeysPage() {
   ];
 
   return (
-    <div>
+    <div class="catalog-page" aria-busy={view.loading()}>
       <PageTitle
         title="All API keys"
         subtitle="Every user's keys — revoke any of them instantly"
       />
 
-      <Card>
-        <Show
-          when={(keyCount() ?? 0) > 0}
-          fallback={
-            <EmptyState icon={Icons.key} title="No keys in the system" />
-          }
-        >
-          <div class="p-2">
-            <UsageGrid
-              columnDefs={cols}
-              datasource={keysDatasource}
-              cacheBlockSize={100}
-              refreshDeps={gridVersion()}
-              storageKey="llmgw-grid:admin.keys"
-            />
-          </div>
+      <CatalogToolbar view={view} />
+      <CatalogState view={view}><Card>
+        <Show when={keyCount() > 0} fallback={<EmptyState icon={Icons.key} title="No matching API keys" hint="Choose another period or adjust your filters." />}>
+          <Show when={!view.mobile()}><div class="p-2"><UsageGrid columnDefs={cols} datasource={keysDatasource} cacheBlockSize={25} refreshDeps={view.refreshKey()} storageKey="llmgw-grid:admin.keys" sort={view.sort()} onSortChanged={view.setSort} /></div></Show>
+          <Show when={view.mobile()}><div class="catalog-mobile p-3 space-y-3"><For each={view.rows()}>{(key) => <div class="catalog-key-card p-4 rounded-xl border border-line bg-elev space-y-3">
+            <div class="flex items-start justify-between gap-3"><div class="min-w-0"><strong class="block text-sm text-ink-100 break-all">{key.name || "Unnamed key"}</strong><span class="block text-xs text-ink-400 break-all mt-1">{key.userEmail || key.userId}</span></div><StatusCell value={key.status} /></div>
+            <code class="block text-xs text-ink-500">{key.prefix}…</code>
+            <div class="grid grid-cols-2 gap-3 border-t border-line pt-3 text-[11px] text-ink-500"><span>Output today<strong class="block text-xs text-ink-200 mt-1">{fmtNum(key.outputToday)}</strong></span><span>Output total<strong class="block text-xs text-ink-200 mt-1">{fmtNum(key.outputTotal)}</strong></span><span>Expires<strong class="block text-xs text-ink-200 mt-1">{key.expiresAt ? fmtDate(key.expiresAt) : "Permanent"}</strong></span><span>Last used<strong class="block text-xs text-ink-200 mt-1">{key.lastUsedAt ? fmtDate(key.lastUsedAt) : "Never"}</strong></span></div>
+            <div class="border-t border-line pt-3"><ActionsCell data={key} /></div>
+          </div>}</For><CatalogPagination view={view} /></div></Show>
         </Show>
-      </Card>
+      </Card></CatalogState>
 
       <Modal
         open={!!confirmRevoke()}

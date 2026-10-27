@@ -142,7 +142,7 @@ try {
   await page.goto(`${serverUrl}#/usage`);
   await assertGridFiltersDisabled(["usage.recent"]);
   const modelHeader = page.locator(".ag-header-cell[col-id='model']").first();
-  assert.equal(Math.round((await modelHeader.boundingBox())!.width), 244, "Saved column widths were lost");
+  assert.notEqual(Math.round((await modelHeader.boundingBox())!.width), 244, "Legacy manual widths were restored in the basic grid");
   await modelHeader.click();
   await page.waitForFunction(() => document.querySelector(".ag-header-cell[col-id='model']")?.getAttribute("aria-sort") === "ascending");
   console.log("[filters-ui] Checking include/exclude");
@@ -338,7 +338,7 @@ try {
   await page.keyboard.press("Escape");
   assert(requests.filter((url) => url.pathname === "/api/usage/events" || url.pathname === "/api/usage/breakdown" || url.pathname.includes("usage-breakdown/")).every((url) => !url.searchParams.has("filters")), "A grid forwarded column filters to the API");
   assert.deepEqual(errors, [], "Browser runtime errors");
-  console.log(`Gateway filters UI passed: stable popup positioning, grids without column filters, preserved layout, include/exclude, shared queries, keyboard, calendar, responsive themes and all three pages. Screenshots: ${output}`);
+  console.log(`Gateway filters UI passed: stable popup positioning, grids without column filters, fixed column order, automatic sizing, include/exclude, shared queries, keyboard, calendar, responsive themes and all three pages. Screenshots: ${output}`);
 } catch (error) {
   if (activePage) {
     await activePage.screenshot({ path: path.join(output, "failure.png") });

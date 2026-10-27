@@ -1,9 +1,9 @@
-import { For, Show, createResource } from "solid-js";
+import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
+import { For, Show } from "solid-js";
 
-import { api } from "../../api";
 import { PageTitle } from "../../index";
-import { Badge, Card, CardHeader, EmptyState, Icons, fmtNum } from "../../ui";
-import { DateTimeFilter, DateTimeFloatingFilter, UsageGrid, serverDatasource, timeFormatter } from "../../aggrid";
+import { Badge, Card, EmptyState, Icons } from "../../ui";
+import { UsageGrid, timeFormatter } from "../../aggrid";
 import type { ColDef } from "ag-grid-community";
 
 interface AuditEntry {
@@ -77,54 +77,17 @@ function formatMeta(meta?: string) {
 }
 
 export default function AdminAuditPage() {
-  const [auditCount] = createResource(async () => {
-    const j = await api<{ total: number }>("GET", "/api/admin/audit?limit=1");
-    return j.total;
-  });
-
-  const [auditList] = createResource(async () => {
-    try {
-      const j = await api<{ entries: AuditEntry[] }>("GET", "/api/admin/audit?limit=50");
-      return j.entries;
-    } catch {
-      return [];
-    }
-  });
-
-  /** Keyset cursor datasource for desktop AG Grid */
-  const auditDatasource = serverDatasource<AuditEntry>((() => {
-    const cursors = new Map<string, Map<number, { ts: number; id: number }>>();
-    return async (params) => {
-      const ctx = JSON.stringify([params.sortModel, params.filterModel]);
-      let ctxCursors = cursors.get(ctx);
-      if (!ctxCursors) {
-        ctxCursors = new Map();
-        cursors.set(ctx, ctxCursors);
-      }
-      const qs = new URLSearchParams({
-        limit: String(Math.min(params.endRow - params.startRow, 500)),
-        offset: String(params.startRow),
-      });
-      if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-      if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
-      const cursor = params.startRow > 0 ? ctxCursors.get(params.startRow - 1) : undefined;
-      if (cursor) qs.set("cursor", `${cursor.ts}:${cursor.id}`);
-      const j = await api<{ entries: AuditEntry[]; total: number }>("GET", `/api/admin/audit?${qs}`);
-      const last = j.entries[j.entries.length - 1];
-      if (last) {
-        ctxCursors.set(params.startRow + j.entries.length - 1, { ts: last.ts, id: last.id });
-      }
-      return { rows: j.entries, total: j.total };
-    };
-  })());
+  const view = createCatalog<AuditEntry>({ storageKey: "llmgw-grid:admin.audit", path: "/api/admin/audit", result: "entries", label: "Audit events", cursor: true, sort: [
+    { value: "ts:desc", label: "Newest first" }, { value: "ts:asc", label: "Oldest first" }, { value: "action:asc", label: "Action A–Z" }, { value: "actor_email:asc", label: "Actor A–Z" },
+  ] });
+  const auditCount = view.total;
+  const auditDatasource = view.datasource;
 
   const cols: ColDef[] = [
     {
       field: "ts",
       headerName: "Time",
       width: 170,
-      filter: DateTimeFilter,
-      floatingFilterComponent: DateTimeFloatingFilter,
       valueFormatter: timeFormatter,
     },
     { field: "action", headerName: "Action", width: 170, cellRenderer: ActionCell },
@@ -159,31 +122,16 @@ export default function AdminAuditPage() {
   ];
 
   return (
-    <div>
+    <div class="catalog-page" aria-busy={view.loading()}>
       <PageTitle
         title="Audit log"
       />
 
-      <Card>
-        <CardHeader title={`${fmtNum(auditCount() ?? 0)} events`} />
-        <Show
-          when={(auditCount() ?? 0) > 0}
-          fallback={<EmptyState icon={Icons.book} title="No audit entries" />}
-        >
-          {/* Desktop & Tablet AG Grid */}
-          <div class="hidden md:block p-2">
-            <UsageGrid
-              columnDefs={cols}
-              datasource={auditDatasource}
-              cacheBlockSize={100}
-              heightClass="h-[560px]"
-              storageKey="llmgw-grid:admin.audit"
-            />
-          </div>
-
-          {/* Touch / Mobile Card List */}
-          <div class="md:hidden space-y-3 p-3">
-            <For each={auditList() ?? []}>
+      <CatalogToolbar view={view} />
+      <CatalogState view={view}><Card>
+        <Show when={auditCount() > 0} fallback={<EmptyState icon={Icons.book} title="No matching audit events" hint="Choose another period or adjust your filters." />}>
+          <Show when={!view.mobile()}><div class="p-2"><UsageGrid columnDefs={cols} datasource={auditDatasource} cacheBlockSize={25} refreshDeps={view.refreshKey()} storageKey="llmgw-grid:admin.audit" heightClass="h-[560px]" sort={view.sort()} onSortChanged={view.setSort} /></div></Show>
+          <Show when={view.mobile()}><div class="catalog-mobile p-3 space-y-3"><For each={view.rows()}>
               {(entry) => {
                 const act = humanAction(entry.action);
                 return (
@@ -220,10 +168,9 @@ export default function AdminAuditPage() {
                   </div>
                 );
               }}
-            </For>
-          </div>
+            </For><CatalogPagination view={view} /></div></Show>
         </Show>
-      </Card>
+      </Card></CatalogState>
     </div>
   );
 }

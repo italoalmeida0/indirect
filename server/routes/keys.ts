@@ -4,6 +4,8 @@ import { requireAuth } from "../auth";
 import { createKey, publicKey, queryKeys, revokeKey } from "../keys";
 import { decryptSecret } from "../crypto";
 import { parseGridQuery } from "../gridql";
+import { catalogWhere } from "../catalog";
+import { readUsage } from "../usage-reader";
 import { clientIp, err, ok, readJsonBody, v } from "../http";
 
 const MAX_KEYS_PER_USER = 50;
@@ -19,11 +21,16 @@ function ownKey(userId: string, keyId: string): ApiKeyRow | null {
 
 /** /api/keys — a user managing their own API keys. */
 export async function handleKeysRoute(path: string, req: Request): Promise<Response | null> {
+  if (path === "/api/keys/filter-options" && req.method === "GET") {
+    const ctx = await requireAuth(req);
+    return ok(await readUsage({ kind: "catalog-facets", catalog: "keys", userId: ctx.user.id, search: new URL(req.url).searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }), req);
+  }
   if (path === "/api/keys" && req.method === "GET") {
     const ctx = await requireAuth(req);
-    if (new URL(req.url).searchParams.has("limit")) {
+    if (new URL(req.url).searchParams.has("limit") || new URL(req.url).searchParams.has("selection")) {
       const grid = parseGridQuery(new URL(req.url));
-      const { keys, total } = queryKeys(ctx.user.id, grid);
+      const params = new URL(req.url).searchParams;
+      const { keys, total } = queryKeys(ctx.user.id, grid, params.has("selection") ? catalogWhere("keys", params, ctx.user.id) : undefined);
       return ok({ keys, total, limit: grid.limit, offset: grid.offset }, req);
     }
     const rows = db

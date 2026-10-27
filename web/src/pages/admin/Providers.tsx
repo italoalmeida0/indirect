@@ -1,4 +1,5 @@
-import { createSignal, For, Show, createResource, createMemo } from "solid-js";
+import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
+import { createSignal, For, Show, createMemo } from "solid-js";
 
 import { api, type AuthStyle, type ProviderDto, type ProviderKeyDto, type SyncOutcome, type SyncPreview } from "../../api";
 import { PageTitle } from "../../index";
@@ -43,10 +44,11 @@ interface ProbeResult {
 }
 
 export default function AdminProvidersPage() {
-  const [providers, { refetch }] = createResource(async () => {
-    const j = await api<{ providers: ProviderDto[] }>("GET", "/api/admin/providers");
-    return j.providers;
-  });
+  const view = createCatalog<ProviderDto>({ path: "/api/admin/providers", result: "providers", label: "Providers", cards: true, sort: [
+    { value: "priority:asc", label: "Fallback priority" }, { value: "name:asc", label: "Name A–Z" }, { value: "createdAt:desc", label: "Newest first" },
+  ] });
+  const providers = view.rows;
+  const refetch = view.refresh;
 
   const [editing, setEditing] = createSignal<ProviderDto | "new" | null>(null);
   const [confirmDelete, setConfirmDelete] = createSignal<ProviderDto | null>(null);
@@ -284,16 +286,6 @@ export default function AdminProvidersPage() {
   };
 
   /** Drag-and-drop callbacks (SortableJS): the reordered ids ARE the new priority. */
-  const reorderProviders = async (ids: string[]) => {
-    try {
-      await api("POST", "/api/admin/providers/reorder", { ids });
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "reorder failed", "err");
-    } finally {
-      refetch();
-    }
-  };
-
   const reorderKeys = (providerId: string) => async (ids: string[]) => {
     try {
       await api("POST", `/api/admin/providers/${providerId}/keys/reorder`, { ids });
@@ -368,21 +360,21 @@ export default function AdminProvidersPage() {
   };
 
   return (
-    <div>
+    <div class="catalog-page" aria-busy={view.loading()}>
       <PageTitle
         title="Providers"
-        subtitle="Upstream LLM endpoints the gateway forwards to — drag to set fallback order (the real API keys live here only)"
+        subtitle="Manage upstream endpoints, fallback priorities and provider keys"
         right={<Btn onClick={() => openEditor("new")}><Icon name={Icons.plus} /> New provider</Btn>}
       />
 
-      <Show when={(providers() ?? []).length > 0} fallback={
-        <Card><EmptyState icon={Icons.server} title="No providers configured"
-          hint="Add your endpoint(s) — the gateway cannot serve requests until one is enabled." /></Card>
+      <CatalogToolbar view={view} />
+      <CatalogState view={view}>      <Show when={(providers() ?? []).length > 0} fallback={
+        <Card><EmptyState icon={Icons.server} title="No matching providers"
+          hint="Adjust your filters or add a new upstream endpoint." /></Card>
       }>
         <div
           class="grid gap-4 min-w-0"
           {...usalItems("fade-u", 80)}
-          ref={(el) => attachSortable(el, { onReorder: reorderProviders })}
         >
           <For each={providers()}>
             {(p) => (
@@ -390,9 +382,7 @@ export default function AdminProvidersPage() {
                 <Card interactive class="min-w-0 p-4 sm:p-5">
                   <div class="flex flex-wrap items-start justify-between gap-3">
                     <div class="flex items-start gap-2 min-w-0">
-                      <span data-handle class="mt-0.5 text-ink-600 hover:text-ink-300 transition-colors">
-                        <Icon name={Icons.grip} size={16} />
-                      </span>
+
                       <div class="min-w-0">
                         <div class="flex items-center gap-2 flex-wrap">
                           <span class="font-semibold">{p.name}</span>
@@ -509,7 +499,7 @@ export default function AdminProvidersPage() {
             )}
           </For>
         </div>
-      </Show>
+      </Show><CatalogPagination view={view} /></CatalogState>
 
       {/* editor modal */}
       <Modal

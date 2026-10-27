@@ -159,7 +159,6 @@ export default function UsagePage() {
             {/* Desktop AG Grid */}
             <Show when={!mobile()}><div class="hidden md:block px-2 py-2">
               <UsageGrid
-                filterable={false}
                 columnDefs={eventCols}
                 datasource={eventsDatasource}
                 cacheBlockSize={EVENTS_BLOCK}

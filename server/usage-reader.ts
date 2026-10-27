@@ -5,16 +5,21 @@ import type { UsageScope, filteredUsageSeries, filteredTopModels, filteredUsageB
 import type { userEvents } from "./usage";
 import type { parseGridQuery } from "./gridql";
 import type { filteredUsageAnalytics } from "./usage-analytics";
+import type { CatalogKind, catalogAuditPage, catalogFilterOptions } from "./catalog";
 
 export type UsageReadRequest = { scope: UsageScope; userId: string | null } & (
   | { kind: "series" }
   | { kind: "overview"; userId: string }
   | { kind: "analytics" }
+  | { kind: "catalog-facets"; catalog: CatalogKind; search: string }
+  | { kind: "catalog-audit"; search: string }
   | { kind: "facets"; search: string }
   | { kind: "breakdown"; grid: ReturnType<typeof parseGridQuery>; users: boolean; summaryOnly: boolean }
   | { kind: "events"; opts: Parameters<typeof userEvents>[1]; userId: string }
 );
-type Result<R extends UsageReadRequest> = R extends { kind: "analytics" } ? ReturnType<typeof filteredUsageAnalytics>
+type Result<R extends UsageReadRequest> = R extends { kind: "catalog-facets" } ? ReturnType<typeof catalogFilterOptions>
+  : R extends { kind: "catalog-audit" } ? ReturnType<typeof catalogAuditPage>
+  : R extends { kind: "analytics" } ? ReturnType<typeof filteredUsageAnalytics>
   : R extends { kind: "overview" } ? ReturnType<typeof filteredUsageSeries> & { models: ReturnType<typeof filteredTopModels> }
   : R extends { kind: "series" } ? ReturnType<typeof filteredUsageSeries>
   : R extends { kind: "facets" } ? ReturnType<typeof usageFilterOptions>

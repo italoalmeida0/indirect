@@ -6,6 +6,44 @@
 .analytics-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; }
 .analytics-toolbar-end { align-items: flex-end; }
 .analytics-toolbar-end .analytics-controls, .analytics-toolbar-end .analytics-chips { justify-content: flex-end; }
+.catalog-page { min-width: 0; container-type: inline-size; }
+.catalog-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px 20px; margin: 20px 0; }
+.catalog-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.catalog-toolbar .analytics-toolbar { margin-bottom: 0; }
+.catalog-search, .catalog-sort { display: flex; align-items: center; min-width: 0; height: 36px; gap: 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink-500); box-shadow: var(--shadow-control); font-size: 12px; }
+.catalog-search { flex: 1 1 220px; max-width: 400px; padding: 0 11px; }
+.catalog-search input { min-width: 0; width: 100%; outline: none; color: var(--ink-100); background: transparent; }
+.catalog-search:focus-within, .catalog-sort:focus-within { outline: 2px solid var(--brand-400); outline-offset: 2px; }
+.catalog-sort { padding: 0 9px; max-width: 210px; }
+.catalog-sort select { min-width: 0; max-width: 100%; color: var(--ink-300); background: var(--card); outline: none; cursor: pointer; }
+.catalog-result-count { grid-column: 1 / -1; color: var(--ink-500); font-size: 11px; font-variant-numeric: tabular-nums; }
+.catalog-results { min-width: 0; transition: opacity 120ms ease; }
+.catalog-results[aria-busy="true"] { opacity: .65; pointer-events: none; }
+.catalog-notice { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; min-height: 200px; padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink-400); font-size: 12px; }
+.catalog-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 18px 2px 4px; color: var(--ink-500); font-size: 11px; font-variant-numeric: tabular-nums; }
+.catalog-pagination button:disabled { opacity: .4; cursor: default; }
+.catalog-selection { position: sticky; top: 10px; z-index: 20; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; padding: 14px 16px; margin-bottom: 18px; box-shadow: var(--shadow-control); }
+.catalog-selection > div:first-child { display: flex; flex-direction: column; gap: 5px; }
+.catalog-selection strong { color: var(--ink-100); font-size: 12px; font-weight: 500; }
+.catalog-selection span { color: var(--ink-500); font-size: 10px; }
+.catalog-selection-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.catalog-model-select { display: flex; align-items: center; gap: 9px; min-height: 36px; color: var(--ink-400); font-size: 11px; cursor: pointer; }
+.catalog-model-select input { width: 18px; height: 18px; accent-color: var(--brand-400); cursor: pointer; }
+.catalog-model-card.is-selected { border-color: var(--brand-400); box-shadow: 0 0 0 1px var(--brand-400); }
+.catalog-mobile { min-width: 0; overflow-wrap: anywhere; }
+.catalog-mobile .catalog-pagination { overflow-wrap: normal; }
+@container (max-width: 900px) {
+  .catalog-toolbar { grid-template-columns: minmax(0, 1fr); }
+  .catalog-search { max-width: none; }
+  .catalog-toolbar .analytics-toolbar { align-items: flex-start; }
+  .catalog-toolbar .analytics-controls, .catalog-toolbar .analytics-chips { justify-content: flex-start; }
+}
+@media (pointer: coarse) {
+  .catalog-mobile button, .catalog-model-select, .catalog-selection button { min-height: 44px; }
+  .catalog-mobile button { min-width: 44px; }
+  .catalog-mobile .flex.items-center.justify-between, .catalog-mobile .flex.items-center.justify-end { flex-wrap: wrap; gap: 8px; }
+  .catalog-search, .catalog-sort { min-height: 42px; }
+}
 .analytics-control { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink-300); font-size: 12px; font-weight: 500; cursor: pointer; box-shadow: var(--shadow-control); transition: border-color 160ms, background 160ms, color 160ms; }
 .analytics-control:hover { background: var(--elev); color: var(--ink-100); border-color: var(--ink-600); }
 .analytics-control.is-active { border-color: color-mix(in srgb, var(--brand-400) 45%, var(--line)); color: var(--brand-400); background: color-mix(in srgb, var(--brand-400) 5%, var(--card)); }
@@ -1402,21 +1440,6 @@ html[data-theme="dark"] .ag-theme-quartz-dark {
     display: none;
   }
 }
-
-/*
- * AG Grid — custom datetime filter (Recent-requests + Audit "Time" columns).
- * From/To datetime-local inputs, in the filter menu (.llmgw-dtfilter) and
- * stacked in the floating filter row (.llmgw-dtfloating). Colored only via
- * the --ag-* variables remapped above, so both themes flip for free.
- */
-.ag-floating-filter { overflow: hidden }
-.llmgw-dtfilter { display: flex; flex-direction: column; gap: 6px; padding: 8px; width: 232px; }
-.llmgw-dtfilter-row { display: flex; flex-direction: column; gap: 3px; font-size: 10px; letter-spacing: 0.02em; text-transform: uppercase; color: var(--ag-secondary-foreground-color, var(--ag-foreground-color)); }
-.llmgw-dt-input { width: 100%; font-family: inherit; font-size: 11px; color: var(--ag-foreground-color); background: var(--ag-background-color); border: 1px solid var(--ag-border-color); border-radius: var(--ag-border-radius); padding: 3px 6px; }
-.llmgw-dt-input:focus { outline: none; border-color: var(--ag-input-focus-border-color, var(--ag-border-color)); }
-.llmgw-dt-clear { align-self: flex-start; font-size: 10px; padding: 2px 8px; border-radius: var(--ag-border-radius); border: 1px solid var(--ag-border-color); background: var(--ag-background-color); color: var(--ag-foreground-color); cursor: pointer; }
-.llmgw-dtfloating { display: flex; flex-direction: column; gap: 2px; padding: 3px 5px; width: 100%; }
-.llmgw-dtfloating .llmgw-dt-input { font-size: 10px; padding: 0 4px; height: 19px; }
 
 /* Highlight.js syntax theme */
 .hljs { color: var(--ink-100); background: transparent; }

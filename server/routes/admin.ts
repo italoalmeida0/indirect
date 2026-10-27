@@ -1,3 +1,4 @@
+import { catalogListSource, catalogWhere, type CatalogKind } from "../catalog";
 import { LIMITS, SMTP_ENABLED } from "../config";
 import { db, stmts, parseStripParams, type ProviderRow, type ProviderKeyRow, type ModelTargetRow, type ApiKeyRow, type UserRow, type AuthStyle, type ModelRow } from "../db";
 import { encryptSecret, decryptSecret, randomToken, sha256Hex } from "../crypto";
@@ -417,10 +418,30 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     return ok({ armed: !!(globalThis as any).__e2eOverflowArmed }, req);
   }
 
+  const catalogFacets = path.match(/^\/api\/admin\/(providers|models|users|keys|audit)\/filter-options$/);
+  if (catalogFacets && req.method === "GET") {
+    return ok(await readUsage({ kind: "catalog-facets", catalog: catalogFacets[1] as CatalogKind, userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }), req);
+  }
+  if (path === "/api/admin/models/selection" && req.method === "GET") {
+    const source = catalogListSource("models", url.searchParams, null);
+    if (url.searchParams.has("selected_ids")) {
+      let ids: unknown;
+      try { ids = JSON.parse(url.searchParams.get("selected_ids")!); } catch { return err(400, "selected_ids is invalid", req); }
+      if (!Array.isArray(ids) || ids.length > 10000 || ids.some((id) => typeof id !== "string" || !id || id.length > 256)) return err(400, "selected_ids is invalid", req);
+      source.sql = `SELECT * FROM (${source.sql}) WHERE id IN (SELECT value FROM json_each(?))`;
+      source.params.push(JSON.stringify(ids));
+    }
+    const rows = db.prepare<{ id: string }, Array<string | number>>(`SELECT id FROM (${source.sql}) ORDER BY id LIMIT 10001`).all(...source.params);
+    if (rows.length > 10000) return err(400, "Select up to 10,000 models at a time. Narrow your filters first.", req);
+    return ok({ ids: rows.map((row) => row.id) }, req);
+  }
+
   if (path === "/api/admin/providers" && req.method === "GET") {
-    const rows = db
-      .prepare<ProviderRow, []>("SELECT * FROM providers ORDER BY priority ASC, created_at ASC")
-      .all();
+    const source = url.searchParams.has("selection") ? catalogListSource("providers", url.searchParams, null) : { sql: "SELECT * FROM providers", params: [] };
+    const grid = url.searchParams.has("limit") || url.searchParams.has("selection") ? parseGridQuery(url) : null;
+    const page = grid ? gridPage({ baseSql: source.sql, baseParams: source.params,
+      cols: { name: { col: "name" }, enabled: { col: "enabled", kind: "number" }, priority: { col: "priority", kind: "number" }, createdAt: { col: "created_at", kind: "number" } }, grid, defaultOrder: "priority ASC", tieBreak: "id ASC" }) : null;
+    const rows = (page?.rows ?? db.prepare<ProviderRow, Array<string | number>>(`SELECT * FROM (${source.sql}) ORDER BY priority ASC, created_at ASC`).all(...source.params)) as ProviderRow[];
     const counts = new Map(
       db
         .query<{ provider_id: string; n: number }, []>(
@@ -431,14 +452,14 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     );
     const keysByProvider = new Map<string, ProviderKeyRow[]>();
     for (const k of db
-      .query<ProviderKeyRow, []>("SELECT * FROM provider_keys ORDER BY priority ASC, created_at ASC")
-      .all()) {
+      .query<ProviderKeyRow, [string]>("SELECT * FROM provider_keys WHERE provider_id IN (SELECT value FROM json_each(?)) ORDER BY priority ASC, created_at ASC")
+      .all(JSON.stringify(rows.map((provider) => provider.id)))) {
       const list = keysByProvider.get(k.provider_id);
       if (list) list.push(k);
       else keysByProvider.set(k.provider_id, [k]);
     }
     return ok(
-      { providers: rows.map((p) => publicProvider(p, counts.get(p.id) ?? 0, keysByProvider.get(p.id) ?? [])) },
+      { providers: rows.map((p) => publicProvider(p, counts.get(p.id) ?? 0, keysByProvider.get(p.id) ?? [])), ...(page ? { total: page.total } : {}) },
       req,
     );
   }
@@ -886,10 +907,14 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   // ================= models (registry) =================
 
-  if (path === "/api/admin/models" && req.method === "GET") {
-    const grid = url.searchParams.has("limit") ? parseGridQuery(url) : null;
+  if ((path === "/api/admin/models" && req.method === "GET") || (path === "/api/admin/models/query" && req.method === "POST")) {
+    const grid = url.searchParams.has("limit") || url.searchParams.has("selection") || req.method === "POST" ? parseGridQuery(url) : null;
     let selectedIds: string[] | null = null;
-    const selectedRaw = url.searchParams.get("selected_ids");
+    // A bounded read payload can hold 10,000 IDs without putting them in a
+    // URL. Mutations retain their smaller cap and delete in 500-ID batches.
+    const selectedRaw = req.method === "POST"
+      ? JSON.stringify((await readJsonBody(req, 4 * 1024 * 1024)).selected_ids ?? null)
+      : url.searchParams.get("selected_ids");
     if (selectedRaw !== null) {
       try {
         const parsed = JSON.parse(selectedRaw);
@@ -902,14 +927,13 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         return err(400, "selected_ids is invalid", req);
       }
     }
-    const selectedWhere = selectedIds === null
-      ? ""
-      : " WHERE m.id IN (SELECT value FROM json_each(?))";
+    const catalog = url.searchParams.has("selection") ? catalogListSource("models", url.searchParams, null) : null;
+    const selectedWhere = selectedIds === null ? "" : " WHERE m.id IN (SELECT value FROM json_each(?))";
     const page = grid
       ? gridPage({
-          baseSql: `SELECT m.*, p.name AS provider_name
+          baseSql: catalog ? `SELECT m.* FROM (${catalog.sql}) m${selectedWhere}` : `SELECT m.*, p.name AS provider_name
                     FROM models m LEFT JOIN providers p ON p.id = m.provider_id${selectedWhere}`,
-          baseParams: selectedIds === null ? [] : [JSON.stringify(selectedIds)],
+          baseParams: [...(catalog?.params ?? []), ...(selectedIds === null ? [] : [JSON.stringify(selectedIds)])],
           cols: {
             id: { col: "id" },
             providerId: { col: "provider_id" },
@@ -1313,7 +1337,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
   // ================= users =================
 
   if (path === "/api/admin/users" && req.method === "GET") {
-    if (url.searchParams.has("limit")) {
+    if (url.searchParams.has("limit") || url.searchParams.has("selection")) {
       const grid = parseGridQuery(url);
       const cols: Record<string, ColSpec> = {
         email: { col: "email" },
@@ -1324,9 +1348,10 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
          lastLoginAt: { col: "last_login_at", kind: "date" },
         createdAt: { col: "created_at", kind: "number" },
       };
+      const source = url.searchParams.has("selection") ? catalogListSource("users", url.searchParams, null) : { sql: "SELECT u.*, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u", params: [] };
       const { rows, total } = gridPage({
-        baseSql: `SELECT u.*, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u`,
-        baseParams: [],
+        baseSql: source.sql,
+        baseParams: source.params,
         cols,
         grid,
         defaultOrder: "created_at DESC",
@@ -1505,9 +1530,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
   // ================= keys (global view) =================
 
   if (path === "/api/admin/keys" && req.method === "GET") {
-    if (url.searchParams.has("limit")) {
+    if (url.searchParams.has("limit") || url.searchParams.has("selection")) {
       const grid = parseGridQuery(url);
-      const { keys, total } = queryKeys(null, grid);
+      const { keys, total } = queryKeys(null, grid, url.searchParams.has("selection") ? catalogWhere("keys", url.searchParams, null) : undefined);
       return ok({ keys, total, limit: grid.limit, offset: grid.offset }, req);
     }
     const rows = db
@@ -1911,7 +1936,10 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
   }
 
   if (path === "/api/admin/audit" && req.method === "GET") {
-    if (url.searchParams.has("limit")) {
+    if (url.searchParams.has("selection")) {
+      return ok(await readUsage({ kind: "catalog-audit", userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }), req);
+    }
+    if (url.searchParams.has("limit") || url.searchParams.has("selection")) {
       const grid = parseGridQuery(url);
       // Keyset continuation for the default (ts DESC, id DESC) ordering —
       // deep forward pages become O(page) instead of walking O(offset) rows.

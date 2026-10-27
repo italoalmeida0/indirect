@@ -1,4 +1,5 @@
-import { createResource, createSignal, For, Show } from "solid-js";
+import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
+import { createSignal, For, Show } from "solid-js";
 
 import { api, currentSession, type AdminUserDto } from "../../api";
 import { PageTitle } from "../../index";
@@ -20,38 +21,16 @@ import {
   fmtDate,
   toast,
 } from "../../ui";
-import { EPOCH_DATE_FILTER_PARAMS, UsageGrid, serverDatasource } from "../../aggrid";
+import { UsageGrid } from "../../aggrid";
 import type { ColDef } from "ag-grid-community";
 
 export default function AdminUsersPage() {
-  const [userCount, { refetch: refetchUserCount }] = createResource(async () => {
-    const j = await api<{ total: number }>("GET", "/api/admin/users?limit=1");
-    return j.total;
-  });
-  const [gridVersion, setGridVersion] = createSignal(0);
-  const [usersList, { refetch: refetchUsersList }] = createResource(gridVersion, async () => {
-    try {
-      const j = await api<{ users: AdminUserDto[] }>("GET", "/api/admin/users?limit=50");
-      return j.users;
-    } catch {
-      return [];
-    }
-  });
-  const refreshGrid = () => {
-    setGridVersion((v) => v + 1);
-    refetchUserCount();
-    refetchUsersList();
-  };
-  const usersDatasource = serverDatasource<AdminUserDto>(async (params) => {
-    const qs = new URLSearchParams({
-      limit: String(Math.min(params.endRow - params.startRow, 500)),
-      offset: String(params.startRow),
-    });
-    if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-    if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
-    const j = await api<{ users: AdminUserDto[]; total: number }>("GET", `/api/admin/users?${qs}`);
-    return { rows: j.users, total: j.total };
-  });
+  const view = createCatalog<AdminUserDto>({ storageKey: "llmgw-grid:admin.users.list", path: "/api/admin/users", result: "users", label: "Users", sort: [
+    { value: "name:asc", label: "Name A–Z" }, { value: "email:asc", label: "Email A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "lastLoginAt:desc", label: "Recently active" }, { value: "keyCount:desc", label: "Most API keys" },
+  ] });
+  const userCount = view.total;
+  const refreshGrid = view.refresh;
+  const usersDatasource = view.datasource;
 
   const [showCreate, setShowCreate] = createSignal(false);
   const [editing, setEditing] = createSignal<AdminUserDto | null>(null);
@@ -293,7 +272,6 @@ export default function AdminUsersPage() {
       headerName: "Last login",
       width: 170,
       filter: "agDateColumnFilter",
-      filterParams: EPOCH_DATE_FILTER_PARAMS,
       valueFormatter: (p) => (p.value ? fmtDate(p.value) : "Never"),
     },
     {
@@ -310,7 +288,7 @@ export default function AdminUsersPage() {
   ];
 
   return (
-    <div>
+    <div class="catalog-page" aria-busy={view.loading()}>
       <PageTitle
         title="Users"
         right={
@@ -320,25 +298,11 @@ export default function AdminUsersPage() {
         }
       />
 
-      <Card>
-        <Show
-          when={(userCount() ?? 0) > 0}
-          fallback={<EmptyState icon={Icons.users} title="No users" />}
-        >
-          {/* Desktop & Tablet AG Grid */}
-          <div class="hidden md:block p-2">
-            <UsageGrid
-              columnDefs={cols}
-              datasource={usersDatasource}
-              cacheBlockSize={100}
-              refreshDeps={gridVersion()}
-              storageKey="llmgw-grid:admin.users.list"
-            />
-          </div>
-
-          {/* Touch / Mobile Card List */}
-          <div class="md:hidden space-y-3 p-3">
-            <For each={usersList() ?? []}>
+      <CatalogToolbar view={view} />
+      <CatalogState view={view}><Card>
+        <Show when={userCount() > 0} fallback={<EmptyState icon={Icons.users} title="No matching users" hint="Adjust your filters or create a new user." />}>
+          <Show when={!view.mobile()}><div class="p-2"><UsageGrid columnDefs={cols} datasource={usersDatasource} cacheBlockSize={25} refreshDeps={view.refreshKey()} storageKey="llmgw-grid:admin.users.list" sort={view.sort()} onSortChanged={view.setSort} /></div></Show>
+          <Show when={view.mobile()}><div class="catalog-mobile p-3 space-y-3"><For each={view.rows()}>
               {(u) => (
                 <div class="p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
                   <div class="flex items-start justify-between gap-2">
@@ -390,10 +354,9 @@ export default function AdminUsersPage() {
                   </div>
                 </div>
               )}
-            </For>
-          </div>
+            </For><CatalogPagination view={view} /></div></Show>
         </Show>
-      </Card>
+      </Card></CatalogState>
 
       {/* create modal */}
       <Modal

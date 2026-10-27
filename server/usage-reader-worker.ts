@@ -5,10 +5,13 @@ import { userEvents } from "./usage";
 import { db } from "./db";
 import type { UsageReadRequest } from "./usage-reader";
 import { filteredUsageAnalytics } from "./usage-analytics";
+import { catalogAuditPage, catalogFilterOptions } from "./catalog";
 
 parentPort!.on("message", ({ id, request: r }: { id: number; request: UsageReadRequest }) => {
   try {
-    const result = db.transaction(() => r.kind === "analytics" ? filteredUsageAnalytics(r.scope, r.userId)
+    const result = db.transaction(() => r.kind === "catalog-facets" ? catalogFilterOptions(r.catalog, new URLSearchParams(r.search), r.userId)
+      : r.kind === "catalog-audit" ? catalogAuditPage(new URLSearchParams(r.search))
+      : r.kind === "analytics" ? filteredUsageAnalytics(r.scope, r.userId)
       : r.kind === "overview" ? { ...filteredUsageSeries(r.scope, r.userId), models: filteredTopModels(r.scope, r.userId) }
       : r.kind === "series" ? filteredUsageSeries(r.scope, r.userId)
       : r.kind === "facets" ? usageFilterOptions(r.userId, r.scope, new URLSearchParams(r.search))

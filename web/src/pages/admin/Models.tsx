@@ -1,11 +1,11 @@
-import { createSignal, For, Show, createResource, createMemo, createEffect } from "solid-js";
+import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
+import { batch, createSignal, For, Show, createResource, createMemo, createEffect } from "solid-js";
 
 import { api, type ModelDto, type ProviderDto, type RoutingMode, type SyncOutcome, type ToolCallMode } from "../../api";
 import { PageTitle } from "../../index";
-import { usalItems } from "../../motion";
 import { attachSortable } from "../../sortable";
-import { Badge, Btn, Card, EmptyState, FilterChip, Icon, IconBtn, Icons, Modal, ModalField, ModalNotice, ModalSection, Segmented, Select, SwitchCard, toast, fmtNum } from "../../ui";
-import { UsageGrid, serverDatasource } from "../../aggrid";
+import { Badge, Btn, Card, EmptyState, Icon, IconBtn, Icons, Modal, ModalField, ModalNotice, ModalSection, Segmented, Select, SwitchCard, toast, fmtNum } from "../../ui";
+import { UsageGrid } from "../../aggrid";
 import type { ColDef, GridApi } from "ag-grid-community";
 
 /** Editor-state of one failover routing target. */
@@ -86,7 +86,7 @@ export default function AdminModelsPage() {
   let modelsGridApi: GridApi<ModelDto> | undefined;
 
   const applyLoadedSelection = (gridApi = modelsGridApi) => {
-    if (!gridApi) return;
+    if (!gridApi || gridApi.isDestroyed()) return;
     const ids = selected();
     gridApi.forEachNode((node) => {
       const id = node.data?.id;
@@ -121,6 +121,7 @@ export default function AdminModelsPage() {
         changed = true;
       }
     });
+    if (next.size > 10000) { toast("Select up to 10,000 models at a time", "err"); applyLoadedSelection(event.api); return; }
     if (changed) setSelected(next);
   };
 
@@ -130,135 +131,41 @@ export default function AdminModelsPage() {
   });
 
   const clearSelection = () => {
-    modelsGridApi?.deselectAll();
-    setSelected(new Set<string>());
-    setSelectedOnly(false);
+    batch(() => { modelsGridApi?.deselectAll(); setSelected(new Set<string>()); setSelectedOnly(false); });
   };
 
+  const view = createCatalog<ModelDto>({ storageKey: "llmgw-grid:admin.models", path: "/api/admin/models", result: "models", label: "Models", sort: [
+    { value: "id:asc", label: "Model ID A–Z" }, { value: "name:asc", label: "Name A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "contextLength:desc", label: "Largest context" }, { value: "pricing_input:asc", label: "Lowest input price" }, { value: "pricing_output:asc", label: "Lowest output price" },
+  ], extra: (): Record<string, string> => selectedOnly() ? { selected_ids: JSON.stringify([...selected()].sort()) } : {} });
+  const modelCount = view.total;
+  const modelsDatasource = view.datasource;
+  const [providers] = createResource(async () => {
+    const j = await api<{ providers: ProviderDto[] }>("GET", "/api/admin/providers"); return j.providers;
+  });
+  const refreshGrid = () => { clearSelection(); view.refresh(); };
+  const modelsGridHeight = () => modelCount() <= 4 ? "h-[280px]" : "h-[540px]";
+  const toggleSelection = (id: string) => setSelected((current) => {
+    const next = new Set(current); if (next.has(id)) next.delete(id); else if (next.size < 10000) next.add(id); return next;
+  });
+  const selectPage = () => setSelected((current) => {
+    const next = new Set(current);
+    const add = (id: string) => { if (next.size < 10000) next.add(id); };
+    if (view.mobile()) for (const model of view.rows()) add(model.id);
+    else modelsGridApi?.forEachNode((node) => { if (node.data) add(node.data.id); });
+    return next;
+  });
   const selectAllFiltered = async () => {
-    const gridApi = modelsGridApi;
-    if (!gridApi) return;
+    const context = view.query();
     setSelectingAll(true);
     try {
-      const filters = gridApi.getFilterModel();
-      const sort = gridApi
-        .getColumnState()
-        .filter((column) => column.sort)
-        .sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0))
-        .map((column) => ({ colId: column.colId, sort: column.sort! }));
-      const ids: string[] = [];
-      let offset = 0;
-      let total = 0;
-
-      do {
-        const qs = new URLSearchParams({
-          limit: "500",
-          offset: String(offset),
-        });
-        if (Object.keys(filters).length > 0) {
-          qs.set("filters", JSON.stringify(filters));
-        }
-        if (sort.length > 0) qs.set("sort", JSON.stringify(sort));
-        const page = await api<{ models: ModelDto[]; total: number }>(
-          "GET",
-          `/api/admin/models?${qs}`,
-        );
-        total = page.total;
-        ids.push(...page.models.map((model) => model.id));
-        offset += page.models.length;
-        if (page.models.length === 0) break;
-      } while (offset < total);
-
-      const next = new Set(selected());
-      for (const id of ids) next.add(id);
-      setSelected(next);
-      applyLoadedSelection(gridApi);
-      toast(`${ids.length} model${ids.length === 1 ? "" : "s"} selected`);
-    } catch (e) {
-      toast(e instanceof Error ? e.message : "could not select filtered models", "err");
-    } finally {
-      setSelectingAll(false);
-    }
+      const result = await api<{ ids: string[] }>("GET", `/api/admin/models/selection?${context}`);
+      if (context !== view.query()) { toast("Filters changed. Select the results again."); return; }
+      const next = new Set([...selected(), ...result.ids]);
+      if (next.size > 10000) { toast("Select up to 10,000 models at a time", "err"); return; }
+      setSelected(next); toast(`${result.ids.length} matching models selected`);
+    } catch (error) { toast(error instanceof Error ? error.message : "Could not select models", "err"); }
+    finally { setSelectingAll(false); }
   };
-
-  const [modelCount, { refetch: refetchModelCount }] = createResource(async () => {
-    const j = await api<{ total: number }>("GET", "/api/admin/models?limit=1");
-    return j.total;
-  });
-  const [providers] = createResource(async () => {
-    const j = await api<{ providers: ProviderDto[] }>("GET", "/api/admin/providers");
-    return j.providers;
-  });
-  const [gridVersion, setGridVersion] = createSignal(0);
-  const [modelsList, { refetch: refetchModelsList }] = createResource(gridVersion, async () => {
-    try {
-      const j = await api<{ models: ModelDto[] }>("GET", "/api/admin/models?limit=100");
-      return j.models;
-    } catch {
-      return [];
-    }
-  });
-  const refreshGrid = () => {
-    clearSelection();
-    setGridVersion((v) => v + 1);
-    refetchModelCount();
-    refetchModelsList();
-  };
-
-  const [cardSearch, setCardSearch] = createSignal("");
-  const [cardStatusFilter, setCardStatusFilter] = createSignal<"all" | "active" | "disabled">("all");
-  const [cardProviderFilter, setCardProviderFilter] = createSignal<string>("all");
-
-  const providerFilterOptions = createMemo(() => [
-    { value: "all", label: "All providers" },
-    ...(providers() ?? []).map((p) => ({ value: p.id, label: p.name })),
-  ]);
-
-  const filteredModels = createMemo(() => {
-    let list = modelsList() ?? [];
-    const st = cardStatusFilter();
-    if (st === "active") list = list.filter((m) => m.enabled);
-    if (st === "disabled") list = list.filter((m) => !m.enabled);
-
-    const prov = cardProviderFilter();
-    if (prov !== "all") list = list.filter((m) => m.providerId === prov || m.providerName === prov);
-
-    const q = cardSearch().trim().toLowerCase();
-    if (q) {
-      list = list.filter(
-        (m) =>
-          m.id.toLowerCase().includes(q) ||
-          (m.name && m.name.toLowerCase().includes(q)) ||
-          (m.upstreamModel && m.upstreamModel.toLowerCase().includes(q)) ||
-          (m.providerName && m.providerName.toLowerCase().includes(q)),
-      );
-    }
-    return list;
-  });
-
-  const activeModelCount = createMemo(() => (modelsList() ?? []).filter((m) => m.enabled).length);
-  const disabledModelCount = createMemo(() => (modelsList() ?? []).filter((m) => !m.enabled).length);
-
-  const modelsGridHeight = () => {
-    const count = modelCount() ?? 0;
-    if (count <= 2) return "h-[200px]";
-    if (count <= 4) return "h-[280px]";
-    if (count <= 8) return "h-[380px]";
-    return "h-[540px]";
-  };
-  const modelsDatasource = serverDatasource<ModelDto>(async (params) => {
-    const qs = new URLSearchParams({
-      limit: String(Math.min(params.endRow - params.startRow, 500)),
-      offset: String(params.startRow),
-    });
-    if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-    if (Object.keys(params.filterModel).length > 0) qs.set("filters", JSON.stringify(params.filterModel));
-    if (selectedOnly()) {
-      qs.set("selected_ids", JSON.stringify([...selected()]));
-    }
-    const j = await api<{ models: ModelDto[]; total: number }>("GET", `/api/admin/models?${qs}`);
-    return { rows: j.models, total: j.total };
-  });
 
   const [routingMode, setRoutingMode] = createSignal<RoutingMode>("passthrough");
   createResource(async () => {
@@ -635,7 +542,7 @@ export default function AdminModelsPage() {
   ];
 
   return (
-    <div>
+    <div class="catalog-page" aria-busy={view.loading()}>
       <PageTitle
         title="Models"
         subtitle="Public model registry and provider failover chains"
@@ -660,175 +567,29 @@ export default function AdminModelsPage() {
         }
       />
 
-      <Show when={selected().size > 0 || selectedOnly()}>
-        <Card class="p-3 mb-4 flex items-center justify-between">
-          <span class="text-xs text-ink-300">{selected().size} selected</span>
-          <div class="flex gap-2">
-            <Btn variant="ghost" size="sm" onClick={selectAllFiltered} disabled={selectingAll() || busy()}>
-              {selectingAll() ? "Selecting…" : "Select all filtered"}
-            </Btn>
-            <Btn
-              variant={selectedOnly() ? "outline" : "ghost"}
-              size="sm"
-              onClick={() => setSelectedOnly((value) => !value)}
-              disabled={
-                (!selectedOnly() && selected().size === 0) ||
-                selectingAll() ||
-                busy()
-              }
-            >
-              Selected only
-            </Btn>
-            <Btn
-              variant="ghost"
-              size="sm"
-              onClick={clearSelection}
-              disabled={
-                (!selectedOnly() && selected().size === 0) ||
-                selectingAll() ||
-                busy()
-              }
-            >
-              Clear
-            </Btn>
-            <Show when={selected().size > 0}>
-              <Btn variant="danger" size="sm" onClick={() => setConfirmBulk(true)} disabled={selectingAll()}>
-                <Icon name={Icons.trash} /> Delete selected
-              </Btn>
-            </Show>
-          </div>
-        </Card>
-      </Show>
-
-      <Show
-        when={(modelCount() ?? 0) > 0}
-        fallback={
-          <Card>
-            <EmptyState
-              icon={Icons.layers}
-              title="No models registered"
-              hint="Creating a provider auto-imports its /models list — or add a model manually."
-            />
-          </Card>
-        }
-      >
-        <Card class="overflow-hidden" {...usalItems("fade-u", 60)}>
-          {/* Desktop & Tablet AG Grid */}
-          <div class="hidden md:block p-2">
-            {/* Selecting a row is local state and must not purge the infinite
-                cache. Only changing Selected only mode or a real model
-                mutation needs to reload rows. */}
-            <UsageGrid
-              columnDefs={cols}
-              datasource={modelsDatasource}
-              cacheBlockSize={100}
-              refreshDeps={`${gridVersion()}:${selectedOnly()}:${selectedOnly() ? [...selected()].sort().join(",") : ""}`}
-              storageKey="llmgw-grid:admin.models"
-              heightClass={modelsGridHeight()}
-              rowSelection="multiple"
-              suppressRowClickSelection
-              getRowId={(p) => p.data.id}
-              onGridReady={(e) => {
-                modelsGridApi = e.api as GridApi<ModelDto>;
-                applyLoadedSelection(modelsGridApi);
-              }}
-              onModelUpdated={(e) => applyLoadedSelection(e.api as GridApi<ModelDto>)}
-              onSelectionChanged={syncLoadedSelection}
-            />
-          </div>
-
-          {/* Touch / Mobile Card List */}
-          <div class="md:hidden p-3 space-y-3">
-            {/* Search & Filter Toolbar */}
-            <div class="p-3 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
-              <div class="relative">
-                <span class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-ink-500">
-                  <Icon name={Icons.search} size={15} />
-                </span>
-                <input
-                  type="text"
-                  value={cardSearch()}
-                  onInput={(e) => setCardSearch(e.currentTarget.value)}
-                  placeholder="Search models by name, id or provider…"
-                  class="w-full rounded-lg border border-line bg-card pl-9 pr-8 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                />
-                <Show when={cardSearch()}>
-                  <button
-                    type="button"
-                    onClick={() => setCardSearch("")}
-                    class="absolute inset-y-0 right-0 pr-2.5 flex items-center text-ink-400 hover:text-ink-200 cursor-pointer"
-                  >
-                    <Icon name={Icons.x} size={14} />
-                  </button>
-                </Show>
-              </div>
-
-              <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div class="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
-                  <FilterChip
-                    selected={cardStatusFilter() === "all"}
-                    onClick={() => setCardStatusFilter("all")}
-                    class="shrink-0"
-                  >
-                    All ({(modelsList() ?? []).length})
-                  </FilterChip>
-                  <FilterChip
-                    selected={cardStatusFilter() === "active"}
-                    onClick={() => setCardStatusFilter("active")}
-                    class="shrink-0"
-                  >
-                    Active ({activeModelCount()})
-                  </FilterChip>
-                  <Show when={disabledModelCount() > 0}>
-                    <FilterChip
-                      selected={cardStatusFilter() === "disabled"}
-                      onClick={() => setCardStatusFilter("disabled")}
-                      class="shrink-0"
-                    >
-                      Disabled ({disabledModelCount()})
-                    </FilterChip>
-                  </Show>
-                  <Show when={(providers() ?? []).length > 1}>
-                    <select
-                      value={cardProviderFilter()}
-                      onChange={(e) => setCardProviderFilter(e.currentTarget.value)}
-                      class="h-6 shrink-0 rounded-md border border-line bg-card px-2 text-[11px] text-ink-300 focus:border-brand-500 focus:outline-none"
-                    >
-                      <For each={providerFilterOptions()}>
-                        {(opt) => <option value={opt.value}>{opt.label}</option>}
-                      </For>
-                    </select>
-                  </Show>
-                </div>
-                <span class="text-[11px] text-ink-500 tabular-nums shrink-0">
-                  Showing {filteredModels().length} of {(modelsList() ?? []).length}
-                </span>
-              </div>
-            </div>
-
-            <Show
-              when={filteredModels().length > 0}
-              fallback={
-                <div class="p-8 text-center rounded-xl border border-line/60 bg-elev space-y-2">
-                  <p class="text-xs text-ink-400">
-                    No models match your filters.
-                  </p>
-                  <Show when={cardSearch() || cardStatusFilter() !== "all"}>
-                    <button
-                      type="button"
-                      onClick={() => { setCardSearch(""); setCardStatusFilter("all"); }}
-                      class="text-xs text-brand-400 hover:underline cursor-pointer"
-                    >
-                      Reset filters
-                    </button>
-                  </Show>
-                </div>
-              }
-            >
-              <div class="space-y-3">
-                <For each={filteredModels()}>
+      <CatalogToolbar view={view} />
+      <Card class="catalog-selection" aria-label="Model selection">
+        <div><strong aria-live="polite">{fmtNum(selected().size)} selected</strong><span>Selection is kept across pages and filters.</span></div>
+        <div class="catalog-selection-actions">
+          <Btn variant="ghost" size="sm" onClick={selectPage} disabled={!modelCount() || view.loading() || busy() || selectingAll()}>{view.mobile() ? "Select page" : "Select loaded"}</Btn>
+          <Btn variant="ghost" size="sm" onClick={selectAllFiltered} disabled={selectedOnly() || view.loading() || busy() || selectingAll()}>{selectingAll() ? "Selecting…" : "Select all results"}</Btn>
+          <Btn variant={selectedOnly() ? "outline" : "ghost"} size="sm" onClick={() => setSelectedOnly((value) => !value)} disabled={(!selectedOnly() && !selected().size) || busy() || selectingAll()}>Selected only</Btn>
+          <Btn variant="ghost" size="sm" onClick={clearSelection} disabled={(!selectedOnly() && !selected().size) || busy() || selectingAll()}>Clear selection</Btn>
+          <Btn variant="danger" size="sm" onClick={() => setConfirmBulk(true)} disabled={!selected().size || busy() || selectingAll()}><Icon name={Icons.trash} />Delete selected</Btn>
+        </div>
+      </Card>
+      <CatalogState view={view}><Card class="overflow-hidden">
+        <Show when={modelCount() > 0} fallback={<EmptyState icon={Icons.layers} title="No matching models" hint="Adjust your filters or register a model." />}>
+          <Show when={!view.mobile()}><div class="p-2"><UsageGrid columnDefs={cols} datasource={modelsDatasource} cacheBlockSize={25} refreshDeps={view.refreshKey()} storageKey="llmgw-grid:admin.models" heightClass={modelsGridHeight()} sort={view.sort()} onSortChanged={view.setSort}
+            rowSelection="multiple" suppressRowClickSelection getRowId={(p) => p.data.id}
+            onGridReady={(event) => { modelsGridApi = event.api as GridApi<ModelDto>; applyLoadedSelection(); }}
+            onGridDestroyed={() => { modelsGridApi = undefined; }}
+            onModelUpdated={(event) => applyLoadedSelection(event.api as GridApi<ModelDto>)} onSelectionChanged={syncLoadedSelection}
+          /></div></Show>
+          <Show when={view.mobile()}><div class="catalog-mobile p-3 space-y-3"><For each={view.rows()}>
                   {(m) => (
-                    <div class="p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
+                    <div class="catalog-model-card p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs" classList={{ "is-selected": selected().has(m.id) }}>
+                      <label class="catalog-model-select"><input type="checkbox" checked={selected().has(m.id)} disabled={!selected().has(m.id) && selected().size >= 10000} aria-label={`Select model ${m.id}`} onChange={() => toggleSelection(m.id)} /><span>{selected().has(m.id) ? "Selected" : "Select model"}</span></label>
                       <div class="flex items-start justify-between gap-2">
                         <div class="min-w-0">
                           <div class="flex items-center gap-2 flex-wrap">
@@ -902,13 +663,9 @@ export default function AdminModelsPage() {
                       </div>
                     </div>
                   )}
-                </For>
-              </div>
-            </Show>
-          </div>
-        </Card>
-      </Show>
-
+                </For><CatalogPagination view={view} /></div></Show>
+        </Show>
+      </Card></CatalogState>
 
       {/* editor modal */}
       <Modal
