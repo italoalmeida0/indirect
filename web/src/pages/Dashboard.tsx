@@ -12,18 +12,17 @@ import { DailyChart } from "../charts";
 import { rangeUnit } from "../analytics-range";
 import { RequestHeatmap } from "../RequestHeatmap";
 import { TopModelsCard } from "../OverviewInsights";
+import { AnalyticsHero, AnalyticsBucket } from "../AnalyticsSummary";
 import type { ActivityScope } from "../overview-activity";
 import { usal, usalItems } from "../motion";
 import {
   Card,
   CountUp,
-  DeltaPill,
   Icon,
   IconTile,
   Icons,
   ProgressBar,
   copyWithToast,
-  fmtCost,
   fmtNum,
 } from "../ui";
 
@@ -31,66 +30,6 @@ import {
 function deltaPct(current: DailyPoint[], previous: DailyPoint[], pick: (d: DailyPoint) => number): number | null {
   const base = previous.reduce((sum, d) => sum + pick(d), 0);
   return base > 0 ? ((current.reduce((sum, d) => sum + pick(d), 0) - base) / base) * 100 : null;
-}
-
-function HeroHeader(props: {
-  icon: string;
-  count?: number;
-  cost?: number;
-  label: string;
-  delta: number | null;
-}) {
-  return (
-    <div class="flex items-start justify-between gap-3">
-      <div class="min-w-0">
-        <div class="text-xs font-medium text-ink-500 mb-2 truncate">{props.label}</div>
-        <div
-          class="text-[32px] sm:text-[38px] leading-tight font-light tracking-tight truncate"
-          title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
-        >
-          {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
-        </div>
-      </div>
-      <div class="flex items-center gap-2 shrink-0">
-        <Show when={props.delta !== null}>
-          <DeltaPill pct={props.delta!} />
-        </Show>
-        <IconTile icon={props.icon} class="w-10 h-10" />
-      </div>
-    </div>
-  );
-}
-
-/** One token/cost bucket: big number on top, colored dot + label + delta beneath. */
-function BucketStat(props: {
-  label: string;
-  count?: number;
-  cost?: number;
-  delta: number | null;
-  color: string;
-}) {
-  return (
-    <div class="min-w-0 flex-1">
-      <div class="flex items-center gap-1.5 text-[11px] text-ink-400 font-medium">
-        <span
-          class="w-1.5 h-1.5 rounded-full inline-block shrink-0"
-          style={{ background: props.color }}
-        />
-        <span class="whitespace-nowrap shrink-0">{props.label}</span>
-      </div>
-      <div
-        class="text-sm sm:text-base font-semibold text-ink-100 tabular-nums leading-tight mt-1 whitespace-nowrap"
-        title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
-      >
-        {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
-      </div>
-      <div class="mt-1 h-4 flex items-center">
-        <Show when={props.delta !== null} fallback={<span class="text-[10px] text-ink-600 leading-none">—</span>}>
-          <DeltaPill pct={props.delta!} class="text-[10px] px-1 py-0 leading-none shrink-0" />
-        </Show>
-      </div>
-    </div>
-  );
 }
 
 const IN_COLOR = "var(--chart-strong)";
@@ -208,26 +147,26 @@ export default function DashboardPage() {
           >
             <Card class="overview-spend p-5 min-w-0 flex flex-col justify-between">
               <div>
-                <HeroHeader
+                <AnalyticsHero
                   icon={Icons.dollarSign}
                   cost={winCost()}
                   label={`Spend · ${filters.label()}`}
                   delta={costDelta()}
                 />
                 <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
-                  <BucketStat
+                  <AnalyticsBucket
                     label="Input"
                     cost={winCostIn()}
                     delta={costInDelta()}
                     color={IN_COLOR}
                   />
-                  <BucketStat
+                  <AnalyticsBucket
                     label="Cache"
                     cost={winCostCache()}
                     delta={costCacheDelta()}
                     color={CACHE_COLOR}
                   />
-                  <BucketStat
+                  <AnalyticsBucket
                     label="Output"
                     cost={winCostOut()}
                     delta={costOutDelta()}
@@ -252,26 +191,26 @@ export default function DashboardPage() {
 
             <Card class="overview-tokens p-5 min-w-0 flex flex-col justify-between">
               <div>
-                <HeroHeader
+                <AnalyticsHero
                   icon={Icons.chart}
                   count={winIn() + winCache() + winOut()}
                   label={`Tokens · ${filters.label()}`}
                   delta={tokensDelta()}
                 />
                 <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
-                  <BucketStat
+                  <AnalyticsBucket
                     label="Input"
                     count={winIn()}
                     delta={inDelta()}
                     color={IN_COLOR}
                   />
-                  <BucketStat
+                  <AnalyticsBucket
                     label="Cache"
                     count={winCache()}
                     delta={cacheDelta()}
                     color={CACHE_COLOR}
                   />
-                  <BucketStat
+                  <AnalyticsBucket
                     label="Output"
                     count={winOut()}
                     delta={outDelta()}
@@ -295,7 +234,7 @@ export default function DashboardPage() {
 
             <div class="overview-activity-row">
               <Card class="overview-requests p-5 min-w-0">
-                <HeroHeader icon={Icons.bolt} count={winReqs()} label={`Requests · ${filters.label()}`} delta={reqDelta()} />
+                <AnalyticsHero icon={Icons.bolt} count={winReqs()} label={`Requests · ${filters.label()}`} delta={reqDelta()} />
                 <RequestHeatmap series={view()} scope={series()!.scope} cacheHitRate={cacheHitRate()} />
               </Card>
               <TopModelsCard models={series()!.models} requests={winReqs()} label={filters.label()} />

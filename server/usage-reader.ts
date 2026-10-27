@@ -4,15 +4,18 @@ import { cachedUsageQueryAsync } from "./usage-cache";
 import type { UsageScope, filteredUsageSeries, filteredTopModels, filteredUsageBreakdown, usageFilterOptions } from "./usage-filters";
 import type { userEvents } from "./usage";
 import type { parseGridQuery } from "./gridql";
+import type { filteredUsageAnalytics } from "./usage-analytics";
 
 export type UsageReadRequest = { scope: UsageScope; userId: string | null } & (
   | { kind: "series" }
   | { kind: "overview"; userId: string }
+  | { kind: "analytics" }
   | { kind: "facets"; search: string }
   | { kind: "breakdown"; grid: ReturnType<typeof parseGridQuery>; users: boolean; summaryOnly: boolean }
   | { kind: "events"; opts: Parameters<typeof userEvents>[1]; userId: string }
 );
-type Result<R extends UsageReadRequest> = R extends { kind: "overview" } ? ReturnType<typeof filteredUsageSeries> & { models: ReturnType<typeof filteredTopModels> }
+type Result<R extends UsageReadRequest> = R extends { kind: "analytics" } ? ReturnType<typeof filteredUsageAnalytics>
+  : R extends { kind: "overview" } ? ReturnType<typeof filteredUsageSeries> & { models: ReturnType<typeof filteredTopModels> }
   : R extends { kind: "series" } ? ReturnType<typeof filteredUsageSeries>
   : R extends { kind: "facets" } ? ReturnType<typeof usageFilterOptions>
   : R extends { kind: "events" } ? ReturnType<typeof userEvents> : ReturnType<typeof filteredUsageBreakdown>;

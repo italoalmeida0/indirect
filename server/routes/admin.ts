@@ -1550,6 +1550,11 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   // ================= stats =================
 
+  if (path === "/api/admin/analytics" && req.method === "GET") {
+    const scope = readUsageScope(url, true) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
+    return ok(await readUsage({ kind: "analytics", scope, userId: null }), req);
+  }
+
   if (path === "/api/admin/usage-filter-options" && req.method === "GET") {
     const scope = readUsageScope(url, true) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
     return ok(await readUsage({ kind: "facets", userId: null, scope, search: url.searchParams.toString() }), req);

@@ -17,7 +17,7 @@ function ActivityTooltip(props: { cell: ActivityCell; anchor: HTMLButtonElement;
   </div>;
 }
 
-export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivityScope; cacheHitRate: number | null }) {
+export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivityScope; cacheHitRate: number | null; compact?: boolean }) {
   const model = createMemo(() => buildRequestActivity(props.series, props.scope));
   const [active, setActive] = createSignal<{ cell: ActivityCell; anchor: HTMLButtonElement } | null>(null);
   const [selected, setSelected] = createSignal<ActivityCell | null>(null);
@@ -72,7 +72,7 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
     onCleanup(() => { observer.disconnect(); cancelAnimationFrame(frame); });
   });
 
-  return <div class={`request-activity ${model().monthly ? "is-monthly" : ""} ${model().short ? "is-short" : ""}`}>
+  return <div class={`request-activity ${model().monthly ? "is-monthly" : ""} ${model().short ? "is-short" : ""} ${props.compact ? "activity-compact" : ""}`}>
     <div class="activity-heading">
       <span>{model().monthly ? "Monthly" : "Daily"} activity <span class="activity-utc">UTC</span></span>
       <span>{model().first === model().last ? model().first : `${model().first ?? ""} – ${model().last ?? ""}`}</span>

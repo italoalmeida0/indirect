@@ -4,10 +4,12 @@ import { filteredTopModels, filteredUsageBreakdown, filteredUsageSeries, usageFi
 import { userEvents } from "./usage";
 import { db } from "./db";
 import type { UsageReadRequest } from "./usage-reader";
+import { filteredUsageAnalytics } from "./usage-analytics";
 
 parentPort!.on("message", ({ id, request: r }: { id: number; request: UsageReadRequest }) => {
   try {
-    const result = db.transaction(() => r.kind === "overview" ? { ...filteredUsageSeries(r.scope, r.userId), models: filteredTopModels(r.scope, r.userId) }
+    const result = db.transaction(() => r.kind === "analytics" ? filteredUsageAnalytics(r.scope, r.userId)
+      : r.kind === "overview" ? { ...filteredUsageSeries(r.scope, r.userId), models: filteredTopModels(r.scope, r.userId) }
       : r.kind === "series" ? filteredUsageSeries(r.scope, r.userId)
       : r.kind === "facets" ? usageFilterOptions(r.userId, r.scope, new URLSearchParams(r.search))
       : r.kind === "events" ? userEvents(r.userId, { ...r.opts, scope: r.scope })

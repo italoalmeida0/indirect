@@ -1,16 +1,17 @@
-import { For, createEffect, on, createMemo, createResource, createSignal, Show } from "solid-js";
+import { For, createEffect, on, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js";
 
 import { api } from "../api";
 import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
 import { PageTitle } from "../index";
-import { DailyChart } from "../charts";
+import { createAnalyticsReport } from "../analytics-report";
+import { AnalyticsSummary } from "../AnalyticsSummary";
+import { AnalyticsError, AnalyticsLoading, AnalyticsSection, CacheUsageChart, ModelUsageChart } from "../AnalyticsCharts";
 import {
   Card,
   CardHeader,
   EmptyState,
   Icon,
   Icons,
-  Segmented,
   fmtCost,
   fmtNum,
 } from "../ui";
@@ -29,74 +30,7 @@ import type { ColDef } from "ag-grid-community";
 
 const EVENTS_BLOCK = 100;
 
-interface BreakdownRow {
-  key_id: string;
-  key_name: string;
-  model: string;
-  proto: "openai" | "anthropic";
-  provider_id: string;
-  provider_name: string | null;
-  provider_key_id: string;
-  provider_key_label: string | null;
-  upstream_model: string;
-  in_tok: number;
-  cache_tok: number;
-  out_tok: number;
-  reqs: number;
-  cost_in?: number;
-  cost_cache?: number;
-  cost_out?: number;
-  cost?: number;
-}
-
 const fmtOrDash = (v: unknown) => (v == null || v === "" ? "—" : String(v));
-
-const byModelCols: ColDef<BreakdownRow>[] = [
-  {
-    field: "model",
-    headerName: "Model",
-    flex: 1.2,
-    minWidth: 150,
-    valueFormatter: (p) => fmtOrDash(p.value),
-  },
-  {
-    field: "proto",
-    headerName: "Proto",
-    width: 105,
-    minWidth: 95,
-    cellRenderer: ProtoCell,
-  },
-  {
-    field: "provider_name",
-    headerName: "Provider",
-    flex: 1,
-    minWidth: 140,
-    valueFormatter: (p) => fmtOrDash(p.value),
-  },
-  {
-    field: "upstream_model",
-    headerName: "Upstream",
-    flex: 1,
-    minWidth: 140,
-    valueFormatter: (p) => fmtOrDash(p.value),
-  },
-  {
-    field: "provider_key_id",
-    headerName: "Upstream key",
-    flex: 0.8,
-    minWidth: 130,
-    valueGetter: (p) => p.data?.provider_key_label || p.data?.provider_key_id?.slice(0, 8) || "—",
-    valueFormatter: (p) => p.value,
-  },
-  { field: "reqs", headerName: "Requests", width: 100, minWidth: 95, type: "rightAligned", valueFormatter: tokenFormatter },
-  { field: "in_tok", headerName: "In", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: tokenFormatter },
-  { field: "cache_tok", headerName: "Cache", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: tokenFormatter },
-  { field: "out_tok", headerName: "Out", width: 95, minWidth: 90, type: "rightAligned", valueFormatter: tokenFormatter },
-  { field: "cost_in", headerName: "In Cost", width: 100, minWidth: 95, type: "rightAligned", valueFormatter: costFormatter },
-  { field: "cost_cache", headerName: "Cache Cost", width: 105, minWidth: 100, type: "rightAligned", valueFormatter: costFormatter },
-  { field: "cost_out", headerName: "Out Cost", width: 100, minWidth: 95, type: "rightAligned", valueFormatter: costFormatter },
-  { field: "cost", headerName: "Total Cost", width: 110, minWidth: 105, type: "rightAligned", valueFormatter: costFormatter },
-];
 
 const eventCols: ColDef[] = [
   { field: "ts", headerName: "Time", width: 170, minWidth: 160, valueFormatter: timeFormatter },
@@ -118,53 +52,35 @@ const eventCols: ColDef[] = [
 
 export default function UsagePage() {
   const filters = createAnalyticsFilters();
-  const [chartMetric, setChartMetric] = createSignal<"tokens" | "requests" | "cost">(
-    "tokens",
-  );
-
   const query = filters.query;
-  const [series] = createResource(query, async (q) => {
-    const j = await api<{ series: any[] }>("GET", `/api/usage/daily?${q}`);
-    return j.series;
-  });
-  const [breakdownCount] = createResource(query, async (q) => {
-    const j = await api<{ total: number }>("GET", `/api/usage/breakdown?${q}&summary=1`);
-    return j.total;
-  });
-  const [breakdownTotals, setBreakdownTotals] = createSignal<GridTotals | null>(null);
-  const breakdownDatasource = serverDatasource<BreakdownRow>(async (params) => {
-    const scope = query();
-    const qs = new URLSearchParams(scope);
-    qs.set("limit", String(Math.min(params.endRow - params.startRow, 500)));
-    qs.set("offset", String(params.startRow));
-    if (params.sortModel.length > 0) qs.set("sort", JSON.stringify(params.sortModel));
-    const j = await api<{ rows: BreakdownRow[]; total: number; totals?: GridTotals }>("GET", `/api/usage/breakdown?${qs}`);
-    if (j.totals && scope === query()) setBreakdownTotals(j.totals);
-    return { rows: j.rows, total: j.total };
-  });
+  const { report, refetch } = createAnalyticsReport(filters);
+  const media = window.matchMedia("(max-width: 767px)");
+  const [mobile, setMobile] = createSignal(media.matches);
+  const resize = () => setMobile(media.matches);
+  media.addEventListener("change", resize);
+  onCleanup(() => media.removeEventListener("change", resize));
 
   // Every count and page shares the same exact scope as the chart.
-  const [eventCount] = createResource(query, async (q) => {
-    const j = await api<{ total: number }>("GET", `/api/usage/events?${q}&summary=1`);
+  let countAbort: AbortController | undefined;
+  let mobileAbort: AbortController | undefined;
+  onCleanup(() => { countAbort?.abort(); mobileAbort?.abort(); });
+  const [eventCount, countActions] = createResource(query, async (q) => {
+    countAbort?.abort();
+    countAbort = new AbortController();
+    const j = await api<{ total: number }>("GET", `/api/usage/events?${q}&summary=1`, undefined, countAbort.signal);
     return j.total;
   });
   const [mobilePage, setMobilePage] = createSignal(1);
   const [expandedEventKey, setExpandedEventKey] = createSignal<string | null>(null);
   createEffect(on(query, () => { setMobilePage(1); setExpandedEventKey(null); }));
-  const mobileQuery = createMemo(() => ({ scope: query(), page: mobilePage() }));
-  const [recentEventsList] = createResource(mobileQuery, async (q) => {
-    const j = await api<{ events: any[] }>("GET", `/api/usage/events?${q.scope}&limit=25&offset=${(q.page - 1) * 25}`);
+  const mobileQuery = createMemo(() => mobile() ? { scope: query(), page: mobilePage() } : false);
+  const [recentEventsList, mobileActions] = createResource(mobileQuery, async (q) => {
+    mobileAbort?.abort();
+    mobileAbort = new AbortController();
+    const j = await api<{ events: any[] }>("GET", `/api/usage/events?${q.scope}&limit=25&offset=${(q.page - 1) * 25}`, undefined, mobileAbort.signal);
     return j.events;
   });
-  const totalMobilePages = createMemo(() => Math.max(1, Math.ceil((eventCount() ?? 0) / 25)));
-
-  const byModelHeight = () => {
-    const count = breakdownCount() ?? 0;
-    if (count <= 2) return "h-[190px]";
-    if (count <= 4) return "h-[250px]";
-    if (count <= 8) return "h-[340px]";
-    return "h-[420px]";
-  };
+  const totalMobilePages = createMemo(() => Math.max(1, Math.ceil((eventCount.error ? 0 : eventCount() ?? 0) / 25)));
 
   /** AG Grid infinite row model: blocks are fetched from the API on scroll,
    *  with the grid's sortModel/filterModel translated to SQL server-side.
@@ -206,66 +122,29 @@ export default function UsagePage() {
   })());
 
   return (
-    <div aria-busy={filters.pending() || series.loading || breakdownCount.loading || eventCount.loading}>
-      <PageTitle
-        title="Usage"
-        subtitle="Inspect consumption per key, provider, model and request"
-      />
-
-      <AnalyticsToolbar filters={filters} loading={series.loading || breakdownCount.loading || eventCount.loading} />
-      <Card class="mb-5">
-        <div class="px-4 py-3 border-b border-line/60 flex items-center justify-between gap-3">
-          <div><h2 class="text-sm font-semibold text-ink-100">Consumption</h2><p class="text-[11px] text-ink-500 mt-0.5">{filters.label()} &middot; {filters.unit() === "month" ? "Monthly" : filters.unit() === "day" ? "Daily" : filters.unit() === "hour" ? "Hourly" : "Minute"} buckets (UTC)</p></div>
-          <Segmented value={chartMetric()} onChange={setChartMetric} options={[
-            { value: "tokens", label: "Tokens" }, { value: "requests", label: "Requests" }, { value: "cost", label: "Cost" },
-          ]} />
-        </div>
-        <div class="px-4 pb-4 pt-2">
-          <Show when={series()} fallback={<div class="h-32" />}>
-            <DailyChart
-              series={series()!}
-              metric={chartMetric()}
-              unit={filters.unit()}
-              resetKey={query()}
-            />
-          </Show>
-        </div>
-      </Card>
-
-      <Card class="mb-5">
-        <CardHeader
-          title="By model"
-          subtitle={`Model × provider breakdown · ${filters.label()}`}
-        />
-        <Show
-          when={breakdownCount() !== undefined}
-          fallback={<div class="p-5 text-xs text-ink-500">Loading…</div>}
-        >
-          <Show
-            when={(breakdownCount() ?? 0) > 0}
-            fallback={<EmptyState icon={Icons.chart} title="No model data in this window" />}
-          >
-            <div class="px-1 py-1">
-              <UsageGrid
-                filterable={false}
-                columnDefs={byModelCols}
-                datasource={breakdownDatasource}
-                cacheBlockSize={100}
-                refreshDeps={query()}
-                heightClass={byModelHeight()}
-                storageKey="llmgw-grid:usage.by-model"
-                totals={breakdownTotals()}
-              />
-            </div>
-          </Show>
-        </Show>
-      </Card>
-
+    <div class="analytics-page usage-page" aria-busy={filters.pending() || report.loading || eventCount.loading || recentEventsList.loading}>
+      <div class="overview-header">
+        <PageTitle title="Usage" subtitle="Understand your spend, models and every request" />
+        <AnalyticsToolbar filters={filters} loading={report.loading || eventCount.loading || recentEventsList.loading} align="end" />
+      </div>
+      <Show when={!report.error} fallback={<AnalyticsError retry={refetch} />}>
+        <Show when={report()} fallback={<AnalyticsLoading />} keyed>{(data) => <>
+          <AnalyticsSummary report={data} label={data.label} query={data.query} />
+          <AnalyticsSection title="Model intelligence" description="Follow the models driving your spend and request volume. Select a legend to refine every chart." />
+          <ModelUsageChart modelColors={data.modelColors} data={data.modelSpend} metric="cost" period={data.label} onSelect={(id, label) => filters.toggle("model", "include", id, label)} />
+          <div class="analytics-detail-grid">
+            <ModelUsageChart modelColors={data.modelColors} data={data.modelRequests} metric="reqs" period={data.label} onSelect={(id, label) => filters.toggle("model", "include", id, label)} />
+            <CacheUsageChart series={data.series} period={data.label} />
+          </div>
+        </>}</Show>
+      </Show>
+      <AnalyticsSection title="Request history" description="Inspect individual calls with the same date range and filters as your charts." />
       <Card>
           <CardHeader
             title="Recent requests"
-            subtitle={eventCount.loading ? "Loading…" : `${fmtNum(eventCount() ?? 0)} events`}
+            subtitle={eventCount.error ? "Request history is unavailable" : eventCount.loading ? "Loading…" : `${fmtNum(eventCount() ?? 0)} events`}
           />
+        <Show when={!eventCount.error && !(mobile() && recentEventsList.error)} fallback={<div class="analytics-request-error p-5 flex flex-wrap items-center gap-3" role="alert"><p class="text-xs text-ink-500">Requests could not be loaded. Your filters are preserved.</p><button type="button" class="ui-button ui-button-secondary" onClick={() => { void countActions.refetch(); if (mobile()) void mobileActions.refetch(); }}>Retry requests</button></div>}>
         <Show
           when={eventCount() !== undefined}
           fallback={<div class="p-5 text-xs text-ink-500">Loading…</div>}
@@ -275,7 +154,7 @@ export default function UsagePage() {
             fallback={<EmptyState icon={Icons.chart} title="No requests in this window" />}
           >
             {/* Desktop AG Grid */}
-            <div class="hidden md:block px-2 py-2">
+            <Show when={!mobile()}><div class="hidden md:block px-2 py-2">
               <UsageGrid
                 filterable={false}
                 columnDefs={eventCols}
@@ -286,10 +165,10 @@ export default function UsagePage() {
                 storageKey="llmgw-grid:usage.recent"
                 totals={eventsTotals()}
               />
-            </div>
+            </div></Show>
 
-            {/* Mobile Card List with Filters & Pagination */}
-            <div class="md:hidden p-3 space-y-3">
+            {/* Mobile request details with pagination. */}
+            <Show when={mobile()}><div class="usage-mobile-requests p-3 space-y-3">
               <p class="text-[11px] text-ink-500" aria-live="polite">{recentEventsList.loading ? "Loading requests…" : `Showing ${(recentEventsList() ?? []).length} of ${fmtNum(eventCount() ?? 0)} requests`}</p>
               <div class="space-y-2">
                 <For each={recentEventsList() ?? []}>
@@ -303,6 +182,8 @@ export default function UsagePage() {
                         {/* Primary compact summary row */}
                         <button
                           type="button"
+                          aria-expanded={isExpanded()}
+                          aria-label={`Inspect request for ${ev.model} at ${new Date(ev.ts).toLocaleString()}`}
                           onClick={toggle}
                           class="w-full text-left p-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-card/50 transition-colors"
                         >
@@ -313,7 +194,7 @@ export default function UsagePage() {
                                 <span class="text-xs font-semibold text-ink-100 truncate">{ev.model}</span>
                                 <ProtoCell value={ev.proto} />
                               </div>
-                              <span class="font-mono text-xs font-semibold text-emerald-400 tabular-nums shrink-0">
+                              <span class="font-mono text-xs font-semibold text-accent-400 tabular-nums shrink-0">
                                 {fmtCost(ev.cost)}
                               </span>
                             </div>
@@ -322,7 +203,7 @@ export default function UsagePage() {
                               <div class="shrink-0 flex items-center gap-1.5 text-ink-500 font-mono text-[10px]">
                                 <span>{latencyFormatter({ value: ev.latency_ms })}</span>
                                 <span>·</span>
-                                <span>{new Date(ev.ts).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}</span>
+                                <span>{new Date(ev.ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
                               </div>
                             </div>
                             {/* Row 3: Token breakdown strip visible on card */}
@@ -365,10 +246,10 @@ export default function UsagePage() {
                                 <span class="text-ink-500 text-[10px] block">{fmtCost(ev.cost_out)}</span>
                               </div>
                             </div>
-                            <div class="flex items-center justify-between text-[10px] text-ink-500 pt-1">
-                              <span>Provider: <strong class="text-ink-300 font-medium">{ev.provider_name || "—"}</strong></span>
+                            <div class="flex flex-wrap items-center justify-between gap-2 text-[10px] text-ink-500 pt-1">
+                              <span class="min-w-0 break-all">Provider: <strong class="text-ink-300 font-medium">{ev.provider_name || "—"}</strong></span>
                               <Show when={ev.upstream_model && ev.upstream_model !== ev.model}>
-                                <span>Upstream: <code class="text-ink-400">{ev.upstream_model}</code></span>
+                                <span class="min-w-0 break-all">Upstream: <code class="text-ink-400">{ev.upstream_model}</code></span>
                               </Show>
                             </div>
                           </div>
@@ -403,8 +284,9 @@ export default function UsagePage() {
                   </button>
                 </div>
               </Show>
-            </div>
+            </div></Show>
           </Show>
+        </Show>
         </Show>
       </Card>
     </div>

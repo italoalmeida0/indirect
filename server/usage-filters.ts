@@ -79,7 +79,7 @@ export function usageScopeWhere(scope: UsageScope, alias: string, userId: string
 
 /** Complete UTC months use monthly aggregates, boundary days use the daily
  * ledger, and only the two partial days read raw events. Segments never overlap. */
-function usageSource(scope: UsageScope, userId: string | null, field?: Field, monthly = true) {
+export function usageSource(scope: UsageScope, userId: string | null, field?: Field, monthly = true) {
   const start = scope.from === null ? null : Math.ceil(scope.from / DAY) * DAY;
   const end = Math.floor(scope.to / DAY) * DAY;
   const segments: string[] = [];

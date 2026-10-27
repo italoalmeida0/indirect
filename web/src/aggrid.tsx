@@ -56,11 +56,6 @@ export function tokenFormatter(p: { value?: unknown }) {
   return fmtNum(Number(p.value ?? 0));
 }
 
-/** Plain count numeric cell formatter. */
-export function countFormatter(p: { value?: unknown }) {
-  return fmtNum(Number(p.value ?? 0));
-}
-
 /** Epoch-ms timestamp cell formatter. */
 export function timeFormatter(p: { value?: unknown }) {
   return fmtDate(Number(p.value ?? 0));

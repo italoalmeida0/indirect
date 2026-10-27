@@ -445,45 +445,6 @@ export function CountUp(props: { value: number; class?: string }) {
   );
 }
 
-/** Big metric card: muted label + large count-up value + delta pill. */
-export function StatCard(props: {
-  icon: string;
-  value?: string;
-  countValue?: number;
-  label: JSX.Element;
-  delta?: number | null;
-  sub?: JSX.Element;
-}) {
-  return (
-    <Card interactive class="p-5">
-      <div class="flex items-start justify-between gap-3">
-        <div class="min-w-0">
-          <div class="text-xs font-medium text-ink-500 mb-2">{props.label}</div>
-          <div
-            class="text-2xl 2xl:text-[28px] leading-tight font-medium tracking-tight whitespace-nowrap"
-            title={props.value ?? (props.countValue !== undefined ? String(props.countValue) : undefined)}
-          >
-            <Show when={props.countValue !== undefined} fallback={props.value}>
-              <CountUp value={props.countValue!} />
-            </Show>
-          </div>
-        </div>
-        <div class="flex items-center gap-2 shrink-0">
-          <Show when={props.delta !== null && props.delta !== undefined}>
-            <DeltaPill pct={props.delta!} />
-          </Show>
-          <IconTile icon={props.icon} class="w-8 h-8 rounded-lg" />
-        </div>
-      </div>
-      <Show when={props.sub}>
-        <div class="mt-3 pt-3 border-t border-line text-xs text-ink-500">
-          {props.sub}
-        </div>
-      </Show>
-    </Card>
-  );
-}
-
 export function Input(props: {
   label?: string;
   type?: string;

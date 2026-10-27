@@ -779,6 +779,12 @@ describe("gateway end-to-end", () => {
         expect(points.status).toBe(200);
         expect(points.json.granularity).toBe(granularity);
         expect(points.json.series.reduce((sum: number, r: any) => sum + r.reqs, 0)).toBe(expected);
+        const analytics = await api(`/api/usage/analytics?${window}`, { token: userToken });
+        expect(analytics.status).toBe(200);
+        expect(analytics.json.granularity).toBe(granularity);
+        expect(analytics.json.series.reduce((sum: number, r: any) => sum + r.reqs, 0)).toBe(expected);
+        expect(analytics.json.modelRequests.points.length).toBeLessThanOrEqual(48);
+        expect(analytics.json.modelRequests.points.reduce((sum: number, r: any) => sum + r.values.reduce((a: number, b: number) => a + b, 0), 0)).toBe(expected);
         const grid = await api(`/api/usage/breakdown?${window}`, { token: userToken });
         expect(grid.status).toBe(200);
         expect(grid.json.totals.reqs).toBe(expected);
@@ -809,6 +815,9 @@ describe("gateway end-to-end", () => {
       expect(quoted.status).toBe(200);
       expect(quoted.json.total).toBe(1);
       expect(quoted.json.rows[0].model).toBe(literal);
+      const quotedAnalytics = await api(`/api/usage/analytics?${params}`, { token: userToken });
+      expect(quotedAnalytics.status).toBe(200);
+      expect(quotedAnalytics.json.modelRequests.groups[0].id).toBe(literal);
       const ownOptions = await api("/api/usage/filter-options", { token: userToken });
       expect(JSON.stringify(ownOptions.json)).not.toContain("filter-fixture/foreign");
       // Prove full days use durable rollups even after raw events are pruned.
@@ -830,6 +839,8 @@ describe("gateway end-to-end", () => {
 
   test("overview ranks distinct models within the exact scope and preserves historical routes", async () => {
     expect((await api("/api/usage/overview")).status).toBe(401);
+    expect((await api("/api/usage/analytics")).status).toBe(401);
+    expect((await api("/api/admin/analytics", { token: userToken })).status).toBe(403);
     const fixture = new Database(path.join(dataDir, "gateway.db"));
     const user = fixture.query("SELECT id FROM users WHERE email = ?").get(userEmail) as { id: string };
     const key = fixture.query("SELECT id FROM api_keys WHERE user_id = ? LIMIT 1").get(user.id) as { id: string };
@@ -847,7 +858,7 @@ describe("gateway end-to-end", () => {
       VALUES (?, ?, ?, 'openai', ?, ?, ?, 10, 20, 30)`);
     const params = new URLSearchParams({ from: String(from), to: String(to), selection: JSON.stringify({ model: { include: models, exclude: [] } }) });
     try {
-      fixture.run("INSERT INTO models (id, upstream_model, name, created_at, updated_at) VALUES (?, '', 'Overview Alpha', 0, 0)", [models[0]!]);
+      fixture.run("INSERT INTO models (id, upstream_model, name, created_at, updated_at, pricing_input, pricing_input_cache, pricing_output) VALUES (?, '', 'Overview Alpha', 0, 0, .000002, .0000005, .000004)", [models[0]!]);
       add(models[0]!, "2024-01-01", 1);
       add(models[0]!, "2024-01-02", 6);
       add(models[0]!, "2024-01-02", 5, "primary/a", provider.id, "openai", "overview-fixture/second-key");
@@ -860,6 +871,7 @@ describe("gateway end-to-end", () => {
       add(models[4]!, "2024-01-04", 5);
       add(models[5]!, "2024-01-05", 5);
       add(models[1]!, "2024-01-02", 1000, "foreign/model", provider.id, "openai", "overview-fixture/foreign-key", "overview-fixture/foreign-user");
+      for (let index = 0; index < 10; index++) add(models[1]!, "2024-01-02", 100, "foreign/model", provider.id, "openai", `overview-fixture/key-${index}`, `overview-fixture/user-${index}`);
       raw.run(key.id, user.id, from, provider.id, models[0]!, "primary/a");
       raw.run(key.id, user.id, to - 1, secondary, models[0]!, "secondary/a");
       raw.run(key.id, user.id, from - 1, provider.id, prefix + "before", "before");
@@ -877,21 +889,62 @@ describe("gateway end-to-end", () => {
       expect(JSON.stringify(result.json)).not.toContain(UPSTREAM_KEY);
       expect(JSON.stringify(result.json)).not.toContain(gatewayKey);
       expect(JSON.stringify(result.json)).not.toContain("foreign");
+      const analytics = await api(`/api/usage/analytics?${params}`, { token: userToken });
+      expect(analytics.status).toBe(200);
+      expect(analytics.json.users).toEqual([]);
+      expect(analytics.json.series.reduce((sum: number, point: any) => sum + point.reqs, 0)).toBe(81);
+      expect(analytics.json.series.reduce((sum: number, point: any) => sum + point.cost, 0)).toBeCloseTo(.0039, 10);
+      for (const metric of ["modelSpend", "modelRequests"]) {
+        expect(analytics.json[metric].groups).toHaveLength(6);
+        expect(analytics.json[metric].groups.at(-1).id).toBeNull();
+        expect(analytics.json[metric].points.length).toBeLessThanOrEqual(48);
+      }
+      expect(analytics.json.modelRequests.points.reduce((sum: number, point: any) => sum + point.values.reduce((a: number, b: number) => a + b, 0), 0)).toBe(81);
+      expect(analytics.json.modelSpend.points.reduce((sum: number, point: any) => sum + point.values.reduce((a: number, b: number) => a + b, 0), 0)).toBeCloseTo(.0039, 10);
+      expect(analytics.json.providers.reduce((sum: number, row: any) => sum + row.reqs, 0)).toBe(81);
+      expect(analytics.json.protocols.reduce((sum: number, row: any) => sum + row.reqs, 0)).toBe(81);
+      expect(JSON.stringify(analytics.json)).not.toContain("foreign");
+      const globalAnalytics = await api(`/api/admin/analytics?${params}`, { token: adminToken });
+      expect(globalAnalytics.status).toBe(200);
+      expect(globalAnalytics.json.activeUsers).toBe(12);
+      expect(globalAnalytics.json.users).toHaveLength(9);
+      expect(globalAnalytics.json.users.at(-1)).toMatchObject({ id: null, members: 4 });
+      expect(globalAnalytics.json.users.reduce((sum: number, row: any) => sum + row.reqs, 0)).toBe(2081);
+      expect(globalAnalytics.json.modelSpend.groups[0].id).toBe(models[0]);
+      expect(globalAnalytics.json.modelRequests.groups[0].id).toBe(models[1]);
+      const userScope = new URLSearchParams(params);
+      userScope.set("selection", JSON.stringify({ model: { include: models, exclude: [] }, user_id: { include: [user.id], exclude: [] } }));
+      const focused = await api(`/api/admin/analytics?${userScope}`, { token: adminToken });
+      expect(focused.json.activeUsers).toBe(1);
+      expect(focused.json.users[0]).toMatchObject({ id: user.id, reqs: 81 });
+      expect((await api(`/api/usage/analytics?${userScope}`, { token: userToken })).status).toBe(400);
       const selected = new URLSearchParams(params);
       selected.set("selection", JSON.stringify({ model: { include: models, exclude: [] }, provider_id: { include: [secondary], exclude: [] } }));
       const route = await api(`/api/usage/overview?${selected}`, { token: userToken });
       expect(route.json.models).toHaveLength(1);
       expect(route.json.models[0]).toMatchObject({ model: models[0], reqs: 10, provider_id: secondary, provider_name: null, upstream_model: "secondary/a", route_count: 1 });
+      const routeAnalytics = await api(`/api/usage/analytics?${selected}`, { token: userToken });
+      expect(routeAnalytics.status).toBe(200);
+      expect(routeAnalytics.json.providers).toHaveLength(1);
+      expect(routeAnalytics.json.providers[0]).toMatchObject({ id: secondary, reqs: 10 });
+      expect(routeAnalytics.json.modelRequests.points.reduce((sum: number, point: any) => sum + point.values.reduce((a: number, b: number) => a + b, 0), 0)).toBe(10);
       selected.set("selection", JSON.stringify({ model: { include: [models[4], models[5]], exclude: [models[4]] } }));
       expect((await api(`/api/usage/overview?${selected}`, { token: userToken })).json.models.map((model: any) => model.model)).toEqual([models[5]]);
       selected.set("selection", JSON.stringify({ model: { include: [prefix + "before", prefix + "after"], exclude: [] } }));
       expect((await api(`/api/usage/overview?${selected}`, { token: userToken })).json.models).toEqual([]);
+      const emptyAnalytics = await api(`/api/usage/analytics?${selected}`, { token: userToken });
+      expect(emptyAnalytics.json.modelSpend.groups).toEqual([]);
+      expect(emptyAnalytics.json.providers).toEqual([]);
       fixture.run("DELETE FROM usage_events WHERE model LIKE 'overview-fixture/%'");
       fixture.run("DELETE FROM usage_model_provider_daily WHERE model LIKE 'overview-fixture/%' AND date >= '2024-02-01' AND date < '2024-03-01'");
       params.set("from", "all"); params.set("to", String(Date.parse("2024-03-01T00:00:00Z")));
       const archived = await api(`/api/usage/overview?${params}`, { token: userToken });
       expect(archived.json.models[0].reqs).toBe(25);
       expect(archived.json.series.reduce((sum: number, point: any) => sum + point.reqs, 0)).toBe(72);
+      const archivedAnalytics = await api(`/api/usage/analytics?${params}`, { token: userToken });
+      expect(archivedAnalytics.status).toBe(200);
+      expect(archivedAnalytics.json.modelRequests.points.reduce((sum: number, point: any) => sum + point.values.reduce((a: number, b: number) => a + b, 0), 0)).toBe(72);
+      expect(archivedAnalytics.json.modelSpend.points.reduce((sum: number, point: any) => sum + point.values.reduce((a: number, b: number) => a + b, 0), 0)).toBeCloseTo(.00375, 10);
       expect((await api("/api/usage/overview?from=NaN&to=1", { token: userToken })).status).toBe(400);
       expect((await api(`/api/usage/overview?from=0&to=1&selection=${encodeURIComponent('{"user_id":{"include":["other"]}}')}`, { token: userToken })).status).toBe(400);
     } finally {

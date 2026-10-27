@@ -207,6 +207,31 @@ export interface TopModelDto {
   route_count: number;
 }
 
+export interface AnalyticsEntity extends Omit<DailyPoint, "date" | "label"> {
+  id: string | null;
+  label: string;
+  detail: string;
+  members: number;
+}
+
+export interface ModelTimeline {
+  groups: { id: string | null; label: string }[];
+  points: { date: string; lastDate?: string; label: string; values: number[] }[];
+}
+
+export interface AnalyticsReport {
+  series: DailyPoint[];
+  previous: DailyPoint[];
+  granularity: "minute" | "hour" | "day" | "month";
+  scope: { from: number | null; to: number };
+  modelSpend: ModelTimeline;
+  modelRequests: ModelTimeline;
+  users: AnalyticsEntity[];
+  providers: AnalyticsEntity[];
+  protocols: AnalyticsEntity[];
+  activeUsers: number;
+}
+
 export type AuthStyle = "bearer" | "x-api-key";
 
 /** One upstream key of a provider (failover order). The key material itself

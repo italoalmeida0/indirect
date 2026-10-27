@@ -2,6 +2,7 @@
 // PLAYWRIGHT_MODULE=… CHROMIUM_PATH=… bun scripts/test-gateway-filters-ui.ts
 // On Windows, use node --experimental-strip-types if Bun's Chromium pipe stalls.
 import assert from "node:assert/strict";
+import { analyticsFixture } from "./gateway-analytics-fixture.ts";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -92,6 +93,7 @@ try {
         data = { categories: domain.map(({ options: _, ...category }) => category), selection, selectedOptions };
       }
     }
+    else if (url.pathname === "/api/usage/analytics" || url.pathname === "/api/admin/analytics") data = analyticsFixture(series, url, url.pathname.startsWith("/api/admin")) as unknown as Record<string, unknown>;
     else if (url.pathname === "/api/usage/daily" || url.pathname === "/api/usage/overview") data = { series, models: [] };
     else if (url.pathname === "/api/admin/stats") data = { series, counts: { users: 8, keys: 12, activeKeys: 9, providers: 3 } };
     else if (url.pathname === "/api/keys") data = { keys: [] };
@@ -138,7 +140,7 @@ try {
   };
   console.log("[filters-ui] Opening Usage");
   await page.goto(`${serverUrl}#/usage`);
-  await assertGridFiltersDisabled(["usage.by-model", "usage.recent"]);
+  await assertGridFiltersDisabled(["usage.recent"]);
   const modelHeader = page.locator(".ag-header-cell[col-id='model']").first();
   assert.equal(Math.round((await modelHeader.boundingBox())!.width), 244, "Saved column widths were lost");
   await modelHeader.click();
@@ -155,12 +157,12 @@ try {
   await assertStableLeft(openingPosition.x, "Searching options");
   const option = page.getByRole("dialog").getByRole("button", { name: /Claude Sonnet 4.5/ });
   holdAnalytics = true;
-  const firstSelection = page.waitForRequest((req: any) => { const url = new URL(req.url()); return url.pathname === "/api/usage/daily" && url.searchParams.get("selection")?.includes("model/0"); }, { timeout: 5000 }).then(() => true, () => false);
+  const firstSelection = page.waitForRequest((req: any) => { const url = new URL(req.url()); return url.pathname === "/api/usage/analytics" && url.searchParams.get("selection")?.includes("model/0"); }, { timeout: 5000 }).then(() => true, () => false);
   try {
     await option.click();
     assert(await firstSelection, `Selection did not reach results: ${requests.slice(-8).map((url) => url.pathname + url.search).join("\n")}`);
     await page.waitForFunction(() => document.querySelector(".analytics-toolbar")?.closest("[aria-busy]")?.getAttribute("aria-busy") === "true");
-    assert.equal(await page.locator(".ag-root-wrapper").count(), 2, "Usage grids disappeared while filters were loading");
+    assert.equal(await page.locator(".ag-root-wrapper").count(), 1, "Usage grids disappeared while filters were loading");
     await assertStableLeft(openingPosition.x, "Applying a filter while data loads");
   } finally {
     holdAnalytics = false;
@@ -172,7 +174,7 @@ try {
   await assertStableLeft(openingPosition.x, "Switching include/exclude");
   await option.click();
   await settleResults();
-  const last = requests.filter((url) => url.pathname === "/api/usage/daily").at(-1)!;
+  const last = requests.filter((url) => url.pathname === "/api/usage/analytics").at(-1)!;
   const selection = JSON.parse(last.searchParams.get("selection")!);
   assert.deepEqual(selection.model, { include: [], exclude: ["model/0"] });
   await assertFits("Desktop filters");
@@ -207,10 +209,10 @@ try {
   await page.getByRole("button", { name: "Apply range" }).click();
   await settleResults();
   assert.match(await time().getAttribute("aria-label") ?? "", /Custom range/);
-  const query = requests.filter((url) => url.pathname === "/api/usage/daily").at(-1)!.searchParams;
+  const query = requests.filter((url) => url.pathname === "/api/usage/analytics").at(-1)!.searchParams;
   assert.equal(await page.evaluate((raw: string) => new Date(Number(raw)).getDate(), query.get("from")!), 8);
   assert.equal(await page.evaluate((raw: string) => new Date(Number(raw)).getDate(), query.get("to")!), 26);
-  for (const endpoint of ["/api/usage/events", "/api/usage/breakdown"]) {
+  for (const endpoint of ["/api/usage/events"]) {
     assert(requests.some((url) => url.pathname === endpoint && url.searchParams.get("from") === query.get("from") && url.searchParams.get("to") === query.get("to")), `${endpoint} lost the shared date range`);
   }
   await time().click();
@@ -230,7 +232,7 @@ try {
   await page.getByRole("button", { name: "Filter usage", exact: true }).click();
   await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
   await page.getByRole("textbox", { name: "Search model…", exact: true }).fill("GPT");
-  await page.getByRole("button", { name: /GPT-5/ }).click();
+  await page.getByRole("dialog").getByRole("button", { name: /GPT-5/ }).click();
   await settleResults();
   await assertFits("Mobile filters");
   await page.screenshot({ path: path.join(output, "mobile-filters-dark.png") });
@@ -252,7 +254,7 @@ try {
 
   for (const route of ["/", "/admin/stats"]) {
     await page.goto(`${serverUrl}#${route}`);
-    if (route === "/admin/stats") await assertGridFiltersDisabled(["admin.stats.users", "admin.stats.models"]);
+    if (route === "/admin/stats") { await page.locator(".analytics-summary").waitFor(); assert.equal(await page.locator(".ag-root-wrapper").count(), 0, "Global Stats still renders a grid"); }
     // Exercise a trigger near the right edge, where the expanded panel needs
     // more room than the initial category menu.
     await page.locator(".analytics-controls").evaluate((el: HTMLElement) => { el.style.width = "100%"; el.style.justifyContent = "flex-end"; });
@@ -262,7 +264,7 @@ try {
     await assertStableLeft(beforeExpansion.x, `${route}: expansion near the viewport edge`);
     await page.getByRole("textbox", { name: "Search model…", exact: true }).fill("Gemini");
     await assertStableLeft(beforeExpansion.x, `${route}: searching near the viewport edge`);
-    await page.getByRole("button", { name: /Gemini 2.5 Pro/ }).click();
+    await page.getByRole("dialog").getByRole("button", { name: /Gemini 2.5 Pro/ }).click();
     await page.keyboard.press("Escape");
     await time().click();
     const periodPosition = await popupPosition();
@@ -309,7 +311,7 @@ try {
   try {
     await page.getByRole("button", { name: "Apply range" }).click();
     await changedMetadata;
-    assert(!requests.some((url) => url.pathname === "/api/usage/daily" && new Date(Number(url.searchParams.get("from"))).getFullYear() === 2020), "Results ran before old selections were validated");
+    assert(!requests.some((url) => url.pathname === "/api/usage/analytics" && new Date(Number(url.searchParams.get("from"))).getFullYear() === 2020), "Results ran before old selections were validated");
     await page.getByRole("button", { name: "Filter usage", exact: true }).click();
     assert.equal(await page.locator(".analytics-option").count(), 0, "Options from the previous period stayed visible");
   } finally {
