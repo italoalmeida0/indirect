@@ -20,7 +20,7 @@ export function catalogSource(kind: CatalogKind, userId: string | null) {
     field("status", "Status", "r.effective_status", "circle-check"),
     ...(userId === null ? [field("owner", "Owner", "COALESCE(r.userEmail, '')", "users")] : []),
     field("expiry", "Expiration", "CASE WHEN r.expires_at IS NULL THEN 'permanent' WHEN r.expires_at <= CAST(strftime('%s','now') AS INTEGER)*1000 THEN 'expired' ELSE 'expiring' END", "calendar-clock"),
-    field("budget", "Budget", "CASE WHEN r.daily_limit IS NOT NULL OR r.total_limit IS NOT NULL THEN 'limited' ELSE 'unlimited' END", "gauge"),
+    field("budget", "Budget", "CASE WHEN r.daily_usd_nanos IS NOT NULL OR r.total_usd_nanos IS NOT NULL THEN 'limited' ELSE 'unlimited' END", "gauge"),
   ] };
   if (kind === "providers") return { sql: `SELECT p.*, (SELECT COUNT(*) FROM models m WHERE m.provider_id = p.id) AS model_count,
     json_array(CASE WHEN p.openai_base_url IS NOT NULL THEN 'openai' END, CASE WHEN p.anthropic_base_url IS NOT NULL THEN 'anthropic' END, CASE WHEN p.responses_base_url IS NOT NULL THEN 'responses' END) AS capabilities FROM providers p`, params: [], time: "created_at", search: ["name", "openai_base_url", "anthropic_base_url", "responses_base_url"], fields: [
@@ -37,7 +37,8 @@ export function catalogSource(kind: CatalogKind, userId: string | null) {
     { ...field("feature", "Feature", "v.value", "sparkles"), json: "r.features" },
     { ...field("modality", "Input modality", "v.value", "layers"), json: "r.input_modalities" },
   ] };
-  if (kind === "users") return { sql: `SELECT u.*, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u`, params: [], time: "created_at", search: ["name", "email"], fields: [
+  if (kind === "users") return { sql: `SELECT u.*, b.plan_id, bp.name AS plan_name, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id`, params: [], time: "created_at", search: ["name", "email"], fields: [
+    field("plan", "Plan", "COALESCE(r.plan_id, '')", "wallet", "COALESCE(r.plan_name, 'Unlimited')"),
     field("user", "User", "r.id", "user-round", "r.email"), field("role", "Role", "r.role", "shield"), field("status", "Status", "r.status", "circle-check"),
     field("two_factor", "Two-factor authentication", "CASE WHEN r.totp_secret IS NULL THEN 'disabled' ELSE 'enabled' END", "shield-check"),
     field("password", "Password sign-in", "CASE WHEN r.password_hash IS NULL THEN 'disabled' ELSE 'enabled' END", "key-round"),

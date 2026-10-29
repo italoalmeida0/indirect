@@ -196,7 +196,7 @@ describe("Empirical Security Audit Tests", () => {
     const userLogin = await api("/api/auth/login", { body: { email: "user-leak@audit.local", password: "user-pass-123456" } });
     const uToken = userLogin.json.accessToken;
 
-    const keyRes = await api("/api/keys", { token: uToken, body: { name: "leaked-key", dailyLimit: 100 } });
+    const keyRes = await api("/api/keys", { token: uToken, body: { name: "leaked-key" } });
     const leakedKey = keyRes.json.token;
 
     // Attacker uses leaked key

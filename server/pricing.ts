@@ -77,7 +77,7 @@ export function costInExprSql(prefix = "e"): string {
   const mdUp = `${prefix}_md_up`;
   const md = `${prefix}_md`;
   const mdId = `${prefix}_md_id`;
-  return `(${prefix}.in_tok * COALESCE(${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0))`;
+  return `COALESCE(${prefix}.cost_in_nanos / 1000000000.0, (${prefix}.in_tok * COALESCE(${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0)))`;
 }
 
 /** Single-row cache input cost expression in USD. */
@@ -85,7 +85,7 @@ export function costCacheExprSql(prefix = "e"): string {
   const mdUp = `${prefix}_md_up`;
   const md = `${prefix}_md`;
   const mdId = `${prefix}_md_id`;
-  return `(${prefix}.cache_tok * COALESCE(${md}.pricing_input_cache, ${mdId}.pricing_input_cache, ${mdUp}.pricing_input_cache, ${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0))`;
+  return `COALESCE(${prefix}.cost_cache_nanos / 1000000000.0, (${prefix}.cache_tok * COALESCE(${md}.pricing_input_cache, ${mdId}.pricing_input_cache, ${mdUp}.pricing_input_cache, ${md}.pricing_input, ${mdId}.pricing_input, ${mdUp}.pricing_input, 0)))`;
 }
 
 /** Single-row output cost expression in USD. */
@@ -93,7 +93,7 @@ export function costOutExprSql(prefix = "e"): string {
   const mdUp = `${prefix}_md_up`;
   const md = `${prefix}_md`;
   const mdId = `${prefix}_md_id`;
-  return `(${prefix}.out_tok * COALESCE(${md}.pricing_output, ${mdId}.pricing_output, ${mdUp}.pricing_output, 0))`;
+  return `COALESCE(${prefix}.cost_out_nanos / 1000000000.0, (${prefix}.out_tok * COALESCE(${md}.pricing_output, ${mdId}.pricing_output, ${mdUp}.pricing_output, 0)))`;
 }
 
 /** Single-row total cost expression in USD. */

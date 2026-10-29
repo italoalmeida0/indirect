@@ -5,6 +5,7 @@ import {
   type JSX,
 } from "solid-js";
 
+import { PlanUsageCard } from "../billing";
 import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
 import { api, type ApiKeyDto, type DailyPoint, type TopModelDto } from "../api";
 import { PageTitle, navigate } from "../index";
@@ -17,13 +18,9 @@ import type { ActivityScope } from "../overview-activity";
 import { usal, usalItems } from "../motion";
 import {
   Card,
-  CountUp,
   Icon,
-  IconTile,
   Icons,
-  ProgressBar,
   copyWithToast,
-  fmtNum,
 } from "../ui";
 
 /** Compare the selected window with the immediately preceding equal window. */
@@ -114,14 +111,6 @@ export default function DashboardPage() {
   const costOutDelta = createMemo(() =>
     deltaPct(view(), comparison(), (d) => d.cost_out ?? 0),
   );
-
-  const budget = createMemo(() => {
-    const ks = keys() ?? [];
-    return {
-      cap: ks.reduce((s, k) => s + (k.totalLimit ?? 0), 0),
-      used: ks.reduce((s, k) => s + (k.outputTotal ?? 0), 0),
-    };
-  });
 
   const todayStr = new Date().toLocaleDateString(undefined, {
     weekday: "long",
@@ -248,45 +237,7 @@ export default function DashboardPage() {
         class="grid grid-cols-1 lg:grid-cols-2 gap-5"
         {...usalItems("fade-u", 110)}
       >
-        <Card class="p-5 min-w-0">
-          <div class="flex items-start justify-between gap-3 mb-4">
-            <div>
-              <h2 class="text-sm font-semibold text-ink-100">
-                Output token budget
-              </h2>
-            </div>
-            <IconTile icon={Icons.key} class="w-9 h-9 rounded-xl" />
-          </div>
-          <Show
-            when={budget().cap > 0}
-            fallback={
-              <div>
-                <div class="text-[28px] font-light tracking-tight mb-2">
-                  Unlimited
-                </div>
-                <p class="text-xs text-ink-500 leading-relaxed">
-                  No lifetime output caps set. Add a total output limit to any
-                  key to track spend against a cap here.
-                </p>
-              </div>
-            }
-          >
-            <div class="flex items-baseline gap-2 mb-3">
-              <span class="text-[28px] font-light tracking-tight">
-                <CountUp value={budget().used} />
-              </span>
-              <span class="text-sm text-ink-500">
-                of {fmtNum(budget().cap)} output tokens
-              </span>
-            </div>
-            <ProgressBar value={budget().used} max={budget().cap} danger />
-            <div class="mt-2.5 text-[11px] text-ink-500 tabular-nums">
-              {budget().cap > 0
-                ? `${Math.min(100, Math.round((budget().used / budget().cap) * 100))}% consumed · ${fmtNum(budget().cap - budget().used)} remaining`
-                : ""}
-            </div>
-          </Show>
-        </Card>
+        <PlanUsageCard />
 
         <Card class="p-5 min-w-0">
           <div class="mb-4">

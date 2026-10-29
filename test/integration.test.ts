@@ -286,7 +286,7 @@ describe("gateway end-to-end", () => {
   test("user creates API key and gets plaintext once", async () => {
     const r = await api("/api/keys", {
       token: userToken,
-      body: { name: "my-first", totalLimit: 1_000_000 },
+      body: { name: "my-first" },
     });
     expect(r.status).toBe(200);
     expect(r.json.token).toMatch(/^gw_[a-f0-9]{48}$/);
@@ -1750,51 +1750,22 @@ describe("gateway end-to-end", () => {
     expect(res.status).toBe(415);
   });
 
-  test("total budget: tiny limit flips key to exhausted", async () => {
-    const made = await api("/api/keys", {
-      token: userToken,
-      body: { name: "tiny", totalLimit: 10 },
-    });
-    const key = made.json.token;
-
-    const first = await llm("/v1/chat/completions", key, {
-      model: "fake-llm-1",
-      messages: [{ role: "user", content: "spend it" }],
-    });
-    expect(first.status).toBe(200);
-    await first.text();
-
-    const second = await llm("/v1/chat/completions", key, {
-      model: "fake-llm-1",
-      messages: [{ role: "user", content: "again" }],
-    });
-    expect(second.status).toBe(429);
-    const e = await second.json();
-    expect(e.error.message).toContain("exhausted");
+  test("zero lifetime USD limit blocks immediately and removing it restores access", async () => {
+    const made = await api("/api/keys", { token: userToken, body: { name: "zero-usd", totalLimitUsd: 0 } });
+    expect(made.status).toBe(200);
+    const blocked = await llm("/v1/chat/completions", made.json.token, { model: "fake-llm-1", messages: [{ role: "user", content: "blocked" }] });
+    expect(blocked.status).toBe(429);
+    expect((await blocked.json()).error.message).toContain("USD");
+    expect((await api(`/api/keys/${made.json.key.id}`, { token: userToken, method: "PATCH", body: { totalLimitUsd: null } })).status).toBe(200);
+    const allowed = await llm("/v1/chat/completions", made.json.token, { model: "fake-llm-1", messages: [{ role: "user", content: "allowed" }] });
+    expect(allowed.status).toBe(200); await allowed.text();
   });
 
-  test("daily budget resets semantics (blocked when spent)", async () => {
-    const made = await api("/api/keys", {
-      token: userToken,
-      body: { name: "daily", dailyLimit: 5 },
-    });
-    const key = made.json.token;
-
-    const first = await llm("/v1/chat/completions", key, {
-      model: "fake-llm-1",
-      messages: [{ role: "user", content: "daily spend" }],
-    });
-    expect(first.status).toBe(200);
-    await first.text();
-
-    await Bun.sleep(3500); // flush (1s) + spend-cache TTL (2s) + margin
-
-    const second = await llm("/v1/chat/completions", key, {
-      model: "fake-llm-1",
-      messages: [{ role: "user", content: "blocked?" }],
-    });
-    expect(second.status).toBe(429);
-    expect((await second.json()).error.message).toContain("daily");
+  test("zero daily USD limit blocks before an upstream request", async () => {
+    const made = await api("/api/keys", { token: userToken, body: { name: "daily-usd", dailyLimitUsd: 0 } });
+    expect(made.status).toBe(200);
+    const blocked = await llm("/v1/chat/completions", made.json.token, { model: "fake-llm-1", messages: [] });
+    expect(blocked.status).toBe(429); expect((await blocked.json()).error.message).toContain("daily");
   });
 
   test("per-key RPM limit", async () => {
@@ -1872,12 +1843,12 @@ describe("gateway end-to-end", () => {
     const keys = await api("/api/admin/keys", { token: adminToken });
     expect(keys.status).toBe(200);
     expect(keys.json.keys.length).toBeGreaterThanOrEqual(4);
-    expect(keys.json.keys.find((k: any) => k.name === "tiny").status).toBe("exhausted");
+    expect(keys.json.keys.find((k: any) => k.name === "daily-usd").status).toBe("daily_limit");
 
     const audit = await api("/api/admin/audit?limit=200", { token: adminToken });
     expect(audit.status).toBe(200);
     expect(audit.json.entries.some((e: any) => e.action === "user.created")).toBe(true);
-    expect(audit.json.entries.some((e: any) => e.action === "key.exhausted")).toBe(true);
+    expect(audit.json.entries.some((e: any) => e.action === "key.updated")).toBe(true);
   });
 
   test("static serving: SPA, legal pages, fallback and hard traversal blocks", async () => {

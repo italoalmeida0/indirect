@@ -22,6 +22,9 @@ export function createCatalog<T>(config: { path: string; result: string; label: 
   const [settledSearch, setSettledSearch] = createSignal("");
   let initialSort: Sort = [];
   try { const stored = JSON.parse(localStorage.getItem(config.storageKey ?? "") ?? "{}").sortModel; if (Array.isArray(stored)) initialSort = stored.filter((entry) => typeof entry?.colId === "string" && entry.colId.length <= 64 && (entry.sort === "asc" || entry.sort === "desc")).slice(0, 8); } catch {}
+  if (config.result === "keys") initialSort = initialSort.map((entry) => ({ ...entry,
+    colId: entry.colId === "outputToday" ? "spendTodayUsd" : entry.colId === "outputTotal" ? "spendTotalUsd" : entry.colId,
+  }));
   const [sort, setSortValue] = createSignal<Sort>(initialSort);
   const [paging, setPaging] = createSignal({ scope: "", page: 1 });
   const [version, setVersion] = createSignal(0);

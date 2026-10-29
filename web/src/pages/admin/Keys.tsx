@@ -15,7 +15,7 @@ import {
   ModalNotice,
   toast,
   fmtDate,
-  fmtNum,
+  fmtCost,
   timeUntil,
 } from "../../ui";
 import { UsageGrid } from "../../aggrid";
@@ -36,7 +36,7 @@ const TONE: Record<
 
 export default function AdminKeysPage() {
   const view = createCatalog<ApiKeyDto>({ storageKey: "llmgw-grid:admin.keys", path: "/api/admin/keys", result: "keys", label: "All API keys", sort: [
-    { value: "name:asc", label: "Name A–Z" }, { value: "userEmail:asc", label: "Owner A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "outputTotal:desc", label: "Highest output usage" },
+    { value: "name:asc", label: "Name A–Z" }, { value: "userEmail:asc", label: "Owner A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "spendTotalUsd:desc", label: "Highest spend" },
   ] });
   const keyCount = view.total;
   const refreshGrid = view.refresh;
@@ -152,28 +152,28 @@ export default function AdminKeysPage() {
     },
     { field: "status", headerName: "Status", width: 130, cellRenderer: StatusCell },
     {
-      field: "outputToday",
-      headerName: "Out today",
+      field: "spendTodayUsd",
+      headerName: "Spend today",
       width: 130,
       type: "rightAligned",
       filter: "agNumberColumnFilter",
       cellRenderer: (p: { data?: ApiKeyDto }) => (
         <span class="tabular-nums">
-          {fmtNum(p.data?.outputToday)}
-          {p.data?.dailyLimit ? `/${fmtNum(p.data.dailyLimit)}` : ""}
+          {fmtCost(p.data?.spendTodayUsd)}
+          {p.data?.dailyLimitUsd ? `/${fmtCost(p.data.dailyLimitUsd)}` : ""}
         </span>
       ),
     },
     {
-      field: "outputTotal",
-      headerName: "Out total",
+      field: "spendTotalUsd",
+      headerName: "Lifetime spend",
       width: 130,
       type: "rightAligned",
       filter: "agNumberColumnFilter",
       cellRenderer: (p: { data?: ApiKeyDto }) => (
         <span class="tabular-nums">
-          {fmtNum(p.data?.outputTotal)}
-          {p.data?.totalLimit ? `/${fmtNum(p.data.totalLimit)}` : ""}
+          {fmtCost(p.data?.spendTotalUsd)}
+          {p.data?.totalLimitUsd ? `/${fmtCost(p.data.totalLimitUsd)}` : ""}
         </span>
       ),
     },
@@ -219,7 +219,7 @@ export default function AdminKeysPage() {
           <Show when={view.mobile()}><div class="catalog-mobile p-3 space-y-3"><For each={view.rows()}>{(key) => <div class="catalog-key-card p-4 rounded-xl border border-line bg-elev space-y-3">
             <div class="flex items-start justify-between gap-3"><div class="min-w-0"><strong class="block text-sm text-ink-100 break-all">{key.name || "Unnamed key"}</strong><span class="block text-xs text-ink-400 break-all mt-1">{key.userEmail || key.userId}</span></div><StatusCell value={key.status} /></div>
             <code class="block text-xs text-ink-500">{key.prefix}…</code>
-            <div class="grid grid-cols-2 gap-3 border-t border-line pt-3 text-[11px] text-ink-500"><span>Output today<strong class="block text-xs text-ink-200 mt-1">{fmtNum(key.outputToday)}</strong></span><span>Output total<strong class="block text-xs text-ink-200 mt-1">{fmtNum(key.outputTotal)}</strong></span><span>Expires<strong class="block text-xs text-ink-200 mt-1">{key.expiresAt ? fmtDate(key.expiresAt) : "Permanent"}</strong></span><span>Last used<strong class="block text-xs text-ink-200 mt-1">{key.lastUsedAt ? fmtDate(key.lastUsedAt) : "Never"}</strong></span></div>
+            <div class="grid grid-cols-2 gap-3 border-t border-line pt-3 text-[11px] text-ink-500"><span>Spend today<strong class="block text-xs text-ink-200 mt-1">{fmtCost(key.spendTodayUsd)}</strong></span><span>Lifetime spend<strong class="block text-xs text-ink-200 mt-1">{fmtCost(key.spendTotalUsd)}</strong></span><span>Expires<strong class="block text-xs text-ink-200 mt-1">{key.expiresAt ? fmtDate(key.expiresAt) : "Permanent"}</strong></span><span>Last used<strong class="block text-xs text-ink-200 mt-1">{key.lastUsedAt ? fmtDate(key.lastUsedAt) : "Never"}</strong></span></div>
             <div class="border-t border-line pt-3"><ActionsCell data={key} /></div>
           </div>}</For><CatalogPagination view={view} /></div></Show>
         </Show>

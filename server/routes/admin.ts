@@ -1,3 +1,4 @@
+import { assignPlan, requirePlan } from "../billing";
 import { catalogListSource, catalogWhere, type CatalogKind } from "../catalog";
 import { LIMITS, SMTP_ENABLED } from "../config";
 import { db, stmts, parseStripParams, type ProviderRow, type ProviderKeyRow, type ModelTargetRow, type ApiKeyRow, type UserRow, type AuthStyle, type ModelRow } from "../db";
@@ -1345,10 +1346,11 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         role: { col: "role" },
         status: { col: "status" },
         keyCount: { col: "key_count", kind: "number" },
+        planName: { col: "plan_name" },
          lastLoginAt: { col: "last_login_at", kind: "date" },
         createdAt: { col: "created_at", kind: "number" },
       };
-      const source = url.searchParams.has("selection") ? catalogListSource("users", url.searchParams, null) : { sql: "SELECT u.*, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u", params: [] };
+      const source = url.searchParams.has("selection") ? catalogListSource("users", url.searchParams, null) : { sql: "SELECT u.*, b.plan_id, bp.name AS plan_name, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id", params: [] };
       const { rows, total } = gridPage({
         baseSql: source.sql,
         baseParams: source.params,
@@ -1358,7 +1360,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         tieBreak: "id DESC",
       });
       return ok({
-        users: rows.map((u: UserRow & { key_count: number }) => ({
+        users: rows.map((u: UserRow & { key_count: number; plan_id: string | null; plan_name: string | null }) => ({
           id: u.id,
           email: u.email,
           name: u.name,
@@ -1370,6 +1372,8 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           createdAt: u.created_at,
           lastLoginAt: u.last_login_at,
           keyCount: u.key_count,
+          planId: u.plan_id,
+          planName: u.plan_name,
         })),
         total,
         limit: grid.limit,
@@ -1377,7 +1381,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       }, req);
     }
     const rows = db
-      .prepare<UserRow, []>("SELECT * FROM users ORDER BY created_at DESC LIMIT 1000")
+      .prepare<UserRow & { plan_id: string | null; plan_name: string | null }, []>("SELECT u.*, b.plan_id, bp.name AS plan_name FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id ORDER BY u.created_at DESC LIMIT 1000")
       .all();
     const keyCounts = db
       .prepare<{ user_id: string; n: number }, []>(
@@ -1399,6 +1403,8 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           createdAt: u.created_at,
           lastLoginAt: u.last_login_at,
           keyCount: countMap.get(u.id) ?? 0,
+          planId: u.plan_id,
+          planName: u.plan_name,
         })),
       },
       req,
@@ -1411,13 +1417,15 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const name = v.str(body, "name", { min: 1, max: 128 })!;
     const role = body.role === "admin" ? "admin" : "user";
     const sendInvite = body.sendInvite !== false;
+    const planId = requirePlan(body.planId);
 
     if (stmts.userByEmail.get(email)) return err(409, "email already registered", req);
 
     const id = randomToken(12);
-    db.prepare(
-      "INSERT INTO users (id, email, name, role, created_at) VALUES (?, ?, ?, ?, ?)",
-    ).run(id, email, name, role, Date.now());
+    db.transaction(() => {
+      db.prepare("INSERT INTO users (id, email, name, role, created_at) VALUES (?, ?, ?, ?, ?)").run(id, email, name, role, Date.now());
+      if (planId) assignPlan(id, planId);
+    }).immediate();
 
     let inviteSent = false;
     let inviteLink: string | null = null;
@@ -1432,7 +1440,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       const base = (process.env.PUBLIC_URL ?? "").replace(/\/$/, "");
       inviteLink = inviteSent ? null : `${base}/#/set-password?token=${encodeURIComponent(token)}`;
     }
-    auditAdmin(ctx.user, "user.created", id, { email, role, inviteSent }, ip);
+    auditAdmin(ctx.user, "user.created", id, { email, role, planId, inviteSent }, ip);
     return ok(
       {
         user: { id, email, name, role },

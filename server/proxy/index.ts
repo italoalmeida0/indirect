@@ -1,7 +1,7 @@
 import { LIMITS } from "../config";
 import { stmts, audit, parseStripParams, type AuthStyle, type Proto } from "../db";
 import { randomToken, sha256Hex } from "../crypto";
-import { clientIp, baseHeaders } from "../http";
+import { ApiError, clientIp, baseHeaders } from "../http";
 import { countRequestTokens, splitKvInput } from "../tokens";
 import {
   acquireUpstreamSlot,
@@ -10,7 +10,8 @@ import {
   limits,
 } from "../ratelimit";
 import { checkKeyAvailability } from "../keys";
-import { recordUsage, flushUsage, getKeySpend } from "../usage";
+import { recordUsage, flushUsage } from "../usage";
+import { BudgetError, reserveBudget, settleBudget, settleUncertainBudget, cancelBudget } from "../billing";
 import { db } from "../db";
 import {
   routerSnapshot,
@@ -146,7 +147,7 @@ function matchRoute(pathname: string, method: string, req: Request): RouteResult
 
 // ===== Error envelopes per protocol =====
 
-function envelopeError(proto: Proto, status: number, message: string, type?: string, req?: Request): Response {
+function envelopeError(proto: Proto, status: number, message: string, type?: string, req?: Request, code?: string): Response {
   const h = baseHeaders(req);
   h.set("Content-Type", "application/json; charset=utf-8");
   // Responses errors share the OpenAI `{error:{…}}` envelope — clients
@@ -154,7 +155,7 @@ function envelopeError(proto: Proto, status: number, message: string, type?: str
   if (proto === "openai" || proto === "responses") {
     return new Response(
       JSON.stringify({
-        error: { message: message, type: type ?? (status === 401 ? "authentication_error" : "invalid_request_error"), code: null },
+        error: { message: message, type: type ?? (status === 401 ? "authentication_error" : "invalid_request_error"), code: code ?? null },
       }),
       { status, headers: h },
     );
@@ -711,6 +712,8 @@ interface UsageResult {
   cacheTok: number;
   outTok: number;
   reasonTok?: number;
+  cacheCreation?: number;
+  billableOutTok?: number;
   model: string;
   estimated: boolean;
 }
@@ -837,10 +840,10 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
   if (!availability.ok) {
     const messages: Record<typeof availability.reason, string> = {
       revoked: "this API key has been revoked",
-      exhausted: "this API key has exhausted its total output token budget",
+      exhausted: "this API key has exhausted its USD spending limit",
       expired: "this API key has expired",
-      daily_limit: "daily output token budget exhausted (resets at 00:00 UTC)",
-      total_limit: "total output token budget exhausted",
+      daily_limit: "daily USD spending limit exhausted (resets at 00:00 UTC)",
+      total_limit: "lifetime USD spending limit exhausted",
     };
     return envelopeError(proto, 429, messages[availability.reason], "rate_limit_error", req);
   }
@@ -871,12 +874,16 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
   };
   req.signal.addEventListener("abort", release, { once: true });
 
-  const requestId = randomToken(8);
+  const requestId = randomToken(16);
   const started = performance.now();
   const requestBytes = req.headers.get("content-length");
   // Set once we hand a streaming Response back: the stream pump owns the slot
   // from there on, releasing it when the stream ends/aborts (not before).
   let slotHeldByStream = false;
+  let recorded = false;
+  let budgetId: string | undefined;
+  let upstreamStarted = false;
+  let retainBudget = false;
 
   try {
     // ---- read + validate body (GET /models has none) ----
@@ -1029,6 +1036,20 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       return envelopeError(proto, 503, "gateway is not configured for this API protocol", "api_error", req);
     }
     const wantsStream = (bodyJson as any)?.stream === true;
+    if (bodyJson && req.method === "POST" && route.upstreamPath !== "/messages/count_tokens") {
+      const model = snap.models.get(String(bodyJson.model));
+      const trustOutputCap = candidates.every((candidate) => !parseStripParams(candidate.provider.row.strip_params).some((key) => ["max_tokens", "max_output_tokens", "max_completion_tokens"].includes(key)));
+      try {
+        budgetId = reserveBudget(keyRow, model, bodyJson, Buffer.byteLength(bodyText, "utf8"), route.upstreamPath === "/embeddings", trustOutputCap, Date.now(), requestId);
+      } catch (error) {
+        if (error instanceof ApiError) {
+          const response = envelopeError(proto, error.status, error.message, error.status === 429 ? "rate_limit_error" : error.status >= 500 ? "api_error" : "invalid_request_error", req, error.code);
+          if (error instanceof BudgetError && error.retryAfter) response.headers.set("Retry-After", String(error.retryAfter));
+          return response;
+        }
+        throw error;
+      }
+    }
 
     // Per-request usage ledger for the client: real upstream figures
     // when present, gateway estimate when the upstream zeroed/omitted
@@ -1044,6 +1065,8 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     };
 
     const record = (u: UsageResult, status: number, latencyMs: number, stream: boolean, cand: RouteCandidate) => {
+      if (recorded) return;
+      recorded = true;
       let inTok = u.inTok;
       let cacheTok = u.cacheTok;
       let estimated = u.estimated;
@@ -1057,7 +1080,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       // egress lane (per-protocol isolation is built into the provider).
       // Always flagged estimated. Nonzero upstream figures never reach
       // this path — they are recorded untouched.
-      if (bodyJson && bodyText && status >= 200 && status < 300 && inTok <= 0 && cacheTok <= 0) {
+      if (bodyJson && bodyText && (status >= 200 && status < 300 || u.outTok > 0 || (u.reasonTok ?? 0) > 0) && inTok <= 0 && cacheTok <= 0) {
         const namespace =
           `${keyRow.id}\0${cand.provider.row.id}\0${cand.key.id}\0` +
           `${cand.upstreamModel || (routedPublicModel ?? String((bodyJson as any)?.model ?? ""))}`;
@@ -1068,7 +1091,13 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           estimated = true;
         }
       }
+      u.inTok = inTok; u.cacheTok = cacheTok; u.estimated = estimated;
+      const noCharge = status >= 400 && inTok <= 0 && cacheTok <= 0 && u.outTok <= 0 && (u.reasonTok ?? 0) <= 0;
+      const uncertain = status === 499 && noCharge;
+      if (budgetId && noCharge && !uncertain) cancelBudget(budgetId);
+      const charge = budgetId ? uncertain ? settleUncertainBudget(budgetId) : noCharge ? { input: 0n, cache: 0n, output: 0n } : settleBudget(budgetId, { inTok, cacheTok, outTok: u.billableOutTok ?? u.outTok + (u.reasonTok ?? 0), cacheCreation: u.cacheCreation }) : undefined;
       recordUsage({
+        charge: charge ?? { input: 0n, cache: 0n, output: 0n },
         keyId: keyRow.id,
         userId: keyRow.user_id,
         proto,
@@ -1090,19 +1119,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       });
       touchKey(keyRow.id, ip);
 
-      // Optimistic total-budget enforcement: the flush lands asynchronously,
-      // so we add this request's delta onto the (≤2s stale) cached spend and
-      // flip the key to exhausted immediately when crossed. Budgets cap
-      // OUTPUT tokens, so only this request's output counts here.
-      if (keyRow.total_limit !== null && keyRow.status === "active") {
-        const spend = getKeySpend(keyRow.id);
-        if (spend.total + u.outTok >= keyRow.total_limit) {
-          db.prepare("UPDATE api_keys SET status = 'exhausted' WHERE id = ? AND status = 'active'").run(
-            keyRow.id,
-          );
-          audit("key.exhausted", { target: keyRow.id, meta: { user: keyRow.user_id }, ip });
-        }
-      }
+
     };
 
     // Usage is parsed from the UPSTREAM body shape through the gateway IR:
@@ -1113,7 +1130,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       if (!contentType.includes("application/json")) return { inTok: 0, cacheTok: 0, outTok: 0, model: "", estimated: false };
       try {
         const irr = decodeResponseToIR(via as IRProto, text, "");
-        return { inTok: irr.inTok, cacheTok: irr.cacheTok, outTok: irr.outTok, model: irr.model, estimated: irr.usageEstimated };
+        return { inTok: irr.inTok, cacheTok: irr.cacheTok, cacheCreation: irr.cacheCreation, billableOutTok: irr.billableOutTok, outTok: irr.outTok, reasonTok: irr.reasonTok, model: irr.model, estimated: irr.usageEstimated };
       } catch {
         return { inTok: 0, cacheTok: 0, outTok: 0, model: "", estimated: true };
       }
@@ -1288,6 +1305,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
 
       let upstream: Response;
       try {
+        upstreamStarted = true;
         upstream = await fetch(upstreamUrl, {
           method: req.method,
           headers: buildUpstreamHeaders(
@@ -1442,7 +1460,6 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           if (counted) return;
           counted = true;
           const u = translator.result();
-          if ((u.estimated || u.inTok === 0) && bodyJson) u.inTok = estimateBodyTokens(bodyJson, proto);
           finalUsage = u;
           record(u, translator.failed && status === 200 ? 502 : status, Math.round(performance.now() - started), true, cand);
         };
@@ -1694,6 +1711,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     if (lastFailure?.kind === "network") {
       recordUsage({
         keyId: keyRow.id, userId: keyRow.user_id, proto, model: routedPublicModel ?? "",
+        charge: req.signal.aborted && budgetId ? settleUncertainBudget(budgetId) : { input: 0n, cache: 0n, output: 0n },
         inTok: 0, cacheTok: 0, outTok: 0, latencyMs: finalLatency,
         status: req.signal.aborted ? 499 : lastFailure.status, stream: wantsStream, estimated: false,
         providerId: lastAttempted?.provider.row.id ?? "",
@@ -1717,9 +1735,23 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       "api_error",
       req,
     );
+  } catch (error) {
+    retainBudget = !!budgetId && upstreamStarted;
+    console.error("[PROXY] request failed; reservation:", budgetId ?? "none", error instanceof Error ? error.name : "unknown");
+    const response = envelopeError(proto, 503, "The request could not be completed safely. Please retry.", "api_error", req);
+    response.headers.set("x-request-id", requestId);
+    return response;
   } finally {
-    if (!slotHeldByStream) release();
-    if (usageFlushDue()) flushUsage();
+    if (!slotHeldByStream) {
+      if (budgetId && !recorded && !retainBudget) {
+        try {
+          if (upstreamStarted && req.signal.aborted) settleUncertainBudget(budgetId);
+          else cancelBudget(budgetId);
+        } catch { console.error("[BILLING] reservation retained for recovery:", budgetId); }
+      }
+      release();
+    }
+    if (usageFlushDue()) { try { flushUsage(); } catch { console.error("[USAGE] analytics flush failed"); } }
   }
 }
 

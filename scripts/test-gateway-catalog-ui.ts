@@ -30,7 +30,7 @@ try {
   const providers = Array.from({ length: 4 }, (_, i) => ({ id: `provider-${i}`, name: `Provider ${i}`, enabled: i !== 3, priority: i, createdAt, modelCount: 40, openaiBaseUrl: "https://upstream.example/v1", openaiAuthStyle: "bearer", anthropicBaseUrl: i % 2 ? null : "https://upstream.example/anthropic", responsesBaseUrl: null, keys: [{ id: `pk-${i}`, label: "Primary", status: "active", priority: 0, failCount: 0 }], stripParams: [], hasApiKey: true }));
   const models = Array.from({ length: 125 }, (_, i) => ({ id: `test/model-${String(i).padStart(3, "0")}`, name: `Model ${i}`, providerId: `provider-${i % 4}`, providerName: `Provider ${i % 4}`, upstreamModel: `upstream/model-${i}`, enabled: i % 3 !== 0, source: i % 2 ? "manual" : "auto", toolCallMode: "fallback", contextLength: 128000, createdAt: createdAt + i, updatedAt: createdAt + i, pricingInput: .000001, pricingOutput: .000004, pricingInputCache: .0000002, targets: [], features: ["tools"], inputModalities: ["text"], outputModalities: ["text"], samplingParams: [] }));
   const users = Array.from({ length: 125 }, (_, i) => ({ id: i === 0 ? "user" : `user-${i}`, name: `Person ${i}`, email: `person${i}@example.com`, role: i % 5 ? "user" : "admin", status: i % 4 ? "active" : "banned", keyCount: i + 1, hasPassword: true, googleLinked: !!(i % 2), totpEnabled: !!(i % 2), createdAt: createdAt + i, lastLoginAt: now - i * 1000 }));
-  const keys = Array.from({ length: 125 }, (_, i) => ({ id: `key-${i}`, userId: i % 2 ? "other" : "user", userEmail: i % 2 ? "other@example.com" : "alex@example.com", name: `Key ${i}`, prefix: "sk-test", status: i % 3 ? "active" : "revoked", outputToday: 1200 + i, outputTotal: 10000 + i, totalLimit: null, dailyLimit: null, revealable: true, rpm: 100, createdAt: createdAt + i, lastUsedAt: now - i * 1000, expiresAt: null }));
+  const keys = Array.from({ length: 125 }, (_, i) => ({ id: `key-${i}`, userId: i % 2 ? "other" : "user", userEmail: i % 2 ? "other@example.com" : "alex@example.com", name: `Key ${i}`, prefix: "sk-test", status: i % 3 ? "active" : "revoked", spendTodayUsd: 1200 + i, spendTotalUsd: 10000 + i, totalLimitUsd: null, dailyLimitUsd: null, revealable: true, rpm: 100, createdAt: createdAt + i, lastUsedAt: now - i * 1000, expiresAt: null }));
   const entries = Array.from({ length: 125 }, (_, i) => ({ id: i + 1, ts: now - i * 60000, action: i % 2 ? "key.create" : "login.failed", actor_email: `person${i % 10}@example.com`, target: `target-${i}`, meta: JSON.stringify({ note: `Event ${i}` }), ip: `192.0.2.${i % 10}` }));
   const descriptors: Record<string, any[]> = {
     keys: [{ id: "key", label: "API key", values: (r: any) => [r.id], text: (r: any) => r.name }, { id: "status", label: "Status", values: (r: any) => [r.status] }, { id: "owner", label: "Owner", values: (r: any) => [r.userEmail] }],
@@ -141,10 +141,12 @@ try {
     await fits(item.label); await page.screenshot({ path: path.join(output, `${item.route.replace("/", "-")}-desktop.png`) });
     if (!item.route.endsWith("audit")) {
       await page.getByRole("button", { name: `Filter ${item.label}`, exact: true }).click();
+      await page.getByRole("dialog").waitFor({ state: "visible" });
       await page.getByRole("dialog").evaluate(async (element: HTMLElement) => { await Promise.all(element.getAnimations().map((animation) => animation.finished.catch(() => {}))); });
       const before = await page.getByRole("dialog").boundingBox();
       await page.getByRole("button", { name: "Filter by Status", exact: true }).click();
-      const after = await page.getByRole("dialog").boundingBox(); assert(Math.abs(before.x - after.x) < 1, "Filter panel jumped on expansion");
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      const after = await page.getByRole("dialog").boundingBox(); assert(Math.abs(before.x - after.x) < 1, `Filter panel jumped on expansion: ${before.x} → ${after.x}`);
       await page.getByRole("dialog").locator(".analytics-option").first().click(); await settled();
       await page.getByRole("button", { name: "Exclude", exact: true }).click();
       await page.getByRole("dialog").locator(".analytics-option").first().click(); await settled();

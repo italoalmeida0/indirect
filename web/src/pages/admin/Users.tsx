@@ -1,7 +1,8 @@
+import { UserPlanManager } from "../../billing";
 import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
-import { createSignal, For, Show } from "solid-js";
+import { createResource, createSignal, For, Show } from "solid-js";
 
-import { api, currentSession, type AdminUserDto } from "../../api";
+import { api, currentSession, type AdminUserDto, type BillingPlanDto } from "../../api";
 import { PageTitle } from "../../index";
 import {
   Badge,
@@ -17,6 +18,8 @@ import {
   ModalNotice,
   ModalSection,
   SwitchCard,
+  Select,
+  fmtCost,
   copyWithToast,
   fmtDate,
   toast,
@@ -32,6 +35,7 @@ export default function AdminUsersPage() {
   const refreshGrid = view.refresh;
   const usersDatasource = view.datasource;
 
+  const [planUser, setPlanUser] = createSignal<AdminUserDto | null>(null);
   const [showCreate, setShowCreate] = createSignal(false);
   const [editing, setEditing] = createSignal<AdminUserDto | null>(null);
   const [confirmDelete, setConfirmDelete] = createSignal<AdminUserDto | null>(
@@ -46,6 +50,8 @@ export default function AdminUsersPage() {
   const [name, setName] = createSignal("");
   const [role, setRole] = createSignal("user");
   const [sendInvite, setSendInvite] = createSignal(true);
+  const [newPlan, setNewPlan] = createSignal("");
+  const [plans] = createResource(async () => (await api<{ plans: BillingPlanDto[] }>("GET", "/api/admin/plans")).plans ?? []);
 
   const meId = () => currentSession()?.user.id;
 
@@ -64,11 +70,13 @@ export default function AdminUsersPage() {
         name: name().trim(),
         role: role(),
         sendInvite: sendInvite(),
+        planId: newPlan() || null,
       });
       setShowCreate(false);
       setEmail("");
       setName("");
       setRole("user");
+      setNewPlan("");
       if (j.invite?.sent) {
         toast("User created — invite email sent");
       } else if (j.invite?.link) {
@@ -220,6 +228,7 @@ export default function AdminUsersPage() {
     if (!u) return null;
     return (
       <div class="flex items-center justify-end gap-1">
+        <IconBtn icon="lucide:wallet" title="Manage plan and resets" onClick={() => setPlanUser(u)} />
         <IconBtn
           icon={Icons.edit}
           title="Edit"
@@ -257,6 +266,7 @@ export default function AdminUsersPage() {
   const cols: ColDef[] = [
     { field: "name", headerName: "Name", flex: 1, minWidth: 160, cellRenderer: NameCell },
     { field: "email", headerName: "Email", flex: 1.2, minWidth: 200, cellRenderer: EmailCell },
+    { field: "planName", headerName: "Plan", minWidth: 130, valueFormatter: (p) => p.value || "Unlimited" },
     { field: "role", headerName: "Role", width: 150, cellRenderer: RoleCell },
     {
       colId: "security",
@@ -277,7 +287,8 @@ export default function AdminUsersPage() {
     {
       colId: "actions",
       headerName: "",
-      width: 180,
+      width: 240,
+      minWidth: 240,
       cellRenderer: ActionsCell,
       sortable: false,
       filter: false,
@@ -298,6 +309,7 @@ export default function AdminUsersPage() {
         }
       />
 
+      <UserPlanManager user={planUser()} close={() => setPlanUser(null)} changed={refreshGrid} />
       <CatalogToolbar view={view} />
       <CatalogState view={view}><Card>
         <Show when={userCount() > 0} fallback={<EmptyState icon={Icons.users} title="No matching users" hint="Adjust your filters or create a new user." />}>
@@ -314,7 +326,7 @@ export default function AdminUsersPage() {
                       <div class="text-xs text-ink-400 truncate mt-0.5">{u.email}</div>
                     </div>
                     <div class="text-right shrink-0 text-[11px] text-ink-400">
-                      <div>Keys: {u.keyCount}</div>
+                      <div>Keys: {u.keyCount}</div><div>{u.planName ?? "Unlimited"}</div>
                       <div>{u.lastLoginAt ? fmtDate(u.lastLoginAt) : "Never logged in"}</div>
                     </div>
                   </div>
@@ -325,6 +337,7 @@ export default function AdminUsersPage() {
                       <SecurityCell data={u} />
                     </div>
                     <div class="flex items-center gap-1">
+                      <IconBtn icon="lucide:wallet" title="Manage plan and resets" onClick={() => setPlanUser(u)} />
                       <button
                         type="button"
                         class="h-9 px-2.5 rounded-lg flex items-center gap-1 text-xs text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer"
@@ -410,6 +423,7 @@ export default function AdminUsersPage() {
                 />
               </ModalField>
 
+              <Select label="Spending plan" value={newPlan()} onChange={setNewPlan} options={[{ value: "", label: "Unlimited — no plan" }, ...(plans.error ? [] : plans() ?? []).map((plan) => ({ value: plan.id, label: `${plan.name} · ${plan.monthlyUsd === null ? "Unlimited" : `${fmtCost(plan.monthlyUsd)} / month`}` }))]} />
               <ModalField label="Gateway role" hint="Determines access to the admin dashboard and registry controls.">
                 <div class="flex flex-wrap gap-2 pt-1">
                   <FilterChip

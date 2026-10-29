@@ -16,7 +16,7 @@ import { findFreePort } from "./free-port";
  *   2. Cross-user IDOR (keys, sessions, usage)
  *   3. Login brute-force lockout semantics (incl. account-level DoS)
  *   4. Proxy key-spray limiting
- *   5. Budget race: parallel burst vs total_limit (eventual consistency)
+ *   5. USD budgets: legacy rejection and parallel admission guards
  *   6. Circuit-breaker poisoning via client aborts (unauthenticated-ish DoS)
  *   7. Upstream response headers overriding gateway security headers
  *   8. Oversized bodies (chunked, no Content-Length)
@@ -552,28 +552,13 @@ describe("security audit", () => {
 
   // ------------------------------------------------------------ 5. budget race
 
-  test("budget: parallel burst overshoots total_limit (eventual consistency, quantified)", async () => {
-    const made = await api("/api/keys", { token: u1Token, body: { name: "race", totalLimit: 60 } });
-    const raceKey = made.json.token as string;
-
-    // 8 parallel requests (the per-key concurrency cap). Budgets cap output
-    // tokens: 10 out each = 80 > 60.
-    const results = await Promise.all(
-      Array.from({ length: 8 }, () =>
-        llm(raceKey, { model: "mini-1", messages: [{ role: "user", content: "race" }] }),
-      ),
-    );
-    const statuses = await Promise.all(results.map(async (r) => { await r.text(); return r.status; }));
-    const okCount = statuses.filter((s) => s === 200).length;
-
-    // All 8 in-flight requests are admitted before the ledger catches up:
-    // measured overshoot is 80 output tokens against a 60-token limit (4x
-    // the six requests the cap would have allowed).
-    expect(okCount).toBeGreaterThan(2); // strictly more than the limit allows
-    await Bun.sleep(2500); // flush + spend-cache expiry
-    const after = await llm(raceKey, { model: "mini-1", messages: [] });
-    expect(after.status).toBe(429); // enforcement eventually bites
-    await after.text();
+  test("budget: retired token fields are rejected and a zero USD cap cannot be bypassed in parallel", async () => {
+    const retired = await api("/api/keys", { token: u1Token, body: { name: "retired", totalLimit: 60 } });
+    expect(retired.status).toBe(400);
+    const made = await api("/api/keys", { token: u1Token, body: { name: "race", totalLimitUsd: 0 } });
+    expect(made.status).toBe(200);
+    const results = await Promise.all(Array.from({ length: 8 }, () => llm(made.json.token, { model: "mini-1", messages: [] })));
+    for (const result of results) { expect(result.status).toBe(429); await result.text(); }
   });
 
   test("budget: revoked key dies immediately", async () => {

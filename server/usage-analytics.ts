@@ -14,7 +14,7 @@ function breakdown(scope: UsageScope, userId: string | null, dimension: "user_id
   return db.prepare<Metrics & { id: string | null; label: string; detail: string; members: number }, Array<string | number>>(`
     WITH targets AS (
       SELECT s.${dimension} AS id, s.model, s.upstream_model, SUM(s.in_tok) AS in_tok,
-        SUM(s.cache_tok) AS cache_tok, SUM(s.out_tok) AS out_tok, SUM(s.reqs) AS reqs
+        SUM(s.cache_tok) AS cache_tok, SUM(s.out_tok) AS out_tok, SUM(s.cost_in_nanos) AS cost_in_nanos, SUM(s.cost_cache_nanos) AS cost_cache_nanos, SUM(s.cost_out_nanos) AS cost_out_nanos, SUM(s.reqs) AS reqs
       FROM ${source.sql} s GROUP BY s.${dimension}, s.model, s.upstream_model
     ), totals AS (
       SELECT m.id, SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok,
@@ -54,7 +54,7 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null)
     const where = usageScopeWhere(scope, "e", userId);
     sourceSql = `SELECT CAST((CAST(e.ts / ${unit} AS INTEGER) - ${startIndex}) / ${step} AS INTEGER) AS bucket,
       e.model, e.upstream_model, SUM(e.in_tok) AS in_tok, SUM(e.cache_tok) AS cache_tok,
-      SUM(e.out_tok) AS out_tok, COUNT(*) AS reqs,
+      SUM(e.out_tok) AS out_tok, SUM(e.cost_in_nanos) AS cost_in_nanos, SUM(e.cost_cache_nanos) AS cost_cache_nanos, SUM(e.cost_out_nanos) AS cost_out_nanos, COUNT(*) AS reqs,
       SUM(e.status >= 200 AND e.status < 300) AS success_reqs, SUM(e.status < 200 OR e.status >= 300) AS error_reqs
       FROM usage_events e WHERE ${where.clauses.join(" AND ")}
       GROUP BY bucket, e.model, e.upstream_model`;
@@ -64,7 +64,7 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null)
     const index = monthly ? "CAST(substr(s.date, 1, 4) AS INTEGER) * 12 + CAST(substr(s.date, 6, 2) AS INTEGER) - 1" : `CAST(strftime('%s', s.date) AS INTEGER) * 1000 / ${unit}`;
     sourceSql = `SELECT CAST((${index} - ${startIndex}) / ${step} AS INTEGER) AS bucket,
       s.model, s.upstream_model, SUM(s.in_tok) AS in_tok, SUM(s.cache_tok) AS cache_tok,
-      SUM(s.out_tok) AS out_tok, SUM(s.reqs) AS reqs, SUM(s.success_reqs) AS success_reqs, SUM(s.error_reqs) AS error_reqs
+      SUM(s.out_tok) AS out_tok, SUM(s.cost_in_nanos) AS cost_in_nanos, SUM(s.cost_cache_nanos) AS cost_cache_nanos, SUM(s.cost_out_nanos) AS cost_out_nanos, SUM(s.reqs) AS reqs, SUM(s.success_reqs) AS success_reqs, SUM(s.error_reqs) AS error_reqs
       FROM ${source.sql} s GROUP BY bucket, s.model, s.upstream_model`;
     params = source.params;
   }

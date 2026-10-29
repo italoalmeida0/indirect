@@ -5,6 +5,8 @@ import { hashPassword, randomToken } from "./crypto";
 import { ApiError, baseHeaders, clientIp, err, json } from "./http";
 import { handleAuthRoute } from "./routes/auth";
 import { handleMeRoute } from "./routes/me";
+import { handleBillingRoute } from "./routes/billing";
+import { startBilling } from "./billing";
 import { handleKeysRoute } from "./routes/keys";
 import { handleUsageRoute } from "./routes/usage";
 import { handleAdminRoute } from "./routes/admin";
@@ -59,6 +61,7 @@ async function bootstrapAdmin(): Promise<void> {
 }
 
 await bootstrapAdmin();
+startBilling();
 
 // ===== Housekeeping sweeps =====
 
@@ -127,6 +130,8 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
     if (viaAuth) return viaAuth;
     const viaMe = await handleMeRoute(path, req);
     if (viaMe) return viaMe;
+    const viaBilling = await handleBillingRoute(path, req);
+    if (viaBilling) return viaBilling;
     const viaKeys = await handleKeysRoute(path, req);
     if (viaKeys) return viaKeys;
     const viaUsage = await handleUsageRoute(path, req, url);

@@ -21,7 +21,7 @@ import {
   SwitchCard,
   copyWithToast,
   fmtDate,
-  fmtNum,
+  fmtCost,
   timeUntil,
   toast,
 } from "../ui";
@@ -54,8 +54,8 @@ interface KeyFormState {
   name: string;
   preset: string;
   customDate: string;
-  dailyLimit: string;
-  totalLimit: string;
+  dailyLimitUsd: string;
+  totalLimitUsd: string;
   rpm: string;
 }
 
@@ -70,7 +70,7 @@ function computeExpiresAt(f: KeyFormState): number | null {
 
 export default function KeysPage() {
   const view = createCatalog<ApiKeyDto>({ storageKey: "llmgw-grid:keys.user", path: "/api/keys", result: "keys", label: "API keys", sort: [
-    { value: "name:asc", label: "Name A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "createdAt:asc", label: "Oldest first" }, { value: "lastUsedAt:desc", label: "Recently used" }, { value: "outputTotal:desc", label: "Highest output usage" },
+    { value: "name:asc", label: "Name A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "createdAt:asc", label: "Oldest first" }, { value: "lastUsedAt:desc", label: "Recently used" }, { value: "spendTotalUsd:desc", label: "Highest spend" },
   ] });
   const keyCount = view.total;
   const refreshGrid = view.refresh;
@@ -92,8 +92,8 @@ export default function KeysPage() {
     name: "",
     preset: "never",
     customDate: "",
-    dailyLimit: "",
-    totalLimit: "",
+    dailyLimitUsd: "",
+    totalLimitUsd: "",
     rpm: "",
   });
 
@@ -102,8 +102,8 @@ export default function KeysPage() {
       name: "",
       preset: "never",
       customDate: "",
-      dailyLimit: "",
-      totalLimit: "",
+      dailyLimitUsd: "",
+      totalLimitUsd: "",
       rpm: "",
     });
 
@@ -117,8 +117,8 @@ export default function KeysPage() {
       const j = await api<{ token: string }>("POST", "/api/keys", {
         name: form().name.trim(),
         expiresAt,
-        dailyLimit: num(form().dailyLimit),
-        totalLimit: num(form().totalLimit),
+        dailyLimitUsd: num(form().dailyLimitUsd),
+        totalLimitUsd: num(form().totalLimitUsd),
         rpm: num(form().rpm),
       });
       setNewToken(j.token);
@@ -137,8 +137,8 @@ export default function KeysPage() {
       name: k.name,
       preset: "never",
       customDate: "",
-      dailyLimit: k.dailyLimit?.toString() ?? "",
-      totalLimit: k.totalLimit?.toString() ?? "",
+      dailyLimitUsd: k.dailyLimitUsd?.toString() ?? "",
+      totalLimitUsd: k.totalLimitUsd?.toString() ?? "",
       rpm: k.rpm?.toString() ?? "",
     });
     setEditing(k);
@@ -151,8 +151,8 @@ export default function KeysPage() {
     try {
       await api("PATCH", `/api/keys/${k.id}`, {
         name: form().name.trim(),
-        dailyLimit: num(form().dailyLimit),
-        totalLimit: num(form().totalLimit),
+        dailyLimitUsd: num(form().dailyLimitUsd),
+        totalLimitUsd: num(form().totalLimitUsd),
         rpm: num(form().rpm),
       });
       toast("Key updated");
@@ -229,21 +229,21 @@ export default function KeysPage() {
     return <Badge tone={st.tone}>{st.label}</Badge>;
   }
 
-  /** Output burn, with a mini progress bar when a budget is set. */
+  /** USD spend, with a mini progress bar when a budget is set. */
   function BudgetCell(props: { data?: ApiKeyDto; kind?: "today" | "total" }) {
     const k = props.data;
     if (!k) return null;
     const today = props.kind === "today";
-    const used = today ? k.outputToday : k.outputTotal;
-    const limit = today ? k.dailyLimit : k.totalLimit;
+    const used = today ? k.spendTodayUsd : k.spendTotalUsd;
+    const limit = today ? k.dailyLimitUsd : k.totalLimitUsd;
     return (
       <div class="flex items-center justify-end gap-2 w-full pr-1">
         <span class="tabular-nums whitespace-nowrap text-xs text-right">
-          {fmtNum(used)}
-          <span class="text-ink-500 font-normal"> / {limit ? fmtNum(limit) : "Unlimited"}</span>
+          {fmtCost(used)}
+          <span class="text-ink-500 font-normal"> / {limit !== null ? fmtCost(limit) : "Unlimited"}</span>
         </span>
         <div class="w-16 shrink-0 flex items-center justify-center">
-          {limit ? (
+          {limit !== null ? (
             <ProgressBar danger value={used} max={limit} />
           ) : (
             <span class="text-[10px] text-ink-600 font-mono leading-none">—</span>
@@ -296,16 +296,16 @@ export default function KeysPage() {
     { field: "prefix", headerName: "Prefix", width: 130, cellRenderer: PrefixCell },
     { field: "status", headerName: "Status", width: 160, cellRenderer: StatusBadgeCell },
     {
-      field: "outputToday",
-      headerName: "Out today",
+      field: "spendTodayUsd",
+      headerName: "Spend today",
       width: 170,
       filter: "agNumberColumnFilter",
       cellRenderer: BudgetCell,
       cellRendererParams: { kind: "today" },
     },
     {
-      field: "outputTotal",
-      headerName: "Out total",
+      field: "spendTotalUsd",
+      headerName: "Lifetime spend",
       width: 170,
       filter: "agNumberColumnFilter",
       cellRenderer: BudgetCell,
@@ -385,18 +385,18 @@ export default function KeysPage() {
                         </div>
                       </div>
 
-                      <Show when={k.totalLimit || k.dailyLimit}>
+                      <Show when={k.totalLimitUsd !== null || k.dailyLimitUsd !== null}>
                         <div class="pt-2 border-t border-line/50 space-y-1.5 text-xs text-ink-400">
-                          <Show when={k.dailyLimit}>
+                          <Show when={k.dailyLimitUsd !== null}>
                             <div class="flex justify-between">
                               <span>Daily limit</span>
-                              <span class="font-mono text-ink-200">{fmtNum(k.dailyLimit!)} tok</span>
+                              <span class="font-mono text-ink-200">{fmtCost(k.dailyLimitUsd!)}</span>
                             </div>
                           </Show>
-                          <Show when={k.totalLimit}>
+                          <Show when={k.totalLimitUsd !== null}>
                             <div class="flex justify-between">
                               <span>Total cap</span>
-                              <span class="font-mono text-ink-200">{fmtNum(k.outputTotal ?? 0)} / {fmtNum(k.totalLimit!)}</span>
+                              <span class="font-mono text-ink-200">{fmtCost(k.spendTotalUsd ?? 0)} / {fmtCost(k.totalLimitUsd!)}</span>
                             </div>
                           </Show>
                         </div>
@@ -448,7 +448,7 @@ export default function KeysPage() {
         open={showCreate()}
         onClose={() => setShowCreate(false)}
         title="Create API key"
-        width="max-w-xl"
+        width="max-w-xl billing-dialog"
         footer={
           <>
             <Btn variant="outline" size="sm" onClick={() => setShowCreate(false)}>
@@ -517,23 +517,23 @@ export default function KeysPage() {
           </ModalSection>
 
           <ModalSection
-            title="Output token budgets"
-            info="Key budgets cap output tokens only. Input and cached tokens are tracked for visibility and never deplete key budget."
+            title="USD spending limits"
+            info="All billable input, cached input, output and reasoning count in USD. Key limits are independent of the account plan."
           >
             <div class="space-y-3">
               <div class="flex items-center justify-between flex-wrap gap-2">
                 <span class="text-xs text-ink-400">Quick limit presets:</span>
                 <div class="flex flex-wrap gap-1.5">
                   <For each={[
-                    { label: "100K Out", val: "100000" },
-                    { label: "500K Out", val: "500000" },
-                    { label: "1M Out", val: "1000000" },
-                    { label: "5M Out", val: "5000000" },
+                    { label: "$1 / day", val: "1" },
+                    { label: "$5 / day", val: "5" },
+                    { label: "$10 / day", val: "10" },
+                    { label: "$50 / day", val: "50" },
                   ]}>
                     {(preset) => (
                       <button
                         type="button"
-                        onClick={() => setForm({ ...form(), dailyLimit: preset.val, totalLimit: String(Number(preset.val) * 10) })}
+                        onClick={() => setForm({ ...form(), dailyLimitUsd: preset.val, totalLimitUsd: String(Number(preset.val) * 10) })}
                         class="px-2 py-1 rounded bg-ink-900/60 hover:bg-ink-800 text-[11px] text-ink-300 hover:text-ink-100 border border-line/60 transition-colors cursor-pointer"
                       >
                         {preset.label}
@@ -542,7 +542,7 @@ export default function KeysPage() {
                   </For>
                   <button
                     type="button"
-                    onClick={() => setForm({ ...form(), dailyLimit: "", totalLimit: "" })}
+                    onClick={() => setForm({ ...form(), dailyLimitUsd: "", totalLimitUsd: "" })}
                     class="px-2 py-1 rounded bg-ink-900/60 hover:bg-ink-800 text-[11px] text-ink-400 hover:text-ink-200 border border-line/60 transition-colors cursor-pointer"
                   >
                     Unlimited
@@ -551,22 +551,22 @@ export default function KeysPage() {
               </div>
 
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <ModalField label="Daily output limit" hint="Resets 00:00 UTC">
+                <ModalField label="Daily limit (USD)" hint="Resets 00:00 UTC">
                   <input
-                    type="number"
-                    min={1}
-                    value={form().dailyLimit}
-                    onInput={(e) => setForm({ ...form(), dailyLimit: e.currentTarget.value })}
+                    type="number" aria-label="Daily limit (USD)"
+                    min={0} step="0.01" inputMode="decimal"
+                    value={form().dailyLimitUsd}
+                    onInput={(e) => setForm({ ...form(), dailyLimitUsd: e.currentTarget.value })}
                     placeholder="Unlimited"
                     class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
                   />
                 </ModalField>
-                <ModalField label="Total output limit" hint="Permanent cap">
+                <ModalField label="Lifetime limit (USD)" hint="Permanent cap">
                   <input
-                    type="number"
-                    min={1}
-                    value={form().totalLimit}
-                    onInput={(e) => setForm({ ...form(), totalLimit: e.currentTarget.value })}
+                    type="number" aria-label="Lifetime limit (USD)"
+                    min={0} step="0.01" inputMode="decimal"
+                    value={form().totalLimitUsd}
+                    onInput={(e) => setForm({ ...form(), totalLimitUsd: e.currentTarget.value })}
                     placeholder="Unlimited"
                     class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
                   />
@@ -607,8 +607,8 @@ export default function KeysPage() {
         open={!!editing()}
         onClose={() => setEditing(null)}
         title={`Edit “${editing()?.name ?? ""}”`}
-        subtitle="Adjust token budgets, rate limits, or expiration schedule. Raising total limit reactivates exhausted keys."
-        width="max-w-xl"
+        subtitle="Adjust USD spending limits, request rate, or expiration. The account plan remains the shared spending ceiling."
+        width="max-w-xl billing-dialog"
         footer={
           <>
             <Btn
@@ -685,27 +685,27 @@ export default function KeysPage() {
           </ModalSection>
 
           <ModalSection
-            title="Output token budgets"
-            info="Budgets only cap output tokens; prompt and cache tokens are tracked separately."
+            title="USD spending limits"
+            info="All billable usage counts in USD. Leave a field empty for no key-level cap; the account plan still applies."
           >
             <div class="space-y-3">
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <ModalField label="Daily output limit" hint="Output tokens · empty = unlimited">
+                <ModalField label="Daily limit (USD)" hint="Resets at midnight UTC · empty = unlimited">
                   <input
-                    type="number"
-                    min={1}
-                    value={form().dailyLimit}
-                    onInput={(e) => setForm({ ...form(), dailyLimit: e.currentTarget.value })}
+                    type="number" aria-label="Daily limit (USD)"
+                    min={0} step="0.01" inputMode="decimal"
+                    value={form().dailyLimitUsd}
+                    onInput={(e) => setForm({ ...form(), dailyLimitUsd: e.currentTarget.value })}
                     placeholder="Unlimited"
                     class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
                   />
                 </ModalField>
-                <ModalField label="Total output limit" hint="Raising reactivates an exhausted key">
+                <ModalField label="Lifetime limit (USD)" hint="Across the entire lifetime of this key">
                   <input
-                    type="number"
-                    min={1}
-                    value={form().totalLimit}
-                    onInput={(e) => setForm({ ...form(), totalLimit: e.currentTarget.value })}
+                    type="number" aria-label="Lifetime limit (USD)"
+                    min={0} step="0.01" inputMode="decimal"
+                    value={form().totalLimitUsd}
+                    onInput={(e) => setForm({ ...form(), totalLimitUsd: e.currentTarget.value })}
                     placeholder="Unlimited"
                     class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
                   />
@@ -747,7 +747,7 @@ export default function KeysPage() {
         onClose={() => setNewToken("")}
         title="API key generated successfully"
         subtitle="Copy your key and integration snippets now. For security, raw tokens cannot be retrieved again once closed."
-        width="max-w-xl"
+        width="max-w-xl billing-dialog"
         footer={
           <>
             <Btn

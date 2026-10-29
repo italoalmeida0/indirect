@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { removeUsdMigration } from "./billing-fixture";
 import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,8 +17,8 @@ describe("analytics response outcomes and API keys", () => {
     const scope: UsageScope = { from, to: Date.UTC(2026, 10, 1), selection: { model: { include: [model], exclude: [] } } };
     const totals = (report: ReturnType<typeof filteredUsageAnalytics>) => report.outcomes.reduce((sum, point) => ({ success: sum.success + point.success, errors: sum.errors + point.errors, unknown: sum.unknown + point.unknown }), { success: 0, errors: 0, unknown: 0 });
     try {
-      for (const [index, status] of [200, 201, 429, 503].entries()) recordUsage({ keyId: `outcomes-test/key-${index < 2 ? "a" : "b"}`, userId, model, proto: "openai", inTok: 10, cacheTok: 20, outTok: 5, status, ts: from + [0, 60_000, 600_000, 900_000][index]!, latencyMs: 1, stream: false, estimated: false });
-      recordUsage({ keyId: "outcomes-test/foreign-key", userId: "outcomes-test/foreign-user", model, proto: "openai", inTok: 1, cacheTok: 0, outTok: 1, status: 500, ts: from, latencyMs: 1, stream: false, estimated: false });
+      for (const [index, status] of [200, 201, 429, 503].entries()) recordUsage({ charge: { input: 0n, cache: 0n, output: 0n }, keyId: `outcomes-test/key-${index < 2 ? "a" : "b"}`, userId, model, proto: "openai", inTok: 10, cacheTok: 20, outTok: 5, status, ts: from + [0, 60_000, 600_000, 900_000][index]!, latencyMs: 1, stream: false, estimated: false });
+      recordUsage({ charge: { input: 0n, cache: 0n, output: 0n }, keyId: "outcomes-test/foreign-key", userId: "outcomes-test/foreign-user", model, proto: "openai", inTok: 1, cacheTok: 0, outTok: 1, status: 500, ts: from, latencyMs: 1, stream: false, estimated: false });
       flushUsage();
       db.run("INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, model, reqs) VALUES (?, ?, '2020-02-01', 'openai', ?, 7)", ["outcomes-test/key-a", userId, model]);
       db.run("INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, model, reqs) VALUES (?, ?, '2020-02', 'openai', ?, 7)", ["outcomes-test/key-a", userId, model]);
@@ -53,6 +54,7 @@ describe("analytics response outcomes and API keys", () => {
       for (const table of ["usage_model_provider_daily", "usage_model_provider_monthly"]) {
         fixture.exec(`ALTER TABLE ${table} DROP COLUMN success_reqs; ALTER TABLE ${table} DROP COLUMN error_reqs;`);
       }
+      removeUsdMigration(fixture);
       // Migration names skip 015; the 024 schema has user_version 23.
       fixture.exec(`PRAGMA user_version = 23;
         INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, model, reqs) VALUES ('key', 'user', '2024-02-01', 'openai', 'model', 10);

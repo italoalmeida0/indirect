@@ -167,15 +167,14 @@ export interface ApiKeyDto {
   prefix: string;
   createdAt: number;
   expiresAt: number | null;
-  dailyLimit: number | null;
-  totalLimit: number | null;
+  dailyLimitUsd: number | null;
+  totalLimitUsd: number | null;
   rpm: number | null;
   status: "active" | "revoked" | "exhausted" | "expired" | "daily_limit" | "total_limit";
   lastUsedAt: number | null;
-  /** Output-token burn — budgets cap output only, so these never mix in
-   *  input or cached-input tokens. */
-  outputToday: number;
-  outputTotal: number;
+  /** Settled billable spend in USD, including all priced token categories. */
+  spendTodayUsd: number;
+  spendTotalUsd: number;
   revealable: boolean;
 }
 
@@ -347,6 +346,8 @@ export interface AdminUserDto {
   createdAt: number;
   lastLoginAt: number | null;
   keyCount: number;
+  planId?: string | null;
+  planName?: string | null;
 }
 
 export interface RemoteHostDto {
@@ -366,4 +367,22 @@ export interface RemotePairDto {
   token: string;
   expiresAt: number;
   connectUrl: string;
+}
+
+
+export interface BillingPlanDto {
+  id: string; name: string; monthlyUsd: number | null;
+  weeklyEnabled: boolean; sessionEnabled: boolean; members?: number;
+  createdAt: number; updatedAt: number;
+}
+export interface BudgetWindowDto {
+  kind: "monthly" | "weekly" | "session" | "daily" | "lifetime";
+  startsAt: number; resetsAt: number | null; limitUsd: number | null;
+  spentUsd: number; billedUsd: number; reservedUsd: number; remainingUsd: number | null;
+}
+export interface BillingDto {
+  plan: BillingPlanDto | null;
+  windows: BudgetWindowDto[]; sessionStarted: boolean;
+  resets: { id: string; kind: "weekly" | "session" | "both"; remaining: number; expiresAt: number | null; note: string }[];
+  serverTime: number;
 }

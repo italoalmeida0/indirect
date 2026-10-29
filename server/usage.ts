@@ -1,4 +1,5 @@
 import { db } from "./db";
+import type { Charge } from "./billing";
 import { usageScopeWhere } from "./usage-filters";
 import { cachedUsageQuery, invalidateUsageQueries } from "./usage-cache";
 import { buildGridWhere, buildGridOrder, gridPage, type ColSpec, type GridFilterEntry, type GridSort } from "./gridql";
@@ -16,12 +17,10 @@ import {
  * Usage accounting.
  *
  * Writes: proxy events are buffered and flushed in one transaction (every
- * second or every 100 events) so a busy proxy never does per-request writes.
+ * second or every 100 events) to avoid per-request analytics transactions.
  *
- * Reads: per-key spend (today + all-time) is cached for ~2s because the
- * proxy checks budgets on EVERY request. Flush invalidates affected cache
- * entries. SQLite (usage_daily) is the source of truth — the cache is only
- * ever a read optimization, never authoritative state.
+ * USD admission and settlement are synchronous in billing.ts. These buffered
+ * analytics rows carry the immutable prices already charged by that ledger.
  */
 
 export interface UsageEvent {
@@ -46,6 +45,7 @@ export interface UsageEvent {
   providerKeyId?: string;
   upstreamModel?: string;
   ts?: number;
+  charge: Charge;
 }
 
 const buffer: UsageEvent[] = [];
@@ -68,8 +68,8 @@ export function recordUsage(ev: UsageEvent): void {
 }
 
 const insertEvent = db.prepare(
-  `INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, cache_tok, out_tok, latency_ms, status, stream, estimated, provider_id, provider_key_id, upstream_model)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  `INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, cache_tok, out_tok, latency_ms, status, stream, estimated, provider_id, provider_key_id, upstream_model, cost_in_nanos, cost_cache_nanos, cost_out_nanos)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 );
 const upsertDaily = db.prepare(
   `INSERT INTO usage_daily (key_id, user_id, date, in_tok, cache_tok, out_tok, reqs)
@@ -83,48 +83,50 @@ const upsertDaily = db.prepare(
 // Same rollup, one dimension deeper (model): powers the per-model dashboard
 // queries without scanning usage_events (~0.03ms extra per event, measured).
 const upsertModelDaily = db.prepare(
-  `INSERT INTO usage_model_daily (key_id, user_id, date, proto, model, in_tok, cache_tok, out_tok, reqs)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
+  `INSERT INTO usage_model_daily (key_id, user_id, date, proto, model, in_tok, cache_tok, out_tok, reqs, cost_in_nanos, cost_cache_nanos, cost_out_nanos)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
    ON CONFLICT(key_id, date, proto, model)
    DO UPDATE SET in_tok = in_tok + excluded.in_tok,
                  cache_tok = cache_tok + excluded.cache_tok,
                  out_tok = out_tok + excluded.out_tok,
-                 reqs = reqs + 1`,
+                 reqs = reqs + 1, cost_in_nanos = COALESCE(cost_in_nanos, 0) + excluded.cost_in_nanos, cost_cache_nanos = COALESCE(cost_cache_nanos, 0) + excluded.cost_cache_nanos, cost_out_nanos = COALESCE(cost_out_nanos, 0) + excluded.cost_out_nanos`,
 );
 // Deepest rollup (migration 011): adds the upstream dimensions — provider,
 // provider key and upstream model id — powering the AG Grid usage breakdown
 // (filter by provider / upstream model / provider key) without scanning
 // usage_events. Written alongside the two shallower rollups.
 const upsertModelProviderDaily = db.prepare(
-  `INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `INSERT INTO usage_model_provider_daily (key_id, user_id, date, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs, cost_in_nanos, cost_cache_nanos, cost_out_nanos)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
    ON CONFLICT(key_id, date, proto, provider_id, provider_key_id, model, upstream_model)
    DO UPDATE SET in_tok = in_tok + excluded.in_tok,
                  cache_tok = cache_tok + excluded.cache_tok,
                  out_tok = out_tok + excluded.out_tok,
                  reqs = reqs + 1, success_reqs = success_reqs + excluded.success_reqs,
-                 error_reqs = error_reqs + excluded.error_reqs`,
+                 error_reqs = error_reqs + excluded.error_reqs,
+                 cost_in_nanos = COALESCE(cost_in_nanos, 0) + excluded.cost_in_nanos, cost_cache_nanos = COALESCE(cost_cache_nanos, 0) + excluded.cost_cache_nanos, cost_out_nanos = COALESCE(cost_out_nanos, 0) + excluded.cost_out_nanos`,
 );
 const upsertModelProviderMonthly = db.prepare(
-  `INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+  `INSERT INTO usage_model_provider_monthly (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model, in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs, cost_in_nanos, cost_cache_nanos, cost_out_nanos)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
    ON CONFLICT(key_id, month, proto, provider_id, provider_key_id, model, upstream_model)
    DO UPDATE SET in_tok = in_tok + excluded.in_tok, cache_tok = cache_tok + excluded.cache_tok,
                  out_tok = out_tok + excluded.out_tok, reqs = reqs + 1,
-                 success_reqs = success_reqs + excluded.success_reqs, error_reqs = error_reqs + excluded.error_reqs`,
+                 success_reqs = success_reqs + excluded.success_reqs, error_reqs = error_reqs + excluded.error_reqs,
+                 cost_in_nanos = COALESCE(cost_in_nanos, 0) + excluded.cost_in_nanos, cost_cache_nanos = COALESCE(cost_cache_nanos, 0) + excluded.cost_cache_nanos, cost_out_nanos = COALESCE(cost_out_nanos, 0) + excluded.cost_out_nanos`,
 );
 
 export function flushUsage(): void {
   flushScheduled = false;
   if (buffer.length === 0) return;
   const batch = buffer.splice(0, buffer.length);
-  const affectedKeys = new Set<string>();
   const changedWindows: Array<{ userId: string; ts: number }> = [];
   db.transaction(() => {
     for (const ev of batch) {
       const ts = ev.ts ?? Date.now();
       changedWindows.push({ userId: ev.userId, ts });
       const model = ev.model.slice(0, 128);
+      const cost = [ev.charge.input, ev.charge.cache, ev.charge.output];
       insertEvent.run(
         ev.keyId,
         ev.userId,
@@ -141,10 +143,11 @@ export function flushUsage(): void {
         ev.providerId ?? "",
         ev.providerKeyId ?? "",
         ev.upstreamModel ?? "",
+        ...cost,
       );
       const date = utcDate(ts);
       upsertDaily.run(ev.keyId, ev.userId, date, ev.inTok, ev.cacheTok, ev.outTok);
-      upsertModelDaily.run(ev.keyId, ev.userId, date, ev.proto, model, ev.inTok, ev.cacheTok, ev.outTok);
+      upsertModelDaily.run(ev.keyId, ev.userId, date, ev.proto, model, ev.inTok, ev.cacheTok, ev.outTok, ...cost);
       upsertModelProviderDaily.run(
         ev.keyId,
         ev.userId,
@@ -159,51 +162,13 @@ export function flushUsage(): void {
         ev.outTok,
         ev.status >= 200 && ev.status < 300 ? 1 : 0,
         ev.status < 200 || ev.status >= 300 ? 1 : 0,
+        ...cost,
       );
       upsertModelProviderMonthly.run(ev.keyId, ev.userId, date.slice(0, 7), ev.proto, ev.providerId ?? "", ev.providerKeyId ?? "", model, ev.upstreamModel ?? "", ev.inTok, ev.cacheTok, ev.outTok,
-        ev.status >= 200 && ev.status < 300 ? 1 : 0, ev.status < 200 || ev.status >= 300 ? 1 : 0);
-      affectedKeys.add(ev.keyId);
+        ev.status >= 200 && ev.status < 300 ? 1 : 0, ev.status < 200 || ev.status >= 300 ? 1 : 0, ...cost);
     }
   })();
-  for (const k of affectedKeys) spendCache.delete(k);
   invalidateUsageQueries(changedWindows);
-}
-
-// ===== Budget reads (cached) =====
-
-/**
- * Key budgets (daily_limit / total_limit) cap OUTPUT tokens only — the
- * category providers price highest and the one the key owner controls.
- * Input and cached-input tokens are metered in their own buckets for
- * visibility, but they never consume a key's budget.
- */
-interface Spend {
-  today: number;
-  total: number;
-  fetchedAt: number;
-}
-
-const spendCache = new Map<string, Spend>();
-const SPEND_TTL_MS = 2_000;
-
-const qToday = db.prepare<{ t: number }, [string, string]>(
-  "SELECT COALESCE(out_tok, 0) AS t FROM usage_daily WHERE key_id = ? AND date = ?",
-);
-const qTotal = db.prepare<{ t: number }, [string]>(
-  "SELECT COALESCE(SUM(out_tok), 0) AS t FROM usage_daily WHERE key_id = ?",
-);
-
-/** OUTPUT-token burn of a key, UTC-today and all-time. */
-export function getKeySpend(keyId: string): { today: number; total: number } {
-  const now = Date.now();
-  const cached = spendCache.get(keyId);
-  if (cached && now - cached.fetchedAt < SPEND_TTL_MS) {
-    return { today: cached.today, total: cached.total };
-  }
-  const today = qToday.get(keyId, utcDate(now))?.t ?? 0;
-  const total = qTotal.get(keyId)?.t ?? 0;
-  spendCache.set(keyId, { today, total, fetchedAt: now });
-  return { today, total };
 }
 
 // ===== Dashboard queries =====

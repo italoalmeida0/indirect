@@ -1123,7 +1123,7 @@ function demoteUnsignedToolCalls(body: Record<string, unknown>): void {
 export interface IRResponse {
   id: string;
   model: string;
-  /** Visible text (reasoning excluded — it never becomes billable output). */
+  /** Visible text. Reasoning has its own token metric and remains billable. */
   text: string;
   toolUses: Array<{ id: string; name: string; input: unknown }>;
   /** Opaque thinking for same-family round-trips. */
@@ -1131,6 +1131,8 @@ export interface IRResponse {
   finish: "stop" | "length" | "tool_calls" | "content_filter";
   inTok: number;
   cacheTok: number;
+  cacheCreation?: number;
+  billableOutTok?: number;
   outTok: number;
   /** Reasoning tokens (visible-text-excluded). Emitted as real
    *  `reasoning_tokens` in responses usage — strict clients (codex) 500
@@ -1264,6 +1266,7 @@ function decodeChatResponseToIR(text: string, fallbackModel: string): IRResponse
     inTok: Math.max(0, prompt - cached),
     cacheTok: Math.max(0, cached),
     outTok: finalOut,
+    billableOutTok: completion > 0 ? completion : finalOut,
     reasonTok,
     usageEstimated: estimated,
   };
@@ -1326,7 +1329,9 @@ function decodeAnthropicResponseToIR(text: string, fallbackModel: string): IRRes
     finish: stop === "max_tokens" ? "length" : toolUses.length ? "tool_calls" : stop === "refusal" ? "content_filter" : "stop",
     inTok: input,
     cacheTok: cacheRead + cacheCreation,
+    cacheCreation,
     outTok: finalOut,
+    billableOutTok: outReported > 0 ? outReported : finalOut,
     reasonTok: Math.max(0, Number(asRecord(u.output_tokens_details).thinking_tokens ?? 0) || 0),
     usageEstimated: estimated,
   };
@@ -1397,6 +1402,7 @@ function decodeResponsesResponseToIR(text: string, fallbackModel: string): IRRes
     inTok: Math.max(0, input - cached),
     cacheTok: Math.max(0, cached),
     outTok: finalOut,
+    billableOutTok: output > 0 ? output : finalOut,
     reasonTok,
     usageEstimated: estimated,
   };
@@ -1599,10 +1605,10 @@ export function reEnvelopeErrorIR(clientProto: Proto, via: Proto, _status: numbe
 
 export interface IRStreamDelta {
   text?: string;
-  /** True for thinking text (reasoning_content): shown, not billed. */
+  /** True for thinking text (reasoning_content), shown separately from visible output. */
   thinking?: boolean;
   toolUse?: { id: string; name: string; inputDelta: string; thoughtSignature?: string; index?: number };
-  usage?: { inTok: number; cacheTok: number; outTok: number; cacheCreation?: number; reasonTok?: number };
+  usage?: { inTok: number; cacheTok: number; outTok: number; cacheCreation?: number; reasonTok?: number; billableOutTok?: number };
   finish?: "stop" | "length" | "tool_calls";
   error?: { type: string; message: string };
 }
@@ -1666,7 +1672,7 @@ function chatStreamParser(data: string): IRStreamDelta[] {
     // structured `reasoning_details[]` (OpenRouter). They are alternate
     // encodings of the same text — take the first that yields any, so
     // stream clients see progress and nothing is silently dropped.
-    // Usage accounting still excludes it (reasoning_tokens split at
+    // The visible-output metric keeps it separate (reasoning_tokens split at
     // the terminal).
     let thinkingText = "";
     if (typeof delta.reasoning_content === "string" && delta.reasoning_content) thinkingText = delta.reasoning_content;
@@ -1722,6 +1728,7 @@ function chatStreamParser(data: string): IRStreamDelta[] {
         inTok: Math.max(0, prompt - cached),
         cacheTok: Math.max(0, cached),
         outTok: Math.max(0, completion - reasonTok),
+        billableOutTok: completion,
         reasonTok,
       };
       // Lying-zero terminal chunk (all counters 0 while content flowed):
@@ -1776,7 +1783,7 @@ function anthropicStreamParser(event: string, data: string): IRStreamDelta[] {
         const reasonTok = Number(j.usage.output_tokens_details?.thinking_tokens ?? j.usage.output_tokens_details?.reasoning_tokens ?? j.usage.reasoning_tokens ?? 0) || 0;
         if (outTok > 0 || cache > 0 || inTok > 0) {
           out.push({
-            usage: { inTok, cacheTok: cache, outTok: Math.max(0, outTok - reasonTok), reasonTok },
+            usage: { inTok, cacheTok: cache, outTok: Math.max(0, outTok - reasonTok), reasonTok, billableOutTok: outTok },
           });
         }
       }
@@ -1853,7 +1860,7 @@ function responsesStreamParser(): (event: string, data: string) => IRStreamDelta
       const cached = Number(u.input_tokens_details?.cached_tokens ?? 0) || 0;
       const output = Number(u.output_tokens ?? 0) || 0;
       const reasonTok = Math.max(0, Number(u.output_tokens_details?.reasoning_tokens ?? 0) || 0);
-      return [{ finish, usage: { inTok: Math.max(0, input - cached), cacheTok: cached, outTok: Math.max(0, output - reasonTok), reasonTok } }];
+      return [{ finish, usage: { inTok: Math.max(0, input - cached), cacheTok: cached, outTok: Math.max(0, output - reasonTok), reasonTok, billableOutTok: output } }];
     }
     return [];
   };
@@ -2148,10 +2155,12 @@ export class IRStreamTranslator {
   private parser: (event: string, data: string) => IRStreamDelta[];
   inTok = 0;
   cacheTok = 0;
+  private cacheCreation = 0;
+  private billedOutput = 0;
   outTok = 0;
   reasonTok = 0;
   /** Streamed thinking chars (reasoning_content deltas): visible to the
-   *  client for progress, but NEVER billable output (same rule as the
+   *  client for progress, but never part of the visible-output metric (same rule as the
    *  buffered reasoning_tokens split). */
   private thinkingChars = 0;
   private sawUsage = false;
@@ -2379,7 +2388,9 @@ export class IRStreamTranslator {
         if (d.text || d.toolUse?.inputDelta) this.sawUsage = true;
         if (d.usage) {
           this.sawUsage = true;
-          adoptInputPair(this, d.usage);
+          if (d.usage.billableOutTok !== undefined) this.billedOutput = Math.max(this.billedOutput, d.usage.billableOutTok);
+          const adopted = adoptInputPair(this, d.usage);
+          if (d.usage.cacheCreation !== undefined && (adopted || d.usage.inTok + d.usage.cacheTok === this.inTok + this.cacheTok)) this.cacheCreation = d.usage.cacheCreation;
           adoptOutputPair(this, d.usage);
           const w = this.writer as unknown as { setInputUsage?: (a: number, b: number) => void };
           if (d.usage.inTok > 0 || d.usage.cacheTok > 0) w.setInputUsage?.(d.usage.inTok, d.usage.cacheTok);
@@ -2433,7 +2444,7 @@ export class IRStreamTranslator {
     if (m && !this.model) this.model = m;
   }
 
-  result(): { inTok: number; cacheTok: number; outTok: number; reasonTok?: number; model: string; estimated: boolean } {
+  result(): { inTok: number; cacheTok: number; cacheCreation?: number; billableOutTok?: number; outTok: number; reasonTok?: number; model: string; estimated: boolean } {
     // sawUsage now ALSO means "bytes crossed the wire" (text/tool deltas
     // mark it — see feed()). The second branch below therefore covers the
     // lying-zero stream: upstream usage said 0/0/0 but content flowed.
@@ -2450,12 +2461,12 @@ export class IRStreamTranslator {
         outTok = this.estimateOutTok();
         estimated = true;
       }
-      return { inTok: this.inTok, cacheTok: this.cacheTok, outTok, reasonTok: this.reasonTok, model: this.model, estimated };
+      return { inTok: this.inTok, cacheTok: this.cacheTok, cacheCreation: this.cacheCreation, billableOutTok: this.billedOutput || outTok + this.reasonTok, outTok, reasonTok: this.reasonTok, model: this.model, estimated };
     }
     // Anthropic reports input usage at message_start; tool-only streams may
     // carry no text — still bill the reported counters, not an estimate.
     if (this.sawUsage) {
-      return { inTok: this.inTok, cacheTok: this.cacheTok, outTok: this.outTok, reasonTok: this.reasonTok, model: this.model, estimated: false };
+      return { inTok: this.inTok, cacheTok: this.cacheTok, cacheCreation: this.cacheCreation, billableOutTok: this.billedOutput || this.outTok + this.reasonTok, outTok: this.outTok, reasonTok: this.reasonTok, model: this.model, estimated: false };
     }
     return {
       inTok: 0,

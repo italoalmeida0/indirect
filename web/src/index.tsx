@@ -41,6 +41,8 @@ import UsagePage from "./pages/Usage";
 import SettingsPage from "./pages/Settings";
 import AdminProvidersPage from "./pages/admin/Providers";
 import AdminModelsPage from "./pages/admin/Models";
+import { PlanLimits } from "./billing";
+import AdminPlansPage from "./pages/admin/Plans";
 import AdminUsersPage from "./pages/admin/Users";
 import AdminKeysPage from "./pages/admin/Keys";
 import AdminStatsPage from "./pages/admin/Stats";
@@ -76,6 +78,7 @@ const USER_NAV: NavItem[] = [
   { path: "/code", label: "Indirect Code", icon: Icons.idc },
   { path: "/keys", label: "API Keys", icon: Icons.key },
   { path: "/usage", label: "Usage", icon: Icons.chart },
+  { path: "/limits", label: "Plan & limits", icon: "lucide:wallet" },
   { path: "/settings", label: "Settings", icon: Icons.cog },
 ];
 
@@ -84,6 +87,7 @@ const ADMIN_NAV: NavItem[] = [
   { path: "/admin/providers", label: "Providers", icon: Icons.server },
   { path: "/admin/models", label: "Models", icon: Icons.layers },
   { path: "/admin/users", label: "Users", icon: Icons.users },
+  { path: "/admin/plans", label: "Plans", icon: "lucide:wallet" },
   { path: "/admin/keys", label: "All Keys", icon: Icons.key },
   { path: "/admin/audit", label: "Audit Log", icon: Icons.book },
 ];
@@ -430,12 +434,14 @@ function Root() {
                   if (p === "/") return <DashboardPage />;
                   if (p === "/keys") return <KeysPage />;
                   if (p === "/usage") return <UsagePage />;
+                  if (p === "/limits") return <PlanLimits />;
                   if (p === "/settings") return <SettingsPage />;
                   if (p.startsWith("/admin") && isAdmin) {
                     if (p === "/admin" || p === "/admin/stats")
                       return <AdminStatsPage />;
                     if (p === "/admin/providers") return <AdminProvidersPage />;
                     if (p === "/admin/models") return <AdminModelsPage />;
+                    if (p === "/admin/plans") return <AdminPlansPage />;
                     if (p === "/admin/users") return <AdminUsersPage />;
                     if (p === "/admin/keys") return <AdminKeysPage />;
                     if (p === "/admin/audit") return <AdminAuditPage />;

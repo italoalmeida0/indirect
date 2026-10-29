@@ -677,6 +677,93 @@ const MIGRATIONS: Migration[] = [
       DO UPDATE SET success_reqs = excluded.success_reqs, error_reqs = excluded.error_reqs;
     `,
   },
+
+  {
+    name: "026_usd_plans_and_atomic_budgets",
+    up: () => {
+      db.exec(`
+        ALTER TABLE api_keys ADD COLUMN daily_usd_nanos INTEGER;
+        ALTER TABLE api_keys ADD COLUMN total_usd_nanos INTEGER;
+        UPDATE api_keys SET daily_limit = NULL, total_limit = NULL,
+          status = CASE WHEN status = 'exhausted' THEN 'active' ELSE status END;
+        CREATE TABLE billing_plans (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, monthly_nanos INTEGER,
+          weekly_enabled INTEGER NOT NULL DEFAULT 0 CHECK(weekly_enabled IN (0,1)),
+          session_enabled INTEGER NOT NULL DEFAULT 0 CHECK(session_enabled IN (0,1)),
+          created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+          CHECK(monthly_nanos IS NULL OR monthly_nanos > 0),
+          CHECK(monthly_nanos IS NOT NULL OR (weekly_enabled = 0 AND session_enabled = 0))
+        );
+        CREATE TABLE user_billing (
+          user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+          plan_id TEXT REFERENCES billing_plans(id) ON DELETE RESTRICT,
+          assignment_version INTEGER NOT NULL DEFAULT 0, session_start INTEGER
+        );
+        CREATE INDEX idx_billing_plan_users ON user_billing(plan_id);
+        CREATE TABLE billing_periods (
+          scope TEXT NOT NULL, owner_id TEXT NOT NULL, kind TEXT NOT NULL,
+          starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL,
+          spent_nanos INTEGER NOT NULL DEFAULT 0 CHECK(typeof(spent_nanos) = 'integer' AND spent_nanos >= 0),
+          reserved_nanos INTEGER NOT NULL DEFAULT 0 CHECK(typeof(reserved_nanos) = 'integer' AND reserved_nanos >= 0),
+          forgiven_nanos INTEGER NOT NULL DEFAULT 0 CHECK(typeof(forgiven_nanos) = 'integer' AND forgiven_nanos >= 0 AND forgiven_nanos <= spent_nanos),
+          PRIMARY KEY(scope, owner_id, kind, starts_at)
+        ) WITHOUT ROWID;
+        CREATE INDEX idx_billing_period_expiry ON billing_periods(ends_at);
+        CREATE TABLE billing_instances (id TEXT PRIMARY KEY, heartbeat INTEGER NOT NULL);
+        CREATE TABLE billing_reservations (
+          id TEXT PRIMARY KEY, instance_id TEXT NOT NULL, key_id TEXT NOT NULL, user_id TEXT NOT NULL,
+          created_at INTEGER NOT NULL, settled_at INTEGER, amount_nanos INTEGER NOT NULL,
+          periods TEXT NOT NULL, pricing TEXT NOT NULL,
+          cost_in_nanos INTEGER, cost_cache_nanos INTEGER, cost_out_nanos INTEGER,
+          state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','settled','recovered'))
+        );
+        CREATE INDEX idx_billing_pending ON billing_reservations(instance_id, created_at) WHERE state = 'pending';
+        CREATE INDEX idx_billing_settled ON billing_reservations(settled_at);
+        CREATE TABLE billing_reset_grants (
+          id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          assignment_version INTEGER NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('weekly','session','both')),
+          remaining INTEGER NOT NULL CHECK(remaining >= 0), expires_at INTEGER,
+          created_at INTEGER NOT NULL, actor_id TEXT, note TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX idx_billing_grants_user ON billing_reset_grants(user_id, created_at);
+        CREATE TABLE billing_reset_uses (
+          id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          grant_id TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+      `);
+      db.exec("CREATE INDEX idx_models_upstream_billing ON models(upstream_model, id)");
+      // Freeze historical prices once. Unpriced history remains zero; future
+      // finite budgets reject unpriced models instead of treating them as free.
+      for (const table of ['usage_events', 'usage_model_daily', 'usage_model_provider_daily', 'usage_model_provider_monthly']) {
+        for (const part of ['in', 'cache', 'out']) db.exec(`ALTER TABLE ${table} ADD COLUMN cost_${part}_nanos INTEGER`);
+        const modelPrice = (column: string, fallback = '0') => `COALESCE(
+          (SELECT ${column} FROM models WHERE id = ${table}.model),
+          ${table === 'usage_model_daily' ? '' : `(SELECT ${column} FROM models WHERE id = ${table}.upstream_model),
+          (SELECT ${column} FROM models WHERE upstream_model = ${table}.upstream_model ORDER BY id LIMIT 1),`}
+          ${fallback})`;
+        const input = modelPrice('pricing_input');
+        db.exec(`UPDATE ${table} SET
+          cost_in_nanos = CAST(ROUND(in_tok * ${input} * 1000000000) AS INTEGER),
+          cost_cache_nanos = CAST(ROUND(cache_tok * ${modelPrice('pricing_input_cache', input)} * 1000000000) AS INTEGER),
+          cost_out_nanos = CAST(ROUND(out_tok * ${modelPrice('pricing_output')} * 1000000000) AS INTEGER)`);
+      }
+      const cost = '(cost_in_nanos + cost_cache_nanos + cost_out_nanos)';
+      db.exec(`
+        INSERT INTO billing_periods(scope, owner_id, kind, starts_at, ends_at, spent_nanos)
+          SELECT 'key', key_id, 'lifetime', 0, 8640000000000000, SUM(${cost}) FROM usage_model_provider_daily GROUP BY key_id;
+        INSERT INTO billing_periods(scope, owner_id, kind, starts_at, ends_at, spent_nanos)
+          SELECT 'key', key_id, 'daily', unixepoch(date)*1000, (unixepoch(date)+86400)*1000, SUM(${cost})
+          FROM usage_model_provider_daily WHERE date = date('now') GROUP BY key_id, date;
+        INSERT INTO billing_periods(scope, owner_id, kind, starts_at, ends_at, spent_nanos)
+          SELECT 'user', user_id, 'monthly', unixepoch(month||'-01')*1000, unixepoch(month||'-01', '+1 month')*1000, SUM(${cost})
+          FROM usage_model_provider_monthly WHERE month = strftime('%Y-%m','now') GROUP BY user_id, month;
+        INSERT INTO billing_periods(scope, owner_id, kind, starts_at, ends_at, spent_nanos)
+          SELECT 'user', user_id, 'weekly', unixepoch(date('now','weekday 0','-6 days'))*1000,
+            unixepoch(date('now','weekday 0','+1 day'))*1000, SUM(${cost})
+          FROM usage_model_provider_daily WHERE date >= date('now','weekday 0','-6 days') GROUP BY user_id;
+      `);
+    },
+  },
 ];
 
 export function migrate(): void {
@@ -815,6 +902,8 @@ export interface ApiKeyRow {
   expires_at: number | null;
   daily_limit: number | null;
   total_limit: number | null;
+  daily_usd_nanos?: number | null;
+  total_usd_nanos?: number | null;
   rpm: number | null;
   status: "active" | "revoked" | "exhausted";
   last_used_at: number | null;

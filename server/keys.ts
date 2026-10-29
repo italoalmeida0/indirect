@@ -1,7 +1,7 @@
 import { GATEWAY_SECRET } from "./config";
 import { db, type ApiKeyRow } from "./db";
 import { encryptSecret, randomToken, sha256Hex } from "./crypto";
-import { getKeySpend } from "./usage";
+import { keySpend } from "./billing";
 import { dropKeyLimiter } from "./ratelimit";
 import { gridPage, type ColSpec } from "./gridql";
 
@@ -21,8 +21,8 @@ export function generateKey(): { token: string; prefix: string; hash: string } {
 export interface CreateKeyOptions {
   name: string;
   expiresAt?: number | null;
-  dailyLimit?: number | null;
-  totalLimit?: number | null;
+  dailyLimitUsd?: number | null;
+  totalLimitUsd?: number | null;
   rpm?: number | null;
 }
 
@@ -31,7 +31,7 @@ export async function createKey(userId: string, opts: CreateKeyOptions): Promise
   const id = randomToken(12);
   const tokenEnc = await encryptSecret(token, GATEWAY_SECRET);
   db.prepare(
-    `INSERT INTO api_keys (id, user_id, name, prefix, hash, created_at, expires_at, daily_limit, total_limit, rpm, status, token_enc)
+    `INSERT INTO api_keys (id, user_id, name, prefix, hash, created_at, expires_at, daily_usd_nanos, total_usd_nanos, rpm, status, token_enc)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
   ).run(
     id,
@@ -41,8 +41,8 @@ export async function createKey(userId: string, opts: CreateKeyOptions): Promise
     hash,
     Date.now(),
     opts.expiresAt ?? null,
-    opts.dailyLimit ?? null,
-    opts.totalLimit ?? null,
+    opts.dailyLimitUsd == null ? null : Math.round(opts.dailyLimitUsd * 1e9),
+    opts.totalLimitUsd == null ? null : Math.round(opts.totalLimitUsd * 1e9),
     opts.rpm ?? null,
     tokenEnc,
   );
@@ -57,7 +57,7 @@ export function revokeKey(keyId: string): void {
 /**
  * Effective availability of a key, evaluated at request time. A key whose
  * daily budget is spent recovers automatically at 00:00 UTC without any
- * state flip; total budget exhaustion flips `status` permanently.
+ * state flip; lifetime caps recover when their allowance is raised.
  */
 export type KeyCheck =
   | { ok: true }
@@ -69,21 +69,20 @@ export function checkKeyAvailability(
   spend?: { today: number; total: number },
 ): KeyCheck {
   if (key.status === "revoked") return { ok: false, reason: "revoked" };
-  if (key.status === "exhausted") return { ok: false, reason: "exhausted" };
   if (key.expires_at !== null && key.expires_at <= now) return { ok: false, reason: "expired" };
 
-  const s = spend ?? getKeySpend(key.id);
-  if (key.daily_limit !== null && s.today >= key.daily_limit) {
+  const s = spend ?? keySpend(key.id);
+  if (key.daily_usd_nanos != null && s.today >= key.daily_usd_nanos / 1e9) {
     return { ok: false, reason: "daily_limit" };
   }
-  if (key.total_limit !== null && s.total >= key.total_limit) {
+  if (key.total_usd_nanos != null && s.total >= key.total_usd_nanos / 1e9) {
     return { ok: false, reason: "total_limit" };
   }
   return { ok: true };
 }
 
 export function publicKey(row: ApiKeyRow, userEmail?: string, spend?: { today: number; total: number }) {
-  const s = spend ?? getKeySpend(row.id);
+  const s = spend ?? keySpend(row.id);
   const availability = checkKeyAvailability(row, Date.now(), s);
   return {
     id: row.id,
@@ -93,36 +92,29 @@ export function publicKey(row: ApiKeyRow, userEmail?: string, spend?: { today: n
     prefix: row.prefix,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
-    dailyLimit: row.daily_limit,
-    totalLimit: row.total_limit,
+    dailyLimitUsd: row.daily_usd_nanos == null ? null : row.daily_usd_nanos / 1e9,
+    totalLimitUsd: row.total_usd_nanos == null ? null : row.total_usd_nanos / 1e9,
     rpm: row.rpm,
     status: availability.ok ? "active" : availability.reason,
     lastUsedAt: row.last_used_at,
-    // Budgets cap output tokens, so these counters are output-only too.
-    outputToday: s.today,
-    outputTotal: s.total,
+    spendTodayUsd: s.today,
+    spendTotalUsd: s.total,
     revealable: !!row.token_enc,
   };
 }
 
 export function keyQuerySource(userId: string | null) {
-  const sourceSql = userId
-    ? `SELECT k.*, u.email AS userEmail,
-              COALESCE((SELECT out_tok FROM usage_daily WHERE key_id = k.id AND date = date('now')), 0) AS _out_today,
-              COALESCE((SELECT SUM(out_tok) FROM usage_daily WHERE key_id = k.id), 0) AS _out_total
-       FROM api_keys k LEFT JOIN users u ON u.id = k.user_id WHERE k.user_id = ?`
-    : `SELECT k.*, u.email AS userEmail,
-              COALESCE((SELECT out_tok FROM usage_daily WHERE key_id = k.id AND date = date('now')), 0) AS _out_today,
-              COALESCE((SELECT SUM(out_tok) FROM usage_daily WHERE key_id = k.id), 0) AS _out_total
-       FROM api_keys k LEFT JOIN users u ON u.id = k.user_id`;
+  const sourceSql = `SELECT k.*, u.email AS userEmail,
+    COALESCE((SELECT spent_nanos / 1000000000.0 FROM billing_periods WHERE scope = 'key' AND owner_id = k.id AND kind = 'daily' AND starts_at = CAST(strftime('%s', 'now', 'start of day') AS INTEGER)*1000), 0) AS _spend_today,
+    COALESCE((SELECT spent_nanos / 1000000000.0 FROM billing_periods WHERE scope = 'key' AND owner_id = k.id AND kind = 'lifetime' AND starts_at = 0), 0) AS _spend_total
+    FROM api_keys k LEFT JOIN users u ON u.id = k.user_id ${userId ? "WHERE k.user_id = ?" : ""}`;
   const sql = `
     SELECT q.*,
            CASE
              WHEN q.status = 'revoked' THEN 'revoked'
-             WHEN q.status = 'exhausted' THEN 'exhausted'
              WHEN q.expires_at IS NOT NULL AND q.expires_at <= CAST(strftime('%s', 'now') AS INTEGER) * 1000 THEN 'expired'
-             WHEN q.daily_limit IS NOT NULL AND q._out_today >= q.daily_limit THEN 'daily_limit'
-             WHEN q.total_limit IS NOT NULL AND q._out_total >= q.total_limit THEN 'total_limit'
+             WHEN q.daily_usd_nanos IS NOT NULL AND q._spend_today >= q.daily_usd_nanos / 1000000000.0 THEN 'daily_limit'
+             WHEN q.total_usd_nanos IS NOT NULL AND q._spend_total >= q.total_usd_nanos / 1000000000.0 THEN 'total_limit'
              ELSE 'active'
            END AS effective_status
     FROM (${sourceSql}) q`;
@@ -131,7 +123,7 @@ export function keyQuerySource(userId: string | null) {
 
 /**
  * Server-driven key listing (AG Grid blocks). userId narrows to one owner
- * (null = admin/global). The output-token counters become SQL columns via
+ * (null = admin/global). The USD counters become SQL columns via
  * correlated subqueries so they're sortable/filterable alongside the rest.
  */
 export function queryKeys(
@@ -146,8 +138,8 @@ export function queryKeys(
     userEmail: { col: "userEmail" },
     status: { col: "effective_status" },
     prefix: { col: "prefix" },
-    outputToday: { col: "_out_today", kind: "number" },
-    outputTotal: { col: "_out_total", kind: "number" },
+    spendTodayUsd: { col: "_spend_today", kind: "number" },
+    spendTotalUsd: { col: "_spend_total", kind: "number" },
     expiresAt: { col: "expires_at", kind: "date" },
     lastUsedAt: { col: "last_used_at", kind: "date" },
     rpm: { col: "rpm", kind: "number" },
@@ -161,8 +153,8 @@ export function queryKeys(
     defaultOrder: "created_at DESC",
     tieBreak: "id DESC",
   });
-  const keys = (rows as Array<ApiKeyRow & { userEmail?: string; _out_today: number; _out_total: number; effective_status: ReturnType<typeof publicKey>["status"] }>).map(
-    (r) => ({ ...publicKey(r, r.userEmail ?? undefined, { today: r._out_today, total: r._out_total }), status: r.effective_status }),
+  const keys = (rows as Array<ApiKeyRow & { userEmail?: string; _spend_today: number; _spend_total: number; effective_status: ReturnType<typeof publicKey>["status"] }>).map(
+    (r) => ({ ...publicKey(r, r.userEmail ?? undefined, { today: r._spend_today, total: r._spend_total }), status: r.effective_status }),
   );
   return { keys, total };
 }

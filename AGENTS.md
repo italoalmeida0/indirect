@@ -165,7 +165,12 @@ frontend + daemon. Run checks from the appropriate project root.
   protocol or a non-JSON body (HTML interstitial, plain-text banner) is
   re-enveloped, since the response content-type is always clamped to JSON.
   Audit every admin/user mutation. Budgets are
-  SQLite-backed and cap OUTPUT tokens only; report input/cache/output separately.
+  SQLite-backed USD allowances: account plans have monthly caps and optional
+  proportional weekly/5-hour caps; API keys have independent daily/lifetime
+  USD caps. Admission reserves balances atomically; settlement freezes prices.
+  Resets forgive only settled weekly/session usage, preserve monthly/key spend
+  and renewal times, and consume an audited, assignment-bound grant. Keep
+  input/cache/output metrics separate. See `docs/gateway-billing.md`.
   Gateway key delete is soft by default; usage ledger survives deletion.
 - Failover (`server/failover.ts`) only before first byte reaches client. Never
   auto-disable/skip a provider key: only explicit admin `disabled` skips.
