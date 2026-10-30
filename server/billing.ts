@@ -1,7 +1,8 @@
 import { audit, db, type ApiKeyRow, type ModelRow } from "./db";
 import { randomToken } from "./crypto";
 import { ApiError } from "./http";
-import { guardedMaintenance } from "./maintenance";
+import { scheduleMaintenance } from "./maintenance";
+import { isRetryableSqliteError, retrySqlite } from "./sqlite-retry";
 
 const NANO = 1_000_000_000;
 const DAY = 86_400_000;
@@ -280,7 +281,18 @@ export function recoverBudgets(now = Date.now()): void {
   }).immediate();
 }
 export function startBilling(): void {
-  heartbeat(); recoverBudgets();
-  setInterval(guardedMaintenance("billing heartbeat", heartbeat), 15_000).unref();
-  setInterval(guardedMaintenance("billing recovery", recoverBudgets), 60_000).unref();
+  // Boot must survive a database that another process is currently writing.
+  // A synchronous throw here happens BEFORE Bun.serve(), so it terminates the
+  // process with "SQLiteError: database is locked" instead of degrading. The
+  // startup pass retries transient contention with a bounded policy and, if it
+  // still cannot run, defers to the scheduled jobs (the first successful
+  // heartbeat establishes the lease anyway).
+  try {
+    retrySqlite(() => { heartbeat(); recoverBudgets(); }, { name: "billing startup" });
+  } catch (error) {
+    if (!isRetryableSqliteError(error)) throw error;
+    console.error("[BILLING] startup maintenance deferred:", error instanceof Error ? error.message : "unknown error");
+  }
+  scheduleMaintenance("billing heartbeat", () => { heartbeat(); }, 15_000);
+  scheduleMaintenance("billing recovery", () => { recoverBudgets(); }, 60_000);
 }

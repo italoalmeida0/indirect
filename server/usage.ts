@@ -1,6 +1,8 @@
 import { db } from "./db";
 import { LIMITS } from "./config";
 import { guardedMaintenance } from "./maintenance";
+import { prepareUsageRollupUpsert, USAGE_HOUR, USAGE_MINUTE } from "./usage-rollup";
+import { withSqliteRetryAsync } from "./sqlite-retry";
 import type { Charge } from "./billing";
 import { usageScopeWhere } from "./usage-filters";
 import { cachedUsageQuery, invalidateUsageQueries } from "./usage-cache";
@@ -51,28 +53,50 @@ export interface UsageEvent {
 }
 
 const buffer: UsageEvent[] = [];
-let flushScheduled = false;
+let bufferStart = 0;
+let flushTimer: ReturnType<typeof setTimeout> | undefined;
+let flushDueAt = 0;
 let retryPending = false;
+const queuedUsage = () => buffer.length - bufferStart;
+const flushBatchSize = 8;
 
 // Leave room for already admitted streams to finish while storage recovers.
 const maxBufferedUsage = 100_000;
-export function canRecordUsage(): boolean { return buffer.length < Math.max(0, maxBufferedUsage - LIMITS.globalConcurrency); }
+export function canRecordUsage(): boolean { return queuedUsage() < Math.max(0, maxBufferedUsage - LIMITS.globalConcurrency); }
 
-const flushInBackground = guardedMaintenance("usage flush", () => {
-  try {
-    flushUsage();
-    retryPending = false;
-  } catch (error) {
+const flushInBackground = guardedMaintenance("usage flush", async () => {
+  if (!queuedUsage()) return;
+  // The ASYNC retry is mandatory here: the synchronous policy sleeps by
+  // blocking the thread, so a held write lock would freeze every request
+  // (including /api/health) for the whole backoff window. Awaiting between
+  // attempts keeps the gateway serving while the buffer waits for the writer.
+  const result = await withSqliteRetryAsync(() => flushUsageBatch(flushBatchSize), {
+    name: "usage flush",
+    // The flush is the restaurant's till: retry longer than a maintenance
+    // sweep before declaring failure, but still bounded.
+    attempts: 6,
+    deadlineMs: 5_000,
+  });
+  retryPending = false;
+  // Keep the buffer moving without starving the event loop: yield to the
+  // timer queue between batches instead of spinning synchronously.
+  if (queuedUsage()) scheduleFlush(result.retried ? 50 : 0);
+}, {
+  onResult: ({ ok }) => {
+    if (ok) return;
+    // The batch stays buffered; the next tick retries the same events.
     retryPending = true;
     scheduleFlush();
-    throw error;
-  }
+  },
 });
 
-function scheduleFlush(): void {
-  if (flushScheduled) return;
-  flushScheduled = true;
-  setTimeout(() => { flushScheduled = false; flushInBackground(); }, 1_000).unref();
+function scheduleFlush(delay = 1_000): void {
+  const due = Date.now() + delay;
+  if (flushTimer && due >= flushDueAt) return;
+  if (flushTimer) clearTimeout(flushTimer);
+  flushDueAt = due;
+  flushTimer = setTimeout(() => { flushTimer = undefined; flushInBackground(); }, delay);
+  flushTimer.unref();
 }
 
 export function utcDate(ts: number): string {
@@ -81,8 +105,7 @@ export function utcDate(ts: number): string {
 
 export function recordUsage(ev: UsageEvent): void {
   buffer.push(ev);
-  if (buffer.length >= 100 && !retryPending) flushInBackground();
-  if (buffer.length) scheduleFlush();
+  scheduleFlush(queuedUsage() >= 100 && !retryPending ? 0 : 1_000);
 }
 
 const insertEvent = db.prepare(
@@ -133,12 +156,18 @@ const upsertModelProviderMonthly = db.prepare(
                  success_reqs = success_reqs + excluded.success_reqs, error_reqs = error_reqs + excluded.error_reqs,
                  cost_in_nanos = COALESCE(cost_in_nanos, 0) + excluded.cost_in_nanos, cost_cache_nanos = COALESCE(cost_cache_nanos, 0) + excluded.cost_cache_nanos, cost_out_nanos = COALESCE(cost_out_nanos, 0) + excluded.cost_out_nanos`,
 );
+const upsertHour = prepareUsageRollupUpsert(db, "hour");
+const upsertMinute = prepareUsageRollupUpsert(db, "minute");
 
 export function flushUsage(): void {
-  if (buffer.length === 0) return;
+  while (queuedUsage()) flushUsageBatch(flushBatchSize);
+}
+
+function flushUsageBatch(limit: number): void {
+  if (!queuedUsage()) return;
   // Keep the batch until the transaction commits; a busy database must not
   // lose settled analytics. Calls are synchronous, so no writers interleave.
-  const batch = buffer.slice();
+  const batch = buffer.slice(bufferStart, bufferStart + limit);
   const changedWindows: Array<{ userId: string; ts: number }> = [];
   db.transaction(() => {
     for (const ev of batch) {
@@ -185,9 +214,15 @@ export function flushUsage(): void {
       );
       upsertModelProviderMonthly.run(ev.keyId, ev.userId, date.slice(0, 7), ev.proto, ev.providerId ?? "", ev.providerKeyId ?? "", model, ev.upstreamModel ?? "", ev.inTok, ev.cacheTok, ev.outTok,
         ev.status >= 200 && ev.status < 300 ? 1 : 0, ev.status < 200 || ev.status >= 300 ? 1 : 0, ...cost);
+      const rollupValues = [ev.keyId, ev.userId, ev.proto, ev.providerId ?? "", ev.providerKeyId ?? "", model, ev.upstreamModel ?? "", ev.inTok, ev.cacheTok, ev.outTok,
+        ev.status >= 200 && ev.status < 300 ? 1 : 0, ev.status < 200 || ev.status >= 300 ? 1 : 0, ...cost];
+      upsertHour.run(Math.floor(ts / USAGE_HOUR) * USAGE_HOUR, ...rollupValues);
+      upsertMinute.run(Math.floor(ts / USAGE_MINUTE) * USAGE_MINUTE, ...rollupValues);
     }
   })();
-  buffer.splice(0, batch.length);
+  bufferStart += batch.length;
+  if (bufferStart === buffer.length) { buffer.length = 0; bufferStart = 0; }
+  else if (bufferStart >= 4096 && bufferStart * 2 >= buffer.length) { buffer.splice(0, bufferStart); bufferStart = 0; }
   invalidateUsageQueries(changedWindows);
 }
 

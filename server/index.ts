@@ -1,5 +1,5 @@
 import { PORT, IS_PROD, ADMIN_EMAIL, ADMIN_PASSWORD, LIMITS, DATA_DIR } from "./config";
-import { configureLimits, limits } from "./ratelimit";
+import { admissionSnapshot, configureLimits, limits } from "./ratelimit";
 import { db, audit, isSqliteBusy } from "./db";
 import { hashPassword, randomToken } from "./crypto";
 import { ApiError, baseHeaders, clientIp, err, json, rateLimitError } from "./http";
@@ -20,7 +20,10 @@ import { handleProxy, proxyRateLimit, proxyStorageUnavailable, proxyRequestError
 import { serveStatic } from "./static";
 import { flushUsage } from "./usage";
 import { initTokenEstimator } from "./tokens";
-import { guardedMaintenance } from "./maintenance";
+import { scheduleMaintenance } from "./maintenance";
+import { pruneUsageRollups } from "./usage-rollup";
+import { batchDelete } from "./batch-delete";
+import { backupIntervalMs, backupRoot, runBackupCycle } from "./backup";
 
 // btdby4-wasm (token estimator) must be warm before serving: every counter
 // below is synchronous after init. Top-level await is fine — Bun.serve
@@ -66,13 +69,44 @@ startBilling();
 
 // ===== Housekeeping sweeps =====
 
-const sweep = setInterval(guardedMaintenance("session cleanup", () => {
+/**
+ * Session and password-token cleanup. Rows are removed in bounded key-order
+ * batches: a large backlog (a tenant that has been running for a year) must
+ * not turn one sweep into a whole-table DELETE that holds the writer while the
+ * proxy needs it. Leftovers are picked up by the next sweep.
+ */
+function cleanupExpiredSessions(): void {
   const now = Date.now();
-  db.prepare("DELETE FROM sessions WHERE abs_expires_at < ?").run(now);
+  const budget = { batchSize: LIMITS.maintenanceBatchSize, maxRows: LIMITS.maintenanceMaxBatchRows };
+  batchDelete(db, { table: "sessions", key: "jti", where: "abs_expires_at < ?", params: [now], ...budget });
   db.prepare("UPDATE sessions SET revoked = 1 WHERE expires_at < ? AND revoked = 0").run(now);
-  db.prepare("DELETE FROM password_tokens WHERE expires_at < ? OR used_at IS NOT NULL AND used_at < ?").run(now, now - 3600_000);
-}), 15 * 60_000);
-sweep.unref();
+  batchDelete(db, {
+    table: "password_tokens",
+    key: "token_hash",
+    where: "expires_at < ? OR used_at IS NOT NULL AND used_at < ?",
+    params: [now, now - 3600_000],
+    ...budget,
+  });
+}
+
+scheduleMaintenance("session cleanup", cleanupExpiredSessions, 15 * 60_000);
+/** Rollup pruning already deletes in batches inside pruneUsageRollups; the
+ *  retry wrapper turns a transient lock into a retry instead of an exit. */
+scheduleMaintenance("analytics rollup cleanup", () => {
+  pruneUsageRollups(db, Date.now(), LIMITS.analyticsHourlyDays, LIMITS.analyticsMinuteDays, LIMITS.maintenanceBatchSize);
+}, 60_000);
+
+// ===== Supported backup schedule =====
+
+const backupEveryMs = backupIntervalMs();
+if (backupEveryMs > 0) {
+  scheduleMaintenance("backup", async () => {
+    await runBackupCycle();
+  }, backupEveryMs);
+  console.log(`[BACKUP] automatic snapshots every ${Math.round(backupEveryMs / 60_000)} min into ${backupRoot()}`);
+} else {
+  console.log("[BACKUP] automatic snapshots disabled (BACKUP_INTERVAL_MINUTES=0); manual admin backup stays available");
+}
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
@@ -96,8 +130,40 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
     return new Response(null, { status: 204, headers: baseHeaders(req) });
   }
 
+  // Liveness: process-only, exempt from every shared bucket. A health check
+  // that can be throttled by the traffic it is meant to observe is useless.
+  // The JSON shape is a public contract (scripts and tests poll it).
   if (path === "/api/health") {
     return json({ ok: true, ts: Date.now() }, { req });
+  }
+
+  // Readiness: can this process actually serve? Storage must be reachable and
+  // writable (a read-only or locked database means calls cannot be admitted),
+  // and admission metrics are reported for operators. Exempt from the shared
+  // IP bucket, for the same reason as liveness.
+  if (path === "/api/ready") {
+    const started = performance.now();
+    let dbOk: boolean;
+    try {
+      db.prepare("SELECT 1 AS ok").get();
+      // The writer must be usable, not just readable: upsert a probe row so a
+      // read-only handle or an unusable writer fails here, not on a real call.
+      db.prepare("INSERT INTO settings (key, value) VALUES ('__ready_probe', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(Date.now()));
+      dbOk = true;
+    } catch {
+      dbOk = false;
+    }
+    const admission = admissionSnapshot();
+    const ok = dbOk;
+    return json({
+      ok,
+      ts: Date.now(),
+      checks: {
+        db: dbOk,
+        latencyMs: Math.round((performance.now() - started) * 100) / 100,
+        admission,
+      },
+    }, { status: ok ? 200 : 503, req });
   }
 
   const proxyPath = (
@@ -177,9 +243,14 @@ const server: Server<WsData> = Bun.serve<WsData>({
     try {
       return await route(req, server);
     } catch (e) {
+      if (req.signal.aborted) return new Response(null, { status: 499 });
       const url = new URL(req.url);
       const isProxy = /^\/(?:v1|openai\/v1|anthropic\/v1)(?:\/|$)/.test(url.pathname);
-      if (e instanceof ApiError) return isProxy ? proxyRequestError(req, url, e.status, e.message, e.code) : err(e.status, e.message, req, e.code);
+      if (e instanceof ApiError) {
+        const response = isProxy ? proxyRequestError(req, url, e.status, e.message, e.code) : err(e.status, e.message, req, e.code);
+        if (e.status === 503) response.headers.set("Retry-After", "1");
+        return response;
+      }
       if (isSqliteBusy(e)) {
         if (isProxy) return proxyStorageUnavailable(req, url);
         const response = err(503, "storage is temporarily unavailable", req);
