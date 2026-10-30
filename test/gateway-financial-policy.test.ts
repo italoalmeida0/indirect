@@ -205,3 +205,342 @@ test("an administrator can change the installation default and override one user
   expect(actions).toContain("financial_policy.installation_updated");
   expect(actions).toContain("financial_policy.user_updated");
 }, 60_000);
+
+test("hidden and percent policies enforce visibility across mutations, reset redemption, all usage surfaces, model catalogs, filter oracles, and cache flips", async () => {
+  const upstream = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      const url = new URL(req.url);
+      if (url.pathname.endsWith("/models") && req.method === "GET") {
+        return Response.json({
+          object: "list",
+          data: [
+            {
+              id: "vis-model",
+              type: "model",
+              display_name: "Visibility Model",
+              context_length: 128_000,
+              top_provider: { max_completion_tokens: 4096 },
+              pricing: {
+                prompt: "0.00001",
+                completion: "0.00003",
+                input_cache_reads: "0.000001",
+                input_cache_writes: "0.00002",
+              },
+            },
+          ],
+          has_more: false,
+        });
+      }
+      if (url.pathname.includes("/models/") && req.method === "GET") {
+        return Response.json({
+          id: "vis-model",
+          type: "model",
+          display_name: "Visibility Model",
+          pricing: { prompt: "0.00001", completion: "0.00003" },
+        });
+      }
+      await req.text();
+      return Response.json({
+        id: "chatcmpl_vis",
+        model: "vis-model",
+        choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+        usage: {
+          prompt_tokens: 1_000,
+          completion_tokens: 500,
+          prompt_tokens_details: { cached_tokens: 200 },
+        },
+      });
+    },
+  });
+
+  try {
+    const gateway = await boot({
+      FINANCIAL_DEFAULT_BUDGET: "hidden",
+      FINANCIAL_DEFAULT_SHOW_PRICES: "false",
+    });
+    const admin = await login(gateway.base, "admin@enterprise.test");
+    const employee = await createUser(gateway.base, admin.accessToken, "strict-emp@enterprise.test");
+    const usdPeer = await createUser(gateway.base, admin.accessToken, "usd-peer@enterprise.test");
+
+    // Configure provider + sync priced model + enable router mode.
+    const prov = await request(gateway.base, "/api/admin/providers", {
+      token: admin.accessToken,
+      body: {
+        name: "VisUpstream",
+        openaiBaseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+        anthropicBaseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+        responsesBaseUrl: `http://127.0.0.1:${upstream.port}/v1`,
+        apiKey: "sk-vis-upstream",
+      },
+    });
+    expect(prov.response.status).toBe(200);
+    const synced = await request(
+      gateway.base,
+      `/api/admin/providers/${prov.data.provider.id}/sync-models`,
+      { token: admin.accessToken, body: {} },
+    );
+    expect(synced.response.status).toBe(200);
+    expect(
+      (
+        await request(gateway.base, "/api/admin/settings", {
+          token: admin.accessToken,
+          method: "PATCH",
+          body: { routingMode: "router" },
+        })
+      ).response.status,
+    ).toBe(200);
+
+    // Override usdPeer to full USD + model prices for cross-user isolation checks.
+    expect(
+      (
+        await request(gateway.base, `/api/admin/users/${usdPeer.user.id}/financial-policy`, {
+          token: admin.accessToken,
+          method: "PATCH",
+          body: { budgetPresentation: "usd", showModelPrices: true },
+        })
+      ).response.status,
+    ).toBe(200);
+
+    // Assign finite $100 plan + weekly reset to employee.
+    await giveUserAPlan(gateway, admin.accessToken, employee.user.id);
+    const grantRes = await request(gateway.base, `/api/admin/users/${employee.user.id}/resets`, {
+      token: admin.accessToken,
+      body: { kind: "weekly", count: 1, note: "sprint reset" },
+    });
+    expect(grantRes.response.status).toBe(200);
+    const resetId = grantRes.data.billing.resets[0].id as string;
+
+    // 1. POST /api/keys must not leak USD fields when budgetPresentation is hidden.
+    const empKeyCreated = await request(gateway.base, "/api/keys", {
+      token: employee.accessToken,
+      body: { name: "cli-key", dailyLimitUsd: 10, totalLimitUsd: 50 },
+    });
+    expect(empKeyCreated.response.status).toBe(200);
+    expect(moneyKeys(empKeyCreated.data)).toEqual([]);
+    expect(empKeyCreated.response.headers.get("x-financial-policy")).toBe("hidden;prices=0");
+    const empKeyToken = empKeyCreated.data.token as string;
+    const empKeyId = empKeyCreated.data.key.id as string;
+
+    const peerKeyCreated = await request(gateway.base, "/api/keys", {
+      token: usdPeer.accessToken,
+      body: { name: "peer-key", dailyLimitUsd: 25 },
+    });
+    expect(peerKeyCreated.response.status).toBe(200);
+    const peerKeyToken = peerKeyCreated.data.token as string;
+
+    const adminKeyCreated = await request(gateway.base, "/api/keys", {
+      token: admin.accessToken,
+      body: { name: "admin-key" },
+    });
+    expect(adminKeyCreated.response.status).toBe(200);
+    const adminKeyToken = adminKeyCreated.data.token as string;
+
+    // Generate real billable spend for employee and usdPeer.
+    for (const tok of [empKeyToken, peerKeyToken]) {
+      const proxyRes = await fetch(`${gateway.base}/v1/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "vis-model",
+          messages: [{ role: "user", content: "hello" }],
+          max_tokens: 64,
+        }),
+      });
+      expect(proxyRes.status).toBe(200);
+    }
+
+    // Wait for buffered usage flush so usage_events and rollups are populated.
+    let flushed = false;
+    for (let i = 0; i < 40; i++) {
+      const check = await request(gateway.base, "/api/usage/events?limit=5", {
+        token: usdPeer.accessToken,
+      });
+      if ((check.data.events?.length ?? 0) >= 1) {
+        flushed = true;
+        break;
+      }
+      await Bun.sleep(100);
+    }
+    expect(flushed).toBe(true);
+
+    // 2. PATCH /api/keys/:id (renaming a key) must not leak spend or limits, and omitting limits preserves them.
+    const renamed = await request(gateway.base, `/api/keys/${empKeyId}`, {
+      token: employee.accessToken,
+      method: "PATCH",
+      body: { name: "cli-key-renamed" },
+    });
+    expect(renamed.response.status).toBe(200);
+    expect(moneyKeys(renamed.data)).toEqual([]);
+    expect(renamed.data.key.name).toBe("cli-key-renamed");
+
+    // Admin still sees the preserved $10 / $50 caps and real nonzero spend.
+    const adminKeys = await request(gateway.base, "/api/admin/keys?limit=20", {
+      token: admin.accessToken,
+    });
+    const rawEmpKey = (adminKeys.data.keys as any[]).find((k) => k.id === empKeyId);
+    expect(rawEmpKey.dailyLimitUsd).toBe(10);
+    expect(rawEmpKey.totalLimitUsd).toBe(50);
+    expect(rawEmpKey.spendTotalUsd).toBeGreaterThan(0);
+
+    // 3. POST /api/billing/resets/:id/redeem must project billing according to user's policy.
+    const redeemed = await request(gateway.base, `/api/billing/resets/${resetId}/redeem`, {
+      token: employee.accessToken,
+      body: { requestId: "redeem-req-hidden-policy-0001" },
+    });
+    expect(redeemed.response.status).toBe(200);
+    expect(moneyKeys(redeemed.data)).toEqual([]);
+    expect(redeemed.data.billing.plan).toMatchObject({ name: "Enterprise", limitConfigured: true });
+
+    // 4. Every /api/usage/* endpoint must omit monetary fields and modelSpend values for hidden user.
+    const now = Date.now();
+    const from = now - 7 * 86_400_000;
+    const usagePaths = [
+      "/api/usage/summary",
+      "/api/usage/daily",
+      "/api/usage/daily?hours=24",
+      `/api/usage/daily?from=${from}&to=${now}`,
+      `/api/usage/daily?key_id=${empKeyId}`,
+      "/api/usage/events?limit=10",
+      `/api/usage/events?from=${from}&to=${now}&limit=10`,
+      `/api/usage/overview?from=${from}&to=${now}`,
+      `/api/usage/analytics?from=${from}&to=${now}`,
+      "/api/usage/breakdown",
+      "/api/usage/breakdown?limit=10",
+      `/api/usage/breakdown?from=${from}&to=${now}&limit=10`,
+      "/api/usage/by-model",
+      `/api/usage/filter-options?from=${from}&to=${now}`,
+    ];
+    for (const usagePath of usagePaths) {
+      const res = await request(gateway.base, usagePath, { token: employee.accessToken });
+      expect(res.response.status).toBe(200);
+      expect(moneyKeys(res.data)).toEqual([]);
+    }
+
+    const empAnalytics = await request(gateway.base, `/api/usage/analytics?from=${from}&to=${now}`, {
+      token: employee.accessToken,
+    });
+    expect(empAnalytics.data.modelSpend).toEqual({ groups: [], points: [] });
+    expect(empAnalytics.data.modelRequests.groups.length).toBeGreaterThan(0);
+
+    // Cross-user isolation: usdPeer still receives real USD costs and modelSpend.
+    const peerAnalytics = await request(gateway.base, `/api/usage/analytics?from=${from}&to=${now}`, {
+      token: usdPeer.accessToken,
+    });
+    expect(moneyKeys(peerAnalytics.data).length).toBeGreaterThan(0);
+    expect(peerAnalytics.data.modelSpend.groups.length).toBeGreaterThan(0);
+
+    // 5. Filter/sort oracles on cost and spendTotalUsd must be neutralized when budgetPresentation !== "usd".
+    const highCostFilter = encodeURIComponent(
+      JSON.stringify({ cost: { filterType: "number", type: "greaterThan", filter: 999_999 } }),
+    );
+    const oracleEvents = await request(
+      gateway.base,
+      `/api/usage/events?limit=10&filters=${highCostFilter}`,
+      { token: employee.accessToken },
+    );
+    expect(oracleEvents.response.status).toBe(200);
+    expect(oracleEvents.data.total).toBe(1);
+
+    const highSpendKeyFilter = encodeURIComponent(
+      JSON.stringify({ spendTotalUsd: { filterType: "number", type: "greaterThan", filter: 999_999 } }),
+    );
+    const oracleKeys = await request(
+      gateway.base,
+      `/api/keys?limit=10&filters=${highSpendKeyFilter}`,
+      { token: employee.accessToken },
+    );
+    expect(oracleKeys.response.status).toBe(200);
+    expect(oracleKeys.data.total).toBe(1);
+
+    // 6. /v1/models and /v1/models/:id must obey showModelPrices across router and passthrough modes.
+    for (const modelPath of ["/v1/models", "/v1/models/vis-model", "/anthropic/v1/models"]) {
+      const empModels = await fetch(`${gateway.base}${modelPath}`, {
+        headers: { Authorization: `Bearer ${empKeyToken}` },
+      });
+      expect(empModels.status).toBe(200);
+      expect(moneyKeys(await empModels.json())).toEqual([]);
+    }
+    const adminModels = await fetch(`${gateway.base}/v1/models`, {
+      headers: { Authorization: `Bearer ${adminKeyToken}` },
+    });
+    expect(adminModels.status).toBe(200);
+    expect(moneyKeys(await adminModels.json()).length).toBeGreaterThan(0);
+
+    // Passthrough mode check for /anthropic/v1/models and /v1/models.
+    await request(gateway.base, "/api/admin/settings", {
+      token: admin.accessToken,
+      method: "PATCH",
+      body: { routingMode: "passthrough" },
+    });
+    for (const modelPath of ["/v1/models", "/anthropic/v1/models", "/v1/models/vis-model"]) {
+      const empPt = await fetch(`${gateway.base}${modelPath}`, {
+        headers: { Authorization: `Bearer ${empKeyToken}` },
+      });
+      expect(empPt.status).toBe(200);
+      expect(moneyKeys(await empPt.json())).toEqual([]);
+    }
+    await request(gateway.base, "/api/admin/settings", {
+      token: admin.accessToken,
+      method: "PATCH",
+      body: { routingMode: "router" },
+    });
+
+    // 7. Live policy flip: percent + showModelPrices=true, then usd, then hidden (verifying cache invalidation).
+    await request(gateway.base, `/api/admin/users/${employee.user.id}/financial-policy`, {
+      token: admin.accessToken,
+      method: "PATCH",
+      body: { budgetPresentation: "percent", showModelPrices: true },
+    });
+    const empPercentBilling = await request(gateway.base, "/api/billing", { token: employee.accessToken });
+    expect(empPercentBilling.response.headers.get("x-financial-policy")).toBe("percent;prices=1");
+    expect(moneyKeys(empPercentBilling.data)).toEqual([]);
+    expect(empPercentBilling.data.billing.plan).toMatchObject({ name: "Enterprise", limitConfigured: true });
+    const empPercentMonthly = empPercentBilling.data.billing.windows.find((w: any) => w.kind === "monthly");
+    expect(typeof empPercentMonthly.usedPercent).toBe("number");
+    expect(typeof empPercentMonthly.holdPercent).toBe("number");
+    expect(empPercentMonthly.limitConfigured).toBe(true);
+
+    const empPercentKeys = await request(gateway.base, "/api/keys", { token: employee.accessToken });
+    expect(moneyKeys(empPercentKeys.data)).toEqual([]);
+    expect(empPercentKeys.data.keys[0].dailyLimitConfigured).toBe(true);
+    expect(empPercentKeys.data.keys[0].totalLimitConfigured).toBe(true);
+    expect(typeof empPercentKeys.data.keys[0].dailyUsedPercent).toBe("number");
+    expect(typeof empPercentKeys.data.keys[0].totalUsedPercent).toBe("number");
+
+    // showModelPrices=true works independently even while budgetPresentation="percent".
+    const empModelsAllowed = await fetch(`${gateway.base}/v1/models`, {
+      headers: { Authorization: `Bearer ${empKeyToken}` },
+    });
+    expect(moneyKeys(await empModelsAllowed.json()).length).toBeGreaterThan(0);
+
+    // Flip to USD: cached analytics for employee must immediately expose cost & modelSpend.
+    await request(gateway.base, `/api/admin/users/${employee.user.id}/financial-policy`, {
+      token: admin.accessToken,
+      method: "PATCH",
+      body: { budgetPresentation: "usd", showModelPrices: true },
+    });
+    const empUsdAnalytics = await request(gateway.base, `/api/usage/analytics?from=${from}&to=${now}`, {
+      token: employee.accessToken,
+    });
+    expect(empUsdAnalytics.response.headers.get("x-financial-policy")).toBe("usd;prices=1");
+    expect(moneyKeys(empUsdAnalytics.data).length).toBeGreaterThan(0);
+    expect(empUsdAnalytics.data.modelSpend.groups.length).toBeGreaterThan(0);
+
+    // Flip back to hidden: cached USD analytics must never be served!
+    await request(gateway.base, `/api/admin/users/${employee.user.id}/financial-policy`, {
+      token: admin.accessToken,
+      method: "PATCH",
+      body: { budgetPresentation: "hidden", showModelPrices: false },
+    });
+    const empHiddenAgain = await request(gateway.base, `/api/usage/analytics?from=${from}&to=${now}`, {
+      token: employee.accessToken,
+    });
+    expect(empHiddenAgain.response.headers.get("x-financial-policy")).toBe("hidden;prices=0");
+    expect(moneyKeys(empHiddenAgain.data)).toEqual([]);
+    expect(empHiddenAgain.data.modelSpend).toEqual({ groups: [], points: [] });
+  } finally {
+    upstream.stop(true);
+  }
+}, 60_000);

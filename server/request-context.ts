@@ -21,6 +21,8 @@ export interface RequestContext {
   startedAt: number;
   method?: string;
   path?: string;
+  /** Effective financial policy header attached once the caller authenticates. */
+  financialPolicyHeader?: string;
 }
 
 const store = new AsyncLocalStorage<RequestContext>();
@@ -28,6 +30,15 @@ const store = new AsyncLocalStorage<RequestContext>();
 /** The current correlation id, or an empty string outside a request. */
 export function currentRequestId(): string {
   return store.getStore()?.requestId ?? "";
+}
+
+export function setCurrentFinancialPolicyHeader(header: string): void {
+  const ctx = store.getStore();
+  if (ctx) ctx.financialPolicyHeader = header;
+}
+
+export function currentFinancialPolicyHeader(): string | undefined {
+  return store.getStore()?.financialPolicyHeader;
 }
 
 /** Run `fn` with `context` bound to the async execution. */

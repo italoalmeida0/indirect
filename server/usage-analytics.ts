@@ -34,10 +34,13 @@ function dimensionTable(scope: UsageScope, userId: string | null) {
     FROM ${source.sql} s GROUP BY s.key_id, s.user_id, s.proto, s.provider_id, s.model, s.upstream_model`).run(...source.params);
 }
 
-function breakdown(scope: UsageScope, userId: string | null, dimension: "user_id" | "provider_id" | "proto" | "key_id", limit: number) {
+function breakdown(scope: UsageScope, userId: string | null, dimension: "user_id" | "provider_id" | "proto" | "key_id", limit: number, includeCost = true) {
   const join = dimension === "user_id" ? "LEFT JOIN users d ON d.id = r.id" : dimension === "provider_id" ? "LEFT JOIN providers d ON d.id = r.id" : dimension === "key_id" ? "LEFT JOIN api_keys d ON d.id = r.id LEFT JOIN users owner ON owner.id = d.user_id" : "";
   const label = dimension === "user_id" ? "COALESCE(NULLIF(d.name, ''), d.email, r.id)" : dimension === "provider_id" ? "COALESCE(NULLIF(d.name, ''), NULLIF(r.id, ''), 'Unattributed')" : dimension === "key_id" ? "COALESCE(NULLIF(d.name, ''), CASE WHEN d.id IS NULL THEN 'Deleted key' ELSE 'Unnamed key' END)" : "CASE r.id WHEN 'openai' THEN 'OpenAI' WHEN 'anthropic' THEN 'Anthropic' ELSE r.id END";
   const detail = dimension === "user_id" ? "COALESCE(d.email, r.id)" : dimension === "key_id" ? userId === null ? "COALESCE(owner.email, 'Deleted user')" : "substr(r.id, 1, 8)" : "''";
+  const byReqsOnly = !includeCost || dimension === "provider_id" || dimension === "proto";
+  const rankOrder = byReqsOnly ? "reqs DESC, (in_tok + cache_tok + out_tok) DESC" : "cost DESC, reqs DESC";
+  const outerOrder = byReqsOnly ? "SUM(r.reqs) DESC, (SUM(r.in_tok) + SUM(r.cache_tok) + SUM(r.out_tok)) DESC" : "SUM(r.cost) DESC, SUM(r.reqs) DESC";
   return db.prepare<Metrics & { id: string | null; label: string; detail: string; members: number }, []>(`
     WITH targets AS (
       SELECT s.${dimension} AS id, s.model, s.upstream_model, SUM(s.in_tok) AS in_tok,
@@ -48,7 +51,7 @@ function breakdown(scope: UsageScope, userId: string | null, dimension: "user_id
         SUM(m.reqs) AS reqs, ${costAggFieldsSql("m")} FROM targets m ${modelPricingJoins("m")}
       GROUP BY m.id HAVING SUM(m.reqs) > 0
     ), ranked AS (
-      SELECT *, ROW_NUMBER() OVER (ORDER BY ${dimension === "provider_id" || dimension === "proto" ? "reqs DESC, cost DESC" : "cost DESC, reqs DESC"}, id) AS rank FROM totals
+      SELECT *, ROW_NUMBER() OVER (ORDER BY ${rankOrder}, id) AS rank FROM totals
     )
     SELECT CASE WHEN r.rank <= ${limit} THEN r.id ELSE NULL END AS id,
       CASE WHEN r.rank <= ${limit} THEN ${label} ELSE 'Other' END AS label,
@@ -56,7 +59,7 @@ function breakdown(scope: UsageScope, userId: string | null, dimension: "user_id
       COUNT(*) AS members, ${sums("r")} FROM ranked r ${join}
     GROUP BY CASE WHEN r.rank <= ${limit} THEN r.id ELSE NULL END
     ORDER BY (CASE WHEN r.rank <= ${limit} THEN r.id ELSE NULL END) IS NULL,
-      ${dimension === "provider_id" || dimension === "proto" ? "SUM(r.reqs) DESC, SUM(r.cost) DESC" : "SUM(r.cost) DESC, SUM(r.reqs) DESC"},
+      ${outerOrder},
       CASE WHEN r.rank <= ${limit} THEN r.id ELSE NULL END
   `).all();
 }
@@ -178,7 +181,7 @@ function windowChart(requested: UsageScope, userId: string | null, granularity: 
 /** One transaction in a bounded read worker supplies every chart in the page.
  * Long windows reuse monthly rollups; only exact partial-day edges scan events.
  * At most 48 time buckets × 6 model categories cross the HTTP boundary. */
-export function filteredUsageAnalytics(scope: UsageScope, userId: string | null, requestedScope: UsageScope = scope) {
+export function filteredUsageAnalytics(scope: UsageScope, userId: string | null, requestedScope: UsageScope = scope, includeCost = true) {
   const current = filteredUsageSeries(scope, userId);
   // The chart grid is derived from the interval, not from the returned points:
   // an interval whose only rows are archived still charts at day resolution.
@@ -220,10 +223,10 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null,
   // One scan of the dimensions feeds the user, key, provider and protocol
   // charts of the page; each of them used to re-split and re-price the range.
   dimensionTable(scope, userId);
-  const users = userId === null ? breakdown(scope, null, "user_id", 8) : [];
-  return { ...current, previous: comparison === null ? [] : comparisonSeries(comparison), modelSpend: modelChart("cost"), modelRequests: modelChart("reqs"),
-    users, keys: breakdown(scope, userId, "key_id", 8), outcomes,
-    providers: breakdown(scope, userId, "provider_id", 5), protocols: breakdown(scope, userId, "proto", 2),
+  const users = userId === null ? breakdown(scope, null, "user_id", 8, includeCost) : [];
+  return { ...current, previous: comparison === null ? [] : comparisonSeries(comparison), modelSpend: includeCost ? modelChart("cost") : { groups: [], points: [] }, modelRequests: modelChart("reqs"),
+    users, keys: breakdown(scope, userId, "key_id", 8, includeCost), outcomes,
+    providers: breakdown(scope, userId, "provider_id", 5, includeCost), protocols: breakdown(scope, userId, "proto", 2, includeCost),
     activeUsers: users.reduce((sum, row) => sum + row.members, 0), scope: { from: scope.from, to: scope.to }, previousHistory: previousWindow?.history ?? null };
 }
 

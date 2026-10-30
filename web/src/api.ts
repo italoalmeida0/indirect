@@ -38,7 +38,51 @@ function loadStored(): Session | null {
   }
 }
 
+export type BudgetPresentation = "usd" | "percent" | "hidden";
+
+export interface FinancialPolicyDto {
+  showModelPrices: boolean;
+  budgetPresentation: BudgetPresentation;
+  inherited?: boolean;
+}
+
 const [session, setSessionSignal] = createSignal<Session | null>(loadStored());
+const [serverPolicy, setServerPolicy] = createSignal<FinancialPolicyDto | null>(null);
+const [financialPolicyRev, setFinancialPolicyRev] = createSignal(0);
+
+function parseFinancialPolicyHeader(raw: string | null): FinancialPolicyDto | null {
+  if (!raw) return null;
+  const [modePart, pricesPart] = raw.split(";");
+  const mode = modePart?.trim();
+  if (mode !== "usd" && mode !== "percent" && mode !== "hidden") return null;
+  const showModelPrices = pricesPart?.trim() !== "prices=0";
+  return { budgetPresentation: mode, showModelPrices };
+}
+
+function observeFinancialPolicy(next: FinancialPolicyDto | null): void {
+  if (!next) return;
+  const prev = serverPolicy();
+  if (
+    !prev ||
+    prev.budgetPresentation !== next.budgetPresentation ||
+    prev.showModelPrices !== next.showModelPrices
+  ) {
+    setServerPolicy(next);
+    if (prev) queueMicrotask(() => setFinancialPolicyRev((n) => n + 1));
+  }
+}
+
+export function currentFinancialPolicy(): FinancialPolicyDto {
+  const s = session();
+  if (s?.user.role === "admin") {
+    return { showModelPrices: true, budgetPresentation: "usd", inherited: false };
+  }
+  return serverPolicy() ?? { showModelPrices: true, budgetPresentation: "usd", inherited: true };
+}
+
+export function policyRevision(): number {
+  return financialPolicyRev();
+}
 
 let listeners: Array<(s: Session | null) => void> = [];
 
@@ -67,6 +111,8 @@ export function setSession(s: Session | null): void {
   // is exactly what happened when signing in from "/" (no #/login hash).
   if (s) localStorage.setItem(LS, JSON.stringify(s));
   else localStorage.removeItem(LS);
+  setServerPolicy(null);
+  setFinancialPolicyRev((n) => n + 1);
   setSessionSignal(s);
   for (const fn of listeners) fn(session());
 }
@@ -136,6 +182,24 @@ async function rawCall<T>(method: string, path: string, body?: unknown, signal?:
   } catch {}
   signal?.throwIfAborted();
   if (!res.ok) throw new ApiFail(res.status, j?.error ?? `HTTP ${res.status}`);
+  const headerPolicy = parseFinancialPolicyHeader(res.headers.get("x-financial-policy"));
+  if (headerPolicy) {
+    observeFinancialPolicy(headerPolicy);
+  } else if (j && typeof j === "object") {
+    const embedded = j.financialPolicy ?? j.billing?.financialPolicy ?? j.policy;
+    if (
+      embedded &&
+      typeof embedded === "object" &&
+      (embedded.budgetPresentation === "usd" ||
+        embedded.budgetPresentation === "percent" ||
+        embedded.budgetPresentation === "hidden") &&
+      typeof embedded.showModelPrices === "boolean" &&
+      path !== "/api/admin/financial-policy" &&
+      !path.startsWith("/api/admin/users/")
+    ) {
+      observeFinancialPolicy(embedded as FinancialPolicyDto);
+    }
+  }
   return j as T;
 }
 
@@ -157,9 +221,17 @@ export async function publicApi<T = any>(method: string, path: string, body?: un
   return rawCall<T>(method, path, body);
 }
 
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && latestSession()) {
+      void api("GET", "/api/me/financial-policy").catch(() => {});
+    }
+  });
+}
+
 // ===== Shared DTOs =====
 
-export interface ApiKeyDto {
+interface ApiKeyBaseDto {
   id: string;
   userId: string;
   userEmail?: string;
@@ -167,16 +239,36 @@ export interface ApiKeyDto {
   prefix: string;
   createdAt: number;
   expiresAt: number | null;
-  dailyLimitUsd: number | null;
-  totalLimitUsd: number | null;
   rpm: number | null;
   status: "active" | "revoked" | "exhausted" | "expired" | "daily_limit" | "total_limit";
   lastUsedAt: number | null;
+  revealable: boolean;
+}
+
+export interface ApiKeyDto extends ApiKeyBaseDto {
+  presentation?: "usd";
+  dailyLimitUsd: number | null;
+  totalLimitUsd: number | null;
   /** Settled billable spend in USD, including all priced token categories. */
   spendTodayUsd: number;
   spendTotalUsd: number;
-  revealable: boolean;
 }
+
+export interface PercentApiKeyDto extends ApiKeyBaseDto {
+  presentation: "percent";
+  dailyLimitConfigured: boolean;
+  totalLimitConfigured: boolean;
+  dailyUsedPercent: number | null;
+  totalUsedPercent: number | null;
+}
+
+export interface HiddenApiKeyDto extends ApiKeyBaseDto {
+  presentation: "hidden";
+  dailyLimitConfigured: boolean;
+  totalLimitConfigured: boolean;
+}
+
+export type ProjectedApiKeyDto = ApiKeyDto | PercentApiKeyDto | HiddenApiKeyDto;
 
 export interface DailyPoint {
   date: string;
@@ -385,14 +477,44 @@ export interface BillingPlanDto {
   weeklyEnabled: boolean; sessionEnabled: boolean; members?: number;
   createdAt: number; updatedAt: number;
 }
-export interface BudgetWindowDto {
-  kind: "monthly" | "weekly" | "session" | "daily" | "lifetime";
-  startsAt: number; resetsAt: number | null; limitUsd: number | null;
-  spentUsd: number; billedUsd: number; reservedUsd: number; remainingUsd: number | null;
+export interface ProjectedBillingPlanDto {
+  id: string;
+  name: string;
+  limitConfigured: boolean;
+  weeklyEnabled?: boolean;
+  sessionEnabled?: boolean;
 }
+interface BudgetWindowBaseDto {
+  kind: "monthly" | "weekly" | "session" | "daily" | "lifetime";
+  startsAt: number;
+  resetsAt: number | null;
+}
+export interface UsdBudgetWindowDto extends BudgetWindowBaseDto {
+  presentation?: "usd";
+  limitUsd: number | null;
+  spentUsd: number;
+  billedUsd: number;
+  reservedUsd: number;
+  remainingUsd: number | null;
+}
+export interface PercentBudgetWindowDto extends BudgetWindowBaseDto {
+  presentation: "percent";
+  limitConfigured: boolean;
+  usedPercent: number | null;
+  holdPercent?: number | null;
+}
+export interface HiddenBudgetWindowDto extends BudgetWindowBaseDto {
+  presentation: "hidden";
+  limitConfigured: boolean;
+  activeHold?: boolean;
+  exhausted?: boolean;
+}
+export type BudgetWindowDto = UsdBudgetWindowDto | PercentBudgetWindowDto | HiddenBudgetWindowDto;
+
 export interface BillingDto {
-  plan: BillingPlanDto | null;
+  plan: BillingPlanDto | ProjectedBillingPlanDto | null;
   windows: BudgetWindowDto[]; sessionStarted: boolean;
   resets: { id: string; kind: "weekly" | "session" | "both"; remaining: number; expiresAt: number | null; note: string }[];
   serverTime: number;
+  financialPolicy?: FinancialPolicyDto;
 }

@@ -1,5 +1,6 @@
 import { BlockList, isIP } from "node:net";
 import { ALLOWED_ORIGINS, TRUST_PROXY, TRUSTED_PROXY_CIDRS } from "./config";
+import { currentFinancialPolicyHeader } from "./request-context";
 
 /**
  * HTTP plumbing shared by every route: security headers, CORS, body guards,
@@ -60,7 +61,7 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
     h.set("Vary", "Origin");
     h.set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
     h.set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key");
-    h.set("Access-Control-Expose-Headers", "Retry-After, X-Request-Id, X-Gateway-Usage, X-Gateway-Queue");
+    h.set("Access-Control-Expose-Headers", "Retry-After, X-Request-Id, X-Gateway-Usage, X-Gateway-Queue, X-Financial-Policy");
     h.set("Access-Control-Max-Age", "600");
   }
   return h;
@@ -69,6 +70,8 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
 export function json(data: unknown, init: { status?: number; req?: Request } = {}): Response {
   const h = baseHeaders(init.req);
   h.set("Content-Type", "application/json; charset=utf-8");
+  const policyHeader = currentFinancialPolicyHeader();
+  if (policyHeader) h.set("X-Financial-Policy", policyHeader);
   return new Response(JSON.stringify(data), { status: init.status ?? 200, headers: h });
 }
 

@@ -7,7 +7,15 @@ import {
 
 import { PlanUsageCard } from "../billing";
 import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
-import { api, type ApiKeyDto, type DailyPoint, type TopModelDto, type UsageHistoryDto } from "../api";
+import {
+  api,
+  currentFinancialPolicy,
+  policyRevision,
+  type DailyPoint,
+  type ProjectedApiKeyDto,
+  type TopModelDto,
+  type UsageHistoryDto,
+} from "../api";
 import { AnalyticsHistoryNotice } from "../analytics-history";
 import { PageTitle, navigate } from "../chrome";
 import { DailyChart } from "../charts";
@@ -35,26 +43,33 @@ const CACHE_COLOR = "var(--chart-mid)";
 const OUT_COLOR = "var(--chart-soft)";
 
 export default function DashboardPage() {
+  const showUsd = createMemo(() => currentFinancialPolicy().budgetPresentation === "usd");
   const filters = createAnalyticsFilters();
-  const [series] = createResource(filters.query, async (query) => {
-    const params = new URLSearchParams(query);
-    const range = { preset: "custom", from: params.get("from") === "all" ? null : Number(params.get("from")), to: Number(params.get("to")) };
-    const j = await api<{ series: DailyPoint[]; granularity: ActivityScope["unit"]; models: TopModelDto[]; history?: UsageHistoryDto }>("GET", `/api/usage/overview?${query}`);
-    // Keep counts and their resolved scope together while the next window loads.
-    return { points: j.series, models: j.models, history: j.history, scope: { from: j.history?.effective.from ?? range.from, to: j.history?.effective.to ?? range.to, unit: j.granularity ?? rangeUnit(range) } };
-  });
-  const [previous] = createResource(filters.query, async (query) => {
-    const params = new URLSearchParams(query);
-    if (params.get("from") === "all") return { points: [] as DailyPoint[], history: undefined };
-    const range = { from: Number(params.get("from")), to: Number(params.get("to")) };
-    if (range.from === 0) return { points: [] as DailyPoint[], history: undefined };
-    params.set("from", String(Math.max(0, range.from - (range.to - range.from))));
-    params.set("to", String(range.from));
-    const j = await api<{ series: DailyPoint[]; history?: UsageHistoryDto }>("GET", `/api/usage/daily?${params}`);
-    return { points: j.series, history: j.history };
-  });
-  const [keys] = createResource(async () => {
-    const j = await api<{ keys: ApiKeyDto[] }>("GET", "/api/keys");
+  const [series] = createResource(
+    () => ({ query: filters.query(), rev: policyRevision() }),
+    async ({ query }) => {
+      const params = new URLSearchParams(query);
+      const range = { preset: "custom", from: params.get("from") === "all" ? null : Number(params.get("from")), to: Number(params.get("to")) };
+      const j = await api<{ series: DailyPoint[]; granularity: ActivityScope["unit"]; models: TopModelDto[]; history?: UsageHistoryDto }>("GET", `/api/usage/overview?${query}`);
+      // Keep counts and their resolved scope together while the next window loads.
+      return { points: j.series, models: j.models, history: j.history, scope: { from: j.history?.effective.from ?? range.from, to: j.history?.effective.to ?? range.to, unit: j.granularity ?? rangeUnit(range) } };
+    },
+  );
+  const [previous] = createResource(
+    () => ({ query: filters.query(), rev: policyRevision() }),
+    async ({ query }) => {
+      const params = new URLSearchParams(query);
+      if (params.get("from") === "all") return { points: [] as DailyPoint[], history: undefined };
+      const range = { from: Number(params.get("from")), to: Number(params.get("to")) };
+      if (range.from === 0) return { points: [] as DailyPoint[], history: undefined };
+      params.set("from", String(Math.max(0, range.from - (range.to - range.from))));
+      params.set("to", String(range.from));
+      const j = await api<{ series: DailyPoint[]; history?: UsageHistoryDto }>("GET", `/api/usage/daily?${params}`);
+      return { points: j.series, history: j.history };
+    },
+  );
+  const [keys] = createResource(policyRevision, async () => {
+    const j = await api<{ keys: ProjectedApiKeyDto[] }>("GET", "/api/keys");
     return j.keys;
   });
   const view = () => series()?.points ?? [];
@@ -133,52 +148,54 @@ export default function DashboardPage() {
         <Show when={series()} keyed>
           {(_series) => (
           <div
-            class="overview-charts grid grid-cols-1 md:grid-cols-2 gap-5 mb-5"
+            class={`overview-charts grid grid-cols-1 ${showUsd() ? "md:grid-cols-2" : ""} gap-5 mb-5`}
             {...usalItems("fade-u", 110)}
           >
-            <Card class="overview-spend p-5 min-w-0 flex flex-col justify-between">
-              <div>
-                <AnalyticsHero
-                  icon={Icons.dollarSign}
-                  cost={winCost()}
-                  label={`Spend · ${filters.label()}`}
-                  delta={costDelta()}
-                />
-                <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
-                  <AnalyticsBucket
-                    label="Input"
-                    cost={winCostIn()}
-                    delta={costInDelta()}
-                    color={IN_COLOR}
+            <Show when={showUsd()}>
+              <Card class="overview-spend p-5 min-w-0 flex flex-col justify-between">
+                <div>
+                  <AnalyticsHero
+                    icon={Icons.dollarSign}
+                    cost={winCost()}
+                    label={`Spend · ${filters.label()}`}
+                    delta={costDelta()}
                   />
-                  <AnalyticsBucket
-                    label="Cache"
-                    cost={winCostCache()}
-                    delta={costCacheDelta()}
-                    color={CACHE_COLOR}
-                  />
-                  <AnalyticsBucket
-                    label="Output"
-                    cost={winCostOut()}
-                    delta={costOutDelta()}
-                    color="var(--chart-brand)"
+                  <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
+                    <AnalyticsBucket
+                      label="Input"
+                      cost={winCostIn()}
+                      delta={costInDelta()}
+                      color={IN_COLOR}
+                    />
+                    <AnalyticsBucket
+                      label="Cache"
+                      cost={winCostCache()}
+                      delta={costCacheDelta()}
+                      color={CACHE_COLOR}
+                    />
+                    <AnalyticsBucket
+                      label="Output"
+                      cost={winCostOut()}
+                      delta={costOutDelta()}
+                      color="var(--chart-brand)"
+                    />
+                  </div>
+                </div>
+                <div
+                  class="mt-4"
+                  {...usal("fade-u delay-200 duration-700 threshold-5")}
+                >
+                  <DailyChart
+                    series={view()}
+                    metric="cost"
+                    variant="line"
+                    height={200}
+                    unit={series()?.scope.unit ?? filters.unit()}
+                    resetKey={`spend:${filters.query()}`}
                   />
                 </div>
-              </div>
-              <div
-                class="mt-4"
-                {...usal("fade-u delay-200 duration-700 threshold-5")}
-              >
-                <DailyChart
-                  series={view()}
-                  metric="cost"
-                  variant="line"
-                  height={200}
-                  unit={series()?.scope.unit ?? filters.unit()}
-                  resetKey={`spend:${filters.query()}`}
-                />
-              </div>
-            </Card>
+              </Card>
+            </Show>
 
             <Card class="overview-tokens p-5 min-w-0 flex flex-col justify-between">
               <div>

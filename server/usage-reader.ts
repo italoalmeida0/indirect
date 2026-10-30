@@ -12,7 +12,7 @@ import type { CatalogKind, catalogAuditPage, catalogFilterOptions } from "./cata
 export type UsageReadRequest = { scope: UsageScope; userId: string | null } & (
   | { kind: "series" }
   | { kind: "overview"; userId: string }
-  | { kind: "analytics" }
+  | { kind: "analytics"; includeCost?: boolean }
   | { kind: "catalog-facets"; catalog: CatalogKind; search: string }
   | { kind: "catalog-audit"; search: string }
   | { kind: "facets"; search: string }

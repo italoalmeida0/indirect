@@ -9,7 +9,7 @@ import { parseGridQuery } from "../gridql";
 import { catalogWhere } from "../catalog";
 import { readUsage } from "../usage-reader";
 import { ApiError, clientIp, err, ok, readJsonBody, v } from "../http";
-import { financialPolicyFor, projectAmounts } from "../financial-policy";
+import { financialPolicyFor, projectKeyDto, sanitizeGridForPolicy } from "../financial-policy";
 
 const MAX_KEYS_PER_USER = 50;
 const MAX_TTL_MS = 10 * 365 * 24 * 3600 * 1000;
@@ -31,20 +31,20 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
   if (path === "/api/keys" && req.method === "GET") {
     const ctx = await requireAuth(req);
     // Key spend is money: project it through the caller's financial policy so a
-    // "hidden" installation cannot leak amounts through the keys screen.
+    // "hidden" or "percent" installation never leaks USD amounts or sort/filter oracles.
     const policy = financialPolicyFor(ctx.user);
     if (new URL(req.url).searchParams.has("limit") || new URL(req.url).searchParams.has("selection")) {
-      const grid = parseGridQuery(new URL(req.url));
+      const grid = sanitizeGridForPolicy(parseGridQuery(new URL(req.url)), policy);
       const params = new URL(req.url).searchParams;
       const { keys, total } = queryKeys(ctx.user.id, grid, params.has("selection") ? catalogWhere("keys", params, ctx.user.id) : undefined);
-      return ok({ keys: projectAmounts(keys, policy), total, limit: grid.limit, offset: grid.offset, financialPolicy: policy }, req);
+      return ok({ keys: keys.map((k) => projectKeyDto(k, policy)), total, limit: grid.limit, offset: grid.offset, financialPolicy: policy }, req);
     }
     const rows = db
       .prepare<ApiKeyRow, [string]>(
         "SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
       )
       .all(ctx.user.id);
-    return ok({ keys: projectAmounts(rows.map((r) => publicKey(r)), policy), financialPolicy: policy }, req);
+    return ok({ keys: rows.map((r) => projectKeyDto(publicKey(r), policy)), financialPolicy: policy }, req);
   }
 
   if (path === "/api/keys" && req.method === "POST") {
@@ -99,7 +99,8 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
 
     // Plaintext token: returned here AND recoverable later via GET /reveal
     // from the AES copy (token_enc) — every reveal is audit-logged.
-    return ok({ key: publicKey(row), token: prepared.token }, req);
+    const policy = financialPolicyFor(ctx.user);
+    return ok({ key: projectKeyDto(publicKey(row), policy), token: prepared.token, financialPolicy: policy }, req);
   }
 
   const m = path.match(/^\/api\/keys\/([a-f0-9]{24})(\/reveal)?$/);
@@ -139,7 +140,8 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
       });
       return db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId)!;
     });
-    return ok({ key: publicKey(updated) }, req);
+    const policy = financialPolicyFor(ctx.user);
+    return ok({ key: projectKeyDto(publicKey(updated), policy), financialPolicy: policy }, req);
   }
 
   if (req.method === "GET" && path.endsWith("/reveal")) {

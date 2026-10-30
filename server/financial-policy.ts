@@ -174,11 +174,23 @@ const NOT_MONEY = new Set([
   "remainingPercent",
   "spendPercent",
   "budgetPresentation",
+  "limitConfigured",
+  "usedPercent",
+  "holdPercent",
+  "dailyLimitConfigured",
+  "totalLimitConfigured",
+  "dailyUsedPercent",
+  "totalUsedPercent",
 ]);
 
 export function isMoneyKey(key: string): boolean {
   if (NOT_MONEY.has(key)) return false;
   return MONEY_KEY.test(key);
+}
+
+/** Compact header value so open browser tabs detect policy flips immediately. */
+export function formatFinancialPolicyHeader(policy: FinancialPolicy): string {
+  return `${policy.budgetPresentation};prices=${policy.showModelPrices ? "1" : "0"}`;
 }
 
 /**
@@ -187,11 +199,17 @@ export function isMoneyKey(key: string): boolean {
  * - "usd": returned untouched.
  * - "hidden": every monetary key is dropped at every depth.
  * - "percent": monetary keys are dropped from the top level too — percentages
- *   are supplied by the caller through `percentages`, because only the route
- *   knows which allowance a value belongs to.
+ *   are supplied by the caller through explicit DTO projections, because only
+ *   the domain projector knows which allowance a value belongs to.
  */
 export function projectAmounts<T>(value: T, policy: FinancialPolicy): T {
   if (policy.budgetPresentation === "usd") return value;
+  return scrub(value) as T;
+}
+
+/** Strip model pricing keys when `showModelPrices` is disabled. */
+export function projectModelPrices<T>(value: T, showModelPrices: boolean): T {
+  if (showModelPrices) return value;
   return scrub(value) as T;
 }
 
@@ -216,23 +234,232 @@ export function usedPercent(spent: number, limit: number | null | undefined): nu
 
 /**
  * Budget window as it may be shown to this caller: real amounts for "usd",
- * consumption percentage plus the renewal instant for "percent", and only the
- * renewal metadata for "hidden".
+ * consumption/hold percentages plus the renewal instant for "percent", and
+ * non-monetary allowance status + renewal metadata for "hidden".
  */
-export function projectWindow<T extends { kind: string; startsAt: number; resetsAt: number | null; limitUsd: number | null; spentUsd: number; remainingUsd: number | null }>(
-  window: T,
-  policy: FinancialPolicy,
-) {
+export function projectWindow<
+  T extends {
+    kind: string;
+    startsAt: number;
+    resetsAt: number | null;
+    limitUsd: number | null;
+    spentUsd: number;
+    reservedUsd?: number;
+    remainingUsd: number | null;
+  },
+>(window: T, policy: FinancialPolicy) {
   const base = { kind: window.kind, startsAt: window.startsAt, resetsAt: window.resetsAt };
   if (policy.budgetPresentation === "usd") {
-    // Pass the window through UNCHANGED. Rebuilding it from a fixed field list
-    // silently dropped fields this function does not know about (billedUsd and
-    // reservedUsd), which broke the ledger view and the billing tests.
     return window;
   }
   if (policy.budgetPresentation === "percent") {
-    return { ...base, usedPercent: usedPercent(window.spentUsd, window.limitUsd), limitConfigured: window.limitUsd !== null };
+    return {
+      presentation: "percent" as const,
+      ...base,
+      usedPercent: usedPercent(window.spentUsd, window.limitUsd),
+      holdPercent: usedPercent(window.reservedUsd ?? 0, window.limitUsd),
+      limitConfigured: window.limitUsd !== null,
+    };
   }
-  return { ...base, limitConfigured: window.limitUsd !== null };
+  return {
+    presentation: "hidden" as const,
+    ...base,
+    limitConfigured: window.limitUsd !== null,
+    activeHold: (window.reservedUsd ?? 0) > 0,
+    exhausted: window.limitUsd !== null && window.remainingUsd !== null && window.remainingUsd <= 0,
+  };
+}
+
+/** Project a complete billing status payload (GET /api/billing and reset redemption). */
+export function projectBillingPayload<
+  T extends {
+    plan: {
+      id: string;
+      name: string;
+      monthlyUsd: number | null;
+      weeklyEnabled: boolean;
+      sessionEnabled: boolean;
+    } | null;
+    windows: Array<{
+      kind: string;
+      startsAt: number;
+      resetsAt: number | null;
+      limitUsd: number | null;
+      spentUsd: number;
+      reservedUsd?: number;
+      remainingUsd: number | null;
+    }>;
+  },
+>(billing: T, policy: FinancialPolicy) {
+  const windows = billing.windows.map((window) => projectWindow(window, policy));
+  const plan =
+    billing.plan &&
+    (policy.budgetPresentation === "usd"
+      ? billing.plan
+      : {
+          id: billing.plan.id,
+          name: billing.plan.name,
+          limitConfigured: billing.plan.monthlyUsd !== null,
+          weeklyEnabled: billing.plan.weeklyEnabled,
+          sessionEnabled: billing.plan.sessionEnabled,
+        });
+  return { ...billing, windows, plan, financialPolicy: policy };
+}
+
+/** Project an API key DTO across GET, POST and PATCH /api/keys. */
+export function projectKeyDto<
+  T extends {
+    id: string;
+    userId: string;
+    userEmail?: string;
+    name: string;
+    prefix: string;
+    createdAt: number;
+    expiresAt: number | null;
+    dailyLimitUsd: number | null;
+    totalLimitUsd: number | null;
+    rpm: number | null;
+    status: string;
+    lastUsedAt: number | null;
+    spendTodayUsd: number;
+    spendTotalUsd: number;
+    revealable: boolean;
+  },
+>(key: T, policy: FinancialPolicy) {
+  if (policy.budgetPresentation === "usd") return key;
+  const base = {
+    id: key.id,
+    userId: key.userId,
+    ...(key.userEmail !== undefined ? { userEmail: key.userEmail } : {}),
+    name: key.name,
+    prefix: key.prefix,
+    createdAt: key.createdAt,
+    expiresAt: key.expiresAt,
+    rpm: key.rpm,
+    status: key.status,
+    lastUsedAt: key.lastUsedAt,
+    revealable: key.revealable,
+    dailyLimitConfigured: key.dailyLimitUsd !== null,
+    totalLimitConfigured: key.totalLimitUsd !== null,
+  };
+  if (policy.budgetPresentation === "percent") {
+    return {
+      presentation: "percent" as const,
+      ...base,
+      dailyUsedPercent: usedPercent(key.spendTodayUsd, key.dailyLimitUsd),
+      totalUsedPercent: usedPercent(key.spendTotalUsd, key.totalLimitUsd),
+    };
+  }
+  return {
+    presentation: "hidden" as const,
+    ...base,
+  };
+}
+
+function stripCostRow<T extends Record<string, unknown>>(row: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (key === "cost" || key === "cost_in" || key === "cost_cache" || key === "cost_out" || isMoneyKey(key)) {
+      continue;
+    }
+    out[key] = value;
+  }
+  return out as T;
+}
+
+/** Project tabular/series usage rows without mutating cached reader snapshots. */
+export function projectUsageRows<T extends Record<string, unknown>>(rows: T[], policy: FinancialPolicy): T[] {
+  if (policy.budgetPresentation === "usd") return rows;
+  return rows.map(stripCostRow);
+}
+
+export function projectUsageSummary<
+  T extends { today: Record<string, unknown>; month: Record<string, unknown>; total: Record<string, unknown> },
+>(summary: T, policy: FinancialPolicy): T {
+  if (policy.budgetPresentation === "usd") return summary;
+  return {
+    ...summary,
+    today: stripCostRow(summary.today),
+    month: stripCostRow(summary.month),
+    total: stripCostRow(summary.total),
+  };
+}
+
+export function projectUsageBreakdownPayload<
+  T extends { rows: Array<Record<string, unknown>>; totals?: Record<string, unknown> },
+>(page: T, policy: FinancialPolicy): T {
+  if (policy.budgetPresentation === "usd") return page;
+  return {
+    ...page,
+    rows: page.rows.map(stripCostRow),
+    ...(page.totals ? { totals: stripCostRow(page.totals) } : {}),
+  };
+}
+
+function rankByVolume<T extends Record<string, unknown>>(entities: T[]): T[] {
+  const named = entities.filter((e) => e.id !== null);
+  const rest = entities.filter((e) => e.id === null);
+  named.sort((a, b) => {
+    const reqDiff = (Number(b.reqs) || 0) - (Number(a.reqs) || 0);
+    if (reqDiff !== 0) return reqDiff;
+    const tokA = (Number(a.in_tok) || 0) + (Number(a.cache_tok) || 0) + (Number(a.out_tok) || 0);
+    const tokB = (Number(b.in_tok) || 0) + (Number(b.cache_tok) || 0) + (Number(b.out_tok) || 0);
+    if (tokB !== tokA) return tokB - tokA;
+    return String(a.label ?? "").localeCompare(String(b.label ?? ""));
+  });
+  return [...named, ...rest].map(stripCostRow);
+}
+
+/**
+ * Project `/api/usage/analytics`: strips per-bucket costs, clears `modelSpend`
+ * (whose `points[*].values` carry raw USD numbers), and orders entity breakdowns
+ * by request/token volume rather than spend.
+ */
+export function projectAnalyticsPayload<
+  T extends {
+    series: Array<Record<string, unknown>>;
+    previous: Array<Record<string, unknown>>;
+    modelSpend: { groups: unknown[]; points: unknown[] };
+    users: Array<Record<string, unknown>>;
+    keys: Array<Record<string, unknown>>;
+    providers: Array<Record<string, unknown>>;
+    protocols: Array<Record<string, unknown>>;
+  },
+>(report: T, policy: FinancialPolicy): T {
+  if (policy.budgetPresentation === "usd") return report;
+  return {
+    ...report,
+    series: report.series.map(stripCostRow),
+    previous: report.previous.map(stripCostRow),
+    modelSpend: { groups: [], points: [] },
+    users: rankByVolume(report.users),
+    keys: rankByVolume(report.keys),
+    providers: report.providers.map(stripCostRow),
+    protocols: report.protocols.map(stripCostRow),
+  };
+}
+
+/**
+ * Drop monetary sort and filter predicates when the caller is not allowed to see
+ * USD values, preventing threshold/ranking probes from acting as a spend oracle.
+ */
+export function sanitizeGridForPolicy<
+  T extends {
+    sort?: Array<{ colId: string; sort: string }>;
+    filters?: Record<string, { filterType?: string; type?: string; filter?: unknown; filterTo?: unknown }>;
+  },
+>(grid: T, policy: FinancialPolicy): T {
+  if (policy.budgetPresentation === "usd") return grid;
+  const sort = grid.sort?.filter((entry) => !isMoneyKey(entry.colId));
+  let filters: T["filters"] = undefined;
+  if (grid.filters) {
+    const kept = Object.entries(grid.filters).filter(([colId]) => !isMoneyKey(colId));
+    if (kept.length > 0) filters = Object.fromEntries(kept);
+  }
+  return {
+    ...grid,
+    sort: sort?.length ? sort : undefined,
+    filters,
+  };
 }
 

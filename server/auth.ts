@@ -1,7 +1,9 @@
 import { GATEWAY_SECRET, LIMITS } from "./config";
 import { db, stmts, audit, inImmediateTx, type UserRow, type SessionRow } from "./db";
 import { jwtSign, jwtVerify, randomToken, sha256Hex } from "./crypto";
+import { financialPolicyFor, formatFinancialPolicyHeader } from "./financial-policy";
 import { ApiError } from "./http";
+import { setCurrentFinancialPolicyHeader } from "./request-context";
 import { disconnectSessionSockets } from "./routes/relay";
 
 /**
@@ -217,6 +219,7 @@ export async function requireAuth(req: Request): Promise<AuthContext> {
     );
   }
 
+  setCurrentFinancialPolicyHeader(formatFinancialPolicyHeader(financialPolicyFor(user)));
   return { user, session };
 }
 

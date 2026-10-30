@@ -1245,7 +1245,7 @@ export function fmtCost(val: number | null | undefined, opts?: { compact?: boole
     const digits = k >= 100 ? 0 : 1;
     return `${neg ? "-" : ""}$${k.toFixed(digits)}K`;
   }
-  return `${neg ? "-" : ""}$${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${neg ? "-" : ""}$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /** Per-hour axis label when the point is an hour bucket, else MM-DD. */

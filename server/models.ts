@@ -404,14 +404,19 @@ export function publicModelSummary(m: ModelRow) {
 }
 
 /** The rich registry entry shape served by /v1/models in router mode. */
-export function publicModelEntry(m: ModelRow, providerName: string): Record<string, unknown> {
+export function publicModelEntry(
+  m: ModelRow,
+  providerName: string,
+  opts?: { includePricing?: boolean },
+): Record<string, unknown> {
   const disabledReasoningEfforts = new Set(["off", "none", "no", "false", "disabled", ""]);
   const rawEfforts = jsonArr(m.reasoning_efforts);
   const efforts = rawEfforts.filter(
     (e): e is string => typeof e === "string" && !disabledReasoningEfforts.has(e.trim().toLowerCase()),
   );
   const isExplicitlyDisabled = rawEfforts.length > 0 && efforts.length === 0;
-  const pricing = modelPricing(m);
+  const includePricing = opts?.includePricing ?? true;
+  const pricing = includePricing ? modelPricing(m) : null;
   const sampling = jsonArr(m.sampling_params);
   const entry: Record<string, unknown> = {
     ...publicModelSummary(m),

@@ -83,7 +83,10 @@ async function build() {
 
   const assetPath = (file: string) => `/assets/${path.basename(file)}`;
   const emittedEntry = result.outputs.find((output) => output.kind === "entry-point");
-  const emittedStyle = result.outputs.find((output) => output.kind === "asset" && output.path.endsWith(".css"));
+  const emittedStyle =
+    result.outputs.find(
+      (output) => output.kind === "asset" && /^boot-[^/\\]+\.css$/.test(path.basename(output.path)),
+    ) ?? result.outputs.find((output) => output.kind === "asset" && output.path.endsWith(".css"));
   if (!emittedEntry) {
     console.error(`[build] no JavaScript entry was produced (saw: ${emitted.slice(0, 12).join(", ")})`);
     process.exit(1);

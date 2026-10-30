@@ -14,7 +14,7 @@ parentPort!.on("message", ({ id, request: r }: { id: number; request: UsageReadR
       if (r.kind === "catalog-audit") return catalogAuditPage(new URLSearchParams(r.search));
       const resolved = resolveUsageScope(r.scope);
       const scope = r.kind === "events" ? r.scope : resolved.scope;
-      const data = r.kind === "analytics" ? filteredUsageAnalytics(scope, r.userId, r.scope)
+      const data = r.kind === "analytics" ? filteredUsageAnalytics(scope, r.userId, r.scope, r.includeCost ?? true)
         : r.kind === "overview" ? { ...filteredUsageSeries(scope, r.userId), models: filteredTopModels(scope, r.userId) }
         : r.kind === "series" ? filteredUsageSeries(scope, r.userId)
         : r.kind === "facets" ? usageFilterOptions(r.userId, scope, new URLSearchParams(r.search))

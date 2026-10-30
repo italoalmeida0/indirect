@@ -1,7 +1,14 @@
 import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../catalog";
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 
-import { api, type ApiKeyDto } from "../api";
+import {
+  api,
+  currentFinancialPolicy,
+  type ApiKeyDto,
+  type HiddenApiKeyDto,
+  type PercentApiKeyDto,
+  type ProjectedApiKeyDto,
+} from "../api";
 import { PageTitle } from "../chrome";
 import {
   Badge,
@@ -59,6 +66,18 @@ interface KeyFormState {
   rpm: string;
 }
 
+function isUsdKey(k: ProjectedApiKeyDto): k is ApiKeyDto {
+  return "spendTotalUsd" in k;
+}
+
+function isPercentKey(k: ProjectedApiKeyDto): k is PercentApiKeyDto {
+  return k.presentation === "percent";
+}
+
+function isHiddenKey(k: ProjectedApiKeyDto): k is HiddenApiKeyDto {
+  return k.presentation === "hidden";
+}
+
 function computeExpiresAt(f: KeyFormState): number | null {
   if (f.preset === "never") return null;
   if (f.preset === "custom") {
@@ -68,21 +87,46 @@ function computeExpiresAt(f: KeyFormState): number | null {
   return Date.now() + Number(f.preset) * 1000;
 }
 
+const BASE_KEY_SORTS = [
+  { value: "name:asc", label: "Name A–Z" },
+  { value: "createdAt:desc", label: "Newest first" },
+  { value: "createdAt:asc", label: "Oldest first" },
+  { value: "lastUsedAt:desc", label: "Recently used" },
+];
+
 export default function KeysPage() {
-  const view = createCatalog<ApiKeyDto>({ storageKey: "llmgw-grid:keys.user", path: "/api/keys", result: "keys", label: "API keys", sort: [
-    { value: "name:asc", label: "Name A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "createdAt:asc", label: "Oldest first" }, { value: "lastUsedAt:desc", label: "Recently used" }, { value: "spendTotalUsd:desc", label: "Highest spend" },
-  ] });
+  const presentation = createMemo(() => currentFinancialPolicy().budgetPresentation);
+  const showUsd = createMemo(() => presentation() === "usd");
+  const showPercent = createMemo(() => presentation() === "percent");
+  const sortOptions = createMemo(() =>
+    showUsd()
+      ? [...BASE_KEY_SORTS, { value: "spendTotalUsd:desc", label: "Highest spend" }]
+      : BASE_KEY_SORTS,
+  );
+  const view = createCatalog<ProjectedApiKeyDto>({
+    storageKey: "llmgw-grid:keys.user",
+    path: "/api/keys",
+    result: "keys",
+    label: "API keys",
+    sort: sortOptions,
+  });
+  createEffect(() => {
+    if (!showUsd()) {
+      const next = view.sort().filter((s) => s.colId !== "spendTotalUsd" && s.colId !== "spendTodayUsd");
+      if (next.length !== view.sort().length) view.setSort(next);
+    }
+  });
   const keyCount = view.total;
   const refreshGrid = view.refresh;
   const keysDatasource = view.datasource;
 
   const [showCreate, setShowCreate] = createSignal(false);
-  const [editing, setEditing] = createSignal<ApiKeyDto | null>(null);
+  const [editing, setEditing] = createSignal<ProjectedApiKeyDto | null>(null);
   const [newToken, setNewToken] = createSignal("");
-  const [confirmRevoke, setConfirmRevoke] = createSignal<ApiKeyDto | null>(
+  const [confirmRevoke, setConfirmRevoke] = createSignal<ProjectedApiKeyDto | null>(
     null,
   );
-  const [confirmDelete, setConfirmDelete] = createSignal<ApiKeyDto | null>(
+  const [confirmDelete, setConfirmDelete] = createSignal<ProjectedApiKeyDto | null>(
     null,
   );
   const [busy, setBusy] = createSignal(false);
@@ -114,13 +158,16 @@ export default function KeysPage() {
     setBusy(true);
     try {
       const expiresAt = computeExpiresAt(form());
-      const j = await api<{ token: string }>("POST", "/api/keys", {
+      const payload: Record<string, unknown> = {
         name: form().name.trim(),
         expiresAt,
-        dailyLimitUsd: num(form().dailyLimitUsd),
-        totalLimitUsd: num(form().totalLimitUsd),
         rpm: num(form().rpm),
-      });
+      };
+      if (showUsd()) {
+        payload.dailyLimitUsd = num(form().dailyLimitUsd);
+        payload.totalLimitUsd = num(form().totalLimitUsd);
+      }
+      const j = await api<{ token: string }>("POST", "/api/keys", payload);
       setNewToken(j.token);
       setShowCreate(false);
       resetForm();
@@ -132,13 +179,13 @@ export default function KeysPage() {
     }
   };
 
-  const openEdit = (k: ApiKeyDto) => {
+  const openEdit = (k: ProjectedApiKeyDto) => {
     setForm({
       name: k.name,
       preset: "never",
       customDate: "",
-      dailyLimitUsd: k.dailyLimitUsd?.toString() ?? "",
-      totalLimitUsd: k.totalLimitUsd?.toString() ?? "",
+      dailyLimitUsd: isUsdKey(k) ? (k.dailyLimitUsd?.toString() ?? "") : "",
+      totalLimitUsd: isUsdKey(k) ? (k.totalLimitUsd?.toString() ?? "") : "",
       rpm: k.rpm?.toString() ?? "",
     });
     setEditing(k);
@@ -149,12 +196,15 @@ export default function KeysPage() {
     if (!k) return;
     setBusy(true);
     try {
-      await api("PATCH", `/api/keys/${k.id}`, {
+      const payload: Record<string, unknown> = {
         name: form().name.trim(),
-        dailyLimitUsd: num(form().dailyLimitUsd),
-        totalLimitUsd: num(form().totalLimitUsd),
         rpm: num(form().rpm),
-      });
+      };
+      if (showUsd()) {
+        payload.dailyLimitUsd = num(form().dailyLimitUsd);
+        payload.totalLimitUsd = num(form().totalLimitUsd);
+      }
+      await api("PATCH", `/api/keys/${k.id}`, payload);
       toast("Key updated");
       setEditing(null);
       refreshGrid();
@@ -181,7 +231,7 @@ export default function KeysPage() {
     }
   };
 
-  const copyKey = async (k: ApiKeyDto) => {
+  const copyKey = async (k: ProjectedApiKeyDto) => {
     try {
       const j = await api<{ token: string }>("GET", `/api/keys/${k.id}/reveal`);
       await copyWithToast(j.token);
@@ -208,7 +258,7 @@ export default function KeysPage() {
 
   // ---- grid cells ----
 
-  function NameCell(props: { data?: ApiKeyDto }) {
+  function NameCell(props: { data?: ProjectedApiKeyDto }) {
     return (
       <span class="text-sm font-medium text-ink-100 truncate block">
         {props.data?.name}
@@ -216,7 +266,7 @@ export default function KeysPage() {
     );
   }
 
-  function PrefixCell(props: { data?: ApiKeyDto }) {
+  function PrefixCell(props: { data?: ProjectedApiKeyDto }) {
     return (
       <code class="text-[11px] text-ink-500 truncate block">
         {props.data?.prefix}…
@@ -229,31 +279,68 @@ export default function KeysPage() {
     return <Badge tone={st.tone}>{st.label}</Badge>;
   }
 
-  /** USD spend, with a mini progress bar when a budget is set. */
-  function BudgetCell(props: { data?: ApiKeyDto; kind?: "today" | "total" }) {
+  /** Budget usage cell supporting usd, percent, and hidden presentation contracts. */
+  function BudgetCell(props: { data?: ProjectedApiKeyDto; kind?: "today" | "total" }) {
     const k = props.data;
     if (!k) return null;
     const today = props.kind === "today";
-    const used = today ? k.spendTodayUsd : k.spendTotalUsd;
-    const limit = today ? k.dailyLimitUsd : k.totalLimitUsd;
-    return (
-      <div class="flex items-center justify-end gap-2 w-full pr-1">
-        <span class="tabular-nums whitespace-nowrap text-xs text-right">
-          {fmtCost(used)}
-          <span class="text-ink-500 font-normal"> / {limit !== null ? fmtCost(limit) : "Unlimited"}</span>
-        </span>
-        <div class="w-16 shrink-0 flex items-center justify-center">
-          {limit !== null ? (
-            <ProgressBar danger value={used} max={limit} />
-          ) : (
-            <span class="text-[10px] text-ink-600 font-mono leading-none">—</span>
-          )}
+    if (isUsdKey(k)) {
+      const used = today ? k.spendTodayUsd : k.spendTotalUsd;
+      const limit = today ? k.dailyLimitUsd : k.totalLimitUsd;
+      return (
+        <div class="flex items-center justify-end gap-2 w-full pr-1">
+          <span class="tabular-nums whitespace-nowrap text-xs text-right">
+            {fmtCost(used)}
+            <span class="text-ink-500 font-normal"> / {limit !== null ? fmtCost(limit) : "Unlimited"}</span>
+          </span>
+          <div class="w-16 shrink-0 flex items-center justify-center">
+            {limit !== null ? (
+              <ProgressBar danger value={used} max={limit} />
+            ) : (
+              <span class="text-[10px] text-ink-600 font-mono leading-none">—</span>
+            )}
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
+    if (isPercentKey(k)) {
+      const configured = today ? k.dailyLimitConfigured : k.totalLimitConfigured;
+      const pct = today ? k.dailyUsedPercent : k.totalUsedPercent;
+      if (!configured) {
+        return (
+          <div class="flex items-center justify-end gap-2 w-full pr-1">
+            <span class="text-xs text-ink-500">Unlimited</span>
+            <div class="w-16 shrink-0 flex items-center justify-center">
+              <span class="text-[10px] text-ink-600 font-mono leading-none">—</span>
+            </div>
+          </div>
+        );
+      }
+      const safePct = Math.max(0, Math.min(100, pct ?? 0));
+      return (
+        <div class="flex items-center justify-end gap-2 w-full pr-1">
+          <span class="tabular-nums whitespace-nowrap text-xs text-right">
+            {safePct.toLocaleString("en", { maximumFractionDigits: 1 })}%
+            <span class="text-ink-500 font-normal"> used</span>
+          </span>
+          <div class="w-16 shrink-0 flex items-center justify-center">
+            <ProgressBar danger value={safePct} max={100} />
+          </div>
+        </div>
+      );
+    }
+    if (isHiddenKey(k)) {
+      const configured = today ? k.dailyLimitConfigured : k.totalLimitConfigured;
+      return (
+        <div class="flex items-center justify-end w-full pr-1">
+          <span class="text-xs text-ink-400">{configured ? "Managed cap" : "No key cap"}</span>
+        </div>
+      );
+    }
+    return null;
   }
 
-  function ActionsCell(props: { data?: ApiKeyDto }) {
+  function ActionsCell(props: { data?: ProjectedApiKeyDto }) {
     const k = props.data;
     if (!k) return null;
     return (
@@ -291,60 +378,88 @@ export default function KeysPage() {
     );
   }
 
-  const cols: ColDef[] = [
-    { field: "name", headerName: "Name", flex: 1.2, minWidth: 160, cellRenderer: NameCell },
-    { field: "prefix", headerName: "Prefix", width: 130, cellRenderer: PrefixCell },
-    { field: "status", headerName: "Status", width: 160, cellRenderer: StatusBadgeCell },
-    {
-      field: "spendTodayUsd",
-      headerName: "Spend today",
-      width: 170,
-      filter: "agNumberColumnFilter",
-      cellRenderer: BudgetCell,
-      cellRendererParams: { kind: "today" },
-    },
-    {
-      field: "spendTotalUsd",
-      headerName: "Lifetime spend",
-      width: 170,
-      filter: "agNumberColumnFilter",
-      cellRenderer: BudgetCell,
-      cellRendererParams: { kind: "total" },
-    },
-    {
-      field: "expiresAt",
-      headerName: "Expires",
-      width: 200,
-      filter: "agDateColumnFilter",
-      valueFormatter: (p) =>
-        p.value ? `${fmtDate(p.value)} (${timeUntil(p.value)})` : "Never",
-    },
-    {
-      field: "lastUsedAt",
-      headerName: "Last used",
-      width: 160,
-      filter: "agDateColumnFilter",
-      valueFormatter: (p) => (p.value ? fmtDate(p.value) : "Never"),
-    },
-    {
-      field: "rpm",
-      headerName: "RPM",
-      width: 100,
-      filter: "agNumberColumnFilter",
-      valueFormatter: (p) => (p.value ?? "default"),
-    },
-    {
-      colId: "actions",
-      headerName: "",
-      width: 160,
-      cellRenderer: ActionsCell,
-      sortable: false,
-      filter: false,
-      floatingFilter: false,
-      resizable: false,
-      pinned: typeof window !== "undefined" && window.innerWidth >= 1024 ? "right" : undefined,
-    },
-  ];
+  const cols = createMemo<ColDef[]>(() => {
+    const budgetCols: ColDef[] = showUsd()
+      ? [
+          {
+            field: "spendTodayUsd",
+            headerName: "Spend today",
+            width: 170,
+            filter: "agNumberColumnFilter",
+            cellRenderer: BudgetCell,
+            cellRendererParams: { kind: "today" },
+          },
+          {
+            field: "spendTotalUsd",
+            headerName: "Lifetime spend",
+            width: 170,
+            filter: "agNumberColumnFilter",
+            cellRenderer: BudgetCell,
+            cellRendererParams: { kind: "total" },
+          },
+        ]
+      : showPercent()
+        ? [
+            {
+              colId: "dailyAllowance",
+              headerName: "Daily allowance",
+              width: 170,
+              sortable: false,
+              filter: false,
+              cellRenderer: BudgetCell,
+              cellRendererParams: { kind: "today" },
+            },
+            {
+              colId: "lifetimeAllowance",
+              headerName: "Lifetime allowance",
+              width: 170,
+              sortable: false,
+              filter: false,
+              cellRenderer: BudgetCell,
+              cellRendererParams: { kind: "total" },
+            },
+          ]
+        : [];
+    return [
+      { field: "name", headerName: "Name", flex: 1.2, minWidth: 160, cellRenderer: NameCell },
+      { field: "prefix", headerName: "Prefix", width: 130, cellRenderer: PrefixCell },
+      { field: "status", headerName: "Status", width: 160, cellRenderer: StatusBadgeCell },
+      ...budgetCols,
+      {
+        field: "expiresAt",
+        headerName: "Expires",
+        width: 200,
+        filter: "agDateColumnFilter",
+        valueFormatter: (p) =>
+          p.value ? `${fmtDate(p.value)} (${timeUntil(p.value)})` : "Never",
+      },
+      {
+        field: "lastUsedAt",
+        headerName: "Last used",
+        width: 160,
+        filter: "agDateColumnFilter",
+        valueFormatter: (p) => (p.value ? fmtDate(p.value) : "Never"),
+      },
+      {
+        field: "rpm",
+        headerName: "RPM",
+        width: 100,
+        filter: "agNumberColumnFilter",
+        valueFormatter: (p) => (p.value ?? "default"),
+      },
+      {
+        colId: "actions",
+        headerName: "",
+        width: 160,
+        cellRenderer: ActionsCell,
+        sortable: false,
+        filter: false,
+        floatingFilter: false,
+        resizable: false,
+        pinned: typeof window !== "undefined" && window.innerWidth >= 1024 ? "right" : undefined,
+      },
+    ];
+  });
 
   return (
     <div class="catalog-page" aria-busy={view.loading()}>
@@ -360,7 +475,7 @@ export default function KeysPage() {
       <CatalogToolbar view={view} />
       <CatalogState view={view}><Card>
         <Show when={keyCount() > 0} fallback={<EmptyState icon={Icons.key} title="No matching API keys" hint="Adjust your filters or create a new key." />}>
-          <Show when={!view.mobile()}><div class="p-2"><UsageGrid columnDefs={cols} datasource={keysDatasource} cacheBlockSize={25} refreshDeps={view.refreshKey()} storageKey="llmgw-grid:keys.user" sort={view.sort()} onSortChanged={view.setSort} /></div></Show>
+          <Show when={!view.mobile()}><div class="p-2"><Show when={presentation()} keyed>{(_mode) => <UsageGrid columnDefs={cols()} datasource={keysDatasource} cacheBlockSize={25} refreshDeps={view.refreshKey()} storageKey="llmgw-grid:keys.user" sort={view.sort()} onSortChanged={view.setSort} />}</Show></div></Show>
           <Show when={view.mobile()}><div class="catalog-mobile p-3 space-y-3"><For each={view.rows()}>
                   {(k) => (
                     <div class="p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
@@ -385,18 +500,35 @@ export default function KeysPage() {
                         </div>
                       </div>
 
-                      <Show when={k.totalLimitUsd !== null || k.dailyLimitUsd !== null}>
+                      <Show when={isUsdKey(k) && (k.totalLimitUsd !== null || k.dailyLimitUsd !== null)}>
                         <div class="pt-2 border-t border-line/50 space-y-1.5 text-xs text-ink-400">
-                          <Show when={k.dailyLimitUsd !== null}>
+                          <Show when={isUsdKey(k) && k.dailyLimitUsd !== null}>
                             <div class="flex justify-between">
                               <span>Daily limit</span>
-                              <span class="font-mono text-ink-200">{fmtCost(k.dailyLimitUsd!)}</span>
+                              <span class="font-mono text-ink-200">{isUsdKey(k) ? fmtCost(k.dailyLimitUsd!) : ""}</span>
                             </div>
                           </Show>
-                          <Show when={k.totalLimitUsd !== null}>
+                          <Show when={isUsdKey(k) && k.totalLimitUsd !== null}>
                             <div class="flex justify-between">
                               <span>Total cap</span>
-                              <span class="font-mono text-ink-200">{fmtCost(k.spendTotalUsd ?? 0)} / {fmtCost(k.totalLimitUsd!)}</span>
+                              <span class="font-mono text-ink-200">{isUsdKey(k) ? `${fmtCost(k.spendTotalUsd)} / ${fmtCost(k.totalLimitUsd!)}` : ""}</span>
+                            </div>
+                          </Show>
+                        </div>
+                      </Show>
+
+                      <Show when={isPercentKey(k) && (k.totalLimitConfigured || k.dailyLimitConfigured)}>
+                        <div class="pt-2 border-t border-line/50 space-y-1.5 text-xs text-ink-400">
+                          <Show when={isPercentKey(k) && k.dailyLimitConfigured}>
+                            <div class="flex justify-between">
+                              <span>Daily allowance</span>
+                              <span class="font-mono text-ink-200">{isPercentKey(k) ? `${(k.dailyUsedPercent ?? 0).toLocaleString("en", { maximumFractionDigits: 1 })}% used` : ""}</span>
+                            </div>
+                          </Show>
+                          <Show when={isPercentKey(k) && k.totalLimitConfigured}>
+                            <div class="flex justify-between">
+                              <span>Lifetime allowance</span>
+                              <span class="font-mono text-ink-200">{isPercentKey(k) ? `${(k.totalUsedPercent ?? 0).toLocaleString("en", { maximumFractionDigits: 1 })}% used` : ""}</span>
                             </div>
                           </Show>
                         </div>
@@ -516,64 +648,66 @@ export default function KeysPage() {
             </div>
           </ModalSection>
 
-          <ModalSection
-            title="USD spending limits"
-            info="All billable input, cached input, output and reasoning count in USD. Key limits are independent of the account plan."
-          >
-            <div class="space-y-3">
-              <div class="flex items-center justify-between flex-wrap gap-2">
-                <span class="text-xs text-ink-400">Quick limit presets:</span>
-                <div class="flex flex-wrap gap-1.5">
-                  <For each={[
-                    { label: "$1 / day", val: "1" },
-                    { label: "$5 / day", val: "5" },
-                    { label: "$10 / day", val: "10" },
-                    { label: "$50 / day", val: "50" },
-                  ]}>
-                    {(preset) => (
-                      <button
-                        type="button"
-                        onClick={() => setForm({ ...form(), dailyLimitUsd: preset.val, totalLimitUsd: String(Number(preset.val) * 10) })}
-                        class="px-2 py-1 rounded bg-ink-900/60 hover:bg-ink-800 text-[11px] text-ink-300 hover:text-ink-100 border border-line/60 transition-colors cursor-pointer"
-                      >
-                        {preset.label}
-                      </button>
-                    )}
-                  </For>
-                  <button
-                    type="button"
-                    onClick={() => setForm({ ...form(), dailyLimitUsd: "", totalLimitUsd: "" })}
-                    class="px-2 py-1 rounded bg-ink-900/60 hover:bg-ink-800 text-[11px] text-ink-400 hover:text-ink-200 border border-line/60 transition-colors cursor-pointer"
-                  >
-                    Unlimited
-                  </button>
+          <Show when={showUsd()}>
+            <ModalSection
+              title="USD spending limits"
+              info="All billable input, cached input, output and reasoning count in USD. Key limits are independent of the account plan."
+            >
+              <div class="space-y-3">
+                <div class="flex items-center justify-between flex-wrap gap-2">
+                  <span class="text-xs text-ink-400">Quick limit presets:</span>
+                  <div class="flex flex-wrap gap-1.5">
+                    <For each={[
+                      { label: "$1 / day", val: "1" },
+                      { label: "$5 / day", val: "5" },
+                      { label: "$10 / day", val: "10" },
+                      { label: "$50 / day", val: "50" },
+                    ]}>
+                      {(preset) => (
+                        <button
+                          type="button"
+                          onClick={() => setForm({ ...form(), dailyLimitUsd: preset.val, totalLimitUsd: String(Number(preset.val) * 10) })}
+                          class="px-2 py-1 rounded bg-ink-900/60 hover:bg-ink-800 text-[11px] text-ink-300 hover:text-ink-100 border border-line/60 transition-colors cursor-pointer"
+                        >
+                          {preset.label}
+                        </button>
+                      )}
+                    </For>
+                    <button
+                      type="button"
+                      onClick={() => setForm({ ...form(), dailyLimitUsd: "", totalLimitUsd: "" })}
+                      class="px-2 py-1 rounded bg-ink-900/60 hover:bg-ink-800 text-[11px] text-ink-400 hover:text-ink-200 border border-line/60 transition-colors cursor-pointer"
+                    >
+                      Unlimited
+                    </button>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <ModalField label="Daily limit (USD)" hint="Resets 00:00 UTC">
+                    <input
+                      type="number" aria-label="Daily limit (USD)"
+                      min={0} step="0.01" inputMode="decimal"
+                      value={form().dailyLimitUsd}
+                      onInput={(e) => setForm({ ...form(), dailyLimitUsd: e.currentTarget.value })}
+                      placeholder="Unlimited"
+                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                    />
+                  </ModalField>
+                  <ModalField label="Lifetime limit (USD)" hint="Permanent cap">
+                    <input
+                      type="number" aria-label="Lifetime limit (USD)"
+                      min={0} step="0.01" inputMode="decimal"
+                      value={form().totalLimitUsd}
+                      onInput={(e) => setForm({ ...form(), totalLimitUsd: e.currentTarget.value })}
+                      placeholder="Unlimited"
+                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                    />
+                  </ModalField>
                 </div>
               </div>
-
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <ModalField label="Daily limit (USD)" hint="Resets 00:00 UTC">
-                  <input
-                    type="number" aria-label="Daily limit (USD)"
-                    min={0} step="0.01" inputMode="decimal"
-                    value={form().dailyLimitUsd}
-                    onInput={(e) => setForm({ ...form(), dailyLimitUsd: e.currentTarget.value })}
-                    placeholder="Unlimited"
-                    class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                  />
-                </ModalField>
-                <ModalField label="Lifetime limit (USD)" hint="Permanent cap">
-                  <input
-                    type="number" aria-label="Lifetime limit (USD)"
-                    min={0} step="0.01" inputMode="decimal"
-                    value={form().totalLimitUsd}
-                    onInput={(e) => setForm({ ...form(), totalLimitUsd: e.currentTarget.value })}
-                    placeholder="Unlimited"
-                    class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                  />
-                </ModalField>
-              </div>
-            </div>
-          </ModalSection>
+            </ModalSection>
+          </Show>
 
           <ModalSection title="Request limits">
             <div class="space-y-3">
@@ -607,7 +741,11 @@ export default function KeysPage() {
         open={!!editing()}
         onClose={() => setEditing(null)}
         title={`Edit “${editing()?.name ?? ""}”`}
-        subtitle="Adjust USD spending limits, request rate, or expiration. The account plan remains the shared spending ceiling."
+        subtitle={
+          showUsd()
+            ? "Adjust USD spending limits, request rate, or expiration. The account plan remains the shared spending ceiling."
+            : "Adjust key name, request rate, or expiration. Spending allowances are managed by your organization."
+        }
         width="max-w-xl billing-dialog"
         footer={
           <>
@@ -684,35 +822,37 @@ export default function KeysPage() {
             </div>
           </ModalSection>
 
-          <ModalSection
-            title="USD spending limits"
-            info="All billable usage counts in USD. Leave a field empty for no key-level cap; the account plan still applies."
-          >
-            <div class="space-y-3">
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <ModalField label="Daily limit (USD)" hint="Resets at midnight UTC · empty = unlimited">
-                  <input
-                    type="number" aria-label="Daily limit (USD)"
-                    min={0} step="0.01" inputMode="decimal"
-                    value={form().dailyLimitUsd}
-                    onInput={(e) => setForm({ ...form(), dailyLimitUsd: e.currentTarget.value })}
-                    placeholder="Unlimited"
-                    class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                  />
-                </ModalField>
-                <ModalField label="Lifetime limit (USD)" hint="Across the entire lifetime of this key">
-                  <input
-                    type="number" aria-label="Lifetime limit (USD)"
-                    min={0} step="0.01" inputMode="decimal"
-                    value={form().totalLimitUsd}
-                    onInput={(e) => setForm({ ...form(), totalLimitUsd: e.currentTarget.value })}
-                    placeholder="Unlimited"
-                    class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                  />
-                </ModalField>
+          <Show when={showUsd()}>
+            <ModalSection
+              title="USD spending limits"
+              info="All billable usage counts in USD. Leave a field empty for no key-level cap; the account plan still applies."
+            >
+              <div class="space-y-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <ModalField label="Daily limit (USD)" hint="Resets at midnight UTC · empty = unlimited">
+                    <input
+                      type="number" aria-label="Daily limit (USD)"
+                      min={0} step="0.01" inputMode="decimal"
+                      value={form().dailyLimitUsd}
+                      onInput={(e) => setForm({ ...form(), dailyLimitUsd: e.currentTarget.value })}
+                      placeholder="Unlimited"
+                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                    />
+                  </ModalField>
+                  <ModalField label="Lifetime limit (USD)" hint="Across the entire lifetime of this key">
+                    <input
+                      type="number" aria-label="Lifetime limit (USD)"
+                      min={0} step="0.01" inputMode="decimal"
+                      value={form().totalLimitUsd}
+                      onInput={(e) => setForm({ ...form(), totalLimitUsd: e.currentTarget.value })}
+                      placeholder="Unlimited"
+                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                    />
+                  </ModalField>
+                </div>
               </div>
-            </div>
-          </ModalSection>
+            </ModalSection>
+          </Show>
 
           <ModalSection title="Request limits">
             <div class="space-y-3">

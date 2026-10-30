@@ -8,3 +8,4 @@
  * one-line entry keeps the router an ordinary module.
  */
 import "./index";
+import "../style.tailwindcss.css";

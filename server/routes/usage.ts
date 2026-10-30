@@ -6,18 +6,33 @@ import { parseGridQuery, parseCursor } from "../gridql";
 import { modelPricingJoins, costAggFieldsSql } from "../pricing";
 import { readUsageScope } from "../usage-filters";
 import { readUsage } from "../usage-reader";
+import {
+  financialPolicyFor,
+  projectAnalyticsPayload,
+  projectUsageBreakdownPayload,
+  projectUsageRows,
+  projectUsageSummary,
+  sanitizeGridForPolicy,
+} from "../financial-policy";
 
 /** /api/usage — the authenticated user's own consumption data. */
 export async function handleUsageRoute(path: string, req: Request, url: URL): Promise<Response | null> {
   if (path === "/api/usage/analytics" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    const policy = financialPolicyFor(ctx.user);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "analytics", scope, userId: ctx.user.id }, req.signal), req);
+    const report = await readUsage(
+      { kind: "analytics", scope, userId: ctx.user.id, includeCost: policy.budgetPresentation === "usd" },
+      req.signal,
+    );
+    return ok(projectAnalyticsPayload(report as any, policy), req);
   }
   if (path === "/api/usage/overview" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    const policy = financialPolicyFor(ctx.user);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "overview", scope, userId: ctx.user.id }, req.signal), req);
+    const overview = await readUsage({ kind: "overview", scope, userId: ctx.user.id }, req.signal);
+    return ok({ ...overview, series: projectUsageRows(overview.series as any[], policy) }, req);
   }
   if (path === "/api/usage/filter-options" && req.method === "GET") {
     const ctx = await requireAuth(req);
@@ -26,13 +41,18 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
   }
   if (path === "/api/usage/summary" && req.method === "GET") {
     const ctx = await requireAuth(req);
-    return ok({ summary: userSummary(ctx.user.id) }, req);
+    const policy = financialPolicyFor(ctx.user);
+    return ok({ summary: projectUsageSummary(userSummary(ctx.user.id) as any, policy) }, req);
   }
 
   if (path === "/api/usage/daily" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    const policy = financialPolicyFor(ctx.user);
     const scope = readUsageScope(url);
-    if (scope) return ok(await readUsage({ kind: "series", scope, userId: ctx.user.id }, req.signal), req);
+    if (scope) {
+      const result = await readUsage({ kind: "series", scope, userId: ctx.user.id }, req.signal);
+      return ok({ ...result, series: projectUsageRows(result.series as any[], policy) }, req);
+    }
     const keyId = url.searchParams.get("key_id");
     if (keyId) {
       // Ownership check only — the queries below key off keyId itself.
@@ -45,7 +65,7 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     if (hoursParam !== null) {
       const hours = Math.min(Math.max(Number(hoursParam) || 24, 1), 168);
       return ok(
-        { series: hourlySeries(ctx.user.id, keyId ?? null, hours), granularity: "hour" },
+        { series: projectUsageRows(hourlySeries(ctx.user.id, keyId ?? null, hours) as any[], policy), granularity: "hour" },
         req,
       );
     }
@@ -53,12 +73,15 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     // "all" = no lower date bound (the ALL window in the UI).
     const daysParam = url.searchParams.get("days");
     const days = daysParam === "all" ? "all" : Math.min(Number(daysParam || 14), 365);
-    if (keyId) return ok({ series: keyDailySeries(keyId!, days), granularity: "day" }, req);
-    return ok({ series: userDailySeries(ctx.user.id, days), granularity: "day" }, req);
+    if (keyId) {
+      return ok({ series: projectUsageRows(keyDailySeries(keyId!, days) as any[], policy), granularity: "day" }, req);
+    }
+    return ok({ series: projectUsageRows(userDailySeries(ctx.user.id, days) as any[], policy), granularity: "day" }, req);
   }
 
   if (path === "/api/usage/events" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    const policy = financialPolicyFor(ctx.user);
     const keyId = url.searchParams.get("key_id") || undefined;
     if (keyId) {
       const key = db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId);
@@ -71,40 +94,42 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     const cursor = parseCursor(url.searchParams.get("cursor"));
     // Server-side sort/filter (AG Grid infinite row model): JSON-encoded
     // sortModel / filterModel, translated through strict whitelists.
-    let sort: Array<{ colId: string; sort: string }> | undefined;
-    let filters: Record<string, { filterType?: string; type?: string; filter?: unknown; filterTo?: unknown }> | undefined;
+    let rawSort: Array<{ colId: string; sort: string }> | undefined;
+    let rawFilters: Record<string, { filterType?: string; type?: string; filter?: unknown; filterTo?: unknown }> | undefined;
     try {
       const s = url.searchParams.get("sort");
       if (s) {
         const parsed = JSON.parse(s);
-        if (Array.isArray(parsed)) sort = parsed.slice(0, 8);
+        if (Array.isArray(parsed)) rawSort = parsed.slice(0, 8);
       }
       const f = url.searchParams.get("filters");
       if (f) {
         const parsed = JSON.parse(f);
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          filters = parsed;
+          rawFilters = parsed;
         }
       }
     } catch {
       /* malformed sort/filters fall back to unfiltered default */
     }
+    const { sort, filters } = sanitizeGridForPolicy({ sort: rawSort, filters: rawFilters }, policy);
     const scope = readUsageScope(url);
     if (scope) {
       const result = await readUsage({ kind: "events", userId: ctx.user.id, scope, opts: { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined, summaryOnly: url.searchParams.get("summary") === "1" } }, req.signal);
-      return ok({ events: result.rows, total: result.total, totals: result.totals, limit, offset, history: result.history }, req);
+      return ok({ events: projectUsageRows(result.rows as any[], policy), total: result.total, totals: result.totals, limit, offset, history: result.history }, req);
     }
     const { rows, total, totals } = userEvents(ctx.user.id, { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined, scope: scope ?? undefined, summaryOnly: url.searchParams.get("summary") === "1" });
-    return ok({ events: rows, total, limit, offset, totals }, req);
+    return ok({ events: projectUsageRows(rows as any[], policy), total, limit, offset, totals }, req);
   }
 
   if (path === "/api/usage/breakdown" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    const policy = financialPolicyFor(ctx.user);
     const scope = readUsageScope(url);
     if (scope) {
-      const grid = parseGridQuery(url);
+      const grid = sanitizeGridForPolicy(parseGridQuery(url), policy);
       const page = await readUsage({ kind: "breakdown", scope, userId: ctx.user.id, grid, users: false, summaryOnly: url.searchParams.get("summary") === "1" }, req.signal);
-      return ok({ ...page, limit: grid.limit, offset: grid.offset }, req);
+      return ok({ ...projectUsageBreakdownPayload(page as any, policy), limit: grid.limit, offset: grid.offset }, req);
     }
     const daysParam = url.searchParams.get("days");
     const keyId = url.searchParams.get("key_id");
@@ -115,25 +140,27 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     const providerId = url.searchParams.get("provider_id") || undefined;
     const days = daysParam === "all" ? "all" : (Number(daysParam || 14) || 14);
     if (url.searchParams.has("limit")) {
-      const grid = parseGridQuery(url);
+      const grid = sanitizeGridForPolicy(parseGridQuery(url), policy);
       const page = queryUserUsageBreakdown(ctx.user.id, {
         keyId: keyId ?? undefined,
         providerId,
         days: days as number | "all",
         ...grid,
       });
-      return ok({ rows: page.rows, total: page.total, limit: grid.limit, offset: grid.offset, totals: page.totals }, req);
+      const projected = projectUsageBreakdownPayload(page as any, policy);
+      return ok({ rows: projected.rows, total: page.total, limit: grid.limit, offset: grid.offset, totals: projected.totals }, req);
     }
     const rows = userUsageBreakdown(ctx.user.id, {
       keyId: keyId ?? undefined,
       providerId,
       days: days as number | "all",
     });
-    return ok({ rows }, req);
+    return ok({ rows: projectUsageRows(rows as any[], policy) }, req);
   }
 
   if (path === "/api/usage/by-model" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    const policy = financialPolicyFor(ctx.user);
     const daysParam = url.searchParams.get("days");
     const keyId = url.searchParams.get("key_id");
     if (keyId) {
@@ -167,23 +194,19 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
          LIMIT 25`,
       )
       .all(...(params as [string, string])) as any[];
-    return ok(
-      {
-        models: rows.map((r) => ({
-          model: r.model || "(unknown)",
-          proto: r.proto,
-          in_tok: r.in_tok,
-          cache_tok: r.cache_tok,
-          out_tok: r.out_tok,
-          reqs: r.reqs,
-          cost_in: r.cost_in,
-          cost_cache: r.cost_cache,
-          cost_out: r.cost_out,
-          cost: r.cost,
-        })),
-      },
-      req,
-    );
+    const models = rows.map((r) => ({
+      model: r.model || "(unknown)",
+      proto: r.proto,
+      in_tok: r.in_tok,
+      cache_tok: r.cache_tok,
+      out_tok: r.out_tok,
+      reqs: r.reqs,
+      cost_in: r.cost_in,
+      cost_cache: r.cost_cache,
+      cost_out: r.cost_out,
+      cost: r.cost,
+    }));
+    return ok({ models: projectUsageRows(models, policy) }, req);
   }
 
   return null;

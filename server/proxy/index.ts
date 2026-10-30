@@ -14,6 +14,7 @@ import { checkKeyAvailability } from "../keys";
 import { canRecordUsage, recordUsage } from "../usage";
 import { currentRequestId } from "../request-context";
 import { allowedModels, modelAllowed, policyFor } from "../model-policy";
+import { financialPolicyFor, projectModelPrices } from "../financial-policy";
 import { BudgetError, reserveBudget, settleBudget, settleUncertainBudget, cancelBudget } from "../billing";
 import { db } from "../db";
 import {
@@ -425,7 +426,13 @@ function buildClientHeaders(upstream: Headers, requestId: string, req: Request, 
  * both). Patch-only, never stored. Non-JSON or error upstreams pass through
  * untouched.
  */
-async function passthroughModelsList(req: Request, proto: Proto, modelId?: string): Promise<Response> {
+async function passthroughModelsList(
+  req: Request,
+  proto: Proto,
+  modelId?: string,
+  showModelPrices = true,
+  allowed: Set<string> | null = null,
+): Promise<Response> {
   const snap = await routerSnapshot();
   const cands = passthroughCandidates(snap, proto, modelId);
   const cand = cands[0];
@@ -482,6 +489,11 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
   if (modelId !== undefined) {
     try {
       const one = JSON.parse(text) as Record<string, unknown>;
+      if (proto === "anthropic") {
+        h.set("Content-Type", "application/json; charset=utf-8");
+        const body = showModelPrices ? text : JSON.stringify(projectModelPrices(one, false));
+        return new Response(body, { status: upstream.status, headers: h });
+      }
       const id = typeof one.id === "string" ? one.id : modelId;
       h.set("Content-Type", "application/json; charset=utf-8");
       return new Response(
@@ -516,12 +528,21 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
   try {
     const j = JSON.parse(text) as Record<string, unknown>;
     // Anthropic clients expect the NATIVE list shape ({type:"model", ...},
-    // has_more) — never rewrite it (the directional-alias contract + real
-    // Anthropic SDKs depend on it). Only OpenAI-family surfaces get the
-    // CodexModel allowlist below.
+    // has_more) — preserve it verbatim unless policy filters models or hides pricing.
     if (proto === "anthropic") {
       h.set("Content-Type", "application/json; charset=utf-8");
-      return new Response(text, { status: upstream.status, headers: h });
+      if (showModelPrices && allowed === null) {
+        return new Response(text, { status: upstream.status, headers: h });
+      }
+      let next: Record<string, unknown> = j;
+      if (allowed !== null && Array.isArray((next as any).data)) {
+        next = {
+          ...next,
+          data: (next as any).data.filter((m: any) => m && typeof m.id === "string" && modelAllowed(allowed, m.id)),
+        };
+      }
+      if (!showModelPrices) next = projectModelPrices(next, false);
+      return new Response(JSON.stringify(next), { status: upstream.status, headers: h });
     }
     const data = (j as any).data;
     if (Array.isArray(data)) {
@@ -531,7 +552,7 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
       // only: OpenAI list fields + the two compat fields codex requires.
       // data[] keeps the OpenAI list shape (lenient decoder) + compat extras.
       const clean = data
-        .filter((m: any) => m && typeof m === "object")
+        .filter((m: any) => m && typeof m === "object" && (typeof m.id !== "string" || modelAllowed(allowed, m.id)))
         .map((m: any) => {
           const id = typeof m.id === "string" ? m.id : "model";
           const levelsFinal = ["low", "high", "max"].map((name: string) => ({ name, description: `${name} reasoning effort`, effort: name }));
@@ -596,6 +617,8 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
         if (k !== "object" && k !== "data" && k !== "models") delete (j as any)[k];
       }
       (j as any).object = "list";
+    } else if (!showModelPrices) {
+      return new Response(JSON.stringify(projectModelPrices(j, false)), { status: upstream.status, headers: h });
     }
     h.set("Content-Type", "application/json; charset=utf-8");
     return new Response(JSON.stringify(j), { status: upstream.status, headers: h });
@@ -661,6 +684,7 @@ function registryModelsResponse(
   proto: Proto,
   modelId?: string,
   allowed: Set<string> | null = null,
+  showModelPrices = true,
 ): Response {
   // The catalog is a policy-filtered view: a model the caller may not use must
   // not be advertised, or the first call to it fails after a round trip.
@@ -705,7 +729,10 @@ function registryModelsResponse(
     }
     const h = baseHeaders(req);
     h.set("Content-Type", "application/json; charset=utf-8");
-    return new Response(JSON.stringify(publicModelEntry(m, providerName(m))), { headers: h });
+    return new Response(
+      JSON.stringify(publicModelEntry(m, providerName(m), { includePricing: showModelPrices })),
+      { headers: h },
+    );
   }
   const h = baseHeaders(req);
   h.set("Content-Type", "application/json; charset=utf-8");
@@ -713,7 +740,7 @@ function registryModelsResponse(
   // alongside `data` and ignore unknown shapes otherwise.
   return new Response(
     JSON.stringify({
-      data: rows.map((m) => publicModelEntry(m, providerName(m))),
+      data: rows.map((m) => publicModelEntry(m, providerName(m), { includePricing: showModelPrices })),
       models: rows.map((m) => ({ id: m.id, slug: m.id })),
     }),
     { headers: h },
@@ -1051,13 +1078,15 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     }
 
     if (snap.mode === "router" && route.isModelsList) {
-      return registryModelsResponse(req, snap, proto, route.modelId, allowedModelIds);
+      const showModelPrices = financialPolicyFor(owner).showModelPrices;
+      return registryModelsResponse(req, snap, proto, route.modelId, allowedModelIds, showModelPrices);
     }
     // Passthrough GET /v1/models(:id): forward upstream (the managers that
     // fetch it — codex — require fields upstreams omit: `display_name` per
     // entry and a top-level `models` array). Patched here, never stored.
     if (route.isModelsList && req.method === "GET") {
-      return await passthroughModelsList(req, proto, route.modelId);
+      const showModelPrices = financialPolicyFor(owner).showModelPrices;
+      return await passthroughModelsList(req, proto, route.modelId, showModelPrices, allowedModelIds);
     }
 
     // ---- build the failover chain ----
