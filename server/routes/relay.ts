@@ -1,18 +1,88 @@
 import type { Server, ServerWebSocket } from "bun";
-import { db, stmts, type RemoteHostRow } from "../db";
+import { db, stmts, type SessionRow } from "../db";
 import { GATEWAY_SECRET } from "../config";
 import { jwtVerify, sha256Hex } from "../crypto";
 import { sendTurnPush, type TurnPush } from "../push";
 
 export type WsData =
-  | { type: "daemon"; hostId: string; userId: string; tokenHash: string; updating?: boolean }
-  | { type: "client"; userId: string; jti: string; family: string; accessExpiresAt: number; expiresAt: number };
+  | {
+      type: "daemon";
+      hostId: string;
+      userId: string;
+      tokenHash: string;
+      updating?: boolean;
+      /** Next full revalidation deadline (host row + token + owner). The
+       *  owner's account status is re-read on EVERY inbound frame. */
+      revalidateAt: number;
+    }
+  | {
+      type: "client";
+      userId: string;
+      jti: string;
+      family: string;
+      accessExpiresAt: number;
+      expiresAt: number;
+      /** Next session revalidation deadline (see CLIENT_RECHECK_MS). */
+      revalidateAt: number;
+    };
 
 const daemons = new Map<string, ServerWebSocket<WsData>>();
 const clientsByUserId = new Map<string, Set<ServerWebSocket<WsData>>>();
 const clientExpiryTimers = new WeakMap<ServerWebSocket<WsData>, ReturnType<typeof setTimeout>>();
 
-function disconnectClient(ws: ServerWebSocket<WsData>, reason: string): void {
+/**
+ * Revocation is normally pushed into the relay by the mutating route
+ * (auth.ts / routes/*), which removes the sockets before closing them.
+ * This recheck is the safety net for revocation that happens OUTSIDE this
+ * process — a second gateway, an operator editing the database, a restored
+ * backup — so an already-open socket cannot outlive its session row by a
+ * full access-token lifetime. One primary-key read per socket per second.
+ */
+const CLIENT_RECHECK_MS = 1000;
+
+/** A daemon revalidates its host row + token at most once per second. The
+ *  owner's account status is checked on every inbound frame instead. */
+const DAEMON_REVALIDATE_MS = 1000;
+
+interface DaemonTokenRow {
+  id: string;
+  user_id: string;
+  status: string;
+}
+
+// Prepared once: these gates run on hot paths (every daemon frame, every
+// client recheck) and must never pay for statement compilation.
+/** Daemon token -> host + owner status (connect / re-pair handshake). */
+const stmtDaemonToken = db.prepare<DaemonTokenRow, [string]>(
+  `SELECT h.id, h.user_id, u.status FROM remote_hosts h
+     JOIN users u ON u.id = h.user_id
+    WHERE h.daemon_token_hash = ?`,
+);
+/** Host still exists for this user, still owns this token, account active. */
+const stmtDaemonOwned = db.prepare<{ id: string }, [string, string, string]>(
+  `SELECT h.id FROM remote_hosts h
+     JOIN users u ON u.id = h.user_id
+    WHERE h.id = ? AND h.user_id = ? AND h.daemon_token_hash = ? AND u.status = 'active'`,
+);
+/** O(1) primary-key lookup: the per-frame gate on every daemon socket. */
+const stmtUserStatus = db.prepare<{ status: string }, [string]>(
+  "SELECT status FROM users WHERE id = ?",
+);
+
+/** A session row that still authorizes a socket: same user, not revoked,
+ *  inside both expiry windows, owner account still active. */
+function usableSession(userId: string, jti: string, accessExpiresAt: number): SessionRow | null {
+  const session = stmts.sessionByJti.get(jti);
+  if (!session || session.user_id !== userId) return null;
+  const now = Date.now();
+  if (session.revoked || session.expires_at <= now || session.abs_expires_at <= now) return null;
+  if (accessExpiresAt <= now) return null;
+  if (stmts.userById.get(userId)?.status !== "active") return null;
+  return session;
+}
+
+/** Drop a client socket from the registry (and its expiry timer). */
+function unregisterClient(ws: ServerWebSocket<WsData>): void {
   if (ws.data.type !== "client") return;
   const clients = clientsByUserId.get(ws.data.userId);
   clients?.delete(ws);
@@ -20,6 +90,13 @@ function disconnectClient(ws: ServerWebSocket<WsData>, reason: string): void {
   const timer = clientExpiryTimers.get(ws);
   if (timer) clearTimeout(timer);
   clientExpiryTimers.delete(ws);
+}
+
+/** Registry first, close second: no queued frame crosses the relay during
+ *  the closing handshake. */
+function disconnectClient(ws: ServerWebSocket<WsData>, reason: string): void {
+  if (ws.data.type !== "client") return;
+  unregisterClient(ws);
   try { ws.close(1008, reason); } catch {}
 }
 
@@ -28,11 +105,10 @@ function disconnectClient(ws: ServerWebSocket<WsData>, reason: string): void {
 function refreshClientExpiry(ws: ServerWebSocket<WsData>): boolean {
   if (ws.data.type !== "client") return false;
   try {
-    const session = stmts.sessionByJti.get(ws.data.jti);
-    const user = stmts.userById.get(ws.data.userId);
-    const now = Date.now();
-    if (session && session.user_id === ws.data.userId && !session.revoked && session.expires_at > now && session.abs_expires_at > now && ws.data.accessExpiresAt > now && user?.status === "active") {
+    const session = usableSession(ws.data.userId, ws.data.jti, ws.data.accessExpiresAt);
+    if (session) {
       ws.data.expiresAt = Math.min(ws.data.accessExpiresAt, session.expires_at, session.abs_expires_at);
+      ws.data.revalidateAt = Date.now() + CLIENT_RECHECK_MS;
       return true;
     }
   } catch (error) {
@@ -56,36 +132,148 @@ function scheduleClientExpiry(ws: ServerWebSocket<WsData>): void {
 
 function clientLive(ws: ServerWebSocket<WsData>): boolean {
   if (ws.data.type !== "client" || !clientsByUserId.get(ws.data.userId)?.has(ws)) return false;
-  if (ws.data.expiresAt > Date.now()) return true;
-  if (!refreshClientExpiry(ws)) return false;
-  scheduleClientExpiry(ws);
+  const now = Date.now();
+  if (now >= ws.data.expiresAt) {
+    if (!refreshClientExpiry(ws)) return false;
+    scheduleClientExpiry(ws);
+    return true;
+  }
+  if (now >= ws.data.revalidateAt) {
+    ws.data.revalidateAt = now + CLIENT_RECHECK_MS;
+    let authorized: boolean;
+    try {
+      authorized = usableSession(ws.data.userId, ws.data.jti, ws.data.accessExpiresAt) !== null;
+    } catch (error) {
+      // A transient read failure must not sever every browser tab: the next
+      // recheck retries in CLIENT_RECHECK_MS.
+      console.error("[RELAY] session recheck failed:", error instanceof Error ? error.name : "unknown");
+      return true;
+    }
+    if (!authorized) {
+      disconnectClient(ws, "session_revoked");
+      return false;
+    }
+  }
   return true;
 }
 
-/** Remove sockets before requesting a close, so queued messages cannot cross
- *  the relay during the WebSocket closing handshake. */
-export function disconnectSessionSockets(userId: string, opts: { jti?: string; family?: string; exceptJti?: string } = {}): void {
+/**
+ * Revocation fan-out for client sockets.
+ *
+ * Every client socket is bound to the `sessions` row that authenticated it
+ * (user + jti + rotation family), so callers can target one session, one
+ * rotation family, or the whole user. ALL matching sockets are removed from
+ * the in-memory registry BEFORE any close is requested: a revoked socket can
+ * therefore never receive a queued daemon frame during the closing handshake.
+ */
+export function disconnectSessionSockets(
+  userId: string,
+  opts: { jti?: string; family?: string; exceptJti?: string } = {},
+): void {
   const clients = clientsByUserId.get(userId);
   if (!clients) return;
+  const doomed: ServerWebSocket<WsData>[] = [];
   for (const ws of clients) {
     if (ws.data.type !== "client") continue;
     if (opts.jti && ws.data.jti !== opts.jti) continue;
     if (opts.family && ws.data.family !== opts.family) continue;
     if (opts.exceptJti && ws.data.jti === opts.exceptJti) continue;
-    disconnectClient(ws, "session_revoked");
+    doomed.push(ws);
+  }
+  if (doomed.length === 0) return;
+  for (const ws of doomed) unregisterClient(ws);
+  for (const ws of doomed) {
+    try { ws.close(1008, "session_revoked"); } catch {}
   }
 }
 
+/** Registry + bookkeeping for a daemon socket that currently owns its host.
+ *  Persists the host offline and tells the user's clients, exactly like the
+ *  regular close handler. Returns true when this socket owned the host. */
+function unregisterDaemon(ws: ServerWebSocket<WsData>): boolean {
+  if (ws.data.type !== "daemon") return false;
+  const { hostId, userId } = ws.data;
+  if (daemons.get(hostId) !== ws) return false;
+  daemons.delete(hostId);
+  updatingHosts.delete(hostId);
+  try {
+    db.prepare("UPDATE remote_hosts SET status = 'offline', last_seen_at = ? WHERE id = ?").run(Date.now(), hostId);
+  } catch (error) {
+    console.error("[RELAY] could not persist host status:", error instanceof Error ? error.name : "unknown");
+  }
+  broadcastToUser(userId, { type: "host_status", hostId, status: "offline" });
+  return true;
+}
+
+/**
+ * Disconnect a daemon socket because its owner is no longer authorized.
+ * NEVER sends the "shutdown" remote-kill frame: a banned account that is
+ * unbanned must redial normally instead of the daemon self-terminating.
+ * The socket leaves the registry before the close is requested.
+ */
+function dropDaemon(ws: ServerWebSocket<WsData>, reason: string): void {
+  const hostId = ws.data.type === "daemon" ? ws.data.hostId : "";
+  const owned = unregisterDaemon(ws);
+  if (owned) console.log(`[RELAY] Daemon dropped: ${hostId} (${reason})`);
+  try { ws.close(1008, reason); } catch {}
+}
+
+/**
+ * Hot-path authorization for a daemon socket.
+ *
+ * The owner's account status is re-read from a prepared statement on EVERY
+ * inbound frame (one primary-key lookup), so a ban stops daemon data even
+ * when the ban happened outside this process. The host row and token are
+ * revalidated once per DAEMON_REVALIDATE_MS.
+ */
+function daemonLive(ws: ServerWebSocket<WsData>): boolean {
+  if (ws.data.type !== "daemon" || daemons.get(ws.data.hostId) !== ws) return false;
+  const { hostId, userId, tokenHash } = ws.data;
+  const now = Date.now();
+
+  let status: string | undefined;
+  try {
+    status = stmtUserStatus.get(userId)?.status;
+  } catch (error) {
+    console.error("[RELAY] daemon account check failed:", error instanceof Error ? error.name : "unknown");
+    return true;
+  }
+  if (status !== "active") {
+    dropDaemon(ws, "account_unavailable");
+    return false;
+  }
+  if (now >= ws.data.revalidateAt) {
+    let owned: boolean;
+    try {
+      owned = stmtDaemonOwned.get(hostId, userId, tokenHash) !== null;
+    } catch (error) {
+      console.error("[RELAY] daemon host check failed:", error instanceof Error ? error.name : "unknown");
+      ws.data.revalidateAt = now + DAEMON_REVALIDATE_MS;
+      return true;
+    }
+    if (!owned) {
+      dropDaemon(ws, "account_unavailable");
+      return false;
+    }
+    ws.data.revalidateAt = now + DAEMON_REVALIDATE_MS;
+  }
+  return true;
+}
+
 /** Bans/deletions disconnect daemons without a shutdown frame, so an unbanned
- *  daemon can reconnect normally. The owner check blocks reconnects meanwhile. */
+ *  daemon can reconnect normally. The owner check blocks reconnects meanwhile.
+ *  Every socket leaves the registry before any close is requested. */
 export function disconnectUserDaemons(userId: string): void {
-  for (const [hostId, ws] of daemons) {
+  const doomed: ServerWebSocket<WsData>[] = [];
+  for (const ws of daemons.values()) {
     if (ws.data.type !== "daemon" || ws.data.userId !== userId) continue;
-    daemons.delete(hostId);
-    updatingHosts.delete(hostId);
-    try { ws.close(1008, "account_unavailable"); } catch {}
+    doomed.push(ws);
   }
   for (const [hostId, owner] of updatingHosts) if (owner === userId) updatingHosts.delete(hostId);
+  for (const ws of doomed) unregisterDaemon(ws);
+  for (const ws of doomed) {
+    try { ws.close(1008, "account_unavailable"); } catch {}
+  }
 }
 
 export function closeDaemonSocket(hostId: string): void {
@@ -162,18 +350,21 @@ export async function handleIndirectCodeUpgrade(
     }
 
     const tokenHash = sha256Hex(token);
-    const host = db
-      .prepare<RemoteHostRow, [string]>(
-        "SELECT h.* FROM remote_hosts h JOIN users u ON u.id = h.user_id WHERE h.daemon_token_hash = ? AND u.status = 'active'",
-      )
-      .get(tokenHash);
-
-    if (!host) {
+    const host = stmtDaemonToken.get(tokenHash);
+    // A banned (or deleted) owner cannot (re)connect with a stored token.
+    if (!host || host.status !== "active") {
       return new Response("unauthorized daemon token", { status: 401 });
     }
 
     const upgraded = server.upgrade(req, {
-      data: { type: "daemon", hostId: host.id, userId: host.user_id, tokenHash, updating: isUpdating },
+      data: {
+        type: "daemon",
+        hostId: host.id,
+        userId: host.user_id,
+        tokenHash,
+        updating: isUpdating,
+        revalidateAt: Date.now() + DAEMON_REVALIDATE_MS,
+      },
     });
     if (upgraded) return undefined;
     return new Response("upgrade failed", { status: 400 });
@@ -201,8 +392,19 @@ export async function handleIndirectCodeUpgrade(
       return new Response("session expired or revoked", { status: 401 });
     }
 
+    // Bind the socket to the session row: user + jti + rotation family are
+    // what every revocation path matches on.
+    const accessExpiresAt = res.payload.exp * 1000;
     const upgraded = server.upgrade(req, {
-      data: { type: "client", userId: session.user_id, jti: session.jti, family: session.family ?? session.jti, accessExpiresAt: res.payload.exp * 1000, expiresAt: Math.min(res.payload.exp * 1000, session.expires_at, session.abs_expires_at) },
+      data: {
+        type: "client",
+        userId: session.user_id,
+        jti: session.jti,
+        family: session.family ?? session.jti,
+        accessExpiresAt,
+        expiresAt: Math.min(accessExpiresAt, session.expires_at, session.abs_expires_at),
+        revalidateAt: Date.now() + CLIENT_RECHECK_MS,
+      },
     });
     if (upgraded) return undefined;
     return new Response("upgrade failed", { status: 400 });
@@ -219,14 +421,13 @@ export const remoteRelayWsHandlers = {
   perMessageDeflate: true,
   open(ws: ServerWebSocket<WsData>) {
     if (ws.data.type === "daemon") {
-      const { hostId, userId } = ws.data;
-      const host = db.prepare<{ id: string }, [string, string, string]>(
-        "SELECT h.id FROM remote_hosts h JOIN users u ON u.id = h.user_id WHERE h.id = ? AND h.user_id = ? AND h.daemon_token_hash = ? AND u.status = 'active'",
-      ).get(hostId, userId, ws.data.tokenHash);
+      const { hostId, userId, tokenHash } = ws.data;
+      const host = stmtDaemonOwned.get(hostId, userId, tokenHash);
       if (!host) { try { ws.close(1008, "account_unavailable"); } catch {} return; }
       const previous = daemons.get(hostId);
       if (previous && previous !== ws) { try { previous.close(1000, "superseded"); } catch {} }
       daemons.set(hostId, ws);
+      ws.data.revalidateAt = Date.now() + DAEMON_REVALIDATE_MS;
 
       const now = Date.now();
       try {
@@ -239,7 +440,7 @@ export const remoteRelayWsHandlers = {
       // "online" — UNLESS a fresh non-updating daemon already reclaimed
       // it (update_done path reconnects without the flag). The flag rides
       // on the socket (upgrade path is async, query is gone by open).
-      const updating = ws.data.type === "daemon" && ws.data.updating === true;
+      const updating = ws.data.updating === true;
       if (updating) updatingHosts.set(hostId, userId);
       else updatingHosts.delete(hostId);
       const hostState = updating ? "updating" : "online";
@@ -252,10 +453,10 @@ export const remoteRelayWsHandlers = {
       });
       console.log(`[RELAY] Daemon ${hostState}: ${hostId} (user: ${userId})`);
     } else if (ws.data.type === "client") {
-      const { userId, jti, expiresAt } = ws.data;
-      const session = stmts.sessionByJti.get(jti);
-      const user = stmts.userById.get(userId);
-      if (!session || session.user_id !== userId || session.revoked || session.expires_at <= Date.now() || session.abs_expires_at <= Date.now() || !user || user.status !== "active" || expiresAt <= Date.now()) {
+      const { userId, jti, expiresAt, accessExpiresAt } = ws.data;
+      // Re-check at open: a revocation may have landed between the upgrade
+      // and this handler, before the socket was registered.
+      if (!usableSession(userId, jti, accessExpiresAt) || expiresAt <= Date.now()) {
         disconnectClient(ws, "session_revoked");
         return;
       }
@@ -265,6 +466,7 @@ export const remoteRelayWsHandlers = {
         clientsByUserId.set(userId, set);
       }
       set.add(ws);
+      ws.data.revalidateAt = Date.now() + CLIENT_RECHECK_MS;
       scheduleClientExpiry(ws);
 
       try {
@@ -282,7 +484,9 @@ export const remoteRelayWsHandlers = {
   },
 
   message(ws: ServerWebSocket<WsData>, message: string | Buffer) {
-    if (ws.data.type === "daemon" && daemons.get(ws.data.hostId) !== ws) return;
+    // Daemons revalidate their owner on every inbound frame; clients
+    // revalidate their session row (throttled) before anything is accepted.
+    if (ws.data.type === "daemon" && !daemonLive(ws)) return;
     if (ws.data.type === "client") {
       if (!clientLive(ws)) return;
     }
@@ -355,37 +559,11 @@ export const remoteRelayWsHandlers = {
 
   close(ws: ServerWebSocket<WsData>, code: number, _reason: string) {
     if (ws.data.type === "daemon") {
-      const { hostId, userId } = ws.data;
-      if (daemons.get(hostId) === ws) {
-        daemons.delete(hostId);
-        // The updating flag dies with the socket: the waiter either
-        // promotes (update_done, fresh non-updating connect follows) or
-        // fails (it reports update_failed itself before rebirthing).
-        updatingHosts.delete(hostId);
-        const now = Date.now();
-        try {
-          db.prepare("UPDATE remote_hosts SET status = 'offline', last_seen_at = ? WHERE id = ?").run(now, hostId);
-        } catch (error) {
-          console.error("[RELAY] could not persist host status:", error instanceof Error ? error.name : "unknown");
-        }
-
-        broadcastToUser(userId, {
-          type: "host_status",
-          hostId,
-          status: "offline",
-        });
-        console.log(`[RELAY] Daemon offline: ${hostId} (code: ${code})`);
+      if (unregisterDaemon(ws)) {
+        console.log(`[RELAY] Daemon offline: ${ws.data.hostId} (code: ${code})`);
       }
     } else if (ws.data.type === "client") {
-      const { userId } = ws.data;
-      const set = clientsByUserId.get(userId);
-      if (set) {
-        set.delete(ws);
-        if (set.size === 0) clientsByUserId.delete(userId);
-      }
-      const timer = clientExpiryTimers.get(ws);
-      if (timer) clearTimeout(timer);
-      clientExpiryTimers.delete(ws);
+      unregisterClient(ws);
     }
   },
 };
@@ -496,7 +674,9 @@ function broadcastToUserCompressed(userId: string, data: string | object, compre
       if (compress) client.send(payload, true);
       else client.send(payload);
     } catch {
-      set.delete(client);
+      // Dead peer: drop it from the registry (and its expiry timer) so a
+      // stale entry can never be counted as a live tab again.
+      unregisterClient(client);
     }
   }
 }

@@ -1,7 +1,10 @@
 import { audit, db, type ApiKeyRow, type ModelRow } from "./db";
 import { randomToken } from "./crypto";
 import { ApiError } from "./http";
-import { guardedMaintenance } from "./maintenance";
+import { scheduleMaintenance } from "./maintenance";
+import { retrySqlite } from "./sqlite-retry";
+import { batchDelete, batchDeleteComposite } from "./batch-delete";
+import { LIMITS } from "./config";
 
 const NANO = 1_000_000_000;
 const DAY = 86_400_000;
@@ -261,7 +264,45 @@ export function redeemReset(userId: string, grantId: string, requestId: string, 
 }
 
 const instanceId = randomToken(12);
-const heartbeat = () => db.prepare("INSERT INTO billing_instances(id, heartbeat) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat = excluded.heartbeat").run(instanceId, Date.now());
+const heartbeatStatement = db.prepare("INSERT INTO billing_instances(id, heartbeat) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat = excluded.heartbeat");
+const heartbeat = () => heartbeatStatement.run(instanceId, Date.now());
+
+/**
+ * Bounded cleanup of expired billing rows. Each table is pruned in key-order
+ * batches so one recovery pass never holds the writer for a whole-table scan;
+ * whatever is left over is picked up by the next scheduled pass.
+ */
+function pruneBillingRows(now: number): void {
+  // billing_periods is a WITHOUT ROWID table (its primary key is the four
+  // accounting columns), so there is no rowid to page by: it needs the
+  // composite-key variant. Using the rowid path here threw at boot.
+  batchDeleteComposite({
+    db,
+    table: "billing_periods",
+    keys: ["scope", "owner_id", "kind", "starts_at"],
+    where: "ends_at < ? AND reserved_nanos = 0 AND kind <> 'lifetime'",
+    params: [now - 400 * DAY],
+    batchSize: LIMITS.maintenanceBatchSize,
+    maxRows: LIMITS.maintenanceMaxBatchRows,
+  });
+  batchDelete(db, {
+    table: "billing_reservations",
+    key: "rowid",
+    where: "settled_at IS NOT NULL AND settled_at < ?",
+    params: [now - 30 * DAY],
+    batchSize: LIMITS.maintenanceBatchSize,
+    maxRows: LIMITS.maintenanceMaxBatchRows,
+  });
+  batchDelete(db, {
+    table: "billing_instances",
+    key: "rowid",
+    where: "heartbeat < ? AND id NOT IN (SELECT instance_id FROM billing_reservations WHERE state = 'pending')",
+    params: [now - DAY],
+    batchSize: LIMITS.maintenanceBatchSize,
+    maxRows: LIMITS.maintenanceMaxBatchRows,
+  });
+}
+
 /** Uncertain requests from a crashed process retain their reservation, then
  * settle conservatively at its bound. A restart never grants free balance. */
 export function recoverBudgets(now = Date.now()): void {
@@ -274,13 +315,22 @@ export function recoverBudgets(now = Date.now()): void {
       finish(row.id, { input: BigInt(row.amount_nanos), cache: 0n, output: 0n }, true);
       audit("billing.reservation.recovered", { target: row.id, meta: { chargedUsd: usd(row.amount_nanos) } });
     }
-    db.prepare("DELETE FROM billing_periods WHERE ends_at < ? AND reserved_nanos = 0 AND kind <> 'lifetime'").run(now - 400 * DAY);
-    db.prepare("DELETE FROM billing_reservations WHERE settled_at < ?").run(now - 30 * DAY);
-    db.prepare("DELETE FROM billing_instances WHERE heartbeat < ? AND id NOT IN (SELECT instance_id FROM billing_reservations WHERE state = 'pending')").run(now - DAY);
   }).immediate();
+  // Cleanup runs OUTSIDE the recovery transaction: it is bounded work that
+  // must not extend the reservation-settling write lock.
+  pruneBillingRows(now);
 }
+
 export function startBilling(): void {
-  heartbeat(); recoverBudgets();
-  setInterval(guardedMaintenance("billing heartbeat", heartbeat), 15_000).unref();
-  setInterval(guardedMaintenance("billing recovery", recoverBudgets), 60_000).unref();
+  try {
+    // Startup may race another process' migration/backup; a bounded retry
+    // covers a momentarily locked database without delaying boot forever.
+    retrySqlite(() => { heartbeat(); recoverBudgets(); }, { name: "billing startup" });
+  } catch (error) {
+    // Boot must not abort: the scheduled jobs re-run both statements and the
+    // first successful heartbeat establishes the lease.
+    console.error("[BILLING] startup maintenance deferred:", error instanceof Error ? error.message : "unknown error");
+  }
+  scheduleMaintenance("billing heartbeat", () => { heartbeat(); }, 15_000);
+  scheduleMaintenance("billing recovery", () => { recoverBudgets(); }, 60_000);
 }
