@@ -837,6 +837,30 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_usage_request ON usage_events(request_id) WHERE request_id != '';
     `,
   },
+  {
+    name: "031_model_access_policy",
+    // Named allow-lists of model ids. `kind = 'default'` is the installation
+    // fallback; `kind = 'project'` binds to a project. An empty allow-list
+    // means "no restriction", so creating a policy cannot black out a working
+    // installation before the administrator fills it in.
+    up: `
+      CREATE TABLE model_policies (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        kind       TEXT NOT NULL CHECK (kind IN ('default','project')),
+        project_id TEXT,
+        enabled    INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_model_policies_project ON model_policies(project_id);
+      CREATE TABLE model_policy_models (
+        policy_id TEXT NOT NULL REFERENCES model_policies(id) ON DELETE CASCADE,
+        model_id  TEXT NOT NULL,
+        PRIMARY KEY (policy_id, model_id)
+      ) WITHOUT ROWID;
+    `,
+  },
 ];
 
 /**

@@ -32,6 +32,7 @@ import { TOOL_CALL_MODES, type ToolCallMode } from "../tool-call-mode";
 import { fetchOpenRouterCatalog, matchOpenRouterModel } from "../openrouter";
 import { readUsageScope } from "../usage-filters";
 import { readUsage } from "../usage-reader";
+import { deletePolicy, listPolicies, readPolicy, upsertPolicy } from "../model-policy";
 import { applyRetention, backupRoot, backupStatus, createBackup, deleteBackup, listBackups, verifyBackup } from "../backup";
 import { existsSync } from "node:fs";
 // The handler's `path` parameter is the request path; this alias keeps the
@@ -1966,6 +1967,53 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     return ok({ users, models }, req);
   }
 
+  // ---- model access policies ----
+  if (path === "/api/admin/model-policies" && (req.method === "GET" || req.method === "POST")) {
+    const ctx = await requireAdmin(req);
+    if (req.method === "GET") return ok({ policies: listPolicies() }, req);
+    const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+    const name = v.str(body, "name", { min: 1, max: 64 })!;
+    const kind = body.kind === "project" ? "project" : "default";
+    const models = Array.isArray(body.models) ? body.models.filter((id): id is string => typeof id === "string").slice(0, 10_000) : [];
+    // Every id must exist: a typo must not silently narrow a policy.
+    const missing = models.filter((id) => !db.query("SELECT id FROM models WHERE id = ?").get(id));
+    if (missing.length) throw new ApiError(400, `Unknown model ids: ${missing.slice(0, 5).join(", ")}`);
+    const id = upsertPolicy({ name, kind, enabled: body.enabled !== false, models }, Date.now());
+    auditAdmin(ctx.user, "model_policy.created", id, { name, kind, models: models.length }, clientIp(req));
+    return ok({ policy: readPolicy(id) }, req);
+  }
+  const policyIdMatch = path.match(/^\/api\/admin\/model-policies\/([A-Za-z0-9_]+)$/);
+  if (policyIdMatch) {
+    const ctx = await requireAdmin(req);
+    const existing = readPolicy(policyIdMatch[1]!);
+    if (!existing) return err(404, "not found", req);
+    if (req.method === "GET") return ok({ policy: existing }, req);
+    if (req.method === "DELETE") {
+      deletePolicy(existing.id);
+      auditAdmin(ctx.user, "model_policy.deleted", existing.id, undefined, clientIp(req));
+      return ok({ deleted: true }, req);
+    }
+    if (req.method === "PATCH") {
+      const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+      const models = Array.isArray(body.models)
+        ? body.models.filter((id): id is string => typeof id === "string").slice(0, 10_000)
+        : existing.models;
+      const missing = models.filter((id) => !db.query("SELECT id FROM models WHERE id = ?").get(id));
+      if (missing.length) throw new ApiError(400, `Unknown model ids: ${missing.slice(0, 5).join(", ")}`);
+      const id = upsertPolicy({
+        id: existing.id,
+        name: typeof body.name === "string" && body.name ? body.name.slice(0, 64) : existing.name,
+        kind: existing.kind,
+        projectId: existing.project_id,
+        enabled: "enabled" in body ? body.enabled !== false : !!existing.enabled,
+        models,
+      }, Date.now());
+      auditAdmin(ctx.user, "model_policy.updated", id, { models: models.length }, clientIp(req));
+      return ok({ policy: readPolicy(id) }, req);
+    }
+    return null;
+  }
+
   if (path === "/api/admin/audit" && req.method === "GET") {
     if (url.searchParams.has("selection")) {
       return ok(await readUsage({ kind: "catalog-audit", userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }, req.signal), req);
@@ -2102,3 +2150,4 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   return null;
 }
+

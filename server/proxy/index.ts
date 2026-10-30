@@ -13,6 +13,7 @@ import {
 import { checkKeyAvailability } from "../keys";
 import { canRecordUsage, recordUsage } from "../usage";
 import { currentRequestId } from "../request-context";
+import { allowedModels, modelAllowed, policyFor } from "../model-policy";
 import { BudgetError, reserveBudget, settleBudget, settleUncertainBudget, cancelBudget } from "../billing";
 import { db } from "../db";
 import {
@@ -659,8 +660,11 @@ function registryModelsResponse(
   snap: RouterSnapshot,
   proto: Proto,
   modelId?: string,
+  allowed: Set<string> | null = null,
 ): Response {
-  const rows = listableModels(snap, proto);
+  // The catalog is a policy-filtered view: a model the caller may not use must
+  // not be advertised, or the first call to it fails after a round trip.
+  const rows = listableModels(snap, proto).filter((model) => modelAllowed(allowed, model.id));
   // Responses clients (codex) expect the OpenAI list shape — and some
   // versions require a top-level `models` array — while the rich
   // registry format stays on the chat/anthropic surfaces.
@@ -896,6 +900,19 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     return response;
   }
 
+  // ---- model access policy ----
+  // Resolved ONCE per request, before any routing: the catalog listing, the
+  // requested model and every fallback target are then judged against the same
+  // allow-list. Enforcing only in the catalog would leave the proxy callable;
+  // enforcing only the requested model would let a fallback target escape.
+  const modelPolicy = policyFor({ role: owner.role, projectId: null });
+  const allowedModelIds = allowedModels(modelPolicy);
+  if (allowedModelIds !== null && route.isModelsList && route.modelId) {
+    if (!allowedModelIds.has(route.modelId)) {
+      return envelopeError(proto, 404, `unknown model '${route.modelId}'`, "model_not_found", req);
+    }
+  }
+
   // ---- account and per-key rate + concurrency ----
   // Per-key RPM stays exactly as before; the account ceiling sits above it so
   // extra keys can never buy more of the shared gateway. The denied dimension
@@ -1034,7 +1051,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     }
 
     if (snap.mode === "router" && route.isModelsList) {
-      return registryModelsResponse(req, snap, proto, route.modelId);
+      return registryModelsResponse(req, snap, proto, route.modelId, allowedModelIds);
     }
     // Passthrough GET /v1/models(:id): forward upstream (the managers that
     // fetch it — codex — require fields upstreams omit: `display_name` per
@@ -1053,6 +1070,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     let stickyLane: string | null = null;
     if (snap.mode === "router" && req.method === "POST" && bodyJson) {
       const requested = String((bodyJson as any).model);
+      // The requested model must be inside the caller's allow-list. Reported as
+      // 404 (not 403) so the catalogue and the call agree: a model the caller
+      // cannot see must not appear to exist.
+      if (!modelAllowed(allowedModelIds, requested)) {
+        return envelopeError(proto, 404, `unknown model '${requested}'`, "model_not_found", req);
+      }
       const resolution = resolveModelRoute(snap, proto, requested);
       if (!resolution.ok) {
         return envelopeError(proto, resolution.status, resolution.message, resolution.code, req);
@@ -1066,6 +1089,11 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       // Passthrough POST: affinity by requested model id (registry-known
       // ids route to their provider first; unknown ids keep stable order).
       const requestedModel = bodyJson && typeof (bodyJson as any).model === "string" ? String((bodyJson as any).model) : undefined;
+      // Passthrough forwards arbitrary ids, so the policy has to gate the
+      // requested id explicitly: there is no registry entry to filter.
+      if (requestedModel !== undefined && !modelAllowed(allowedModelIds, requestedModel)) {
+        return envelopeError(proto, 404, `unknown model '${requestedModel}'`, "model_not_found", req);
+      }
       candidates = passthroughCandidates(snap, proto, requestedModel);
       // One sticky lane per requested id (or protocol when unmapped):
       // unrelated model ids never share a winner.
