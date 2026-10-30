@@ -1,7 +1,7 @@
 import { createSignal, onMount, Show, For, createResource } from "solid-js";
 
 import { api, currentSession, setSession, type PublicUser } from "../api";
-import { PageTitle, navigate } from "../index";
+import { PageTitle, navigate } from "../chrome";
 import { usalItems } from "../motion";
 import { renderGoogleButton } from "../google";
 import {

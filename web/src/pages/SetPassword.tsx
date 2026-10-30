@@ -1,7 +1,7 @@
 import { createSignal, Show } from "solid-js";
 
 import { publicApi } from "../api";
-import { navigate, LogoMark } from "../index";
+import { navigate, LogoMark } from "../chrome";
 import { usal, usalItems } from "../motion";
 import { Btn, Card, Input, Spinner, ThemeToggle, capitalize } from "../ui";
 

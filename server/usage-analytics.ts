@@ -125,6 +125,16 @@ function unitOf(granularity: "month" | "day" | "hour" | "minute"): number {
   return granularity === "minute" ? USAGE_MINUTE : granularity === "hour" ? USAGE_HOUR : DAY;
 }
 
+/** A window spanning more than ~13 months charts by month. */
+function spanIsMonthly(scope: UsageScope): boolean {
+  return scope.from === null || scope.to - scope.from > 400 * DAY;
+}
+
+/** Granularity this window can actually be read at (see usageSeriesGranularity). */
+function granularityUnit(scope: UsageScope): number {
+  return unitOf(usageSeriesGranularity(scope));
+}
+
 /** Date labels for every chart bucket. */
 function datesFor(first: number, last: number, step: number, granularity: "month" | "day" | "hour" | "minute") {
   const unit = unitOf(granularity);
@@ -142,18 +152,27 @@ function datesFor(first: number, last: number, step: number, granularity: "month
 /** Aggregate one window onto its own 48-bucket chart grid: at most 48 values
  * per chart, and both the current range and its comparison keep their own
  * calendar labels. */
-function windowChart(scope: UsageScope, userId: string | null, granularity: "month" | "day" | "hour" | "minute", name: string) {
-  const unit = unitOf(granularity), monthly = granularity === "month";
-  const first = scope.from === null ? null : granularity === "month" ? new Date(scope.from).getUTCFullYear() * 12 + new Date(scope.from).getUTCMonth() : Math.floor(scope.from / unit);
+function windowChart(requested: UsageScope, userId: string | null, granularity: "month" | "day" | "hour" | "minute" | null, name: string) {
+  // Resolve the bounds first: the comparison window is built from the REQUESTED
+  // range and then widened to whole archived days. Charting it at the current
+  // window's granularity would ask for minute buckets over a range that only
+  // exists as days, so nothing is reachable and the comparison renders zero.
+  // Passing null lets each window pick its own granularity from its own bounds.
+  const scope = resolveUsageScope(requested).scope;
+  const unit = granularity === null ? granularityUnit(scope) : unitOf(granularity);
+  const monthly = granularity === null ? spanIsMonthly(scope) : granularity === "month";
+  // The effective unit, after the null-means-derive branch above.
+  const chartGranularity: "month" | "day" | "hour" | "minute" = granularity ?? (monthly ? "month" : unit === USAGE_MINUTE ? "minute" : unit === USAGE_HOUR ? "hour" : "day");
+  const first = scope.from === null ? null : monthly ? new Date(scope.from).getUTCFullYear() * 12 + new Date(scope.from).getUTCMonth() : Math.floor(scope.from / unit);
   const last = new Date(scope.to - 1);
   const lastIndex = monthly ? last.getUTCFullYear() * 12 + last.getUTCMonth() : Math.floor(last.getTime() / unit);
   // The series' first point is the chart's first bucket; an unbounded start
   // begins at the first period with a row, exactly like the daily series.
-  const startIndex = first ?? bucketIndex(filteredUsageSeries(scope, userId).series[0]?.date ?? new Date(scope.to - 1).toISOString().slice(0, 10), granularity);
+  const startIndex = first ?? bucketIndex(filteredUsageSeries(scope, userId).series[0]?.date ?? new Date(scope.to - 1).toISOString().slice(0, 10), chartGranularity);
   const step = Math.max(1, Math.ceil((lastIndex - startIndex + 1) / 48));
-  const table = bucketTable(name, granularity);
+  const table = bucketTable(name, chartGranularity);
   fillBucketTable(table, scope, userId, monthly, unit, startIndex, step);
-  return { rows: chartRows(table.name), dates: datesFor(startIndex, lastIndex, step, granularity), table: table.name };
+  return { rows: chartRows(table.name), dates: datesFor(startIndex, lastIndex, step, chartGranularity), table: table.name };
 }
 
 /** One transaction in a bounded read worker supplies every chart in the page.
@@ -170,7 +189,10 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null,
   // hour, minute and raw segments; the comparison used to run a second full
   // pass over the same history, doubling the cost of every analytics page.
   const chart = windowChart(scope, userId, granularity, "usage_chart");
-  const comparison = previousWindow === null ? null : windowChart(previousWindow.scope, userId, granularity, "usage_comparison");
+  // The comparison picks its OWN granularity: widening to archived days can
+  // change the unit, and borrowing the current window's unit made an archived
+  // comparison unreadable (it charted zero).
+  const comparison = previousWindow === null ? null : windowChart(previousWindow.scope, userId, null, "usage_comparison");
   const rows = chart.rows;
   const dates = chart.dates;
   const modelChart = (metric: "cost" | "reqs") => {

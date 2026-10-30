@@ -416,6 +416,22 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
 /* Runs once per render frame, only on nodes changed by that frame.    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * KaTeX ships ~1.6 MB of base64 font data in its stylesheet, and only a
+ * transcript that actually contains an equation needs it. The stylesheet is
+ * therefore attached on first use instead of being part of the dashboard
+ * entry, which removes it from every page load that never renders math.
+ */
+let katexCssRequested = false;
+function ensureKatexCss(): void {
+  if (katexCssRequested || typeof document === "undefined") return;
+  katexCssRequested = true;
+  const link = document.createElement("link");
+  link.rel = "stylesheet";
+  link.href = new URL("katex/dist/katex.min.css", import.meta.url).href;
+  document.head.appendChild(link);
+}
+
 function katexOne(host: HTMLElement) {
   // Input/output separation: thetarnav streams latex as raw text nodes;
   // after the first render the output <span> lives in the same element, so
@@ -447,6 +463,7 @@ function katexOne(host: HTMLElement) {
   const span = document.createElement("span");
   span.className = "katex-holder";
   host.replaceChildren(span);
+  ensureKatexCss();
   try {
     katex.render(tex, span, {
       throwOnError: false,

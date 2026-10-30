@@ -1,6 +1,4 @@
-import "@fontsource-variable/inter";
-import "katex/dist/katex.min.css";
-import "@fontsource-variable/jetbrains-mono";
+import "./fonts.css";
 
 import { render } from "solid-js/web";
 import {
@@ -8,10 +6,12 @@ import {
   createEffect,
   createMemo,
   createResource,
+  lazy,
   onCleanup,
   onMount,
   Show,
   For,
+  Suspense,
   type JSX,
 } from "solid-js";
 
@@ -33,20 +33,30 @@ import {
 import { setMotionEnabled } from "./motion";
 import LoginPage from "./pages/Login";
 import SetPasswordPage from "./pages/SetPassword";
-import DashboardPage from "./pages/Dashboard";
-import IndirectCodePage from "./indirect-code/IndirectCodePage";
-import CodeDevPage from "./indirect-code/CodeDevPage";
-import KeysPage from "./pages/Keys";
-import UsagePage from "./pages/Usage";
-import SettingsPage from "./pages/Settings";
-import AdminProvidersPage from "./pages/admin/Providers";
-import AdminModelsPage from "./pages/admin/Models";
 import { PlanLimits } from "./billing";
-import AdminPlansPage from "./pages/admin/Plans";
-import AdminUsersPage from "./pages/admin/Users";
-import AdminKeysPage from "./pages/admin/Keys";
-import AdminStatsPage from "./pages/admin/Stats";
-import AdminAuditPage from "./pages/admin/Audit";
+/**
+ * Route-level code splitting. The dashboard bundle is dominated by the
+ * Indirect Code workspace (transcript rendering, generative UI runtimes) and
+ * the AG Grid catalog screens, none of which a first visit to the overview
+ * needs. Each route loads its own chunk on demand, so the first paint only
+ * pays for the shell plus the current page.
+ *
+ * The login and set-password pages stay eager: they are the entry point for
+ * an unauthenticated visitor and splitting them would only add a round trip.
+ */
+const DashboardPage = lazy(() => import("./pages/Dashboard"));
+const IndirectCodePage = lazy(() => import("./indirect-code/IndirectCodePage"));
+const CodeDevPage = lazy(() => import("./indirect-code/CodeDevPage"));
+const KeysPage = lazy(() => import("./pages/Keys"));
+const UsagePage = lazy(() => import("./pages/Usage"));
+const SettingsPage = lazy(() => import("./pages/Settings"));
+const AdminProvidersPage = lazy(() => import("./pages/admin/Providers"));
+const AdminModelsPage = lazy(() => import("./pages/admin/Models"));
+const AdminPlansPage = lazy(() => import("./pages/admin/Plans"));
+const AdminUsersPage = lazy(() => import("./pages/admin/Users"));
+const AdminKeysPage = lazy(() => import("./pages/admin/Keys"));
+const AdminStatsPage = lazy(() => import("./pages/admin/Stats"));
+const AdminAuditPage = lazy(() => import("./pages/admin/Audit"));
 
 /**
  * Hash router. All app routes live under `#/…` so the static server never
@@ -61,9 +71,8 @@ function parseHash(): { path: string; query: URLSearchParams } {
   return { path: path || "/", query: new URLSearchParams(qs ?? "") };
 }
 
-export function navigate(to: string): void {
-  location.hash = to;
-}
+export { navigate, LogoMark, PageTitle } from "./chrome";
+import { navigate } from "./chrome";
 
 window.addEventListener("hashchange", () => setRoute(parseHash()));
 
@@ -103,6 +112,25 @@ function pageInfo(path: string): NavItem {
   );
 }
 
+/** Placeholder while a route chunk downloads. Deliberately minimal: it is
+ *  visible for one round trip on a cold cache, never on a warm one. */
+function RouteChunk(props: { children: JSX.Element }): JSX.Element {
+  return (
+    <Suspense
+      fallback={
+        <div class="route-loading" role="status" aria-live="polite" aria-busy="true">
+          <span class="route-loading-dot" />
+          <span class="route-loading-dot" />
+          <span class="route-loading-dot" />
+          <span class="sr-only">Loading</span>
+        </div>
+      }
+    >
+      {props.children}
+    </Suspense>
+  );
+}
+
 function isActive(item: NavItem, current: string): boolean {
   return item.path === "/"
     ? current === "/"
@@ -110,26 +138,6 @@ function isActive(item: NavItem, current: string): boolean {
       ? current === "/admin" || current === "/admin/stats"
       : current.startsWith(item.path);
 }
-
-function LogoMark(props: { class?: string }) {
-  return (
-    <div
-      class={`rounded-lg bg-brand-500 text-ink-950 flex items-center justify-center border border-brand-600/30 shadow-sm ${props.class ?? "w-8 h-8"}`}
-    >
-      <svg viewBox="0 0 32 32" class="w-[62%] h-[62%]" aria-hidden="true">
-        <path
-          d="M16 7l7 4v8l-7 4-7-4v-8z"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        />
-        <circle cx="16" cy="15" r="2.5" fill="currentColor" />
-      </svg>
-    </div>
-  );
-}
-
-export { LogoMark };
 
 /** Icon-rail button with hover tooltip (desktop rail). */
 function RailItem(props: { item: NavItem; current: string; badge?: number }) {
@@ -343,32 +351,6 @@ function AppShell(props: { children: JSX.Element }) {
   );
 }
 
-function PageTitle(props: {
-  title: string;
-  subtitle?: string;
-  right?: JSX.Element;
-}) {
-  return (
-    <div
-      class="relative flex flex-wrap items-end justify-between gap-3 mb-5"
-    >
-      <div>
-        <h1
-          class="text-2xl leading-tight font-semibold tracking-tight"
-        >
-          {props.title}
-        </h1>
-        <Show when={props.subtitle}>
-          <p class="text-xs leading-relaxed text-ink-400 mt-1.5">{props.subtitle}</p>
-        </Show>
-      </div>
-      {props.right}
-    </div>
-  );
-}
-
-export { PageTitle };
-
 function Root() {
   const [tick, setTick] = createSignal(0);
   const off = onSessionChange(() => setTick((t) => t + 1));
@@ -422,14 +404,14 @@ function Root() {
           {(() => {
             const p = route().path;
             if (p === "/code-dev" || p.startsWith("/code-dev") || p === "/codedev" || p.startsWith("/codedev")) {
-              return <CodeDevPage />;
+              return <RouteChunk><CodeDevPage /></RouteChunk>;
             }
             if (p.startsWith("/code")) {
-              return <IndirectCodePage />;
+              return <RouteChunk><IndirectCodePage /></RouteChunk>;
             }
             return (
               <AppShell>
-                {(() => {
+                <RouteChunk>{(() => {
                   const isAdmin = currentSession()?.user.role === "admin";
                   if (p === "/") return <DashboardPage />;
                   if (p === "/keys") return <KeysPage />;
@@ -447,7 +429,7 @@ function Root() {
                     if (p === "/admin/audit") return <AdminAuditPage />;
                   }
                   return <DashboardPage />;
-                })()}
+                })()}</RouteChunk>
               </AppShell>
             );
           })()}

@@ -7,8 +7,9 @@ import {
 
 import { PlanUsageCard } from "../billing";
 import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
-import { api, type ApiKeyDto, type DailyPoint, type TopModelDto } from "../api";
-import { PageTitle, navigate } from "../index";
+import { api, type ApiKeyDto, type DailyPoint, type TopModelDto, type UsageHistoryDto } from "../api";
+import { AnalyticsHistoryNotice } from "../analytics-history";
+import { PageTitle, navigate } from "../chrome";
 import { DailyChart } from "../charts";
 import { rangeUnit } from "../analytics-range";
 import { RequestHeatmap } from "../RequestHeatmap";
@@ -38,26 +39,26 @@ export default function DashboardPage() {
   const [series] = createResource(filters.query, async (query) => {
     const params = new URLSearchParams(query);
     const range = { preset: "custom", from: params.get("from") === "all" ? null : Number(params.get("from")), to: Number(params.get("to")) };
-    const j = await api<{ series: DailyPoint[]; granularity: ActivityScope["unit"]; models: TopModelDto[] }>("GET", `/api/usage/overview?${query}`);
+    const j = await api<{ series: DailyPoint[]; granularity: ActivityScope["unit"]; models: TopModelDto[]; history?: UsageHistoryDto }>("GET", `/api/usage/overview?${query}`);
     // Keep counts and their resolved scope together while the next window loads.
-    return { points: j.series, models: j.models, scope: { from: range.from, to: range.to, unit: j.granularity ?? rangeUnit(range) } };
+    return { points: j.series, models: j.models, history: j.history, scope: { from: j.history?.effective.from ?? range.from, to: j.history?.effective.to ?? range.to, unit: j.granularity ?? rangeUnit(range) } };
   });
   const [previous] = createResource(filters.query, async (query) => {
     const params = new URLSearchParams(query);
-    if (params.get("from") === "all") return [];
+    if (params.get("from") === "all") return { points: [] as DailyPoint[], history: undefined };
     const range = { from: Number(params.get("from")), to: Number(params.get("to")) };
-    if (range.from === 0) return [];
+    if (range.from === 0) return { points: [] as DailyPoint[], history: undefined };
     params.set("from", String(Math.max(0, range.from - (range.to - range.from))));
     params.set("to", String(range.from));
-    const j = await api<{ series: DailyPoint[] }>("GET", `/api/usage/daily?${params}`);
-    return j.series;
+    const j = await api<{ series: DailyPoint[]; history?: UsageHistoryDto }>("GET", `/api/usage/daily?${params}`);
+    return { points: j.series, history: j.history };
   });
   const [keys] = createResource(async () => {
     const j = await api<{ keys: ApiKeyDto[] }>("GET", "/api/keys");
     return j.keys;
   });
   const view = () => series()?.points ?? [];
-  const comparison = () => previous.loading ? [] : previous() ?? [];
+  const comparison = () => previous.loading ? [] : previous()?.points ?? [];
   // Keep the three buckets visible alongside the requested combined headline.
   const winIn = createMemo(() =>
     view().reduce((s, d) => s + (d.in_tok ?? 0), 0),
@@ -124,6 +125,7 @@ export default function DashboardPage() {
         <PageTitle title="Overview" subtitle={todayStr} />
         <AnalyticsToolbar filters={filters} loading={series.loading} align="end" />
       </div>
+      <AnalyticsHistoryNotice history={series()?.history} previous={previous()?.history} />
 
       {/* Keep the previous window visible while refreshing. The keyed resource
           mounts CountUp with resolved values so USAL always owns fresh nodes. */}
@@ -172,7 +174,7 @@ export default function DashboardPage() {
                   metric="cost"
                   variant="line"
                   height={200}
-                  unit={filters.unit()}
+                  unit={series()?.scope.unit ?? filters.unit()}
                   resetKey={`spend:${filters.query()}`}
                 />
               </div>
@@ -215,7 +217,7 @@ export default function DashboardPage() {
                   series={view()}
                   metric="tokens"
                   height={200}
-                  unit={filters.unit()}
+                  unit={series()?.scope.unit ?? filters.unit()}
                   resetKey={`tokens:${filters.query()}`}
                 />
               </div>

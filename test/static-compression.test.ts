@@ -22,6 +22,8 @@ beforeAll(async () => {
   writeFileSync(path.join(ROOT, "assets", "small.js"), "x=1");
   writeFileSync(path.join(ROOT, "assets", "logo.png"), Buffer.alloc(4096, 7));
   writeFileSync(path.join(ROOT, "index.html"), "<!doctype html><title>indirect</title>");
+  // STATIC_ROOT is resolved at module load, so the env has to be in place
+  // before the module is imported — hence the dynamic import.
   process.env.STATIC_DIR = ROOT;
   const { serveStatic } = await import("../server/static");
   server = Bun.serve({

@@ -2,7 +2,7 @@ import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "
 import { createSignal, For, Show } from "solid-js";
 
 import { api, type ApiKeyDto } from "../api";
-import { PageTitle } from "../index";
+import { PageTitle } from "../chrome";
 import {
   Badge,
   Btn,
