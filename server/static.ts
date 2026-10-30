@@ -1,6 +1,8 @@
 import { existsSync, statSync } from "fs";
+import { createHash } from "node:crypto";
 import path from "path";
 
+import { compressedAsset, negotiateEncoding } from "./compression";
 import { baseHeaders } from "./http";
 
 /**
@@ -76,6 +78,12 @@ export function resolveStaticFile(urlPath: string): { filePath: string; isHtml: 
   return { filePath: finalPath, isHtml: finalPath.endsWith(".html") };
 }
 
+/** ETag over (size, mtime): the dashboard never rewrites an asset in place
+ *  without touching it, and this needs no extra read of the file. */
+function assetEtag(stats: { size: number; mtimeMs: number }): string {
+  return `W/"${stats.size.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
+}
+
 export function serveStatic(req: Request, urlPath: string): Response | null {
   if (!existsSync(STATIC_ROOT)) return null;
   const resolved = resolveStaticFile(urlPath === "/" ? "/index.html" : urlPath);
@@ -83,6 +91,14 @@ export function serveStatic(req: Request, urlPath: string): Response | null {
 
   const file = Bun.file(resolved.filePath);
   if (file.size === 0 && !resolved.isHtml) return null;
+
+  let stats: { size: number; mtimeMs: number } | null = null;
+  try {
+    const raw = statSync(resolved.filePath);
+    stats = { size: raw.size, mtimeMs: raw.mtimeMs };
+  } catch {
+    stats = null;
+  }
 
   const headers = baseHeaders(req, resolved.isHtml);
   headers.set("Content-Type", MIME[path.extname(resolved.filePath).toLowerCase()] ?? "application/octet-stream");
@@ -93,16 +109,44 @@ export function serveStatic(req: Request, urlPath: string): Response | null {
   const isPushSw = basename === "push-sw.js";
   const isReleaseAsset = resolved.filePath.includes(path.sep + "r" + path.sep);
 
+  const immutable = !resolved.isHtml && !isPushSw && !isReleaseAsset && IMMUTABLE_EXT.has(path.extname(resolved.filePath));
   headers.set(
     "Cache-Control",
     resolved.isHtml || isPushSw
       ? "no-cache"
       : isReleaseAsset
         ? "public, max-age=60, must-revalidate"
-        : IMMUTABLE_EXT.has(path.extname(resolved.filePath))
+        : immutable
             ? "public, max-age=31536000, immutable"
             : "public, max-age=300",
   );
+  // Precompressed variants exist for these bytes, so a shared cache must key
+  // on the encoding.
+  headers.set("Vary", "Accept-Encoding");
+  if (stats) headers.set("ETag", assetEtag(stats));
+
+  // Conditional request: a matching validator skips the body entirely. Only
+  // for the shared-cacheable assets — HTML must always revalidate its content.
+  if (!resolved.isHtml && stats) {
+    const ifNoneMatch = req.headers.get("if-none-match");
+    if (ifNoneMatch && ifNoneMatch.split(",").some((tag) => tag.trim() === assetEtag(stats!))) {
+      return new Response(null, { status: 304, headers });
+    }
+  }
+
+  // Range requests refer to the UNCOMPRESSED byte offsets; never compress them.
+  if (resolved.isHtml || isPushSw || !req.headers.get("range")) {
+    const encoding = negotiateEncoding(req.headers.get("accept-encoding"));
+    if (encoding) {
+      const body = compressedAsset(resolved.filePath, encoding);
+      if (body) {
+        headers.set("Content-Encoding", encoding);
+        headers.set("Content-Length", String(body.length));
+        // Bun otherwise applies its own encoding on top of ours.
+        return new Response(body as unknown as BodyInit, { status: 200, headers });
+      }
+    }
+  }
 
   return new Response(file, { status: 200, headers });
 }
