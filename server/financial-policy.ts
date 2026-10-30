@@ -39,14 +39,52 @@ export function isBudgetPresentation(value: unknown): value is BudgetPresentatio
   return typeof value === "string" && (PRESENTATIONS as readonly string[]).includes(value);
 }
 
-/** Installation defaults, overridable through the environment. */
-export const DEFAULT_FINANCIAL_POLICY: FinancialPolicy = {
+/**
+ * Installation defaults: the environment seeds them and an administrator can
+ * change them at runtime (stored in installation_policy so the choice survives
+ * a restart). The environment stays the documented bootstrap.
+ */
+const envDefaults = {
   showModelPrices: process.env.FINANCIAL_DEFAULT_SHOW_PRICES !== "false",
-  budgetPresentation: isBudgetPresentation(process.env.FINANCIAL_DEFAULT_BUDGET)
+  budgetPresentation: (isBudgetPresentation(process.env.FINANCIAL_DEFAULT_BUDGET)
     ? process.env.FINANCIAL_DEFAULT_BUDGET!
-    : "usd",
-  inherited: true,
+    : "usd") as BudgetPresentation,
 };
+
+const installationValue = db.prepare<{ value: string }, [string]>(
+  "SELECT value FROM installation_policy WHERE key = ?",
+);
+const setInstallationValue = db.prepare(
+  `INSERT INTO installation_policy (key, value, updated_at) VALUES (?, ?, ?)
+   ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+);
+const clearInstallationValue = db.prepare("DELETE FROM installation_policy WHERE key = ?");
+
+/** Effective installation defaults, environment overlaid with the stored choice. */
+export function installationDefaults(): { showModelPrices: boolean; budgetPresentation: BudgetPresentation } {
+  let showModelPrices = envDefaults.showModelPrices;
+  let budgetPresentation = envDefaults.budgetPresentation;
+  try {
+    const prices = installationValue.get("show_model_prices");
+    if (prices) showModelPrices = prices.value === "1";
+    const budget = installationValue.get("budget_presentation");
+    if (budget && isBudgetPresentation(budget.value)) budgetPresentation = budget.value;
+  } catch {
+    // Not configured yet: the environment value applies.
+  }
+  return { showModelPrices, budgetPresentation };
+}
+
+/** Change an installation default; `null` restores the environment value. */
+export function setInstallationDefaults(
+  next: { showModelPrices?: boolean | null; budgetPresentation?: BudgetPresentation | null },
+  now = Date.now(),
+): void {
+  if (next.showModelPrices === null) clearInstallationValue.run("show_model_prices");
+  else if (typeof next.showModelPrices === "boolean") setInstallationValue.run("show_model_prices", next.showModelPrices ? "1" : "0", now);
+  if (next.budgetPresentation === null) clearInstallationValue.run("budget_presentation");
+  else if (isBudgetPresentation(next.budgetPresentation)) setInstallationValue.run("budget_presentation", next.budgetPresentation, now);
+}
 
 interface PolicyRow {
   user_id: string;
@@ -84,14 +122,15 @@ export function storedPolicy(userId: string): StoredFinancialPolicy {
  * person who owns the installation.
  */
 export function financialPolicyFor(user: Pick<UserRow, "id" | "role"> | null): FinancialPolicy {
-  if (!user) return { ...DEFAULT_FINANCIAL_POLICY };
+  const defaults = installationDefaults();
+  if (!user) return { ...defaults, inherited: true };
   if (user.role === "admin") {
     return { showModelPrices: true, budgetPresentation: "usd", inherited: false };
   }
   const stored = storedPolicy(user.id);
   return {
-    showModelPrices: stored.showModelPrices ?? DEFAULT_FINANCIAL_POLICY.showModelPrices,
-    budgetPresentation: stored.budgetPresentation ?? DEFAULT_FINANCIAL_POLICY.budgetPresentation,
+    showModelPrices: stored.showModelPrices ?? defaults.showModelPrices,
+    budgetPresentation: stored.budgetPresentation ?? defaults.budgetPresentation,
     inherited: stored.showModelPrices === null && stored.budgetPresentation === null,
   };
 }
@@ -112,11 +151,6 @@ export function setFinancialPolicy(
     next.budgetPresentation,
     now,
   );
-}
-
-/** True when amounts must be omitted from a response for this policy. */
-export function hidesAmounts(policy: FinancialPolicy): boolean {
-  return policy.budgetPresentation === "hidden";
 }
 
 /**
@@ -199,8 +233,3 @@ export function projectWindow(
   return { ...base, limitConfigured: window.limitUsd !== null };
 }
 
-/** Model pricing as it may be shown to this caller. */
-export function projectPricing<T extends Record<string, unknown>>(pricing: T | null, policy: FinancialPolicy): T | null {
-  if (!policy.showModelPrices) return null;
-  return pricing;
-}

@@ -8,6 +8,7 @@ import {
   applyRetentionRules,
   buildSnapshot,
   listSnapshotSummaries,
+  manifestTimestamp,
   type BackupKind,
   type BackupManifest,
   type BackupSummary,
@@ -64,16 +65,8 @@ export interface CreateBackupOptions {
 }
 
 function newSnapshotId(kind: BackupKind, createdAt: number): string {
-  return manifestStamp(createdAt) + "-" + kind + "-" + createdAt.toString(36);
-}
-
-function manifestStamp(ts: number): string {
-  const d = new Date(ts);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    String(d.getUTCFullYear()) + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate()) +
-    "T" + pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + pad(d.getUTCSeconds()) + "Z"
-  );
+  // Shared with the verifier so a manifest id can be parsed back into a time.
+  return manifestTimestamp(createdAt) + "-" + kind + "-" + createdAt.toString(36);
 }
 
 /** Snapshot root: BACKUP_DIR when set, else <DATA_DIR>/backups. */

@@ -8,6 +8,7 @@ import { parseGridQuery } from "../gridql";
 import { catalogWhere } from "../catalog";
 import { readUsage } from "../usage-reader";
 import { ApiError, clientIp, err, ok, readJsonBody, v } from "../http";
+import { financialPolicyFor, projectAmounts } from "../financial-policy";
 
 const MAX_KEYS_PER_USER = 50;
 const MAX_TTL_MS = 10 * 365 * 24 * 3600 * 1000;
@@ -28,18 +29,21 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
   }
   if (path === "/api/keys" && req.method === "GET") {
     const ctx = await requireAuth(req);
+    // Key spend is money: project it through the caller's financial policy so a
+    // "hidden" installation cannot leak amounts through the keys screen.
+    const policy = financialPolicyFor(ctx.user);
     if (new URL(req.url).searchParams.has("limit") || new URL(req.url).searchParams.has("selection")) {
       const grid = parseGridQuery(new URL(req.url));
       const params = new URL(req.url).searchParams;
       const { keys, total } = queryKeys(ctx.user.id, grid, params.has("selection") ? catalogWhere("keys", params, ctx.user.id) : undefined);
-      return ok({ keys, total, limit: grid.limit, offset: grid.offset }, req);
+      return ok({ keys: projectAmounts(keys, policy), total, limit: grid.limit, offset: grid.offset, financialPolicy: policy }, req);
     }
     const rows = db
       .prepare<ApiKeyRow, [string]>(
         "SELECT * FROM api_keys WHERE user_id = ? ORDER BY created_at DESC",
       )
       .all(ctx.user.id);
-    return ok({ keys: rows.map((r) => publicKey(r)) }, req);
+    return ok({ keys: projectAmounts(rows.map((r) => publicKey(r)), policy), financialPolicy: policy }, req);
   }
 
   if (path === "/api/keys" && req.method === "POST") {

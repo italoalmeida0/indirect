@@ -22,6 +22,7 @@ import { sendSecurityAlert } from "../email";
 import { ApiError, clientIp, err, ok, rateLimitError, readJsonBody, v } from "../http";
 import { bruteforceClear, bruteforceFail, bruteforceLocked, consumeTotpCode } from "../ratelimit";
 import { DEFAULT_MODEL_CONTEXT, DEFAULT_MODEL_OUTPUT, routerSnapshot } from "../models";
+import { financialPolicyFor, installationDefaults } from "../financial-policy";
 
 /**
  * /api/me/* — profile, password, TOTP, Google linking, session management.
@@ -212,6 +213,13 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     if (!target || target.user_id !== ctx.user.id) return err(404, "session not found", req);
     revokeSession(jti);
     return ok({ revoked: true }, req);
+  }
+
+  // Financial visibility: the effective policy for THIS caller. Read-only here;
+  // who may change it is an administrator decision (see /api/admin/policy).
+  if (path === "/api/me/financial-policy" && req.method === "GET") {
+    const ctx = await requireAuth(req);
+    return ok({ policy: financialPolicyFor(ctx.user), defaults: installationDefaults() }, req);
   }
 
   if (path === "/api/me/models" && req.method === "GET") {

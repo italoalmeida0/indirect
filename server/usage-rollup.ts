@@ -140,12 +140,12 @@ export function backfillHourRollups(
   db: Database,
   opts: { now?: number; hours?: number; rawFrom?: number } = {},
 ): { advanced: boolean; hourlyFrom: number; hours: number } {
-  const now = opts.now ?? Date.now();
+  // Bounds come from the coverage watermark, not the wall clock: a backfill
+  // describes hours that already happened, so "now" is not an input.
   const limit = Math.max(0, Math.floor(opts.hours ?? USAGE_HOURLY_BACKFILL_HOURS));
   const coverage = usageRollupCoverage(db);
   const floor = db.query<{ hour_floor: number; raw_from: number }, []>("SELECT hour_floor, raw_from FROM usage_rollup_coverage WHERE id = 1").get()!;
   const boundary = Math.max(0, Math.floor(opts.rawFrom ?? floor.raw_from ?? 0), floor.hour_floor ?? 0);
-  const currentHour = Math.floor(now / USAGE_HOUR) * USAGE_HOUR;
   // Hours already written by live ingestion are authoritative; backfill stops
   // at the first hour this process can prove it has not covered.
   const target = Math.max(boundary, coverage.hourly_from - limit * USAGE_HOUR);

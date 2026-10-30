@@ -803,6 +803,27 @@ const MIGRATIONS: Migration[] = [
     up: `ALTER TABLE usage_rollup_coverage ADD COLUMN hour_floor INTEGER NOT NULL DEFAULT 0;
       ALTER TABLE usage_rollup_coverage ADD COLUMN minute_floor INTEGER NOT NULL DEFAULT 0;`,
   },
+  {
+    name: "029_financial_policy",
+    // Per-user override of the installation's financial visibility defaults.
+    // A NULL column means "inherit"; a row with both columns NULL is deleted
+    // rather than stored, so the table only ever holds real overrides.
+    // Enforced server-side: hiding a dashboard component would still ship the
+    // amounts in the API response.
+    up: `
+      CREATE TABLE user_financial_policy (
+        user_id             TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        show_model_prices   INTEGER CHECK (show_model_prices IN (0, 1)),
+        budget_presentation TEXT CHECK (budget_presentation IN ('usd', 'percent', 'hidden')),
+        updated_at          INTEGER NOT NULL
+      );
+      CREATE TABLE installation_policy (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 /**

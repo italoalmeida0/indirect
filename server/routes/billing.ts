@@ -4,6 +4,43 @@ import { db, audit } from "../db";
 import { randomToken } from "../crypto";
 import { ApiError, clientIp, ok, readJsonBody, v } from "../http";
 import { LIMITS } from "../config";
+import {
+  financialPolicyFor,
+  installationDefaults,
+  isBudgetPresentation,
+  projectWindow,
+  setFinancialPolicy,
+  setInstallationDefaults,
+  storedPolicy,
+  type FinancialPolicy,
+} from "../financial-policy";
+
+/**
+ * Apply the financial visibility policy to a billing payload.
+ *
+ * Amounts are omitted HERE, on the server, not hidden in the UI: a component
+ * that is merely not rendered still leaves the values in the network response.
+ * The window carries a consumption percentage and its renewal instant instead,
+ * which is what a non-admin dashboard needs to render "65% used, renews on …".
+ */
+/** Optional boolean that also accepts 0/1 and null ("inherit the default"). */
+function readFlag(body: Record<string, unknown>, field: string): boolean | null {
+  const value = body[field];
+  if (value === null) return null;
+  if (typeof value === "boolean") return value;
+  if (value === 0 || value === 1) return value === 1;
+  throw new ApiError(400, `${field} must be a boolean`);
+}
+
+function projectBilling(billing: ReturnType<typeof billingStatus>, policy: FinancialPolicy) {
+  const windows = billing.windows.map((window) => projectWindow(window, policy));
+  // The plan's monthly allowance is an amount too; drop it when amounts are
+  // hidden and keep only the plan identity.
+  const plan = billing.plan && (policy.budgetPresentation === "usd"
+    ? billing.plan
+    : { id: billing.plan.id, name: billing.plan.name });
+  return { ...billing, windows, plan, financialPolicy: policy };
+}
 
 /** All administrative mutations and reset redemptions are audited in the
  * same transaction as the balance change. Browser identity never selects
@@ -11,7 +48,7 @@ import { LIMITS } from "../config";
 export async function handleBillingRoute(path: string, req: Request): Promise<Response | null> {
   if (path === "/api/billing" && req.method === "GET") {
     const { user } = await requireAuth(req);
-    return ok({ billing: billingStatus(user.id) }, req);
+    return ok({ billing: projectBilling(billingStatus(user.id), financialPolicyFor(user)) }, req);
   }
   const redeem = path.match(/^\/api\/billing\/resets\/([a-f0-9]{24})\/redeem$/);
   if (redeem && req.method === "POST") {
@@ -19,6 +56,60 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
     const body = await readJsonBody(req, LIMITS.apiBodyBytes);
     const requestId = v.str(body, "requestId", { min: 16, max: 128 })!;
     return ok({ billing: redeemReset(user.id, redeem[1]!, requestId, clientIp(req)) }, req);
+  }
+  // Installation financial policy: the default every user inherits unless an
+  // administrator overrides it for that user.
+  if (path === "/api/admin/financial-policy" && (req.method === "GET" || req.method === "PATCH")) {
+    const { user } = await requireAdmin(req);
+    if (req.method === "GET") {
+      return ok({ defaults: installationDefaults(), policy: financialPolicyFor(user) }, req);
+    }
+    const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+    const showModelPrices = "showModelPrices" in body ? readFlag(body, "showModelPrices") : undefined;
+    const rawPresentation = "budgetPresentation" in body ? body.budgetPresentation : undefined;
+    if (rawPresentation !== undefined && rawPresentation !== null && !isBudgetPresentation(rawPresentation)) {
+      throw new ApiError(400, "budgetPresentation must be usd, percent or hidden");
+    }
+    setInstallationDefaults(
+      {
+        ...(showModelPrices === undefined ? {} : { showModelPrices: showModelPrices === null ? null : showModelPrices === 1 }),
+        ...(rawPresentation === undefined ? {} : { budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null }),
+      },
+      Date.now(),
+    );
+    audit("financial_policy.installation_updated", {
+      actorId: user.id,
+      ip: clientIp(req),
+      meta: { showModelPrices: showModelPrices ?? "unchanged", budgetPresentation: rawPresentation ?? "unchanged" },
+    });
+    return ok({ defaults: installationDefaults() }, req);
+  }
+  // Per-user override of the installation defaults: the second half of the
+  // visibility policy (an installation default plus an optional user override).
+  const policyMatch = path.match(/^\/api\/admin\/users\/([a-f0-9]{24})\/financial-policy$/);
+  if (policyMatch) {
+    const { user } = await requireAdmin(req);
+    const targetId = policyMatch[1]!;
+    if (!db.query("SELECT id FROM users WHERE id = ?").get(targetId)) throw new ApiError(404, "User not found", );
+    if (req.method === "GET") {
+      return ok({ policy: financialPolicyFor({ id: targetId, role: "user" }), stored: storedPolicy(targetId), defaults: installationDefaults() }, req);
+    }
+    if (req.method !== "PATCH") return null;
+    const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+    const current = storedPolicy(targetId);
+    const showModelPrices = "showModelPrices" in body ? readFlag(body, "showModelPrices") : current.showModelPrices;
+    const rawPresentation = "budgetPresentation" in body ? body.budgetPresentation : current.budgetPresentation;
+    if (rawPresentation !== null && !isBudgetPresentation(rawPresentation)) {
+      throw new ApiError(400, "budgetPresentation must be usd, percent or hidden");
+    }
+    setFinancialPolicy(targetId, { showModelPrices, budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null });
+    audit("financial_policy.user_updated", {
+      actorId: user.id,
+      target: targetId,
+      ip: clientIp(req),
+      meta: { showModelPrices, budgetPresentation: rawPresentation },
+    });
+    return ok({ policy: financialPolicyFor({ id: targetId, role: "user" }), stored: storedPolicy(targetId) }, req);
   }
   const planMatch = path.match(/^\/api\/admin\/plans(?:\/([a-f0-9]{24}))?$/);
   const userMatch = path.match(/^\/api\/admin\/users\/([a-f0-9]{24})\/(billing|resets)$/);

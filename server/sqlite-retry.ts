@@ -184,7 +184,3 @@ export async function withSqliteRetryAsync<T>(operation: () => T | Promise<T>, o
   throw lastError;
 }
 
-/** Async convenience wrapper that returns only the value. */
-export async function retrySqliteAsync<T>(operation: () => T | Promise<T>, options: SqliteRetryOptions = {}): Promise<T> {
-  return (await withSqliteRetryAsync(operation, options)).value;
-}
