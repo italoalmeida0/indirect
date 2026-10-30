@@ -23,6 +23,7 @@ export interface CreateKeyOptions {
   dailyLimitUsd?: number | null;
   totalLimitUsd?: number | null;
   rpm?: number | null;
+  projectId?: string | null;
 }
 
 export interface PreparedKey {
@@ -44,8 +45,8 @@ export async function prepareKey(userId: string, opts: CreateKeyOptions): Promis
 
 export function insertPreparedKey(prepared: PreparedKey, now = Date.now()): ApiKeyRow {
   db.prepare(
-    `INSERT INTO api_keys (id, user_id, name, prefix, hash, created_at, expires_at, daily_usd_nanos, total_usd_nanos, rpm, status, token_enc)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
+    `INSERT INTO api_keys (id, user_id, name, prefix, hash, created_at, expires_at, daily_usd_nanos, total_usd_nanos, rpm, status, token_enc, project_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
   ).run(
     prepared.id,
     prepared.userId,
@@ -58,6 +59,7 @@ export function insertPreparedKey(prepared: PreparedKey, now = Date.now()): ApiK
     prepared.opts.totalLimitUsd == null ? null : Math.round(prepared.opts.totalLimitUsd * 1e9),
     prepared.opts.rpm ?? null,
     prepared.tokenEnc,
+    prepared.opts.projectId ?? null,
   );
   return db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(prepared.id)!;
 }
@@ -104,6 +106,7 @@ export function publicKey(row: ApiKeyRow, userEmail?: string, spend?: { today: n
   return {
     id: row.id,
     userId: row.user_id,
+    projectId: row.project_id ?? null,
     userEmail,
     name: row.name,
     prefix: row.prefix,

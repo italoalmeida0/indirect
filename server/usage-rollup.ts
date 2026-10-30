@@ -201,6 +201,9 @@ export async function pruneUsageEvents(
   const findOldest = db.prepare<{ ts: number }, [number]>(
     "SELECT ts FROM usage_events WHERE ts < ? ORDER BY ts ASC LIMIT 1",
   );
+  const undeliveredBefore = db.prepare("SELECT 1 FROM usage_outbox WHERE ts < ? LIMIT 1");
+  const inFlightBefore = db.prepare("SELECT 1 FROM billing_reservations WHERE state = 'pending' AND created_at < ? LIMIT 1");
+  const blockedBefore = (end: number) => !!undeliveredBefore.get(end) || !!inFlightBefore.get(end);
   const dailyCount = db.prepare<{ n: number }, [string]>(
     "SELECT COALESCE(SUM(reqs), 0) AS n FROM usage_model_provider_daily WHERE date = ?",
   );
@@ -257,13 +260,14 @@ export async function pruneUsageEvents(
     for (;;) {
       const oldest = findOldest.get(cutoff);
       if (!oldest) {
-        const current = readRawFrom();
-        if (cutoff > current) {
-          db.transaction(() => {
+        let blocked = false;
+        db.transaction(() => {
+          blocked = blockedBefore(cutoff);
+          if (!blocked && cutoff > readRawFrom()) {
             advanceWatermark.run(cutoff, cutoff, cutoff, cutoff, cutoff);
-          }).immediate();
-        }
-        remaining = false;
+          }
+        }).immediate();
+        remaining = blocked;
         break;
       }
 
@@ -278,7 +282,11 @@ export async function pruneUsageEvents(
 
       let stepDeleted = 0;
       let stepRawFrom = dayEnd;
+      let blocked = false;
       db.transaction(() => {
+        // A settled outbox item or an older live hold can still produce a raw
+        // event in this day. Never publish its day as pruned until delivery.
+        if (blockedBefore(dayEnd)) { blocked = true; return; }
         const current = readRawFrom();
         if (current < dayEnd) {
           if (current <= dayStart) {
@@ -300,6 +308,8 @@ export async function pruneUsageEvents(
         stepRawFrom = readRawFrom();
       }).immediate();
 
+      if (blocked) { remaining = true; break; }
+
       batches++;
       deleted += stepDeleted;
       opts.onBatch?.({ deleted: stepDeleted, total: deleted, batch: batches, rawFrom: stepRawFrom });
@@ -317,6 +327,8 @@ export async function pruneUsageEvents(
   } finally {
     for (const stmt of [
       findOldest,
+      undeliveredBefore,
+      inFlightBefore,
       dailyCount,
       rawDayCount,
       materializeDaily,

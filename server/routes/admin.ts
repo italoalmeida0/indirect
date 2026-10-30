@@ -3,7 +3,7 @@ import { catalogListSource, catalogWhere, type CatalogKind } from "../catalog";
 import { LIMITS, SMTP_ENABLED } from "../config";
 import { db, stmts, inImmediateTx, parseStripParams, type ProviderRow, type ProviderKeyRow, type ModelTargetRow, type ApiKeyRow, type UserRow, type AuthStyle, type ModelRow } from "../db";
 import { encryptSecret, decryptSecret, randomToken, sha256Hex } from "../crypto";
-import { requireAdmin, markUserSessionsRevoked, auditAdmin } from "../auth";
+import { requireAdmin, markUserSessionsRevoked, auditAdmin, effectiveRole, EFFECTIVE_ROLE_SQL } from "../auth";
 import { disconnectSessionSockets, disconnectUserDaemons } from "./relay";
 import { markKeyRevoked, publicKey } from "../keys";
 import { dropKeyLimiter } from "../ratelimit";
@@ -34,6 +34,8 @@ import { fetchOpenRouterCatalog, matchOpenRouterModel } from "../openrouter";
 import { readUsageScope } from "../usage-filters";
 import { readUsage } from "../usage-reader";
 import { deletePolicy, listPolicies, readPolicy, upsertPolicy } from "../model-policy";
+import { projectById, validateProjectAssignment } from "../projects";
+import { assertAdminAccountMutationAllowed, assertMfaCanDisable, corporateAuthConfig, requiresSso } from "../auth-policy";
 import { applyRetention, backupRoot, backupStatus, createBackup, deleteBackup, listBackups, verifyBackup } from "../backup";
 import { existsSync } from "node:fs";
 // The handler's `path` parameter is the request path; this alias keeps the
@@ -1382,14 +1384,14 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       const cols: Record<string, ColSpec> = {
         email: { col: "email" },
         name: { col: "name" },
-        role: { col: "role" },
+        role: { col: "effective_role" },
         status: { col: "status" },
         keyCount: { col: "key_count", kind: "number" },
         planName: { col: "plan_name" },
          lastLoginAt: { col: "last_login_at", kind: "date" },
         createdAt: { col: "created_at", kind: "number" },
       };
-      const source = url.searchParams.has("selection") ? catalogListSource("users", url.searchParams, null) : { sql: "SELECT u.*, b.plan_id, bp.name AS plan_name, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id", params: [] };
+      const source = url.searchParams.has("selection") ? catalogListSource("users", url.searchParams, null) : { sql: `SELECT u.*, ${EFFECTIVE_ROLE_SQL} AS effective_role, b.plan_id, bp.name AS plan_name, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id`, params: [] };
       const { rows, total } = gridPage({
         baseSql: source.sql,
         baseParams: source.params,
@@ -1403,7 +1405,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           id: u.id,
           email: u.email,
           name: u.name,
-          role: u.role,
+          role: effectiveRole(u),
           status: u.status,
           hasPassword: !!u.password_hash,
           googleLinked: !!u.google_id,
@@ -1434,7 +1436,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           id: u.id,
           email: u.email,
           name: u.name,
-          role: u.role,
+          role: effectiveRole(u),
           status: u.status,
           hasPassword: !!u.password_hash,
           googleLinked: !!u.google_id,
@@ -1454,7 +1456,8 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const body = await readJsonBody(req, LIMITS.apiBodyBytes);
     const email = v.email(body, "email");
     const name = v.str(body, "name", { min: 1, max: 128 })!;
-    const role = body.role === "admin" ? "admin" : "user";
+    if (body.role !== undefined && body.role !== "admin" && body.role !== "user" && body.role !== "project_manager") throw new ApiError(400, "Invalid role");
+    const role = body.role === "admin" || body.role === "project_manager" ? body.role : "user";
     const sendInvite = body.sendInvite !== false;
     const planId = requirePlan(body.planId);
 
@@ -1463,7 +1466,8 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const id = randomToken(12);
     const inviteToken = sendInvite ? randomToken(32) : null;
     inImmediateTx(() => {
-      db.prepare("INSERT INTO users (id, email, name, role, created_at) VALUES (?, ?, ?, ?, ?)").run(id, email, name, role, Date.now());
+      if (role === "admin" && corporateAuthConfig().requireAdminMfa) throw new ApiError(409, "enroll an authenticator before promoting an administrator");
+      db.prepare("INSERT INTO users (id, email, name, role, enterprise_role, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, email, name, role === "admin" ? "admin" : "user", role === "project_manager" ? "project_manager" : null, Date.now());
       if (planId) assignPlan(id, planId);
       if (inviteToken) {
         db.prepare(
@@ -1503,7 +1507,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (req.method === "PATCH" && !action) {
       const body = await readJsonBody(req, LIMITS.apiBodyBytes);
       const name = v.str(body, "name", { min: 1, max: 128, optional: true }) ?? target.name;
-      const role = body.role === "admin" || body.role === "user" ? body.role : target.role;
+      if (body.role !== undefined && body.role !== "admin" && body.role !== "user" && body.role !== "project_manager") throw new ApiError(400, "Invalid role");
+      const role = body.role === "admin" || body.role === "user" || body.role === "project_manager" ? body.role : effectiveRole(target);
+      if (body.status !== undefined && body.status !== "banned" && body.status !== "active") throw new ApiError(400, "Invalid status");
       const status =
         body.status === "banned" || body.status === "active" ? body.status : target.status;
       if (targetId === ctx.user.id && (role !== "admin" || status !== "active")) {
@@ -1513,21 +1519,26 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         target.role === "admin" &&
         target.status === "active" &&
         (role !== "admin" || status !== "active");
+      const privilegesChanged = role !== effectiveRole(target) || status !== target.status;
       const changed = inImmediateTx(() => {
+        assertAdminAccountMutationAllowed(targetId, { role, status });
         const result = demotesActiveAdmin
           ? db.prepare(
-            `UPDATE users SET name = ?, role = ?, status = ?
+            `UPDATE users SET name = ?, role = ?, enterprise_role = ?, status = ?
              WHERE id = ? AND (
                SELECT COUNT(*) FROM users
                WHERE role = 'admin' AND status = 'active'
              ) > 1`,
-            ).run(name, role, status, targetId)
-          : db.prepare("UPDATE users SET name = ?, role = ?, status = ? WHERE id = ?").run(
-              name, role, status, targetId,
+            ).run(name, role === "admin" ? "admin" : "user", role === "project_manager" ? "project_manager" : null, status, targetId)
+          : db.prepare("UPDATE users SET name = ?, role = ?, enterprise_role = ?, status = ? WHERE id = ?").run(
+              name, role === "admin" ? "admin" : "user", role === "project_manager" ? "project_manager" : null, status, targetId,
             );
         if (result.changes !== 1) return false;
+        // A later promotion must not silently revive old delegated scope.
+        if (role !== effectiveRole(target)) db.prepare("UPDATE project_members SET role = 'member' WHERE user_id = ? AND role = 'manager'").run(targetId);
+        if (role !== "admin") db.prepare("UPDATE corporate_account_policy SET sso_exempt=0 WHERE user_id=?").run(targetId);
+        if (privilegesChanged) markUserSessionsRevoked(targetId);
         if (status === "banned") {
-          markUserSessionsRevoked(targetId);
           db.prepare("DELETE FROM remote_pairing_tokens WHERE user_id = ?").run(targetId);
         }
         auditAdmin(ctx.user, "user.updated", targetId, { name, role, status }, ip);
@@ -1536,8 +1547,8 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       if (!changed) {
         return err(400, "cannot remove the last active admin", req);
       }
+      if (privilegesChanged) disconnectSessionSockets(targetId);
       if (status === "banned") {
-        disconnectSessionSockets(targetId);
         disconnectUserDaemons(targetId);
       }
       return ok({ done: true }, req);
@@ -1546,6 +1557,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (req.method === "DELETE" && !action) {
       if (targetId === ctx.user.id) return err(400, "you cannot delete yourself", req);
       const deleted = inImmediateTx(() => {
+        assertAdminAccountMutationAllowed(targetId, { deleted: true });
         if (target.role === "admin" && target.status === "active") {
           db.prepare(
             `DELETE FROM users WHERE id = ? AND (
@@ -1574,11 +1586,17 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
     if (req.method === "POST" && action === "/reset-2fa") {
       inImmediateTx(() => {
+        const current = stmts.userById.get(targetId);
+        if (!current) throw new ApiError(404, "user not found");
+        assertMfaCanDisable(current);
         db.prepare("UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE id = ?").run(
           targetId,
         );
+        db.prepare("DELETE FROM auth_recovery_codes WHERE user_id = ?").run(targetId);
+        markUserSessionsRevoked(targetId);
         auditAdmin(ctx.user, "user.2fa.reset", targetId, undefined, ip);
       });
+      disconnectSessionSockets(targetId);
       return ok({ done: true }, req);
     }
 
@@ -1594,6 +1612,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (req.method === "POST" && action === "/send-reset") {
       const token = randomToken(32);
       inImmediateTx(() => {
+        const current = stmts.userById.get(targetId);
+        if (!current) throw new ApiError(404, "user not found");
+        if (requiresSso(current)) throw new ApiError(403, "This account requires corporate sign-in");
         db.prepare(
           "INSERT INTO password_tokens (token_hash, user_id, kind, expires_at) VALUES (?, ?, 'reset', ?)",
         ).run(sha256Hex(token), targetId, Date.now() + LIMITS.passwordTokenTtlMs);
@@ -1623,6 +1644,19 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
   }
 
   const adminKeyMatch = path.match(/^\/api\/admin\/keys\/([a-f0-9]{24})(\/reveal)?$/);
+  if (adminKeyMatch && req.method === "PATCH" && !adminKeyMatch[2]) {
+    const keyId = adminKeyMatch[1]!, body = await readJsonBody(req, LIMITS.apiBodyBytes);
+    if (!("projectId" in body) || Object.keys(body).some((key) => key !== "projectId")) throw new ApiError(400, "Only projectId can be changed here");
+    const key = inImmediateTx(() => {
+      const current = db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId);
+      if (!current) throw new ApiError(404, "key not found");
+      const projectId = validateProjectAssignment(current.user_id, body.projectId);
+      db.prepare("UPDATE api_keys SET project_id = ? WHERE id = ?").run(projectId, keyId);
+      auditAdmin(ctx.user, "key.project_updated.admin", keyId, { owner: current.user_id, previousProjectId: current.project_id ?? null, projectId }, ip);
+      return db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId)!;
+    });
+    return ok({ key: publicKey(key, stmts.userById.get(key.user_id)?.email) }, req);
+  }
   if (adminKeyMatch && req.method === "DELETE" && !adminKeyMatch[2]) {
     const keyId = adminKeyMatch[1]!;
     const key = db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId);
@@ -2026,14 +2060,18 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (req.method === "GET") return ok({ policies: listPolicies() }, req);
     const body = await readJsonBody(req, LIMITS.apiBodyBytes);
     const name = v.str(body, "name", { min: 1, max: 64 })!;
+    if (body.kind !== undefined && body.kind !== "project" && body.kind !== "default") throw new ApiError(400, "Invalid policy kind");
+    if (body.models !== undefined && (!Array.isArray(body.models) || body.models.length > 10_000 || body.models.some((id) => typeof id !== "string"))) throw new ApiError(400, "models must be an array of up to 10000 public model IDs");
     const kind = body.kind === "project" ? "project" : "default";
+    const projectId = kind === "project" && typeof body.projectId === "string" ? body.projectId : null;
+    if (kind === "project" && (!projectId || projectById(projectId)?.kind !== "project")) throw new ApiError(400, "A valid projectId is required");
     const models = Array.isArray(body.models) ? body.models.filter((id): id is string => typeof id === "string").slice(0, 10_000) : [];
     // Every id must exist: a typo must not silently narrow a policy.
     const missing = models.filter((id) => !db.query("SELECT id FROM models WHERE id = ?").get(id));
     if (missing.length) throw new ApiError(400, `Unknown model ids: ${missing.slice(0, 5).join(", ")}`);
     const id = inImmediateTx(() => {
-      const createdId = upsertPolicy({ name, kind, enabled: body.enabled !== false, models }, Date.now());
-      auditAdmin(ctx.user, "model_policy.created", createdId, { name, kind, models: models.length }, clientIp(req));
+      const createdId = upsertPolicy({ name, kind, projectId, enabled: body.enabled !== false, models }, Date.now());
+      auditAdmin(ctx.user, "model_policy.created", createdId, { name, kind, projectId, models: models.length }, clientIp(req));
       return createdId;
     });
     return ok({ policy: readPolicy(id) }, req);
@@ -2053,6 +2091,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     }
     if (req.method === "PATCH") {
       const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+      if (body.models !== undefined && (!Array.isArray(body.models) || body.models.length > 10_000 || body.models.some((id) => typeof id !== "string"))) throw new ApiError(400, "models must be an array of up to 10000 public model IDs");
       const models = Array.isArray(body.models)
         ? body.models.filter((id): id is string => typeof id === "string").slice(0, 10_000)
         : existing.models;
@@ -2065,7 +2104,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           kind: existing.kind,
           projectId: existing.project_id,
           enabled: "enabled" in body ? body.enabled !== false : !!existing.enabled,
-          models,
+          models: "models" in body ? models : undefined,
         }, Date.now());
         auditAdmin(ctx.user, "model_policy.updated", updatedId, { models: models.length }, clientIp(req));
         return updatedId;

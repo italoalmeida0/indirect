@@ -17,6 +17,15 @@ export class ApiError extends Error {
   }
 }
 
+/** Disallow ASCII control characters in identity/configuration identifiers. */
+export function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
 function corsOriginFor(req?: Request): string | null {
   if (!req || ALLOWED_ORIGINS.length === 0) return null;
   const origin = req.headers.get("origin");

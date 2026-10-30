@@ -52,10 +52,11 @@ beforeAll(async () => {
   await waitForServer();
 }, 60_000);
 
-afterAll(() => {
+afterAll(async () => {
   try {
     gwProc.kill();
   } catch {}
+  await gwProc.exited;
   try {
     rmSync(dataDir, { recursive: true, force: true });
   } catch {}
@@ -413,7 +414,9 @@ describe("Indirect Code Relay and Pairing", () => {
       // Wait for daemon to register and come online
       let realHostId = "";
       const started = Date.now();
-      while (Date.now() - started < 10_000) {
+      // A cold Windows worker provisions its managed shell before connecting.
+      // Measure that separately from the session lifecycle below.
+      while (Date.now() - started < 45_000) {
         const hRes = await fetch(`${GW}/api/indirect-code/hosts`, {
           headers: { Authorization: `Bearer ${userToken}` },
         });
@@ -427,6 +430,7 @@ describe("Indirect Code Relay and Pairing", () => {
       }
 
       expect(realHostId).not.toBeEmpty();
+      console.log(`[daemon-startup] ready in ${Date.now() - started}ms (including managed runtime provisioning)`);
 
       // Connect client WebSocket
       const clientWs = new WebSocket(`${GW_WS}/api/indirect-code/client/ws?token=${userToken}`);
@@ -491,12 +495,20 @@ describe("Indirect Code Relay and Pairing", () => {
       try {
         daemonSubproc.kill();
       } catch {}
+      await daemonSubproc.exited;
+      // Pairing can create an offline host before a cold runtime download
+      // finishes. Remove this test's host even if its startup assertion fails.
+      const leftovers = await fetch(`${GW}/api/indirect-code/hosts`, { headers: { Authorization: `Bearer ${userToken}` } });
+      const remaining = await leftovers.json() as { hosts: Array<{ id: string; name: string }> };
+      for (const host of remaining.hosts.filter((item) => item.name === "Real Go Daemon")) {
+        await fetch(`${GW}/api/indirect-code/hosts/${host.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${userToken}` } });
+      }
       try {
         rmSync(daemonData, { recursive: true, force: true });
         rmSync(workDir, { recursive: true, force: true });
       } catch {}
     }
-  }, 15000);
+  }, 60000);
 
   test("Real Go Daemon: pins, message edits, projects, search, attachments", async () => {
     const pairRes = await fetch(`${GW}/api/indirect-code/pair`, {
@@ -751,6 +763,7 @@ describe("Indirect Code Relay and Pairing", () => {
       try {
         daemonSubproc.kill();
       } catch {}
+      await daemonSubproc.exited;
       try {
         rmSync(daemonData, { recursive: true, force: true });
         rmSync(workDir, { recursive: true, force: true });
@@ -886,6 +899,7 @@ describe("Indirect Code Relay and Pairing", () => {
       try {
         daemonSubproc.kill();
       } catch {}
+      await daemonSubproc.exited;
       try {
         rmSync(daemonData, { recursive: true, force: true });
         rmSync(workDir, { recursive: true, force: true });

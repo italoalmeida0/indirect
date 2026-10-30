@@ -120,20 +120,20 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
       const session = "sessionEnabled" in body ? !!body.sessionEnabled : !!existing?.session_enabled;
       if (monthly === null && (weekly || session)) throw new ApiError(400, "Shorter windows require a monthly allowance");
       const planId = id ?? randomToken(12), now = Date.now();
-      db.transaction(() => {
+      inImmediateTx(() => {
         if (id) db.prepare("UPDATE billing_plans SET name = ?, monthly_nanos = ?, weekly_enabled = ?, session_enabled = ?, updated_at = ? WHERE id = ?").run(name, monthly, +weekly, +session, now, id);
         else db.prepare("INSERT INTO billing_plans(id, name, monthly_nanos, weekly_enabled, session_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(planId, name, monthly, +weekly, +session, now, now);
         audit(id ? "billing.plan.updated" : "billing.plan.created", { actorId: user.id, target: planId, ip, meta: { name, monthlyUsd: monthly === null ? null : monthly / 1e9, weekly, session } });
-      }).immediate();
+      });
       return ok({ plans: listPlans() }, req);
     }
     if (id && req.method === "DELETE") {
-      db.transaction(() => {
+      inImmediateTx(() => {
         if (db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM user_billing WHERE plan_id = ?").get(id)!.n) throw new ApiError(409, "Move all members to another plan before deleting it");
         if (!db.query("SELECT id FROM billing_plans WHERE id = ?").get(id)) throw new ApiError(404, "Plan not found");
         db.prepare("DELETE FROM billing_plans WHERE id = ?").run(id);
         audit("billing.plan.deleted", { actorId: user.id, target: id, ip });
-      }).immediate();
+      });
       return ok({ deleted: true }, req);
     }
   }
@@ -146,7 +146,7 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
         const body = await readJsonBody(req, LIMITS.apiBodyBytes);
         if (!("planId" in body)) throw new ApiError(400, "planId is required");
         const plan = requirePlan(body.planId);
-        db.transaction(() => { assignPlan(id, plan); audit("billing.plan.assigned", { actorId: user.id, target: id, ip, meta: { planId: plan } }); }).immediate();
+        inImmediateTx(() => { assignPlan(id, plan); audit("billing.plan.assigned", { actorId: user.id, target: id, ip, meta: { planId: plan } }); });
         return ok({ billing: billingStatus(id) }, req);
       }
     } else if (req.method === "POST") {

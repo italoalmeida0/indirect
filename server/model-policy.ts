@@ -9,14 +9,13 @@ import { db, inImmediateTx } from "./db";
  * needs the decision enforced where the request is served, not in the UI.
  *
  * A policy is a named allow-list of model ids with:
- *   - `kind`: "default" (applies to everyone without a more specific match)
- *              or "project" (applies to keys attributed to that project).
- *   - `models`: the allowed model ids. An EMPTY list means "no restriction",
- *     which is how an installation stays unrestricted until it opts in.
+ *   - `kind`: "default" or "project" (grants for that project's keys).
+ *   - `models`: public model IDs, never provider aliases.
  *
- * Resolution order for a caller: the project policy assigned to the invoking
- * key's project, else the default policy. Administrators are exempt: they must
- * be able to reach every registered model to administer the installation.
+ * No enabled, nonempty default means unrestricted personal and project use.
+ * Otherwise a project's enabled nonempty list adds grants to the default.
+ * Empty project lists add nothing; they cannot turn a restricted default into
+ * unrestricted access. Administrators alone are exempt.
  */
 
 export interface ModelPolicyRow {
@@ -31,35 +30,24 @@ export interface ModelPolicyRow {
 
 export interface ModelPolicyEntry {
   model_id: string;
+  deleted: number;
 }
 
 const policyById = db.prepare<ModelPolicyRow, [string]>("SELECT * FROM model_policies WHERE id = ?");
 const defaultPolicy = db.prepare<ModelPolicyRow, []>("SELECT * FROM model_policies WHERE kind = 'default' AND enabled = 1 ORDER BY created_at LIMIT 1");
 const projectPolicy = db.prepare<ModelPolicyRow, [string]>("SELECT * FROM model_policies WHERE kind = 'project' AND project_id = ? AND enabled = 1 ORDER BY created_at LIMIT 1");
-const allowedFor = db.prepare<ModelPolicyEntry, [string]>("SELECT model_id FROM model_policy_models WHERE policy_id = ? ORDER BY model_id");
+const allowedFor = db.prepare<ModelPolicyEntry, [string]>("SELECT model_id, deleted FROM model_policy_models WHERE policy_id = ? ORDER BY model_id");
 
-/** The policy that applies to a request, or null when nothing restricts it. */
-export function policyFor(subject: { role?: string; projectId?: string | null }): ModelPolicyRow | null {
+/** Read on every request; membership and policy edits need no cache invalidation. */
+export function allowedModels(subject: { role?: string; projectId?: string | null }): Set<string> | null {
   if (subject.role === "admin") return null;
-  if (subject.projectId) {
-    const project = projectPolicy.get(subject.projectId);
-    if (project) return project;
-  }
-  return defaultPolicy.get() ?? null;
-}
-
-/**
- * Allowed model ids for a policy, or null when the policy does not restrict.
- *
- * An empty allow-list is treated as unrestricted on purpose: it is the state a
- * freshly created policy starts in, and silently blocking every model until an
- * administrator fills the list in would be an outage caused by a form.
- */
-export function allowedModels(policy: ModelPolicyRow | null): Set<string> | null {
-  if (!policy) return null;
-  const rows = allowedFor.all(policy.id);
+  const base = defaultPolicy.get();
+  const rows = base ? allowedFor.all(base.id) : [];
   if (rows.length === 0) return null;
-  return new Set(rows.map((row) => row.model_id));
+  const allowed = new Set(rows.filter((row) => !row.deleted).map((row) => row.model_id));
+  const project = subject.projectId ? projectPolicy.get(subject.projectId) : null;
+  if (project) for (const row of allowedFor.all(project.id)) if (!row.deleted) allowed.add(row.model_id);
+  return allowed;
 }
 
 /** True when this model may be used. */
@@ -69,16 +57,22 @@ export function modelAllowed(allowed: Set<string> | null, modelId: string): bool
 
 export interface ModelPolicySummary extends ModelPolicyRow {
   models: string[];
+  missingModels: string[];
+}
+
+function summarize(row: ModelPolicyRow): ModelPolicySummary {
+  const rows = allowedFor.all(row.id);
+  return { ...row, models: rows.filter((entry) => !entry.deleted).map((entry) => entry.model_id), missingModels: rows.filter((entry) => !!entry.deleted).map((entry) => entry.model_id) };
 }
 
 export function listPolicies(): ModelPolicySummary[] {
   const rows = db.query<ModelPolicyRow, []>("SELECT * FROM model_policies ORDER BY kind, created_at").all();
-  return rows.map((row) => ({ ...row, models: allowedFor.all(row.id).map((entry) => entry.model_id) }));
+  return rows.map(summarize);
 }
 
 export function readPolicy(id: string): ModelPolicySummary | null {
   const row = policyById.get(id);
-  return row ? { ...row, models: allowedFor.all(row.id).map((entry) => entry.model_id) } : null;
+  return row ? summarize(row) : null;
 }
 
 /**
@@ -91,21 +85,25 @@ export function upsertPolicy(input: {
   kind: "default" | "project";
   projectId?: string | null;
   enabled: boolean;
-  models: string[];
+  models?: string[];
 }, now = Date.now()): string {
   return inImmediateTx(() => {
     const id = input.id ?? ("mp_" + crypto.randomUUID().replace(/-/g, "").slice(0, 20));
-    if (input.kind === "default") {
-      db.prepare("UPDATE model_policies SET kind = 'project', project_id = NULL WHERE kind = 'default' AND id <> ?").run(id);
+    if (input.enabled && input.kind === "default") {
+      db.prepare("UPDATE model_policies SET enabled = 0 WHERE kind = 'default' AND id <> ?").run(id);
+    } else if (input.enabled && input.kind === "project" && input.projectId) {
+      db.prepare("UPDATE model_policies SET enabled = 0 WHERE kind = 'project' AND project_id = ? AND id <> ?").run(input.projectId, id);
     }
     db.prepare(`INSERT INTO model_policies (id, name, kind, project_id, enabled, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET name = excluded.name, kind = excluded.kind,
         project_id = excluded.project_id, enabled = excluded.enabled, updated_at = excluded.updated_at`)
       .run(id, input.name, input.kind, input.kind === "project" ? input.projectId ?? null : null, input.enabled ? 1 : 0, now, now);
-    db.prepare("DELETE FROM model_policy_models WHERE policy_id = ?").run(id);
-    const insert = db.prepare("INSERT OR IGNORE INTO model_policy_models (policy_id, model_id) VALUES (?, ?)");
-    for (const modelId of new Set(input.models)) insert.run(id, modelId);
+    if (input.models !== undefined) {
+      db.prepare("DELETE FROM model_policy_models WHERE policy_id = ?").run(id);
+      const insert = db.prepare("INSERT OR IGNORE INTO model_policy_models (policy_id, model_id) VALUES (?, ?)");
+      for (const modelId of new Set(input.models)) insert.run(id, modelId);
+    }
     return id;
   });
 }

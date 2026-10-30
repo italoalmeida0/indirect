@@ -3,6 +3,7 @@ import { db, stmts, type SessionRow } from "../db";
 import { GATEWAY_SECRET } from "../config";
 import { jwtVerify, sha256Hex } from "../crypto";
 import { sendTurnPush, type TurnPush } from "../push";
+import { assertSessionPolicy } from "../auth-policy";
 
 export type WsData =
   | {
@@ -77,7 +78,9 @@ function usableSession(userId: string, jti: string, accessExpiresAt: number): Se
   const now = Date.now();
   if (session.revoked || session.expires_at <= now || session.abs_expires_at <= now) return null;
   if (accessExpiresAt <= now) return null;
-  if (stmts.userById.get(userId)?.status !== "active") return null;
+  const user = stmts.userById.get(userId);
+  if (user?.status !== "active") return null;
+  try { assertSessionPolicy(user, session); } catch { return null; }
   return session;
 }
 
@@ -114,7 +117,7 @@ function refreshClientExpiry(ws: ServerWebSocket<WsData>): boolean {
   } catch (error) {
     console.error("[RELAY] session expiry check failed:", error instanceof Error ? error.name : "unknown");
   }
-  disconnectClient(ws, "session_expired");
+  disconnectClient(ws, Date.now() >= ws.data.expiresAt ? "session_expired" : "session_revoked");
   return false;
 }
 
@@ -125,7 +128,7 @@ function scheduleClientExpiry(ws: ServerWebSocket<WsData>): void {
   const timer = setTimeout(() => {
     if (ws.data.type !== "client" || !clientsByUserId.get(ws.data.userId)?.has(ws)) return;
     if (refreshClientExpiry(ws)) scheduleClientExpiry(ws);
-  }, Math.max(0, ws.data.expiresAt - Date.now()));
+  }, Math.max(0, Math.min(CLIENT_RECHECK_MS, ws.data.expiresAt - Date.now())));
   timer.unref();
   clientExpiryTimers.set(ws, timer);
 }
@@ -144,10 +147,11 @@ function clientLive(ws: ServerWebSocket<WsData>): boolean {
     try {
       authorized = usableSession(ws.data.userId, ws.data.jti, ws.data.accessExpiresAt) !== null;
     } catch (error) {
-      // A transient read failure must not sever every browser tab: the next
-      // recheck retries in CLIENT_RECHECK_MS.
+      // Storage failure is not authorization. Stop forwarding until the
+      // client reconnects and the session can actually be verified again.
       console.error("[RELAY] session recheck failed:", error instanceof Error ? error.name : "unknown");
-      return true;
+      disconnectClient(ws, "authorization_unavailable");
+      return false;
     }
     if (!authorized) {
       disconnectClient(ws, "session_revoked");
@@ -391,6 +395,8 @@ export async function handleIndirectCodeUpgrade(
     if (!session || session.user_id !== res.payload.sub || session.revoked || session.expires_at <= Date.now() || session.abs_expires_at <= Date.now() || !user || user.status !== "active") {
       return new Response("session expired or revoked", { status: 401 });
     }
+    try { assertSessionPolicy(user, session); }
+    catch { return new Response("session no longer satisfies the security policy", { status: 401 }); }
 
     // Bind the socket to the session row: user + jti + rotation family are
     // what every revocation path matches on.

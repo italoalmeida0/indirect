@@ -236,6 +236,12 @@ interface Waiter {
 const waiters: Waiter[] = [];
 let queuedBytes = 0;
 let peakQueued = 0;
+const admissionRejections: Record<AdmissionReason, number> = { global: 0, user: 0, key: 0, queue: 0, aborted: 0 };
+
+function denial(reason: AdmissionReason, retryAfter: number): Extract<Admission, { ok: false }> {
+  admissionRejections[reason]++;
+  return { ok: false, reason, retryAfter };
+}
 
 function blockingReason(keyId: string, userId: string, limits: AdmissionLimits): Exclude<AdmissionReason, "queue" | "aborted"> | null {
   if (totalUpstreamInFlight >= limits.global) return "global";
@@ -271,6 +277,7 @@ function finish(waiter: Waiter, result: Admission): void {
   queuedBytes = Math.max(0, queuedBytes - waiter.bytes);
   clearTimeout(waiter.timer);
   if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
+  if (!result.ok) admissionRejections[result.reason]++;
   waiter.settle(result);
 }
 
@@ -313,18 +320,18 @@ export async function admitUpstream(
   limits: AdmissionLimits,
   wait: AdmissionWait,
 ): Promise<Admission> {
-  if (wait.signal?.aborted) return { ok: false, reason: "aborted", retryAfter: 1 };
+  if (wait.signal?.aborted) return denial("aborted", 1);
 
   const immediate = tryTake(keyId, userId, limits);
   if (immediate) return { ok: true, release: immediate };
 
   const blocked = blockingReason(keyId, userId, limits) ?? "global";
   const bytes = Math.max(0, wait.bytes ?? 0);
-  if (wait.deadlineMs <= 0) return { ok: false, reason: blocked, retryAfter: 1 };
+  if (wait.deadlineMs <= 0) return denial(blocked, 1);
   if (waiters.length >= Math.max(1, wait.maxQueue) || queuedBytes + bytes > wait.maxQueueBytes) {
     // The queue itself is the denied dimension: retrying with a doomed key
     // would only burn the client's deadline.
-    return { ok: false, reason: "queue", retryAfter: deadlineRetryAfter(wait.deadlineMs) };
+    return denial("queue", deadlineRetryAfter(wait.deadlineMs));
   }
 
   return new Promise<Admission>((settle) => {
@@ -355,12 +362,13 @@ export async function admitUpstream(
 }
 
 /** Queue depth and slot occupancy for observability (/api/ready). */
-export function admissionSnapshot(): { inFlight: number; queued: number; queuedBytes: number; peakQueued: number; maxQueued: number } {
+export function admissionSnapshot() {
   return {
     inFlight: totalUpstreamInFlight,
     queued: waiters.length,
     queuedBytes,
     peakQueued,
     maxQueued: LIMITS.admissionQueueMax,
+    rejected: { ...admissionRejections },
   };
 }

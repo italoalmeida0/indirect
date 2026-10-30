@@ -8,6 +8,7 @@ import type { userEvents } from "./usage";
 import type { parseGridQuery } from "./gridql";
 import type { filteredUsageAnalytics } from "./usage-analytics";
 import type { CatalogKind, catalogAuditPage, catalogFilterOptions } from "./catalog";
+import type { ProjectUsageRequest, ProjectUsageTotals } from "./project-usage";
 
 export type UsageReadRequest = { scope: UsageScope; userId: string | null } & (
   | { kind: "series" }
@@ -18,8 +19,10 @@ export type UsageReadRequest = { scope: UsageScope; userId: string | null } & (
   | { kind: "facets"; search: string }
   | { kind: "breakdown"; grid: ReturnType<typeof parseGridQuery>; users: boolean; summaryOnly: boolean }
   | { kind: "events"; opts: Parameters<typeof userEvents>[1]; userId: string }
+  | ({ kind: "financial-project" } & ProjectUsageRequest)
 );
-type Result<R extends UsageReadRequest> = (R extends { kind: "catalog-facets" } ? ReturnType<typeof catalogFilterOptions>
+type Result<R extends UsageReadRequest> = (R extends { kind: "financial-project" } ? ProjectUsageTotals
+  : R extends { kind: "catalog-facets" } ? ReturnType<typeof catalogFilterOptions>
   : R extends { kind: "catalog-audit" } ? ReturnType<typeof catalogAuditPage>
   : R extends { kind: "analytics" } ? ReturnType<typeof filteredUsageAnalytics>
   : R extends { kind: "overview" } ? ReturnType<typeof filteredUsageSeries> & { models: ReturnType<typeof filteredTopModels> }
@@ -31,6 +34,9 @@ interface Reader { worker: Worker; job?: Job; timer?: ReturnType<typeof setTimeo
 const readers: Reader[] = [];
 const queue: Job[] = [];
 let sequence = 0;
+let completed = 0;
+let failures = 0;
+let timedOut = 0;
 const busy = () => new ApiError(503, "Analytics is busy. Please retry shortly.");
 
 function failed(reader: Reader, error: Error = busy()) {
@@ -75,7 +81,7 @@ function dispatch() {
     clearTimeout(reader.job.timer);
     const remaining = reader.job.expires - Date.now();
     if (remaining <= 0) { reader.job.reject(busy()); reader.job = undefined; dispatch(); return; }
-    reader.timer = setTimeout(() => failed(reader), remaining);
+    reader.timer = setTimeout(() => { timedOut++; failed(reader); }, remaining);
     try { reader.worker.postMessage({ id: reader.job.id, request: reader.job.request }); }
     catch { failed(reader); }
   }
@@ -88,7 +94,7 @@ export function readUsage<R extends UsageReadRequest>(request: R, signal?: Abort
   const { scope, userId, ...options } = request;
   let extra: unknown = options;
   let invalidationScope = scope;
-  if (request.kind !== "catalog-facets" && request.kind !== "catalog-audit" && request.kind !== "events") {
+  if (request.kind !== "financial-project" && request.kind !== "catalog-facets" && request.kind !== "catalog-audit" && request.kind !== "events") {
     invalidationScope = resolveUsageScope(scope).scope;
     if (request.kind === "analytics" && scope.from !== null && scope.from > 0) {
       const previous = resolveUsageScope({ ...scope, from: Math.max(0, scope.from - (scope.to - scope.from)), to: scope.from }).scope;
@@ -107,8 +113,8 @@ export function readUsage<R extends UsageReadRequest>(request: R, signal?: Abort
     const cleanup = () => { clearTimeout(job.timer); sharedSignal.removeEventListener("abort", abort); };
     const job: Job = {
       id: ++sequence, expires: Date.now() + LIMITS.analyticsDeadlineMs, request,
-      resolve: (result) => { if (!finished) { finished = true; cleanup(); resolve(result); } },
-      reject: (error) => { if (!finished) { finished = true; cleanup(); reject(error); } },
+      resolve: (result) => { if (!finished) { finished = true; completed++; cleanup(); resolve(result); } },
+      reject: (error) => { if (!finished) { finished = true; failures++; cleanup(); reject(error); } },
     };
     const abort = () => {
       const error = new DOMException("Analytics request cancelled", "AbortError");
@@ -119,7 +125,7 @@ export function readUsage<R extends UsageReadRequest>(request: R, signal?: Abort
     };
     job.timer = setTimeout(() => {
       const index = queue.indexOf(job);
-      if (index >= 0) { queue.splice(index, 1); job.reject(busy()); }
+      if (index >= 0) { timedOut++; queue.splice(index, 1); job.reject(busy()); }
     }, LIMITS.analyticsDeadlineMs);
     queue.push(job);
     sharedSignal.addEventListener("abort", abort, { once: true });
@@ -134,4 +140,8 @@ export async function closeUsageReaders(): Promise<void> {
     clearTimeout(reader.timer); reader.job?.reject(busy()); stopping.push(reader.worker.terminate());
   }
   await Promise.all(stopping);
+}
+
+export function usageReaderStatus() {
+  return { workers: readers.length, active: readers.filter((reader) => !!reader.job).length, queued: queue.length, pendingLimit: LIMITS.analyticsPending, completed, failed: failures, timedOut };
 }

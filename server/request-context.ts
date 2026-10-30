@@ -23,6 +23,8 @@ export interface RequestContext {
   path?: string;
   /** Effective financial policy header attached once the caller authenticates. */
   financialPolicyHeader?: string;
+  /** Revalidate dashboard authorization after awaits, under the mutation lock. */
+  revalidateMutation?: () => void;
 }
 
 const store = new AsyncLocalStorage<RequestContext>();
@@ -39,6 +41,15 @@ export function setCurrentFinancialPolicyHeader(header: string): void {
 
 export function currentFinancialPolicyHeader(): string | undefined {
   return store.getStore()?.financialPolicyHeader;
+}
+
+export function setMutationRevalidator(revalidate: () => void): void {
+  const ctx = store.getStore();
+  if (ctx) ctx.revalidateMutation = revalidate;
+}
+
+export function revalidateCurrentMutation(): void {
+  store.getStore()?.revalidateMutation?.();
 }
 
 /** Run `fn` with `context` bound to the async execution. */

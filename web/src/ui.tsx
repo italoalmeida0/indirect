@@ -453,6 +453,7 @@ export function Input(props: {
   placeholder?: string;
   min?: number;
   max?: number;
+  step?: number | string;
   autocomplete?: string;
   required?: boolean;
   hint?: string;
@@ -478,6 +479,7 @@ export function Input(props: {
         placeholder={props.placeholder}
         min={props.min}
         max={props.max}
+        step={props.step}
         autocomplete={props.autocomplete}
         required={props.required}
         disabled={props.disabled}

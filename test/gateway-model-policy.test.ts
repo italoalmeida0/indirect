@@ -80,6 +80,13 @@ test("a default policy restricts the catalog and the proxy for every protocol", 
     expect(ids).toContain("economy");
     expect(ids).not.toContain("premium");
 
+    // Dashboard /api/me/models must obey the exact same effective policy.
+    const meModels = await request(gateway.base, "/api/me/models", { token: user.accessToken });
+    expect(meModels.response.status).toBe(200);
+    const meIds = meModels.data.models.map((m: any) => m.id);
+    expect(meIds).toContain("economy");
+    expect(meIds).not.toContain("premium");
+
     // A single-model read is refused rather than leaked.
     expect((await fetch(`${gateway.base}/v1/models/premium`, { headers: { Authorization: `Bearer ${key}` } })).status).toBe(404);
 

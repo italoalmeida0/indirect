@@ -4,6 +4,7 @@ import { api, currentSession, setSession, type PublicUser } from "../api";
 import { PageTitle, navigate } from "../chrome";
 import { usalItems } from "../motion";
 import { renderGoogleButton } from "../google";
+import AccountSecurity from "./AccountSecurity";
 import {
   Badge, Btn, Card, IconBtn, CardHeader, Icon, Icons, Input, Modal, ModalField, ModalNotice, Segmented, Spinner, copyWithToast, fmtDate, setThemeMode, themeMode, toast,
 } from "../ui";
@@ -299,6 +300,7 @@ export default function SettingsPage() {
         </Card>
       </div>
 
+      <AccountSecurity />
       <Card class="mt-6">
         <CardHeader title="Active sessions" />
         <div class="px-5 pb-5">

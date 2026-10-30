@@ -193,6 +193,7 @@ describe("pinned release assets", () => {
 
   test("the platform key maps Windows to the ZIP asset", () => {
     expect(obscuraPlatformKey("win32", "x64")).toBe("win32-x64");
+    expect(obscuraPlatformKey("win32", "arm64")).toBe("win32-x64");
     expect(OBSCURA_ASSETS[obscuraPlatformKey("win32", "x64")]?.file).toBe("obscura-x86_64-windows-stealth.zip");
     expect(OBSCURA_ASSETS[obscuraPlatformKey("linux", "arm64")]?.file).toBe("obscura-aarch64-linux-stealth.tar.gz");
     expect(OBSCURA_ASSETS[obscuraPlatformKey("darwin", "x64")]?.file).toBe("obscura-x86_64-macos-stealth.tar.gz");

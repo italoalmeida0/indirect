@@ -52,6 +52,12 @@ export const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 function loadSecret(): string {
   const envSecret = process.env.INDIRECT_SECRET || process.env.GATEWAY_SECRET || "";
   if (envSecret && envSecret.length >= 32) return envSecret;
+  const secretPath = process.env.INDIRECT_SECRET_FILE || process.env.GATEWAY_SECRET_FILE;
+  if (secretPath) {
+    const fromFile = readFileSync(secretPath, "utf8");
+    if (fromFile.length < 32) throw new Error("configured credential secret file is too short");
+    return fromFile;
+  }
 
   if (IS_PROD) {
     console.error(

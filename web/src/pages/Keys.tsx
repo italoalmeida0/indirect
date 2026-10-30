@@ -1,5 +1,5 @@
 import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../catalog";
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js";
 
 import {
   api,
@@ -8,6 +8,7 @@ import {
   type HiddenApiKeyDto,
   type PercentApiKeyDto,
   type ProjectedApiKeyDto,
+  type FinancialProjectDto,
 } from "../api";
 import { PageTitle } from "../chrome";
 import {
@@ -25,6 +26,7 @@ import {
   ModalSection,
   OrDivider,
   ProgressBar,
+  Select,
   SwitchCard,
   copyWithToast,
   fmtDate,
@@ -64,6 +66,7 @@ interface KeyFormState {
   dailyLimitUsd: string;
   totalLimitUsd: string;
   rpm: string;
+  projectId: string;
 }
 
 function isUsdKey(k: ProjectedApiKeyDto): k is ApiKeyDto {
@@ -95,6 +98,8 @@ const BASE_KEY_SORTS = [
 ];
 
 export default function KeysPage() {
+  const [projects] = createResource(async () => (await api<{ projects: FinancialProjectDto[] }>("GET", "/api/projects")).projects);
+  const readProjects = () => projects.error ? undefined : projects();
   const presentation = createMemo(() => currentFinancialPolicy().budgetPresentation);
   const showUsd = createMemo(() => presentation() === "usd");
   const showPercent = createMemo(() => presentation() === "percent");
@@ -139,6 +144,7 @@ export default function KeysPage() {
     dailyLimitUsd: "",
     totalLimitUsd: "",
     rpm: "",
+    projectId: "",
   });
 
   const resetForm = () =>
@@ -149,6 +155,7 @@ export default function KeysPage() {
       dailyLimitUsd: "",
       totalLimitUsd: "",
       rpm: "",
+      projectId: "",
     });
 
   const num = (s: string) => (s.trim() === "" ? null : Number(s));
@@ -162,6 +169,7 @@ export default function KeysPage() {
         name: form().name.trim(),
         expiresAt,
         rpm: num(form().rpm),
+        projectId: form().projectId || null,
       };
       if (showUsd()) {
         payload.dailyLimitUsd = num(form().dailyLimitUsd);
@@ -187,6 +195,7 @@ export default function KeysPage() {
       dailyLimitUsd: isUsdKey(k) ? (k.dailyLimitUsd?.toString() ?? "") : "",
       totalLimitUsd: isUsdKey(k) ? (k.totalLimitUsd?.toString() ?? "") : "",
       rpm: k.rpm?.toString() ?? "",
+      projectId: k.projectId ?? "",
     });
     setEditing(k);
   };
@@ -199,6 +208,7 @@ export default function KeysPage() {
       const payload: Record<string, unknown> = {
         name: form().name.trim(),
         rpm: num(form().rpm),
+        projectId: form().projectId || null,
       };
       if (showUsd()) {
         payload.dailyLimitUsd = num(form().dailyLimitUsd);
@@ -603,6 +613,7 @@ export default function KeysPage() {
             />
           </ModalField>
 
+          <Show when={readProjects()?.length || projects.error}><Show when={projects.error} fallback={<Select label="Financial project" value={form().projectId} onChange={(id) => setForm({ ...form(), projectId: id })} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((p) => p.status === "active").map((p) => ({ value: p.id, label: p.name }))]} />}><p role="alert" class="text-xs text-ink-400">Financial projects could not be loaded. Reload to choose a project.</p></Show></Show>
           <ModalSection title="Expiration">
             <div class="space-y-2.5">
               <div class="flex flex-wrap gap-2">
@@ -777,6 +788,7 @@ export default function KeysPage() {
             />
           </ModalField>
 
+          <Show when={readProjects()?.length || form().projectId}><Select label="Financial project" value={form().projectId} onChange={(id) => setForm({ ...form(), projectId: id })} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((p) => p.status === "active" || p.id === form().projectId).map((p) => ({ value: p.id, label: `${p.name}${p.status === "archived" ? " (archived)" : ""}` }))]} hint="Reassignment changes future requests. Historical usage keeps its original financial project." /></Show>
           <ModalSection title="Expiration">
             <div class="space-y-2.5">
               <div class="flex flex-wrap gap-2">

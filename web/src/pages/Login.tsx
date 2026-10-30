@@ -35,16 +35,29 @@ export default function LoginPage() {
   const [error, setError] = createSignal("");
   const [info, setInfo] = createSignal("");
   const [googleClientId, setGoogleClientId] = createSignal<string | null>(null);
+  const [oidcStart, setOidcStart] = createSignal<string | null>(null);
 
   let googleDiv: HTMLDivElement | undefined;
 
   onMount(async () => {
+    const callback = new URLSearchParams(location.search).get("oidc");
+    if (callback === "complete") {
+      setBusy(true);
+      history.replaceState(null, "", `${location.pathname}${location.hash}`);
+      try {
+        const result = await publicApi<any>("POST", "/api/auth/oidc/complete", {});
+        if (result.needs2FA) { setTempToken(result.tempToken); setMode("2fa"); }
+        else enterApp(result);
+      } catch (e) { setError(e instanceof Error ? e.message : "Corporate sign-in failed"); }
+      finally { setBusy(false); }
+    }
     try {
-      const cfg = await publicApi<{ googleClientId: string | null; smtpConfigured: boolean }>(
+      const cfg = await publicApi<{ googleClientId: string | null; smtpConfigured: boolean; oidcEnabled?: boolean; oidcStartUrl?: string }>(
         "GET",
         "/api/auth/config",
       );
       setGoogleClientId(cfg.googleClientId);
+      if (cfg.oidcEnabled && cfg.oidcStartUrl?.startsWith("/api/auth/oidc/")) setOidcStart(cfg.oidcStartUrl);
       if (cfg.googleClientId && googleDiv) {
         renderGoogleButton(googleDiv, cfg.googleClientId, async (idToken) => {
           setBusy(true);
@@ -185,7 +198,7 @@ export default function LoginPage() {
                 <span class="text-brand-500">
                   <Icon name={Icons.shield} size={16} />
                 </span>
-                Enter the 6-digit code from your authenticator
+                Enter an authenticator code or a recovery code
               </div>
               <Input
                 label="Authentication code"
@@ -195,7 +208,7 @@ export default function LoginPage() {
                 autocomplete="one-time-code"
                 required
               />
-              <Btn type="submit" class="w-full" disabled={busy() || code().length !== 6}>
+              <Btn type="submit" class="w-full" disabled={busy() || code().trim().length < 6}>
                 {busy() ? <Spinner /> : "Verify"}
               </Btn>
               <button
@@ -225,7 +238,8 @@ export default function LoginPage() {
             </form>
           </Show>
 
-          <Show when={googleClientId()}>
+          <Show when={mode() === "login" && oidcStart()}><div class="mt-5 pt-5 border-t border-line"><Btn variant="outline" class="w-full" disabled={busy()} onClick={() => { const start = oidcStart(); if (start) location.assign(start); }}>Continue with corporate SSO</Btn></div></Show>
+          <Show when={googleClientId() && mode() === "login"}>
             <div class="mt-5 pt-5 border-t border-line flex justify-center">
               {/* overflow-hidden + rounded-full clips the GSI iframe's white
                   background that would otherwise peek past the pill corners. */}

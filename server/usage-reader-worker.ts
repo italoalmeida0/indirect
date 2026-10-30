@@ -6,12 +6,14 @@ import { db } from "./db";
 import type { UsageReadRequest } from "./usage-reader";
 import { filteredUsageAnalytics } from "./usage-analytics";
 import { catalogAuditPage, catalogFilterOptions } from "./catalog";
+import { projectUsageReport } from "./project-usage";
 
 parentPort!.on("message", ({ id, request: r }: { id: number; request: UsageReadRequest }) => {
   try {
     const result = db.transaction(() => {
       if (r.kind === "catalog-facets") return catalogFilterOptions(r.catalog, new URLSearchParams(r.search), r.userId);
       if (r.kind === "catalog-audit") return catalogAuditPage(new URLSearchParams(r.search));
+      if (r.kind === "financial-project") return projectUsageReport(db, r);
       const resolved = resolveUsageScope(r.scope);
       const scope = r.kind === "events" ? r.scope : resolved.scope;
       const data = r.kind === "analytics" ? filteredUsageAnalytics(scope, r.userId, r.scope, r.includeCost ?? true)

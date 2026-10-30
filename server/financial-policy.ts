@@ -208,9 +208,33 @@ export function projectAmounts<T>(value: T, policy: FinancialPolicy): T {
 }
 
 /** Strip model pricing keys when `showModelPrices` is disabled. */
-export function projectModelPrices<T>(value: T, showModelPrices: boolean): T {
+export function projectModelPrices(value: unknown, showModelPrices: boolean): unknown {
   if (showModelPrices) return value;
-  return scrub(value) as T;
+  return publicModelMetadata(value);
+}
+
+// Passthrough providers can add arbitrary fields, including amounts with names
+// we have never seen. Only documented non-financial catalog metadata may cross
+// the restricted boundary; a monetary-name regex cannot enforce that contract.
+const MODEL_METADATA = new Set([
+  "id", "object", "created", "created_at", "owned_by", "display_name", "name", "description", "type",
+  "context_length", "max_output_tokens", "max_completion_tokens", "max_tokens", "supported_parameters",
+  "modality", "input_modalities", "output_modalities", "tokenizer", "instruct_type", "is_moderated",
+  "has_more", "first_id", "last_id",
+]);
+const MODEL_METADATA_OBJECTS = new Set(["top_provider", "architecture"]);
+
+function publicModelMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(publicModelMetadata);
+  if (!value || typeof value !== "object") return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if ((key === "data" || key === "models") && Array.isArray(item)) result[key] = item.map(publicModelMetadata);
+    else if (MODEL_METADATA_OBJECTS.has(key) && item && typeof item === "object" && !Array.isArray(item)) result[key] = publicModelMetadata(item);
+    else if (MODEL_METADATA.has(key) && (item === null || ["string", "number", "boolean"].includes(typeof item) ||
+      (Array.isArray(item) && item.every((part) => typeof part === "string")))) result[key] = item;
+  }
+  return result;
 }
 
 function scrub(value: unknown): unknown {
@@ -311,6 +335,7 @@ export function projectKeyDto<
   T extends {
     id: string;
     userId: string;
+    projectId: string | null;
     userEmail?: string;
     name: string;
     prefix: string;
@@ -330,6 +355,7 @@ export function projectKeyDto<
   const base = {
     id: key.id,
     userId: key.userId,
+    projectId: key.projectId,
     ...(key.userEmail !== undefined ? { userEmail: key.userEmail } : {}),
     name: key.name,
     prefix: key.prefix,
@@ -356,26 +382,31 @@ export function projectKeyDto<
   };
 }
 
-function stripCostRow<T extends Record<string, unknown>>(row: T): T {
+const PUBLIC_USAGE_COLUMNS = new Set([
+  "id", "key_id", "key_name", "user_id", "user_email", "user_name", "email", "name",
+  "project_id", "cost_center_id", "projectId", "costCenterId", "project_name", "cost_center_name",
+  "model", "proto", "provider_id", "provider_name", "provider_key_id", "provider_key_label", "upstream_model",
+  "in_tok", "cache_tok", "out_tok", "reqs", "success_reqs", "error_reqs", "latency_ms", "status", "stream", "estimated",
+  "ts", "date", "lastDate", "label", "detail", "members", "rank", "request_id", "requests", "success", "errors", "unknown",
+]);
+
+function stripCostRow<T extends Record<string, unknown>>(row: T): Partial<T> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(row)) {
-    if (key === "cost" || key === "cost_in" || key === "cost_cache" || key === "cost_out" || isMoneyKey(key)) {
-      continue;
-    }
-    out[key] = value;
+    if (PUBLIC_USAGE_COLUMNS.has(key) && (value === null || ["string", "number", "boolean"].includes(typeof value))) out[key] = value;
   }
-  return out as T;
+  return out as Partial<T>;
 }
 
 /** Project tabular/series usage rows without mutating cached reader snapshots. */
-export function projectUsageRows<T extends Record<string, unknown>>(rows: T[], policy: FinancialPolicy): T[] {
+export function projectUsageRows<T extends Record<string, unknown>>(rows: T[], policy: FinancialPolicy): Array<Partial<T>> {
   if (policy.budgetPresentation === "usd") return rows;
   return rows.map(stripCostRow);
 }
 
 export function projectUsageSummary<
   T extends { today: Record<string, unknown>; month: Record<string, unknown>; total: Record<string, unknown> },
->(summary: T, policy: FinancialPolicy): T {
+>(summary: T, policy: FinancialPolicy) {
   if (policy.budgetPresentation === "usd") return summary;
   return {
     ...summary,
@@ -387,7 +418,7 @@ export function projectUsageSummary<
 
 export function projectUsageBreakdownPayload<
   T extends { rows: Array<Record<string, unknown>>; totals?: Record<string, unknown> },
->(page: T, policy: FinancialPolicy): T {
+>(page: T, policy: FinancialPolicy) {
   if (policy.budgetPresentation === "usd") return page;
   return {
     ...page,
@@ -396,7 +427,7 @@ export function projectUsageBreakdownPayload<
   };
 }
 
-function rankByVolume<T extends Record<string, unknown>>(entities: T[]): T[] {
+function rankByVolume<T extends Record<string, unknown>>(entities: T[]): Array<Partial<T>> {
   const named = entities.filter((e) => e.id !== null);
   const rest = entities.filter((e) => e.id === null);
   named.sort((a, b) => {
@@ -425,7 +456,7 @@ export function projectAnalyticsPayload<
     providers: Array<Record<string, unknown>>;
     protocols: Array<Record<string, unknown>>;
   },
->(report: T, policy: FinancialPolicy): T {
+>(report: T, policy: FinancialPolicy) {
   if (policy.budgetPresentation === "usd") return report;
   return {
     ...report,

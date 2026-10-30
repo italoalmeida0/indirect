@@ -153,21 +153,29 @@ describe("USD plans and enforcement over HTTP", () => {
     for (let index = 0; index < 50 && (await status()).windows[0].reservedUsd > 0; index++) await Bun.sleep(20);
     const current = (await status()).windows[0]; expect(current.reservedUsd).toBe(0); expect(current.spentUsd).toBeGreaterThan(0);
   });
-  test("storage errors fail closed in the client protocol and retain unsettled holds", async () => {
+  test("admission storage errors fail closed and a settlement failure keeps the hold instead of discarding an earned response", async () => {
     clearSpend();
     sql.exec("CREATE TRIGGER billing_test_admission BEFORE INSERT ON billing_reservations BEGIN SELECT RAISE(ABORT, 'test admission failure'); END");
     try {
       const failed = await llm(); expect(failed.status).toBe(503); expect(JSON.parse(failed.text).error.type).toBe("api_error");
       expect((await status()).windows[0].reservedUsd).toBe(0);
     } finally { sql.exec("DROP TRIGGER billing_test_admission"); }
+    // Settlement runs after the provider already produced (and billed) the
+    // tokens, and it is impossible to recall a flushed stream. The contract is
+    // therefore: keep the earned response, keep the pending hold counting
+    // against the budget so nothing is given away, and retry the charge.
     sql.exec("CREATE TRIGGER billing_test_settlement BEFORE UPDATE OF state ON billing_reservations WHEN NEW.state='settled' BEGIN SELECT RAISE(ABORT, 'test settlement failure'); END");
     try {
-      const failed = await llm(); expect(failed.status).toBe(503); expect(JSON.parse(failed.text).error.type).toBe("api_error");
-      const retained = (await status()).windows[0]; expect(retained.reservedUsd).toBeGreaterThan(0); expect(retained.spentUsd).toBe(0);
+      const served = await llm(); expect(served.status).toBe(200); expect(served.text).toContain("choices");
+      const retained = (await status()).windows[0];
+      expect(retained.reservedUsd).toBeGreaterThan(0); expect(retained.spentUsd).toBe(0);
+      // Advance a stopped process's lease to exercise restart recovery of the
+      // hold that could not settle, while the settled transition still fails.
+      const recovered = Bun.spawnSync([process.execPath, "-e", 'import {recoverBudgets} from "./server/billing.ts"; recoverBudgets(Date.now()+360001);'], { cwd: path.join(import.meta.dir, ".."), env: { ...process.env, DATA_DIR: dir, NODE_ENV: "test", GATEWAY_SECRET: "b".repeat(64) }, stdout: "pipe", stderr: "pipe" });
+      expect(recovered.exitCode).toBe(0);
+      const after = (await status()).windows[0];
+      expect(after.reservedUsd).toBe(0); expect(after.spentUsd).toBeGreaterThan(0);
     } finally { sql.exec("DROP TRIGGER billing_test_settlement"); }
-    // Advance a stopped process's lease to exercise restart recovery.
-    const recovered = Bun.spawnSync([process.execPath, "-e", 'import {recoverBudgets} from "./server/billing.ts"; recoverBudgets(Date.now()+360001);'], { cwd: path.join(import.meta.dir, ".."), env: { ...process.env, DATA_DIR: dir, NODE_ENV: "test", GATEWAY_SECRET: "b".repeat(64) }, stdout: "pipe", stderr: "pipe" });
-    expect(recovered.exitCode).toBe(0); expect((await status()).windows[0].reservedUsd).toBe(0); expect((await status()).windows[0].spentUsd).toBeGreaterThan(0);
   });
   test("banked reset is atomic, idempotent, preserves monthly/key spend and never shifts renewal times", async () => {
     clearSpend(); await llm();

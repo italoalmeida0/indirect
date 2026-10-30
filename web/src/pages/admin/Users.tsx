@@ -26,6 +26,8 @@ import {
 } from "../../ui";
 import { UsageGrid } from "../../aggrid";
 import type { ColDef } from "ag-grid-community";
+import { UserFinancialPolicy } from "./FinancialPolicies";
+import { UserCorporatePolicy } from "./CorporateAuth";
 
 export default function AdminUsersPage() {
   const view = createCatalog<AdminUserDto>({ storageKey: "llmgw-grid:admin.users.list", path: "/api/admin/users", result: "users", label: "Users", sort: [
@@ -38,6 +40,8 @@ export default function AdminUsersPage() {
   const [planUser, setPlanUser] = createSignal<AdminUserDto | null>(null);
   const [showCreate, setShowCreate] = createSignal(false);
   const [editing, setEditing] = createSignal<AdminUserDto | null>(null);
+  const [policyUser, setPolicyUser] = createSignal<AdminUserDto | null>(null);
+  const [policyTab, setPolicyTab] = createSignal("financial");
   const [confirmDelete, setConfirmDelete] = createSignal<AdminUserDto | null>(
     null,
   );
@@ -49,7 +53,7 @@ export default function AdminUsersPage() {
   const [email, setEmail] = createSignal("");
   const [name, setName] = createSignal("");
   const [role, setRole] = createSignal("user");
-  const [sendInvite, setSendInvite] = createSignal(true);
+  const [sendInvite, setSendInvite] = createSignal(false);
   const [newPlan, setNewPlan] = createSignal("");
   const [plans] = createResource(async () => (await api<{ plans: BillingPlanDto[] }>("GET", "/api/admin/plans")).plans ?? []);
 
@@ -187,7 +191,7 @@ export default function AdminUsersPage() {
     return (
       <>
         <Badge tone={u.role === "admin" ? "indigo" : "zinc"}>
-          {u.role === "admin" ? "Admin" : "User"}
+          {u.role === "admin" ? "Admin" : u.role === "project_manager" ? "Project manager" : "User"}
         </Badge>
         <Show when={u.status === "banned"}>
           <Badge tone="red">Banned</Badge>
@@ -433,6 +437,12 @@ export default function AdminUsersPage() {
                     User
                   </FilterChip>
                   <FilterChip
+                    selected={role() === "project_manager"}
+                    onClick={() => setRole("project_manager")}
+                  >
+                    Project manager
+                  </FilterChip>
+                  <FilterChip
                     selected={role() === "admin"}
                     onClick={() => setRole("admin")}
                   >
@@ -509,6 +519,12 @@ export default function AdminUsersPage() {
                         User
                       </FilterChip>
                       <FilterChip
+                        selected={u().role === "project_manager"}
+                        onClick={() => setEditing({ ...u(), role: "project_manager" })}
+                      >
+                        Project manager
+                      </FilterChip>
+                      <FilterChip
                         selected={u().role === "admin"}
                         onClick={() => setEditing({ ...u(), role: "admin" })}
                       >
@@ -516,6 +532,8 @@ export default function AdminUsersPage() {
                       </FilterChip>
                     </div>
                   </ModalField>
+                  <p class="text-xs text-ink-400">Project managers can manage members only in financial projects where they have manager membership. They do not gain administration access.</p>
+                  <div class="rounded-lg border border-line p-3 space-y-2"><p class="text-xs text-ink-400 break-all">User ID: {u().id}</p><Btn size="sm" variant="outline" onClick={() => { setPolicyUser(u()); setPolicyTab("financial"); setEditing(null); }}>Financial and corporate access</Btn></div>
 
                   <ModalField label="Account status" hint="Banning immediately revokes active sessions and blocks all proxy keys.">
                     <div class="flex flex-wrap gap-2 pt-1">
@@ -623,6 +641,9 @@ export default function AdminUsersPage() {
       </Modal>
 
       {/* delete confirm */}
+      <Modal open={!!policyUser()} onClose={() => setPolicyUser(null)} title={`Access policy: ${policyUser()?.email ?? ""}`}>
+        <Show when={policyUser()}>{(user) => <div class="space-y-4"><Select label="User access settings" value={policyTab()} onChange={setPolicyTab} options={[{ value: "financial", label: "Financial visibility" }, { value: "corporate", label: "Corporate identity" }]} /><Show when={policyTab() === "financial"}><UserFinancialPolicy userId={user().id} /></Show><Show when={policyTab() === "corporate"}><UserCorporatePolicy userId={user().id} /></Show></div>}</Show>
+      </Modal>
       <Modal
         open={!!confirmDelete()}
         onClose={() => setConfirmDelete(null)}

@@ -12,10 +12,12 @@ export interface PublicUser {
   id: string;
   email: string;
   name: string;
-  role: "admin" | "user";
+  role: "admin" | "project_manager" | "user";
   hasPassword: boolean;
   googleLinked: boolean;
   totpEnabled: boolean;
+  oidcLinked?: boolean;
+  managed?: boolean;
   status: "active" | "banned";
   createdAt: number;
 }
@@ -243,6 +245,7 @@ interface ApiKeyBaseDto {
   status: "active" | "revoked" | "exhausted" | "expired" | "daily_limit" | "total_limit";
   lastUsedAt: number | null;
   revealable: boolean;
+  projectId?: string | null;
 }
 
 export interface ApiKeyDto extends ApiKeyBaseDto {
@@ -440,16 +443,61 @@ export interface AdminUserDto {
   id: string;
   email: string;
   name: string;
-  role: "admin" | "user";
+  role: "admin" | "project_manager" | "user";
   status: "active" | "banned";
   hasPassword: boolean;
   googleLinked: boolean;
   totpEnabled: boolean;
+  oidcLinked?: boolean;
+  managed?: boolean;
   createdAt: number;
   lastLoginAt: number | null;
   keyCount: number;
   planId?: string | null;
   planName?: string | null;
+}
+
+/** Gateway billing scopes; unrelated to daemon-owned workspace projects. */
+export interface FinancialProjectDto {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  kind: "project" | "cost_center";
+  costCenterId: string | null;
+  responsibleUserId: string | null;
+  status: "active" | "archived";
+  membership: "member" | "manager" | null;
+  budgets: { kind: "monthly" | "lifetime"; resetsAt: number | null; limitConfigured?: boolean; limitUsd?: number | null; spentUsd?: number; reservedUsd?: number; usedPercent?: number | null }[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProjectMemberDto {
+  userId: string;
+  email: string;
+  name: string;
+  role: "member" | "manager";
+}
+
+export interface ProjectUsageDto {
+  requests: number;
+  inputTokens: number;
+  cacheTokens: number;
+  outputTokens: number;
+  successRequests: number;
+  errorRequests: number;
+  costUsd?: number;
+}
+
+export interface ModelPolicyDto {
+  id: string;
+  name: string;
+  kind: "default" | "project";
+  project_id: string | null;
+  enabled: number;
+  models: string[];
+  missingModels?: string[];
 }
 
 export interface RemoteHostDto {

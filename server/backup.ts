@@ -2,6 +2,7 @@
 import { Worker } from "node:worker_threads";
 import { existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { DATA_DIR, GATEWAY_SECRET, LIMITS } from "./config";
 import { db } from "./db";
 import {
@@ -66,7 +67,7 @@ export interface CreateBackupOptions {
 
 function newSnapshotId(kind: BackupKind, createdAt: number): string {
   // Shared with the verifier so a manifest id can be parsed back into a time.
-  return manifestTimestamp(createdAt) + "-" + kind + "-" + createdAt.toString(36);
+  return manifestTimestamp(createdAt) + "-" + kind + "-" + createdAt.toString(36) + "-" + randomUUID().slice(0, 8);
 }
 
 /** Snapshot root: BACKUP_DIR when set, else <DATA_DIR>/backups. */
@@ -108,7 +109,7 @@ function snapshotOptions(options: CreateBackupOptions, kind: BackupKind, created
 
 /**
  * Build the snapshot in a worker thread. Rejects when the worker cannot be
- * created or times out; the caller then falls back to the main thread.
+ * created or times out. Serving paths must not fall back to blocking copies.
  */
 async function snapshotInWorker(options: ReturnType<typeof snapshotOptions>, timeoutMs: number): Promise<BackupManifest> {
   const source = path.join(DATA_DIR, "gateway.db");
@@ -136,28 +137,21 @@ async function snapshotInWorker(options: ReturnType<typeof snapshotOptions>, tim
       });
     });
   } finally {
-    void worker.terminate().catch(() => undefined);
+    await worker.terminate();
   }
 }
 
 /**
  * Create one verified snapshot. Safe while the gateway serves traffic.
- * Falls back to running the copy on the main thread when worker threads are
- * unavailable, so a restricted runtime degrades in speed, not in function.
+ * In-process work is an explicit offline/test option only. A worker failure
+ * must surface instead of unexpectedly blocking the gateway's request loop.
  */
 export async function createBackup(options: CreateBackupOptions = {}): Promise<BackupManifest> {
   const kind = options.kind || "manual";
   const createdAt = Date.now();
   const build = snapshotOptions(options, kind, createdAt);
   if (!options.inProcess) {
-    try {
-      return await snapshotInWorker(build, options.timeoutMs ?? 30 * 60_000);
-    } catch (error) {
-      // Only fall back for infrastructure problems (no worker support); a
-      // snapshot that failed on its own merits must surface its error.
-      if (!/worker/i.test(error instanceof Error ? error.message : String(error))) throw error;
-      console.warn("[BACKUP] snapshot worker unavailable, copying in process:", error instanceof Error ? error.message : error);
-    }
+    return snapshotInWorker(build, options.timeoutMs ?? 30 * 60_000);
   }
   // AWAIT the retry: this runs inside the live gateway (scheduled or admin
   // triggered), so the backoff must yield the event loop. The synchronous
@@ -194,7 +188,7 @@ async function verifyInWorker(
       });
     });
   } finally {
-    void worker.terminate().catch(() => undefined);
+    await worker.terminate();
   }
 }
 
@@ -204,12 +198,7 @@ export async function verifyBackup(
   options: { inProcess?: boolean; timeoutMs?: number } = {},
 ): Promise<import("./backup-files").BackupVerification> {
   if (!options.inProcess) {
-    try {
-      return await verifyInWorker(snapshotDir, options.timeoutMs ?? 15 * 60_000);
-    } catch (error) {
-      if (!/worker/i.test(error instanceof Error ? error.message : String(error))) throw error;
-      console.warn("[BACKUP] verification worker unavailable, running in process:", error instanceof Error ? error.message : error);
-    }
+    return verifyInWorker(snapshotDir, options.timeoutMs ?? 15 * 60_000);
   }
   const { verifySnapshot, readManifest } = await import("./backup-files");
   return verifySnapshot(snapshotDir, readManifest(snapshotDir) ?? undefined);
@@ -310,7 +299,7 @@ export function backupIntervalMs(): number {
 
 /** Remove a snapshot directory (operator cleanup / failed runs). */
 export function deleteBackup(id: string, options: { dir?: string } = {}): boolean {
-  if (!/^[A-Za-z0-9T._-]+$/.test(id)) return false;
+  if (!/^[A-Za-z0-9][A-Za-z0-9T._-]{0,127}$/.test(id)) return false;
   const target = path.join(backupRoot(options.dir), id);
   if (!existsSync(target) || !statSync(target).isDirectory()) return false;
   rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });

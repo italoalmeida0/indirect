@@ -77,6 +77,9 @@ export const OBSCURA_ASSETS: Record<string, ReleaseAsset> = {
 };
 
 export function obscuraPlatformKey(platform = process.platform, arch = process.arch): string {
+  // Windows on ARM executes the same pinned x64 Obscura release through its
+  // OS compatibility layer. This is still Obscura, not a fallback browser.
+  if (platform === "win32" && arch === "arm64") return "win32-x64";
   return `${platform}-${arch === "arm64" ? "arm64" : "x64"}`;
 }
 

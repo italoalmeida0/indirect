@@ -9,6 +9,7 @@ import {
   readSync,
   readdirSync,
   statSync,
+  lstatSync,
   copyFileSync,
   rmSync,
   writeFileSync,
@@ -72,6 +73,46 @@ export const DB_NAME = "gateway.db";
 export const SECRET_DIR = "secret";
 export const DAEMON_DIR = "daemon";
 
+/** Validate the inventory before accessing any manifest-supplied path. */
+export function validateManifest(manifest: BackupManifest): void {
+  if (manifest.version !== 1 || !/^[A-Za-z0-9][A-Za-z0-9T._-]{0,127}$/.test(manifest.id) || manifest.database !== DB_NAME ||
+      !Number.isSafeInteger(manifest.schemaVersion) || manifest.schemaVersion < 1 || typeof manifest.secretFromEnv !== "boolean" ||
+      !Array.isArray(manifest.files) || manifest.files.length < 2 || manifest.files.length > 100_000) {
+    throw new Error("invalid snapshot manifest");
+  }
+  const paths = new Set<string>();
+  let totalBytes = 0;
+  for (const entry of manifest.files) {
+    if (!entry || typeof entry.path !== "string" || entry.path.length > 1024 ||
+        entry.path.includes("\\") || entry.path.includes(":") || entry.path.includes("\0") ||
+        entry.path.split("/").some((part) => !part || part === "." || part === "..") ||
+        entry.path === MANIFEST_NAME || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 ||
+        typeof entry.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(entry.sha256)) {
+      throw new Error("invalid snapshot file inventory");
+    }
+    const portablePath = entry.path.toLowerCase();
+    if (paths.has(portablePath)) throw new Error("duplicate snapshot file path");
+    paths.add(portablePath);
+    totalBytes += entry.bytes;
+  }
+  const secret = `${SECRET_DIR}/${manifest.secretFromEnv ? "INDIRECT_SECRET.env" : ".secret"}`;
+  if (!paths.has(DB_NAME) || !paths.has(secret.toLowerCase()) || !Number.isSafeInteger(totalBytes) || totalBytes !== manifest.totalBytes) {
+    throw new Error("snapshot inventory is missing required files or has an invalid total");
+  }
+}
+
+/** Inventory paths are relative POSIX paths. Reject symlinks/junctions at every level. */
+export function snapshotFile(snapshotDir: string, relative: string): string {
+  let current = path.resolve(snapshotDir);
+  for (const part of relative.split("/")) {
+    if (!part || part === "." || part === ".." || /[\\:\0]/.test(part)) throw new Error("invalid snapshot path");
+    current = path.join(current, part);
+    if (lstatSync(current).isSymbolicLink()) throw new Error("snapshot paths must not contain symbolic links");
+  }
+  if (!lstatSync(current).isFile()) throw new Error("snapshot entry is not a regular file");
+  return current;
+}
+
 /** Canary tables: every one must exist and be readable in a restored copy. */
 export const CANARY_TABLES = [
   "users",
@@ -126,7 +167,7 @@ export function manifestTimestamp(ts: number): string {
  * came from. Otherwise the generated <DATA_DIR>/.secret file is copied.
  */
 export function secretMaterial(dataDir: string, gatewaySecret: string): { fromEnv: boolean; entries: Array<{ name: string; content: string; mode: number }> } {
-  const fromEnv = !!(process.env.INDIRECT_SECRET || process.env.GATEWAY_SECRET);
+  const fromEnv = !!(process.env.INDIRECT_SECRET || process.env.GATEWAY_SECRET || process.env.INDIRECT_SECRET_FILE || process.env.GATEWAY_SECRET_FILE);
   const content = fromEnv
     ? Buffer.from(gatewaySecret, "utf8").toString("base64") + "\n"
     : readFileSync(path.join(dataDir, ".secret"), "utf8");
@@ -199,14 +240,14 @@ export function verifySnapshot(snapshotDir: string, manifest?: BackupManifest): 
   let schemaVersion = 0;
   try {
     if (!existsSync(databasePath)) throw new Error("snapshot database is missing");
-    if (manifest) {
+    if (!manifest) throw new Error("snapshot manifest is missing or invalid");
+    validateManifest(manifest);
       for (const file of manifest.files) {
-        const full = path.join(snapshotDir, file.path);
+        const full = snapshotFile(snapshotDir, file.path);
         if (!existsSync(full)) throw new Error("snapshot file is missing: " + file.path);
         if (statSync(full).size !== file.bytes) throw new Error("snapshot file size mismatch: " + file.path);
         if (sha256File(full) !== file.sha256) throw new Error("snapshot file hash mismatch: " + file.path);
       }
-    }
     const snapshot = new Database(databasePath, { readonly: true });
     try {
       for (const row of snapshot.query<Record<string, unknown>, []>("PRAGMA integrity_check").all()) {
@@ -217,11 +258,12 @@ export function verifySnapshot(snapshotDir: string, manifest?: BackupManifest): 
       }
       schemaVersion = Number(snapshot.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0);
       if (schemaVersion <= 0) throw new Error("snapshot reports schema version 0");
+      if (schemaVersion !== manifest.schemaVersion) throw new Error("snapshot schema version does not match its manifest");
       for (const table of CANARY_TABLES) {
         // A bare row count proves the table exists, is readable and its b-tree
         // is intact — exactly what the first dashboard query after a restore
         // needs.
-        snapshot.query('SELECT COUNT(*) AS n FROM "' + table + '"').get();
+        snapshot.query('SELECT 1 FROM "' + table + '" LIMIT 1').get();
         canary.push(table);
       }
     } finally {
@@ -261,7 +303,7 @@ export interface SnapshotBuildOptions {
  */
 export function buildSnapshot(connection: Database, options: SnapshotBuildOptions): BackupManifest {
   const snapshotDir = path.join(options.root, options.id);
-  mkdirSync(snapshotDir, { recursive: true });
+  mkdirSync(snapshotDir, { recursive: true, mode: 0o700 });
   try {
     const databasePath = path.join(snapshotDir, DB_NAME);
     // VACUUM INTO refuses to overwrite an existing file; a fresh directory
@@ -312,8 +354,10 @@ export function readManifest(dir: string): BackupManifest | null {
   const file = path.join(dir, MANIFEST_NAME);
   if (!existsSync(file)) return null;
   try {
+    if (statSync(file).size > 8 * 1024 * 1024) return null;
     const parsed = JSON.parse(readFileSync(file, "utf8")) as BackupManifest;
-    if (!parsed || parsed.version !== 1 || typeof parsed.id !== "string") return null;
+    if (!parsed) return null;
+    validateManifest(parsed);
     return parsed;
   } catch {
     return null;

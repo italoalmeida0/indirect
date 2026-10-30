@@ -26,6 +26,8 @@
  * never request paths.
  */
 
+import { recordBusyFailure, recordBusyRetry } from "./metrics";
+
 export interface SqliteRetryOptions {
   /** Total attempts, including the first one. Must be >= 1. */
   attempts?: number;
@@ -124,10 +126,12 @@ export function withSqliteRetry<T>(operation: () => T, options: SqliteRetryOptio
         retried = true;
         log(`[SQLITE] ${label}database busy; retrying in bounded batches (up to ${attempts} attempts / ${deadlineMs}ms)`);
       }
+      recordBusyRetry();
       sleep(delay);
     }
   }
 
+  recordBusyFailure();
   throw lastError;
 }
 
@@ -181,10 +185,12 @@ export async function withSqliteRetryAsync<T>(operation: () => T | Promise<T>, o
         log(`[SQLITE] ${label}database busy; retrying in bounded batches (up to ${attempts} attempts / ${deadlineMs}ms)`);
       }
       // Yield to the event loop instead of blocking it.
+      recordBusyRetry();
       await Bun.sleep(delay);
     }
   }
 
+  recordBusyFailure();
   throw lastError;
 }
 

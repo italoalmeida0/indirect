@@ -1,4 +1,5 @@
 import { withSqliteRetryAsync, type SqliteRetryOptions } from "./sqlite-retry";
+import { beginMaintenanceMetric } from "./metrics";
 
 /**
  * Wrapper for periodic work.
@@ -54,6 +55,9 @@ const MAINTENANCE_RETRY: SqliteRetryOptions = {
   maxDelayMs: 100,
 };
 
+/** A scheduled job overrunning this budget is holding the serving thread. */
+const MAINTENANCE_SLOW_MS = 250;
+
 export function guardedMaintenance(name: string, job: () => void | Promise<void>, options: MaintenanceOptions = {}): MaintenanceJob {
   const retry: SqliteRetryOptions = { ...MAINTENANCE_RETRY, ...options.retry, name };
   let inFlight: Promise<void> | null = null;
@@ -71,11 +75,23 @@ export function guardedMaintenance(name: string, job: () => void | Promise<void>
   };
 
   const run = async (): Promise<void> => {
+    const complete = beginMaintenanceMetric(name);
+    const startedAt = performance.now();
     try {
       await withSqliteRetryAsync(async () => { await job(); }, retry);
+      complete(true);
       settle(true);
     } catch (error) {
+      complete(false, error);
       settle(false, error);
+    } finally {
+      // A scheduled job that overruns this budget is holding the serving
+      // thread, not just using spare time. Log it so a stall seen as slow
+      // health or proxy responses is attributable instead of mysterious.
+      const elapsed = performance.now() - startedAt;
+      if (elapsed > MAINTENANCE_SLOW_MS) {
+        console.warn(`[MAINTENANCE] ${name} held the loop for ${elapsed.toFixed(0)}ms (budget ${MAINTENANCE_SLOW_MS}ms)`);
+      }
     }
   };
 

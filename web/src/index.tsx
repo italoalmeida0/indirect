@@ -57,6 +57,8 @@ const AdminUsersPage = lazy(() => import("./pages/admin/Users"));
 const AdminKeysPage = lazy(() => import("./pages/admin/Keys"));
 const AdminStatsPage = lazy(() => import("./pages/admin/Stats"));
 const AdminAuditPage = lazy(() => import("./pages/admin/Audit"));
+const ProjectsPage = lazy(() => import("./pages/Projects"));
+const OrganizationPage = lazy(() => import("./pages/admin/Organization"));
 
 /**
  * Hash router. All app routes live under `#/…` so the static server never
@@ -88,6 +90,7 @@ const USER_NAV: NavItem[] = [
   { path: "/keys", label: "API Keys", icon: Icons.key },
   { path: "/usage", label: "Usage", icon: Icons.chart },
   { path: "/limits", label: "Plan & limits", icon: "lucide:wallet" },
+  { path: "/projects", label: "Financial projects", icon: Icons.folder },
   { path: "/settings", label: "Settings", icon: Icons.cog },
 ];
 
@@ -99,6 +102,7 @@ const ADMIN_NAV: NavItem[] = [
   { path: "/admin/plans", label: "Plans", icon: "lucide:wallet" },
   { path: "/admin/keys", label: "All Keys", icon: Icons.key },
   { path: "/admin/audit", label: "Audit Log", icon: Icons.book },
+  { path: "/admin/organization", label: "Organization", icon: Icons.cog },
 ];
 
 function pageInfo(path: string): NavItem {
@@ -418,6 +422,8 @@ function Root() {
                   if (p === "/usage") return <UsagePage />;
                   if (p === "/limits") return <PlanLimits />;
                   if (p === "/settings") return <SettingsPage />;
+                  if (p === "/projects") return <ProjectsPage />;
+                  if (p.startsWith("/admin") && !isAdmin) return <div class="space-y-3"><h1 class="text-2xl font-semibold">Administration access required</h1><p role="alert" class="text-sm text-ink-400">Your account does not have permission to use this page.</p><a href="#/projects" class="text-accent-500 underline">Open your financial projects</a></div>;
                   if (p.startsWith("/admin") && isAdmin) {
                     if (p === "/admin" || p === "/admin/stats")
                       return <AdminStatsPage />;
@@ -427,6 +433,7 @@ function Root() {
                     if (p === "/admin/users") return <AdminUsersPage />;
                     if (p === "/admin/keys") return <AdminKeysPage />;
                     if (p === "/admin/audit") return <AdminAuditPage />;
+                    if (p === "/admin/organization") return <OrganizationPage />;
                   }
                   return <DashboardPage />;
                 })()}</RouteChunk>

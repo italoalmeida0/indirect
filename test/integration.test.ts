@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { Database } from "bun:sqlite";
 
-import { totpAt } from "../server/crypto";
+import { unusedTotpCode } from "./totp-fixture";
 import { findFreePort } from "./free-port";
 
 /**
@@ -1802,7 +1802,8 @@ describe("gateway end-to-end", () => {
     expect(setup.status).toBe(200);
     expect(setup.json.qrDataUrl).toMatch(/^data:image\/png/);
     const secret = setup.json.secret;
-    const code = await totpAt(secret, Date.now());
+    const consumed = new Set<string>();
+    const code = await unusedTotpCode(secret, consumed);
 
     const enable = await api("/api/me/2fa/enable", { token: userToken, body: { code } });
     expect(enable.status).toBe(200);
@@ -1811,11 +1812,12 @@ describe("gateway end-to-end", () => {
     expect(login.status).toBe(200);
     expect(login.json.needs2FA).toBe(true);
 
-    const wrong = await api("/api/auth/2fa", { body: { tempToken: login.json.tempToken, code: "000000" } });
+    // Enrollment consumed this code: a login cannot replay the same proof.
+    const wrong = await api("/api/auth/2fa", { body: { tempToken: login.json.tempToken, code } });
     expect(wrong.status).toBe(401);
 
     const right = await api("/api/auth/2fa", {
-      body: { tempToken: login.json.tempToken, code: await totpAt(secret, Date.now()) },
+      body: { tempToken: login.json.tempToken, code: await unusedTotpCode(secret, consumed) },
     });
     expect(right.status).toBe(200);
     expect(right.json.accessToken).toBeTruthy();

@@ -6,6 +6,7 @@ import { withSqliteRetryAsync } from "./sqlite-retry";
 import type { Charge } from "./billing";
 import { usageScopeWhere } from "./usage-filters";
 import { cachedUsageQuery, invalidateUsageQueries } from "./usage-cache";
+import { decodeUsage, enqueueUsage, pendingUsage, type OutboxRow } from "./usage-outbox";
 import { buildGridWhere, buildGridOrder, gridPage, type ColSpec, type GridFilterEntry, type GridSort } from "./gridql";
 import {
   modelPricingJoins,
@@ -20,8 +21,8 @@ import {
 /**
  * Usage accounting.
  *
- * Writes: proxy events are buffered and flushed in one transaction (every
- * second or every 100 events) to avoid per-request analytics transactions.
+ * Settlement writes events to a durable outbox in its existing transaction.
+ * A bounded worker drains them into raw and rollup tables atomically.
  *
  * USD admission and settlement are synchronous in billing.ts. These buffered
  * analytics rows carry the immutable prices already charged by that ledger.
@@ -30,6 +31,9 @@ import {
 export interface UsageEvent {
   keyId: string;
   userId: string;
+  /** Scope IDs are captured before dispatch, not looked up at flush time. */
+  projectId?: string | null;
+  costCenterId?: string | null;
   proto: "openai" | "anthropic" | "responses";
   model: string;
   /** Cache-free input tokens (providers charge full price for these). */
@@ -54,12 +58,10 @@ export interface UsageEvent {
   requestId?: string;
 }
 
-const buffer: UsageEvent[] = [];
-let bufferStart = 0;
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 let flushDueAt = 0;
 let retryPending = false;
-const queuedUsage = () => buffer.length - bufferStart;
+const queuedUsage = pendingUsage;
 const flushBatchSize = 8;
 
 // Leave room for already admitted streams to finish while storage recovers.
@@ -106,14 +108,36 @@ export function utcDate(ts: number): string {
 }
 
 export function recordUsage(ev: UsageEvent): void {
-  buffer.push(ev);
+  enqueueUsage(ev);
   scheduleFlush(queuedUsage() >= 100 && !retryPending ? 0 : 1_000);
 }
 
+/** Wake after a reservation transaction enqueues a completed event. */
+export function wakeUsageOutbox(): void { scheduleFlush(queuedUsage() >= 100 && !retryPending ? 0 : 1_000); }
+
+/** Restart delivery after a crash; periodic polling also picks up recovered
+ * reservations and writes from a different gateway process. */
+export function startUsageOutbox(): void {
+  if (queuedUsage()) scheduleFlush(0);
+  const timer = setInterval(() => { if (queuedUsage()) scheduleFlush(0); }, 1_000);
+  timer.unref();
+}
+
 const insertEvent = db.prepare(
-  `INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, cache_tok, out_tok, latency_ms, status, stream, estimated, provider_id, provider_key_id, upstream_model, cost_in_nanos, cost_cache_nanos, cost_out_nanos, request_id)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  `INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, cache_tok, out_tok, latency_ms, status, stream, estimated, provider_id, provider_key_id, upstream_model, cost_in_nanos, cost_cache_nanos, cost_out_nanos, request_id, project_id, cost_center_id)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 );
+function financialRollup(period: "daily" | "monthly") {
+  const bucket = period === "daily" ? "date" : "month";
+  return db.prepare(`INSERT INTO usage_financial_${period} (project_id,cost_center_id,${bucket},key_id,user_id,model,in_tok,cache_tok,out_tok,reqs,success_reqs,error_reqs,cost_in_nanos,cost_cache_nanos,cost_out_nanos)
+    VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?,?,?)
+    ON CONFLICT(project_id,cost_center_id,${bucket},key_id,user_id,model) DO UPDATE SET
+      in_tok=in_tok+excluded.in_tok,cache_tok=cache_tok+excluded.cache_tok,out_tok=out_tok+excluded.out_tok,
+      reqs=reqs+1,success_reqs=success_reqs+excluded.success_reqs,error_reqs=error_reqs+excluded.error_reqs,
+      cost_in_nanos=cost_in_nanos+excluded.cost_in_nanos,cost_cache_nanos=cost_cache_nanos+excluded.cost_cache_nanos,cost_out_nanos=cost_out_nanos+excluded.cost_out_nanos`);
+}
+const upsertFinancialDaily = financialRollup("daily");
+const upsertFinancialMonthly = financialRollup("monthly");
 const upsertDaily = db.prepare(
   `INSERT INTO usage_daily (key_id, user_id, date, in_tok, cache_tok, out_tok, reqs)
    VALUES (?, ?, ?, ?, ?, ?, 1)
@@ -165,14 +189,17 @@ export function flushUsage(): void {
   while (queuedUsage()) flushUsageBatch(flushBatchSize);
 }
 
+const readOutbox = db.prepare<OutboxRow, [number]>("SELECT id,payload FROM usage_outbox ORDER BY id LIMIT ?");
+const deleteOutbox = db.prepare("DELETE FROM usage_outbox WHERE id = ?");
 function flushUsageBatch(limit: number): void {
   if (!queuedUsage()) return;
-  // Keep the batch until the transaction commits; a busy database must not
-  // lose settled analytics. Calls are synchronous, so no writers interleave.
-  const batch = buffer.slice(bufferStart, bufferStart + limit);
   const changedWindows: Array<{ userId: string; ts: number }> = [];
   db.transaction(() => {
-    for (const ev of batch) {
+    // Taking and deleting the outbox rows in this same writer transaction
+    // makes the raw rows and every rollup exactly-once across crashes and
+    // across multiple gateway processes.
+    for (const item of readOutbox.all(limit)) {
+      const ev = decodeUsage(item);
       const ts = ev.ts ?? Date.now();
       changedWindows.push({ userId: ev.userId, ts });
       const model = ev.model.slice(0, 128);
@@ -195,8 +222,17 @@ function flushUsageBatch(limit: number): void {
         ev.upstreamModel ?? "",
         ...cost,
         ev.requestId ?? "",
+        ev.projectId ?? null,
+        ev.costCenterId ?? null,
       );
       const date = utcDate(ts);
+      if (ev.projectId) {
+        const financial = [ev.projectId, ev.costCenterId ?? "", date, ev.keyId, ev.userId, model, ev.inTok, ev.cacheTok, ev.outTok,
+          ev.status >= 200 && ev.status < 300 ? 1 : 0, ev.status < 200 || ev.status >= 300 ? 1 : 0, ...cost];
+        upsertFinancialDaily.run(...financial);
+        financial[2] = date.slice(0, 7);
+        upsertFinancialMonthly.run(...financial);
+      }
       upsertDaily.run(ev.keyId, ev.userId, date, ev.inTok, ev.cacheTok, ev.outTok);
       upsertModelDaily.run(ev.keyId, ev.userId, date, ev.proto, model, ev.inTok, ev.cacheTok, ev.outTok, ...cost);
       upsertModelProviderDaily.run(
@@ -221,11 +257,9 @@ function flushUsageBatch(limit: number): void {
         ev.status >= 200 && ev.status < 300 ? 1 : 0, ev.status < 200 || ev.status >= 300 ? 1 : 0, ...cost];
       upsertHour.run(Math.floor(ts / USAGE_HOUR) * USAGE_HOUR, ...rollupValues);
       upsertMinute.run(Math.floor(ts / USAGE_MINUTE) * USAGE_MINUTE, ...rollupValues);
+      deleteOutbox.run(item.id);
     }
-  })();
-  bufferStart += batch.length;
-  if (bufferStart === buffer.length) { buffer.length = 0; bufferStart = 0; }
-  else if (bufferStart >= 4096 && bufferStart * 2 >= buffer.length) { buffer.splice(0, bufferStart); bufferStart = 0; }
+  }).immediate();
   invalidateUsageQueries(changedWindows);
 }
 

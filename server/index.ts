@@ -8,6 +8,7 @@ import { handleMeRoute } from "./routes/me";
 import { handleBillingRoute } from "./routes/billing";
 import { startBilling } from "./billing";
 import { handleKeysRoute } from "./routes/keys";
+import { handleProjectsRoute } from "./routes/projects";
 import { handleUsageRoute } from "./routes/usage";
 import { handleAdminRoute } from "./routes/admin";
 import { handleIndirectCodeRestRoute } from "./routes/indirect-code";
@@ -18,13 +19,17 @@ import { handleManifestRoute } from "./routes/manifest";
 import { handleIndirectCodeUpgrade, remoteRelayWsHandlers, type WsData } from "./routes/relay";
 import { handleProxy, proxyRateLimit, proxyStorageUnavailable, proxyRequestError } from "./proxy/index";
 import { serveStatic } from "./static";
-import { flushUsage } from "./usage";
+import { flushUsage, startUsageOutbox } from "./usage";
 import { initTokenEstimator } from "./tokens";
 import { resolveRequestId, runWithRequest } from "./request-context";
 import { scheduleMaintenance } from "./maintenance";
 import { pruneUsageEvents, pruneUsageRollupsAsync, USAGE_DAY } from "./usage-rollup";
 import { batchDeleteAsync, yieldToEventLoop } from "./batch-delete";
 import { backupIntervalMs, backupRoot, runBackupCycle } from "./backup";
+import { handleMetricsRoute } from "./routes/metrics";
+import { beginHttpMetric, instrumentResponse } from "./metrics";
+import { handleCorporateAuthRoute } from "./routes/corporate-auth";
+import { handleUserImportRoute } from "./routes/user-import";
 
 // btdby4-wasm (token estimator) must be warm before serving: every counter
 // below is synchronous after init. Top-level await is fine — Bun.serve
@@ -67,6 +72,7 @@ async function bootstrapAdmin(): Promise<void> {
 
 await bootstrapAdmin();
 startBilling();
+startUsageOutbox();
 
 // ===== Housekeeping sweeps =====
 
@@ -107,6 +113,15 @@ async function cleanupExpiredSessions(): Promise<void> {
     ...budget,
   });
 
+  for (const [table, key] of [["oidc_flows", "state_hash"], ["auth_challenges", "id"], ["auth_mfa_uses", "digest"]]) {
+    await batchDeleteAsync(db, { table: table!, key: key!, where: "expires_at < ?", params: [now], ...budget });
+  }
+  await batchDeleteAsync(db, {
+    table: "user_import_batches", key: "id",
+    where: "(committed_at IS NULL AND expires_at < ?) OR committed_at < ?",
+    params: [now, now - 30 * USAGE_DAY], ...budget,
+  });
+
   if (LIMITS.auditRetentionDays > 0) {
     const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;
     const auditCutoff = Math.max(0, today - (LIMITS.auditRetentionDays - 1) * USAGE_DAY);
@@ -135,7 +150,6 @@ scheduleMaintenance("wal checkpoint", () => {
  */
 if (LIMITS.usageEventRetentionDays > 0) {
   scheduleMaintenance("usage event retention", async () => {
-    flushUsage();
     const result = await pruneUsageEvents(
       db,
       Date.now(),
@@ -244,6 +258,14 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
   }
 
   if (path.startsWith("/api/")) {
+    const viaMetrics = await handleMetricsRoute(path, req);
+    if (viaMetrics) return viaMetrics;
+    const viaProjects = await handleProjectsRoute(path, req);
+    if (viaProjects) return viaProjects;
+    const viaCorporateAuth = await handleCorporateAuthRoute(path, req);
+    if (viaCorporateAuth) return viaCorporateAuth;
+    const viaImport = await handleUserImportRoute(path, req);
+    if (viaImport) return viaImport;
     // Indirect Code WebSocket upgrades (/api/indirect-code/daemon/ws and /api/indirect-code/client/ws)
     if (path.startsWith("/api/indirect-code/") && path.endsWith("/ws")) {
       return await handleIndirectCodeUpgrade(path, req, url, server);
@@ -302,6 +324,7 @@ const server: Server<WsData> = Bun.serve<WsData>({
     // audit rows and usage events inherit it. A well-formed client id is
     // honoured; anything else is replaced, never echoed.
     const url = new URL(req.url);
+    const finishMetric = beginHttpMetric(url.pathname);
     const requestId = resolveRequestId(req.headers.get("x-request-id"), () => randomToken(16));
     const response = await runWithRequest(
       { requestId, startedAt: performance.now(), method: req.method, path: url.pathname },
@@ -309,7 +332,7 @@ const server: Server<WsData> = Bun.serve<WsData>({
     );
     // Echo the id on EVERY response so a client can quote it in a report.
     response.headers.set("X-Request-Id", requestId);
-    return response;
+    return instrumentResponse(response, finishMetric, req.signal, req.method === "HEAD");
   },
 });
 
