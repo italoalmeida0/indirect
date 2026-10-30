@@ -4,6 +4,7 @@ import { isMainThread, workerData } from "node:worker_threads";
 
 import { DATA_DIR, LIMITS } from "./config";
 import { normalizePricing, pricingColumns } from "./pricing";
+import { currentRequestId } from "./request-context";
 
 /**
  * SQLite via bun:sqlite (built into the runtime, WAL mode). Migrations are
@@ -824,6 +825,18 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    name: "030_request_correlation",
+    // The correlation id ties an audit row, a usage event and the response
+    // header (X-Request-Id) together. Existing rows keep NULL: they predate
+    // the field and inventing an id for them would be a lie.
+    up: `
+      ALTER TABLE audit_log ADD COLUMN request_id TEXT;
+      ALTER TABLE usage_events ADD COLUMN request_id TEXT NOT NULL DEFAULT '';
+      CREATE INDEX idx_audit_request ON audit_log(request_id) WHERE request_id IS NOT NULL;
+      CREATE INDEX idx_usage_request ON usage_events(request_id) WHERE request_id != '';
+    `,
+  },
 ];
 
 /**
@@ -1093,10 +1106,14 @@ export let auditRevision = 0;
 
 export function audit(
   action: string,
-  opts: { actorId?: string | null; target?: string | null; meta?: unknown; ip?: string | null } = {},
+  opts: { actorId?: string | null; target?: string | null; meta?: unknown; ip?: string | null; requestId?: string | null } = {},
 ): void {
+  // The correlation id is inherited from the request scope when the caller does
+  // not pass one, so every audit row written while serving a request can be
+  // matched to the response header the client saw.
+  const requestId = opts.requestId ?? currentRequestId();
   db.prepare(
-    "INSERT INTO audit_log (ts, actor_id, action, target, meta, ip) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO audit_log (ts, actor_id, action, target, meta, ip, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
   ).run(
     Date.now(),
     opts.actorId ?? null,
@@ -1104,6 +1121,7 @@ export function audit(
     opts.target ?? null,
     opts.meta === undefined ? null : JSON.stringify(opts.meta),
     opts.ip ?? null,
+    requestId || null,
   );
   auditRevision++;
 }

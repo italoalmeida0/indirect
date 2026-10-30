@@ -20,6 +20,7 @@ import { handleProxy, proxyRateLimit, proxyStorageUnavailable, proxyRequestError
 import { serveStatic } from "./static";
 import { flushUsage } from "./usage";
 import { initTokenEstimator } from "./tokens";
+import { resolveRequestId, runWithRequest } from "./request-context";
 import { scheduleMaintenance } from "./maintenance";
 import { pruneUsageRollups } from "./usage-rollup";
 import { batchDelete } from "./batch-delete";
@@ -240,8 +241,25 @@ const server: Server<WsData> = Bun.serve<WsData>({
   websocket: remoteRelayWsHandlers,
 
   async fetch(req): Promise<Response | undefined> {
+    // One correlation id per request, established BEFORE any handler runs so
+    // audit rows and usage events inherit it. A well-formed client id is
+    // honoured; anything else is replaced, never echoed.
+    const url = new URL(req.url);
+    const requestId = resolveRequestId(req.headers.get("x-request-id"), () => randomToken(16));
+    const response = await runWithRequest(
+      { requestId, startedAt: performance.now(), method: req.method, path: url.pathname },
+      () => handleRequest(req, server, url),
+    );
+    // Echo the id on EVERY response so a client can quote it in a report.
+    response.headers.set("X-Request-Id", requestId);
+    return response;
+  },
+});
+
+/** Everything after correlation is established; errors become responses. */
+async function handleRequest(req: Request, server: Server<WsData>, url: URL): Promise<Response> {
     try {
-      return await route(req, server);
+      return (await route(req, server)) ?? new Response(null, { status: 204 });
     } catch (e) {
       if (req.signal.aborted) return new Response(null, { status: 499 });
       const url = new URL(req.url);
@@ -260,8 +278,7 @@ const server: Server<WsData> = Bun.serve<WsData>({
       console.error(`[HTTP] unhandled error on ${req.method} ${url.pathname}:`, e);
       return isProxy ? proxyRequestError(req, url, 500, "internal error") : err(500, "internal error", req);
     }
-  },
-});
+}
 
 console.log(`[BOOT] indirect listening on http://${server.hostname}:${server.port} (${IS_PROD ? "prod" : "dev"})`);
 console.log(`[BOOT] data dir: ${DATA_DIR}`);

@@ -12,6 +12,7 @@ import {
 } from "../ratelimit";
 import { checkKeyAvailability } from "../keys";
 import { canRecordUsage, recordUsage } from "../usage";
+import { currentRequestId } from "../request-context";
 import { BudgetError, reserveBudget, settleBudget, settleUncertainBudget, cancelBudget } from "../billing";
 import { db } from "../db";
 import {
@@ -956,7 +957,10 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     return envelopeError(proto, 499, "client disconnected", "api_error", req);
   }
 
-  const requestId = randomToken(16);
+  // Use the request-scoped correlation id, NOT a fresh random one: the client
+  // sees this value in X-Request-Id and the usage ledger stores it, so a quoted
+  // header must find its rows. A private id here silently broke that link.
+  const requestId = currentRequestId() || randomToken(16);
   const started = performance.now();
   const requestBytes = req.headers.get("content-length");
   // Set once we hand a streaming Response back: the stream pump owns the slot
@@ -1200,6 +1204,9 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         providerId: cand.provider.row.id,
         providerKeyId: cand.key.id,
         upstreamModel: cand.upstreamModel,
+        // The SAME id the client receives as X-Request-Id, so a customer can
+        // quote the header and an operator can find this exact row.
+        requestId,
       });
       touchKey(keyRow.id, ip);
 

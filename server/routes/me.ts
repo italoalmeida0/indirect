@@ -38,9 +38,22 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
 
   if (path === "/api/me" && req.method === "PATCH") {
     const ctx = await requireAuth(req);
+    const ip = clientIp(req);
     const body = await readJsonBody(req, LIMITS.authBodyBytes);
     const name = v.str(body, "name", { min: 1, max: 128 })!;
+    // Every mutation is audited, including a profile rename: "who changed this
+    // and when" is exactly what an offboarding review asks for, and a silent
+    // rename leaves no trail.
+    const changed = name !== ctx.user.name;
     db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, ctx.user.id);
+    if (changed) {
+      audit("profile.updated", {
+        actorId: ctx.user.id,
+        target: ctx.user.id,
+        ip,
+        meta: { field: "name", from: ctx.user.name, to: name },
+      });
+    }
     return ok({ user: publicUser(stmts.userById.get(ctx.user.id)!) }, req);
   }
 

@@ -50,6 +50,8 @@ export interface UsageEvent {
   upstreamModel?: string;
   ts?: number;
   charge: Charge;
+  /** Correlation id of the client request that produced this event. */
+  requestId?: string;
 }
 
 const buffer: UsageEvent[] = [];
@@ -109,8 +111,8 @@ export function recordUsage(ev: UsageEvent): void {
 }
 
 const insertEvent = db.prepare(
-  `INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, cache_tok, out_tok, latency_ms, status, stream, estimated, provider_id, provider_key_id, upstream_model, cost_in_nanos, cost_cache_nanos, cost_out_nanos)
-   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  `INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, cache_tok, out_tok, latency_ms, status, stream, estimated, provider_id, provider_key_id, upstream_model, cost_in_nanos, cost_cache_nanos, cost_out_nanos, request_id)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 );
 const upsertDaily = db.prepare(
   `INSERT INTO usage_daily (key_id, user_id, date, in_tok, cache_tok, out_tok, reqs)
@@ -192,6 +194,7 @@ function flushUsageBatch(limit: number): void {
         ev.providerKeyId ?? "",
         ev.upstreamModel ?? "",
         ...cost,
+        ev.requestId ?? "",
       );
       const date = utcDate(ts);
       upsertDaily.run(ev.keyId, ev.userId, date, ev.inTok, ev.cacheTok, ev.outTok);

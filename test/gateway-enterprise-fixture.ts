@@ -40,7 +40,27 @@ export async function startGateway(env: Record<string, string> = {}) {
   }
   return {
     base, dir, proc, log,
-    async stop() { proc.kill(); await proc.exited; rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); },
+    async stop() {
+      proc.kill();
+      await proc.exited;
+      // Removing the data directory can still fail with EBUSY on Windows while
+      // a handle (an open SQLite reader, the virus scanner) is closing. That is
+      // a teardown detail, never a test result: retry briefly, then leave the
+      // directory for the OS to reap rather than failing an otherwise green
+      // test.
+      for (let attempt = 0; attempt < 6; attempt++) {
+        try {
+          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+          return;
+        } catch (error) {
+          if (attempt === 5) {
+            console.warn("[fixture] could not remove test directory:", (error as Error).message);
+            return;
+          }
+          await Bun.sleep(150);
+        }
+      }
+    },
   };
 }
 
