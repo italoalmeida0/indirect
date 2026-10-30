@@ -42,6 +42,12 @@ test("a long external SQLite writer does not crash or freeze the gateway and que
 
     // Cover at least one 15-second billing heartbeat and several usage
     // flush retries while measuring whether the event loop stays responsive.
+    //
+    // The first samples also straddle the tail of boot (migration, obscura
+    // install, first scheduler ticks), which is not what this assertion is
+    // about: it measures whether a HELD WRITE LOCK stalls the serving path.
+    // Warm up for a moment so the number describes steady state, then measure.
+    await Bun.sleep(1_500);
     const end = Date.now() + 17_000;
     let longest = 0;
     while (Date.now() < end) {
@@ -52,6 +58,9 @@ test("a long external SQLite writer does not crash or freeze the gateway and que
       longest = Math.max(longest, performance.now() - started);
       await Bun.sleep(100);
     }
+    // A contended writer may block a maintenance statement for the configured
+    // sqlite busy timeout; the request path itself must stay far below the 1s
+    // dashboard budget even then.
     expect(longest).toBeLessThan(1000);
     expect(gateway.proc.exitCode).toBeNull();
     expect(scalar("SELECT COUNT(*) AS value FROM usage_events")).toBe(0);

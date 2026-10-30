@@ -38,8 +38,24 @@ export interface MaintenanceJob {
   readonly running: boolean;
 }
 
+/** Default policy for periodic work.
+ *
+ * Deliberately SHORT. While another connection holds the write lock, every
+ * attempt blocks the thread for the full sqlite busy_timeout before it can even
+ * report SQLITE_BUSY, so a long retry budget is not "patience" — it is a
+ * repeated stall of the event loop, which is what made /api/health spike past
+ * a second. A periodic job should give up quickly and let the NEXT scheduled
+ * run try again; the schedule is the retry.
+ */
+const MAINTENANCE_RETRY: SqliteRetryOptions = {
+  attempts: 2,
+  deadlineMs: 250,
+  baseDelayMs: 25,
+  maxDelayMs: 100,
+};
+
 export function guardedMaintenance(name: string, job: () => void | Promise<void>, options: MaintenanceOptions = {}): MaintenanceJob {
-  const retry: SqliteRetryOptions = { name, ...options.retry };
+  const retry: SqliteRetryOptions = { ...MAINTENANCE_RETRY, ...options.retry, name };
   let inFlight: Promise<void> | null = null;
   let failed = false;
 

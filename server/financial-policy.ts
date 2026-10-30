@@ -219,13 +219,16 @@ export function usedPercent(spent: number, limit: number | null | undefined): nu
  * consumption percentage plus the renewal instant for "percent", and only the
  * renewal metadata for "hidden".
  */
-export function projectWindow(
-  window: { kind: string; startsAt: number; resetsAt: number | null; limitUsd: number | null; spentUsd: number; remainingUsd: number | null },
+export function projectWindow<T extends { kind: string; startsAt: number; resetsAt: number | null; limitUsd: number | null; spentUsd: number; remainingUsd: number | null }>(
+  window: T,
   policy: FinancialPolicy,
 ) {
   const base = { kind: window.kind, startsAt: window.startsAt, resetsAt: window.resetsAt };
   if (policy.budgetPresentation === "usd") {
-    return { ...base, limitUsd: window.limitUsd, spentUsd: window.spentUsd, remainingUsd: window.remainingUsd };
+    // Pass the window through UNCHANGED. Rebuilding it from a fixed field list
+    // silently dropped fields this function does not know about (billedUsd and
+    // reservedUsd), which broke the ledger view and the billing tests.
+    return window;
   }
   if (policy.budgetPresentation === "percent") {
     return { ...base, usedPercent: usedPercent(window.spentUsd, window.limitUsd), limitConfigured: window.limitUsd !== null };

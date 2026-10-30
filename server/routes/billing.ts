@@ -72,7 +72,7 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
     }
     setInstallationDefaults(
       {
-        ...(showModelPrices === undefined ? {} : { showModelPrices: showModelPrices === null ? null : showModelPrices === 1 }),
+        ...(showModelPrices === undefined ? {} : { showModelPrices }),
         ...(rawPresentation === undefined ? {} : { budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null }),
       },
       Date.now(),

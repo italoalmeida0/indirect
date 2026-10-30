@@ -15,7 +15,7 @@ import {
   type RetentionResult,
 } from "./backup-files";
 import type { BackupWorkerData, BackupWorkerReply } from "./backup-worker";
-import { retrySqlite } from "./sqlite-retry";
+import { withSqliteRetryAsync } from "./sqlite-retry";
 
 /**
  * Supported backup: snapshot, verification, retention and scheduling.
@@ -159,7 +159,11 @@ export async function createBackup(options: CreateBackupOptions = {}): Promise<B
       console.warn("[BACKUP] snapshot worker unavailable, copying in process:", error instanceof Error ? error.message : error);
     }
   }
-  return retrySqlite(() => buildSnapshot(db, build), { name: "backup snapshot" });
+  // AWAIT the retry: this runs inside the live gateway (scheduled or admin
+  // triggered), so the backoff must yield the event loop. The synchronous
+  // variant sleeps by blocking the thread, which stalls every request for up
+  // to the whole retry window while another writer holds the database.
+  return (await withSqliteRetryAsync(() => buildSnapshot(db, build), { name: "backup snapshot" })).value;
 }
 
 /** Re-open a snapshot read-only and prove it is restorable. */
