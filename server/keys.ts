@@ -2,7 +2,6 @@ import { GATEWAY_SECRET } from "./config";
 import { db, type ApiKeyRow } from "./db";
 import { encryptSecret, randomToken, sha256Hex } from "./crypto";
 import { keySpend } from "./billing";
-import { dropKeyLimiter } from "./ratelimit";
 import { gridPage, type ColSpec } from "./gridql";
 
 /**
@@ -26,32 +25,50 @@ export interface CreateKeyOptions {
   rpm?: number | null;
 }
 
-export async function createKey(userId: string, opts: CreateKeyOptions): Promise<{ row: ApiKeyRow; token: string }> {
+export interface PreparedKey {
+  id: string;
+  userId: string;
+  token: string;
+  prefix: string;
+  hash: string;
+  tokenEnc: string;
+  opts: CreateKeyOptions;
+}
+
+export async function prepareKey(userId: string, opts: CreateKeyOptions): Promise<PreparedKey> {
   const { token, prefix, hash } = generateKey();
   const id = randomToken(12);
   const tokenEnc = await encryptSecret(token, GATEWAY_SECRET);
+  return { id, userId, token, prefix, hash, tokenEnc, opts };
+}
+
+export function insertPreparedKey(prepared: PreparedKey, now = Date.now()): ApiKeyRow {
   db.prepare(
     `INSERT INTO api_keys (id, user_id, name, prefix, hash, created_at, expires_at, daily_usd_nanos, total_usd_nanos, rpm, status, token_enc)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)`,
   ).run(
-    id,
-    userId,
-    opts.name.slice(0, 64),
-    prefix,
-    hash,
-    Date.now(),
-    opts.expiresAt ?? null,
-    opts.dailyLimitUsd == null ? null : Math.round(opts.dailyLimitUsd * 1e9),
-    opts.totalLimitUsd == null ? null : Math.round(opts.totalLimitUsd * 1e9),
-    opts.rpm ?? null,
-    tokenEnc,
+    prepared.id,
+    prepared.userId,
+    prepared.opts.name.slice(0, 64),
+    prepared.prefix,
+    prepared.hash,
+    now,
+    prepared.opts.expiresAt ?? null,
+    prepared.opts.dailyLimitUsd == null ? null : Math.round(prepared.opts.dailyLimitUsd * 1e9),
+    prepared.opts.totalLimitUsd == null ? null : Math.round(prepared.opts.totalLimitUsd * 1e9),
+    prepared.opts.rpm ?? null,
+    prepared.tokenEnc,
   );
-  return { row: db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(id)!, token };
+  return db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(prepared.id)!;
 }
 
-export function revokeKey(keyId: string): void {
+export async function createKey(userId: string, opts: CreateKeyOptions): Promise<{ row: ApiKeyRow; token: string }> {
+  const prepared = await prepareKey(userId, opts);
+  return { row: insertPreparedKey(prepared), token: prepared.token };
+}
+
+export function markKeyRevoked(keyId: string): void {
   db.prepare("UPDATE api_keys SET status = 'revoked' WHERE id = ?").run(keyId);
-  dropKeyLimiter(keyId);
 }
 
 /**

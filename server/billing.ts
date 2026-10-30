@@ -2,6 +2,7 @@ import { audit, db, type ApiKeyRow, type ModelRow } from "./db";
 import { randomToken } from "./crypto";
 import { ApiError } from "./http";
 import { scheduleMaintenance } from "./maintenance";
+import { currentRequestId } from "./request-context";
 import { isRetryableSqliteError, retrySqlite } from "./sqlite-retry";
 
 const NANO = 1_000_000_000;
@@ -16,7 +17,7 @@ interface PlanRow { id: string; name: string; monthly_nanos: number | null; week
 interface Account { plan_id: string | null; assignment_version: number; session_start: number | null }
 interface Pricing { model: string; input: string; cache: string; write: string; output: string; request: string; known: boolean }
 export interface Charge { input: bigint; cache: bigint; output: bigint }
-interface Hold { id: string; amount_nanos: number; periods: string; pricing: string; state: string; cost_in_nanos: number | null; cost_cache_nanos: number | null; cost_out_nanos: number | null }
+interface Hold { id: string; request_id: string | null; amount_nanos: number; periods: string; pricing: string; state: string; cost_in_nanos: number | null; cost_cache_nanos: number | null; cost_out_nanos: number | null }
 const getAccount = db.prepare<Account, [string]>("SELECT * FROM user_billing WHERE user_id = ?");
 const getPlan = db.prepare<PlanRow, [string]>("SELECT * FROM billing_plans WHERE id = ?");
 const getCounter = db.prepare<Counter, [string, string, string, number]>(`SELECT CAST(spent_nanos AS TEXT) AS spent, CAST(reserved_nanos AS TEXT) AS reserved, CAST(forgiven_nanos AS TEXT) AS forgiven FROM billing_periods WHERE scope = ? AND owner_id = ? AND kind = ? AND starts_at = ?`);
@@ -26,7 +27,7 @@ const settleCounter = db.prepare("UPDATE billing_periods SET spent_nanos = spent
 const getHold = db.prepare<Hold, [string]>("SELECT * FROM billing_reservations WHERE id = ?");
 const freshKey = db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?");
 const ownerStatus = db.prepare<{ status: string }, [string]>("SELECT status FROM users WHERE id = ?");
-const insertHold = db.prepare("INSERT INTO billing_reservations(id, instance_id, key_id, user_id, created_at, amount_nanos, periods, pricing) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+const insertHold = db.prepare("INSERT INTO billing_reservations(id, request_id, instance_id, key_id, user_id, created_at, amount_nanos, periods, pricing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
 const settleHold = db.prepare("UPDATE billing_reservations SET state = ?, settled_at = ?, cost_in_nanos = ?, cost_cache_nanos = ?, cost_out_nanos = ? WHERE id = ? AND state = 'pending'");
 const usd = (amount: bigint | number | string) => Number(amount) / NANO;
 // Parse the canonical decimal representation before scaling. Multiplying a
@@ -182,8 +183,9 @@ export function reserveBudget(key: ApiKeyRow, model: ModelRow | undefined, body:
       const c = getCounter.get(p.scope, p.owner, p.kind, p.start)!;
       if (p.limit !== null && BigInt(c.spent) - BigInt(c.forgiven) + BigInt(c.reserved) + amount > BigInt(p.limit)) throw new BudgetError(p);
     }
-    const id = requestId ?? randomToken(16);
-    insertHold.run(id, instanceId, key.id, key.user_id, now, amount, JSON.stringify(state.periods), JSON.stringify(price));
+    const id = randomToken(16);
+    const correlationId = (requestId ?? currentRequestId()) || null;
+    insertHold.run(id, correlationId, instanceId, key.id, key.user_id, now, amount, JSON.stringify(state.periods), JSON.stringify(price));
     for (const p of state.periods) reserveCounter.run(amount, p.scope, p.owner, p.kind, p.start);
     return id;
   }).immediate();

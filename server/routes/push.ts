@@ -1,6 +1,6 @@
 import { requireAuth } from "../auth";
-import { audit, db } from "../db";
-import { clientIp, err, json, readJsonBody, v } from "../http";
+import { audit, db, inImmediateTx } from "../db";
+import { ApiError, clientIp, err, json, readJsonBody, v } from "../http";
 import { deleteSubscription, listSubscriptions, saveSubscription, vapidPublicKey } from "../push";
 
 /**
@@ -55,19 +55,21 @@ export async function handlePushRoute(path: string, req: Request, _url: URL): Pr
     if (typeof auth !== "string" || auth.length < 10 || auth.length > 512) {
       return err(400, "keys.auth is invalid", req);
     }
-    const count = db
-      .prepare<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?")
-      .get(user.id)!.n;
-    const exists = db
-      .prepare<{ endpoint: string }, [string, string]>(
-        "SELECT endpoint FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
-      )
-      .get(user.id, endpoint);
-    if (count >= MAX_SUBS_PER_USER && !exists) {
-      return err(429, "too many push subscriptions for this user", req);
-    }
-    saveSubscription(user.id, { endpoint, keys: { p256dh, auth } }, label);
-    audit("push.subscribed", { actorId: user.id, ip, meta: { pushService: endpointHost(endpoint), label } });
+    inImmediateTx(() => {
+      const count = db
+        .prepare<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?")
+        .get(user.id)!.n;
+      const exists = db
+        .prepare<{ endpoint: string }, [string, string]>(
+          "SELECT endpoint FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+        )
+        .get(user.id, endpoint);
+      if (count >= MAX_SUBS_PER_USER && !exists) {
+        throw new ApiError(429, "too many push subscriptions for this user");
+      }
+      saveSubscription(user.id, { endpoint, keys: { p256dh, auth } }, label);
+      audit("push.subscribed", { actorId: user.id, ip, meta: { pushService: endpointHost(endpoint), label } });
+    });
     return json({ success: true }, { req });
   }
 
@@ -76,8 +78,11 @@ export async function handlePushRoute(path: string, req: Request, _url: URL): Pr
     const ip = clientIp(req);
     const body = await readJsonBody(req, 8 * 1024);
     const endpoint = v.str(body, "endpoint", { min: 10, max: 2048 })!;
-    const removed = deleteSubscription(user.id, endpoint);
-    if (removed) audit("push.unsubscribed", { actorId: user.id, ip, meta: { pushService: endpointHost(endpoint) } });
+    const removed = inImmediateTx(() => {
+      const didRemove = deleteSubscription(user.id, endpoint);
+      if (didRemove) audit("push.unsubscribed", { actorId: user.id, ip, meta: { pushService: endpointHost(endpoint) } });
+      return didRemove;
+    });
     return json({ success: true, removed }, { req });
   }
 

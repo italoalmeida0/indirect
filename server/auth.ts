@@ -1,5 +1,5 @@
 import { GATEWAY_SECRET, LIMITS } from "./config";
-import { db, stmts, audit, type UserRow, type SessionRow } from "./db";
+import { db, stmts, audit, inImmediateTx, type UserRow, type SessionRow } from "./db";
 import { jwtSign, jwtVerify, randomToken, sha256Hex } from "./crypto";
 import { ApiError } from "./http";
 import { disconnectSessionSockets } from "./routes/relay";
@@ -32,38 +32,54 @@ export function publicUser(u: UserRow) {
   };
 }
 
-export async function issueSession(
+export async function prepareSessionTokens(
   user: UserRow,
   meta: { ip?: string | null; ua?: string | null; label?: string | null; family?: string | null } = {},
-): Promise<{ accessToken: string; refreshToken: string; refreshExpiresAt: number }> {
+) {
   const jti = randomToken(16);
   const refreshToken = randomToken(32);
   const now = Date.now();
   const refreshExpiresAt = now + LIMITS.refreshTokenTtlMs;
-
-  db.prepare(
-    `INSERT INTO sessions (jti, user_id, refresh_hash, created_at, last_used_at, expires_at, abs_expires_at, revoked, ip, ua, label, family)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-  ).run(
-    jti,
-    user.id,
-    sha256Hex(refreshToken),
-    now,
-    now,
-    refreshExpiresAt,
-    now + LIMITS.refreshAbsoluteTtlMs,
-    meta.ip ?? null,
-    meta.ua?.slice(0, 200) ?? null,
-    meta.label ?? null,
-    meta.family ?? jti, // a fresh login starts a new rotation family
-  );
-
   const accessToken = await jwtSign(
     { sub: user.id, jti, role: user.role, type: "access" },
     GATEWAY_SECRET,
     LIMITS.accessTokenTtlSec,
   );
-  return { accessToken, refreshToken, refreshExpiresAt };
+  return {
+    jti,
+    accessToken,
+    refreshToken,
+    refreshHash: sha256Hex(refreshToken),
+    now,
+    refreshExpiresAt,
+    absExpiresAt: now + LIMITS.refreshAbsoluteTtlMs,
+    ip: meta.ip ?? null,
+    ua: meta.ua?.slice(0, 200) ?? null,
+    label: meta.label ?? null,
+    family: meta.family ?? jti,
+  };
+}
+
+export function insertSessionRow(
+  userId: string,
+  prepared: Awaited<ReturnType<typeof prepareSessionTokens>>,
+): void {
+  db.prepare(
+    `INSERT INTO sessions (jti, user_id, refresh_hash, created_at, last_used_at, expires_at, abs_expires_at, revoked, ip, ua, label, family)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+  ).run(
+    prepared.jti,
+    userId,
+    prepared.refreshHash,
+    prepared.now,
+    prepared.now,
+    prepared.refreshExpiresAt,
+    prepared.absExpiresAt,
+    prepared.ip,
+    prepared.ua,
+    prepared.label,
+    prepared.family,
+  );
 }
 
 /** Sign a short-lived token that only proves "password step passed, awaiting 2FA". */
@@ -81,9 +97,14 @@ export async function verify2faTempToken(token: string): Promise<string> {
   return res.payload.sub;
 }
 
-export function revokeSession(jti: string): void {
+export function markSessionRevoked(jti: string): SessionRow | undefined {
   const session = stmts.sessionByJti.get(jti);
   db.prepare("UPDATE sessions SET revoked = 1 WHERE jti = ?").run(jti);
+  return session ?? undefined;
+}
+
+export function revokeSession(jti: string): void {
+  const session = markSessionRevoked(jti);
   if (session) disconnectSessionSockets(session.user_id, { jti });
 }
 
@@ -98,11 +119,6 @@ export function markUserSessionsRevoked(userId: string, exceptJti?: string): voi
   } else {
     db.prepare("UPDATE sessions SET revoked = 1 WHERE user_id = ?").run(userId);
   }
-}
-
-export function revokeAllUserSessions(userId: string, exceptJti?: string): void {
-  markUserSessionsRevoked(userId, exceptJti);
-  disconnectSessionSockets(userId, { exceptJti });
 }
 
 /** Rotate a refresh token -> new session row (old jti revoked).
@@ -130,12 +146,14 @@ export async function rotateRefreshToken(refreshToken: string): Promise<{
     // rotated-forward session dies too.
     const lapsedNaturally = session.expires_at < now || session.abs_expires_at < now;
     if (!lapsedNaturally && session.family) {
-      db.prepare("UPDATE sessions SET revoked = 1 WHERE family = ?").run(session.family);
-      disconnectSessionSockets(session.user_id, { family: session.family });
-      audit("session.refresh_reuse", {
-        target: session.jti,
-        meta: { user: session.user_id, family: session.family },
+      inImmediateTx(() => {
+        db.prepare("UPDATE sessions SET revoked = 1 WHERE family = ?").run(session.family!);
+        audit("session.refresh_reuse", {
+          target: session.jti,
+          meta: { user: session.user_id, family: session.family },
+        });
       });
+      disconnectSessionSockets(session.user_id, { family: session.family });
     }
     throw new ApiError(401, "session expired, please log in again");
   }
@@ -149,14 +167,23 @@ export async function rotateRefreshToken(refreshToken: string): Promise<{
 
   // Rotate: kill old session, create a fresh one (device label and family
   // are carried over — the chain stays auditable as one login).
-  revokeSession(session.jti);
-  const tokens = await issueSession(user, {
+  const prepared = await prepareSessionTokens(user, {
     ip: session.ip,
     ua: session.ua,
     label: session.label,
     family: session.family ?? session.jti,
   });
-  return { ...tokens, user };
+  inImmediateTx(() => {
+    markSessionRevoked(session.jti);
+    insertSessionRow(user.id, prepared);
+  });
+  disconnectSessionSockets(session.user_id, { jti: session.jti });
+  return {
+    accessToken: prepared.accessToken,
+    refreshToken: prepared.refreshToken,
+    refreshExpiresAt: prepared.refreshExpiresAt,
+    user,
+  };
 }
 
 /**

@@ -78,7 +78,9 @@ describe("USD plans and enforcement over HTTP", () => {
   });
   test("all billable categories settle immediately and model price changes never rewrite history", async () => {
     clearSpend(); const result = await llm(); expect(result.status).toBe(200);
-    const receipt = sql.query<any, [string]>("SELECT state, pricing FROM billing_reservations WHERE id = ?").get(result.headers.get("x-request-id")!);
+    const reqHeader = result.headers.get("x-request-id")!;
+    const receipt = sql.query<any, [string]>("SELECT id, request_id, state, pricing FROM billing_reservations WHERE request_id = ?").get(reqHeader);
+    expect(receipt.id).not.toBe(reqHeader);
     expect(receipt.state).toBe("settled"); expect(JSON.parse(receipt.pricing).model).toBe("billing-model");
     expect((await status()).windows[0].spentUsd).toBeCloseTo(.000154, 9);
     expect((await request("/api/keys", user)).data.keys[0].spendTotalUsd).toBeCloseTo(.000154, 9);

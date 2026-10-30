@@ -1,9 +1,10 @@
 import { LIMITS, GATEWAY_SECRET } from "../config";
-import { db, audit, type ApiKeyRow } from "../db";
+import { db, audit, inImmediateTx, type ApiKeyRow } from "../db";
 import { requireAuth } from "../auth";
 import { readUsd } from "../billing";
-import { createKey, publicKey, queryKeys, revokeKey } from "../keys";
+import { insertPreparedKey, markKeyRevoked, prepareKey, publicKey, queryKeys } from "../keys";
 import { decryptSecret } from "../crypto";
+import { dropKeyLimiter } from "../ratelimit";
 import { parseGridQuery } from "../gridql";
 import { catalogWhere } from "../catalog";
 import { readUsage } from "../usage-reader";
@@ -67,18 +68,38 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
       optional: true,
     });
 
-    const { row, token } = await createKey(ctx.user.id, {
+    const prepared = await prepareKey(ctx.user.id, {
       name,
       expiresAt,
       dailyLimitUsd: dailyLimit === null ? null : dailyLimit / 1e9,
       totalLimitUsd: totalLimit === null ? null : totalLimit / 1e9,
       rpm,
     });
-    audit("key.created", { actorId: ctx.user.id, target: row.id, ip, meta: { name, dailyLimitUsd: dailyLimit === null ? null : dailyLimit / 1e9, totalLimitUsd: totalLimit === null ? null : totalLimit / 1e9, rpm } });
+    const row = inImmediateTx(() => {
+      const currentCount = db
+        .prepare<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM api_keys WHERE user_id = ?")
+        .get(ctx.user.id)!.n;
+      if (currentCount >= MAX_KEYS_PER_USER) {
+        throw new ApiError(400, `limit of ${MAX_KEYS_PER_USER} keys reached`);
+      }
+      const inserted = insertPreparedKey(prepared);
+      audit("key.created", {
+        actorId: ctx.user.id,
+        target: inserted.id,
+        ip,
+        meta: {
+          name,
+          dailyLimitUsd: dailyLimit === null ? null : dailyLimit / 1e9,
+          totalLimitUsd: totalLimit === null ? null : totalLimit / 1e9,
+          rpm,
+        },
+      });
+      return inserted;
+    });
 
     // Plaintext token: returned here AND recoverable later via GET /reveal
     // from the AES copy (token_enc) — every reveal is audit-logged.
-    return ok({ key: publicKey(row), token }, req);
+    return ok({ key: publicKey(row), token: prepared.token }, req);
   }
 
   const m = path.match(/^\/api\/keys\/([a-f0-9]{24})(\/reveal)?$/);
@@ -101,14 +122,23 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
     // Raising limits re-activates an exhausted key.
     const newStatus = key.status === "exhausted" ? "active" : key.status;
 
-    db.prepare(
-      "UPDATE api_keys SET name = ?, daily_usd_nanos = ?, total_usd_nanos = ?, rpm = ?, status = ? WHERE id = ?",
-    ).run(name, dailyLimit, totalLimit, rpm, newStatus, keyId);
-
-    audit("key.updated", { actorId: ctx.user.id, target: keyId, ip, meta: { dailyLimitUsd: dailyLimit === null ? null : dailyLimit / 1e9, totalLimitUsd: totalLimit === null ? null : totalLimit / 1e9, rpm } });
-    const updated = db
-      .prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?")
-      .get(keyId)!;
+    const updated = inImmediateTx(() => {
+      db.prepare(
+        "UPDATE api_keys SET name = ?, daily_usd_nanos = ?, total_usd_nanos = ?, rpm = ?, status = ? WHERE id = ?",
+      ).run(name, dailyLimit, totalLimit, rpm, newStatus, keyId);
+      audit("key.updated", {
+        actorId: ctx.user.id,
+        target: keyId,
+        ip,
+        meta: {
+          name,
+          dailyLimitUsd: dailyLimit === null ? null : dailyLimit / 1e9,
+          totalLimitUsd: totalLimit === null ? null : totalLimit / 1e9,
+          rpm,
+        },
+      });
+      return db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId)!;
+    });
     return ok({ key: publicKey(updated) }, req);
   }
 
@@ -134,13 +164,19 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
     const hard = new URL(req.url).searchParams.get("hard") === "true";
     if (hard) {
       // Permanent removal. Usage history is kept (ledger rows stay auditable).
-      db.prepare("DELETE FROM api_keys WHERE id = ?").run(keyId);
-      audit("key.deleted", { actorId: ctx.user.id, target: keyId, ip, meta: { name: key.name } });
+      inImmediateTx(() => {
+        db.prepare("DELETE FROM api_keys WHERE id = ?").run(keyId);
+        audit("key.deleted", { actorId: ctx.user.id, target: keyId, ip, meta: { name: key.name } });
+      });
+      dropKeyLimiter(keyId);
       return ok({ deleted: true }, req);
     }
 
-    revokeKey(keyId);
-    audit("key.revoked", { actorId: ctx.user.id, target: keyId, ip });
+    inImmediateTx(() => {
+      markKeyRevoked(keyId);
+      audit("key.revoked", { actorId: ctx.user.id, target: keyId, ip });
+    });
+    dropKeyLimiter(keyId);
     return ok({ revoked: true }, req);
   }
 

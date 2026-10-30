@@ -1,7 +1,7 @@
 import QRCode from "qrcode";
 
 import { LIMITS } from "../config";
-import { db, stmts, audit } from "../db";
+import { db, stmts, audit, inImmediateTx } from "../db";
 import {
   hashPassword,
   verifyPassword,
@@ -13,7 +13,7 @@ import {
 import {
   requireAuth,
   markUserSessionsRevoked,
-  revokeSession,
+  markSessionRevoked,
   publicUser,
 } from "../auth";
 import { disconnectSessionSockets } from "./relay";
@@ -45,15 +45,17 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     // and when" is exactly what an offboarding review asks for, and a silent
     // rename leaves no trail.
     const changed = name !== ctx.user.name;
-    db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, ctx.user.id);
-    if (changed) {
-      audit("profile.updated", {
-        actorId: ctx.user.id,
-        target: ctx.user.id,
-        ip,
-        meta: { field: "name", from: ctx.user.name, to: name },
-      });
-    }
+    inImmediateTx(() => {
+      db.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, ctx.user.id);
+      if (changed) {
+        audit("profile.updated", {
+          actorId: ctx.user.id,
+          target: ctx.user.id,
+          ip,
+          meta: { field: "name", from: ctx.user.name, to: name },
+        });
+      }
+    });
     return ok({ user: publicUser(stmts.userById.get(ctx.user.id)!) }, req);
   }
 
@@ -76,12 +78,12 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     }
 
     const newHash = await hashPassword(newPassword);
-    db.transaction(() => {
+    inImmediateTx(() => {
       db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, ctx.user.id);
       markUserSessionsRevoked(ctx.user.id, ctx.session.jti);
-    })();
+      audit("password.changed", { actorId: ctx.user.id, ip });
+    });
     disconnectSessionSockets(ctx.user.id, { exceptJti: ctx.session.jti });
-    audit("password.changed", { actorId: ctx.user.id, ip });
     void sendSecurityAlert(ctx.user.email, "Your password was changed.");
     return ok({ done: true }, req);
   }
@@ -89,10 +91,14 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
   // ---- TOTP setup: generate pending secret + QR ----
   if (path === "/api/me/2fa/setup" && req.method === "POST") {
     const ctx = await requireAuth(req);
+    const ip = clientIp(req);
     const secret = newTotpSecret();
-    db.prepare("UPDATE users SET totp_pending = ? WHERE id = ?").run(secret, ctx.user.id);
     const uri = totpUri(secret, ctx.user.email);
     const qrDataUrl = await QRCode.toDataURL(uri, { margin: 1, width: 220 });
+    inImmediateTx(() => {
+      db.prepare("UPDATE users SET totp_pending = ? WHERE id = ?").run(secret, ctx.user.id);
+      audit("2fa.setup", { actorId: ctx.user.id, target: ctx.user.id, ip });
+    });
     return ok({ secret, otpauthUri: uri, qrDataUrl }, req);
   }
 
@@ -110,10 +116,12 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
       return err(400, "invalid code — check your authenticator clock", req);
     }
     bruteforceClear(`2faenable:${ctx.user.id}`);
-    db.prepare("UPDATE users SET totp_secret = totp_pending, totp_pending = NULL WHERE id = ?").run(
-      ctx.user.id,
-    );
-    audit("2fa.enabled", { actorId: ctx.user.id, ip });
+    inImmediateTx(() => {
+      db.prepare("UPDATE users SET totp_secret = totp_pending, totp_pending = NULL WHERE id = ?").run(
+        ctx.user.id,
+      );
+      audit("2fa.enabled", { actorId: ctx.user.id, ip });
+    });
     void sendSecurityAlert(ctx.user.email, "Two-factor authentication was enabled.");
     return ok({ enabled: true }, req);
   }
@@ -133,10 +141,12 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
       return err(401, "invalid code", req);
     }
 
-    db.prepare("UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE id = ?").run(
-      ctx.user.id,
-    );
-    audit("2fa.disabled", { actorId: ctx.user.id, ip });
+    inImmediateTx(() => {
+      db.prepare("UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE id = ?").run(
+        ctx.user.id,
+      );
+      audit("2fa.disabled", { actorId: ctx.user.id, ip });
+    });
     void sendSecurityAlert(ctx.user.email, "Two-factor authentication was disabled.");
     return ok({ disabled: true }, req);
   }
@@ -153,13 +163,16 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     // The session already proves identity, so the Google email does NOT need to
     // match the account email (e.g. work Google + personal gateway account).
     // Auto-link at login (auth.ts) still requires an exact email match.
-    const existing = stmts.userByGoogleId.get(identity.sub);
-    if (existing && existing.id !== ctx.user.id) {
+    const conflict = inImmediateTx(() => {
+      const existing = stmts.userByGoogleId.get(identity.sub);
+      if (existing && existing.id !== ctx.user.id) return true;
+      db.prepare("UPDATE users SET google_id = ? WHERE id = ?").run(identity.sub, ctx.user.id);
+      audit("google.linked", { actorId: ctx.user.id, ip, meta: { email: identity.email } });
+      return false;
+    });
+    if (conflict) {
       return err(409, "this Google account is linked to another user", req);
     }
-
-    db.prepare("UPDATE users SET google_id = ? WHERE id = ?").run(identity.sub, ctx.user.id);
-    audit("google.linked", { actorId: ctx.user.id, ip, meta: { email: identity.email } });
     void sendSecurityAlert(
       ctx.user.email,
       `A Google account (${identity.email}) was linked to your account.`,
@@ -174,8 +187,10 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     if (!ctx.user.password_hash) {
       return err(400, "set a password before unlinking Google", req);
     }
-    db.prepare("UPDATE users SET google_id = NULL WHERE id = ?").run(ctx.user.id);
-    audit("google.unlinked", { actorId: ctx.user.id, ip });
+    inImmediateTx(() => {
+      db.prepare("UPDATE users SET google_id = NULL WHERE id = ?").run(ctx.user.id);
+      audit("google.unlinked", { actorId: ctx.user.id, ip });
+    });
     return ok({ linked: false }, req);
   }
 
@@ -208,23 +223,37 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
 
   if (path.startsWith("/api/me/sessions/") && req.method === "PATCH") {
     const ctx = await requireAuth(req);
+    const ip = clientIp(req);
     const jti = path.slice("/api/me/sessions/".length).trim();
     if (!jti || jti.length > 128) return err(400, "invalid session id", req);
     const target = stmts.sessionByJti.get(jti);
     if (!target || target.user_id !== ctx.user.id) return err(404, "session not found", req);
     const body = await readJsonBody(req, LIMITS.authBodyBytes);
-    const label = v.str(body, "label", { max: 64, optional: true });
-    db.prepare("UPDATE sessions SET label = ? WHERE jti = ?").run(label || null, jti);
+    const label = v.str(body, "label", { max: 64, optional: true }) || null;
+    inImmediateTx(() => {
+      db.prepare("UPDATE sessions SET label = ? WHERE jti = ?").run(label, jti);
+      audit("session.updated", {
+        actorId: ctx.user.id,
+        target: jti,
+        ip,
+        meta: { label, previousLabel: target.label },
+      });
+    });
     return ok({ done: true }, req);
   }
 
   if (path.startsWith("/api/me/sessions/") && req.method === "DELETE") {
     const ctx = await requireAuth(req);
+    const ip = clientIp(req);
     const jti = path.slice("/api/me/sessions/".length).trim();
     if (!jti || jti.length > 128) return err(400, "invalid session id", req);
     const target = stmts.sessionByJti.get(jti);
     if (!target || target.user_id !== ctx.user.id) return err(404, "session not found", req);
-    revokeSession(jti);
+    inImmediateTx(() => {
+      markSessionRevoked(jti);
+      audit("session.revoked", { actorId: ctx.user.id, target: jti, ip });
+    });
+    disconnectSessionSockets(ctx.user.id, { jti });
     return ok({ revoked: true }, req);
   }
 

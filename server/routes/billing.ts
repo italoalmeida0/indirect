@@ -1,6 +1,6 @@
 import { requireAdmin, requireAuth } from "../auth";
 import { assignPlan, billingStatus, grantReset, listPlans, readUsd, redeemReset, requirePlan } from "../billing";
-import { db, audit } from "../db";
+import { db, audit, inImmediateTx } from "../db";
 import { randomToken } from "../crypto";
 import { ApiError, clientIp, ok, readJsonBody, v } from "../http";
 import { LIMITS } from "../config";
@@ -70,17 +70,19 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
     if (rawPresentation !== undefined && rawPresentation !== null && !isBudgetPresentation(rawPresentation)) {
       throw new ApiError(400, "budgetPresentation must be usd, percent or hidden");
     }
-    setInstallationDefaults(
-      {
-        ...(showModelPrices === undefined ? {} : { showModelPrices }),
-        ...(rawPresentation === undefined ? {} : { budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null }),
-      },
-      Date.now(),
-    );
-    audit("financial_policy.installation_updated", {
-      actorId: user.id,
-      ip: clientIp(req),
-      meta: { showModelPrices: showModelPrices ?? "unchanged", budgetPresentation: rawPresentation ?? "unchanged" },
+    inImmediateTx(() => {
+      setInstallationDefaults(
+        {
+          ...(showModelPrices === undefined ? {} : { showModelPrices }),
+          ...(rawPresentation === undefined ? {} : { budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null }),
+        },
+        Date.now(),
+      );
+      audit("financial_policy.installation_updated", {
+        actorId: user.id,
+        ip: clientIp(req),
+        meta: { showModelPrices: showModelPrices ?? "unchanged", budgetPresentation: rawPresentation ?? "unchanged" },
+      });
     });
     return ok({ defaults: installationDefaults() }, req);
   }
@@ -102,12 +104,14 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
     if (rawPresentation !== null && !isBudgetPresentation(rawPresentation)) {
       throw new ApiError(400, "budgetPresentation must be usd, percent or hidden");
     }
-    setFinancialPolicy(targetId, { showModelPrices, budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null });
-    audit("financial_policy.user_updated", {
-      actorId: user.id,
-      target: targetId,
-      ip: clientIp(req),
-      meta: { showModelPrices, budgetPresentation: rawPresentation },
+    inImmediateTx(() => {
+      setFinancialPolicy(targetId, { showModelPrices, budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null });
+      audit("financial_policy.user_updated", {
+        actorId: user.id,
+        target: targetId,
+        ip: clientIp(req),
+        meta: { showModelPrices, budgetPresentation: rawPresentation },
+      });
     });
     return ok({ policy: financialPolicyFor({ id: targetId, role: "user" }), stored: storedPolicy(targetId) }, req);
   }

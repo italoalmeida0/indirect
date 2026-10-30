@@ -860,6 +860,16 @@ const MIGRATIONS: Migration[] = [
       ) WITHOUT ROWID;
     `,
   },
+  {
+    name: "032_reservation_request_correlation",
+    // Reservation primary keys must always be fresh internal identifiers so a
+    // client retrying or sharing X-Request-Id across calls never collides on
+    // billing_reservations.id; request_id remains indexed for correlation.
+    up: `
+      ALTER TABLE billing_reservations ADD COLUMN request_id TEXT;
+      CREATE INDEX idx_billing_reservations_request ON billing_reservations(request_id) WHERE request_id IS NOT NULL;
+    `,
+  },
 ];
 
 /**
@@ -1124,6 +1134,18 @@ export const stmts = {
   ),
 };
 
+/**
+ * Execute `fn` inside a `BEGIN IMMEDIATE` transaction at the outer boundary,
+ * or inside a nested SQLite `SAVEPOINT` when already inside a transaction.
+ */
+export function inImmediateTx<T>(fn: () => T): T {
+  return db.inTransaction ? db.transaction(fn)() : db.transaction(fn).immediate();
+}
+
+const insertAuditStmt = db.prepare(
+  "INSERT INTO audit_log (ts, actor_id, action, target, meta, ip, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+);
+
 /** In-process dashboard cache invalidation for audited metadata mutations. */
 export let auditRevision = 0;
 
@@ -1135,9 +1157,7 @@ export function audit(
   // not pass one, so every audit row written while serving a request can be
   // matched to the response header the client saw.
   const requestId = opts.requestId ?? currentRequestId();
-  db.prepare(
-    "INSERT INTO audit_log (ts, actor_id, action, target, meta, ip, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-  ).run(
+  insertAuditStmt.run(
     Date.now(),
     opts.actorId ?? null,
     action,

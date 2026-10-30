@@ -1,5 +1,5 @@
 import { LIMITS, GOOGLE_CLIENT_ID, SMTP_ENABLED } from "../config";
-import { db, stmts, audit } from "../db";
+import { db, stmts, audit, inImmediateTx } from "../db";
 import {
   hashPassword,
   verifyPassword,
@@ -8,12 +8,13 @@ import {
   sha256Hex,
 } from "../crypto";
 import {
-  issueSession,
+  prepareSessionTokens,
+  insertSessionRow,
   issue2faTempToken,
   verify2faTempToken,
   rotateRefreshToken,
   requireAuth,
-  revokeSession,
+  markSessionRevoked,
   markUserSessionsRevoked,
   publicUser,
 } from "../auth";
@@ -42,12 +43,31 @@ function passwordPolicy(pw: string): void {
   if (pw.length > 256) throw new ApiError(400, "password is too long");
 }
 
-async function finishLogin(userId: string, req: Request, server: any) {
+async function finishLogin(
+  userId: string,
+  req: Request,
+  server: any,
+  loginAction: string,
+  extraBefore?: () => void,
+) {
   const user = stmts.userById.get(userId)!;
   const ip = clientIp(req, server);
-  const tokens = await issueSession(user, { ip, ua: req.headers.get("user-agent") });
-  db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(Date.now(), user.id);
-  return ok({ ...tokens, user: publicUser(user) }, req);
+  const prepared = await prepareSessionTokens(user, { ip, ua: req.headers.get("user-agent") });
+  inImmediateTx(() => {
+    extraBefore?.();
+    insertSessionRow(user.id, prepared);
+    db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(prepared.now, user.id);
+    audit(loginAction, { actorId: user.id, ip });
+  });
+  return ok(
+    {
+      accessToken: prepared.accessToken,
+      refreshToken: prepared.refreshToken,
+      refreshExpiresAt: prepared.refreshExpiresAt,
+      user: publicUser(stmts.userById.get(user.id)!),
+    },
+    req,
+  );
 }
 
 export async function handleAuthRoute(path: string, req: Request, server: any): Promise<Response | null> {
@@ -102,8 +122,7 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
     }
 
     bruteforceClear(scope);
-    audit("login.success", { actorId: user.id, ip });
-    return finishLogin(user.id, req, server);
+    return finishLogin(user.id, req, server, "login.success");
   }
 
   // ---- 2FA completion ----
@@ -134,8 +153,7 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
 
     bruteforceClear(scope);
     bruteforceClear(`login:${user.email}`);
-    audit("login.success.2fa", { actorId: userId, ip });
-    return finishLogin(userId, req, server);
+    return finishLogin(userId, req, server, "login.success.2fa");
   }
 
   // ---- Google sign-in (existing accounts only; auto-links by verified email) ----
@@ -146,25 +164,41 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
     const identity = await verifyGoogleIdToken(idToken);
 
     let user = stmts.userByGoogleId.get(identity.sub);
+    let autoLinkId: string | null = null;
     if (!user) {
       // Auto-link only when Google guarantees email ownership AND the account
       // does not already have a different Google identity bound.
       if (!identity.emailVerified) return err(403, "Google account not linked", req);
       const byEmail = stmts.userByEmail.get(identity.email);
       if (!byEmail || byEmail.google_id) return err(403, "Google account not linked", req);
-      db.prepare("UPDATE users SET google_id = ? WHERE id = ?").run(identity.sub, byEmail.id);
-      user = stmts.userById.get(byEmail.id)!;
-      audit("google.autolink", { actorId: user.id, ip, meta: { email: identity.email } });
+      user = byEmail;
+      autoLinkId = byEmail.id;
     }
     if (user.status !== "active") return err(403, "account is disabled", req);
 
     if (user.totp_secret) {
+      if (autoLinkId) {
+        inImmediateTx(() => {
+          db.prepare("UPDATE users SET google_id = ? WHERE id = ?").run(identity.sub, autoLinkId!);
+          audit("google.autolink", { actorId: autoLinkId!, ip, meta: { email: identity.email } });
+        });
+      }
       const tempToken = await issue2faTempToken(user.id);
       return ok({ needs2FA: true, tempToken }, req);
     }
 
-    audit("login.success.google", { actorId: user.id, ip });
-    return finishLogin(user.id, req, server);
+    return finishLogin(
+      user.id,
+      req,
+      server,
+      "login.success.google",
+      autoLinkId
+        ? () => {
+            db.prepare("UPDATE users SET google_id = ? WHERE id = ?").run(identity.sub, autoLinkId!);
+            audit("google.autolink", { actorId: autoLinkId!, ip, meta: { email: identity.email } });
+          }
+        : undefined,
+    );
   }
 
   // ---- refresh rotation ----
@@ -186,7 +220,11 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
   // ---- logout ----
   if (path === "/api/auth/logout" && req.method === "POST") {
     const ctx = await requireAuth(req);
-    revokeSession(ctx.session.jti);
+    inImmediateTx(() => {
+      markSessionRevoked(ctx.session.jti);
+      audit("logout", { actorId: ctx.user.id, target: ctx.session.jti, ip });
+    });
+    disconnectSessionSockets(ctx.user.id, { jti: ctx.session.jti });
     return ok({ loggedOut: true }, req);
   }
 
@@ -202,14 +240,14 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
     const user = stmts.userByEmail.get(email);
     if (user && user.status === "active" && limits.resetAccountPer10Min(email) === 0) {
       const token = randomToken(32);
-      db.transaction(() => {
+      inImmediateTx(() => {
         db.prepare("DELETE FROM password_tokens WHERE user_id = ? AND kind = 'reset'").run(user.id);
         db.prepare(
           "INSERT INTO password_tokens (token_hash, user_id, kind, expires_at) VALUES (?, ?, 'reset', ?)",
         ).run(sha256Hex(token), user.id, Date.now() + LIMITS.passwordTokenTtlMs);
-      })();
+        audit("password.reset.requested", { target: user.id, ip });
+      });
       void sendResetEmail(email, token);
-      audit("password.reset.requested", { target: user.id, ip });
     }
     return ok({ message: "If the account exists, a reset email is on its way." }, req);
   }
@@ -233,18 +271,19 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
     }
 
     const newHash = await hashPassword(password);
-    const claimed = db.transaction(() => {
+    const claimed = inImmediateTx(() => {
+      const now = Date.now();
       const result = db.prepare(
         "UPDATE password_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?",
-      ).run(Date.now(), tokenHash, Date.now());
+      ).run(now, tokenHash, now);
       if (result.changes !== 1) return false;
       db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, row.user_id);
       markUserSessionsRevoked(row.user_id);
+      audit(`password.${row.kind}.completed`, { target: row.user_id, ip });
       return true;
-    })();
+    });
     if (!claimed) return err(400, "link is invalid or has expired", req);
     disconnectSessionSockets(row.user_id);
-    audit(`password.${row.kind}.completed`, { target: row.user_id, ip });
     const owner = stmts.userById.get(row.user_id);
     if (owner) {
       void sendSecurityAlert(

@@ -1,4 +1,4 @@
-import { db } from "./db";
+import { db, inImmediateTx } from "./db";
 
 /**
  * Model access policy.
@@ -93,7 +93,7 @@ export function upsertPolicy(input: {
   enabled: boolean;
   models: string[];
 }, now = Date.now()): string {
-  return db.transaction(() => {
+  return inImmediateTx(() => {
     const id = input.id ?? ("mp_" + crypto.randomUUID().replace(/-/g, "").slice(0, 20));
     if (input.kind === "default") {
       db.prepare("UPDATE model_policies SET kind = 'project', project_id = NULL WHERE kind = 'default' AND id <> ?").run(id);
@@ -107,13 +107,13 @@ export function upsertPolicy(input: {
     const insert = db.prepare("INSERT OR IGNORE INTO model_policy_models (policy_id, model_id) VALUES (?, ?)");
     for (const modelId of new Set(input.models)) insert.run(id, modelId);
     return id;
-  }).immediate();
+  });
 }
 
 export function deletePolicy(id: string): boolean {
-  return db.transaction(() => {
+  return inImmediateTx(() => {
     const removed = db.prepare("DELETE FROM model_policies WHERE id = ?").run(id).changes;
     db.prepare("DELETE FROM model_policy_models WHERE policy_id = ?").run(id);
     return removed > 0;
-  }).immediate();
+  });
 }
