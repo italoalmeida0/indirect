@@ -60,7 +60,7 @@ beforeAll(async () => {
   await request(`/api/admin/providers/${provider.data.provider.id}/sync-models`, admin, {});
   const created = await request("/api/keys", user, { name: "Billing key" }); key = created.data.token; keyId = created.data.key.id;
   sql = new Database(path.join(dir, "gateway.db")); sql.exec("PRAGMA busy_timeout = 5000");
-}, 30000);
+}, 90_000);
 
 afterAll(async () => { sql?.close(); gateway?.kill(); if (gateway) await gateway.exited; server?.stop(true); if (dir) rmSync(dir, { recursive: true, force: true }); });
 

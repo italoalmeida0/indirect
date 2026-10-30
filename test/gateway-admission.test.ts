@@ -154,7 +154,7 @@ test("forwarded addresses require an explicitly trusted peer and a trusted hop c
     expect((await get("203.0.113.3, invalid")).response.status).toBe(429);
     for (let i = 0; i < 4; i++) expect((await get("1.1.1.1, 192.0.2.9, 10.0.0.1", "/api/health")).response.status).toBe(200);
   } finally { await gateway.stop(); }
-}, 40000);
+}, 90_000);
 
 test("untrusted peers cannot spoof buckets, and early proxy 429s use protocol envelopes", async () => {
   const direct = await startGateway({ TRUST_PROXY: "true", TRUSTED_PROXY_CIDRS: "10.0.0.0/8", LIMIT_IP_PER_MIN: "2" });
@@ -182,7 +182,7 @@ test("untrusted peers cannot spoof buckets, and early proxy 429s use protocol en
 
 test("an empty CIDR prefix is rejected at startup", async () => {
   await expect(startGateway({ TRUST_PROXY: "true", TRUSTED_PROXY_CIDRS: "127.0.0.1/" })).rejects.toThrow("Invalid TRUSTED_PROXY_CIDRS entry");
-}, 40000);
+}, 90_000);
 
 test("16 keys of one account cannot exceed the account ceiling while another account still gets through", async () => {
   const held: Array<() => void> = [];

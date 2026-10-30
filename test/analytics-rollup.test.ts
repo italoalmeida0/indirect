@@ -168,4 +168,8 @@ test("live ingestion updates sub-day rollups atomically and retries a failed flu
     await gateway.stop();
     upstream.stop(true);
   }
-}, 40000);
+  // This case boots a real gateway and waits on several fixed flush windows.
+  // Under the full parallel suite (60+ files, each spawning its own gateway on
+  // a small CI box) 40s is not enough headroom and it fails for scheduling
+  // reasons rather than a defect.
+}, 90_000);

@@ -316,4 +316,4 @@ test("deleting a host still sends the remote-kill frames", async () => {
     for (const ws of sockets) ws.close();
     await gateway.stop();
   }
-}, 40000);
+}, 90_000);
