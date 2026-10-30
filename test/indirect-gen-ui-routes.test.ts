@@ -1,4 +1,6 @@
 import { describe, expect, test, beforeAll } from "bun:test";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 import {
   handleGenUiRoute,
@@ -50,8 +52,15 @@ async function get(fullPath: string): Promise<Response> {
 describe("gen-ui widget routes", () => {
   // Library bundles are build artifacts; generate them so the lib injection
   // contract below is exercised from a clean checkout too.
+  //
+  // Skip the (multi-second) bundling when the artifacts are already present:
+  // this hook runs under the FULL parallel suite, where re-bundling can lose
+  // the CPU for longer than the hook timeout and fail a test for scheduling
+  // reasons. `bun run build:web` produces them in any real build.
   beforeAll(async () => {
-    await vendorGenUiLibs();
+    const libsDir = path.join(import.meta.dir, "..", "web", "public", "vendor", "gen-ui");
+    const present = existsSync(path.join(libsDir, "d3.js")) && existsSync(path.join(libsDir, "three.js"));
+    if (!present) await vendorGenUiLibs();
   });
 
   test("POST stores a widget and returns its content-addressed URL", async () => {

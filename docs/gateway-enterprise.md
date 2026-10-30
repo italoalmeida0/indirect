@@ -1,8 +1,11 @@
 # Gateway enterprise hardening — design and contracts
 
 This document is the shared contract for the enterprise hardening program.
-Every workstream implements against these interfaces. Sections marked
-**(wave N)** are delivered by that wave.
+
+Status is recorded per section below. A section marked **[delivered]** has an
+implementation AND automated tests that fail if the behaviour regresses; a
+section marked **[pending]** is not implemented yet and must not be described
+as if it were.
 
 ## Operating envelope
 
@@ -171,3 +174,67 @@ model catalog cannot drift apart. Internal accounting is unchanged.
   a documented command.
 - Failures are fixed, never skipped. A test that cannot run without an
   external prerequisite is documented in the handoff, not silently skipped.
+## Delivery status
+
+**[delivered]** Relay session binding and daemon reauthorization — revoked
+sessions, rotated families, bans, deletions and password resets close the bound
+sockets before any further frame crosses the relay; a banned daemon token
+cannot reconnect and an unbanned one redials without receiving a kill frame.
+Tests: `test/gateway-relay-bans.test.ts`, `test/gateway-relay-revocation.test.ts`.
+
+**[delivered]** Per-account aggregate limits with a bounded admission queue —
+16 keys of one account cannot exceed the account ceiling, another account keeps
+serving, and a burst waits inside the deadline instead of failing. Tests:
+`test/gateway-admission.test.ts`.
+
+**[delivered]** Financial visibility enforced server-side — installation
+default plus per-user override for `showModelPrices` and
+`budgetPresentation`; administrators always see USD; everyone else receives
+percentages or no amounts at all, asserted on the HTTP payload. Tests:
+`test/gateway-financial-policy.test.ts`.
+
+**[delivered]** Model access policies — named allow-lists (default and
+project) enforced before routing, so the catalog, a single-model read, the
+requested model and every fallback target obey the same decision on every
+protocol surface. Tests: `test/gateway-model-policy.test.ts`.
+
+**[delivered]** SQLite contention — boot survives a held lock, periodic work
+never blocks the request path, and cleanup runs in bounded batches. Tests:
+`test/gateway-sqlite-contention.test.ts`, `test/gateway-contention.test.ts`,
+`test/sqlite-retry.test.ts`.
+
+**[delivered]** Supported backup — consistent snapshot while serving,
+verification (including of a tampered snapshot), retention, and the
+credential-encryption secret travelling with the copy. Tests:
+`test/gateway-backup.test.ts`.
+
+**[delivered]** Request correlation and audit coverage — `X-Request-Id` on
+every response, the same id on the usage event and the audit row, and a profile
+rename is audited with its before/after value. Tests:
+`test/gateway-correlation.test.ts`.
+
+**[delivered]** Detailed-event retention — detail expires, aggregates do not.
+Tests: `test/usage-retention.test.ts`.
+
+**[delivered]** Asset delivery — brotli/gzip with correct negotiation, ETag
+and Range handling; route-level code splitting; latin-only font subsets and an
+on-demand KaTeX stylesheet took the initial payload from 4.66 MB to 0.70 MB.
+Tests: `test/static-compression.test.ts`.
+
+**[delivered]** Obscura installation — ZIP and tar.gz read in-process (Bun's
+archive reader rejects valid ZIP, which is the Windows release format),
+version and SHA-256 pinned, air-gapped install supported, every archive member
+unpacked. Tests: `test/obscura-install.test.ts`, `test/indirect-gen-ui-lint.test.ts`.
+
+**[pending]** Financial projects and cost centers.
+
+**[pending]** Roles beyond admin/user (project manager), corporate OIDC, MFA
+enforced for administrators, bulk user import.
+
+**[pending]** Metrics endpoint (calls, errors, latency, concurrency, queue
+depth, rejections, backup age) — liveness and readiness already exist and are
+exempt from the shared IP bucket.
+
+**[pending]** Ten-year capacity fixture run (500 users x 500 calls/day) with
+the p99 report.
+
