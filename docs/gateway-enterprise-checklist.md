@@ -100,8 +100,17 @@ qualified merely because its code exists. The detailed scope is in
   153.0.8010.12, Bun 1.4.2 arm64, loopback. The single 1,125 ms sample is a
   cold first navigation, and with 20 samples the p99 is the maximum, so this
   does not establish the 1,000 ms target either way.
-- [ ] Streaming/non-streaming mixed traffic, maintenance/backup interference
-  during measurement, and a sustained soak crossing scheduled maintenance.
+- [ ] **Sub-day rollups stay empty for pre-existing detailed data.** On the
+  quick fixture, after boot, `usage_rollup_coverage` reports `hourly_from` and
+  `minute_from` advanced to roughly the present, while `usage_hour_rollups` and
+  `usage_minute_rollups` both hold **0 rows** for 500,000 detailed events seeded
+  across two days. Recent windows therefore fall back to scanning
+  `usage_events`, which is what makes a 14-day dashboard request cost 3.5 s and
+  an analytics request exceed its budget. The backfill watermark advancing
+  without materialising rows needs a dedicated investigation: either it is a
+  real backfill defect or the seeded history is outside the range it accepts,
+  and both would leave a real installation paying raw scans after a restore
+  until the next scheduled rollup.
 - [ ] Ten-year audit cardinality (the fixture profile seeds 365 audit days) and
   any claim of ten-year reliability from a finite soak.
 - [ ] The explicit capacity workflow has not executed on a dedicated native
