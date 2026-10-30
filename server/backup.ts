@@ -122,8 +122,8 @@ async function snapshotInWorker(options: ReturnType<typeof snapshotOptions>, tim
       timer.unref();
       worker.once("message", (reply: BackupWorkerReply) => {
         clearTimeout(timer);
-        if (reply.ok) resolve(reply.manifest);
-        else reject(new Error(reply.error));
+        if (reply.ok && "manifest" in reply) resolve(reply.manifest);
+        else reject(new Error(reply.ok ? "unexpected worker reply" : reply.error));
       });
       worker.once("error", (error: unknown) => {
         clearTimeout(timer);
@@ -166,8 +166,51 @@ export async function createBackup(options: CreateBackupOptions = {}): Promise<B
   return (await withSqliteRetryAsync(() => buildSnapshot(db, build), { name: "backup snapshot" })).value;
 }
 
-/** Re-open a snapshot read-only and prove it is restorable. */
-export async function verifyBackup(snapshotDir: string): Promise<import("./backup-files").BackupVerification> {
+async function verifyInWorker(
+  snapshotDir: string,
+  timeoutMs: number,
+): Promise<import("./backup-files").BackupVerification> {
+  const worker = new Worker(new URL("./backup-worker.ts", import.meta.url), {
+    workerData: { op: "verify", snapshotDir } satisfies BackupWorkerData,
+  });
+  worker.unref();
+  try {
+    return await new Promise<import("./backup-files").BackupVerification>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("verification worker timed out")), timeoutMs);
+      timer.unref();
+      worker.once("message", (reply: BackupWorkerReply) => {
+        clearTimeout(timer);
+        if (reply.ok && "verification" in reply) resolve(reply.verification);
+        else reject(new Error(reply.ok ? "unexpected worker reply" : reply.error));
+      });
+      worker.once("error", (error: unknown) => {
+        clearTimeout(timer);
+        reject(error instanceof Error ? error : new Error("verification worker failed"));
+      });
+      worker.once("exit", (code: number) => {
+        if (code === 0) return;
+        clearTimeout(timer);
+        reject(new Error("verification worker exited with code " + code));
+      });
+    });
+  } finally {
+    void worker.terminate().catch(() => undefined);
+  }
+}
+
+/** Re-open a snapshot read-only in a worker thread and prove it is restorable. */
+export async function verifyBackup(
+  snapshotDir: string,
+  options: { inProcess?: boolean; timeoutMs?: number } = {},
+): Promise<import("./backup-files").BackupVerification> {
+  if (!options.inProcess) {
+    try {
+      return await verifyInWorker(snapshotDir, options.timeoutMs ?? 15 * 60_000);
+    } catch (error) {
+      if (!/worker/i.test(error instanceof Error ? error.message : String(error))) throw error;
+      console.warn("[BACKUP] verification worker unavailable, running in process:", error instanceof Error ? error.message : error);
+    }
+  }
   const { verifySnapshot, readManifest } = await import("./backup-files");
   return verifySnapshot(snapshotDir, readManifest(snapshotDir) ?? undefined);
 }

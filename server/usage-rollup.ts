@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { yieldToEventLoop } from "./batch-delete";
 
 export const USAGE_DAY = 86_400_000;
 export const USAGE_HOUR = 3_600_000;
@@ -115,39 +116,225 @@ export function rebuildUsageRollups(db: Database, opts: RebuildUsageRollupsOptio
  * Deletion is batched: one unbounded DELETE holds the write lock for a
  * whole-table scan.
  */
-export function pruneUsageEvents(db: Database, now: number, retentionDays: number, batch = 5_000): { deleted: number; rawFrom: number } {
+export interface PruneUsageEventsOptions {
+  /** Maximum rows deleted in one invocation (scheduled runs bound per-tick work). */
+  maxRows?: number;
+  /** Maximum micro-transactions executed in one invocation. */
+  maxBatches?: number;
+  /** Optional observer invoked after each committed micro-batch. */
+  onBatch?: (info: { deleted: number; total: number; batch: number; rawFrom: number }) => void;
+}
+
+export interface PruneUsageEventsResult {
+  deleted: number;
+  rawFrom: number;
+  batches: number;
+  remaining: boolean;
+}
+
+export interface RetentionRunStatus {
+  runs: number;
+  totalDeleted: number;
+  lastRunAt: number | null;
+  lastDeleted: number;
+  lastRawFrom: number;
+  lastRemaining: boolean;
+}
+
+const retentionStats: RetentionRunStatus = {
+  runs: 0,
+  totalDeleted: 0,
+  lastRunAt: null,
+  lastDeleted: 0,
+  lastRawFrom: 0,
+  lastRemaining: false,
+};
+
+export function retentionStatus(): RetentionRunStatus {
+  return { ...retentionStats };
+}
+
+/** Maximum rows removed inside one SQLite write transaction so lock hold stays < ~10ms. */
+const MAX_PRUNE_TX_ROWS = 1_000;
+
+/**
+ * Delete detailed usage events older than the retention window in bounded,
+ * yielding micro-transactions.
+ *
+ * Invariants preserved across partial progress, concurrent writes, crash, and restart:
+ *   1. Only COMPLETE UTC days older than `cutoff` are eligible (`dayEnd <= cutoff`).
+ *   2. Before any row of UTC day `[dayStart, dayEnd)` is deleted, we verify that
+ *      `usage_model_provider_daily` safely accounts for the day's raw events
+ *      (materializing raw-only days if absent, and refusing to advance `raw_from`
+ *      if a partial deficit exists).
+ *   3. `raw_from` advances one UTC day (`dayEnd`) at a time in the first
+ *      micro-transaction of that day — never jumping ahead to unpruned days, and
+ *      never exposing a partially deleted day to sub-day raw fallback queries.
+ *   4. Subsequent runs resume from `SELECT ts FROM usage_events WHERE ts < cutoff`
+ *      even if `raw_from` already reached `dayEnd` before an interruption.
+ */
+export async function pruneUsageEvents(
+  db: Database,
+  now: number,
+  retentionDays: number,
+  batch = MAX_PRUNE_TX_ROWS,
+  opts: PruneUsageEventsOptions = {},
+): Promise<PruneUsageEventsResult> {
+  const readRawFrom = () =>
+    db.query<{ raw_from: number }, []>("SELECT raw_from FROM usage_rollup_coverage WHERE id = 1").get()?.raw_from ?? 0;
+
   if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
-    return { deleted: 0, rawFrom: db.query<{ raw_from: number }, []>("SELECT raw_from FROM usage_rollup_coverage WHERE id = 1").get()?.raw_from ?? 0 };
+    return { deleted: 0, rawFrom: readRawFrom(), batches: 0, remaining: false };
   }
+
   const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;
   // Keep N days INCLUDING today, and never cut inside the current day.
   const cutoff = Math.max(0, today - (Math.max(1, Math.floor(retentionDays)) - 1) * USAGE_DAY);
-  const coverage = db.query<{ raw_from: number }, []>("SELECT raw_from FROM usage_rollup_coverage WHERE id = 1").get();
-  const current = coverage?.raw_from ?? 0;
-  if (cutoff <= current) return { deleted: 0, rawFrom: current };
+  const microBatch = Math.min(MAX_PRUNE_TX_ROWS, Math.max(1, Math.floor(batch)));
+  const maxRows = opts.maxRows ?? Infinity;
+  const maxBatches = opts.maxBatches ?? Infinity;
+
   let deleted = 0;
-  db.transaction(() => {
-    const remove = db.prepare("DELETE FROM usage_events WHERE id IN (SELECT id FROM usage_events WHERE ts < ? ORDER BY id LIMIT ?)");
-    try {
-      for (;;) {
-        const changed = remove.run(cutoff, batch).changes;
-        deleted += changed;
-        if (changed < batch) break;
+  let batches = 0;
+  let remaining: boolean;
+
+  const findOldest = db.prepare<{ ts: number }, [number]>(
+    "SELECT ts FROM usage_events WHERE ts < ? ORDER BY ts ASC LIMIT 1",
+  );
+  const dailyCount = db.prepare<{ n: number }, [string]>(
+    "SELECT COALESCE(SUM(reqs), 0) AS n FROM usage_model_provider_daily WHERE date = ?",
+  );
+  const rawDayCount = db.prepare<{ n: number }, [number, number]>(
+    "SELECT COUNT(*) AS n FROM usage_events WHERE ts >= ? AND ts < ?",
+  );
+  const materializeDaily = db.prepare(`
+    INSERT INTO usage_model_provider_daily
+      (key_id, user_id, date, proto, provider_id, provider_key_id, model, upstream_model,
+       in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs, cost_in_nanos, cost_cache_nanos, cost_out_nanos)
+    SELECT key_id, user_id, ?, proto, provider_id, provider_key_id, model, upstream_model,
+      SUM(in_tok), SUM(cache_tok), SUM(out_tok), COUNT(*),
+      SUM(status >= 200 AND status < 300), SUM(status < 200 OR status >= 300),
+      SUM(cost_in_nanos), SUM(cost_cache_nanos), SUM(cost_out_nanos)
+    FROM usage_events WHERE ts >= ? AND ts < ?
+    GROUP BY key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model
+    ON CONFLICT(key_id, date, proto, provider_id, provider_key_id, model, upstream_model) DO NOTHING
+  `);
+  const materializeMonthly = db.prepare(`
+    INSERT INTO usage_model_provider_monthly
+      (key_id, user_id, month, proto, provider_id, provider_key_id, model, upstream_model,
+       in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs, cost_in_nanos, cost_cache_nanos, cost_out_nanos)
+    SELECT key_id, user_id, ?, proto, provider_id, provider_key_id, model, upstream_model,
+      SUM(in_tok), SUM(cache_tok), SUM(out_tok), COUNT(*),
+      SUM(status >= 200 AND status < 300), SUM(status < 200 OR status >= 300),
+      SUM(cost_in_nanos), SUM(cost_cache_nanos), SUM(cost_out_nanos)
+    FROM usage_events WHERE ts >= ? AND ts < ?
+    GROUP BY key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model
+    ON CONFLICT(key_id, month, proto, provider_id, provider_key_id, model, upstream_model) DO UPDATE SET
+      in_tok = in_tok + excluded.in_tok,
+      cache_tok = cache_tok + excluded.cache_tok,
+      out_tok = out_tok + excluded.out_tok,
+      reqs = reqs + excluded.reqs,
+      success_reqs = success_reqs + excluded.success_reqs,
+      error_reqs = error_reqs + excluded.error_reqs,
+      cost_in_nanos = COALESCE(cost_in_nanos, 0) + excluded.cost_in_nanos,
+      cost_cache_nanos = COALESCE(cost_cache_nanos, 0) + excluded.cost_cache_nanos,
+      cost_out_nanos = COALESCE(cost_out_nanos, 0) + excluded.cost_out_nanos
+  `);
+  const advanceWatermark = db.prepare(`
+    UPDATE usage_rollup_coverage
+    SET raw_from = MAX(raw_from, ?),
+        hour_floor = MAX(hour_floor, ?),
+        hourly_from = MAX(hourly_from, ?),
+        minute_floor = MAX(minute_floor, ?),
+        minute_from = MAX(minute_from, ?)
+    WHERE id = 1
+  `);
+  const removeSlice = db.prepare(
+    "DELETE FROM usage_events WHERE id IN (SELECT id FROM usage_events WHERE ts < ? ORDER BY ts ASC, id ASC LIMIT ?)",
+  );
+
+  try {
+    for (;;) {
+      const oldest = findOldest.get(cutoff);
+      if (!oldest) {
+        const current = readRawFrom();
+        if (cutoff > current) {
+          db.transaction(() => {
+            advanceWatermark.run(cutoff, cutoff, cutoff, cutoff, cutoff);
+          }).immediate();
+        }
+        remaining = false;
+        break;
       }
-    } finally { remove.finalize(); }
-    // Advance the watermark LAST, inside the same transaction: a crash before
-    // this point leaves the events in place and the next run retries; a crash
-    // after it cannot happen without the deletes having committed.
-    db.prepare("UPDATE usage_rollup_coverage SET raw_from = ? WHERE id = 1").run(cutoff);
-  }).immediate();
-  return { deleted, rawFrom: cutoff };
+
+      if (batches >= maxBatches || deleted >= maxRows) {
+        remaining = true;
+        break;
+      }
+
+      const dayStart = Math.floor(oldest.ts / USAGE_DAY) * USAGE_DAY;
+      const dayEnd = Math.min(cutoff, dayStart + USAGE_DAY);
+      const limit = Math.min(microBatch, maxRows - deleted);
+
+      let stepDeleted = 0;
+      let stepRawFrom = dayEnd;
+      db.transaction(() => {
+        const current = readRawFrom();
+        if (current < dayEnd) {
+          if (current <= dayStart) {
+            const dayIso = new Date(dayStart).toISOString().slice(0, 10);
+            const dailyReqs = dailyCount.get(dayIso)?.n ?? 0;
+            const rawReqs = rawDayCount.get(dayStart, dayEnd)?.n ?? 0;
+            if (dailyReqs === 0 && rawReqs > 0) {
+              materializeDaily.run(dayIso, dayStart, dayEnd);
+              materializeMonthly.run(dayIso.slice(0, 7), dayStart, dayEnd);
+            } else if (dailyReqs < rawReqs) {
+              throw new Error(
+                `Refusing to advance raw_from past ${dayIso}: daily aggregate count (${dailyReqs}) is less than raw event count (${rawReqs})`,
+              );
+            }
+          }
+          advanceWatermark.run(dayEnd, dayEnd, dayEnd, dayEnd, dayEnd);
+        }
+        stepDeleted = removeSlice.run(dayEnd, limit).changes;
+        stepRawFrom = readRawFrom();
+      }).immediate();
+
+      batches++;
+      deleted += stepDeleted;
+      opts.onBatch?.({ deleted: stepDeleted, total: deleted, batch: batches, rawFrom: stepRawFrom });
+      await yieldToEventLoop();
+    }
+
+    const finalRawFrom = readRawFrom();
+    retentionStats.runs++;
+    retentionStats.totalDeleted += deleted;
+    retentionStats.lastRunAt = Date.now();
+    retentionStats.lastDeleted = deleted;
+    retentionStats.lastRawFrom = finalRawFrom;
+    retentionStats.lastRemaining = remaining;
+    return { deleted, rawFrom: finalRawFrom, batches, remaining };
+  } finally {
+    for (const stmt of [
+      findOldest,
+      dailyCount,
+      rawDayCount,
+      materializeDaily,
+      materializeMonthly,
+      advanceWatermark,
+      removeSlice,
+    ]) {
+      stmt.finalize();
+    }
+  }
 }
 
 export function pruneUsageRollups(db: Database, now: number, hourDays: number, minuteDays: number, batch = 1000): void {
-  backfillHourRollups(db, { now });
+  backfillHourRollups(db, { now, hours: 1 });
   const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;
   const hourCutoff = Math.max(0, today - (hourDays - 1) * USAGE_DAY);
   const minuteCutoff = Math.max(0, today - (minuteDays - 1) * USAGE_DAY);
+  const cappedBatch = Math.min(MAX_PRUNE_TX_ROWS, Math.max(1, Math.floor(batch)));
   db.transaction(() => {
     const coverage = db.prepare("UPDATE usage_rollup_coverage SET hour_floor = MAX(hour_floor, ?), minute_floor = MAX(minute_floor, ?), hourly_from = MAX(hourly_from, ?), minute_from = MAX(minute_from, ?) WHERE id = 1");
     try { coverage.run(hourCutoff, minuteCutoff, hourCutoff, minuteCutoff); } finally { coverage.finalize(); }
@@ -157,9 +344,57 @@ export function pruneUsageRollups(db: Database, now: number, hourDays: number, m
           SELECT bucket,key_id,proto,provider_id,provider_key_id,model,upstream_model
           FROM usage_${kind}_rollups WHERE bucket < ? ORDER BY bucket LIMIT ?
         )`);
-      try { remove.run(cutoff, batch); } finally { remove.finalize(); }
+      try { remove.run(cutoff, cappedBatch); } finally { remove.finalize(); }
     }
   }).immediate();
+}
+
+export async function pruneUsageRollupsAsync(
+  db: Database,
+  now: number,
+  hourDays: number,
+  minuteDays: number,
+  batch = 500,
+  maxBatches = 20,
+): Promise<void> {
+  for (let h = 0; h < USAGE_HOURLY_BACKFILL_HOURS; h++) {
+    const step = backfillHourRollups(db, { now, hours: 1 });
+    if (!step.advanced) break;
+    await yieldToEventLoop();
+  }
+  const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;
+  const hourCutoff = Math.max(0, today - (hourDays - 1) * USAGE_DAY);
+  const minuteCutoff = Math.max(0, today - (minuteDays - 1) * USAGE_DAY);
+  const cappedBatch = Math.min(MAX_PRUNE_TX_ROWS, Math.max(1, Math.floor(batch)));
+  db.transaction(() => {
+    const coverage = db.prepare(
+      "UPDATE usage_rollup_coverage SET hour_floor = MAX(hour_floor, ?), minute_floor = MAX(minute_floor, ?), hourly_from = MAX(hourly_from, ?), minute_from = MAX(minute_from, ?) WHERE id = 1",
+    );
+    try {
+      coverage.run(hourCutoff, minuteCutoff, hourCutoff, minuteCutoff);
+    } finally {
+      coverage.finalize();
+    }
+  }).immediate();
+  await yieldToEventLoop();
+
+  for (const [kind, cutoff] of [["hour", hourCutoff], ["minute", minuteCutoff]] as const) {
+    for (let i = 0; i < maxBatches; i++) {
+      const remove = db.prepare(`DELETE FROM usage_${kind}_rollups
+        WHERE (bucket,key_id,proto,provider_id,provider_key_id,model,upstream_model) IN (
+          SELECT bucket,key_id,proto,provider_id,provider_key_id,model,upstream_model
+          FROM usage_${kind}_rollups WHERE bucket < ? ORDER BY bucket LIMIT ?
+        )`);
+      let changed: number;
+      try {
+        changed = db.transaction(() => remove.run(cutoff, cappedBatch).changes).immediate();
+      } finally {
+        remove.finalize();
+      }
+      if (changed < cappedBatch) break;
+      await yieldToEventLoop();
+    }
+  }
 }
 /** Hours a bounded backfill covers per call. Startup and the periodic sweep
  * both use the same budget so ingestion never waits on a long scan. */

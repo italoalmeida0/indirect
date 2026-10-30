@@ -124,8 +124,12 @@ export const LIMITS = {
    * otherwise grows forever. 0 disables pruning.
    */
   usageEventRetentionDays: Number(process.env.USAGE_EVENT_RETENTION_DAYS ?? 400),
-  /** Rows removed per statement by the retention sweep. */
-  usageEventPruneBatch: positiveLimit("USAGE_EVENT_PRUNE_BATCH", 5_000),
+  /** Rows removed per micro-transaction by the retention sweep (clamped per lock hold). */
+  usageEventPruneBatch: positiveLimit("USAGE_EVENT_PRUNE_BATCH", 1_000),
+  /** Maximum detailed usage events pruned in one scheduled maintenance tick. */
+  usageEventPruneMaxRows: boundedLimit("USAGE_EVENT_PRUNE_MAX_ROWS", 50_000, 1_000_000),
+  /** Days of audit_log entries to keep (0 retains audit history indefinitely). */
+  auditRetentionDays: Math.max(0, Math.floor(Number(process.env.AUDIT_RETENTION_DAYS ?? 0) || 0)),
   /** Retention: completed snapshots kept per bucket, newest first. */
   backupKeepDaily: boundedLimit("BACKUP_KEEP_DAILY", 14, 3650),
   backupKeepWeekly: boundedLimit("BACKUP_KEEP_WEEKLY", 8, 520),

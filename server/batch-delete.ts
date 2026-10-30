@@ -35,6 +35,14 @@ export interface BatchDeleteResult {
 const DEFAULT_BATCH = 500;
 const HARD_BATCH_CAP = 100_000;
 
+/**
+ * Macrotask yield so pending HTTP accept/read/write I/O runs between bounded
+ * SQLite write transactions instead of starving behind a synchronous loop.
+ */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 interface BatchPlan {
   /** Table to delete from (already validated by the caller). */
   table: string;
@@ -130,6 +138,46 @@ export function batchDeleteComposite(options: BatchDeleteOptions & {
     deleted += changed;
     options.onBatch?.({ deleted: changed, total: deleted, batch: batches });
     if (changed < limit) break;
+  }
+  return { deleted, batches, truncated };
+}
+
+/**
+ * Asynchronous bounded-batch delete that yields to the macrotask event loop
+ * between micro-transactions so HTTP probes, proxy admission, and dashboard
+ * traffic keep flowing during large cleanups.
+ */
+export async function batchDeleteAsync(
+  db: Database,
+  options: BatchDeleteOptions & {
+    table: string;
+    key?: string;
+    where?: string;
+    params?: Array<string | number | null>;
+    maxRows?: number;
+  },
+): Promise<BatchDeleteResult> {
+  const batchSize = Math.min(HARD_BATCH_CAP, Math.max(1, Math.floor(options.batchSize ?? DEFAULT_BATCH)));
+  const maxBatches = options.maxBatches ?? Infinity;
+  const maxRows = options.maxRows ?? Infinity;
+  const key = options.key ?? "rowid";
+  const retry = options.retry ?? (<T>(operation: () => T): T => operation());
+  const plan: BatchPlan = { table: options.table, key, where: options.where ?? "", params: options.params ?? [] };
+  let deleted = 0;
+  let batches = 0;
+  let truncated = false;
+  for (;;) {
+    if (batches >= maxBatches || deleted >= maxRows) {
+      truncated = true;
+      break;
+    }
+    const limit = Math.min(batchSize, maxRows - deleted);
+    const changed = runBatch(db, plan, limit, retry);
+    batches++;
+    deleted += changed;
+    options.onBatch?.({ deleted: changed, total: deleted, batch: batches });
+    if (changed < limit) break;
+    await yieldToEventLoop();
   }
   return { deleted, batches, truncated };
 }

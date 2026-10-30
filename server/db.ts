@@ -870,6 +870,16 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_billing_reservations_request ON billing_reservations(request_id) WHERE request_id IS NOT NULL;
     `,
   },
+  {
+    name: "033_maintenance_indexes",
+    // Keep periodic session and password-token cleanup O(batch) rather than
+    // scanning the full table inside a write transaction.
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_sessions_abs_expires ON sessions(abs_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_sessions_active_expires ON sessions(expires_at) WHERE revoked = 0;
+      CREATE INDEX IF NOT EXISTS idx_password_tokens_expires ON password_tokens(expires_at);
+    `,
+  },
 ];
 
 /**
@@ -1167,4 +1177,42 @@ export function audit(
     requestId || null,
   );
   auditRevision++;
+}
+
+export interface WalCheckpointStatus {
+  runs: number;
+  busyRuns: number;
+  lastRunAt: number | null;
+  lastLogFrames: number;
+  lastCheckpointedFrames: number;
+}
+
+const walStats: WalCheckpointStatus = {
+  runs: 0,
+  busyRuns: 0,
+  lastRunAt: null,
+  lastLogFrames: 0,
+  lastCheckpointedFrames: 0,
+};
+
+/**
+ * Passive WAL checkpoint: transfers frames that no active reader depends on
+ * back into gateway.db without blocking concurrent readers or writers.
+ */
+export function runPassiveWalCheckpoint(targetDb: Database = db): WalCheckpointStatus {
+  const row = targetDb
+    .query<{ busy: number; log: number; checkpointed: number }, []>("PRAGMA wal_checkpoint(PASSIVE)")
+    .get();
+  walStats.runs++;
+  walStats.lastRunAt = Date.now();
+  if (row) {
+    if (row.busy > 0) walStats.busyRuns++;
+    walStats.lastLogFrames = row.log;
+    walStats.lastCheckpointedFrames = row.checkpointed;
+  }
+  return { ...walStats };
+}
+
+export function walCheckpointStatus(): WalCheckpointStatus {
+  return { ...walStats };
 }

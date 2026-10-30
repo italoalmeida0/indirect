@@ -1,4 +1,5 @@
 import { audit, db, type ApiKeyRow, type ModelRow } from "./db";
+import { yieldToEventLoop } from "./batch-delete";
 import { randomToken } from "./crypto";
 import { ApiError } from "./http";
 import { scheduleMaintenance } from "./maintenance";
@@ -265,23 +266,110 @@ export function redeemReset(userId: string, grantId: string, requestId: string, 
 
 const instanceId = randomToken(12);
 const heartbeat = () => db.prepare("INSERT INTO billing_instances(id, heartbeat) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat = excluded.heartbeat").run(instanceId, Date.now());
-/** Uncertain requests from a crashed process retain their reservation, then
- * settle conservatively at its bound. A restart never grants free balance. */
-export function recoverBudgets(now = Date.now()): void {
-  db.transaction(() => {
-    // Refresh our own lease in the same write transaction before recovering
-    // stale instances, even if an earlier periodic heartbeat was blocked.
+
+function recoverStaleReservationStep(now: number, limit: number): number {
+  return db.transaction(() => {
     heartbeat();
-    const stale = db.query<{ id: string; amount_nanos: number }, [number]>(`SELECT r.id, r.amount_nanos FROM billing_reservations r LEFT JOIN billing_instances i ON i.id = r.instance_id WHERE r.state = 'pending' AND COALESCE(i.heartbeat, r.created_at) < ? LIMIT 500`).all(now - 5 * 60_000);
+    const stale = db
+      .query<{ id: string; amount_nanos: number }, [number, number]>(
+        `SELECT r.id, r.amount_nanos
+         FROM billing_reservations r
+         LEFT JOIN billing_instances i ON i.id = r.instance_id
+         WHERE r.state = 'pending' AND COALESCE(i.heartbeat, r.created_at) < ?
+         LIMIT ?`,
+      )
+      .all(now - 5 * 60_000, limit);
     for (const row of stale) {
       finish(row.id, { input: BigInt(row.amount_nanos), cache: 0n, output: 0n }, true);
       audit("billing.reservation.recovered", { target: row.id, meta: { chargedUsd: usd(row.amount_nanos) } });
     }
-    db.prepare("DELETE FROM billing_periods WHERE ends_at < ? AND reserved_nanos = 0 AND kind <> 'lifetime'").run(now - 400 * DAY);
-    db.prepare("DELETE FROM billing_reservations WHERE settled_at < ?").run(now - 30 * DAY);
-    db.prepare("DELETE FROM billing_instances WHERE heartbeat < ? AND id NOT IN (SELECT instance_id FROM billing_reservations WHERE state = 'pending')").run(now - DAY);
+    return stale.length;
   }).immediate();
 }
+
+function pruneExpiredBillingStep(now: number, batchSize: number): { periods: number; reservations: number; instances: number } {
+  const periods = db.transaction(() =>
+    db
+      .prepare(
+        `DELETE FROM billing_periods
+         WHERE (scope, owner_id, kind, starts_at) IN (
+           SELECT scope, owner_id, kind, starts_at
+           FROM billing_periods
+           WHERE ends_at < ? AND reserved_nanos = 0 AND kind <> 'lifetime'
+           ORDER BY ends_at
+           LIMIT ?
+         )`,
+      )
+      .run(now - 400 * DAY, batchSize).changes,
+  ).immediate();
+  const reservations = db.transaction(() =>
+    db
+      .prepare(
+        `DELETE FROM billing_reservations
+         WHERE id IN (
+           SELECT id FROM billing_reservations
+           WHERE settled_at < ?
+           ORDER BY settled_at
+           LIMIT ?
+         )`,
+      )
+      .run(now - 30 * DAY, batchSize).changes,
+  ).immediate();
+  const instances = db.transaction(() =>
+    db
+      .prepare(
+        `DELETE FROM billing_instances
+         WHERE id IN (
+           SELECT id FROM billing_instances
+           WHERE heartbeat < ?
+             AND id NOT IN (SELECT instance_id FROM billing_reservations WHERE state = 'pending')
+           LIMIT ?
+         )`,
+      )
+      .run(now - DAY, batchSize).changes,
+  ).immediate();
+  return { periods, reservations, instances };
+}
+
+/** Uncertain requests from a crashed process retain their reservation, then
+ * settle conservatively at its bound. A restart never grants free balance.
+ * Bounded per call so synchronous startup never holds a multi-second write lock. */
+export function recoverBudgets(now = Date.now(), batchSize = 500): void {
+  const capped = Math.min(1_000, Math.max(1, Math.floor(batchSize)));
+  for (let i = 0; i < 10; i++) {
+    const recovered = recoverStaleReservationStep(now, 50);
+    if (recovered < 50) break;
+  }
+  pruneExpiredBillingStep(now, capped);
+}
+
+/** Asynchronous bounded recovery + expired ledger cleanup yielding between micro-batches. */
+export async function recoverBudgetsAsync(
+  now = Date.now(),
+  opts: { batchSize?: number; maxRows?: number } = {},
+): Promise<{ recovered: number; deletedReservations: number; deletedPeriods: number }> {
+  const batchSize = Math.min(1_000, Math.max(1, Math.floor(opts.batchSize ?? 500)));
+  const maxRows = Math.max(batchSize, Math.floor(opts.maxRows ?? 50_000));
+  let recovered = 0;
+  for (let step = 0; step < 20; step++) {
+    const count = recoverStaleReservationStep(now, 50);
+    recovered += count;
+    if (count < 50) break;
+    await yieldToEventLoop();
+  }
+  let deletedReservations = 0;
+  let deletedPeriods = 0;
+  while (deletedReservations + deletedPeriods < maxRows) {
+    const limit = Math.min(batchSize, maxRows - (deletedReservations + deletedPeriods));
+    const step = pruneExpiredBillingStep(now, limit);
+    deletedPeriods += step.periods;
+    deletedReservations += step.reservations;
+    if (step.periods < limit && step.reservations < limit && step.instances < limit) break;
+    await yieldToEventLoop();
+  }
+  return { recovered, deletedReservations, deletedPeriods };
+}
+
 export function startBilling(): void {
   // Boot must survive a database that another process is currently writing.
   // A synchronous throw here happens BEFORE Bun.serve(), so it terminates the
@@ -295,8 +383,8 @@ export function startBilling(): void {
     if (!isRetryableSqliteError(error)) throw error;
     console.error("[BILLING] startup maintenance deferred:", error instanceof Error ? error.message : "unknown error");
   }
-  // maintenanceBatchSize keeps each job's lock hold short, and recovery already
-  // runs its cleanup outside the settlement transaction.
+  // maintenanceBatchSize keeps each job's lock hold short, and recovery yields
+  // between bounded micro-transactions so large reservation backlogs never stall traffic.
   scheduleMaintenance("billing heartbeat", () => { heartbeat(); }, 15_000);
-  scheduleMaintenance("billing recovery", () => { recoverBudgets(); }, 60_000);
+  scheduleMaintenance("billing recovery", async () => { await recoverBudgetsAsync(); }, 60_000);
 }

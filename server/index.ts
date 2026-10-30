@@ -1,6 +1,6 @@
 import { PORT, IS_PROD, ADMIN_EMAIL, ADMIN_PASSWORD, LIMITS, DATA_DIR } from "./config";
 import { admissionSnapshot, configureLimits, limits } from "./ratelimit";
-import { db, audit, isSqliteBusy } from "./db";
+import { db, audit, isSqliteBusy, runPassiveWalCheckpoint } from "./db";
 import { hashPassword, randomToken } from "./crypto";
 import { ApiError, baseHeaders, clientIp, err, json, rateLimitError } from "./http";
 import { handleAuthRoute } from "./routes/auth";
@@ -22,8 +22,8 @@ import { flushUsage } from "./usage";
 import { initTokenEstimator } from "./tokens";
 import { resolveRequestId, runWithRequest } from "./request-context";
 import { scheduleMaintenance } from "./maintenance";
-import { pruneUsageEvents, pruneUsageRollups } from "./usage-rollup";
-import { batchDelete } from "./batch-delete";
+import { pruneUsageEvents, pruneUsageRollupsAsync, USAGE_DAY } from "./usage-rollup";
+import { batchDeleteAsync, yieldToEventLoop } from "./batch-delete";
 import { backupIntervalMs, backupRoot, runBackupCycle } from "./backup";
 
 // btdby4-wasm (token estimator) must be warm before serving: every counter
@@ -76,38 +76,79 @@ startBilling();
  * not turn one sweep into a whole-table DELETE that holds the writer while the
  * proxy needs it. Leftovers are picked up by the next sweep.
  */
-function cleanupExpiredSessions(): void {
+async function cleanupExpiredSessions(): Promise<void> {
   const now = Date.now();
   const budget = { batchSize: LIMITS.maintenanceBatchSize, maxRows: LIMITS.maintenanceMaxBatchRows };
-  batchDelete(db, { table: "sessions", key: "jti", where: "abs_expires_at < ?", params: [now], ...budget });
-  db.prepare("UPDATE sessions SET revoked = 1 WHERE expires_at < ? AND revoked = 0").run(now);
-  batchDelete(db, {
+  await batchDeleteAsync(db, { table: "sessions", key: "jti", where: "abs_expires_at < ?", params: [now], ...budget });
+
+  // Bound idle-session revocation into micro-transactions so a large batch of
+  // expired sessions never holds the SQLite writer across a full table update.
+  const revokeSlice = db.prepare(
+    "UPDATE sessions SET revoked = 1 WHERE jti IN (SELECT jti FROM sessions WHERE expires_at < ? AND revoked = 0 LIMIT ?)",
+  );
+  try {
+    let revokedTotal = 0;
+    while (revokedTotal < budget.maxRows) {
+      const limit = Math.min(budget.batchSize, budget.maxRows - revokedTotal);
+      const changed = revokeSlice.run(now, limit).changes;
+      revokedTotal += changed;
+      if (changed < limit) break;
+      await yieldToEventLoop();
+    }
+  } finally {
+    revokeSlice.finalize();
+  }
+
+  await batchDeleteAsync(db, {
     table: "password_tokens",
     key: "token_hash",
     where: "expires_at < ? OR used_at IS NOT NULL AND used_at < ?",
     params: [now, now - 3600_000],
     ...budget,
   });
+
+  if (LIMITS.auditRetentionDays > 0) {
+    const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;
+    const auditCutoff = Math.max(0, today - (LIMITS.auditRetentionDays - 1) * USAGE_DAY);
+    await batchDeleteAsync(db, {
+      table: "audit_log",
+      key: "id",
+      where: "ts < ?",
+      params: [auditCutoff],
+      ...budget,
+    });
+  }
 }
 
 scheduleMaintenance("session cleanup", cleanupExpiredSessions, 15 * 60_000);
-/** Rollup pruning already deletes in batches inside pruneUsageRollups; the
- *  retry wrapper turns a transient lock into a retry instead of an exit. */
-scheduleMaintenance("analytics rollup cleanup", () => {
-  pruneUsageRollups(db, Date.now(), LIMITS.analyticsHourlyDays, LIMITS.analyticsMinuteDays, LIMITS.maintenanceBatchSize);
-}, 60_000);
+scheduleMaintenance("analytics rollup cleanup", () =>
+  pruneUsageRollupsAsync(db, Date.now(), LIMITS.analyticsHourlyDays, LIMITS.analyticsMinuteDays, LIMITS.maintenanceBatchSize),
+60_000);
+scheduleMaintenance("wal checkpoint", () => {
+  runPassiveWalCheckpoint(db);
+}, 5 * 60_000);
 
 /**
- * Detailed-event retention. Runs hourly, not every minute: it deletes whole
- * days older than the window, so a more frequent schedule would only re-scan
- * the same rows. Aggregates are untouched, which is why the long history keeps
- * working after the detail is gone.
+ * Detailed-event retention. Runs every 5 minutes in bounded, yielding micro-batches
+ * (capped per tick by `LIMITS.usageEventPruneMaxRows`) so even 250k+/day expiration
+ * drains smoothly without holding the SQLite write lock across requests.
  */
 if (LIMITS.usageEventRetentionDays > 0) {
-  scheduleMaintenance("usage event retention", () => {
-    const result = pruneUsageEvents(db, Date.now(), LIMITS.usageEventRetentionDays, LIMITS.usageEventPruneBatch);
-    if (result.deleted) console.info(`[RETENTION] pruned ${result.deleted} detailed usage event(s) older than ${LIMITS.usageEventRetentionDays} days`);
-  }, 60 * 60_000);
+  scheduleMaintenance("usage event retention", async () => {
+    flushUsage();
+    const result = await pruneUsageEvents(
+      db,
+      Date.now(),
+      LIMITS.usageEventRetentionDays,
+      LIMITS.usageEventPruneBatch,
+      { maxRows: LIMITS.usageEventPruneMaxRows },
+    );
+    if (result.deleted) {
+      console.info(
+        `[RETENTION] pruned ${result.deleted} detailed usage event(s) older than ${LIMITS.usageEventRetentionDays} days${result.remaining ? " (continuing next tick)" : ""}`,
+      );
+    }
+  }, 5 * 60_000);
   console.log(`[RETENTION] detailed usage events kept for ${LIMITS.usageEventRetentionDays} days; aggregates are retained`);
 } else {
   console.log("[RETENTION] detailed usage event pruning disabled (USAGE_EVENT_RETENTION_DAYS=0)");

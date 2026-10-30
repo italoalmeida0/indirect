@@ -16,15 +16,22 @@
  */
 import { parentPort, workerData } from "node:worker_threads";
 import { Database } from "bun:sqlite";
-import { buildSnapshot, type BackupManifest, type SnapshotBuildOptions } from "./backup-files";
+import {
+  buildSnapshot,
+  readManifest,
+  verifySnapshot,
+  type BackupManifest,
+  type BackupVerification,
+  type SnapshotBuildOptions,
+} from "./backup-files";
 
-export interface BackupWorkerData extends SnapshotBuildOptions {
-  /** Live database file to copy. */
-  source: string;
-}
+export type BackupWorkerData =
+  | ({ op?: "create"; source: string } & SnapshotBuildOptions)
+  | { op: "verify"; snapshotDir: string };
 
 export type BackupWorkerReply =
   | { ok: true; manifest: BackupManifest }
+  | { ok: true; verification: BackupVerification }
   | { ok: false; error: string };
 
 const data = workerData as BackupWorkerData | undefined;
@@ -32,6 +39,12 @@ if (data) {
   let connection: Database | null = null;
   const reply: BackupWorkerReply = (() => {
     try {
+      if (data.op === "verify") {
+        return {
+          ok: true,
+          verification: verifySnapshot(data.snapshotDir, readManifest(data.snapshotDir) ?? undefined),
+        };
+      }
       connection = new Database(data.source, { readonly: true });
       connection.exec("PRAGMA busy_timeout = 5000");
       return { ok: true, manifest: buildSnapshot(connection, data) };
