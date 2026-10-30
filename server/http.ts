@@ -60,7 +60,7 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
     h.set("Vary", "Origin");
     h.set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
     h.set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key");
-    h.set("Access-Control-Expose-Headers", "Retry-After, X-Request-Id, X-Gateway-Usage");
+    h.set("Access-Control-Expose-Headers", "Retry-After, X-Request-Id, X-Gateway-Usage, X-Gateway-Queue");
     h.set("Access-Control-Max-Age", "600");
   }
   return h;
@@ -80,10 +80,23 @@ export function err(status: number, message: string, req?: Request, code?: strin
   return json({ success: false, error: message, ...(code ? { code } : {}) }, { status, req });
 }
 
-export function rateLimitError(message: string, retryAfter: number, req?: Request): Response {
-  const response = err(429, message, req);
+/**
+ * Headers every 429 must carry, shared by the dashboard envelope and the
+ * protocol envelopes in server/proxy.
+ *
+ * Retry-After is the contract clients back off on (integer seconds >= 1).
+ * X-Gateway-Queue reports the admission queue depth so a rejection says
+ * whether capacity is exhausted or merely busy; it is exposed for CORS in
+ * baseHeaders alongside Retry-After.
+ */
+export function applyRateLimitHeaders(response: Response, retryAfter: number, queueDepth?: number): Response {
   response.headers.set("Retry-After", String(Math.max(1, Math.ceil(retryAfter))));
+  if (queueDepth !== undefined) response.headers.set("X-Gateway-Queue", String(queueDepth));
   return response;
+}
+
+export function rateLimitError(message: string, retryAfter: number, req?: Request, queueDepth?: number): Response {
+  return applyRateLimitHeaders(err(429, message, req), retryAfter, queueDepth);
 }
 
 type PeerServer = { requestIP(req: Request): { address: string } | null };

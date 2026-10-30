@@ -178,27 +178,189 @@ export function consumeTotpCode(digest: string): boolean {
 }
 
 // ===== Proxy concurrency control (key, account, and global upstream) =====
+//
+// Three ceilings apply to one upstream call, checked in this order:
+//   global  — the whole gateway (LIMIT_GLOBAL_CONCURRENCY)
+//   account — every key of one account together (LIMIT_USER_CONCURRENCY)
+//   key     — one API key (DEFAULT_KEY_CONCURRENCY, as before)
+// A request that finds a ceiling exhausted waits in a BOUNDED FIFO queue for a
+// short deadline instead of failing immediately; a released slot dispatches the
+// oldest waiter that fits. Every admitted slot carries an idempotent release:
+// success, error, client abort and stream end all release exactly once.
 
 const keyConcurrency = new Map<string, number>();
 const userConcurrency = new Map<string, number>();
 let totalUpstreamInFlight = 0;
 
-export function acquireUpstreamSlot(keyId: string, userId: string, perKeyMax: number, perUserMax = LIMITS.userConcurrency, globalMax = LIMITS.globalConcurrency):
-  { ok: false; reason: "global" | "user" | "key" } | { ok: true; release: () => void } {
-  if (totalUpstreamInFlight >= globalMax) return { ok: false, reason: "global" };
-  if ((userConcurrency.get(userId) ?? 0) >= perUserMax) return { ok: false, reason: "user" };
-  if ((keyConcurrency.get(keyId) ?? 0) >= perKeyMax) return { ok: false, reason: "key" };
+/** Which ceiling denied the request (or "queue" for admission overflow). */
+export type AdmissionReason = "global" | "user" | "key" | "queue" | "aborted";
+
+export interface AdmissionLimits {
+  /** Concurrent requests allowed for one API key. */
+  perKey: number;
+  /** Concurrent requests allowed for one account, across all of its keys. */
+  perUser: number;
+  /** Concurrent requests allowed for the whole gateway. */
+  global: number;
+}
+
+export interface AdmissionWait {
+  /** How long a request may wait for a slot before it is rejected. */
+  deadlineMs: number;
+  /** Hard cap on the number of waiting requests. */
+  maxQueue: number;
+  /** Hard cap on the declared bytes those waiting requests carry. */
+  maxQueueBytes: number;
+  /** Declared request size (Content-Length), consumed by the byte guard. */
+  bytes?: number;
+  /** Aborting the client request removes it from the queue (no slot leak). */
+  signal?: AbortSignal;
+}
+
+export type Admission =
+  | { ok: true; release: () => void }
+  | { ok: false; reason: AdmissionReason; retryAfter: number };
+
+interface Waiter {
+  keyId: string;
+  userId: string;
+  limits: AdmissionLimits;
+  bytes: number;
+  timer: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+  settle: (result: Admission) => void;
+}
+
+/** FIFO of requests waiting for a concurrency slot. */
+const waiters: Waiter[] = [];
+let queuedBytes = 0;
+let peakQueued = 0;
+
+function blockingReason(keyId: string, userId: string, limits: AdmissionLimits): Exclude<AdmissionReason, "queue" | "aborted"> | null {
+  if (totalUpstreamInFlight >= limits.global) return "global";
+  if ((userConcurrency.get(userId) ?? 0) >= limits.perUser) return "user";
+  if ((keyConcurrency.get(keyId) ?? 0) >= limits.perKey) return "key";
+  return null;
+}
+
+/** Take a slot when every ceiling has room; returns an idempotent release. */
+function tryTake(keyId: string, userId: string, limits: AdmissionLimits): (() => void) | null {
+  if (blockingReason(keyId, userId, limits) !== null) return null;
   keyConcurrency.set(keyId, (keyConcurrency.get(keyId) ?? 0) + 1);
   userConcurrency.set(userId, (userConcurrency.get(userId) ?? 0) + 1);
   totalUpstreamInFlight++;
   let released = false;
-  return { ok: true, release: () => {
+  return () => {
     if (released) return;
     released = true;
-    const keys = keyConcurrency.get(keyId)!;
-    if (keys === 1) keyConcurrency.delete(keyId); else keyConcurrency.set(keyId, keys - 1);
-    const users = userConcurrency.get(userId)!;
-    if (users === 1) userConcurrency.delete(userId); else userConcurrency.set(userId, users - 1);
-    totalUpstreamInFlight--;
-  } };
+    const keys = (keyConcurrency.get(keyId) ?? 1) - 1;
+    if (keys <= 0) keyConcurrency.delete(keyId); else keyConcurrency.set(keyId, keys);
+    const users = (userConcurrency.get(userId) ?? 1) - 1;
+    if (users <= 0) userConcurrency.delete(userId); else userConcurrency.set(userId, users);
+    totalUpstreamInFlight = Math.max(0, totalUpstreamInFlight - 1);
+    pump();
+  };
+}
+
+/** Settle one waiter exactly once (timer, abort and dispatch all race here). */
+function finish(waiter: Waiter, result: Admission): void {
+  const index = waiters.indexOf(waiter);
+  if (index < 0) return; // already settled by another path
+  waiters.splice(index, 1);
+  queuedBytes = Math.max(0, queuedBytes - waiter.bytes);
+  clearTimeout(waiter.timer);
+  if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
+  waiter.settle(result);
+}
+
+/**
+ * Dispatch freed capacity strictly in arrival order: the oldest waiter that
+ * still fits goes first. A waiter blocked by its own key/account ceiling keeps
+ * its place in line without stalling unrelated requests behind it.
+ */
+function pump(): void {
+  if (waiters.length === 0) return;
+  let index = 0;
+  while (index < waiters.length) {
+    const waiter = waiters[index]!;
+    const release = tryTake(waiter.keyId, waiter.userId, waiter.limits);
+    if (!release) {
+      index++;
+      continue;
+    }
+    waiters.splice(index, 1);
+    queuedBytes = Math.max(0, queuedBytes - waiter.bytes);
+    clearTimeout(waiter.timer);
+    if (waiter.signal && waiter.onAbort) waiter.signal.removeEventListener("abort", waiter.onAbort);
+    waiter.settle({ ok: true, release });
+  }
+}
+
+function deadlineRetryAfter(deadlineMs: number): number {
+  return Math.max(1, Math.ceil(deadlineMs / 1000));
+}
+
+/**
+ * Admit one upstream call. Returns immediately when a slot is free, otherwise
+ * queues the request until a slot frees or the deadline expires. The queue is
+ * length- and byte-bounded: overflow is rejected instead of growing without
+ * limit, and the same 429 is returned when the deadline passes.
+ */
+export async function admitUpstream(
+  keyId: string,
+  userId: string,
+  limits: AdmissionLimits,
+  wait: AdmissionWait,
+): Promise<Admission> {
+  if (wait.signal?.aborted) return { ok: false, reason: "aborted", retryAfter: 1 };
+
+  const immediate = tryTake(keyId, userId, limits);
+  if (immediate) return { ok: true, release: immediate };
+
+  const blocked = blockingReason(keyId, userId, limits) ?? "global";
+  const bytes = Math.max(0, wait.bytes ?? 0);
+  if (wait.deadlineMs <= 0) return { ok: false, reason: blocked, retryAfter: 1 };
+  if (waiters.length >= Math.max(1, wait.maxQueue) || queuedBytes + bytes > wait.maxQueueBytes) {
+    // The queue itself is the denied dimension: retrying with a doomed key
+    // would only burn the client's deadline.
+    return { ok: false, reason: "queue", retryAfter: deadlineRetryAfter(wait.deadlineMs) };
+  }
+
+  return new Promise<Admission>((settle) => {
+    const waiter: Waiter = {
+      keyId,
+      userId,
+      limits,
+      bytes,
+      timer: setTimeout(() => finish(waiter, {
+        ok: false,
+        // Re-evaluate at expiry: the dimension the client should back off from
+        // is the one still blocking it, not necessarily the one that queued it.
+        reason: blockingReason(waiter.keyId, waiter.userId, waiter.limits) ?? "queue",
+        retryAfter: deadlineRetryAfter(wait.deadlineMs),
+      }), wait.deadlineMs),
+      settle,
+      signal: wait.signal,
+    };
+    waiter.timer.unref?.();
+    if (wait.signal) {
+      waiter.onAbort = () => finish(waiter, { ok: false, reason: "aborted", retryAfter: 1 });
+      wait.signal.addEventListener("abort", waiter.onAbort, { once: true });
+    }
+    waiters.push(waiter);
+    queuedBytes += bytes;
+    if (waiters.length > peakQueued) peakQueued = waiters.length;
+  });
+}
+
+/** Queue depth and slot occupancy for observability (/api/ready). */
+export function admissionSnapshot(): { inFlight: number; queued: number; queuedBytes: number; peakQueued: number; maxQueued: number } {
+  return {
+    inFlight: totalUpstreamInFlight,
+    queued: waiters.length,
+    queuedBytes,
+    peakQueued,
+    maxQueued: LIMITS.admissionQueueMax,
+  };
 }

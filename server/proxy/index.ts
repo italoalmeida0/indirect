@@ -1,10 +1,11 @@
 import { LIMITS } from "../config";
 import { stmts, audit, isSqliteBusy, parseStripParams, type AuthStyle, type Proto } from "../db";
 import { randomToken, sha256Hex } from "../crypto";
-import { ApiError, clientIp, baseHeaders } from "../http";
+import { ApiError, applyRateLimitHeaders, clientIp, baseHeaders } from "../http";
 import { countRequestTokens, splitKvInput } from "../tokens";
 import {
-  acquireUpstreamSlot,
+  admissionSnapshot,
+  admitUpstream,
   keyRpmHit,
   userRpmHit,
   limits,
@@ -169,11 +170,11 @@ function envelopeError(proto: Proto, status: number, message: string, type?: str
   );
 }
 
-export function proxyRateLimit(req: Request, url: URL, retryAfter: number, message = "rate limit exceeded"): Response {
+export function proxyRateLimit(req: Request, url: URL, retryAfter: number, message = "rate limit exceeded", queueDepth?: number): Response {
   const route = matchRoute(url.pathname, req.method, req);
-  const response = envelopeError(route.match?.proto ?? route.hint, 429, message, "rate_limit_error", req);
-  response.headers.set("Retry-After", String(Math.max(1, Math.ceil(retryAfter))));
-  return response;
+  const proto = route.match?.proto ?? route.hint;
+  const response = envelopeError(proto, 429, message, "rate_limit_error", req);
+  return applyRateLimitHeaders(response, retryAfter, queueDepth);
 }
 
 export function proxyStorageUnavailable(req: Request, url: URL): Response {
@@ -186,7 +187,16 @@ export function proxyStorageUnavailable(req: Request, url: URL): Response {
 export function proxyRequestError(req: Request, url: URL, status: number, message: string, code?: string): Response {
   const route = matchRoute(url.pathname, req.method, req);
   const type = status === 401 ? "authentication_error" : status === 429 ? "rate_limit_error" : status >= 500 ? "api_error" : "invalid_request_error";
-  return envelopeError(route.match?.proto ?? route.hint, status, message, type, req, code);
+  const response = envelopeError(route.match?.proto ?? route.hint, status, message, type, req, code);
+  // Contract: every 429 leaving the proxy surface carries Retry-After.
+  if (status === 429) response.headers.set("Retry-After", "1");
+  return response;
+}
+
+/** Whole seconds until the next 00:00 UTC (daily USD caps reset there). */
+function secondsUntilUtcMidnight(now = Date.now()): number {
+  const day = 24 * 60 * 60 * 1000;
+  return Math.max(1, Math.ceil((Math.floor(now / day) * day + day - now) / 1000));
 }
 
 // ===== Failover observability (per-provider-key stats, write-light) =====
@@ -865,7 +875,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       daily_limit: "daily USD spending limit exhausted (resets at 00:00 UTC)",
       total_limit: "lifetime USD spending limit exhausted",
     };
-    return envelopeError(proto, 429, messages[availability.reason], "rate_limit_error", req);
+    // Every 429 on the proxy surface carries Retry-After: a daily cap really
+    // does reset at 00:00 UTC, the others need an administrator (1s keeps the
+    // header contract without inviting a tight retry loop).
+    const response = envelopeError(proto, 429, messages[availability.reason], "rate_limit_error", req);
+    response.headers.set("Retry-After", String(availability.reason === "daily_limit" ? secondsUntilUtcMidnight() : 1));
+    return response;
   }
 
   // Owner must be an active user.
@@ -881,19 +896,50 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
   }
 
   // ---- account and per-key rate + concurrency ----
+  // Per-key RPM stays exactly as before; the account ceiling sits above it so
+  // extra keys can never buy more of the shared gateway. The denied dimension
+  // ("account" / "key" / "gateway") is always named in the message.
   const userRetry = userRpmHit(keyRow.user_id);
   if (userRetry > 0) {
-    return proxyRateLimit(req, url, userRetry, `account rate limit exceeded, retry in ${userRetry}s`);
+    return proxyRateLimit(req, url, userRetry, `account rate limit exceeded (${LIMITS.userRpm} req/min across all keys), retry in ${userRetry}s`);
   }
   const rpm = keyRow.rpm ?? LIMITS.defaultKeyRpm;
   const rpmRetry = keyRpmHit(keyRow.id, rpm);
   if (rpmRetry > 0) {
-    return proxyRateLimit(req, url, rpmRetry, `rate limit exceeded (${rpm} req/min), retry in ${rpmRetry}s`);
+    return proxyRateLimit(req, url, rpmRetry, `key rate limit exceeded (${rpm} req/min), retry in ${rpmRetry}s`);
   }
-  const slot = acquireUpstreamSlot(keyRow.id, keyRow.user_id, LIMITS.defaultKeyConcurrency);
+  // Concurrency ceilings (gateway -> account -> key) go through the bounded
+  // admission queue: a short burst waits for a slot instead of failing at
+  // once; past the deadline the caller still gets a 429 with Retry-After.
+  const slot = await admitUpstream(
+    keyRow.id,
+    keyRow.user_id,
+    {
+      perKey: LIMITS.defaultKeyConcurrency,
+      perUser: LIMITS.userConcurrency,
+      global: LIMITS.globalConcurrency,
+    },
+    {
+      deadlineMs: LIMITS.admissionWaitMs,
+      maxQueue: LIMITS.admissionQueueMax,
+      maxQueueBytes: LIMITS.admissionQueueBytes,
+      bytes: Number(req.headers.get("content-length") || 0) || 0,
+      signal: req.signal,
+    },
+  );
   if (!slot.ok) {
-    const message = slot.reason === "user" ? "too many concurrent requests for this account" : slot.reason === "key" ? "too many concurrent requests for this key" : "gateway concurrency limit reached";
-    return proxyRateLimit(req, url, 1, message);
+    if (slot.reason === "aborted") {
+      return envelopeError(proto, 499, "client disconnected", "api_error", req);
+    }
+    const message =
+      slot.reason === "user"
+        ? `account concurrency limit reached (${LIMITS.userConcurrency} concurrent across all keys)`
+        : slot.reason === "key"
+          ? `key concurrency limit reached (${LIMITS.defaultKeyConcurrency} concurrent for this key)`
+          : slot.reason === "queue"
+            ? "admission queue is full, retry shortly"
+            : `gateway concurrency limit reached (${LIMITS.globalConcurrency} concurrent)`;
+    return proxyRateLimit(req, url, slot.retryAfter, message, admissionSnapshot().queued);
   }
 
   // Slot released exactly once, whatever happens below.
@@ -923,6 +969,8 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
 
   try {
     // ---- read + validate body (GET /models has none) ----
+    // Reading happens INSIDE the try so every early return releases the slot
+    // through the finally below (an unread body is not an admission slot).
     let bodyText = "";
     let bodyJson: Record<string, unknown> | null = null;
     if (req.method === "POST") {
@@ -1524,7 +1572,13 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         const onClientAbortStream = () => reader.cancel().catch(() => {});
         req.signal.addEventListener("abort", onClientAbortStream, { once: true });
 
+        // Idempotent by construction: every terminal path (stream end, upstream
+        // error, client cancel, disconnect after the response started) funnels
+        // here, so the concurrency slot is released exactly once.
+        let cleanedUp = false;
         const cleanup = () => {
+          if (cleanedUp) return;
+          cleanedUp = true;
           resetIdle(true);
           translator.dispose();
           req.signal.removeEventListener("abort", onClientAbortStream);
@@ -1544,6 +1598,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           // (true pass-through pacing) and memory stays bounded by in-flight
           // chunks — never by the whole response.
           async pull(sink) {
+            // Already finished (upstream done, cancelled, or client gone):
+            // release the reader and close, never re-enter the pump.
+            if (cleanedUp) {
+              closeSink(sink);
+              return;
+            }
             try {
               const { done, value } = await reader.read();
               if (done) {

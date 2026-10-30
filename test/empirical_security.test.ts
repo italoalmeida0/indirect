@@ -227,17 +227,26 @@ describe("Empirical Security Audit Tests", () => {
   });
 
   test("2.2 one account cannot exhaust global upstream slots with many keys", async () => {
-    const { acquireUpstreamSlot } = await import("../server/ratelimit");
+    const { admitUpstream } = await import("../server/ratelimit");
+    const limits = { perKey: 16, perUser: 32, global: 256 };
+    // deadlineMs 0 = reject immediately instead of waiting in the admission
+    // queue, so this measures the ceiling itself.
+    const noWait = { deadlineMs: 0, maxQueue: 1, maxQueueBytes: 0 };
     const releases: Array<() => void> = [];
     for (let i = 0; i < 256; i++) {
-      const slot = acquireUpstreamSlot(`key-${i}`, "one-user", 16, 32, 256);
+      const slot = await admitUpstream(`key-${i}`, "one-user", limits, noWait);
       if (slot.ok) releases.push(slot.release);
     }
+    // 256 keys buy nothing: the account ceiling still stops at 32.
     expect(releases).toHaveLength(32);
-    const innocent = acquireUpstreamSlot("innocent-key", "another-user", 16, 32, 256);
+    const innocent = await admitUpstream("innocent-key", "another-user", limits, noWait);
     expect(innocent.ok).toBe(true);
     if (innocent.ok) { innocent.release(); innocent.release(); }
     for (const release of releases) release();
+    // Every slot came back: the shared gateway is not permanently drained.
+    const after = await admitUpstream("innocent-key", "another-user", { perKey: 256, perUser: 256, global: 256 }, noWait);
+    expect(after.ok).toBe(true);
+    if (after.ok) after.release();
   });
 
   // VETOR 3: SERVER CRASH / DOS

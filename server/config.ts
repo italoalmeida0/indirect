@@ -6,6 +6,7 @@ import {
   chmodSync,
 } from "fs";
 import path from "path";
+import { availableParallelism } from "node:os";
 
 /**
  * Central configuration. Everything comes from env, all optional knobs have
@@ -88,18 +89,65 @@ function positiveLimit(name: string, fallback: number): number {
   return value;
 }
 
+function boundedLimit(name: string, fallback: number, maximum: number): number {
+  const value = positiveLimit(name, fallback);
+  if (value > maximum) throw new Error(`${name} must be at most ${maximum}`);
+  return value;
+}
+
 export const LIMITS = {
   /** Bound synchronous SQLite lock waits so the event loop remains responsive. */
   sqliteBusyTimeoutMs: positiveLimit("SQLITE_BUSY_TIMEOUT_MS", 25),
+  analyticsReaders: boundedLimit("ANALYTICS_READERS", Math.min(8, Math.max(2, Math.ceil(availableParallelism() * 2 / 3))), 16),
+  analyticsPending: boundedLimit("ANALYTICS_PENDING", 256, 4096),
+  analyticsDeadlineMs: positiveLimit("ANALYTICS_DEADLINE_MS", 5000),
+  analyticsHourlyDays: boundedLimit("ANALYTICS_HOURLY_DAYS", 90, 3650),
+  analyticsMinuteDays: boundedLimit("ANALYTICS_MINUTE_DAYS", 3, 365),
+
+  /** Periodic cleanup runs bounded batches so a single DELETE never holds the
+   *  writer long enough to starve the proxy (see server/batch-delete.ts). */
+  maintenanceBatchSize: boundedLimit("MAINTENANCE_BATCH_SIZE", 500, 100_000),
+  /** Safety valve: rows removed by one scheduled cleanup run. */
+  maintenanceMaxBatchRows: boundedLimit("MAINTENANCE_MAX_BATCH_ROWS", 50_000, 1_000_000),
+
+  /**
+   * Supported backup (server/backup.ts). An empty directory means
+   * `<DATA_DIR>/backups`. Scheduling is disabled with
+   * BACKUP_INTERVAL_MINUTES=0; manual runs stay available.
+   */
+  backupDir: process.env.BACKUP_DIR || "",
+  backupIntervalMinutes: Number(process.env.BACKUP_INTERVAL_MINUTES ?? 24 * 60),
+  /** Retention: completed snapshots kept per bucket, newest first. */
+  backupKeepDaily: boundedLimit("BACKUP_KEEP_DAILY", 14, 3650),
+  backupKeepWeekly: boundedLimit("BACKUP_KEEP_WEEKLY", 8, 520),
+  /** Copy Indirect Code daemon data directories into the snapshot. */
+  backupIncludeDaemon: process.env.BACKUP_INCLUDE_DAEMON === "true",
+  /** Extra daemon data directories to copy when the copy is enabled. */
+  backupDaemonDirs: (process.env.BACKUP_DAEMON_DIRS || "").split(",").map((s) => s.trim()).filter(Boolean),
   /** body caps */
   authBodyBytes: Number(process.env.LIMIT_AUTH_BODY_BYTES || 16 * 1024),
   apiBodyBytes: Number(process.env.LIMIT_API_BODY_BYTES || 256 * 1024),
   proxyBodyBytes: Number(process.env.LIMIT_PROXY_BODY_BYTES || 4 * 1024 * 1024),
 
-  /** global per-IP token bucket */
-  ipPerMin: positiveLimit("LIMIT_IP_PER_MIN", 30_000),
-  /** stricter buckets for credential endpoints */
-  authPerMinPerIp: positiveLimit("LIMIT_AUTH_PER_MIN", 1_000),
+  /**
+   * Global per-IP token bucket shared by every dashboard and proxy route.
+   * Office, VPN and CGNAT egress put hundreds of employees behind one
+   * address, and each open dashboard tab polls (billing every 30s, workspace
+   * status every 15s) on top of mutations and proxy calls. The default keeps
+   * a burst of 600 employees x a few concurrent tabs far below the ceiling:
+   * 60_000/min is ~1_000 req/s from one address, which no legitimate polling
+   * pattern reaches, while still bounding a flood from a single source.
+   * Liveness (/api/health) and readiness (/api/ready) never consume it.
+   */
+  ipPerMin: positiveLimit("LIMIT_IP_PER_MIN", 60_000),
+  /**
+   * Credential endpoints (login, 2FA, Google sign-in) get their own bucket.
+   * Must stay far above a real office morning: 500 employees signing in
+   * within one minute is 500 requests, and a retry storm doubles or triples
+   * that. The brute-force guards (per-account lockout, per-IP spray bucket)
+   * are what stop a real attack, not this availability bucket.
+   */
+  authPerMinPerIp: positiveLimit("LIMIT_AUTH_PER_MIN", 6_000),
   resetPer10MinPerIp: positiveLimit("LIMIT_RESET_PER_10MIN", 1_000),
 
   /** brute force: N failures in window -> lockout (per account) */
@@ -117,10 +165,31 @@ export const LIMITS = {
   /** defaults applied when a key leaves them empty */
   defaultKeyRpm: Number(process.env.DEFAULT_KEY_RPM || 120),
   defaultKeyConcurrency: Number(process.env.DEFAULT_KEY_CONCURRENCY || 16),
-  /** Administrator ceilings apply across all of an account's keys. */
+  /**
+   * Account ceilings apply across ALL keys of one account, so creating more
+   * keys never buys more of the shared gateway. Both are per running process
+   * and cannot be raised by the key owner; per-key limits still apply on top.
+   */
   userRpm: positiveLimit("LIMIT_USER_RPM", 600),
   userConcurrency: positiveLimit("LIMIT_USER_CONCURRENCY", 32),
-  globalConcurrency: positiveLimit("LIMIT_GLOBAL_CONCURRENCY", 256),
+  /**
+   * Whole-gateway ceiling on concurrent upstream calls. Sized for the
+   * 500-employee envelope: one person rarely runs more than one turn at a
+   * time, so 512 leaves headroom for a company-wide burst while still
+   * bounding upstream connection use.
+   */
+  globalConcurrency: positiveLimit("LIMIT_GLOBAL_CONCURRENCY", 512),
+  /**
+   * Bounded admission queue in front of the concurrency ceilings: a request
+   * that would exceed a ceiling waits up to the deadline instead of failing
+   * immediately, and is released FIFO when a slot frees. The deadline is
+   * short enough to feel instant to a client that would otherwise get a 429.
+   * maxBytes caps the declared request bytes waiting at once, so a burst of
+   * large uploads cannot pin the queue in memory.
+   */
+  admissionWaitMs: positiveLimit("LIMIT_ADMISSION_WAIT_MS", 400),
+  admissionQueueMax: positiveLimit("LIMIT_ADMISSION_QUEUE_MAX", 1_024),
+  admissionQueueBytes: positiveLimit("LIMIT_ADMISSION_QUEUE_BYTES", 64 * 1024 * 1024),
 
   /** upstream behavior */
   upstreamTimeoutMs: Number(process.env.UPSTREAM_TIMEOUT_MS || 120_000),
