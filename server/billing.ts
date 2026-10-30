@@ -293,6 +293,8 @@ export function startBilling(): void {
     if (!isRetryableSqliteError(error)) throw error;
     console.error("[BILLING] startup maintenance deferred:", error instanceof Error ? error.message : "unknown error");
   }
+  // maintenanceBatchSize keeps each job's lock hold short, and recovery already
+  // runs its cleanup outside the settlement transaction.
   scheduleMaintenance("billing heartbeat", () => { heartbeat(); }, 15_000);
   scheduleMaintenance("billing recovery", () => { recoverBudgets(); }, 60_000);
 }
