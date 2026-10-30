@@ -1,5 +1,4 @@
 import { afterAll, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import path from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,11 +19,10 @@ function freshDb() {
   const dir = mkdtempSync(path.join(tmpdir(), "retention-"));
   dirs.push(dir);
   process.env.DATA_DIR = dir;
-  return dir;
 }
 
 test("retention removes only complete days older than the window and advances the watermark", async () => {
-  const dir = freshDb();
+  freshDb();
   const { db } = await import("../server/db");
   const { pruneUsageEvents } = await import("../server/usage-rollup");
 
@@ -63,7 +61,7 @@ test("retention removes only complete days older than the window and advances th
 }, 90_000);
 
 test("retention deletes in bounded batches and can be disabled", async () => {
-  const dir = freshDb();
+  freshDb();
   const { db } = await import("../server/db");
   const { pruneUsageEvents } = await import("../server/usage-rollup");
   const today = Math.floor(Date.now() / DAY) * DAY;
@@ -80,14 +78,14 @@ test("retention deletes in bounded batches and can be disabled", async () => {
   expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_events").get()!.n).toBe(0);
 
   // Disabled (0 days) prunes nothing at all.
-  const before = db.prepare("UPDATE usage_rollup_coverage SET raw_from = 0 WHERE id = 1").run();
+  db.prepare("UPDATE usage_rollup_coverage SET raw_from = 0 WHERE id = 1").run();
   db.prepare("INSERT INTO usage_events (key_id,user_id,ts,proto,model,in_tok,out_tok,latency_ms,status,stream,estimated) VALUES ('k','u',?,'openai','m',1,1,10,200,0,0)").run(today - 40 * DAY);
   expect(pruneUsageEvents(db, Date.now(), 0, 10).deleted).toBe(0);
   expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_events").get()!.n).toBe(1);
 }, 90_000);
 
 test("aggregates survive the pruning of their detail", async () => {
-  const dir = freshDb();
+  freshDb();
   const { db } = await import("../server/db");
   const { pruneUsageEvents } = await import("../server/usage-rollup");
   const today = Math.floor(Date.now() / DAY) * DAY;

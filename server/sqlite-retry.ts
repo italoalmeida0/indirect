@@ -1,5 +1,3 @@
-import { isSqliteBusy } from "./db";
-
 /**
  * Shared retry policy for transient SQLite contention.
  *
@@ -71,7 +69,13 @@ export const SQLITE_RETRY_DEFAULTS = {
 
 /** True when the error is transient SQLite contention, never for anything else. */
 export function isRetryableSqliteError(error: unknown): boolean {
-  return isSqliteBusy(error);
+  if (!error || typeof error !== "object") return false;
+  const value = error as { code?: unknown; errno?: unknown };
+  return (
+    (typeof value.code === "string" && (value.code.startsWith("SQLITE_BUSY") || value.code.startsWith("SQLITE_LOCKED"))) ||
+    value.errno === 5 ||
+    value.errno === 6
+  );
 }
 
 /** Exponential backoff with equal jitter: delay/2 + random * delay/2. */

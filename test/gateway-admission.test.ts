@@ -484,7 +484,13 @@ test("the admission queue never leaks a slot after aborts, errors or stream ends
     // Either the fetch itself rejects (headers not consumed yet) or the body
     // read fails; both prove the client walked away mid-stream.
     const abandoned = await streaming;
-    if (abandoned) expect(() => abandoned.body!.getReader().read()).not.toThrow();
+    if (abandoned?.body) {
+      const outcome = await abandoned.body.getReader().read().then(
+        () => "eof",
+        (error: unknown) => (error instanceof Error ? error.name : String(error)),
+      );
+      expect(["eof", "AbortError"]).toContain(outcome);
+    }
     gates.splice(0).forEach((resolve) => resolve());
     await expectFree(key);
 

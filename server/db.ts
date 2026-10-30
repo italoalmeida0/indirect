@@ -5,6 +5,7 @@ import { isMainThread, workerData } from "node:worker_threads";
 import { DATA_DIR, LIMITS } from "./config";
 import { normalizePricing, pricingColumns } from "./pricing";
 import { currentRequestId } from "./request-context";
+import { isRetryableSqliteError } from "./sqlite-retry";
 
 /**
  * SQLite via bun:sqlite (built into the runtime, WAL mode). Migrations are
@@ -21,9 +22,7 @@ db.exec(`PRAGMA busy_timeout = ${LIMITS.sqliteBusyTimeoutMs}`);
 
 /** SQLite exposes extended busy/locked codes in some Bun versions. */
 export function isSqliteBusy(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value = error as { code?: unknown; errno?: unknown };
-  return typeof value.code === "string" && (value.code.startsWith("SQLITE_BUSY") || value.code.startsWith("SQLITE_LOCKED")) || value.errno === 5 || value.errno === 6;
+  return isRetryableSqliteError(error);
 }
 
 type Migration = { name: string; up: string | (() => void) };

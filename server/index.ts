@@ -278,7 +278,6 @@ async function handleRequest(req: Request, server: Server<WsData>, url: URL): Pr
       return (await route(req, server)) ?? new Response(null, { status: 204 });
     } catch (e) {
       if (req.signal.aborted) return new Response(null, { status: 499 });
-      const url = new URL(req.url);
       const isProxy = /^\/(?:v1|openai\/v1|anthropic\/v1)(?:\/|$)/.test(url.pathname);
       if (e instanceof ApiError) {
         const response = isProxy ? proxyRequestError(req, url, e.status, e.message, e.code) : err(e.status, e.message, req, e.code);

@@ -38,9 +38,12 @@ export async function removeTree(dir: string): Promise<void> {
       rmSync(dir, { recursive: true, force: true, maxRetries: 2, retryDelay: 20 });
       return;
     } catch (error) {
+      // Force Bun's GC to finalize any lingering bun:sqlite Statement wrappers
+      // so sqlite3_close_v2 releases Windows WAL/SHM file handles immediately.
+      try { Bun.gc(true); } catch {}
       if (attempt === 19) {
         const child = Bun.spawn(
-          [process.execPath, "-e", "require('node:fs').rmSync(process.argv[1],{recursive:true,force:true,maxRetries:20,retryDelay:50})", dir],
+          [process.execPath, "-e", "require('node:fs').rmSync(process.argv[1],{recursive:true,force:true,maxRetries:40,retryDelay:50})", dir],
           { stdout: "ignore", stderr: "pipe" },
         );
         const code = await child.exited;

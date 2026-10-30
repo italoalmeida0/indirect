@@ -157,7 +157,14 @@ describe("withSqliteRetry", () => {
       reader.releaseLock();
       const started = Date.now();
       const result = withSqliteRetry(
-        () => db.prepare("INSERT INTO rows(ts) VALUES (?)").run(Date.now()).changes,
+        () => {
+          const stmt = db.prepare("INSERT INTO rows(ts) VALUES (?)");
+          try {
+            return stmt.run(Date.now()).changes;
+          } finally {
+            stmt.finalize();
+          }
+        },
         { attempts: 20, deadlineMs: 10_000, baseDelayMs: 20, maxDelayMs: 120, name: "live" },
       );
       await holder.exited;
@@ -219,7 +226,11 @@ describe("batchDelete", () => {
   function seed(name: string, rows: number): { db: Database; dir: string } {
     const fixture = fixtureDatabase(name);
     const insert = fixture.db.prepare("INSERT INTO rows(ts) VALUES (?)");
-    fixture.db.transaction(() => { for (let i = 0; i < rows; i++) insert.run(i); })();
+    try {
+      fixture.db.transaction(() => { for (let i = 0; i < rows; i++) insert.run(i); })();
+    } finally {
+      insert.finalize();
+    }
     return fixture;
   }
 
@@ -256,9 +267,13 @@ describe("batchDelete", () => {
     const { db, dir } = fixtureDatabase("batch-composite");
     db.exec("CREATE TABLE composite (bucket INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(bucket, key)) WITHOUT ROWID");
     const insert = db.prepare("INSERT INTO composite(bucket, key) VALUES (?, ?)");
-    db.transaction(() => {
-      for (let bucket = 0; bucket < 10; bucket++) for (let key = 0; key < 50; key++) insert.run(bucket, "k" + key);
-    })();
+    try {
+      db.transaction(() => {
+        for (let bucket = 0; bucket < 10; bucket++) for (let key = 0; key < 50; key++) insert.run(bucket, "k" + key);
+      })();
+    } finally {
+      insert.finalize();
+    }
     try {
       const result = batchDeleteComposite({ db, table: "composite", keys: ["bucket", "key"], where: "bucket < ?", params: [7], batchSize: 100 });
       expect(result.deleted).toBe(350);
