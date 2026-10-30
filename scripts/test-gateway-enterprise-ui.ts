@@ -187,7 +187,9 @@ try {
     // Per-page thresholds: an overall p99 lets one slow screen hide behind two
     // fast ones, and the agreed target is per measured interaction.
     for (const entry of result.byRoute) {
-      assert(entry.count * cases.length >= samples, `${entry.route} did not receive a full share of interactions`);
+      // Each page gets its even share of the interactions; samples do not
+      // always divide by the number of pages, so allow the rounded-down share.
+      assert(entry.count >= Math.floor(samples / cases.length), `${entry.route} did not receive a full share of interactions`);
       assert(entry.p99 <= 1000, `${entry.route} p99=${entry.p99.toFixed(1)}ms exceeds 1000ms`);
     }
     assert(result.distribution.p99 <= 1000, `frontend p99=${result.distribution.p99.toFixed(1)}ms exceeds 1000ms`);

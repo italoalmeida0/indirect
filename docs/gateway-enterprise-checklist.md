@@ -48,6 +48,16 @@ qualified merely because its code exists. The detailed scope is in
   ten-year or one-year dashboard request exceeded the 5,000 ms analytics job
   budget and answered `503 "Analytics is busy"`; after it, ten-year stats answer
   in ~690 ms and every ordinary window succeeds.
+- [x] **Frontend interaction target met.** Enforced run
+  (`--enforce-p99`, 1,000 interactions, production SPA, real gateway, loopback,
+  Chromium 153.0.8010.12): p50 474.5 ms, p95 647.6 ms, **p99 701.3 ms** against
+  the 1,000 ms target, 0 failed interactions and 0 runtime errors. Per page p99:
+  `/` 400, `/usage` 731, `/admin/stats` 579 ms. The interaction starts at the
+  document navigation and ends after the target API responded, the populated
+  page reported `aria-busy=false` and two animation frames elapsed. Fixture: the
+  six-user correctness fixture (900 represented requests), not the delivered
+  retention profile — so this qualifies the browser path, not the
+  administrative aggregate cost measured below.
 
 ## Gates recorded on the current source revision
 
@@ -124,19 +134,21 @@ aggregates: closing it needs a global (user-independent) daily rollup for
 administrative charts, because at 500 users a cross-user bucket reads 500 times
 the rows of a personal one.
 
-**Verdict: one of the three agreed targets is met on this host.** Gateway-added
-API latency passes at p99 69.3 ms; dashboard APIs (2,355 ms) and the 50-user
-burst (1,431 ms) do not. Two defects behind the worst of it were found and fixed
-in this round — long windows now read monthly rollups instead of the daily table
-(`USAGE_MONTHLY_CHART_SPAN`), which removed every `503 "Analytics is busy"` from
-ordinary windows and took ten-year stats from >5,000 ms to ~690 ms, and the
-fixture now seeds hour rollups the way live ingestion does, because a fixture
-without them made every recent window scan raw events. What remains is
-cross-user aggregate cost on the two administrative endpoints and admission
-queueing under a 50-way burst; closing it needs a user-independent daily rollup
-for administrative charts (a cross-user bucket reads 500x the rows of a personal
-one) and a dedicated pass on burst admission, or qualification on the intended
-server hardware.
+**Verdict: two of the four agreed measurements pass on this host.** Gateway-added
+API latency passes at p99 69.3 ms (target 100 ms) and the frontend interaction
+target passes at p99 701.3 ms (target 1,000 ms). The dashboard API target
+(2,355 ms) and the 50-user burst (1,431 ms) do not. Two defects behind the worst
+of it were found and fixed in this round — long windows now read monthly rollups
+instead of the daily table (`USAGE_MONTHLY_CHART_SPAN`), which removed every
+`503 "Analytics is busy"` from ordinary windows and took ten-year stats from
+>5,000 ms to ~690 ms, and the fixture now seeds hour rollups the way live
+ingestion does, because a fixture without them made every recent window scan raw
+events. What remains is cross-user aggregate cost on the two administrative
+endpoints and queueing during the 50-way burst; closing it needs a
+user-independent daily rollup for administrative charts (a cross-user bucket
+reads 500x the rows of a personal one), a coarser per-user daily rollup for the
+people chart, and a dedicated pass on burst admission, or qualification on the
+intended server hardware.
 
 ## Not verified — must not be reported as passing
 
