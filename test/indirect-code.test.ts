@@ -398,7 +398,7 @@ describe("Indirect Code Relay and Pairing", () => {
     const daemonData = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-test-"));
     const workDir = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-work-"));
 
-    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin/indirect-code");
+    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin", process.platform === "win32" ? "indirect-code.exe" : "indirect-code");
 
     // Spawn Go daemon
     const daemonSubproc = Bun.spawn(
@@ -508,7 +508,7 @@ describe("Indirect Code Relay and Pairing", () => {
 
     const daemonData = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-test2-"));
     const workDir = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-work2-"));
-    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin/indirect-code");
+    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin", process.platform === "win32" ? "indirect-code.exe" : "indirect-code");
     const daemonSubproc = Bun.spawn(
       [daemonBin, "--worker", "--connect", pairJson.connectUrl, "--data-dir", daemonData, "--name", "Feature Daemon"],
       { stdout: "inherit", stderr: "inherit" },
@@ -695,8 +695,11 @@ describe("Indirect Code Relay and Pairing", () => {
 
       // Nested session inside the project tree (cwd = <workDir>/sub)
       mkdirSync(path.join(workDir, "sub"));
-      send({ type: "create_session", cwd: `${workDir}/sub`, title: "Nested", model: "gpt-4o" });
-      const nestedCreated = await waitFor((m) => m.type === "session_created" && m.session.cwd === `${workDir}/sub`);
+      // The daemon normalizes cwd with the PLATFORM separator, so compare
+      // against path.join rather than a literal forward slash: on Windows
+      // "C:/x/sub" arrives as "C:\x\sub" and an exact string match never fires.
+      send({ type: "create_session", cwd: path.join(workDir, "sub"), title: "Nested", model: "gpt-4o" });
+      const nestedCreated = await waitFor((m) => m.type === "session_created" && m.session.cwd === path.join(workDir, "sub"));
       const nestedSid = nestedCreated.session.id;
       send({ type: "upload_attachment", sessionId: nestedSid, name: "nested.txt", mime: "text/plain", data: helloB64, requestId: "ua_test_2" });
       await waitFor((m) => m.type === "attachment_uploaded" && m.sessionId === nestedSid);
@@ -765,7 +768,7 @@ describe("Indirect Code Relay and Pairing", () => {
 
     const daemonData = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-dedup-"));
     const workDir = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-dedup-work-"));
-    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin/indirect-code");
+    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin", process.platform === "win32" ? "indirect-code.exe" : "indirect-code");
     const daemonSubproc = Bun.spawn(
       [daemonBin, "--worker", "--connect", pairJson.connectUrl, "--data-dir", daemonData, "--name", "Dedup Daemon"],
       { stdout: "inherit", stderr: "inherit" },
