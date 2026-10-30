@@ -84,8 +84,12 @@ describe("USD plans and enforcement over HTTP", () => {
     expect((await request("/api/keys", user)).data.keys[0].spendTotalUsd).toBeCloseTo(.000154, 9);
     await request("/api/admin/models/billing-model", admin, { pricing: { prompt: .000002, completion: .000006, input_cache_reads: .0000002, input_cache_writes: .000004 } }, "PATCH");
     expect((await status()).windows[0].spentUsd).toBeCloseTo(.000154, 9);
-    await Bun.sleep(1200);
-    const event = sql.query<any, [string]>("SELECT cost_in_nanos, cost_cache_nanos, cost_out_nanos FROM usage_events WHERE key_id = ? ORDER BY id DESC LIMIT 1").get(keyId)!;
+    let event: any;
+    for (let i = 0; i < 40; i++) {
+      await Bun.sleep(100);
+      event = sql.query<any, [string]>("SELECT cost_in_nanos, cost_cache_nanos, cost_out_nanos FROM usage_events WHERE key_id = ? ORDER BY id DESC LIMIT 1").get(keyId);
+      if (event) break;
+    }
     expect(event).toEqual({ cost_in_nanos: 60000, cost_cache_nanos: 4000, cost_out_nanos: 90000 });
     await request("/api/admin/models/billing-model", admin, { pricing: { prompt: .000001, completion: .000003, input_cache_reads: .0000001, input_cache_writes: .000002 } }, "PATCH");
   });

@@ -15,7 +15,7 @@ const BODY = "export const answer = 42;\n".repeat(4000);
 let server: ReturnType<typeof Bun.serve>;
 let base = "";
 
-beforeAll(() => {
+beforeAll(async () => {
   rmSync(ROOT, { recursive: true, force: true });
   mkdirSync(path.join(ROOT, "assets"), { recursive: true });
   writeFileSync(path.join(ROOT, "assets", "app.js"), BODY);
@@ -23,7 +23,7 @@ beforeAll(() => {
   writeFileSync(path.join(ROOT, "assets", "logo.png"), Buffer.alloc(4096, 7));
   writeFileSync(path.join(ROOT, "index.html"), "<!doctype html><title>indirect</title>");
   process.env.STATIC_DIR = ROOT;
-  const { serveStatic } = require("../server/static") as typeof import("../server/static");
+  const { serveStatic } = await import("../server/static");
   server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -130,5 +130,13 @@ describe("static delivery", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-cache");
     expect(response.headers.get("content-type")).toContain("text/html");
+  });
+
+  test("compression cache accounting and reset", async () => {
+    const { compressionCacheStats, resetCompressionCache, COMPRESSION_LIMITS } = await import("../server/compression");
+    expect(COMPRESSION_LIMITS.MIN_BYTES).toBeGreaterThan(0);
+    expect(compressionCacheStats().entries).toBeGreaterThan(0);
+    resetCompressionCache();
+    expect(compressionCacheStats().entries).toBe(0);
   });
 });

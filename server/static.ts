@@ -1,5 +1,4 @@
 import { existsSync, statSync } from "fs";
-import { createHash } from "node:crypto";
 import path from "path";
 
 import { compressedAsset, negotiateEncoding } from "./compression";
