@@ -480,3 +480,19 @@ qualify 400-day retention. Native ARM64 Bun 1.4.2 is available for a new local
 run; availability is not a passing measurement. A native Linux deployment
 needs its documented target-machine run. No ten-year reliability claim follows
 from a short soak or finite regression suite.
+
+A later native ARM64 run (Snapdragon X Elite, 12 cores, 16 GB, Bun 1.4.2
+arm64, quick profile: 500 users, two detailed days, 913,250,000 represented
+requests, 1,200 samples at 32/s) measured gateway-added API p99 270.7 ms with
+0/1,200 errors, dashboard p99 2,298.6 ms with 1/1,200 errors, and a 50-user
+burst p99 of 1,418.6 ms. Every non-administrative dashboard route stayed under
+210 ms p99; the entire overrun came from `/api/admin/stats` (1,945 ms) and
+`/api/admin/analytics` (5,006 ms, the single error), whose cross-user
+aggregates cost roughly 100–150k grouped rows/s on that laptop. Two defects
+found on the way are fixed: windows longer than four months now read the
+monthly rollup (which removed every `503 "Analytics is busy"` from ordinary
+windows and took ten-year stats from over 5,000 ms to ~690 ms), and the
+capacity fixture seeds hour rollups the way live ingestion does. The targets
+remain unmet on that host; the full distributions, per-route numbers and the
+remaining prerequisites are in
+[the validation checklist](gateway-enterprise-checklist.md).

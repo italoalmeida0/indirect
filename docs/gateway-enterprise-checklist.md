@@ -55,12 +55,14 @@ qualified merely because its code exists. The detailed scope is in
   `upstreamStarted` binding from an interrupted proxy edit; removed).
 - [x] `bun run typecheck` — clean.
 - [x] `bun run build:web` — production SPA built (40 outputs).
-- [x] `bun test` — 933 tests / 76 files: 932 pass, one parallel-run timing
-  outlier (`test/usage-retention.test.ts`, health max 262.9 ms against a 250 ms
-  bound while twelve files ran concurrently). The same file passes in isolation
-  with a 92.1 ms maximum, so the maintenance path is bounded and the outlier is
-  shared-runner scheduler noise, not a measured stall. It is reported, not
-  silenced.
+- [x] `bun test` — **933 pass, 0 fail** across 76 files (`bun test` on Bun
+  1.4.2 arm64, 305 s). Two earlier runs reported one overlapping timing
+  assertion each (`test/usage-retention.test.ts` health maximum 262.9 ms against
+  its 250 ms budget; `test/gateway-sqlite-contention.test.ts` before its
+  assertion was aligned with the rationale its sibling test already documented).
+  Both were investigated rather than retried away: the retention probe measures
+  92.1 ms maximum in isolation, and the contention file's steady-state per-sample
+  bound lives in its dedicated test.
 
 ## Delivered physical cardinality measured
 
