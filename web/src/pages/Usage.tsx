@@ -2,8 +2,9 @@ import { For, createEffect, on, createMemo, createResource, createSignal, onClea
 
 import { api } from "../api";
 import { AnalyticsToolbar, createAnalyticsFilters } from "../analytics-filters";
-import { PageTitle } from "../index";
+import { PageTitle } from "../chrome";
 import { createAnalyticsReport } from "../analytics-report";
+import { AnalyticsHistoryNotice, EventRetentionNotice } from "../analytics-history";
 import { AnalyticsSummary } from "../AnalyticsSummary";
 import { AnalyticsError, AnalyticsLoading, AnalyticsSection, ApiKeyUsageCard, CacheUsageChart, ModelUsageChart, RequestOutcomesChart } from "../AnalyticsCharts";
 import {
@@ -126,6 +127,7 @@ export default function UsagePage() {
       </div>
       <Show when={!report.error} fallback={<AnalyticsError retry={refetch} />}>
         <Show when={report()} fallback={<AnalyticsLoading />} keyed>{(data) => <>
+          <AnalyticsHistoryNotice history={data.history} previous={data.previousHistory} />
           <AnalyticsSection title="Spend" description="Understand your costs and the models behind them." />
           <AnalyticsSummary report={data} label={data.label} query={data.query} section="spend" />
           <ModelUsageChart modelColors={data.modelColors} data={data.modelSpend} metric="cost" period={data.label} onSelect={(id, label) => filters.toggle("model", "include", id, label)} />
@@ -143,6 +145,7 @@ export default function UsagePage() {
       </Show>
       <AnalyticsSection title="Request history" description="Inspect individual calls with the same date range and filters as your charts." />
       <Card class="usage-request-history">
+        <EventRetentionNotice history={report()?.history} />
           <CardHeader
             title="Recent requests"
             subtitle={eventCount.error ? "Request history is unavailable" : eventCount.loading ? "Loading…" : `${fmtNum(eventCount() ?? 0)} events`}

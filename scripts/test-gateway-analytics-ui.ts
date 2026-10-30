@@ -35,6 +35,7 @@ try {
   let failNext = false;
   let failEvents = false;
   let unknownStatuses = false;
+  let archived = false;
   const pending = new Set<() => void>();
   page.on("pageerror", (error: Error) => errors.push(String(error)));
   await page.addInitScript(() => {
@@ -81,6 +82,13 @@ try {
       if (failNext) { failNext = false; await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ success: false, error: "Analytics is busy" }) }); return; }
       const fixture = seriesFor(url);
       const report = analyticsFixture(fixture.series, url, url.pathname.startsWith("/api/admin"), fixture.unit);
+      if (archived) {
+        const to = Number(url.searchParams.get("to"));
+        const from = url.searchParams.get("from") === "all" ? null : Number(url.searchParams.get("from"));
+        const effectiveFrom = from === null ? null : Math.floor(from / 86_400_000) * 86_400_000;
+        report.history = { requested: { from, to }, effective: { from: effectiveFrom, to }, rawFrom: to - 7 * 86_400_000, resolution: "day", adjusted: true };
+        report.previousHistory = { requested: { from, to }, effective: { from: effectiveFrom, to }, rawFrom: to - 7 * 86_400_000, resolution: "day", adjusted: true };
+      }
       if (unknownStatuses) report.outcomes = report.outcomes.map((point) => ({ ...point, success: 0, errors: 0, unknown: point.success + point.errors + point.unknown }));
       reports.set(url.pathname + url.search, report);
       data = report as unknown as Record<string, unknown>;
@@ -240,6 +248,15 @@ try {
   assert(await touch.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Touch layout overflows");
   await touch.screenshot({ path: path.join(output, "global-touch.png"), fullPage: true });
   await touch.close();
+  archived = true;
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload(); await settled();
+  await page.getByText("Older activity is retained by UTC day.", { exact: false }).waitFor({ state: "visible" });
+  await page.getByText("Individual requests are retained from", { exact: false }).waitFor({ state: "visible" });
+  await fits("Archive notice on mobile");
+  await page.goto(`${serverUrl}#/admin/stats`); await settled();
+  await page.getByText("The comparison includes complete boundary days:", { exact: false }).waitFor({ state: "visible" });
+  await fits("Global archive notice on mobile");
   assert.deepEqual(errors, [], "Browser runtime errors");
   console.log(`Analytics UI passed: context sections, model bars, cache data, API key cards, two response-rate lines, request grid without duplicate totals, global visualizations, shared drilldowns, retries, touch and responsive themes. Screenshots: ${output}`);
 } catch (error) {

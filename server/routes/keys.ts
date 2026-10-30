@@ -24,7 +24,7 @@ function ownKey(userId: string, keyId: string): ApiKeyRow | null {
 export async function handleKeysRoute(path: string, req: Request): Promise<Response | null> {
   if (path === "/api/keys/filter-options" && req.method === "GET") {
     const ctx = await requireAuth(req);
-    return ok(await readUsage({ kind: "catalog-facets", catalog: "keys", userId: ctx.user.id, search: new URL(req.url).searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }), req);
+    return ok(await readUsage({ kind: "catalog-facets", catalog: "keys", userId: ctx.user.id, search: new URL(req.url).searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }, req.signal), req);
   }
   if (path === "/api/keys" && req.method === "GET") {
     const ctx = await requireAuth(req);

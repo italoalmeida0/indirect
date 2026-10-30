@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import { AnalyticsToolbar, createAnalyticsFilters } from "../../analytics-filters";
 import { createAnalyticsReport } from "../../analytics-report";
+import { AnalyticsHistoryNotice } from "../../analytics-history";
 import { AnalyticsSummary } from "../../AnalyticsSummary";
 import { AnalyticsError, AnalyticsLoading, AnalyticsSection, ApiKeyUsageCard, CacheUsageChart, ModelUsageChart, RequestOutcomesChart, ProviderMixChart, UserEfficiencyChart, UserSpendChart } from "../../AnalyticsCharts";
 import { PageTitle } from "../../index";
@@ -19,6 +20,7 @@ export default function StatsPage() {
     </div>
     <Show when={!report.error} fallback={<AnalyticsError retry={refetch} />}>
       <Show when={report()} fallback={<AnalyticsLoading />} keyed>{(data) => <>
+        <AnalyticsHistoryNotice history={data.history} previous={data.previousHistory} />
         <AnalyticsSummary report={data} label={data.label} query={data.query} section="costs" />
         <div class="analytics-scope-context">
           <span><Icon name="lucide:users" size={14} /><strong>{fmtNum(data.activeUsers)}</strong> users with activity</span>

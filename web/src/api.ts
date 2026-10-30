@@ -218,11 +218,21 @@ export interface ModelTimeline {
   points: { date: string; lastDate?: string; label: string; values: number[] }[];
 }
 
+export interface UsageHistoryDto {
+  requested: { from: number | null; to: number };
+  effective: { from: number | null; to: number };
+  rawFrom: number | null;
+  resolution: "millisecond" | "day";
+  adjusted: boolean;
+}
+
 export interface AnalyticsReport {
   series: DailyPoint[];
   previous: DailyPoint[];
   granularity: "minute" | "hour" | "day" | "month";
   scope: { from: number | null; to: number };
+  history?: UsageHistoryDto;
+  previousHistory?: UsageHistoryDto | null;
   modelSpend: ModelTimeline;
   modelRequests: ModelTimeline;
   users: AnalyticsEntity[];

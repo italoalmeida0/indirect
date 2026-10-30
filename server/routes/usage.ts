@@ -12,17 +12,17 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
   if (path === "/api/usage/analytics" && req.method === "GET") {
     const ctx = await requireAuth(req);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "analytics", scope, userId: ctx.user.id }), req);
+    return ok(await readUsage({ kind: "analytics", scope, userId: ctx.user.id }, req.signal), req);
   }
   if (path === "/api/usage/overview" && req.method === "GET") {
     const ctx = await requireAuth(req);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "overview", scope, userId: ctx.user.id }), req);
+    return ok(await readUsage({ kind: "overview", scope, userId: ctx.user.id }, req.signal), req);
   }
   if (path === "/api/usage/filter-options" && req.method === "GET") {
     const ctx = await requireAuth(req);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "facets", userId: ctx.user.id, scope, search: url.searchParams.toString() }), req);
+    return ok(await readUsage({ kind: "facets", userId: ctx.user.id, scope, search: url.searchParams.toString() }, req.signal), req);
   }
   if (path === "/api/usage/summary" && req.method === "GET") {
     const ctx = await requireAuth(req);
@@ -32,7 +32,7 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
   if (path === "/api/usage/daily" && req.method === "GET") {
     const ctx = await requireAuth(req);
     const scope = readUsageScope(url);
-    if (scope) return ok(await readUsage({ kind: "series", scope, userId: ctx.user.id }), req);
+    if (scope) return ok(await readUsage({ kind: "series", scope, userId: ctx.user.id }, req.signal), req);
     const keyId = url.searchParams.get("key_id");
     if (keyId) {
       // Ownership check only — the queries below key off keyId itself.
@@ -91,8 +91,8 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     }
     const scope = readUsageScope(url);
     if (scope) {
-      const result = await readUsage({ kind: "events", userId: ctx.user.id, scope, opts: { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined, summaryOnly: url.searchParams.get("summary") === "1" } });
-      return ok({ events: result.rows, total: result.total, totals: result.totals, limit, offset }, req);
+      const result = await readUsage({ kind: "events", userId: ctx.user.id, scope, opts: { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined, summaryOnly: url.searchParams.get("summary") === "1" } }, req.signal);
+      return ok({ events: result.rows, total: result.total, totals: result.totals, limit, offset, history: result.history }, req);
     }
     const { rows, total, totals } = userEvents(ctx.user.id, { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined, scope: scope ?? undefined, summaryOnly: url.searchParams.get("summary") === "1" });
     return ok({ events: rows, total, limit, offset, totals }, req);
@@ -103,7 +103,7 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     const scope = readUsageScope(url);
     if (scope) {
       const grid = parseGridQuery(url);
-      const page = await readUsage({ kind: "breakdown", scope, userId: ctx.user.id, grid, users: false, summaryOnly: url.searchParams.get("summary") === "1" });
+      const page = await readUsage({ kind: "breakdown", scope, userId: ctx.user.id, grid, users: false, summaryOnly: url.searchParams.get("summary") === "1" }, req.signal);
       return ok({ ...page, limit: grid.limit, offset: grid.offset }, req);
     }
     const daysParam = url.searchParams.get("days");

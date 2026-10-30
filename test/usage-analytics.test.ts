@@ -25,6 +25,7 @@ describe("analytics response outcomes and API keys", () => {
       const all = filteredUsageAnalytics(scope, userId);
       expect(totals(all)).toEqual({ success: 2, errors: 2, unknown: 7 });
       expect(all.outcomes.length).toBeLessThanOrEqual(48);
+      expect(all.outcomes.map((point) => point.success + point.errors + point.unknown).filter(Boolean).sort((a, b) => a - b)).toEqual([4, 7]);
       expect(all.keys.map((key) => key.id).sort()).toEqual(["outcomes-test/key-a", "outcomes-test/key-b"]);
       expect(all.keys.reduce((sum, key) => sum + key.reqs, 0)).toBe(11);
       expect(JSON.stringify(all)).not.toContain("foreign");
@@ -39,7 +40,7 @@ describe("analytics response outcomes and API keys", () => {
       expect(totals(filteredUsageAnalytics(scope, userId))).toEqual({ success: 2, errors: 2, unknown: 7 });
       expect(totals(filteredUsageAnalytics({ ...scope, selection: { model: { include: [model], exclude: [model] } } }, userId))).toEqual({ success: 0, errors: 0, unknown: 0 });
     } finally {
-      for (const table of ["usage_events", "usage_model_provider_daily", "usage_model_provider_monthly", "usage_model_daily"]) db.run(`DELETE FROM ${table} WHERE model = ?`, [model]);
+      for (const table of ["usage_events", "usage_model_provider_daily", "usage_model_provider_monthly", "usage_model_daily", "usage_hour_rollups", "usage_minute_rollups"]) db.run(`DELETE FROM ${table} WHERE model = ?`, [model]);
       db.run("DELETE FROM usage_daily WHERE key_id LIKE 'outcomes-test/%'");
     }
   });

@@ -771,9 +771,78 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    name: "027_usage_subday_rollups",
+    up: () => {
+      for (const kind of ["hour", "minute"]) {
+        db.exec(`CREATE TABLE usage_${kind}_rollups (
+          bucket INTEGER NOT NULL, key_id TEXT NOT NULL, user_id TEXT NOT NULL,
+          proto TEXT NOT NULL, provider_id TEXT NOT NULL DEFAULT '', provider_key_id TEXT NOT NULL DEFAULT '',
+          model TEXT NOT NULL, upstream_model TEXT NOT NULL DEFAULT '',
+          in_tok INTEGER NOT NULL, cache_tok INTEGER NOT NULL, out_tok INTEGER NOT NULL,
+          reqs INTEGER NOT NULL, success_reqs INTEGER NOT NULL, error_reqs INTEGER NOT NULL,
+          cost_in_nanos INTEGER, cost_cache_nanos INTEGER, cost_out_nanos INTEGER,
+          PRIMARY KEY(bucket, key_id, proto, provider_id, provider_key_id, model, upstream_model)
+        ) WITHOUT ROWID;
+        CREATE INDEX idx_usage_${kind}_user ON usage_${kind}_rollups(user_id, bucket, reqs);
+        CREATE INDEX idx_usage_${kind}_bucket ON usage_${kind}_rollups(bucket, user_id, reqs);`);
+      }
+      // Older rows are not assumed to have rollups. New traffic is covered
+      // from the next complete bucket; an offline rebuild can extend coverage.
+      db.exec(`CREATE TABLE usage_rollup_coverage (
+        id INTEGER PRIMARY KEY CHECK(id = 1), raw_from INTEGER NOT NULL,
+        hourly_from INTEGER NOT NULL, minute_from INTEGER NOT NULL
+      );
+      INSERT INTO usage_rollup_coverage VALUES (1, 0,
+        (CAST(unixepoch() * 1000 / 3600000 AS INTEGER) + 1) * 3600000,
+        (CAST(unixepoch() * 1000 / 60000 AS INTEGER) + 1) * 60000);`);
+    },
+  },
+  {
+    name: "028_usage_rollup_prune_floors",
+    up: `ALTER TABLE usage_rollup_coverage ADD COLUMN hour_floor INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE usage_rollup_coverage ADD COLUMN minute_floor INTEGER NOT NULL DEFAULT 0;`,
+  },
 ];
 
-export function migrate(): void {
+/**
+ * Boot must survive a database that another process is holding.
+ *
+ * `migrate()` runs at module load, before the HTTP server exists, so an
+ * escaping SQLITE_BUSY is an uncaught exception and Bun exits the process with
+ * code 1. The reported failure was exactly that: an operator's external write
+ * transaction held the database, `PRAGMA optimize` inside migrate() hit the
+ * lock, and the gateway died instead of waiting for the writer to finish.
+ *
+ * The boot path therefore retries transient contention with a much longer
+ * budget than a periodic sweep (an operator may hold a transaction for
+ * minutes), and treats the planner-statistics refresh as best effort: it is an
+ * optimization, never a prerequisite for serving.
+ */
+function migrateWithRetry(): void {
+  const deadline = Date.now() + BOOT_LOCK_DEADLINE_MS;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      applyMigrations();
+      return;
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const delay = Math.min(2_000, 50 * 2 ** (attempt - 1));
+      if (Date.now() + delay > deadline) {
+        console.error(
+          `[DB] database stayed locked for ${Math.round(BOOT_LOCK_DEADLINE_MS / 1000)}s during boot.` +
+          " Another process (backup tool, sqlite3 session, second gateway) still holds a write transaction." +
+          " Release it and restart, or raise SQLITE_BOOT_LOCK_TIMEOUT_MS.",
+        );
+        throw error;
+      }
+      if (attempt === 1) console.warn("[DB] database is busy at boot; waiting for the other writer to finish");
+      Bun.sleepSync(delay);
+    }
+  }
+}
+
+function applyMigrations(): void {
   const row = Object.values(
     db.query<Record<string, number>, []>("PRAGMA user_version").get() ?? {},
   );
@@ -790,8 +859,24 @@ export function migrate(): void {
   // Give the query planner table statistics. Without ANALYZE data, SQLite
   // picks bad plans once usage_events grows (measured: the admin 24h per-user
   // aggregate went 287ms -> 0.5ms at 3.65M rows only because of this).
-  // Incremental: cheap no-op once stats exist.
-  db.exec("PRAGMA optimize");
+  // Incremental: cheap no-op once stats exist — and optional, so a busy
+  // database degrades the next queries slightly instead of failing boot.
+  try {
+    db.exec("PRAGMA optimize");
+  } catch (error) {
+    if (!isSqliteBusy(error)) throw error;
+    console.warn("[DB] PRAGMA optimize skipped: database is busy");
+  }
+}
+
+/** How long boot waits for another process to release the database. */
+const BOOT_LOCK_DEADLINE_MS = (() => {
+  const raw = Number(process.env.SQLITE_BOOT_LOCK_TIMEOUT_MS ?? 120_000);
+  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
+})();
+
+export function migrate(): void {
+  migrateWithRetry();
 }
 
 if (!usageReader) migrate();

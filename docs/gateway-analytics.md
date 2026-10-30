@@ -4,8 +4,15 @@
 
 Every view captures one half-open `[from, to)` interval in epoch milliseconds.
 Calendar inputs use the browser's timezone; aggregation boundaries use UTC.
-Filter options depend on this interval and the authenticated user's visibility,
-not on other selected filters. The global endpoints require an administrator.
+Retained raw events support exact millisecond boundaries. If an endpoint falls
+inside a UTC day before the declared raw-retention boundary, that endpoint is
+expanded to include the whole day. Responses report both `history.requested`
+and `history.effective`, `history.rawFrom`, the available `resolution`
+(`millisecond` or `day`), and whether bounds were `adjusted`. The dashboard
+shows the adjustment; comparison windows report `previousHistory` separately.
+This preserves archived boundary-day totals without presenting them as an
+exact partial day. Filter options use the same effective interval and the
+authenticated user's visibility. Global endpoints require an administrator.
 
 The filter-options endpoint has two operations:
 
@@ -24,24 +31,58 @@ new result query. Invalidated selections cannot turn into hidden constraints.
 
 ## Storage and query cost
 
-Usage ingestion updates events, daily ledgers and the monthly provider/model
-ledger in one SQLite transaction. Migration 024 backfills monthly aggregates
-from the existing daily ledger, preserving history independently of raw logs.
-The initial backfill requires time proportional to the existing daily rows.
-The developer seed script maintains the same monthly ledger.
+Usage ingestion updates events and the minute, hour, daily and monthly ledgers
+in one SQLite transaction. Migration 024 backfills monthly aggregates from the
+existing daily ledger, preserving history independently of raw logs. Migration
+027 starts sub-day coverage at the next complete bucket without assuming older
+raw events have already been rolled up. Until a rebuild covers them, queries
+read those intervals from raw events.
 
 Long-range queries use nonoverlapping segments:
 
 1. Complete UTC months from `usage_model_provider_monthly`.
-2. Remaining complete days at the two boundaries from
-   `usage_model_provider_daily`.
-3. Only the partial boundary days from `usage_events`.
+2. Remaining complete days from `usage_model_provider_daily`.
+3. Covered complete hours and minutes from their dimension-preserving ledgers.
+4. The two partial-minute edges, and intervals without rollup coverage, from
+   `usage_events`.
 
 Daily charts use daily aggregates; charts over 400 days use monthly buckets.
 Input, cached input, output and their costs remain separate. Pricing/name joins
 run after grouping, reducing repeated lookups for the same model or provider.
-Event lists still read raw retained events and report their exact retained
-counts; they do not substitute ledger counts for missing raw rows.
+Event lists still read raw retained events with the original requested bounds
+and report their exact retained counts; they do not substitute ledger counts
+for missing raw rows. Their `history.rawFrom` states the retention boundary,
+and the Usage page displays it alongside the list.
+
+By default the gateway keeps hourly rollups for 90 UTC calendar days and minute
+rollups for three. `ANALYTICS_HOURLY_DAYS` and `ANALYTICS_MINUTE_DAYS`
+change those windows. Cleanup advances the coverage watermark before deleting
+at most 1,000 old rows from each table per minute; a query falls back to retained
+raw events when the finer rollup is no longer covered. Daily and monthly history
+is independent of these sub-day windows. This does not itself delete raw events.
+
+Rebuild covered sub-day rows from retained raw events with the gateway stopped:
+
+```sh
+DATA_DIR=/path/to/data bun scripts/rebuild-usage-rollups.ts --raw-from=2026-08-01
+```
+
+`--raw-from` is the first UTC day for which all raw events are retained; use
+`1970-01-01` when raw history has never been pruned. Optional `--from`,
+`--minute-from` and exclusive `--to` are UTC dates. The defaults rebuild
+the configured hour/minute windows through the end of the current UTC day.
+The producer replaces one day per write transaction, verifies its raw event
+count against the durable daily ledger, and publishes coverage only for
+completed days. Live ingestion remains consistent but may receive retryable
+storage errors during a rebuild, so offline operation is recommended. Programmatic
+offline importers can call `rebuildUsageRollups(db, { from, to, rawFrom,
+minuteFrom })` from `server/usage-rollup.ts`, with day-aligned epoch
+milliseconds and an exclusive `to`.
+
+The raw boundary is an operator declaration, not a guess based on the oldest
+event. If raw events are pruned or imported outside the gateway, set the correct
+boundary while the gateway is offline and rebuild before serving queries; do
+not remove arbitrary retained rows while leaving the boundary unchanged.
 
 Covering indexes on `(user_id, date/month, reqs)` and `(date/month, user_id, reqs)`
 also contain the dimensions of the WITHOUT ROWID primary key. Global date
@@ -51,14 +92,20 @@ is added for every possible combination of checkbox selections.
 
 ## Isolation, caching and overload
 
-Scoped analytics run on two worker threads, each with its own read-only SQLite
+Scoped analytics run on CPU-aware worker threads, each with its own read-only SQLite
 connection. They do not migrate, ingest, or change the source database. The
 queries within each job share one read transaction, keeping rows and summaries
 on the same snapshot. The proxy's event loop remains available while a query
 groups or sorts.
-The reader queue holds at most 16 jobs, with a 30-second deadline including
-queue time. Saturation returns the normal dashboard error envelope with 503.
+The default is two thirds of the available CPU threads, bounded to two through eight.
+At most 256 distinct jobs can be pending, with a five-second deadline including
+queue time; `ANALYTICS_READERS`, `ANALYTICS_PENDING` and
+`ANALYTICS_DEADLINE_MS` tune these bounds. Saturation returns the normal
+dashboard error envelope with 503.
 Reader replacement waits for termination, preserving the physical worker bound.
+Identical requests share a job; a disconnected caller leaves that shared job
+alone while other callers still need it. A job with no remaining callers is
+removed from the queue or its running worker is terminated.
 
 Identical in-flight requests share one job. Query result caches are LRU bounded
 to 256 entries and an 8 MiB encoded key/result budget per process, with a
@@ -87,7 +134,7 @@ queries including JSON encoding, and probes event-loop delay during a reader
 query. It never seeds the configured gateway database. `--reuse` accepts only a
 previous isolated benchmark directory directly under the OS temporary directory.
 
-A local Windows run on 2026-10-26 used 1,000,000 raw events spanning 3,653 days,
+A historical local Windows run on 2026-10-26 used 1,000,000 raw events spanning 3,653 days,
 751,376 daily rows and 50,000 additional archived model IDs in a 538 MiB database.
 The archived IDs exercise option cardinality and pagination. Application-cold
 measurements keep OS/SQLite pages warm; they are not cold-disk or network timings.
