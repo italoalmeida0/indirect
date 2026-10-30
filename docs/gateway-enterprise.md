@@ -1,240 +1,482 @@
-# Gateway enterprise hardening — design and contracts
+# Gateway enterprise operation and validation
 
-This document is the shared contract for the enterprise hardening program.
+The gateway uses Bun, SQLite and SolidJS. One installation represents one
+company or one person. Projects, corporate identity and a monitoring service
+are optional; personal keys work without them. The dashboard's **Organization**
+page groups the optional administrative controls.
 
-Status is recorded per section below. A section marked **[delivered]** has an
-implementation AND automated tests that fail if the behaviour regresses; a
-section marked **[pending]** is not implemented yet and must not be described
-as if it were.
+The implementation described here has regression tests. Capacity qualification
+is a separate gate and remains unverified until a report for the final source
+revision and intended hardware passes. See
+[the validation checklist](gateway-enterprise-checklist.md) for run status.
 
-## Operating envelope
+## Operating envelope and defaults
 
-- 500 employees, 500 AI calls per person per day (250k/day).
-- 10 years of aggregated history; detailed events under a configurable
-  retention window.
-- p99 gateway-added latency: <= 100 ms for \`/v1/*\`, <= 1000 ms for
-  dashboard APIs (measured with a fixed-cost local upstream).
-- One installation represents one company (or one person). Enterprise
-  features are gated behind an explicit enable switch and are inert when
-  disabled, so a personal installation keeps the one-key, one-model flow.
+The intended workload is 500 employees making 500 AI requests each per day:
+250,000 requests/day. The targets are gateway-added API p99 <=100 ms and complete
+dashboard interaction p99 <=1,000 ms. API and frontend results must be reported
+separately. A process metric or a fast loading indicator does not establish
+either target.
 
-## Cross-cutting contracts
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `FINANCIAL_DEFAULT_BUDGET` | `usd` | `usd`, `percent` or `hidden` for non-administrators |
+| `FINANCIAL_DEFAULT_SHOW_PRICES` | `true` | Model-price discovery, independent of budget presentation |
+| Corporate sign-in / required SSO / required administrator MFA | Off | Configured through Organization; local authentication works with these policies off |
+| Financial projects and shared budgets | None | Keys are personal until explicitly associated with a project |
+| `USAGE_EVENT_RETENTION_DAYS` | `400` | Detailed usage days; `0` disables pruning |
+| `AUDIT_RETENTION_DAYS` | `0` | No automatic audit expiry; a positive value enables bounded expiry |
+| `ANALYTICS_HOURLY_DAYS` / `ANALYTICS_MINUTE_DAYS` | `90` / `3` | Finer rollup retention; daily/monthly aggregates are independent |
+| `BACKUP_INTERVAL_MINUTES` | `1440` | Scheduled snapshots; `0` leaves only manual backup |
+| `BACKUP_KEEP_DAILY` / `BACKUP_KEEP_WEEKLY` | `14` / `8` | Snapshot retention buckets |
+| `BACKUP_INCLUDE_DAEMON` | `false` | Optional copy of separately owned daemon directories |
+| `LIMIT_USER_RPM` / `LIMIT_USER_CONCURRENCY` | `600` / `32` | Aggregate ceilings across an account's keys |
+| `LIMIT_GLOBAL_CONCURRENCY` | `512` | Concurrent upstream calls in this process |
+| `LIMIT_ADMISSION_WAIT_MS` / `LIMIT_ADMISSION_QUEUE_MAX` | `400` / `1024` | Bounded concurrency wait and queue |
+| `LIMIT_ADMISSION_QUEUE_BYTES` | `67108864` | Declared request bytes allowed to wait |
 
-### Request correlation
+Daily and monthly ledgers are not automatically expired. They preserve the
+ten-year accounting requirement after detailed rows expire. At the intended
+rate, 400 detailed days mean **100,000,000 physical usage events**; ten years
+of represented requests is a different cardinality. Historical local sizing
+was roughly 547 MiB per million events, so raw history alone can exceed 53 GiB
+before differences in indexes, identifiers, reservations, audit, WAL and free
+pages. Measure the actual database. Allow additional disk for live snapshots,
+a separate restore and WAL growth. Reducing retention is an explicit
+forensic/storage tradeoff, never an implicit performance optimization.
 
-- Every HTTP request entering \`server/index.ts\` gets a correlation id:
-  \`x-request-id\` from the client when it matches \`^[A-Za-z0-9._-]{8,128}$\`,
-  otherwise a fresh id.
-- The id is exposed on the response as \`X-Request-Id\` for every route
-  (dashboard and proxy), and is available through a request-scoped store
-  (\`AsyncLocalStorage\`) so audit rows and usage events inherit it without
-  threading a parameter through every function.
-- \`usage_events.request_id\` and \`audit_log.request_id\` store the id.
-  Proxy responses already send \`X-Request-Id\`; that value MUST equal the
-  \`request_id\` persisted on the usage event for the same call.
+Audit history is separate: the default retains it indefinitely. A fixture with
+365 audit days does not qualify ten years of audit storage. Settled reservation
+detail is retained for 30 days; expired non-lifetime billing periods are pruned
+after 400 days when they have no outstanding holds. Lifetime balances remain.
 
-### Audit coverage
+## Roles and financial scopes
 
-Every authenticated mutation writes exactly one audit row. The rule is
-testable: a mutation endpoint invoked by an admin/user must increase
-\`audit_log\` by one row with a stable action name.
+| Capability | User | Project manager | Administrator |
+| --- | --- | --- | --- |
+| Own keys, plan and personal usage | Yes | Yes | Yes |
+| List/read financial scopes | Membership only | Membership only | All scopes |
+| Shared report and member directory | No | Assigned manager scopes only | All scopes |
+| Add/remove ordinary project members | No | Assigned manager scopes only | Yes |
+| Grant/remove manager memberships | No | No | Yes |
+| Create/edit/archive scopes and shared budgets | No | No | Yes |
+| Providers, registry, users, plans, policies, import, backups and metrics | No | No | Yes |
 
-### Error envelopes
+A project manager needs both the gateway `project_manager` role and a `manager`
+membership in the exact scope. A responsible user field alone grants no
+capability. A cost-center membership grants no membership in child projects.
+Out-of-scope management/report reads return 404; global administration requires
+the administrator role. Authorization applies to direct requests too.
 
-- \`/v1/*\` (including \`/openai/v1/*\` and \`/anthropic/v1/*\`) always speak the
-  client protocol envelope (OpenAI \`{error:{message,type,code}}\`,
-  Anthropic \`{type:"error",error:{type,message}}\`, Responses shares OpenAI).
-- Rate-limited responses always carry \`Retry-After\` (integer seconds >= 1).
-- Dashboard routes keep \`{success:false,error}\`.
+The original `users.role` column retains its `admin`/`user` constraint.
+Delegation is stored in nullable `users.enterprise_role`; `effectiveRole()`
+combines them and the public DTO exposes `admin`, `project_manager` or `user`.
+Role filtering/sorting uses the same decision. Do not write `project_manager`
+directly into the original role column.
 
-### Limits
+Financial scopes use `financial_projects` and `project_members`. They have a
+unique editable code, name, description, optional responsible user,
+`active`/`archived` status and optional monthly/lifetime USD ceilings. A project
+can reference one active cost center; a cost center cannot have a parent.
+Neither owns Indirect Code sessions, transcripts, files or daemon
+configuration. The daemon continues to own its workspace projects.
 
-- Per-key RPM and concurrency stay exactly as today.
-- Per-account aggregate RPM and concurrency are enforced ACROSS all keys of
-  one account (already partially present); they must be configurable and
-  must expose the denied dimension in the error message.
-- A bounded admission queue may absorb short bursts: a request that would
-  exceed a concurrency ceiling waits up to a configured deadline instead of
-  failing immediately, and is dequeued (FIFO) the moment a slot frees.
-  Queue length and wait deadline are configurable; overflow still returns
-  429 with \`Retry-After\`.
+Only a **project** can be associated with a key. Its owner must be an active
+member. Admission also validates the active parent cost center. An archived
+scope or removed member makes an associated key unavailable; it never silently
+switches to personal use. Administrative assignment validates the key owner's
+membership too. There is no hard-delete project API; archive preserves history.
 
-### Financial visibility policy
+Admission captures project/cost-center IDs, prices and budget periods. Account,
+key, project and cost-center holds are reserved atomically. Monthly shared
+ceilings renew at 00:00 UTC on the first of the month; lifetime ceilings do not
+renew. `null` means unlimited; zero blocks new billable work. Accepted requests
+settle against their captured scopes even if a key moves, membership changes
+or a scope is archived while they run. Renaming/reorganizing never reclassifies
+old usage. Pre-project historical requests remain personal.
 
-Two independent settings, with an installation default and a per-user
-override:
+Project reports read the immutable ledger. `from`/`to` are inclusive UTC dates
+(`YYYY-MM-DD`), with at most a 50-year span. Cost-center reports use the
+attribution recorded for each request, rather than today's parent assignment.
 
-1. \`showModelPrices\` (boolean) — whether model pricing is returned.
-2. \`budgetPresentation\` — \`"usd"\` | \`"percent"\` | \`"hidden"\`.
+## Financial visibility and model access
 
-Administrators always see real USD. For a non-admin user whose policy hides
-values, the API omits every USD amount (no \`*Usd\`, no \`cost*\`, no
-\`pricing*\` field) and returns percentages plus renewal timestamps instead.
-The projection is centralized in one module so billing, keys, usage and the
-model catalog cannot drift apart. Internal accounting is unchanged.
+Organization → Financial visibility sets installation defaults. Users → Edit →
+Financial and corporate access sets independent per-user overrides; `null`
+inherits that field's default. Administrators retain USD visibility for
+reconciliation. Project managers obey the non-administrator financial policy.
 
-## Workstreams
+- `usd` returns monetary amounts and balances.
+- `percent` returns allowed consumption/hold percentages, configured-limit
+  flags and renewal metadata without the underlying USD values.
+- `hidden` omits amounts and percentages while preserving permitted
+  operational status and renewal information. Project budget windows expose
+  only kind and renewal time in this mode.
+- `showModelPrices` separately controls model pricing. Hiding budgets does not
+  disable explicitly permitted model prices, and hiding model prices does not
+  hide a permitted USD account balance.
 
-### A. Relay session binding and daemon authorization (wave 1)
+Explicit projections cover key mutation/list/detail replies, billing/reset
+redemption, usage summaries/events/analytics/breakdowns, model catalog/detail
+responses and filter/sort metadata. Internal accounting stays in nanodollars.
+`X-Financial-Policy` and policy-aware resources refresh an open page after
+policy changes; stale USD values must not remain visible when policy narrows.
+Finite private plans are not described as unlimited because USD is absent.
 
-- A client socket is bound to the \`sessions\` row that authenticated it.
-- Revocation (single session, family, all sessions, ban, delete, password
-  reset) closes the affected sockets immediately, before the closing
-  handshake, so no queued frame crosses the relay.
-- A daemon socket revalidates its owner's account status on every inbound
-  frame (cheap, prepared statement) and is closed when the account is no
-  longer active; the daemon token cannot be used to reconnect while the
-  account is banned.
-- Coverage: revoked session, rotated refresh family, ban, unban, delete,
-  password reset, and an independent user's sockets staying open.
+Model policies use **public registry IDs**, including IDs with slashes.
+Without an enabled nonempty default list, access is unrestricted. Otherwise
+an enabled project's list adds grants to that default for its assigned keys.
+Empty/disabled project lists add nothing. Administrators are exempt. Discovery
+(`/v1/models`, `/api/me/models`), detail reads and every proxy protocol share
+the decision; aliases/fallback targets cannot bypass it. The dashboard's
+`projectId` model-catalog query validates active membership first.
 
-### B. Aggregate limits, admission queue, IP defaults (wave 1)
+Model renames update policy references. Deleting a selected model leaves a
+denied tombstone in `missingModels`; recreating its ID does not regrant it.
+A default containing only tombstones continues to deny access. Name/enabled
+edits preserve tombstones; explicitly replacing `models` removes them.
+Deliberately saving an empty default restores unrestricted access. The editor
+exposes this distinction.
 
-- \`LIMIT_USER_RPM\` / \`LIMIT_USER_CONCURRENCY\` / \`LIMIT_GLOBAL_CONCURRENCY\`
-  already exist; add a bounded queue with deadline and byte-size guards.
-- Office/VPN defaults: 40 distinct employees behind one IP must all log in.
-  The per-IP credential bucket must not trip on legitimate office egress,
-  and the global IP bucket must not throttle health checks.
-- \`/api/health\` (liveness) and \`/api/ready\` (readiness) are exempt from the
-  shared public IP bucket.
+## Corporate sign-in, MFA and recovery
 
-### C. Global analytics on aggregated days (wave 1)
+Use Organization → Corporate authentication to configure an OIDC issuer,
+client ID and optional client secret. Production requires an HTTPS `PUBLIC_URL`
+origin and HTTPS provider endpoints. Register the exact displayed callback:
+`PUBLIC_URL/api/auth/oidc/callback`. An empty UI secret retains the configured
+secret; the API accepts `clientSecret:""` to clear it. Secrets are encrypted
+at rest and never returned in configuration responses.
 
-- Long/global queries must read \`usage_model_provider_monthly\` and
-  \`usage_model_provider_daily\` for complete UTC days and only touch
-  \`usage_events\` for the partial edges of the current day.
-- The hourly/minute rollups serve sub-day windows after their coverage
-  watermark.
-- Measured target on 1M events: complete-day global stats and analytics in
-  the low hundreds of milliseconds, not seconds; 503s only under genuine
-  overload.
-- 50 concurrent distinct-user analytics requests must mostly succeed.
+Authorization code sign-in uses S256 PKCE, browser-bound single-use state and
+nonce, fixed return destinations and a short-lived HttpOnly completion cookie.
+It validates issuer, audience/authorized party, time bounds, signatures and
+applicable token hashes. RS256 and ES256 require their corresponding key types;
+HMAC, unsigned and mismatched keys are rejected. Discovery/JWKS responses,
+key/flow counts and network deadlines are bounded; rotation refreshes keys.
+The HTTP-loopback exception requires `NODE_ENV=test` and
+`OIDC_ALLOW_HTTP_LOOPBACK=true`; it does not enable production HTTP sign-in.
 
-### D. SQLite contention and supported backup (wave 1)
+An email claim never silently links an identity or assigns a role. An
+administrator can bind the provider's exact issuer and immutable subject in
+the user's corporate access settings. A user can explicitly link from Settings
+after password/TOTP verification, or a sufficiently recent corporate sign-in
+when no password exists. Provider groups do not assign gateway roles.
+Unlinking requires another sign-in method and is rejected while managed SSO
+requires that identity.
 
-- Periodic jobs (billing heartbeat/recovery, usage flush, maintenance
-  sweeps) retry transient \`SQLITE_BUSY\`/\`SQLITE_LOCKED\` with bounded backoff
-  instead of exiting.
-- Imports and cleanups work in batches.
-- A supported backup command uses \`VACUUM INTO\` (or the online backup API)
-  and preserves the credential-encryption secret; it can run while the
-  gateway is serving, and a verification step re-opens the snapshot.
+Before enabling policies:
 
-### E. Financial projects and cost centers (wave 2)
+1. Enroll every active administrator in an authenticator before requiring MFA.
+2. Generate and safely store recovery codes. Ten single-use codes are shown
+   once; the server stores hashes. Regeneration invalidates the old set and
+   revokes other sessions. Sign-in accepts a TOTP or recovery code.
+3. For required managed SSO, explicitly link every active managed account to
+   the configured issuer. Keep an active administrator with a local password,
+   authenticator, remaining recovery codes and explicit SSO recovery exemption.
 
-- \`projects\` (id, name, description, responsible user, optional shared
-  budget, status) and \`project_members\`.
-- \`api_keys.project_id\` associates a key with a project.
-- \`usage_events.project_id\` and the rollup tables preserve the attribution
-  at write time, so renaming/reorganizing a project never reclassifies
-  historical spend.
-- Consumption report per project; optional shared budget enforced like the
-  existing USD periods.
+Readiness checks reject violations. Promotion, deactivation, demotion,
+deletion, MFA removal and recovery changes preserve required local recovery
+access. Keep that identity outside the corporate provider's failure domain.
 
-### F. Roles, visibility policy, OIDC, bulk import (wave 2)
+Saving installation authentication policy signs everyone out using a versioned
+check; individual identity-policy changes revoke that account's sessions.
+Renewal and relay authentication revalidate method, policy version and required
+MFA. Local login/reset and Google sign-in cannot bypass required SSO.
+Controlled-provider tests cover these contracts; an actual corporate tenant
+integration is a separate operator setup/validation step.
 
-- Fixed roles: \`admin\`, \`project_manager\`, \`user\`. Cost visibility is
-  independent of role.
-- Configurable OIDC provider, optional "managed accounts must use SSO", MFA
-  required for administrators.
-- Bulk user import with preview + validation.
+## Bulk user import
 
-### G. Model access policies (wave 2)
+Organization → Bulk user import accepts CSV or a JSON array, bounded to
+**500 users and 256 KiB of UTF-8 content**, with a separately bounded envelope.
+CSV requires `email,name`; optional columns are `role`, `planId`, `projectIds`,
+`managed`, `oidcSubject`. JSON uses the same fields with a `projectIds` array
+and boolean `managed`. CSV separates project IDs with semicolons and uses
+literal `true`/`false`. Plans/active projects must exist; at most 20 project IDs
+are allowed per row. Example:
 
-- Allowed model sets per role and per project; enforcement in the proxy for
-  every protocol, filtering in the catalog, and fallback targets must honour
-  the same policy.
+```csv
+email,name,role,managed
+alex@example.com,Alex,user,false
+sam@example.com,Sam,project_manager,false
+```
 
-### H. Audit, correlation, observability (wave 3)
+Preview returns row numbers, normalized identities, create/existing/error
+status and row errors. Duplicate input emails/subjects are errors; existing
+emails are skipped without changing their accounts. Preview is bound to the
+requesting administrator, expires after 30 minutes, and is bounded to five
+pending batches per administrator and 200 stored batches.
 
-- Audit coverage for every mutation; \`request_id\` on audit and usage rows.
-- Structured request logs that follow a call through provider attempts.
-- Metrics: calls, errors, latency, concurrency, queue sizes, limit
-  rejections, last backup age. Liveness/readiness split.
+Commit revalidates references/security policy in the transaction that creates
+accounts, memberships and audit. Invalid batches make no partial account
+changes. Repeating a committed `batchId` returns its stored result with
+`replayed:true`. Matching content within its live preview window reuses the
+batch. New managed accounts need an exact `oidcSubject` when SSO is enforced;
+project-manager imports receive manager membership in their listed projects.
+Unenrolled administrators cannot be imported while administrator MFA is required.
 
-### I. Install and delivery (wave 3)
+Import sends no invitations or notifications and creates no password. For a
+local account, deliberately use its invitation/password-setup action after
+import. Managed accounts can use their explicitly bound corporate identity.
 
-- Obscura archive extraction fixed (ZIP and tar.gz), version + checksum
-  pinned, pre-installable offline, native Windows test.
-- Static asset compression (Brotli/gzip), and reduced initial JS payload via
-  lazy loading of the heaviest screens.
-- Configurable retention for detailed usage events; aggregates keep 10 years.
+## Correlation, audit and durability
 
-### J. Capacity validation (wave 4)
+`X-Request-Id` accepts a client value matching `^[A-Za-z0-9._-]{8,128}$` or is
+generated. Responses, usage and audit preserve correlation. Each financial
+operation has an independent unique reservation identity: repeating correlation
+does not cause global idempotency or cross-account collisions. Reset
+redemption's explicit `requestId` is a separate grant/user-bound contract.
 
-- Ten-year fixture (500 users x 500 calls/day) with capacity report:
-  API added p99 <= 100 ms, dashboard p99 <= 1000 ms, accuracy assertions for
-  partial-day ranges, burst of 50 concurrent analytics requests.
+Sensitive local mutations commit required audit records in the same transaction
+or roll back together. Audit captures actor, action, target, time, correlation
+and context without secrets. A no-op may write nothing; import can write
+per-user and batch events. Audit is not defined as exactly one row per HTTP
+request. External effects such as email cannot be rolled back by SQLite and
+are not performed inside a long network transaction.
 
-## Testing rules
+Settlement commits the charge and durable usage-outbox entry together. A
+bounded worker atomically drains it into detailed events and rollups; restart
+retries cannot duplicate accounting. Analytics can lag while delivery catches
+up, but a process crash does not discard settled usage. Pending holds survive
+crashes; bounded recovery conservatively settles uncertain requests after the
+missing-heartbeat grace period. See [billing semantics](gateway-billing.md)
+for pricing, cancellation and resets.
 
-- New routes get black-box tests in \`test/\` that boot a real gateway.
-- Anything time- or performance-sensitive is proven with a measurement, not
-  a claim: the measurement is committed as a script and reproduced in CI or
-  a documented command.
-- Failures are fixed, never skipped. A test that cannot run without an
-  external prerequisite is documented in the handoff, not silently skipped.
-## Delivery status
+Admission and settlement fail differently on storage errors, deliberately. An
+admission failure happens before any provider call, so it fails closed: the
+client receives a `503` and no hold exists. A settlement failure happens after
+the provider already produced and billed the tokens, and a flushed stream
+cannot be recalled, so the earned response is kept. The pending hold keeps
+counting against the budget (nothing is given away), the charge is retried in
+bounded memory with backoff, repeated failures degrade to a conservative charge
+for the reserved bound, and new admissions stop once that retry queue
+saturates.
 
-**[delivered]** Relay session binding and daemon reauthorization — revoked
-sessions, rotated families, bans, deletions and password resets close the bound
-sockets before any further frame crosses the relay; a banned daemon token
-cannot reconnect and an unbanned one redials without receiving a kill frame.
-Tests: `test/gateway-relay-bans.test.ts`, `test/gateway-relay-revocation.test.ts`.
+## Retention, metrics and health
 
-**[delivered]** Per-account aggregate limits with a bounded admission queue —
-16 keys of one account cannot exceed the account ceiling, another account keeps
-serving, and a burst waits inside the deadline instead of failing. Tests:
-`test/gateway-admission.test.ts`.
+Detailed retention uses bounded micro-transactions and yields between batches.
+Defaults are at most 50,000 rows per scheduled tick and 1,000 per write
+transaction. Coverage advances only after safe progress; deleting detail never
+deletes accounted daily/monthly totals. Other periodic jobs use bounded work
+and retry budgets and suppress overlapping runs. Passive checkpoints avoid
+a forced truncation checkpoint on the serving path. Bounds do not replace
+concurrent-load measurements on the intended disk.
 
-**[delivered]** Financial visibility enforced server-side — installation
-default plus per-user override for `showModelPrices` and
-`budgetPresentation`; administrators always see USD; everyone else receives
-percentages or no amounts at all, asserted on the HTTP payload. Tests:
-`test/gateway-financial-policy.test.ts`.
+Boot never runs an unbounded `ANALYZE`. When `sqlite_stat1` already holds
+statistics, boot runs the incremental `PRAGMA optimize` that keeps plans
+healthy as the gateway's own data grows. When statistics are missing and the
+file is large — a restored backup copy, a seeded capacity fixture, a database
+grown by another tool — boot logs `[DB] planner statistics missing on a
+N-page database` and continues with slightly worse plans instead of scanning
+every index before the HTTP server exists. Build them once, with the gateway
+stopped:
 
-**[delivered]** Model access policies — named allow-lists (default and
-project) enforced before routing, so the catalog, a single-model read, the
-requested model and every fallback target obey the same decision on every
-protocol surface. Tests: `test/gateway-model-policy.test.ts`.
+```sh
+DATA_DIR=./data bun scripts/analyze-gateway.ts            # bounded per-index sample
+DATA_DIR=./data bun scripts/analyze-gateway.ts --limit=400
+```
 
-**[delivered]** SQLite contention — boot survives a held lock, periodic work
-never blocks the request path, and cleanup runs in bounded batches. Tests:
-`test/gateway-sqlite-contention.test.ts`, `test/gateway-contention.test.ts`,
-`test/sqlite-retry.test.ts`.
+Measured on the delivered retention profile (500 users, 400 detailed days =
+100,000,000 raw events, 7,500,000 settled reservations, 1,095,005 audit rows):
+`gateway.db` is 13.7M pages ≈ **56 GB**, and a full `ANALYZE` of
+`usage_events` on a Windows ARM64 laptop at cold cache did not finish in
+fifteen minutes. Both facts are why statistics are built offline with a bounded
+sample and why the qualification workflow preflights free disk before seeding.
 
-**[delivered]** Supported backup — consistent snapshot while serving,
-verification (including of a tampered snapshot), retention, and the
-credential-encryption secret travelling with the copy. Tests:
-`test/gateway-backup.test.ts`.
+`GET /api/health` is liveness; `GET /api/ready` tests readiness. Both avoid the
+shared public IP bucket. Organization → Operations and backups displays
+`GET /api/admin/metrics`. It requires an administrator session or a dedicated
+`GATEWAY_METRICS_TOKEN` of at least 32 characters as a bearer token. That token
+grants no other admin API. Replies use `Cache-Control:no-store`.
 
-**[delivered]** Request correlation and audit coverage — `X-Request-Id` on
-every response, the same id on the usage event and the audit row, and a profile
-rename is audited with its before/after value. Tests:
-`test/gateway-correlation.test.ts`.
+Metrics include HTTP status classes, active/completed/cancelled requests,
+5xx counts, route-family latency, admission limits/queues/rejections, analytics
+worker health, SQLite contention/checkpoints, retention, maintenance and backup
+outcomes. Labels contain no user/project IDs, raw URLs, request IDs or
+credentials. Latency p50/p95/p99 cover the last **512 completions per route
+family**; count/sum/max are process-lifetime values. Duration includes stream
+consumption and provider waits. These are operational signals, not a
+gateway-overhead benchmark or evidence that the targets passed.
 
-**[delivered]** Detailed-event retention — detail expires, aggregates do not.
-Tests: `test/usage-retention.test.ts`.
+## Backup and offline restore
 
-**[delivered]** Asset delivery — brotli/gzip with correct negotiation, ETag
-and Range handling; route-level code splitting; latin-only font subsets and an
-on-demand KaTeX stylesheet took the initial payload from 4.66 MB to 0.70 MB.
-Tests: `test/static-compression.test.ts`.
+Administrators can list/create/verify/delete snapshots in Organization →
+Operations and backups. `BACKUP_DIR` defaults to `DATA_DIR/backups`.
+A consistent `VACUUM INTO` snapshot runs while WAL writes continue; creation
+and verification use worker threads. Worker failure is reported rather than
+falling back to synchronous serving-thread work.
 
-**[delivered]** Obscura installation — ZIP and tar.gz read in-process (Bun's
-archive reader rejects valid ZIP, which is the Windows release format),
-version and SHA-256 pinned, air-gapped install supported, every archive member
-unpacked. Tests: `test/obscura-install.test.ts`, `test/indirect-gen-ui-lint.test.ts`.
+Snapshots contain the database, bounded manifest with sizes/hashes/schema
+version, and the secret material needed to decrypt credentials. Verification
+checks inventory/path safety, sizes, SHA-256, SQLite integrity and critical
+table reads. Hashes detect corruption relative to the manifest; they are not
+an authenticity signature against replacement of both files and manifest.
+Protect snapshots and keep an off-host copy under the operator's access policy.
+Copied encryption secrets make snapshot access security-sensitive.
 
-**[pending]** Financial projects and cost centers.
+Daemon inclusion is off by default. When enabled, configure
+`BACKUP_DAEMON_DIRS` explicitly and arrange an offline/consistent daemon copy
+when required. A gateway SQLite snapshot does not establish a simultaneous
+transaction with daemon files or transfer their ownership. Daily/weekly
+retention applies to complete snapshots; inspect failed/interrupted copies
+before operator cleanup.
 
-**[pending]** Roles beyond admin/user (project manager), corporate OIDC, MFA
-enforced for administrators, bulk user import.
+Restore is an **offline CLI operation into a new or empty directory**; it never
+restores over the live installation. The destination parent must exist and be
+separate from the snapshot. The source and staged copy are verified before
+the restored directory is published:
 
-**[pending]** Metrics endpoint (calls, errors, latency, concurrency, queue
-depth, rejections, backup age) — liveness and readiness already exist and are
-exempt from the shared IP bucket.
+```sh
+bun scripts/restore-gateway-backup.ts \
+  --snapshot=/protected/backups/SNAPSHOT_ID \
+  --destination=/srv/indirect-restored
+```
 
-**[pending]** Ten-year capacity fixture run (500 users x 500 calls/day) with
-the p99 report.
+The CLI prints paths/schema metadata, not credentials. Configure the printed
+destination as `DATA_DIR` and its printed `secretFile` as `INDIRECT_SECRET_FILE`:
 
+```sh
+DATA_DIR=/srv/indirect-restored \
+INDIRECT_SECRET_FILE=/srv/indirect-restored/.secret \
+PUBLIC_URL=https://restored.example.com \
+bun start
+```
+
+Remove unrelated `INDIRECT_SECRET`/`GATEWAY_SECRET` environment values from
+that service: they take precedence over the secret file. Secret bytes,
+including intentional whitespace, must remain exact. Keep deployment settings
+such as `PUBLIC_URL`, SMTP, scraper credentials and proxy configuration with
+the deployment; the database does not reconstruct them. Restore optional
+`daemon/` copies separately while those daemons are stopped. Check history,
+balances, key reveal and an authorized provider request before switching traffic.
+The automated restore test does these checks on a separate running installation
+while preserving its source installation.
+
+## REST administration reference
+
+Dashboard successes include `success:true`; failures use
+`{success:false,error}`. Proxy failures retain the client's OpenAI/Anthropic
+envelope. Rate/concurrency rejections include `Retry-After`.
+
+| Routes | Access/purpose |
+| --- | --- |
+| `GET /api/projects`, `GET /api/projects/:id` | Administrator or membership-scoped metadata/projected budgets |
+| `POST /api/projects`, `PATCH /api/projects/:id` | Administrator create/edit/archive; `code,name,description,kind,costCenterId,responsibleUserId,monthlyLimitUsd,totalLimitUsd,status` as applicable; kind fixed after creation |
+| `GET /api/projects/:id/members`, `GET /api/projects/:id/member-candidates?q=...` | Scoped manager/administrator; search 2–80 characters, at most 20 candidates |
+| `PUT /api/projects/:id/members/:userId`, `DELETE` same path | Scoped member management; only administrators manage manager roles |
+| `GET /api/projects/:id/usage?from=YYYY-MM-DD&to=YYYY-MM-DD` | Scoped manager/administrator report; cost only when permitted |
+| `POST /api/keys`, `PATCH /api/keys/:id` | Own key with optional `projectId`/`null`; existing key fields keep their contracts |
+| `PATCH /api/admin/keys/:id` | Administrator project reassignment, `{projectId}` only |
+| `GET/PATCH /api/admin/financial-policy` | Installation financial defaults |
+| `GET/PATCH /api/admin/users/:id/financial-policy` | Independent nullable user overrides |
+| `GET/POST /api/admin/model-policies`, `GET/PATCH/DELETE /api/admin/model-policies/:id` | Administrator lists; project creation requires `projectId`, association fixed on edit |
+| `GET/PUT /api/admin/corporate-auth` | Administrator OIDC/policy configuration/readiness |
+| `GET/PUT /api/admin/users/:id/corporate-auth` | Administrator managed/exempt policy and explicit issuer/subject link |
+| `GET /api/auth/config`, `/api/auth/oidc/start`, `/api/auth/oidc/callback`, `POST /api/auth/oidc/complete` | Public sign-in flow with browser-bound completion |
+| `GET /api/me/security`, `POST/DELETE /api/me/oidc/link`, `POST /api/me/security/recovery-codes` | Current-account identity/recovery with required verification |
+| `POST /api/admin/users/import/preview`, `POST /api/admin/users/import/commit` | Administrator bounded preview and atomic commit |
+| `GET /api/admin/metrics` | Administrator or read-only scraper token |
+| `GET /api/admin/backups`, `GET /api/admin/backups/status`, `POST /api/admin/backups` | Administrator list/status/create |
+| `POST /api/admin/backups/:id/verify`, `DELETE /api/admin/backups/:id` | Administrator verify/delete; restore uses the CLI |
+
+## Regression and qualification commands
+
+Run the normal gates from the repository root:
+
+```sh
+bun run lint
+bun run typecheck
+bun test
+bun run build:web
+```
+
+The reviewed reproductions have specific regression coverage:
+
+| Reproduction | Regression boundary |
+| --- | --- |
+| Repeated correlation collides with reservation identity | `test/gateway-correlation.test.ts`: sequential/concurrent/cross-account/recovery calls |
+| Values leak through alternate/mutation endpoints | `test/gateway-financial-policy.test.ts`, `test/financial-projection.test.ts`: payload inventory and policy changes |
+| Percent UI consumes USD DTO fields | `scripts/test-gateway-financial-ui.ts`: actual finite/40%/reserved/unlimited/hidden presentation |
+| Retention stalls serving traffic | `test/usage-retention.test.ts`: backlog, interruption/restart, accounting and concurrent health/writes |
+| Rename/audit failure leaves unaudited state | `test/gateway-correlation.test.ts`: mutation events and injected rollback failures |
+| Dashboard/project model policy differs from proxy | `test/gateway-model-policy.test.ts`, `test/gateway-financial-projects.test.ts`: discovery, aliases, tombstones and grants |
+
+Additional coverage is in `test/gateway-corporate-auth.test.ts`,
+`test/gateway-user-import.test.ts`, `test/gateway-metrics.test.ts`,
+`test/gateway-backup.test.ts`, `test/gateway-restore.test.ts` and
+`test/usage-outbox.test.ts`. Test existence is not a passing result for a later
+revision; record the command and verdict after the final edit.
+
+Browser regressions require the built production SPA, an external pinned
+Playwright installation and Chromium. The financial script uses Node.js 22
+TypeScript stripping and starts Bun via `BUN_BIN`; the enterprise script uses Bun:
+
+```sh
+PLAYWRIGHT_MODULE=/absolute/playwright/index.mjs CHROMIUM_PATH=/absolute/chromium \
+bun scripts/test-gateway-enterprise-ui.ts --samples=40 --dir=tmp/enterprise-ui
+
+PLAYWRIGHT_MODULE=/absolute/playwright/index.js \
+CHROMIUM_PATH=/absolute/chromium BUN_BIN=/absolute/bun \
+node --experimental-strip-types scripts/test-gateway-financial-ui.ts
+```
+
+Fresh enterprise UI runs use six users/30 days and exercise mutations. They are
+correctness smoke tests. Reuse a completed enterprise fixture to measure real
+retained history without changing its policies. Keep fixture JSON/databases
+private: they contain generated test credentials. Publish sanitized reports
+and screenshots only.
+
+Capacity commands use isolated directories and refuse to overwrite nonempty
+seed destinations:
+
+```sh
+# Quick: 500 users, ten-year aggregates, two physical raw days.
+bun scripts/test-gateway-enterprise.ts --seed-only --dir=tmp/enterprise-quick
+bun scripts/test-gateway-enterprise.ts --reuse --dir=tmp/enterprise-quick \
+  --samples=1200 --rate=32 --report=tmp/enterprise-quick-api.json
+
+# Delivered raw retention: 100M events and 7.5M settled reservations.
+bun scripts/test-gateway-enterprise.ts --seed-only --raw-days=400 \
+  --reservation-days=30 --dir=tmp/enterprise-400
+bun scripts/test-gateway-enterprise.ts --reuse --dir=tmp/enterprise-400 \
+  --samples=1200 --rate=32 --report=tmp/enterprise-400-api.json
+
+PLAYWRIGHT_MODULE=/absolute/playwright/index.mjs CHROMIUM_PATH=/absolute/chromium \
+bun scripts/test-gateway-enterprise-ui.ts --reuse --dir=tmp/enterprise-400 \
+  --samples=3600 --enforce-p99 --report=tmp/enterprise-400-frontend.json
+```
+
+`--full` currently seeds 90 raw days (22.5M events), so it does not replace
+explicit `--raw-days=400`. The fixture checks physical count and aggregate
+totals independently. Its default audit profile is 365 days at six
+events/user/day (1,095,000 rows); these commands do not claim ten-year audit
+cardinality. Durability is not weakened for measurement.
+
+The API script schedules open-loop arrivals, includes scheduling/queue delay,
+errors/timeouts, subtracts per-request local provider processing time and
+reports API overhead separately from dashboard API duration. The browser
+script measures navigation through the target response, populated page and
+rendering frames, recording browser/cache/network conditions and per-route
+distributions. `--enforce-p99` requires at least 1,000 total interactions and
+rejects failures/runtime errors. The 3,600-interaction command gives 1,200
+samples for each of the three currently measured pages. Small samples remain
+exploratory even when fast.
+
+Ordinary CI runs production-SPA financial/enterprise regressions.
+`.github/workflows/enterprise-qualification.yml` is an explicit manual gate on
+a configurable dedicated native Linux runner, with disk/architecture preflight,
+separate quick/full400 profiles and sanitized report artifacts. Quick success
+does not qualify delivered retention. A full report must still identify which
+streaming/protocol/mixed-traffic, cold/warm/date/filter, maintenance/backup and
+sustained-load scenarios actually ran. Unimplemented or unrun scenarios remain
+unverified. Record CPU/RAM, OS/architecture, Bun/browser versions, storage,
+source revision, fixture/index cardinalities/size, actual soak duration,
+p50/p95/p99/max, errors, WAL/memory growth and cleanup/recovery results.
+
+The reviewed Windows x64 run on a Snapdragon X ARM host was an emulation
+baseline: API-added p99 313.9 ms, dashboard API p99 4,141.2 ms with 8/1,200
+errors, and a 50-user burst p99 1,086.4 ms. Its two physical raw days did not
+qualify 400-day retention. Native ARM64 Bun 1.4.2 is available for a new local
+run; availability is not a passing measurement. A native Linux deployment
+needs its documented target-machine run. No ten-year reliability claim follows
+from a short soak or finite regression suite.

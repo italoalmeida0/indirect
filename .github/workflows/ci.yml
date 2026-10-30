@@ -34,6 +34,11 @@ jobs:
         with:
           bun-version: "1.4.2"
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -77,6 +82,27 @@ jobs:
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.mjs" bun scripts/test-indirect-settings-ui.ts
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.mjs" bun scripts/test-indirect-mode-skills-ui.ts
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.mjs" bun scripts/test-indirect-office-ui.ts
+
+      - name: Enterprise administration browser regressions (production SPA)
+        env:
+          SMTP_HOST: ""
+          BACKUP_INCLUDE_DAEMON: "false"
+          BACKUP_INTERVAL_MINUTES: "0"
+        run: |
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.mjs" bun scripts/test-gateway-enterprise-ui.ts --samples=12 --dir="$RUNNER_TEMP/enterprise-ui" --report="$RUNNER_TEMP/enterprise-ui/frontend-report.json"
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.js" BUN_BIN="$(command -v bun)" node --experimental-strip-types scripts/test-gateway-financial-ui.ts
+
+      - name: Enterprise browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: enterprise-browser-regressions
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/enterprise-ui/frontend-report.json
+            ${{ runner.temp }}/enterprise-ui/ui-screenshots/*.png
+            tmp/gateway-financial-ui/*.png
 
       - name: Daemon protocol and turn lifecycle
         run: bun scripts/test-indirect-daemon-protocol.ts
