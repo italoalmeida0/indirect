@@ -93,25 +93,49 @@ Command:
 | Dashboard APIs, 12 req/s, 1,200 samples | ≤1,000 ms | 8.0 / 257.5 / **2,298.6** / 5,006.8 ms | 1/1,200 (503) |
 | 50-user distinct analytics burst | ≤1,000 ms | 806.8 / 1,417.3 / **1,418.6** / 1,418.6 ms | 0/50 |
 
-Per dashboard route p99: `/api/usage/overview` 68.8, `/api/usage/analytics`
-66.8, `/api/usage/events` 25.7, `/api/usage/filter-options` 15.6, `/api/keys`
-40.6, `/api/billing` 13.5, `/api/admin/users` 14.6, `/api/admin/keys` 11.5,
-`/api/admin/audit` 205.0, `/api/admin/usage-filter-options` 8.9,
-**`/api/admin/stats` 1,945.0** and **`/api/admin/analytics` 5,006.8 (the single
-503)**. Every non-administrative dashboard route is comfortably inside the
-budget; the whole overrun comes from the two cross-user administrative
-aggregates and from queueing during the 50-way burst.
+Per dashboard route p99: `/api/usage/overview` 31, `/api/usage/analytics` 67,
+`/api/usage/events` 30, `/api/usage/filter-options` 22, `/api/keys` 14,
+`/api/billing` 15, `/api/admin/users` 13, `/api/admin/keys` 9,
+`/api/admin/audit` 51, `/api/admin/usage-filter-options` 14,
+**`/api/admin/stats` 1,974** and **`/api/admin/analytics` 4,908**. Every
+non-administrative dashboard route is inside the budget; the whole overrun comes
+from the two cross-user administrative aggregates, which read 500 users' rows
+per bucket while a personal page reads one user's (measured: personal analytics
+p50 16 ms, admin analytics p50 1,373 ms), and from queueing during the 50-way
+burst.
 
-**Verdict: the agreed targets are NOT met on this host.** Two defects behind the
-worst of it were found and fixed in this round — long windows now read monthly
-rollups instead of the daily table (`USAGE_MONTHLY_CHART_SPAN`), which removed
-every `503 "Analytics is busy"` from ordinary windows and took ten-year stats
-from >5,000 ms to ~690 ms, and the fixture now seeds hour rollups the way live
-ingestion does, because a fixture without them made every recent window scan
-raw events. What remains is host throughput on the two admin aggregates
-(~100–150k rows/s for a seven-dimension grouping on this laptop) and admission
-queueing under a 50-way burst; closing it needs either a covering index plus a
-single materialised scan per analytics page, or qualification on the intended
+**Split-process methodology correction — the API target passes.** The numbers
+above were produced with the fixture's upstream and the load generator in one
+process, so generator queueing was charged to the gateway. Measuring the same
+gateway from a second process (`--serve` in one, `--base=<url>` in the other;
+the per-request upstream time still comes from the response header) gives:
+
+| Workload | Agreed p99 | Measured p50 / p95 / p99 / max | Errors |
+| --- | --- | --- | --- |
+| Gateway-added API latency, 32 req/s, 1,200 samples | ≤100 ms | 12.5 / 50.5 / **69.3** / 78.4 ms | 0/1,200 |
+| Total proxy latency, same workload | — | 33.5 / 71.4 / 89.8 / 105.5 ms | 0/1,200 |
+| Dashboard APIs, 12 req/s, 1,200 samples | ≤1,000 ms | — / — / **2,355.2** / — ms | 0/1,200 |
+| 50-user distinct analytics burst | ≤1,000 ms | 842 / — / **1,431.1** / — ms | 0/50 |
+
+So the gateway-added latency target **is met** (p99 69.3 ms against 100 ms) and
+the co-located generator was inflating it by ~4x. The dashboard and burst
+targets are not met, and the cause is isolated to the cross-user administrative
+aggregates: closing it needs a global (user-independent) daily rollup for
+administrative charts, because at 500 users a cross-user bucket reads 500 times
+the rows of a personal one.
+
+**Verdict: one of the three agreed targets is met on this host.** Gateway-added
+API latency passes at p99 69.3 ms; dashboard APIs (2,355 ms) and the 50-user
+burst (1,431 ms) do not. Two defects behind the worst of it were found and fixed
+in this round — long windows now read monthly rollups instead of the daily table
+(`USAGE_MONTHLY_CHART_SPAN`), which removed every `503 "Analytics is busy"` from
+ordinary windows and took ten-year stats from >5,000 ms to ~690 ms, and the
+fixture now seeds hour rollups the way live ingestion does, because a fixture
+without them made every recent window scan raw events. What remains is
+cross-user aggregate cost on the two administrative endpoints and admission
+queueing under a 50-way burst; closing it needs a user-independent daily rollup
+for administrative charts (a cross-user bucket reads 500x the rows of a personal
+one) and a dedicated pass on burst admission, or qualification on the intended
 server hardware.
 
 ## Not verified — must not be reported as passing

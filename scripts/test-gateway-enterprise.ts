@@ -136,7 +136,15 @@ try {
     : await createEnterpriseFixture(scenario, specifiedDir);
   emit("fixture", { dir: fixture.dir, scenario: fixture.scenario, representedRequests: fixture.expectedRequests, schemaVersion: fixture.schemaVersion });
   if (!args.includes("--seed-only")) {
-    stack = await startEnterpriseStack(fixture);
+    // --base measures an already-serving fixture (see --serve). Both the local
+    // upstream and the load generator otherwise share this process' event loop,
+    // so queuing inside the generator shows up as gateway-added latency. A
+    // qualification run that wants the pure gateway number measures across
+    // processes; the header-based upstream timing stays available either way.
+    const externalBase = arg("base");
+    stack = externalBase
+      ? ({ base: externalBase, fixture, upstreamDuration: () => undefined, stop: async () => {} } as unknown as EnterpriseStack)
+      : await startEnterpriseStack(fixture);
     if (args.includes("--serve")) {
       emit("server", { base: stack.base, fixture: fixturePath(fixture.dir) });
       await new Promise<void>((resolve) => { process.once("SIGINT", () => resolve()); process.once("SIGTERM", () => resolve()); });
