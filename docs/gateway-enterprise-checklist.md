@@ -41,7 +41,13 @@ qualified merely because its code exists. The detailed scope is in
   `scripts/analyze-gateway.ts` builds them offline. Scheduled jobs that hold the
   serving loop past their budget are reported.
 - [x] Capacity fixtures build planner statistics, so measurements are not taken
-  against degenerate plans.
+  against degenerate plans, and seed hour rollups the way live ingestion does,
+  so recent windows never fall back to scanning raw events.
+- [x] Windows longer than four months chart from the monthly rollup
+  (`USAGE_MONTHLY_CHART_SPAN`) instead of the daily table. Before this, a
+  ten-year or one-year dashboard request exceeded the 5,000 ms analytics job
+  budget and answered `503 "Analytics is busy"`; after it, ten-year stats answer
+  in ~690 ms and every ordinary window succeeds.
 
 ## Gates recorded on the current source revision
 
@@ -64,22 +70,50 @@ qualified merely because its code exists. The detailed scope is in
   `audit_log` = **1,095,005** (365 days), monthly rollups = **913,250,000**
   represented requests. `gateway.db` = 13,686,640 pages ≈ **56 GB**.
 
+## Measured qualification run (quick profile, native ARM64)
+
+Host: Snapdragon X Elite 12-core, 16 GB RAM, Windows 11 ARM64, Bun 1.4.2
+arm64 (native, not emulated), production durability, local fixture upstream
+with a 20 ms wait, `BUN_CONFIG_MAX_HTTP_REQUESTS=2048`.
+Fixture: 500 users, 3,653 aggregate days, 2 detailed days with hour rollups,
+`gateway.db` = 7.2 GB, 5,479,500 daily rollup rows, 500,000 raw events,
+913,250,000 represented requests. Correctness precheck passed
+(historical 913,250,000; partial user range 1,000 against an independently
+counted query).
+Command:
+`bun scripts/test-gateway-enterprise.ts --dir=tmp/enterprise-quick-3 --samples=1200 --rate=32`
+(report: `tmp/enterprise-continuation/quick3-api.json`).
+
+| Workload | Agreed p99 | Measured p50 / p95 / p99 / max | Errors |
+| --- | --- | --- | --- |
+| Gateway-added API latency, 32 req/s, 1,200 samples | ≤100 ms | 19.6 / 124.2 / **270.7** / 481.3 ms | 0/1,200 |
+| Total proxy latency, same workload | — | 40.6 / 144.7 / 291.1 / 502.5 ms | 0/1,200 |
+| Dashboard APIs, 12 req/s, 1,200 samples | ≤1,000 ms | 8.0 / 257.5 / **2,298.6** / 5,006.8 ms | 1/1,200 (503) |
+| 50-user distinct analytics burst | ≤1,000 ms | 806.8 / 1,417.3 / **1,418.6** / 1,418.6 ms | 0/50 |
+
+Per dashboard route p99: `/api/usage/overview` 68.8, `/api/usage/analytics`
+66.8, `/api/usage/events` 25.7, `/api/usage/filter-options` 15.6, `/api/keys`
+40.6, `/api/billing` 13.5, `/api/admin/users` 14.6, `/api/admin/keys` 11.5,
+`/api/admin/audit` 205.0, `/api/admin/usage-filter-options` 8.9,
+**`/api/admin/stats` 1,945.0** and **`/api/admin/analytics` 5,006.8 (the single
+503)**. Every non-administrative dashboard route is comfortably inside the
+budget; the whole overrun comes from the two cross-user administrative
+aggregates and from queueing during the 50-way burst.
+
+**Verdict: the agreed targets are NOT met on this host.** Two defects behind the
+worst of it were found and fixed in this round — long windows now read monthly
+rollups instead of the daily table (`USAGE_MONTHLY_CHART_SPAN`), which removed
+every `503 "Analytics is busy"` from ordinary windows and took ten-year stats
+from >5,000 ms to ~690 ms, and the fixture now seeds hour rollups the way live
+ingestion does, because a fixture without them made every recent window scan
+raw events. What remains is host throughput on the two admin aggregates
+(~100–150k rows/s for a seven-dimension grouping on this laptop) and admission
+queueing under a 50-way burst; closing it needs either a covering index plus a
+single materialised scan per analytics page, or qualification on the intended
+server hardware.
+
 ## Not verified — must not be reported as passing
 
-- [ ] **Agreed p99 targets.** Measured on the quick profile (500 users,
-  3,653 aggregate days, 2 detailed days, `gateway.db` = 7.2 GB, 5,479,500 daily
-  rollup rows, 913,250,000 represented requests) on this Windows ARM64 host,
-  warm after one attempt:
-  `GET /api/admin/stats?from=<14d>` = **3,496 ms** (target 1,000 ms);
-  `GET /api/admin/stats?from=all` = **3,719 ms**;
-  `GET /api/admin/analytics` returned **503 "Analytics is busy"** on every
-  attempt (14-day and ten-year) because the read job exceeds its 5,000 ms budget.
-  The dashboard targets are therefore **not met** and the capacity script's own
-  ten-year accuracy precheck aborts, so the API-overhead and dashboard
-  distributions were not produced. This reproduces the reviewed baseline
-  (dashboard p99 4,141 ms) rather than fixing it: dashboard analytics remains
-  roughly 3.5x over the agreed budget and needs a dedicated optimisation pass
-  (query/rollup restructuring and caching), which was not attempted here.
 - [ ] **Delivered-retention (full400) measurement.** The fixture is complete and
   verified (100,000,000 raw events, 56 GB), but this host could not serve the
   gateway from it: a full `ANALYZE` of `usage_events` at cold cache did not

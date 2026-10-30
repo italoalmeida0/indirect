@@ -6,6 +6,18 @@ import { cachedUsageQuery } from "./usage-cache";
 import { usageRollupCoverage, USAGE_DAY, USAGE_HOUR, USAGE_MINUTE } from "./usage-rollup";
 
 const DAY = USAGE_DAY;
+
+/** Spans longer than this chart months instead of days.
+ *
+ * Reading a whole span from the daily rollup costs one row per key, user, day
+ * and model — 135,000 rows for a 90-day window of 500 users, 547,500 for a
+ * year — while the monthly rollup holds twelve rows per key and model for that
+ * same year. Measured on a 500-user fixture: a 365-day daily read exceeds the
+ * 5 s analytics job budget (the request fails with "Analytics is busy"), while
+ * the same window from months answers in a few hundred milliseconds. Four
+ * months is the point where a day-granular chart has already outgrown the
+ * 48-bucket grid anyway, so the switch costs no resolution a reader can use. */
+export const USAGE_MONTHLY_CHART_SPAN = 120 * DAY;
 const fields = ["model", "provider_id", "key_id", "proto", "upstream_model", "provider_key_id", "user_id"] as const;
 type Field = typeof fields[number];
 interface UsageSelection { include: string[]; exclude: string[] }
@@ -267,12 +279,12 @@ export function usageSeriesGranularity(scope: UsageScope): "month" | "day" | "ho
   const rawFrom = usageRollupCoverage(db).raw_from;
   const archived = rawFrom > 0 && (scope.from === null || scope.from < rawFrom);
   const unit = archived ? DAY : span <= USAGE_HOUR ? USAGE_MINUTE : span <= 3 * DAY ? USAGE_HOUR : DAY;
-  return span > 400 * DAY ? "month" : unit === DAY ? "day" : unit === USAGE_MINUTE ? "minute" : "hour";
+  return span > USAGE_MONTHLY_CHART_SPAN ? "month" : unit === DAY ? "day" : unit === USAGE_MINUTE ? "minute" : "hour";
 }
 
 function buildUsageSeries(scope: UsageScope, userId: string | null) {
   const span = scope.from === null ? Infinity : scope.to - scope.from;
-  const monthly = span > 400 * DAY;
+  const monthly = span > USAGE_MONTHLY_CHART_SPAN;
   const rawFrom = usageRollupCoverage(db).raw_from;
   const archived = rawFrom > 0 && (scope.from === null || scope.from < rawFrom);
   const unit = archived ? DAY : span <= USAGE_HOUR ? USAGE_MINUTE : span <= 3 * DAY ? USAGE_HOUR : DAY;

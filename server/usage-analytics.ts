@@ -1,6 +1,6 @@
 import { db } from "./db";
 import { costAggFieldsSql, costRowFieldsSql, modelPricingJoins } from "./pricing";
-import { filteredUsageSeries, memoizedUsageSource, resolveUsageScope, usageSource, USAGE_MODEL_DIMENSIONS, usageSeriesGranularity, type UsageScope } from "./usage-filters";
+import { filteredUsageSeries, memoizedUsageSource, resolveUsageScope, usageSource, USAGE_MONTHLY_CHART_SPAN, USAGE_MODEL_DIMENSIONS, usageSeriesGranularity, type UsageScope } from "./usage-filters";
 import { USAGE_DAY, USAGE_HOUR, USAGE_MINUTE } from "./usage-rollup";
 
 const DAY = USAGE_DAY;
@@ -128,9 +128,9 @@ function unitOf(granularity: "month" | "day" | "hour" | "minute"): number {
   return granularity === "minute" ? USAGE_MINUTE : granularity === "hour" ? USAGE_HOUR : DAY;
 }
 
-/** A window spanning more than ~13 months charts by month. */
+/** A window spanning more than ~4 months charts by month. */
 function spanIsMonthly(scope: UsageScope): boolean {
-  return scope.from === null || scope.to - scope.from > 400 * DAY;
+  return scope.from === null || scope.to - scope.from > USAGE_MONTHLY_CHART_SPAN;
 }
 
 /** Granularity this window can actually be read at (see usageSeriesGranularity). */

@@ -252,6 +252,32 @@ export async function createEnterpriseFixture(scenario: EnterpriseScenario, requ
       db.transaction(() => rawInsert.run(fixture.providerId, fixture.providerKeyId, day))();
       console.log(JSON.stringify({ phase: "raw-history", completedDays: scenario.rawDays - day, days: scenario.rawDays }));
     }
+    // Live ingestion writes an hour rollup with every event. A fixture that
+    // seeded only detail would make every recent window fall back to scanning
+    // `usage_events`, which measured as a 5 s analytics timeout instead of a
+    // sub-second answer — a fixture artefact, not product behaviour. Build the
+    // same rollup shape from the seeded events and publish the coverage
+    // watermark so queries use it.
+    const hourInsert = db.prepare(`INSERT INTO usage_hour_rollups
+      (bucket, key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model,
+       in_tok, cache_tok, out_tok, reqs, success_reqs, error_reqs, cost_in_nanos, cost_cache_nanos, cost_out_nanos)
+      SELECT CAST(ts / 3600000 AS INTEGER) * 3600000, key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model,
+        SUM(in_tok), SUM(cache_tok), SUM(out_tok), COUNT(*), SUM(status >= 200 AND status < 300), SUM(status < 200 OR status >= 300),
+        SUM(cost_in_nanos), SUM(cost_cache_nanos), SUM(cost_out_nanos)
+      FROM usage_events WHERE ts >= ? AND ts < ?
+      GROUP BY 1, key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model`);
+    for (let day = scenario.rawDays - 1; day >= 0; day--) {
+      const window = db.query<{ from_ts: number; to_ts: number }, [number]>(
+        "SELECT ts AS from_ts, ts + duration AS to_ts FROM seed_days WHERE i = ?",
+      ).get(day)!;
+      db.transaction(() => hourInsert.run(window.from_ts, window.to_ts))();
+      console.log(JSON.stringify({ phase: "hour-rollups", completedDays: scenario.rawDays - day, days: scenario.rawDays }));
+    }
+    const oldestRaw = db.query<{ ts: number | null }, []>("SELECT MIN(ts) AS ts FROM usage_events").get()!.ts;
+    if (oldestRaw !== null) {
+      db.prepare("UPDATE usage_rollup_coverage SET hourly_from = MIN(hourly_from, ?) WHERE id = 1")
+        .run(Math.floor(oldestRaw / 3_600_000) * 3_600_000);
+    }
     // Settled reservations have the same retained cardinality as real traffic.
     const reservationInsert = db.prepare(`INSERT INTO billing_reservations(id,instance_id,key_id,user_id,created_at,settled_at,amount_nanos,periods,pricing,cost_in_nanos,cost_cache_nanos,cost_out_nanos,state)
       SELECT printf('fixture-%d-%d-%d',d.i,u.i,c.i),'fixture',u.key_id,u.id,${timestamp},${timestamp},${COST.input + COST.cache + COST.output},'[]','{}',${COST.input},${COST.cache},${COST.output},'settled'
