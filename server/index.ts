@@ -22,7 +22,7 @@ import { flushUsage } from "./usage";
 import { initTokenEstimator } from "./tokens";
 import { resolveRequestId, runWithRequest } from "./request-context";
 import { scheduleMaintenance } from "./maintenance";
-import { pruneUsageRollups } from "./usage-rollup";
+import { pruneUsageEvents, pruneUsageRollups } from "./usage-rollup";
 import { batchDelete } from "./batch-delete";
 import { backupIntervalMs, backupRoot, runBackupCycle } from "./backup";
 
@@ -96,6 +96,22 @@ scheduleMaintenance("session cleanup", cleanupExpiredSessions, 15 * 60_000);
 scheduleMaintenance("analytics rollup cleanup", () => {
   pruneUsageRollups(db, Date.now(), LIMITS.analyticsHourlyDays, LIMITS.analyticsMinuteDays, LIMITS.maintenanceBatchSize);
 }, 60_000);
+
+/**
+ * Detailed-event retention. Runs hourly, not every minute: it deletes whole
+ * days older than the window, so a more frequent schedule would only re-scan
+ * the same rows. Aggregates are untouched, which is why the long history keeps
+ * working after the detail is gone.
+ */
+if (LIMITS.usageEventRetentionDays > 0) {
+  scheduleMaintenance("usage event retention", () => {
+    const result = pruneUsageEvents(db, Date.now(), LIMITS.usageEventRetentionDays, LIMITS.usageEventPruneBatch);
+    if (result.deleted) console.info(`[RETENTION] pruned ${result.deleted} detailed usage event(s) older than ${LIMITS.usageEventRetentionDays} days`);
+  }, 60 * 60_000);
+  console.log(`[RETENTION] detailed usage events kept for ${LIMITS.usageEventRetentionDays} days; aggregates are retained`);
+} else {
+  console.log("[RETENTION] detailed usage event pruning disabled (USAGE_EVENT_RETENTION_DAYS=0)");
+}
 
 // ===== Supported backup schedule =====
 

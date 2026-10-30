@@ -97,6 +97,52 @@ export function rebuildUsageRollups(db: Database, opts: RebuildUsageRollupsOptio
  * The same sweep extends hour coverage backwards over retained events, so the
  * partially covered hours left by migration 027 stop falling back to a raw
  * scan once the gateway has been running for a few minutes. */
+/**
+ * Delete detailed usage events older than the retention window.
+ *
+ * A million events occupy ~547 MiB before compression, and the row grows with
+ * every call forever unless something bounds it. Detail is what expires;
+ * AGGREGATES DO NOT: the daily/monthly rollups keep the ten-year history, so
+ * charts and billing stay exact while the raw ledger shrinks.
+ *
+ * Two invariants make this safe:
+ *   - only COMPLETE UTC days older than the cutoff are removed, so a partial
+ *     day can never be half-deleted;
+ *   - `raw_from` advances to the cutoff in the SAME transaction, so a query
+ *     knows the detail starts there and falls back to aggregates for the rest
+ *     instead of silently showing zero.
+ *
+ * Deletion is batched: one unbounded DELETE holds the write lock for a
+ * whole-table scan.
+ */
+export function pruneUsageEvents(db: Database, now: number, retentionDays: number, batch = 5_000): { deleted: number; rawFrom: number } {
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) {
+    return { deleted: 0, rawFrom: db.query<{ raw_from: number }, []>("SELECT raw_from FROM usage_rollup_coverage WHERE id = 1").get()?.raw_from ?? 0 };
+  }
+  const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;
+  // Keep N days INCLUDING today, and never cut inside the current day.
+  const cutoff = Math.max(0, today - (Math.max(1, Math.floor(retentionDays)) - 1) * USAGE_DAY);
+  const coverage = db.query<{ raw_from: number }, []>("SELECT raw_from FROM usage_rollup_coverage WHERE id = 1").get();
+  const current = coverage?.raw_from ?? 0;
+  if (cutoff <= current) return { deleted: 0, rawFrom: current };
+  let deleted = 0;
+  db.transaction(() => {
+    const remove = db.prepare("DELETE FROM usage_events WHERE id IN (SELECT id FROM usage_events WHERE ts < ? ORDER BY id LIMIT ?)");
+    try {
+      for (;;) {
+        const changed = remove.run(cutoff, batch).changes;
+        deleted += changed;
+        if (changed < batch) break;
+      }
+    } finally { remove.finalize(); }
+    // Advance the watermark LAST, inside the same transaction: a crash before
+    // this point leaves the events in place and the next run retries; a crash
+    // after it cannot happen without the deletes having committed.
+    db.prepare("UPDATE usage_rollup_coverage SET raw_from = ? WHERE id = 1").run(cutoff);
+  }).immediate();
+  return { deleted, rawFrom: cutoff };
+}
+
 export function pruneUsageRollups(db: Database, now: number, hourDays: number, minuteDays: number, batch = 1000): void {
   backfillHourRollups(db, { now });
   const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;

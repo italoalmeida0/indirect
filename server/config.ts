@@ -117,6 +117,15 @@ export const LIMITS = {
    */
   backupDir: process.env.BACKUP_DIR || "",
   backupIntervalMinutes: Number(process.env.BACKUP_INTERVAL_MINUTES ?? 24 * 60),
+  /**
+   * Days of DETAILED usage events to keep. Aggregates (the daily and monthly
+   * rollups) are kept regardless, so the long history survives while the raw
+   * ledger stays bounded: a million events occupy ~547 MiB, and the table
+   * otherwise grows forever. 0 disables pruning.
+   */
+  usageEventRetentionDays: Number(process.env.USAGE_EVENT_RETENTION_DAYS ?? 400),
+  /** Rows removed per statement by the retention sweep. */
+  usageEventPruneBatch: positiveLimit("USAGE_EVENT_PRUNE_BATCH", 5_000),
   /** Retention: completed snapshots kept per bucket, newest first. */
   backupKeepDaily: boundedLimit("BACKUP_KEEP_DAILY", 14, 3650),
   backupKeepWeekly: boundedLimit("BACKUP_KEEP_WEEKLY", 8, 520),
