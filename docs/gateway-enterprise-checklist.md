@@ -66,19 +66,29 @@ qualified merely because its code exists. The detailed scope is in
 
 ## Not verified — must not be reported as passing
 
-- [ ] **Agreed p99 targets on the delivered retention profile.** The full400
-  fixture exists and is complete, but this host could not produce the
-  measurement: a full `ANALYZE` of `usage_events` at cold cache did not finish
-  in fifteen minutes, and the gateway boot that depended on it exceeded the
-  30 s harness deadline. The code defect behind that dependency is fixed
-  (bounded statistics, offline command), but the numbers themselves were not
-  obtained. Exact command and prerequisite:
-  `bun scripts/analyze-gateway.ts` with `DATA_DIR` pointing at the fixture
-  (gateway stopped), then
-  `bun scripts/test-gateway-enterprise.ts --reuse --dir=tmp/enterprise-full400 --samples=1200 --rate=32 --report=…`
-  on a native host with ≥100 GiB free and, preferably, Linux. Until that run
-  exists, `api-added p99 <= 100 ms` and `dashboard p99 <= 1000 ms` remain
-  unmeasured for the delivered profile.
+- [ ] **Agreed p99 targets.** Measured on the quick profile (500 users,
+  3,653 aggregate days, 2 detailed days, `gateway.db` = 7.2 GB, 5,479,500 daily
+  rollup rows, 913,250,000 represented requests) on this Windows ARM64 host,
+  warm after one attempt:
+  `GET /api/admin/stats?from=<14d>` = **3,496 ms** (target 1,000 ms);
+  `GET /api/admin/stats?from=all` = **3,719 ms**;
+  `GET /api/admin/analytics` returned **503 "Analytics is busy"** on every
+  attempt (14-day and ten-year) because the read job exceeds its 5,000 ms budget.
+  The dashboard targets are therefore **not met** and the capacity script's own
+  ten-year accuracy precheck aborts, so the API-overhead and dashboard
+  distributions were not produced. This reproduces the reviewed baseline
+  (dashboard p99 4,141 ms) rather than fixing it: dashboard analytics remains
+  roughly 3.5x over the agreed budget and needs a dedicated optimisation pass
+  (query/rollup restructuring and caching), which was not attempted here.
+- [ ] **Delivered-retention (full400) measurement.** The fixture is complete and
+  verified (100,000,000 raw events, 56 GB), but this host could not serve the
+  gateway from it: a full `ANALYZE` of `usage_events` at cold cache did not
+  finish in fifteen minutes. The boot-side dependency is fixed (bounded
+  statistics plus `scripts/analyze-gateway.ts`), the numbers are not obtained.
+  Prerequisites: run `bun scripts/analyze-gateway.ts` against the fixture while
+  the gateway is stopped, then
+  `bun scripts/test-gateway-enterprise.ts --reuse --dir=tmp/enterprise-full400 --samples=1200 --rate=32`,
+  preferably on native Linux with ≥100 GiB free.
 - [x] Enterprise administration browser regressions on a fresh six-user fixture:
   project creation with a shared budget, membership save, financial defaults,
   model policy, bulk import preview/commit, corporate-auth section keyboard
