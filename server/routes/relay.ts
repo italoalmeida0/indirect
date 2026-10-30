@@ -5,11 +5,88 @@ import { jwtVerify, sha256Hex } from "../crypto";
 import { sendTurnPush, type TurnPush } from "../push";
 
 export type WsData =
-  | { type: "daemon"; hostId: string; userId: string; updating?: boolean }
-  | { type: "client"; userId: string };
+  | { type: "daemon"; hostId: string; userId: string; tokenHash: string; updating?: boolean }
+  | { type: "client"; userId: string; jti: string; family: string; accessExpiresAt: number; expiresAt: number };
 
 const daemons = new Map<string, ServerWebSocket<WsData>>();
 const clientsByUserId = new Map<string, Set<ServerWebSocket<WsData>>>();
+const clientExpiryTimers = new WeakMap<ServerWebSocket<WsData>, ReturnType<typeof setTimeout>>();
+
+function disconnectClient(ws: ServerWebSocket<WsData>, reason: string): void {
+  if (ws.data.type !== "client") return;
+  const clients = clientsByUserId.get(ws.data.userId);
+  clients?.delete(ws);
+  if (clients?.size === 0) clientsByUserId.delete(ws.data.userId);
+  const timer = clientExpiryTimers.get(ws);
+  if (timer) clearTimeout(timer);
+  clientExpiryTimers.delete(ws);
+  try { ws.close(1008, reason); } catch {}
+}
+
+/** Refresh the sliding expiry at its previous deadline. Normal authenticated
+ *  HTTP activity may have extended it since this socket was opened. */
+function refreshClientExpiry(ws: ServerWebSocket<WsData>): boolean {
+  if (ws.data.type !== "client") return false;
+  try {
+    const session = stmts.sessionByJti.get(ws.data.jti);
+    const user = stmts.userById.get(ws.data.userId);
+    const now = Date.now();
+    if (session && session.user_id === ws.data.userId && !session.revoked && session.expires_at > now && session.abs_expires_at > now && ws.data.accessExpiresAt > now && user?.status === "active") {
+      ws.data.expiresAt = Math.min(ws.data.accessExpiresAt, session.expires_at, session.abs_expires_at);
+      return true;
+    }
+  } catch (error) {
+    console.error("[RELAY] session expiry check failed:", error instanceof Error ? error.name : "unknown");
+  }
+  disconnectClient(ws, "session_expired");
+  return false;
+}
+
+function scheduleClientExpiry(ws: ServerWebSocket<WsData>): void {
+  if (ws.data.type !== "client") return;
+  const previous = clientExpiryTimers.get(ws);
+  if (previous) clearTimeout(previous);
+  const timer = setTimeout(() => {
+    if (ws.data.type !== "client" || !clientsByUserId.get(ws.data.userId)?.has(ws)) return;
+    if (refreshClientExpiry(ws)) scheduleClientExpiry(ws);
+  }, Math.max(0, ws.data.expiresAt - Date.now()));
+  timer.unref();
+  clientExpiryTimers.set(ws, timer);
+}
+
+function clientLive(ws: ServerWebSocket<WsData>): boolean {
+  if (ws.data.type !== "client" || !clientsByUserId.get(ws.data.userId)?.has(ws)) return false;
+  if (ws.data.expiresAt > Date.now()) return true;
+  if (!refreshClientExpiry(ws)) return false;
+  scheduleClientExpiry(ws);
+  return true;
+}
+
+/** Remove sockets before requesting a close, so queued messages cannot cross
+ *  the relay during the WebSocket closing handshake. */
+export function disconnectSessionSockets(userId: string, opts: { jti?: string; family?: string; exceptJti?: string } = {}): void {
+  const clients = clientsByUserId.get(userId);
+  if (!clients) return;
+  for (const ws of clients) {
+    if (ws.data.type !== "client") continue;
+    if (opts.jti && ws.data.jti !== opts.jti) continue;
+    if (opts.family && ws.data.family !== opts.family) continue;
+    if (opts.exceptJti && ws.data.jti === opts.exceptJti) continue;
+    disconnectClient(ws, "session_revoked");
+  }
+}
+
+/** Bans/deletions disconnect daemons without a shutdown frame, so an unbanned
+ *  daemon can reconnect normally. The owner check blocks reconnects meanwhile. */
+export function disconnectUserDaemons(userId: string): void {
+  for (const [hostId, ws] of daemons) {
+    if (ws.data.type !== "daemon" || ws.data.userId !== userId) continue;
+    daemons.delete(hostId);
+    updatingHosts.delete(hostId);
+    try { ws.close(1008, "account_unavailable"); } catch {}
+  }
+  for (const [hostId, owner] of updatingHosts) if (owner === userId) updatingHosts.delete(hostId);
+}
 
 export function closeDaemonSocket(hostId: string): void {
   const ws = daemons.get(hostId);
@@ -23,6 +100,7 @@ export function closeDaemonSocket(hostId: string): void {
       ws.close(1000, "host_deleted");
     } catch {}
     daemons.delete(hostId);
+    updatingHosts.delete(hostId);
   }
 }
 
@@ -41,6 +119,7 @@ export function disconnectDaemonSocket(hostId: string): void {
       ws.close(1000, "host_repaired");
     } catch {}
     daemons.delete(hostId);
+    updatingHosts.delete(hostId);
   }
 }
 
@@ -85,7 +164,7 @@ export async function handleIndirectCodeUpgrade(
     const tokenHash = sha256Hex(token);
     const host = db
       .prepare<RemoteHostRow, [string]>(
-        "SELECT * FROM remote_hosts WHERE daemon_token_hash = ?",
+        "SELECT h.* FROM remote_hosts h JOIN users u ON u.id = h.user_id WHERE h.daemon_token_hash = ? AND u.status = 'active'",
       )
       .get(tokenHash);
 
@@ -94,7 +173,7 @@ export async function handleIndirectCodeUpgrade(
     }
 
     const upgraded = server.upgrade(req, {
-      data: { type: "daemon", hostId: host.id, userId: host.user_id, updating: isUpdating },
+      data: { type: "daemon", hostId: host.id, userId: host.user_id, tokenHash, updating: isUpdating },
     });
     if (upgraded) return undefined;
     return new Response("upgrade failed", { status: 400 });
@@ -117,12 +196,13 @@ export async function handleIndirectCodeUpgrade(
     }
 
     const session = stmts.sessionByJti.get(res.payload.jti);
-    if (!session || session.revoked || session.expires_at < Date.now()) {
+    const user = session && stmts.userById.get(session.user_id);
+    if (!session || session.user_id !== res.payload.sub || session.revoked || session.expires_at <= Date.now() || session.abs_expires_at <= Date.now() || !user || user.status !== "active") {
       return new Response("session expired or revoked", { status: 401 });
     }
 
     const upgraded = server.upgrade(req, {
-      data: { type: "client", userId: res.payload.sub },
+      data: { type: "client", userId: session.user_id, jti: session.jti, family: session.family ?? session.jti, accessExpiresAt: res.payload.exp * 1000, expiresAt: Math.min(res.payload.exp * 1000, session.expires_at, session.abs_expires_at) },
     });
     if (upgraded) return undefined;
     return new Response("upgrade failed", { status: 400 });
@@ -140,12 +220,20 @@ export const remoteRelayWsHandlers = {
   open(ws: ServerWebSocket<WsData>) {
     if (ws.data.type === "daemon") {
       const { hostId, userId } = ws.data;
+      const host = db.prepare<{ id: string }, [string, string, string]>(
+        "SELECT h.id FROM remote_hosts h JOIN users u ON u.id = h.user_id WHERE h.id = ? AND h.user_id = ? AND h.daemon_token_hash = ? AND u.status = 'active'",
+      ).get(hostId, userId, ws.data.tokenHash);
+      if (!host) { try { ws.close(1008, "account_unavailable"); } catch {} return; }
+      const previous = daemons.get(hostId);
+      if (previous && previous !== ws) { try { previous.close(1000, "superseded"); } catch {} }
       daemons.set(hostId, ws);
 
       const now = Date.now();
-      db.prepare(
-        "UPDATE remote_hosts SET status = 'online', last_seen_at = ? WHERE id = ?",
-      ).run(now, hostId);
+      try {
+        db.prepare("UPDATE remote_hosts SET status = 'online', last_seen_at = ? WHERE id = ?").run(now, hostId);
+      } catch (error) {
+        console.error("[RELAY] could not persist host status:", error instanceof Error ? error.name : "unknown");
+      }
 
       // Brutal updater owns the host: report "updating" (overlay), not
       // "online" — UNLESS a fresh non-updating daemon already reclaimed
@@ -164,13 +252,20 @@ export const remoteRelayWsHandlers = {
       });
       console.log(`[RELAY] Daemon ${hostState}: ${hostId} (user: ${userId})`);
     } else if (ws.data.type === "client") {
-      const { userId } = ws.data;
+      const { userId, jti, expiresAt } = ws.data;
+      const session = stmts.sessionByJti.get(jti);
+      const user = stmts.userById.get(userId);
+      if (!session || session.user_id !== userId || session.revoked || session.expires_at <= Date.now() || session.abs_expires_at <= Date.now() || !user || user.status !== "active" || expiresAt <= Date.now()) {
+        disconnectClient(ws, "session_revoked");
+        return;
+      }
       let set = clientsByUserId.get(userId);
       if (!set) {
         set = new Set();
         clientsByUserId.set(userId, set);
       }
       set.add(ws);
+      scheduleClientExpiry(ws);
 
       try {
         ws.send(JSON.stringify({ type: "relay_connected", userId }));
@@ -187,6 +282,10 @@ export const remoteRelayWsHandlers = {
   },
 
   message(ws: ServerWebSocket<WsData>, message: string | Buffer) {
+    if (ws.data.type === "daemon" && daemons.get(ws.data.hostId) !== ws) return;
+    if (ws.data.type === "client") {
+      if (!clientLive(ws)) return;
+    }
     const rawStr = typeof message === "string" ? message : message.toString("utf8");
     let parsed: any;
     try {
@@ -264,9 +363,11 @@ export const remoteRelayWsHandlers = {
         // fails (it reports update_failed itself before rebirthing).
         updatingHosts.delete(hostId);
         const now = Date.now();
-        db.prepare(
-          "UPDATE remote_hosts SET status = 'offline', last_seen_at = ? WHERE id = ?",
-        ).run(now, hostId);
+        try {
+          db.prepare("UPDATE remote_hosts SET status = 'offline', last_seen_at = ? WHERE id = ?").run(now, hostId);
+        } catch (error) {
+          console.error("[RELAY] could not persist host status:", error instanceof Error ? error.name : "unknown");
+        }
 
         broadcastToUser(userId, {
           type: "host_status",
@@ -282,6 +383,9 @@ export const remoteRelayWsHandlers = {
         set.delete(ws);
         if (set.size === 0) clientsByUserId.delete(userId);
       }
+      const timer = clientExpiryTimers.get(ws);
+      if (timer) clearTimeout(timer);
+      clientExpiryTimers.delete(ws);
     }
   },
 };
@@ -387,6 +491,7 @@ function broadcastToUserCompressed(userId: string, data: string | object, compre
   if (!set || set.size === 0) return;
   const payload = typeof data === "string" ? data : JSON.stringify(data);
   for (const client of set) {
+    if (!clientLive(client)) continue;
     try {
       if (compress) client.send(payload, true);
       else client.send(payload);

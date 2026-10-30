@@ -60,6 +60,7 @@ beforeAll(async () => {
       ADMIN_EMAIL: "admin@audit.local",
       ADMIN_PASSWORD: ADMIN_PW,
       TRUST_PROXY: "true",
+      TRUSTED_PROXY_CIDRS: "127.0.0.1/32,::1/128",
       LIMIT_IP_PER_MIN: "100000",
     },
     stdout: "ignore",
@@ -168,7 +169,9 @@ describe("Empirical Security Audit Tests", () => {
   });
 
   test("1.3 [SECURITY FIX VERIFIED] Rate Limiter Bounded Eviction does not clear all active limits", async () => {
-    const { limits } = await import("../server/ratelimit");
+    const { limits, configureLimits } = await import("../server/ratelimit");
+    const { LIMITS } = await import("../server/config");
+    configureLimits({ ipPerMin: 600 });
     // Limit target IP
     for (let i = 0; i < 605; i++) {
       limits.ipPerMin("target-test-ip");
@@ -182,6 +185,7 @@ describe("Empirical Security Audit Tests", () => {
     }
 
     console.log("[EMPIRICAL TEST 1.3] Rate limiter flood test verified with bounded eviction");
+    configureLimits({ ipPerMin: LIMITS.ipPerMin });
   });
 
   // VETOR 2: LEAKED API KEY
@@ -222,26 +226,18 @@ describe("Empirical Security Audit Tests", () => {
     expect(comp.status).toBe(200);
   });
 
-  test("2.2 [LEAKED KEY ANALYSIS] Global Upstream Slot Exhaustion DoS with Leaked Key", async () => {
-    const { acquireUpstreamSlot, releaseUpstreamSlot } = await import("../server/ratelimit");
-    // Default globalMax is 256
-    // If 256 slots are held, NO other key can make requests
-    const acquired: string[] = [];
+  test("2.2 one account cannot exhaust global upstream slots with many keys", async () => {
+    const { acquireUpstreamSlot } = await import("../server/ratelimit");
+    const releases: Array<() => void> = [];
     for (let i = 0; i < 256; i++) {
-      const ok = acquireUpstreamSlot(`key-${i}`, 16, 256);
-      if (ok) acquired.push(`key-${i}`);
+      const slot = acquireUpstreamSlot(`key-${i}`, "one-user", 16, 32, 256);
+      if (slot.ok) releases.push(slot.release);
     }
-    expect(acquired.length).toBe(256);
-
-    // Now an innocent key tries to acquire slot
-    const innocentKeySlot = acquireUpstreamSlot("innocent-key", 16, 256);
-    console.log("[EMPIRICAL TEST 2.2] Innocent key acquire slot when pool full:", innocentKeySlot);
-    expect(innocentKeySlot).toBe(false);
-
-    // Release all slots
-    for (const k of acquired) {
-      releaseUpstreamSlot(k);
-    }
+    expect(releases).toHaveLength(32);
+    const innocent = acquireUpstreamSlot("innocent-key", "another-user", 16, 32, 256);
+    expect(innocent.ok).toBe(true);
+    if (innocent.ok) { innocent.release(); innocent.release(); }
+    for (const release of releases) release();
   });
 
   // VETOR 3: SERVER CRASH / DOS

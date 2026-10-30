@@ -2,6 +2,7 @@ import { GATEWAY_SECRET, LIMITS } from "./config";
 import { db, stmts, audit, type UserRow, type SessionRow } from "./db";
 import { jwtSign, jwtVerify, randomToken, sha256Hex } from "./crypto";
 import { ApiError } from "./http";
+import { disconnectSessionSockets } from "./routes/relay";
 
 /**
  * Session model:
@@ -81,10 +82,14 @@ export async function verify2faTempToken(token: string): Promise<string> {
 }
 
 export function revokeSession(jti: string): void {
+  const session = stmts.sessionByJti.get(jti);
   db.prepare("UPDATE sessions SET revoked = 1 WHERE jti = ?").run(jti);
+  if (session) disconnectSessionSockets(session.user_id, { jti });
 }
 
-export function revokeAllUserSessions(userId: string, exceptJti?: string): void {
+/** Use inside an enclosing transaction when revocation accompanies a change
+ *  to credentials or account status; disconnect sockets after commit. */
+export function markUserSessionsRevoked(userId: string, exceptJti?: string): void {
   if (exceptJti) {
     db.prepare("UPDATE sessions SET revoked = 1 WHERE user_id = ? AND jti != ?").run(
       userId,
@@ -93,6 +98,11 @@ export function revokeAllUserSessions(userId: string, exceptJti?: string): void 
   } else {
     db.prepare("UPDATE sessions SET revoked = 1 WHERE user_id = ?").run(userId);
   }
+}
+
+export function revokeAllUserSessions(userId: string, exceptJti?: string): void {
+  markUserSessionsRevoked(userId, exceptJti);
+  disconnectSessionSockets(userId, { exceptJti });
 }
 
 /** Rotate a refresh token -> new session row (old jti revoked).
@@ -121,6 +131,7 @@ export async function rotateRefreshToken(refreshToken: string): Promise<{
     const lapsedNaturally = session.expires_at < now || session.abs_expires_at < now;
     if (!lapsedNaturally && session.family) {
       db.prepare("UPDATE sessions SET revoked = 1 WHERE family = ?").run(session.family);
+      disconnectSessionSockets(session.user_id, { family: session.family });
       audit("session.refresh_reuse", {
         target: session.jti,
         meta: { user: session.user_id, family: session.family },
@@ -162,7 +173,7 @@ export async function requireAuth(req: Request): Promise<AuthContext> {
 
   const session = stmts.sessionByJti.get(res.payload.jti);
   const now = Date.now();
-  if (!session || session.revoked || session.abs_expires_at < now) {
+  if (!session || session.user_id !== res.payload.sub || session.revoked || session.expires_at <= now || session.abs_expires_at <= now) {
     throw new ApiError(401, "session revoked");
   }
 

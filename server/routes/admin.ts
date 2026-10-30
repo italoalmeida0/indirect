@@ -3,7 +3,8 @@ import { catalogListSource, catalogWhere, type CatalogKind } from "../catalog";
 import { LIMITS, SMTP_ENABLED } from "../config";
 import { db, stmts, parseStripParams, type ProviderRow, type ProviderKeyRow, type ModelTargetRow, type ApiKeyRow, type UserRow, type AuthStyle, type ModelRow } from "../db";
 import { encryptSecret, decryptSecret, randomToken, sha256Hex } from "../crypto";
-import { requireAdmin, revokeAllUserSessions, auditAdmin } from "../auth";
+import { requireAdmin, revokeAllUserSessions, markUserSessionsRevoked, auditAdmin } from "../auth";
+import { disconnectSessionSockets, disconnectUserDaemons } from "./relay";
 import { publicKey, revokeKey } from "../keys";
 import { GATEWAY_SECRET } from "../config";
 import { sendInviteEmail, sendResetEmail } from "../email";
@@ -1472,38 +1473,55 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         target.role === "admin" &&
         target.status === "active" &&
         (role !== "admin" || status !== "active");
-      const changed = demotesActiveAdmin
-        ? db.prepare(
+      const changed = db.transaction(() => {
+        const result = demotesActiveAdmin
+          ? db.prepare(
             `UPDATE users SET name = ?, role = ?, status = ?
              WHERE id = ? AND (
                SELECT COUNT(*) FROM users
                WHERE role = 'admin' AND status = 'active'
              ) > 1`,
-          ).run(name, role, status, targetId)
-        : db.prepare("UPDATE users SET name = ?, role = ?, status = ? WHERE id = ?").run(
-            name, role, status, targetId,
-          );
-      if (changed.changes !== 1) {
+            ).run(name, role, status, targetId)
+          : db.prepare("UPDATE users SET name = ?, role = ?, status = ? WHERE id = ?").run(
+              name, role, status, targetId,
+            );
+        if (result.changes !== 1) return false;
+        if (status === "banned") {
+          markUserSessionsRevoked(targetId);
+          db.prepare("DELETE FROM remote_pairing_tokens WHERE user_id = ?").run(targetId);
+        }
+        return true;
+      }).immediate();
+      if (!changed) {
         return err(400, "cannot remove the last active admin", req);
       }
-      if (status === "banned") revokeAllUserSessions(targetId);
+      if (status === "banned") {
+        disconnectSessionSockets(targetId);
+        disconnectUserDaemons(targetId);
+      }
       auditAdmin(ctx.user, "user.updated", targetId, { name, role, status }, ip);
       return ok({ done: true }, req);
     }
 
     if (req.method === "DELETE" && !action) {
       if (targetId === ctx.user.id) return err(400, "you cannot delete yourself", req);
-      const changed = target.role === "admin" && target.status === "active"
-        ? db.prepare(
+      if (target.role === "admin" && target.status === "active") {
+        db.prepare(
             `DELETE FROM users WHERE id = ? AND (
               SELECT COUNT(*) FROM users
               WHERE role = 'admin' AND status = 'active'
             ) > 1`,
-          ).run(targetId)
-        : db.prepare("DELETE FROM users WHERE id = ?").run(targetId);
-      if (changed.changes !== 1) {
+          ).run(targetId);
+      } else {
+        db.prepare("DELETE FROM users WHERE id = ?").run(targetId);
+      }
+      // bun:sqlite may count cascaded FK deletes in .changes. Check whether
+      // the target survived the guarded delete instead of comparing the count.
+      if (stmts.userById.get(targetId)) {
         return err(400, "cannot remove the last active admin", req);
       }
+      disconnectSessionSockets(targetId);
+      disconnectUserDaemons(targetId);
       auditAdmin(ctx.user, "user.deleted", targetId, { email: target.email }, ip);
       return ok({ deleted: true }, req);
     }

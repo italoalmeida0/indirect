@@ -1,4 +1,5 @@
-import { ALLOWED_ORIGINS, TRUST_PROXY } from "./config";
+import { BlockList, isIP } from "node:net";
+import { ALLOWED_ORIGINS, TRUST_PROXY, TRUSTED_PROXY_CIDRS } from "./config";
 
 /**
  * HTTP plumbing shared by every route: security headers, CORS, body guards,
@@ -59,6 +60,7 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
     h.set("Vary", "Origin");
     h.set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS");
     h.set("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key");
+    h.set("Access-Control-Expose-Headers", "Retry-After, X-Request-Id, X-Gateway-Usage");
     h.set("Access-Control-Max-Age", "600");
   }
   return h;
@@ -78,22 +80,72 @@ export function err(status: number, message: string, req?: Request, code?: strin
   return json({ success: false, error: message, ...(code ? { code } : {}) }, { status, req });
 }
 
-/** Resolve the real client IP, honoring proxy headers only when configured. */
-export function clientIp(req: Request, server?: { requestIP(req: Request): { address: string } | null }): string {
-  if (TRUST_PROXY) {
-    const cf = req.headers.get("cf-connecting-ip");
-    if (cf) return cf.trim();
-    const tc = req.headers.get("true-client-ip");
-    if (tc) return tc.trim();
+export function rateLimitError(message: string, retryAfter: number, req?: Request): Response {
+  const response = err(429, message, req);
+  response.headers.set("Retry-After", String(Math.max(1, Math.ceil(retryAfter))));
+  return response;
+}
+
+type PeerServer = { requestIP(req: Request): { address: string } | null };
+const trustedProxies = new BlockList();
+for (const entry of TRUSTED_PROXY_CIDRS) {
+  const pieces = entry.split("/");
+  const address = pieces[0]!;
+  const version = isIP(address);
+  const prefix = pieces.length === 1 ? (version === 4 ? 32 : 128) : /^\d+$/.test(pieces[1]!) ? Number(pieces[1]) : NaN;
+  if (!version || pieces.length > 2 || !Number.isInteger(prefix) || prefix < 0 || prefix > (version === 4 ? 32 : 128)) {
+    throw new Error(`Invalid TRUSTED_PROXY_CIDRS entry: ${entry}`);
+  }
+  trustedProxies.addSubnet(address, prefix, version === 4 ? "ipv4" : "ipv6");
+}
+const requestIps = new WeakMap<Request, string>();
+
+function canonicalIp(value: string): string | null {
+  const address = value.trim();
+  const version = isIP(address);
+  if (version === 4) return address;
+  if (version !== 6) return null;
+  // URL canonicalization collapses equivalent IPv6 spellings into one bucket.
+  let normalized: string;
+  try { normalized = new URL(`http://[${address}]/`).hostname.slice(1, -1); }
+  catch { return null; }
+  const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (!mapped) return normalized;
+  const high = parseInt(mapped[1]!, 16), low = parseInt(mapped[2]!, 16);
+  return `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+}
+
+function trustedAddress(address: string): boolean {
+  const normalized = canonicalIp(address);
+  return !!normalized && trustedProxies.check(normalized, isIP(normalized) === 4 ? "ipv4" : "ipv6");
+}
+
+/** A forwarded header is trusted only from an explicitly configured peer. */
+export function isTrustedProxy(req: Request, server?: PeerServer): boolean {
+  const peer = server?.requestIP(req)?.address;
+  return TRUST_PROXY && !!peer && trustedAddress(peer);
+}
+
+export function clientIp(req: Request, server?: PeerServer): string {
+  if (!server) return requestIps.get(req) ?? "unknown";
+  const peer = canonicalIp(server.requestIP(req)?.address ?? "") ?? "unknown";
+  let result = peer;
+  if (TRUST_PROXY && trustedAddress(peer)) {
     const xff = req.headers.get("x-forwarded-for");
     if (xff) {
-      const first = xff.split(",")[0];
-      if (first) return first.trim();
+      const parts = xff.split(",");
+      const chain = parts.length <= 32 ? parts.map(canonicalIp) : [];
+      if (chain.length && chain.every((address) => address !== null)) {
+        // Ignore addresses supplied to an untrusted hop to the left.
+        for (let i = chain.length - 1; i >= 0 && trustedAddress(result); i--) result = chain[i]!;
+      }
+    } else {
+      const forwarded = req.headers.get("cf-connecting-ip") || req.headers.get("true-client-ip") || req.headers.get("x-real-ip");
+      if (forwarded) result = canonicalIp(forwarded) ?? peer;
     }
-    const real = req.headers.get("x-real-ip");
-    if (real) return real.trim();
   }
-  return server?.requestIP(req)?.address ?? "unknown";
+  requestIps.set(req, result);
+  return result;
 }
 
 /**

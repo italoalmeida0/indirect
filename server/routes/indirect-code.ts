@@ -4,7 +4,7 @@ import { createKey, revokeKey } from "../keys";
 import { decryptSecret, randomToken, sha256Hex } from "../crypto";
 import { err, json, readJsonBody } from "../http";
 import { GATEWAY_SECRET, PUBLIC_URL } from "../config";
-import { closeDaemonSocket, disconnectDaemonSocket, isHostUpdating } from "./relay";
+import { closeDaemonSocket, disconnectDaemonSocket, isHostOnline, isHostUpdating } from "./relay";
 import { publicModelEntry, routerSnapshot } from "../models";
 
 /**
@@ -93,7 +93,7 @@ export async function handleIndirectCodeRestRoute(
     const now = Date.now();
     const row = db
       .prepare<RemotePairingTokenRow, [string, number]>(
-        "SELECT * FROM remote_pairing_tokens WHERE token = ? AND expires_at > ?",
+        "SELECT p.* FROM remote_pairing_tokens p JOIN users u ON u.id = p.user_id WHERE p.token = ? AND p.expires_at > ? AND u.status = 'active'",
       )
       .get(token, now);
 
@@ -108,6 +108,10 @@ export async function handleIndirectCodeRestRoute(
     try {
       body = await readJsonBody(req, 16 * 1024);
     } catch {}
+
+    if (db.prepare<{ status: string }, [string]>("SELECT status FROM users WHERE id = ?").get(row.user_id)?.status !== "active") {
+      return err(401, "account unavailable", req);
+    }
 
     const hostName = (body?.name || body?.hostname || "Indirect Machine").slice(0, 64);
     const hostname = (body?.hostname || "").slice(0, 128);
@@ -202,6 +206,11 @@ export async function handleIndirectCodeRestRoute(
       name: `Daemon: ${hostName}`,
     });
 
+    if (db.prepare<{ status: string }, [string]>("SELECT status FROM users WHERE id = ?").get(row.user_id)?.status !== "active") {
+      revokeKey(apiKeyRow.id);
+      return err(401, "account unavailable", req);
+    }
+
     db.prepare(
       `INSERT INTO remote_hosts (id, user_id, name, hostname, os, arch, daemon_token_hash, api_key_id, status, last_seen_at, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'offline', ?, ?)`,
@@ -255,7 +264,7 @@ export async function handleIndirectCodeRestRoute(
       os: r.os,
       arch: r.arch,
       apiKeyId: r.api_key_id,
-      status: r.status === "online" && isHostUpdating(r.id) ? "updating" : r.status,
+      status: isHostOnline(r.id) ? (isHostUpdating(r.id) ? "updating" : "online") : "offline",
       lastSeenAt: r.last_seen_at,
       createdAt: r.created_at,
     }));

@@ -22,6 +22,10 @@ export const PUBLIC_URL = (
   process.env.PUBLIC_URL || `http://localhost:${PORT}`
 ).replace(/\/$/, "");
 export const TRUST_PROXY = process.env.TRUST_PROXY === "true";
+export const TRUSTED_PROXY_CIDRS = (process.env.TRUSTED_PROXY_CIDRS || "").split(",").map((s) => s.trim()).filter(Boolean);
+if (TRUST_PROXY && TRUSTED_PROXY_CIDRS.length === 0) {
+  console.warn("[BOOT] TRUST_PROXY is enabled but TRUSTED_PROXY_CIDRS is empty; forwarding headers will be ignored");
+}
 export const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((s) => s.trim())
@@ -78,17 +82,25 @@ export const GATEWAY_SECRET = INDIRECT_SECRET;
 
 // ===== Limits (tunable via env for stress tests) =====
 
+function positiveLimit(name: string, fallback: number): number {
+  const value = process.env[name] === undefined ? fallback : Number(process.env[name]);
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+  return value;
+}
+
 export const LIMITS = {
+  /** Bound synchronous SQLite lock waits so the event loop remains responsive. */
+  sqliteBusyTimeoutMs: positiveLimit("SQLITE_BUSY_TIMEOUT_MS", 25),
   /** body caps */
   authBodyBytes: Number(process.env.LIMIT_AUTH_BODY_BYTES || 16 * 1024),
   apiBodyBytes: Number(process.env.LIMIT_API_BODY_BYTES || 256 * 1024),
   proxyBodyBytes: Number(process.env.LIMIT_PROXY_BODY_BYTES || 4 * 1024 * 1024),
 
   /** global per-IP token bucket */
-  ipPerMin: Number(process.env.LIMIT_IP_PER_MIN || 600),
+  ipPerMin: positiveLimit("LIMIT_IP_PER_MIN", 30_000),
   /** stricter buckets for credential endpoints */
-  authPerMinPerIp: Number(process.env.LIMIT_AUTH_PER_MIN || 30),
-  resetPer10MinPerIp: Number(process.env.LIMIT_RESET_PER_10MIN || 5),
+  authPerMinPerIp: positiveLimit("LIMIT_AUTH_PER_MIN", 1_000),
+  resetPer10MinPerIp: positiveLimit("LIMIT_RESET_PER_10MIN", 1_000),
 
   /** brute force: N failures in window -> lockout (per account) */
   loginFailWindowMs: 15 * 60 * 1000,
@@ -100,11 +112,15 @@ export const LIMITS = {
    * egress), so this bucket must stop sprays without letting a handful of
    * typos block everyone behind the same address.
    */
-  loginIpFailMax: Number(process.env.LIMIT_LOGIN_IP_FAIL_MAX || 50),
+  loginIpFailMax: Number(process.env.LIMIT_LOGIN_IP_FAIL_MAX || 250),
 
   /** defaults applied when a key leaves them empty */
   defaultKeyRpm: Number(process.env.DEFAULT_KEY_RPM || 120),
   defaultKeyConcurrency: Number(process.env.DEFAULT_KEY_CONCURRENCY || 16),
+  /** Administrator ceilings apply across all of an account's keys. */
+  userRpm: positiveLimit("LIMIT_USER_RPM", 600),
+  userConcurrency: positiveLimit("LIMIT_USER_CONCURRENCY", 32),
+  globalConcurrency: positiveLimit("LIMIT_GLOBAL_CONCURRENCY", 256),
 
   /** upstream behavior */
   upstreamTimeoutMs: Number(process.env.UPSTREAM_TIMEOUT_MS || 120_000),

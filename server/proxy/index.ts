@@ -1,16 +1,16 @@
 import { LIMITS } from "../config";
-import { stmts, audit, parseStripParams, type AuthStyle, type Proto } from "../db";
+import { stmts, audit, isSqliteBusy, parseStripParams, type AuthStyle, type Proto } from "../db";
 import { randomToken, sha256Hex } from "../crypto";
 import { ApiError, clientIp, baseHeaders } from "../http";
 import { countRequestTokens, splitKvInput } from "../tokens";
 import {
   acquireUpstreamSlot,
-  releaseUpstreamSlot,
   keyRpmHit,
+  userRpmHit,
   limits,
 } from "../ratelimit";
 import { checkKeyAvailability } from "../keys";
-import { recordUsage, flushUsage } from "../usage";
+import { canRecordUsage, recordUsage } from "../usage";
 import { BudgetError, reserveBudget, settleBudget, settleUncertainBudget, cancelBudget } from "../billing";
 import { db } from "../db";
 import {
@@ -93,7 +93,7 @@ function matchRoute(pathname: string, method: string, req: Request): RouteResult
     forced = "anthropic";
     p = "/v1" + p.slice("/anthropic/v1".length);
   }
-  const hint = forced ?? "openai";
+  const hint = forced ?? (p === "/v1/messages" || p.startsWith("/v1/messages/") || (p.startsWith("/v1/models") && !!req.headers.get("x-api-key")) ? "anthropic" : "openai");
 
   // OpenAI surface
   if (forced !== "anthropic") {
@@ -167,6 +167,26 @@ function envelopeError(proto: Proto, status: number, message: string, type?: str
     }),
     { status, headers: h },
   );
+}
+
+export function proxyRateLimit(req: Request, url: URL, retryAfter: number, message = "rate limit exceeded"): Response {
+  const route = matchRoute(url.pathname, req.method, req);
+  const response = envelopeError(route.match?.proto ?? route.hint, 429, message, "rate_limit_error", req);
+  response.headers.set("Retry-After", String(Math.max(1, Math.ceil(retryAfter))));
+  return response;
+}
+
+export function proxyStorageUnavailable(req: Request, url: URL): Response {
+  const route = matchRoute(url.pathname, req.method, req);
+  const response = envelopeError(route.match?.proto ?? route.hint, 503, "storage is temporarily unavailable", "api_error", req);
+  response.headers.set("Retry-After", "1");
+  return response;
+}
+
+export function proxyRequestError(req: Request, url: URL, status: number, message: string, code?: string): Response {
+  const route = matchRoute(url.pathname, req.method, req);
+  const type = status === 401 ? "authentication_error" : status === 429 ? "rate_limit_error" : status >= 500 ? "api_error" : "invalid_request_error";
+  return envelopeError(route.match?.proto ?? route.hint, status, message, type, req, code);
 }
 
 // ===== Failover observability (per-provider-key stats, write-light) =====
@@ -830,8 +850,8 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
   const keyRow = stmts.keyByHash.get(sha256Hex(token));
   if (!keyRow) {
     // Failed proxy auth attempts get their own strict bucket: key spraying dies here.
-    const retry = limits.authPerMin(`proxyfail:${ip}`);
-    if (retry > 0) return envelopeError(proto, 429, "too many failed authentications", undefined, req);
+    const retry = limits.proxyAuthFailures(ip);
+    if (retry > 0) return proxyRateLimit(req, url, retry, "too many failed authentications");
     return envelopeError(proto, 401, "invalid API key", undefined, req);
   }
 
@@ -854,14 +874,26 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     return envelopeError(proto, 401, "account unavailable", undefined, req);
   }
 
-  // ---- per-key rate + concurrency ----
+  if (!canRecordUsage()) {
+    const response = envelopeError(proto, 503, "usage storage is temporarily unavailable", "api_error", req);
+    response.headers.set("Retry-After", "5");
+    return response;
+  }
+
+  // ---- account and per-key rate + concurrency ----
+  const userRetry = userRpmHit(keyRow.user_id);
+  if (userRetry > 0) {
+    return proxyRateLimit(req, url, userRetry, `account rate limit exceeded, retry in ${userRetry}s`);
+  }
   const rpm = keyRow.rpm ?? LIMITS.defaultKeyRpm;
   const rpmRetry = keyRpmHit(keyRow.id, rpm);
   if (rpmRetry > 0) {
-    return envelopeError(proto, 429, `rate limit exceeded (${rpm} req/min), retry in ${rpmRetry}s`, "rate_limit_error", req);
+    return proxyRateLimit(req, url, rpmRetry, `rate limit exceeded (${rpm} req/min), retry in ${rpmRetry}s`);
   }
-  if (!acquireUpstreamSlot(keyRow.id, LIMITS.defaultKeyConcurrency)) {
-    return envelopeError(proto, 429, "too many concurrent requests for this key", "rate_limit_error", req);
+  const slot = acquireUpstreamSlot(keyRow.id, keyRow.user_id, LIMITS.defaultKeyConcurrency);
+  if (!slot.ok) {
+    const message = slot.reason === "user" ? "too many concurrent requests for this account" : slot.reason === "key" ? "too many concurrent requests for this key" : "gateway concurrency limit reached";
+    return proxyRateLimit(req, url, 1, message);
   }
 
   // Slot released exactly once, whatever happens below.
@@ -869,10 +901,14 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
   const release = () => {
     if (!slotReleased) {
       slotReleased = true;
-      releaseUpstreamSlot(keyRow.id);
+      slot.release();
     }
   };
   req.signal.addEventListener("abort", release, { once: true });
+  if (req.signal.aborted) {
+    release();
+    return envelopeError(proto, 499, "client disconnected", "api_error", req);
+  }
 
   const requestId = randomToken(16);
   const started = performance.now();
@@ -1738,7 +1774,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
   } catch (error) {
     retainBudget = !!budgetId && upstreamStarted;
     console.error("[PROXY] request failed; reservation:", budgetId ?? "none", error instanceof Error ? error.name : "unknown");
-    const response = envelopeError(proto, 503, "The request could not be completed safely. Please retry.", "api_error", req);
+    const response = isSqliteBusy(error) ? proxyStorageUnavailable(req, url) : envelopeError(proto, 503, "The request could not be completed safely. Please retry.", "api_error", req);
     response.headers.set("x-request-id", requestId);
     return response;
   } finally {
@@ -1751,7 +1787,6 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       }
       release();
     }
-    if (usageFlushDue()) { try { flushUsage(); } catch { console.error("[USAGE] analytics flush failed"); } }
   }
 }
 
@@ -1770,14 +1805,4 @@ function touchKey(keyId: string, ip: string): void {
     ip.slice(0, 64),
     keyId,
   );
-}
-
-let lastFlushCheck = 0;
-function usageFlushDue(): boolean {
-  const now = Date.now();
-  if (now - lastFlushCheck > 5_000) {
-    lastFlushCheck = now;
-    return true;
-  }
-  return false;
 }

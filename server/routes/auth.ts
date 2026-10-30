@@ -14,12 +14,13 @@ import {
   rotateRefreshToken,
   requireAuth,
   revokeSession,
-  revokeAllUserSessions,
+  markUserSessionsRevoked,
   publicUser,
 } from "../auth";
+import { disconnectSessionSockets } from "./relay";
 import { verifyGoogleIdToken } from "../google";
 import { sendResetEmail, sendSecurityAlert } from "../email";
-import { ApiError, clientIp, err, ok, readJsonBody, v } from "../http";
+import { ApiError, clientIp, err, ok, rateLimitError, readJsonBody, v } from "../http";
 import {
   bruteforceClear,
   bruteforceFail,
@@ -52,13 +53,13 @@ async function finishLogin(userId: string, req: Request, server: any) {
 export async function handleAuthRoute(path: string, req: Request, server: any): Promise<Response | null> {
   const ip = clientIp(req, server);
 
-  // Brute-force bucket (30/min/ip) applies ONLY to credential endpoints —
+  // Credential bucket applies ONLY to credential endpoints —
   // refresh/logout/config are called routinely by the dashboard and must not
   // eat the login budget (authed traffic is covered by the global ip bucket).
   const CREDENTIAL_PATHS = ["/api/auth/login", "/api/auth/2fa", "/api/auth/google"];
   if (CREDENTIAL_PATHS.includes(path)) {
     const retry = limits.authPerMin(ip);
-    if (retry > 0) return err(429, `too many attempts, retry in ${retry}s`, req);
+    if (retry > 0) return rateLimitError(`too many attempts, retry in ${retry}s`, retry, req);
   }
 
   if (path === "/api/auth/config" && req.method === "GET") {
@@ -80,7 +81,7 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
     const scope = `login:${email}`;
     const scopeIp = `login-ip:${ip}`;
     const locked = Math.max(bruteforceLocked(scope), bruteforceLocked(scopeIp));
-    if (locked > 0) return err(429, `account temporarily locked, retry in ${locked}s`, req);
+    if (locked > 0) return rateLimitError(`account temporarily locked, retry in ${locked}s`, locked, req);
 
     const user = stmts.userByEmail.get(email);
     const hash = user?.password_hash ?? DUMMY_HASH;
@@ -116,7 +117,7 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
 
     const scope = `2fa:${userId}`;
     const locked = bruteforceLocked(scope);
-    if (locked > 0) return err(429, `too many 2FA failures, retry in ${locked}s`, req);
+    if (locked > 0) return rateLimitError(`too many 2FA failures, retry in ${locked}s`, locked, req);
 
     const user = stmts.userById.get(userId);
     if (!user || !user.totp_secret || user.status !== "active") {
@@ -192,14 +193,14 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
   // ---- password reset request ----
   if (path === "/api/auth/password-reset/request" && req.method === "POST") {
     const limited = limits.resetPer10Min(ip);
-    if (limited > 0) return err(429, `too many requests, retry in ${limited}s`, req);
+    if (limited > 0) return rateLimitError(`too many requests, retry in ${limited}s`, limited, req);
 
     const body = await readJsonBody(req, LIMITS.authBodyBytes);
     const email = v.email(body, "email");
 
     // Always answer identically to avoid account enumeration.
     const user = stmts.userByEmail.get(email);
-    if (user && user.status === "active") {
+    if (user && user.status === "active" && limits.resetAccountPer10Min(email) === 0) {
       const token = randomToken(32);
       db.transaction(() => {
         db.prepare("DELETE FROM password_tokens WHERE user_id = ? AND kind = 'reset'").run(user.id);
@@ -238,10 +239,11 @@ export async function handleAuthRoute(path: string, req: Request, server: any): 
       ).run(Date.now(), tokenHash, Date.now());
       if (result.changes !== 1) return false;
       db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, row.user_id);
+      markUserSessionsRevoked(row.user_id);
       return true;
     })();
     if (!claimed) return err(400, "link is invalid or has expired", req);
-    revokeAllUserSessions(row.user_id);
+    disconnectSessionSockets(row.user_id);
     audit(`password.${row.kind}.completed`, { target: row.user_id, ip });
     const owner = stmts.userById.get(row.user_id);
     if (owner) {

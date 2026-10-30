@@ -1,6 +1,7 @@
 import { audit, db, type ApiKeyRow, type ModelRow } from "./db";
 import { randomToken } from "./crypto";
 import { ApiError } from "./http";
+import { guardedMaintenance } from "./maintenance";
 
 const NANO = 1_000_000_000;
 const DAY = 86_400_000;
@@ -260,10 +261,14 @@ export function redeemReset(userId: string, grantId: string, requestId: string, 
 }
 
 const instanceId = randomToken(12);
+const heartbeat = () => db.prepare("INSERT INTO billing_instances(id, heartbeat) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat = excluded.heartbeat").run(instanceId, Date.now());
 /** Uncertain requests from a crashed process retain their reservation, then
  * settle conservatively at its bound. A restart never grants free balance. */
 export function recoverBudgets(now = Date.now()): void {
   db.transaction(() => {
+    // Refresh our own lease in the same write transaction before recovering
+    // stale instances, even if an earlier periodic heartbeat was blocked.
+    heartbeat();
     const stale = db.query<{ id: string; amount_nanos: number }, [number]>(`SELECT r.id, r.amount_nanos FROM billing_reservations r LEFT JOIN billing_instances i ON i.id = r.instance_id WHERE r.state = 'pending' AND COALESCE(i.heartbeat, r.created_at) < ? LIMIT 500`).all(now - 5 * 60_000);
     for (const row of stale) {
       finish(row.id, { input: BigInt(row.amount_nanos), cache: 0n, output: 0n }, true);
@@ -275,8 +280,7 @@ export function recoverBudgets(now = Date.now()): void {
   }).immediate();
 }
 export function startBilling(): void {
-  const heartbeat = () => db.prepare("INSERT INTO billing_instances(id, heartbeat) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET heartbeat = excluded.heartbeat").run(instanceId, Date.now());
   heartbeat(); recoverBudgets();
-  setInterval(heartbeat, 15_000).unref();
-  setInterval(() => recoverBudgets(), 60_000).unref();
+  setInterval(guardedMaintenance("billing heartbeat", heartbeat), 15_000).unref();
+  setInterval(guardedMaintenance("billing recovery", recoverBudgets), 60_000).unref();
 }

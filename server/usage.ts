@@ -1,4 +1,6 @@
 import { db } from "./db";
+import { LIMITS } from "./config";
+import { guardedMaintenance } from "./maintenance";
 import type { Charge } from "./billing";
 import { usageScopeWhere } from "./usage-filters";
 import { cachedUsageQuery, invalidateUsageQueries } from "./usage-cache";
@@ -50,6 +52,28 @@ export interface UsageEvent {
 
 const buffer: UsageEvent[] = [];
 let flushScheduled = false;
+let retryPending = false;
+
+// Leave room for already admitted streams to finish while storage recovers.
+const maxBufferedUsage = 100_000;
+export function canRecordUsage(): boolean { return buffer.length < Math.max(0, maxBufferedUsage - LIMITS.globalConcurrency); }
+
+const flushInBackground = guardedMaintenance("usage flush", () => {
+  try {
+    flushUsage();
+    retryPending = false;
+  } catch (error) {
+    retryPending = true;
+    scheduleFlush();
+    throw error;
+  }
+});
+
+function scheduleFlush(): void {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  setTimeout(() => { flushScheduled = false; flushInBackground(); }, 1_000).unref();
+}
 
 export function utcDate(ts: number): string {
   return new Date(ts).toISOString().slice(0, 10);
@@ -57,14 +81,8 @@ export function utcDate(ts: number): string {
 
 export function recordUsage(ev: UsageEvent): void {
   buffer.push(ev);
-  if (buffer.length >= 100) {
-    flushUsage();
-    return;
-  }
-  if (!flushScheduled) {
-    flushScheduled = true;
-    setTimeout(flushUsage, 1_000).unref();
-  }
+  if (buffer.length >= 100 && !retryPending) flushInBackground();
+  if (buffer.length) scheduleFlush();
 }
 
 const insertEvent = db.prepare(
@@ -117,9 +135,10 @@ const upsertModelProviderMonthly = db.prepare(
 );
 
 export function flushUsage(): void {
-  flushScheduled = false;
   if (buffer.length === 0) return;
-  const batch = buffer.splice(0, buffer.length);
+  // Keep the batch until the transaction commits; a busy database must not
+  // lose settled analytics. Calls are synchronous, so no writers interleave.
+  const batch = buffer.slice();
   const changedWindows: Array<{ userId: string; ts: number }> = [];
   db.transaction(() => {
     for (const ev of batch) {
@@ -168,6 +187,7 @@ export function flushUsage(): void {
         ev.status >= 200 && ev.status < 300 ? 1 : 0, ev.status < 200 || ev.status >= 300 ? 1 : 0, ...cost);
     }
   })();
+  buffer.splice(0, batch.length);
   invalidateUsageQueries(changedWindows);
 }
 

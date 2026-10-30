@@ -7,7 +7,7 @@ import { LIMITS } from "./config";
  */
 
 interface Bucket {
-  tokens: number;
+  used: number;
   resetAt: number;
 }
 
@@ -22,19 +22,21 @@ class TokenBucket {
   }
 
   /** Returns the retry-after (seconds) when limited, or 0 when allowed. */
-  hit(key: string, cost = 1): number {
+  hit(key: string, cost = 1, maxTokens = this.maxTokens): number {
     const now = Date.now();
     let b = this.buckets.get(key);
     if (!b || b.resetAt <= now) {
-      b = { tokens: this.maxTokens, resetAt: now + this.windowMs };
+      b = { used: 0, resetAt: now + this.windowMs };
       this.buckets.set(key, b);
     }
-    if (b.tokens < cost) {
+    if (b.used + cost > maxTokens) {
       return Math.max(1, Math.ceil((b.resetAt - now) / 1000));
     }
-    b.tokens -= cost;
+    b.used += cost;
     return 0;
   }
+
+  delete(key: string): void { this.buckets.delete(key); }
 
   private sweep(): void {
     const now = Date.now();
@@ -53,32 +55,24 @@ class TokenBucket {
 
 // ===== Named limiters =====
 
-let ipLimiter = new TokenBucket(600, 60_000);
-let authLimiter = new TokenBucket(30, 60_000);
-let resetLimiter = new TokenBucket(5, 10 * 60_000);
+let ipLimiter = new TokenBucket(LIMITS.ipPerMin, 60_000);
+let authLimiter = new TokenBucket(LIMITS.authPerMinPerIp, 60_000);
+let resetLimiter = new TokenBucket(LIMITS.resetPer10MinPerIp, 10 * 60_000);
+const resetAccountLimiter = new TokenBucket(5, 10 * 60_000);
+const proxyAuthFailures = new TokenBucket(30, 60_000);
+const userRpmLimiter = new TokenBucket(LIMITS.userRpm, 60_000);
 
-/** Per-API-key limiters are created per key id and GC'd with the map. */
-const keyRpmLimiters = new Map<string, TokenBucket>();
+/** One map/timer for all keys, rather than one timer per key. */
+const keyRpmLimiter = new TokenBucket(0, 60_000);
 
 export function keyRpmHit(keyId: string, rpm: number): number {
-  let l = keyRpmLimiters.get(keyId);
-  if (!l) {
-    l = new TokenBucket(rpm, 60_000);
-    keyRpmLimiters.set(keyId, l);
-    if (keyRpmLimiters.size > 10_000) {
-      let count = 0;
-      for (const k of keyRpmLimiters.keys()) {
-        keyRpmLimiters.delete(k);
-        count++;
-        if (count >= 2_000) break;
-      }
-    }
-  }
-  return l.hit("");
+  return keyRpmLimiter.hit(keyId, 1, rpm);
 }
 
+export function userRpmHit(userId: string): number { return userRpmLimiter.hit(userId); }
+
 export function dropKeyLimiter(keyId: string): void {
-  keyRpmLimiters.delete(keyId);
+  keyRpmLimiter.delete(keyId);
 }
 
 export function configureLimits(opts: { ipPerMin?: number; authPerMin?: number; resetPer10Min?: number }) {
@@ -91,6 +85,8 @@ export const limits = {
   ipPerMin: (ip: string) => ipLimiter.hit(ip),
   authPerMin: (ip: string) => authLimiter.hit(ip),
   resetPer10Min: (ip: string) => resetLimiter.hit(ip),
+  resetAccountPer10Min: (email: string) => resetAccountLimiter.hit(email),
+  proxyAuthFailures: (ip: string) => proxyAuthFailures.hit(ip),
 };
 
 // ===== Brute-force tracker (login + TOTP failures) =====
@@ -181,23 +177,28 @@ export function consumeTotpCode(digest: string): boolean {
   return true;
 }
 
-// ===== Proxy concurrency control (per API key + global upstream) =====
+// ===== Proxy concurrency control (key, account, and global upstream) =====
 
 const keyConcurrency = new Map<string, number>();
+const userConcurrency = new Map<string, number>();
 let totalUpstreamInFlight = 0;
 
-export function acquireUpstreamSlot(keyId: string, perKeyMax: number, globalMax = 256): boolean {
-  if (totalUpstreamInFlight >= globalMax) return false;
-  const cur = keyConcurrency.get(keyId) ?? 0;
-  if (cur >= perKeyMax) return false;
-  keyConcurrency.set(keyId, cur + 1);
+export function acquireUpstreamSlot(keyId: string, userId: string, perKeyMax: number, perUserMax = LIMITS.userConcurrency, globalMax = LIMITS.globalConcurrency):
+  { ok: false; reason: "global" | "user" | "key" } | { ok: true; release: () => void } {
+  if (totalUpstreamInFlight >= globalMax) return { ok: false, reason: "global" };
+  if ((userConcurrency.get(userId) ?? 0) >= perUserMax) return { ok: false, reason: "user" };
+  if ((keyConcurrency.get(keyId) ?? 0) >= perKeyMax) return { ok: false, reason: "key" };
+  keyConcurrency.set(keyId, (keyConcurrency.get(keyId) ?? 0) + 1);
+  userConcurrency.set(userId, (userConcurrency.get(userId) ?? 0) + 1);
   totalUpstreamInFlight++;
-  return true;
-}
-
-export function releaseUpstreamSlot(keyId: string): void {
-  const cur = keyConcurrency.get(keyId) ?? 0;
-  if (cur <= 1) keyConcurrency.delete(keyId);
-  else keyConcurrency.set(keyId, cur - 1);
-  totalUpstreamInFlight = Math.max(0, totalUpstreamInFlight - 1);
+  let released = false;
+  return { ok: true, release: () => {
+    if (released) return;
+    released = true;
+    const keys = keyConcurrency.get(keyId)!;
+    if (keys === 1) keyConcurrency.delete(keyId); else keyConcurrency.set(keyId, keys - 1);
+    const users = userConcurrency.get(userId)!;
+    if (users === 1) userConcurrency.delete(userId); else userConcurrency.set(userId, users - 1);
+    totalUpstreamInFlight--;
+  } };
 }

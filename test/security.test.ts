@@ -23,9 +23,8 @@ import { findFreePort } from "./free-port";
  *   9. Provider URL validation (SSRF surface)
  *  10. Account-enumeration uniformity
  *
- * TRUST_PROXY=true + per-scenario X-Forwarded-For lets every bucket-dependent
- * test run on a fresh "IP" (and doubles as a demo that XFF-based limiting is
- * only as trustworthy as the edge proxy overwriting it).
+ * The test explicitly trusts its loopback proxy peer so each scenario can
+ * exercise a separate forwarded client address.
  */
 
 // Ports are allocated at runtime so concurrent `bun test` runs can never
@@ -197,7 +196,8 @@ beforeAll(async () => {
       STATIC_DIR: staticDir,
       ADMIN_EMAIL: "boss@audit.test",
       ADMIN_PASSWORD: ADMIN_PW,
-      TRUST_PROXY: "true", // honor our per-scenario XFF (and proves the spoof point)
+      TRUST_PROXY: "true",
+      TRUSTED_PROXY_CIDRS: "127.0.0.1/32,::1/128",
       LIMIT_IP_PER_MIN: "100000", // isolate: only the strict auth bucket (30/min default) matters
       LIMIT_LOGIN_IP_FAIL_MAX: "8", // keep the per-IP spray lockout test fast
     },

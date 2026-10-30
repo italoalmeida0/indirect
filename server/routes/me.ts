@@ -12,13 +12,14 @@ import {
 } from "../crypto";
 import {
   requireAuth,
-  revokeAllUserSessions,
+  markUserSessionsRevoked,
   revokeSession,
   publicUser,
 } from "../auth";
+import { disconnectSessionSockets } from "./relay";
 import { verifyGoogleIdToken } from "../google";
 import { sendSecurityAlert } from "../email";
-import { ApiError, clientIp, err, ok, readJsonBody, v } from "../http";
+import { ApiError, clientIp, err, ok, rateLimitError, readJsonBody, v } from "../http";
 import { bruteforceClear, bruteforceFail, bruteforceLocked, consumeTotpCode } from "../ratelimit";
 import { DEFAULT_MODEL_CONTEXT, DEFAULT_MODEL_OUTPUT, routerSnapshot } from "../models";
 
@@ -53,7 +54,7 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     if (ctx.user.password_hash) {
       const current = v.str(body, "currentPassword", { min: 1, max: 256 })!;
       const locked = bruteforceLocked(`pwchange:${ctx.user.id}`);
-      if (locked > 0) return err(429, `too many attempts, retry in ${locked}s`, req);
+      if (locked > 0) return rateLimitError(`too many attempts, retry in ${locked}s`, locked, req);
       if (!(await verifyPassword(current, ctx.user.password_hash))) {
         bruteforceFail(`pwchange:${ctx.user.id}`);
         return err(401, "current password is incorrect", req);
@@ -61,8 +62,11 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     }
 
     const newHash = await hashPassword(newPassword);
-    db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, ctx.user.id);
-    revokeAllUserSessions(ctx.user.id, ctx.session.jti); // keep this session
+    db.transaction(() => {
+      db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, ctx.user.id);
+      markUserSessionsRevoked(ctx.user.id, ctx.session.jti);
+    })();
+    disconnectSessionSockets(ctx.user.id, { exceptJti: ctx.session.jti });
     audit("password.changed", { actorId: ctx.user.id, ip });
     void sendSecurityAlert(ctx.user.email, "Your password was changed.");
     return ok({ done: true }, req);
@@ -86,7 +90,7 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     const code = v.str(body, "code", { min: 6, max: 6 })!;
 
     const locked = bruteforceLocked(`2faenable:${ctx.user.id}`);
-    if (locked > 0) return err(429, `too many attempts, retry in ${locked}s`, req);
+    if (locked > 0) return rateLimitError(`too many attempts, retry in ${locked}s`, locked, req);
     if (!(await totpVerify(ctx.user.totp_pending, code))) {
       bruteforceFail(`2faenable:${ctx.user.id}`);
       return err(400, "invalid code — check your authenticator clock", req);
@@ -108,7 +112,7 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     const code = v.str(body, "code", { min: 6, max: 6 })!;
 
     const locked = bruteforceLocked(`2fadisable:${ctx.user.id}`);
-    if (locked > 0) return err(429, `too many attempts, retry in ${locked}s`, req);
+    if (locked > 0) return rateLimitError(`too many attempts, retry in ${locked}s`, locked, req);
     const valid = await totpVerify(ctx.user.totp_secret, code);
     if (!valid || !consumeTotpCode(sha256Hex(`${ctx.user.totp_secret}:${code}`))) {
       bruteforceFail(`2fadisable:${ctx.user.id}`);

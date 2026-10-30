@@ -1,8 +1,8 @@
 import { PORT, IS_PROD, ADMIN_EMAIL, ADMIN_PASSWORD, LIMITS, DATA_DIR } from "./config";
 import { configureLimits, limits } from "./ratelimit";
-import { db, audit } from "./db";
+import { db, audit, isSqliteBusy } from "./db";
 import { hashPassword, randomToken } from "./crypto";
-import { ApiError, baseHeaders, clientIp, err, json } from "./http";
+import { ApiError, baseHeaders, clientIp, err, json, rateLimitError } from "./http";
 import { handleAuthRoute } from "./routes/auth";
 import { handleMeRoute } from "./routes/me";
 import { handleBillingRoute } from "./routes/billing";
@@ -16,10 +16,11 @@ import { ensureObscuraBrowser } from "./routes/obscura";
 import { handlePushRoute } from "./routes/push";
 import { handleManifestRoute } from "./routes/manifest";
 import { handleIndirectCodeUpgrade, remoteRelayWsHandlers, type WsData } from "./routes/relay";
-import { handleProxy } from "./proxy/index";
+import { handleProxy, proxyRateLimit, proxyStorageUnavailable, proxyRequestError } from "./proxy/index";
 import { serveStatic } from "./static";
 import { flushUsage } from "./usage";
 import { initTokenEstimator } from "./tokens";
+import { guardedMaintenance } from "./maintenance";
 
 // btdby4-wasm (token estimator) must be warm before serving: every counter
 // below is synchronous after init. Top-level await is fine — Bun.serve
@@ -65,12 +66,12 @@ startBilling();
 
 // ===== Housekeeping sweeps =====
 
-const sweep = setInterval(() => {
+const sweep = setInterval(guardedMaintenance("session cleanup", () => {
   const now = Date.now();
   db.prepare("DELETE FROM sessions WHERE abs_expires_at < ?").run(now);
   db.prepare("UPDATE sessions SET revoked = 1 WHERE expires_at < ? AND revoked = 0").run(now);
   db.prepare("DELETE FROM password_tokens WHERE expires_at < ? OR used_at IS NOT NULL AND used_at < ?").run(now, now - 3600_000);
-}, 15 * 60_000);
+}), 15 * 60_000);
 sweep.unref();
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
@@ -95,23 +96,26 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
     return new Response(null, { status: 204, headers: baseHeaders(req) });
   }
 
-  const ip = clientIp(req, server);
-  const retry = limits.ipPerMin(ip);
-  if (retry > 0) return err(429, `rate limit exceeded, retry in ${retry}s`, req);
-
   if (path === "/api/health") {
     return json({ ok: true, ts: Date.now() }, { req });
   }
 
-  // Global per-IP bucket — first line of DoS defense.
-  if (
+  const proxyPath = (
     path.startsWith("/v1/") ||
     path === "/v1" ||
     path.startsWith("/openai/v1/") ||
     path === "/openai/v1" ||
     path.startsWith("/anthropic/v1/") ||
     path === "/anthropic/v1"
-  ) {
+  );
+  const ip = clientIp(req, server);
+  const retry = limits.ipPerMin(ip);
+  if (retry > 0) {
+    const message = `rate limit exceeded, retry in ${retry}s`;
+    return proxyPath ? proxyRateLimit(req, url, retry, message) : rateLimitError(message, retry, req);
+  }
+
+  if (proxyPath) {
     return handleProxy(req, url, server);
   }
 
@@ -120,7 +124,7 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
     if (path.startsWith("/api/indirect-code/") && path.endsWith("/ws")) {
       return await handleIndirectCodeUpgrade(path, req, url, server);
     }
-    const viaGenUi = await handleGenUiRoute(path, req, url);
+    const viaGenUi = await handleGenUiRoute(path, req, url, server);
     if (viaGenUi) return viaGenUi;
     const viaIndirectCode = await handleIndirectCodeRestRoute(path, req, url);
     if (viaIndirectCode) return viaIndirectCode;
@@ -173,9 +177,17 @@ const server: Server<WsData> = Bun.serve<WsData>({
     try {
       return await route(req, server);
     } catch (e) {
-      if (e instanceof ApiError) return err(e.status, e.message, req, e.code);
-      console.error(`[HTTP] unhandled error on ${req.method} ${new URL(req.url).pathname}:`, e);
-      return err(500, "internal error", req);
+      const url = new URL(req.url);
+      const isProxy = /^\/(?:v1|openai\/v1|anthropic\/v1)(?:\/|$)/.test(url.pathname);
+      if (e instanceof ApiError) return isProxy ? proxyRequestError(req, url, e.status, e.message, e.code) : err(e.status, e.message, req, e.code);
+      if (isSqliteBusy(e)) {
+        if (isProxy) return proxyStorageUnavailable(req, url);
+        const response = err(503, "storage is temporarily unavailable", req);
+        response.headers.set("Retry-After", "1");
+        return response;
+      }
+      console.error(`[HTTP] unhandled error on ${req.method} ${url.pathname}:`, e);
+      return isProxy ? proxyRequestError(req, url, 500, "internal error") : err(500, "internal error", req);
     }
   },
 });

@@ -1,5 +1,5 @@
 import { err, json, readJsonBody } from "../http";
-import { TRUST_PROXY } from "../config";
+import { isTrustedProxy } from "../http";
 import { db } from "../db";
 import { sha256Hex } from "../crypto";
 import { runWidgetLint } from "./widget-lint";
@@ -109,11 +109,13 @@ function contentId(parts: unknown[]): string {
  * reached us on — with reverse-proxy headers honored exactly like
  * server/http.ts does for client IPs.
  */
-function requestOrigin(req: Request): string {
-  if (TRUST_PROXY) {
+function requestOrigin(req: Request, server?: { requestIP(req: Request): { address: string } | null }): string {
+  if (isTrustedProxy(req, server)) {
     const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
     const proto = (req.headers.get("x-forwarded-proto") || "https").split(",")[0].trim();
-    if (host) return `${proto || "https"}://${host.split(",")[0].trim()}`;
+    if (host && (proto === "http" || proto === "https")) {
+      try { return new URL(`${proto}://${host.split(",")[0]!.trim()}`).origin; } catch {}
+    }
   }
   try {
     return new URL(req.url).origin;
@@ -353,6 +355,7 @@ export async function handleGenUiRoute(
   path: string,
   req: Request,
   _url: URL,
+  server?: { requestIP(req: Request): { address: string } | null },
 ): Promise<Response | null> {
   // Lint: the daemon validates widget sources here before showing them.
   // Auth is the daemon token (same surface as /api/indirect-code/models).
@@ -427,7 +430,7 @@ export async function handleGenUiRoute(
         ]),
       ),
     });
-    const origin = requestOrigin(req);
+    const origin = requestOrigin(req, server);
     const doc = buildWidgetDocument({
       theme,
       moduleUrl,
@@ -452,7 +455,7 @@ export async function handleGenUiRoute(
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "public, max-age=31536000, immutable",
-        "content-security-policy": widgetCSP(nonce, requestOrigin(req)),
+        "content-security-policy": widgetCSP(nonce, requestOrigin(req, server)),
         "x-content-type-options": "nosniff",
       },
     });

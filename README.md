@@ -48,7 +48,6 @@ docker run -d --name indirect \
   -e ADMIN_EMAIL="you@example.com" \
   -e ADMIN_PASSWORD="use-a-long-random-password" \
   -e PUBLIC_URL="https://gateway.example.com" \
-  -e TRUST_PROXY="true" \
   indirect
 ```
 
@@ -97,9 +96,11 @@ Highlights:
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | first-admin bootstrap (only when the DB is empty) |
 | `GOOGLE_CLIENT_ID` | enables Google sign-in (Web client; JS origin = `PUBLIC_URL`) |
 | `SMTP_*` | invite/reset/security emails; without it, action links are printed to the log and shown to the admin |
-| `TRUST_PROXY` | honor `cf-connecting-ip`/`x-forwarded-for` (set when behind Cloudflare/nginx) |
+| `TRUST_PROXY`, `TRUSTED_PROXY_CIDRS` | honor forwarding headers only from socket peers in these comma-separated proxy IPs/CIDRs |
 | `ALLOWED_ORIGINS` | CORS allow-list for the dashboard API |
-| `LIMIT_*`, `DEFAULT_KEY_RPM`, `DEFAULT_KEY_CONCURRENCY` | rate-limit tuning (incl. `LIMIT_LOGIN_IP_FAIL_MAX`, the per-IP password-spray threshold — defaults to 50; keep it well above the per-account lockout of 5) |
+| `LIMIT_USER_RPM`, `LIMIT_USER_CONCURRENCY`, `LIMIT_GLOBAL_CONCURRENCY` | administrator ceilings across a user's keys (defaults: 600/min, 32 concurrent, and 256 global) |
+| `SQLITE_BUSY_TIMEOUT_MS` | maximum synchronous wait for a SQLite lock (default 25 ms); a busy store causes a retryable failure rather than a prolonged event-loop stall |
+| `LIMIT_*`, `DEFAULT_KEY_RPM`, `DEFAULT_KEY_CONCURRENCY` | per-IP and per-key rate-limit tuning; account ceilings remain in force even if a key owner raises their limit |
 
 ## Testing & benchmarks
 
@@ -116,7 +117,8 @@ streaming adds negligible buffering.
 
 ## Deployment notes
 
-- Put it behind TLS (Caddy/nginx/Cloudflare). Set `PUBLIC_URL` to the https origin and `TRUST_PROXY=true`.
+- Put it behind TLS (Caddy/nginx/Cloudflare) and set `PUBLIC_URL` to the HTTPS origin. To use forwarded IP/origin headers, set `TRUST_PROXY=true` and list the actual proxy peers in `TRUSTED_PROXY_CIDRS` (for example `127.0.0.1/32,::1/128` for a local proxy). The edge must overwrite client-supplied forwarding headers. The gateway walks `X-Forwarded-For` from the socket peer through trusted hops and stops at the first untrusted address.
+- Existing `TRUST_PROXY=true` deployments must add `TRUSTED_PROXY_CIDRS`: without it, forwarding headers are ignored and the socket peer is used. Do not include public client networks in the trusted list.
 - `/data` (SQLite + dev-generated secret) is the only state — back it up or mount a volume.
 - The proxy routes are meant to be public: every guard (hash-lookup keys, budgets, RPM, concurrency, IP bucket) applies to them by design.
 

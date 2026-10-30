@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import path from "path";
 import { isMainThread, workerData } from "node:worker_threads";
 
-import { DATA_DIR } from "./config";
+import { DATA_DIR, LIMITS } from "./config";
 import { normalizePricing, pricingColumns } from "./pricing";
 
 /**
@@ -16,7 +16,14 @@ export const db = new Database(path.join(DATA_DIR, "gateway.db"), usageReader ? 
 
 if (!usageReader) db.exec("PRAGMA journal_mode = WAL");
 db.exec("PRAGMA foreign_keys = ON");
-db.exec("PRAGMA busy_timeout = 5000");
+db.exec(`PRAGMA busy_timeout = ${LIMITS.sqliteBusyTimeoutMs}`);
+
+/** SQLite exposes extended busy/locked codes in some Bun versions. */
+export function isSqliteBusy(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { code?: unknown; errno?: unknown };
+  return typeof value.code === "string" && (value.code.startsWith("SQLITE_BUSY") || value.code.startsWith("SQLITE_LOCKED")) || value.errno === 5 || value.errno === 6;
+}
 
 type Migration = { name: string; up: string | (() => void) };
 
