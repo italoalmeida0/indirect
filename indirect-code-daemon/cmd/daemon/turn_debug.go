@@ -179,10 +179,10 @@ func simulateSessionPrompt(dcfg DaemonConfig, rec *SessionRecord, promptText str
 		&tools.UseSkillTool{},
 	}
 	masterReg := core.NewRegistry(baseTools...)
-	eff, _ := skillRegistry.resolveSession(rec.Skills, opt.Mode)
+	eff, _ := skillRegistry().resolveSession(rec.Skills, opt.Mode)
 	effReg := skillsRegistry(masterReg, eff)
 	if t, ok := effReg["use_skill"].(*tools.UseSkillTool); ok {
-		t.Listing = skillRegistry.skillsDescription(eff.Mode, rec.Skills)
+		t.Listing = skillRegistry().skillsDescription(eff.Mode, rec.Skills)
 	}
 	toolSpecs := effReg.Specs()
 

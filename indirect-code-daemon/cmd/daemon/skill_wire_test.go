@@ -13,14 +13,14 @@ import (
 // the active skills sorted by priority, and a usable override is stored
 // verbatim (missing usable = inherit; no lock validation at ingestion).
 func TestCreateSessionTakesModeAndSkillsFromWire(t *testing.T) {
-	prev := skillRegistry
-	defer func() { skillRegistry = prev }()
-	skillRegistry = &skillStore{list: map[string]skills.Skill{
+	prev := skillRegistry()
+	defer func() { swapSkillRegistry(prev) }()
+	swapSkillRegistry(&skillStore{list: map[string]skills.Skill{
 		// Primary declares agentic + a deny-locked usable: both must be
 		// overridden by the wire below, proving the daemon is passive.
 		"build": {Name: "build", Description: "d", Mode: "agentic", Usable: "deny"},
 		"extra": {Name: "extra", Description: "d", Usable: "ask"},
-	}}
+	}})
 
 	h := newWSHarness(t)
 	h.send(map[string]any{

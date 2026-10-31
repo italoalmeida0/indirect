@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"indirect/indirect-code-daemon/packages/skills"
 )
@@ -21,10 +22,24 @@ type skillStore struct {
 	errs []error
 }
 
-// skillRegistry is the process-wide store. Initialized at boot from the
+// skillRegistryPtr is the process-wide store. Initialized at boot from the
 // data dir; tests replace it. Before initialization it serves empty (never
 // nil derefs).
-var skillRegistry = &skillStore{}
+//
+// The pointer is atomic, not a plain package variable: request goroutines read
+// the registry from the dispatch lane (sessionPayload -> skillsApprovalMode)
+// while boot and tests swap it, which the race detector flags as an
+// unsynchronized read. The store's own contents are guarded by its mutex.
+var skillRegistryPtr atomic.Pointer[skillStore]
+
+func init() { skillRegistryPtr.Store(&skillStore{}) }
+
+// skillRegistry returns the current store.
+func skillRegistry() *skillStore { return skillRegistryPtr.Load() }
+
+// swapSkillRegistry installs next and returns the store it replaced (tests use
+// it to restore the previous registry).
+func swapSkillRegistry(next *skillStore) *skillStore { return skillRegistryPtr.Swap(next) }
 
 // skillsDir returns the skill directory under a data dir root.
 func skillsDir(dataDir string) string {
@@ -208,7 +223,7 @@ func (s *skillStore) skillsDescription(mode string, active map[string]skills.Ses
 // mode, approvalMode}.
 // Parse errors go to the daemon log, never to the client payload.
 func skillsListing() map[string]any {
-	list := skillRegistry.all()
+	list := skillRegistry().all()
 	out := make(map[string]any, len(list))
 	for name, sk := range list {
 		// The official list carries the file ORIGINAL: no usable key (or a
@@ -233,7 +248,7 @@ func skillsListing() map[string]any {
 			"approvalMode": sk.ApprovalMode,
 		}
 	}
-	for _, e := range skillRegistry.loadErrors() {
+	for _, e := range skillRegistry().loadErrors() {
 		trace("skills.load.error", map[string]any{"err": e.Error()})
 	}
 	return out

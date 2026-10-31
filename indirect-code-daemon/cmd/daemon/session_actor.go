@@ -2052,7 +2052,7 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 	// denied tools): arg-key deny refuses the call, and a per-tool "ask"
 	// forces human approval even under the session YOLO toggle while a
 	// per-tool "yolo" runs free even in ask mode.
-	eff, err := skillRegistry.resolveSession(a.rec.Skills, options.Mode)
+	eff, err := skillRegistry().resolveSession(a.rec.Skills, options.Mode)
 	if err != nil {
 		m.reply <- approvalOutcome{reason: "skill policy: " + err.Error()}
 		return

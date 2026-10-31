@@ -25,7 +25,7 @@ type skillUseRecord struct {
 // turn is not re-sent: the tool answers with a short delivered ack instead
 // (the body text appears exactly once per turn).
 func (w *turnBridge) LoadSkill(name string) (string, error) {
-	sk, ok := skillRegistry.get(name)
+	sk, ok := skillRegistry().get(name)
 	if !ok {
 		return "", fmt.Errorf("unknown skill (ask the user to check the skill name)")
 	}
@@ -76,7 +76,7 @@ func (w *turnBridge) RecordSkillUse(name string, once bool) string {
 // drives the tool list, the approval gate and the ephemeral prefix; the
 // MODE is the session's own mode (snapshot options, frontend-derived).
 func (w *turnBridge) resolveSkillPolicy() error {
-	eff, err := skillRegistry.resolveSession(w.snap.skills, w.snap.options.Mode)
+	eff, err := skillRegistry().resolveSession(w.snap.skills, w.snap.options.Mode)
 	if err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func (w *turnBridge) resolveSkillPolicy() error {
 func (w *turnBridge) effectiveRegistry() core.Registry {
 	reg := skillsRegistry(w.reg, w.skillEff)
 	if t, ok := reg["use_skill"].(*tools.UseSkillTool); ok {
-		t.Listing = skillRegistry.skillsDescription(w.skillEff.Mode, w.snap.skills)
+		t.Listing = skillRegistry().skillsDescription(w.skillEff.Mode, w.snap.skills)
 	}
 	return reg
 }

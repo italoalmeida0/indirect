@@ -16,10 +16,10 @@ import (
 // is correct product behavior but not what those tests exercise).
 func installGrantingTestSkills(t *testing.T) map[string]skills.SessionSkill {
 	t.Helper()
-	prev := skillRegistry
+	prev := skillRegistry()
 	ask := skills.PermSpec{Policy: skills.PolicyAsk}
 	yolo := skills.PermSpec{Policy: skills.PolicyYolo}
-	skillRegistry = &skillStore{list: map[string]skills.Skill{
+	swapSkillRegistry(&skillStore{list: map[string]skills.Skill{
 		"build": {Name: "build", Mode: "agentic", Permissions: map[string]skills.PermSpec{
 			"read": ask, "write": ask, "edit": ask, "bash": ask, "python": ask,
 			"glob": ask, "search": ask, "inspect": ask,
@@ -27,8 +27,8 @@ func installGrantingTestSkills(t *testing.T) map[string]skills.SessionSkill {
 			"bg_await": ask, "bg_check": ask, "bg_cancel": ask,
 			"question": yolo, "todo": yolo,
 		}},
-	}}
-	t.Cleanup(func() { skillRegistry = prev })
+	}})
+	t.Cleanup(func() { swapSkillRegistry(prev) })
 	return map[string]skills.SessionSkill{"build": {Priority: 1, Active: true}}
 }
 
@@ -38,16 +38,16 @@ func installGrantingTestSkills(t *testing.T) map[string]skills.SessionSkill {
 // back to deny. At session level, a missing usable or explicit "inherit"
 // means "use the skill file original" (no override).
 func TestUseSkillUsableGate(t *testing.T) {
-	prev := skillRegistry
-	defer func() { skillRegistry = prev }()
-	skillRegistry = &skillStore{list: map[string]skills.Skill{
+	prev := skillRegistry()
+	defer func() { swapSkillRegistry(prev) }()
+	swapSkillRegistry(&skillStore{list: map[string]skills.Skill{
 		"free":   {Name: "free", Usable: "yolo"},
 		"gate":   {Name: "gate", Usable: "ask"},
 		"hidden": {Name: "hidden", Usable: "deny"},
 		"base":   {Name: "base", Usable: "never"},
 		"plain":  {Name: "plain"}, // no usable key in the skill module: deny fallback
 		"pinned": {Name: "pinned", Usable: "ask"},
-	}}
+	}})
 	args := func(name string) []byte { return []byte(`{"name":"` + name + `"}`) }
 	noOverrides := map[string]skills.SessionSkill{}
 

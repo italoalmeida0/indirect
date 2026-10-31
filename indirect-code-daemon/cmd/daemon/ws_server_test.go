@@ -118,7 +118,7 @@ func (h *wsHarness) mkSession(t *testing.T, id string) {
 }
 
 func TestPullConfigReturnsSkills(t *testing.T) {
-	skillRegistry.initFrom(t.TempDir())
+	skillRegistry().initFrom(t.TempDir())
 	h := newWSHarness(t)
 	h.send(map[string]any{"type": "pull", "collection": "config", "id": float64(1)})
 	got := h.lastType("pull-response")
