@@ -35,18 +35,23 @@ let revision = -1;
 let dataVersion = -1;
 const readVersion = db.prepare<{ data_version: number }, []>("PRAGMA data_version");
 
-function remove(key: string, entry: Entry) {
-  entries.delete(key);
-  bytes -= entry.bytes;
-  // Keep the value available for a stale read; the map is trimmed with the
-  // entries so the retained set can never outgrow the cache budget.
+/** Keep the newest answer for a key so a caller may read it while a refresh
+ * runs. Bounded by the same entry budget as the cache itself. */
+function remember(key: string, value: unknown) {
   stale.delete(key);
-  stale.set(key, { value: entry.value, at: Date.now() });
+  stale.set(key, { value, at: Date.now() });
   while (stale.size > MAX_ENTRIES) {
     const oldest = stale.keys().next().value;
     if (oldest === undefined) break;
     stale.delete(oldest);
   }
+}
+
+function remove(key: string, entry: Entry) {
+  entries.delete(key);
+  bytes -= entry.bytes;
+  // Keep the value available for a stale read.
+  remember(key, entry.value);
 }
 
 function synchronize() {
@@ -140,6 +145,12 @@ export function cachedUsageQueryAsync<T>(kind: string, scope: UsageScope, userId
     activeJobs++;
     created.promise = Promise.resolve().then(() => load(created.controller.signal)).then((value) => {
       synchronize();
+      // Remember the snapshot even when a write landed during the read: it is
+      // still the newest answer this key has, and a dashboard must be able to
+      // serve it while the next refresh runs. Without this the value was
+      // dropped, the retained snapshot aged past the allowance, and every poll
+      // blocked on a full recompute — which is exactly what a busy window did.
+      remember(key, value);
       if (!created.invalidated) insert(key, value, invalidationScope, userId);
       return value;
     }).finally(() => {
