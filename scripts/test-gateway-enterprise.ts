@@ -5,6 +5,13 @@
  *   bun scripts/test-gateway-enterprise.ts --reuse --dir=tmp/enterprise
  *   bun scripts/test-gateway-enterprise.ts --full --dir=tmp/enterprise-full
  *   bun scripts/test-gateway-enterprise.ts --reuse --dir=tmp/enterprise --serve
+ *   bun scripts/test-gateway-enterprise.ts --reuse --dir=tmp/enterprise \
+ *     --base=http://127.0.0.1:PORT --samples=1200 --rate=32
+ *
+ * --serve holds a gateway + upstream for the second command, which measures
+ * from its own process so generator queueing is not charged to the gateway.
+ * Stop a --serve process with SIGINT/SIGTERM (Ctrl-C): a forced kill does not
+ * run its cleanup and leaves the gateway child holding the fixture database.
  *
  * Default history covers ten calendar years for 500 employees × 500 calls/day.
  * Quick raw retention is 2 days; --full physically retains 90 days (22.5M events)
