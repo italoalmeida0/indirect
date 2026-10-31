@@ -87,11 +87,30 @@ function dispatch() {
   }
 }
 
+/** Live analytics windows snap to the minute.
+ *
+ * A dashboard asks for "the last 14 days up to now", and `now` moves on every
+ * poll: at 12 req/s the cache key, the coalescing key and the retained snapshot
+ * all change per request, so a page that costs ~900 ms was recomputed for every
+ * poll. Snapping a live upper bound to the minute keeps the span identical while
+ * letting a burst of polls share one computation. Historical ranges are left
+ * untouched: their bounds already describe a fixed window and an exactness check
+ * must see it verbatim. */
+const LIVE_WINDOW_MS = 5 * 60_000;
+const MINUTE_MS = 60_000;
+function liveAnalyticsScope(scope: UsageScope): UsageScope {
+  if (scope.to < Date.now() - LIVE_WINDOW_MS) return scope;
+  const to = Math.floor(scope.to / MINUTE_MS) * MINUTE_MS;
+  const from = scope.from === null ? null : to - (scope.to - scope.from);
+  return { ...scope, from, to };
+}
+
 /** Bounded read-only workers isolate analytical GROUP BY from the proxy.
  * Identical requests coalesce; a job is cancelled only after all its callers
  * have disconnected. */
 export function readUsage<R extends UsageReadRequest>(request: R, signal?: AbortSignal): Promise<Result<R>> {
-  const { scope, userId, staleWhileRevalidateMs, ...options } = request;
+  const { scope: requested, userId, staleWhileRevalidateMs, ...options } = request;
+  const scope = request.kind === "analytics" ? liveAnalyticsScope(requested) : requested;
   let extra: unknown = options;
   let invalidationScope = scope;
   if (request.kind !== "financial-project" && request.kind !== "catalog-facets" && request.kind !== "catalog-audit" && request.kind !== "events") {
@@ -112,7 +131,9 @@ export function readUsage<R extends UsageReadRequest>(request: R, signal?: Abort
     let finished = false;
     const cleanup = () => { clearTimeout(job.timer); sharedSignal.removeEventListener("abort", abort); };
     const job: Job = {
-      id: ++sequence, expires: Date.now() + LIMITS.analyticsDeadlineMs, request,
+      // The worker must compute the SAME window the key was built from, or a
+      // shared snapshot would answer with another sample's millisecond bound.
+      id: ++sequence, expires: Date.now() + LIMITS.analyticsDeadlineMs, request: scope === requested ? request : ({ ...request, scope } as R),
       resolve: (result) => { if (!finished) { finished = true; completed++; cleanup(); resolve(result); } },
       reject: (error) => { if (!finished) { finished = true; failures++; cleanup(); reject(error); } },
     };
