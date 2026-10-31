@@ -116,8 +116,13 @@ jobs:
         # Gateway boot starts an opportunistic obscura download and probes the
         # binary synchronously. Provisioning it here keeps a network fetch or a
         # slow first execution out of the boot that the measurement depends on.
+        # Importing the route boots the process, which refuses to start in
+        # production without a secret, so this throwaway value is only for the
+        # download: no fixture, database or measurement uses it.
         env:
           DATA_DIR: ${{ runner.temp }}/enterprise-obscura
+          GATEWAY_SECRET: 0000000000000000000000000000000000000000000000000000000000000000
+          INDIRECT_SECRET: 0000000000000000000000000000000000000000000000000000000000000000
         run: |
           set -euo pipefail
           mkdir -p "$DATA_DIR"
