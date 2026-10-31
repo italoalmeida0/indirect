@@ -197,6 +197,25 @@ edges would be better than measured. The administrative aggregates do not touch
   `/admin/stats` 488/553/664. With 20 samples the p99 is the maximum, so this
   neither confirms nor refutes the target — it only informed it.
 
+## Sustained mixed soak (11 minutes, quick profile)
+
+`bun scripts/soak-gateway.ts --dir=tmp/enterprise-quick-3 --minutes=11 --rate=8`
+— 3 proxy arrivals to 1 dashboard read, open loop, 674 s, on the 500-user quick
+fixture. All six dashboard routes were exercised (208 arrivals each), plus 3,744
+proxy completions.
+
+- **4,992 arrivals, 4,992 `200`**: 0 client errors, 0 server errors, 0 network
+  errors.
+- **Memory bounded**: 140 MiB after warm-up, 159 MiB peak, 74 MiB final — the
+  run ends below its baseline.
+- **Write-ahead log bounded**: 5.35 MiB peak.
+- **Scheduled maintenance ran and never failed**: usage flush 624, billing
+  heartbeat 44, billing recovery 11, analytics rollup cleanup 11, WAL checkpoint
+  2, detailed-event retention 2 — 0 failures across all six jobs.
+
+This says nothing about ten-year reliability: eleven minutes cannot establish
+long-run behaviour, and the fixture retains two detailed days rather than 400.
+
 ## Not verified — must not be reported as passing
 
 - [ ] **Sub-day rollups stay empty for pre-existing detailed data.** On a freshly
@@ -210,9 +229,9 @@ edges would be better than measured. The administrative aggregates do not touch
   leave a restored installation paying raw scans until the next scheduled rollup.
   The fixture now writes hour rollups at seed time, which hides the symptom
   without answering the question.
-- [ ] Ten-year audit cardinality (every fixture profile seeds 365 audit days) and
-  any claim of ten-year reliability from a finite soak.
-- [ ] Sustained mixed soak crossing scheduled maintenance, and streaming versus
-  non-streaming measurement under one workload.
+- [ ] Ten-year audit cardinality (every fixture profile seeds 365 audit days).
+- [ ] Streaming versus non-streaming measurement under one workload, and
+  sustained traffic against the delivered retention (the soak ran on the quick
+  profile and covered non-streaming completions only).
 - [ ] The explicit capacity workflow has not executed on a dedicated native
   runner; a local result on a laptop is evidence, not a qualification.

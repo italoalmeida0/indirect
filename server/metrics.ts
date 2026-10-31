@@ -152,6 +152,20 @@ export function recordBusyRetry(): void { busyRetries++; }
 export function recordBusyFailure(): void { busyFailures++; }
 export function sqliteMetricsSnapshot() { return { busyRetries, busyFailures }; }
 
+/** Resident and heap usage for operators and soak runs. Reading it is cheap and
+ * allocation-free apart from the snapshot object itself. */
+export function processMetricsSnapshot() {
+  const usage = process.memoryUsage();
+  const mb = (bytes: number) => Math.round(bytes / 1_048_576);
+  return {
+    rssMb: mb(usage.rss),
+    heapUsedMb: mb(usage.heapUsed),
+    heapTotalMb: mb(usage.heapTotal),
+    externalMb: mb(usage.external),
+    uptimeSeconds: Math.round((Date.now() - startedAt) / 1000),
+  };
+}
+
 export function beginMaintenanceMetric(name: string): (ok: boolean, error?: unknown) => void {
   let metric = jobs.get(name);
   if (!metric && jobs.size < 32) {

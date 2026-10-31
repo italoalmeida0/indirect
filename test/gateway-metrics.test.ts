@@ -33,6 +33,11 @@ test("operational metrics require administration or a dedicated read-only scrape
   expect(metrics.admission.rejected).toEqual({ global: 0, user: 0, key: 0, queue: 0, aborted: 0 });
   expect(metrics.analytics.queued).toBe(0);
   expect(metrics.storage.busyRetries).toBeGreaterThanOrEqual(0);
+  expect(metrics.process.rssMb).toBeGreaterThan(0);
+  expect(metrics.process.heapUsedMb).toBeGreaterThan(0);
+  // Bun reports a heap total that does not bound heapUsed the way Node's does,
+  // so only presence and plausibility are asserted here.
+  expect(metrics.process.rssMb).toBeGreaterThanOrEqual(metrics.process.heapUsedMb);
   expect(metrics.backup.count).toBe(0);
   expect(after.text).not.toContain(scraper);
   expect(after.text).not.toContain(user.accessToken);

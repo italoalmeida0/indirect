@@ -3,7 +3,7 @@ import { requireAdmin } from "../auth";
 import { backupStatus } from "../backup";
 import { walCheckpointStatus } from "../db";
 import { ApiError, ok } from "../http";
-import { httpMetricsSnapshot, maintenanceMetricsSnapshot, sqliteMetricsSnapshot } from "../metrics";
+import { httpMetricsSnapshot, maintenanceMetricsSnapshot, processMetricsSnapshot, sqliteMetricsSnapshot } from "../metrics";
 import { admissionSnapshot } from "../ratelimit";
 import { retentionStatus } from "../usage-rollup";
 import { usageReaderStatus } from "../usage-reader";
@@ -25,6 +25,7 @@ export async function handleMetricsRoute(path: string, req: Request): Promise<Re
   if (req.method !== "GET") throw new ApiError(405, "method not allowed");
   const result = {
     ...httpMetricsSnapshot(),
+    process: processMetricsSnapshot(),
     admission: admissionSnapshot(),
     analytics: usageReaderStatus(),
     maintenance: maintenanceMetricsSnapshot(),
