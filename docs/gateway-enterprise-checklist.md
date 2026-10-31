@@ -74,14 +74,6 @@ qualified merely because its code exists. The detailed scope is in
   92.1 ms maximum in isolation, and the contention file's steady-state per-sample
   bound lives in its dedicated test.
 
-## Delivered physical cardinality measured
-
-- [x] `tmp/enterprise-full400`: 500 users, 3,653 aggregate days,
-  `usage_events` = **100,000,000** rows (400 detailed days),
-  `billing_reservations` = **7,500,000** settled (30 days),
-  `audit_log` = **1,095,005** (365 days), monthly rollups = **913,250,000**
-  represented requests. `gateway.db` = 13,686,640 pages ≈ **56 GB**.
-
 ## Measured qualification run (quick profile, native ARM64)
 
 Host: Snapdragon X Elite 12-core, 16 GB RAM, Windows 11 ARM64, Bun 1.4.2
@@ -150,40 +142,77 @@ reads 500x the rows of a personal one), a coarser per-user daily rollup for the
 people chart, and a dedicated pass on burst admission, or qualification on the
 intended server hardware.
 
-## Not verified — must not be reported as passing
+## Delivered-retention qualification (400 detailed days, 100M events)
 
-- [ ] **Delivered-retention (full400) measurement.** The fixture is complete and
-  verified (100,000,000 raw events, 56 GB), but this host could not serve the
-  gateway from it: a full `ANALYZE` of `usage_events` at cold cache did not
-  finish in fifteen minutes. The boot-side dependency is fixed (bounded
-  statistics plus `scripts/analyze-gateway.ts`), the numbers are not obtained.
-  Prerequisites: run `bun scripts/analyze-gateway.ts` against the fixture while
-  the gateway is stopped, then
-  `bun scripts/test-gateway-enterprise.ts --reuse --dir=tmp/enterprise-full400 --samples=1200 --rate=32`,
-  preferably on native Linux with ≥100 GiB free.
+Fixture: 500 users, 3,653 aggregate days, **100,000,000** detailed events
+(400 days), **7,500,000** settled reservations (30 days), **1,095,005** audit
+rows, 913,250,000 represented requests. As seeded it was 13,686,640 pages
+(~56 GB); after the bounded hour-rollup backfill (5,198,500 hour rows, 200
+passes) `gateway.db` is **55 GB**. Method: gateway served in one process
+(`--serve`), load generator in another (`--base`), 1,200 samples at 32 req/s,
+production durability, local fixture upstream.
+
+- **Accounting exactness passed**: `/api/admin/stats?from=all` reported
+  913,250,000 historical requests and the partial user range matched an
+  independently counted query (7,073), so ten-year aggregates survive the
+  deletion window at full cardinality.
+- **Gateway-added API latency**: p50 13.4 / p95 114.8 / **p99 164.2** / max
+  235.2 ms, **0/1,200 errors**, 1,200/1,200 responses `200`.
+- **Dashboard APIs**: p99 **5,019.9 ms** with **28/1,200 errors** (`503` from the
+  5,000 ms analytics read budget). Per route p99: `/api/admin/stats` 5,325 (12
+  errors), `/api/admin/analytics` 5,122 (16), `/api/usage/events` 2,512,
+  `/api/usage/filter-options` 993, `/api/usage/overview` 962,
+  `/api/usage/analytics` 626, `/api/keys` 508, `/api/admin/keys` 431,
+  `/api/admin/usage-filter-options` 262, `/api/billing` 164,
+  `/api/admin/users` 45.
+- **50-user burst**: p99 1,362.6 ms, 0 errors.
+
+**Verdict at delivered retention: not qualified on this host.** The dashboard
+budget and the zero-error requirement fail; the proxy overhead budget fails at
+164 ms against 100 ms, though it passed on the quick profile at 69.3 ms, so the
+difference is the larger detailed table and 16 GB of RAM against a 55 GB
+database, not the gateway's request path.
+
+**Caveat that makes these numbers pessimistic:** `usage_events` carries **no
+planner statistics** in this fixture. `PRAGMA analysis_limit` is not honoured in
+this environment — `ANALYZE` on the 5.48M-row rollup tables took 27–155 s, which
+is a full index walk, not a bounded sample — so a full `ANALYZE` of the
+100M-row table is not feasible here. A real installation builds those statistics
+incrementally as it grows, so its plans for the events grid and partial-day
+edges would be better than measured. The administrative aggregates do not touch
+`usage_events`, so their 5-second timeouts are not explained by this caveat.
+
+## Browser gates
+
 - [x] Enterprise administration browser regressions on a fresh six-user fixture:
   project creation with a shared budget, membership save, financial defaults,
   model policy, bulk import preview/commit, corporate-auth section keyboard
   navigation, verified backup, `project_manager` scope isolation and
   administrative refusal — 0 failed interactions, 0 runtime errors.
-- [x] Exploratory browser timing on the same fixture, reuse path, 60
-  interactions (20 per page): p50 488 ms, p95 734 ms, p99 1,125 ms; per page
-  `/` 347/380/1,125, `/usage` 562/768/773, `/admin/stats` 488/553/664. Chromium
-  153.0.8010.12, Bun 1.4.2 arm64, loopback. The single 1,125 ms sample is a
-  cold first navigation, and with 20 samples the p99 is the maximum, so this
-  does not establish the 1,000 ms target either way.
-- [ ] **Sub-day rollups stay empty for pre-existing detailed data.** On the
-  quick fixture, after boot, `usage_rollup_coverage` reports `hourly_from` and
-  `minute_from` advanced to roughly the present, while `usage_hour_rollups` and
-  `usage_minute_rollups` both hold **0 rows** for 500,000 detailed events seeded
-  across two days. Recent windows therefore fall back to scanning
-  `usage_events`, which is what makes a 14-day dashboard request cost 3.5 s and
-  an analytics request exceed its budget. The backfill watermark advancing
-  without materialising rows needs a dedicated investigation: either it is a
-  real backfill defect or the seeded history is outside the range it accepts,
-  and both would leave a real installation paying raw scans after a restore
-  until the next scheduled rollup.
-- [ ] Ten-year audit cardinality (the fixture profile seeds 365 audit days) and
+- [x] Enforced frontend p99 on the same fixture: 1,000 interactions, p50 474.5 /
+  p95 647.6 / p99 **701.3** ms (target 1,000), 0 failed interactions, 0 runtime
+  errors; per page `/` 400, `/usage` 731, `/admin/stats` 579 ms.
+- [x] Exploratory reuse run, 60 interactions (20 per page): p50 488 / p95 734 /
+  p99 1,125 ms; per page `/` 347/380/1,125, `/usage` 562/768/773,
+  `/admin/stats` 488/553/664. With 20 samples the p99 is the maximum, so this
+  neither confirms nor refutes the target — it only informed it.
+
+## Not verified — must not be reported as passing
+
+- [ ] **Sub-day rollups stay empty for pre-existing detailed data.** On a freshly
+  seeded quick fixture, `usage_rollup_coverage` reported `hourly_from` advanced to
+  roughly the present while `usage_hour_rollups` and `usage_minute_rollups` held
+  **0 rows** for 500,000 detailed events across two days, so recent windows fell
+  back to scanning `usage_events` (a 14-day dashboard request cost 3.5 s). The
+  production backfill then rebuilt them correctly in 47 hours of coverage. What
+  remains unexplained is why the watermark advanced without materialising rows —
+  either a backfill defect or a range the backfill refuses — because both would
+  leave a restored installation paying raw scans until the next scheduled rollup.
+  The fixture now writes hour rollups at seed time, which hides the symptom
+  without answering the question.
+- [ ] Ten-year audit cardinality (every fixture profile seeds 365 audit days) and
   any claim of ten-year reliability from a finite soak.
+- [ ] Sustained mixed soak crossing scheduled maintenance, and streaming versus
+  non-streaming measurement under one workload.
 - [ ] The explicit capacity workflow has not executed on a dedicated native
-  runner; a local exploratory result is not a qualification.
+  runner; a local result on a laptop is evidence, not a qualification.
