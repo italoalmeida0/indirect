@@ -229,7 +229,7 @@ func sessionPayload(rec *SessionRecord) map[string]any {
 // user's ask rules), so the YOLO/ASK selector is hidden. "ask" (default,
 // including no skills) shows the selector.
 func skillsApprovalMode(rec *SessionRecord) string {
-	eff, err := skillRegistry.resolveSession(rec.Skills, rec.Options.Mode)
+	eff, err := skillRegistry().resolveSession(rec.Skills, rec.Options.Mode)
 	if err == nil && eff.AskAutoApprove {
 		return "yolo"
 	}

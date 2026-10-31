@@ -2,6 +2,7 @@ import { For, createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { createTranscript } from "../../web/src/indirect-code/hooks/useTranscript";
 import { AssistantTurnContent, type TranscriptRenderCtx } from "../../web/src/indirect-code/components/TranscriptBlocks";
+import { RemoteCodeProvider } from "../../web/src/indirect-code/ctx";
 
 render(()=>{
  const [sid,setSid]=createSignal("s");
@@ -20,7 +21,17 @@ render(()=>{
   setPreviewFile: () => {}, activeSession: () => null, pendingApproval: t.pendingApproval, projects: () => [],
  };
  Object.assign(window,{transcriptTest:{t,sent,setSid,setHost}});
- return <><div id="viewport" ref={t.setChatContainerRef} onScroll={t.onChatScroll}
+ // The transcript components read the app's domain contexts (StreamingMarkdown
+ // prefills the composer, turn content reads host/session). Mounting them
+ // bare threw "RemoteCode context used outside provider" and left the fixture
+ // rendering nothing, so it provides the same shape the page does — stubs
+ // only, since this gate asserts rendered DOM, not wire traffic.
+ const ctxValues = {
+  host: {}, session: {}, transcript: {}, turnChanges: {},
+  composer: { setInputPrompt: () => {}, sendPrompt: async () => {} },
+  queue: {}, background: {}, modal: {}, ui: {},
+ } as unknown as Parameters<typeof RemoteCodeProvider>[0];
+ return <RemoteCodeProvider {...ctxValues}><div id="viewport" ref={t.setChatContainerRef} onScroll={t.onChatScroll}
   style={{height:"320px",overflow:"auto","overflow-anchor":"none"}}>
   <div ref={t.setChatContentRef}><For each={t.renderBlocks()}>{block=><div data-transcript-id={block.msg.id}
    style={{"min-height":"80px",border:"1px solid transparent"}}>
@@ -30,5 +41,5 @@ render(()=>{
   </div>}</For></div>
  </div><div id="actual"><For each={t.renderBlocks()}>{block =>
   <AssistantTurnContent ctx={ctx} block={block} finished={t.sessionStatus() !== "running"} />
- }</For></div></>;
+ }</For></div></RemoteCodeProvider>;
 },document.getElementById("root")!);

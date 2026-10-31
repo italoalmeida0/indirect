@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -495,7 +496,10 @@ func (s *server) handle(raw net.Conn) {
 
 type bconn struct {
 	c      *Conn
-	cursor int64
+	// cursor is atomic: the run loop advances it while sending and a re-hello
+	// on the connection goroutine can move it forward, and neither may block on
+	// the other (a slow parent must never stall the broadcast).
+	cursor atomic.Int64
 }
 
 type broadcast struct {
@@ -516,7 +520,8 @@ func (b *broadcast) kill() {
 }
 
 func (b *broadcast) register(c *Conn, cursor *int64) {
-	bc := &bconn{c: c, cursor: *cursor}
+	bc := &bconn{c: c}
+	bc.cursor.Store(*cursor)
 	b.mu.Lock()
 	b.conns[bc] = struct{}{}
 	b.mu.Unlock()
@@ -537,8 +542,8 @@ func (b *broadcast) unregister(c *Conn) {
 func (b *broadcast) setcursor(c *Conn, cursor int64) {
 	b.mu.Lock()
 	for bc := range b.conns {
-		if bc.c == c && cursor > bc.cursor {
-			bc.cursor = cursor
+		if bc.c == c && cursor > bc.cursor.Load() {
+			bc.cursor.Store(cursor)
 		}
 	}
 	b.mu.Unlock()
@@ -582,12 +587,13 @@ func (b *broadcast) run() {
 			}
 			b.mu.Unlock()
 			for _, bc := range conns {
-				if bc.cursor > off {
+				cur := bc.cursor.Load()
+				if cur > off {
 					continue // already has it
 				}
-				if bc.cursor == off {
+				if cur == off {
 					_ = bc.c.Send(Out{Type: VerbOut, Off: off, Chunk: chunk})
-					bc.cursor = off + int64(n)
+					bc.cursor.Store(off + int64(n))
 				}
 				// cursor < off: gap — the parent repairs from the log
 				// (file is the contract); skip to keep memory bounded.

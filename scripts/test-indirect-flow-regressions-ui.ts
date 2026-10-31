@@ -1,11 +1,12 @@
 // Deterministic browser regression gate for Indirect Code hooks and mirror.
 // PLAYWRIGHT_MODULE=... CHROMIUM_PATH=... bun scripts/test-indirect-flow-regressions-ui.ts
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 
 import solidPlugin from "../plugins/solid-plugin";
 import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const bundle=await Bun.build({entrypoints:[new URL('../test/fixtures/indirect-flow-regressions.ts',import.meta.url).pathname],target:"browser",plugins:[iconifyPlugin,solidPlugin]});
+const bundle=await Bun.build({entrypoints:[fileURLToPath(new URL('../test/fixtures/indirect-flow-regressions.ts',import.meta.url))],target:"browser",plugins:[iconifyPlugin,solidPlugin]});
 if(!bundle.success)throw new Error(bundle.logs.join('\n'));
 const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req){return new URL(req.url).pathname==='/bundle.js'?new Response(bundle.outputs[0]):new Response('<html><script type="module" src="/bundle.js"></script></html>',{headers:{'content-type':'text/html'}})}});
 const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH,headless:true});

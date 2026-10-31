@@ -19,7 +19,7 @@ func (a *sessionActor) onSkillActivate(m skillActivateMsg) {
 	if m.gen != a.gen || m.name == "" {
 		return
 	}
-	if _, ok := skillRegistry.get(m.name); !ok {
+	if _, ok := skillRegistry().get(m.name); !ok {
 		return
 	}
 	a.touch()
@@ -55,7 +55,7 @@ func (a *sessionActor) onSkillsUpdate(m skillsUpdateMsg) {
 		a.rec.Skills = map[string]skills.SessionSkill{}
 	}
 	for name, upd := range m.Set {
-		if _, ok := skillRegistry.get(name); !ok {
+		if _, ok := skillRegistry().get(name); !ok {
 			continue
 		}
 		st := a.rec.Skills[name]
@@ -281,7 +281,7 @@ func useSkillUsableGate(active map[string]skills.SessionSkill, args json.RawMess
 	if len(args) > 0 {
 		_ = json.Unmarshal(args, &parsed)
 	}
-	sk, ok := skillRegistry.get(parsed.Name)
+	sk, ok := skillRegistry().get(parsed.Name)
 	if !ok {
 		return "", ""
 	}

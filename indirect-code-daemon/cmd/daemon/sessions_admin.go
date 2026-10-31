@@ -212,7 +212,7 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 		if name == "" || recSkills[name].Active {
 			continue
 		}
-		sk, ok := skillRegistry.get(name)
+		sk, ok := skillRegistry().get(name)
 		if !ok {
 			continue
 		}
@@ -222,7 +222,7 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 		recSkills[name] = skills.SessionSkill{Priority: prio, Active: true, Usable: choice.Usable}
 		prio++
 	}
-	recSkills = skillRegistry.normalizeSessionSkills(recSkills)
+	recSkills = skillRegistry().normalizeSessionSkills(recSkills)
 	rec := &SessionRecord{
 		Options: norm, ID: sessID, CWD: cwd,
 		Title: title, TitleSource: titleSource, Model: model,

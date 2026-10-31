@@ -1,6 +1,7 @@
 // Build the SPA first. Uses the production static response and CSP, then
 // exercises Office conversion with the real versioned Pandoc engine.
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 
 process.env.NODE_ENV = "production";
 process.env.GATEWAY_SECRET = "office-browser-test-secret-only-00000000";
@@ -9,7 +10,7 @@ const { serveStatic } = await import("../server/static");
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const bundle = await Bun.build({
-  entrypoints: [new URL("../test/fixtures/office-conversion-ui.ts", import.meta.url).pathname],
+  entrypoints: [fileURLToPath(new URL("../test/fixtures/office-conversion-ui.ts", import.meta.url))],
   target: "browser",
 });
 if (!bundle.success) throw new Error(bundle.logs.join("\n"));

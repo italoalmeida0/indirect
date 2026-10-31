@@ -6,12 +6,13 @@
  * (estimateContext shown in the UI). Read-only probe; not part of `bun test`.
  */
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { promises as fs } from "fs";
 
-const WS = path.join(path.dirname(new URL(import.meta.url).pathname), "..");
+const WS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const envFile = await fs.readFile(path.join(WS, ".env"), "utf8").catch(() => "");
 const envGet = (k: string) => {
   const m = new RegExp(`^${k}=(.*)$`, "m").exec(envFile);

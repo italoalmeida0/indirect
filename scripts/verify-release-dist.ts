@@ -2,10 +2,11 @@
 //
 // ONE multi-call artifact backs the whole release (see
 // scripts/build-indirect-all.ts): the manifest has a single `daemon` field
-// and dist/ ships six platform assets. This validator is the single source
-// of truth for that contract; CI and the release workflow BOTH call it (it
-// replaced two copied inline verifiers that had drifted apart — the release
-// one still required the removed `launcher` manifest section, V2-005).
+// and dist/ ships six platform assets plus, optionally, the installer scripts
+// (see AUXILIARY_ASSETS). This validator is the single source of truth for
+// that contract; CI and the release workflow BOTH call it (it replaced two
+// copied inline verifiers that had drifted apart — the release one still
+// required the removed `launcher` manifest section, V2-005).
 //
 // Usage: bun scripts/verify-release-dist.ts [distDir] [expectedVersion]
 //   distDir         defaults to indirect-code-daemon/dist
@@ -24,6 +25,15 @@ export const EXPECTED_PLATFORMS = [
   "windows-amd64",
   "windows-arm64",
 ] as const;
+
+/**
+ * Optional assets that ship beside the binaries and are checksummed the same
+ * way, but are not daemon platform targets: the packaging step lists the
+ * installer scripts in the same `assets` map. They are optional so a dist built
+ * without them stays valid; when present they must be real files whose
+ * checksums agree with both SHA256SUMS.txt and the manifest.
+ */
+export const AUXILIARY_ASSETS = ["install.sh", "install.ps1"] as const;
 
 export class DistError extends Error {}
 
@@ -63,8 +73,13 @@ export function verifyDist(distDir: string, expectedVersion?: string) {
     const p = join(distDir, name);
     if (!existsSync(p) || !statSync(p).isFile()) bad(`asset file missing: ${name}`);
   }
-  const extra = Object.keys(assets).filter((k) => !(EXPECTED_PLATFORMS as readonly string[]).includes(k));
+  const extra = Object.keys(assets).filter((k) => !(EXPECTED_PLATFORMS as readonly string[]).includes(k) && !(AUXILIARY_ASSETS as readonly string[]).includes(k));
   if (extra.length) bad(`manifest has unexpected platforms: ${extra.join(", ")}`);
+  const auxiliary = Object.keys(assets).filter((k) => (AUXILIARY_ASSETS as readonly string[]).includes(k));
+  for (const key of auxiliary) {
+    const name = assets[key]!;
+    if (!existsSync(join(distDir, name)) || !statSync(join(distDir, name)).isFile()) bad(`auxiliary asset file missing: ${name}`);
+  }
 
   // 3. Checksums: SHA256SUMS.txt and the manifest must agree with the
   //    real bytes of every shipped binary.
@@ -89,6 +104,12 @@ export function verifyDist(distDir: string, expectedVersion?: string) {
       bad(`${name} does not embed version ${expectedVersion} (stale binary?)`);
     }
   }
+  for (const key of auxiliary) {
+    const name = assets[key]!;
+    const hash = sha256(readFileSync(join(distDir, name)));
+    if (sums[name] !== hash) bad(`SHA256SUMS mismatch for ${name}`);
+    if (daemon.sums?.[name] !== hash) bad(`versions.json sums mismatch for ${name}`);
+  }
   // Every listed sum must match the file on disk (catches stale leftovers).
   for (const [name, hash] of Object.entries(sums)) {
     const p = join(distDir, name);
@@ -96,8 +117,9 @@ export function verifyDist(distDir: string, expectedVersion?: string) {
     if (sha256(readFileSync(p)) !== hash) bad(`checksum mismatch for ${name}`);
   }
   const listedBinaries = Object.keys(sums).filter((n) => n.startsWith("indirect-code-"));
-  if (listedBinaries.length !== EXPECTED_PLATFORMS.length) {
-    bad(`SHA256SUMS lists ${listedBinaries.length} binaries, want ${EXPECTED_PLATFORMS.length}`);
+  const expectedSums = EXPECTED_PLATFORMS.length + auxiliary.length;
+  if (listedBinaries.length !== expectedSums) {
+    bad(`SHA256SUMS lists ${listedBinaries.length} files, want ${expectedSums}`);
   }
 
   return { version, assets, checked: EXPECTED_PLATFORMS.length };

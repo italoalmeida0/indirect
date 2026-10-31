@@ -1,6 +1,7 @@
 // Browser regression test using an existing Playwright installation.
 // PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CHROMIUM_PATH=… bun scripts/test-indirect-collapse-ui.ts
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import solidPlugin from "../plugins/solid-plugin";
 import iconifyPlugin from "../plugins/iconify-solid-plugin";
 
@@ -9,8 +10,7 @@ const { chromium } = await import(
 );
 const bundle = await Bun.build({
   entrypoints: [
-    new URL("../test/fixtures/indirect-collapse-ui.tsx", import.meta.url)
-      .pathname,
+    fileURLToPath(new URL("../test/fixtures/indirect-collapse-ui.tsx", import.meta.url)),
   ],
   target: "browser",
   plugins: [iconifyPlugin, solidPlugin],

@@ -108,6 +108,10 @@ func TestV5SeedsSkillsAndCollapsesModes(t *testing.T) {
 func TestV5MovesTalkSessionsHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// os.UserHomeDir reads USERPROFILE on Windows and HOME elsewhere, so
+	// stubbing only HOME left the migration resolving the real profile and this
+	// assertion failing on the Windows runners.
+	t.Setenv("USERPROFILE", home)
 	dir := t.TempDir()
 	sessions := filepath.Join(dir, "sessions")
 	if err := os.MkdirAll(sessions, 0o755); err != nil {
