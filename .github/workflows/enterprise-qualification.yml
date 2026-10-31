@@ -141,7 +141,22 @@ jobs:
           FIXTURE_DIR: ${{ steps.preflight.outputs.fixture_dir }}
           REPORT_DIR: ${{ steps.preflight.outputs.report_dir }}
         run: |
-          bun scripts/test-gateway-enterprise.ts --reuse --dir="$FIXTURE_DIR" --samples="$SAMPLES" --rate="$REQUEST_RATE" --api-p99=100 --dashboard-p99=1000 --report="$REPORT_DIR/api-report.json"
+          # The generator must not share an event loop with the fixture upstream:
+          # co-located, generator queueing is charged to the gateway and the same
+          # run reports ~4x the gateway's actual overhead (270.7ms against 69.3ms
+          # measured). --serve holds the gateway and upstream in one process,
+          # --base measures from this one.
+          bun scripts/test-gateway-enterprise.ts --reuse --dir="$FIXTURE_DIR" --serve > "$REPORT_DIR/serve.log" 2>&1 &
+          SERVE_PID=$!
+          trap 'kill $SERVE_PID 2>/dev/null || true' EXIT
+          BASE=""
+          for _ in $(seq 1 180); do
+            BASE=$(grep -o 'http://127\.0\.0\.1:[0-9]*' "$REPORT_DIR/serve.log" | head -1 || true)
+            [ -n "$BASE" ] && break
+            sleep 1
+          done
+          test -n "$BASE" || { echo "fixture gateway did not start"; cat "$REPORT_DIR/serve.log"; exit 1; }
+          bun scripts/test-gateway-enterprise.ts --reuse --dir="$FIXTURE_DIR" --base="$BASE" --samples="$SAMPLES" --rate="$REQUEST_RATE" --api-p99=100 --dashboard-p99=1000 --report="$REPORT_DIR/api-report.json"
 
       - name: Enforce complete frontend interaction threshold
         # Preserve separate frontend evidence even if the API threshold failed.
