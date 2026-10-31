@@ -65,14 +65,15 @@ qualified merely because its code exists. The detailed scope is in
   `upstreamStarted` binding from an interrupted proxy edit; removed).
 - [x] `bun run typecheck` — clean.
 - [x] `bun run build:web` — production SPA built (40 outputs).
-- [x] `bun test` — **933 pass, 0 fail** across 76 files (`bun test` on Bun
-  1.4.2 arm64, 305 s). Two earlier runs reported one overlapping timing
-  assertion each (`test/usage-retention.test.ts` health maximum 262.9 ms against
-  its 250 ms budget; `test/gateway-sqlite-contention.test.ts` before its
-  assertion was aligned with the rationale its sibling test already documented).
-  Both were investigated rather than retried away: the retention probe measures
-  92.1 ms maximum in isolation, and the contention file's steady-state per-sample
-  bound lives in its dedicated test.
+- [x] `bun test` — **933 pass, 0 fail** across 76 files on Bun 1.4.2 arm64
+  (`--max-concurrency=4`, 298 s). Four earlier default-parallelism runs were also
+  fully green (305–334 s). Under the default 20-way parallelism this host
+  eventually produced two noisy runs after the 55 GB fixtures were on the same
+  disk: one had a transient `SQLiteError: disk I/O error` in the shared
+  end-to-end gateway that cascaded into 56 failures, another timed out a single
+  relay test at 25 s. Both affected files pass in isolation (83/83 in 24.9 s and
+  4/4 in 6.2 s), so the cause is host I/O under 76 concurrent SQLite files, not a
+  regression; the bounded-concurrency run is what is recorded here.
 
 ## Measured qualification run (quick profile, native ARM64)
 
