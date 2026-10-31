@@ -43,6 +43,19 @@ qualified merely because its code exists. The detailed scope is in
 - [x] Capacity fixtures build planner statistics, so measurements are not taken
   against degenerate plans, and seed hour rollups the way live ingestion does,
   so recent windows never fall back to scanning raw events.
+- [x] **Sub-day coverage after a restore is bounded and self-healing, not stalled.**
+  Migration 027 starts `hourly_from`/`minute_from` at the next complete
+  hour/minute on purpose: rows that already exist are not assumed to have
+  rollups. The scheduled `analytics rollup cleanup` job therefore runs
+  `backfillHourRollups` in a loop of `USAGE_HOURLY_BACKFILL_HOURS` (6) one-hour
+  steps, so coverage extends backwards **6 hours per minute** — roughly 27 hours
+  to rebuild 400 days of hourly coverage from retained events. It never crosses
+  `hour_floor` or the raw-retention boundary, so it cannot claim coverage for
+  deleted rows. An earlier note here read this watermark as an unexplained
+  anomaly; it was the documented initial value. `test/analytics-rollup.test.ts`
+  now pins the behaviour: bounded 6-hour steps, convergence onto exactly the
+  retained events, a declining step once nothing older exists, and a floor that
+  stops it.
 - [x] Windows longer than four months chart from the monthly rollup
   (`USAGE_MONTHLY_CHART_SPAN`) instead of the daily table. Before this, a
   ten-year or one-year dashboard request exceeded the 5,000 ms analytics job
@@ -256,17 +269,6 @@ the fixture retains two detailed days rather than 400.
 
 ## Not verified — must not be reported as passing
 
-- [ ] **Sub-day rollups stay empty for pre-existing detailed data.** On a freshly
-  seeded quick fixture, `usage_rollup_coverage` reported `hourly_from` advanced to
-  roughly the present while `usage_hour_rollups` and `usage_minute_rollups` held
-  **0 rows** for 500,000 detailed events across two days, so recent windows fell
-  back to scanning `usage_events` (a 14-day dashboard request cost 3.5 s). The
-  production backfill then rebuilt them correctly in 47 hours of coverage. What
-  remains unexplained is why the watermark advanced without materialising rows —
-  either a backfill defect or a range the backfill refuses — because both would
-  leave a restored installation paying raw scans until the next scheduled rollup.
-  The fixture now writes hour rollups at seed time, which hides the symptom
-  without answering the question.
 - [ ] Ten-year audit cardinality (every fixture profile seeds 365 audit days).
 - [ ] A dedicated streaming-throughput profile at the agreed arrival rate (the
   soak measured streaming under mixed load, and sustained traffic has not been

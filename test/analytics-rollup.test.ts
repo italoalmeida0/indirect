@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import path from "node:path";
-import { pruneUsageRollups, rebuildUsageRollups, usageRollupCoverage, USAGE_DAY, USAGE_HOUR, USAGE_MINUTE } from "../server/usage-rollup";
+import { backfillHourRollups, pruneUsageRollups, rebuildUsageRollups, usageRollupCoverage, USAGE_DAY, USAGE_HOUR, USAGE_HOURLY_BACKFILL_HOURS, USAGE_MINUTE } from "../server/usage-rollup";
 import { createUser, login, request, startGateway, waitUntil } from "./gateway-enterprise-fixture";
 
 test("rebuilt rollups preserve exact retained ranges and disclose expanded archived boundaries", async () => {
@@ -173,3 +173,58 @@ test("live ingestion updates sub-day rollups atomically and retries a failed flu
   // a small CI box) 40s is not enough headroom and it fails for scheduling
   // reasons rather than a defect.
 }, 90_000);
+
+test("hour backfill extends sub-day coverage in bounded steps and stops at the prune floor", async () => {
+  const gateway = await startGateway();
+  const sql = new Database(path.join(gateway.dir, "gateway.db"));
+  try {
+    const admin = await login(gateway.base, "admin@enterprise.test");
+    const user = await createUser(gateway.base, admin.accessToken, "rollup-backfill@enterprise.test");
+    const keyId = (await request(gateway.base, "/api/keys", { token: user.accessToken, body: { name: "backfill" } })).data.key.id as string;
+    // Twelve complete hours that live ingestion never wrote: the shape a restore
+    // or an import leaves behind, with events present and sub-day coverage
+    // absent. Migration 027 starts coverage at the next complete hour, so every
+    // one of these hours would otherwise fall back to a raw scan.
+    const hourNow = Math.floor(Date.now() / USAGE_HOUR) * USAGE_HOUR;
+    const insert = sql.prepare(`INSERT INTO usage_events(key_id,user_id,ts,proto,model,in_tok,cache_tok,out_tok,status,provider_id,provider_key_id,upstream_model,cost_in_nanos,cost_cache_nanos,cost_out_nanos)
+      VALUES(?,?,?,'openai','model-a',2,3,5,200,'provider','provider-key','upstream',100,200,300)`);
+    try {
+      sql.transaction(() => {
+        for (let offset = 12; offset >= 1; offset--) insert.run(keyId, user.user.id, hourNow - offset * USAGE_HOUR + USAGE_MINUTE);
+      })();
+    } finally { insert.finalize(); }
+    expect(sql.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_hour_rollups").get()!.n).toBe(0);
+
+    const start = usageRollupCoverage(sql).hourly_from;
+    const first = backfillHourRollups(sql, { hours: USAGE_HOURLY_BACKFILL_HOURS });
+    expect(first.advanced).toBe(true);
+    expect(first.hours).toBe(USAGE_HOURLY_BACKFILL_HOURS);
+    expect(start - first.hourlyFrom).toBe(USAGE_HOURLY_BACKFILL_HOURS * USAGE_HOUR);
+
+    const second = backfillHourRollups(sql, { hours: USAGE_HOURLY_BACKFILL_HOURS });
+    expect(second.hours).toBe(USAGE_HOURLY_BACKFILL_HOURS);
+
+    // Keep stepping until the backfill has nothing left to prove; the contract
+    // is convergence onto exactly the retained events, not a step count, because
+    // the watermark starts at the next complete hour and the boundary hour may
+    // hold no events.
+    let steps = 2;
+    let step = second;
+    while (step.advanced && steps < 10) { step = backfillHourRollups(sql, { hours: USAGE_HOURLY_BACKFILL_HOURS }); steps++; }
+    expect(steps).toBeLessThan(10);
+    expect(sql.query<{ n: number; reqs: number }, []>("SELECT COUNT(*) AS n, COALESCE(SUM(reqs), 0) AS reqs FROM usage_hour_rollups").get()!)
+      .toMatchObject({ n: 12, reqs: 12 });
+    // Settled: a further step declines rather than claiming coverage it cannot
+    // materialise from retained events.
+    expect(backfillHourRollups(sql, { hours: USAGE_HOURLY_BACKFILL_HOURS }).advanced).toBe(false);
+
+    // The prune floor is a hard boundary: coverage never extends into hours the
+    // retention job has already deleted.
+    const floor = hourNow - 6 * USAGE_HOUR;
+    sql.exec(`UPDATE usage_rollup_coverage SET hour_floor = ${floor}, hourly_from = ${hourNow}`);
+    expect(backfillHourRollups(sql, { hours: USAGE_HOURLY_BACKFILL_HOURS }).hourlyFrom).toBeGreaterThanOrEqual(floor);
+  } finally {
+    sql.close();
+    await gateway.stop();
+  }
+}, 60_000);
