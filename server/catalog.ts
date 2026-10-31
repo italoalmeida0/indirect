@@ -1,4 +1,5 @@
 import { db } from "./db";
+import { EFFECTIVE_ROLE_SQL } from "./roles";
 import { ApiError } from "./http";
 import { keyQuerySource } from "./keys";
 import { buildGridOrder, likeEscape, parseCursor, parseGridQuery } from "./gridql";
@@ -7,7 +8,7 @@ import { cachedUsageQuery } from "./usage-cache";
 export type CatalogKind = "keys" | "providers" | "models" | "users" | "audit";
 interface Field { id: string; label: string; icon: string; value: string; display?: string; json?: string }
 type Selection = Record<string, { include: string[]; exclude: string[] }>;
-const labels: Record<string, string> = { active: "Active", enabled: "Enabled", disabled: "Disabled", revoked: "Revoked", exhausted: "Budget exhausted", expired: "Expired", daily_limit: "Daily budget spent", total_limit: "Total budget spent", permanent: "Permanent", expiring: "Expiring", limited: "Limited", unlimited: "Unlimited", auto: "Imported", manual: "Manual", user: "User", admin: "Administrator", fallback: "Fallback", native: "Native", workaround: "Workaround", own: "Custom", openai: "OpenAI", anthropic: "Anthropic", responses: "Responses" };
+const labels: Record<string, string> = { active: "Active", enabled: "Enabled", disabled: "Disabled", revoked: "Revoked", exhausted: "Budget exhausted", expired: "Expired", daily_limit: "Daily budget spent", total_limit: "Total budget spent", permanent: "Permanent", expiring: "Expiring", limited: "Limited", unlimited: "Unlimited", auto: "Imported", manual: "Manual", user: "User", admin: "Administrator", project_manager: "Project manager", fallback: "Fallback", native: "Native", workaround: "Workaround", own: "Custom", openai: "OpenAI", anthropic: "Anthropic", responses: "Responses" };
 const enumFields = new Set(["status", "role", "expiry", "budget", "source", "tool_mode", "two_factor", "password", "google", "protocol"]);
 const field = (id: string, label: string, value: string, icon: string, display?: string): Field => ({ id, label, value, icon: `lucide:${icon}`,
   display: display ?? (enumFields.has(id) ? `CASE ${value} ${Object.entries(labels).map(([key, label]) => `WHEN '${key}' THEN '${label}'`).join(" ")} ELSE ${value} END` : undefined) });
@@ -37,9 +38,9 @@ export function catalogSource(kind: CatalogKind, userId: string | null) {
     { ...field("feature", "Feature", "v.value", "sparkles"), json: "r.features" },
     { ...field("modality", "Input modality", "v.value", "layers"), json: "r.input_modalities" },
   ] };
-  if (kind === "users") return { sql: `SELECT u.*, b.plan_id, bp.name AS plan_name, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id`, params: [], time: "created_at", search: ["name", "email"], fields: [
+  if (kind === "users") return { sql: `SELECT u.*, ${EFFECTIVE_ROLE_SQL} AS effective_role, b.plan_id, bp.name AS plan_name, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id`, params: [], time: "created_at", search: ["name", "email"], fields: [
     field("plan", "Plan", "COALESCE(r.plan_id, '')", "wallet", "COALESCE(r.plan_name, 'Unlimited')"),
-    field("user", "User", "r.id", "user-round", "r.email"), field("role", "Role", "r.role", "shield"), field("status", "Status", "r.status", "circle-check"),
+    field("user", "User", "r.id", "user-round", "r.email"), field("role", "Role", "r.effective_role", "shield"), field("status", "Status", "r.status", "circle-check"),
     field("two_factor", "Two-factor authentication", "CASE WHEN r.totp_secret IS NULL THEN 'disabled' ELSE 'enabled' END", "shield-check"),
     field("password", "Password sign-in", "CASE WHEN r.password_hash IS NULL THEN 'disabled' ELSE 'enabled' END", "key-round"),
     field("google", "Google sign-in", "CASE WHEN r.google_id IS NULL THEN 'disabled' ELSE 'enabled' END", "log-in"),

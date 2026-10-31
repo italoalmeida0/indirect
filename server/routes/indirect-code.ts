@@ -1,7 +1,8 @@
-import { db, audit, type ApiKeyRow, type RemoteHostRow, type RemotePairingTokenRow } from "../db";
+import { db, audit, inImmediateTx, type ApiKeyRow, type RemoteHostRow, type RemotePairingTokenRow } from "../db";
 import { requireAuth } from "../auth";
-import { createKey, revokeKey } from "../keys";
+import { insertPreparedKey, markKeyRevoked, prepareKey } from "../keys";
 import { decryptSecret, randomToken, sha256Hex } from "../crypto";
+import { dropKeyLimiter } from "../ratelimit";
 import { err, json, readJsonBody } from "../http";
 import { GATEWAY_SECRET, PUBLIC_URL } from "../config";
 import { closeDaemonSocket, disconnectDaemonSocket, isHostOnline, isHostUpdating } from "./relay";
@@ -68,11 +69,12 @@ export async function handleIndirectCodeRestRoute(
     const now = Date.now();
     const expiresAt = now + 15 * 60_000; // 15 minutes TTL
 
-    db.prepare(
-      "INSERT INTO remote_pairing_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
-    ).run(token, user.id, expiresAt, now);
-
-    audit("remote_host.pair_token_created", { actorId: user.id });
+    inImmediateTx(() => {
+      db.prepare(
+        "INSERT INTO remote_pairing_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+      ).run(token, user.id, expiresAt, now);
+      audit("remote_host.pair_token_created", { actorId: user.id });
+    });
 
     return json(
       {
@@ -100,9 +102,6 @@ export async function handleIndirectCodeRestRoute(
     if (!row) {
       return err(401, "invalid or expired pairing token", req);
     }
-
-    // Single-use token: consume immediately
-    db.prepare("DELETE FROM remote_pairing_tokens WHERE token = ?").run(token);
 
     let body: any = null;
     try {
@@ -135,13 +134,6 @@ export async function handleIndirectCodeRestRoute(
         .get(claimedHostId, row.user_id);
       if (existing && existing.daemon_token_hash === sha256Hex(claimedToken)) {
         const newDaemonToken = `dmt_${randomToken(24)}`;
-        db.prepare(
-          `UPDATE remote_hosts
-           SET name = ?, hostname = ?, os = ?, arch = ?,
-               daemon_token_hash = ?, status = 'offline', last_seen_at = ?
-           WHERE id = ?`,
-        ).run(hostName, hostname, os, arch, sha256Hex(newDaemonToken), now, existing.id);
-
         // Reuse the dedicated API key value when it is still revealable;
         // otherwise mint a fresh one (old key row revoked below is harmless).
         let apiKeyValue: string | null = null;
@@ -155,19 +147,33 @@ export async function handleIndirectCodeRestRoute(
             } catch {}
           }
         }
-        if (!apiKeyValue) {
-          if (existing.api_key_id) {
-            try {
-              revokeKey(existing.api_key_id);
-            } catch {}
+        const replacementKey = apiKeyValue ? null : await prepareKey(row.user_id, { name: `Daemon: ${hostName}` });
+        const consumed = inImmediateTx(() => {
+          const used = db.prepare("DELETE FROM remote_pairing_tokens WHERE token = ? AND expires_at > ?").run(token, Date.now());
+          if (used.changes !== 1) return false;
+          if (db.prepare<{ status: string }, [string]>("SELECT status FROM users WHERE id = ?").get(row.user_id)?.status !== "active") {
+            return false;
           }
-          const created = await createKey(row.user_id, { name: `Daemon: ${hostName}` });
-          db.prepare("UPDATE remote_hosts SET api_key_id = ? WHERE id = ?").run(
-            created.row.id,
-            existing.id,
-          );
-          apiKeyValue = created.token;
-        }
+          db.prepare(
+            `UPDATE remote_hosts
+             SET name = ?, hostname = ?, os = ?, arch = ?,
+                 daemon_token_hash = ?, status = 'offline', last_seen_at = ?
+             WHERE id = ?`,
+          ).run(hostName, hostname, os, arch, sha256Hex(newDaemonToken), now, existing.id);
+          if (replacementKey) {
+            if (existing.api_key_id) markKeyRevoked(existing.api_key_id);
+            const createdRow = insertPreparedKey(replacementKey, now);
+            db.prepare("UPDATE remote_hosts SET api_key_id = ? WHERE id = ?").run(createdRow.id, existing.id);
+          }
+          audit("remote_host.repaired", {
+            actorId: row.user_id,
+            target: existing.id,
+            meta: { hostname, os, arch },
+          });
+          return true;
+        });
+        if (!consumed) return err(401, "invalid or expired pairing token", req);
+        if (replacementKey && existing.api_key_id) dropKeyLimiter(existing.api_key_id);
 
         // Drop any stale socket still keyed by this host so the re-paired
         // daemon is the only writer. NO remote-kill frames here: this is a
@@ -177,18 +183,12 @@ export async function handleIndirectCodeRestRoute(
         // deletion below (they make a live daemon self-terminate).
         disconnectDaemonSocket(existing.id);
 
-        audit("remote_host.repaired", {
-          actorId: row.user_id,
-          target: existing.id,
-          meta: { hostname, os, arch },
-        });
-
         return json(
           {
             success: true,
             hostId: existing.id,
             daemonToken: newDaemonToken,
-            apiKey: apiKeyValue,
+            apiKey: apiKeyValue ?? replacementKey!.token,
             gatewayUrl: PUBLIC_URL,
             reused: true,
           },
@@ -202,43 +202,44 @@ export async function handleIndirectCodeRestRoute(
     const daemonTokenHash = sha256Hex(daemonToken);
 
     // Create a dedicated gateway API key for this daemon so its LLM calls are attributed to this user
-    const { row: apiKeyRow, token: apiKeyValue } = await createKey(row.user_id, {
-      name: `Daemon: ${hostName}`,
+    const preparedKey = await prepareKey(row.user_id, { name: `Daemon: ${hostName}` });
+    const paired = inImmediateTx(() => {
+      const used = db.prepare("DELETE FROM remote_pairing_tokens WHERE token = ? AND expires_at > ?").run(token, Date.now());
+      if (used.changes !== 1) return false;
+      if (db.prepare<{ status: string }, [string]>("SELECT status FROM users WHERE id = ?").get(row.user_id)?.status !== "active") {
+        return false;
+      }
+      const apiKeyRow = insertPreparedKey(preparedKey, now);
+      db.prepare(
+        `INSERT INTO remote_hosts (id, user_id, name, hostname, os, arch, daemon_token_hash, api_key_id, status, last_seen_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'offline', ?, ?)`,
+      ).run(
+        hostId,
+        row.user_id,
+        hostName,
+        hostname,
+        os,
+        arch,
+        daemonTokenHash,
+        apiKeyRow.id,
+        now,
+        now,
+      );
+      audit("remote_host.paired", {
+        actorId: row.user_id,
+        target: hostId,
+        meta: { hostname, os, arch },
+      });
+      return true;
     });
-
-    if (db.prepare<{ status: string }, [string]>("SELECT status FROM users WHERE id = ?").get(row.user_id)?.status !== "active") {
-      revokeKey(apiKeyRow.id);
-      return err(401, "account unavailable", req);
-    }
-
-    db.prepare(
-      `INSERT INTO remote_hosts (id, user_id, name, hostname, os, arch, daemon_token_hash, api_key_id, status, last_seen_at, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'offline', ?, ?)`,
-    ).run(
-      hostId,
-      row.user_id,
-      hostName,
-      hostname,
-      os,
-      arch,
-      daemonTokenHash,
-      apiKeyRow.id,
-      now,
-      now,
-    );
-
-    audit("remote_host.paired", {
-      actorId: row.user_id,
-      target: hostId,
-      meta: { hostname, os, arch },
-    });
+    if (!paired) return err(401, "invalid or expired pairing token", req);
 
     return json(
       {
         success: true,
         hostId,
         daemonToken,
-        apiKey: apiKeyValue,
+        apiKey: preparedKey.token,
         gatewayUrl: PUBLIC_URL,
       },
       { req },
@@ -285,20 +286,17 @@ export async function handleIndirectCodeRestRoute(
 
     if (!host) return err(404, "host not found", req);
 
+    inImmediateTx(() => {
+      if (host.api_key_id) markKeyRevoked(host.api_key_id);
+      db.prepare("DELETE FROM remote_hosts WHERE id = ?").run(host.id);
+      audit("remote_host.deleted", { actorId: user.id, target: host.id });
+    });
+
     // Close any active WebSocket connection for this daemon. Kill frames
     // ARE intended here: the host row goes away for good — the daemon must
     // self-terminate, not redial (any redial would 401).
     closeDaemonSocket(host.id);
-
-    // Revoke dedicated API key if exists
-    if (host.api_key_id) {
-      try {
-        revokeKey(host.api_key_id);
-      } catch {}
-    }
-
-    db.prepare("DELETE FROM remote_hosts WHERE id = ?").run(host.id);
-    audit("remote_host.deleted", { actorId: user.id, target: host.id });
+    if (host.api_key_id) dropKeyLimiter(host.api_key_id);
 
     return json({ success: true }, { req });
   }

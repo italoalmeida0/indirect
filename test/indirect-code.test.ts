@@ -52,10 +52,11 @@ beforeAll(async () => {
   await waitForServer();
 }, 60_000);
 
-afterAll(() => {
+afterAll(async () => {
   try {
     gwProc.kill();
   } catch {}
+  await gwProc.exited;
   try {
     rmSync(dataDir, { recursive: true, force: true });
   } catch {}
@@ -398,7 +399,7 @@ describe("Indirect Code Relay and Pairing", () => {
     const daemonData = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-test-"));
     const workDir = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-work-"));
 
-    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin/indirect-code");
+    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin", process.platform === "win32" ? "indirect-code.exe" : "indirect-code");
 
     // Spawn Go daemon
     const daemonSubproc = Bun.spawn(
@@ -413,7 +414,9 @@ describe("Indirect Code Relay and Pairing", () => {
       // Wait for daemon to register and come online
       let realHostId = "";
       const started = Date.now();
-      while (Date.now() - started < 10_000) {
+      // A cold Windows worker provisions its managed shell before connecting.
+      // Measure that separately from the session lifecycle below.
+      while (Date.now() - started < 45_000) {
         const hRes = await fetch(`${GW}/api/indirect-code/hosts`, {
           headers: { Authorization: `Bearer ${userToken}` },
         });
@@ -427,6 +430,7 @@ describe("Indirect Code Relay and Pairing", () => {
       }
 
       expect(realHostId).not.toBeEmpty();
+      console.log(`[daemon-startup] ready in ${Date.now() - started}ms (including managed runtime provisioning)`);
 
       // Connect client WebSocket
       const clientWs = new WebSocket(`${GW_WS}/api/indirect-code/client/ws?token=${userToken}`);
@@ -491,12 +495,20 @@ describe("Indirect Code Relay and Pairing", () => {
       try {
         daemonSubproc.kill();
       } catch {}
+      await daemonSubproc.exited;
+      // Pairing can create an offline host before a cold runtime download
+      // finishes. Remove this test's host even if its startup assertion fails.
+      const leftovers = await fetch(`${GW}/api/indirect-code/hosts`, { headers: { Authorization: `Bearer ${userToken}` } });
+      const remaining = await leftovers.json() as { hosts: Array<{ id: string; name: string }> };
+      for (const host of remaining.hosts.filter((item) => item.name === "Real Go Daemon")) {
+        await fetch(`${GW}/api/indirect-code/hosts/${host.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${userToken}` } });
+      }
       try {
         rmSync(daemonData, { recursive: true, force: true });
         rmSync(workDir, { recursive: true, force: true });
       } catch {}
     }
-  }, 15000);
+  }, 60000);
 
   test("Real Go Daemon: pins, message edits, projects, search, attachments", async () => {
     const pairRes = await fetch(`${GW}/api/indirect-code/pair`, {
@@ -508,7 +520,7 @@ describe("Indirect Code Relay and Pairing", () => {
 
     const daemonData = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-test2-"));
     const workDir = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-work2-"));
-    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin/indirect-code");
+    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin", process.platform === "win32" ? "indirect-code.exe" : "indirect-code");
     const daemonSubproc = Bun.spawn(
       [daemonBin, "--worker", "--connect", pairJson.connectUrl, "--data-dir", daemonData, "--name", "Feature Daemon"],
       { stdout: "inherit", stderr: "inherit" },
@@ -695,8 +707,11 @@ describe("Indirect Code Relay and Pairing", () => {
 
       // Nested session inside the project tree (cwd = <workDir>/sub)
       mkdirSync(path.join(workDir, "sub"));
-      send({ type: "create_session", cwd: `${workDir}/sub`, title: "Nested", model: "gpt-4o" });
-      const nestedCreated = await waitFor((m) => m.type === "session_created" && m.session.cwd === `${workDir}/sub`);
+      // The daemon normalizes cwd with the PLATFORM separator, so compare
+      // against path.join rather than a literal forward slash: on Windows
+      // "C:/x/sub" arrives as "C:\x\sub" and an exact string match never fires.
+      send({ type: "create_session", cwd: path.join(workDir, "sub"), title: "Nested", model: "gpt-4o" });
+      const nestedCreated = await waitFor((m) => m.type === "session_created" && m.session.cwd === path.join(workDir, "sub"));
       const nestedSid = nestedCreated.session.id;
       send({ type: "upload_attachment", sessionId: nestedSid, name: "nested.txt", mime: "text/plain", data: helloB64, requestId: "ua_test_2" });
       await waitFor((m) => m.type === "attachment_uploaded" && m.sessionId === nestedSid);
@@ -748,6 +763,7 @@ describe("Indirect Code Relay and Pairing", () => {
       try {
         daemonSubproc.kill();
       } catch {}
+      await daemonSubproc.exited;
       try {
         rmSync(daemonData, { recursive: true, force: true });
         rmSync(workDir, { recursive: true, force: true });
@@ -765,7 +781,7 @@ describe("Indirect Code Relay and Pairing", () => {
 
     const daemonData = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-dedup-"));
     const workDir = mkdtempSync(path.join(tmpdir(), "llmgw-daemon-dedup-work-"));
-    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin/indirect-code");
+    const daemonBin = path.join(import.meta.dir, "../indirect-code-daemon/bin", process.platform === "win32" ? "indirect-code.exe" : "indirect-code");
     const daemonSubproc = Bun.spawn(
       [daemonBin, "--worker", "--connect", pairJson.connectUrl, "--data-dir", daemonData, "--name", "Dedup Daemon"],
       { stdout: "inherit", stderr: "inherit" },
@@ -883,6 +899,7 @@ describe("Indirect Code Relay and Pairing", () => {
       try {
         daemonSubproc.kill();
       } catch {}
+      await daemonSubproc.exited;
       try {
         rmSync(daemonData, { recursive: true, force: true });
         rmSync(workDir, { recursive: true, force: true });

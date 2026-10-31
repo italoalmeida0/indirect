@@ -1,7 +1,7 @@
 import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
-import { createSignal, For, Show } from "solid-js";
+import { createResource, createSignal, For, Show } from "solid-js";
 
-import { api, type ApiKeyDto } from "../../api";
+import { api, type ApiKeyDto, type FinancialProjectDto } from "../../api";
 import { PageTitle } from "../../index";
 import {
   Badge,
@@ -13,6 +13,7 @@ import {
   Icons,
   Modal,
   ModalNotice,
+  Select,
   toast,
   fmtDate,
   fmtCost,
@@ -35,6 +36,11 @@ const TONE: Record<
 };
 
 export default function AdminKeysPage() {
+  const [projects, { refetch: refetchProjects }] = createResource(async () => (await api<{ projects: FinancialProjectDto[] }>("GET", "/api/projects")).projects);
+  const readProjects = () => projects.error ? undefined : projects();
+  const [assigning, setAssigning] = createSignal<ApiKeyDto | null>(null);
+  const [projectId, setProjectId] = createSignal("");
+  const [assignmentError, setAssignmentError] = createSignal("");
   const view = createCatalog<ApiKeyDto>({ storageKey: "llmgw-grid:admin.keys", path: "/api/admin/keys", result: "keys", label: "All API keys", sort: [
     { value: "name:asc", label: "Name A–Z" }, { value: "userEmail:asc", label: "Owner A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "spendTotalUsd:desc", label: "Highest spend" },
   ] });
@@ -48,6 +54,12 @@ export default function AdminKeysPage() {
     null,
   );
   const [busy, setBusy] = createSignal(false);
+  const assign = async () => {
+    const key = assigning(); if (!key) return; setBusy(true); setAssignmentError("");
+    try { await api("PATCH", `/api/admin/keys/${encodeURIComponent(key.id)}`, { projectId: projectId() || null }); setAssigning(null); refreshGrid(); toast("Key financial project saved"); }
+    catch (e) { setAssignmentError(e instanceof Error ? e.message : "Assignment failed"); } finally { setBusy(false); }
+  };
+  const openAssignment = (key: ApiKeyDto) => { setProjectId(key.projectId ?? ""); setAssignmentError(""); setAssigning(key); };
 
   const revoke = async () => {
     const k = confirmRevoke();
@@ -117,6 +129,7 @@ export default function AdminKeysPage() {
     if (!k) return null;
     return (
       <div class="flex items-center justify-end gap-1">
+        <IconBtn icon={Icons.folder} title="Assign financial project" onClick={() => openAssignment(k)} />
         <IconBtn
           icon={Icons.copy}
           title={k.revealable ? "Copy full token" : "Predates reveal support"}
@@ -143,6 +156,7 @@ export default function AdminKeysPage() {
   const cols: ColDef[] = [
     { field: "name", headerName: "Name", flex: 1.1, minWidth: 160, cellRenderer: NameCell },
     { field: "prefix", headerName: "Prefix", width: 130, cellRenderer: PrefixCell },
+    { colId: "financialProject", headerName: "Financial project", width: 170, sortable: false, valueGetter: (p) => p.data?.projectId ? readProjects()?.find((project) => project.id === p.data.projectId)?.name ?? p.data.projectId : "Personal" },
     {
       field: "userEmail",
       headerName: "Owner",
@@ -195,7 +209,7 @@ export default function AdminKeysPage() {
     {
       colId: "actions",
       headerName: "",
-      width: 130,
+      width: 170,
       cellRenderer: ActionsCell,
       sortable: false,
       filter: false,
@@ -212,6 +226,7 @@ export default function AdminKeysPage() {
         subtitle="Every user's keys — revoke any of them instantly"
       />
 
+      <Modal open={!!assigning()} onClose={() => !busy() && setAssigning(null)} title="Assign financial project"><div class="space-y-4"><p class="text-sm text-ink-300 break-words">{assigning()?.name} · {assigning()?.userEmail ?? assigning()?.userId}</p><Show when={projects.error} fallback={<Select label="Key financial project" value={projectId()} onChange={setProjectId} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((project) => project.status === "active" || project.id === projectId()).map((project) => ({ value: project.id, label: project.name }))]} />}><p role="alert" class="text-sm">Financial projects could not be loaded.</p><Btn size="sm" variant="outline" onClick={() => refetchProjects()}>Retry projects</Btn></Show><ModalNotice>The key owner must be a member of the selected active project. Reassignment applies to future requests; historical accounting and accepted requests keep their original attribution.</ModalNotice><Show when={assignmentError()}><p role="alert" class="text-sm">{assignmentError()}</p></Show><div class="flex justify-end gap-2"><Btn variant="ghost" disabled={busy()} onClick={() => setAssigning(null)}>Cancel</Btn><Btn disabled={busy() || !!projects.error || projects.loading} onClick={assign}>Save assignment</Btn></div></div></Modal>
       <CatalogToolbar view={view} />
       <CatalogState view={view}><Card>
         <Show when={keyCount() > 0} fallback={<EmptyState icon={Icons.key} title="No matching API keys" hint="Choose another period or adjust your filters." />}>

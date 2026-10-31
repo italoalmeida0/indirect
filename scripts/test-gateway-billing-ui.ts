@@ -2,10 +2,11 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
+const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || "playwright") as any;
 const root = fileURLToPath(new URL("..", import.meta.url)), output = path.join(root, "tmp/gateway-billing-ui");
 mkdirSync(output, { recursive: true });
 const server = createServer((req, res) => {

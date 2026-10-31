@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 
 import { totpAt } from "../server/crypto";
+import { unusedTotpCode } from "./totp-fixture";
 import { findFreePort } from "./free-port";
 
 /**
@@ -328,12 +329,13 @@ describe("security audit", () => {
 
   test("JWT type confusion: 2fa temp token is not an access token (and vice-versa)", async () => {
     const ip = freshIp();
+    const consumed = new Set<string>();
     // enable TOTP on u3
     const setup = await api("/api/me/2fa/setup", { token: u3Token, method: "POST", ip });
     const secret = setup.json.secret as string;
     const enable = await api("/api/me/2fa/enable", {
       token: u3Token,
-      body: { code: await totpAt(secret, Date.now()) },
+      body: { code: await unusedTotpCode(secret, consumed) },
       ip,
     });
     expect(enable.status).toBe(200);
@@ -355,20 +357,17 @@ describe("security audit", () => {
     });
     expect(confusion.status).toBe(401);
 
-    // finish u3's login properly so the account is usable again (+ disable 2FA
-    // with a next-window code to dodge the anti-replay store). The timestamp is
-    // pinned to the START of the next 30s window: a fixed "+35s" lands two
-    // windows ahead near a boundary and flakes with a 401.
+    // Enrollment, login and disable are separate proofs. Keep the real replay
+    // guard enabled and use a distinct accepted counter window for each step.
     const finish = await api("/api/auth/2fa", {
-      body: { tempToken, code: await totpAt(secret, Date.now()) },
+      body: { tempToken, code: await unusedTotpCode(secret, consumed) },
       ip,
     });
     expect(finish.status).toBe(200);
     u3Token = finish.json.accessToken;
-    const nextWindow = (Math.floor(Date.now() / 30_000) + 1) * 30_000 + 1_000;
     const disable = await api("/api/me/2fa/disable", {
       token: u3Token,
-      body: { code: await totpAt(secret, nextWindow) },
+      body: { code: await unusedTotpCode(secret, consumed) },
       ip,
     });
     expect(disable.status).toBe(200);

@@ -1,0 +1,178 @@
+name: Enterprise capacity qualification
+
+# Explicit resource-heavy gate. It never runs on pull requests or against a
+# deployed installation. Quick tests two raw days; full400 tests the delivered
+# 400-day retention. Neither profile substitutes unmeasured scenarios.
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "quick = exploratory two raw days; full400 = 100M physical events"
+        type: choice
+        options: [quick, full400]
+        default: quick
+      runner_labels:
+        description: 'Dedicated Linux runner labels as JSON; no concurrent unrelated load'
+        type: string
+        default: '["self-hosted","linux","ARM64","enterprise-capacity"]'
+      architecture:
+        description: "Native runtime/host architecture required by this run"
+        type: choice
+        options: [arm64, x64]
+        default: arm64
+      samples:
+        description: "API samples and samples per each of the three frontend pages (minimum 1000)"
+        type: string
+        default: "1200"
+      rate:
+        description: "Open-loop proxy requests per second (minimum 32)"
+        type: string
+        default: "32"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: enterprise-qualification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: Native ${{ inputs.architecture }} / ${{ inputs.profile }}
+    runs-on: ${{ fromJSON(inputs.runner_labels) }}
+    timeout-minutes: 360
+    defaults:
+      run:
+        shell: bash
+    env:
+      PROFILE: ${{ inputs.profile }}
+      EXPECTED_ARCH: ${{ inputs.architecture }}
+      SAMPLES: ${{ inputs.samples }}
+      REQUEST_RATE: ${{ inputs.rate }}
+      BUN_CONFIG_MAX_HTTP_REQUESTS: "2048"
+      SMTP_HOST: ""
+      GOOGLE_CLIENT_ID: ""
+      BACKUP_INCLUDE_DAEMON: "false"
+      # Backup/maintenance interference is reported only when the capacity
+      # script explicitly exercises it; a disabled schedule is disclosed.
+      BACKUP_INTERVAL_MINUTES: "0"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Resource, architecture and input preflight
+        id: preflight
+        run: |
+          set -euo pipefail
+          test "$RUNNER_OS" = Linux
+          [[ "$SAMPLES" =~ ^[0-9]+$ ]] && (( SAMPLES >= 1000 && SAMPLES <= 100000 ))
+          [[ "$REQUEST_RATE" =~ ^[0-9]+$ ]] && (( REQUEST_RATE >= 32 && REQUEST_RATE <= 1000 ))
+          case "$PROFILE" in
+            quick) raw_days=2; reservation_days=2; minimum_gib=20 ;;
+            full400) raw_days=400; reservation_days=30; minimum_gib=100 ;;
+            *) echo "Unsupported profile" >&2; exit 1 ;;
+          esac
+          case "$(uname -m)" in
+            aarch64|arm64) host_arch=arm64 ;;
+            x86_64|amd64) host_arch=x64 ;;
+            *) echo "Unsupported host architecture" >&2; exit 1 ;;
+          esac
+          test "$host_arch" = "$EXPECTED_ARCH"
+          test "$(bun -p 'process.arch')" = "$EXPECTED_ARCH"
+          test "$(bun --version)" = 1.4.2
+          free_kib=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
+          (( free_kib >= minimum_gib * 1024 * 1024 )) || { echo "Need at least $minimum_gib GiB free on the fixture volume" >&2; exit 1; }
+          report_dir="$RUNNER_TEMP/enterprise-evidence-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          fixture_dir="$RUNNER_TEMP/enterprise-fixture-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          mkdir -p "$report_dir"
+          echo "report_dir=$report_dir" >> "$GITHUB_OUTPUT"
+          echo "fixture_dir=$fixture_dir" >> "$GITHUB_OUTPUT"
+          echo "raw_days=$raw_days" >> "$GITHUB_OUTPUT"
+          echo "reservation_days=$reservation_days" >> "$GITHUB_OUTPUT"
+          git rev-parse HEAD > "$report_dir/source-revision.txt"
+          uname -a > "$report_dir/hardware.txt"
+          lscpu >> "$report_dir/hardware.txt"
+          free -b >> "$report_dir/hardware.txt"
+          df -B1 "$RUNNER_TEMP" >> "$report_dir/hardware.txt"
+          lsblk -o NAME,TYPE,SIZE,ROTA >> "$report_dir/hardware.txt"
+          sha256sum "$(command -v bun)" > "$report_dir/bun-binary.sha256"
+          PROFILE_RAW_DAYS="$raw_days" PROFILE_RESERVATION_DAYS="$reservation_days" bun -e 'import { cpus, totalmem } from "node:os"; console.log(JSON.stringify({ source: process.env.GITHUB_SHA, profile: process.env.PROFILE, targetArchitecture: process.env.EXPECTED_ARCH, runtimeArchitecture: process.arch, bun: Bun.version, cpu: cpus()[0]?.model, logicalCpus: cpus().length, memoryBytes: totalmem(), users: 500, requestsPerUserDay: 500, rawDays: Number(process.env.PROFILE_RAW_DAYS), rawEvents: 250000 * Number(process.env.PROFILE_RAW_DAYS), reservationDays: Number(process.env.PROFILE_RESERVATION_DAYS), auditDays: 365, auditRows: 1095000, apiSamples: Number(process.env.SAMPLES), frontendSamples: Number(process.env.SAMPLES) * 3, proxyArrivalRate: Number(process.env.REQUEST_RATE), dashboardArrivalRate: 12, generatorMaxHttpRequests: 2048, scheduledBackups: false, productionDurability: "unchanged", targetsDeliveredRawRetention: process.env.PROFILE === "full400", remainingRequirements: ["Ten-year audit cardinality is not seeded by this profile", "Only scenarios actually recorded in the reports are measured", "A finite soak cannot establish ten-year reliability"] }, null, 2));' > "$report_dir/profile.json"
+
+      - name: Install dependencies and browser
+        run: |
+          bun install --frozen-lockfile
+          mkdir -p "$RUNNER_TEMP/enterprise-browser"
+          bun add --cwd "$RUNNER_TEMP/enterprise-browser" playwright@1.63.0
+          bun "$RUNNER_TEMP/enterprise-browser/node_modules/playwright/cli.js" install --with-deps chromium
+
+      - name: Build production SPA
+        run: bun run build:web
+
+      - name: Provision the gen-ui lint browser once
+        # Gateway boot starts an opportunistic obscura download and probes the
+        # binary synchronously. Provisioning it here keeps a network fetch or a
+        # slow first execution out of the boot that the measurement depends on.
+        env:
+          DATA_DIR: ${{ runner.temp }}/enterprise-obscura
+        run: |
+          set -euo pipefail
+          mkdir -p "$DATA_DIR"
+          binary=$(bun -e 'import { ensureObscuraBrowser } from "./server/routes/obscura.ts"; console.log(await ensureObscuraBrowser());')
+          test -x "$binary"
+          echo "OBSCURA_PATH=$binary" >> "$GITHUB_ENV"
+
+      - name: Seed isolated history and verify physical cardinality
+        env:
+          FIXTURE_DIR: ${{ steps.preflight.outputs.fixture_dir }}
+          REPORT_DIR: ${{ steps.preflight.outputs.report_dir }}
+          RAW_DAYS: ${{ steps.preflight.outputs.raw_days }}
+          RESERVATION_DAYS: ${{ steps.preflight.outputs.reservation_days }}
+        run: |
+          set -euo pipefail
+          bun scripts/test-gateway-enterprise.ts --seed-only --users=500 --requests-per-user-day=500 --raw-days="$RAW_DAYS" --reservation-days="$RESERVATION_DAYS" --dir="$FIXTURE_DIR" --report="$REPORT_DIR/seed-report.json" | tee "$REPORT_DIR/seed-progress.log"
+
+      - name: Enforce API overhead and dashboard API thresholds
+        id: api
+        env:
+          FIXTURE_DIR: ${{ steps.preflight.outputs.fixture_dir }}
+          REPORT_DIR: ${{ steps.preflight.outputs.report_dir }}
+        run: |
+          # The generator must not share an event loop with the fixture upstream:
+          # co-located, generator queueing is charged to the gateway and the same
+          # run reports ~4x the gateway's actual overhead (270.7ms against 69.3ms
+          # measured). --serve holds the gateway and upstream in one process,
+          # --base measures from this one.
+          bun scripts/test-gateway-enterprise.ts --reuse --dir="$FIXTURE_DIR" --serve > "$REPORT_DIR/serve.log" 2>&1 &
+          SERVE_PID=$!
+          trap 'kill $SERVE_PID 2>/dev/null || true' EXIT
+          BASE=""
+          for _ in $(seq 1 180); do
+            BASE=$(grep -o 'http://127\.0\.0\.1:[0-9]*' "$REPORT_DIR/serve.log" | head -1 || true)
+            [ -n "$BASE" ] && break
+            sleep 1
+          done
+          test -n "$BASE" || { echo "fixture gateway did not start"; cat "$REPORT_DIR/serve.log"; exit 1; }
+          bun scripts/test-gateway-enterprise.ts --reuse --dir="$FIXTURE_DIR" --base="$BASE" --samples="$SAMPLES" --rate="$REQUEST_RATE" --api-p99=100 --dashboard-p99=1000 --report="$REPORT_DIR/api-report.json"
+
+      - name: Enforce complete frontend interaction threshold
+        # Preserve separate frontend evidence even if the API threshold failed.
+        if: ${{ !cancelled() && steps.preflight.outcome == 'success' && (steps.api.outcome == 'success' || steps.api.outcome == 'failure') }}
+        env:
+          FIXTURE_DIR: ${{ steps.preflight.outputs.fixture_dir }}
+          REPORT_DIR: ${{ steps.preflight.outputs.report_dir }}
+        run: |
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/enterprise-browser/node_modules/playwright/index.mjs" bun scripts/test-gateway-enterprise-ui.ts --reuse --dir="$FIXTURE_DIR" --samples="$((SAMPLES * 3))" --enforce-p99 --report="$REPORT_DIR/frontend-report.json"
+
+      - name: Publish sanitized evidence
+        if: ${{ always() && steps.preflight.outputs.report_dir != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: enterprise-${{ inputs.profile }}-${{ inputs.architecture }}-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 14
+          # Never upload fixture JSON, databases, secret material or gateway logs.
+          path: ${{ steps.preflight.outputs.report_dir }}/*

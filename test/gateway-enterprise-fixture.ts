@@ -7,8 +7,8 @@ const root = path.join(import.meta.dir, "..");
 export const testSecret = "enterprise-regression-secret-0123456789";
 export const testPassword = "enterprise-test-password-123";
 
-export async function startGateway(env: Record<string, string> = {}) {
-  const dir = mkdtempSync(path.join(tmpdir(), "indirect-enterprise-test-"));
+export async function startGateway(env: Record<string, string> = {}, existingDir?: string) {
+  const dir = existingDir ?? mkdtempSync(path.join(tmpdir(), "indirect-enterprise-test-"));
   const port = await findFreePort();
   const base = `http://127.0.0.1:${port}`;
   const proc = Bun.spawn([process.execPath, "server/index.ts"], {
@@ -35,12 +35,37 @@ export async function startGateway(env: Record<string, string> = {}) {
   } catch (error) {
     proc.kill();
     await proc.exited;
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    if (!existingDir) rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     throw error;
   }
   return {
     base, dir, proc, log,
-    async stop() { proc.kill(); await proc.exited; rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); },
+    async killOnly() {
+      proc.kill();
+      await proc.exited;
+    },
+    async stop() {
+      proc.kill();
+      await proc.exited;
+      // Removing the data directory can still fail with EBUSY on Windows while
+      // a handle (an open SQLite reader, the virus scanner) is closing. That is
+      // a teardown detail, never a test result: retry briefly, then leave the
+      // directory for the OS to reap rather than failing an otherwise green
+      // test.
+      for (let attempt = 0; attempt < 6; attempt++) {
+        try {
+          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+          return;
+        } catch (error) {
+          Bun.gc(true);
+          if (attempt === 5) {
+            console.warn("[fixture] could not remove test directory:", (error as Error).message);
+            return;
+          }
+          await Bun.sleep(150);
+        }
+      }
+    },
   };
 }
 

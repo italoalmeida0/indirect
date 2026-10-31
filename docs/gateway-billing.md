@@ -25,16 +25,40 @@ Changing a plan never clears spend or restarts an active session. Monthly and
 weekly counters also track usage while their limits are disabled. Sessions
 begin tracking when their plan first enables session distribution.
 
-**Plan & limits** shows current account spend, remaining and reserved USD,
-renewal times and available resets. These are live allowance windows and do not
-follow analytics date filters.
+**Plan & limits** shows live allowance windows, renewal times and available
+resets, independently of analytics date filters. Administrators control USD,
+percentage or hidden presentation through installation defaults and per-user
+overrides. A finite private plan remains finite when amounts are omitted;
+unlimited is an explicit contract, not the absence of a USD field. Model-price
+visibility is a separate setting. See [financial visibility](gateway-enterprise.md#financial-visibility-and-model-access).
 
 ## API keys and migration
 
 Keys have optional independent `dailyLimitUsd` and `totalLimitUsd` limits.
 The daily cap renews at 00:00 UTC; the lifetime cap never renews. `null` is
-unlimited, and zero blocks new billable requests. Both key and account caps
-must admit a request. Key owners cannot change their account plan.
+unlimited, and zero blocks new billable requests. Key and account caps, plus
+any associated project and cost-center caps, must all admit a request. Key
+owners cannot change their account plan.
+
+## Shared project and cost-center budgets
+
+Financial projects are optional gateway billing/access scopes. They do not own
+Indirect Code daemon projects, sessions or files. A key's `projectId` can name
+an active financial project only when its owner belongs to it. The project's
+optional active cost center is captured too; a key cannot name a cost center
+directly. Monthly shared ceilings reset at the UTC calendar-month boundary;
+lifetime ceilings never reset. Each can be independently unlimited.
+
+Account, key, project and cost-center reservations are taken atomically.
+Reassigning a key or reorganizing projects affects future admission only.
+An accepted request settles against its original project/cost center even if
+membership, names, parent assignment or status changes while it runs. Reports
+use this immutable attribution. Archiving a project/cost center or removing
+membership blocks subsequent associated-key requests rather than silently
+switching them to personal use. Budgets and scope edits require an
+administrator; project managers can manage ordinary members and read reports
+only in their explicitly assigned scopes. Details and endpoints are documented
+in [the enterprise operating guide](gateway-enterprise.md#roles-and-financial-scopes).
 
 Migration 026 removes the old output-token caps and reactivates keys exhausted
 by those caps, as requested. Revoked keys remain revoked and expiration stays

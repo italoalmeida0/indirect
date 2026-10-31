@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { Database } from "bun:sqlite";
 
-import { totpAt } from "../server/crypto";
+import { unusedTotpCode } from "./totp-fixture";
 import { findFreePort } from "./free-port";
 
 /**
@@ -1802,7 +1802,8 @@ describe("gateway end-to-end", () => {
     expect(setup.status).toBe(200);
     expect(setup.json.qrDataUrl).toMatch(/^data:image\/png/);
     const secret = setup.json.secret;
-    const code = await totpAt(secret, Date.now());
+    const consumed = new Set<string>();
+    const code = await unusedTotpCode(secret, consumed);
 
     const enable = await api("/api/me/2fa/enable", { token: userToken, body: { code } });
     expect(enable.status).toBe(200);
@@ -1811,11 +1812,12 @@ describe("gateway end-to-end", () => {
     expect(login.status).toBe(200);
     expect(login.json.needs2FA).toBe(true);
 
-    const wrong = await api("/api/auth/2fa", { body: { tempToken: login.json.tempToken, code: "000000" } });
+    // Enrollment consumed this code: a login cannot replay the same proof.
+    const wrong = await api("/api/auth/2fa", { body: { tempToken: login.json.tempToken, code } });
     expect(wrong.status).toBe(401);
 
     const right = await api("/api/auth/2fa", {
-      body: { tempToken: login.json.tempToken, code: await totpAt(secret, Date.now()) },
+      body: { tempToken: login.json.tempToken, code: await unusedTotpCode(secret, consumed) },
     });
     expect(right.status).toBe(200);
     expect(right.json.accessToken).toBeTruthy();
@@ -2979,11 +2981,21 @@ describe("zero-usage inference (isolated pair)", () => {
     // Buffered replies carry the gateway's authoritative usage (real or
     // estimated — same numbers the ledger records) as a response header.
     expect(r1.headers.get("x-gateway-usage")).toMatch(/^in=\d+,cache=\d+,out=\d+$/);
-    await Bun.sleep(1500); // usage flushes on a 1s buffer
+    // Poll for the flushed row instead of sleeping a fixed 1.5s: the buffer
+    // flush is asynchronous, so a fixed sleep is a race under load.
+    const waitForEvent = async (match: (event: any) => boolean) => {
+      for (let attempt = 0; attempt < 120; attempt++) {
+        const response = await api2(`/api/usage/events?key_id=${keyId}&limit=20`, { token: user2 });
+        const found = response.json.events?.find(match);
+        if (found) return found;
+        await Bun.sleep(100);
+      }
+      return undefined;
+    };
 
     const ev1 = await api2(`/api/usage/events?key_id=${keyId}&limit=10`, { token: user2 });
     expect(ev1.status).toBe(200);
-    const e1 = ev1.json.events.find((e: any) => e.proto === "openai" && e.stream === 0);
+    const e1 = await waitForEvent((e: any) => e.proto === "openai" && e.stream === 0);
     expect(e1).toBeTruthy();
     expect(e1.estimated).toBe(1);
     expect(e1.out_tok).toBeGreaterThan(0); // content flowed: never zero
@@ -2994,9 +3006,7 @@ describe("zero-usage inference (isolated pair)", () => {
     // cache ~= whole first turn, fresh ~= the appended block.
     const r2 = await llm2("/v1/chat/completions", key, probeBody([{ role: "user", content: `tail ${big(60, "b")}` }]));
     expect(r2.status).toBe(200);
-    await Bun.sleep(1500); // usage flushes on a 1s buffer
-    const ev2 = await api2(`/api/usage/events?key_id=${keyId}&limit=10`, { token: user2 });
-    const e2 = ev2.json.events.find((e: any) => e.proto === "openai" && e.stream === 0 && e.id !== e1.id);
+    const e2 = await waitForEvent((e: any) => e.proto === "openai" && e.stream === 0 && e.id !== e1.id);
     expect(e2).toBeTruthy();
     expect(e2.estimated).toBe(1);
     expect(e2.out_tok).toBeGreaterThan(0);
@@ -3023,9 +3033,7 @@ describe("zero-usage inference (isolated pair)", () => {
     // Streams carry the same signal as a terminal SSE comment (headers
     // freeze at first byte, so it can only ride the body).
     expect(sse3).toMatch(/^: x-gateway-usage in=\d+,cache=\d+,out=\d+$/m);
-    await Bun.sleep(1500); // usage flushes on a 1s buffer
-    const ev3 = await api2(`/api/usage/events?key_id=${keyId}&limit=10`, { token: user2 });
-    const e3 = ev3.json.events.find((e: any) => e.proto === "anthropic" && e.stream === 1);
+    const e3 = await waitForEvent((e: any) => e.proto === "anthropic" && e.stream === 1);
     expect(e3).toBeTruthy();
     expect(e3.estimated).toBe(1);
     expect(e3.out_tok).toBeGreaterThan(0);
@@ -3037,9 +3045,7 @@ describe("zero-usage inference (isolated pair)", () => {
       messages: [{ role: "user", content: "honest usage probe, reasonably long body here" }],
     });
     expect(r4.status).toBe(200);
-    await Bun.sleep(1500); // usage flushes on a 1s buffer
-    const ev4 = await api2(`/api/usage/events?key_id=${keyId}&limit=10`, { token: user2 });
-    const e4 = ev4.json.events.find((e: any) => e.proto === "openai" && e.stream === 0 && e.estimated === 0);
+    const e4 = await waitForEvent((e: any) => e.proto === "openai" && e.stream === 0 && e.estimated === 0);
     expect(e4).toBeTruthy();
     expect(e4.out_tok).toBeGreaterThan(0);
   }, 120_000);

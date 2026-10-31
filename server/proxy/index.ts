@@ -1,17 +1,22 @@
 import { LIMITS } from "../config";
 import { stmts, audit, isSqliteBusy, parseStripParams, type AuthStyle, type Proto } from "../db";
 import { randomToken, sha256Hex } from "../crypto";
-import { ApiError, clientIp, baseHeaders } from "../http";
+import { ApiError, applyRateLimitHeaders, clientIp, baseHeaders } from "../http";
 import { countRequestTokens, splitKvInput } from "../tokens";
 import {
-  acquireUpstreamSlot,
+  admissionSnapshot,
+  admitUpstream,
   keyRpmHit,
   userRpmHit,
   limits,
 } from "../ratelimit";
 import { checkKeyAvailability } from "../keys";
-import { canRecordUsage, recordUsage } from "../usage";
-import { BudgetError, reserveBudget, settleBudget, settleUncertainBudget, cancelBudget } from "../billing";
+import { canRecordUsage, recordUsage, wakeUsageOutbox, type UsageEvent } from "../usage";
+import { currentRequestId } from "../request-context";
+import { allowedModels, modelAllowed } from "../model-policy";
+import { requireKeyProject } from "../projects";
+import { financialPolicyFor, projectModelPrices } from "../financial-policy";
+import { BudgetError, reserveBudget, finalizeBudget, canAcceptSettlement, markUncertainAttempt, reserveNextAttempt } from "../billing";
 import { db } from "../db";
 import {
   routerSnapshot,
@@ -169,11 +174,11 @@ function envelopeError(proto: Proto, status: number, message: string, type?: str
   );
 }
 
-export function proxyRateLimit(req: Request, url: URL, retryAfter: number, message = "rate limit exceeded"): Response {
+export function proxyRateLimit(req: Request, url: URL, retryAfter: number, message = "rate limit exceeded", queueDepth?: number): Response {
   const route = matchRoute(url.pathname, req.method, req);
-  const response = envelopeError(route.match?.proto ?? route.hint, 429, message, "rate_limit_error", req);
-  response.headers.set("Retry-After", String(Math.max(1, Math.ceil(retryAfter))));
-  return response;
+  const proto = route.match?.proto ?? route.hint;
+  const response = envelopeError(proto, 429, message, "rate_limit_error", req);
+  return applyRateLimitHeaders(response, retryAfter, queueDepth);
 }
 
 export function proxyStorageUnavailable(req: Request, url: URL): Response {
@@ -186,7 +191,16 @@ export function proxyStorageUnavailable(req: Request, url: URL): Response {
 export function proxyRequestError(req: Request, url: URL, status: number, message: string, code?: string): Response {
   const route = matchRoute(url.pathname, req.method, req);
   const type = status === 401 ? "authentication_error" : status === 429 ? "rate_limit_error" : status >= 500 ? "api_error" : "invalid_request_error";
-  return envelopeError(route.match?.proto ?? route.hint, status, message, type, req, code);
+  const response = envelopeError(route.match?.proto ?? route.hint, status, message, type, req, code);
+  // Contract: every 429 leaving the proxy surface carries Retry-After.
+  if (status === 429) response.headers.set("Retry-After", "1");
+  return response;
+}
+
+/** Whole seconds until the next 00:00 UTC (daily USD caps reset there). */
+function secondsUntilUtcMidnight(now = Date.now()): number {
+  const day = 24 * 60 * 60 * 1000;
+  return Math.max(1, Math.ceil((Math.floor(now / day) * day + day - now) / 1000));
 }
 
 // ===== Failover observability (per-provider-key stats, write-light) =====
@@ -413,7 +427,12 @@ function buildClientHeaders(upstream: Headers, requestId: string, req: Request, 
  * both). Patch-only, never stored. Non-JSON or error upstreams pass through
  * untouched.
  */
-async function passthroughModelsList(req: Request, proto: Proto, modelId?: string): Promise<Response> {
+async function passthroughModelsList(
+  req: Request,
+  proto: Proto,
+  modelId?: string,
+  catalogAccess?: () => { allowed: Set<string> | null; showModelPrices: boolean },
+): Promise<Response> {
   const snap = await routerSnapshot();
   const cands = passthroughCandidates(snap, proto, modelId);
   const cand = cands[0];
@@ -457,12 +476,31 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
   }
   const ct = upstream.headers.get("content-type") || "";
   const h = buildClientHeaders(upstream.headers, "models", req);
-  if (!ct.includes("application/json")) return new Response(upstream.body, { status: upstream.status, headers: h });
   let text: string;
   try {
     text = await upstream.text();
   } catch {
     return new Response(null, { status: upstream.status, headers: h });
+  }
+  // Access and financial visibility can change while the upstream response is
+  // in flight. Re-read them after the body arrives, before projecting bytes.
+  let showModelPrices = true, allowed: Set<string> | null = null;
+  try {
+    const current = catalogAccess?.();
+    if (current) { allowed = current.allowed; showModelPrices = current.showModelPrices; }
+  } catch (error) {
+    if (error instanceof ApiError) return envelopeError(proto, error.status, error.message, "invalid_request_error", req, error.code);
+    throw error;
+  }
+  if (modelId !== undefined && !modelAllowed(allowed, modelId)) return envelopeError(proto, 404, `unknown model '${modelId}'`, "model_not_found", req);
+  if (!upstream.ok) {
+    h.set("Content-Type", "application/json; charset=utf-8");
+    return new Response(reEnvelopeError(proto, via, upstream.status, text), { status: upstream.status, headers: h });
+  }
+  const restricted = allowed !== null || !showModelPrices;
+  if (!ct.toLowerCase().includes("application/json")) {
+    if (restricted) return envelopeError(proto, 502, "upstream model catalog could not be safely projected", "api_error", req);
+    return new Response(text, { status: upstream.status, headers: h });
   }
   // Single-model fetch decodes into CodexModel too (strict struct — the
   // same missing-field 500s as the list). Rebuild with the allowlisted
@@ -470,7 +508,16 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
   if (modelId !== undefined) {
     try {
       const one = JSON.parse(text) as Record<string, unknown>;
-      const id = typeof one.id === "string" ? one.id : modelId;
+      if (!one || typeof one !== "object" || Array.isArray(one)) throw new Error("invalid model detail");
+      if (proto === "anthropic") {
+        h.set("Content-Type", "application/json; charset=utf-8");
+        // The URL is the public identifier. An upstream alias must not be
+        // returned as a different, possibly denied, model ID.
+        const detail = { ...one, id: modelId };
+        const body = JSON.stringify(showModelPrices ? detail : projectModelPrices(detail, false));
+        return new Response(body, { status: upstream.status, headers: h });
+      }
+      const id = modelId;
       h.set("Content-Type", "application/json; charset=utf-8");
       return new Response(
         JSON.stringify({
@@ -497,19 +544,25 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
         { status: upstream.status, headers: h },
       );
     } catch {
+      if (restricted) return envelopeError(proto, 502, "upstream model detail could not be safely projected", "api_error", req);
       h.set("Content-Type", "application/json; charset=utf-8");
       return new Response(text, { status: upstream.status, headers: h });
     }
   }
   try {
     const j = JSON.parse(text) as Record<string, unknown>;
+    if (!j || typeof j !== "object" || Array.isArray(j) || (restricted && !Array.isArray(j.data))) throw new Error("invalid model catalog");
     // Anthropic clients expect the NATIVE list shape ({type:"model", ...},
-    // has_more) — never rewrite it (the directional-alias contract + real
-    // Anthropic SDKs depend on it). Only OpenAI-family surfaces get the
-    // CodexModel allowlist below.
+    // has_more) — preserve it verbatim unless policy filters models or hides pricing.
     if (proto === "anthropic") {
       h.set("Content-Type", "application/json; charset=utf-8");
-      return new Response(text, { status: upstream.status, headers: h });
+      if (showModelPrices && allowed === null) {
+        return new Response(text, { status: upstream.status, headers: h });
+      }
+      const data = Array.isArray(j.data) ? j.data.filter((m: any) => m && typeof m.id === "string" && modelAllowed(allowed, m.id)) : [];
+      let next: Record<string, unknown> = { data, has_more: j.has_more === true, first_id: data[0]?.id ?? null, last_id: data.at(-1)?.id ?? null };
+      if (!showModelPrices) next = projectModelPrices(next, false) as Record<string, unknown>;
+      return new Response(JSON.stringify(next), { status: upstream.status, headers: h });
     }
     const data = (j as any).data;
     if (Array.isArray(data)) {
@@ -519,7 +572,7 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
       // only: OpenAI list fields + the two compat fields codex requires.
       // data[] keeps the OpenAI list shape (lenient decoder) + compat extras.
       const clean = data
-        .filter((m: any) => m && typeof m === "object")
+        .filter((m: any) => m && typeof m === "object" && typeof m.id === "string" && modelAllowed(allowed, m.id))
         .map((m: any) => {
           const id = typeof m.id === "string" ? m.id : "model";
           const levelsFinal = ["low", "high", "max"].map((name: string) => ({ name, description: `${name} reasoning effort`, effort: name }));
@@ -584,10 +637,13 @@ async function passthroughModelsList(req: Request, proto: Proto, modelId?: strin
         if (k !== "object" && k !== "data" && k !== "models") delete (j as any)[k];
       }
       (j as any).object = "list";
+    } else if (!showModelPrices) {
+      return new Response(JSON.stringify(projectModelPrices(j, false)), { status: upstream.status, headers: h });
     }
     h.set("Content-Type", "application/json; charset=utf-8");
     return new Response(JSON.stringify(j), { status: upstream.status, headers: h });
   } catch {
+    if (restricted) return envelopeError(proto, 502, "upstream model catalog could not be safely projected", "api_error", req);
     h.set("Content-Type", "application/json; charset=utf-8");
     return new Response(text, { status: upstream.status, headers: h });
   }
@@ -648,8 +704,12 @@ function registryModelsResponse(
   snap: RouterSnapshot,
   proto: Proto,
   modelId?: string,
+  allowed: Set<string> | null = null,
+  showModelPrices = true,
 ): Response {
-  const rows = listableModels(snap, proto);
+  // The catalog is a policy-filtered view: a model the caller may not use must
+  // not be advertised, or the first call to it fails after a round trip.
+  const rows = listableModels(snap, proto).filter((model) => modelAllowed(allowed, model.id));
   // Responses clients (codex) expect the OpenAI list shape — and some
   // versions require a top-level `models` array — while the rich
   // registry format stays on the chat/anthropic surfaces.
@@ -690,7 +750,10 @@ function registryModelsResponse(
     }
     const h = baseHeaders(req);
     h.set("Content-Type", "application/json; charset=utf-8");
-    return new Response(JSON.stringify(publicModelEntry(m, providerName(m))), { headers: h });
+    return new Response(
+      JSON.stringify(publicModelEntry(m, providerName(m), { includePricing: showModelPrices })),
+      { headers: h },
+    );
   }
   const h = baseHeaders(req);
   h.set("Content-Type", "application/json; charset=utf-8");
@@ -698,7 +761,7 @@ function registryModelsResponse(
   // alongside `data` and ignore unknown shapes otherwise.
   return new Response(
     JSON.stringify({
-      data: rows.map((m) => publicModelEntry(m, providerName(m))),
+      data: rows.map((m) => publicModelEntry(m, providerName(m), { includePricing: showModelPrices })),
       models: rows.map((m) => ({ id: m.id, slug: m.id })),
     }),
     { headers: h },
@@ -865,7 +928,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       daily_limit: "daily USD spending limit exhausted (resets at 00:00 UTC)",
       total_limit: "lifetime USD spending limit exhausted",
     };
-    return envelopeError(proto, 429, messages[availability.reason], "rate_limit_error", req);
+    // Every 429 on the proxy surface carries Retry-After: a daily cap really
+    // does reset at 00:00 UTC, the others need an administrator (1s keeps the
+    // header contract without inviting a tight retry loop).
+    const response = envelopeError(proto, 429, messages[availability.reason], "rate_limit_error", req);
+    response.headers.set("Retry-After", String(availability.reason === "daily_limit" ? secondsUntilUtcMidnight() : 1));
+    return response;
   }
 
   // Owner must be an active user.
@@ -874,26 +942,81 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     return envelopeError(proto, 401, "account unavailable", undefined, req);
   }
 
-  if (!canRecordUsage()) {
+  if (!canRecordUsage() || !canAcceptSettlement()) {
     const response = envelopeError(proto, 503, "usage storage is temporarily unavailable", "api_error", req);
     response.headers.set("Retry-After", "5");
     return response;
   }
 
+  // Capture assignment at admission. The reservation transaction checks it
+  // again and freezes both scope IDs before any upstream request starts.
+  let assignment: ReturnType<typeof requireKeyProject>;
+  try { assignment = requireKeyProject(owner.id, keyRow.project_id ?? null); }
+  catch (error) {
+    if (error instanceof ApiError) return envelopeError(proto, error.status, error.message, "invalid_request_error", req, error.code);
+    throw error;
+  }
+  const projectId = assignment?.project.id ?? null;
+  const costCenterId = assignment?.costCenter?.id ?? null;
+  const allowedModelIds = allowedModels({ role: owner.role, projectId });
+  const catalogAccess = () => db.transaction(() => {
+    const currentKey = stmts.keyByHash.get(sha256Hex(token));
+    const currentOwner = currentKey ? stmts.userById.get(currentKey.user_id) : null;
+    if (!currentKey || currentKey.user_id !== owner.id || currentKey.status === "revoked" || (currentKey.expires_at !== null && currentKey.expires_at <= Date.now()) || !currentOwner || currentOwner.status !== "active") throw new ApiError(401, "API key or account unavailable");
+    const currentAssignment = requireKeyProject(currentOwner.id, currentKey.project_id ?? null);
+    return { allowed: allowedModels({ role: currentOwner.role, projectId: currentAssignment?.project.id ?? null }), showModelPrices: financialPolicyFor(currentOwner).showModelPrices };
+  })();
+  if (allowedModelIds !== null && route.isModelsList && route.modelId) {
+    if (!allowedModelIds.has(route.modelId)) {
+      return envelopeError(proto, 404, `unknown model '${route.modelId}'`, "model_not_found", req);
+    }
+  }
+
   // ---- account and per-key rate + concurrency ----
+  // Per-key RPM stays exactly as before; the account ceiling sits above it so
+  // extra keys can never buy more of the shared gateway. The denied dimension
+  // ("account" / "key" / "gateway") is always named in the message.
   const userRetry = userRpmHit(keyRow.user_id);
   if (userRetry > 0) {
-    return proxyRateLimit(req, url, userRetry, `account rate limit exceeded, retry in ${userRetry}s`);
+    return proxyRateLimit(req, url, userRetry, `account rate limit exceeded (${LIMITS.userRpm} req/min across all keys), retry in ${userRetry}s`);
   }
   const rpm = keyRow.rpm ?? LIMITS.defaultKeyRpm;
   const rpmRetry = keyRpmHit(keyRow.id, rpm);
   if (rpmRetry > 0) {
-    return proxyRateLimit(req, url, rpmRetry, `rate limit exceeded (${rpm} req/min), retry in ${rpmRetry}s`);
+    return proxyRateLimit(req, url, rpmRetry, `key rate limit exceeded (${rpm} req/min), retry in ${rpmRetry}s`);
   }
-  const slot = acquireUpstreamSlot(keyRow.id, keyRow.user_id, LIMITS.defaultKeyConcurrency);
+  // Concurrency ceilings (gateway -> account -> key) go through the bounded
+  // admission queue: a short burst waits for a slot instead of failing at
+  // once; past the deadline the caller still gets a 429 with Retry-After.
+  const slot = await admitUpstream(
+    keyRow.id,
+    keyRow.user_id,
+    {
+      perKey: LIMITS.defaultKeyConcurrency,
+      perUser: LIMITS.userConcurrency,
+      global: LIMITS.globalConcurrency,
+    },
+    {
+      deadlineMs: LIMITS.admissionWaitMs,
+      maxQueue: LIMITS.admissionQueueMax,
+      maxQueueBytes: LIMITS.admissionQueueBytes,
+      bytes: Number(req.headers.get("content-length") || 0) || 0,
+      signal: req.signal,
+    },
+  );
   if (!slot.ok) {
-    const message = slot.reason === "user" ? "too many concurrent requests for this account" : slot.reason === "key" ? "too many concurrent requests for this key" : "gateway concurrency limit reached";
-    return proxyRateLimit(req, url, 1, message);
+    if (slot.reason === "aborted") {
+      return envelopeError(proto, 499, "client disconnected", "api_error", req);
+    }
+    const message =
+      slot.reason === "user"
+        ? `account concurrency limit reached (${LIMITS.userConcurrency} concurrent across all keys)`
+        : slot.reason === "key"
+          ? `key concurrency limit reached (${LIMITS.defaultKeyConcurrency} concurrent for this key)`
+          : slot.reason === "queue"
+            ? "admission queue is full, retry shortly"
+            : `gateway concurrency limit reached (${LIMITS.globalConcurrency} concurrent)`;
+    return proxyRateLimit(req, url, slot.retryAfter, message, admissionSnapshot().queued);
   }
 
   // Slot released exactly once, whatever happens below.
@@ -910,19 +1033,24 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     return envelopeError(proto, 499, "client disconnected", "api_error", req);
   }
 
-  const requestId = randomToken(16);
+  // Use the request-scoped correlation id, NOT a fresh random one: the client
+  // sees this value in X-Request-Id and the usage ledger stores it, so a quoted
+  // header must find its rows. A private id here silently broke that link.
+  const requestId = currentRequestId() || randomToken(16);
   const started = performance.now();
+  let requestAt = Date.now();
   const requestBytes = req.headers.get("content-length");
   // Set once we hand a streaming Response back: the stream pump owns the slot
   // from there on, releasing it when the stream ends/aborts (not before).
   let slotHeldByStream = false;
   let recorded = false;
   let budgetId: string | undefined;
-  let upstreamStarted = false;
-  let retainBudget = false;
+  let currentAttemptDispatched = false;
 
   try {
     // ---- read + validate body (GET /models has none) ----
+    // Reading happens INSIDE the try so every early return releases the slot
+    // through the finally below (an unread body is not an admission slot).
     let bodyText = "";
     let bodyJson: Record<string, unknown> | null = null;
     if (req.method === "POST") {
@@ -982,13 +1110,19 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     }
 
     if (snap.mode === "router" && route.isModelsList) {
-      return registryModelsResponse(req, snap, proto, route.modelId);
+      try {
+        const current = catalogAccess();
+        return registryModelsResponse(req, snap, proto, route.modelId, current.allowed, current.showModelPrices);
+      } catch (error) {
+        if (error instanceof ApiError) return envelopeError(proto, error.status, error.message, "invalid_request_error", req, error.code);
+        throw error;
+      }
     }
     // Passthrough GET /v1/models(:id): forward upstream (the managers that
     // fetch it — codex — require fields upstreams omit: `display_name` per
     // entry and a top-level `models` array). Patched here, never stored.
     if (route.isModelsList && req.method === "GET") {
-      return await passthroughModelsList(req, proto, route.modelId);
+      return await passthroughModelsList(req, proto, route.modelId, catalogAccess);
     }
 
     // ---- build the failover chain ----
@@ -1001,6 +1135,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     let stickyLane: string | null = null;
     if (snap.mode === "router" && req.method === "POST" && bodyJson) {
       const requested = String((bodyJson as any).model);
+      // The requested model must be inside the caller's allow-list. Reported as
+      // 404 (not 403) so the catalogue and the call agree: a model the caller
+      // cannot see must not appear to exist.
+      if (!modelAllowed(allowedModelIds, requested)) {
+        return envelopeError(proto, 404, `unknown model '${requested}'`, "model_not_found", req);
+      }
       const resolution = resolveModelRoute(snap, proto, requested);
       if (!resolution.ok) {
         return envelopeError(proto, resolution.status, resolution.message, resolution.code, req);
@@ -1014,6 +1154,11 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       // Passthrough POST: affinity by requested model id (registry-known
       // ids route to their provider first; unknown ids keep stable order).
       const requestedModel = bodyJson && typeof (bodyJson as any).model === "string" ? String((bodyJson as any).model) : undefined;
+      // Passthrough forwards arbitrary ids, so the policy has to gate the
+      // requested id explicitly: there is no registry entry to filter.
+      if (requestedModel !== undefined && !modelAllowed(allowedModelIds, requestedModel)) {
+        return envelopeError(proto, 404, `unknown model '${requestedModel}'`, "model_not_found", req);
+      }
       candidates = passthroughCandidates(snap, proto, requestedModel);
       // One sticky lane per requested id (or protocol when unmapped):
       // unrelated model ids never share a winner.
@@ -1076,13 +1221,30 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       const model = snap.models.get(String(bodyJson.model));
       const trustOutputCap = candidates.every((candidate) => !parseStripParams(candidate.provider.row.strip_params).some((key) => ["max_tokens", "max_output_tokens", "max_completion_tokens"].includes(key)));
       try {
-        budgetId = reserveBudget(keyRow, model, bodyJson, Buffer.byteLength(bodyText, "utf8"), route.upstreamPath === "/embeddings", trustOutputCap, Date.now(), requestId);
+        requestAt = Date.now();
+        budgetId = reserveBudget(keyRow, model, bodyJson, Buffer.byteLength(bodyText, "utf8"), route.upstreamPath === "/embeddings", trustOutputCap, requestAt, requestId, { projectId, costCenterId, proto, stream: wantsStream });
       } catch (error) {
         if (error instanceof ApiError) {
           const response = envelopeError(proto, error.status, error.message, error.status === 429 ? "rate_limit_error" : error.status >= 500 ? "api_error" : "invalid_request_error", req, error.code);
           if (error instanceof BudgetError && error.retryAfter) response.headers.set("Retry-After", String(error.retryAfter));
           return response;
         }
+        throw error;
+      }
+    } else if (bodyJson && req.method === "POST") {
+      // Non-billed count_tokens must still recheck membership and policy just
+      // before upstream dispatch. It cannot use a stale project grant.
+      try {
+        db.transaction(() => {
+          const fresh = stmts.keyByHash.get(sha256Hex(token));
+          const user = stmts.userById.get(owner.id);
+          if (!fresh || fresh.status === "revoked" || !user || user.status !== "active") throw new ApiError(401, "API key or account unavailable");
+          const current = requireKeyProject(owner.id, fresh.project_id ?? null);
+          if ((current?.project.id ?? null) !== projectId || (current?.costCenter?.id ?? null) !== costCenterId) throw new ApiError(409, "API key project changed; retry the request");
+          if (!modelAllowed(allowedModels({ role: user.role, projectId }), String(bodyJson!.model))) throw new ApiError(404, `unknown model '${bodyJson!.model}'`, "model_not_found");
+        }).immediate();
+      } catch (error) {
+        if (error instanceof ApiError) return envelopeError(proto, error.status, error.message, "invalid_request_error", req, error.code);
         throw error;
       }
     }
@@ -1102,7 +1264,6 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
 
     const record = (u: UsageResult, status: number, latencyMs: number, stream: boolean, cand: RouteCandidate) => {
       if (recorded) return;
-      recorded = true;
       let inTok = u.inTok;
       let cacheTok = u.cacheTok;
       let estimated = u.estimated;
@@ -1129,13 +1290,13 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       }
       u.inTok = inTok; u.cacheTok = cacheTok; u.estimated = estimated;
       const noCharge = status >= 400 && inTok <= 0 && cacheTok <= 0 && u.outTok <= 0 && (u.reasonTok ?? 0) <= 0;
-      const uncertain = status === 499 && noCharge;
-      if (budgetId && noCharge && !uncertain) cancelBudget(budgetId);
-      const charge = budgetId ? uncertain ? settleUncertainBudget(budgetId) : noCharge ? { input: 0n, cache: 0n, output: 0n } : settleBudget(budgetId, { inTok, cacheTok, outTok: u.billableOutTok ?? u.outTok + (u.reasonTok ?? 0), cacheCreation: u.cacheCreation }) : undefined;
-      recordUsage({
-        charge: charge ?? { input: 0n, cache: 0n, output: 0n },
+      const uncertain = (status === 499 || status === 502) && noCharge;
+      const event: Omit<UsageEvent, "charge"> = {
         keyId: keyRow.id,
         userId: keyRow.user_id,
+        projectId,
+        costCenterId,
+        ts: requestAt,
         proto,
         // Router mode bills/attributes under the PUBLIC model id the client
         // asked for (the upstream model id varies per failover target);
@@ -1152,7 +1313,17 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         providerId: cand.provider.row.id,
         providerKeyId: cand.key.id,
         upstreamModel: cand.upstreamModel,
-      });
+        // The SAME id the client receives as X-Request-Id, so a customer can
+        // quote the header and an operator can find this exact row.
+        requestId,
+      };
+      if (budgetId) {
+        if (uncertain) finalizeBudget(budgetId, { kind: "uncertain", event });
+        else if (noCharge) finalizeBudget(budgetId, { kind: "cancel", event });
+        else finalizeBudget(budgetId, { kind: "exact", usage: { inTok, cacheTok, outTok: u.billableOutTok ?? u.outTok + (u.reasonTok ?? 0), cacheCreation: u.cacheCreation }, event });
+        wakeUsageOutbox();
+      } else recordUsage({ ...event, charge: { input: 0n, cache: 0n, output: 0n } });
+      recorded = true;
       touchKey(keyRow.id, ip);
 
 
@@ -1179,6 +1350,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     // The candidate that last made a fetch attempt — its provider/key/upstream
     // model are attributed to the "all candidates failed" network record.
     let lastAttempted: RouteCandidate | null = null;
+    let needNextReservation = false;
 
     // ---- forward, with failover across the candidate chain ----
     // No-skip policy: every candidate is attempted in order (sticky winner
@@ -1213,6 +1385,21 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       )!.replace(/\/+$/, "");
       const breakerId = `${cand.provider.row.id}:${upstreamProto}`;
       if (breakerState(breakerId) === "open") continue;
+      if (needNextReservation && budgetId) {
+        try { reserveNextAttempt(budgetId); needNextReservation = false; }
+        catch (error) {
+          if (!(error instanceof ApiError)) throw error;
+          const event: Omit<UsageEvent, "charge"> = { keyId: keyRow.id, userId: keyRow.user_id, projectId, costCenterId, ts: requestAt, requestId, proto,
+            model: routedPublicModel ?? String(bodyJson?.model ?? ""), inTok: 0, cacheTok: 0, outTok: 0,
+            latencyMs: Math.round(performance.now() - started), status: error.status, stream: wantsStream, estimated: true };
+          finalizeBudget(budgetId, { kind: "cancel", event });
+          recorded = true;
+          wakeUsageOutbox();
+          const response = envelopeError(proto, error.status, error.message, error.status === 429 ? "rate_limit_error" : "invalid_request_error", req, error.code);
+          if (error instanceof BudgetError && error.retryAfter) response.headers.set("Retry-After", String(error.retryAfter));
+          return response;
+        }
+      }
 
       // `/messages/count_tokens` has no OpenAI equivalent: answer translated
       // attempts locally from the request-body size estimate.
@@ -1341,7 +1528,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
 
       let upstream: Response;
       try {
-        upstreamStarted = true;
+        currentAttemptDispatched = true;
         upstream = await fetch(upstreamUrl, {
           method: req.method,
           headers: buildUpstreamHeaders(
@@ -1363,6 +1550,14 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         req.signal.removeEventListener("abort", onClientAbort);
         const clientDisconnected = req.signal.aborted;
         const timedOut = controller.signal.aborted && !clientDisconnected;
+        if (budgetId) {
+          // A fetch failure after dispatch cannot prove that the provider did
+          // not process or bill the request. Charge its bound even when a
+          // later fallback succeeds, and reserve another unit before retrying.
+          markUncertainAttempt(budgetId);
+          currentAttemptDispatched = false;
+          needNextReservation = true;
+        }
         // A client giving up on us (short timeout, rage-quit) must NOT trip
         // the breaker nor the key's fail counter — otherwise a few
         // disconnects would 503 the whole gateway for every user. Only
@@ -1403,6 +1598,18 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           /* classified with an empty peek */
         }
         clearTimeout(peekTimeout);
+
+        const reported = parseBufferedUsage(upstream.headers.get("content-type") || "", errBody, cand.translated, cand.via);
+        const reportedCounts = [reported.inTok, reported.cacheTok, reported.outTok, reported.reasonTok ?? 0];
+        if (reportedCounts.some((count) => !Number.isSafeInteger(count) || count > 0)) {
+          // A known charged error is a completed attempt. Settle its reported
+          // usage and return it rather than silently discarding it on retry.
+          record(reported, upstream.status, Math.round(performance.now() - started), false, cand);
+          const errHeaders = buildClientHeaders(upstream.headers, requestId, req, { attemptsMade });
+          setUsageHeader(errHeaders, reported);
+          return new Response(reEnvelopeError(proto, cand.via, upstream.status, errBody), { status: upstream.status, headers: errHeaders });
+        }
+        currentAttemptDispatched = false;
 
         if (req.signal.aborted) {
           lastFailure = { kind: "upstream", status: upstream.status, body: errBody, headers: upstream.headers };
@@ -1524,7 +1731,13 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         const onClientAbortStream = () => reader.cancel().catch(() => {});
         req.signal.addEventListener("abort", onClientAbortStream, { once: true });
 
+        // Idempotent by construction: every terminal path (stream end, upstream
+        // error, client cancel, disconnect after the response started) funnels
+        // here, so the concurrency slot is released exactly once.
+        let cleanedUp = false;
         const cleanup = () => {
+          if (cleanedUp) return;
+          cleanedUp = true;
           resetIdle(true);
           translator.dispose();
           req.signal.removeEventListener("abort", onClientAbortStream);
@@ -1544,6 +1757,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           // (true pass-through pacing) and memory stays bounded by in-flight
           // chunks — never by the whole response.
           async pull(sink) {
+            // Already finished (upstream done, cancelled, or client gone):
+            // release the reader and close, never re-enter the pump.
+            if (cleanedUp) {
+              closeSink(sink);
+              return;
+            }
             try {
               const { done, value } = await reader.read();
               if (done) {
@@ -1745,15 +1964,19 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       return new Response(outBody, { status: f.status, headers: failHeaders });
     }
     if (lastFailure?.kind === "network") {
-      recordUsage({
-        keyId: keyRow.id, userId: keyRow.user_id, proto, model: routedPublicModel ?? "",
-        charge: req.signal.aborted && budgetId ? settleUncertainBudget(budgetId) : { input: 0n, cache: 0n, output: 0n },
+      const event: Omit<UsageEvent, "charge"> = {
+        keyId: keyRow.id, userId: keyRow.user_id, projectId, costCenterId, ts: requestAt, requestId, proto, model: routedPublicModel ?? "",
         inTok: 0, cacheTok: 0, outTok: 0, latencyMs: finalLatency,
         status: req.signal.aborted ? 499 : lastFailure.status, stream: wantsStream, estimated: false,
         providerId: lastAttempted?.provider.row.id ?? "",
         providerKeyId: lastAttempted?.key.id ?? "",
         upstreamModel: lastAttempted?.upstreamModel ?? "",
-      });
+      };
+      if (budgetId) {
+        finalizeBudget(budgetId, { kind: "uncertain", event });
+        wakeUsageOutbox();
+      } else recordUsage({ ...event, charge: { input: 0n, cache: 0n, output: 0n } });
+      recorded = true;
       return envelopeError(
         proto,
         lastFailure.status,
@@ -1772,17 +1995,16 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       req,
     );
   } catch (error) {
-    retainBudget = !!budgetId && upstreamStarted;
     console.error("[PROXY] request failed; reservation:", budgetId ?? "none", error instanceof Error ? error.name : "unknown");
     const response = isSqliteBusy(error) ? proxyStorageUnavailable(req, url) : envelopeError(proto, 503, "The request could not be completed safely. Please retry.", "api_error", req);
     response.headers.set("x-request-id", requestId);
     return response;
   } finally {
     if (!slotHeldByStream) {
-      if (budgetId && !recorded && !retainBudget) {
+      if (budgetId && !recorded) {
         try {
-          if (upstreamStarted && req.signal.aborted) settleUncertainBudget(budgetId);
-          else cancelBudget(budgetId);
+          finalizeBudget(budgetId, { kind: currentAttemptDispatched ? "uncertain" : "cancel" });
+          wakeUsageOutbox();
         } catch { console.error("[BILLING] reservation retained for recovery:", budgetId); }
       }
       release();

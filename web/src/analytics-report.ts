@@ -1,5 +1,5 @@
 import { createResource, onCleanup, untrack } from "solid-js";
-import { api, type AnalyticsReport } from "./api";
+import { api, policyRevision, type AnalyticsReport } from "./api";
 import type { createAnalyticsFilters } from "./analytics-filters";
 import { modelColorIndices } from "./analytics-data";
 
@@ -7,13 +7,16 @@ import { modelColorIndices } from "./analytics-data";
  * Pending filters never relabel old data, and stale network reads are canceled. */
 export function createAnalyticsReport(filters: ReturnType<typeof createAnalyticsFilters>, admin = false) {
   let abort: AbortController | undefined;
-  const [report, actions] = createResource(filters.query, async (query) => {
-    abort?.abort();
-    const controller = abort = new AbortController();
-    const label = untrack(filters.label);
-    const result = await api<AnalyticsReport>("GET", `${admin ? "/api/admin" : "/api/usage"}/analytics?${query}`, undefined, controller.signal);
-    return { ...result, label, query, modelColors: modelColorIndices(result.modelSpend, result.modelRequests) };
-  });
+  const [report, actions] = createResource(
+    () => ({ query: filters.query(), rev: admin ? 0 : policyRevision() }),
+    async ({ query }) => {
+      abort?.abort();
+      const controller = abort = new AbortController();
+      const label = untrack(filters.label);
+      const result = await api<AnalyticsReport>("GET", `${admin ? "/api/admin" : "/api/usage"}/analytics?${query}`, undefined, controller.signal);
+      return { ...result, label, query, modelColors: modelColorIndices(result.modelSpend, result.modelRequests) };
+    },
+  );
   onCleanup(() => abort?.abort());
   return { report, refetch: actions.refetch };
 }

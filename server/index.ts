@@ -1,6 +1,6 @@
 import { PORT, IS_PROD, ADMIN_EMAIL, ADMIN_PASSWORD, LIMITS, DATA_DIR } from "./config";
-import { configureLimits, limits } from "./ratelimit";
-import { db, audit, isSqliteBusy } from "./db";
+import { admissionSnapshot, configureLimits, limits } from "./ratelimit";
+import { db, audit, isSqliteBusy, runPassiveWalCheckpoint } from "./db";
 import { hashPassword, randomToken } from "./crypto";
 import { ApiError, baseHeaders, clientIp, err, json, rateLimitError } from "./http";
 import { handleAuthRoute } from "./routes/auth";
@@ -8,6 +8,7 @@ import { handleMeRoute } from "./routes/me";
 import { handleBillingRoute } from "./routes/billing";
 import { startBilling } from "./billing";
 import { handleKeysRoute } from "./routes/keys";
+import { handleProjectsRoute } from "./routes/projects";
 import { handleUsageRoute } from "./routes/usage";
 import { handleAdminRoute } from "./routes/admin";
 import { handleIndirectCodeRestRoute } from "./routes/indirect-code";
@@ -18,9 +19,17 @@ import { handleManifestRoute } from "./routes/manifest";
 import { handleIndirectCodeUpgrade, remoteRelayWsHandlers, type WsData } from "./routes/relay";
 import { handleProxy, proxyRateLimit, proxyStorageUnavailable, proxyRequestError } from "./proxy/index";
 import { serveStatic } from "./static";
-import { flushUsage } from "./usage";
+import { flushUsage, startUsageOutbox } from "./usage";
 import { initTokenEstimator } from "./tokens";
-import { guardedMaintenance } from "./maintenance";
+import { resolveRequestId, runWithRequest } from "./request-context";
+import { scheduleMaintenance } from "./maintenance";
+import { pruneUsageEvents, pruneUsageRollupsAsync, USAGE_DAY } from "./usage-rollup";
+import { batchDeleteAsync, yieldToEventLoop } from "./batch-delete";
+import { backupIntervalMs, backupRoot, runBackupCycle } from "./backup";
+import { handleMetricsRoute } from "./routes/metrics";
+import { beginHttpMetric, instrumentResponse } from "./metrics";
+import { handleCorporateAuthRoute } from "./routes/corporate-auth";
+import { handleUserImportRoute } from "./routes/user-import";
 
 // btdby4-wasm (token estimator) must be warm before serving: every counter
 // below is synchronous after init. Top-level await is fine — Bun.serve
@@ -63,16 +72,113 @@ async function bootstrapAdmin(): Promise<void> {
 
 await bootstrapAdmin();
 startBilling();
+startUsageOutbox();
 
 // ===== Housekeeping sweeps =====
 
-const sweep = setInterval(guardedMaintenance("session cleanup", () => {
+/**
+ * Session and password-token cleanup. Rows are removed in bounded key-order
+ * batches: a large backlog (a tenant that has been running for a year) must
+ * not turn one sweep into a whole-table DELETE that holds the writer while the
+ * proxy needs it. Leftovers are picked up by the next sweep.
+ */
+async function cleanupExpiredSessions(): Promise<void> {
   const now = Date.now();
-  db.prepare("DELETE FROM sessions WHERE abs_expires_at < ?").run(now);
-  db.prepare("UPDATE sessions SET revoked = 1 WHERE expires_at < ? AND revoked = 0").run(now);
-  db.prepare("DELETE FROM password_tokens WHERE expires_at < ? OR used_at IS NOT NULL AND used_at < ?").run(now, now - 3600_000);
-}), 15 * 60_000);
-sweep.unref();
+  const budget = { batchSize: LIMITS.maintenanceBatchSize, maxRows: LIMITS.maintenanceMaxBatchRows };
+  await batchDeleteAsync(db, { table: "sessions", key: "jti", where: "abs_expires_at < ?", params: [now], ...budget });
+
+  // Bound idle-session revocation into micro-transactions so a large batch of
+  // expired sessions never holds the SQLite writer across a full table update.
+  const revokeSlice = db.prepare(
+    "UPDATE sessions SET revoked = 1 WHERE jti IN (SELECT jti FROM sessions WHERE expires_at < ? AND revoked = 0 LIMIT ?)",
+  );
+  try {
+    let revokedTotal = 0;
+    while (revokedTotal < budget.maxRows) {
+      const limit = Math.min(budget.batchSize, budget.maxRows - revokedTotal);
+      const changed = revokeSlice.run(now, limit).changes;
+      revokedTotal += changed;
+      if (changed < limit) break;
+      await yieldToEventLoop();
+    }
+  } finally {
+    revokeSlice.finalize();
+  }
+
+  await batchDeleteAsync(db, {
+    table: "password_tokens",
+    key: "token_hash",
+    where: "expires_at < ? OR used_at IS NOT NULL AND used_at < ?",
+    params: [now, now - 3600_000],
+    ...budget,
+  });
+
+  for (const [table, key] of [["oidc_flows", "state_hash"], ["auth_challenges", "id"], ["auth_mfa_uses", "digest"]]) {
+    await batchDeleteAsync(db, { table: table!, key: key!, where: "expires_at < ?", params: [now], ...budget });
+  }
+  await batchDeleteAsync(db, {
+    table: "user_import_batches", key: "id",
+    where: "(committed_at IS NULL AND expires_at < ?) OR committed_at < ?",
+    params: [now, now - 30 * USAGE_DAY], ...budget,
+  });
+
+  if (LIMITS.auditRetentionDays > 0) {
+    const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;
+    const auditCutoff = Math.max(0, today - (LIMITS.auditRetentionDays - 1) * USAGE_DAY);
+    await batchDeleteAsync(db, {
+      table: "audit_log",
+      key: "id",
+      where: "ts < ?",
+      params: [auditCutoff],
+      ...budget,
+    });
+  }
+}
+
+scheduleMaintenance("session cleanup", cleanupExpiredSessions, 15 * 60_000);
+scheduleMaintenance("analytics rollup cleanup", () =>
+  pruneUsageRollupsAsync(db, Date.now(), LIMITS.analyticsHourlyDays, LIMITS.analyticsMinuteDays, LIMITS.maintenanceBatchSize),
+60_000);
+scheduleMaintenance("wal checkpoint", () => {
+  runPassiveWalCheckpoint(db);
+}, 5 * 60_000);
+
+/**
+ * Detailed-event retention. Runs every 5 minutes in bounded, yielding micro-batches
+ * (capped per tick by `LIMITS.usageEventPruneMaxRows`) so even 250k+/day expiration
+ * drains smoothly without holding the SQLite write lock across requests.
+ */
+if (LIMITS.usageEventRetentionDays > 0) {
+  scheduleMaintenance("usage event retention", async () => {
+    const result = await pruneUsageEvents(
+      db,
+      Date.now(),
+      LIMITS.usageEventRetentionDays,
+      LIMITS.usageEventPruneBatch,
+      { maxRows: LIMITS.usageEventPruneMaxRows },
+    );
+    if (result.deleted) {
+      console.info(
+        `[RETENTION] pruned ${result.deleted} detailed usage event(s) older than ${LIMITS.usageEventRetentionDays} days${result.remaining ? " (continuing next tick)" : ""}`,
+      );
+    }
+  }, 5 * 60_000);
+  console.log(`[RETENTION] detailed usage events kept for ${LIMITS.usageEventRetentionDays} days; aggregates are retained`);
+} else {
+  console.log("[RETENTION] detailed usage event pruning disabled (USAGE_EVENT_RETENTION_DAYS=0)");
+}
+
+// ===== Supported backup schedule =====
+
+const backupEveryMs = backupIntervalMs();
+if (backupEveryMs > 0) {
+  scheduleMaintenance("backup", async () => {
+    await runBackupCycle();
+  }, backupEveryMs);
+  console.log(`[BACKUP] automatic snapshots every ${Math.round(backupEveryMs / 60_000)} min into ${backupRoot()}`);
+} else {
+  console.log("[BACKUP] automatic snapshots disabled (BACKUP_INTERVAL_MINUTES=0); manual admin backup stays available");
+}
 
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
@@ -96,8 +202,40 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
     return new Response(null, { status: 204, headers: baseHeaders(req) });
   }
 
+  // Liveness: process-only, exempt from every shared bucket. A health check
+  // that can be throttled by the traffic it is meant to observe is useless.
+  // The JSON shape is a public contract (scripts and tests poll it).
   if (path === "/api/health") {
     return json({ ok: true, ts: Date.now() }, { req });
+  }
+
+  // Readiness: can this process actually serve? Storage must be reachable and
+  // writable (a read-only or locked database means calls cannot be admitted),
+  // and admission metrics are reported for operators. Exempt from the shared
+  // IP bucket, for the same reason as liveness.
+  if (path === "/api/ready") {
+    const started = performance.now();
+    let dbOk: boolean;
+    try {
+      db.prepare("SELECT 1 AS ok").get();
+      // The writer must be usable, not just readable: upsert a probe row so a
+      // read-only handle or an unusable writer fails here, not on a real call.
+      db.prepare("INSERT INTO settings (key, value) VALUES ('__ready_probe', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(Date.now()));
+      dbOk = true;
+    } catch {
+      dbOk = false;
+    }
+    const admission = admissionSnapshot();
+    const ok = dbOk;
+    return json({
+      ok,
+      ts: Date.now(),
+      checks: {
+        db: dbOk,
+        latencyMs: Math.round((performance.now() - started) * 100) / 100,
+        admission,
+      },
+    }, { status: ok ? 200 : 503, req });
   }
 
   const proxyPath = (
@@ -120,6 +258,14 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
   }
 
   if (path.startsWith("/api/")) {
+    const viaMetrics = await handleMetricsRoute(path, req);
+    if (viaMetrics) return viaMetrics;
+    const viaProjects = await handleProjectsRoute(path, req);
+    if (viaProjects) return viaProjects;
+    const viaCorporateAuth = await handleCorporateAuthRoute(path, req);
+    if (viaCorporateAuth) return viaCorporateAuth;
+    const viaImport = await handleUserImportRoute(path, req);
+    if (viaImport) return viaImport;
     // Indirect Code WebSocket upgrades (/api/indirect-code/daemon/ws and /api/indirect-code/client/ws)
     if (path.startsWith("/api/indirect-code/") && path.endsWith("/ws")) {
       return await handleIndirectCodeUpgrade(path, req, url, server);
@@ -174,12 +320,34 @@ const server: Server<WsData> = Bun.serve<WsData>({
   websocket: remoteRelayWsHandlers,
 
   async fetch(req): Promise<Response | undefined> {
+    // One correlation id per request, established BEFORE any handler runs so
+    // audit rows and usage events inherit it. A well-formed client id is
+    // honoured; anything else is replaced, never echoed.
+    const url = new URL(req.url);
+    const finishMetric = beginHttpMetric(url.pathname);
+    const requestId = resolveRequestId(req.headers.get("x-request-id"), () => randomToken(16));
+    const response = await runWithRequest(
+      { requestId, startedAt: performance.now(), method: req.method, path: url.pathname },
+      () => handleRequest(req, server, url),
+    );
+    // Echo the id on EVERY response so a client can quote it in a report.
+    response.headers.set("X-Request-Id", requestId);
+    return instrumentResponse(response, finishMetric, req.signal, req.method === "HEAD");
+  },
+});
+
+/** Everything after correlation is established; errors become responses. */
+async function handleRequest(req: Request, server: Server<WsData>, url: URL): Promise<Response> {
     try {
-      return await route(req, server);
+      return (await route(req, server)) ?? new Response(null, { status: 204 });
     } catch (e) {
-      const url = new URL(req.url);
+      if (req.signal.aborted) return new Response(null, { status: 499 });
       const isProxy = /^\/(?:v1|openai\/v1|anthropic\/v1)(?:\/|$)/.test(url.pathname);
-      if (e instanceof ApiError) return isProxy ? proxyRequestError(req, url, e.status, e.message, e.code) : err(e.status, e.message, req, e.code);
+      if (e instanceof ApiError) {
+        const response = isProxy ? proxyRequestError(req, url, e.status, e.message, e.code) : err(e.status, e.message, req, e.code);
+        if (e.status === 503) response.headers.set("Retry-After", "1");
+        return response;
+      }
       if (isSqliteBusy(e)) {
         if (isProxy) return proxyStorageUnavailable(req, url);
         const response = err(503, "storage is temporarily unavailable", req);
@@ -189,8 +357,7 @@ const server: Server<WsData> = Bun.serve<WsData>({
       console.error(`[HTTP] unhandled error on ${req.method} ${url.pathname}:`, e);
       return isProxy ? proxyRequestError(req, url, 500, "internal error") : err(500, "internal error", req);
     }
-  },
-});
+}
 
 console.log(`[BOOT] indirect listening on http://${server.hostname}:${server.port} (${IS_PROD ? "prod" : "dev"})`);
 console.log(`[BOOT] data dir: ${DATA_DIR}`);

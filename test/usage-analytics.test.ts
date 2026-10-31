@@ -16,6 +16,13 @@ describe("analytics response outcomes and API keys", () => {
     const from = Date.UTC(2016, 0, 1);
     const scope: UsageScope = { from, to: Date.UTC(2026, 10, 1), selection: { model: { include: [model], exclude: [] } } };
     const totals = (report: ReturnType<typeof filteredUsageAnalytics>) => report.outcomes.reduce((sum, point) => ({ success: sum.success + point.success, errors: sum.errors + point.errors, unknown: sum.unknown + point.unknown }), { success: 0, errors: 0, unknown: 0 });
+    // Pin the raw-retention watermark for this case. The test asserts EXACT
+    // millisecond bounds, and resolveUsageScope deliberately widens any range
+    // that reaches into the archive to whole UTC days. Leaving raw_from at
+    // whatever a previously-run test left behind made the answer depend on
+    // test order.
+    const previousRawFrom = db.query<{ raw_from: number }, []>("SELECT raw_from FROM usage_rollup_coverage WHERE id = 1").get()!.raw_from;
+    db.run("UPDATE usage_rollup_coverage SET raw_from = 0 WHERE id = 1");
     try {
       for (const [index, status] of [200, 201, 429, 503].entries()) recordUsage({ charge: { input: 0n, cache: 0n, output: 0n }, keyId: `outcomes-test/key-${index < 2 ? "a" : "b"}`, userId, model, proto: "openai", inTok: 10, cacheTok: 20, outTok: 5, status, ts: from + [0, 60_000, 600_000, 900_000][index]!, latencyMs: 1, stream: false, estimated: false });
       recordUsage({ charge: { input: 0n, cache: 0n, output: 0n }, keyId: "outcomes-test/foreign-key", userId: "outcomes-test/foreign-user", model, proto: "openai", inTok: 1, cacheTok: 0, outTok: 1, status: 500, ts: from, latencyMs: 1, stream: false, estimated: false });
@@ -25,6 +32,7 @@ describe("analytics response outcomes and API keys", () => {
       const all = filteredUsageAnalytics(scope, userId);
       expect(totals(all)).toEqual({ success: 2, errors: 2, unknown: 7 });
       expect(all.outcomes.length).toBeLessThanOrEqual(48);
+      expect(all.outcomes.map((point) => point.success + point.errors + point.unknown).filter(Boolean).sort((a, b) => a - b)).toEqual([4, 7]);
       expect(all.keys.map((key) => key.id).sort()).toEqual(["outcomes-test/key-a", "outcomes-test/key-b"]);
       expect(all.keys.reduce((sum, key) => sum + key.reqs, 0)).toBe(11);
       expect(JSON.stringify(all)).not.toContain("foreign");
@@ -39,8 +47,9 @@ describe("analytics response outcomes and API keys", () => {
       expect(totals(filteredUsageAnalytics(scope, userId))).toEqual({ success: 2, errors: 2, unknown: 7 });
       expect(totals(filteredUsageAnalytics({ ...scope, selection: { model: { include: [model], exclude: [model] } } }, userId))).toEqual({ success: 0, errors: 0, unknown: 0 });
     } finally {
-      for (const table of ["usage_events", "usage_model_provider_daily", "usage_model_provider_monthly", "usage_model_daily"]) db.run(`DELETE FROM ${table} WHERE model = ?`, [model]);
+      for (const table of ["usage_events", "usage_model_provider_daily", "usage_model_provider_monthly", "usage_model_daily", "usage_hour_rollups", "usage_minute_rollups"]) db.run(`DELETE FROM ${table} WHERE model = ?`, [model]);
       db.run("DELETE FROM usage_daily WHERE key_id LIKE 'outcomes-test/%'");
+      db.run("UPDATE usage_rollup_coverage SET raw_from = ? WHERE id = 1", [previousRawFrom]);
     }
   });
 

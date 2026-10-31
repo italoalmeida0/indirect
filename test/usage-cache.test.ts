@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { cachedUsageQuery, cachedUsageQueryAsync, invalidateUsageQueries } from "../server/usage-cache";
 import { audit } from "../server/db";
 import type { UsageScope } from "../server/usage-filters";
+import { LIMITS } from "../server/config";
 
 const scope: UsageScope = { from: 100, to: 200, selection: {} };
 
@@ -29,6 +30,16 @@ describe("bounded analytics query cache", () => {
     expect(get("one")).toBe(4);
     expect(get("two")).toBe(2);
     expect(get(null)).toBe(5);
+  });
+
+  test("a query can invalidate on its expanded or comparison window", async () => {
+    let reads = 0;
+    const load = async () => ++reads;
+    const expanded = { ...scope, from: 50 };
+    const get = () => cachedUsageQueryAsync("expanded-window", scope, "one", load, undefined, undefined, expanded);
+    expect(await get()).toBe(1);
+    invalidateUsageQueries([{ userId: "one", ts: 75 }]);
+    expect(await get()).toBe(2);
   });
 
   test("audited metadata mutations invalidate names and pricing immediately", () => {
@@ -64,7 +75,7 @@ describe("bounded analytics query cache", () => {
 
   test("pending queries are bounded before reader dispatch", async () => {
     const releases: Array<() => void> = [];
-    const jobs = Array.from({ length: 32 }, (_, i) => cachedUsageQueryAsync("pending-limit-test", scope, `pending-${i}`, () => new Promise<number>((resolve) => releases.push(() => resolve(i)))));
+    const jobs = Array.from({ length: LIMITS.analyticsPending }, (_, i) => cachedUsageQueryAsync("pending-limit-test", scope, `pending-${i}`, () => new Promise<number>((resolve) => releases.push(() => resolve(i)))));
     try {
       await expect(cachedUsageQueryAsync("pending-limit-test", scope, "overflow", async () => 0)).rejects.toMatchObject({ status: 503 });
     } finally {
@@ -72,5 +83,40 @@ describe("bounded analytics query cache", () => {
       for (const release of releases) release();
       await Promise.all(jobs);
     }
+  });
+
+  test("cancelled subscribers do not cancel shared work needed by another caller", async () => {
+    const first = new AbortController(), second = new AbortController();
+    let finish!: (value: number) => void;
+    let runs = 0, cancelled = false;
+    const load = (signal: AbortSignal) => {
+      runs++;
+      signal.addEventListener("abort", () => { cancelled = true; });
+      return new Promise<number>((resolve) => { finish = resolve; });
+    };
+    const a = cachedUsageQueryAsync("shared-cancel", scope, "one", load, undefined, first.signal);
+    const b = cachedUsageQueryAsync("shared-cancel", scope, "one", load, undefined, second.signal);
+    const rejected = a.then(() => "resolved", (error) => error.name);
+    await Promise.resolve();
+    first.abort();
+    expect(await rejected).toBe("AbortError");
+    expect(cancelled).toBe(false);
+    finish(7);
+    expect(await b).toBe(7);
+    expect(runs).toBe(1);
+  });
+
+  test("a job is cancelled after its final subscriber leaves, and a new caller can retry", async () => {
+    const controller = new AbortController();
+    let cancelled = false;
+    const task = cachedUsageQueryAsync("all-cancel", scope, "one", (signal) => new Promise<number>((_resolve, reject) => {
+      signal.addEventListener("abort", () => { cancelled = true; reject(new DOMException("cancelled", "AbortError")); });
+    }), undefined, controller.signal);
+    const rejected = task.then(() => "resolved", (error) => error.name);
+    await Promise.resolve();
+    controller.abort();
+    expect(await rejected).toBe("AbortError");
+    expect(cancelled).toBe(true);
+    expect(await cachedUsageQueryAsync("all-cancel", scope, "one", async () => 9)).toBe(9);
   });
 });

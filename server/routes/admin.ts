@@ -1,11 +1,12 @@
 import { assignPlan, requirePlan } from "../billing";
 import { catalogListSource, catalogWhere, type CatalogKind } from "../catalog";
 import { LIMITS, SMTP_ENABLED } from "../config";
-import { db, stmts, parseStripParams, type ProviderRow, type ProviderKeyRow, type ModelTargetRow, type ApiKeyRow, type UserRow, type AuthStyle, type ModelRow } from "../db";
+import { db, stmts, inImmediateTx, parseStripParams, type ProviderRow, type ProviderKeyRow, type ModelTargetRow, type ApiKeyRow, type UserRow, type AuthStyle, type ModelRow } from "../db";
 import { encryptSecret, decryptSecret, randomToken, sha256Hex } from "../crypto";
-import { requireAdmin, revokeAllUserSessions, markUserSessionsRevoked, auditAdmin } from "../auth";
+import { requireAdmin, markUserSessionsRevoked, auditAdmin, effectiveRole, EFFECTIVE_ROLE_SQL } from "../auth";
 import { disconnectSessionSockets, disconnectUserDaemons } from "./relay";
-import { publicKey, revokeKey } from "../keys";
+import { markKeyRevoked, publicKey } from "../keys";
+import { dropKeyLimiter } from "../ratelimit";
 import { GATEWAY_SECRET } from "../config";
 import { sendInviteEmail, sendResetEmail } from "../email";
 import { stickyClearAll } from "../failover";
@@ -32,6 +33,14 @@ import { TOOL_CALL_MODES, type ToolCallMode } from "../tool-call-mode";
 import { fetchOpenRouterCatalog, matchOpenRouterModel } from "../openrouter";
 import { readUsageScope } from "../usage-filters";
 import { readUsage } from "../usage-reader";
+import { deletePolicy, listPolicies, readPolicy, upsertPolicy } from "../model-policy";
+import { projectById, validateProjectAssignment } from "../projects";
+import { assertAdminAccountMutationAllowed, assertMfaCanDisable, corporateAuthConfig, requiresSso } from "../auth-policy";
+import { applyRetention, backupRoot, backupStatus, createBackup, deleteBackup, listBackups, verifyBackup } from "../backup";
+import { existsSync } from "node:fs";
+// The handler's `path` parameter is the request path; this alias keeps the
+// filesystem join unambiguous.
+import nodePath from "node:path";
 
 /**
  * /api/admin/* — everything requires role=admin. Every mutation is audited.
@@ -80,26 +89,37 @@ function publicProviderKey(k: ProviderKeyRow) {
 }
 
 /** Insert a new upstream key at the end of a provider's failover chain. */
-async function addProviderKey(providerId: string, apiKey: string, label: string, status: "active" | "disabled" = "active") {
+async function addProviderKey(
+  providerId: string,
+  apiKey: string,
+  label: string,
+  onCommitted?: (row: ProviderKeyRow) => void,
+  status: "active" | "disabled" = "active",
+) {
   const id = randomToken(12);
   const enc = await encryptSecret(apiKey, GATEWAY_SECRET);
-  const maxP = db
-    .prepare<{ p: number | null }, [string]>("SELECT MAX(priority) AS p FROM provider_keys WHERE provider_id = ?")
-    .get(providerId)!.p;
-  const now = Date.now();
-  db.prepare(
-    `INSERT INTO provider_keys (id, provider_id, label, api_key_enc, priority, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, providerId, label, enc, (maxP ?? -10) + 10, status, now, now);
-  refreshProviderKeyMirror(providerId);
+  const row = inImmediateTx(() => {
+    const maxP = db
+      .prepare<{ p: number | null }, [string]>("SELECT MAX(priority) AS p FROM provider_keys WHERE provider_id = ?")
+      .get(providerId)!.p;
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO provider_keys (id, provider_id, label, api_key_enc, priority, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(id, providerId, label, enc, (maxP ?? -10) + 10, status, now, now);
+    refreshProviderKeyMirror(providerId);
+    const inserted = db.prepare<ProviderKeyRow, [string]>("SELECT * FROM provider_keys WHERE id = ?").get(id)!;
+    onCommitted?.(inserted);
+    return inserted;
+  });
   // New candidate in the chain: rebuild sticky lanes.
   stickyClearAll();
-  return db.prepare<ProviderKeyRow, [string]>("SELECT * FROM provider_keys WHERE id = ?").get(id)!;
+  return row;
 }
 
 /** Legacy single-key write: route an incoming `apiKey` to the provider's
  *  TOP-1 key row (create when missing), keeping the mirror invariant. */
-async function rotatePrimaryKey(providerId: string, apiKeyEnc: string): Promise<void> {
+function rotatePrimaryKeySync(providerId: string, apiKeyEnc: string): void {
   const top = providerKeysFor(providerId)[0];
   if (top) {
     // A new secret is a fresh credential: clear its visible failure counter.
@@ -355,19 +375,14 @@ export function validateTargets(raw: unknown, modelId: string): TargetInput[] {
 }
 
 /** Replace a model's whole failover chain (order = priority) + mirror. */
-function replaceModelTargets(modelId: string, targets: TargetInput[]): void {
-  db.transaction(() => {
-    db.prepare("DELETE FROM model_targets WHERE model_id = ?").run(modelId);
-    const ins = db.prepare(
-      "INSERT INTO model_targets (model_id, provider_id, upstream_model, priority, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-    );
-    const now = Date.now();
-    targets.forEach((t, i) => ins.run(modelId, t.providerId, t.upstreamModel, i * 10, t.enabled ? 1 : 0, now));
-    refreshModelMirror(modelId);
-  })();
-  // The chain changed: this lane's winner may no longer be top priority.
-  stickyClearAll();
-  invalidateModelCache();
+function replaceModelTargetsSync(modelId: string, targets: TargetInput[]): void {
+  db.prepare("DELETE FROM model_targets WHERE model_id = ?").run(modelId);
+  const ins = db.prepare(
+    "INSERT INTO model_targets (model_id, provider_id, upstream_model, priority, enabled, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  );
+  const now = Date.now();
+  targets.forEach((t, i) => ins.run(modelId, t.providerId, t.upstreamModel, i * 10, t.enabled ? 1 : 0, now));
+  refreshModelMirror(modelId);
 }
 
 /** Legacy single-link edit (PATCH providerId/upstreamModel): sync the TOP-1
@@ -422,7 +437,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   const catalogFacets = path.match(/^\/api\/admin\/(providers|models|users|keys|audit)\/filter-options$/);
   if (catalogFacets && req.method === "GET") {
-    return ok(await readUsage({ kind: "catalog-facets", catalog: catalogFacets[1] as CatalogKind, userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }), req);
+    return ok(await readUsage({ kind: "catalog-facets", catalog: catalogFacets[1] as CatalogKind, userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }, req.signal), req);
   }
   if (path === "/api/admin/models/selection" && req.method === "GET") {
     const source = catalogListSource("models", url.searchParams, null);
@@ -471,44 +486,52 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const data = await providerWrite(body);
     const plainApiKey = v.str(body, "apiKey", { max: 512, optional: true });
     const id = randomToken(12);
-    db.prepare(
-      `INSERT INTO providers (id, name, openai_base_url, anthropic_base_url, responses_base_url, openai_auth_style, anthropic_auth_style, responses_auth_style, strip_params, api_key_enc, enabled, priority, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      data.name,
-      data.openaiBaseUrl,
-      data.anthropicBaseUrl,
-      data.responsesBaseUrl,
-      data.openaiAuthStyle,
-      data.anthropicAuthStyle,
-      data.responsesAuthStyle,
-      data.stripParamsJson,
-      data.apiKeyEnc!,
-      data.enabled ? 1 : 0,
-      data.priority,
-      Date.now(),
-    );
-    // The submitted key becomes the provider's primary upstream key.
-    db.prepare(
-      `INSERT INTO provider_keys (id, provider_id, label, api_key_enc, priority, status, created_at, updated_at)
-       VALUES (?, ?, 'primary', ?, 0, 'active', ?, ?)`,
-    ).run(randomToken(12), id, data.apiKeyEnc!, Date.now(), Date.now());
+    const dual = !!data.openaiBaseUrl && !!data.anthropicBaseUrl;
+    const row = inImmediateTx(() => {
+      const now = Date.now();
+      db.prepare(
+        `INSERT INTO providers (id, name, openai_base_url, anthropic_base_url, responses_base_url, openai_auth_style, anthropic_auth_style, responses_auth_style, strip_params, api_key_enc, enabled, priority, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        data.name,
+        data.openaiBaseUrl,
+        data.anthropicBaseUrl,
+        data.responsesBaseUrl,
+        data.openaiAuthStyle,
+        data.anthropicAuthStyle,
+        data.responsesAuthStyle,
+        data.stripParamsJson,
+        data.apiKeyEnc!,
+        data.enabled ? 1 : 0,
+        data.priority,
+        now,
+      );
+      // The submitted key becomes the provider's primary upstream key.
+      db.prepare(
+        `INSERT INTO provider_keys (id, provider_id, label, api_key_enc, priority, status, created_at, updated_at)
+         VALUES (?, ?, 'primary', ?, 0, 'active', ?, ?)`,
+      ).run(randomToken(12), id, data.apiKeyEnc!, now, now);
+      auditAdmin(
+        ctx.user,
+        "provider.created",
+        id,
+        { name: data.name, ...(plainApiKey && dual ? { import: "pending-choice" } : {}) },
+        ip,
+      );
+      return db.prepare<ProviderRow, [string]>("SELECT * FROM providers WHERE id = ?").get(id)!;
+    });
     invalidateModelCache();
-    const row = db.prepare<ProviderRow, [string]>("SELECT * FROM providers WHERE id = ?").get(id)!;
     // Dual-capability provider: don't import yet — preview both /models lists
     // and let the dashboard confirm the import. Single-capability:
     // auto-import right away.
-    const dual = !!row.openai_base_url && !!row.anthropic_base_url;
     if (plainApiKey && dual) {
       const preview = await previewProviderModels(row, plainApiKey);
-      auditAdmin(ctx.user, "provider.created", id, { name: data.name, import: "pending-choice" }, ip);
       return ok({ provider: publicProvider(row), preview }, req);
     }
     // Model registry auto-import: best-effort — a failing /models endpoint
     // yields per-capability errors in `sync` but never blocks creation.
     const sync = plainApiKey ? await syncProviderModels(row, plainApiKey) : {};
-    auditAdmin(ctx.user, "provider.created", id, { name: data.name, sync }, ip);
     return ok({ provider: publicProvider(row), sync }, req);
   }
 
@@ -529,15 +552,15 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (ids.length !== existing.length || existing.some((p) => !ids.includes(p.id))) {
       throw new ApiError(400, "ids must list every provider exactly once");
     }
-    db.transaction(() => {
+    inImmediateTx(() => {
       const upd = db.prepare("UPDATE providers SET priority = ? WHERE id = ?");
       (ids as string[]).forEach((pid, i) => upd.run(i * 10, pid));
-    })();
+      auditAdmin(ctx.user, "providers.reordered", undefined, { count: ids.length }, ip);
+    });
     // Provider order changed: sticky winners may now be wrong-ordered —
     // lanes rebuild from the new order.
     stickyClearAll();
     invalidateModelCache();
-    auditAdmin(ctx.user, "providers.reordered", undefined, { count: ids.length }, ip);
     const rows = db
       .prepare<ProviderRow, []>("SELECT * FROM providers ORDER BY priority ASC, created_at ASC")
       .all();
@@ -562,9 +585,10 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       const body = await readJsonBody(req, LIMITS.apiBodyBytes);
       const apiKey = v.str(body, "apiKey", { min: 1, max: 512 })!;
       const label = v.str(body, "label", { max: 64, optional: true }) ?? "";
-      const row = await addProviderKey(providerId, apiKey, label.trim());
+      const row = await addProviderKey(providerId, apiKey, label.trim(), (inserted) => {
+        auditAdmin(ctx.user, "provider_key.created", inserted.id, { provider: providerId, label: inserted.label }, ip);
+      });
       invalidateModelCache();
-      auditAdmin(ctx.user, "provider_key.created", row.id, { provider: providerId, label: row.label }, ip);
       return ok({ key: publicProviderKey(row) }, req);
     }
 
@@ -580,16 +604,17 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       ) {
         throw new ApiError(400, "ids must list every key of this provider exactly once");
       }
-      db.transaction(() => {
+      inImmediateTx(() => {
         const upd = db.prepare("UPDATE provider_keys SET priority = ?, updated_at = ? WHERE id = ?");
-        (ids as string[]).forEach((kid, i) => upd.run(i * 10, Date.now(), kid));
-      })();
-      // A new key became top-1: the mirror follows.
-      refreshProviderKeyMirror(providerId);
+        const now = Date.now();
+        (ids as string[]).forEach((kid, i) => upd.run(i * 10, now, kid));
+        // A new key became top-1: the mirror follows.
+        refreshProviderKeyMirror(providerId);
+        auditAdmin(ctx.user, "provider_keys.reordered", providerId, { count: ids.length }, ip);
+      });
       // Key order changed: lanes rebuild from the new order.
       stickyClearAll();
       invalidateModelCache();
-      auditAdmin(ctx.user, "provider_keys.reordered", providerId, { count: ids.length }, ip);
       return ok({ keys: providerKeysFor(providerId).map(publicProviderKey) }, req);
     }
 
@@ -630,41 +655,45 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
             exhaustedReason = null;
           }
         }
-        db.prepare(
-          `UPDATE provider_keys SET label = ?, api_key_enc = ?, status = ?, fail_count = ?,
-             cooldown_until = ?, exhausted_reason = ?, updated_at = ? WHERE id = ?`,
-        ).run(label, api_key_enc, status, failCount, cooldownUntil, exhaustedReason, Date.now(), keyId);
-        refreshProviderKeyMirror(providerId);
+        const row = inImmediateTx(() => {
+          db.prepare(
+            `UPDATE provider_keys SET label = ?, api_key_enc = ?, status = ?, fail_count = ?,
+               cooldown_until = ?, exhausted_reason = ?, updated_at = ? WHERE id = ?`,
+          ).run(label, api_key_enc, status, failCount, cooldownUntil, exhaustedReason, Date.now(), keyId);
+          refreshProviderKeyMirror(providerId);
+          auditAdmin(
+            ctx.user,
+            status !== keyRow.status && status === "active" ? "provider_key.reenabled" : "provider_key.updated",
+            keyId,
+            { provider: providerId, status },
+            ip,
+          );
+          return db.prepare<ProviderKeyRow, [string]>("SELECT * FROM provider_keys WHERE id = ?").get(keyId)!;
+        });
         // Key identity/order may have changed (rotation, re-enable,
         // disable): drop every sticky winner so lanes rebuild from the
         // current priority order instead of a stale candidate.
         stickyClearAll();
         invalidateModelCache();
-        auditAdmin(
-          ctx.user,
-          status !== keyRow.status && status === "active" ? "provider_key.reenabled" : "provider_key.updated",
-          keyId,
-          { provider: providerId, status },
-          ip,
-        );
-        const row = db.prepare<ProviderKeyRow, [string]>("SELECT * FROM provider_keys WHERE id = ?").get(keyId)!;
         return ok({ key: publicProviderKey(row) }, req);
       }
 
       if (req.method === "DELETE") {
         // providers.api_key_enc is NOT NULL — the failover chain must never
         // become empty. Deleting the last key would orphan the provider.
-        const n = db
-          .prepare<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM provider_keys WHERE provider_id = ?")
-          .get(providerId)!.n;
-        if (n <= 1) throw new ApiError(400, "a provider needs at least one upstream key");
-        db.prepare("DELETE FROM provider_keys WHERE id = ?").run(keyId);
-        refreshProviderKeyMirror(providerId);
+        inImmediateTx(() => {
+          const n = db
+            .prepare<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM provider_keys WHERE provider_id = ?")
+            .get(providerId)!.n;
+          if (n <= 1) throw new ApiError(400, "a provider needs at least one upstream key");
+          db.prepare("DELETE FROM provider_keys WHERE id = ?").run(keyId);
+          refreshProviderKeyMirror(providerId);
+          auditAdmin(ctx.user, "provider_key.deleted", keyId, { provider: providerId, label: keyRow.label }, ip);
+        });
         // Same as PATCH above: a deleted key must not stay pinned as a
         // sticky winner.
         stickyClearAll();
         invalidateModelCache();
-        auditAdmin(ctx.user, "provider_key.deleted", keyId, { provider: providerId, label: keyRow.label }, ip);
         return ok({ deleted: true }, req);
       }
     }
@@ -673,31 +702,33 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       const body = await readJsonBody(req, LIMITS.apiBodyBytes);
       const data = await providerWrite(body, existing);
       const priKeyRotated = !!v.str(body, "apiKey", { max: 512, optional: true });
-      db.prepare(
-        `UPDATE providers SET name = ?, openai_base_url = ?, anthropic_base_url = ?, responses_base_url = ?, openai_auth_style = ?, anthropic_auth_style = ?, responses_auth_style = ?, strip_params = ?, api_key_enc = ?, enabled = ?, priority = ?
-         WHERE id = ?`,
-      ).run(
-        data.name,
-        data.openaiBaseUrl,
-        data.anthropicBaseUrl,
-        data.responsesBaseUrl,
-        data.openaiAuthStyle,
-        data.anthropicAuthStyle,
-        data.responsesAuthStyle,
-        data.stripParamsJson,
-        data.apiKeyEnc!,
-        data.enabled ? 1 : 0,
-        data.priority,
-        providerId,
-      );
-      // A submitted apiKey rotates the TOP-1 upstream key (legacy single-key
-      // semantics) and refreshes its failure state.
-      if (priKeyRotated) await rotatePrimaryKey(providerId, data.apiKeyEnc!);
+      const row = inImmediateTx(() => {
+        db.prepare(
+          `UPDATE providers SET name = ?, openai_base_url = ?, anthropic_base_url = ?, responses_base_url = ?, openai_auth_style = ?, anthropic_auth_style = ?, responses_auth_style = ?, strip_params = ?, api_key_enc = ?, enabled = ?, priority = ?
+           WHERE id = ?`,
+        ).run(
+          data.name,
+          data.openaiBaseUrl,
+          data.anthropicBaseUrl,
+          data.responsesBaseUrl,
+          data.openaiAuthStyle,
+          data.anthropicAuthStyle,
+          data.responsesAuthStyle,
+          data.stripParamsJson,
+          data.apiKeyEnc!,
+          data.enabled ? 1 : 0,
+          data.priority,
+          providerId,
+        );
+        // A submitted apiKey rotates the TOP-1 upstream key (legacy single-key
+        // semantics) and refreshes its failure state.
+        if (priKeyRotated) rotatePrimaryKeySync(providerId, data.apiKeyEnc!);
+        auditAdmin(ctx.user, "provider.updated", providerId, { name: data.name }, ip);
+        return db.prepare<ProviderRow, [string]>("SELECT * FROM providers WHERE id = ?").get(providerId)!;
+      });
       // Identity/order/capabilities may have changed: rebuild sticky lanes.
       stickyClearAll();
       invalidateModelCache();
-      auditAdmin(ctx.user, "provider.updated", providerId, { name: data.name }, ip);
-      const row = db.prepare<ProviderRow, [string]>("SELECT * FROM providers WHERE id = ?").get(providerId)!;
       return ok({ provider: publicProvider(row) }, req);
     }
 
@@ -714,21 +745,21 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         )
         .all(providerId)
         .map((r) => r.model_id);
-      db.transaction(() => {
+      inImmediateTx(() => {
         if (deleteModels) db.prepare("DELETE FROM models WHERE provider_id = ?").run(providerId);
         db.prepare("DELETE FROM providers WHERE id = ?").run(providerId);
         for (const mid of affected) refreshModelMirror(mid);
-      })();
+        auditAdmin(
+          ctx.user,
+          "provider.deleted",
+          providerId,
+          { name: existing.name, models: deleteModels ? { deleted: n } : { orphaned: n } },
+          ip,
+        );
+      });
       // Provider gone (keys cascade away): stale winners must not survive.
       stickyClearAll();
       invalidateModelCache();
-      auditAdmin(
-        ctx.user,
-        "provider.deleted",
-        providerId,
-        { name: existing.name, models: deleteModels ? { deleted: n } : { orphaned: n } },
-        ip,
-      );
       return ok(
         { deleted: true, modelsDeleted: deleteModels ? n : 0, modelsOrphaned: deleteModels ? 0 : n },
         req,
@@ -901,9 +932,11 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (mode !== "passthrough" && mode !== "router") {
       throw new ApiError(400, 'routingMode must be "passthrough" or "router"');
     }
-    setRoutingMode(mode);
+    inImmediateTx(() => {
+      setRoutingMode(mode);
+      auditAdmin(ctx.user, "settings.updated", "routing_mode", { routingMode: mode }, ip);
+    });
     invalidateModelCache();
-    auditAdmin(ctx.user, "settings.updated", "routing_mode", { routingMode: mode }, ip);
     return ok({ settings: { routingMode: mode } }, req);
   }
 
@@ -1067,7 +1100,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const toolCallMode = f.tool_call_mode;
     const now = Date.now();
     const chain = targets ?? [{ providerId, upstreamModel, enabled: f.enabled === 1 }];
-    db.transaction(() => {
+    inImmediateTx(() => {
       db.prepare(
         `INSERT INTO models
            (id, provider_id, upstream_model, name, description, enabled, context_length,
@@ -1089,9 +1122,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       );
       chain.forEach((t, i) => ins.run(id, t.providerId, t.upstreamModel, i * 10, t.enabled ? 1 : 0, now));
       refreshModelMirror(id);
-    })();
+      auditAdmin(ctx.user, "model.created", id, { providerId, upstreamModel, targets: chain.length }, ip);
+    });
     invalidateModelCache();
-    auditAdmin(ctx.user, "model.created", id, { providerId, upstreamModel, targets: chain.length }, ip);
     const row = db
       .prepare<ModelRow & { provider_name: string | null }, [string]>(
         `SELECT m.*, p.name AS provider_name FROM models m LEFT JOIN providers p ON p.id = m.provider_id WHERE m.id = ?`,
@@ -1114,7 +1147,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const del = db.prepare("DELETE FROM models WHERE id = ?");
     const exists = db.prepare("SELECT 1 AS x FROM models WHERE id = ?");
     let deleted = 0;
-    db.transaction(() => {
+    inImmediateTx(() => {
       // NB: bun:sqlite's .changes includes FK-cascaded model_targets rows —
       // count models by existence instead.
       for (const mid of ids as string[]) {
@@ -1123,9 +1156,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           deleted++;
         }
       }
-    })();
+      auditAdmin(ctx.user, "models.bulk_deleted", undefined, { requested: ids.length, deleted }, ip);
+    });
     invalidateModelCache();
-    auditAdmin(ctx.user, "models.bulk_deleted", undefined, { requested: ids.length, deleted }, ip);
     return ok({ deleted }, req);
   }
 
@@ -1145,7 +1178,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       )
       .all();
     let count = 0;
-    db.transaction(() => {
+    inImmediateTx(() => {
       const upd = db.prepare(
         `UPDATE models SET pricing = COALESCE(?, pricing),
                            pricing_input = COALESCE(?, pricing_input),
@@ -1192,9 +1225,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           count++;
         }
       }
-    })();
+      auditAdmin(ctx.user, "models.enriched_from_openrouter", "all", { count }, ip);
+    });
     if (count > 0) invalidateModelCache();
-    auditAdmin(ctx.user, "models.enriched_from_openrouter", "all", { count }, ip);
     return ok({ count }, req);
   }
 
@@ -1210,16 +1243,20 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (!existing) return err(404, "model not found", req);
     const body = await readJsonBody(req, LIMITS.apiBodyBytes);
     const targets = validateTargets(body.targets, modelId);
-    replaceModelTargets(modelId, targets);
-    // The mirror makes the top-1 visible on the models row itself.
-    db.prepare("UPDATE models SET updated_at = ? WHERE id = ?").run(Date.now(), modelId);
-    auditAdmin(
-      ctx.user,
-      "model.targets_updated",
-      modelId,
-      { chain: targets.map((t) => `${t.providerId} → ${t.upstreamModel}`) },
-      ip,
-    );
+    inImmediateTx(() => {
+      replaceModelTargetsSync(modelId, targets);
+      // The mirror makes the top-1 visible on the models row itself.
+      db.prepare("UPDATE models SET updated_at = ? WHERE id = ?").run(Date.now(), modelId);
+      auditAdmin(
+        ctx.user,
+        "model.targets_updated",
+        modelId,
+        { chain: targets.map((t) => `${t.providerId} → ${t.upstreamModel}`) },
+        ip,
+      );
+    });
+    stickyClearAll();
+    invalidateModelCache();
     const row = db
       .prepare<ModelRow & { provider_name: string | null }, [string]>(
         `SELECT m.*, p.name AS provider_name FROM models m LEFT JOIN providers p ON p.id = m.provider_id WHERE m.id = ?`,
@@ -1282,7 +1319,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       }
       const f = modelFields(body, existing);
       const finalId = newId ?? modelId;
-      db.transaction(() => {
+      inImmediateTx(() => {
         db.prepare(
           `UPDATE models SET provider_id = ?, upstream_model = ?, name = ?,
              description = ?, enabled = ?, context_length = ?, max_output_length = ?,
@@ -1301,25 +1338,26 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           f.pricing_input_cache_write, f.pricing_output, f.tool_call_mode, Date.now(), modelId,
         );
         if (targets) {
-          replaceModelTargets(modelId, targets);
+          replaceModelTargetsSync(modelId, targets);
         } else if ("providerId" in body || "upstreamModel" in body) {
           upsertPrimaryTarget(modelId, providerId, f.upstream_model ?? existing.upstream_model);
         }
         if (newId) db.prepare("UPDATE models SET id = ? WHERE id = ?").run(newId, modelId);
         refreshModelMirror(finalId);
-      })();
+        auditAdmin(
+          ctx.user,
+          newId ? "model.renamed" : "model.updated",
+          finalId,
+          {
+            providerId,
+            ...(targets ? { targets: targets.length } : {}),
+            ...(newId ? { renamedFrom: modelId } : {}),
+          },
+          ip,
+        );
+      });
+      if (targets || "providerId" in body || "upstreamModel" in body || newId) stickyClearAll();
       invalidateModelCache();
-      auditAdmin(
-        ctx.user,
-        newId ? "model.renamed" : "model.updated",
-        finalId,
-        {
-          providerId,
-          ...(targets ? { targets: targets.length } : {}),
-          ...(newId ? { renamedFrom: modelId } : {}),
-        },
-        ip,
-      );
       const row = db
         .prepare<ModelRow & { provider_name: string | null }, [string]>(
           `SELECT m.*, p.name AS provider_name FROM models m LEFT JOIN providers p ON p.id = m.provider_id WHERE m.id = ?`,
@@ -1329,9 +1367,11 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     }
 
     if (req.method === "DELETE") {
-      db.prepare("DELETE FROM models WHERE id = ?").run(modelId);
+      inImmediateTx(() => {
+        db.prepare("DELETE FROM models WHERE id = ?").run(modelId);
+        auditAdmin(ctx.user, "model.deleted", modelId, undefined, ip);
+      });
       invalidateModelCache();
-      auditAdmin(ctx.user, "model.deleted", modelId, undefined, ip);
       return ok({ deleted: true }, req);
     }
   }
@@ -1344,14 +1384,14 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
       const cols: Record<string, ColSpec> = {
         email: { col: "email" },
         name: { col: "name" },
-        role: { col: "role" },
+        role: { col: "effective_role" },
         status: { col: "status" },
         keyCount: { col: "key_count", kind: "number" },
         planName: { col: "plan_name" },
          lastLoginAt: { col: "last_login_at", kind: "date" },
         createdAt: { col: "created_at", kind: "number" },
       };
-      const source = url.searchParams.has("selection") ? catalogListSource("users", url.searchParams, null) : { sql: "SELECT u.*, b.plan_id, bp.name AS plan_name, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id", params: [] };
+      const source = url.searchParams.has("selection") ? catalogListSource("users", url.searchParams, null) : { sql: `SELECT u.*, ${EFFECTIVE_ROLE_SQL} AS effective_role, b.plan_id, bp.name AS plan_name, (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id) AS key_count FROM users u LEFT JOIN user_billing b ON b.user_id = u.id LEFT JOIN billing_plans bp ON bp.id = b.plan_id`, params: [] };
       const { rows, total } = gridPage({
         baseSql: source.sql,
         baseParams: source.params,
@@ -1365,7 +1405,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           id: u.id,
           email: u.email,
           name: u.name,
-          role: u.role,
+          role: effectiveRole(u),
           status: u.status,
           hasPassword: !!u.password_hash,
           googleLinked: !!u.google_id,
@@ -1396,7 +1436,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           id: u.id,
           email: u.email,
           name: u.name,
-          role: u.role,
+          role: effectiveRole(u),
           status: u.status,
           hasPassword: !!u.password_hash,
           googleLinked: !!u.google_id,
@@ -1416,32 +1456,36 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const body = await readJsonBody(req, LIMITS.apiBodyBytes);
     const email = v.email(body, "email");
     const name = v.str(body, "name", { min: 1, max: 128 })!;
-    const role = body.role === "admin" ? "admin" : "user";
+    if (body.role !== undefined && body.role !== "admin" && body.role !== "user" && body.role !== "project_manager") throw new ApiError(400, "Invalid role");
+    const role = body.role === "admin" || body.role === "project_manager" ? body.role : "user";
     const sendInvite = body.sendInvite !== false;
     const planId = requirePlan(body.planId);
 
     if (stmts.userByEmail.get(email)) return err(409, "email already registered", req);
 
     const id = randomToken(12);
-    db.transaction(() => {
-      db.prepare("INSERT INTO users (id, email, name, role, created_at) VALUES (?, ?, ?, ?, ?)").run(id, email, name, role, Date.now());
+    const inviteToken = sendInvite ? randomToken(32) : null;
+    inImmediateTx(() => {
+      if (role === "admin" && corporateAuthConfig().requireAdminMfa) throw new ApiError(409, "enroll an authenticator before promoting an administrator");
+      db.prepare("INSERT INTO users (id, email, name, role, enterprise_role, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, email, name, role === "admin" ? "admin" : "user", role === "project_manager" ? "project_manager" : null, Date.now());
       if (planId) assignPlan(id, planId);
-    }).immediate();
+      if (inviteToken) {
+        db.prepare(
+          "INSERT INTO password_tokens (token_hash, user_id, kind, expires_at) VALUES (?, ?, 'invite', ?)",
+        ).run(sha256Hex(inviteToken), id, Date.now() + LIMITS.passwordTokenTtlMs);
+      }
+      auditAdmin(ctx.user, "user.created", id, { email, role, planId, sendInvite, smtpConfigured: SMTP_ENABLED }, ip);
+    });
 
     let inviteSent = false;
     let inviteLink: string | null = null;
-    if (sendInvite) {
-      const token = randomToken(32);
-      db.prepare(
-        "INSERT INTO password_tokens (token_hash, user_id, kind, expires_at) VALUES (?, ?, 'invite', ?)",
-      ).run(sha256Hex(token), id, Date.now() + LIMITS.passwordTokenTtlMs);
-      inviteSent = await sendInviteEmail(email, name, token);
+    if (inviteToken) {
+      inviteSent = await sendInviteEmail(email, name, inviteToken);
       // Relative link when PUBLIC_URL is unset — the dashboard prefixes the
       // origin the admin is actually browsing with (handles port-forwarding).
       const base = (process.env.PUBLIC_URL ?? "").replace(/\/$/, "");
-      inviteLink = inviteSent ? null : `${base}/#/set-password?token=${encodeURIComponent(token)}`;
+      inviteLink = inviteSent ? null : `${base}/#/set-password?token=${encodeURIComponent(inviteToken)}`;
     }
-    auditAdmin(ctx.user, "user.created", id, { email, role, planId, inviteSent }, ip);
     return ok(
       {
         user: { id, email, name, role },
@@ -1463,7 +1507,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (req.method === "PATCH" && !action) {
       const body = await readJsonBody(req, LIMITS.apiBodyBytes);
       const name = v.str(body, "name", { min: 1, max: 128, optional: true }) ?? target.name;
-      const role = body.role === "admin" || body.role === "user" ? body.role : target.role;
+      if (body.role !== undefined && body.role !== "admin" && body.role !== "user" && body.role !== "project_manager") throw new ApiError(400, "Invalid role");
+      const role = body.role === "admin" || body.role === "user" || body.role === "project_manager" ? body.role : effectiveRole(target);
+      if (body.status !== undefined && body.status !== "banned" && body.status !== "active") throw new ApiError(400, "Invalid status");
       const status =
         body.status === "banned" || body.status === "active" ? body.status : target.status;
       if (targetId === ctx.user.id && (role !== "admin" || status !== "active")) {
@@ -1473,82 +1519,110 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         target.role === "admin" &&
         target.status === "active" &&
         (role !== "admin" || status !== "active");
-      const changed = db.transaction(() => {
+      const privilegesChanged = role !== effectiveRole(target) || status !== target.status;
+      const changed = inImmediateTx(() => {
+        assertAdminAccountMutationAllowed(targetId, { role, status });
         const result = demotesActiveAdmin
           ? db.prepare(
-            `UPDATE users SET name = ?, role = ?, status = ?
+            `UPDATE users SET name = ?, role = ?, enterprise_role = ?, status = ?
              WHERE id = ? AND (
                SELECT COUNT(*) FROM users
                WHERE role = 'admin' AND status = 'active'
              ) > 1`,
-            ).run(name, role, status, targetId)
-          : db.prepare("UPDATE users SET name = ?, role = ?, status = ? WHERE id = ?").run(
-              name, role, status, targetId,
+            ).run(name, role === "admin" ? "admin" : "user", role === "project_manager" ? "project_manager" : null, status, targetId)
+          : db.prepare("UPDATE users SET name = ?, role = ?, enterprise_role = ?, status = ? WHERE id = ?").run(
+              name, role === "admin" ? "admin" : "user", role === "project_manager" ? "project_manager" : null, status, targetId,
             );
         if (result.changes !== 1) return false;
+        // A later promotion must not silently revive old delegated scope.
+        if (role !== effectiveRole(target)) db.prepare("UPDATE project_members SET role = 'member' WHERE user_id = ? AND role = 'manager'").run(targetId);
+        if (role !== "admin") db.prepare("UPDATE corporate_account_policy SET sso_exempt=0 WHERE user_id=?").run(targetId);
+        if (privilegesChanged) markUserSessionsRevoked(targetId);
         if (status === "banned") {
-          markUserSessionsRevoked(targetId);
           db.prepare("DELETE FROM remote_pairing_tokens WHERE user_id = ?").run(targetId);
         }
+        auditAdmin(ctx.user, "user.updated", targetId, { name, role, status }, ip);
         return true;
-      }).immediate();
+      });
       if (!changed) {
         return err(400, "cannot remove the last active admin", req);
       }
+      if (privilegesChanged) disconnectSessionSockets(targetId);
       if (status === "banned") {
-        disconnectSessionSockets(targetId);
         disconnectUserDaemons(targetId);
       }
-      auditAdmin(ctx.user, "user.updated", targetId, { name, role, status }, ip);
       return ok({ done: true }, req);
     }
 
     if (req.method === "DELETE" && !action) {
       if (targetId === ctx.user.id) return err(400, "you cannot delete yourself", req);
-      if (target.role === "admin" && target.status === "active") {
-        db.prepare(
+      const deleted = inImmediateTx(() => {
+        assertAdminAccountMutationAllowed(targetId, { deleted: true });
+        if (target.role === "admin" && target.status === "active") {
+          db.prepare(
             `DELETE FROM users WHERE id = ? AND (
               SELECT COUNT(*) FROM users
               WHERE role = 'admin' AND status = 'active'
             ) > 1`,
           ).run(targetId);
-      } else {
-        db.prepare("DELETE FROM users WHERE id = ?").run(targetId);
-      }
-      // bun:sqlite may count cascaded FK deletes in .changes. Check whether
-      // the target survived the guarded delete instead of comparing the count.
-      if (stmts.userById.get(targetId)) {
+        } else {
+          db.prepare("DELETE FROM users WHERE id = ?").run(targetId);
+        }
+        // bun:sqlite may count cascaded FK deletes in .changes. Check whether
+        // the target survived the guarded delete instead of comparing the count.
+        if (stmts.userById.get(targetId)) {
+          return false;
+        }
+        auditAdmin(ctx.user, "user.deleted", targetId, { email: target.email }, ip);
+        return true;
+      });
+      if (!deleted) {
         return err(400, "cannot remove the last active admin", req);
       }
       disconnectSessionSockets(targetId);
       disconnectUserDaemons(targetId);
-      auditAdmin(ctx.user, "user.deleted", targetId, { email: target.email }, ip);
       return ok({ deleted: true }, req);
     }
 
     if (req.method === "POST" && action === "/reset-2fa") {
-      db.prepare("UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE id = ?").run(
-        targetId,
-      );
-      auditAdmin(ctx.user, "user.2fa.reset", targetId, undefined, ip);
+      inImmediateTx(() => {
+        const current = stmts.userById.get(targetId);
+        if (!current) throw new ApiError(404, "user not found");
+        assertMfaCanDisable(current);
+        db.prepare("UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE id = ?").run(
+          targetId,
+        );
+        db.prepare("DELETE FROM auth_recovery_codes WHERE user_id = ?").run(targetId);
+        markUserSessionsRevoked(targetId);
+        auditAdmin(ctx.user, "user.2fa.reset", targetId, undefined, ip);
+      });
+      disconnectSessionSockets(targetId);
       return ok({ done: true }, req);
     }
 
     if (req.method === "POST" && action === "/revoke-sessions") {
-      revokeAllUserSessions(targetId);
-      auditAdmin(ctx.user, "user.sessions.revoked", targetId, undefined, ip);
+      inImmediateTx(() => {
+        markUserSessionsRevoked(targetId);
+        auditAdmin(ctx.user, "user.sessions.revoked", targetId, undefined, ip);
+      });
+      disconnectSessionSockets(targetId);
       return ok({ done: true }, req);
     }
 
     if (req.method === "POST" && action === "/send-reset") {
       const token = randomToken(32);
-      db.prepare(
-        "INSERT INTO password_tokens (token_hash, user_id, kind, expires_at) VALUES (?, ?, 'reset', ?)",
-      ).run(sha256Hex(token), targetId, Date.now() + LIMITS.passwordTokenTtlMs);
+      inImmediateTx(() => {
+        const current = stmts.userById.get(targetId);
+        if (!current) throw new ApiError(404, "user not found");
+        if (requiresSso(current)) throw new ApiError(403, "This account requires corporate sign-in");
+        db.prepare(
+          "INSERT INTO password_tokens (token_hash, user_id, kind, expires_at) VALUES (?, ?, 'reset', ?)",
+        ).run(sha256Hex(token), targetId, Date.now() + LIMITS.passwordTokenTtlMs);
+        auditAdmin(ctx.user, "user.reset.sent", targetId, { smtpConfigured: SMTP_ENABLED }, ip);
+      });
       const sent = await sendResetEmail(target.email, token);
       const base = (process.env.PUBLIC_URL ?? "").replace(/\/$/, "");
       const link = sent ? null : `${base}/#/set-password?token=${encodeURIComponent(token)}`;
-      auditAdmin(ctx.user, "user.reset.sent", targetId, { sent }, ip);
       return ok({ sent, link }, req);
     }
   }
@@ -1570,6 +1644,19 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
   }
 
   const adminKeyMatch = path.match(/^\/api\/admin\/keys\/([a-f0-9]{24})(\/reveal)?$/);
+  if (adminKeyMatch && req.method === "PATCH" && !adminKeyMatch[2]) {
+    const keyId = adminKeyMatch[1]!, body = await readJsonBody(req, LIMITS.apiBodyBytes);
+    if (!("projectId" in body) || Object.keys(body).some((key) => key !== "projectId")) throw new ApiError(400, "Only projectId can be changed here");
+    const key = inImmediateTx(() => {
+      const current = db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId);
+      if (!current) throw new ApiError(404, "key not found");
+      const projectId = validateProjectAssignment(current.user_id, body.projectId);
+      db.prepare("UPDATE api_keys SET project_id = ? WHERE id = ?").run(projectId, keyId);
+      auditAdmin(ctx.user, "key.project_updated.admin", keyId, { owner: current.user_id, previousProjectId: current.project_id ?? null, projectId }, ip);
+      return db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId)!;
+    });
+    return ok({ key: publicKey(key, stmts.userById.get(key.user_id)?.email) }, req);
+  }
   if (adminKeyMatch && req.method === "DELETE" && !adminKeyMatch[2]) {
     const keyId = adminKeyMatch[1]!;
     const key = db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId);
@@ -1577,13 +1664,19 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
     const hard = new URL(req.url).searchParams.get("hard") === "true";
     if (hard) {
-      db.prepare("DELETE FROM api_keys WHERE id = ?").run(keyId);
-      auditAdmin(ctx.user, "key.deleted.admin", keyId, { owner: key.user_id, name: key.name }, ip);
+      inImmediateTx(() => {
+        db.prepare("DELETE FROM api_keys WHERE id = ?").run(keyId);
+        auditAdmin(ctx.user, "key.deleted.admin", keyId, { owner: key.user_id, name: key.name }, ip);
+      });
+      dropKeyLimiter(keyId);
       return ok({ deleted: true }, req);
     }
 
-    revokeKey(keyId);
-    auditAdmin(ctx.user, "key.revoked.admin", keyId, { owner: key.user_id }, ip);
+    inImmediateTx(() => {
+      markKeyRevoked(keyId);
+      auditAdmin(ctx.user, "key.revoked.admin", keyId, { owner: key.user_id }, ip);
+    });
+    dropKeyLimiter(keyId);
     return ok({ revoked: true }, req);
   }
 
@@ -1603,12 +1696,12 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   if (path === "/api/admin/analytics" && req.method === "GET") {
     const scope = readUsageScope(url, true) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "analytics", scope, userId: null }), req);
+    return ok(await readUsage({ kind: "analytics", scope, userId: null }, req.signal), req);
   }
 
   if (path === "/api/admin/usage-filter-options" && req.method === "GET") {
     const scope = readUsageScope(url, true) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "facets", userId: null, scope, search: url.searchParams.toString() }), req);
+    return ok(await readUsage({ kind: "facets", userId: null, scope, search: url.searchParams.toString() }, req.signal), req);
   }
 
   if (path === "/api/admin/stats" && req.method === "GET") {
@@ -1620,7 +1713,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         activeKeys: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM api_keys WHERE status = 'active'").get()!.n,
         providers: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM providers").get()!.n,
       };
-      return ok({ ...await readUsage({ kind: "series", scope, userId: null }), counts, kvCache: kvSnapshotCached() }, req);
+      return ok({ ...await readUsage({ kind: "series", scope, userId: null }, req.signal), counts, kvCache: kvSnapshotCached() }, req);
     }
     // Hour granularity ("1D"): the window tables come from usage_events so
     // series/top-lists stay consistent with the trailing-N-hours chart.
@@ -1788,7 +1881,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const grid = parseGridQuery(url);
     const scope = readUsageScope(url, true);
     if (scope) {
-      const page = await readUsage({ kind: "breakdown", scope, userId: null, grid, users: path.endsWith("/users"), summaryOnly: url.searchParams.get("summary") === "1" });
+      const page = await readUsage({ kind: "breakdown", scope, userId: null, grid, users: path.endsWith("/users"), summaryOnly: url.searchParams.get("summary") === "1" }, req.signal);
       return ok({ [path.endsWith("/users") ? "users" : "models"]: page.rows, total: page.total, totals: page.totals, limit: grid.limit, offset: grid.offset }, req);
     }
     const daysAll = url.searchParams.get("days") === "all";
@@ -1961,9 +2054,69 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     return ok({ users, models }, req);
   }
 
+  // ---- model access policies ----
+  if (path === "/api/admin/model-policies" && (req.method === "GET" || req.method === "POST")) {
+    const ctx = await requireAdmin(req);
+    if (req.method === "GET") return ok({ policies: listPolicies() }, req);
+    const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+    const name = v.str(body, "name", { min: 1, max: 64 })!;
+    if (body.kind !== undefined && body.kind !== "project" && body.kind !== "default") throw new ApiError(400, "Invalid policy kind");
+    if (body.models !== undefined && (!Array.isArray(body.models) || body.models.length > 10_000 || body.models.some((id) => typeof id !== "string"))) throw new ApiError(400, "models must be an array of up to 10000 public model IDs");
+    const kind = body.kind === "project" ? "project" : "default";
+    const projectId = kind === "project" && typeof body.projectId === "string" ? body.projectId : null;
+    if (kind === "project" && (!projectId || projectById(projectId)?.kind !== "project")) throw new ApiError(400, "A valid projectId is required");
+    const models = Array.isArray(body.models) ? body.models.filter((id): id is string => typeof id === "string").slice(0, 10_000) : [];
+    // Every id must exist: a typo must not silently narrow a policy.
+    const missing = models.filter((id) => !db.query("SELECT id FROM models WHERE id = ?").get(id));
+    if (missing.length) throw new ApiError(400, `Unknown model ids: ${missing.slice(0, 5).join(", ")}`);
+    const id = inImmediateTx(() => {
+      const createdId = upsertPolicy({ name, kind, projectId, enabled: body.enabled !== false, models }, Date.now());
+      auditAdmin(ctx.user, "model_policy.created", createdId, { name, kind, projectId, models: models.length }, clientIp(req));
+      return createdId;
+    });
+    return ok({ policy: readPolicy(id) }, req);
+  }
+  const policyIdMatch = path.match(/^\/api\/admin\/model-policies\/([A-Za-z0-9_]+)$/);
+  if (policyIdMatch) {
+    const ctx = await requireAdmin(req);
+    const existing = readPolicy(policyIdMatch[1]!);
+    if (!existing) return err(404, "not found", req);
+    if (req.method === "GET") return ok({ policy: existing }, req);
+    if (req.method === "DELETE") {
+      inImmediateTx(() => {
+        deletePolicy(existing.id);
+        auditAdmin(ctx.user, "model_policy.deleted", existing.id, undefined, clientIp(req));
+      });
+      return ok({ deleted: true }, req);
+    }
+    if (req.method === "PATCH") {
+      const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+      if (body.models !== undefined && (!Array.isArray(body.models) || body.models.length > 10_000 || body.models.some((id) => typeof id !== "string"))) throw new ApiError(400, "models must be an array of up to 10000 public model IDs");
+      const models = Array.isArray(body.models)
+        ? body.models.filter((id): id is string => typeof id === "string").slice(0, 10_000)
+        : existing.models;
+      const missing = models.filter((id) => !db.query("SELECT id FROM models WHERE id = ?").get(id));
+      if (missing.length) throw new ApiError(400, `Unknown model ids: ${missing.slice(0, 5).join(", ")}`);
+      const id = inImmediateTx(() => {
+        const updatedId = upsertPolicy({
+          id: existing.id,
+          name: typeof body.name === "string" && body.name ? body.name.slice(0, 64) : existing.name,
+          kind: existing.kind,
+          projectId: existing.project_id,
+          enabled: "enabled" in body ? body.enabled !== false : !!existing.enabled,
+          models: "models" in body ? models : undefined,
+        }, Date.now());
+        auditAdmin(ctx.user, "model_policy.updated", updatedId, { models: models.length }, clientIp(req));
+        return updatedId;
+      });
+      return ok({ policy: readPolicy(id) }, req);
+    }
+    return null;
+  }
+
   if (path === "/api/admin/audit" && req.method === "GET") {
     if (url.searchParams.has("selection")) {
-      return ok(await readUsage({ kind: "catalog-audit", userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }), req);
+      return ok(await readUsage({ kind: "catalog-audit", userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }, req.signal), req);
     }
     if (url.searchParams.has("limit") || url.searchParams.has("selection")) {
       const grid = parseGridQuery(url);
@@ -2054,5 +2207,47 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     return ok({ entries: rows, total }, req);
   }
 
+  // ================= supported backup =================
+
+  if ((path === "/api/admin/backups" || path === "/api/admin/backups/status") && req.method === "GET") {
+    return ok({ backups: listBackups(), status: backupStatus() }, req);
+  }
+
+  if (path === "/api/admin/backups" && req.method === "POST") {
+    // The snapshot itself runs in a worker thread, so serving traffic
+    // continues while the copy is written.
+    const manifest = await createBackup({ kind: "manual" });
+    const retention = manifest.verification?.ok ? applyRetention({ now: manifest.createdAt }) : { removed: [], keptDaily: [], keptWeekly: [] };
+    auditAdmin(ctx.user, "backup.created", manifest.id, {
+      kind: manifest.kind,
+      bytes: manifest.totalBytes,
+      schemaVersion: manifest.schemaVersion,
+      verified: manifest.verification?.ok ?? null,
+      includeDaemon: manifest.includeDaemon,
+      error: manifest.error,
+      retentionRemoved: retention.removed.length,
+    }, ip);
+    if (retention.removed.length) auditAdmin(ctx.user, "backup.retention", "", { removed: retention.removed }, ip);
+    return ok({ backup: manifest, retention }, req);
+  }
+
+  const backupMatch = path.match(/^\/api\/admin\/backups\/([A-Za-z0-9._-]{1,128})(\/verify)?$/);
+  if (backupMatch) {
+    const id = backupMatch[1]!;
+    if (backupMatch[2] && req.method === "POST") {
+      const dir = nodePath.join(backupRoot(), id);
+      if (!existsSync(nodePath.join(dir, "manifest.json"))) return err(404, "Backup not found", req);
+      const verification = await verifyBackup(dir);
+      auditAdmin(ctx.user, "backup.verified", id, { ok: verification.ok, error: verification.error }, ip);
+      return ok({ id, verification }, req);
+    }
+    if (!backupMatch[2] && req.method === "DELETE") {
+      if (!deleteBackup(id)) return err(404, "Backup not found", req);
+      auditAdmin(ctx.user, "backup.deleted", id, {}, ip);
+      return ok({ deleted: true, id }, req);
+    }
+  }
+
   return null;
 }
+

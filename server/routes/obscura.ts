@@ -77,6 +77,9 @@ export const OBSCURA_ASSETS: Record<string, ReleaseAsset> = {
 };
 
 export function obscuraPlatformKey(platform = process.platform, arch = process.arch): string {
+  // Windows on ARM executes the same pinned x64 Obscura release through its
+  // OS compatibility layer. This is still Obscura, not a fallback browser.
+  if (platform === "win32" && arch === "arm64") return "win32-x64";
   return `${platform}-${arch === "arm64" ? "arm64" : "x64"}`;
 }
 
@@ -161,7 +164,12 @@ async function installArchive(raw: Uint8Array, dir: string, asset: ReleaseAsset)
   const root = path.resolve(dir);
   mkdirSync(root, { recursive: true });
   let installed = 0;
+  let sinceYield = 0;
   for (const entry of entries) {
+    // The release bundles are ~75 MB. Decompressing and writing them in one
+    // synchronous burst blocks the event loop for over a second — during boot
+    // that stalls the first health checks. Yield between members.
+    if (sinceYield > 0 && sinceYield % 32 === 0) await Bun.sleep(0);
     const normalized = entry.name.replace(/\\/g, "/");
     if (normalized.endsWith("/")) continue;
     const target = path.resolve(root, normalized);
@@ -175,6 +183,7 @@ async function installArchive(raw: Uint8Array, dir: string, asset: ReleaseAsset)
       try { chmodSync(target, 0o755); } catch {}
     }
     installed++;
+    sinceYield++;
   }
   if (installed === 0) throw new Error("obscura archive contained no files");
   const binaryPath = path.join(root, asset.binary);

@@ -1,5 +1,5 @@
 import { Show, batch, createEffect, createMemo, createResource, createSignal, onCleanup, type Accessor, type JSX } from "solid-js";
-import { api } from "./api";
+import { api, policyRevision } from "./api";
 import { AnalyticsToolbar, createAnalyticsFilters } from "./analytics-filters";
 import { serverDatasource } from "./aggrid";
 import { Icon, Icons, Select, fmtNum } from "./ui";
@@ -12,7 +12,7 @@ const PAGE_SIZE = 25;
 /** A single query drives desktop blocks and mobile pages. The first page is
  * shared with the count, identical reads coalesce, and scope changes cancel
  * obsolete requests. No mobile-only filtering of a truncated result set. */
-export function createCatalog<T>(config: { path: string; result: string; label: string; sort: SortOption[]; storageKey?: string; cards?: boolean; cursor?: boolean; extra?: Accessor<Record<string, string>> }) {
+export function createCatalog<T>(config: { path: string; result: string; label: string; sort: SortOption[] | Accessor<SortOption[]>; storageKey?: string; cards?: boolean; cursor?: boolean; extra?: Accessor<Record<string, string>> }) {
   const filters = createAnalyticsFilters(false, { endpoint: `${config.path}/filter-options`, initialPreset: "all" });
   const media = window.matchMedia("(max-width: 767px)");
   const [mobile, setMobile] = createSignal(media.matches);
@@ -38,7 +38,7 @@ export function createCatalog<T>(config: { path: string; result: string; label: 
     if (sort().length) params.set("sort", JSON.stringify(sort()));
     return params.toString();
   });
-  const scope = createMemo(() => `${version()}:${query()}`);
+  const scope = createMemo(() => `${version()}:${policyRevision()}:${query()}`);
   const page = () => paging().scope === scope() ? paging().page : 1;
   const setPage = (next: number | ((current: number) => number)) => setPaging({ scope: scope(), page: typeof next === "function" ? next(page()) : next });
   createEffect(() => {
@@ -103,13 +103,15 @@ export function CatalogToolbar(props: { view: CatalogView; right?: JSX.Element }
   const view = props.view;
   let searchInput!: HTMLInputElement;
   const selectedSort = () => view.sort()[0] ? `${view.sort()[0]!.colId}:${view.sort()[0]!.sort}` : "";
+  const configuredSorts = () => typeof view.config.sort === "function" ? view.config.sort() : view.config.sort;
   const sortOptions = createMemo(() => {
     const current = view.sort()[0];
-    const custom = current && !view.config.sort.some((option) => option.value === selectedSort());
+    const list = configuredSorts();
+    const custom = current && !list.some((option) => option.value === selectedSort());
     return [
       { value: "", label: "Default order" },
       ...(custom ? [{ value: selectedSort(), label: `${current.colId.replace(/_/g, " ").replace(/([A-Z])/g, " $1").replace(/^./, (char) => char.toUpperCase())} · ${current.sort === "asc" ? "Ascending" : "Descending"}` }] : []),
-      ...view.config.sort,
+      ...list,
     ];
   });
   return <div class="catalog-toolbar" aria-label={`${view.config.label} controls`}>

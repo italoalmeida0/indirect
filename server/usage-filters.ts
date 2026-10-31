@@ -3,8 +3,21 @@ import { ApiError } from "./http";
 import { gridPage, type ColSpec, type parseGridQuery } from "./gridql";
 import { costAggFieldsSql, costRowFieldsSql, modelPricingJoins } from "./pricing";
 import { cachedUsageQuery } from "./usage-cache";
+import { usageRollupCoverage, USAGE_DAY, USAGE_HOUR, USAGE_MINUTE } from "./usage-rollup";
 
-const DAY = 86_400_000;
+const DAY = USAGE_DAY;
+
+/** Spans longer than this chart months instead of days.
+ *
+ * Reading a whole span from the daily rollup costs one row per key, user, day
+ * and model — 135,000 rows for a 90-day window of 500 users, 547,500 for a
+ * year — while the monthly rollup holds twelve rows per key and model for that
+ * same year. Measured on a 500-user fixture: a 365-day daily read exceeds the
+ * 5 s analytics job budget (the request fails with "Analytics is busy"), while
+ * the same window from months answers in a few hundred milliseconds. Four
+ * months is the point where a day-granular chart has already outgrown the
+ * 48-bucket grid anyway, so the switch costs no resolution a reader can use. */
+export const USAGE_MONTHLY_CHART_SPAN = 120 * DAY;
 const fields = ["model", "provider_id", "key_id", "proto", "upstream_model", "provider_key_id", "user_id"] as const;
 type Field = typeof fields[number];
 interface UsageSelection { include: string[]; exclude: string[] }
@@ -12,6 +25,31 @@ export interface UsageScope {
   from: number | null;
   to: number;
   selection: Partial<Record<Field, UsageSelection>>;
+}
+
+export interface UsageHistory {
+  requested: { from: number | null; to: number };
+  effective: { from: number | null; to: number };
+  rawFrom: number | null;
+  resolution: "millisecond" | "day";
+  adjusted: boolean;
+}
+
+/** Raw retention removes the information needed to split an archived UTC day.
+ * Include the whole boundary day and disclose the effective bounds. */
+export function resolveUsageScope(scope: UsageScope): { scope: UsageScope; history: UsageHistory } {
+  const rawFrom = usageRollupCoverage(db).raw_from;
+  const from = scope.from !== null && scope.from < rawFrom ? Math.floor(scope.from / DAY) * DAY : scope.from;
+  const to = scope.to < rawFrom ? Math.ceil(scope.to / DAY) * DAY : scope.to;
+  const archive = rawFrom > 0 && (from === null || from < rawFrom);
+  return {
+    scope: { ...scope, from, to },
+    history: {
+      requested: { from: scope.from, to: scope.to }, effective: { from, to },
+      rawFrom: rawFrom || null, resolution: archive ? "day" : "millisecond",
+      adjusted: from !== scope.from || to !== scope.to,
+    },
+  };
 }
 
 /** Explicit analytics queries coexist with the older days/hours API. Reject
@@ -77,15 +115,91 @@ export function usageScopeWhere(scope: UsageScope, alias: string, userId: string
   return { clauses, params };
 }
 
-/** Complete UTC months use monthly aggregates, boundary days use the daily
- * ledger, and only the two partial days read raw events. Segments never overlap. */
-export function usageSource(scope: UsageScope, userId: string | null, field?: Field, monthly = true) {
-  const start = scope.from === null ? null : Math.ceil(scope.from / DAY) * DAY;
-  const end = Math.floor(scope.to / DAY) * DAY;
+/** Dimensions a caller can ask instead of the full rollup key. Charts only
+ * need model attribution, and aggregating it inside each segment avoids
+ * materializing seven dimension columns for every rollup row. */
+export const USAGE_MODEL_DIMENSIONS = "model, upstream_model";
+
+/** Nonoverlapping months, days, hours, minutes and raw edge fragments. A
+ * rollup is used only after its coverage watermark; earlier rows fall back to
+ * raw events. The output bucket retains the time needed for short charts.
+ *
+ * `dimensions` narrows the projection to the attributes a caller groups by;
+ * the default keeps the whole rollup key so breakdowns and facets stay exact.
+ * The emitted segments depend only on the shape of the interval and those
+ * dimensions, so the union is deterministic for the numbers a query can
+ * change; readers memoize it and several charts in one request reuse it. */
+export function usageSource(scope: UsageScope, userId: string | null, field?: Field, monthly = true, unit = DAY, dimensions = field ?? "key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model") {
   const segments: string[] = [];
   const params: Array<string | number> = [];
-  const dimensions = field ?? "key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model";
   const metrics = field ? "" : "in_tok, cache_tok, out_tok, cost_in_nanos, cost_cache_nanos, cost_out_nanos, success_reqs, error_reqs, ";
+  const coverage = usageRollupCoverage(db);
+
+  const raw = (from: number, to: number) => {
+    if (from >= to) return;
+    const where = usageScopeWhere({ ...scope, from, to }, "e", userId);
+    const sums = field ? "" : "SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(cost_in_nanos) AS cost_in_nanos, SUM(cost_cache_nanos) AS cost_cache_nanos, SUM(cost_out_nanos) AS cost_out_nanos, SUM(status >= 200 AND status < 300) AS success_reqs, SUM(status < 200 OR status >= 300) AS error_reqs, ";
+    const bucket = field ? "0" : `CAST(ts / ${unit} AS INTEGER) * ${unit}`;
+    const date = field ? "''" : "date(ts / 1000, 'unixepoch')";
+    segments.push(`SELECT ${dimensions}, ${bucket} AS bucket, ${date} AS date, ${sums}COUNT(*) AS reqs FROM usage_events e WHERE ${where.clauses.join(" AND ")} GROUP BY ${dimensions}${field ? "" : ", bucket"}`);
+    params.push(...where.params);
+  };
+  // Rollup rows are pre-aggregated per key, minute and hour, so a narrowed
+  // projection must be summed again; only the time bucket is carried through.
+  const rollup = (kind: "hour" | "minute", from: number, to: number) => {
+    if (from >= to) return;
+    const where = usageScopeWhere(scope, "m", userId, false);
+    where.clauses.push("m.bucket >= ?", "m.bucket < ?");
+    where.params.push(from, to);
+    const bucket = field ? "0" : "bucket";
+    const date = field ? "''" : "date(bucket / 1000, 'unixepoch')";
+    if (!field && dimensions === "key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model") {
+      segments.push(`SELECT ${dimensions}, ${bucket} AS bucket, ${date} AS date, ${metrics}reqs FROM usage_${kind}_rollups m WHERE ${where.clauses.join(" AND ")}`);
+    } else {
+      const grouped = field && dimensions === field ? field : dimensions;
+      const sums = field ? "" : "SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(cost_in_nanos) AS cost_in_nanos, SUM(cost_cache_nanos) AS cost_cache_nanos, SUM(cost_out_nanos) AS cost_out_nanos, SUM(success_reqs) AS success_reqs, SUM(error_reqs) AS error_reqs, ";
+      segments.push(`SELECT ${grouped}, ${bucket} AS bucket, ${date} AS date, ${sums}SUM(reqs) AS reqs FROM usage_${kind}_rollups m WHERE ${where.clauses.join(" AND ")} GROUP BY ${grouped}${field ? "" : ", bucket"}`);
+    }
+    params.push(...where.params);
+  };
+  const minutes = (from: number, to: number) => {
+    const first = Math.ceil(Math.max(from, coverage.minute_from) / USAGE_MINUTE) * USAGE_MINUTE;
+    const last = Math.floor(to / USAGE_MINUTE) * USAGE_MINUTE;
+    if (first >= last) { raw(from, to); return; }
+    raw(from, first);
+    rollup("minute", first, last);
+    raw(last, to);
+  };
+  const hours = (from: number, to: number) => {
+    if (unit < USAGE_HOUR) { minutes(from, to); return; }
+    const first = Math.ceil(Math.max(from, coverage.hourly_from) / USAGE_HOUR) * USAGE_HOUR;
+    const last = Math.floor(to / USAGE_HOUR) * USAGE_HOUR;
+    if (first >= last) { minutes(from, to); return; }
+    minutes(from, first);
+    rollup("hour", first, last);
+    minutes(last, to);
+  };
+
+  if (unit < DAY) {
+    hours(scope.from!, scope.to);
+    return { sql: `(${segments.join(" UNION ALL ")})`, params };
+  }
+
+  // A narrowed projection re-aggregates month/day rows on their own key; the
+  // untrimmed projection keeps the existing straight read of the ledger.
+  const dayRollup = (table: string, dateExpr: string, dims: string, facet: Field | undefined, sums: string, where: ReturnType<typeof usageScopeWhere>) => {
+    const full = dims === "key_id, user_id, proto, provider_id, provider_key_id, model, upstream_model";
+    if (full && !facet) return `SELECT ${dims}, 0 AS bucket, ${dateExpr} AS date, ${sums}reqs FROM ${table} m WHERE ${where.clauses.join(" AND ")}`;
+    const metricsSums = facet ? "" : "SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(cost_in_nanos) AS cost_in_nanos, SUM(cost_cache_nanos) AS cost_cache_nanos, SUM(cost_out_nanos) AS cost_out_nanos, SUM(success_reqs) AS success_reqs, SUM(error_reqs) AS error_reqs, ";
+    // The period itself stays in the grouping: charts bucket by it, and a
+    // facet narrows the projection without needing any date at all.
+    const date = facet ? "'' AS date" : `${dateExpr} AS date`;
+    const group = facet ? dims : `${dims}, ${dateExpr}`;
+    return `SELECT ${dims}, 0 AS bucket, ${date}, ${metricsSums}SUM(reqs) AS reqs FROM ${table} m WHERE ${where.clauses.join(" AND ")} GROUP BY ${group}`;
+  };
+
+  const start = scope.from === null ? null : Math.ceil(scope.from / DAY) * DAY;
+  const end = Math.floor(scope.to / DAY) * DAY;
   if (start === null || start < end) {
     const monthStart = (ts: number) => { const d = new Date(ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1); };
     const nextMonth = (ts: number) => { const d = new Date(ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1); };
@@ -96,7 +210,7 @@ export function usageSource(scope: UsageScope, userId: string | null, field?: Fi
       const where = usageScopeWhere(scope, "m", userId, false);
       if (firstMonth !== null) { where.clauses.push("m.month >= ?"); where.params.push(new Date(firstMonth).toISOString().slice(0, 7)); }
       where.clauses.push("m.month < ?"); where.params.push(new Date(lastMonth).toISOString().slice(0, 7));
-      segments.push(`SELECT ${dimensions}, month || '-01' AS date, ${metrics}reqs FROM usage_model_provider_monthly m WHERE ${where.clauses.join(" AND ")}`);
+      segments.push(dayRollup("usage_model_provider_monthly", "month || '-01'", dimensions, field, metrics, where));
       params.push(...where.params);
     }
     const days: Array<[number | null, number]> = hasMonths
@@ -106,43 +220,86 @@ export function usageSource(scope: UsageScope, userId: string | null, field?: Fi
       const where = usageScopeWhere(scope, "m", userId, false);
       if (from !== null) { where.clauses.push("m.date >= ?"); where.params.push(new Date(from).toISOString().slice(0, 10)); }
       where.clauses.push("m.date < ?"); where.params.push(new Date(to).toISOString().slice(0, 10));
-      segments.push(`SELECT ${dimensions}, date, ${metrics}reqs FROM usage_model_provider_daily m WHERE ${where.clauses.join(" AND ")}`);
+      segments.push(dayRollup("usage_model_provider_daily", "date", dimensions, field, metrics, where));
       params.push(...where.params);
     }
   }
-  const intervals: Array<[number | null, number]> = start !== null && start >= end
-    ? [[scope.from, scope.to]]
-    : [...(scope.from !== null && start !== scope.from ? [[scope.from, start!] as [number, number]] : []), ...(end < scope.to ? [[end, scope.to] as [number, number]] : [])];
-  for (const [from, to] of intervals) {
-    const where = usageScopeWhere({ ...scope, from, to }, "e", userId);
-    const sums = field ? "" : "SUM(in_tok) AS in_tok, SUM(cache_tok) AS cache_tok, SUM(out_tok) AS out_tok, SUM(cost_in_nanos) AS cost_in_nanos, SUM(cost_cache_nanos) AS cost_cache_nanos, SUM(cost_out_nanos) AS cost_out_nanos, SUM(status >= 200 AND status < 300) AS success_reqs, SUM(status < 200 OR status >= 300) AS error_reqs, ";
-    segments.push(`SELECT ${dimensions}, date(ts / 1000, 'unixepoch') AS date, ${sums}COUNT(*) AS reqs FROM usage_events e WHERE ${where.clauses.join(" AND ")} GROUP BY ${dimensions}, date`);
-    params.push(...where.params);
+  if (start !== null && start >= end) hours(scope.from!, scope.to);
+  else {
+    if (scope.from !== null && start !== scope.from) hours(scope.from, start!);
+    if (end < scope.to) hours(end, scope.to);
   }
+  // An unbounded start with no complete day yields no daily segment at all.
+  if (!segments.length) hours(scope.to - DAY, scope.to);
   return { sql: `(${segments.join(" UNION ALL ")})`, params };
+}
+
+interface SourceMemoEntry { sql: string; params: Array<string | number>; expires: number }
+const sourceMemo = new Map<string, SourceMemoEntry>();
+const SOURCE_MEMO_TTL = 60_000;
+const SOURCE_MEMO_LIMIT = 128;
+
+/** Split one scope into priced/unpriced day, month, minute, hour and raw parts.
+ * Deriving the segments repeats the same calendar math for every chart of one
+ * request, so the result is memoized for a bounded number of intervals. The
+ * memo is keyed by the coverage watermark: a rollup rebuild or prune publishes
+ * new numbers and invalidates every entry. */
+export function memoizedUsageSource(scope: UsageScope, userId: string | null, field?: Field, monthly = true, unit = DAY) {
+  const coverage = usageRollupCoverage(db);
+  const key = JSON.stringify([field ?? null, monthly, unit, usageQuerySignature(scope, userId),
+    coverage.raw_from, coverage.hourly_from, coverage.minute_from]);
+  const hit = sourceMemo.get(key);
+  if (hit && hit.expires > Date.now()) return { sql: hit.sql, params: hit.params };
+  const source = usageSource(scope, userId, field, monthly, unit);
+  if (sourceMemo.size >= SOURCE_MEMO_LIMIT) {
+    const now = Date.now();
+    for (const [oldKey, entry] of sourceMemo) if (entry.expires <= now || sourceMemo.size >= SOURCE_MEMO_LIMIT) sourceMemo.delete(oldKey);
+  }
+  sourceMemo.set(key, { sql: source.sql, params: source.params, expires: Date.now() + SOURCE_MEMO_TTL });
+  return source;
+}
+
+/** Stable identity of the rows a scope can select; used for memoization only. */
+export function usageQuerySignature(scope: UsageScope, userId: string | null) {
+  return JSON.stringify([userId, scope.from, scope.to, Object.keys(scope.selection).sort().map((field) => {
+    const entry = scope.selection[field as Field]!;
+    return [field, [...entry.include].sort(), [...entry.exclude].sort()];
+  })]);
 }
 
 export function filteredUsageSeries(scope: UsageScope, userId: string | null) {
   return cachedUsageQuery("series", scope, userId, () => buildUsageSeries(scope, userId));
 }
 
+/** Bucket granularity of one interval. Archived ranges cannot be split below a
+ * UTC day, so they always chart days; otherwise the span picks the unit and
+ * long histories chart months. */
+export function usageSeriesGranularity(scope: UsageScope): "month" | "day" | "hour" | "minute" {
+  const span = scope.from === null ? Infinity : scope.to - scope.from;
+  const rawFrom = usageRollupCoverage(db).raw_from;
+  const archived = rawFrom > 0 && (scope.from === null || scope.from < rawFrom);
+  const unit = archived ? DAY : span <= USAGE_HOUR ? USAGE_MINUTE : span <= 3 * DAY ? USAGE_HOUR : DAY;
+  return span > USAGE_MONTHLY_CHART_SPAN ? "month" : unit === DAY ? "day" : unit === USAGE_MINUTE ? "minute" : "hour";
+}
+
 function buildUsageSeries(scope: UsageScope, userId: string | null) {
   const span = scope.from === null ? Infinity : scope.to - scope.from;
-  const monthly = span > 400 * DAY;
-  const unit = span <= 3_600_000 ? 60_000 : span <= 3 * DAY ? 3_600_000 : DAY;
+  const monthly = span > USAGE_MONTHLY_CHART_SPAN;
+  const rawFrom = usageRollupCoverage(db).raw_from;
+  const archived = rawFrom > 0 && (scope.from === null || scope.from < rawFrom);
+  const unit = archived ? DAY : span <= USAGE_HOUR ? USAGE_MINUTE : span <= 3 * DAY ? USAGE_HOUR : DAY;
   let rows: any[];
   if (unit < DAY) {
-    const where = usageScopeWhere(scope, "m", userId);
+    const source = usageSource(scope, userId, undefined, false, unit, USAGE_MODEL_DIMENSIONS);
     rows = db.prepare(`SELECT m.bucket, SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.cost_in_nanos) AS cost_in_nanos, SUM(m.cost_cache_nanos) AS cost_cache_nanos, SUM(m.cost_out_nanos) AS cost_out_nanos, SUM(m.reqs) AS reqs, ${costAggFieldsSql("m")}
-      FROM (SELECT CAST(e.ts / ${unit} AS INTEGER) * ${unit} AS bucket, e.model, e.upstream_model,
-        SUM(e.in_tok) AS in_tok, SUM(e.cache_tok) AS cache_tok, SUM(e.out_tok) AS out_tok, SUM(e.cost_in_nanos) AS cost_in_nanos, SUM(e.cost_cache_nanos) AS cost_cache_nanos, SUM(e.cost_out_nanos) AS cost_out_nanos, COUNT(*) AS reqs
-        FROM usage_events e WHERE ${where.clauses.map((clause) => clause.replaceAll("m.", "e.")).join(" AND ")}
-        GROUP BY bucket, e.model, e.upstream_model) m
-      ${modelPricingJoins("m")} GROUP BY m.bucket ORDER BY m.bucket`).all(...where.params);
+      FROM (SELECT CAST(s.bucket / ${unit} AS INTEGER) * ${unit} AS bucket, s.model, s.upstream_model,
+        SUM(s.in_tok) AS in_tok, SUM(s.cache_tok) AS cache_tok, SUM(s.out_tok) AS out_tok, SUM(s.cost_in_nanos) AS cost_in_nanos, SUM(s.cost_cache_nanos) AS cost_cache_nanos, SUM(s.cost_out_nanos) AS cost_out_nanos, SUM(s.reqs) AS reqs
+        FROM ${source.sql} s GROUP BY CAST(s.bucket / ${unit} AS INTEGER), s.model, s.upstream_model) m
+      ${modelPricingJoins("m")} GROUP BY m.bucket ORDER BY m.bucket`).all(...source.params);
   } else {
     // Daily charts must keep daily buckets; long windows can consume monthly
     // rows because their displayed buckets are months as well.
-    const source = usageSource(scope, userId, undefined, monthly);
+    const source = usageSource(scope, userId, undefined, monthly, DAY, USAGE_MODEL_DIMENSIONS);
     rows = db.prepare(`SELECT CAST(strftime('%s', m.date) AS INTEGER) * 1000 AS bucket,
       SUM(m.in_tok) AS in_tok, SUM(m.cache_tok) AS cache_tok, SUM(m.out_tok) AS out_tok, SUM(m.cost_in_nanos) AS cost_in_nanos, SUM(m.cost_cache_nanos) AS cost_cache_nanos, SUM(m.cost_out_nanos) AS cost_out_nanos, SUM(m.reqs) AS reqs, ${costAggFieldsSql("m")}
       FROM (SELECT ${monthly ? "substr(s.date, 1, 7) || '-01'" : "s.date"} AS date, s.model, s.upstream_model, SUM(s.in_tok) AS in_tok, SUM(s.cache_tok) AS cache_tok, SUM(s.out_tok) AS out_tok, SUM(s.cost_in_nanos) AS cost_in_nanos, SUM(s.cost_cache_nanos) AS cost_cache_nanos, SUM(s.cost_out_nanos) AS cost_out_nanos, SUM(s.reqs) AS reqs

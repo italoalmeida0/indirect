@@ -1,9 +1,27 @@
 import { requireAdmin, requireAuth } from "../auth";
 import { assignPlan, billingStatus, grantReset, listPlans, readUsd, redeemReset, requirePlan } from "../billing";
-import { db, audit } from "../db";
+import { db, audit, inImmediateTx } from "../db";
 import { randomToken } from "../crypto";
 import { ApiError, clientIp, ok, readJsonBody, v } from "../http";
 import { LIMITS } from "../config";
+import {
+  financialPolicyFor,
+  installationDefaults,
+  isBudgetPresentation,
+  projectBillingPayload,
+  setFinancialPolicy,
+  setInstallationDefaults,
+  storedPolicy,
+} from "../financial-policy";
+
+/** Optional boolean that also accepts 0/1 and null ("inherit the default"). */
+function readFlag(body: Record<string, unknown>, field: string): boolean | null {
+  const value = body[field];
+  if (value === null) return null;
+  if (typeof value === "boolean") return value;
+  if (value === 0 || value === 1) return value === 1;
+  throw new ApiError(400, `${field} must be a boolean`);
+}
 
 /** All administrative mutations and reset redemptions are audited in the
  * same transaction as the balance change. Browser identity never selects
@@ -11,14 +29,75 @@ import { LIMITS } from "../config";
 export async function handleBillingRoute(path: string, req: Request): Promise<Response | null> {
   if (path === "/api/billing" && req.method === "GET") {
     const { user } = await requireAuth(req);
-    return ok({ billing: billingStatus(user.id) }, req);
+    return ok({ billing: projectBillingPayload(billingStatus(user.id), financialPolicyFor(user)) }, req);
   }
   const redeem = path.match(/^\/api\/billing\/resets\/([a-f0-9]{24})\/redeem$/);
   if (redeem && req.method === "POST") {
     const { user } = await requireAuth(req);
     const body = await readJsonBody(req, LIMITS.apiBodyBytes);
     const requestId = v.str(body, "requestId", { min: 16, max: 128 })!;
-    return ok({ billing: redeemReset(user.id, redeem[1]!, requestId, clientIp(req)) }, req);
+    return ok(
+      { billing: projectBillingPayload(redeemReset(user.id, redeem[1]!, requestId, clientIp(req)), financialPolicyFor(user)) },
+      req,
+    );
+  }
+  // Installation financial policy: the default every user inherits unless an
+  // administrator overrides it for that user.
+  if (path === "/api/admin/financial-policy" && (req.method === "GET" || req.method === "PATCH")) {
+    const { user } = await requireAdmin(req);
+    if (req.method === "GET") {
+      return ok({ defaults: installationDefaults(), policy: financialPolicyFor(user) }, req);
+    }
+    const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+    const showModelPrices = "showModelPrices" in body ? readFlag(body, "showModelPrices") : undefined;
+    const rawPresentation = "budgetPresentation" in body ? body.budgetPresentation : undefined;
+    if (rawPresentation !== undefined && rawPresentation !== null && !isBudgetPresentation(rawPresentation)) {
+      throw new ApiError(400, "budgetPresentation must be usd, percent or hidden");
+    }
+    inImmediateTx(() => {
+      setInstallationDefaults(
+        {
+          ...(showModelPrices === undefined ? {} : { showModelPrices }),
+          ...(rawPresentation === undefined ? {} : { budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null }),
+        },
+        Date.now(),
+      );
+      audit("financial_policy.installation_updated", {
+        actorId: user.id,
+        ip: clientIp(req),
+        meta: { showModelPrices: showModelPrices ?? "unchanged", budgetPresentation: rawPresentation ?? "unchanged" },
+      });
+    });
+    return ok({ defaults: installationDefaults() }, req);
+  }
+  // Per-user override of the installation defaults: the second half of the
+  // visibility policy (an installation default plus an optional user override).
+  const policyMatch = path.match(/^\/api\/admin\/users\/([a-f0-9]{24})\/financial-policy$/);
+  if (policyMatch) {
+    const { user } = await requireAdmin(req);
+    const targetId = policyMatch[1]!;
+    if (!db.query("SELECT id FROM users WHERE id = ?").get(targetId)) throw new ApiError(404, "User not found", );
+    if (req.method === "GET") {
+      return ok({ policy: financialPolicyFor({ id: targetId, role: "user" }), stored: storedPolicy(targetId), defaults: installationDefaults() }, req);
+    }
+    if (req.method !== "PATCH") return null;
+    const body = await readJsonBody(req, LIMITS.apiBodyBytes);
+    const current = storedPolicy(targetId);
+    const showModelPrices = "showModelPrices" in body ? readFlag(body, "showModelPrices") : current.showModelPrices;
+    const rawPresentation = "budgetPresentation" in body ? body.budgetPresentation : current.budgetPresentation;
+    if (rawPresentation !== null && !isBudgetPresentation(rawPresentation)) {
+      throw new ApiError(400, "budgetPresentation must be usd, percent or hidden");
+    }
+    inImmediateTx(() => {
+      setFinancialPolicy(targetId, { showModelPrices, budgetPresentation: rawPresentation as "usd" | "percent" | "hidden" | null });
+      audit("financial_policy.user_updated", {
+        actorId: user.id,
+        target: targetId,
+        ip: clientIp(req),
+        meta: { showModelPrices, budgetPresentation: rawPresentation },
+      });
+    });
+    return ok({ policy: financialPolicyFor({ id: targetId, role: "user" }), stored: storedPolicy(targetId) }, req);
   }
   const planMatch = path.match(/^\/api\/admin\/plans(?:\/([a-f0-9]{24}))?$/);
   const userMatch = path.match(/^\/api\/admin\/users\/([a-f0-9]{24})\/(billing|resets)$/);
@@ -41,20 +120,20 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
       const session = "sessionEnabled" in body ? !!body.sessionEnabled : !!existing?.session_enabled;
       if (monthly === null && (weekly || session)) throw new ApiError(400, "Shorter windows require a monthly allowance");
       const planId = id ?? randomToken(12), now = Date.now();
-      db.transaction(() => {
+      inImmediateTx(() => {
         if (id) db.prepare("UPDATE billing_plans SET name = ?, monthly_nanos = ?, weekly_enabled = ?, session_enabled = ?, updated_at = ? WHERE id = ?").run(name, monthly, +weekly, +session, now, id);
         else db.prepare("INSERT INTO billing_plans(id, name, monthly_nanos, weekly_enabled, session_enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(planId, name, monthly, +weekly, +session, now, now);
         audit(id ? "billing.plan.updated" : "billing.plan.created", { actorId: user.id, target: planId, ip, meta: { name, monthlyUsd: monthly === null ? null : monthly / 1e9, weekly, session } });
-      }).immediate();
+      });
       return ok({ plans: listPlans() }, req);
     }
     if (id && req.method === "DELETE") {
-      db.transaction(() => {
+      inImmediateTx(() => {
         if (db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM user_billing WHERE plan_id = ?").get(id)!.n) throw new ApiError(409, "Move all members to another plan before deleting it");
         if (!db.query("SELECT id FROM billing_plans WHERE id = ?").get(id)) throw new ApiError(404, "Plan not found");
         db.prepare("DELETE FROM billing_plans WHERE id = ?").run(id);
         audit("billing.plan.deleted", { actorId: user.id, target: id, ip });
-      }).immediate();
+      });
       return ok({ deleted: true }, req);
     }
   }
@@ -67,7 +146,7 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
         const body = await readJsonBody(req, LIMITS.apiBodyBytes);
         if (!("planId" in body)) throw new ApiError(400, "planId is required");
         const plan = requirePlan(body.planId);
-        db.transaction(() => { assignPlan(id, plan); audit("billing.plan.assigned", { actorId: user.id, target: id, ip, meta: { planId: plan } }); }).immediate();
+        inImmediateTx(() => { assignPlan(id, plan); audit("billing.plan.assigned", { actorId: user.id, target: id, ip, meta: { planId: plan } }); });
         return ok({ billing: billingStatus(id) }, req);
       }
     } else if (req.method === "POST") {

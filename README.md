@@ -100,6 +100,7 @@ Highlights:
 | `ALLOWED_ORIGINS` | CORS allow-list for the dashboard API |
 | `LIMIT_USER_RPM`, `LIMIT_USER_CONCURRENCY`, `LIMIT_GLOBAL_CONCURRENCY` | administrator ceilings across a user's keys (defaults: 600/min, 32 concurrent, and 256 global) |
 | `SQLITE_BUSY_TIMEOUT_MS` | maximum synchronous wait for a SQLite lock (default 25 ms); a busy store causes a retryable failure rather than a prolonged event-loop stall |
+| `ANALYTICS_READERS`, `ANALYTICS_PENDING`, `ANALYTICS_DEADLINE_MS` | bounded analytics worker, queue and timeout settings; defaults use up to eight CPU-aware workers, 256 jobs and five seconds |
 | `LIMIT_*`, `DEFAULT_KEY_RPM`, `DEFAULT_KEY_CONCURRENCY` | per-IP and per-key rate-limit tuning; account ceilings remain in force even if a key owner raises their limit |
 
 ## Testing & benchmarks

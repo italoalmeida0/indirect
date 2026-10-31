@@ -4,6 +4,8 @@ import { isMainThread, workerData } from "node:worker_threads";
 
 import { DATA_DIR, LIMITS } from "./config";
 import { normalizePricing, pricingColumns } from "./pricing";
+import { currentRequestId, revalidateCurrentMutation } from "./request-context";
+import { isRetryableSqliteError } from "./sqlite-retry";
 
 /**
  * SQLite via bun:sqlite (built into the runtime, WAL mode). Migrations are
@@ -20,9 +22,7 @@ db.exec(`PRAGMA busy_timeout = ${LIMITS.sqliteBusyTimeoutMs}`);
 
 /** SQLite exposes extended busy/locked codes in some Bun versions. */
 export function isSqliteBusy(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const value = error as { code?: unknown; errno?: unknown };
-  return typeof value.code === "string" && (value.code.startsWith("SQLITE_BUSY") || value.code.startsWith("SQLITE_LOCKED")) || value.errno === 5 || value.errno === 6;
+  return isRetryableSqliteError(error);
 }
 
 type Migration = { name: string; up: string | (() => void) };
@@ -771,9 +771,287 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    name: "027_usage_subday_rollups",
+    up: () => {
+      for (const kind of ["hour", "minute"]) {
+        db.exec(`CREATE TABLE usage_${kind}_rollups (
+          bucket INTEGER NOT NULL, key_id TEXT NOT NULL, user_id TEXT NOT NULL,
+          proto TEXT NOT NULL, provider_id TEXT NOT NULL DEFAULT '', provider_key_id TEXT NOT NULL DEFAULT '',
+          model TEXT NOT NULL, upstream_model TEXT NOT NULL DEFAULT '',
+          in_tok INTEGER NOT NULL, cache_tok INTEGER NOT NULL, out_tok INTEGER NOT NULL,
+          reqs INTEGER NOT NULL, success_reqs INTEGER NOT NULL, error_reqs INTEGER NOT NULL,
+          cost_in_nanos INTEGER, cost_cache_nanos INTEGER, cost_out_nanos INTEGER,
+          PRIMARY KEY(bucket, key_id, proto, provider_id, provider_key_id, model, upstream_model)
+        ) WITHOUT ROWID;
+        CREATE INDEX idx_usage_${kind}_user ON usage_${kind}_rollups(user_id, bucket, reqs);
+        CREATE INDEX idx_usage_${kind}_bucket ON usage_${kind}_rollups(bucket, user_id, reqs);`);
+      }
+      // Older rows are not assumed to have rollups. New traffic is covered
+      // from the next complete bucket; an offline rebuild can extend coverage.
+      db.exec(`CREATE TABLE usage_rollup_coverage (
+        id INTEGER PRIMARY KEY CHECK(id = 1), raw_from INTEGER NOT NULL,
+        hourly_from INTEGER NOT NULL, minute_from INTEGER NOT NULL
+      );
+      INSERT INTO usage_rollup_coverage VALUES (1, 0,
+        (CAST(unixepoch() * 1000 / 3600000 AS INTEGER) + 1) * 3600000,
+        (CAST(unixepoch() * 1000 / 60000 AS INTEGER) + 1) * 60000);`);
+    },
+  },
+  {
+    name: "028_usage_rollup_prune_floors",
+    up: `ALTER TABLE usage_rollup_coverage ADD COLUMN hour_floor INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE usage_rollup_coverage ADD COLUMN minute_floor INTEGER NOT NULL DEFAULT 0;`,
+  },
+  {
+    name: "029_financial_policy",
+    // Per-user override of the installation's financial visibility defaults.
+    // A NULL column means "inherit"; a row with both columns NULL is deleted
+    // rather than stored, so the table only ever holds real overrides.
+    // Enforced server-side: hiding a dashboard component would still ship the
+    // amounts in the API response.
+    up: `
+      CREATE TABLE user_financial_policy (
+        user_id             TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        show_model_prices   INTEGER CHECK (show_model_prices IN (0, 1)),
+        budget_presentation TEXT CHECK (budget_presentation IN ('usd', 'percent', 'hidden')),
+        updated_at          INTEGER NOT NULL
+      );
+      CREATE TABLE installation_policy (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `,
+  },
+  {
+    name: "030_request_correlation",
+    // The correlation id ties an audit row, a usage event and the response
+    // header (X-Request-Id) together. Existing rows keep NULL: they predate
+    // the field and inventing an id for them would be a lie.
+    up: `
+      ALTER TABLE audit_log ADD COLUMN request_id TEXT;
+      ALTER TABLE usage_events ADD COLUMN request_id TEXT NOT NULL DEFAULT '';
+      CREATE INDEX idx_audit_request ON audit_log(request_id) WHERE request_id IS NOT NULL;
+      CREATE INDEX idx_usage_request ON usage_events(request_id) WHERE request_id != '';
+    `,
+  },
+  {
+    name: "031_model_access_policy",
+    // Named allow-lists of model ids. `kind = 'default'` is the installation
+    // fallback; `kind = 'project'` binds to a project. An empty allow-list
+    // means "no restriction", so creating a policy cannot black out a working
+    // installation before the administrator fills it in.
+    up: `
+      CREATE TABLE model_policies (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        kind       TEXT NOT NULL CHECK (kind IN ('default','project')),
+        project_id TEXT,
+        enabled    INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_model_policies_project ON model_policies(project_id);
+      CREATE TABLE model_policy_models (
+        policy_id TEXT NOT NULL REFERENCES model_policies(id) ON DELETE CASCADE,
+        model_id  TEXT NOT NULL,
+        PRIMARY KEY (policy_id, model_id)
+      ) WITHOUT ROWID;
+    `,
+  },
+  {
+    name: "032_reservation_request_correlation",
+    // Reservation primary keys must always be fresh internal identifiers so a
+    // client retrying or sharing X-Request-Id across calls never collides on
+    // billing_reservations.id; request_id remains indexed for correlation.
+    up: `
+      ALTER TABLE billing_reservations ADD COLUMN request_id TEXT;
+      CREATE INDEX idx_billing_reservations_request ON billing_reservations(request_id) WHERE request_id IS NOT NULL;
+    `,
+  },
+  {
+    name: "033_maintenance_indexes",
+    // Keep periodic session and password-token cleanup O(batch) rather than
+    // scanning the full table inside a write transaction.
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_sessions_abs_expires ON sessions(abs_expires_at);
+      CREATE INDEX IF NOT EXISTS idx_sessions_active_expires ON sessions(expires_at) WHERE revoked = 0;
+      CREATE INDEX IF NOT EXISTS idx_password_tokens_expires ON password_tokens(expires_at);
+    `,
+  },
+  {
+    name: "034_financial_projects",
+    // users.role has an established CHECK and many foreign keys. Store the
+    // delegated role separately rather than rebuilding that parent table.
+    // Historical attribution deliberately has no FK: deleting a user/key or
+    // archiving/reorganizing a financial scope must not rewrite the ledger.
+    up: `
+      ALTER TABLE users ADD COLUMN enterprise_role TEXT CHECK(enterprise_role IS NULL OR enterprise_role = 'project_manager');
+      CREATE TABLE financial_projects (
+        id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('project','cost_center')),
+        code TEXT NOT NULL UNIQUE, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+        cost_center_id TEXT REFERENCES financial_projects(id) ON DELETE RESTRICT,
+        responsible_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived')),
+        monthly_nanos INTEGER CHECK(monthly_nanos IS NULL OR monthly_nanos >= 0),
+        total_nanos INTEGER CHECK(total_nanos IS NULL OR total_nanos >= 0),
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        CHECK(kind = 'project' OR cost_center_id IS NULL)
+      );
+      CREATE INDEX idx_financial_projects_center ON financial_projects(cost_center_id);
+      CREATE TABLE project_members (
+        project_id TEXT NOT NULL REFERENCES financial_projects(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK(role IN ('member','manager')), created_at INTEGER NOT NULL,
+        PRIMARY KEY(project_id, user_id)
+      ) WITHOUT ROWID;
+      CREATE INDEX idx_project_members_user ON project_members(user_id, project_id);
+      ALTER TABLE api_keys ADD COLUMN project_id TEXT REFERENCES financial_projects(id) ON DELETE RESTRICT;
+      CREATE INDEX idx_api_keys_project ON api_keys(project_id);
+      ALTER TABLE usage_events ADD COLUMN project_id TEXT;
+      ALTER TABLE usage_events ADD COLUMN cost_center_id TEXT;
+      ALTER TABLE billing_reservations ADD COLUMN project_id TEXT;
+      ALTER TABLE billing_reservations ADD COLUMN cost_center_id TEXT;
+      CREATE TABLE usage_financial_daily (
+        project_id TEXT NOT NULL, cost_center_id TEXT NOT NULL, date TEXT NOT NULL,
+        key_id TEXT NOT NULL, user_id TEXT NOT NULL, model TEXT NOT NULL,
+        in_tok INTEGER NOT NULL, cache_tok INTEGER NOT NULL, out_tok INTEGER NOT NULL,
+        reqs INTEGER NOT NULL, success_reqs INTEGER NOT NULL, error_reqs INTEGER NOT NULL,
+        cost_in_nanos INTEGER NOT NULL, cost_cache_nanos INTEGER NOT NULL, cost_out_nanos INTEGER NOT NULL,
+        PRIMARY KEY(project_id, cost_center_id, date, key_id, user_id, model)
+      ) WITHOUT ROWID;
+      CREATE INDEX idx_usage_financial_daily_project_date ON usage_financial_daily(project_id, date);
+      CREATE INDEX idx_usage_financial_daily_center ON usage_financial_daily(cost_center_id, date);
+      CREATE TABLE usage_financial_monthly (
+        project_id TEXT NOT NULL, cost_center_id TEXT NOT NULL, month TEXT NOT NULL,
+        key_id TEXT NOT NULL, user_id TEXT NOT NULL, model TEXT NOT NULL,
+        in_tok INTEGER NOT NULL, cache_tok INTEGER NOT NULL, out_tok INTEGER NOT NULL,
+        reqs INTEGER NOT NULL, success_reqs INTEGER NOT NULL, error_reqs INTEGER NOT NULL,
+        cost_in_nanos INTEGER NOT NULL, cost_cache_nanos INTEGER NOT NULL, cost_out_nanos INTEGER NOT NULL,
+        PRIMARY KEY(project_id, cost_center_id, month, key_id, user_id, model)
+      ) WITHOUT ROWID;
+      CREATE INDEX idx_usage_financial_monthly_project_month ON usage_financial_monthly(project_id, month);
+      CREATE INDEX idx_usage_financial_monthly_center ON usage_financial_monthly(cost_center_id, month);
+      -- A removed allow-list entry remains a tombstone. Otherwise deleting the
+      -- last allowed model would turn an opted-in default into unrestricted
+      -- access, or re-creating its name could silently restore a stale grant.
+      ALTER TABLE model_policy_models ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1));
+      UPDATE model_policy_models SET deleted=1 WHERE NOT EXISTS (SELECT 1 FROM models WHERE models.id = model_policy_models.model_id);
+      CREATE TRIGGER model_policy_model_deleted AFTER DELETE ON models BEGIN
+        UPDATE model_policy_models SET deleted=1 WHERE model_id=OLD.id;
+      END;
+      CREATE TRIGGER model_policy_model_renamed AFTER UPDATE OF id ON models WHEN OLD.id <> NEW.id BEGIN
+        DELETE FROM model_policy_models WHERE model_id=NEW.id AND policy_id IN (SELECT policy_id FROM model_policy_models WHERE model_id=OLD.id);
+        UPDATE model_policy_models SET model_id=NEW.id WHERE model_id=OLD.id;
+      END;
+    `,
+  },
+  {
+    name: "035_corporate_identity_and_import",
+    up: `
+      CREATE TABLE corporate_identities (issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at INTEGER NOT NULL, PRIMARY KEY(issuer,subject), UNIQUE(issuer,user_id));
+      CREATE TABLE corporate_account_policy (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, managed INTEGER NOT NULL DEFAULT 0 CHECK(managed IN(0,1)), sso_exempt INTEGER NOT NULL DEFAULT 0 CHECK(sso_exempt IN(0,1)));
+      ALTER TABLE sessions ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'local';
+      ALTER TABLE sessions ADD COLUMN mfa_verified INTEGER NOT NULL DEFAULT 0 CHECK(mfa_verified IN(0,1));
+      ALTER TABLE sessions ADD COLUMN auth_policy_version INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE oidc_flows (state_hash TEXT PRIMARY KEY, nonce TEXT NOT NULL, verifier TEXT NOT NULL, cookie_hash TEXT NOT NULL, redirect_path TEXT NOT NULL, link_user_id TEXT REFERENCES users(id) ON DELETE CASCADE, link_session_jti TEXT, config_version INTEGER NOT NULL, expires_at INTEGER NOT NULL);
+      CREATE INDEX idx_oidc_flows_expiry ON oidc_flows(expires_at);
+      CREATE TABLE auth_recovery_codes(user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, code_hash TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY(user_id,code_hash));
+      CREATE TABLE user_import_batches(id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, input_hash TEXT NOT NULL, rows_json TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, committed_at INTEGER, result_json TEXT);
+      CREATE INDEX idx_user_import_expiry ON user_import_batches(expires_at);
+      CREATE TABLE auth_challenges (id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,auth_method TEXT NOT NULL,expires_at INTEGER NOT NULL);
+      CREATE INDEX idx_auth_challenges_expiry ON auth_challenges(expires_at);
+      CREATE TABLE auth_mfa_uses(digest TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+      CREATE INDEX idx_auth_mfa_uses_expiry ON auth_mfa_uses(expires_at);
+    `,
+  },
+  {
+    name: "036_durable_usage_outbox",
+    up: `
+      ALTER TABLE billing_reservations ADD COLUMN request_proto TEXT CHECK(request_proto IS NULL OR request_proto IN ('openai','anthropic','responses'));
+      ALTER TABLE billing_reservations ADD COLUMN request_model TEXT;
+      ALTER TABLE billing_reservations ADD COLUMN request_stream INTEGER NOT NULL DEFAULT 0 CHECK(request_stream IN (0,1));
+      CREATE INDEX idx_billing_pending_created ON billing_reservations(created_at) WHERE state = 'pending';
+      CREATE TABLE usage_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE,
+        ts INTEGER NOT NULL, payload TEXT NOT NULL
+      );
+      CREATE INDEX idx_usage_outbox_ts ON usage_outbox(ts);
+      CREATE TABLE usage_outbox_pending (id INTEGER PRIMARY KEY CHECK(id=1), pending INTEGER NOT NULL CHECK(pending>=0));
+      INSERT INTO usage_outbox_pending(id,pending) VALUES(1,0);
+      CREATE TRIGGER usage_outbox_count_insert AFTER INSERT ON usage_outbox BEGIN
+        UPDATE usage_outbox_pending SET pending=pending+1 WHERE id=1;
+      END;
+      CREATE TRIGGER usage_outbox_count_delete AFTER DELETE ON usage_outbox BEGIN
+        UPDATE usage_outbox_pending SET pending=pending-1 WHERE id=1;
+      END;
+    `,
+  },
+  {
+    name: "037_authenticator_step_up_and_import_identity_context",
+    up: `
+      ALTER TABLE sessions ADD COLUMN recovery_verified_at INTEGER;
+      CREATE TABLE mfa_enrollments (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        session_jti TEXT NOT NULL REFERENCES sessions(jti) ON DELETE CASCADE,
+        pending_hash TEXT NOT NULL, credential_fingerprint TEXT NOT NULL,
+        policy_version INTEGER NOT NULL, expires_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_mfa_enrollments_expiry ON mfa_enrollments(expires_at);
+      ALTER TABLE user_import_batches ADD COLUMN auth_context TEXT NOT NULL DEFAULT '';
+    `,
+  },
+  {
+    name: "038_ambiguous_attempt_reservations",
+    // Keep one client-request hold while reserving an additional unit for
+    // each retry after an upstream attempt with unknown billing outcome.
+    up: `
+      ALTER TABLE billing_reservations ADD COLUMN unit_nanos INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE billing_reservations ADD COLUMN uncertain_nanos INTEGER NOT NULL DEFAULT 0;
+      UPDATE billing_reservations SET unit_nanos=amount_nanos WHERE state='pending';
+    `,
+  },
 ];
 
-export function migrate(): void {
+/**
+ * Boot must survive a database that another process is holding.
+ *
+ * `migrate()` runs at module load, before the HTTP server exists, so an
+ * escaping SQLITE_BUSY is an uncaught exception and Bun exits the process with
+ * code 1. The reported failure was exactly that: an operator's external write
+ * transaction held the database, `PRAGMA optimize` inside migrate() hit the
+ * lock, and the gateway died instead of waiting for the writer to finish.
+ *
+ * The boot path therefore retries transient contention with a much longer
+ * budget than a periodic sweep (an operator may hold a transaction for
+ * minutes), and treats the planner-statistics refresh as best effort: it is an
+ * optimization, never a prerequisite for serving.
+ */
+function migrateWithRetry(): void {
+  const deadline = Date.now() + BOOT_LOCK_DEADLINE_MS;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      applyMigrations();
+      return;
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const delay = Math.min(2_000, 50 * 2 ** (attempt - 1));
+      if (Date.now() + delay > deadline) {
+        console.error(
+          `[DB] database stayed locked for ${Math.round(BOOT_LOCK_DEADLINE_MS / 1000)}s during boot.` +
+          " Another process (backup tool, sqlite3 session, second gateway) still holds a write transaction." +
+          " Release it and restart, or raise SQLITE_BOOT_LOCK_TIMEOUT_MS.",
+        );
+        throw error;
+      }
+      if (attempt === 1) console.warn("[DB] database is busy at boot; waiting for the other writer to finish");
+      Bun.sleepSync(delay);
+    }
+  }
+}
+
+function applyMigrations(): void {
   const row = Object.values(
     db.query<Record<string, number>, []>("PRAGMA user_version").get() ?? {},
   );
@@ -790,8 +1068,55 @@ export function migrate(): void {
   // Give the query planner table statistics. Without ANALYZE data, SQLite
   // picks bad plans once usage_events grows (measured: the admin 24h per-user
   // aggregate went 287ms -> 0.5ms at 3.65M rows only because of this).
-  // Incremental: cheap no-op once stats exist.
-  db.exec("PRAGMA optimize");
+  // Incremental: cheap no-op once stats exist — and optional, so a busy
+  // database degrades the next queries slightly instead of failing boot.
+  //
+  // Boot must never run an unbounded ANALYZE. On a database that grew outside
+  // this gateway (a restored copy, a seeded fixture, a migration from another
+  // tool) `sqlite_stat1` is empty and `PRAGMA optimize` analyzes every index of
+  // every table: measured 100M usage_events = 13.7M pages, minutes of random
+  // I/O before the HTTP server exists. When statistics already exist the call
+  // is incremental and stays; when they do not and the file is large it is
+  // skipped with the exact offline command, because a gateway that grows its
+  // own database always has statistics by the time it is this big.
+  try {
+    const pages = (db.query<{ page_count: number }, []>("PRAGMA page_count").get()?.page_count) ?? 0;
+    if (!hasPlannerStatistics() && pages > STATS_BOOT_PAGE_BUDGET) {
+      console.warn(
+        `[DB] planner statistics missing on a ${pages}-page database; skipping the boot ANALYZE. ` +
+        `Run "bun scripts/analyze-gateway.ts" while the gateway is stopped, then restart.`,
+      );
+    } else {
+      db.exec("PRAGMA analysis_limit = 1000");
+      db.exec("PRAGMA optimize");
+    }
+  } catch (error) {
+    if (!isSqliteBusy(error)) throw error;
+    console.warn("[DB] PRAGMA optimize skipped: database is busy");
+  }
+}
+
+/** True when the planner already has statistics to work from. */
+function hasPlannerStatistics(): boolean {
+  try {
+    return (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM sqlite_stat1").get()?.n ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Above this size (4 KiB pages ≈ 8 GB) a database without planner statistics
+ * is analyzed offline instead of inside boot; see the stats block in migrate(). */
+const STATS_BOOT_PAGE_BUDGET = 2_000_000;
+
+/** How long boot waits for another process to release the database. */
+const BOOT_LOCK_DEADLINE_MS = (() => {
+  const raw = Number(process.env.SQLITE_BOOT_LOCK_TIMEOUT_MS ?? 120_000);
+  return Number.isFinite(raw) && raw > 0 ? raw : 120_000;
+})();
+
+export function migrate(): void {
+  migrateWithRetry();
 }
 
 if (!usageReader) migrate();
@@ -803,6 +1128,7 @@ export interface UserRow {
   email: string;
   name: string;
   role: "admin" | "user";
+  enterprise_role?: "project_manager" | null;
   password_hash: string | null;
   google_id: string | null;
   totp_secret: string | null;
@@ -825,6 +1151,10 @@ export interface SessionRow {
   ua: string | null;
   label: string | null;
   family: string | null;
+  auth_method: string;
+  mfa_verified: number;
+  auth_policy_version: number;
+  recovery_verified_at: number | null;
 }
 
 export type AuthStyle = "bearer" | "x-api-key";
@@ -916,6 +1246,7 @@ export interface ApiKeyRow {
   last_used_at: number | null;
   last_used_ip: string | null;
   token_enc: string | null;
+  project_id?: string | null;
 }
 
 /** One upstream API key of a provider (failover chain, ordered by priority).
@@ -982,22 +1313,81 @@ export const stmts = {
   ),
 };
 
+/**
+ * Execute `fn` inside a `BEGIN IMMEDIATE` transaction at the outer boundary,
+ * or inside a nested SQLite `SAVEPOINT` when already inside a transaction.
+ */
+export function inImmediateTx<T>(fn: () => T): T {
+  if (db.inTransaction) return db.transaction(fn)();
+  return db.transaction(() => {
+    // Authentication performed before an awaited body/network call can be stale.
+    // Check once after acquiring the writer; nested changes may revoke themselves.
+    revalidateCurrentMutation();
+    return fn();
+  }).immediate();
+}
+
+const insertAuditStmt = db.prepare(
+  "INSERT INTO audit_log (ts, actor_id, action, target, meta, ip, request_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+);
+
 /** In-process dashboard cache invalidation for audited metadata mutations. */
 export let auditRevision = 0;
 
 export function audit(
   action: string,
-  opts: { actorId?: string | null; target?: string | null; meta?: unknown; ip?: string | null } = {},
+  opts: { actorId?: string | null; target?: string | null; meta?: unknown; ip?: string | null; requestId?: string | null } = {},
 ): void {
-  db.prepare(
-    "INSERT INTO audit_log (ts, actor_id, action, target, meta, ip) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(
+  // The correlation id is inherited from the request scope when the caller does
+  // not pass one, so every audit row written while serving a request can be
+  // matched to the response header the client saw.
+  const requestId = opts.requestId ?? currentRequestId();
+  insertAuditStmt.run(
     Date.now(),
     opts.actorId ?? null,
     action,
     opts.target ?? null,
     opts.meta === undefined ? null : JSON.stringify(opts.meta),
     opts.ip ?? null,
+    requestId || null,
   );
   auditRevision++;
+}
+
+export interface WalCheckpointStatus {
+  runs: number;
+  busyRuns: number;
+  lastRunAt: number | null;
+  lastLogFrames: number;
+  lastCheckpointedFrames: number;
+}
+
+const walStats: WalCheckpointStatus = {
+  runs: 0,
+  busyRuns: 0,
+  lastRunAt: null,
+  lastLogFrames: 0,
+  lastCheckpointedFrames: 0,
+};
+
+/**
+ * Passive WAL checkpoint: transfers frames that no active reader depends on
+ * back into gateway.db without blocking concurrent readers or writers.
+ */
+export function runPassiveWalCheckpoint(targetDb: Database = db): WalCheckpointStatus {
+  const row = targetDb
+    .query<{ busy: number; log: number; checkpointed: number }, []>("PRAGMA wal_checkpoint(PASSIVE)")
+    .get();
+  walStats.runs++;
+  walStats.lastRunAt = Date.now();
+  if (row) {
+    if (row.busy > 0) walStats.busyRuns++;
+    walStats.lastLogFrames = row.log;
+    walStats.lastCheckpointedFrames = row.checkpointed;
+  }
+  return { ...walStats };
+}
+
+export function walCheckpointStatus(): WalCheckpointStatus {
+  return { ...walStats };
 }

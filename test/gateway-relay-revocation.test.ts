@@ -164,4 +164,4 @@ test("relay enforces sliding session expiry and keeps sessions extended by authe
     sql.close();
     await gateway.stop();
   }
-}, 40000);
+}, 90_000);

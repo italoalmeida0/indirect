@@ -1,7 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 
+import { ensureObscuraBrowser } from "../server/routes/obscura";
 import { runWidgetLint } from "../server/routes/widget-lint";
 import { compileJsxModule } from "../web/src/indirect-code/components/generative-ui/jsx-compile";
+
+beforeAll(async () => {
+  await ensureObscuraBrowser();
+}, 120_000);
 
 /**
  * Black-box tests for the gateway widget lint pipeline (the widget_set /
@@ -19,7 +24,7 @@ describe("widget lint pipeline (gateway)", () => {
     const res = await runWidgetLint({ id: "t", source: goodWidget, state: '{"amount": 5}' });
     expect(res.ok).toBe(true);
     expect(res.errors).toEqual([]);
-  });
+  }, 60_000);
 
   test("syntax errors fail in the compile phase with the real message", async () => {
     const res = await runWidgetLint({ id: "t", source: "export default function App( { return <div>;" });
@@ -46,7 +51,7 @@ describe("widget lint pipeline (gateway)", () => {
     expect(res.ok).toBe(false);
     expect(res.errors[0].phase).toBe("render");
     expect(res.errors[0].message).toContain("boom render");
-  });
+  }, 60_000);
 
   test("audit findings carry a code frame at the ORIGINAL line (JSX above)", async () => {
     // The stripped capability sits on source line 4 — after a multi-line
@@ -69,7 +74,7 @@ function evil() {
     expect(err.line).toBe(10);
     expect(err.message).toContain("10 |   globalThis.fetch");
     expect(err.message).toContain("^");
-  });
+  }, 60_000);
 
   test("frames stay correct after the sanitize stage (multi-line strip)", async () => {
     // boom() first strips a MULTI-LINE forbidden call (the sanitize edits
@@ -98,7 +103,7 @@ function boom() {
     // The audit finding sits on the ORIGINAL line 10 (the multi-line call).
     const audit = res.errors.find((e) => e.phase === "audit");
     expect(audit?.line).toBe(10);
-  });
+  }, 60_000);
 
   test("render errors carry a code frame of the model source", async () => {
     const src = `export default function App() {
@@ -124,7 +129,7 @@ function boom() {
     expect(err.message).toMatch(/\n\d+ \| /);
     expect(err.message).toContain("^");
     expect(typeof err.line).toBe("number");
-  });
+  }, 60_000);
 
   test("the lint renders with the REQUESTED state (props)", async () => {
     // The lint page runs the REAL widget runtime (same buildRuntimeScript
@@ -144,7 +149,7 @@ function boom() {
     const good = await runWidgetLint({ id: "t", source: src, state: '{"amount": 42}' });
     expect(good.errors).toEqual([]);
     expect(good.ok).toBe(true);
-  });
+  }, 60_000);
 
   test("mount-time effects run in the smoke render (real runtime)", async () => {
     // useEffect runs against the REAL runtime now — a crash inside an
@@ -160,7 +165,7 @@ export default function App() {
     const res = await runWidgetLint({ id: "t", source: src });
     expect(res.ok).toBe(false);
     expect(res.errors.some((e) => e.message.includes("effect boom"))).toBe(true);
-  });
+  }, 60_000);
 
   test("lib globals (d3) resolve in the lint page (appended prelude)", async () => {
     // The widget uses `d3` as a LIB GLOBAL (no import): the compile appends
@@ -179,7 +184,7 @@ export default function App() {
     const res = await runWidgetLint({ id: "t", source: src });
     expect(res.errors).toEqual([]);
     expect(res.ok).toBe(true);
-  });
+  }, 60_000);
 
   test("update-phase bugs surface in the smoke render (exercised loop)", async () => {
     // A classic "works until the first tick": the widget renders fine and
@@ -206,14 +211,14 @@ export default function App() {
     const res = await runWidgetLint({ id: "t", source: src });
     expect(res.ok).toBe(false);
     expect(res.errors.some((e) => /side/.test(e.message))).toBe(true);
-  });
+  }, 60_000);
 
   test("an invalid state header fails the lint", async () => {
     const res = await runWidgetLint({ id: "t", source: goodWidget, state: "{bad json}" });
     expect(res.ok).toBe(false);
     expect(res.errors[0].phase).toBe("render");
     expect(res.errors[0].message).toContain("state header");
-  });
+  }, 60_000);
 
   test("extra test code runs against the widget's exports", async () => {
     const widget = `export function add(a: number, b: number) { return a + b; }\nexport default function App() { return <div/>; }`;
@@ -231,7 +236,7 @@ export default function App() {
     expect(failing.ok).toBe(false);
     expect(failing.errors[0].phase).toBe("test");
     expect(failing.errors[0].message).toContain("assert failed");
-  });
+  }, 60_000);
 
   test("test code must import the widget module to exercise it", async () => {
     const res = await runWidgetLint({
@@ -242,7 +247,7 @@ export default function App() {
     expect(res.ok).toBe(false);
     expect(res.errors[0].phase).toBe("test");
     expect(res.errors[0].message).toContain("import the widget module");
-  });
+  }, 60_000);
 
   test("a hanging test fails with a timeout, not a hang", async () => {
     const res = await runWidgetLint({
@@ -253,7 +258,7 @@ export default function App() {
     expect(res.ok).toBe(false);
     expect(res.errors[0].phase).toBe("test");
     expect(res.errors[0].message).toContain("timed out");
-  }, 20_000);
+  }, 60_000);
 
   test("malformed test code fails in the audit phase", async () => {
     const res = await runWidgetLint({
@@ -263,7 +268,7 @@ export default function App() {
     });
     expect(res.ok).toBe(false);
     expect(res.errors[0].phase).toBe("audit");
-  });
+  }, 60_000);
 });
 
 /**

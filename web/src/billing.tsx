@@ -1,19 +1,133 @@
 import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
-import { api, type AdminUserDto, type BillingDto, type BillingPlanDto } from "./api";
+import {
+  api,
+  policyRevision,
+  type AdminUserDto,
+  type BillingDto,
+  type BillingPlanDto,
+  type BudgetPresentation,
+  type BudgetWindowDto,
+  type FinancialPolicyDto,
+  type HiddenBudgetWindowDto,
+  type PercentBudgetWindowDto,
+  type ProjectedBillingPlanDto,
+  type UsdBudgetWindowDto,
+} from "./api";
 import { Badge, Btn, Card, Icon, Icons, Modal, ModalField, Select, fmtCost, fmtDate, toast } from "./ui";
 
 const windowName = (kind: string) => ({ monthly: "Monthly allowance", weekly: "Weekly allowance", session: "5-hour session", both: "Weekly + 5-hour" }[kind] ?? kind);
+const fmtPct = (value: number) => `${Number(value.toFixed(1))}%`;
+
+function isUsdWindow(w: BudgetWindowDto): w is UsdBudgetWindowDto {
+  return w.presentation !== "percent" && w.presentation !== "hidden" && "spentUsd" in w;
+}
+
+function isPercentWindow(w: BudgetWindowDto): w is PercentBudgetWindowDto {
+  return w.presentation === "percent" || ("usedPercent" in w && !("spentUsd" in w));
+}
+
+function asHiddenWindow(w: BudgetWindowDto): HiddenBudgetWindowDto {
+  return w as HiddenBudgetWindowDto;
+}
+
+function describePlanAllowance(
+  plan: BillingPlanDto | ProjectedBillingPlanDto | null,
+  policy?: FinancialPolicyDto,
+): string {
+  if (!plan) return "Your account has no spending ceiling.";
+  if ("monthlyUsd" in plan && plan.monthlyUsd !== undefined) {
+    return plan.monthlyUsd !== null ? `${fmtCost(plan.monthlyUsd)} monthly allowance` : "Your account has no spending ceiling.";
+  }
+  const projected = plan as ProjectedBillingPlanDto;
+  if (!projected.limitConfigured) return "Your account has no spending ceiling.";
+  const mode: BudgetPresentation = policy?.budgetPresentation ?? "hidden";
+  return mode === "percent" ? "Percentage-tracked monthly allowance" : "Managed monthly allowance";
+}
 
 export function BillingSummary(props: { billing: BillingDto; compact?: boolean }) {
   return <div class={`billing-windows ${props.compact ? "is-compact" : ""}`}>
     <For each={props.billing.windows}>{(window) => {
-      const percent = () => window.limitUsd === null ? 0 : Math.min(100, window.limitUsd > 0 ? (window.spentUsd + window.reservedUsd) / window.limitUsd * 100 : 100);
+      const renewalText = () =>
+        window.kind === "session" && !props.billing.sessionStarted
+          ? "Starts with your next request"
+          : `Renews ${fmtDate(window.resetsAt)}`;
+
+      if (isUsdWindow(window)) {
+        const percent = () => window.limitUsd === null ? 0 : Math.min(100, window.limitUsd > 0 ? (window.spentUsd + window.reservedUsd) / window.limitUsd * 100 : 100);
+        return <div class="billing-window">
+          <div class="flex items-center justify-between gap-2"><h3>{windowName(window.kind)}</h3><Show when={window.limitUsd !== null}><span class="billing-percent">{Math.round(percent())}%</span></Show></div>
+          <div class="billing-amount"><strong>{window.limitUsd === null ? "Unlimited" : fmtCost(window.remainingUsd)}</strong><Show when={window.limitUsd !== null}><span>remaining</span></Show></div>
+          <Show when={window.limitUsd !== null}><div class={`billing-meter ${percent() >= 95 ? "is-low" : ""}`} role="progressbar" aria-label={`${windowName(window.kind)} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent())} aria-valuetext={`${fmtCost(window.spentUsd)} spent of ${fmtCost(window.limitUsd)}`}><span style={{ width: `${percent()}%` }} /></div></Show>
+          <p class="billing-detail">{fmtCost(window.spentUsd)} spent<Show when={window.limitUsd !== null}> of {fmtCost(window.limitUsd)}</Show><Show when={window.reservedUsd > 0}> · {fmtCost(window.reservedUsd)} reserved</Show></p>
+          <p class="billing-reset"><Icon name="lucide:clock-3" size={12} />{renewalText()}</p>
+        </div>;
+      }
+
+      if (isPercentWindow(window)) {
+        const settled = () => window.usedPercent ?? 0;
+        const held = () => window.holdPercent ?? 0;
+        const committed = () => window.limitConfigured ? Math.min(100, Math.round((settled() + held()) * 10) / 10) : 0;
+        const remaining = () => Math.max(0, Math.round((100 - committed()) * 10) / 10);
+        return <div class="billing-window">
+          <div class="flex items-center justify-between gap-2">
+            <h3>{windowName(window.kind)}</h3>
+            <Show when={window.limitConfigured}><span class="billing-percent">{fmtPct(committed())}</span></Show>
+          </div>
+          <div class="billing-amount">
+            <strong>{!window.limitConfigured ? "Unlimited" : fmtPct(remaining())}</strong>
+            <Show when={window.limitConfigured}><span>{committed() >= 100 ? "remaining · limit reached" : "remaining"}</span></Show>
+          </div>
+          <Show when={window.limitConfigured}>
+            <div
+              class={`billing-meter ${committed() >= 95 ? "is-low" : ""}`}
+              role="progressbar"
+              aria-label={`${windowName(window.kind)} used`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.round(committed())}
+              aria-valuetext={
+                held() > 0
+                  ? `${fmtPct(settled())} used, ${fmtPct(held())} held in flight`
+                  : `${fmtPct(settled())} of allowance used`
+              }
+            >
+              <span style={{ width: `${committed()}%` }} />
+            </div>
+          </Show>
+          <p class="billing-detail">
+            {!window.limitConfigured
+              ? "No spending limit configured"
+              : <>
+                  {fmtPct(settled())} used
+                  <Show when={held() > 0}> · {fmtPct(held())} held in flight</Show>
+                  <Show when={committed() >= 95 && committed() < 100}> · Near limit</Show>
+                  <Show when={committed() >= 100}> · Allowance exhausted</Show>
+                </>}
+          </p>
+          <p class="billing-reset"><Icon name="lucide:clock-3" size={12} />{renewalText()}</p>
+        </div>;
+      }
+
+      const hidden = asHiddenWindow(window);
       return <div class="billing-window">
-        <div class="flex items-center justify-between gap-2"><h3>{windowName(window.kind)}</h3><Show when={window.limitUsd !== null}><span class="billing-percent">{Math.round(percent())}%</span></Show></div>
-        <div class="billing-amount"><strong>{window.limitUsd === null ? "Unlimited" : fmtCost(window.remainingUsd)}</strong><Show when={window.limitUsd !== null}><span>remaining</span></Show></div>
-        <Show when={window.limitUsd !== null}><div class={`billing-meter ${percent() >= 95 ? "is-low" : ""}`} role="progressbar" aria-label={`${windowName(window.kind)} used`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent())} aria-valuetext={`${fmtCost(window.spentUsd)} spent of ${fmtCost(window.limitUsd)}`}><span style={{ width: `${percent()}%` }} /></div></Show>
-        <p class="billing-detail">{fmtCost(window.spentUsd)} spent<Show when={window.limitUsd !== null}> of {fmtCost(window.limitUsd)}</Show><Show when={window.reservedUsd > 0}> · {fmtCost(window.reservedUsd)} reserved</Show></p>
-        <p class="billing-reset"><Icon name="lucide:clock-3" size={12} />{window.kind === "session" && !props.billing.sessionStarted ? "Starts with your next request" : `Renews ${fmtDate(window.resetsAt)}`}</p>
+        <div class="flex items-center justify-between gap-2">
+          <h3>{windowName(hidden.kind)}</h3>
+          <Show when={hidden.limitConfigured}>
+            <Badge tone={hidden.exhausted ? "red" : "green"}>{hidden.exhausted ? "Exhausted" : "Active"}</Badge>
+          </Show>
+        </div>
+        <div class="billing-amount">
+          <strong>{!hidden.limitConfigured ? "Unlimited" : hidden.exhausted ? "Allowance reached" : "Managed allowance"}</strong>
+        </div>
+        <p class="billing-detail">
+          {!hidden.limitConfigured
+            ? "No spending limit configured"
+            : hidden.exhausted
+              ? "Wait for renewal or redeem an available reset."
+              : "Usage is tracked automatically against your plan."}
+          <Show when={hidden.activeHold}> · Requests in progress</Show>
+        </p>
+        <p class="billing-reset"><Icon name="lucide:clock-3" size={12} />{renewalText()}</p>
       </div>;
     }}</For>
   </div>;
@@ -21,7 +135,7 @@ export function BillingSummary(props: { billing: BillingDto; compact?: boolean }
 
 function createBilling() {
   let controller: AbortController | undefined;
-  const [data, actions] = createResource(async () => {
+  const [data, actions] = createResource(policyRevision, async () => {
     controller?.abort(); controller = new AbortController();
     return (await api<{ billing: BillingDto }>("GET", "/api/billing", undefined, controller.signal)).billing;
   });
@@ -59,7 +173,7 @@ export function PlanLimits() {
     <div class="billing-page-heading"><div><span class="billing-eyebrow">Your account</span><h1>Plan & limits</h1><p>One allowance across every model, API key and connected client.</p></div><Btn variant="outline" size="sm" disabled={billing.data.loading} onClick={() => void billing.refetch()}><Icon name={Icons.refresh} size={14} />Refresh</Btn></div>
     <Show when={!billing.data.error} fallback={<Card class="billing-error"><span role="alert">Your limits could not be loaded.</span><Btn variant="outline" onClick={() => void billing.refetch()}>Try again</Btn></Card>}>
       <Show when={billing.data()} fallback={<Card class="p-6 text-sm text-ink-500">Loading your plan…</Card>}>{(data) => <>
-        <Card class="billing-plan-summary"><div class="billing-heading"><div><span class="billing-eyebrow">Current plan</span><h2>{data().plan?.name ?? "Unlimited"}</h2><p>{data().plan?.monthlyUsd != null ? `${fmtCost(data().plan!.monthlyUsd)} monthly allowance` : "Your account has no spending ceiling."}</p></div><div class="billing-plan-symbol"><Icon name="lucide:wallet" size={24} /></div></div><BillingSummary billing={data()} /></Card>
+        <Card class="billing-plan-summary"><div class="billing-heading"><div><span class="billing-eyebrow">Current plan</span><h2>{data().plan?.name ?? "Unlimited"}</h2><p>{describePlanAllowance(data().plan, data().financialPolicy)}</p></div><div class="billing-plan-symbol"><Icon name="lucide:wallet" size={24} /></div></div><BillingSummary billing={data()} /></Card>
         <div class="billing-info-grid">
           <Card class="billing-policy"><Icon name="lucide:shield-check" size={20} /><h2>Clear, shared limits</h2><p>All priced input, cached input, output and reasoning count toward your allowance. Individual API keys can have smaller daily and lifetime spending limits.</p><p>Requests in progress temporarily reserve balance. The unused amount returns when a request finishes. Cancelling before the provider reports usage may consume the reserved amount.</p></Card>
           <Card class="billing-policy"><Icon name="lucide:calendar-clock" size={20} /><h2>Predictable renewals</h2><p>The month renews on the first day at 00:00 UTC. Weekly limits renew on Monday. A 5-hour session starts with your first admitted request after the previous session expires.</p><p>Optional shorter allowances are proportional to the number of days in the current month. They do not accumulate.</p></Card>

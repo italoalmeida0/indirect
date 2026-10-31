@@ -453,6 +453,7 @@ export function Input(props: {
   placeholder?: string;
   min?: number;
   max?: number;
+  step?: number | string;
   autocomplete?: string;
   required?: boolean;
   hint?: string;
@@ -478,6 +479,7 @@ export function Input(props: {
         placeholder={props.placeholder}
         min={props.min}
         max={props.max}
+        step={props.step}
         autocomplete={props.autocomplete}
         required={props.required}
         disabled={props.disabled}
@@ -1245,7 +1247,7 @@ export function fmtCost(val: number | null | undefined, opts?: { compact?: boole
     const digits = k >= 100 ? 0 : 1;
     return `${neg ? "-" : ""}$${k.toFixed(digits)}K`;
   }
-  return `${neg ? "-" : ""}$${abs.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${neg ? "-" : ""}$${abs.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
 /** Per-hour axis label when the point is an hour bucket, else MM-DD. */
