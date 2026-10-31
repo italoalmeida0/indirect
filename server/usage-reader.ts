@@ -10,7 +10,7 @@ import type { filteredUsageAnalytics } from "./usage-analytics";
 import type { CatalogKind, catalogAuditPage, catalogFilterOptions } from "./catalog";
 import type { ProjectUsageRequest, ProjectUsageTotals } from "./project-usage";
 
-export type UsageReadRequest = { scope: UsageScope; userId: string | null } & (
+export type UsageReadRequest = { scope: UsageScope; userId: string | null; staleWhileRevalidateMs?: number } & (
   | { kind: "series" }
   | { kind: "overview"; userId: string }
   | { kind: "analytics"; includeCost?: boolean }
@@ -91,7 +91,7 @@ function dispatch() {
  * Identical requests coalesce; a job is cancelled only after all its callers
  * have disconnected. */
 export function readUsage<R extends UsageReadRequest>(request: R, signal?: AbortSignal): Promise<Result<R>> {
-  const { scope, userId, ...options } = request;
+  const { scope, userId, staleWhileRevalidateMs, ...options } = request;
   let extra: unknown = options;
   let invalidationScope = scope;
   if (request.kind !== "financial-project" && request.kind !== "catalog-facets" && request.kind !== "catalog-audit" && request.kind !== "events") {
@@ -130,7 +130,7 @@ export function readUsage<R extends UsageReadRequest>(request: R, signal?: Abort
     queue.push(job);
     sharedSignal.addEventListener("abort", abort, { once: true });
     if (sharedSignal.aborted) abort(); else dispatch();
-  }), extra, signal, invalidationScope);
+  }), extra, signal, invalidationScope, { staleWhileRevalidateMs });
 }
 
 export async function closeUsageReaders(): Promise<void> {

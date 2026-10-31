@@ -110,6 +110,13 @@ export const LIMITS = {
   analyticsHourlyDays: boundedLimit("ANALYTICS_HOURLY_DAYS", 90, 3650),
   analyticsMinuteDays: boundedLimit("ANALYTICS_MINUTE_DAYS", 3, 365),
 
+  /** How stale a dashboard snapshot may be while a refresh happens behind it.
+   * Ingestion invalidates every window that contains "now", so a busy gateway
+   * would otherwise recompute a cross-user analytics page for every poll; the
+   * dashboard serves the last computed snapshot for this long and refreshes it
+   * in the background. 0 disables it and restores strict read-through. */
+  analyticsStaleMs: boundedLimit("ANALYTICS_STALE_MS", 5000, 60_000),
+
   /** Periodic cleanup runs bounded batches so a single DELETE never holds the
    *  writer long enough to starve the proxy (see server/batch-delete.ts). */
   maintenanceBatchSize: boundedLimit("MAINTENANCE_BATCH_SIZE", 500, 100_000),

@@ -1696,7 +1696,10 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   if (path === "/api/admin/analytics" && req.method === "GET") {
     const scope = readUsageScope(url, true) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "analytics", scope, userId: null }, req.signal), req);
+    // A dashboard snapshot may lag the ledger by a moment: ingestion invalidates
+    // every window containing "now", so strict read-through recomputes a
+    // cross-user page for every poll while traffic flows.
+    return ok(await readUsage({ kind: "analytics", scope, userId: null, staleWhileRevalidateMs: LIMITS.analyticsStaleMs }, req.signal), req);
   }
 
   if (path === "/api/admin/usage-filter-options" && req.method === "GET") {

@@ -15,6 +15,10 @@ interface Entry {
   to: number;
 }
 const entries = new Map<string, Entry>();
+/** Last good value per key, kept briefly after an entry is invalidated or
+ * expires so a dashboard can answer from it while a refresh runs behind the
+ * request. Bounded by the same entry budget. */
+const stale = new Map<string, { value: unknown; at: number }>();
 interface Pending {
   promise: Promise<unknown>;
   scope: UsageScope;
@@ -34,12 +38,24 @@ const readVersion = db.prepare<{ data_version: number }, []>("PRAGMA data_versio
 function remove(key: string, entry: Entry) {
   entries.delete(key);
   bytes -= entry.bytes;
+  // Keep the value available for a stale read; the map is trimmed with the
+  // entries so the retained set can never outgrow the cache budget.
+  stale.delete(key);
+  stale.set(key, { value: entry.value, at: Date.now() });
+  while (stale.size > MAX_ENTRIES) {
+    const oldest = stale.keys().next().value;
+    if (oldest === undefined) break;
+    stale.delete(oldest);
+  }
 }
 
 function synchronize() {
   const version = readVersion.get()!.data_version;
   if (version !== dataVersion || auditRevision !== revision) {
     entries.clear(); bytes = 0;
+    // An external writer or a metadata change is a real change of answer: no
+    // stale snapshot may survive it.
+    stale.clear();
     for (const job of pending.values()) job.invalidated = true;
     dataVersion = version; revision = auditRevision;
   }
@@ -94,13 +110,29 @@ export function cachedUsageQuery<T>(kind: string, scope: UsageScope, userId: str
 }
 
 /** Coalesce identical reader jobs. A write during a query prevents its result
- * from entering the cache; readers already waiting still receive their snapshot. */
-export function cachedUsageQueryAsync<T>(kind: string, scope: UsageScope, userId: string | null, load: (signal: AbortSignal) => Promise<T>, extra?: unknown, signal?: AbortSignal, invalidationScope = scope): Promise<T> {
+ * from entering the cache; readers already waiting still receive their snapshot.
+ *
+ * `options.staleWhileRevalidateMs` lets a caller answer from the last value when
+ * it is at most that old, and refresh it in the background. Ingestion
+ * invalidates every window that contains "now", so without this a dashboard
+ * polling a busy gateway recomputes the whole page on every request. */
+export function cachedUsageQueryAsync<T>(kind: string, scope: UsageScope, userId: string | null, load: (signal: AbortSignal) => Promise<T>, extra?: unknown, signal?: AbortSignal, invalidationScope = scope, options?: { staleWhileRevalidateMs?: number }): Promise<T> {
   if (signal?.aborted) return Promise.reject(new DOMException("Analytics request cancelled", "AbortError"));
   synchronize();
   const key = usageQueryKey(scope, userId, kind, extra);
   const hit = cached(key);
   if (hit) return Promise.resolve(hit.value as T);
+  const accepted = options?.staleWhileRevalidateMs ?? 0;
+  if (accepted > 0) {
+    const previous = stale.get(key);
+    if (previous && Date.now() - previous.at <= accepted) {
+      // Refresh behind the response. No waiter is attached, so a failure is
+      // only a missed refresh: the caller already has a valid snapshot.
+      void cachedUsageQueryAsync(kind, scope, userId, load, extra, undefined, invalidationScope)
+        .catch(() => undefined);
+      return Promise.resolve(previous.value as T);
+    }
+  }
   let job = pending.get(key);
   if (!job || job.invalidated) {
     if (activeJobs >= LIMITS.analyticsPending) return Promise.reject(new ApiError(503, "Analytics is busy. Please retry shortly."));

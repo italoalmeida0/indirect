@@ -42,6 +42,22 @@ describe("bounded analytics query cache", () => {
     expect(await get()).toBe(2);
   });
 
+  test("a dashboard can answer from its last snapshot while it refreshes behind it", async () => {
+    let reads = 0;
+    const get = (staleMs?: number) => cachedUsageQueryAsync("swr-test", scope, null, async () => ++reads, undefined, undefined, undefined, { staleWhileRevalidateMs: staleMs ?? 0 });
+    expect(await get()).toBe(1);
+    invalidateUsageQueries([{ userId: "one", ts: 150 }]);
+    // Ingestion invalidated the window; the dashboard takes the snapshot it
+    // already had instead of blocking on a recompute.
+    expect(await get(5_000)).toBe(1);
+    await Bun.sleep(25);
+    // The refresh ran behind that response, so the next read is the new value.
+    expect(await get(5_000)).toBe(2);
+    invalidateUsageQueries([{ userId: "one", ts: 150 }]);
+    // A strict caller (no stale allowance) still reads through immediately.
+    expect(await get()).toBe(3);
+  });
+
   test("audited metadata mutations invalidate names and pricing immediately", () => {
     let reads = 0;
     const get = () => cachedUsageQuery("metadata-test", scope, "one", () => ++reads);
