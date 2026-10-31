@@ -197,7 +197,7 @@ edges would be better than measured. The administrative aggregates do not touch
   `/admin/stats` 488/553/664. With 20 samples the p99 is the maximum, so this
   neither confirms nor refutes the target — it only informed it.
 
-## Sustained mixed soak (11 minutes, quick profile)
+## Sustained mixed soak (quick profile)
 
 `bun scripts/soak-gateway.ts --dir=tmp/enterprise-quick-3 --minutes=11 --rate=8`
 — 3 proxy arrivals to 1 dashboard read, open loop, 674 s, on the 500-user quick
@@ -213,8 +213,19 @@ proxy completions.
   heartbeat 44, billing recovery 11, analytics rollup cleanup 11, WAL checkpoint
   2, detailed-event retention 2 — 0 failures across all six jobs.
 
-This says nothing about ten-year reliability: eleven minutes cannot establish
-long-run behaviour, and the fixture retains two detailed days rather than 400.
+**Streaming under the same mixed load** (`--stream-share=3`, 481 s, 3,768
+arrivals, 942 streaming completions): 0 errors, memory 141 → 66 MiB with a
+159 MiB peak, WAL 4.8 MiB, and the six jobs again ran without a failure. First
+byte arrived at p50 62.5 / p95 132.7 ms and the stream closed at p50 108.5 /
+p95 163 ms, leaving a **median gap of 45.4 ms** (p95 67.4) between first byte and
+close — the fixture upstream holds 60 ms between its two frames, so the relay is
+forwarding frames as they arrive rather than buffering the body. 157 of the 942
+streams (16.7%) arrived as a single read because this client's first read landed
+after both frames were buffered under load; that count is reported, and the
+assertion is on the population median, which is the claim a soak can defend.
+
+Neither run says anything about ten-year reliability: minutes are not years, and
+the fixture retains two detailed days rather than 400.
 
 ## Not verified — must not be reported as passing
 
@@ -230,8 +241,8 @@ long-run behaviour, and the fixture retains two detailed days rather than 400.
   The fixture now writes hour rollups at seed time, which hides the symptom
   without answering the question.
 - [ ] Ten-year audit cardinality (every fixture profile seeds 365 audit days).
-- [ ] Streaming versus non-streaming measurement under one workload, and
-  sustained traffic against the delivered retention (the soak ran on the quick
-  profile and covered non-streaming completions only).
+- [ ] A dedicated streaming-throughput profile at the agreed arrival rate (the
+  soak measured streaming under mixed load, and sustained traffic has not been
+  run against the delivered retention).
 - [ ] The explicit capacity workflow has not executed on a dedicated native
   runner; a local result on a laptop is evidence, not a qualification.

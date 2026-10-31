@@ -24,6 +24,7 @@ if (!dir) throw new Error("--dir=<seeded fixture> is required");
 const minutes = Math.max(1, Number(arg("minutes") ?? 10));
 const rate = Math.max(1, Number(arg("rate") ?? 8));
 const sampleMs = Math.max(1_000, Number(arg("sample-ms") ?? 15_000));
+const streamShare = Math.max(0, Number(arg("stream-share") ?? 4));
 const reportPath = arg("report");
 const DAY = 86_400_000;
 const MB = 1_048_576;
@@ -42,6 +43,20 @@ const statusCounts: Record<string, number> = {};
 const statusByRoute: Record<string, Record<string, number>> = {};
 const errorBodies = new Map<string, string>();
 const slowest: Array<{ route: string; status: number; ms: number }> = [];
+const streamTtfb: number[] = [], streamTotal: number[] = [], streamChunks: number[] = [], streamGap: number[] = [];
+let streamFailures = 0, streamCoalesced = 0;
+
+const percentile = (values: number[], p: number) => {
+  const sorted = values.toSorted((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)] ?? 0;
+};
+const distribution = (values: number[]) => ({
+  count: values.length,
+  p50: Number(percentile(values, 0.5).toFixed(1)),
+  p95: Number(percentile(values, 0.95).toFixed(1)),
+  p99: Number(percentile(values, 0.99).toFixed(1)),
+  max: Number((values.length ? Math.max(...values) : 0).toFixed(1)),
+});
 
 const proxyBodies = ["Overhead sample", "Steady soak request", "Mixed workload", "Background traffic"];
 /** Dashboard reads with a fresh window per request, as a browsing user makes.
@@ -74,7 +89,50 @@ async function operation(index: number) {
   const token = picked.admin ? fixture.admin.accessToken : isDashboard ? user.accessToken : user.key;
   const body = isDashboard ? undefined : { model: "enterprise-fast", messages: [{ role: "user", content: proxyBodies[index % proxyBodies.length] }], max_tokens: 64 };
   const started = performance.now();
+  // A streaming share keeps the relay exercised under load: the assertion is
+  // that bytes keep arriving (first frame well before the stream closes), not
+  // that the whole body lands at once.
+  const streaming = !isDashboard && streamShare > 0 && index % streamShare === 0;
   try {
+    if (streaming) {
+      const response = await fetch(`${stack.base}${route}`, { method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(body as Record<string, unknown>), stream: true }), signal: AbortSignal.timeout(40_000) });
+      const label = route;
+      issued++;
+      statusCounts[response.status] = (statusCounts[response.status] ?? 0) + 1;
+      const perRoute = statusByRoute[label] ?? (statusByRoute[label] = {});
+      perRoute[response.status] = (perRoute[response.status] ?? 0) + 1;
+      if (response.status !== 200 || !response.body) {
+        if (response.status >= 500) server5xx++; else client4xx++;
+        streamFailures++;
+        const key = `${label} ${response.status}`;
+        if (!errorBodies.has(key)) errorBodies.set(key, (await response.text()).slice(0, 200));
+      } else {
+        ok2xx++;
+        const reader = response.body.getReader();
+        let chunks = 0, ttfb = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!ttfb && value && value.byteLength > 0) ttfb = performance.now() - started;
+          chunks++;
+        }
+        const total = performance.now() - started;
+        streamTtfb.push(ttfb || total);
+        streamTotal.push(total);
+        streamChunks.push(chunks);
+        // The fixture upstream holds 60 ms between its two frames, so a relay
+        // that streamed them leaves a gap between first byte and close. A
+        // single chunk is not proof of buffering by itself: if this client's
+        // first read happens after both frames are buffered (a loaded event
+        // loop), it sees them together. Coalescing is therefore counted and
+        // bounded as a share, not treated as a failure per sample.
+        if (total - (ttfb || total) < 30) streamCoalesced++;
+        streamGap.push(total - (ttfb || total));
+      }
+      return;
+    }
     const response = await enterpriseRequest(stack.base, route, token, body);
     const ms = performance.now() - started;
     const label = route.split("?")[0]!;
@@ -151,6 +209,14 @@ const maintenanceRuns = observed.at(-1)?.maintenanceRuns as Record<string, numbe
 if (server5xx > 0) failures.push(`${server5xx} server error response(s)`);
 if (client4xx > 0) failures.push(`${client4xx} client error response(s): ${JSON.stringify(Object.fromEntries(errorBodies))}`);
 if (networkErrors > 0) failures.push(`${networkErrors} network error(s)`);
+if (streamFailures > 0) failures.push(`${streamFailures} stream(s) returned an error status`);
+// The claim a soak can defend is about the population: the median stream must
+// show the head start the upstream's 60 ms hold creates. Individual samples can
+// coalesce when this client's first read lands after both frames were buffered,
+// which is why the count is reported rather than asserted per sample.
+if (streamGap.length > 0 && percentile(streamGap, 0.5) < 30) {
+  failures.push(`median stream gap ${percentile(streamGap, 0.5).toFixed(1)}ms — bodies are being buffered, not streamed`);
+}
 for (const [job, count] of Object.entries(maintenanceFailures ?? {})) if (count > 0) failures.push(`maintenance "${job}" failed ${count} time(s)`);
 if (finalRss - baseline > 200) failures.push(`resident memory grew ${finalRss - baseline} MiB (${baseline} -> ${finalRss})`);
 if (peakWal > 1_073_741_824) failures.push(`write-ahead log peaked at ${(peakWal / MB).toFixed(0)} MiB`);
@@ -161,6 +227,9 @@ const report = {
   dir, durationSeconds: Math.round(elapsedMs / 1000), arrivalRate: rate, mixedShare: "3 proxy : 1 dashboard",
   machine: enterpriseMachine(),
   traffic: { issued, ok2xx, client4xx, server5xx, networkErrors, statusCounts, statusByRoute, errorBodies: Object.fromEntries(errorBodies) },
+  streaming: { share: streamShare, failures: streamFailures, coalesced: streamCoalesced, ttfbMs: distribution(streamTtfb), totalMs: distribution(streamTotal),
+    gapMs: distribution(streamGap),
+    chunks: { min: streamChunks.length ? Math.min(...streamChunks) : 0, max: streamChunks.length ? Math.max(...streamChunks) : 0 } },
   memory: { baselineMb: baseline, finalMb: finalRss, peakMb: peakRss, growthMb: finalRss - baseline },
   wal: { peakBytes: peakWal, finalBytes: Number(observed.at(-1)?.walBytes ?? 0) },
   maintenance: { runs: maintenanceRuns, failures: maintenanceFailures },
