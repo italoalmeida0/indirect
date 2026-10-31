@@ -111,8 +111,14 @@ try {
     await page.getByRole("button", { name: "New model policy", exact: true }).click();
     await page.getByLabel("Policy name", { exact: true }).fill("Browser economical policy");
     await page.getByLabel("Find models", { exact: true }).fill("enterprise-fast");
-    await page.getByRole("checkbox", { name: /enterprise-fast/ }).focus();
-    await page.keyboard.press("Space");
+    // Check the row instead of focusing it and pressing Space: the search
+    // results land asynchronously, so a Space delivered before the checkbox is
+    // really focused left the form empty, the save button never appeared and
+    // the click timed out on a loaded runner. check() waits for actionability
+    // and is a no-op when the box is already ticked.
+    const modelCheckbox = page.getByRole("checkbox", { name: /enterprise-fast/ });
+    await modelCheckbox.check();
+    assert(await modelCheckbox.isChecked(), "the model row must be selected before saving");
     await page.getByRole("button", { name: "Save model policy", exact: true }).click();
     await page.getByText("Browser economical policy", { exact: false }).first().waitFor();
     assert((await api("/api/admin/model-policies", admin.accessToken)).policies.some((item: { name: string }) => item.name === "Browser economical policy"));
