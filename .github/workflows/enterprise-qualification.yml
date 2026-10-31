@@ -119,6 +119,12 @@ jobs:
         # Importing the route boots the process, which refuses to start in
         # production without a secret, so this throwaway value is only for the
         # download: no fixture, database or measurement uses it.
+        #
+        # This step is an optimisation, not a gate: if the release asset cannot
+        # be fetched the measured boot downloads it itself, so a failure here
+        # must not hide the measurements behind it. It still reports what went
+        # wrong, because a silent downgrade would be its own problem.
+        continue-on-error: true
         env:
           DATA_DIR: ${{ runner.temp }}/enterprise-obscura
           # Quoted on purpose: an unquoted 64-digit run of zeros parses as the
@@ -126,11 +132,21 @@ jobs:
           GATEWAY_SECRET: "9f2c4a7e1b8d3506c9e4f7a2b5d8e1c4f7a0b3d6e9c2f5a8b1d4e7c0f3a6b9d2"
           INDIRECT_SECRET: "9f2c4a7e1b8d3506c9e4f7a2b5d8e1c4f7a0b3d6e9c2f5a8b1d4e7c0f3a6b9d2"
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p "$DATA_DIR"
-          binary=$(bun -e 'import { ensureObscuraBrowser } from "./server/routes/obscura.ts"; console.log(await ensureObscuraBrowser());')
-          test -x "$binary"
-          echo "OBSCURA_PATH=$binary" >> "$GITHUB_ENV"
+          export NODE_ENV=production
+          if bun -e 'import { ensureObscuraBrowser } from "./server/routes/obscura.ts"; console.log(await ensureObscuraBrowser());' > "$RUNNER_TEMP/obscura-provision.log" 2>&1; then
+            binary="$(tail -n 1 "$RUNNER_TEMP/obscura-provision.log")"
+            echo "resolved obscura: $binary"
+            if [ -x "$binary" ]; then
+              echo "OBSCURA_PATH=$binary" >> "$GITHUB_ENV"
+            else
+              echo "::warning::obscura resolved to a non-executable path: $binary"
+            fi
+          else
+            echo "::warning::obscura provisioning failed; the measured boot downloads it instead"
+            cat "$RUNNER_TEMP/obscura-provision.log"
+          fi
 
       - name: Seed isolated history and verify physical cardinality
         env:
