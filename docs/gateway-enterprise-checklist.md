@@ -117,12 +117,15 @@ still a cold read on this disk. Reaching the target for cross-user analytics at
 NVMe and more RAM than the 16 GB available here), not just a different schema.
 
 - [x] **All four gates also passed on native Linux CI**, not only on this
-  Windows ARM64 laptop: run `41168782145` on the pushed `dev` revision reports
-  `Install dependencies`, `Lint`, `Typecheck`, `Unit + integration tests` and
-  `SPA build sanity` as successful in the `Gateway (Linux)` job, and the
-  enterprise browser evidence step before the failing one also passed. The job
-  then fails at `Transcript browser regressions`, which is outside this brief's
-  gateway scope and pre-existing (see below).
+  Windows ARM64 laptop. Run `41173536400` on revision `1f5631d` reports the
+  `Gateway (Linux)` job steps `Install dependencies`, `Lint`, `Typecheck`,
+  `Build daemon for integration tests`, `Unit + integration tests` (the 934-test
+  suite) and `SPA build sanity` as **successful**, with `Enterprise browser
+  evidence` also successful. The job then fails at `Transcript browser
+  regressions` (`0 !== 1`), which is an Indirect Code transcript script outside
+  this brief, and that failure skips the later `Enterprise administration
+  browser regressions` step — that gate is therefore recorded from this machine
+  only, not from CI.
 
 ## Measured qualification run (quick profile, native ARM64)
 
@@ -331,13 +334,14 @@ the fixture retains two detailed days rather than 400.
   20 GiB free for the quick profile and 100 GiB for full400, which a
   GitHub-hosted runner does not provide.
 - [ ] **`dev` CI is red for reasons that predate this work.** On the pushed
-  revision the `Gateway (Linux)` job passed dependency install, lint, typecheck,
-  `bun test`, SPA build sanity and the enterprise browser evidence, and failed
-  only at `Transcript browser regressions` (`0 !== 1`, an Indirect Code transcript
-  script). The Go daemon and race jobs also fail. The run that precedes this work
-  (`41071388519`) failed the same `Gateway (Linux)` job with a different browser
-  assertion (`Expected: > 1000`), so the red state is inherited; the Indirect Code
-  suite needs its own investigation and its scripts require `dist/`, the daemon
+  revision `1f5631d` the `Gateway (Linux)` job passes dependency install, lint,
+  typecheck, the 934-test suite, SPA build sanity and the enterprise browser
+  evidence, then fails at `Transcript browser regressions` (`0 !== 1`, an
+  Indirect Code transcript script) — and the same job fails, with a different
+  browser assertion (`Expected: > 1000`), on run `41071388519` from before this
+  work started. The other platform daemon jobs also fail (`Daemon race (Linux)`
+  alternates between pass and fail), e.g. `scripts/test-indirect-daemon-protocol.ts:97`.
+  That suite needs its own investigation: its scripts require `dist/`, the daemon
   binary and `META_API_KEY`, none of which this session set up.
 - [ ] Sustained traffic against the delivered retention. The soaks ran on the
   quick profile; the delivered-retention runs could not be repeated once free
