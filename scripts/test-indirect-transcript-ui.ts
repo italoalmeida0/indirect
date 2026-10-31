@@ -1,11 +1,12 @@
 // Deterministic browser gate for transcript reconciliation and reading position.
 // PLAYWRIGHT_MODULE=... CHROMIUM_PATH=... bun scripts/test-indirect-transcript-ui.ts
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import solidPlugin from "../plugins/solid-plugin";
 import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const bundle=await Bun.build({entrypoints:[new URL("../test/fixtures/transcript-identity-ui.tsx",import.meta.url).pathname],target:"browser",plugins:[iconifyPlugin,solidPlugin]});
-const worker=await Bun.build({entrypoints:[new URL("../web/src/indirect-code/transcript/history-worker.ts",import.meta.url).pathname],target:"browser"});
+const bundle=await Bun.build({entrypoints:[fileURLToPath(new URL("../test/fixtures/transcript-identity-ui.tsx",import.meta.url))],target:"browser",plugins:[iconifyPlugin,solidPlugin]});
+const worker=await Bun.build({entrypoints:[fileURLToPath(new URL("../web/src/indirect-code/transcript/history-worker.ts",import.meta.url))],target:"browser"});
 if(!bundle.success || !worker.success) throw new Error([...bundle.logs,...worker.logs].join("\n"));
 const workerSource=await worker.outputs[0].text();
 const server=Bun.serve({hostname:"127.0.0.1",port:0,fetch(req){

@@ -10,12 +10,13 @@
 // clicks, like a user. Run:
 //   PLAYWRIGHT_MODULE=… CHROMIUM_PATH=… bun scripts/test-indirect-mode-skills-ui.ts
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { readdirSync, readFileSync } from "node:fs";
 import solidPlugin from "../plugins/solid-plugin";
 import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const bundle = await Bun.build({
-  entrypoints: [new URL("../test/fixtures/indirect-mode-skills-ui.tsx", import.meta.url).pathname],
+  entrypoints: [fileURLToPath(new URL("../test/fixtures/indirect-mode-skills-ui.tsx", import.meta.url))],
   target: "browser",
   plugins: [iconifyPlugin, solidPlugin],
 });
@@ -23,7 +24,7 @@ if (!bundle.success) throw new Error(bundle.logs.join("\n"));
 // Inline the built app CSS when present so screenshots render like the app.
 let css = "";
 try {
-  const distDir = new URL("../dist/", import.meta.url).pathname;
+  const distDir = fileURLToPath(new URL("../dist/", import.meta.url));
   const cssFile = readdirSync(distDir).find((f) => f.endsWith(".css"));
   if (cssFile) css = readFileSync(distDir + cssFile, "utf8");
 } catch {}

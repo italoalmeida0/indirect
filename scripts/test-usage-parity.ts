@@ -19,12 +19,13 @@
  * Read-only probe + temp gateway; not part of `bun test`.
  */
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { promises as fs } from "fs";
 
-const WS = path.dirname(new URL(import.meta.url).pathname);
+const WS = path.dirname(fileURLToPath(import.meta.url));
 const envFile = await fs.readFile(path.join(WS, "..", ".env"), "utf8").catch(() => "");
 const envGet = (k: string) => {
   const m = new RegExp(`^${k}=(.*)$`, "m").exec(envFile);

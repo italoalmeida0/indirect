@@ -14,6 +14,7 @@
  *   SYNTHETIC_API_KEY / SYNTHETIC_BASE_URL / E2E_MODEL
  */
 import { mkdirSync, mkdtempSync } from "fs";
+import { fileURLToPath } from "node:url";
 import path from "path";
 import os from "os";
 import fs from "fs/promises";
@@ -21,7 +22,7 @@ import assert from "assert";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 
-const ROOT = path.dirname(new URL(import.meta.url).pathname);
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WS = path.join(ROOT, "..");
 const envFile = await fs.readFile(path.join(WS, ".env"), "utf8").catch(() => "");
 const envGet = (k: string) => {

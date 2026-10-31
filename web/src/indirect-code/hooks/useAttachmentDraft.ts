@@ -39,15 +39,23 @@ export function createAttachmentDraft(opts: {
       preparingAttachments() +
       (opts.additionalCount?.() || 0);
     const room = Math.max(0, MAX_ATTACHMENTS - currentCount);
-    if (files.length > room) {
+    if (room <= 0) {
       opts.toast(`Max ${MAX_ATTACHMENTS} attachments per message`, "err");
       return;
+    }
+    // Trim instead of rejecting the batch: dropping twenty files with ten slots
+    // free must attach the ten that fit, not discard the whole gesture. Slicing
+    // before any await keeps the reservation made above authoritative.
+    const list = Array.from(files).slice(0, room);
+    if (!list.length) return;
+    if (list.length < files.length) {
+      opts.toast(`Only ${room} more attachment${room === 1 ? "" : "s"} fit in this message`, "err");
     }
     const currentBytes = pendingAttachments().reduce(
       (sum, a) => sum + (a.size || 0),
       0,
     );
-    const incomingBytes = Array.from(files).reduce(
+    const incomingBytes = list.reduce(
       (sum, f) => sum + (f.size || 0),
       0,
     );
@@ -55,8 +63,6 @@ export function createAttachmentDraft(opts: {
       opts.toast("Total attachments exceed 25MB limit", "err");
       return;
     }
-    const list = Array.from(files);
-    if (!list.length) return;
     setPreparingAttachments((n) => n + list.length);
     inFlightBytes += incomingBytes;
     try {

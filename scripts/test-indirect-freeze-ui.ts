@@ -1,9 +1,10 @@
 // Freeze overlay fixture test: full-screen update block in a real browser.
 //   PLAYWRIGHT_MODULE=... CHROMIUM_PATH=... bun scripts/test-indirect-freeze-ui.ts
 import solidPlugin from "../plugins/solid-plugin";
+import { fileURLToPath } from "node:url";
 import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const bundle = await Bun.build({ entrypoints:[new URL("../test/fixtures/indirect-freeze-ui.tsx",import.meta.url).pathname],
+const bundle = await Bun.build({ entrypoints:[fileURLToPath(new URL("../test/fixtures/indirect-freeze-ui.tsx",import.meta.url))],
   target:"browser",plugins:[iconifyPlugin,solidPlugin] });
 if (!bundle.success) throw new Error(bundle.logs.join("\n"));
 const server = Bun.serve({hostname:"127.0.0.1",port:0,fetch: (req) => new URL(req.url).pathname === "/bundle.js" ? new Response(bundle.outputs[0]) :

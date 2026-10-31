@@ -39,7 +39,7 @@ const IS_WIN = process.platform === "win32";
 // in the repo layout — detect both.
 const SCRIPT_DIR = fileURLToPath(new URL(".", import.meta.url));
 const IS_STANDALONE = IS_WIN && !SCRIPT_DIR.replace(/\\/g, "/").includes("/scripts/");
-const ROOT = IS_STANDALONE ? join(SCRIPT_DIR, "..") : new URL("..", import.meta.url).pathname;
+const ROOT = IS_STANDALONE ? join(SCRIPT_DIR, "..") : fileURLToPath(new URL("..", import.meta.url));
 // Windows file URLs come back as /C:/... (leading slash): strip it so
 // join() produces a valid native path (otherwise `go build` runs in a
 // nonexistent cwd and every spawn fails ENOENT).

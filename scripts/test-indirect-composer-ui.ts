@@ -1,5 +1,6 @@
 // Browser regression tests using an existing Playwright installation.
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import solidPlugin from "../plugins/solid-plugin";
 import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const { chromium } = await import(
@@ -7,8 +8,7 @@ const { chromium } = await import(
 );
 const bundle = await Bun.build({
   entrypoints: [
-    new URL("../test/fixtures/indirect-composer-ui.tsx", import.meta.url)
-      .pathname,
+    fileURLToPath(new URL("../test/fixtures/indirect-composer-ui.tsx", import.meta.url)),
   ],
   target: "browser",
   plugins: [iconifyPlugin, solidPlugin],
@@ -236,8 +236,8 @@ try {
   });
   assert.equal(
     (await state()).pending.length,
-    30,
-    "concurrent drops must respect the 30-file cap",
+    10,
+    "concurrent drops must respect the per-message attachment cap",
   );
   await reset();
   await page.evaluate(async () => {

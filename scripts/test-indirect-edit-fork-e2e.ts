@@ -29,6 +29,7 @@
  * part of `bun test`. Fails non-zero with the collected evidence printed.
  */
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -36,7 +37,7 @@ import { promises as fs } from "fs";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname));
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)));
 const WS = path.join(ROOT, "..");
 const MODEL = process.env.E2E_MODEL || "muse-spark-1.3-contributor";
 const daemonBin = path.join(WS, "indirect-code-daemon", "bin", "indirect-code");

@@ -15,12 +15,13 @@
  * Fails non-zero with evidence. Slow on purpose (real model latency).
  */
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { mkdtempSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { promises as fs } from "fs";
 
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname));
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)));
 const WS = path.join(ROOT, "..");
 const envFile = await fs.readFile(path.join(WS, ".env"), "utf8").catch(() => "");
 const envGet = (k: string) => {

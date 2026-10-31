@@ -59,7 +59,10 @@ async function run(label: string) {
   const proc=Bun.spawn([binary,'--slot','a','--data-dir',dir],{env:{...process.env,ICD_WAIT_TOOL:'200ms',ICD_WATCH_EVERY:'5s',ICD_AUTOBG_AFTER:'1s'},stdout:Bun.file(join(dir,'stdout.log')),stderr:Bun.file(join(dir,'stderr.log'))});
   const wait=async(pred:()=>any,ms=4000)=>{const deadline=Date.now()+ms;while(Date.now()<deadline){const v=pred();if(v)return v;await Bun.sleep(10)}return null};
   const send=(m:any)=>socket.send(JSON.stringify({...m,hostId:'review-host'}));
-  const create=async(id:string,mode='talk',access='full')=>{send({type:'create_session',requestId:id,cwd:work,title:'original',model:'m',options:{mode,access,effort:'none'}});const ev=await wait(()=>events.find(e=>e.type==='session_created'&&e.requestId===id));if(!ev)throw Error('create timeout');return ev.session.id;};
+  // A skill-less session runs under the base policy, which denies tools
+  // before a human ever sees them; the approval scenario therefore activates
+  // the builtin `build` skill (agentic_base grants read at ask).
+  const create=async(id:string,mode='talk',access='full',skills?:string[])=>{send({type:'create_session',requestId:id,cwd:work,title:'original',model:'m',options:{mode,access,effort:'none',...(skills?{skills:skills.map(name=>({name}))}:{})}});const ev=await wait(()=>events.find(e=>e.type==='session_created'&&e.requestId===id));if(!ev)throw Error('create timeout');return ev.session.id;};
   const prompt=async(sid:string,text:string,extra={})=>{
     const from=events.length;
     send({type:'prompt',sessionId:sid,text,...extra});
@@ -93,7 +96,7 @@ async function run(label: string) {
     const compacted=!!await wait(()=>events.slice(from).find(e=>e.type==='session_compacted'&&e.sessionId===sid),4000);
     const compactSentAsPrompt=requests.slice(fromReq).some(r=>JSON.stringify(r.body.messages).includes('/compact'));
     scenario='approval';toolIssued=false;
-    const approvalSID=await create('approval','build','ask');
+    const approvalSID=await create('approval','build','ask',['build']);
     send({type:'prompt',sessionId:approvalSID,text:'Read hello.txt'});
     const approval=await wait(()=>events.find(e=>e.type==='tool_approval_request'&&e.sessionId===approvalSID));
     if(!approval)throw Error('approval not emitted');
@@ -102,7 +105,7 @@ async function run(label: string) {
     const approvalAdvanced=!!await wait(()=>requests.length>n,700);
     send({type:'cancel',sessionId:approvalSID});
     scenario='question';toolIssued=false;
-    const questionSID=await create('question','build','full');
+    const questionSID=await create('question','build','full',['build']);
     send({type:'prompt',sessionId:questionSID,text:'Ask a question'});
     const question=await wait(()=>events.find(e=>e.type==='question_request'&&e.sessionId===questionSID));
     if(!question)throw Error('question not emitted');
@@ -113,7 +116,7 @@ async function run(label: string) {
     send({type:'cancel',sessionId:questionSID});
     await wait(()=>events.find(e=>e.type==='session_status'&&e.sessionId===questionSID&&e.status==='idle'));
     scenario='bg_await';
-    const sleepSID=await create('bg_await','build','full');
+    const sleepSID=await create('bg_await','build','full',['build']);
     const sleepFrom=events.length;
     await prompt(sleepSID,'Await the background task, then finish',{requestId:'sleep-send'});
     assert(events.slice(sleepFrom).some(e=>e.type==='prompt_accepted'&&e.requestId==='sleep-send'),'prompt admission not acknowledged');
@@ -143,7 +146,10 @@ async function run(label: string) {
       scenario='bg_await_cancel';
       const start=events.length;
       send({type:'prompt',sessionId:sleepSID,text:`Await before ${delay}`,requestId:`before-${delay}`,options:{mode:'build',access:'full',effort:'none'}});
-      assert(await wait(()=>events.slice(start).filter(e=>e.sessionId===sleepSID&&e.type==='agent_event'&&e.event?.type==='tool_execution_start').length>=2,30000));
+      // One tool start is the whole sequence: the stub already detached a
+      // background task in the first cycle, so it goes straight to the
+      // blocking bg_await instead of replaying bash + bg_await.
+      assert(await wait(()=>events.slice(start).filter(e=>e.sessionId===sleepSID&&e.type==='agent_event'&&e.event?.type==='tool_execution_start').length>=1,30000),'bg_await did not start');
       send({type:'cancel',sessionId:sleepSID});
       // Wait for idle BEFORE the follow-up: a cancelled turn never drains
       // the queue, and stopping the detached runner takes a moment.

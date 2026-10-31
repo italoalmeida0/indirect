@@ -1,13 +1,14 @@
 // Real Chromium correctness/performance gate. Playwright remains external.
 // PLAYWRIGHT_MODULE=... CHROMIUM_PATH=... bun scripts/test-indirect-streaming-ui.ts
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { copiedMathFormulas, copiedMathMarkdown, mathFormulas, mathMarkdown } from "../test/fixtures/markdown-math";
 import solidPlugin from "../plugins/solid-plugin";
 import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
-const bundle = await Bun.build({ entrypoints: [new URL("../test/fixtures/indirect-streaming-ui.tsx", import.meta.url).pathname], target: "browser", plugins: [iconifyPlugin, solidPlugin] });
+const bundle = await Bun.build({ entrypoints: [fileURLToPath(new URL("../test/fixtures/indirect-streaming-ui.tsx", import.meta.url))], target: "browser", plugins: [iconifyPlugin, solidPlugin] });
 if (!bundle.success) throw new Error(bundle.logs.join("\n"));
-const worker = await Bun.build({ entrypoints: [new URL("../web/src/indirect-code/transcript/history-worker.ts", import.meta.url).pathname], target: "browser" });
+const worker = await Bun.build({ entrypoints: [fileURLToPath(new URL("../web/src/indirect-code/transcript/history-worker.ts", import.meta.url))], target: "browser" });
 if (!worker.success) throw new Error(worker.logs.join("\n"));
 const cssName = Array.from(new Bun.Glob("*.css").scanSync("dist"))[0];
 if (!cssName) throw new Error("Run bun run build:web before this browser check");

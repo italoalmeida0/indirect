@@ -2,6 +2,7 @@
 // general settings save/cancel/reload, expectedRevision conflicts, host and
 // request correlation, offline failures, and authoritative mirror acks.
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import solidPlugin from "../plugins/solid-plugin";
 import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const { chromium } = await import(
@@ -9,8 +10,7 @@ const { chromium } = await import(
 );
 const bundle = await Bun.build({
   entrypoints: [
-    new URL("../test/fixtures/indirect-settings-ui.tsx", import.meta.url)
-      .pathname,
+    fileURLToPath(new URL("../test/fixtures/indirect-settings-ui.tsx", import.meta.url)),
   ],
   target: "browser",
   plugins: [iconifyPlugin, solidPlugin],
