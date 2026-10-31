@@ -181,8 +181,23 @@ function windowChart(requested: UsageScope, userId: string | null, granularity: 
 /** One transaction in a bounded read worker supplies every chart in the page.
  * Long windows reuse monthly rollups; only exact partial-day edges scan events.
  * At most 48 time buckets × 6 model categories cross the HTTP boundary. */
+/** Opt-in stage timing for a single analytics page. The page splits one window
+ * across several aggregations and the cost is not evenly distributed, so
+ * `USAGE_ANALYTICS_TRACE=1` names each stage and its milliseconds instead of
+ * leaving an operator to guess which pass dominates. */
+const traceAnalytics = process.env.USAGE_ANALYTICS_TRACE === "1";
+function stage<T>(label: string, run: () => T): T {
+  if (!traceAnalytics) return run();
+  const started = performance.now();
+  try {
+    return run();
+  } finally {
+    console.log(`[ANALYTICS] ${label} ${(performance.now() - started).toFixed(1)}ms`);
+  }
+}
+
 export function filteredUsageAnalytics(scope: UsageScope, userId: string | null, requestedScope: UsageScope = scope, includeCost = true) {
-  const current = filteredUsageSeries(scope, userId);
+  const current = stage("series", () => filteredUsageSeries(scope, userId));
   // The chart grid is derived from the interval, not from the returned points:
   // an interval whose only rows are archived still charts at day resolution.
   const granularity = usageSeriesGranularity(scope);
@@ -191,11 +206,11 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null,
   // Both the chart and its comparison are aggregated from the month, day,
   // hour, minute and raw segments; the comparison used to run a second full
   // pass over the same history, doubling the cost of every analytics page.
-  const chart = windowChart(scope, userId, granularity, "usage_chart");
+  const chart = stage("chart", () => windowChart(scope, userId, granularity, "usage_chart"));
   // The comparison picks its OWN granularity: widening to archived days can
   // change the unit, and borrowing the current window's unit made an archived
   // comparison unreadable (it charted zero).
-  const comparison = previousWindow === null ? null : windowChart(previousWindow.scope, userId, null, "usage_comparison");
+  const comparison = previousWindow === null ? null : stage("comparison", () => windowChart(previousWindow.scope, userId, null, "usage_comparison"));
   const rows = chart.rows;
   const dates = chart.dates;
   const modelChart = (metric: "cost" | "reqs") => {
@@ -222,11 +237,11 @@ export function filteredUsageAnalytics(scope: UsageScope, userId: string | null,
   }
   // One scan of the dimensions feeds the user, key, provider and protocol
   // charts of the page; each of them used to re-split and re-price the range.
-  dimensionTable(scope, userId);
-  const users = userId === null ? breakdown(scope, null, "user_id", 8, includeCost) : [];
+  stage("dimensions", () => dimensionTable(scope, userId));
+  const users = userId === null ? stage("users", () => breakdown(scope, null, "user_id", 8, includeCost)) : [];
   return { ...current, previous: comparison === null ? [] : comparisonSeries(comparison), modelSpend: includeCost ? modelChart("cost") : { groups: [], points: [] }, modelRequests: modelChart("reqs"),
-    users, keys: breakdown(scope, userId, "key_id", 8, includeCost), outcomes,
-    providers: breakdown(scope, userId, "provider_id", 5, includeCost), protocols: breakdown(scope, userId, "proto", 2, includeCost),
+    users, keys: stage("keys", () => breakdown(scope, userId, "key_id", 8, includeCost)), outcomes,
+    providers: stage("providers", () => breakdown(scope, userId, "provider_id", 5, includeCost)), protocols: stage("protocols", () => breakdown(scope, userId, "proto", 2, includeCost)),
     activeUsers: users.reduce((sum, row) => sum + row.members, 0), scope: { from: scope.from, to: scope.to }, previousHistory: previousWindow?.history ?? null };
 }
 

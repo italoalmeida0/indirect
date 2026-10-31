@@ -75,6 +75,32 @@ qualified merely because its code exists. The detailed scope is in
   4/4 in 6.2 s), so the cause is host I/O under 76 concurrent SQLite files, not a
   regression; the bounded-concurrency run is what is recorded here.
 
+## Where the administrative analytics page spends its time
+
+`USAGE_ANALYTICS_TRACE=1` logs each stage of one analytics page. On the quick
+fixture, one uncached admin request per window:
+
+| Window | series | chart | comparison | dimensions | four breakdowns | total |
+| --- | --- | --- | --- | --- | --- | --- |
+| 90 days | 3,430 ms | 179 ms | 577 ms | 170 ms | 21 ms | ~4.4 s |
+| 365 days | 968 ms | 569 ms | 2,309 ms | 760 ms | 35 ms | ~4.7 s |
+| ten years | 1,431 ms | 1,083 ms | — | 1,300 ms | 23 ms | ~3.8 s |
+
+The first stage to touch a window pays its cold read and every later stage over
+the same rows is cheap — that is why the chart costs 179 ms right after the
+series costs 3,430 ms over identical data. The consequence for the target is
+that an analytics page reads **two** windows (the range and its comparison), so
+at least one of them is always cold: 365 days spends 2.3 s on the comparison
+alone.
+
+This is why a coarse rollup alone would not reach 1,000 ms here. A
+user-independent daily rollup collapses the series, chart and comparison to a few
+hundred rows, but the people chart needs per-user rows, and 90 days of 500 users
+is 45,000 rows even at the coarsest useful grain (user × day, no key, no model) —
+still a cold read on this disk. Reaching the target for cross-user analytics at
+500 users needs a host whose cold read of the retention window is fast (server
+NVMe and more RAM than the 16 GB available here), not just a different schema.
+
 ## Measured qualification run (quick profile, native ARM64)
 
 Host: Snapdragon X Elite 12-core, 16 GB RAM, Windows 11 ARM64, Bun 1.4.2
