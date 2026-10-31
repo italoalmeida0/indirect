@@ -139,6 +139,27 @@ that an analytics page reads **two** windows (the range and its comparison), so
 at least one of them is always cold: 365 days spends 2.3 s on the comparison
 alone.
 
+A later measurement separates that cold read from the steady state. Timing the
+rollup union (`usageSource`) on its own, per window, on a warm database:
+
+| Window | union rows | cost |
+| --- | --- | --- |
+| current 14 days | 42 | 140 ms |
+| previous 14 days | 39 | 164 ms |
+| current 90 days | 270 | 1,059 ms |
+| current 365 days | 1,095 | 14,126 ms (daily path; the page reads months here) |
+
+So in steady state the four aggregations of a 14-day page are comparable —
+series ~140, chart ~140, comparison ~160, dimensions ~170 ms, about 610 ms
+together — and the 3,430 ms figure above is the first stage absorbing the cold
+page-cache read for the whole page. Two optimizations were tried and rejected on
+measurement, which is why the code carries neither: dropping the model ranking
+from the comparison (it only feeds per-bucket totals) saved nothing, because the
+ranking runs over the ≤48 × 6 scratch table and the cost is building that table;
+and reading the four aggregations in parallel would cut ~610 ms of wall time to
+~180 ms but needs four jobs per page out of an eight-worker read pool, which the
+12 req/s dashboard saturates immediately.
+
 This is why a coarse rollup alone would not reach 1,000 ms here. A
 user-independent daily rollup collapses the series, chart and comparison to a few
 hundred rows, but the people chart needs per-user rows, and 90 days of 500 users
