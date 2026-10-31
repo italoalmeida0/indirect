@@ -53,6 +53,14 @@ try {
     if ((await btn.getAttribute("aria-expanded")) !== "true") await btn.click();
     await page.waitForSelector('[role="menuitemradio"], [role="menuitemcheckbox"]');
   };
+  /** Closes the menu deterministically. Escape only reaches the composer's
+   * handler while focus is inside it, and after a click on a skill row it is
+   * not, so the draft would silently stay uncommitted. */
+  const closeModeMenu = async () => {
+    const btn = page.getByRole("button", { name: "Agent mode and skills" });
+    if ((await btn.getAttribute("aria-expanded")) === "true") await btn.click();
+    await page.waitForSelector('[role="menuitemradio"], [role="menuitemcheckbox"]', { state: "detached" });
+  };
 
   // --- Draft bootstrap (page calls ensureSelection for a new draft) ---
   assert.equal(await ev(`a => { a.options.ensureSelection(); return a.options.selectedSkills().join(",") }`), "build", "draft must default to the first cached mode skill");
@@ -117,19 +125,31 @@ try {
   assert.equal(await page.getByRole("button", { name: "Change activation policy for plain" }).count(), 0, "no-usable-key skill must not offer a usable cycle (original = deny)");
   // Additional skill of the OTHER mode stays available, but the wire mode
   // never leaves talk; usable omitted vs differing rules still apply.
+  //
+  // The mode menu is a DRAFT editor: opening it snapshots the selection,
+  // toggles and badge cycles edit that draft, and applyDraft() persists the
+  // diff when it closes. So the selection and the update_skills command land
+  // on close, not on each click.
   await page.getByRole("menuitemcheckbox").filter({ hasText: "custom" }).click();
-  await page.waitForFunction(() => (window as any).modeSkillsUI.options.selectedSkills().includes("custom"));
   assert.equal(await ev(`a => a.options.sessionOptions().mode`), "talk", "locked session mode must not follow an additional skill");
   const badge = page.getByRole("button", { name: "Change activation policy for custom" });
   await badge.click(); // inherit -> ask (== original: omitted)
   await badge.click(); // ask -> yolo (differs: sent)
+  await closeModeMenu();
+  await page.waitForFunction(() => (window as any).modeSkillsUI.options.selectedSkills().includes("custom"));
   const upds = (await ev(`a => JSON.parse(JSON.stringify(a.commands))`)).filter((c: any) => c.type === "update_skills" && c.set.custom);
-  assert(upds.length >= 3, `expected toggle+2 cycle updates, got ${JSON.stringify(upds)}`);
-  assert(!("usable" in upds[upds.length - 2].set.custom), `usable equal to original must be omitted: ${JSON.stringify(upds[upds.length - 2])}`);
+  assert(upds.length >= 1, `closing the menu must send the skill update, got ${JSON.stringify(upds)}`);
+  assert.equal(upds[upds.length - 1].set.custom.active, true);
   assert.equal(upds[upds.length - 1].set.custom.usable, "yolo");
+  // Cycling back to the file's original ask must DROP the override instead of
+  // pinning it: omitted means inherit. Driven through the hook because the
+  // menu is a modal draft editor and re-opening it mid-assertion only tests the
+  // shortcut, not the diff rule.
+  const backToOriginal = (await ev(`a => { a.options.syncSkills(["talk","custom"], { custom: "ask" }); return JSON.parse(JSON.stringify(a.commands)) }`)).filter((c: any) => c.type === "update_skills" && c.set.custom);
+  assert(backToOriginal.length >= 1, "restoring the original usable must still reach the daemon");
+  assert(!("usable" in backToOriginal[backToOriginal.length - 1].set.custom), `usable equal to original must be omitted: ${JSON.stringify(backToOriginal[backToOriginal.length - 1])}`);
   assert.equal(await ev(`a => { a.options.syncSkills(["custom"]); return a.options.selectedSkills().join(",") }`), "talk,custom", "mandatory primary in a talk session is talk");
   await page.screenshot({ path: "/tmp/mode-skills-talk-locked.png" });
-  await page.keyboard.press("Escape");
 
   // --- Agentic session: talk is hidden, mode locked to agentic ---
   await page.getByRole("button", { name: "Projects", exact: true }).click();
@@ -152,6 +172,8 @@ try {
   await openModeMenu();
   assert.equal((await radios()).length, 0, "Mode section must disappear when no mode skill exists");
   await page.getByRole("menuitemcheckbox").filter({ hasText: "custom" }).click();
+  // Draft editor again: the toggle lands on the selection when the menu closes.
+  await closeModeMenu();
   await page.waitForFunction(() => (window as any).modeSkillsUI.options.selectedSkills().join(",") === "custom");
   assert.equal(await ev(`a => a.options.sessionOptions().mode`), "agentic", "mode must come from the first selected (additional) skill");
   await page.screenshot({ path: "/tmp/mode-skills-none.png" });

@@ -60,7 +60,10 @@ export function ToolbarContext() {
     if (isEditing()) return draftAgentMode();
     const opt = optimisticModeSkill();
     if (opt) {
-      const spec = modeSkills().find((m) => m.name === opt);
+      // Look the optimistic pick up in the UNFILTERED catalog: modeSkills()
+      // filters by this very function, so asking it here recursed until the
+      // stack blew up as soon as a mode pick was pending.
+      const spec = effectiveModeSkills(m.savedSkills(), m.skillsLoaded()).find((x) => x.name === opt);
       if (spec) return baseMode(spec.mode);
     }
     return c.agentMode();
