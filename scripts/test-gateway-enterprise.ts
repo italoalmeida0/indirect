@@ -35,7 +35,12 @@ const integer = (name: string, fallback: number) => {
 const full = args.includes("--full"), baseScenario = enterpriseDefaults(full);
 const users = integer("users", baseScenario.users), days = integer("days", baseScenario.days);
 const scenario = { ...baseScenario, users, days, requestsPerUserDay: integer("requests-per-user-day", baseScenario.requestsPerUserDay),
-  rawDays: Math.min(days, integer("raw-days", baseScenario.rawDays)), auditDays: Math.min(days, baseScenario.auditDays),
+  rawDays: Math.min(days, integer("raw-days", baseScenario.rawDays)),
+  // Audit history is independent of detailed-event retention, so it can be
+  // widened to the full ten years to measure the administrative log at the
+  // cardinality a long-lived installation actually reaches.
+  auditDays: Math.min(days, integer("audit-days", baseScenario.auditDays)),
+  auditPerUserDay: integer("audit-per-user-day", baseScenario.auditPerUserDay),
   reservationDays: Math.min(days, integer("reservation-days", baseScenario.reservationDays)) };
 const specifiedDir = arg("dir") ? path.resolve(arg("dir")!) : undefined;
 const samples = integer("samples", 1200), rate = integer("rate", 32), dashboardLimitMs = integer("dashboard-p99", 1000), apiLimitMs = integer("api-p99", 100);

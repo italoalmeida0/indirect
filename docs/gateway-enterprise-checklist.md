@@ -114,6 +114,14 @@ still a cold read on this disk. Reaching the target for cross-user analytics at
 500 users needs a host whose cold read of the retention window is fast (server
 NVMe and more RAM than the 16 GB available here), not just a different schema.
 
+- [x] **All four gates also passed on native Linux CI**, not only on this
+  Windows ARM64 laptop: run `41168782145` on the pushed `dev` revision reports
+  `Install dependencies`, `Lint`, `Typecheck`, `Unit + integration tests` and
+  `SPA build sanity` as successful in the `Gateway (Linux)` job, and the
+  enterprise browser evidence step before the failing one also passed. The job
+  then fails at `Transcript browser regressions`, which is outside this brief's
+  gateway scope and pre-existing (see below).
+
 ## Measured qualification run (quick profile, native ARM64)
 
 Host: Snapdragon X Elite 12-core, 16 GB RAM, Windows 11 ARM64, Bun 1.4.2
@@ -213,14 +221,31 @@ budget and the zero-error requirement fail; the proxy overhead budget fails at
 difference is the larger detailed table and 16 GB of RAM against a 55 GB
 database, not the gateway's request path.
 
-**Caveat that makes these numbers pessimistic:** `usage_events` carries **no
-planner statistics** in this fixture. `PRAGMA analysis_limit` is not honoured in
-this environment — `ANALYZE` on the 5.48M-row rollup tables took 27–155 s, which
-is a full index walk, not a bounded sample — so a full `ANALYZE` of the
-100M-row table is not feasible here. A real installation builds those statistics
-incrementally as it grows, so its plans for the events grid and partial-day
-edges would be better than measured. The administrative aggregates do not touch
-`usage_events`, so their 5-second timeouts are not explained by this caveat.
+**Correction — `analysis_limit` works, and the event table now has statistics.**
+An earlier note here claimed the pragma was ignored because `ANALYZE` on a
+5.48M-row table took 27–155 s. That was wrong: the pragma is honoured and the
+cost was cold random I/O. Controlled measurement on a 2M-row table gives 78 ms
+with `analysis_limit=8` against 216 ms with `0`; on the 10,950,005-row audit
+table it is 787 ms warm against 28,215 ms cold. `ANALYZE usage_events` on the
+55 GB fixture then completed in **1,252.7 s (20.9 min)** and wrote full
+statistics for all seven indexes (100,001,250 rows).
+
+**The delivered-retention numbers are dominated by page-cache state, not by
+plans.** Three runs of the same workload on the same fixture:
+
+| Run | Host state | Accuracy precheck | API p99 | Dashboard p99 (errors) |
+| --- | --- | --- | --- | --- |
+| before statistics | warmed by the 5.2M-row hour backfill | passed | 164.2 ms | 5,019.9 ms (28) |
+| after statistics | still flushing the 20-minute ANALYZE | passed | 3,867.8 ms | 7,448.9 ms (117) |
+| after statistics, restarted | 0.2 GiB of 15.6 GiB RAM free | **failed (503)** | — | — |
+
+In the second run even `/api/admin/keys` reached 4,306 ms at p99 and `/api/billing`
+6,036 ms, which no query plan explains. A 55 GB database against 16 GB of RAM
+cannot hold its working set, so the same workload moves by more than an order of
+magnitude with cache state and at times cannot complete the ten-year accuracy
+check inside the 5 s analytics budget. That is the binding constraint on this
+host, and it is why the dashboard and burst targets are reported as unmet rather
+than as an optimisation still to land.
 
 ## Browser gates
 
@@ -236,6 +261,31 @@ edges would be better than measured. The administrative aggregates do not touch
   p99 1,125 ms; per page `/` 347/380/1,125, `/usage` 562/768/773,
   `/admin/stats` 488/553/664. With 20 samples the p99 is the maximum, so this
   neither confirms nor refutes the target — it only informed it.
+
+## Ten-year audit cardinality (10,950,005 rows)
+
+`bun scripts/test-gateway-enterprise.ts --seed-only --users=500
+--requests-per-user-day=500 --raw-days=2 --audit-days=3650 --reservation-days=2`
+seeds ten years of audit history (500 users × 6 entries × 3,650 days) into a
+9.3 GB fixture. Measured on that fixture:
+
+| Query | Result |
+| --- | --- |
+| first page, cold | 155 ms |
+| first page, warm (3 runs) | 157 / 157 / 191 ms |
+| deep keyset cursor page | 190 ms |
+| exact action filter (`login.success`) | 209 ms cold, 238 ms warm, total 3,650,001 |
+| sort by `ts` | 3,763 ms |
+| sort by `actor_email` | 13,299 ms |
+
+Paging and filtering hold up at ten-year cardinality; **custom column sorts do
+not**. The page query wraps `SELECT a.*, u.email … FROM audit_log a LEFT JOIN
+users u` in subqueries, so `ORDER BY` cannot use `idx_audit_ts` and the whole
+history is sorted: 3.8 s for a `ts` sort and 13.3 s for a sort on the joined
+actor email. Default order (newest first) and cursor paging are unaffected, so
+this is not on the measured dashboard path, and it is reported rather than
+fixed: the fix (order and limit the bare table, then join the actor for the page)
+touches the audit page's SQL and belongs behind its own regression test.
 
 ## Sustained mixed soak (quick profile)
 
@@ -269,9 +319,24 @@ the fixture retains two detailed days rather than 400.
 
 ## Not verified — must not be reported as passing
 
-- [ ] Ten-year audit cardinality (every fixture profile seeds 365 audit days).
-- [ ] A dedicated streaming-throughput profile at the agreed arrival rate (the
-  soak measured streaming under mixed load, and sustained traffic has not been
-  run against the delivered retention).
-- [ ] The explicit capacity workflow has not executed on a dedicated native
-  runner; a local result on a laptop is evidence, not a qualification.
+- [ ] **The capacity qualification workflow has never completed a run.** Two
+  independent reasons: GitHub only dispatches `workflow_dispatch` for a workflow
+  that exists on the default branch (`main` holds `ci.yml` and `release.yml`
+  only, while this one lives on `dev`), and the repository has **0 registered
+  self-hosted runners** for its default labels
+  `["self-hosted","linux","ARM64","enterprise-capacity"]`
+  (`gh api .../actions/runners` → `total_count: 0`). The preflight also requires
+  20 GiB free for the quick profile and 100 GiB for full400, which a
+  GitHub-hosted runner does not provide.
+- [ ] **`dev` CI is red for reasons that predate this work.** On the pushed
+  revision the `Gateway (Linux)` job passed dependency install, lint, typecheck,
+  `bun test`, SPA build sanity and the enterprise browser evidence, and failed
+  only at `Transcript browser regressions` (`0 !== 1`, an Indirect Code transcript
+  script). The Go daemon and race jobs also fail. The run that precedes this work
+  (`41071388519`) failed the same `Gateway (Linux)` job with a different browser
+  assertion (`Expected: > 1000`), so the red state is inherited; the Indirect Code
+  suite needs its own investigation and its scripts require `dist/`, the daemon
+  binary and `META_API_KEY`, none of which this session set up.
+- [ ] Sustained traffic against the delivered retention. The soaks ran on the
+  quick profile; the delivered-retention runs could not be repeated once free
+  memory fell to 0.2 GiB of 15.6 GiB.
