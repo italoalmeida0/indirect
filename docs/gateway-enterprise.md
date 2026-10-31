@@ -485,7 +485,10 @@ A later native ARM64 run (Snapdragon X Elite, 12 cores, 16 GB, Bun 1.4.2
 arm64, quick profile: 500 users, two detailed days, 913,250,000 represented
 requests, 1,200 samples at 32/s) measured gateway-added API **p99 69.3 ms** with
 0/1,200 errors, dashboard p99 2,355 ms with 0/1,200 errors, and a 50-user burst
-p99 of 1,431 ms. The gateway-added number requires measuring from a second
+p99 of 1,431 ms. The enforced browser gate passed on the same hardware at
+**p99 701.3 ms** over 1,000 interactions against the production SPA (per page:
+`/` 400, `/usage` 731, `/admin/stats` 579 ms), with 0 failed interactions and 0
+runtime errors. The gateway-added number requires measuring from a second
 process (`--serve` plus `--base`): with the fixture upstream and the load
 generator sharing one event loop, generator queueing was charged to the gateway
 and the same run reported 270.7 ms. Every non-administrative dashboard route
