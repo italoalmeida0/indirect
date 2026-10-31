@@ -367,16 +367,17 @@ the fixture retains two detailed days rather than 400.
   profile requires 100 GiB free and the default
   `["self-hosted","linux","ARM64","enterprise-capacity"]` label still has
   **0 registered runners**, so that profile has only ever run on this laptop.
-- [ ] **`dev` CI is red for reasons that predate this work.** On the pushed
-  revision `1f5631d` the `Gateway (Linux)` job passes dependency install, lint,
-  typecheck, the 934-test suite, SPA build sanity and the enterprise browser
-  evidence, then fails at `Transcript browser regressions` (`0 !== 1`, an
-  Indirect Code transcript script) — and the same job fails, with a different
-  browser assertion (`Expected: > 1000`), on run `41071388519` from before this
-  work started. The other platform daemon jobs also fail (`Daemon race (Linux)`
-  alternates between pass and fail), e.g. `scripts/test-indirect-daemon-protocol.ts:97`.
-  That suite needs its own investigation: its scripts require `dist/`, the daemon
-  binary and `META_API_KEY`, none of which this session set up.
+- [x] **CI is green on `main`.** Run `41236854039` passes all nine jobs
+  (Gateway, the six native daemon jobs, the race detector and the musl /
+  glibc-free proof). The failures recorded here were real and each had its own
+  cause: the transcript fixture mounted the components without the app's domain
+  contexts and rendered nothing; the daemon e2e scripts created skill-less
+  sessions, which the base policy denies before a human sees the approval; the
+  release validator rejected the installer scripts the packaging step lists as
+  assets; the mode menu's optimistic pick recursed through its own filtered
+  list; and `handleFiles` had replaced trimming with rejecting the whole batch.
+  The race detector also found two unsynchronized pointers (the skill registry
+  and the broadcast cursor), now atomic.
 - [ ] Sustained traffic against the delivered retention. The soaks ran on the
   quick profile; the delivered-retention runs could not be repeated once free
   memory fell to 0.2 GiB of 15.6 GiB.
