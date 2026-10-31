@@ -121,8 +121,10 @@ jobs:
         # download: no fixture, database or measurement uses it.
         env:
           DATA_DIR: ${{ runner.temp }}/enterprise-obscura
-          GATEWAY_SECRET: 0000000000000000000000000000000000000000000000000000000000000000
-          INDIRECT_SECRET: 0000000000000000000000000000000000000000000000000000000000000000
+          # Quoted on purpose: an unquoted 64-digit run of zeros parses as the
+          # integer 0, and boot then rejects a one-character secret.
+          GATEWAY_SECRET: "9f2c4a7e1b8d3506c9e4f7a2b5d8e1c4f7a0b3d6e9c2f5a8b1d4e7c0f3a6b9d2"
+          INDIRECT_SECRET: "9f2c4a7e1b8d3506c9e4f7a2b5d8e1c4f7a0b3d6e9c2f5a8b1d4e7c0f3a6b9d2"
         run: |
           set -euo pipefail
           mkdir -p "$DATA_DIR"
