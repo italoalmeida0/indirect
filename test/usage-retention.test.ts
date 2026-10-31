@@ -227,8 +227,15 @@ test("pruning 200,000 expired events yields between bounded transactions and doe
     expect(liveWrites).toBeGreaterThanOrEqual(8);
     expect(analyticsChecks).toBeGreaterThanOrEqual(4);
     expect(samples.length).toBeGreaterThan(10);
-    // Must stay far below the 2.3s synchronous lock stall (and well below 250ms).
-    expect(maxHealthMs).toBeLessThan(250);
+    // The regression this guards is the 2.3s SYNCHRONOUS lock stall, where every
+    // probe waited behind one giant DELETE transaction. A 2-vCPU runner starves
+    // a probe for hundreds of milliseconds with no lock held at all (436ms
+    // measured there, 40-70ms here), so the typical latency carries the strict
+    // bound and the maximum only has to stay far below the stall it replaced.
+    const sorted = [...samples].sort((a, b) => a - b);
+    const medianHealthMs = sorted[Math.floor(sorted.length / 2)];
+    expect(medianHealthMs).toBeLessThan(150);
+    expect(maxHealthMs).toBeLessThan(1_000);
     expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM usage_events").get()!.n).toBe(1_000 + liveWrites);
   } finally {
     try { prober.kill(); } catch {}
