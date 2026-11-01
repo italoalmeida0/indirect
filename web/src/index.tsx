@@ -84,26 +84,56 @@ interface NavItem {
   icon: string;
 }
 
+interface NavGroup {
+  label: string;
+  items: NavItem[];
+}
+
 const USER_NAV: NavItem[] = [
   { path: "/", label: "Overview", icon: Icons.home },
   { path: "/code", label: "Indirect Code", icon: Icons.idc },
-  { path: "/keys", label: "API Keys", icon: Icons.key },
+  { path: "/keys", label: "API keys", icon: Icons.key },
   { path: "/usage", label: "Usage", icon: Icons.chart },
   { path: "/limits", label: "Plan & limits", icon: "lucide:wallet" },
   { path: "/projects", label: "Financial projects", icon: Icons.folder },
   { path: "/settings", label: "Settings", icon: Icons.cog },
 ];
 
-const ADMIN_NAV: NavItem[] = [
-  { path: "/admin", label: "Global stats", icon: Icons.bolt },
-  { path: "/admin/providers", label: "Providers", icon: Icons.server },
-  { path: "/admin/models", label: "Models", icon: Icons.layers },
-  { path: "/admin/users", label: "Users", icon: Icons.users },
-  { path: "/admin/plans", label: "Plans", icon: "lucide:wallet" },
-  { path: "/admin/keys", label: "All Keys", icon: Icons.key },
-  { path: "/admin/audit", label: "Audit Log", icon: Icons.book },
-  { path: "/admin/organization", label: "Organization", icon: Icons.cog },
+/** Administration is grouped by the job an operator is doing, so the rail
+ *  separates observability, routing, access and installation configuration
+ *  instead of presenting eight unrelated links. */
+const ADMIN_GROUPS: NavGroup[] = [
+  {
+    label: "Observability",
+    items: [
+      { path: "/admin", label: "Global stats", icon: "lucide:activity" },
+      { path: "/admin/audit", label: "Audit log", icon: Icons.book },
+    ],
+  },
+  {
+    label: "Routing",
+    items: [
+      { path: "/admin/providers", label: "Providers", icon: Icons.server },
+      { path: "/admin/models", label: "Models", icon: Icons.layers },
+    ],
+  },
+  {
+    label: "Access & billing",
+    items: [
+      { path: "/admin/users", label: "Users", icon: Icons.users },
+      { path: "/admin/plans", label: "Plans", icon: "lucide:wallet" },
+      { path: "/admin/keys", label: "All keys", icon: Icons.key },
+    ],
+  },
+  {
+    label: "Configuration",
+    items: [
+      { path: "/admin/organization", label: "Organization", icon: "lucide:building-2" },
+    ],
+  },
 ];
+
+const ADMIN_NAV: NavItem[] = ADMIN_GROUPS.flatMap((group) => group.items);
 
 function pageInfo(path: string): NavItem {
   const all = [...USER_NAV, ...ADMIN_NAV];
@@ -260,10 +290,20 @@ function AppShell(props: { children: JSX.Element }) {
           </For>
           <Show when={user().role === "admin"}>
             <span class="w-6 lg:w-56 h-px bg-line mt-4 mb-2 shrink-0" />
-            <span class="hidden lg:block w-60 px-2.5 pb-1 text-[10px] font-medium text-ink-500">Administration</span>
-            <For each={ADMIN_NAV}>
-              {(item) => <RailItem item={item} current={route().path} />}
-            </For>
+            <div class="w-full flex flex-col items-center" role="group" aria-label="Administration">
+              <For each={ADMIN_GROUPS}>
+                {(group, index) => (
+                  <div class="gw-nav-group w-full flex flex-col items-center gap-0.5" role="group" aria-label={group.label}>
+                    <span class={`gw-nav-group-label hidden lg:block w-60 px-2.5 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-ink-500 ${index() === 0 ? "" : "mt-1"}`}>
+                      {group.label}
+                    </span>
+                    <For each={group.items}>
+                      {(item) => <RailItem item={item} current={route().path} />}
+                    </For>
+                  </div>
+                )}
+              </For>
+            </div>
           </Show>
         </nav>
         <div class="flex items-center justify-center lg:justify-start lg:w-60 lg:px-2 pt-3">
@@ -303,17 +343,23 @@ function AppShell(props: { children: JSX.Element }) {
           </div>
         </div>
         <Show when={mobileNav()}>
-          <div class="border-t border-line anim-fade-in px-3 py-3 space-y-0.5 max-h-[70vh] overflow-y-auto">
+          <div class="border-t border-line anim-fade-in bg-ink-950 px-3 py-3 space-y-0.5 max-h-[calc(100dvh-3.5rem)] overflow-y-auto overscroll-contain">
             <For each={USER_NAV}>{mobileLink}</For>
             <Show when={user().role === "admin"}>
-              <div class="px-4 pt-3 pb-1 text-[10px] font-medium uppercase tracking-wider text-ink-500">
-                Administration
-              </div>
-              <For each={ADMIN_NAV}>{mobileLink}</For>
+              <For each={ADMIN_GROUPS}>
+                {(group) => (
+                  <div class="pt-3">
+                    <div class="px-4 pb-1 text-[10px] font-medium uppercase tracking-wider text-ink-500">
+                      {group.label}
+                    </div>
+                    <For each={group.items}>{mobileLink}</For>
+                  </div>
+                )}
+              </For>
             </Show>
             <button
               onClick={logout}
-              class="w-full flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
+              class="mt-3 w-full flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
             >
               <Icon name={Icons.logout} size={20} />
               Sign out

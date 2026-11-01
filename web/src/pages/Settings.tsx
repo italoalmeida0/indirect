@@ -191,7 +191,7 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <PageTitle title="Settings" />
+      <PageTitle title="Settings" subtitle="Your profile, sign-in security and active browser sessions." />
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card>

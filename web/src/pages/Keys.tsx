@@ -474,7 +474,8 @@ export default function KeysPage() {
   return (
     <div class="catalog-page" aria-busy={view.loading()}>
       <PageTitle
-        title="API Keys"
+        title="API keys"
+        subtitle="Create and manage keys that authenticate your gateway traffic."
         right={
           <Btn onClick={() => setShowCreate(true)}>
             <Icon name={Icons.plus} /> New key

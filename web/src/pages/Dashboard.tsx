@@ -1,8 +1,12 @@
 import {
   createMemo,
   createResource,
+  ErrorBoundary,
+  For,
   Show,
+  Suspense,
   type JSX,
+  type Resource,
 } from "solid-js";
 
 import { PlanUsageCard } from "../billing";
@@ -27,6 +31,7 @@ import type { ActivityScope } from "../overview-activity";
 import { usal, usalItems } from "../motion";
 import {
   Card,
+  Btn,
   Icon,
   Icons,
   copyWithToast,
@@ -42,38 +47,134 @@ const IN_COLOR = "var(--chart-strong)";
 const CACHE_COLOR = "var(--chart-mid)";
 const OUT_COLOR = "var(--chart-soft)";
 
+/** A failed overview read stays a value, not a thrown resource error, so the
+ *  page can keep its header, last data and retry action on screen. */
+type OverviewSeries =
+  | {
+      ok: true;
+      points: DailyPoint[];
+      models: TopModelDto[];
+      history?: UsageHistoryDto;
+      scope: ActivityScope;
+    }
+  | { ok: false; error: string };
+
+interface PreviousWindow {
+  points: DailyPoint[];
+  history?: UsageHistoryDto;
+}
+
+const failure = (error: unknown) =>
+  error instanceof Error ? error.message : "Request failed";
+
+/**
+ * Overview shell: the page header and range controls render immediately and
+ * stay interactive while the cards below load. Resources are created here but
+ * only read inside `OverviewBody`, which has its own Suspense boundary, so a
+ * slow analytics read never blanks the whole route.
+ */
 export default function DashboardPage() {
   const showUsd = createMemo(() => currentFinancialPolicy().budgetPresentation === "usd");
   const filters = createAnalyticsFilters();
-  const [series] = createResource(
+  const [series, { refetch: refetchSeries }] = createResource(
     () => ({ query: filters.query(), rev: policyRevision() }),
-    async ({ query }) => {
-      const params = new URLSearchParams(query);
-      const range = { preset: "custom", from: params.get("from") === "all" ? null : Number(params.get("from")), to: Number(params.get("to")) };
-      const j = await api<{ series: DailyPoint[]; granularity: ActivityScope["unit"]; models: TopModelDto[]; history?: UsageHistoryDto }>("GET", `/api/usage/overview?${query}`);
-      // Keep counts and their resolved scope together while the next window loads.
-      return { points: j.series, models: j.models, history: j.history, scope: { from: j.history?.effective.from ?? range.from, to: j.history?.effective.to ?? range.to, unit: j.granularity ?? rangeUnit(range) } };
+    async ({ query }): Promise<OverviewSeries> => {
+      try {
+        const params = new URLSearchParams(query);
+        const range = { preset: "custom", from: params.get("from") === "all" ? null : Number(params.get("from")), to: Number(params.get("to")) };
+        const j = await api<{ series: DailyPoint[]; granularity: ActivityScope["unit"]; models: TopModelDto[]; history?: UsageHistoryDto }>("GET", `/api/usage/overview?${query}`);
+        // Keep counts and their resolved scope together while the next window loads.
+        return { ok: true, points: j.series, models: j.models, history: j.history, scope: { from: j.history?.effective.from ?? range.from, to: j.history?.effective.to ?? range.to, unit: j.granularity ?? rangeUnit(range) } };
+      } catch (error) {
+        return { ok: false, error: failure(error) };
+      }
     },
   );
-  const [previous] = createResource(
+  const [previous, { refetch: refetchPrevious }] = createResource(
     () => ({ query: filters.query(), rev: policyRevision() }),
-    async ({ query }) => {
-      const params = new URLSearchParams(query);
-      if (params.get("from") === "all") return { points: [] as DailyPoint[], history: undefined };
-      const range = { from: Number(params.get("from")), to: Number(params.get("to")) };
-      if (range.from === 0) return { points: [] as DailyPoint[], history: undefined };
-      params.set("from", String(Math.max(0, range.from - (range.to - range.from))));
-      params.set("to", String(range.from));
-      const j = await api<{ series: DailyPoint[]; history?: UsageHistoryDto }>("GET", `/api/usage/daily?${params}`);
-      return { points: j.series, history: j.history };
+    async ({ query }): Promise<PreviousWindow> => {
+      try {
+        const params = new URLSearchParams(query);
+        if (params.get("from") === "all") return { points: [] as DailyPoint[], history: undefined };
+        const range = { from: Number(params.get("from")), to: Number(params.get("to")) };
+        if (range.from === 0) return { points: [] as DailyPoint[], history: undefined };
+        params.set("from", String(Math.max(0, range.from - (range.to - range.from))));
+        params.set("to", String(range.from));
+        const j = await api<{ series: DailyPoint[]; history?: UsageHistoryDto }>("GET", `/api/usage/daily?${params}`);
+        return { points: j.series, history: j.history };
+      } catch {
+        // The comparison is optional; never fail the overview for it.
+        return { points: [] as DailyPoint[], history: undefined };
+      }
     },
   );
-  const [keys] = createResource(policyRevision, async () => {
-    const j = await api<{ keys: ProjectedApiKeyDto[] }>("GET", "/api/keys");
-    return j.keys;
+  const [keys, { refetch: refetchKeys }] = createResource(policyRevision, async () => {
+    try {
+      const j = await api<{ keys: ProjectedApiKeyDto[] }>("GET", "/api/keys");
+      return j.keys;
+    } catch {
+      return null;
+    }
   });
-  const view = () => series()?.points ?? [];
-  const comparison = () => previous.loading ? [] : previous()?.points ?? [];
+  const retryOverview = () => {
+    refetchSeries();
+    refetchPrevious();
+    refetchKeys();
+  };
+
+  const todayStr = new Date().toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+
+  return (
+    <div aria-busy={filters.pending() || series.loading}>
+      <div class="overview-header">
+        <PageTitle title="Overview" subtitle={todayStr} />
+        <AnalyticsToolbar filters={filters} loading={series.loading} align="end" />
+      </div>
+      <ErrorBoundary
+        fallback={(error) => (
+          <OverviewError
+            message={failure(error)}
+            onRetry={() => location.reload()}
+          />
+        )}
+      >
+        <Suspense fallback={<OverviewSkeleton spend={showUsd()} />}>
+          <OverviewBody
+            series={series}
+            previous={previous}
+            keys={keys}
+            filters={filters}
+            showUsd={showUsd()}
+            onRetry={retryOverview}
+          />
+        </Suspense>
+      </ErrorBoundary>
+    </div>
+  );
+}
+
+function OverviewBody(props: {
+  series: Resource<OverviewSeries>;
+  previous: Resource<PreviousWindow>;
+  keys: Resource<ProjectedApiKeyDto[] | null>;
+  filters: ReturnType<typeof createAnalyticsFilters>;
+  showUsd: boolean;
+  onRetry: () => void;
+}): JSX.Element {
+  const data = createMemo(() => {
+    const result = props.series();
+    return result?.ok ? result : undefined;
+  });
+  const error = createMemo(() => {
+    const result = props.series();
+    return result && !result.ok ? result.error : undefined;
+  });
+  const view = () => data()?.points ?? [];
+  const comparison = () => props.previous.loading ? [] : props.previous()?.points ?? [];
   // Keep the three buckets visible alongside the requested combined headline.
   const winIn = createMemo(() =>
     view().reduce((s, d) => s + (d.in_tok ?? 0), 0),
@@ -128,36 +229,28 @@ export default function DashboardPage() {
     deltaPct(view(), comparison(), (d) => d.cost_out ?? 0),
   );
 
-  const todayStr = new Date().toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  });
-
   return (
-    <div aria-busy={filters.pending() || series.loading}>
-      <div class="overview-header">
-        <PageTitle title="Overview" subtitle={todayStr} />
-        <AnalyticsToolbar filters={filters} loading={series.loading} align="end" />
-      </div>
-      <AnalyticsHistoryNotice history={series()?.history} previous={previous()?.history} />
+    <div aria-busy={props.series.loading}>
+      <Show when={error()}>
+        {(message) => <OverviewError message={message()} onRetry={props.onRetry} />}
+      </Show>
+      <AnalyticsHistoryNotice history={data()?.history} previous={props.previous()?.history} />
 
       {/* Keep the previous window visible while refreshing. The keyed resource
           mounts CountUp with resolved values so USAL always owns fresh nodes. */}
-      <Show when={series() !== undefined}>
-        <Show when={series()} keyed>
-          {(_series) => (
+      <Show when={data()} keyed>
+        {(current) => (
           <div
-            class={`overview-charts grid grid-cols-1 ${showUsd() ? "md:grid-cols-2" : ""} gap-5 mb-5`}
+            class={`overview-charts grid grid-cols-1 ${props.showUsd ? "md:grid-cols-2" : ""} gap-5 mb-5`}
             {...usalItems("fade-u", 110)}
           >
-            <Show when={showUsd()}>
+            <Show when={props.showUsd}>
               <Card class="overview-spend p-5 min-w-0 flex flex-col justify-between">
                 <div>
                   <AnalyticsHero
                     icon={Icons.dollarSign}
                     cost={winCost()}
-                    label={`Spend · ${filters.label()}`}
+                    label={`Spend · ${props.filters.label()}`}
                     delta={costDelta()}
                   />
                   <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
@@ -190,8 +283,8 @@ export default function DashboardPage() {
                     metric="cost"
                     variant="line"
                     height={200}
-                    unit={series()?.scope.unit ?? filters.unit()}
-                    resetKey={`spend:${filters.query()}`}
+                    unit={current.scope.unit}
+                    resetKey={`spend:${props.filters.query()}`}
                   />
                 </div>
               </Card>
@@ -202,7 +295,7 @@ export default function DashboardPage() {
                 <AnalyticsHero
                   icon={Icons.chart}
                   count={winIn() + winCache() + winOut()}
-                  label={`Tokens · ${filters.label()}`}
+                  label={`Tokens · ${props.filters.label()}`}
                   delta={tokensDelta()}
                 />
                 <div class="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-line">
@@ -234,22 +327,21 @@ export default function DashboardPage() {
                   series={view()}
                   metric="tokens"
                   height={200}
-                  unit={series()?.scope.unit ?? filters.unit()}
-                  resetKey={`tokens:${filters.query()}`}
+                  unit={current.scope.unit}
+                  resetKey={`tokens:${props.filters.query()}`}
                 />
               </div>
             </Card>
 
             <div class="overview-activity-row">
               <Card class="overview-requests p-5 min-w-0">
-                <AnalyticsHero icon={Icons.bolt} count={winReqs()} label={`Requests · ${filters.label()}`} delta={reqDelta()} />
-                <RequestHeatmap series={view()} scope={series()!.scope} cacheHitRate={cacheHitRate()} />
+                <AnalyticsHero icon={Icons.bolt} count={winReqs()} label={`Requests · ${props.filters.label()}`} delta={reqDelta()} />
+                <RequestHeatmap series={view()} scope={current.scope} cacheHitRate={cacheHitRate()} />
               </Card>
-              <TopModelsCard models={series()!.models} requests={winReqs()} label={filters.label()} />
+              <TopModelsCard models={current.models} requests={winReqs()} label={props.filters.label()} />
             </div>
           </div>
-          )}
-        </Show>
+        )}
       </Show>
 
       <div
@@ -273,7 +365,7 @@ export default function DashboardPage() {
               label="Anthropic-compatible"
               value={`${location.origin}/anthropic/v1`}
             />
-            <Show when={(keys() ?? []).length === 0}>
+            <Show when={props.keys()?.length === 0}>
               <button
                 onClick={() => navigate("/keys")}
                 class="ui-button ui-button-primary group mt-1 w-full justify-between"
@@ -287,6 +379,113 @@ export default function DashboardPage() {
                 />
               </button>
             </Show>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function OverviewError(props: { message: string; onRetry: () => void }): JSX.Element {
+  return (
+    <Card class="overview-error p-4 sm:p-5 mb-5">
+      <div class="overview-error-row" role="alert">
+        <Icon name="lucide:circle-alert" size={18} class="overview-error-icon text-amber-500" />
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-medium text-ink-100">Usage analytics could not be loaded</p>
+          <p class="text-xs text-ink-400 mt-1">
+            {props.message.replace(/\.$/, "")}. Retry the selected period.
+          </p>
+        </div>
+        <Btn variant="outline" size="sm" onClick={props.onRetry}>
+          Try again
+        </Btn>
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * First-load placeholder for the analytics region. It mirrors the card grid
+ * and approximate heights, so the header, plan card and endpoint card do not
+ * jump when the payload resolves. The real cards fade in through USAL.
+ */
+function OverviewSkeleton(props: { spend: boolean }): JSX.Element {
+  const metric = () => (
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <div class="ui-skeleton h-2.5 w-24" />
+        <div class="ui-skeleton h-8 w-36 mt-3 rounded-lg" />
+      </div>
+      <div class="ui-skeleton w-10 h-10 rounded-lg" />
+    </div>
+  );
+  const buckets = () => (
+    <div class="grid grid-cols-3 gap-2 mt-5 pt-4 border-t border-line">
+      <For each={[0, 1, 2]}>
+        {() => (
+          <div>
+            <div class="ui-skeleton h-2 w-10" />
+            <div class="ui-skeleton h-3.5 w-16 mt-2" />
+            <div class="ui-skeleton h-2 w-8 mt-2" />
+          </div>
+        )}
+      </For>
+    </div>
+  );
+  const chart = () => <div class="ui-skeleton flex-1 min-h-48 mt-5 rounded-xl" />;
+  return (
+    <div
+      class="overview-charts grid grid-cols-1 md:grid-cols-2 gap-5 mb-5"
+      role="status"
+      aria-label="Loading usage analytics"
+    >
+      <Show when={props.spend}>
+        <Card class="overview-skeleton-card p-5 flex flex-col">
+          {metric()}
+          {buckets()}
+          {chart()}
+        </Card>
+      </Show>
+      <Card class="overview-skeleton-card p-5 flex flex-col">
+        {metric()}
+        {buckets()}
+        {chart()}
+      </Card>
+      <div class="overview-activity-row">
+        <Card class="overview-skeleton-card overview-skeleton-activity p-5 flex flex-col">
+          {metric()}
+          <div class="ui-skeleton h-2.5 w-28 mt-7" />
+          <div class="grid grid-cols-7 gap-1.5 mt-4">
+            <For each={Array.from({ length: 28 })}>
+              {() => <div class="ui-skeleton aspect-square rounded" />}
+            </For>
+          </div>
+        </Card>
+        <Card class="overview-skeleton-card overview-skeleton-activity p-5 flex flex-col">
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+              <div class="ui-skeleton h-3 w-24" />
+              <div class="ui-skeleton h-2 w-32 mt-2" />
+            </div>
+            <div class="ui-skeleton w-5 h-5 rounded" />
+          </div>
+          <div class="mt-4">
+            <For each={[0, 1, 2, 3]}>
+              {() => (
+                <div class="flex items-center gap-3 py-4 border-b border-line last:border-0">
+                  <div class="ui-skeleton h-2.5 w-4" />
+                  <div class="min-w-0 flex-1">
+                    <div class="ui-skeleton h-3 w-36 max-w-full" />
+                    <div class="ui-skeleton h-2 w-52 max-w-full mt-2" />
+                  </div>
+                  <div class="w-14 shrink-0">
+                    <div class="ui-skeleton h-3 w-10 ml-auto" />
+                    <div class="ui-skeleton h-1.5 w-full mt-2 rounded-full" />
+                  </div>
+                </div>
+              )}
+            </For>
           </div>
         </Card>
       </div>
