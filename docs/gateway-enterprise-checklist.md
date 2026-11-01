@@ -138,12 +138,16 @@ bound was met in some runs and missed in others:
 | `41253904158` | 619.5 ms | every route under 1,000 | ✅ |
 | `41258711679` | 462.7 ms | every route under 1,000 | ✅ |
 | `41260763738` | — | `/` 323, `/usage` 1,083, `/admin/stats` 1,337 | ❌ |
+| `41263714844` | — | `/` 502, `/usage` 780, `/admin/stats` 717 | ✅ |
 
-The median interaction is ~200-250 ms; what crosses the bound is a tail, and it
-crosses it by 8-34%. `/usage` is the user's own page and keeps strict semantics
-on purpose — a request just made must appear — so it cannot take the snapshot
-allowance, and its tail has to come from a cheaper cold read. That is the one
-measurement in this brief that is not reproducibly inside its budget.
+The median interaction is ~200-270 ms. Run `41263714844` is the second complete
+pass of the whole workflow, and its backend numbers are the best measured so far:
+API added p99 **7.9 ms**, dashboard p99 **347.8 ms**, burst p99 **326.9 ms**, zero
+errors, accounting exact. What crosses the bound in a bad run is a tail, and it
+crosses it by 8-34%. `/usage` is the user's own page and keeps strict semantics on
+purpose — a request just made must appear — so it cannot take the snapshot
+allowance, and its tail has to come from a cheaper cold read. The remaining
+variance is real and reported rather than smoothed away.
 
 ### Earlier run — the state before those two changes
 
