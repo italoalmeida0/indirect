@@ -92,12 +92,46 @@ qualified merely because its code exists. The detailed scope is in
 
 ## Automated qualification on a hosted runner (4 vCPU, Ubuntu 26.04 x64)
 
-`gh workflow run enterprise-qualification.yml --ref main -f profile=quick
--f runner_labels='["ubuntu-latest"]' -f architecture=x64 -f samples=1000 -f rate=32`
-— run `41204696046`, the first complete execution of the workflow: preflight,
-dependency install, SPA build, obscura provisioning, fixture seeding with
-cardinality verification, the API/dashboard thresholds, the frontend threshold
-and the evidence artifact all ran; the script reported `logicalCpus: 4`.
+### Final run — every target passes
+
+Run `41253904158` (`workflow_dispatch` on `main`, `profile=quick`,
+`runner_labels=["ubuntu-latest"]`, `architecture=x64`, `samples=1000`,
+`rate=32`, `logicalCpus: 4`) reports `result: {passed: true, failures: []}`:
+
+| Measurement | Target | Result | |
+| --- | --- | --- | --- |
+| Ten-year accounting exactness | exact | 913,250,000 historical; 1,000 partial | ✅ |
+| Gateway-added API latency, 32 req/s, 1,000 samples | ≤100 ms | p50 1.7 / p95 4.3 / **p99 7.4** / max 18.9 ms, 0 errors | ✅ |
+| Dashboard APIs, 1,000 samples | ≤1,000 ms | p50 1.9 / p95 17.8 / **p99 524.3** / max 2,139.4 ms, **0 errors** | ✅ |
+| 50-user dashboard burst | ≤1,000 ms | p50 171.1 / p95 309.3 / **p99 323.6** ms, 0 errors | ✅ |
+| Frontend interaction, 3,000 interactions | ≤1,000 ms | p50 250.1 / p95 317.4 / **p99 619.5** / max 2,152.0 ms, 0 errors | ✅ |
+
+Two changes closed the dashboard target, and both are stated here because they
+change what the numbers mean:
+
+1. **A dashboard snapshot may be served while it refreshes.** Ingestion
+   invalidates every cache entry whose window contains "now" — which is every
+   analytics window — so before this a gateway with traffic recomputed the whole
+   cross-user page for every poll. `ANALYTICS_STALE_MS` (default 5000, `0`
+   restores strict read-through) lets `/api/admin/analytics` answer from the last
+   computed snapshot while a refresh runs behind the response. Callers that do
+   not opt in keep read-through, and an external writer or a metadata change
+   still clears everything.
+2. **A live analytics window snaps to the minute.** A dashboard asks for "the
+   last 14 days up to now", and `now` moved on every poll, so even a perfect
+   cache missed: the measured signature was p95 140 ms with p99 1,681 ms, a few
+   percent of samples each paying the full page. Windows that end within five
+   minutes of now snap their upper bound to the minute with the span preserved;
+   historical ranges pass through verbatim, so the accounting exactness check
+   sees exactly the range it asked for.
+
+The cold computation itself is unchanged: one uncached cross-user page costs
+~600-900 ms on a 4-vCPU runner (the max 2,139 ms sample above is one of them)
+and ~1.6 s on this laptop. What changed is how often a dashboard has to pay it.
+
+### Earlier run — the state before those two changes
+
+Run `41204696046` on the same hardware, for comparison:
 
 | Measurement | Target | Result | |
 | --- | --- | --- | --- |
@@ -108,18 +142,9 @@ and the evidence artifact all ran; the script reported `logicalCpus: 4`.
 | Frontend interaction, 3,000 interactions | ≤1,000 ms | p50 233.3 / p95 633.4 / **p99 736.3** / max 1,556.6 ms, 0 errors | ✅ |
 
 Per dashboard route p99 on that runner: **`/api/admin/analytics` 2,018**
-(p50 931) is the only route over budget; `/api/usage/analytics` 694,
+(p50 931) was the only route over budget; `/api/usage/analytics` 694,
 `/api/admin/stats` 609, `/api/usage/events` 529, `/api/billing` 322,
 `/api/admin/users` 305, and the remaining six routes are 19–232 ms.
-
-This is the strongest statement the evidence supports: **three of the four
-measurements pass on ordinary server hardware**, the dashboard misses by 1.34x
-entirely because of one endpoint — the cross-user administrative analytics page,
-whose p50 of 931 ms is what the stage trace predicted — and the 16 GB laptop
-that produced 5,019 ms and 28 `503`s on the same fixture is an outlier in the
-other direction rather than the reference. The API p99 of 177.7 ms against a
-100 ms budget is a tail on a 4-vCPU runner (median 1.9 ms), reported as it was
-measured.
 
 ## Where the administrative analytics page spends its time
 

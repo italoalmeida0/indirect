@@ -87,15 +87,18 @@ function dispatch() {
   }
 }
 
-/** Live analytics windows snap to the minute.
+/** Live analytics windows snap to the minute — but only for a caller that
+ * accepts a snapshot (the administrative dashboard).
  *
  * A dashboard asks for "the last 14 days up to now", and `now` moves on every
  * poll: at 12 req/s the cache key, the coalescing key and the retained snapshot
  * all change per request, so a page that costs ~900 ms was recomputed for every
  * poll. Snapping a live upper bound to the minute keeps the span identical while
- * letting a burst of polls share one computation. Historical ranges are left
- * untouched: their bounds already describe a fixed window and an exactness check
- * must see it verbatim. */
+ * letting a burst of polls share one computation.
+ *
+ * A caller with strict semantics gets the window it asked for verbatim: a user's
+ * own usage page must show a request made in the current minute, and historical
+ * ranges describe a fixed window an exactness check must see unchanged. */
 const LIVE_WINDOW_MS = 5 * 60_000;
 const MINUTE_MS = 60_000;
 function liveAnalyticsScope(scope: UsageScope): UsageScope {
@@ -110,7 +113,8 @@ function liveAnalyticsScope(scope: UsageScope): UsageScope {
  * have disconnected. */
 export function readUsage<R extends UsageReadRequest>(request: R, signal?: AbortSignal): Promise<Result<R>> {
   const { scope: requested, userId, staleWhileRevalidateMs, ...options } = request;
-  const scope = request.kind === "analytics" ? liveAnalyticsScope(requested) : requested;
+  const snapshots = (staleWhileRevalidateMs ?? 0) > 0;
+  const scope = request.kind === "analytics" && snapshots ? liveAnalyticsScope(requested) : requested;
   let extra: unknown = options;
   let invalidationScope = scope;
   if (request.kind !== "financial-project" && request.kind !== "catalog-facets" && request.kind !== "catalog-audit" && request.kind !== "events") {
