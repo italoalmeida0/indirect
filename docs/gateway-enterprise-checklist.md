@@ -129,6 +129,22 @@ The cold computation itself is unchanged: one uncached cross-user page costs
 ~600-900 ms on a 4-vCPU runner (the max 2,139 ms sample above is one of them)
 and ~1.6 s on this laptop. What changed is how often a dashboard has to pay it.
 
+**The frontend target sits on the boundary and oscillates.** Across the runs
+after these changes the backend gate passed every time, while the per-interaction
+bound was met in some runs and missed in others:
+
+| Run | Frontend p99 | Per route | |
+| --- | --- | --- | --- |
+| `41253904158` | 619.5 ms | every route under 1,000 | ✅ |
+| `41258711679` | 462.7 ms | every route under 1,000 | ✅ |
+| `41260763738` | — | `/` 323, `/usage` 1,083, `/admin/stats` 1,337 | ❌ |
+
+The median interaction is ~200-250 ms; what crosses the bound is a tail, and it
+crosses it by 8-34%. `/usage` is the user's own page and keeps strict semantics
+on purpose — a request just made must appear — so it cannot take the snapshot
+allowance, and its tail has to come from a cheaper cold read. That is the one
+measurement in this brief that is not reproducibly inside its budget.
+
 ### Earlier run — the state before those two changes
 
 Run `41204696046` on the same hardware, for comparison:
