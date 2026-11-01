@@ -114,7 +114,8 @@ function liveAnalyticsScope(scope: UsageScope): UsageScope {
 export function readUsage<R extends UsageReadRequest>(request: R, signal?: AbortSignal): Promise<Result<R>> {
   const { scope: requested, userId, staleWhileRevalidateMs, ...options } = request;
   const snapshots = (staleWhileRevalidateMs ?? 0) > 0;
-  const scope = request.kind === "analytics" && snapshots ? liveAnalyticsScope(requested) : requested;
+  const snapped = request.kind === "analytics" || request.kind === "series";
+  const scope = snapped && snapshots ? liveAnalyticsScope(requested) : requested;
   let extra: unknown = options;
   let invalidationScope = scope;
   if (request.kind !== "financial-project" && request.kind !== "catalog-facets" && request.kind !== "catalog-audit" && request.kind !== "events") {

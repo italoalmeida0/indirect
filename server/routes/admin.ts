@@ -1716,7 +1716,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         activeKeys: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM api_keys WHERE status = 'active'").get()!.n,
         providers: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM providers").get()!.n,
       };
-      return ok({ ...await readUsage({ kind: "series", scope, userId: null }, req.signal), counts, kvCache: kvSnapshotCached() }, req);
+      return ok({ ...await readUsage({ kind: "series", scope, userId: null, staleWhileRevalidateMs: LIMITS.analyticsStaleMs }, req.signal), counts, kvCache: kvSnapshotCached() }, req);
     }
     // Hour granularity ("1D"): the window tables come from usage_events so
     // series/top-lists stay consistent with the trailing-N-hours chart.
