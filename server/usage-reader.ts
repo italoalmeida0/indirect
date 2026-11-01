@@ -102,10 +102,13 @@ function dispatch() {
 const LIVE_WINDOW_MS = 5 * 60_000;
 const MINUTE_MS = 60_000;
 function liveAnalyticsScope(scope: UsageScope): UsageScope {
+  // An unbounded window is a whole-history question and must end at the instant
+  // asked for: snapping it dropped the last partial minute of a freshly seeded
+  // fixture, and the accounting check lost 1,500 requests.
+  if (scope.from === null) return scope;
   if (scope.to < Date.now() - LIVE_WINDOW_MS) return scope;
   const to = Math.floor(scope.to / MINUTE_MS) * MINUTE_MS;
-  const from = scope.from === null ? null : to - (scope.to - scope.from);
-  return { ...scope, from, to };
+  return { ...scope, from: to - (scope.to - scope.from), to };
 }
 
 /** Bounded read-only workers isolate analytical GROUP BY from the proxy.
