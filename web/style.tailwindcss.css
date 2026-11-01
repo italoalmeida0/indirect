@@ -721,6 +721,16 @@ body {
     background: var(--brand-500);
     border-radius: 2px;
   }
+  /* Collapsed rail: group labels are hidden, so each administration group
+   * keeps a short rule that preserves the same hierarchy without text. */
+  @media (max-width: 1023.98px) {
+    .gw-nav-group + .gw-nav-group {
+      width: 2.5rem;
+      margin-top: 0.375rem;
+      padding-top: 0.375rem;
+      border-top: 1px solid var(--line);
+    }
+  }
   .rc-sidebar { background: var(--ink-900); }
   .rc-composer {
     border: 1px solid var(--control-border);
@@ -1854,3 +1864,59 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
 .route-loading-dot:nth-child(3) { animation-delay: .3s; }
 @keyframes route-loading-pulse { 0%, 100% { opacity: .2; transform: scale(.85); } 50% { opacity: .8; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) { .route-loading-dot { animation: none; opacity: .5; } }
+
+/* ===== Organization hub =====
+ * Installation settings keep their section rail visible on desktop and turn
+ * into a compact two-column launcher on narrow screens. */
+.org-page { min-width: 0; }
+.org-hub { display: grid; grid-template-columns: 264px minmax(0, 1fr); align-items: start; gap: 24px; }
+.org-hub-nav { position: sticky; top: 5rem; display: flex; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+.org-hub-link { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px; border: 1px solid transparent; border-radius: 8px; text-align: left; color: var(--ink-400); cursor: pointer; transition: background-color 140ms, border-color 140ms, color 140ms; }
+.org-hub-link:hover { background: var(--elev); color: var(--ink-100); }
+.org-hub-link[aria-current="true"] { background: color-mix(in srgb, var(--brand-400) 8%, transparent); color: var(--ink-100); }
+.org-hub-link:focus-visible { outline: 2px solid var(--brand-400); outline-offset: 2px; }
+.org-hub-link-icon { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0; margin-top: 1px; border: 1px solid var(--line); border-radius: 7px; background: var(--elev); color: var(--ink-500); transition: color 140ms, border-color 140ms, background-color 140ms; }
+.org-hub-link[aria-current="true"] .org-hub-link-icon { color: var(--brand-400); border-color: color-mix(in srgb, var(--brand-400) 30%, var(--line)); background: color-mix(in srgb, var(--brand-400) 8%, var(--card)); }
+.org-hub-link-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; padding-top: 1px; }
+.org-hub-link-title { font-size: 12px; font-weight: 500; line-height: 1.35; color: inherit; }
+.org-hub-link-hint { font-size: 10.5px; line-height: 1.5; color: var(--ink-500); }
+.org-hub-link-chevron { margin: 7px 0 0 auto; flex-shrink: 0; color: var(--ink-600); }
+.org-hub-link[aria-current="true"] .org-hub-link-chevron { color: var(--brand-400); }
+.org-hub-content { min-width: 0; }
+.org-hub-content > * { margin: 0; }
+@media (max-width: 900px) {
+  .org-hub { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .org-hub-nav { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .org-hub-link { align-items: center; padding: 9px; }
+  .org-hub-link-icon { width: 26px; height: 26px; margin-top: 0; }
+  .org-hub-link-hint, .org-hub-link-chevron { display: none; }
+  .org-hub-link-title { font-size: 11.5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .org-hub-link, .org-hub-link-icon { transition: none; }
+}
+
+/* ===== Loading placeholders =====
+ * Used where a first payload decides the whole layout (the overview cards).
+ * A single sweep keeps several placeholders in sync without per-block delay. */
+.ui-skeleton { position: relative; overflow: hidden; border-radius: 6px; background: var(--ink-800); }
+.ui-skeleton::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--ink-100) 7%, transparent), transparent); transform: translateX(-100%); animation: skeleton-sweep 1.4s ease-in-out infinite; }
+@keyframes skeleton-sweep { to { transform: translateX(100%); } }
+.overview-skeleton-card { min-height: 27rem; }
+@media (prefers-reduced-motion: reduce) { .ui-skeleton::after { animation: none; } }
+
+.overview-error-row { display: flex; align-items: center; gap: 14px; }
+.overview-error-icon { flex-shrink: 0; }
+.overview-skeleton-activity { min-height: 30rem; }
+@media (max-width: 640px) {
+  .overview-error-row { align-items: flex-start; flex-wrap: wrap; }
+}
+
+/* Operational counters read as a row of metric tiles instead of loose text. */
+.ops-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ops-stat { min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--elev); }
+.ops-stat dt { color: var(--ink-500); font-size: 11px; font-weight: 500; line-height: 1.4; }
+.ops-stat dd { margin-top: 6px; color: var(--ink-100); font-family: var(--font-mono); font-size: 20px; line-height: 1.25; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+@media (min-width: 640px) {
+  .ops-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

@@ -50,7 +50,10 @@ async function choose(page: any, label: string, name: string | RegExp) {
 async function organization(page: any, section: string) {
   await page.goto(`${base}/#/admin/organization`);
   await page.getByRole("heading", { name: "Organization", exact: true }).waitFor();
-  await choose(page, "Organization settings", section);
+  const entry = page.locator(".org-hub-link", { hasText: section });
+  assert.equal(await entry.count(), 1, `organization section "${section}" must appear exactly once in the rail`);
+  await entry.click();
+  await page.locator(".org-hub-link[aria-current=\"true\"]", { hasText: section }).waitFor();
 }
 async function noOverflow(page: any, name: string) {
   for (const width of [768, 390, 320]) {
@@ -134,12 +137,16 @@ try {
 
     await organization(page, "Corporate authentication");
     await page.getByLabel("OIDC issuer URL", { exact: true }).waitFor();
-    await page.getByRole("combobox", { name: "Organization settings", exact: true }).focus();
-    await page.keyboard.press("Space"); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Escape");
-    assert(await page.getByRole("combobox", { name: "Organization settings", exact: true }).evaluate((element: HTMLElement) => element === document.activeElement));
+    // The section rail is the only organization switcher: it must stay
+    // keyboard reachable and swap the panel on activation.
+    const railEntry = page.locator(".org-hub-link", { hasText: "Operations & backups" });
+    await railEntry.focus();
+    assert(await railEntry.evaluate((element: HTMLElement) => element === document.activeElement), "organization rail must accept keyboard focus");
+    await page.keyboard.press("Enter");
+    await page.getByRole("heading", { name: "Operational metrics", exact: true }).waitFor();
     await noOverflow(page, "corporate-auth");
 
-    await organization(page, "Operations and backups");
+    await organization(page, "Operations & backups");
     await page.getByRole("heading", { name: "Operational metrics", exact: true }).waitFor();
     await page.getByRole("button", { name: "Create verified backup", exact: true }).click();
     await page.getByText("Verified", { exact: true }).first().waitFor();
@@ -162,7 +169,7 @@ try {
   const cases = [
     { route: "/", page: personal.page, title: "Overview", selector: "main [aria-busy=false]", endpoint: "/api/usage/overview" },
     { route: "/usage", page: personal.page, title: "Usage", selector: ".usage-page[aria-busy=false]", endpoint: "/api/usage/analytics" },
-    { route: "/admin/stats", page, title: "Global Stats", selector: ".global-stats-page[aria-busy=false]", endpoint: "/api/admin/analytics" },
+    { route: "/admin/stats", page, title: "Global stats", selector: ".global-stats-page[aria-busy=false]", endpoint: "/api/admin/analytics" },
   ];
   for (let index = 0; index < samples; index++) {
     const item = cases[index % cases.length]!;

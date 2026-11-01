@@ -4,6 +4,12 @@ import { AnalyticsToolbar, createAnalyticsFilters } from "./analytics-filters";
 import { serverDatasource } from "./aggrid";
 import { Icon, Icons, Select, fmtNum } from "./ui";
 
+/** Result counts read as a phrase: "1 API key", "2 API keys", "16 audit events". */
+function countLabel(total: number, label: string): string {
+  const noun = total === 1 ? label.replace(/ies$/, "y").replace(/s$/, "") : label;
+  return `${fmtNum(total)} ${noun}`;
+}
+
 type Sort = Array<{ colId: string; sort: string }>;
 interface SortOption { value: string; label: string }
 interface Page<T> { rows: T[]; total: number }
@@ -129,7 +135,7 @@ export function CatalogToolbar(props: { view: CatalogView; right?: JSX.Element }
         value={selectedSort()} triggerLabel={selectedSort() ? undefined : "Sort"} options={sortOptions()}
         onChange={(value) => { const [colId, sort] = value.split(":"); view.setSort(colId && sort ? [{ colId, sort }] : []); }} />}
     />
-    <div class="catalog-result-count" role="status" aria-live="polite">{view.records.error ? "Results unavailable" : view.loading() ? "Updating results…" : `${fmtNum(view.total())} ${view.config.label.toLowerCase()}`}</div>
+    <div class="catalog-result-count" role="status" aria-live="polite">{view.records.error ? "Results unavailable" : view.loading() ? "Updating results…" : countLabel(view.total(), view.config.label)}</div>
   </div>;
 }
 

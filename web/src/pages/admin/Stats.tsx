@@ -12,10 +12,11 @@ export default function StatsPage() {
   const { report, refetch } = createAnalyticsReport(filters, true);
   const selectUser = (id: string, label: string) => filters.toggle("user_id", "include", id, label);
   const selectModel = (id: string, label: string) => filters.toggle("model", "include", id, label);
+  const counted = (total: number, one: string, many: string) => (total === 1 ? one : many);
 
   return <div class="analytics-page global-stats-page" aria-busy={filters.pending() || report.loading}>
     <div class="overview-header">
-      <PageTitle title="Global Stats" subtitle="A clear view of spend, traffic and the people behind it" />
+      <PageTitle title="Global stats" subtitle="A clear view of spend, traffic and the people behind it" />
       <AnalyticsToolbar filters={filters} loading={report.loading} align="end" />
     </div>
     <Show when={!report.error} fallback={<AnalyticsError retry={refetch} />}>
@@ -23,8 +24,8 @@ export default function StatsPage() {
         <AnalyticsHistoryNotice history={data.history} previous={data.previousHistory} />
         <AnalyticsSummary report={data} label={data.label} query={data.query} section="costs" />
         <div class="analytics-scope-context">
-          <span><Icon name="lucide:users" size={14} /><strong>{fmtNum(data.activeUsers)}</strong> users with activity</span>
-          <span><Icon name="lucide:network" size={14} /><strong>{fmtNum(data.providers.reduce((sum, provider) => sum + provider.members, 0))}</strong> providers with traffic</span>
+          <span><Icon name="lucide:users" size={14} /><strong>{fmtNum(data.activeUsers)}</strong> {counted(data.activeUsers, "user", "users")} with activity</span>
+          <span><Icon name="lucide:network" size={14} /><strong>{fmtNum(data.providers.reduce((sum, provider) => sum + provider.members, 0))}</strong> {counted(data.providers.reduce((sum, provider) => sum + provider.members, 0), "provider", "providers")} with traffic</span>
           <span><Icon name="lucide:list-filter" size={14} />Every chart follows the selected scope</span>
         </div>
         <AnalyticsSection title="Where spend goes" description="Compare model adoption and understand the cost of your selected traffic." />

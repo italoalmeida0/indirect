@@ -125,6 +125,7 @@ export default function AdminAuditPage() {
     <div class="catalog-page" aria-busy={view.loading()}>
       <PageTitle
         title="Audit log"
+        subtitle="Authentication and administrative activity, newest first."
       />
 
       <CatalogToolbar view={view} />

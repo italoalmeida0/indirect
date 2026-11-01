@@ -306,6 +306,7 @@ export default function AdminUsersPage() {
     <div class="catalog-page" aria-busy={view.loading()}>
       <PageTitle
         title="Users"
+        subtitle="Accounts, roles and spending plans across this installation."
         right={
           <Btn onClick={() => setShowCreate(true)}>
             <Icon name={Icons.plus} /> New user

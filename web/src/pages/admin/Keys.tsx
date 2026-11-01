@@ -41,7 +41,7 @@ export default function AdminKeysPage() {
   const [assigning, setAssigning] = createSignal<ApiKeyDto | null>(null);
   const [projectId, setProjectId] = createSignal("");
   const [assignmentError, setAssignmentError] = createSignal("");
-  const view = createCatalog<ApiKeyDto>({ storageKey: "llmgw-grid:admin.keys", path: "/api/admin/keys", result: "keys", label: "All API keys", sort: [
+  const view = createCatalog<ApiKeyDto>({ storageKey: "llmgw-grid:admin.keys", path: "/api/admin/keys", result: "keys", label: "API keys", sort: [
     { value: "name:asc", label: "Name A–Z" }, { value: "userEmail:asc", label: "Owner A–Z" }, { value: "createdAt:desc", label: "Newest first" }, { value: "spendTotalUsd:desc", label: "Highest spend" },
   ] });
   const keyCount = view.total;
