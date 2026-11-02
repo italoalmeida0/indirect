@@ -5,7 +5,7 @@ import { db, type ApiKeyRow } from "../db";
 import { parseGridQuery, parseCursor } from "../gridql";
 import { modelPricingJoins, costAggFieldsSql } from "../pricing";
 import { readUsageScope } from "../usage-filters";
-import { readUsage } from "../usage-reader";
+import { readAuthorizedUsage } from "../authorized-usage";
 import {
   financialPolicyFor,
   projectAnalyticsPayload,
@@ -19,25 +19,22 @@ import {
 export async function handleUsageRoute(path: string, req: Request, url: URL): Promise<Response | null> {
   if (path === "/api/usage/analytics" && req.method === "GET") {
     const ctx = await requireAuth(req);
-    const policy = financialPolicyFor(ctx.user);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    const report = await readUsage(
-      { kind: "analytics", scope, userId: ctx.user.id, includeCost: policy.budgetPresentation === "usd" },
-      req.signal,
-    );
-    return ok(projectAnalyticsPayload(report as any, policy), req);
+    return readAuthorizedUsage(ctx, req,
+      (user, policy) => ({ kind: "analytics", scope, userId: user.id, includeCost: policy.budgetPresentation === "usd" }),
+      (report, policy) => ok(projectAnalyticsPayload(report as any, policy), req));
   }
   if (path === "/api/usage/overview" && req.method === "GET") {
     const ctx = await requireAuth(req);
-    const policy = financialPolicyFor(ctx.user);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    const overview = await readUsage({ kind: "overview", scope, userId: ctx.user.id }, req.signal);
-    return ok({ ...overview, series: projectUsageRows(overview.series as any[], policy) }, req);
+    return readAuthorizedUsage(ctx, req, (user) => ({ kind: "overview", scope, userId: user.id }),
+      (overview, policy) => ok({ ...overview, series: projectUsageRows(overview.series as any[], policy) }, req));
   }
   if (path === "/api/usage/filter-options" && req.method === "GET") {
     const ctx = await requireAuth(req);
     const scope = readUsageScope(url) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "facets", userId: ctx.user.id, scope, search: url.searchParams.toString() }, req.signal), req);
+    return readAuthorizedUsage(ctx, req, (user) => ({ kind: "facets", userId: user.id, scope, search: url.searchParams.toString() }),
+      (result) => ok(result, req));
   }
   if (path === "/api/usage/summary" && req.method === "GET") {
     const ctx = await requireAuth(req);
@@ -50,8 +47,8 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     const policy = financialPolicyFor(ctx.user);
     const scope = readUsageScope(url);
     if (scope) {
-      const result = await readUsage({ kind: "series", scope, userId: ctx.user.id }, req.signal);
-      return ok({ ...result, series: projectUsageRows(result.series as any[], policy) }, req);
+      return readAuthorizedUsage(ctx, req, (user) => ({ kind: "series", scope, userId: user.id }),
+        (result, currentPolicy) => ok({ ...result, series: projectUsageRows(result.series as any[], currentPolicy) }, req));
     }
     const keyId = url.searchParams.get("key_id");
     if (keyId) {
@@ -115,8 +112,10 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     const { sort, filters } = sanitizeGridForPolicy({ sort: rawSort, filters: rawFilters }, policy);
     const scope = readUsageScope(url);
     if (scope) {
-      const result = await readUsage({ kind: "events", userId: ctx.user.id, scope, opts: { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined, summaryOnly: url.searchParams.get("summary") === "1" } }, req.signal);
-      return ok({ events: projectUsageRows(result.rows as any[], policy), total: result.total, totals: result.totals, limit, offset, history: result.history }, req);
+      return readAuthorizedUsage(ctx, req, (user, nextPolicy) => {
+        const grid = sanitizeGridForPolicy({ sort: rawSort, filters: rawFilters }, nextPolicy);
+        return { kind: "events", userId: user.id, scope, opts: { keyId, limit, offset, ...grid, cursor: cursor ?? undefined, summaryOnly: url.searchParams.get("summary") === "1" } };
+      }, (result, currentPolicy) => ok({ events: projectUsageRows(result.rows as any[], currentPolicy), total: result.total, totals: result.totals, limit, offset, history: result.history }, req));
     }
     const { rows, total, totals } = userEvents(ctx.user.id, { keyId, limit, offset, sort, filters, cursor: cursor ?? undefined, scope: scope ?? undefined, summaryOnly: url.searchParams.get("summary") === "1" });
     return ok({ events: projectUsageRows(rows as any[], policy), total, limit, offset, totals }, req);
@@ -127,9 +126,10 @@ export async function handleUsageRoute(path: string, req: Request, url: URL): Pr
     const policy = financialPolicyFor(ctx.user);
     const scope = readUsageScope(url);
     if (scope) {
-      const grid = sanitizeGridForPolicy(parseGridQuery(url), policy);
-      const page = await readUsage({ kind: "breakdown", scope, userId: ctx.user.id, grid, users: false, summaryOnly: url.searchParams.get("summary") === "1" }, req.signal);
-      return ok({ ...projectUsageBreakdownPayload(page as any, policy), limit: grid.limit, offset: grid.offset }, req);
+      const grid = parseGridQuery(url);
+      return readAuthorizedUsage(ctx, req,
+        (user, nextPolicy) => ({ kind: "breakdown", scope, userId: user.id, grid: sanitizeGridForPolicy(grid, nextPolicy), users: false, summaryOnly: url.searchParams.get("summary") === "1" }),
+        (page, currentPolicy) => ok({ ...projectUsageBreakdownPayload(page as any, currentPolicy), limit: grid.limit, offset: grid.offset }, req));
     }
     const daysParam = url.searchParams.get("days");
     const keyId = url.searchParams.get("key_id");

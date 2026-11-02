@@ -11,10 +11,13 @@ import {
   statSync,
   lstatSync,
   copyFileSync,
+  fsyncSync,
+  renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 
 /**
@@ -283,6 +286,39 @@ export function verifySnapshot(snapshotDir: string, manifest?: BackupManifest): 
   }
 }
 
+/** Publish complete status atomically; a stopped verifier must not truncate the
+ * inventory or leave the list showing a verification result it never recorded. */
+function writeManifest(snapshotDir: string, manifest: BackupManifest): void {
+  validateManifest(manifest);
+  const temporary = path.join(snapshotDir, `${MANIFEST_NAME}.${randomUUID()}.tmp`);
+  let handle: number | undefined;
+  try {
+    handle = openSync(temporary, "wx", 0o600);
+    writeFileSync(handle, JSON.stringify(manifest, null, 2));
+    fsyncSync(handle);
+    closeSync(handle);
+    handle = undefined;
+    renameSync(temporary, path.join(snapshotDir, MANIFEST_NAME));
+  } finally {
+    if (handle !== undefined) closeSync(handle);
+    if (existsSync(temporary)) unlinkSync(temporary);
+  }
+}
+
+/** Explicit re-verification updates the same persisted status used by listing
+ * and retention. Restore uses verifySnapshot and never writes to its source. */
+export function verifyAndRecordSnapshot(snapshotDir: string): BackupVerification {
+  const manifest = readManifest(snapshotDir);
+  const verification = verifySnapshot(snapshotDir, manifest ?? undefined);
+  if (manifest) {
+    manifest.verification = verification;
+    if (verification.ok) delete manifest.error;
+    else manifest.error = verification.error;
+    writeManifest(snapshotDir, manifest);
+  }
+  return verification;
+}
+
 export interface SnapshotBuildOptions {
   root: string;
   id: string;
@@ -340,7 +376,7 @@ export function buildSnapshot(connection: Database, options: SnapshotBuildOption
       manifest.verification = verifySnapshot(snapshotDir, manifest);
       if (!manifest.verification.ok) manifest.error = manifest.verification.error;
     }
-    writeFileSync(path.join(snapshotDir, MANIFEST_NAME), JSON.stringify(manifest, null, 2));
+    writeManifest(snapshotDir, manifest);
     return manifest;
   } catch (error) {
     // A half-written snapshot must never look restorable.
@@ -410,16 +446,19 @@ export interface RetentionResult {
 }
 
 /**
- * Retention: keep the newest `keepDaily` snapshots plus the newest snapshot
- * of each of the last `keepWeekly` ISO weeks. Anything else is removed
- * (directory included) once nothing else references it.
+ * Verified restore points own the daily/weekly buckets. A failed or unverified
+ * copy cannot displace a valid one. Keep the most recent unsuccessful copy for
+ * diagnosis, independently of those buckets, so repeated failures stay bounded.
  */
 export function applyRetentionRules(root: string, options: { keepDaily: number; keepWeekly: number; now: number; removeFiles: boolean }): RetentionResult {
   const backups = listSnapshotSummaries(root, options.now);
   if (backups.length === 0) return { removed: [], keptDaily: [], keptWeekly: [] };
   const keep = new Set<string>();
-  const daily = backups.slice(0, options.keepDaily);
+  const verified = backups.filter((backup) => backup.verified === true);
+  const daily = verified.slice(0, Math.max(1, options.keepDaily));
   for (const backup of daily) keep.add(backup.id);
+  const unsuccessful = backups.find((backup) => backup.verified !== true);
+  if (unsuccessful) keep.add(unsuccessful.id);
 
   // ISO weeks, Monday-based, in UTC: the newest snapshot of each week is the
   // weekly restore point, which keeps a month of history at daily granularity
@@ -431,7 +470,7 @@ export function applyRetentionRules(root: string, options: { keepDaily: number; 
     return monday.toISOString().slice(0, 10);
   };
   const weeks = new Map<string, string>();
-  for (const backup of backups) {
+  for (const backup of verified) {
     const key = weekKey(backup.createdAt);
     if (!weeks.has(key)) weeks.set(key, backup.id);
   }

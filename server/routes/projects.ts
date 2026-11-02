@@ -6,7 +6,7 @@ import { financialPolicyFor } from "../financial-policy";
 import { likeEscape } from "../gridql";
 import { ApiError, clientIp, ok, readJsonBody, v } from "../http";
 import { projectAccess, projectById, projectDto, requireProjectAccess, type FinancialProject } from "../projects";
-import { readUsage } from "../usage-reader";
+import { readAuthorizedUsage } from "../authorized-usage";
 import { requireLiveActor } from "../live-auth";
 
 function responsible(value: unknown): string | null {
@@ -136,8 +136,10 @@ export async function handleProjectsRoute(path: string, req: Request): Promise<R
     const to = params.has("to") ? validateDate(params.get("to")!) : today;
     if (to < from || to - from > 50 * 366 * 86_400_000) throw new ApiError(400, "Invalid date range");
     const toExclusive = to + 86_400_000;
-    const usage = await readUsage({ kind: "financial-project", userId: null, scope: { from, to: toExclusive, selection: {} }, projectId: id, projectKind: project.kind, from, toExclusive, includeCost: policy.budgetPresentation === "usd" }, req.signal);
-    return ok({ usage, from: dateString(from), to: dateString(to), financialPolicy: policy }, req);
+    return readAuthorizedUsage(ctx, req, (user, nextPolicy) => {
+      const current = requireProjectAccess(user, id, true);
+      return { kind: "financial-project", userId: null, scope: { from, to: toExclusive, selection: {} }, projectId: id, projectKind: current.kind, from, toExclusive, includeCost: nextPolicy.budgetPresentation === "usd" };
+    }, (usage, currentPolicy) => ok({ usage, from: dateString(from), to: dateString(to), financialPolicy: currentPolicy }, req));
   }
   return null;
 }

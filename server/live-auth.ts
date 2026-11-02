@@ -2,6 +2,8 @@ import type { AuthContext } from "./auth";
 import { assertSessionPolicy } from "./auth-policy";
 import { stmts, type UserRow } from "./db";
 import { ApiError } from "./http";
+import { financialPolicyFor, formatFinancialPolicyHeader } from "./financial-policy";
+import { setCurrentFinancialPolicyHeader } from "./request-context";
 
 /** Revalidate after an awaited request body and within the mutation's writer
  * transaction. Revoking a session or banning an account must take effect
@@ -15,4 +17,13 @@ export function requireLiveActor(ctx: AuthContext): UserRow {
   if (user.role !== ctx.user.role || user.enterprise_role !== ctx.user.enterprise_role || user.password_hash !== ctx.user.password_hash || user.totp_secret !== ctx.user.totp_secret || user.google_id !== ctx.user.google_id) throw new ApiError(401, "account credentials or permissions changed; sign in again");
   assertSessionPolicy(user, session);
   return user;
+}
+
+/** A worker result must be authorized and projected using the caller's policy
+ * at delivery, including the response header consumed by the dashboard. */
+export function requireLiveRead(ctx: AuthContext) {
+  const user = requireLiveActor(ctx);
+  const policy = financialPolicyFor(user);
+  setCurrentFinancialPolicyHeader(formatFinancialPolicyHeader(policy));
+  return { user, policy };
 }

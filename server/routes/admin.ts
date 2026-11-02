@@ -32,7 +32,8 @@ import { normalizePricing, pricingColumns, modelPricingJoins, costAggFieldsSql }
 import { TOOL_CALL_MODES, type ToolCallMode } from "../tool-call-mode";
 import { fetchOpenRouterCatalog, matchOpenRouterModel } from "../openrouter";
 import { readUsageScope } from "../usage-filters";
-import { readUsage } from "../usage-reader";
+import { readAuthorizedUsage } from "../authorized-usage";
+import { requireLiveActor } from "../live-auth";
 import { deletePolicy, listPolicies, readPolicy, upsertPolicy } from "../model-policy";
 import { projectById, validateProjectAssignment } from "../projects";
 import { assertAdminAccountMutationAllowed, assertMfaCanDisable, corporateAuthConfig, requiresSso } from "../auth-policy";
@@ -437,7 +438,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   const catalogFacets = path.match(/^\/api\/admin\/(providers|models|users|keys|audit)\/filter-options$/);
   if (catalogFacets && req.method === "GET") {
-    return ok(await readUsage({ kind: "catalog-facets", catalog: catalogFacets[1] as CatalogKind, userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }, req.signal), req);
+    return readAuthorizedUsage(ctx, req,
+      () => ({ kind: "catalog-facets", catalog: catalogFacets[1] as CatalogKind, userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }),
+      (result) => ok(result, req));
   }
   if (path === "/api/admin/models/selection" && req.method === "GET") {
     const source = catalogListSource("models", url.searchParams, null);
@@ -1506,21 +1509,20 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
     if (req.method === "PATCH" && !action) {
       const body = await readJsonBody(req, LIMITS.apiBodyBytes);
-      const name = v.str(body, "name", { min: 1, max: 128, optional: true }) ?? target.name;
+      const requestedName = v.str(body, "name", { min: 1, max: 128, optional: true });
       if (body.role !== undefined && body.role !== "admin" && body.role !== "user" && body.role !== "project_manager") throw new ApiError(400, "Invalid role");
-      const role = body.role === "admin" || body.role === "user" || body.role === "project_manager" ? body.role : effectiveRole(target);
+      const requestedRole = body.role === "admin" || body.role === "user" || body.role === "project_manager" ? body.role : undefined;
       if (body.status !== undefined && body.status !== "banned" && body.status !== "active") throw new ApiError(400, "Invalid status");
-      const status =
-        body.status === "banned" || body.status === "active" ? body.status : target.status;
-      if (targetId === ctx.user.id && (role !== "admin" || status !== "active")) {
-        return err(400, "you cannot demote or ban yourself", req);
-      }
-      const demotesActiveAdmin =
-        target.role === "admin" &&
-        target.status === "active" &&
-        (role !== "admin" || status !== "active");
-      const privilegesChanged = role !== effectiveRole(target) || status !== target.status;
+      const requestedStatus = body.status === "banned" || body.status === "active" ? body.status : undefined;
       const changed = inImmediateTx(() => {
+        const current = stmts.userById.get(targetId);
+        if (!current) throw new ApiError(404, "user not found");
+        const name = requestedName ?? current.name;
+        const role = requestedRole ?? effectiveRole(current);
+        const status = requestedStatus ?? current.status;
+        if (targetId === ctx.user.id && (role !== "admin" || status !== "active")) throw new ApiError(400, "you cannot demote or ban yourself");
+        const demotesActiveAdmin = current.role === "admin" && current.status === "active" && (role !== "admin" || status !== "active");
+        const privilegesChanged = role !== effectiveRole(current) || status !== current.status;
         assertAdminAccountMutationAllowed(targetId, { role, status });
         const result = demotesActiveAdmin
           ? db.prepare(
@@ -1533,22 +1535,22 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           : db.prepare("UPDATE users SET name = ?, role = ?, enterprise_role = ?, status = ? WHERE id = ?").run(
               name, role === "admin" ? "admin" : "user", role === "project_manager" ? "project_manager" : null, status, targetId,
             );
-        if (result.changes !== 1) return false;
+        if (result.changes !== 1) return null;
         // A later promotion must not silently revive old delegated scope.
-        if (role !== effectiveRole(target)) db.prepare("UPDATE project_members SET role = 'member' WHERE user_id = ? AND role = 'manager'").run(targetId);
+        if (role !== effectiveRole(current)) db.prepare("UPDATE project_members SET role = 'member' WHERE user_id = ? AND role = 'manager'").run(targetId);
         if (role !== "admin") db.prepare("UPDATE corporate_account_policy SET sso_exempt=0 WHERE user_id=?").run(targetId);
         if (privilegesChanged) markUserSessionsRevoked(targetId);
         if (status === "banned") {
           db.prepare("DELETE FROM remote_pairing_tokens WHERE user_id = ?").run(targetId);
         }
-        auditAdmin(ctx.user, "user.updated", targetId, { name, role, status }, ip);
-        return true;
+        auditAdmin(ctx.user, "user.updated", targetId, { name, role, status, before: { name: current.name, role: effectiveRole(current), status: current.status }, after: { name, role, status } }, ip);
+        return { privilegesChanged, status };
       });
       if (!changed) {
         return err(400, "cannot remove the last active admin", req);
       }
-      if (privilegesChanged) disconnectSessionSockets(targetId);
-      if (status === "banned") {
+      if (changed.privilegesChanged) disconnectSessionSockets(targetId);
+      if (changed.status === "banned") {
         disconnectUserDaemons(targetId);
       }
       return ok({ done: true }, req);
@@ -1557,8 +1559,10 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     if (req.method === "DELETE" && !action) {
       if (targetId === ctx.user.id) return err(400, "you cannot delete yourself", req);
       const deleted = inImmediateTx(() => {
+        const current = stmts.userById.get(targetId);
+        if (!current) throw new ApiError(404, "user not found");
         assertAdminAccountMutationAllowed(targetId, { deleted: true });
-        if (target.role === "admin" && target.status === "active") {
+        if (current.role === "admin" && current.status === "active") {
           db.prepare(
             `DELETE FROM users WHERE id = ? AND (
               SELECT COUNT(*) FROM users
@@ -1573,7 +1577,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         if (stmts.userById.get(targetId)) {
           return false;
         }
-        auditAdmin(ctx.user, "user.deleted", targetId, { email: target.email }, ip);
+        auditAdmin(ctx.user, "user.deleted", targetId, { email: current.email }, ip);
         return true;
       });
       if (!deleted) {
@@ -1699,12 +1703,16 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     // A dashboard snapshot may lag the ledger by a moment: ingestion invalidates
     // every window containing "now", so strict read-through recomputes a
     // cross-user page for every poll while traffic flows.
-    return ok(await readUsage({ kind: "analytics", scope, userId: null, staleWhileRevalidateMs: LIMITS.analyticsStaleMs }, req.signal), req);
+    return readAuthorizedUsage(ctx, req,
+      () => ({ kind: "analytics", scope, userId: null, staleWhileRevalidateMs: LIMITS.analyticsStaleMs }),
+      (result) => ok(result, req));
   }
 
   if (path === "/api/admin/usage-filter-options" && req.method === "GET") {
     const scope = readUsageScope(url, true) ?? { from: Date.now() - 14 * 86_400_000, to: Date.now(), selection: {} };
-    return ok(await readUsage({ kind: "facets", userId: null, scope, search: url.searchParams.toString() }, req.signal), req);
+    return readAuthorizedUsage(ctx, req,
+      () => ({ kind: "facets", userId: null, scope, search: url.searchParams.toString() }),
+      (result) => ok(result, req));
   }
 
   if (path === "/api/admin/stats" && req.method === "GET") {
@@ -1716,7 +1724,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         activeKeys: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM api_keys WHERE status = 'active'").get()!.n,
         providers: db.prepare<{ n: number }, []>("SELECT COUNT(*) AS n FROM providers").get()!.n,
       };
-      return ok({ ...await readUsage({ kind: "series", scope, userId: null, staleWhileRevalidateMs: LIMITS.analyticsStaleMs }, req.signal), counts, kvCache: kvSnapshotCached() }, req);
+      return readAuthorizedUsage(ctx, req,
+        () => ({ kind: "series", scope, userId: null, staleWhileRevalidateMs: LIMITS.analyticsStaleMs }),
+        (result) => ok({ ...result, counts, kvCache: kvSnapshotCached() }, req));
     }
     // Hour granularity ("1D"): the window tables come from usage_events so
     // series/top-lists stay consistent with the trailing-N-hours chart.
@@ -1884,8 +1894,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     const grid = parseGridQuery(url);
     const scope = readUsageScope(url, true);
     if (scope) {
-      const page = await readUsage({ kind: "breakdown", scope, userId: null, grid, users: path.endsWith("/users"), summaryOnly: url.searchParams.get("summary") === "1" }, req.signal);
-      return ok({ [path.endsWith("/users") ? "users" : "models"]: page.rows, total: page.total, totals: page.totals, limit: grid.limit, offset: grid.offset }, req);
+      return readAuthorizedUsage(ctx, req,
+        () => ({ kind: "breakdown", scope, userId: null, grid, users: path.endsWith("/users"), summaryOnly: url.searchParams.get("summary") === "1" }),
+        (page) => ok({ [path.endsWith("/users") ? "users" : "models"]: page.rows, total: page.total, totals: page.totals, limit: grid.limit, offset: grid.offset }, req));
     }
     const daysAll = url.searchParams.get("days") === "all";
     const days = daysAll ? "all" : Math.min(Number(url.searchParams.get("days") || 14), 365);
@@ -2119,7 +2130,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
 
   if (path === "/api/admin/audit" && req.method === "GET") {
     if (url.searchParams.has("selection")) {
-      return ok(await readUsage({ kind: "catalog-audit", userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }, req.signal), req);
+      return readAuthorizedUsage(ctx, req,
+        () => ({ kind: "catalog-audit", userId: null, search: url.searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }),
+        (result) => ok(result, req));
     }
     if (url.searchParams.has("limit") || url.searchParams.has("selection")) {
       const grid = parseGridQuery(url);
@@ -2217,10 +2230,14 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
   }
 
   if (path === "/api/admin/backups" && req.method === "POST") {
+    // Filesystem work cannot roll back with SQLite. Persist authorization and
+    // intent before starting it; completion rows retain the same request id.
+    inImmediateTx(() => auditAdmin(ctx.user, "backup.create_requested", undefined, { kind: "manual" }, ip));
     // The snapshot itself runs in a worker thread, so serving traffic
     // continues while the copy is written.
     const manifest = await createBackup({ kind: "manual" });
-    const retention = manifest.verification?.ok ? applyRetention({ now: manifest.createdAt }) : { removed: [], keptDaily: [], keptWeekly: [] };
+    inImmediateTx(() => auditAdmin(ctx.user, "backup.retention_requested", manifest.id, undefined, ip));
+    const retention = applyRetention({ now: manifest.createdAt });
     auditAdmin(ctx.user, "backup.created", manifest.id, {
       kind: manifest.kind,
       bytes: manifest.totalBytes,
@@ -2234,17 +2251,20 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
     return ok({ backup: manifest, retention }, req);
   }
 
-  const backupMatch = path.match(/^\/api\/admin\/backups\/([A-Za-z0-9._-]{1,128})(\/verify)?$/);
+  const backupMatch = path.match(/^\/api\/admin\/backups\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})(\/verify)?$/);
   if (backupMatch) {
     const id = backupMatch[1]!;
     if (backupMatch[2] && req.method === "POST") {
       const dir = nodePath.join(backupRoot(), id);
       if (!existsSync(nodePath.join(dir, "manifest.json"))) return err(404, "Backup not found", req);
+      inImmediateTx(() => auditAdmin(ctx.user, "backup.verify_requested", id, undefined, ip));
       const verification = await verifyBackup(dir);
       auditAdmin(ctx.user, "backup.verified", id, { ok: verification.ok, error: verification.error }, ip);
+      requireLiveActor(ctx);
       return ok({ id, verification }, req);
     }
     if (!backupMatch[2] && req.method === "DELETE") {
+      inImmediateTx(() => auditAdmin(ctx.user, "backup.delete_requested", id, undefined, ip));
       if (!deleteBackup(id)) return err(404, "Backup not found", req);
       auditAdmin(ctx.user, "backup.deleted", id, {}, ip);
       return ok({ deleted: true, id }, req);

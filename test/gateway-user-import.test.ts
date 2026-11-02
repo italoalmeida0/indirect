@@ -2,6 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import path from "node:path";
 import { createUser, login, request, startGateway } from "./gateway-enterprise-fixture";
+import { beginOidc, finishOidc, startMockOidc } from "./oidc-fixture";
 
 const gateways: Array<Awaited<ReturnType<typeof startGateway>>> = [];
 afterAll(async () => { for (const gateway of gateways) await gateway.stop(); });
@@ -97,4 +98,67 @@ test("import commit revalidates references, rolls back audit faults and binds pr
     sql.prepare("UPDATE user_import_batches SET expires_at=0 WHERE id=?").run(expiring.data.batchId);
     expect((await commit(gateway.base, admin.accessToken, expiring.data.batchId)).response.status).toBe(409);
   } finally { sql.close(); }
+}, 60_000);
+
+test("import previews bind subjects and policy to the reviewed issuer while committed results remain immutable", async () => {
+  const first = await startMockOidc("ES256"), second = await startMockOidc("ES256");
+  const gateway = await startGateway({ SMTP_HOST: "", OIDC_ALLOW_HTTP_LOOPBACK: "true" }); gateways.push(gateway);
+  const sql = new Database(path.join(gateway.dir, "gateway.db"));
+  try {
+    let admin = await login(gateway.base, "admin@enterprise.test");
+    expect((await request(gateway.base, "/api/admin/corporate-auth", { token: admin.accessToken, method: "PUT", body: { enabled: true, issuer: first.issuer, clientId: "indirect-test" } })).response.status).toBe(200);
+    admin = await login(gateway.base, "admin@enterprise.test");
+    const input = [{ email: "reviewed-admin@enterprise.test", name: "Reviewed administrator", role: "admin", managed: true, oidcSubject: "employee-subject" }];
+    const prepared = await preview(gateway.base, admin.accessToken, input);
+    expect(prepared.data.valid).toBe(true);
+    const committed = await preview(gateway.base, admin.accessToken, [{ email: "committed-import@enterprise.test", name: "Committed" }]);
+    const original = await commit(gateway.base, admin.accessToken, committed.data.batchId);
+    expect(original.response.status).toBe(200);
+
+    expect((await request(gateway.base, "/api/admin/corporate-auth", { token: admin.accessToken, method: "PUT", body: { issuer: second.issuer } })).response.status).toBe(200);
+    admin = await login(gateway.base, "admin@enterprise.test");
+    expect((await commit(gateway.base, admin.accessToken, prepared.data.batchId)).response.status).toBe(409);
+    expect(sql.query("SELECT id FROM users WHERE email='reviewed-admin@enterprise.test'").get()).toBeNull();
+    second.identity("employee-subject");
+    expect((await finishOidc(gateway.base, await beginOidc(gateway.base))).response.status).toBe(403);
+    const replay = await commit(gateway.base, admin.accessToken, committed.data.batchId);
+    expect(replay.data).toEqual({ ...original.data, replayed: true });
+
+    const reviewedAgain = await preview(gateway.base, admin.accessToken, input);
+    expect(reviewedAgain.data.batchId).not.toBe(prepared.data.batchId);
+    expect(reviewedAgain.data.valid).toBe(true);
+    expect((await commit(gateway.base, admin.accessToken, reviewedAgain.data.batchId)).response.status).toBe(200);
+    const signedIn = await finishOidc(gateway.base, await beginOidc(gateway.base));
+    expect(signedIn.response.status).toBe(200);
+    expect(signedIn.data.user.role).toBe("admin");
+
+    const policyPreview = await preview(gateway.base, admin.accessToken, [{ email: "policy-context@enterprise.test", name: "Policy context" }]);
+    expect((await request(gateway.base, "/api/admin/corporate-auth", { token: admin.accessToken, method: "PUT", body: { clientId: "updated-client" } })).response.status).toBe(200);
+    admin = await login(gateway.base, "admin@enterprise.test");
+    expect((await commit(gateway.base, admin.accessToken, policyPreview.data.batchId)).response.status).toBe(409);
+
+    const legacy = await preview(gateway.base, admin.accessToken, [{ email: "legacy-context@enterprise.test", name: "Legacy context" }]);
+    sql.prepare("UPDATE user_import_batches SET auth_context='' WHERE id=?").run(legacy.data.batchId);
+    sql.prepare("UPDATE user_import_batches SET auth_context='' WHERE id=?").run(committed.data.batchId);
+    expect((await commit(gateway.base, admin.accessToken, legacy.data.batchId)).response.status).toBe(409);
+    expect((await commit(gateway.base, admin.accessToken, committed.data.batchId)).data).toEqual({ ...original.data, replayed: true });
+  } finally { sql.close(); await first.stop(); await second.stop(); }
+}, 60_000);
+
+test("identical import content can be reviewed again after its invalid references are repaired", async () => {
+  const gateway = await startGateway({ SMTP_HOST: "" }); gateways.push(gateway);
+  const admin = await login(gateway.base, "admin@enterprise.test");
+  const project = await request(gateway.base, "/api/projects", { token: admin.accessToken, body: { code: "REPAIRED", name: "Repaired reference", kind: "project" } });
+  const projectId = project.data.project.id;
+  expect((await request(gateway.base, `/api/projects/${projectId}`, { token: admin.accessToken, method: "PATCH", body: { status: "archived" } })).response.status).toBe(200);
+  const input = [{ email: "repaired-import@enterprise.test", name: "Repaired import", projectIds: [projectId] }];
+  const invalid = await preview(gateway.base, admin.accessToken, input);
+  expect(invalid.data.valid).toBe(false);
+  expect((await preview(gateway.base, admin.accessToken, input)).data.batchId).toBe(invalid.data.batchId);
+  expect((await request(gateway.base, `/api/projects/${projectId}`, { token: admin.accessToken, method: "PATCH", body: { status: "active" } })).response.status).toBe(200);
+  const repaired = await preview(gateway.base, admin.accessToken, input);
+  expect(repaired.data.valid).toBe(true);
+  expect(repaired.data.batchId).not.toBe(invalid.data.batchId);
+  expect((await commit(gateway.base, admin.accessToken, invalid.data.batchId)).response.status).toBe(409);
+  expect((await commit(gateway.base, admin.accessToken, repaired.data.batchId)).data.created).toBe(1);
 }, 60_000);

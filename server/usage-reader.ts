@@ -21,7 +21,7 @@ export type UsageReadRequest = { scope: UsageScope; userId: string | null; stale
   | { kind: "events"; opts: Parameters<typeof userEvents>[1]; userId: string }
   | ({ kind: "financial-project" } & ProjectUsageRequest)
 );
-type Result<R extends UsageReadRequest> = (R extends { kind: "financial-project" } ? ProjectUsageTotals
+export type UsageReadResult<R extends UsageReadRequest> = (R extends { kind: "financial-project" } ? ProjectUsageTotals
   : R extends { kind: "catalog-facets" } ? ReturnType<typeof catalogFilterOptions>
   : R extends { kind: "catalog-audit" } ? ReturnType<typeof catalogAuditPage>
   : R extends { kind: "analytics" } ? ReturnType<typeof filteredUsageAnalytics>
@@ -114,7 +114,7 @@ function liveAnalyticsScope(scope: UsageScope): UsageScope {
 /** Bounded read-only workers isolate analytical GROUP BY from the proxy.
  * Identical requests coalesce; a job is cancelled only after all its callers
  * have disconnected. */
-export function readUsage<R extends UsageReadRequest>(request: R, signal?: AbortSignal): Promise<Result<R>> {
+export function readUsage<R extends UsageReadRequest>(request: R, signal?: AbortSignal): Promise<UsageReadResult<R>> {
   const { scope: requested, userId, staleWhileRevalidateMs, ...options } = request;
   const snapshots = (staleWhileRevalidateMs ?? 0) > 0;
   const snapped = request.kind === "analytics" || request.kind === "series";
@@ -133,7 +133,7 @@ export function readUsage<R extends UsageReadRequest>(request: R, signal?: Abort
     for (const key of ["from", "to", "selection"]) search.delete(key);
     search.sort(); extra = search.toString();
   }
-  return cachedUsageQueryAsync(`reader-${request.kind}`, scope, userId, (sharedSignal) => new Promise<Result<R>>((resolve, reject) => {
+  return cachedUsageQueryAsync(`reader-${request.kind}`, scope, userId, (sharedSignal) => new Promise<UsageReadResult<R>>((resolve, reject) => {
     if (sharedSignal.aborted) { reject(new DOMException("Analytics request cancelled", "AbortError")); return; }
     if (queue.length >= LIMITS.analyticsPending) { reject(busy()); return; }
     let finished = false;

@@ -7,11 +7,11 @@ import { decryptSecret } from "../crypto";
 import { dropKeyLimiter } from "../ratelimit";
 import { parseGridQuery } from "../gridql";
 import { catalogWhere } from "../catalog";
-import { readUsage } from "../usage-reader";
+import { readAuthorizedUsage } from "../authorized-usage";
 import { ApiError, clientIp, err, ok, readJsonBody, v } from "../http";
 import { financialPolicyFor, projectKeyDto, sanitizeGridForPolicy } from "../financial-policy";
 import { validateProjectAssignment } from "../projects";
-import { requireLiveActor } from "../live-auth";
+import { requireLiveActor, requireLiveRead } from "../live-auth";
 
 const MAX_KEYS_PER_USER = 50;
 const MAX_TTL_MS = 10 * 365 * 24 * 3600 * 1000;
@@ -28,7 +28,9 @@ function ownKey(userId: string, keyId: string): ApiKeyRow | null {
 export async function handleKeysRoute(path: string, req: Request): Promise<Response | null> {
   if (path === "/api/keys/filter-options" && req.method === "GET") {
     const ctx = await requireAuth(req);
-    return ok(await readUsage({ kind: "catalog-facets", catalog: "keys", userId: ctx.user.id, search: new URL(req.url).searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }, req.signal), req);
+    return readAuthorizedUsage(ctx, req,
+      (user) => ({ kind: "catalog-facets", catalog: "keys", userId: user.id, search: new URL(req.url).searchParams.toString(), scope: { from: null, to: Infinity, selection: {} } }),
+      (result) => ok(result, req));
   }
   if (path === "/api/keys" && req.method === "GET") {
     const ctx = await requireAuth(req);
@@ -106,7 +108,7 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
 
     // Plaintext token: returned here AND recoverable later via GET /reveal
     // from the AES copy (token_enc) — every reveal is audit-logged.
-    const policy = financialPolicyFor(ctx.user);
+    const { policy } = requireLiveRead(ctx);
     return ok({ key: projectKeyDto(publicKey(row), policy), token: prepared.token, financialPolicy: policy }, req);
   }
 
@@ -156,7 +158,7 @@ export async function handleKeysRoute(path: string, req: Request): Promise<Respo
       });
       return db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(keyId)!;
     });
-    const policy = financialPolicyFor(ctx.user);
+    const { policy } = requireLiveRead(ctx);
     return ok({ key: projectKeyDto(publicKey(updated), policy), financialPolicy: policy }, req);
   }
 

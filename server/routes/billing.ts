@@ -4,6 +4,7 @@ import { db, audit, inImmediateTx } from "../db";
 import { randomToken } from "../crypto";
 import { ApiError, clientIp, ok, readJsonBody, v } from "../http";
 import { LIMITS } from "../config";
+import { requireLiveRead } from "../live-auth";
 import {
   financialPolicyFor,
   installationDefaults,
@@ -33,13 +34,12 @@ export async function handleBillingRoute(path: string, req: Request): Promise<Re
   }
   const redeem = path.match(/^\/api\/billing\/resets\/([a-f0-9]{24})\/redeem$/);
   if (redeem && req.method === "POST") {
-    const { user } = await requireAuth(req);
+    const ctx = await requireAuth(req);
     const body = await readJsonBody(req, LIMITS.apiBodyBytes);
     const requestId = v.str(body, "requestId", { min: 16, max: 128 })!;
-    return ok(
-      { billing: projectBillingPayload(redeemReset(user.id, redeem[1]!, requestId, clientIp(req)), financialPolicyFor(user)) },
-      req,
-    );
+    const billing = redeemReset(ctx.user.id, redeem[1]!, requestId, clientIp(req));
+    const { policy } = requireLiveRead(ctx);
+    return ok({ billing: projectBillingPayload(billing, policy) }, req);
   }
   // Installation financial policy: the default every user inherits unless an
   // administrator overrides it for that user.

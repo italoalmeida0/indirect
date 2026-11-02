@@ -17,6 +17,7 @@ import {
 } from "./backup-files";
 import type { BackupWorkerData, BackupWorkerReply } from "./backup-worker";
 import { withSqliteRetryAsync } from "./sqlite-retry";
+import { ApiError } from "./http";
 
 /**
  * Supported backup: snapshot, verification, retention and scheduling.
@@ -56,9 +57,7 @@ export interface CreateBackupOptions {
   /** Skip verification (the admin and CLI flows always verify). */
   verify?: boolean;
   /**
-   * Build the snapshot on this thread instead of a worker. Used by the
-   * restore-verification script and as the fallback when a worker cannot
-   * start.
+   * Build on this thread only for explicit offline/test operations.
    */
   inProcess?: boolean;
   /** Hard timeout for a worker snapshot, in milliseconds. */
@@ -73,6 +72,19 @@ function newSnapshotId(kind: BackupKind, createdAt: number): string {
 /** Snapshot root: BACKUP_DIR when set, else <DATA_DIR>/backups. */
 export function backupRoot(explicit?: string): string {
   return path.resolve(explicit || LIMITS.backupDir || path.join(DATA_DIR, "backups"));
+}
+
+let operationInFlight = false;
+function requireBackupIdle(): void {
+  if (operationInFlight) throw new ApiError(409, "A backup operation is already in progress. Retry after it finishes.");
+}
+
+/** Large snapshots and verification scans share one bounded worker slot. */
+async function exclusiveBackup<T>(work: () => Promise<T>): Promise<T> {
+  requireBackupIdle();
+  operationInFlight = true;
+  try { return await work(); }
+  finally { operationInFlight = false; }
 }
 
 /**
@@ -147,17 +159,20 @@ async function snapshotInWorker(options: ReturnType<typeof snapshotOptions>, tim
  * must surface instead of unexpectedly blocking the gateway's request loop.
  */
 export async function createBackup(options: CreateBackupOptions = {}): Promise<BackupManifest> {
-  const kind = options.kind || "manual";
-  const createdAt = Date.now();
-  const build = snapshotOptions(options, kind, createdAt);
-  if (!options.inProcess) {
-    return snapshotInWorker(build, options.timeoutMs ?? 30 * 60_000);
-  }
-  // AWAIT the retry: this runs inside the live gateway (scheduled or admin
-  // triggered), so the backoff must yield the event loop. The synchronous
-  // variant sleeps by blocking the thread, which stalls every request for up
-  // to the whole retry window while another writer holds the database.
-  return (await withSqliteRetryAsync(() => buildSnapshot(db, build), { name: "backup snapshot" })).value;
+  return exclusiveBackup(async () => {
+    try {
+      const kind = options.kind || "manual";
+      const build = snapshotOptions(options, kind, Date.now());
+      const manifest = options.inProcess
+        ? (await withSqliteRetryAsync(() => buildSnapshot(db, build), { name: "backup snapshot" })).value
+        : await snapshotInWorker(build, options.timeoutMs ?? 30 * 60_000);
+      recordBackupAttempt(manifest.verification?.ok === true);
+      return manifest;
+    } catch (error) {
+      recordBackupAttempt(false);
+      throw error;
+    }
+  });
 }
 
 async function verifyInWorker(
@@ -197,11 +212,11 @@ export async function verifyBackup(
   snapshotDir: string,
   options: { inProcess?: boolean; timeoutMs?: number } = {},
 ): Promise<import("./backup-files").BackupVerification> {
-  if (!options.inProcess) {
-    return verifyInWorker(snapshotDir, options.timeoutMs ?? 15 * 60_000);
-  }
-  const { verifySnapshot, readManifest } = await import("./backup-files");
-  return verifySnapshot(snapshotDir, readManifest(snapshotDir) ?? undefined);
+  return exclusiveBackup(async () => {
+    if (!options.inProcess) return verifyInWorker(snapshotDir, options.timeoutMs ?? 15 * 60_000);
+    const { verifyAndRecordSnapshot } = await import("./backup-files");
+    return verifyAndRecordSnapshot(snapshotDir);
+  });
 }
 
 /** Every snapshot under the backup root, newest first. */
@@ -224,6 +239,7 @@ export interface RetentionOptions {
  * being written, or crashed mid-copy) are left alone.
  */
 export function applyRetention(options: RetentionOptions = {}): RetentionResult {
+  requireBackupIdle();
   const keepDaily = Math.max(1, Math.floor(options.keepDaily ?? LIMITS.backupKeepDaily));
   const keepWeekly = Math.max(0, Math.floor(options.keepWeekly ?? LIMITS.backupKeepWeekly));
   const root = backupRoot(options.dir);
@@ -236,6 +252,7 @@ export function applyRetention(options: RetentionOptions = {}): RetentionResult 
 }
 
 export interface BackupStatus {
+  busy: boolean;
   dir: string;
   intervalMinutes: number;
   enabled: boolean;
@@ -263,6 +280,7 @@ export function backupStatus(options: { dir?: string; now?: number } = {}): Back
   const summaries = listBackups(options);
   const intervalMinutes = LIMITS.backupIntervalMinutes;
   return {
+    busy: operationInFlight,
     dir: backupRoot(options.dir),
     intervalMinutes,
     enabled: Number.isFinite(intervalMinutes) && intervalMinutes > 0,
@@ -280,11 +298,11 @@ export function backupStatus(options: { dir?: string; now?: number } = {}): Back
 
 /**
  * One scheduled cycle: snapshot, verify, prune. A verification failure is
- * recorded but never deletes the snapshot — a bad snapshot is evidence.
+ * recorded; retention preserves verified restore points and the newest
+ * unsuccessful copy for diagnosis.
  */
 export async function runBackupCycle(options: CreateBackupOptions = {}): Promise<{ manifest: BackupManifest; retention: RetentionResult }> {
   const manifest = await createBackup({ ...options, kind: options.kind ?? "scheduled" });
-  recordBackupAttempt(manifest.verification ? manifest.verification.ok : true);
   const retention = applyRetention({ dir: options.dir, now: manifest.createdAt });
   if (retention.removed.length) console.info("[BACKUP] retention removed " + retention.removed.length + " snapshot(s)");
   return { manifest, retention };
@@ -299,6 +317,7 @@ export function backupIntervalMs(): number {
 
 /** Remove a snapshot directory (operator cleanup / failed runs). */
 export function deleteBackup(id: string, options: { dir?: string } = {}): boolean {
+  requireBackupIdle();
   if (!/^[A-Za-z0-9][A-Za-z0-9T._-]{0,127}$/.test(id)) return false;
   const target = path.join(backupRoot(options.dir), id);
   if (!existsSync(target) || !statSync(target).isDirectory()) return false;
