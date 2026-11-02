@@ -48,7 +48,9 @@ func summaryFromMeta(meta metaLine) SessionSummary {
 		CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt,
 		LastTurnStartedAt: lastTurnStartedAt,
 		LastTurnEndedAt:   lastTurnEndedAt,
-		TodosOpen:         meta.TodosOpen, Options: &meta.Options}
+		TodosOpen:         meta.TodosOpen, Options: &meta.Options,
+		Skills:       cloneSkillsMap(meta.Skills),
+		ApprovalMode: skillsApprovalModeFor(meta.Skills, meta.Options.Mode)}
 }
 
 func sessionListItem(s SessionSummary) map[string]any {
@@ -59,6 +61,11 @@ func sessionListItem(s SessionSummary) map[string]any {
 		"lastTurnStartedAt": s.LastTurnStartedAt,
 		"lastTurnEndedAt":   s.LastTurnEndedAt,
 		"todosOpen":         s.TodosOpen, "options": s.Options,
+		// Skill selection + resolved approval mode ride the mirror summary:
+		// the web client re-applies them on every list refresh/selection,
+		// and a missing key would reset the picker to its default primary.
+		"skills":       skillsPayload(s.Skills),
+		"approvalMode": s.ApprovalMode,
 	}
 }
 

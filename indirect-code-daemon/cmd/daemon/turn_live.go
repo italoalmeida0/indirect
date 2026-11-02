@@ -229,7 +229,14 @@ func sessionPayload(rec *SessionRecord) map[string]any {
 // user's ask rules), so the YOLO/ASK selector is hidden. "ask" (default,
 // including no skills) shows the selector.
 func skillsApprovalMode(rec *SessionRecord) string {
-	eff, err := skillRegistry().resolveSession(rec.Skills, rec.Options.Mode)
+	return skillsApprovalModeFor(rec.Skills, rec.Options.Mode)
+}
+
+// skillsApprovalModeFor is the map/mode form of skillsApprovalMode: the
+// mirror summary is built from a meta line (no full record), so it resolves
+// the same display mode from the persisted skill map and session mode.
+func skillsApprovalModeFor(sessionSkills map[string]skills.SessionSkill, mode string) string {
+	eff, err := skillRegistry().resolveSession(sessionSkills, mode)
 	if err == nil && eff.AskAutoApprove {
 		return "yolo"
 	}

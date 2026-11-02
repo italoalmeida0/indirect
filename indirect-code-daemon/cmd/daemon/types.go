@@ -241,4 +241,13 @@ type SessionSummary struct {
 	LastTurnEndedAt int64           `json:"lastTurnEndedAt,omitempty"`
 	TodosOpen       *bool           `json:"todosOpen,omitempty"`
 	Options         *SessionOptions `json:"options,omitempty"`
+	// Skills is the session's skill selection (the same complete map the
+	// full session payload carries). The mirror pull is the web client's
+	// list source, so omitting it would make every mirror refresh wipe the
+	// selection back to the default primary skill.
+	Skills map[string]skills.SessionSkill `json:"skills,omitempty"`
+	// ApprovalMode is the resolved display mode ("ask" | "yolo") derived
+	// from the primary skill. The mirror carries it so selecting a session
+	// or refreshing the list never resets the permissions UI.
+	ApprovalMode string `json:"approvalMode,omitempty"`
 }
