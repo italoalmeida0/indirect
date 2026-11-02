@@ -9,17 +9,17 @@
  *  - a dedicated read-only connection never touches the writer's lock beyond
  *    the shared read lock SQLite already grants WAL readers, so serving
  *    traffic continues unchanged,
- *  - the handler still falls back to the in-process connection when a worker
- *    cannot be created (single-file installs, restricted runtimes).
+ *  - a worker failure is reported instead of blocking serving traffic with an
+ *    unexpected synchronous fallback.
  *
- * The worker receives only file paths — never a secret value, never a query.
+ * Snapshot creation receives the configured encryption material so it can
+ * preserve it in the protected snapshot directory. It is never logged.
  */
 import { parentPort, workerData } from "node:worker_threads";
 import { Database } from "bun:sqlite";
 import {
   buildSnapshot,
-  readManifest,
-  verifySnapshot,
+  verifyAndRecordSnapshot,
   type BackupManifest,
   type BackupVerification,
   type SnapshotBuildOptions,
@@ -42,7 +42,7 @@ if (data) {
       if (data.op === "verify") {
         return {
           ok: true,
-          verification: verifySnapshot(data.snapshotDir, readManifest(data.snapshotDir) ?? undefined),
+          verification: verifyAndRecordSnapshot(data.snapshotDir),
         };
       }
       connection = new Database(data.source, { readonly: true });

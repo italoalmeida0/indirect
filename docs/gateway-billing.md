@@ -90,8 +90,9 @@ are audited in their balance-changing transactions.
 conservative request cost against every applicable period. It uses indexed
 period counters, independent of raw usage volume and buffered analytics.
 Parallel requests across different keys cannot all spend the same remaining
-account balance. The reservation ID matches the server-generated 128-bit `X-Request-Id`, and
-its pricing snapshot retains the model ID. Prices are stored with the reservation, and settlement
+account balance. Each reservation has a separate internal ID and retains the
+client-visible `X-Request-Id` for correlation; its pricing snapshot retains the
+model ID. Prices are stored with the reservation, and settlement
 atomically releases the hold and adds the actual usage cost exactly once.
 Each request belongs to the windows in which it was admitted, even if it finishes
 after a boundary. Analytics events and daily/monthly rollups carry immutable
@@ -104,13 +105,21 @@ round up to the next nanodollar. Input, cache reads, cache creation and output
 use their configured registry prices. Reported reasoning is included in the
 billable output cost without changing the separate visible-token counters.
 Configured per-request fees are included in input cost. Free token-counting
-operations do not consume allowance. All-cached streaming inputs remain cached.
+operations neither consume allowance nor require available budget, but still
+enforce the key, account, project and model permissions. All-cached streaming
+inputs remain cached.
 
 Finite budgets require configured model pricing. A request reserves its output
 maximum (or the model's registered output/context bound) plus conservative
-input framing. Media and provider-managed conversation state require a known
-context bound. If a provider strips the requested output cap, admission uses
-the registered model bound. Missing or unsafe cost bounds fail before forwarding.
+input framing. Legacy completion batches reserve for each prompt and the larger
+of `n` and `best_of`; an array of token IDs is one prompt. Input is conservatively
+reserved per generated copy because compatible providers may bill each copy's
+prompt separately. Embedding batches
+reserve input context per item. Admission uses the largest supplied output cap
+when compatible cap fields coexist and requires a cap meaningful for the request
+protocol. Media and provider-managed conversation state require a known context
+bound. If a provider strips the requested output cap, admission uses the
+registered model bound. Missing or unsafe cost bounds fail before forwarding.
 A smaller explicit output maximum can allow a request to fit remaining balance.
 
 Providers remain responsible for truthful usage and honoring their declared
@@ -124,14 +133,22 @@ Each gateway process has a heartbeat. Pending reservations survive a crash and
 continue to reduce available balance. After a five-minute missing heartbeat,
 bounded recovery batches settle uncertain reservations at their reserved bound
 and audit the recovery. A live heartbeat protects long streams. Confirmed
-failures release unspent holds. A client cancellation after forwarding, before
-any usable usage or output arrives, settles at the reserved bound and is audited;
-disconnecting cannot repeatedly burn upstream compute for free. Partial output
-on cancelled streams uses reported or estimated usage. No restart grants free balance. Financial
-settlement is synchronous and separate from the buffered analytics log, which
-may lag by one second. SQLite's durable commit policy is preserved. Unexpected admission/storage failures
-return protocol-shaped 503 responses. A failed settlement retains its hold for
-process recovery instead of returning unaccounted balance.
+failures release unspent holds. A dispatched attempt that ends in a transport
+failure, timeout or unmetered HTTP 408/5xx retains its conservative charge;
+the gateway rechecks authorization, plan assignment and current limits before
+every dispatch. A definite uncharged failure reuses the active reservation;
+an ambiguous failure reserves another unit before trying a fallback. If a newly enabled window cannot
+be represented by the original hold, the retry is refused and the original
+attempt still settles in its original windows. Interrupted streams
+without authoritative terminal usage also settle at the reserved bound, even if
+partial counters or output arrived. When a completed provider report has any
+nonzero usage, every reported category is preserved; estimates are used only for
+all-zero reports with actual content. Completed authoritative usage is preserved.
+No restart grants free balance. Financial settlement is synchronous and
+separate from the buffered analytics log, which may lag by one second. SQLite's
+durable commit policy is preserved. Unexpected admission/storage failures return
+protocol-shaped 503 responses. A failed settlement retains its hold and retries
+in the live process; crash recovery handles a still-pending hold.
 
 Expired period rows are pruned after 400 days once they have no reservations;
 lifetime totals and historical usage rollups remain. Settled reservation detail

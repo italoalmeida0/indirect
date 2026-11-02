@@ -1140,6 +1140,8 @@ export interface IRResponse {
   reasonTok: number;
   /** True when usage was absent and had to be estimated. */
   usageEstimated: boolean;
+  /** Whether any upstream usage category was nonzero before estimation. */
+  reportedUsage: boolean;
   /** Raw request-body size (chars) — reserved for future input guards. */
   requestChars?: number;
   error?: { type: string; message: string };
@@ -1156,13 +1158,9 @@ function parseJsonObject(text: string): Record<string, unknown> {
 
 /** Parse a buffered upstream response of any protocol into an IRResponse.
  *
- *  Zero-input guard: when the upstream reports in+cache == 0 but the
- *  request body was non-trivial, the zero is a lie (observed live:
- *  MuseSpark 400k-context turn billed in:0/cache:0). The caller owns the
- *  body estimate — pass it via `bodyInEstimate`; the decoder then flags
- *  the response estimated and lets the record() call site split it into
- *  fresh/cache via the prefix-stability tracker. Nonzero upstream input
- *  figures are never touched. */
+ *  The caller owns input estimation. An entirely zero usage report with
+ *  actual content may be flagged for the record() fallback; any nonzero
+ *  reported category remains authoritative. */
 export function decodeResponseToIR(
   via: Proto,
   text: string,
@@ -1175,7 +1173,7 @@ export function decodeResponseToIR(
       : via === "responses"
         ? decodeResponsesResponseToIR(text, fallbackModel)
         : decodeChatResponseToIR(text, fallbackModel);
-  if (bodyInEstimate !== undefined && bodyInEstimate > 0 && dec.inTok <= 0 && dec.cacheTok <= 0) {
+  if (bodyInEstimate !== undefined && bodyInEstimate > 0 && !dec.reportedUsage && (!!dec.text || dec.toolUses.length > 0 || dec.thinking.length > 0)) {
     dec.usageEstimated = true;
   }
   return dec;
@@ -1242,16 +1240,13 @@ function decodeChatResponseToIR(text: string, fallbackModel: string): IRResponse
   const completion = Number(u.completion_tokens ?? 0) || 0;
   const reasonTok = Math.min(completion, Math.max(0, Number(asRecord(u.completion_tokens_details).reasoning_tokens ?? u.reasoning_tokens ?? 0) || 0));
   const outTok = Math.max(0, completion - reasonTok);
-  const visibleText = typeof message.content === "string" ? message.content : "";
-  // Zero-output guard (buffered): upstream said 0 output but visible text/
-  // tool bytes arrived. Estimate via btdby4 (conservative) and flag
-  // estimated — trusting the zero would erase the turn. Nonzero figures
-  // are never overridden. Output estimates use btdby4; input/cache splits
-  // come from the btdby4 KV provider in the proxy record() path.
-  const usageSaidNothing = u.prompt_tokens === undefined && u.completion_tokens === undefined;
-  let estimated = usageSaidNothing;
+  const visibleText = typeof message.content === "string" ? message.content : typeof first.text === "string" ? first.text : "";
+  // Estimate output only when every reported category is zero and content
+  // arrived. Input/cache estimation is handled by record().
+  const reportedUsage = prompt > 0 || cached > 0 || completion > 0 || reasonTok > 0;
+  let estimated = false;
   let finalOut = outTok;
-  if (!usageSaidNothing && outTok <= 0 && (visibleText.length > 0 || toolUses.length > 0)) {
+  if (!reportedUsage && (visibleText.length > 0 || toolUses.length > 0)) {
     finalOut = estimateBufferedOutTok(visibleText, toolUses, thinking);
     estimated = true;
   }
@@ -1269,6 +1264,7 @@ function decodeChatResponseToIR(text: string, fallbackModel: string): IRResponse
     billableOutTok: completion > 0 ? completion : finalOut,
     reasonTok,
     usageEstimated: estimated,
+    reportedUsage,
   };
 }
 
@@ -1308,15 +1304,13 @@ function decodeAnthropicResponseToIR(text: string, fallbackModel: string): IRRes
   const cacheCreation = Number(u.cache_creation_input_tokens ?? 0) || 0;
   const stop = String(j.stop_reason ?? "end_turn");
   const outReported = Number(u.output_tokens ?? 0) || 0;
-  // Zero-output guard (buffered): upstream said 0 output but visible text/
-  // tool bytes arrived. Estimate via btdby4 (conservative) and flag
-  // estimated — trusting the zero would erase the turn. Nonzero figures
-  // are never overridden. Output estimates use btdby4; input/cache splits
-  // come from the btdby4 KV provider in the proxy record() path.
-  const usageSaidNothing = u.input_tokens === undefined && u.output_tokens === undefined;
-  let estimated = usageSaidNothing;
+  // Estimate output only when every reported category is zero and content
+  // arrived. Input/cache estimation is handled by record().
+  const reasonTok = Math.max(0, Number(asRecord(u.output_tokens_details).thinking_tokens ?? 0) || 0);
+  const reportedUsage = input > 0 || cacheRead > 0 || cacheCreation > 0 || outReported > 0 || reasonTok > 0;
+  let estimated = false;
   let finalOut = outReported;
-  if (!usageSaidNothing && outReported <= 0 && (outText.length > 0 || toolUses.length > 0)) {
+  if (!reportedUsage && (outText.length > 0 || toolUses.length > 0)) {
     finalOut = estimateBufferedOutTok(outText, toolUses, thinking);
     estimated = true;
   }
@@ -1332,8 +1326,9 @@ function decodeAnthropicResponseToIR(text: string, fallbackModel: string): IRRes
     cacheCreation,
     outTok: finalOut,
     billableOutTok: outReported > 0 ? outReported : finalOut,
-    reasonTok: Math.max(0, Number(asRecord(u.output_tokens_details).thinking_tokens ?? 0) || 0),
+    reasonTok,
     usageEstimated: estimated,
+    reportedUsage,
   };
 }
 
@@ -1379,15 +1374,12 @@ function decodeResponsesResponseToIR(text: string, fallbackModel: string): IRRes
   const output = Number(u.output_tokens ?? 0) || 0;
   const reasonTok = Math.max(0, Number(asRecord(u.output_tokens_details).reasoning_tokens ?? 0) || 0);
   const outTok = Math.max(0, output - reasonTok);
-  // Zero-output guard (buffered): upstream said 0 output but visible text/
-  // tool bytes arrived. Estimate via btdby4 (conservative) and flag
-  // estimated — trusting the zero would erase the turn. Nonzero figures
-  // are never overridden. Output estimates use btdby4; input/cache splits
-  // come from the btdby4 KV provider in the proxy record() path.
-  const usageSaidNothing = u.input_tokens === undefined && u.output_tokens === undefined;
-  let estimated = usageSaidNothing;
+  // Estimate output only when every reported category is zero and content
+  // arrived. Input/cache estimation is handled by record().
+  const reportedUsage = input > 0 || cached > 0 || output > 0 || reasonTok > 0;
+  let estimated = false;
   let finalOut = outTok;
-  if (!usageSaidNothing && outTok <= 0 && (outText.length > 0 || toolUses.length > 0)) {
+  if (!reportedUsage && (outText.length > 0 || toolUses.length > 0)) {
     finalOut = estimateBufferedOutTok(outText, toolUses, thinking);
     estimated = true;
   }
@@ -1405,6 +1397,7 @@ function decodeResponsesResponseToIR(text: string, fallbackModel: string): IRRes
     billableOutTok: output > 0 ? output : finalOut,
     reasonTok,
     usageEstimated: estimated,
+    reportedUsage,
   };
 }
 
@@ -1734,7 +1727,7 @@ function chatStreamParser(data: string): IRStreamDelta[] {
       // Lying-zero terminal chunk (all counters 0 while content flowed):
       // drop it so result() estimates from the wire. Nonzero figures
       // always flow through.
-      const allZero = usage.inTok <= 0 && usage.cacheTok <= 0 && usage.outTok <= 0;
+      const allZero = usage.inTok <= 0 && usage.cacheTok <= 0 && usage.outTok <= 0 && usage.reasonTok <= 0 && usage.billableOutTok <= 0;
       if (allZero) return out;
       const hasFinish = out.some((d) => d.finish);
       if (!hasFinish && (!j.choices || j.choices.length === 0)) {
@@ -1781,7 +1774,7 @@ function anthropicStreamParser(event: string, data: string): IRStreamDelta[] {
         const cache = Number(j.usage.cache_read_input_tokens ?? 0) || 0;
         const inTok = Number(j.usage.input_tokens ?? 0) || 0;
         const reasonTok = Number(j.usage.output_tokens_details?.thinking_tokens ?? j.usage.output_tokens_details?.reasoning_tokens ?? j.usage.reasoning_tokens ?? 0) || 0;
-        if (outTok > 0 || cache > 0 || inTok > 0) {
+        if (outTok > 0 || cache > 0 || inTok > 0 || reasonTok > 0) {
           out.push({
             usage: { inTok, cacheTok: cache, outTok: Math.max(0, outTok - reasonTok), reasonTok, billableOutTok: outTok },
           });
@@ -1791,7 +1784,7 @@ function anthropicStreamParser(event: string, data: string): IRStreamDelta[] {
     }
     if (event === "message_start") {
       const u = j.message?.usage ?? {};
-      if (u.input_tokens !== undefined) {
+      if (u.input_tokens !== undefined || u.cache_read_input_tokens !== undefined || u.cache_creation_input_tokens !== undefined) {
         // Cache_creation is kept separate (not folded into cacheTok) so
         // the Anthropic writer can replay the native field split on
         // message_start; the translator still sums both into cacheTok.
@@ -1850,7 +1843,13 @@ function responsesStreamParser(): (event: string, data: string) => IRStreamDelta
     }
     if (event === "response.failed") {
       const e = j.response?.error ?? {};
-      return [{ error: { type: String(e.code ?? "api_error"), message: String(e.message ?? "Upstream response failed") } }];
+      const u = j.response?.usage;
+      const input = Number(u?.input_tokens ?? 0) || 0;
+      const cached = Number(u?.input_tokens_details?.cached_tokens ?? 0) || 0;
+      const output = Number(u?.output_tokens ?? 0) || 0;
+      const reasonTok = Math.max(0, Number(u?.output_tokens_details?.reasoning_tokens ?? 0) || 0);
+      return [{ error: { type: String(e.code ?? "api_error"), message: String(e.message ?? "Upstream response failed") },
+        ...(u && (input > 0 || cached > 0 || output > 0 || reasonTok > 0) ? { usage: { inTok: Math.max(0, input - cached), cacheTok: cached, outTok: Math.max(0, output - reasonTok), reasonTok, billableOutTok: output } } : {}) }];
     }
     if (event === "response.completed" || event === "response.incomplete") {
       const u = j.response?.usage;
@@ -2145,6 +2144,8 @@ export class IRStreamTranslator {
   private decoder = new TextDecoder();
   private done = false;
   failed = false;
+  /** A terminal error may itself contain the provider's final usage. */
+  terminalErrorUsage = false;
   private sawFinish = false;
   /** A bare finish frame arrived but usage may still ride the NEXT chunk
    *  (canonical OpenAI pattern: finish chunk THEN usage-only chunk THEN
@@ -2164,6 +2165,7 @@ export class IRStreamTranslator {
    *  buffered reasoning_tokens split). */
   private thinkingChars = 0;
   private sawUsage = false;
+  private reportedNonzeroUsage = false;
   private model = "";
   private outChars = 0;
   /** Capped verbatim sample of streamed text/tool-arg JSON. 500KB covers
@@ -2346,6 +2348,7 @@ export class IRStreamTranslator {
         if (!deltas.some((d) => d.finish || d.error)) deltas.push({ finish: pf });
       }
       if (!deltas.length) continue;
+      if (deltas.some((d) => d.error && d.usage && (d.usage.inTok > 0 || d.usage.cacheTok > 0 || d.usage.outTok > 0 || (d.usage.reasonTok ?? 0) > 0))) this.terminalErrorUsage = true;
       const expanded = this.expand(deltas);
       for (const d of expanded) {
         if (d.text) {
@@ -2388,6 +2391,7 @@ export class IRStreamTranslator {
         if (d.text || d.toolUse?.inputDelta) this.sawUsage = true;
         if (d.usage) {
           this.sawUsage = true;
+          if ([d.usage.inTok, d.usage.cacheTok, d.usage.outTok, d.usage.reasonTok ?? 0, d.usage.billableOutTok ?? 0, d.usage.cacheCreation ?? 0].some((count) => count !== 0)) this.reportedNonzeroUsage = true;
           if (d.usage.billableOutTok !== undefined) this.billedOutput = Math.max(this.billedOutput, d.usage.billableOutTok);
           const adopted = adoptInputPair(this, d.usage);
           if (d.usage.cacheCreation !== undefined && (adopted || d.usage.inTok + d.usage.cacheTok === this.inTok + this.cacheTok)) this.cacheCreation = d.usage.cacheCreation;
@@ -2444,29 +2448,26 @@ export class IRStreamTranslator {
     if (m && !this.model) this.model = m;
   }
 
-  result(): { inTok: number; cacheTok: number; cacheCreation?: number; billableOutTok?: number; outTok: number; reasonTok?: number; model: string; estimated: boolean } {
+  result(): { inTok: number; cacheTok: number; cacheCreation?: number; billableOutTok?: number; outTok: number; reasonTok?: number; model: string; estimated: boolean; reportedUsage: boolean; contentCrossed: boolean } {
+    const evidence = { reportedUsage: this.reportedNonzeroUsage, contentCrossed: this.outChars > 0 || this.toolJsonChars > 0 || this.thinkingChars > 0 };
     // sawUsage now ALSO means "bytes crossed the wire" (text/tool deltas
     // mark it — see feed()). The second branch below therefore covers the
     // lying-zero stream: upstream usage said 0/0/0 but content flowed.
     if (this.sawUsage && (this.inTok > 0 || this.outTok > 0 || this.cacheTok > 0 || this.outChars > 0 || this.toolJsonChars > 0)) {
-      // Zero-output guard: the upstream said 0 (or omitted) output, but
-      // text/tool bytes crossed the wire — observed live (400k-context
-      // turn billed out:17403 with in/cache zeroed). Trusting that zero
-      // would erase the turn; estimate from the streamed sample instead
-      // (btdby4, conservative) and keep the event flagged estimated.
-      // Nonzero upstream figures are NEVER overridden.
+      // Only an entirely zero report with streamed content permits an output
+      // estimate. Preserve zero output when any category is nonzero.
       let outTok = this.outTok;
       let estimated = false;
-      if (outTok <= 0 && (this.outChars > 0 || this.toolJsonChars > 0)) {
+      if (!this.reportedNonzeroUsage && outTok <= 0 && (this.outChars > 0 || this.toolJsonChars > 0)) {
         outTok = this.estimateOutTok();
         estimated = true;
       }
-      return { inTok: this.inTok, cacheTok: this.cacheTok, cacheCreation: this.cacheCreation, billableOutTok: this.billedOutput || outTok + this.reasonTok, outTok, reasonTok: this.reasonTok, model: this.model, estimated };
+      return { inTok: this.inTok, cacheTok: this.cacheTok, cacheCreation: this.cacheCreation, billableOutTok: this.billedOutput || outTok + this.reasonTok, outTok, reasonTok: this.reasonTok, model: this.model, estimated, ...evidence };
     }
     // Anthropic reports input usage at message_start; tool-only streams may
     // carry no text — still bill the reported counters, not an estimate.
     if (this.sawUsage) {
-      return { inTok: this.inTok, cacheTok: this.cacheTok, cacheCreation: this.cacheCreation, billableOutTok: this.billedOutput || this.outTok + this.reasonTok, outTok: this.outTok, reasonTok: this.reasonTok, model: this.model, estimated: false };
+      return { inTok: this.inTok, cacheTok: this.cacheTok, cacheCreation: this.cacheCreation, billableOutTok: this.billedOutput || this.outTok + this.reasonTok, outTok: this.outTok, reasonTok: this.reasonTok, model: this.model, estimated: false, ...evidence };
     }
     return {
       inTok: 0,
@@ -2475,6 +2476,7 @@ export class IRStreamTranslator {
       reasonTok: this.reasonTok,
       model: this.model,
       estimated: true,
+      ...evidence,
     };
   }
 

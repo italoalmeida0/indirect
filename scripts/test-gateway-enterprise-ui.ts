@@ -47,6 +47,13 @@ async function choose(page: any, label: string, name: string | RegExp) {
   await page.getByRole("combobox", { name: label, exact: true }).click();
   await page.getByRole("option", { name, exact: typeof name === "string" }).click();
 }
+async function chooseProject(page: any, label: string) {
+  await page.getByRole("combobox", { name: label, exact: true }).click();
+  const project = page.getByRole("option", { name: "Browser delivery project", exact: true });
+  await project.waitFor();
+  assert.equal(await page.getByRole("option", { name: "Browser cost center", exact: true }).count(), 0, `${label} must exclude cost centers`);
+  await project.click();
+}
 async function organization(page: any, section: string) {
   await page.goto(`${base}/#/admin/organization`);
   await page.getByRole("heading", { name: "Organization", exact: true }).waitFor();
@@ -78,8 +85,15 @@ try {
   if (!reuse) {
     await page.goto(`${base}/#/projects`);
     await page.getByRole("button", { name: "New financial project", exact: true }).click();
+    await page.getByLabel("Project code", { exact: true }).fill("UI-COST-CENTER");
+    await page.getByLabel("Project name", { exact: true }).fill("Browser cost center");
+    await choose(page, "Scope type", "Cost center");
+    await page.getByRole("button", { name: "Save project", exact: true }).click();
+    await page.getByRole("button", { name: /Browser cost center/ }).first().waitFor();
+    await page.getByRole("button", { name: "New financial project", exact: true }).click();
     await page.getByLabel("Project code", { exact: true }).fill("UI-DELIVERY");
     await page.getByLabel("Project name", { exact: true }).fill("Browser delivery project");
+    await choose(page, "Cost center", "Browser cost center");
     await page.getByLabel("Shared monthly budget (USD)", { exact: true }).fill("100");
     await page.getByLabel("Shared lifetime budget (USD)", { exact: true }).fill("1000");
     await page.getByRole("button", { name: "Save project", exact: true }).click();
@@ -95,10 +109,46 @@ try {
     assert.equal((await memberSaved).status(), 200);
     const projects = await api("/api/projects", admin.accessToken);
     const project = projects.projects.find((item: { code: string }) => item.code === "UI-DELIVERY");
+    const center = projects.projects.find((item: { code: string }) => item.code === "UI-COST-CENTER");
     assert(project, "UI project was not persisted");
+    assert(center, "UI cost center was not persisted");
+    assert.equal(project.costCenterId, center.id, "cost centers remain available as project parents");
     const memberships = await api(`/api/projects/${project.id}/members`, admin.accessToken);
     assert(memberships.members.some((item: { userId: string; role: string }) => item.userId === fixture.users[0]!.id && item.role === "manager"), "UI membership was not persisted");
     await noOverflow(page, "projects");
+
+    // Both scopes are visible to this key owner: eligibility must depend on
+    // scope kind, rather than accidentally hiding a non-member cost center.
+    for (const scope of [project, center]) await api(`/api/projects/${scope.id}/members/${admin.user.id}`, admin.accessToken, { role: "member" }, "PUT");
+    await page.goto(`${base}/#/keys`);
+    await page.getByRole("button", { name: "New key", exact: true }).click();
+    await page.getByPlaceholder("e.g. production-agent-01", { exact: true }).fill("Browser project key");
+    await chooseProject(page, "Financial project");
+    const keyCreated = page.waitForResponse((result: any) => new URL(result.url()).pathname === "/api/keys" && result.request().method() === "POST");
+    await page.getByRole("button", { name: "Create key", exact: true }).click();
+    const createdKeyResponse = await keyCreated;
+    assert.equal(createdKeyResponse.status(), 200);
+    const createdKey = (await createdKeyResponse.json()).key;
+    assert.equal(createdKey.projectId, project.id);
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+
+    await page.setViewportSize({ width: 390, height: 960 });
+    await page.goto(`${base}/#/keys`);
+    await page.getByText("Browser project key", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "Edit", exact: true }).click();
+    await chooseProject(page, "Financial project");
+    const keyEdited = page.waitForResponse((result: any) => new URL(result.url()).pathname === `/api/keys/${createdKey.id}` && result.request().method() === "PATCH");
+    await page.getByRole("button", { name: "Save changes", exact: true }).click();
+    assert.equal((await keyEdited).status(), 200);
+    await page.goto(`${base}/#/admin/keys`);
+    await page.locator(".catalog-key-card", { hasText: "Browser project key" }).getByRole("button", { name: "Assign financial project", exact: true }).click();
+    await chooseProject(page, "Key financial project");
+    await choose(page, "Key financial project", "Personal — no financial project");
+    const keyAssigned = page.waitForResponse((result: any) => new URL(result.url()).pathname === `/api/admin/keys/${createdKey.id}` && result.request().method() === "PATCH");
+    await page.getByRole("button", { name: "Save assignment", exact: true }).click();
+    assert.equal((await keyAssigned).status(), 200);
+    assert.equal((await api("/api/keys", admin.accessToken)).keys.find((key: { id: string }) => key.id === createdKey.id).projectId, null);
+    await page.setViewportSize({ width: 1440, height: 1000 });
 
     await organization(page, "Financial visibility");
     await choose(page, "Budget presentation", "Budget percentages");
@@ -125,6 +175,15 @@ try {
     await page.getByRole("button", { name: "Save model policy", exact: true }).click();
     await page.getByText("Browser economical policy", { exact: false }).first().waitFor();
     assert((await api("/api/admin/model-policies", admin.accessToken)).policies.some((item: { name: string }) => item.name === "Browser economical policy"));
+    await page.getByRole("button", { name: "New model policy", exact: true }).click();
+    await page.getByLabel("Policy name", { exact: true }).fill("Browser project grant");
+    await choose(page, "Policy scope", "Project grant");
+    await chooseProject(page, "Financial project");
+    await page.getByLabel("Find models", { exact: true }).fill("enterprise-fast");
+    await page.getByRole("checkbox", { name: /enterprise-fast/ }).check();
+    await page.getByRole("button", { name: "Save model policy", exact: true }).click();
+    await page.getByRole("heading", { name: /Browser project grant/ }).waitFor();
+    assert((await api("/api/admin/model-policies", admin.accessToken)).policies.some((item: { name: string; project_id: string }) => item.name === "Browser project grant" && item.project_id === project.id));
     await noOverflow(page, "model-policies");
 
     await organization(page, "Bulk user import");
@@ -137,6 +196,7 @@ try {
 
     await organization(page, "Corporate authentication");
     await page.getByLabel("OIDC issuer URL", { exact: true }).waitFor();
+    await noOverflow(page, "corporate-auth");
     // The section rail is the only organization switcher: it must stay
     // keyboard reachable and swap the panel on activation.
     const railEntry = page.locator(".org-hub-link", { hasText: "Operations & backups" });
@@ -144,7 +204,6 @@ try {
     assert(await railEntry.evaluate((element: HTMLElement) => element === document.activeElement), "organization rail must accept keyboard focus");
     await page.keyboard.press("Enter");
     await page.getByRole("heading", { name: "Operational metrics", exact: true }).waitFor();
-    await noOverflow(page, "corporate-auth");
 
     await organization(page, "Operations & backups");
     await page.getByRole("heading", { name: "Operational metrics", exact: true }).waitFor();

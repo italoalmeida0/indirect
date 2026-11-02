@@ -1,7 +1,7 @@
 import { db, stmts, audit, inImmediateTx } from "../db";
 import { requireAdmin } from "../auth";
 import { assignPlan } from "../billing";
-import { assertSessionPolicy, corporateAuthConfig } from "../auth-policy";
+import { assertSessionPolicy, corporateAuthConfig, type CorporateAuthConfig } from "../auth-policy";
 import { randomToken, sha256Hex } from "../crypto";
 import { ApiError, clientIp, hasControlCharacters, ok } from "../http";
 
@@ -13,8 +13,14 @@ interface ImportRow {
   planId: string | null; projectIds: string[]; managed: boolean; oidcSubject: string | null;
   status: "create" | "existing" | "error"; errors: string[];
 }
-interface ImportBatch { id: string; actor_id: string; input_hash: string; rows_json: string; created_at: number; expires_at: number; committed_at: number | null; result_json: string | null }
+interface ImportBatch { id: string; actor_id: string; input_hash: string; auth_context: string; rows_json: string; created_at: number; expires_at: number; committed_at: number | null; result_json: string | null }
 const fields = ["email", "name", "role", "planId", "projectIds", "managed", "oidcSubject"];
+
+// Subjects are meaningful only within the issuer reviewed by the administrator.
+// Bind every uncommitted preview to the same identity and security policy.
+function importAuthContext(config: CorporateAuthConfig): string {
+  return JSON.stringify([config.version, config.enabled, config.issuer, config.clientId, config.requireManagedSso, config.requireAdminMfa]);
+}
 
 /** Stop reading as soon as the cap is crossed, including chunked requests. */
 async function readImportBody(req: Request): Promise<Record<string, unknown>> {
@@ -71,11 +77,10 @@ function parseCsv(content: string): Record<string, unknown>[] {
   });
 }
 
-function validateRows(raw: unknown[], csv: boolean): ImportRow[] {
+function validateRows(raw: unknown[], csv: boolean, config: CorporateAuthConfig): ImportRow[] {
   if (!raw.length || raw.length > MAX_ROWS) throw new ApiError(400, `import must contain 1-${MAX_ROWS} users`);
   const seen = new Set<string>();
   const seenSubjects = new Set<string>();
-  const config = corporateAuthConfig();
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return raw.map((entry, index) => {
     const errors: string[] = [];
@@ -147,18 +152,25 @@ export async function handleUserImportRoute(path: string, req: Request): Promise
     if (body.format === "csv") input = parseCsv(body.content.replace(/^\uFEFF/, ""));
     else { try { input = JSON.parse(body.content); } catch { throw new ApiError(400, "import content is not valid JSON"); } }
     if (!Array.isArray(input)) throw new ApiError(400, "JSON import must contain an array of users");
-    const rows = validateRows(input, body.format === "csv");
+    const inputRows = input;
     const batch = inImmediateTx(() => {
       requireLiveAdmin();
+      const config = corporateAuthConfig();
+      const context = importAuthContext(config);
+      const rows = validateRows(inputRows, body.format === "csv", config);
+      const rowsJson = JSON.stringify(rows);
       // Preview persistence is bounded globally and per administrator. No unbounded
       // import queue or user creation happens while a preview is being inspected.
       db.prepare("DELETE FROM user_import_batches WHERE id IN (SELECT id FROM user_import_batches WHERE expires_at < ? AND committed_at IS NULL LIMIT 25)").run(Date.now());
       db.prepare("DELETE FROM user_import_batches WHERE id IN (SELECT id FROM user_import_batches WHERE committed_at < ? LIMIT 25)").run(Date.now() - 30 * 86_400_000);
       const prior = db.query<ImportBatch, [string, string, number]>("SELECT * FROM user_import_batches WHERE actor_id=? AND input_hash=? AND expires_at>? ORDER BY created_at DESC LIMIT 1").get(ctx.user.id, hash, Date.now());
-      if (prior) return prior;
+      // A committed result is immutable. An uncommitted preview may be reused
+      // only when its validation and identity context still match this review.
+      if (prior && (prior.committed_at || (prior.auth_context === context && prior.rows_json === rowsJson))) return prior;
+      if (prior) db.prepare("UPDATE user_import_batches SET expires_at=? WHERE id=? AND committed_at IS NULL").run(Date.now(), prior.id);
       if (db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM user_import_batches").get()!.n >= 200 || db.query<{ n: number }, [string, number]>("SELECT COUNT(*) AS n FROM user_import_batches WHERE actor_id=? AND expires_at>? AND committed_at IS NULL").get(ctx.user.id, Date.now())!.n >= 5) throw new ApiError(429, "too many pending imports; wait for a preview to expire");
       const id = randomToken(24), now = Date.now();
-      db.prepare("INSERT INTO user_import_batches(id,actor_id,input_hash,rows_json,created_at,expires_at) VALUES (?,?,?,?,?,?)").run(id, ctx.user.id, hash, JSON.stringify(rows), now, now + TTL);
+      db.prepare("INSERT INTO user_import_batches(id,actor_id,input_hash,auth_context,rows_json,created_at,expires_at) VALUES (?,?,?,?,?,?,?)").run(id, ctx.user.id, hash, context, rowsJson, now, now + TTL);
       audit("users.import.previewed", { actorId: ctx.user.id, target: id, ip: clientIp(req), meta: { rows: rows.length, invalid: rows.filter((row) => row.errors.length).length } });
       return db.query<ImportBatch, [string]>("SELECT * FROM user_import_batches WHERE id=?").get(id)!;
     });
@@ -173,13 +185,14 @@ export async function handleUserImportRoute(path: string, req: Request): Promise
     if (!batch) throw new ApiError(404, "import preview not found");
     if (batch.committed_at) return { ...JSON.parse(batch.result_json!) as Record<string, unknown>, replayed: true };
     if (batch.expires_at <= Date.now()) throw new ApiError(409, "import preview expired; preview the file again");
+    const config = corporateAuthConfig();
+    if (batch.auth_context !== importAuthContext(config)) throw new ApiError(409, "corporate authentication changed; preview the file again");
     const preview = JSON.parse(batch.rows_json) as ImportRow[];
     if (preview.some((row) => row.errors.length)) throw new ApiError(409, "fix every invalid row before committing the import");
     // Revalidate references and policy under the writer lock. A changed plan,
     // project or identity cannot leave half an import committed.
-    const rows = validateRows(preview.map((row) => ({ email: row.email, name: row.name, role: row.role, planId: row.planId, projectIds: row.projectIds, managed: row.managed, oidcSubject: row.oidcSubject })), false);
+    const rows = validateRows(preview.map((row) => ({ email: row.email, name: row.name, role: row.role, planId: row.planId, projectIds: row.projectIds, managed: row.managed, oidcSubject: row.oidcSubject })), false, config);
     if (rows.some((row) => row.errors.length)) throw new ApiError(409, "an account, project, plan, or security policy changed; create a new preview");
-    const config = corporateAuthConfig();
     let created = 0, existing = 0;
     const userIds: string[] = [];
     for (const row of rows) {
