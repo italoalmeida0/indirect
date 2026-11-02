@@ -5,6 +5,51 @@ qualified merely because its code exists. The detailed scope is in
 `ENTERPRISE_COMPLETION_PROMPT.md`; operating contracts are in
 `docs/gateway-enterprise.md`.
 
+## Post-review regression fixes (2026-11-02)
+
+- [x] Completion batches, token-ID arrays, `n`/`best_of`, embedding batches and
+  conflicting protocol caps cannot under-reserve finite account/key/project
+  budgets. Retry authorization rechecks current assignment, limits and windows
+  while retaining original attribution and exactly-once settlement.
+- [x] Unmetered dispatched 408/5xx/timeouts reserve each ambiguous attempt;
+  interrupted partial streams remain uncertain and terminal usage stays exact.
+  Queued token counts recheck key expiry. Live settlement retry remains durable.
+- [x] Every provider dispatch rechecks live authority, including retries after
+  definite uncharged errors and free native/local token counts. The original
+  gated-429/revocation probe now returns 401 after one upstream hit, with no
+  fallback and zero charge. Free counts remain allowed at zero budget.
+- [x] Native and translated metering retain every category of nonzero upstream
+  usage. Only all-zero reports with actual model content are estimated; empty
+  JSON envelopes and banners do not create usage. The original terminal-error
+  probe now preserves input 0/output 2 and charges no invented input.
+- [x] OIDC import previews freeze issuer/client/security context, preserve
+  committed replay, and refresh validation after references are repaired.
+  Delayed administrator edits preserve the target's current role and ban.
+- [x] Worker-backed personal/project/administrator reads recheck current
+  identity, membership and financial policy at delivery, with at most one
+  policy-driven retry. Deterministic tests pause real worker dispatches.
+- [x] Explicit backup verification persists failure/repair atomically. Verified
+  retention buckets survive failed/unverified copies. Backup workers are bounded
+  and filesystem mutations require a correlated durable audit intent.
+- [x] Project-only selectors exclude cost centers. Production browser checks
+  exercise create/edit/admin assignment/project grants and the actual corporate
+  authentication form at 768/390/320 pixels; 12 navigation samples had zero
+  failures/runtime errors. All seven financial presentation scenarios passed.
+- [x] Open-loop scheduler tests preserve fixed arrivals under slow operations,
+  count overload explicitly and drain outstanding work. A one-minute functional
+  mixed run offered/started/completed 240 requests, all HTTP 200, with no failed
+  samples or maintenance jobs. RSS was 139/144/138 MiB baseline/peak/final;
+  peak WAL was 4.1 MiB. This small fixture run is not capacity qualification.
+- [x] Final local gates: lint and typecheck clean, production SPA built, and
+  **965 tests passed, zero failures**, across 82 files (9,302 assertions, 352 s)
+  on native Windows ARM64 Bun 1.4.2 with `--max-concurrency=4`. The pinned
+  Obscura browser was pre-provisioned through `OBSCURA_PATH`; browser execution
+  remained enabled. Native CI runs the ordinary workflow after push; its result
+  is recorded separately from this local verification.
+
+The measurements below describe earlier revisions and retain their original
+fixture and hardware limits; they do not qualify these fixes at full retention.
+
 ## Implemented and covered by regression tests
 
 - [x] Revalidate the earlier correlation, financial policy, UI DTO, audit and
@@ -72,7 +117,7 @@ qualified merely because its code exists. The detailed scope is in
   retention profile — so this qualifies the browser path, not the
   administrative aggregate cost measured below.
 
-## Gates recorded on the current source revision
+## Earlier gateway gate results
 
 - [x] `bun run lint` — clean, zero warnings (the previous run left one unused
   `upstreamStarted` binding from an interrupted proxy edit; removed).
@@ -393,12 +438,21 @@ this is not on the measured dashboard path, and it is reported rather than
 fixed: the fix (order and limit the bare table, then join the actor for the page)
 touches the audit page's SQL and belongs behind its own regression test.
 
-## Sustained mixed soak (quick profile)
+## Earlier batched mixed soaks (quick profile)
 
 `bun scripts/soak-gateway.ts --dir=tmp/enterprise-quick-3 --minutes=11 --rate=8`
-— 3 proxy arrivals to 1 dashboard read, open loop, 674 s, on the 500-user quick
+— 3 proxy arrivals to 1 dashboard read, response-paced batches, 674 s, on the 500-user quick
 fixture. All six dashboard routes were exercised (208 arrivals each), plus 3,744
 proxy completions.
+
+These historical runs awaited each batch before issuing another, so `--rate=8`
+was a requested batch size per second, not a guaranteed open-loop arrival rate.
+Their error, memory, WAL and maintenance observations remain recorded below;
+they cannot establish saturation behaviour at a fixed offered rate. The current
+script schedules arrivals independently, counts overload at its in-flight cap,
+and reports offered/started/completed rates plus drain time. The sustained
+qualification must be repeated with that scheduler before claiming an
+open-loop soak passed.
 
 - **4,992 arrivals, 4,992 `200`**: 0 client errors, 0 server errors, 0 network
   errors.

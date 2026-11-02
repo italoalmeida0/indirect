@@ -121,6 +121,13 @@ redemption, usage summaries/events/analytics/breakdowns, model catalog/detail
 responses and filter/sort metadata. Internal accounting stays in nanodollars.
 `X-Financial-Policy` and policy-aware resources refresh an open page after
 policy changes; stale USD values must not remain visible when policy narrows.
+
+Worker-backed user, manager and administrator reports revalidate the live
+session and account before serialization. Project reports also recheck current
+membership. Projection uses the delivery-time financial policy; when a change
+requires different query predicates or cost aggregation, the read retries once
+with that policy and then returns `409` if it changes again. This bounds the
+work while preventing a pending read from restoring revoked financial access.
 Finite private plans are not described as unlimited because USD is absent.
 
 Model policies use **public registry IDs**, including IDs with slashes.
@@ -210,8 +217,13 @@ pending batches per administrator and 200 stored batches.
 Commit revalidates references/security policy in the transaction that creates
 accounts, memberships and audit. Invalid batches make no partial account
 changes. Repeating a committed `batchId` returns its stored result with
-`replayed:true`. Matching content within its live preview window reuses the
-batch. New managed accounts need an exact `oidcSubject` when SSO is enforced;
+`replayed:true`, including after a later identity-policy change. An uncommitted
+preview freezes the issuer, client and security-policy version: changing that
+context requires a new preview before any accounts or identity links are created.
+Matching content reuses an uncommitted batch only while both its validation and
+identity context still match. Repairing an invalid project/plan reference allows
+the same input to produce a fresh preview immediately. New managed accounts need
+an exact `oidcSubject` when SSO is enforced;
 project-manager imports receive manager membership in their listed projects.
 Unenrolled administrators cannot be imported while administrator MFA is required.
 
@@ -306,20 +318,31 @@ A consistent `VACUUM INTO` snapshot runs while WAL writes continue; creation
 and verification use worker threads. Worker failure is reported rather than
 falling back to synchronous serving-thread work.
 
+Creation and verification share one worker slot; overlapping operations receive
+`409` and may retry after it is released. Deletion and retention cannot race an
+active worker. Manual filesystem mutations record an audited intent before
+starting, followed by a correlated completion record. Manual creation outcomes
+are included in backup status as well as scheduled outcomes.
+
 Snapshots contain the database, bounded manifest with sizes/hashes/schema
 version, and the secret material needed to decrypt credentials. Verification
 checks inventory/path safety, sizes, SHA-256, SQLite integrity and critical
 table reads. Hashes detect corruption relative to the manifest; they are not
 an authenticity signature against replacement of both files and manifest.
 Protect snapshots and keep an off-host copy under the operator's access policy.
-Copied encryption secrets make snapshot access security-sensitive.
+Copied encryption secrets make snapshot access security-sensitive. Explicit
+re-verification atomically persists its latest result in the manifest, so a
+failed copy is no longer listed as verified. Repair and successful re-verification
+clear the earlier error.
 
 Daemon inclusion is off by default. When enabled, configure
 `BACKUP_DAEMON_DIRS` explicitly and arrange an offline/consistent daemon copy
 when required. A gateway SQLite snapshot does not establish a simultaneous
 transaction with daemon files or transfer their ownership. Daily/weekly
-retention applies to complete snapshots; inspect failed/interrupted copies
-before operator cleanup.
+retention buckets contain verified restore points. Failed or unverified copies
+cannot displace them; the newest unsuccessful copy is kept separately for
+diagnosis, and older unsuccessful copies expire. Interrupted copies without a
+complete manifest require operator inspection and cleanup.
 
 Restore is an **offline CLI operation into a new or empty directory**; it never
 restores over the live installation. The destination parent must exist and be
@@ -461,6 +484,24 @@ distributions. `--enforce-p99` requires at least 1,000 total interactions and
 rejects failures/runtime errors. The 3,600-interaction command gives 1,200
 samples for each of the three currently measured pages. Small samples remain
 exploratory even when fast.
+
+The mixed soak uses the same fixture and runs independently of the capacity
+thresholds:
+
+```sh
+bun scripts/soak-gateway.ts --dir=tmp/enterprise-quick --minutes=12 \
+  --rate=8 --max-inflight=128 --report=tmp/enterprise-quick-soak.json
+```
+
+Each arrival has a fixed monotonic timestamp; a slow response never delays the
+next arrival. The in-flight cap bounds outstanding work. Arrivals above that cap
+are counted as overload failures rather than silently queued or omitted. The
+report separates requested rate, offered/started/completed counts and measured
+rates, scheduling delay, offering duration and drain duration. Metrics sampling
+continues through the drain, and every started request completes or records an
+error before reporting. Historical batched soak measurements in the checklist
+predate this scheduler and do not demonstrate a fixed offered rate. A short
+functional run does not qualify sustained load or delivered retention.
 
 Ordinary CI runs production-SPA financial/enterprise regressions.
 `.github/workflows/enterprise-qualification.yml` is an explicit manual gate on
