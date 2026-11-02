@@ -7,6 +7,7 @@ import {
   originalUsable,
   usableDiffers,
 } from "../web/src/indirect-code/utils/modeSkills";
+import { normalizeSession } from "../web/src/indirect-code/store/sessions";
 import type { SkillConfig } from "../web/src/indirect-code/types";
 
 const official = (over: Record<string, Partial<SkillConfig>>): Record<string, SkillConfig> => {
@@ -109,5 +110,36 @@ describe("usableDiffers (omit the key when it equals the original)", () => {
     expect(originalUsable("")).toBe("deny");
     expect(originalUsable("inherit")).toBe("deny"); // session-only value, never a file original
     expect(usableDiffers("deny", undefined)).toBe(false);
+  });
+});
+
+describe("session mirror summary (list pulls)", () => {
+  // The sessions collection is re-applied on every mirror refresh, session
+  // selection and reconnect. The daemon summary must therefore carry the
+  // skill selection and resolved approval mode; otherwise the picker resets
+  // to the default primary and the permissions UI to "ask".
+  test("normalizeSession keeps skills and approvalMode from the summary", () => {
+    const session = normalizeSession(
+      {
+        id: "s1",
+        cwd: "/w",
+        title: "T",
+        model: "m",
+        status: "idle",
+        createdAt: 1,
+        updatedAt: 1,
+        options: { effort: "medium", mode: "agentic", skills: [], access: "ask" },
+        skills: {
+          build: { priority: 1, active: true, usable: "" },
+          notes: { priority: 2, active: true, usable: "yolo" },
+          plan: { priority: 3, active: false, usable: "" },
+        },
+        approvalMode: "yolo",
+      },
+      "h1",
+    );
+    expect(session.skills?.notes).toEqual({ priority: 2, active: true, usable: "yolo" });
+    expect(session.skills?.plan).toEqual({ priority: 3, active: false, usable: "" });
+    expect(session.approvalMode).toBe("yolo");
   });
 });

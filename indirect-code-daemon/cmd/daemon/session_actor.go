@@ -1060,6 +1060,11 @@ func (a *sessionActor) onApprovalResponse(m approvalResponseMsg) {
 			approved = false
 		} else {
 			a.pingChange()
+			// The human just resolved the approval: clear the pending overlay
+			// BEFORE the snapshot so session_data (which now carries the
+			// complete client overlay) cannot resurrect the approval card.
+			a.clearPending()
+			a.setState(stateRunning)
 			a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": pagedHistoryBlock(sessionPayload(a.rec), a.rec)})
 		}
 	}

@@ -75,7 +75,13 @@ func (a *sessionActor) prepareTranscriptEvent(value any) {
 	m["transcript"] = t.cursor
 	if typ == "session_data" {
 		if p, ok := m["session"].(map[string]any); ok {
-			for k, v := range a.transcriptOverlay() {
+			// A session_data snapshot is COMPLETE for the client: besides the
+			// live transcript it must carry the actor-owned overlay (pending
+			// approval/question, live tool starts/progress, thinking timer).
+			// Otherwise a routine snapshot mid-turn (configure, update_skills)
+			// would clear the approval/question card the human still has to
+			// answer, leaving the turn blocked with no UI.
+			for k, v := range a.clientOverlay() {
 				p[k] = v
 			}
 		}
