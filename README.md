@@ -413,6 +413,12 @@ cd indirect-code-daemon
 CGO_ENABLED=1 go test ./...   # daemon suites (needs Go 1.26 + zig)
 ```
 
+`test/openrouter-integration.test.ts` also ships a live OpenRouter smoke suite
+(real catalog, streaming and non-streaming inference, rejected-credential
+handling). It runs when `OPENROUTER_API_KEY` is present, which Bun loads from
+the gitignored `.env`; `OPENROUTER_BASE_URL` overrides the API root. Without a
+key those tests skip, so `bun test` stays offline. Never commit the key.
+
 Browser UI checks are external Playwright scripts (for example
 `scripts/test-indirect-transcript-ui.ts` and `scripts/test-gateway-billing-ui.ts`).
 They need a built SPA, a Playwright installation and a Chromium binary, passed
