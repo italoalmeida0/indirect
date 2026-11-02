@@ -9,10 +9,10 @@ import { createUser, login, request, startGateway } from "./gateway-enterprise-f
  * OpenRouter upstream suite.
  *
  * The catalog transport tests run offline against a stubbed fetch, so `bun test`
- * stays hermetic on CI. Anything that reaches the real OpenRouter API is gated
- * on OPENROUTER_API_KEY (Bun loads the gitignored .env from the repo root) and
- * skips without it; OPENROUTER_BASE_URL selects the API root when a deployment
- * points the gateway at a mirror.
+ * stays hermetic without credentials. Anything that reaches the real OpenRouter
+ * API is gated on OPENROUTER_API_KEY (Bun loads the gitignored .env from the
+ * repo root) and skips without it; OPENROUTER_BASE_URL selects the API root and
+ * OPENROUTER_TEST_MODEL the smoke model.
  */
 
 const apiKey = (process.env.OPENROUTER_API_KEY ?? "").trim();
@@ -238,9 +238,10 @@ describe.skipIf(!live)("OpenRouter gateway integration (live)", () => {
     const models = await request(gateway.base, "/api/admin/models", { token: adminToken });
     expect(models.response.status).toBe(200);
     const ids = (models.data.models as Array<{ id: string }>).map((row) => row.id);
-    // `openrouter/free` is the documented smoke model; fall back to any free
-    // variant so the suite keeps working if the alias is retired.
-    const configuredModel = process.env.OPENROUTER_TEST_MODEL?.trim() || process.env.E2E_MODEL?.trim();
+    // CI can pin a cheap smoke model through OPENROUTER_TEST_MODEL; without one
+    // use the documented free alias, then any free variant, so the suite keeps
+    // working for accounts whose remaining free models change.
+    const configuredModel = process.env.OPENROUTER_TEST_MODEL?.trim();
     model = (configuredModel && ids.includes(configuredModel))
       ? configuredModel
       : (ids.includes("openrouter/free") ? "openrouter/free" : (ids.find((id) => id.endsWith(":free")) ?? ""));
