@@ -194,7 +194,7 @@ export default function SettingsPage() {
       <PageTitle title="Settings" subtitle="Your profile, sign-in security and active browser sessions." />
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card>
+        <Card motion="fade-u duration-250">
           <CardHeader title="Profile & Appearance" />
           <div class="px-5 pb-5 space-y-5">
             <div class="space-y-4">
@@ -226,7 +226,7 @@ export default function SettingsPage() {
           </div>
         </Card>
 
-        <Card>
+        <Card motion="fade-u duration-250">
           <CardHeader title="Password" subtitle={me().hasPassword ? undefined : "Set account password"} />
           <div class="px-5 pb-5 space-y-4">
             <Show when={me().hasPassword}>
@@ -240,7 +240,7 @@ export default function SettingsPage() {
           </div>
         </Card>
 
-        <Card class="lg:col-span-2">
+        <Card class="lg:col-span-2" motion="fade-u duration-300">
           <div class="p-5">
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div class="space-y-4">
@@ -301,7 +301,7 @@ export default function SettingsPage() {
       </div>
 
       <AccountSecurity />
-      <Card class="mt-6">
+      <Card class="mt-6" motion="fade-u duration-300">
         <CardHeader title="Active sessions" />
         <div class="px-5 pb-5">
           <ul class="divide-y divide-line" {...usalItems("fade-u", 40)}>

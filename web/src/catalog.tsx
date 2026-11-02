@@ -3,6 +3,7 @@ import { api, policyRevision } from "./api";
 import { AnalyticsToolbar, createAnalyticsFilters } from "./analytics-filters";
 import { serverDatasource } from "./aggrid";
 import { Icon, Icons, Select, fmtNum } from "./ui";
+import { usal, usalItems } from "./motion";
 
 /** Result counts read as a phrase: "1 API key", "2 API keys", "16 audit events". */
 function countLabel(total: number, label: string): string {
@@ -96,9 +97,14 @@ export function createCatalog<T>(config: { path: string; result: string; label: 
   };
   const retry = () => { cache.clear(); void refetch(); };
   onCleanup(() => { media.removeEventListener("change", resize); clearTimeout(searchTimer); for (const entry of cache.values()) entry.abort.abort(); });
+  // Memos: the mobile list and every toolbar read keeps its array identity
+  // between refreshes instead of allocating a new one per access, so <For>
+  // only re-creates the rows that really changed.
+  const rows = createMemo(() => records.error ? [] : records()?.rows ?? []);
+  const total = createMemo(() => records.error ? 0 : records()?.total ?? 0);
+  const loading = createMemo(() => records.loading || filters.pending() || search().trim() !== settledSearch());
   return { filters, config, search, setSearch, sort, setSort, query, page, setPage, records, mobile, refresh, retry,
-    rows: () => records.error ? [] : records()?.rows ?? [], total: () => records.error ? 0 : records()?.total ?? 0,
-    loading: () => records.loading || filters.pending() || search().trim() !== settledSearch(),
+    rows, total, loading,
     refreshKey: scope,
     datasource: serverDatasource<T>((params) => load(params.startRow, params.endRow - params.startRow, params.sortModel)),
   };
@@ -140,8 +146,8 @@ export function CatalogToolbar(props: { view: CatalogView; right?: JSX.Element }
 }
 
 export function CatalogState(props: { view: CatalogView; children: JSX.Element }) {
-  return <Show when={!props.view.records.error} fallback={<div class="catalog-notice" role="alert"><Icon name="lucide:circle-alert" size={20} /><p>Could not load {props.view.config.label.toLowerCase()}. Your filters are preserved.</p><button type="button" class="ui-button ui-button-secondary" onClick={props.view.retry}>Try again</button></div>}>
-    <Show when={props.view.records()} fallback={<div class="catalog-notice" role="status"><Icon name="lucide:loader-circle" size={18} class="animate-spin motion-reduce:animate-none" />Loading {props.view.config.label.toLowerCase()}…</div>}><div class="catalog-results" aria-busy={props.view.loading()}>{props.children}</div></Show>
+  return <Show when={!props.view.records.error} fallback={<div class="catalog-notice" role="alert" {...usal("fade-u duration-200")}><Icon name="lucide:circle-alert" size={20} /><p>Could not load {props.view.config.label.toLowerCase()}. Your filters are preserved.</p><button type="button" class="ui-button ui-button-secondary" onClick={props.view.retry}>Try again</button></div>}>
+    <Show when={props.view.records()} fallback={<div class="catalog-notice" role="status" {...usal("fade-u duration-200")}><Icon name="lucide:loader-circle" size={18} class="animate-spin motion-reduce:animate-none" />Loading {props.view.config.label.toLowerCase()}…</div>}><div class="catalog-results" aria-busy={props.view.loading()} {...usalItems("fade-u", 40)}>{props.children}</div></Show>
   </Show>;
 }
 

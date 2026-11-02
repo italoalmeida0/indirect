@@ -3,6 +3,7 @@ import { Axis, AxisCursor, AxisGrid, AxisLabel, AxisLine, AxisTooltip, Bar, Char
 import type { AnalyticsEntity, AnalyticsReport, DailyPoint, ModelTimeline } from "./api";
 import { analyticsBuckets, analyticsTotals, cachePercent } from "./analytics-data";
 import { Card, Icon, fmtCost, fmtNum, pointLabel } from "./ui";
+import { usal } from "./motion";
 
 const colors = ["var(--chart-series-1)", "var(--chart-series-2)", "var(--chart-series-3)", "var(--chart-series-4)", "var(--chart-series-5)", "var(--chart-mid)"];
 const percent = (value: number | null) => value === null ? "—" : `${value.toLocaleString("en", { maximumFractionDigits: 1 })}%`;
@@ -209,9 +210,9 @@ export function AnalyticsError(props: { retry: () => unknown }) {
 }
 
 export function AnalyticsLoading() {
-  return <div class="analytics-loading" role="status"><Icon name="lucide:loader-circle" size={19} class="animate-spin motion-reduce:animate-none" /><span>Loading your analytics…</span></div>;
+  return <div class="analytics-loading" role="status" {...usal("fade-u duration-200")}><Icon name="lucide:loader-circle" size={19} class="animate-spin motion-reduce:animate-none" /><span>Loading your analytics…</span></div>;
 }
 
 export function AnalyticsSection(props: { title: string; description: string; right?: JSX.Element }) {
-  return <div class="analytics-section-heading"><div><h2>{props.title}</h2><p>{props.description}</p></div>{props.right}</div>;
+  return <div class="analytics-section-heading" {...usal("fade-u duration-250")}><div><h2>{props.title}</h2><p>{props.description}</p></div>{props.right}</div>;
 }

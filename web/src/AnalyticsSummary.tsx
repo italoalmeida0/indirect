@@ -5,6 +5,7 @@ import { TokenBucketsChart } from "./AnalyticsCharts";
 import { analyticsTotals, type AnalyticsMetric } from "./analytics-data";
 import { RequestHeatmap } from "./RequestHeatmap";
 import { Card, CountUp, DeltaPill, IconTile, Icons, fmtCost } from "./ui";
+import { usalItems } from "./motion";
 
 export function AnalyticsHero(props: {
   icon: string;
@@ -81,7 +82,7 @@ export function AnalyticsSummary(props: { report: AnalyticsReport; label: string
     { label: "Cache", token: "cache_tok", cost: "cost_cache", color: "var(--chart-mid)" },
     { label: "Output", token: "out_tok", cost: "cost_out", color: "var(--chart-brand)" },
   ] as const;
-  return <div class={`analytics-summary ${props.section === "costs" ? "is-pair" : "is-single"}`}>
+  return <div class={`analytics-summary ${props.section === "costs" ? "is-pair" : "is-single"}`} {...usalItems("fade-u", 90)}>
     <Show when={props.section === "spend" || props.section === "costs"}><Card class="analytics-summary-spend p-5 min-w-0 flex flex-col">
       <AnalyticsHero icon={Icons.dollarSign} cost={value("cost")} label={`Spend · ${props.label}`} delta={delta(["cost"])} />
       <div class="analytics-summary-buckets"><For each={buckets}>{(bucket) => <AnalyticsBucket label={bucket.label} cost={value(bucket.cost)} color={bucket.color} delta={delta([bucket.cost])} />}</For></div>

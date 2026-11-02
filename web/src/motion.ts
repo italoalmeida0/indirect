@@ -1,3 +1,4 @@
+import { createEffect, createSignal, onCleanup } from "solid-js";
 import USAL from "usal";
 
 /**
@@ -53,18 +54,63 @@ export function usalItems(
   return usal(`split-item ${value} split-delay-${stagger} threshold-5`);
 }
 
+const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+
 /**
- * Count-up from 0 to a PRE-FORMATTED numeric string ("950", "12.5", "1.14").
- * Any unit suffix ("K"/"M"/"B") must stay OUTSIDE this string: USAL replaces
- * the matched text with its animated span, so a suffixed target would eat
- * the unit.
+ * Number that follows `target` WITHOUT recreating its element.
  *
- * NEVER pass locale-grouped numbers here ("1,140,500"): USAL's parser treats
- * a single separator followed by 1-3 digits as DECIMALS, so "1,140,500" would
- * be read as 1.140 and the counter would land on "1,140".
+ * USAL's `count-[n]` replaces the animated text node with its own span, so a
+ * Solid update after the animation would write into a detached node: numbers
+ * either went stale or had to remount (`<Show keyed>`) on every data refresh,
+ * which replayed the whole card's entrance. This tween owns the number
+ * instead: it counts up from zero on mount and from the value on screen when
+ * the data changes, so a refresh animates the value and leaves the DOM alone.
+ * `prefers-reduced-motion` jumps straight to the target.
  */
-export function usalCount(formatted: string): { "data-usal": string } {
-  return usal(`count-[${formatted}] duration-1000`);
+export function createTweenedNumber(
+  target: () => number,
+  entrance = 700,
+  update = 420,
+): () => number {
+  const [display, setDisplay] = createSignal(0);
+  let frame = 0;
+  let current = 0;
+  let settled = false;
+  const stop = () => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+  };
+  const run = (to: number, duration: number) => {
+    stop();
+    const from = current;
+    if (reduceMotion || !Number.isFinite(to) || from === to) {
+      current = Number.isFinite(to) ? to : from;
+      setDisplay(current);
+      return;
+    }
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / duration);
+      current = from + (to - from) * easeOutCubic(t);
+      setDisplay(current);
+      if (t < 1) {
+        frame = requestAnimationFrame(step);
+      } else {
+        frame = 0;
+        current = to;
+        setDisplay(to);
+      }
+    };
+    frame = requestAnimationFrame(step);
+  };
+  createEffect(() => {
+    // Read the dependency first: Solid memos evaluate eagerly.
+    const to = target();
+    run(to, settled ? update : entrance);
+    settled = true;
+  });
+  onCleanup(stop);
+  return display;
 }
 
 export { USAL };

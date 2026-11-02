@@ -138,27 +138,29 @@ export default function UsagePage() {
         <AnalyticsToolbar filters={filters} loading={report.loading || eventCount.loading || recentEventsList.loading} align="end" />
       </div>
       <Show when={!report.error} fallback={<AnalyticsError retry={refetch} />}>
-        <Show when={report()} fallback={<AnalyticsLoading />} keyed>{(data) => <>
-          <AnalyticsHistoryNotice history={data.history} previous={data.previousHistory} />
+        {/* Not keyed: a refetch (range, filters, policy) updates the mounted
+            sections in place instead of re-creating the whole analysis. */}
+        <Show when={report()} fallback={<AnalyticsLoading />}>{(data) => <>
+          <AnalyticsHistoryNotice history={data().history} previous={data().previousHistory} />
           <Show when={showUsd()}>
             <AnalyticsSection title="Spend" description="Understand your costs and the models behind them." />
-            <AnalyticsSummary report={data} label={data.label} query={data.query} section="spend" />
-            <ModelUsageChart modelColors={data.modelColors} data={data.modelSpend} metric="cost" period={data.label} onSelect={(id, label) => filters.toggle("model", "include", id, label)} />
+            <AnalyticsSummary report={data()} label={data().label} query={data().query} section="spend" />
+            <ModelUsageChart modelColors={data().modelColors} data={data().modelSpend} metric="cost" period={data().label} onSelect={(id, label) => filters.toggle("model", "include", id, label)} />
           </Show>
           <AnalyticsSection title="Tokens & caching" description="Track input, cached input and output, then see how effectively your prompts use the cache." />
-          <AnalyticsSummary report={data} label={data.label} query={data.query} section="tokens" />
-          <CacheUsageChart series={data.series} period={data.label} />
+          <AnalyticsSummary report={data()} label={data().label} query={data().query} section="tokens" />
+          <CacheUsageChart series={data().series} period={data().label} />
           <AnalyticsSection title="Requests & reliability" description="Follow traffic, response outcomes and the API keys generating activity." />
-          <AnalyticsSummary report={data} label={data.label} query={data.query} section="requests" />
+          <AnalyticsSummary report={data()} label={data().label} query={data().query} section="requests" />
           <div class="analytics-detail-grid">
-            <ModelUsageChart modelColors={data.modelColors} data={data.modelRequests} metric="reqs" period={data.label} onSelect={(id, label) => filters.toggle("model", "include", id, label)} />
-            <RequestOutcomesChart outcomes={data.outcomes} period={data.label} />
+            <ModelUsageChart modelColors={data().modelColors} data={data().modelRequests} metric="reqs" period={data().label} onSelect={(id, label) => filters.toggle("model", "include", id, label)} />
+            <RequestOutcomesChart outcomes={data().outcomes} period={data().label} />
           </div>
-          <ApiKeyUsageCard keys={data.keys} period={data.label} showSpend={showUsd()} onSelect={(id, label) => filters.toggle("key_id", "include", id, label)} />
+          <ApiKeyUsageCard keys={data().keys} period={data().label} showSpend={showUsd()} onSelect={(id, label) => filters.toggle("key_id", "include", id, label)} />
         </>}</Show>
       </Show>
       <AnalyticsSection title="Request history" description="Inspect individual calls with the same date range and filters as your charts." />
-      <Card class="usage-request-history">
+      <Card class="usage-request-history" motion="fade-u duration-300">
         <EventRetentionNotice history={report()?.history} />
           <CardHeader
             title="Recent requests"

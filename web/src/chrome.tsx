@@ -1,5 +1,7 @@
 import { Show, type JSX } from "solid-js";
 
+import { usal } from "./motion";
+
 /**
  * Shell pieces shared by the router and the individual pages.
  *
@@ -40,6 +42,7 @@ export function PageTitle(props: {
   return (
     <div
       class="relative flex flex-wrap items-end justify-between gap-3 mb-5"
+      {...usal("fade-u duration-300")}
     >
       <div>
         <h1

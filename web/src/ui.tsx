@@ -12,7 +12,7 @@ import { Portal } from "solid-js/web";
 import type { Placement } from "@floating-ui/dom";
 
 import { anchorFloat, Z } from "./floating";
-import { usalCount } from "./motion";
+import { createTweenedNumber, usal } from "./motion";
 
 /**
  * Hand-built UI kit: buttons, cards, inputs, custom select, modal, toast,
@@ -282,6 +282,9 @@ export function Btn(props: {
 export function Card(props: {
   class?: string;
   interactive?: boolean;
+  /** Optional USAL entrance tokens ("fade-u duration-250"), so a card that a
+   *  route or tab mounts carries its own motion (see `usal` in motion.ts). */
+  motion?: string;
   children: JSX.Element;
 }) {
   return (
@@ -291,6 +294,7 @@ export function Card(props: {
           ? "ui-card-interactive"
           : ""
       } ${props.class ?? ""}`}
+      {...(props.motion ? usal(props.motion) : {})}
     >
       {props.children}
     </div>
@@ -425,23 +429,22 @@ export function compactParts(n: number): { count: string; suffix: string } {
 
 /**
  * Animated number: counts up from 0 (compact — 950, 12.5K, 1.14M — never wraps).
- * Re-mounts when the displayed value changes: USAL replaces our text node with
- * its own span when it animates, so an in-place Solid update after that would
- * write into a detached node and the number would go stale (window switches).
+ * The tween owns the text node, so a data refresh animates FROM the value on
+ * screen instead of re-creating the element (which used to replay the whole
+ * card entrance and could leave a stale number behind).
  */
 export function CountUp(props: { value: number; class?: string }) {
-  const parts = () => compactParts(Math.round(Math.max(0, props.value)));
+  const animated = createTweenedNumber(() =>
+    Math.round(Math.max(0, props.value)),
+  );
+  const parts = () => compactParts(animated());
   return (
-    <Show when={parts().count} keyed>
-      {(count) => (
-        <span class={`tabular-nums inline-flex items-baseline ${props.class ?? ""}`}>
-          <span {...usalCount(count)}>{count}</span>
-          <Show when={parts().suffix}>
-            <span class="text-[0.85em] font-medium ml-0.5">{parts().suffix}</span>
-          </Show>
-        </span>
-      )}
-    </Show>
+    <span class={`tabular-nums inline-flex items-baseline ${props.class ?? ""}`}>
+      <span>{parts().count}</span>
+      <Show when={parts().suffix}>
+        {(suffix) => <span class="text-[0.85em] font-medium ml-0.5">{suffix()}</span>}
+      </Show>
+    </span>
   );
 }
 
@@ -1002,7 +1005,7 @@ export function Modal(props: {
     <Show when={props.open}>
       <Portal>
         <div
-          class="ui-dialog-backdrop fixed inset-0 overflow-y-auto p-3 sm:p-6 flex items-center justify-center"
+          class="ui-dialog-backdrop fixed inset-0 overflow-y-auto flex items-center justify-center"
           style={{ "z-index": Z.modal }}
           onMouseDown={props.onClose}
         >
@@ -1013,9 +1016,13 @@ export function Modal(props: {
             aria-labelledby={titleId}
             aria-describedby={desc() ? descriptionId : undefined}
             tabindex="-1"
-            class={`ui-dialog anim-pop-in flex max-h-[calc(100dvh-2rem)] sm:max-h-[90dvh] my-auto min-h-0 w-full flex-col ${
+            class={`ui-dialog anim-pop-in flex my-auto min-h-0 w-full flex-col ${
               props.width ?? "max-w-xl"
-            } ${props.fullOnMobile !== false ? "max-sm:h-[100dvh] max-sm:max-h-[100dvh] max-sm:rounded-none max-sm:my-0 max-sm:border-0" : ""} outline-none overflow-hidden`}
+            } ${
+              props.fullOnMobile !== false
+                ? "ui-dialog-full sm:max-h-[90dvh]"
+                : "max-h-[calc(100dvh-2rem)] sm:max-h-[90dvh]"
+            } outline-none overflow-hidden`}
             onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
           >
@@ -1148,7 +1155,7 @@ export function EmptyState(props: {
   hint?: string;
 }) {
   return (
-    <div class="flex flex-col items-center justify-center py-12 text-center">
+    <div class="flex flex-col items-center justify-center py-12 text-center" {...usal("fade-u duration-250")}>
       <div class="w-11 h-11 rounded-2xl bg-ink-800/70 border border-line flex items-center justify-center text-ink-400 mb-3">
         <Icon name={props.icon} size={20} />
       </div>

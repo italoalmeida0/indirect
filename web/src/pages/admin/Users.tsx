@@ -1,6 +1,6 @@
 import { UserPlanManager } from "../../billing";
 import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 
 import { api, currentSession, type AdminUserDto, type BillingPlanDto } from "../../api";
 import { PageTitle } from "../../index";
@@ -58,6 +58,15 @@ export default function AdminUsersPage() {
   const [plans] = createResource(async () => (await api<{ plans: BillingPlanDto[] }>("GET", "/api/admin/plans")).plans ?? []);
 
   const meId = () => currentSession()?.user.id;
+
+  // Built once per plan list instead of on every keystroke in the create form.
+  const planOptions = createMemo(() => [
+    { value: "", label: "Unlimited — no plan" },
+    ...(plans.error ? [] : plans() ?? []).map((plan) => ({
+      value: plan.id,
+      label: `${plan.name} · ${plan.monthlyUsd === null ? "Unlimited" : `${fmtCost(plan.monthlyUsd)} / month`}`,
+    })),
+  ]);
 
   // Server returns an absolute link when PUBLIC_URL is configured, otherwise
   // a root-relative one — prefix our own origin only in the relative case.
@@ -428,7 +437,7 @@ export default function AdminUsersPage() {
                 />
               </ModalField>
 
-              <Select label="Spending plan" value={newPlan()} onChange={setNewPlan} options={[{ value: "", label: "Unlimited — no plan" }, ...(plans.error ? [] : plans() ?? []).map((plan) => ({ value: plan.id, label: `${plan.name} · ${plan.monthlyUsd === null ? "Unlimited" : `${fmtCost(plan.monthlyUsd)} / month`}` }))]} />
+              <Select label="Spending plan" value={newPlan()} onChange={setNewPlan} options={planOptions()} />
               <ModalField label="Gateway role" hint="Determines access to the admin dashboard and registry controls.">
                 <div class="flex flex-wrap gap-2 pt-1">
                   <FilterChip
