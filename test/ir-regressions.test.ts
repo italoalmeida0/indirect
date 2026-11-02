@@ -129,6 +129,44 @@ describe("IR streaming regressions", () => {
     expect(translate("anthropic", "anthropic", wire).find((e) => e.type === "message_delta").usage.output_tokens).toBe(5);
     expect(translate("anthropic", "openai", wire).at(-1).usage.completion_tokens).toBe(5);
   });
+  test("Responses upstream without SSE event names still streams text and tools", () => {
+    // OpenRouter's Responses API (like several OpenAI-compatible bridges)
+    // sends data-only frames: the event kind rides ONLY the payload `type`,
+    // never an `event:` field. Reading the field alone used to drop every
+    // event — no text, no function_call, no terminal — so Codex stalled
+    // after announcing a tool call it never received.
+    const bare = (body: unknown) => `data: ${JSON.stringify(body)}\n\n`;
+    const wire =
+      bare({ type: "response.created", response: { id: "resp_1", status: "in_progress", output: [] } }) +
+      bare({ type: "response.output_item.added", output_index: 0, item: { id: "msg_1", type: "message", role: "assistant", status: "in_progress", content: [] } }) +
+      bare({ type: "response.output_text.delta", output_index: 0, item_id: "msg_1", content_index: 0, delta: "Running ls" }) +
+      bare({ type: "response.output_item.added", output_index: 1, item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "exec_command", arguments: "" } }) +
+      bare({ type: "response.function_call_arguments.delta", output_index: 1, item_id: "fc_1", delta: '{"cmd":' }) +
+      bare({ type: "response.function_call_arguments.delta", output_index: 1, item_id: "fc_1", delta: '"ls"}' }) +
+      bare({ type: "response.function_call_arguments.done", output_index: 1, item_id: "fc_1", name: "exec_command", arguments: '{"cmd":"ls"}' }) +
+      bare({ type: "response.output_item.done", output_index: 1, item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "exec_command", arguments: '{"cmd":"ls"}' } }) +
+      bare({ type: "response.completed", response: { id: "resp_1", status: "completed", output: [], usage: { input_tokens: 5, output_tokens: 4 } } }) +
+      "data: [DONE]\n\n";
+    for (const proto of ["openai", "anthropic", "responses"] as const) {
+      const events = translate("responses", proto, wire);
+      expect(events.some((e) => e.type === "response.failed")).toBe(false);
+      expect(calls(events, proto)).toEqual([{ id: "call_1", name: "exec_command", args: '{"cmd":"ls"}' }]);
+      if (proto === "responses") {
+        expect(events.filter((e) => e.type === "response.output_text.delta").map((e) => e.delta)).toEqual(["Running ls"]);
+        expect(events.at(-1).response.status).toBe("completed");
+      }
+    }
+    // Event-less terminal failures must still fail, never fabricate success.
+    const failed = translate("responses", "responses", bare({ type: "response.failed", response: { error: { code: "server_error", message: "Busy" } } }));
+    expect(JSON.stringify(failed)).toContain("Busy");
+    expect(failed.some((e) => e.type === "response.completed")).toBe(false);
+    // Some SSE proxies label every frame with a generic event name and keep
+    // the real kind in the payload only; the payload type must still win.
+    const generic = translate("responses", "responses", wire.replace(/^data: /gm, "event: message\ndata: "));
+    expect(generic.some((e) => e.type === "response.failed")).toBe(false);
+    expect(calls(generic, "responses")).toEqual([{ id: "call_1", name: "exec_command", args: '{"cmd":"ls"}' }]);
+    expect(generic.at(-1).response.status).toBe("completed");
+  });
   test("Responses incomplete and abrupt EOF never become completed", () => {
     const events = translate("responses", "responses", frame("response.incomplete", { response: { incomplete_details: { reason: "max_output_tokens" }, usage: { input_tokens: 3, output_tokens: 2 } } }));
     expect(events.at(-1).response.status).toBe("incomplete");
