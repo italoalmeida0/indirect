@@ -2304,9 +2304,20 @@ export class IRStreamTranslator {
       let deltas: IRStreamDelta[];
       try {
         const eventBody = JSON.parse(data);
-        deltas = eventBody.error || eventBody.type === "error"
+        // The canonical event kind is the payload `type` whenever present:
+        // OpenAI Responses frames repeat it in an `event:` field, but
+        // compatible servers (OpenRouter, LiteLLM-style bridges, vLLM) send
+        // data-only frames — or one generic `event: message` for all — and
+        // keep the real kind only in the payload. Anthropic payloads repeat
+        // their SSE type; chat chunks carry none and fall back to the SSE
+        // name. Reading the `event:` field alone silently dropped EVERY
+        // response event from those upstreams: no text, no tool calls, no
+        // terminal — the client saw an empty broken stream.
+        const eventName =
+          (typeof eventBody.type === "string" && eventBody.type) || this.currentEvent;
+        deltas = eventBody.error || eventName === "error"
           ? [{ error: { type: String(eventBody.error?.type ?? eventBody.error?.code ?? eventBody.code ?? "api_error"), message: String(eventBody.error?.message ?? eventBody.message ?? "Upstream stream failed") } }]
-          : this.parser(this.currentEvent, data);
+          : this.parser(eventName, data);
       } catch {
         deltas = [];
       }

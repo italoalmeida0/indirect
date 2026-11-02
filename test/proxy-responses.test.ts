@@ -297,6 +297,53 @@ describe("proxy Responses matrix (in-process)", () => {
   });
 });
 
+describe("provider dialects (in-process)", () => {
+  test("data-only Responses SSE frames (OpenRouter dialect) reach a Codex-style client", async () => {
+    // OpenRouter's /responses stream omits SSE `event:` names: the kind
+    // lives only in the payload `type`. The proxy must still forward text,
+    // the function_call item and the terminal event.
+    onlyProvider(PR);
+    const real = globalThis.fetch;
+    const bare = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
+    globalThis.fetch = (async (_input: any, _init: any) =>
+      new Response(
+        new ReadableStream<string>({
+          start(c) {
+            c.enqueue(bare({ type: "response.created", response: { id: "resp_stub", status: "in_progress", output: [] } }));
+            c.enqueue(bare({ type: "response.output_text.delta", output_index: 0, item_id: "msg_0", content_index: 0, delta: "Running ls" }));
+            c.enqueue(bare({ type: "response.output_item.added", output_index: 1, item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "shell", arguments: "" } }));
+            c.enqueue(bare({ type: "response.function_call_arguments.delta", output_index: 1, item_id: "fc_1", delta: '{"command":["ls"]}' }));
+            c.enqueue(bare({ type: "response.function_call_arguments.done", output_index: 1, item_id: "fc_1", name: "shell", arguments: '{"command":["ls"]}' }));
+            c.enqueue(bare({ type: "response.output_item.done", output_index: 1, item: { id: "fc_1", type: "function_call", call_id: "call_1", name: "shell", arguments: '{"command":["ls"]}', status: "completed" } }));
+            c.enqueue(bare({ type: "response.completed", response: { id: "resp_stub", status: "completed", output: [], usage: { input_tokens: 7, output_tokens: 3 } } }));
+            c.enqueue("data: [DONE]\n\n");
+            c.close();
+          },
+        }).pipeThrough(new TextEncoderStream()),
+        { headers: { "Content-Type": "text/event-stream" } },
+      )) as typeof fetch;
+    try {
+      const { req, url } = gwReq("/v1/responses", {
+        model: "m",
+        input: "list files",
+        stream: true,
+        tools: [{ type: "function", name: "shell", parameters: { type: "object" } }],
+      });
+      const res = await handleProxy(req, url, undefined);
+      expect(res.status).toBe(200);
+      const text = await readSse(res);
+      expect(text).not.toContain("response.failed");
+      expect(text).toContain("Running ls");
+      expect(text).toContain('"type":"function_call"');
+      expect(text).toContain('"call_id":"call_1"');
+      expect(text).toContain('"arguments":"{\\"command\\":[\\"ls\\"]}"');
+      expect(text).toContain("event: response.completed");
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});
+
 describe("provider strip_params (in-process)", () => {
   function setStrip(id: string, params: string[]): void {
     db.prepare("UPDATE providers SET strip_params = ? WHERE id = ?").run(JSON.stringify(params), id);
