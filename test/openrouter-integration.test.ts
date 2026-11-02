@@ -240,7 +240,10 @@ describe.skipIf(!live)("OpenRouter gateway integration (live)", () => {
     const ids = (models.data.models as Array<{ id: string }>).map((row) => row.id);
     // `openrouter/free` is the documented smoke model; fall back to any free
     // variant so the suite keeps working if the alias is retired.
-    model = ids.includes("openrouter/free") ? "openrouter/free" : (ids.find((id) => id.endsWith(":free")) ?? "");
+    const configuredModel = process.env.OPENROUTER_TEST_MODEL?.trim() || process.env.E2E_MODEL?.trim();
+    model = (configuredModel && ids.includes(configuredModel))
+      ? configuredModel
+      : (ids.includes("openrouter/free") ? "openrouter/free" : (ids.find((id) => id.endsWith(":free")) ?? ""));
     expect(model).not.toBe("");
 
     const alice = await createUser(gateway.base, adminToken, "openrouter-live@enterprise.test");
