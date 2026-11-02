@@ -173,8 +173,10 @@ function OverviewBody(props: {
     const result = props.series();
     return result && !result.ok ? result.error : undefined;
   });
-  const view = () => data()?.points ?? [];
-  const comparison = () => props.previous.loading ? [] : props.previous()?.points ?? [];
+  // Stable identities: the chart, heatmap and delta memos all read these, so
+  // every unrelated signal (theme, policy, a sibling card) reused the array.
+  const view = createMemo(() => data()?.points ?? []);
+  const comparison = createMemo(() => props.previous.loading ? [] : props.previous()?.points ?? []);
   // Keep the three buckets visible alongside the requested combined headline.
   const winIn = createMemo(() =>
     view().reduce((s, d) => s + (d.in_tok ?? 0), 0),
@@ -236,9 +238,10 @@ function OverviewBody(props: {
       </Show>
       <AnalyticsHistoryNotice history={data()?.history} previous={props.previous()?.history} />
 
-      {/* Keep the previous window visible while refreshing. The keyed resource
-          mounts CountUp with resolved values so USAL always owns fresh nodes. */}
-      <Show when={data()} keyed>
+      {/* Keep the previous window visible while refreshing. NOT keyed: a
+          refetch swaps values inside the mounted cards, so the entrance never
+          replays and the numbers animate from what is already on screen. */}
+      <Show when={data()}>
         {(current) => (
           <div
             class={`overview-charts grid grid-cols-1 ${props.showUsd ? "md:grid-cols-2" : ""} gap-5 mb-5`}
@@ -283,7 +286,7 @@ function OverviewBody(props: {
                     metric="cost"
                     variant="line"
                     height={200}
-                    unit={current.scope.unit}
+                    unit={current().scope.unit}
                     resetKey={`spend:${props.filters.query()}`}
                   />
                 </div>
@@ -327,7 +330,7 @@ function OverviewBody(props: {
                   series={view()}
                   metric="tokens"
                   height={200}
-                  unit={current.scope.unit}
+                  unit={current().scope.unit}
                   resetKey={`tokens:${props.filters.query()}`}
                 />
               </div>
@@ -336,9 +339,9 @@ function OverviewBody(props: {
             <div class="overview-activity-row">
               <Card class="overview-requests p-5 min-w-0">
                 <AnalyticsHero icon={Icons.bolt} count={winReqs()} label={`Requests · ${props.filters.label()}`} delta={reqDelta()} />
-                <RequestHeatmap series={view()} scope={current.scope} cacheHitRate={cacheHitRate()} />
+                <RequestHeatmap series={view()} scope={current().scope} cacheHitRate={cacheHitRate()} />
               </Card>
-              <TopModelsCard models={current.models} requests={winReqs()} label={props.filters.label()} />
+              <TopModelsCard models={current().models} requests={winReqs()} label={props.filters.label()} />
             </div>
           </div>
         )}

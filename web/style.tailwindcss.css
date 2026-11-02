@@ -694,7 +694,19 @@ body {
   .peer:checked + .ui-switch-track, .ui-switch-track[aria-checked="true"] { background: var(--brand-500); border-color: var(--brand-500); }
   .peer:checked + .ui-switch-track .ui-switch-thumb, .ui-switch-track[aria-checked="true"] .ui-switch-thumb { translate: 0.75rem 0; background: var(--ink-950); }
   .peer:focus-visible + .ui-switch-track { outline: 2px solid var(--brand-500); outline-offset: 3px; }
-  .ui-dialog-backdrop { background: rgb(0 0 0 / 48%); backdrop-filter: blur(3px); }
+  /* Dialog padding lives here, not in utilities: safe areas must survive the
+   * cascade, and a fixed sheet larger than this padding box spilled past the
+   * top and bottom edges on phones. */
+  .ui-dialog-backdrop {
+    --dialog-gap: 0.75rem;
+    background: rgb(0 0 0 / 48%);
+    backdrop-filter: blur(3px);
+    padding: calc(var(--sat) + var(--dialog-gap)) calc(var(--sar) + var(--dialog-gap))
+      calc(var(--sab) + var(--dialog-gap)) calc(var(--sal) + var(--dialog-gap));
+  }
+  @media (min-width: 640px) {
+    .ui-dialog-backdrop { --dialog-gap: 1.5rem; }
+  }
   .ui-dialog {
     border: 1px solid var(--control-border);
     border-radius: var(--radius-xl);
@@ -764,9 +776,15 @@ body {
   html:not(.mobile) .ui-button-ghost:hover, html:not(.mobile) .ui-segment:hover,
   html.mobile .ui-button-ghost:active, html.mobile .ui-segment:active { color: var(--ink-100); background-color: var(--ink-800); }
   html:not(.mobile) .ui-field:hover:not(:focus):not(:disabled), html:not(.mobile) .ui-switch-card:hover, html:not(.mobile) .ui-card-interactive:hover { border-color: var(--control-border); }
+  /* Phones show the dialog as a card INSET from every edge: the header never
+   * sits under the status bar and the footer never under the home indicator.
+   * A 100dvh sheet is taller than the backdrop's padding box, and centering
+   * overflowed it past the top and bottom borders. */
   @media (max-width: 639px) {
-    .ui-dialog-full { max-height: 100dvh; height: 100dvh; border-radius: 0; border-width: 0; }
-    .ui-dialog-backdrop:has(.ui-dialog-full) { padding: 0; }
+    .ui-dialog-full {
+      height: auto;
+      max-height: calc(100dvh - var(--sat) - var(--sab) - 2 * var(--dialog-gap));
+    }
   }
 }
 
@@ -824,25 +842,10 @@ html.theme-xfade body * {
     pointer-events: none;
   }
 
-  /* Portaled dialogs sit outside the workspace shell. Keep their close
-   * buttons and footers clear of the notch and home indicator as well. */
-  .ui-dialog-backdrop {
-    --dialog-gap: 0.75rem;
-    padding: calc(var(--sat) + var(--dialog-gap)) calc(var(--sar) + var(--dialog-gap))
-      calc(var(--sab) + var(--dialog-gap)) calc(var(--sal) + var(--dialog-gap));
-  }
+  /* Portaled dialogs sit outside the workspace shell; the backdrop padding
+   * above already adds the notch and home-indicator insets. */
   .ui-dialog {
     max-height: calc(100dvh - var(--sat) - var(--sab) - 2 * var(--dialog-gap));
-  }
-  @media (min-width: 640px) {
-    .ui-dialog-backdrop { --dialog-gap: 1.5rem; }
-  }
-  @media (max-width: 639px) {
-    .ui-dialog-backdrop:has(.ui-dialog-full) { padding: var(--sat) var(--sar) var(--sab) var(--sal); }
-    .ui-dialog-full {
-      height: calc(100dvh - var(--sat) - var(--sab));
-      max-height: calc(100dvh - var(--sat) - var(--sab));
-    }
   }
 }
 
