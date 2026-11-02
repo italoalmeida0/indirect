@@ -7,7 +7,11 @@
  * Proxy completions and dashboard reads arrive at a steady open-loop rate while
  * the gateway's own schedule runs: analytics rollup cleanup every minute, WAL
  * checkpoint and detailed-event retention every five, billing recovery every
- * minute. The run samples `/api/admin/metrics` throughout and asserts what a
+ * minute. Arrivals have fixed monotonic timestamps independent of completion;
+ * --max-inflight=128 bounds outstanding work and counts excess arrivals as
+ * overload failures. Requests drain before the report, which separates the
+ * offered/started/completed rates and drain duration. The run samples
+ * `/api/admin/metrics` throughout and asserts what a
  * soak can actually prove — no server errors, no maintenance job failure,
  * bounded resident memory, and a bounded write-ahead log — and reports
  * everything it observed as JSON. It makes no claim about ten-year reliability,
@@ -16,15 +20,22 @@ import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { cpus } from "node:os";
 import { enterpriseMachine, enterpriseRequest, loadEnterpriseFixture, startEnterpriseStack } from "./enterprise-fixture";
+import { runOpenLoop } from "./open-loop-scheduler";
 
 const args = process.argv.slice(2);
 const arg = (name: string) => args.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3);
 const dir = arg("dir");
 if (!dir) throw new Error("--dir=<seeded fixture> is required");
-const minutes = Math.max(1, Number(arg("minutes") ?? 10));
-const rate = Math.max(1, Number(arg("rate") ?? 8));
-const sampleMs = Math.max(1_000, Number(arg("sample-ms") ?? 15_000));
-const streamShare = Math.max(0, Number(arg("stream-share") ?? 4));
+const integer = (name: string, fallback: number, minimum: number, maximum: number) => {
+  const value = Number(arg(name) ?? fallback);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`${name} must be an integer from ${minimum} to ${maximum}`);
+  return value;
+};
+const minutes = integer("minutes", 10, 1, 1440);
+const rate = integer("rate", 8, 1, 1000);
+const maxInFlight = integer("max-inflight", 128, 1, 4096);
+const sampleMs = integer("sample-ms", 15_000, 1000, 60_000);
+const streamShare = integer("stream-share", 4, 0, 1000);
 const reportPath = arg("report");
 const DAY = 86_400_000;
 const MB = 1_048_576;
@@ -77,7 +88,8 @@ const dashboardRoute = (ordinal: number, now: number) => {
   }
 };
 
-async function operation(index: number) {
+async function operation(index: number, intendedAt: number) {
+  issued++;
   const user = fixture.users[index % fixture.users.length]!;
   // One in four arrivals is a dashboard read; a sixth of those is the
   // administrative aggregate, the heaviest thing a person can ask for.
@@ -99,7 +111,6 @@ async function operation(index: number) {
         headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
         body: JSON.stringify({ ...(body as Record<string, unknown>), stream: true }), signal: AbortSignal.timeout(40_000) });
       const label = route;
-      issued++;
       statusCounts[response.status] = (statusCounts[response.status] ?? 0) + 1;
       const perRoute = statusByRoute[label] ?? (statusByRoute[label] = {});
       perRoute[response.status] = (perRoute[response.status] ?? 0) + 1;
@@ -109,7 +120,6 @@ async function operation(index: number) {
         const key = `${label} ${response.status}`;
         if (!errorBodies.has(key)) errorBodies.set(key, (await response.text()).slice(0, 200));
       } else {
-        ok2xx++;
         const reader = response.body.getReader();
         let chunks = 0, ttfb = 0;
         for (;;) {
@@ -119,6 +129,7 @@ async function operation(index: number) {
           chunks++;
         }
         const total = performance.now() - started;
+        ok2xx++;
         streamTtfb.push(ttfb || total);
         streamTotal.push(total);
         streamChunks.push(chunks);
@@ -134,9 +145,8 @@ async function operation(index: number) {
       return;
     }
     const response = await enterpriseRequest(stack.base, route, token, body);
-    const ms = performance.now() - started;
+    const ms = performance.now() - intendedAt;
     const label = route.split("?")[0]!;
-    issued++;
     statusCounts[response.status] = (statusCounts[response.status] ?? 0) + 1;
     const perRoute = statusByRoute[label] ?? (statusByRoute[label] = {});
     perRoute[response.status] = (perRoute[response.status] ?? 0) + 1;
@@ -151,12 +161,14 @@ async function operation(index: number) {
     }
     if (ms > 2_000) slowest.push({ route: route.split("?")[0]!, status: response.status, ms });
   } catch {
-    issued++; networkErrors++;
+    networkErrors++;
   }
 }
 
 async function sample() {
-  const response = await enterpriseRequest(stack.base, "/api/admin/metrics", fixture.admin.accessToken);
+  let response: Awaited<ReturnType<typeof enterpriseRequest>>;
+  try { response = await enterpriseRequest(stack.base, "/api/admin/metrics", fixture.admin.accessToken); }
+  catch (error) { observed.push({ at: Date.now(), metricsStatus: 0, error: error instanceof Error ? error.message.slice(0, 300) : "Metrics request failed" }); return; }
   if (response.status !== 200) { observed.push({ at: Date.now(), metricsStatus: response.status }); return; }
   const metrics = (response.json as any).metrics;
   const jobs = Array.isArray(metrics.maintenance) ? metrics.maintenance : [];
@@ -180,74 +192,75 @@ async function sample() {
   });
 }
 
-const startedAt = Date.now();
-const deadline = startedAt + minutes * 60_000;
-let index = 0;
+try {
+  await sample();
+  // Sample throughout offering and drain, with at most one metrics request in
+  // flight. Stop the timer without adding a sampling interval to the duration.
+  let sampling: Promise<void> | undefined;
+  const sampleTimer = setInterval(() => {
+    if (!sampling) sampling = sample().finally(() => { sampling = undefined; });
+  }, sampleMs);
+  const arrivals = await runOpenLoop({ durationMs: minutes * 60_000, rate, maxInFlight, operation }).finally(async () => {
+    clearInterval(sampleTimer);
+    await sampling;
+  });
+  await sample();
 
-// Sampling and traffic run together; sampling alone would miss the peaks the
-// traffic provokes, and traffic alone would leave memory unobserved.
-const sampling = (async () => { while (Date.now() < deadline) { await sample(); await Bun.sleep(sampleMs); } })();
-while (Date.now() < deadline) {
-  const batchStart = Date.now();
-  await Promise.all(Array.from({ length: rate }, (_, offset) => operation(index + offset)));
-  index += rate;
-  const elapsed = Date.now() - batchStart;
-  if (elapsed < 1_000) await Bun.sleep(1_000 - elapsed);
-}
-await sampling;
-await sample();
-const elapsedMs = Date.now() - startedAt;
+  const withMemory = observed.filter((row) => typeof row.rssMb === "number") as Array<Record<string, number>>;
+  const baseline = withMemory.length > 1 ? withMemory[1]!.rssMb! : (withMemory[0]?.rssMb ?? 0);
+  const finalRss = withMemory.at(-1)?.rssMb ?? baseline;
+  const peakRss = withMemory.reduce((max, row) => Math.max(max, row.rssMb!), 0);
+  const peakWal = observed.reduce((max, row) => Math.max(max, Number(row.walBytes ?? 0)), 0);
+  const maintenanceFailures = observed.at(-1)?.maintenanceFailures as Record<string, number> | undefined;
+  const maintenanceRuns = observed.at(-1)?.maintenanceRuns as Record<string, number> | undefined;
 
-const withMemory = observed.filter((row) => typeof row.rssMb === "number") as Array<Record<string, number>>;
-const baseline = withMemory.length > 1 ? withMemory[1]!.rssMb! : (withMemory[0]?.rssMb ?? 0);
-const finalRss = withMemory.at(-1)?.rssMb ?? baseline;
-const peakRss = withMemory.reduce((max, row) => Math.max(max, row.rssMb!), 0);
-const peakWal = observed.reduce((max, row) => Math.max(max, Number(row.walBytes ?? 0)), 0);
-const maintenanceFailures = observed.at(-1)?.maintenanceFailures as Record<string, number> | undefined;
-const maintenanceRuns = observed.at(-1)?.maintenanceRuns as Record<string, number> | undefined;
+  if (server5xx > 0) failures.push(`${server5xx} server error response(s)`);
+  if (client4xx > 0) failures.push(`${client4xx} client error response(s): ${JSON.stringify(Object.fromEntries(errorBodies))}`);
+  if (networkErrors > 0) failures.push(`${networkErrors} network error(s)`);
+  if (arrivals.overloaded > 0) failures.push(`${arrivals.overloaded} offered arrival(s) exceeded the ${maxInFlight}-request in-flight limit`);
+  if (arrivals.failed > 0) failures.push(`${arrivals.failed} operation failure(s): ${JSON.stringify(arrivals.errors)}`);
+  const metricsErrors = observed.filter((row) => "metricsStatus" in row).length;
+  if (metricsErrors > 0) failures.push(`${metricsErrors} metrics sample(s) failed`);
+  if (issued !== arrivals.started || arrivals.completed !== arrivals.started) failures.push("Traffic start/completion accounting did not reconcile");
+  if (streamFailures > 0) failures.push(`${streamFailures} stream(s) returned an error status`);
+  // The claim a soak can defend is about the population: the median stream must
+  // show the head start the upstream's 60 ms hold creates. Individual samples can
+  // coalesce when this client's first read lands after both frames were buffered,
+  // which is why the count is reported rather than asserted per sample.
+  if (streamGap.length > 0 && percentile(streamGap, 0.5) < 30) {
+    failures.push(`median stream gap ${percentile(streamGap, 0.5).toFixed(1)}ms — bodies are being buffered, not streamed`);
+  }
+  for (const [job, count] of Object.entries(maintenanceFailures ?? {})) if (count > 0) failures.push(`maintenance "${job}" failed ${count} time(s)`);
+  if (finalRss - baseline > 200) failures.push(`resident memory grew ${finalRss - baseline} MiB (${baseline} -> ${finalRss})`);
+  if (peakWal > 1_073_741_824) failures.push(`write-ahead log peaked at ${(peakWal / MB).toFixed(0)} MiB`);
+  const scheduled = Object.values(maintenanceRuns ?? {}).filter((runs) => runs > 0).length;
+  if (scheduled < 2) failures.push(`only ${scheduled} maintenance job(s) ran during the soak`);
 
-if (server5xx > 0) failures.push(`${server5xx} server error response(s)`);
-if (client4xx > 0) failures.push(`${client4xx} client error response(s): ${JSON.stringify(Object.fromEntries(errorBodies))}`);
-if (networkErrors > 0) failures.push(`${networkErrors} network error(s)`);
-if (streamFailures > 0) failures.push(`${streamFailures} stream(s) returned an error status`);
-// The claim a soak can defend is about the population: the median stream must
-// show the head start the upstream's 60 ms hold creates. Individual samples can
-// coalesce when this client's first read lands after both frames were buffered,
-// which is why the count is reported rather than asserted per sample.
-if (streamGap.length > 0 && percentile(streamGap, 0.5) < 30) {
-  failures.push(`median stream gap ${percentile(streamGap, 0.5).toFixed(1)}ms — bodies are being buffered, not streamed`);
-}
-for (const [job, count] of Object.entries(maintenanceFailures ?? {})) if (count > 0) failures.push(`maintenance "${job}" failed ${count} time(s)`);
-if (finalRss - baseline > 200) failures.push(`resident memory grew ${finalRss - baseline} MiB (${baseline} -> ${finalRss})`);
-if (peakWal > 1_073_741_824) failures.push(`write-ahead log peaked at ${(peakWal / MB).toFixed(0)} MiB`);
-const scheduled = Object.values(maintenanceRuns ?? {}).filter((runs) => runs > 0).length;
-if (scheduled < 2) failures.push(`only ${scheduled} maintenance job(s) ran during the soak`);
+  const report = {
+    dir, durationSeconds: Math.round(arrivals.totalMs / 1000), requestedArrivalRate: rate, mixedShare: "3 proxy : 1 dashboard",
+    machine: enterpriseMachine(),
+    traffic: { ...arrivals, issued, ok2xx, client4xx, server5xx, networkErrors, statusCounts, statusByRoute, errorBodies: Object.fromEntries(errorBodies) },
+    streaming: { share: streamShare, failures: streamFailures, coalesced: streamCoalesced, ttfbMs: distribution(streamTtfb), totalMs: distribution(streamTotal),
+      gapMs: distribution(streamGap),
+      chunks: { min: streamChunks.length ? Math.min(...streamChunks) : 0, max: streamChunks.length ? Math.max(...streamChunks) : 0 } },
+    memory: { baselineMb: baseline, finalMb: finalRss, peakMb: peakRss, growthMb: finalRss - baseline },
+    wal: { peakBytes: peakWal, finalBytes: Number(observed.at(-1)?.walBytes ?? 0) },
+    maintenance: { runs: maintenanceRuns, failures: maintenanceFailures },
+    slowSamples: slowest.sort((a, b) => b.ms - a.ms).slice(0, 15),
+    samples: observed,
+    passed: failures.length === 0, failures,
+  };
 
-const report = {
-  dir, durationSeconds: Math.round(elapsedMs / 1000), arrivalRate: rate, mixedShare: "3 proxy : 1 dashboard",
-  machine: enterpriseMachine(),
-  traffic: { issued, ok2xx, client4xx, server5xx, networkErrors, statusCounts, statusByRoute, errorBodies: Object.fromEntries(errorBodies) },
-  streaming: { share: streamShare, failures: streamFailures, coalesced: streamCoalesced, ttfbMs: distribution(streamTtfb), totalMs: distribution(streamTotal),
-    gapMs: distribution(streamGap),
-    chunks: { min: streamChunks.length ? Math.min(...streamChunks) : 0, max: streamChunks.length ? Math.max(...streamChunks) : 0 } },
-  memory: { baselineMb: baseline, finalMb: finalRss, peakMb: peakRss, growthMb: finalRss - baseline },
-  wal: { peakBytes: peakWal, finalBytes: Number(observed.at(-1)?.walBytes ?? 0) },
-  maintenance: { runs: maintenanceRuns, failures: maintenanceFailures },
-  slowSamples: slowest.sort((a, b) => b.ms - a.ms).slice(0, 15),
-  samples: observed,
-  passed: failures.length === 0, failures,
-};
-
-const text = JSON.stringify(report, null, 2);
-if (reportPath) {
-  const target = path.resolve(reportPath);
-  mkdirSync(path.dirname(target), { recursive: true });
-  writeFileSync(target, text);
-}
-console.log(JSON.stringify({ name: "soak", value: {
-  durationSeconds: report.durationSeconds, traffic: report.traffic, memory: report.memory, wal: report.wal,
-  maintenanceRuns, maintenanceFailures, passed: report.passed, failures: report.failures, report: reportPath ?? null,
-  logicalCpus: cpus().length,
-} }));
-await stack.stop();
-if (failures.length) process.exitCode = 1;
+  const text = JSON.stringify(report, null, 2);
+  if (reportPath) {
+    const target = path.resolve(reportPath);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, text);
+  }
+  console.log(JSON.stringify({ name: "soak", value: {
+    durationSeconds: report.durationSeconds, traffic: report.traffic, memory: report.memory, wal: report.wal,
+    maintenanceRuns, maintenanceFailures, passed: report.passed, failures: report.failures, report: reportPath ?? null,
+    logicalCpus: cpus().length,
+  } }));
+  if (failures.length) process.exitCode = 1;
+} finally { await stack.stop(); }

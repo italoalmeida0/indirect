@@ -614,7 +614,7 @@ export default function KeysPage() {
             />
           </ModalField>
 
-          <Show when={readProjects()?.length || projects.error}><Show when={projects.error} fallback={<Select label="Financial project" value={form().projectId} onChange={(id) => setForm({ ...form(), projectId: id })} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((p) => p.status === "active").map((p) => ({ value: p.id, label: p.name }))]} />}><p role="alert" class="text-xs text-ink-400">Financial projects could not be loaded. Reload to choose a project.</p></Show></Show>
+          <Show when={readProjects()?.length || projects.error}><Show when={projects.error} fallback={<Select label="Financial project" value={form().projectId} onChange={(id) => setForm({ ...form(), projectId: id })} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((p) => p.kind === "project" && p.status === "active").map((p) => ({ value: p.id, label: p.name }))]} />}><p role="alert" class="text-xs text-ink-400">Financial projects could not be loaded. Reload to choose a project.</p></Show></Show>
           <ModalSection title="Expiration">
             <div class="space-y-2.5">
               <div class="flex flex-wrap gap-2">
@@ -789,7 +789,7 @@ export default function KeysPage() {
             />
           </ModalField>
 
-          <Show when={readProjects()?.length || form().projectId}><Select label="Financial project" value={form().projectId} onChange={(id) => setForm({ ...form(), projectId: id })} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((p) => p.status === "active" || p.id === form().projectId).map((p) => ({ value: p.id, label: `${p.name}${p.status === "archived" ? " (archived)" : ""}` }))]} hint="Reassignment changes future requests. Historical usage keeps its original financial project." /></Show>
+          <Show when={readProjects()?.length || form().projectId}><Select label="Financial project" value={form().projectId} onChange={(id) => setForm({ ...form(), projectId: id })} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((p) => p.kind === "project" && (p.status === "active" || p.id === form().projectId)).map((p) => ({ value: p.id, label: `${p.name}${p.status === "archived" ? " (archived)" : ""}` }))]} hint="Reassignment changes future requests. Historical usage keeps its original financial project." /></Show>
           <ModalSection title="Expiration">
             <div class="space-y-2.5">
               <div class="flex flex-wrap gap-2">
