@@ -16,7 +16,7 @@ import { currentRequestId } from "../request-context";
 import { allowedModels, modelAllowed } from "../model-policy";
 import { requireKeyProject } from "../projects";
 import { financialPolicyFor, projectModelPrices } from "../financial-policy";
-import { BudgetError, reserveBudget, finalizeBudget, canAcceptSettlement, markUncertainAttempt, reserveNextAttempt } from "../billing";
+import { BudgetError, reserveBudget, finalizeBudget, canAcceptSettlement, markUncertainAttempt, reserveNextAttempt, revalidateBudgetDispatch, revalidateFreeDispatch } from "../billing";
 import { db } from "../db";
 import {
   routerSnapshot,
@@ -35,7 +35,7 @@ import {
   stickyGet,
   stickySet,
 } from "../failover";
-import { normalizeAttemptBody } from "./target-profile";
+import { normalizeAttemptBody, profileForTarget } from "./target-profile";
 import { dsmlRecoverer, toolHintsFromRequest } from "./dsml";
 import {
   applyMarkupRequestAdaptation,
@@ -799,6 +799,8 @@ interface UsageResult {
   billableOutTok?: number;
   model: string;
   estimated: boolean;
+  reportedUsage?: boolean;
+  contentCrossed?: boolean;
 }
 
 // ===== Main handler =====
@@ -920,7 +922,10 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
 
   // ---- availability (revoked/expired/budgets) ----
   const availability = checkKeyAvailability(keyRow);
-  if (!availability.ok) {
+  // Token counting is free: a spent key budget does not prevent this
+  // operation, although revoked or expired credentials remain unavailable.
+  const freeTokenCount = route.upstreamPath === "/messages/count_tokens" && req.method === "POST";
+  if (!availability.ok && (!freeTokenCount || availability.reason === "revoked" || availability.reason === "expired")) {
     const messages: Record<typeof availability.reason, string> = {
       revoked: "this API key has been revoked",
       exhausted: "this API key has exhausted its USD spending limit",
@@ -1219,32 +1224,21 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     const wantsStream = (bodyJson as any)?.stream === true;
     if (bodyJson && req.method === "POST" && route.upstreamPath !== "/messages/count_tokens") {
       const model = snap.models.get(String(bodyJson.model));
-      const trustOutputCap = candidates.every((candidate) => !parseStripParams(candidate.provider.row.strip_params).some((key) => ["max_tokens", "max_output_tokens", "max_completion_tokens"].includes(key)));
+      const trustOutputCap = candidates.every((candidate) => {
+        if (parseStripParams(candidate.provider.row.strip_params).some((key) => ["max_tokens", "max_output_tokens", "max_completion_tokens"].includes(key))) return false;
+        // The generic target normalizer can rename max_tokens on legacy
+        // completions; that endpoint only defines the classic name.
+        return route.upstreamPath !== "/completions" || profileForTarget({ ...candidate.provider.row, via: candidate.via, upstreamModel: candidate.upstreamModel }).outputLimitKey === "max_tokens";
+      });
       try {
         requestAt = Date.now();
-        budgetId = reserveBudget(keyRow, model, bodyJson, Buffer.byteLength(bodyText, "utf8"), route.upstreamPath === "/embeddings", trustOutputCap, requestAt, requestId, { projectId, costCenterId, proto, stream: wantsStream });
+        budgetId = reserveBudget(keyRow, model, bodyJson, Buffer.byteLength(bodyText, "utf8"), route.upstreamPath === "/embeddings", trustOutputCap, requestAt, requestId, { projectId, costCenterId, proto, stream: wantsStream, upstreamPath: route.upstreamPath, fallbackOutputCap: candidates.some((candidate) => candidate.translated && candidate.via === "anthropic") ? 4096 : undefined });
       } catch (error) {
         if (error instanceof ApiError) {
           const response = envelopeError(proto, error.status, error.message, error.status === 429 ? "rate_limit_error" : error.status >= 500 ? "api_error" : "invalid_request_error", req, error.code);
           if (error instanceof BudgetError && error.retryAfter) response.headers.set("Retry-After", String(error.retryAfter));
           return response;
         }
-        throw error;
-      }
-    } else if (bodyJson && req.method === "POST") {
-      // Non-billed count_tokens must still recheck membership and policy just
-      // before upstream dispatch. It cannot use a stale project grant.
-      try {
-        db.transaction(() => {
-          const fresh = stmts.keyByHash.get(sha256Hex(token));
-          const user = stmts.userById.get(owner.id);
-          if (!fresh || fresh.status === "revoked" || !user || user.status !== "active") throw new ApiError(401, "API key or account unavailable");
-          const current = requireKeyProject(owner.id, fresh.project_id ?? null);
-          if ((current?.project.id ?? null) !== projectId || (current?.costCenter?.id ?? null) !== costCenterId) throw new ApiError(409, "API key project changed; retry the request");
-          if (!modelAllowed(allowedModels({ role: user.role, projectId }), String(bodyJson!.model))) throw new ApiError(404, `unknown model '${bodyJson!.model}'`, "model_not_found");
-        }).immediate();
-      } catch (error) {
-        if (error instanceof ApiError) return envelopeError(proto, error.status, error.message, "invalid_request_error", req, error.code);
         throw error;
       }
     }
@@ -1262,13 +1256,14 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       h.set("x-gateway-usage", `in=${u.inTok},cache=${u.cacheTok},out=${u.outTok}`);
     };
 
-    const record = (u: UsageResult, status: number, latencyMs: number, stream: boolean, cand: RouteCandidate) => {
+    const record = (u: UsageResult, status: number, latencyMs: number, stream: boolean, cand: RouteCandidate, incomplete = false) => {
       if (recorded) return;
       let inTok = u.inTok;
       let cacheTok = u.cacheTok;
       let estimated = u.estimated;
-      // Zero-input guard: upstream said in+cache == 0 on a 2xx with a
-      // non-trivial request body (the MuseSpark 400k-context case). The
+      // Only an all-zero upstream report permits a fallback estimate when
+      // content crossed the wire. Preserve every category when even one
+      // upstream counter is nonzero. The
       // split comes from the btdby4 KV provider (`splitKvInput`): it
       // counts the request with the real BPE engine and simulates a REAL
       // KV cache on the EGRESS side (the provider that answered) — a
@@ -1277,7 +1272,8 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       // egress lane (per-protocol isolation is built into the provider).
       // Always flagged estimated. Nonzero upstream figures never reach
       // this path — they are recorded untouched.
-      if (bodyJson && bodyText && (status >= 200 && status < 300 || u.outTok > 0 || (u.reasonTok ?? 0) > 0) && inTok <= 0 && cacheTok <= 0) {
+      const reportedUsage = u.reportedUsage ?? [u.inTok, u.cacheTok, u.outTok, u.reasonTok ?? 0, u.billableOutTok ?? 0, u.cacheCreation ?? 0].some((count) => count !== 0);
+      if (bodyJson && bodyText && u.contentCrossed && (status >= 200 && status < 300 || stream) && !reportedUsage && inTok <= 0 && cacheTok <= 0) {
         const namespace =
           `${keyRow.id}\0${cand.provider.row.id}\0${cand.key.id}\0` +
           `${cand.upstreamModel || (routedPublicModel ?? String((bodyJson as any)?.model ?? ""))}`;
@@ -1290,7 +1286,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       }
       u.inTok = inTok; u.cacheTok = cacheTok; u.estimated = estimated;
       const noCharge = status >= 400 && inTok <= 0 && cacheTok <= 0 && u.outTok <= 0 && (u.reasonTok ?? 0) <= 0;
-      const uncertain = (status === 499 || status === 502) && noCharge;
+      const uncertain = incomplete || (status === 499 || status === 502) && noCharge;
       const event: Omit<UsageEvent, "charge"> = {
         keyId: keyRow.id,
         userId: keyRow.user_id,
@@ -1334,12 +1330,15 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     // (in, cache, out) split with reasoning excluded. No legacy parsers:
     // protocol N+1 only needs its decoder in decodeResponseToIR.
     const parseBufferedUsage = (contentType: string, text: string, _translated: boolean, via: Proto): UsageResult => {
-      if (!contentType.includes("application/json")) return { inTok: 0, cacheTok: 0, outTok: 0, model: "", estimated: false };
+      if (!contentType.includes("application/json")) return { inTok: 0, cacheTok: 0, outTok: 0, model: "", estimated: false, reportedUsage: false, contentCrossed: false };
       try {
         const irr = decodeResponseToIR(via as IRProto, text, "");
-        return { inTok: irr.inTok, cacheTok: irr.cacheTok, cacheCreation: irr.cacheCreation, billableOutTok: irr.billableOutTok, outTok: irr.outTok, reasonTok: irr.reasonTok, model: irr.model, estimated: irr.usageEstimated };
+        const embeddingData = route.upstreamPath === "/embeddings" ? (JSON.parse(text) as { data?: unknown }).data : undefined;
+        const embedded = Array.isArray(embeddingData) && embeddingData.length > 0;
+        const contentCrossed = !!irr.text || irr.toolUses.length > 0 || irr.thinking.length > 0 || embedded;
+        return { inTok: irr.inTok, cacheTok: irr.cacheTok, cacheCreation: irr.cacheCreation, billableOutTok: irr.billableOutTok, outTok: irr.outTok, reasonTok: irr.reasonTok, model: irr.model, estimated: irr.usageEstimated, reportedUsage: irr.reportedUsage, contentCrossed };
       } catch {
-        return { inTok: 0, cacheTok: 0, outTok: 0, model: "", estimated: true };
+        return { inTok: 0, cacheTok: 0, outTok: 0, model: "", estimated: true, reportedUsage: false, contentCrossed: false };
       }
     };
 
@@ -1351,6 +1350,28 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     // model are attributed to the "all candidates failed" network record.
     let lastAttempted: RouteCandidate | null = null;
     let needNextReservation = false;
+    const requestedModel = String(bodyJson?.model ?? "");
+    const rejectDispatch = (error: unknown): Response => {
+      if (!(error instanceof ApiError)) throw error;
+      if (budgetId) {
+        const event: Omit<UsageEvent, "charge"> = { keyId: keyRow.id, userId: keyRow.user_id, projectId, costCenterId, ts: requestAt, requestId, proto,
+          model: routedPublicModel ?? requestedModel, inTok: 0, cacheTok: 0, outTok: 0,
+          latencyMs: Math.round(performance.now() - started), status: error.status, stream: wantsStream, estimated: true };
+        finalizeBudget(budgetId, { kind: "cancel", event });
+        recorded = true;
+        wakeUsageOutbox();
+      }
+      const response = envelopeError(proto, error.status, error.message, error.status === 429 ? "rate_limit_error" : error.status >= 500 ? "api_error" : "invalid_request_error", req, error.code);
+      if (error instanceof BudgetError && error.retryAfter) response.headers.set("Retry-After", String(error.retryAfter));
+      return response;
+    };
+    const revalidateDispatch = (): Response | null => {
+      try {
+        if (budgetId) revalidateBudgetDispatch(budgetId, requestedModel);
+        else revalidateFreeDispatch({ keyId: keyRow.id, userId: keyRow.user_id, projectId, costCenterId, model: requestedModel });
+        return null;
+      } catch (error) { return rejectDispatch(error); }
+    };
 
     // ---- forward, with failover across the candidate chain ----
     // No-skip policy: every candidate is attempted in order (sticky winner
@@ -1358,8 +1379,6 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     // nothing here removes a key from rotation; the client owns backoff
     // and always receives the real upstream error.
     for (const cand of candidates.slice(0, LIMITS.maxFailoverAttempts)) {
-      attemptsMade++;
-      lastAttempted = cand;
       // Translated candidates serve requests through the provider's
       // other-protocol endpoint (the gateway IR, every direction);
       // everything else is byte-faithful pass-through on its own
@@ -1386,24 +1405,18 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       const breakerId = `${cand.provider.row.id}:${upstreamProto}`;
       if (breakerState(breakerId) === "open") continue;
       if (needNextReservation && budgetId) {
-        try { reserveNextAttempt(budgetId); needNextReservation = false; }
-        catch (error) {
-          if (!(error instanceof ApiError)) throw error;
-          const event: Omit<UsageEvent, "charge"> = { keyId: keyRow.id, userId: keyRow.user_id, projectId, costCenterId, ts: requestAt, requestId, proto,
-            model: routedPublicModel ?? String(bodyJson?.model ?? ""), inTok: 0, cacheTok: 0, outTok: 0,
-            latencyMs: Math.round(performance.now() - started), status: error.status, stream: wantsStream, estimated: true };
-          finalizeBudget(budgetId, { kind: "cancel", event });
-          recorded = true;
-          wakeUsageOutbox();
-          const response = envelopeError(proto, error.status, error.message, error.status === 429 ? "rate_limit_error" : "invalid_request_error", req, error.code);
-          if (error instanceof BudgetError && error.retryAfter) response.headers.set("Retry-After", String(error.retryAfter));
-          return response;
-        }
+        try { reserveNextAttempt(budgetId, requestedModel); needNextReservation = false; }
+        catch (error) { return rejectDispatch(error); }
       }
+
+      attemptsMade++;
+      lastAttempted = cand;
 
       // `/messages/count_tokens` has no OpenAI equivalent: answer translated
       // attempts locally from the request-body size estimate.
       if (cand.translated && route.upstreamPath === "/messages/count_tokens" && bodyJson) {
+        const rejected = revalidateDispatch();
+        if (rejected) return rejected;
         const h = baseHeaders(req);
         h.set("Content-Type", "application/json; charset=utf-8");
         h.set("x-gateway-attempts", String(attemptsMade));
@@ -1517,6 +1530,10 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         }
       }
 
+      // Conversion can await remote media. Recheck after it, immediately before
+      // handing bytes to the provider, including definite-error retries.
+      const rejected = revalidateDispatch();
+      if (rejected) return rejected;
       const upstreamUrl = `${base}${upstreamPath}`;
       const controller = new AbortController();
       const headerTimeout = setTimeout(
@@ -1608,6 +1625,13 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           const errHeaders = buildClientHeaders(upstream.headers, requestId, req, { attemptsMade });
           setUsageHeader(errHeaders, reported);
           return new Response(reEnvelopeError(proto, cand.via, upstream.status, errBody), { status: upstream.status, headers: errHeaders });
+        }
+        // A gateway/timeout/server failure may have happened after the
+        // provider accepted and billed the work. Persist that uncertainty
+        // before trying another candidate, just as for a failed fetch.
+        if (budgetId && (upstream.status === 408 || upstream.status >= 500)) {
+          markUncertainAttempt(budgetId);
+          needNextReservation = true;
         }
         currentAttemptDispatched = false;
 
@@ -1704,7 +1728,8 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           counted = true;
           const u = translator.result();
           finalUsage = u;
-          record(u, translator.failed && status === 200 ? 502 : status, Math.round(performance.now() - started), true, cand);
+          const incomplete = (translator.failed || status === 499 || status === 502) && !translator.terminalErrorUsage;
+          record(u, translator.failed && status === 200 ? 502 : status, Math.round(performance.now() - started), true, cand, incomplete);
         };
         const usageComment = (): Uint8Array | null => {
           if (!finalUsage || usageTailSent) return null;
@@ -1891,6 +1916,11 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         let translatedUsage: UsageResult;
         try {
           const irr = decodeResponseToIR(cand.via as IRProto, respText, modelName);
+          // record() may have estimated input for an all-zero report; keep the
+          // translated body and usage header consistent with the ledger.
+          irr.inTok = bufferedUsage.inTok;
+          irr.cacheTok = bufferedUsage.cacheTok;
+          irr.usageEstimated = bufferedUsage.estimated;
           // Tool-call recovery (markup leaking into content): recovered
           // calls join the IR tool uses, the markup is stripped. Anti-
           // duplicate guard: a native tool use already carries the call, so

@@ -21,7 +21,7 @@ interface Period { scope: "key" | "user" | "project"; owner: string; kind: Kind;
 interface Counter { spent: string; reserved: string; forgiven: string }
 interface PlanRow { id: string; name: string; monthly_nanos: number | null; weekly_enabled: number; session_enabled: number; created_at: number; updated_at: number }
 interface Account { plan_id: string | null; assignment_version: number; session_start: number | null }
-interface Pricing { model: string; input: string; cache: string; write: string; output: string; request: string; known: boolean }
+interface Pricing { model: string; input: string; cache: string; write: string; output: string; request: string; known: boolean; assignmentVersion?: number; planId?: string | null; boundedAtAdmission?: boolean }
 export interface Charge { input: bigint; cache: bigint; output: bigint }
 interface Hold { id: string; request_id: string | null; key_id: string; user_id: string; created_at: number; project_id: string | null; cost_center_id: string | null; request_proto: UsageEvent["proto"] | null; request_model: string | null; request_stream: number; amount_nanos: number; unit_nanos: number; uncertain_nanos: number; periods: string; pricing: string; state: string; cost_in_nanos: number | null; cost_cache_nanos: number | null; cost_out_nanos: number | null }
 const getAccount = db.prepare<Account, [string]>("SELECT * FROM user_billing WHERE user_id = ?");
@@ -150,6 +150,19 @@ function containsMedia(body: Record<string, unknown>): boolean {
   return false;
 }
 
+/** OpenAI completions and embeddings accept either one token-id array or a
+ * batch of strings/token-id arrays. A context limit applies to each member,
+ * not to the aggregate request. Reject ambiguous shapes under a finite budget
+ * rather than guessing a bound for an upstream's interpretation. */
+function batchSize(value: unknown, field: string, limited: boolean): number {
+  if (!Array.isArray(value)) return 1;
+  const tokens = (part: unknown): part is number[] => Array.isArray(part) && part.every((n) => Number.isSafeInteger(n) && n >= 0);
+  if (value.length && value.every((n) => Number.isSafeInteger(n) && n >= 0)) return 1;
+  if (value.length && (value.every((part) => typeof part === "string") || value.every(tokens))) return value.length;
+  if (limited) throw new ApiError(400, `${field} must be a string, token array, or batch of those`, "invalid_input");
+  return 1;
+}
+
 export class BudgetError extends ApiError {
   retryAfter: number;
   constructor(period: Period) {
@@ -160,7 +173,7 @@ export class BudgetError extends ApiError {
 
 /** One short IMMEDIATE transaction checks every cap and reserves all windows.
  * No token balance, stale usage cache, or raw-event scan participates. */
-export function reserveBudget(key: ApiKeyRow, model: ModelRow | undefined, body: Record<string, unknown>, bodyBytes: number, inputOnly = false, trustOutputCap = true, now = Date.now(), requestId?: string, expected?: { projectId: string | null; costCenterId: string | null; proto?: UsageEvent["proto"]; stream?: boolean }): string {
+export function reserveBudget(key: ApiKeyRow, model: ModelRow | undefined, body: Record<string, unknown>, bodyBytes: number, inputOnly = false, trustOutputCap = true, now = Date.now(), requestId?: string, expected?: { projectId: string | null; costCenterId: string | null; proto?: UsageEvent["proto"]; stream?: boolean; upstreamPath?: string; fallbackOutputCap?: number }): string {
   return db.transaction(() => {
     const fresh = freshKey.get(key.id);
     const owner = ownerStatus.get(key.user_id);
@@ -179,22 +192,46 @@ export function reserveBudget(key: ApiKeyRow, model: ModelRow | undefined, body:
     }
     const limited = state.periods.some((p) => p.limit !== null);
     const price = pricing(model, inputOnly);
+    // The same frozen document already accompanies the hold across retries and
+    // crashes. No period or scope is changed for the original attempt.
+    price.assignmentVersion = state.account.assignment_version;
+    price.planId = state.account.plan_id;
+    price.boundedAtAdmission = limited;
     if (!price.model && typeof body.model === "string") price.model = body.model.slice(0, 128);
     if (limited && !price.known) throw new ApiError(503, "USD budgets require configured input and output pricing for this model", "model_pricing_unavailable");
-    const rawMax = body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens;
-    if (limited && rawMax !== undefined && (typeof rawMax !== "number" || !Number.isSafeInteger(rawMax) || rawMax < 1 || rawMax > 1_000_000_000)) throw new ApiError(400, "Output maximum must be a positive integer", "invalid_output_limit");
+    const completion = expected?.upstreamPath === "/completions";
+    const batches = batchSize(inputOnly ? body.input : completion ? body.prompt : undefined, inputOnly ? "input" : "prompt", limited);
+    const limits = [body.max_output_tokens, body.max_completion_tokens, body.max_tokens].filter((value) => value !== undefined);
+    if (limited && !inputOnly && limits.some((value) => typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 1_000_000_000)) throw new ApiError(400, "Output maximum must be a positive integer", "invalid_output_limit");
+    // A cap from a different protocol may be ignored by the native provider.
+    // Require a cap the ingress operation actually understands, but bound by
+    // the largest supplied limit because tolerant providers differ on priority.
+    const relevant = completion || expected?.proto === "anthropic" ? body.max_tokens
+      : expected?.proto === "responses" ? body.max_output_tokens
+        : expected?.proto === "openai" ? body.max_tokens ?? body.max_completion_tokens
+          : body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens;
+    const validLimits = limits.filter((value): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 1_000_000_000);
+    const rawMax = typeof relevant === "number" && validLimits.length ? Math.max(...validLimits) : undefined;
     const copies = body.n ?? 1;
-    if (limited && (typeof copies !== "number" || !Number.isSafeInteger(copies) || copies < 1 || copies > 128)) throw new ApiError(400, "n must be between 1 and 128", "invalid_output_limit");
-    const output = inputOnly ? 0 : trustOutputCap && typeof rawMax === "number" && rawMax > 0 ? rawMax : model?.max_output_length ?? model?.context_length ?? 0;
+    const bestOf = completion ? body.best_of ?? 1 : 1;
+    if (limited && !inputOnly && [copies, bestOf].some((value) => typeof value !== "number" || !Number.isSafeInteger(value) || value < 1 || value > 128)) throw new ApiError(400, "n and best_of must be between 1 and 128", "invalid_output_limit");
+    const configuredOutput = model?.max_output_length ?? model?.context_length ?? 0;
+    const output = inputOnly ? 0 : trustOutputCap && rawMax !== undefined ? rawMax : configuredOutput ? Math.max(configuredOutput, expected?.fallbackOutputCap ?? 0) : 0;
     if (limited && !inputOnly && !output) throw new ApiError(400, "Set an output maximum or configure the model output limit before using a USD budget", "output_limit_required");
     // Text bytes plus generous protocol/tool framing form a conservative bound.
     // Stateful/media inputs use the full registered context instead.
     const media = !!body.previous_response_id || containsMedia(body);
     if (limited && media && !model?.context_length) throw new ApiError(400, "Stateful and media requests need a registered context length with USD budgets", "context_limit_required");
     const framing = 256 * (16 + (Array.isArray(body.messages) ? body.messages.length : 0) + (Array.isArray(body.tools) ? body.tools.length : 0));
-    const input = media ? model?.context_length ?? bodyBytes + framing : Math.min(model?.context_length ?? Infinity, bodyBytes + framing);
+    const context = model?.context_length ? model.context_length * batches : Infinity;
+    const input = media ? (Number.isFinite(context) ? context : bodyBytes + framing) : Math.min(context, bodyBytes + framing);
+    const generations = Math.max(typeof copies === "number" && Number.isSafeInteger(copies) && copies > 0 ? copies : 1, typeof bestOf === "number" && Number.isSafeInteger(bestOf) && bestOf > 0 ? bestOf : 1);
+    // Compatible providers need not share OpenAI's prompt accounting. Bound a
+    // separate prompt charge for every generated copy as well as its output.
+    const inputTokens = input * (inputOnly ? 1 : generations), outputTokens = output * generations * batches;
+    if (!Number.isSafeInteger(inputTokens) || !Number.isSafeInteger(outputTokens)) throw new ApiError(400, "Request cost bound is too large", "request_cost_too_large");
     const maxInputRate = [price.input, price.cache, price.write].map(BigInt).reduce((a, b) => a > b ? a : b).toString();
-    const amount = priceTokens(input, maxInputRate) + priceTokens(output * (typeof copies === "number" ? copies : 1), price.output) + priceTokens(1, price.request);
+    const amount = priceTokens(inputTokens, maxInputRate) + priceTokens(outputTokens, price.output) + priceTokens(1, price.request);
     if (amount > 9_000_000_000_000_000n) throw new ApiError(400, "Request cost bound is too large", "request_cost_too_large");
     for (const p of state.periods) {
       ensureCounter.run(p.scope, p.owner, p.kind, p.start, p.end);
@@ -220,33 +257,79 @@ export function markUncertainAttempt(id: string): void {
   }).immediate();
 }
 
+interface DispatchAccess { keyId: string; userId: string; projectId: string | null; costCenterId: string | null; model: string }
+
+/** Shared by billed and free dispatches, always inside a database transaction. */
+function currentDispatchAccess(access: DispatchAccess) {
+  const key = freshKey.get(access.keyId), owner = ownerStatus.get(access.userId);
+  if (!key || key.user_id !== access.userId || key.status === "revoked" || (key.expires_at !== null && key.expires_at <= Date.now()) || owner?.status !== "active") throw new ApiError(401, "API key or account unavailable");
+  const assignment = requireKeyProject(access.userId, key.project_id ?? null);
+  if ((assignment?.project.id ?? null) !== access.projectId || (assignment?.costCenter?.id ?? null) !== access.costCenterId) throw new ApiError(409, "API key project changed; retry the request");
+  if (access.model && !modelAllowed(allowedModels({ role: owner.role, projectId: access.projectId }), access.model)) throw new ApiError(404, `unknown model '${access.model}'`, "model_not_found");
+  return { key, assignment };
+}
+
+/** Check current authorization and caps against the frozen hold. `additional`
+ * is zero when reusing an active unit and one unit for an ambiguous retry. */
+function checkReservedDispatch(row: Hold, additional: bigint, requestedModel?: string): Period[] {
+  const { key, assignment } = currentDispatchAccess({ keyId: row.key_id, userId: row.user_id, projectId: row.project_id, costCenterId: row.cost_center_id, model: requestedModel ?? row.request_model ?? "" });
+  const originalPricing = JSON.parse(row.pricing) as Pricing;
+  const account = getAccount.get(row.user_id) ?? { plan_id: null, assignment_version: 0, session_start: null };
+  // Legacy holds without the assignment snapshot remain recoverable, but
+  // cannot authorize a new upstream attempt against an unknown assignment.
+  if (originalPricing.assignmentVersion === undefined || originalPricing.planId === undefined || originalPricing.assignmentVersion !== account.assignment_version || originalPricing.planId !== account.plan_id) throw new ApiError(409, "Budget assignment changed; retry the request");
+  const now = Date.now();
+  const current = periods(key, row.user_id, now, false).periods;
+  const date = new Date(now), monthStart = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1), monthEnd = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
+  for (const project of [assignment?.project, assignment?.costCenter]) if (project) {
+    current.push(
+      { scope: "project", owner: project.id, kind: "monthly", start: monthStart, end: monthEnd, limit: project.monthly_nanos === null ? null : String(project.monthly_nanos) },
+      { scope: "project", owner: project.id, kind: "lifetime", start: 0, end: MAX_DATE, limit: project.total_nanos === null ? null : String(project.total_nanos) },
+    );
+  }
+  const limits = new Map(current.map((p) => [`${p.scope}:${p.owner}:${p.kind}`, p.limit]));
+  const frozen = JSON.parse(row.periods) as Period[];
+  // A newly active or rolled-over window cannot be added to this hold: its
+  // earlier attempt belongs to the original windows, while finish() settles
+  // one common amount across the frozen set. Unbounded admissions may also
+  // have skipped the validation required for a finite budget.
+  if ((current.some((p) => p.limit !== null) && !originalPricing.boundedAtAdmission) || current.some((p) => p.limit !== null && !frozen.some((old) => old.scope === p.scope && old.owner === p.owner && old.kind === p.kind && old.start === p.start))) {
+    throw new ApiError(409, "Budget windows changed; retry the request");
+  }
+  for (const p of frozen) {
+    const limit = limits.get(`${p.scope}:${p.owner}:${p.kind}`) ?? null;
+    const counter = getCounter.get(p.scope, p.owner, p.kind, p.start) ?? empty;
+    if (limit !== null && BigInt(counter.spent) - BigInt(counter.forgiven) + BigInt(counter.reserved) + additional > BigInt(limit)) throw new BudgetError({ ...p, limit });
+  }
+  return frozen;
+}
+
+/** A free token-count request rechecks authority, but never reserves or rejects
+ * on a spent budget. */
+export function revalidateFreeDispatch(access: DispatchAccess): void {
+  db.transaction(() => { currentDispatchAccess(access); }).immediate();
+}
+
+/** Recheck an already reserved unit immediately before every dispatch. */
+export function revalidateBudgetDispatch(id: string, requestedModel?: string): void {
+  db.transaction(() => {
+    const row = getHold.get(id);
+    if (!row || row.state !== "pending") throw new ApiError(503, "reservation is no longer pending");
+    if (BigInt(row.uncertain_nanos) + BigInt(row.unit_nanos) > BigInt(row.amount_nanos)) throw new ApiError(503, "reservation has no active attempt");
+    checkReservedDispatch(row, 0n, requestedModel);
+  }).immediate();
+}
+
 /** Reserve a fresh unit before retrying an ambiguous attempt. The original
- * period keys and scope IDs stay frozen; current caps and authorization are
- * rechecked so a later reduction/revocation cannot be bypassed. */
-export function reserveNextAttempt(id: string): void {
+ * period keys and scope IDs stay frozen. */
+export function reserveNextAttempt(id: string, requestedModel?: string): void {
   db.transaction(() => {
     const row = getHold.get(id);
     if (!row || row.state !== "pending") throw new ApiError(503, "reservation is no longer pending");
     const uncertain = BigInt(row.uncertain_nanos), amount = BigInt(row.amount_nanos), unit = BigInt(row.unit_nanos);
     if (uncertain !== amount) throw new ApiError(503, "reservation already has an active attempt");
     if (amount + unit > 9_000_000_000_000_000n) throw new ApiError(429, "The request's conservative failover budget is exhausted", "budget_failover");
-    const key = freshKey.get(row.key_id), owner = ownerStatus.get(row.user_id);
-    if (!key || key.user_id !== row.user_id || key.status === "revoked" || (key.expires_at !== null && key.expires_at <= Date.now()) || owner?.status !== "active") throw new ApiError(401, "API key or account unavailable");
-    const assignment = requireKeyProject(row.user_id, key.project_id ?? null);
-    if ((assignment?.project.id ?? null) !== row.project_id || (assignment?.costCenter?.id ?? null) !== row.cost_center_id) throw new ApiError(409, "API key project changed; retry the request");
-    if (row.request_model && !modelAllowed(allowedModels({ role: owner.role, projectId: row.project_id }), row.request_model)) throw new ApiError(404, `unknown model '${row.request_model}'`, "model_not_found");
-    const current = periods(key, row.user_id, row.created_at, false).periods;
-    const limits = new Map(current.map((p) => [`${p.scope}:${p.owner}:${p.kind}`, p.limit]));
-    for (const project of [assignment?.project, assignment?.costCenter]) if (project) {
-      limits.set(`project:${project.id}:monthly`, project.monthly_nanos === null ? null : String(project.monthly_nanos));
-      limits.set(`project:${project.id}:lifetime`, project.total_nanos === null ? null : String(project.total_nanos));
-    }
-    const frozen = JSON.parse(row.periods) as Period[];
-    for (const p of frozen) {
-      const limit = limits.get(`${p.scope}:${p.owner}:${p.kind}`) ?? null;
-      const counter = getCounter.get(p.scope, p.owner, p.kind, p.start) ?? empty;
-      if (limit !== null && BigInt(counter.spent) - BigInt(counter.forgiven) + BigInt(counter.reserved) + unit > BigInt(limit)) throw new BudgetError({ ...p, limit });
-    }
+    const frozen = checkReservedDispatch(row, unit, requestedModel);
     db.prepare("UPDATE billing_reservations SET amount_nanos = amount_nanos + unit_nanos WHERE id = ? AND state = 'pending'").run(id);
     for (const p of frozen) reserveCounter.run(unit, p.scope, p.owner, p.kind, p.start);
   }).immediate();
