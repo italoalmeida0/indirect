@@ -18,7 +18,7 @@
   /* Budgets cap a shared-subtree DAG so it is rejected instead of expanding
      without bound: t = {t, t} repeated. */
   var MAX_DEPTH = 32;
-  var MAX_NODES = 100000;
+  var MAX_NODES = 10000;
   var MAX_STRING_BYTES = 4 * 1024 * 1024;
 
   var OBJECT_PROTO = Object.prototype;
@@ -28,7 +28,9 @@
      Array.prototype.push or Function.prototype.call, and the walk must not
      pick the patched versions up at snapshot time. Go re-validates the
      decoded object anyway; this keeps the JS-side checks honest too. */
-  var reflectApply = Reflect.apply;
+  var bind = Function.prototype.bind;
+  var uncurryThis = bind.bind(Function.prototype.call);
+  var createObject = Object.create;
   var getPrototypeOf = Object.getPrototypeOf;
   var getOwnPropertyNames = Object.getOwnPropertyNames;
   var getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
@@ -36,10 +38,10 @@
   var defineProperty = Object.defineProperty;
   var isArray = Array.isArray;
   var jsonStringify = JSON.stringify;
-  var objectToString = OBJECT_PROTO.toString;
-  var hasOwnProperty = OBJECT_PROTO.hasOwnProperty;
-  var stringSlice = String.prototype.slice;
-  var stringCharCodeAt = String.prototype.charCodeAt;
+  var objectToString = uncurryThis(OBJECT_PROTO.toString);
+  var hasOwnProperty = uncurryThis(OBJECT_PROTO.hasOwnProperty);
+  var stringSlice = uncurryThis(String.prototype.slice);
+  var charCodeAt = uncurryThis(String.prototype.charCodeAt);
   var isFiniteNumber = isFinite;
   var ErrorCtor = Error;
 
@@ -73,10 +75,6 @@
 
   function fail(message) {
     throw new ErrorCtor(message);
-  }
-
-  function charCodeAt(s, i) {
-    return reflectApply(stringCharCodeAt, s, [i]);
   }
 
   function utf8Length(s) {
@@ -114,8 +112,8 @@
       if (isArray(value)) {
         return "array";
       }
-      var tag = reflectApply(objectToString, value, []);
-      return "object (" + reflectApply(stringSlice, tag, [8, tag.length - 1]) + ")";
+      var tag = objectToString(value);
+      return "object (" + stringSlice(tag, 8, tag.length - 1) + ")";
     }
     return type;
   }
@@ -129,10 +127,13 @@
   }
 
   /* Budget counts values and string bytes across one traversal, so a shared
-     subtree is charged every time it is visited. A plain record (not a
-     prototype-based class) so a module cannot reach its methods. */
+     subtree is charged every time it is visited. A null-prototype record so
+     neither Object.prototype nor a class prototype is consulted. */
   function newBudget() {
-    return { nodes: 0, stringBytes: 0 };
+    var budget = createObject(null);
+    budget.nodes = 0;
+    budget.stringBytes = 0;
+    return budget;
   }
 
   function countNode(budget) {
@@ -156,10 +157,9 @@
   }
 
   /* path is the chain of containers from the root to the current value (a
-     plain array indexed by depth: at most MAX_DEPTH entries, so a linear
-     scan is cheap and nothing patchable — Set, push — is involved). Slots
-     are DEFINED, never assigned, so an index setter a module installed on
-     Array.prototype cannot observe the walk. */
+     null-prototype object indexed by depth: at most MAX_DEPTH entries, so a
+     linear scan is cheap and no prototype setter on Object.prototype or
+     Array.prototype can observe or intercept slot writes). */
   function onPath(path, depth, value) {
     for (var i = 0; i < depth; i++) {
       if (path[i] === value) {
@@ -169,33 +169,29 @@
     return false;
   }
 
-  function setPath(path, depth, value) {
-    defineProperty(path, depth, { value: value, writable: true, enumerable: true, configurable: true });
-  }
-
-  /* ownDataValue reads one own property through its descriptor: accessors
-     and hidden properties are rejected instead of being invoked. Every
-     check is an OWN-property check — `in` would consult a prototype the
-     module may have extended. */
-  function ownDataValue(value, name) {
+  /* ownDataDescriptor reads one own property descriptor: accessors and
+     hidden properties are rejected instead of being invoked. Every check is
+     an OWN-property check — `in` would consult a prototype the module may
+     have extended. */
+  function ownDataDescriptor(value, name) {
     var descriptor = getOwnPropertyDescriptor(value, name);
     if (!descriptor) {
-      return { missing: true, value: undefined };
+      return undefined;
     }
     if (!descriptor.enumerable) {
       fail("objects must not carry hidden properties (" + name + ")");
     }
-    if (!reflectApply(hasOwnProperty, descriptor, ["value"])) {
+    if (!hasOwnProperty(descriptor, "value")) {
       fail("objects must not carry accessors (" + name + ")");
     }
-    return { missing: false, value: descriptor.value };
+    return descriptor;
   }
 
   /* quote serializes one primitive string. JSON.stringify never consults
      toJSON for primitives, so a module patching a prototype cannot reach
      this path. */
   function quote(s) {
-    return reflectApply(jsonStringify, undefined, [s]);
+    return jsonStringify(s);
   }
 
   /* walk validates plain data and returns its JSON text directly: no
@@ -234,7 +230,7 @@
     if (onPath(path, depth, value)) {
       fail("contains a cycle");
     }
-    setPath(path, depth, value);
+    path[depth] = value;
     var names = getOwnPropertyNames(value);
     if (getOwnPropertySymbols(value).length > 0) {
       fail("object keys must be strings (symbols are not supported)");
@@ -244,17 +240,17 @@
       var length = getOwnPropertyDescriptor(value, "length").value;
       text = "[";
       for (var i = 0; i < length; i++) {
-        var item = ownDataValue(value, "" + i);
-        if (item.missing) {
+        var itemDesc = ownDataDescriptor(value, "" + i);
+        if (!itemDesc) {
           fail("contains a sparse array with a hole at index " + i);
         }
-        text += (i > 0 ? "," : "") + walk(item.value, budget, depth + 1, path);
+        text += (i > 0 ? "," : "") + walk(itemDesc.value, budget, depth + 1, path);
       }
       /* own names = indexes + "length"; anything else is an extra key. */
       if (names.length !== length + 1) {
         fail("arrays must hold items only (no extra properties)");
       }
-      setPath(path, depth, undefined);
+      path[depth] = undefined;
       return text + "]";
     }
     if (!isPlainObject(value)) {
@@ -264,15 +260,15 @@
     var first = true;
     for (var n = 0; n < names.length; n++) {
       var name = names[n];
-      var entry = ownDataValue(value, name);
-      if (entry.value === undefined) {
+      var propDesc = ownDataDescriptor(value, name);
+      if (!propDesc || propDesc.value === undefined) {
         continue; /* like a missing key: JSON has no undefined */
       }
       countString(budget, name);
-      text += (first ? "" : ",") + quote(name) + ":" + walk(entry.value, budget, depth + 1, path);
+      text += (first ? "" : ",") + quote(name) + ":" + walk(propDesc.value, budget, depth + 1, path);
       first = false;
     }
-    setPath(path, depth, undefined);
+    path[depth] = undefined;
     return text + "}";
   }
 
@@ -283,7 +279,7 @@
      replace it by reassigning the global. */
   defineProperty(globalThis, "__gu_snapshot", {
     value: function (value) {
-      return walk(value, newBudget(), 0, []);
+      return walk(value, newBudget(), 0, createObject(null));
     },
     writable: false,
     configurable: false,
