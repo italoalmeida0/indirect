@@ -28,10 +28,38 @@ type root struct {
 	server     *wsServer
 	admin      *sessionAdmin
 	wg         sync.WaitGroup
+
+	// skillsStop ends the skill-directory watcher (closed once by
+	// shutdown); see startSkillWatcher.
+	skillsStop     chan struct{}
+	skillsStopOnce sync.Once
 }
 
 func newRoot(dataDir string) *root {
-	return &root{dataDir: dataDir}
+	return &root{dataDir: dataDir, skillsStop: make(chan struct{})}
+}
+
+// startSkillWatcher re-scans <data-dir>/skills in the background: an
+// added, edited or removed skill file reloads the registry (the next turn
+// request resolves against it) and pings the "config" collection so every
+// client re-pulls the skill listing — no daemon restart needed.
+func (r *root) startSkillWatcher() {
+	store := skillRegistry()
+	go store.watch(r.skillsStop, func() {
+		if r.server != nil {
+			r.server.notifyChange("config")
+		}
+	})
+}
+
+// stopSkillWatcher ends the watcher; safe to call more than once (and on a
+// root built without newRoot, whose channel is nil).
+func (r *root) stopSkillWatcher() {
+	r.skillsStopOnce.Do(func() {
+		if r.skillsStop != nil {
+			close(r.skillsStop)
+		}
+	})
 }
 
 // bootActors starts the four actors (called by main after pairing/config).

@@ -76,7 +76,10 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	if genTalk.Usable != "never" || genTalk.Permissions["widget_set"].Policy != skills.PolicyYolo || genTalk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
 		t.Fatalf("generative_ui_talk conversion drifted: %+v", genTalk)
 	}
-	if genAgentic := list["generative_ui_agentic"]; genAgentic.Usable != "never" || genAgentic.Permissions["widget_read"].Policy != skills.PolicyDeny {
+	// Agentic widgets are opt-in: the mode skills do not import them, and
+	// the user adds generative_ui_agentic per session (deny = user-visible,
+	// hidden from use_skill), pinned to agentic sessions.
+	if genAgentic := list["generative_ui_agentic"]; genAgentic.Usable != "deny" || genAgentic.Mode != "agentic" || genAgentic.Permissions["widget_read"].Policy != skills.PolicyDeny || genAgentic.Permissions["widget_set"].Policy != skills.PolicyYolo {
 		t.Fatalf("generative_ui_agentic conversion drifted: %+v", genAgentic)
 	}
 	for _, name := range []string{"plan", "learning"} {

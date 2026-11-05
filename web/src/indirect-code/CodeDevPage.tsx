@@ -768,10 +768,18 @@ export default function CodeDevPage() {
     if (!text || !sid || !hid) return;
 
     const currentSession = sessions().find((s) => s.id === sid);
+    // The daemon REPLACES the session options from every prompt, so the
+    // quick prompt must echo the session's own values: an invented
+    // "default" effort would be canonicalized to "" and persisted. Missing
+    // values stay missing (the daemon normalizes an absent effort to its
+    // default), never a placeholder.
     const mode = sessionMeta()?.mode || currentSession?.options?.mode || "agentic";
-    const effort = sessionMeta()?.effort || currentSession?.options?.effort || "default";
+    const effort = sessionMeta()?.effort || currentSession?.options?.effort || "";
     const access = sessionMeta()?.access || currentSession?.options?.access || "full";
-    const skills = currentSession?.options?.skills || [];
+    // options.skills is a create/configure input the daemon echoes empty;
+    // the live selection is the session skill map and is not touched by a
+    // prompt, so sending [] here is a no-op by contract.
+    const skills: { name: string; usable?: string }[] = [];
 
     relay.send({
       type: "prompt",

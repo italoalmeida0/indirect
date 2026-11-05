@@ -1,6 +1,6 @@
 import type { DaemonCommand } from "../daemon-protocol";
 import { normalizeSkillSelection } from "../utils/settingsValidation";
-import { MODE_SKILL_NAMES, deriveSessionMode, ensureModeSkill, originalUsable, usableDiffers } from "../utils/modeSkills";
+import { MODE_SKILL_NAMES, baseMode, deriveSessionMode, ensureModeSkill, isModeSkillName, usableDiffers } from "../utils/modeSkills";
 import { createSignal } from "solid-js";
 
 /** Session options (model/effort/mode/skills/access) + reconciliation with the
@@ -121,6 +121,10 @@ export function createSessionOptions(opts: {
     return aKeys.every((k) => a[k] === b[k]);
   };
   const [skillUsables, setSkillUsables] = createSignal<Record<string, string>>({}, { equals: recordsEqual });
+  /** True once the current draft's skill selection is settled (seeded from
+   * the remembered choice, or edited by the user): later config refreshes
+   * must not reseed it. Reset when a session snapshot takes over. */
+  let draftSeeded = false;
 
   /** Applies the session skill map from the daemon snapshot (complete
    * replace): active skills ordered by priority become the selection, and
@@ -133,9 +137,51 @@ export function createSessionOptions(opts: {
       map[name] = st.usable || "inherit";
       if (st.active) active.push({ name, priority: st.priority ?? 0 });
     }
-    active.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name));
+    // Same tie-break as the daemon's Resolve (byte order of the name), so
+    // the primary skill shown here is the one the daemon resolves.
+    active.sort((a, b) => a.priority - b.priority || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     setSkillUsables(map);
     setSelectedSkills(ensuredSelection(active.map((s) => s.name)));
+    draftSeeded = false;
+    pendingSkillSync = undefined;
+  }
+
+  /** An update_skills in flight: mirror rows pulled before the daemon
+   * applied it still carry the old map, so they must not revert the local
+   * edit. The daemon answers every update_skills with a complete
+   * session_data (applySessionSkills), which ends the wait; the deadline
+   * only covers a lost reply. */
+  let pendingSkillSync: { sessionId: string; until: number } | undefined;
+  const SKILL_SYNC_GRACE_MS = 5000;
+
+  /** Mirror-row variant of applySessionSkills: skipped while a local edit
+   * of this session is still travelling to the daemon. */
+  function applyMirrorSessionSkills(sessionId: string, skills: Parameters<typeof applySessionSkills>[0]) {
+    if (pendingSkillSync && pendingSkillSync.sessionId === sessionId && Date.now() < pendingSkillSync.until) return;
+    applySessionSkills(skills);
+  }
+
+  /** Starts a draft from a clean slate: the previous session's selection,
+   * usable overrides and approval mode never carry over. The primary skill
+   * comes from the remembered choice (its mode skill, or one matching its
+   * mode); additional skills are per conversation and start empty. With
+   * `force` false this only seeds a draft nobody settled yet (config
+   * refreshes must not undo an in-draft pick). */
+  function resetDraftSkills(remembered?: { mode?: string; skills?: { name: string }[] } | null, force = true) {
+    if (!force && draftSeeded) {
+      ensureSelection();
+      return;
+    }
+    const available = opts.listModeSkills?.() ?? MODE_SKILL_NAMES;
+    const rememberedNames = (remembered?.skills ?? []).map((s) => (typeof s === "string" ? s : s?.name)).filter(Boolean) as string[];
+    const primary =
+      rememberedNames.find((n) => isModeSkillName(n) && available.includes(n)) ??
+      (remembered?.mode ? available.find((n) => baseMode(opts.getSkill?.(n)?.mode) === baseMode(remembered.mode)) : undefined);
+    setSkillUsables({});
+    setApprovalMode("ask");
+    setSelectedSkills(primary ? [primary] : []);
+    ensureSelection();
+    draftSeeded = !!primary;
   }
 
   /** Persists a granular skill edit (daemon `update_skills`): per-skill
@@ -164,16 +210,21 @@ export function createSessionOptions(opts: {
       // true removal from the session map.
       if (!nextSet.has(name)) set[name] = { active: false, ...usableEntry(name, (usables ?? skillUsables())[name]) };
     }
-    // Ensure mutual exclusion between base modes (build, plan, learning, talk)
+    // Ensure mutual exclusion between base modes (build, plan, learning,
+    // talk): a mode skill the session map still knows (it has an entry,
+    // active or not, in the last snapshot) and that is not the chosen one
+    // is explicitly deactivated. Mode skills the session never had need no
+    // entry — sending {active:false} for them only bloats the map.
     const modeSkillsList = opts.listModeSkills?.() ?? MODE_SKILL_NAMES;
     for (const m of modeSkillsList) {
-      if (!nextSet.has(m) && !set[m]) {
+      if (!nextSet.has(m) && !set[m] && m in skillUsables()) {
         set[m] = { active: false, ...usableEntry(m, (usables ?? skillUsables())[m]) };
       }
     }
     if (usables) {
       for (const [name, usable] of Object.entries(usables)) {
-        if (skillUsables()[name] !== usable && !set[name]) {
+        // "inherit" and unset are the same session value (no override).
+        if ((skillUsables()[name] || "inherit") !== (usable || "inherit") && !set[name]) {
           set[name] = { active: nextSet.has(name), ...usableEntry(name, usable) };
         }
       }
@@ -181,25 +232,19 @@ export function createSessionOptions(opts: {
     setSelectedSkills(skills);
     if (usables) setSkillUsables(usables);
     const sid = opts.getSessionId();
-    if (sid) opts.send({ type: "update_skills", sessionId: sid, set, unset, order: skills });
+    if (sid) {
+      pendingSkillSync = { sessionId: sid, until: Date.now() + SKILL_SYNC_GRACE_MS };
+      opts.send({ type: "update_skills", sessionId: sid, set, unset, order: skills });
+    } else draftSeeded = true; // an in-draft pick is the user's: keep it
   }
 
-  /** Cycles one skill's session usable override within the locks of the
-   * skill file's ORIGINAL (usable table): only an "ask" original may be
-   * pinned (ask/yolo/deny); deny/yolo/never originals — including a file
-   * with no usable key, whose original is deny — are locked (static
-   * badge). The session value "inherit" means "no override". */
-  function cycleSkillUsable(name: string, defaultUsable?: string) {
-    if (originalUsable(defaultUsable) !== "ask") return;
-    const order = ["ask", "yolo", "deny"];
-    const cur = skillUsables()[name] || "inherit";
-    const idx = order.indexOf(cur);
-    const next = order[idx < 0 ? 0 : (idx + 1) % order.length];
-    const map = { ...skillUsables(), [name]: next };
-    // syncSkills diffs `map` against the live skillUsables() signal and
-    // applies the map itself — pre-setting the signal here would starve
-    // that diff and the override would never reach the daemon.
-    syncSkills(selectedSkills(), map);
+  /** Clears every per-session skill state (host switch: nothing from the
+   * previous daemon may bleed through until a session or draft takes over). */
+  function resetSkillState() {
+    setSkillUsables({});
+    setApprovalMode("ask");
+    setSelectedSkills([]);
+    draftSeeded = false;
   }
 
   /** Reconciles server selection from daemon (session_data): older configure
@@ -234,7 +279,7 @@ export function createSessionOptions(opts: {
   return {
     effort, setEffort, agentMode, setAgentMode, selectedSkills, setSelectedSkills,
     approvalMode, applyApprovalMode, syncSkills, ensureSelection, pendingMode,
-    skillUsables, applySessionSkills, cycleSkillUsable,
+    skillUsables, applySessionSkills, applyMirrorSessionSkills, resetDraftSkills, resetSkillState,
     activeModel, setActiveModel, yoloMode, setYoloMode,
     modeMenuOpen, setModeMenuOpen, accessMenuOpen, setAccessMenuOpen,
     modeBtn, accessBtn,

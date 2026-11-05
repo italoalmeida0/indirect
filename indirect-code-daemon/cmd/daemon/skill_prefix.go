@@ -76,28 +76,32 @@ func markTurnPrompt(meta map[string]string) {
 
 // skillActivateMsg asks the actor to apply a use_skill activation
 // immediately (mid-turn): the skill joins the session's skill map marked
-// active + inContext (its body rode the tool_result) + byAI, with the once
-// marker when requested. The map change is persisted and mirrored to the
-// frontend right away (the UI shows the skill active mid-turn); only the
-// tool call/result pair is ephemeral (stripped before commit).
+// active + byAI (+ inContext when its body rode the tool_result), with the
+// once marker when requested. The map change is persisted and mirrored to
+// the frontend right away (the UI shows the skill active mid-turn); only
+// the tool call/result pair is ephemeral (stripped before commit). The
+// session's usable override is never part of the message: the actor's
+// record is the only source of truth for it.
 type skillActivateMsg struct {
 	gen  int
 	name string
 	// once marks an AI activation with once=true (deactivated at turn end).
 	once bool
-	// usable override to store ("" keeps the skill default).
-	usable string
+	// delivered reports the skill BODY rode this use_skill tool_result
+	// (false when the tool answered with the already-loaded ack because
+	// the body is in the turn's <skill> prefix or an earlier result).
+	delivered bool
 }
 
 // skillNoticeMessage builds the ephemeral system notice emitted when the
-// user deactivates a skill whose last activation was the AI's (this turn).
-// The message is request-only context (pendingContext): it never joins the
-// persisted transcript.
+// user deactivates, during a turn, a skill whose last activation was the
+// AI's. The message is request-only context (pendingContext): it never
+// joins the persisted transcript.
 func skillNoticeMessage(name string) provider.Message {
 	return provider.Message{
 		ID:      provider.NewMessageID(),
 		Role:    provider.RoleUser,
-		Content: []provider.Content{provider.TextBlock{Text: "[system notice] The user deactivated the skill " + name + " that you loaded this turn; its instructions no longer apply."}},
+		Content: []provider.Content{provider.TextBlock{Text: "[system notice] The user deactivated the skill " + name + " that you loaded; its instructions no longer apply."}},
 		Meta:    map[string]string{skillNoticeMetaKey: name},
 	}
 }

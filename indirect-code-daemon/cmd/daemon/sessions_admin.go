@@ -166,7 +166,7 @@ func (a *sessionAdmin) purgeSession(id string) error {
 	return nil
 }
 
-func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOptions, requestID string) {
+func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOptions, requestID string) bool {
 	cwd = strings.TrimSpace(cwd)
 	if cwd == "" || cwd == "~" {
 		home, _ := os.UserHomeDir()
@@ -187,7 +187,7 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 	}
 	if err != nil || statErr != nil || !info.IsDir() {
 		a.emit(map[string]any{"type": "error", "hostId": a.host(), "requestId": requestID, "message": "Select an existing project folder before starting a conversation"})
-		return
+		return false
 	}
 	sessID := "sess_" + randomID8() + randomID8()
 	title = strings.TrimSpace(title)
@@ -239,10 +239,11 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 	st := newDiskStore(a.dataDir)
 	if err := st.saveSessionSync(rec); err != nil {
 		a.emit(map[string]any{"type": "error", "hostId": a.host(), "requestId": requestID, "message": "Failed to create session: " + err.Error()})
-		return
+		return false
 	}
 	a.emit(map[string]any{"type": "session_created", "requestId": requestID, "hostId": a.host(), "session": sessionPayloadPaged(rec, 0)})
 	if a.onEvent != nil {
 		a.onEvent("sessions")
 	}
+	return true
 }

@@ -74,7 +74,12 @@ const frameworkDir = macosFrameworkDir(DAEMON_DIR);
 for (const target of TARGETS) {
   const ext = target.goos === "windows" ? ".exe" : "";
   const name = `indirect-code-${target.goos}-${target.goarch}${ext}`;
-  const ldflags = `${daemonLdflags} -linkmode ${target.linkmode}`;
+  // On Windows hosts, Go's cmd/link updateMachoOutFile (machoRewriteUuid)
+  // keeps a.out open via defer while calling os.Remove + os.Rename(a.out~,
+  // a.out), which NTFS rejects with ERROR_ACCESS_DENIED. Clearing -buildid=
+  // on Windows skips the post-link rewrite while zig's LLD still emits LC_UUID.
+  const hostDarwinFix = target.goos === "darwin" && process.platform === "win32" ? " -buildid=" : "";
+  const ldflags = `${daemonLdflags} -linkmode ${target.linkmode}${hostDarwinFix}`;
   const env: Record<string, string> = {
     ...process.env,
     CGO_ENABLED: "1",

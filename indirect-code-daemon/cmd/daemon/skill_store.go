@@ -2,11 +2,13 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"indirect/indirect-code-daemon/packages/skills"
 )
@@ -14,12 +16,18 @@ import (
 // skillStore is the daemon's per-installation skill registry: *.js skill
 // definitions in <data-dir>/skills. Each daemon (each machine) owns its own
 // skill files — custom skills are individual per installation. The store is
-// read-mostly: reload() re-scans the directory, readers get snapshots.
+// read-mostly: reload() re-scans the directory, readers get snapshots, and
+// watch() re-runs reload whenever the directory's contents change, so an
+// edited or new skill file reaches the next turn and the frontend picker
+// without a daemon restart.
 type skillStore struct {
 	mu   sync.RWMutex
 	dir  string
 	list map[string]skills.Skill
 	errs []error
+	// sig is the directory signature the current list was loaded from
+	// (see dirSignature); watch() reloads when it changes.
+	sig string
 }
 
 // skillRegistryPtr is the process-wide store. Initialized at boot from the
@@ -66,7 +74,11 @@ func (s *skillStore) reload() []error {
 	s.mu.RLock()
 	dir := s.dir
 	s.mu.RUnlock()
-	builtins, errs := builtinSkills()
+	sig := dirSignature(dir)
+	builtins, builtinErrs := builtinSkills()
+	// Copy the builtin errors: they are a process-wide slice, and appending
+	// the disk errors onto it in place would race between reloads.
+	errs := append([]error(nil), builtinErrs...)
 	merged := make(map[string]skills.Skill, len(builtins))
 	for k, v := range builtins {
 		merged[k] = v
@@ -86,8 +98,69 @@ func (s *skillStore) reload() []error {
 	s.mu.Lock()
 	s.list = merged
 	s.errs = errs
+	s.sig = sig
 	s.mu.Unlock()
+	for _, e := range errs {
+		trace("skills.load.error", map[string]any{"err": e.Error()})
+	}
 	return errs
+}
+
+// dirSignature fingerprints the skill directory's *.js files (name, size,
+// modification time). A missing or unreadable directory has the empty
+// signature. Polling a signature keeps the watcher dependency-free and
+// portable (no inotify/FSEvents/ReadDirectoryChanges bindings).
+func dirSignature(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".js") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "%s\x00%d\x00%d\n", e.Name(), info.Size(), info.ModTime().UnixNano())
+	}
+	return b.String()
+}
+
+// skillWatchInterval is how often watch() fingerprints the skill directory.
+var skillWatchInterval = 2 * time.Second
+
+// watch polls the skill directory until stop closes and reloads the store
+// whenever its signature changes, then calls onChange (the daemon pings the
+// "config" collection so clients re-pull the skill listing). Turns resolve
+// against the store on every request, so the next model call already sees
+// the new definitions.
+func (s *skillStore) watch(stop <-chan struct{}, onChange func()) {
+	ticker := time.NewTicker(skillWatchInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		s.mu.RLock()
+		dir, last := s.dir, s.sig
+		s.mu.RUnlock()
+		if dirSignature(dir) == last {
+			continue
+		}
+		errs := s.reload()
+		trace("skills.reload", map[string]any{"dir": dir, "errors": len(errs)})
+		if onChange != nil {
+			onChange()
+		}
+	}
 }
 
 // get returns one skill by name.
@@ -180,6 +253,14 @@ func cloneSkillsMap(in map[string]skills.SessionSkill) map[string]skills.Session
 	return out
 }
 
+// skillModeMatches reports whether a skill may serve a session of the given
+// (canonical) mode: unpinned skills serve every mode, pinned ones only
+// their own. The use_skill listing, the use_skill gate and LoadSkill all
+// apply this same rule.
+func skillModeMatches(sk skills.Skill, mode string) bool {
+	return sk.Mode == "" || sk.Mode == canonicalSessionMode(mode)
+}
+
 // skillsDescription renders the model-facing skill listing for the
 // use_skill tool description: one line per skill the AI may activate
 // (effective usable ask/yolo only). The system prompt never lists skills —
@@ -197,7 +278,7 @@ func (s *skillStore) skillsDescription(mode string, active map[string]skills.Ses
 	sort.Strings(names)
 	for _, name := range names {
 		sk := store[name]
-		if sk.Mode != "" && mode != "" && sk.Mode != mode {
+		if !skillModeMatches(sk, mode) {
 			continue
 		}
 		usable, err := skills.UsableValue(sk, active[name].Usable)
@@ -220,8 +301,7 @@ func (s *skillStore) skillsDescription(mode string, active map[string]skills.Ses
 // skillsListing renders the whole skill store for the config pull (the
 // frontend's skill manager and session-creation picker). Shape matches the
 // web SkillConfig mirror: name -> {name, description, enabled, usable,
-// mode, approvalMode}.
-// Parse errors go to the daemon log, never to the client payload.
+// mode, approvalMode}. Load errors travel separately (skillLoadErrors).
 func skillsListing() map[string]any {
 	list := skillRegistry().all()
 	out := make(map[string]any, len(list))
@@ -248,8 +328,27 @@ func skillsListing() map[string]any {
 			"approvalMode": sk.ApprovalMode,
 		}
 	}
-	for _, e := range skillRegistry().loadErrors() {
-		trace("skills.load.error", map[string]any{"err": e.Error()})
+	return out
+}
+
+// skillLoadErrors renders the last load errors for the config pull, so a
+// broken hand-edited skill file is visible in the skill picker instead of
+// silently missing. Messages name the file relative to the skill directory
+// (the absolute data-dir path stays on the daemon).
+func skillLoadErrors() []string {
+	store := skillRegistry()
+	store.mu.RLock()
+	dir := store.dir
+	store.mu.RUnlock()
+	errs := store.loadErrors()
+	out := make([]string, 0, len(errs))
+	for _, e := range errs {
+		msg := e.Error()
+		if dir != "" {
+			msg = strings.ReplaceAll(msg, dir+string(filepath.Separator), "skills/")
+			msg = strings.ReplaceAll(msg, filepath.ToSlash(dir)+"/", "skills/")
+		}
+		out = append(out, msg)
 	}
 	return out
 }

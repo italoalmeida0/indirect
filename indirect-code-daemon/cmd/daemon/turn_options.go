@@ -315,23 +315,35 @@ func skillsRegistry(reg core.Registry, eff skills.Effective) core.Registry {
 	return out
 }
 
+// skillPolicyTool maps a called tool name to the name skill permissions
+// are written against: "patch" is an alias of "edit" (Registry.Get resolves
+// it), so it follows edit's grant instead of being denied as an unlisted
+// tool.
+func skillPolicyTool(tool string) string {
+	if tool == "patch" {
+		return "edit"
+	}
+	return tool
+}
+
 // skillsArgRestriction rejects a tool call carrying an argument key the
 // chain denies. Overrides scope to the argument KEY only — they decide
 // whether the tool may use that argument at all and never inspect the
 // argument's value or content. A missing entry follows the chain (arg ->
 // tool -> earlier skills -> deny).
 func skillsArgRestriction(eff skills.Effective, tool string, args json.RawMessage) string {
+	policyTool := skillPolicyTool(tool)
 	var m map[string]json.RawMessage
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &m); err != nil {
 			return ""
 		}
 	}
-	if eff.ToolDecision(tool) == skills.PolicyDeny {
+	if eff.ToolDecision(policyTool) == skills.PolicyDeny {
 		return "" // the tool-level denial speaks for itself
 	}
 	for key := range m {
-		if eff.ArgDecision(tool, key) == skills.PolicyDeny {
+		if eff.ArgDecision(policyTool, key) == skills.PolicyDeny {
 			return tool + " may not use the '" + key + "' argument in the active skill policy."
 		}
 	}
@@ -348,6 +360,7 @@ func skillsArgRestriction(eff skills.Effective, tool string, args json.RawMessag
 // how a resolved "ask" is handled: "ask" (default) shows human approval,
 // "yolo" auto-approves (bypassing the user's ask rules).
 func skillsApproval(eff skills.Effective, tool string, args json.RawMessage) skills.Policy {
+	tool = skillPolicyTool(tool)
 	p := eff.ToolDecision(tool)
 	if p == skills.PolicyDeny {
 		return skills.PolicyDeny

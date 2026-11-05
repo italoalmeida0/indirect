@@ -47,6 +47,8 @@ func TestUseSkillUsableGate(t *testing.T) {
 		"base":   {Name: "base", Usable: "never"},
 		"plain":  {Name: "plain"}, // no usable key in the skill module: deny fallback
 		"pinned": {Name: "pinned", Usable: "ask"},
+		"talky":  {Name: "talky", Usable: "yolo", Mode: "talk"},
+		"agent":  {Name: "agent", Usable: "yolo", Mode: "agentic"},
 	}})
 	args := func(name string) []byte { return []byte(`{"name":"` + name + `"}`) }
 	noOverrides := map[string]skills.SessionSkill{}
@@ -57,10 +59,12 @@ func TestUseSkillUsableGate(t *testing.T) {
 		"hidden":  "refuse",
 		"base":    "refuse",
 		"plain":   "refuse", // absent file usable = deny
-		"unknown": "",       // unknown: the tool's own error speaks
+		"unknown": "refuse", // nothing to approve: the load can only fail
+		"talky":   "refuse", // pinned to another mode: hidden AND refused
+		"agent":   "approve",
 	}
 	for skill, want := range cases {
-		verdict, _ := useSkillUsableGate(noOverrides, args(skill))
+		verdict, _ := useSkillUsableGate(noOverrides, "agentic", args(skill))
 		if verdict != want {
 			t.Errorf("gate(%q) = %q, want %q", skill, verdict, want)
 		}
@@ -70,14 +74,14 @@ func TestUseSkillUsableGate(t *testing.T) {
 	// asks. An explicit session yolo override on that same original runs
 	// free, while fallback-deny originals stay locked.
 	inherit := map[string]skills.SessionSkill{"pinned": {Usable: "inherit"}}
-	if v, _ := useSkillUsableGate(inherit, args("pinned")); v != "ask" {
+	if v, _ := useSkillUsableGate(inherit, "agentic", args("pinned")); v != "ask" {
 		t.Errorf("session inherit must keep the file original (ask), got %q", v)
 	}
 	over := map[string]skills.SessionSkill{"plain": {Usable: "yolo"}, "pinned": {Usable: "yolo"}}
-	if v, _ := useSkillUsableGate(over, args("plain")); v != "refuse" {
+	if v, _ := useSkillUsableGate(over, "agentic", args("plain")); v != "refuse" {
 		t.Errorf("fallback deny original must stay locked, got %q", v)
 	}
-	if v, _ := useSkillUsableGate(over, args("pinned")); v != "approve" {
+	if v, _ := useSkillUsableGate(over, "agentic", args("pinned")); v != "approve" {
 		t.Errorf("session yolo override must approve, got %q", v)
 	}
 }

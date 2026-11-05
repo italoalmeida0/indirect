@@ -63,12 +63,17 @@ export interface RcProject {
 /** Daemon configuration mirror (single doc per host). */
 export interface RcConfig {
   revision?: string;
-  lastSelection?: { model: string; effort: string; mode?:string; access?:string; skills?:string[] };
+  /** Last explicit create/configure choice: the default for new drafts.
+   * `skills` is the active selection that choice carried (the daemon drops
+   * unknown and base-only names). */
+  lastSelection?: { model: string; effort: string; mode?: string; access?: string; skills?: { name: string; usable?: string }[] };
   id: string;
   hostId: string;
   settings?: Record<string, any>;
   mcpServers?: Record<string, any>;
   skills?: Record<string, any>;
+  /** Skill files the daemon could not load (one message per file). */
+  skillErrors?: string[];
   name?: string;
 }
 
@@ -244,6 +249,7 @@ export function createDataLayer(opts: {
       settings: c.settings && typeof c.settings === "object" ? c.settings : {},
       mcpServers: c.mcpServers ?? c.mcp_servers ?? {},
       skills: c.skills ?? {},
+      skillErrors: Array.isArray(c.skillErrors) ? c.skillErrors.filter((e: unknown) => typeof e === "string") : [],
       name: c.name,
     };
   }

@@ -399,10 +399,12 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.pingChange()
 	case configureMsg:
 		a.touch()
-		// The session MODE is the wire's mode (the frontend re-derives it
-		// from the primary skill and re-sends it here, so mode switches
-		// are live); normalizedOptions below canonicalizes it (invalid
-		// falls back to "talk"). The daemon never derives it.
+		// The session MODE is the wire's mode: the frontend derives it from
+		// the primary skill when the session is created and then keeps it
+		// LOCKED (every configure re-sends the same mode; the picker only
+		// offers mode skills of that base mode). normalizedOptions below
+		// canonicalizes it (invalid falls back to "talk"). The daemon never
+		// derives it.
 		if m.Model != "" {
 			a.rec.Model = m.Model
 			a.saveOrAppend(walEvent{Type: walTypeModel, Model: m.Model})
@@ -2077,24 +2079,19 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 	// skill) and is never governed by skill permission entries or by the
 	// session approvalMode: usable "ask" forces human approval even under
 	// session YOLO; "yolo" runs free even in ask mode; "deny"/"never"
-	// (including a skill module without a usable key) refuse.
+	// (including a skill module without a usable key), another mode's
+	// skill and an unknown name refuse.
 	forceHuman := false
 	if m.tool == "use_skill" {
-		switch verdict, reason := useSkillUsableGate(a.rec.Skills, m.args); verdict {
+		switch verdict, reason := useSkillUsableGate(a.rec.Skills, options.Mode, m.args); verdict {
 		case "approve":
 			m.reply <- approvalOutcome{approved: true}
 			return
-		case "refuse":
-			m.reply <- approvalOutcome{reason: reason}
-			return
 		case "ask":
 			forceHuman = true
-		default: // unknown skill: let the tool's own error surface decide
-			if options.Access == "full" {
-				m.reply <- approvalOutcome{approved: true}
-				return
-			}
-			forceHuman = true
+		default: // refuse
+			m.reply <- approvalOutcome{reason: reason}
+			return
 		}
 	}
 	if !forceHuman {

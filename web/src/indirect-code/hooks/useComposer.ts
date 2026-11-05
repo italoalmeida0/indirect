@@ -35,6 +35,8 @@ export function createComposer(opts: {
     configureSession: () => void;
     setActiveModel: (v: string) => void;
     setEffort: (v: string) => void;
+    /** Opens the Mode & Skills picker (/skills). */
+    setModeMenuOpen: (open: boolean) => void;
   };
   /** /clear: the page opens a fresh draft. */
   onClearConversation: () => void;
@@ -202,6 +204,14 @@ export function createComposer(opts: {
         opts.toast(`Reasoning effort set to ${formatEffort(lvl)}`, "ok");
         return true;
       }
+      case "/skills":
+        // Skills are managed in the Mode & Skills picker; the daemon has no
+        // /skills command, so sending it down would start a model turn.
+        opts.o.setModeMenuOpen(true);
+        return true;
+      case "/mcp":
+        opts.toast("MCP servers are not supported by this host", "err");
+        return true;
       default:
         return false;
     }

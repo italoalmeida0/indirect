@@ -9,12 +9,15 @@ import (
 )
 
 // onSkillActivate applies a use_skill activation immediately (mid-turn).
-// The skill joins the session's skill map marked active + byAI + inContext:
-// its body rode the tool_result for immediate use this turn, so the
-// rebuilt <skill> prefix (next request) never repeats it. with once=true
-// the skill is deactivated again at turn end (finishTurn). The transcript
-// is untouched here — the use_skill call/result pair is stripped before
-// the turn commits (stripSkillArtifacts).
+// The skill joins the session's skill map marked active + byAI; when its
+// body rode the tool_result (m.delivered) it is also inContext, so the
+// rebuilt <skill> prefix (next request) never repeats it. With once=true
+// the skill is deactivated again at turn end (finishTurn). A skill the
+// USER already activated is left exactly as the user set it: the AI
+// "loading" it never turns a persistent user activation into a once one,
+// nor claims it as an AI activation. The transcript is untouched here —
+// the use_skill call/result pair is stripped before the turn commits
+// (stripSkillArtifacts).
 func (a *sessionActor) onSkillActivate(m skillActivateMsg) {
 	if m.gen != a.gen || m.name == "" {
 		return
@@ -26,19 +29,35 @@ func (a *sessionActor) onSkillActivate(m skillActivateMsg) {
 	if a.rec.Skills == nil {
 		a.rec.Skills = map[string]skills.SessionSkill{}
 	}
-	st := a.rec.Skills[m.name]
-	st.Active = true
-	st.ByAI = true // last activation is the AI's: user deactivation notices
-	st.Once = m.once
-	st.InContext = true // the body rode the tool_result this turn
-	if st.Priority == 0 {
-		st.Priority = len(a.rec.Skills) + 1
+	st, exists := a.rec.Skills[m.name]
+	if !(st.Active && !st.ByAI) {
+		// AI activation (new entry, an inactive one, or the AI's own
+		// skill again): the AI's choice of once applies.
+		st.ByAI = true // last activation is the AI's: user deactivation notices
+		st.Once = m.once
 	}
-	if st.Usable == "" {
-		st.Usable = m.usable
+	st.Active = true
+	if m.delivered {
+		st.InContext = true // the body rode the tool_result this turn
+	}
+	if !exists || st.Priority == 0 {
+		st.Priority = nextSkillPriority(a.rec.Skills)
 	}
 	a.rec.Skills[m.name] = st
 	a.saveSkills()
+}
+
+// nextSkillPriority is one past the highest stored priority: a new entry
+// lands after every existing one even when deletions left gaps (the map
+// size would collide with a surviving priority).
+func nextSkillPriority(m map[string]skills.SessionSkill) int {
+	top := 0
+	for _, st := range m {
+		if st.Priority > top {
+			top = st.Priority
+		}
+	}
+	return top + 1
 }
 
 // onSkillsUpdate applies a granular frontend skill edit: per-skill set/unset
@@ -47,8 +66,9 @@ func (a *sessionActor) onSkillActivate(m skillActivateMsg) {
 // missing usable means inherit, a present usable is stored VERBATIM. A
 // user (re)activation is persistent — it clears the once marker and
 // records the user as the activation source. The session MODE is NOT
-// touched here: it arrives via configure (the frontend re-derives it
-// from the primary skill whenever the selection changes).
+// touched here: it arrives via create/configure, and the frontend keeps it
+// locked for the session's lifetime (the primary skill can only change
+// within the same base mode).
 func (a *sessionActor) onSkillsUpdate(m skillsUpdateMsg) {
 	a.touch()
 	if a.rec.Skills == nil {
@@ -82,6 +102,10 @@ func (a *sessionActor) onSkillsUpdate(m skillsUpdateMsg) {
 		}
 		st.Active = upd.Active
 		st.Usable = usable
+		if st.Priority == 0 {
+			// New entry without a reorder: append, never jump to primary.
+			st.Priority = nextSkillPriority(a.rec.Skills)
+		}
 		a.rec.Skills[name] = st
 	}
 	for _, name := range m.Unset {
@@ -148,8 +172,10 @@ func (a *sessionActor) saveSkills() {
 }
 
 // endTurnSkills runs the turn-end skill rules: every once skill
-// deactivates and the daemon-owned turn markers (once/inContext/byAI)
-// reset — they only describe THIS turn. Reports whether anything changed.
+// deactivates and the turn-scoped markers (once/inContext) reset — they
+// only describe THIS turn. byAI is NOT turn-scoped: it records who made
+// the last activation and survives until the user deactivates or
+// re-activates the skill. Reports whether anything changed.
 func (a *sessionActor) endTurnSkills() bool {
 	changed := false
 	for name, st := range a.rec.Skills {
@@ -172,9 +198,24 @@ func (a *sessionActor) endTurnSkills() bool {
 // ephemeral <skill> prefix of the turns where the skill is active, so the
 // raw activation artifacts must never join the persisted context (they
 // would duplicate the body forever); notices are request-only by
-// contract. Only messages of turn turnIdx are touched: older committed
-// turns may carry their own pre-folded placeholders and stay as they are.
+// contract. Results are matched by the CALL ID of the stripped use_skill
+// calls (plus the Details marker), so a refused or failed use_skill —
+// whose error result carries no Details — never leaves an orphan
+// tool_result behind. Only messages of turn turnIdx are touched: older
+// committed turns may carry their own pre-folded placeholders and stay as
+// they are.
 func stripSkillArtifacts(msgs []provider.Message, turnIdx int) []provider.Message {
+	callIDs := map[string]bool{}
+	for _, msg := range msgs {
+		if msg.TurnIndex != turnIdx {
+			continue
+		}
+		for _, c := range msg.Content {
+			if block, ok := c.(provider.ToolCallBlock); ok && block.Name == "use_skill" && block.ID != "" {
+				callIDs[block.ID] = true
+			}
+		}
+	}
 	out := make([]provider.Message, 0, len(msgs))
 	for _, msg := range msgs {
 		if msg.TurnIndex != turnIdx {
@@ -192,7 +233,7 @@ func stripSkillArtifacts(msgs []provider.Message, turnIdx int) []provider.Messag
 					continue
 				}
 			case provider.ToolResultBlock:
-				if isUseSkillResult(block) {
+				if callIDs[block.CallID] || isUseSkillResult(block) {
 					continue
 				}
 			}
@@ -271,10 +312,12 @@ func sortSkillsByNamePriority(m map[string]skills.SessionSkill, names []string) 
 // approvalMode NEVER influences this gate: there is no effective
 // "inherit" left to resolve — a session "inherit" (or missing usable)
 // simply means the file original applies, and a file without a usable
-// key has deny as its original. Unknown skills return "" and leave the
-// decision to the tool itself (its error surface is better than a
-// generic refusal).
-func useSkillUsableGate(active map[string]skills.SessionSkill, args json.RawMessage) (verdict string, reason string) {
+// key has deny as its original. A skill pinned to ANOTHER mode is refused
+// too: the use_skill listing hides it, and guessing its name must not
+// activate it (with all of its grants) in this session. Unknown skills are
+// refused with a pointer back to the listing — asking a human to approve
+// a load that can only fail would be noise.
+func useSkillUsableGate(active map[string]skills.SessionSkill, mode string, args json.RawMessage) (verdict string, reason string) {
 	var parsed struct {
 		Name string `json:"name"`
 	}
@@ -283,7 +326,10 @@ func useSkillUsableGate(active map[string]skills.SessionSkill, args json.RawMess
 	}
 	sk, ok := skillRegistry().get(parsed.Name)
 	if !ok {
-		return "", ""
+		return "refuse", "unknown skill (use a name exactly as listed in the use_skill description)"
+	}
+	if !skillModeMatches(sk, mode) {
+		return "refuse", "skill is not available in this mode"
 	}
 	usable, err := skills.UsableValue(sk, active[parsed.Name].Usable)
 	if err != nil {

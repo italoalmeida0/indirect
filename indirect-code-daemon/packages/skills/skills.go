@@ -123,8 +123,8 @@ type Source struct {
 var moduleTimeout = qjs.DefaultTimeout
 
 // Parse loads one standalone JavaScript skill. It can compute freely, but
-// require has no other module to resolve against — cross-skill imports need
-// one of the set loaders below.
+// a `skill:` import has no other module to resolve against — cross-skill
+// imports need one of the set loaders below.
 func Parse(filename string, data []byte) (Skill, error) {
 	list, errs := LoadSet([]Source{{Path: filename, Data: data}}, nil)
 	for _, sk := range list {
@@ -412,13 +412,12 @@ func checkEnum(what, value string, allowed []string) error {
 	return fmt.Errorf("%s must be one of %s, got %q", what, strings.Join(allowed, "|"), value)
 }
 
-// decodePermissions reads the permissions object. Each entry is a policy
-// string, or an object with `policy` plus argument-key policies — in an
-// `args` object, as direct keys of the spec object, or both merged
-// (a module may compose specs from a base, so the two forms can meet; conflicting
-// policies for one argument are an error).
 // decodePermissions reads the permissions map: tool name to permission
-// entry. Keys starting with "_" are private composition metadata.
+// entry. Each entry is a policy string, or an object with `policy` plus
+// argument-key policies — in an `args` object, as direct keys of the spec
+// object, or both merged (a module may compose specs from a base, so the
+// two forms can meet; conflicting policies for one argument are an error).
+// Keys starting with "_" are private composition metadata.
 func decodePermissions(v any, file string) (map[string]PermSpec, error) {
 	raw, ok := v.(map[string]any)
 	if !ok {
@@ -533,17 +532,21 @@ type moduleSource struct {
 // Single-goroutine by construction: the QuickJS loader callback runs on the
 // same goroutine that started the evaluation.
 type skillLoader struct {
-	roots      []*moduleSource
-	byStem     map[string]*moduleSource
-	byLowStem  map[string]*moduleSource
-	errsByStem map[string]error
+	roots     []*moduleSource
+	byStem    map[string]*moduleSource
+	byLowStem map[string]*moduleSource
+	// errsBySource caches the evaluation failure of one module SOURCE. It
+	// is keyed by the source itself, never by stem: a broken disk file whose
+	// stem matches a builtin module must not poison the imports that
+	// resolve to that builtin.
+	errsBySource map[*moduleSource]error
 }
 
 func newSkillLoader(roots, modules []Source) *skillLoader {
 	l := &skillLoader{
-		byStem:     map[string]*moduleSource{},
-		byLowStem:  map[string]*moduleSource{},
-		errsByStem: map[string]error{},
+		byStem:       map[string]*moduleSource{},
+		byLowStem:    map[string]*moduleSource{},
+		errsBySource: map[*moduleSource]error{},
 	}
 	toSources := func(list []Source) []*moduleSource {
 		out := make([]*moduleSource, 0, len(list))
@@ -687,7 +690,7 @@ func (l *skillLoader) runModule(ms *moduleSource) (out string, err error) {
 		if err != nil {
 			return nil, err
 		}
-		if failure, failed := l.errsByStem[target.stem]; failed {
+		if failure, failed := l.errsBySource[target]; failed {
 			return nil, failure
 		}
 		return target.src.Data, nil
@@ -699,7 +702,7 @@ func (l *skillLoader) runModule(ms *moduleSource) (out string, err error) {
 		Resolve: resolve,
 	})
 	if err != nil {
-		l.errsByStem[ms.stem] = err
+		l.errsBySource[ms] = err
 		return "", fmt.Errorf("skill %s: %w", file, err)
 	}
 	return snapshot, nil

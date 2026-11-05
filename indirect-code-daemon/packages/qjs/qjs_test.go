@@ -415,3 +415,46 @@ func TestImportCyclePaths(t *testing.T) {
 		}
 	}
 }
+
+// The snapshot boundary captured its intrinsics before module code ran: a
+// module that patches JSON.stringify, Object.* helpers, prototype setters
+// or toJSON hooks cannot change what crosses back to Go, nor smuggle an
+// accessor past the plain-data checks.
+func TestSnapshotIgnoresPatchedIntrinsics(t *testing.T) {
+	out := eval(t, `
+		JSON.stringify = () => '{"name":"forged"}';
+		Object.getOwnPropertyNames = () => [];
+		Object.getPrototypeOf = () => Object.prototype;
+		Array.isArray = () => false;
+		Object.prototype.toJSON = function () { return "forged"; };
+		Array.prototype.toJSON = function () { return "forged"; };
+		Object.defineProperty(Array.prototype, "0", { set() { throw new Error("setter ran"); }, configurable: true });
+		Object.prototype.value = "forged";
+		export default { name: "real", list: ["a", "b"], nested: { ok: true } };
+	`)
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("snapshot is not JSON: %v (%s)", err, out)
+	}
+	if got["name"] != "real" {
+		t.Fatalf("patched intrinsics changed the snapshot: %s", out)
+	}
+	if list, _ := got["list"].([]any); len(list) != 2 || list[0] != "a" {
+		t.Fatalf("array lost through patched intrinsics: %s", out)
+	}
+	if nested, _ := got["nested"].(map[string]any); nested["ok"] != true {
+		t.Fatalf("nested object lost through patched intrinsics: %s", out)
+	}
+
+	// An accessor stays an accessor even when Object.prototype carries a
+	// `value` key that `in` would have found.
+	_, err := EvalModule(Module{Name: "accessor.js", Source: []byte(`
+		Object.prototype.value = "forged";
+		const o = { name: "x" };
+		Object.defineProperty(o, "body", { get() { return "b"; }, enumerable: true });
+		export default o;
+	`)})
+	if err == nil || !strings.Contains(err.Error(), "accessor") {
+		t.Fatalf("accessor must be rejected despite a patched prototype, got %v", err)
+	}
+}

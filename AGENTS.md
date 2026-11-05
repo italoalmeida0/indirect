@@ -37,6 +37,13 @@ frontend + daemon. Run checks from the appropriate project root.
   first shipped format WAS JavaScript, so there is no earlier skill format
   and no conversion step — storage migration v5 only rewrites session meta
   (mode collapse, talk sessions to Home).
+  The daemon polls `skills/` (name/size/mtime signature, no fs-notify dep):
+  an edit reloads the store, the next turn request resolves against it, and
+  a `config` change ping makes clients re-pull the listing; per-file load
+  errors ride the config pull as `skillErrors` and show in the skill picker.
+  A skill's `mode` pin only hides it from `use_skill` (listing AND gate) in
+  other-mode sessions; it never removes a user selection. `use_skill` on a
+  skill the user already activated never turns it into a once/AI activation.
 - QuickJS is linked LATE: `packages/qjs/lib/<platform>/libquickjs.a` holds the
   prebuilt engine (fastcompiled once, never rebuilt here) and
   `link_<os>_<arch>.go` files select it per target. `packages/qjs/shim.c` is
@@ -130,9 +137,12 @@ frontend + daemon. Run checks from the appropriate project root.
   stored by the `widget_set` tool — never in the transcript.
   Fence headers use `widget_id:` (never `id:`) so the link to the store is
   explicit.
-- Tools: `widget_set`/`widget_list`/`widget_lint` everywhere; `widget_read`
-  and `widget_edit` are talk-only (the other modes have a real terminal:
-  write the source as a file, import with `widget_set {id, src_file}`).
+- Tools: `widget_set`/`widget_list`/`widget_lint` wherever a generative-UI
+  skill grants them — always in talk (the `talk` skill imports
+  `generative_ui_talk`), opt-in in agentic (the user adds the
+  `generative_ui_agentic` skill; build/plan/learning do not import it).
+  `widget_read` and `widget_edit` are talk-only (agentic has a real
+  terminal: write the source as a file, import with `widget_set {id, src_file}`).
   Tool outputs mirror the native create/inspect/read/edit shapes so the
   frontend bodies are copy-paste; widget edits never produce change balloons.
 - Every `widget_set` lints at the gateway (`POST

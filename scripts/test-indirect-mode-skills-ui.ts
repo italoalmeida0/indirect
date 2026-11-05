@@ -133,8 +133,9 @@ try {
   await page.getByRole("menuitemcheckbox").filter({ hasText: "custom" }).click();
   assert.equal(await ev(`a => a.options.sessionOptions().mode`), "talk", "locked session mode must not follow an additional skill");
   const badge = page.getByRole("button", { name: "Change activation policy for custom" });
-  await badge.click(); // inherit -> ask (== original: omitted)
-  await badge.click(); // ask -> yolo (differs: sent)
+  assert.equal((await badge.textContent())?.trim(), "ask", "no override shows the file original (ask)");
+  await badge.click(); // ask (original, no override) -> yolo (differs: sent)
+  assert.equal((await badge.textContent())?.trim(), "yolo");
   await closeModeMenu();
   await page.waitForFunction(() => (window as any).modeSkillsUI.options.selectedSkills().includes("custom"));
   const upds = (await ev(`a => JSON.parse(JSON.stringify(a.commands))`)).filter((c: any) => c.type === "update_skills" && c.set.custom);

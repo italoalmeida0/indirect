@@ -84,11 +84,20 @@ type Effective struct {
 // name is missing from the store is skipped (its file may have been
 // deleted from the daemon's skill dir); usable:never skills are base-only
 // and are ignored as direct selections (they contribute only through
-// another module imports them).
+// another module importing them). A skill's `mode` pin never removes a
+// USER selection: it only keeps the skill out of the model's use_skill
+// listing (and the use_skill gate) in sessions of another mode.
 func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string) (Effective, error) {
 	eff := Effective{
 		Bodies: map[string]string{},
 		Listed: map[string]bool{},
+	}
+	// The mode is caller-supplied (frontend-derived): the daemon only
+	// validates the enum — anything but "agentic" is "talk".
+	if mode == "agentic" {
+		eff.Mode = "agentic"
+	} else {
+		eff.Mode = "talk"
 	}
 
 	names := make([]string, 0, len(active))
@@ -112,15 +121,9 @@ func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string
 		return names[i] < names[j]
 	})
 
-	// The mode is caller-supplied (frontend-derived): the daemon only
-	// validates the enum — anything but "agentic" is "talk". Only the
-	// approvalMode still comes from the PRIMARY skill (first active by
-	// priority): it is a property of the skill, not a mode derivation.
-	if mode == "agentic" {
-		eff.Mode = "agentic"
-	} else {
-		eff.Mode = "talk"
-	}
+	// Only the approvalMode still comes from the PRIMARY skill (first
+	// active by priority): it is a property of the skill, not a mode
+	// derivation.
 	if len(names) > 0 {
 		eff.AskAutoApprove = store[names[0]].ApprovalMode == "yolo"
 	}
@@ -153,7 +156,7 @@ func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string
 		if err != nil || usable == "deny" || usable == "never" {
 			continue // AI-hidden
 		}
-		if sk.Mode != "" && eff.Mode != "" && sk.Mode != eff.Mode {
+		if sk.Mode != "" && sk.Mode != eff.Mode {
 			continue // another mode's skill
 		}
 		eff.Listed[name] = true

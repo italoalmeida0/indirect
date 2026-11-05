@@ -6,19 +6,23 @@ import { createReview } from "../../web/src/indirect-code/hooks/useReview";
 import { createSessionOptions } from "../../web/src/indirect-code/hooks/useSessionOptions";
 import { createProjects } from "../../web/src/indirect-code/hooks/useProjects";
 import { ToolbarContext } from "../../web/src/indirect-code/components/composer/ToolbarContext";
+import { ToolbarSend } from "../../web/src/indirect-code/components/composer/ToolbarSend";
 import { ComposerFooter } from "../../web/src/indirect-code/components/composer/ComposerFooter";
+import { ComposerInput } from "../../web/src/indirect-code/components/composer/ComposerInput";
 import { WorkspaceSidebar } from "../../web/src/indirect-code/components/WorkspaceSidebar";
 import { RemoteCodeProvider } from "../../web/src/indirect-code/ctx";
 import { baseMode, effectiveModeSkills } from "../../web/src/indirect-code/utils/modeSkills";
 import type { SkillConfig } from "../../web/src/indirect-code/types";
 
-const api: any = { commands: [] };
+const api: any = { commands: [], notices: [] };
 (window as any).modeSkillsUI = api;
 render(() => {
   const [sid, setSid] = createSignal("");
   const [draftMode, setDraftMode] = createSignal(true);
   const [official, setOfficial] = createSignal<Record<string, SkillConfig>>({});
   const [loaded, setLoaded] = createSignal(false);
+  const [skillErrors, setSkillErrors] = createSignal<string[]>([]);
+  const [lastSelection, setLastSelection] = createSignal<any>(undefined);
   const send = (command: any) => {
     api.commands.push(command);
   };
@@ -27,6 +31,9 @@ render(() => {
     { ...baseSession, id: "talk-1", cwd: "/home/tester", title: "Talk about cats", updatedAt: 300, options: { effort: "medium", mode: "talk", skills: [], access: "full" }, skills: { talk: { priority: 1, active: true, usable: "" } } },
     { ...baseSession, id: "talk-2", cwd: "/home/tester", title: "Talk about rust", updatedAt: 200, options: { effort: "medium", mode: "talk", skills: [], access: "full" }, skills: { talk: { priority: 1, active: true, usable: "" } } },
     { ...baseSession, id: "agent-1", cwd: "/work/proj", title: "Build the thing", updatedAt: 100, options: { effort: "medium", mode: "agentic", skills: [], access: "ask" }, skills: { build: { priority: 1, active: true, usable: "" } } },
+    // Rich session: extra skill with a usable override + a yolo approval
+    // mode, used to prove a fresh draft does not inherit any of it.
+    { ...baseSession, id: "agent-rich", cwd: "/work/proj", title: "Rich session", updatedAt: 150, options: { effort: "medium", mode: "agentic", skills: [], access: "ask" }, approvalMode: "yolo", skills: { build: { priority: 1, active: true, usable: "" }, custom: { priority: 2, active: true, usable: "yolo" } } },
   ]);
   const [projectsList] = createSignal<any[]>([
     { id: "home", hostId: "host-a", name: "Home", path: "/home/tester", createdAt: 1, protected: true },
@@ -34,7 +41,7 @@ render(() => {
   ]);
   const opts = {
     send,
-    toast: () => {},
+    toast: (message: string) => api.notices.push(message),
     isOpen: () => true,
     getSessionId: sid,
     getHostId: () => "host-a",
@@ -99,6 +106,7 @@ render(() => {
       configureSession: () => options.configureSession(),
       setActiveModel: () => {},
       setEffort: () => {},
+      setModeMenuOpen: (open: boolean) => options.setModeMenuOpen(open),
     },
     onClearConversation: () => {},
     onBeginConversation: () => {},
@@ -110,16 +118,22 @@ render(() => {
     const sess = sessions().find((s) => s.id === id);
     if (sess) {
       options.applyOptions(sess.options);
-      options.applySessionSkills(sess.skills);
+      options.applyApprovalMode(sess.approvalMode);
+      options.applyMirrorSessionSkills(sess.id, sess.skills);
     }
   }
+  /** Mirrors IndirectCodePage.startNewConversation: the previous session's
+   * skill state never carries over; the remembered selection seeds the
+   * primary mode skill. */
   function startNewConversation(projectId?: string) {
     if (projectId) projects.setActiveProjectId(projectId);
     setSid("");
     setDraftMode(true);
-    options.ensureSelection();
+    const remembered = options.getLastLocalSelection() || lastSelection();
+    if (remembered) options.applyOptions(remembered);
+    options.resetDraftSkills(remembered);
   }
-  Object.assign(api, { options, c, t, projects, setOfficial, setLoaded, setSid, setDraftMode, selectSession, draftMode, sid });
+  Object.assign(api, { options, c, t, projects, setOfficial, setLoaded, setSid, setDraftMode, selectSession, draftMode, sid, setSkillErrors, setLastSelection });
   const composerValue = {
     ...c,
     activeModel: options.activeModel,
@@ -133,7 +147,6 @@ render(() => {
     pendingMode: options.pendingMode,
     approvalMode: options.approvalMode,
     skillUsables: options.skillUsables,
-    cycleSkillUsable: options.cycleSkillUsable,
     yoloMode: options.yoloMode,
     setYoloMode: options.setYoloMode,
     modeMenuOpen: options.modeMenuOpen,
@@ -148,7 +161,7 @@ render(() => {
     addBtn: undefined,
     modelBtn: undefined,
   };
-  const modalValue = { ...review, savedSkills: official, skillsLoaded: loaded, openSettings: () => {}, generatePairingToken: async () => {} };
+  const modalValue = { ...review, savedSkills: official, skillsLoaded: loaded, skillErrors, openSettings: () => {}, generatePairingToken: async () => {} };
   const sessionValue = {
     ...projects,
     sessions,
@@ -213,7 +226,9 @@ render(() => {
         <div style={{ flex: "1", display: "flex", "flex-direction": "column", "justify-content": "flex-end", padding: "24px" }}>
           <div style={{ display: "flex", gap: "8px" }}>
             <ToolbarContext />
+            <ToolbarSend />
           </div>
+          <ComposerInput />
           <ComposerFooter />
         </div>
       </div>

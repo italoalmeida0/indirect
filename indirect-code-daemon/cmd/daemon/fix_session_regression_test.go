@@ -153,7 +153,9 @@ func TestRecordSkillUseSingleEnvelope(t *testing.T) {
 		if !ok {
 			t.Fatalf("inbox payload is %T, want skillActivateMsg (double stamping detected!)", env.Payload)
 		}
-		if act.name != "test-skill" || !act.once || act.usable != "ask" {
+		// The usable override never rides the activation: the actor's
+		// record is its only source of truth.
+		if act.name != "test-skill" || !act.once || act.gen != 1 {
 			t.Fatalf("unexpected skillActivateMsg: %+v", act)
 		}
 	default:

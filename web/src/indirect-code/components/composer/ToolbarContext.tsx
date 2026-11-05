@@ -77,13 +77,23 @@ export function ToolbarContext() {
     return aKeys.every((k) => a[k] === b[k]);
   };
 
+  /** The selection as it was when the popup OPENED (or when a mode pick
+   * last committed it). applyDraft sends only the user's delta against it,
+   * so changes that arrived from the daemon meanwhile — an AI use_skill
+   * activation, a once skill expiring at turn end — are never undone by
+   * closing the popup. */
+  let openSnapshot: { skills: string[]; usables: Record<string, string>; mode: string } = { skills: [], usables: {}, mode: "" };
+
   createEffect(() => {
     const open = isMenuOpen();
     if (open) {
       untrack(() => {
-        setDraftSkills([...c.selectedSkills()]);
-        setDraftUsables({ ...c.skillUsables() });
+        const skills = [...c.selectedSkills()];
+        const usables = { ...c.skillUsables() };
+        setDraftSkills(skills);
+        setDraftUsables(usables);
         setDraftAgentMode(c.agentMode());
+        openSnapshot = { skills, usables, mode: c.agentMode() };
         setIsEditing(true);
       });
     } else if (isEditing()) {
@@ -99,27 +109,43 @@ export function ToolbarContext() {
     const targetSkills = draftSkills();
     const targetUsables = draftUsables();
     const targetMode = draftAgentMode();
+    const base = openSnapshot;
+
+    const userChangedSkills = !arraysEqual(targetSkills, base.skills);
+    const userChangedUsables = !recordsEqual(targetUsables, base.usables);
+    const modeChanged = targetMode !== "" && targetMode !== base.mode;
+    if (!userChangedSkills && !userChangedUsables && !modeChanged) return;
 
     const primaryMode = targetSkills.find(isModeSkill);
     if (primaryMode) {
       setOptimisticModeSkill(primaryMode);
     }
 
-    const currentSkills = c.selectedSkills();
-    const currentUsables = c.skillUsables();
-    const currentMode = c.agentMode();
+    // Rebase the user's edit onto the live selection: keep the draft order
+    // for what the user kept or added, drop what left the live selection
+    // meanwhile (unless the user added it in the popup), and append what
+    // arrived meanwhile that the user never saw.
+    const current = c.selectedSkills();
+    const opened = new Set(base.skills);
+    const live = new Set(current);
+    const kept = targetSkills.filter((n) => !opened.has(n) || live.has(n));
+    const arrived = current.filter((n) => !opened.has(n) && !targetSkills.includes(n));
+    const nextSkills = [...kept, ...arrived];
 
-    const skillsChanged = !arraysEqual(targetSkills, currentSkills);
-    const usablesChanged = !recordsEqual(targetUsables, currentUsables);
-    const modeChanged = targetMode !== "" && targetMode !== currentMode;
-
-    if (skillsChanged || usablesChanged || modeChanged) {
-      if (modeChanged) {
-        c.setAgentMode(targetMode as any);
+    // Usables: only the keys the user actually changed in the popup.
+    const nextUsables = { ...c.skillUsables() };
+    for (const key of new Set([...Object.keys(targetUsables), ...Object.keys(base.usables)])) {
+      if (targetUsables[key] !== base.usables[key]) {
+        if (targetUsables[key] === undefined) delete nextUsables[key];
+        else nextUsables[key] = targetUsables[key];
       }
-      c.syncSkills(targetSkills, targetUsables);
-      c.configureSession();
     }
+
+    if (modeChanged) {
+      c.setAgentMode(targetMode as any);
+    }
+    c.syncSkills(nextSkills, nextUsables);
+    c.configureSession();
   }
 
   // Reset to main view whenever the menu closes
@@ -165,6 +191,9 @@ export function ToolbarContext() {
     if (isEditing()) {
       setDraftAgentMode(mode);
       setDraftSkills(nextSkills);
+      // The pick commits the whole draft right away: it becomes the new
+      // base, so closing the popup only sends what changes after it.
+      openSnapshot = { skills: [...nextSkills], usables: { ...draftUsables() }, mode };
     }
     c.setAgentMode(mode);
     c.syncSkills(nextSkills, isEditing() ? draftUsables() : undefined);
@@ -209,18 +238,30 @@ export function ToolbarContext() {
     }
   }
 
+  /** Cycles a skill's session usable override within the locks of the
+   * skill file's ORIGINAL: only an "ask" original may be pinned. The cycle
+   * is ask → yolo → deny → ask, where "ask" (the original) is stored as
+   * "inherit" — no override on the wire — so a session never round-trips
+   * to a value the daemon would echo back differently. */
   function cycleSkillUsable(name: string, defaultUsable?: string) {
     if (originalUsable(defaultUsable) !== "ask") return;
     const order = ["ask", "yolo", "deny"];
-    const cur = (isEditing() ? draftUsables() : c.skillUsables())[name] || "inherit";
-    const idx = order.indexOf(cur);
-    const next = order[idx < 0 ? 0 : (idx + 1) % order.length];
+    const idx = order.indexOf(shownUsable(name));
+    const picked = order[(idx < 0 ? 0 : idx + 1) % order.length];
+    const next = picked === "ask" ? "inherit" : picked;
     if (isEditing()) {
       setDraftUsables({ ...draftUsables(), [name]: next });
     } else {
       const map = { ...c.skillUsables(), [name]: next };
       c.syncSkills(c.selectedSkills(), map);
     }
+  }
+
+  /** The effective usable of an ask-original skill as the badge shows it:
+   * no override ("inherit"/unset) is the original "ask". */
+  function shownUsable(name: string): string {
+    const v = effectiveSkillUsables()[name];
+    return !v || v === "inherit" ? "ask" : v;
   }
 
   function activeModeSkillName(): string {
@@ -287,7 +328,7 @@ export function ToolbarContext() {
               </button>
               <Show when={originalUsable(skill?.usable) === "ask"}>
                 <button aria-label={`Change activation policy for ${name}`} onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }} class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-300 hover:bg-elev cursor-pointer">
-                  {effectiveSkillUsables()[name] ?? "inherit"}
+                  {shownUsable(name)}
                 </button>
               </Show>
               <Show when={originalUsable(skill?.usable) === "yolo"}>
@@ -300,6 +341,17 @@ export function ToolbarContext() {
           )}
         </For>
       </ul>
+      <Show when={(m.skillErrors?.() ?? []).length > 0}>
+        <div role="status" class="mx-1 mt-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+          <div class="flex items-center gap-1 font-medium">
+            <Iconify icon="lucide:circle-alert" size={12} />
+            <span>{(m.skillErrors?.() ?? []).length === 1 ? "1 skill file failed to load" : `${(m.skillErrors?.() ?? []).length} skill files failed to load`}</span>
+          </div>
+          <ul class="mt-1 space-y-0.5 text-amber-300/90">
+            <For each={m.skillErrors?.() ?? []}>{(err) => <li class="break-words">{err}</li>}</For>
+          </ul>
+        </div>
+      </Show>
     </>
   );
 

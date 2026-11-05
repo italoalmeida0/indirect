@@ -1,4 +1,6 @@
-/** Only explicit command tokens route away from the model; absolute paths do not. */
+/** Only explicit command tokens route away from the model; absolute paths do not.
+ * /skills and /mcp are answered locally by the composer router (the daemon
+ * no longer knows them), so they never become a model turn. */
 export function slashCommand(text: string) {
   const match =
     /^\/(clear|model|reasoning|compact|jail|unjail|help|skills|mcp)(?:\s|$)/i.exec(

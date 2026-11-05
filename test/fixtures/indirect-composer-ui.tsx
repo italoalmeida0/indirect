@@ -58,6 +58,7 @@ render(() => {
       configureSession: () => {},
       setActiveModel: () => {},
       setEffort: () => {},
+      setModeMenuOpen: () => {},
     },
     onClearConversation: () => setSid(""),
     onBeginConversation: () => {},

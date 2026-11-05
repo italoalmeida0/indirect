@@ -70,9 +70,9 @@ export interface ComposerCtxValue extends Composer {
   /** Mode the next create/configure will carry (locked for an existing
    * session, derived from the primary skill in draft). */
   pendingMode: SessionOptions["pendingMode"];
-  /** Per-skill session usable override + cycling (ask/yolo/deny/inherit). */
+  /** Per-skill session usable override (ask/yolo/deny/inherit). Cycling
+   * lives in the Mode & Skills popup, which edits a local draft. */
   skillUsables: SessionOptions["skillUsables"];
-  cycleSkillUsable: SessionOptions["cycleSkillUsable"];
   /** Resolved approval mode ("ask" | "yolo"); yolo hides the YOLO/ASK selector. */
   approvalMode: SessionOptions["approvalMode"];
   yoloMode: SessionOptions["yoloMode"];

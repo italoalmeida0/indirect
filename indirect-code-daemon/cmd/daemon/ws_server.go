@@ -457,7 +457,9 @@ func (s *wsServer) handleRaw(raw []byte) {
 			Model     string         `json:"model"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.admin.createSession(req.CWD, req.Title, req.Model, req.Options, req.RequestID)
+		if s.admin.createSession(req.CWD, req.Title, req.Model, req.Options, req.RequestID) {
+			_ = s.rememberSelection(req.Model, req.Options)
+		}
 
 	case "delete_session":
 		var req struct {
@@ -1113,7 +1115,7 @@ func (s *wsServer) onPull(id json.RawMessage, collection string) {
 		reply([]map[string]any{{
 			"id": "daemon", "revision": configRevision(cfg),
 			"settings": settings, "lastSelection": last,
-			"mcpServers": map[string]any{}, "skills": skillsListing(), "name": name,
+			"mcpServers": map[string]any{}, "skills": skillsListing(), "skillErrors": skillLoadErrors(), "name": name,
 		}}, "")
 	default:
 		reply(nil, "unknown collection")
@@ -1424,11 +1426,14 @@ func (s *wsServer) truncateAndRun(sessionID string, index int, text, model strin
 
 func (s *wsServer) onSlashCommand(res spawnResult, sessionID, text string) bool {
 	// v2 slash subset: /clear /compact /jail /unjail /help. /skills /mcp gone.
+	// Command names are case-insensitive, matching the frontend's router
+	// (`/Compact` must not become a billed model turn).
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
 		return false
 	}
-	switch fields[0] {
+	command := strings.ToLower(fields[0])
+	switch command {
 	case "/clear":
 		// Handled by the frontend (new conversation = UI-only). Nothing to
 		// do here — the old path started an EMPTY turn (the model answered
@@ -1442,7 +1447,7 @@ func (s *wsServer) onSlashCommand(res spawnResult, sessionID, text string) bool 
 		return true
 	case "/jail", "/unjail":
 		select {
-		case res.Inbox <- Envelope{SessionID: sessionID, Payload: jailMsg{Jail: fields[0] == "/jail"}}:
+		case res.Inbox <- Envelope{SessionID: sessionID, Payload: jailMsg{Jail: command == "/jail"}}:
 		case <-time.After(replyTimeout):
 		}
 		return true
@@ -1848,7 +1853,13 @@ func (s *wsServer) rememberSelection(model string, options SessionOptions) error
 		model = cfg.LastSelection.Model
 	}
 	next := *cfg
-	next.LastSelection = &ModelSelection{Model: model, SessionOptions: normalizedOptions(options)}
+	// Unlike the persisted SESSION options (whose live selection is
+	// SessionRecord.Skills), the remembered default keeps the skill choice:
+	// it is how a fresh draft knows which mode skill the user picked last.
+	// Unknown and base-only names drop.
+	remembered := normalizedOptions(options)
+	remembered.Skills = rememberableSkills(options.Skills)
+	next.LastSelection = &ModelSelection{Model: model, SessionOptions: remembered}
 	cfgDir := s.configDir
 	if cfgDir == "" {
 		cfgDir = s.dataDir
@@ -1859,6 +1870,25 @@ func (s *wsServer) rememberSelection(model string, options SessionOptions) error
 	s.cfg.store(&next)
 	s.notifyChange("config")
 	return nil
+}
+
+// rememberableSkills filters a create/configure skill choice down to the
+// skills the store knows and the user may see (never-usable bases drop).
+// Always non-nil so the JSON carries [] rather than null.
+func rememberableSkills(in []SkillChoice) []SkillChoice {
+	out := []SkillChoice{}
+	store := skillRegistry().all()
+	for _, choice := range in {
+		sk, ok := store[choice.Name]
+		if !ok {
+			continue
+		}
+		if usable, err := skills.UsableValue(sk, ""); err != nil || usable == "never" {
+			continue
+		}
+		out = append(out, choice)
+	}
+	return out
 }
 
 func (s *wsServer) handleGetSessionDebug(sessionID, requestID string) {

@@ -337,3 +337,23 @@ export default { name: "big", description: "d", body: "b", extra: t };
 		t.Fatalf("oversized snapshot took too long: %v", time.Since(start))
 	}
 }
+
+// A broken disk file whose stem matches a builtin module must not poison
+// the other disk skills importing that builtin: the import resolves to the
+// builtin, and load failures are cached per source, never per stem.
+func TestBrokenDiskStemDoesNotPoisonBuiltinImport(t *testing.T) {
+	builtin := Source{Path: "builtin_skills/base.js", Data: []byte(`export default { name: "base", description: "b", usable: "never", body: "BASE" };`)}
+	brokenDisk := Source{Path: "/u/skills/base.js", Data: []byte(`throw new Error("boom");`)}
+	user := Source{Path: "/u/skills/user.js", Data: []byte(`import b from "skill:base"; export default { ...b, name: "user", usable: "ask", body: b.body + "!" };`)}
+	list, errs := LoadSet([]Source{brokenDisk, user}, []Source{builtin})
+	sk, ok := list["user"]
+	if !ok {
+		t.Fatalf("user skill importing the builtin failed because of an unrelated disk file: %s", errorsText(errs))
+	}
+	if sk.Body != "BASE!" {
+		t.Fatalf("user skill body = %q, want the builtin base body", sk.Body)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "boom") {
+		t.Fatalf("want exactly the broken disk file reported, got: %s", errorsText(errs))
+	}
+}

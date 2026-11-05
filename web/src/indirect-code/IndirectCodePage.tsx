@@ -387,6 +387,7 @@ export default function IndirectCodePage() {
       configureSession: () => options.configureSession(),
       setActiveModel: (v: string) => options.setActiveModel(v),
       setEffort: (v: string) => options.setEffort(v),
+      setModeMenuOpen: (open: boolean) => options.setModeMenuOpen(open),
     },
     onClearConversation: () => startNewConversation(),
     onBeginConversation: () => beginConversationWith(),
@@ -676,10 +677,12 @@ export default function IndirectCodePage() {
     turnChanges.reset();
     notice.setAppNotice(null);
     options.applyOptions(options.getLastLocalSelection() || mirror.configDoc()?.lastSelection);
-    // Draft bootstrap: a mode skill is mandatory when one exists — the
-    // picker must show a primary (and creation must send one) from the
-    // start, even before the official skill list arrives (cache answers).
-    options.ensureSelection();
+    // Draft bootstrap: a clean skill slate (nothing from the session that
+    // was on screen carries over — selection, usable overrides, approval
+    // mode), seeded with the remembered primary skill; a mode skill is
+    // mandatory when one exists, even before the official skill list
+    // arrives (cache answers).
+    options.resetDraftSkills(options.getLastLocalSelection() || mirror.configDoc()?.lastSelection);
     composer.clearAttachments();
     if (projectId) projects.setActiveProjectId(projectId);
     if (isMobile()) setSidebarOpen(false);
@@ -1240,6 +1243,7 @@ export default function IndirectCodePage() {
       // daemon may bleed through (frontend = dumb monitor).
       untrack(() => {
         options.resetPending();
+        options.resetSkillState();
         transcript.clearForkRequest(); transcript.setForking(false);
         setDraftMode(true);
         setCreatingSession(false);
@@ -1366,7 +1370,7 @@ export default function IndirectCodePage() {
       options.reconcileServerSelection(s.id, s.model, s.options, gatewayModels().map((m) => m.id), gatewayModels()[0]?.id || "");
     }
     options.applyApprovalMode(s.approvalMode);
-    options.applySessionSkills(s.skills);
+    options.applyMirrorSessionSkills(s.id, s.skills);
   });
 
   createEffect(() => {
@@ -1377,10 +1381,11 @@ export default function IndirectCodePage() {
     const selection = options.getLastLocalSelection() || saved;
     options.setActiveModel(catalog.find((m) => m.id === selection?.model)?.id || catalog[0]?.id || "");
     options.applyOptions(selection);
-    // Draft bootstrap (same as startNewConversation): the mandatory mode
-    // skill is in place before the first picker render or creation.
+    // Draft bootstrap (same as startNewConversation): the remembered
+    // primary skill seeds a draft nobody settled yet; an in-draft pick is
+    // never undone by a later config refresh.
     untrack(() => {
-      options.ensureSelection();
+      options.resetDraftSkills(selection, false);
     });
   });
 
@@ -1455,7 +1460,6 @@ export default function IndirectCodePage() {
     pendingMode: options.pendingMode,
     approvalMode: options.approvalMode,
     skillUsables: options.skillUsables,
-    cycleSkillUsable: options.cycleSkillUsable,
     yoloMode: options.yoloMode,
     setYoloMode: options.setYoloMode,
     modeMenuOpen: options.modeMenuOpen,

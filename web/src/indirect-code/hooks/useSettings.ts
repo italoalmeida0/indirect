@@ -51,6 +51,10 @@ export function createSettings(opts: {
    * mode picker renders its temporary 4-skill cache; afterwards the official
    * list rules. */
   const skillsLoaded = () => configDoc()?.skills != null;
+  /** Skill files the daemon failed to load (hand-edited modules with a
+   * syntax or schema error). The daemon watches its skills directory, so
+   * this list — like savedSkills — refreshes on its own after an edit. */
+  const skillErrors = createMemo<string[]>(() => configDoc()?.skillErrors ?? []);
   const settingsChanged = createMemo(
     () =>
       !!(
@@ -265,6 +269,7 @@ export function createSettings(opts: {
     setDaemonSettings,
     savedSkills,
     skillsLoaded,
+    skillErrors,
     openSettings,
     cancelSettings,
     reloadSettings,

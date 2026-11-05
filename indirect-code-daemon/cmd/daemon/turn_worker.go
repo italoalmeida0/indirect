@@ -201,6 +201,13 @@ type turnBridge struct {
 	// records use_skill calls to fold/activate at turn end.
 	skillEff  skills.Effective
 	skillUses []skillUseRecord
+	// skillsSent names the skills whose body a use_skill result of THIS
+	// worker already returned (the actor's InContext echo only arrives at
+	// the next refresh, so two calls in one response would otherwise both
+	// carry the body). lastSkillDelivered hands LoadSkill's outcome to the
+	// RecordSkillUse call that immediately follows it.
+	skillsSent         map[string]bool
+	lastSkillDelivered bool
 	// mutationSeq counts edit/write calls this turn; jobMutationMark
 	// records it per background job at registration. The exact-
 	// duplicate bg guard refuses only while no file mutation landed
@@ -589,7 +596,7 @@ func (w *turnBridge) approveTool(call provider.ToolCallBlock) (bool, string, jso
 	// File mutations invalidate the exact-duplicate bg guard for jobs
 	// started before them; counted pre-approval (a rejected edit
 	// only loses a dedupe opportunity, never blocks real work).
-	if call.Name == "edit" || call.Name == "write" {
+	if call.Name == "edit" || call.Name == "write" || call.Name == "patch" {
 		w.mutationSeq++
 	}
 	if reason := w.duplicateBgRefusal(call); reason != "" {

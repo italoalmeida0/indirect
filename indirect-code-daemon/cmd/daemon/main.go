@@ -214,7 +214,8 @@ func daemonMain() {
 	// Builtin skills (builtin_skills/*.js) are embedded in the binary and
 	// merged in RAM at load: they never touch the machine's skills
 	// directory, and their names are reserved — a user skill with the
-	// same name is ignored (builtins cannot be overridden).
+	// same name is ignored (builtins cannot be overridden). The directory
+	// is watched after the actors boot (startSkillWatcher).
 	skillRegistry().initFrom(dataDir)
 
 	// Crash debris: sweep stale tmp files; boot() in the supervisor flips
@@ -227,6 +228,9 @@ func daemonMain() {
 	_ = st
 
 	root.bootActors()
+	// Skill files are hand-edited: watch the directory so changes apply
+	// without a restart (reload + "config" ping to the clients).
+	root.startSkillWatcher()
 	root.writePidFile()
 
 	// Brutal update protocol boot hooks (v1.0.28 semantics): a promoted
@@ -533,6 +537,7 @@ func (r *root) removePidFile() {
 
 func (r *root) shutdown(reason string) {
 	fmt.Println("[SHUTDOWN]", reason)
+	r.stopSkillWatcher()
 	// Ordered, awaited shutdown: session commits (commitWAL per resident)
 	// complete BEFORE the process exits. Each stage has a deadline; a
 	// wedged actor delays exit but never skips the commit attempt.

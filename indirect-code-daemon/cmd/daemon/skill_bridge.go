@@ -21,13 +21,18 @@ type skillUseRecord struct {
 // override; a missing file usable is a deny original). "usable: deny"
 // skills are invisible; "ask" requires human approval (the caller-approval
 // route via approveTool); "yolo" runs free. The approvalMode never takes
-// part here. A skill whose body already rode a use_skill tool_result THIS
-// turn is not re-sent: the tool answers with a short delivered ack instead
-// (the body text appears exactly once per turn).
+// part here, and a skill pinned to another mode is never served. The body
+// text appears exactly once per turn: when it is already in context — it
+// rode an earlier use_skill tool_result, or the skill is active and its
+// body is in this request's <skill> prefix — the tool answers with a short
+// loaded ack instead.
 func (w *turnBridge) LoadSkill(name string) (string, error) {
 	sk, ok := skillRegistry().get(name)
 	if !ok {
 		return "", fmt.Errorf("unknown skill (ask the user to check the skill name)")
+	}
+	if !skillModeMatches(sk, w.skillEff.Mode) {
+		return "", fmt.Errorf("skill is not available in this mode")
 	}
 	usable, err := skills.UsableValue(sk, w.skillUsableOverride(name))
 	if err != nil {
@@ -40,10 +45,33 @@ func (w *turnBridge) LoadSkill(name string) (string, error) {
 		// only contributes when another module imports it.
 		return "", fmt.Errorf("skill is not available")
 	}
-	if w.skillEff.Delivered[name] {
-		return "<skill id=\"" + name + "\" loaded and active>", nil
+	if w.skillBodyInContext(name) {
+		w.lastSkillDelivered = false
+		return skillFoldPlaceholder(name), nil
 	}
+	if w.skillsSent == nil {
+		w.skillsSent = map[string]bool{}
+	}
+	w.skillsSent[name] = true
+	w.lastSkillDelivered = true
 	return sk.Body, nil
+}
+
+// skillBodyInContext reports whether the skill's body is already in this
+// turn's context: delivered by an earlier use_skill result (this turn's
+// eff.Delivered, or an earlier call of this very worker the actor has not
+// echoed back yet) or carried by the <skill> prefix of the current request
+// (active skill in the resolved prefix order).
+func (w *turnBridge) skillBodyInContext(name string) bool {
+	if w.skillEff.Delivered[name] || w.skillsSent[name] {
+		return true
+	}
+	for _, active := range w.skillEff.Order {
+		if active == name {
+			return true
+		}
+	}
+	return false
 }
 
 // skillUsableOverride reads the session's usable override for one skill.
@@ -56,16 +84,16 @@ func (w *turnBridge) skillUsableOverride(name string) string {
 
 // RecordSkillUse implements tools.UseSkillHost. The activation lands in the
 // session record IMMEDIATELY (skillActivateMsg through the actor inbox):
-// the skill is active + in-context + byAI from this call on, so the next
-// request's <skill> prefix omits its body (it already rode the
-// tool_result). Turn-end bookkeeping (once deactivation, artifact drop,
-// marker reset) is the actor's job.
+// the skill is active + byAI from this call on, and in-context when its
+// body rode this result, so the next request's <skill> prefix omits it.
+// Turn-end bookkeeping (once deactivation, artifact drop, marker reset) is
+// the actor's job. Always called right after LoadSkill on the same
+// goroutine (UseSkillTool.Execute), which is what lastSkillDelivered
+// relies on.
 func (w *turnBridge) RecordSkillUse(name string, once bool) string {
-	// The session override rides through VERBATIM: an empty/"inherit"
-	// override stays an override-less entry (the file original keeps
-	// applying) instead of being frozen to today's resolved value.
-	usable := w.skillUsableOverride(name)
-	w.sendInbox(skillActivateMsg{gen: w.snap.gen, name: name, once: once, usable: usable})
+	delivered := w.lastSkillDelivered
+	w.lastSkillDelivered = false
+	w.sendInbox(skillActivateMsg{gen: w.snap.gen, name: name, once: once, delivered: delivered})
 	w.skillUses = append(w.skillUses, skillUseRecord{name: name, once: once})
 	return name
 }
