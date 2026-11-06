@@ -52,6 +52,9 @@ func (t *EditTool) Preview(ctx context.Context, raw json.RawMessage) (core.ToolR
 }
 
 func (t *EditTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
+	if err := ctx.Err(); err != nil {
+		return core.ToolResult{}, err
+	}
 	return t.executeInternal(ctx, raw, false, progress)
 }
 

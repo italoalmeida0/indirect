@@ -284,8 +284,13 @@ func lastBalloon(rec *SessionRecord) *filetrack.TurnChanges {
 	if rec == nil || len(rec.FileBalloons) == 0 {
 		return nil
 	}
-	b := rec.FileBalloons[len(rec.FileBalloons)-1]
-	return &b
+	b := &rec.FileBalloons[len(rec.FileBalloons)-1]
+	if b.TurnIndex != rec.TurnSeq {
+		// The last persisted balloon belongs to an earlier turn; a turn that
+		// touched no files must not re-emit it as its own.
+		return nil
+	}
+	return b
 }
 
 func fileBalloonPayloads(balloons []filetrack.TurnChanges) []map[string]any {

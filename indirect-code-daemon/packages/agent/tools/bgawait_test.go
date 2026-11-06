@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,5 +91,53 @@ func TestBgAwaitRunsFullWhenPinnedRunning(t *testing.T) {
 	}
 	if envAttr(res, "waited") != "1s" {
 		t.Fatalf("waited attr = %q", envAttr(res, "waited"))
+	}
+}
+
+// orderedHost simulates the race window: the pinned job finishes inside
+// BgTaskStatus. The subscription must already exist at that point.
+type orderedHost struct {
+	mu    sync.Mutex
+	calls []string
+	wake  chan struct{}
+}
+
+func (h *orderedHost) WaitForAnyJob(string, <-chan struct{}) <-chan struct{} {
+	h.mu.Lock()
+	h.calls = append(h.calls, "wait")
+	wake := h.wake
+	h.mu.Unlock()
+	return wake
+}
+
+func (h *orderedHost) BgTaskStatus(string, string) (string, string, bool) {
+	h.mu.Lock()
+	h.calls = append(h.calls, "status")
+	wake := h.wake
+	h.mu.Unlock()
+	// The job finishes in the window between the status read and what the
+	// old code did next (subscribe).
+	select {
+	case <-wake:
+	default:
+		close(wake)
+	}
+	return "running", "job", true
+}
+
+func TestBgAwaitSubscribesBeforeStatusCheck(t *testing.T) {
+	host := &orderedHost{wake: make(chan struct{})}
+	tool := &BgAwaitTool{Host: host, SessionID: "s"}
+	res, elapsed := awaitResult(t, tool, `{"max_wait_seconds":5,"waiting_for":"bg_1","reason":"waiting for build"}`)
+	if elapsed > 2*time.Second {
+		t.Fatalf("bg_await dead-waited after the job finished: %s", elapsed)
+	}
+	if envAttr(res, "status") != "woken_early" {
+		t.Fatalf("status = %q, want woken_early", envAttr(res, "status"))
+	}
+	host.mu.Lock()
+	defer host.mu.Unlock()
+	if strings.Join(host.calls, ",") != "wait,status" {
+		t.Fatalf("host calls = %v, want subscription before the status check", host.calls)
 	}
 }

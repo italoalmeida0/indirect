@@ -75,7 +75,8 @@ func validateAttachmentIDs(rec *SessionRecord, ids []string) error {
 	return nil
 }
 
-// pruneOrphanAttachments drops refs (and files) no longer referenced.
+// pruneOrphanAttachments drops refs (and files) no longer referenced by the
+// transcript, queued messages or keepExtra.
 func pruneOrphanAttachments(rec *SessionRecord, keepExtra []string) {
 	keep := map[string]bool{}
 	for _, id := range keepExtra {
@@ -86,8 +87,12 @@ func pruneOrphanAttachments(rec *SessionRecord, keepExtra []string) {
 			keep[id] = true
 		}
 	}
-	if len(keep) == len(rec.Attachments) {
-		return
+	// Queued messages are not part of the transcript yet, but their uploads
+	// are referenced by the item that will start the next turn.
+	for _, q := range rec.Queue {
+		for _, id := range q.AttachmentIDs {
+			keep[id] = true
+		}
 	}
 	live := rec.Attachments[:0]
 	for _, a := range rec.Attachments {

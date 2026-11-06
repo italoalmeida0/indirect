@@ -506,9 +506,15 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 		if len(rr.context) > 0 {
 			w.agent.SetMessages(append(w.agent.History(), rr.context...))
 			for _, m := range rr.context {
-				if m.Role == provider.RoleUser {
-					w.handleEvent(core.EvUserMessage{Message: m})
+				if m.Role != provider.RoleUser {
+					continue
 				}
+				// Skill-deactivation notices are model-facing runtime context:
+				// emitting them as user_message renders a fake chat bubble.
+				if m.Meta[skillNoticeMetaKey] != "" {
+					continue
+				}
+				w.handleEvent(core.EvUserMessage{Message: m})
 			}
 		}
 	case <-requestCtx.Done():

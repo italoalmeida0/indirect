@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/provider"
@@ -91,9 +92,9 @@ func (a *sessionActor) onSkillsUpdate(m skillsUpdateMsg) {
 			st.Once = false
 		case !upd.Active && st.Active:
 			// User deactivation of an AI-activated skill: the AI gets one
-			// ephemeral notice (pendingContext, never persisted). The
-			// deactivation clears ByAI, so a second deactivation after
-			// re-activation never notices again.
+			// ephemeral notice (a turn-scoped transcript row stripped before
+			// commit). The deactivation clears ByAI, so a second
+			// deactivation after re-activation never notices again.
 			if st.ByAI {
 				a.noticeSkillDeactivation(name)
 			}
@@ -153,14 +154,23 @@ func (a *sessionActor) onSkillsUpdate(m skillsUpdateMsg) {
 }
 
 // noticeSkillDeactivation queues the ephemeral system notice for the AI:
-// the user deactivated a skill the AI activated this turn. The notice
-// lives only in pendingContext (request-side); it is never persisted and
-// is dropped at turn end when no request consumes it.
+// the user deactivated a skill the AI activated this turn. The notice is a
+// turn-scoped transcript row (its meta tag keeps it out of the UI) so the
+// worker history and a.rec.Messages stay index-aligned for compaction; it
+// is stripped before the turn commits and dropped at turn end when no
+// request consumes it.
 func (a *sessionActor) noticeSkillDeactivation(name string) {
 	if a.state != stateRunning && a.state != stateAwaitAppr && a.state != stateAwaitQ {
 		return // no worker to tell — the notice is turn-scoped
 	}
-	a.pendingContext = append(a.pendingContext, skillNoticeMessage(name))
+	msg := skillNoticeMessage(name)
+	msg.TurnIndex = a.rec.TurnSeq
+	a.rec.Messages = append(a.rec.Messages, msg)
+	if err := a.saveOrAppend(walMsgEvent(msg)); err != nil {
+		a.rec.Messages = a.rec.Messages[:len(a.rec.Messages)-1]
+		return
+	}
+	a.pendingContext = append(a.pendingContext, msg)
 }
 
 // saveSkills persists the session skill map (full-replace WAL event) and
@@ -201,10 +211,17 @@ func (a *sessionActor) endTurnSkills() bool {
 // contract. Results are matched by the CALL ID of the stripped use_skill
 // calls (plus the Details marker), so a refused or failed use_skill —
 // whose error result carries no Details — never leaves an orphan
-// tool_result behind. Only messages of turn turnIdx are touched: older
-// committed turns may carry their own pre-folded placeholders and stay as
-// they are.
-func stripSkillArtifacts(msgs []provider.Message, turnIdx int) []provider.Message {
+// tool_result behind. An assistant step that carried a use_skill call and
+// has nothing visible left afterwards (reasoning only) is dropped with it,
+// so the next step does not inherit an empty thinking-only bubble. Only
+// messages of turn turnIdx are touched: older committed turns may carry
+// their own pre-folded placeholders and stay as they are.
+//
+// anchor is a.rec.Compaction.KeepFrom (negative when there is no
+// compaction state). Every removed message at an index below it shifts the
+// kept tail left, so the returned anchor subtracts those removals and is
+// clamped to the new transcript length.
+func stripSkillArtifacts(msgs []provider.Message, turnIdx int, anchor int) ([]provider.Message, int) {
 	callIDs := map[string]bool{}
 	for _, msg := range msgs {
 		if msg.TurnIndex != turnIdx {
@@ -217,35 +234,68 @@ func stripSkillArtifacts(msgs []provider.Message, turnIdx int) []provider.Messag
 		}
 	}
 	out := make([]provider.Message, 0, len(msgs))
-	for _, msg := range msgs {
+	adjusted := anchor
+	for i, msg := range msgs {
+		dropped := false
 		if msg.TurnIndex != turnIdx {
 			out = append(out, msg)
 			continue
 		}
 		if _, isNotice := msg.Meta[skillNoticeMetaKey]; isNotice {
-			continue // ephemeral notice: never committed
-		}
-		content := make([]provider.Content, 0, len(msg.Content))
-		for _, c := range msg.Content {
-			switch block := c.(type) {
-			case provider.ToolCallBlock:
-				if block.Name == "use_skill" {
-					continue
+			dropped = true // ephemeral notice: never committed
+		} else {
+			hadUseSkill := false
+			content := make([]provider.Content, 0, len(msg.Content))
+			for _, c := range msg.Content {
+				switch block := c.(type) {
+				case provider.ToolCallBlock:
+					if block.Name == "use_skill" {
+						hadUseSkill = true
+						continue
+					}
+				case provider.ToolResultBlock:
+					if callIDs[block.CallID] || isUseSkillResult(block) {
+						continue
+					}
 				}
-			case provider.ToolResultBlock:
-				if callIDs[block.CallID] || isUseSkillResult(block) {
-					continue
-				}
+				content = append(content, c)
 			}
-			content = append(content, c)
+			switch {
+			case len(content) == 0:
+				dropped = true
+			case hadUseSkill && reasoningOnlyContent(content):
+				dropped = true
+			default:
+				msg.Content = content
+				out = append(out, msg)
+			}
 		}
-		if len(content) == 0 {
-			continue
+		if dropped && i < anchor {
+			adjusted--
 		}
-		msg.Content = content
-		out = append(out, msg)
 	}
-	return out
+	if adjusted >= 0 && adjusted > len(out) {
+		adjusted = len(out)
+	}
+	return out, adjusted
+}
+
+// reasoningOnlyContent reports whether a stripped assistant step has no
+// visible content left: reasoning and empty text only. Any image, tool
+// call/result or real text keeps the message.
+func reasoningOnlyContent(content []provider.Content) bool {
+	for _, c := range content {
+		switch block := c.(type) {
+		case provider.ReasoningBlock:
+		case provider.TextBlock:
+			if strings.TrimSpace(block.Text) != "" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func skillNameFromDetails(details any) string {

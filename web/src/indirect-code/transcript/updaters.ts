@@ -43,6 +43,11 @@ export function normalizeSessionMessages(rawMsgs: any[], previous: ChatMessage[]
     if (typeof m.meta?.background_delivery === "string" && m.meta.background_delivery) {
       return;
     }
+    // Skill-deactivation notices are model-facing runtime context: they
+    // never render, and must not become a carrier for later tool results.
+    if (typeof m.meta?.skill_notice === "string" && m.meta.skill_notice) {
+      return;
+    }
     const blocks = parseContentBlocks(m);
     const role = m.role === "assistant" ? "assistant" : m.role === "tool" ? "tool" : "user";
     if (role === "assistant") {

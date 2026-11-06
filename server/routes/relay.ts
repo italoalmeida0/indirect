@@ -282,18 +282,19 @@ export function disconnectUserDaemons(userId: string): void {
 
 export function closeDaemonSocket(hostId: string): void {
   const ws = daemons.get(hostId);
-  if (ws) {
-    try {
-      // "shutdown" is the remote-kill signal: the daemon self-terminates
-      // (quiesce + exit) instead of entering its reconnect backoff.
-      // "disconnected" is kept for old daemons that only log it.
-      ws.send(JSON.stringify({ type: "shutdown", hostId, reason: "host_deleted" }));
-      ws.send(JSON.stringify({ type: "disconnected", reason: "host_deleted" }));
-      ws.close(1000, "host_deleted");
-    } catch {}
-    daemons.delete(hostId);
-    updatingHosts.delete(hostId);
-  }
+  if (!ws) return;
+  // Registry first, close second: the offline status + client broadcast must
+  // not depend on the close handler, which would find the host already
+  // unregistered (it would return false and send nothing).
+  unregisterDaemon(ws);
+  try {
+    // "shutdown" is the remote-kill signal: the daemon self-terminates
+    // (quiesce + exit) instead of entering its reconnect backoff.
+    // "disconnected" is kept for old daemons that only log it.
+    ws.send(JSON.stringify({ type: "shutdown", hostId, reason: "host_deleted" }));
+    ws.send(JSON.stringify({ type: "disconnected", reason: "host_deleted" }));
+    ws.close(1000, "host_deleted");
+  } catch {}
 }
 
 /**
@@ -306,13 +307,13 @@ export function closeDaemonSocket(hostId: string): void {
  */
 export function disconnectDaemonSocket(hostId: string): void {
   const ws = daemons.get(hostId);
-  if (ws) {
-    try {
-      ws.close(1000, "host_repaired");
-    } catch {}
-    daemons.delete(hostId);
-    updatingHosts.delete(hostId);
-  }
+  if (!ws) return;
+  // Same registry-first contract as every other daemon disconnect: persist
+  // offline and tell the user's tabs before the closing handshake.
+  unregisterDaemon(ws);
+  try {
+    ws.close(1000, "host_repaired");
+  } catch {}
 }
 
 export function isHostOnline(hostId: string): boolean {

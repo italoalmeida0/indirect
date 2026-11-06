@@ -1,8 +1,10 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
+	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
 	"indirect/indirect-code-daemon/packages/skills"
 )
@@ -104,7 +106,7 @@ func TestStripSkillArtifactsDropsNoticesAndUseSkill(t *testing.T) {
 		notice,
 		{Role: provider.RoleAssistant, TurnIndex: 6, Content: []provider.Content{provider.ToolCallBlock{Name: "use_skill"}}},
 	}
-	out := stripSkillArtifacts(msgs, 7)
+	out, _ := stripSkillArtifacts(msgs, 7, -1)
 	joined := ""
 	for _, m := range out {
 		for _, c := range m.Content {
@@ -121,5 +123,132 @@ func TestStripSkillArtifactsDropsNoticesAndUseSkill(t *testing.T) {
 	want := "hi|call:read|call:use_skill|"
 	if joined != want {
 		t.Fatalf("stripped turn = %q, want %q (use_skill pair + notice dropped, other turns untouched)", joined, want)
+	}
+}
+
+// An assistant step whose only remaining content after the use_skill call
+// was stripped is reasoning must not survive as an empty thinking bubble.
+// Steps that never called use_skill, or still show text/image/other calls,
+// stay.
+func TestStripSkillArtifactsDropsReasoningOnlyUseSkillStep(t *testing.T) {
+	msgs := []provider.Message{
+		{ID: "plain-thinking", Role: provider.RoleAssistant, TurnIndex: 4, Content: []provider.Content{
+			provider.ReasoningBlock{Summary: "no skill here"},
+		}},
+		{ID: "skill-thinking", Role: provider.RoleAssistant, TurnIndex: 4, Content: []provider.Content{
+			provider.ReasoningBlock{Summary: "weighing a skill"},
+			provider.ToolCallBlock{ID: "c1", Name: "use_skill"},
+		}},
+		{ID: "skill-result", Role: provider.RoleTool, TurnIndex: 4, Content: []provider.Content{
+			provider.ToolResultBlock{CallID: "c1", Details: map[string]any{"skill": "foo"}},
+		}},
+		{ID: "skill-and-text", Role: provider.RoleAssistant, TurnIndex: 4, Content: []provider.Content{
+			provider.ReasoningBlock{Summary: "answer next"},
+			provider.ToolCallBlock{ID: "c2", Name: "use_skill"},
+			provider.TextBlock{Text: "visible answer"},
+		}},
+		{ID: "skill-and-image", Role: provider.RoleAssistant, TurnIndex: 4, Content: []provider.Content{
+			provider.ToolCallBlock{ID: "c3", Name: "use_skill"},
+			provider.ImageBlock{MimeType: "image/png", Data: []byte{1}},
+		}},
+	}
+	out, _ := stripSkillArtifacts(msgs, 4, -1)
+	got := make([]string, 0, len(out))
+	for _, m := range out {
+		got = append(got, m.ID)
+	}
+	want := []string{"plain-thinking", "skill-and-text", "skill-and-image"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("surviving messages = %v, want %v", got, want)
+	}
+	for _, m := range out {
+		for _, c := range m.Content {
+			if call, ok := c.(provider.ToolCallBlock); ok && call.Name == "use_skill" {
+				t.Fatalf("%s kept a use_skill call", m.ID)
+			}
+		}
+	}
+	if len(out[1].Content) != 2 {
+		t.Fatalf("text step must keep reasoning + text, got %+v", out[1].Content)
+	}
+	if len(out[2].Content) != 1 {
+		t.Fatalf("image step must keep the image, got %+v", out[2].Content)
+	}
+}
+
+// Mid-turn compaction stores KeepFrom against the pre-strip transcript.
+// finishTurn's strip removes use_skill rows/notices below that anchor, so
+// the persisted anchor must shift left by exactly those removals.
+func TestFinishTurnShiftsCompactionKeepFromAfterStrip(t *testing.T) {
+	rec := &SessionRecord{
+		ID:      "skill-keepfrom",
+		TurnSeq: 2,
+		Compaction: &core.CompactionState{
+			PreviousSummary: "earlier work",
+			KeepFrom:        6,
+		},
+		Messages: []provider.Message{
+			{ID: "u1", Role: provider.RoleUser, TurnIndex: 1, Content: []provider.Content{provider.TextBlock{Text: "old question"}}},
+			{ID: "a1", Role: provider.RoleAssistant, TurnIndex: 1, Content: []provider.Content{provider.TextBlock{Text: "old answer"}}},
+			{ID: "u2", Role: provider.RoleUser, TurnIndex: 2, Content: []provider.Content{provider.TextBlock{Text: "new request"}}},
+			{ID: "a2", Role: provider.RoleAssistant, TurnIndex: 2, Content: []provider.Content{
+				provider.ReasoningBlock{Summary: "load it"},
+				provider.ToolCallBlock{ID: "c1", Name: "use_skill"},
+			}},
+			{ID: "t2", Role: provider.RoleTool, TurnIndex: 2, Content: []provider.Content{
+				provider.ToolResultBlock{CallID: "c1", Details: map[string]any{"skill": "foo"}},
+			}},
+			{ID: "n2", Role: provider.RoleUser, TurnIndex: 2, Meta: map[string]string{skillNoticeMetaKey: "foo"}, Content: []provider.Content{
+				provider.TextBlock{Text: "[system notice] The user deactivated the skill foo"},
+			}},
+			{ID: "a3", Role: provider.RoleAssistant, TurnIndex: 2, Content: []provider.Content{provider.TextBlock{Text: "kept reply"}}},
+			{ID: "u3", Role: provider.RoleUser, TurnIndex: 2, Content: []provider.Content{provider.TextBlock{Text: "kept tail"}}},
+		},
+	}
+	a, _ := darActor(t, rec)
+	a.finishTurn(true)
+
+	got := make([]string, 0, len(a.rec.Messages))
+	for _, m := range a.rec.Messages {
+		got = append(got, m.ID)
+	}
+	want := []string{"u1", "a1", "u2", "a3", "u3"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("committed messages = %v, want %v", got, want)
+	}
+	if a.rec.Compaction == nil {
+		t.Fatal("compaction state lost")
+	}
+	if a.rec.Compaction.KeepFrom != 3 {
+		t.Fatalf("KeepFrom = %d, want 3 (three rows stripped below the old anchor 6)", a.rec.Compaction.KeepFrom)
+	}
+	if a.rec.Compaction.KeepFrom > len(a.rec.Messages) {
+		t.Fatalf("KeepFrom %d out of range for %d messages", a.rec.Compaction.KeepFrom, len(a.rec.Messages))
+	}
+}
+
+// An anchor that pointed at the old transcript end no longer exists after
+// the strip; it must clamp to the new end (projectionAnchor fails open on an
+// out-of-range index and silently drops the summary).
+func TestStripSkillArtifactsClampsAnchorAtNewEnd(t *testing.T) {
+	msgs := []provider.Message{
+		{ID: "u", Role: provider.RoleUser, TurnIndex: 2, Content: []provider.Content{provider.TextBlock{Text: "hi"}}},
+		{ID: "a", Role: provider.RoleAssistant, TurnIndex: 2, Content: []provider.Content{
+			provider.ReasoningBlock{Summary: "load"},
+			provider.ToolCallBlock{ID: "c1", Name: "use_skill"},
+		}},
+		{ID: "t", Role: provider.RoleTool, TurnIndex: 2, Content: []provider.Content{
+			provider.ToolResultBlock{CallID: "c1", Details: map[string]any{"skill": "foo"}},
+		}},
+		{ID: "n", Role: provider.RoleUser, TurnIndex: 2, Meta: map[string]string{skillNoticeMetaKey: "foo"}, Content: []provider.Content{
+			provider.TextBlock{Text: "[system notice] The user deactivated the skill foo"},
+		}},
+	}
+	out, anchor := stripSkillArtifacts(msgs, 2, len(msgs))
+	if len(out) != 1 || out[0].ID != "u" {
+		t.Fatalf("stripped transcript = %+v, want only the user row", out)
+	}
+	if anchor != len(out) {
+		t.Fatalf("anchor = %d, want clamped to %d", anchor, len(out))
 	}
 }
