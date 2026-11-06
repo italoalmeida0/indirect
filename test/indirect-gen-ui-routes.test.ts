@@ -113,6 +113,46 @@ describe("gen-ui widget routes", () => {
     expect(html).toContain("/api/indirect-code/gen-ui/modules/");
   });
 
+  test("GET re-pins header and meta CSP to the request origin, not the POST origin", async () => {
+    const POST_ORIGIN = "http://localhost:3000";
+    const GET_ORIGIN = "http://127.0.0.1:3000";
+    const path = "/api/indirect-code/gen-ui/widgets";
+    const jsx = `export default function App() { return <div className="gu-root">origin</div>; }`;
+    const created = await handleGenUiRoute(
+      path,
+      new Request(POST_ORIGIN + path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ theme: "dark", jsx, stateJSON: "{}" }),
+      }),
+      new URL(POST_ORIGIN + path),
+    );
+    if (!created) throw new Error("widget POST not handled");
+    const out = (await created.json()) as { url?: string };
+    expect(out.url).toMatch(/^\/api\/indirect-code\/gen-ui\/widgets\/[0-9a-f]{64}$/);
+
+    const url = new URL(GET_ORIGIN + out.url);
+    const res = await handleGenUiRoute(url.pathname, new Request(url.toString()), url);
+    if (!res) throw new Error("widget GET not handled");
+    expect(res.status).toBe(200);
+    const csp = res.headers.get("content-security-policy") || "";
+    expect(csp).toContain(`${GET_ORIGIN}/api/indirect-code/gen-ui/lib/`);
+    expect(csp).toContain(`${GET_ORIGIN}/api/indirect-code/gen-ui/modules/`);
+    expect(csp).not.toContain(POST_ORIGIN);
+
+    const html = await res.text();
+    const meta = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(html)?.[1] || "";
+    const nonce = /'nonce-([0-9a-f]{32})'/.exec(csp)?.[1] || "";
+    expect(nonce).not.toBe("");
+    // The header and the meta tag must agree on BOTH nonce and origin: the
+    // browser enforces the intersection, so a stale POST origin in the meta
+    // would block the widget's own module.
+    expect(meta).toContain(`'nonce-${nonce}'`);
+    expect(meta).toContain(`${GET_ORIGIN}/api/indirect-code/gen-ui/lib/`);
+    expect(meta).toContain(`${GET_ORIGIN}/api/indirect-code/gen-ui/modules/`);
+    expect(meta).not.toContain(POST_ORIGIN);
+  });
+
   test("unknown widget id 404s (ids are unguessable sha256 digests)", async () => {
     const res = await get(`/api/indirect-code/gen-ui/widgets/${"0".repeat(64)}`);
     expect(res.status).toBe(404);
@@ -295,15 +335,28 @@ describe("gen-ui image proxy", () => {
     expect(sniffImageMime(new Uint8Array(4))).toBeNull();
   });
 
-  test("isBlockedAddress covers loopback, RFC1918, link-local and metadata", () => {
+  test("isBlockedAddress covers loopback, RFC1918, link-local, metadata and IPv4-mapped IPv6", () => {
     for (const host of [
       "127.0.0.1", "0.0.0.0", "10.1.2.3", "172.16.9.9", "192.168.1.1",
       "169.254.169.254", "100.100.100.100", "224.0.0.1", "::1", "[::1]",
       "fe80::1", "fd00::1", "localhost", "db.internal", "printer.local",
+      // WHATWG canonicalizes a dotted quad inside an IPv6 literal into two
+      // hex groups; the dotted-decimal check alone would miss all of these.
+      "[::ffff:7f00:1]", "::ffff:7f00:1", "[::ffff:a9fe:a9fe]",
+      "[::ffff:a00:1]", "[::ffff:c0a8:101]", "::ffff:127.0.0.1",
+      "0:0:0:0:0:ffff:7f00:1",
+      // IPv4-compatible, NAT64, 6to4 and other non-global ranges.
+      "::127.0.0.1", "[64:ff9b::7f00:1]", "64:ff9b::a9fe:a9fe",
+      "2002:7f00:1::", "2001:db8::1", "ff02::1", "fec0::1",
     ]) {
       expect(isBlockedAddress(host)).toBe(true);
     }
-    for (const host of ["8.8.8.8", "1.1.1.1", "example.com", "2606:4700::1111", "cdn.example.org"]) {
+    for (const host of [
+      "8.8.8.8", "1.1.1.1", "example.com", "2606:4700::1111", "cdn.example.org",
+      // Only the embedded IPv4 target decides for tunnel prefixes: a public
+      // quad stays allowed.
+      "[::ffff:808:808]", "64:ff9b::808:808",
+    ]) {
       expect(isBlockedAddress(host)).toBe(false);
     }
   });
@@ -314,12 +367,22 @@ describe("gen-ui image proxy", () => {
       "http://127.0.0.1/x.png",
       "http://169.254.169.254/latest/meta-data/",
       "http://10.0.0.5/admin",
+      "http://[::ffff:127.0.0.1]:3000/x.png",
+      "http://[::ffff:169.254.169.254]/latest/meta-data/",
+      "http://[::ffff:10.0.0.1]/x.png",
+      "http://[::ffff:192.168.1.1]/x.png",
       "https://db.internal/secret.png",
+    ]) {
+      const res = await img(u);
+      expect(res.status, u).toBe(403);
+      expect(fetchCalls.length).toBe(0);
+    }
+    for (const u of [
       "javascript:alert(1)",
       "file:///etc/passwd",
     ]) {
       const res = await img(u);
-      expect(res.status).toBe(400);
+      expect(res.status, u).toBe(400);
       expect(fetchCalls.length).toBe(0);
     }
     const missing = await img("");

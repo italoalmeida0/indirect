@@ -37,6 +37,10 @@ export const COMPLETION_TOOL_NAMES = new Set(["finish_entire_request"]);
 export const SUMMARY_GATE_BLOCK_PREFIX =
   "Blocked: a progress summary is required first. Other tools are on hold until the progress summary is recorded.";
 
+/** Prefix of the daemon's ephemeral skill-deactivation notice
+ * (skillNoticeMessage in indirect-code-daemon/cmd/daemon/skill_prefix.go). */
+export const SKILL_DEACTIVATION_NOTICE_PREFIX = "[system notice] The user deactivated the skill ";
+
 /** Detects synthetic system prompt nudges. Transcript-real (sent to the provider)
  * but never shown as a user bubble in the chat UI. */
 export function isSyntheticNudge(text: string): boolean {
@@ -45,6 +49,7 @@ export function isSyntheticNudge(text: string): boolean {
     (trimmed.startsWith("<system-reminder>") && trimmed.endsWith("</system-reminder>")) ||
     (trimmed.startsWith("<system_prompt>") && trimmed.endsWith("</system_prompt>")) ||
     (trimmed.startsWith("<system-warn>") && trimmed.endsWith("</system-warn>")) ||
+    trimmed.startsWith(SKILL_DEACTIVATION_NOTICE_PREFIX) ||
     trimmed.startsWith(SUMMARY_GATE_BLOCK_PREFIX)
   );
 }

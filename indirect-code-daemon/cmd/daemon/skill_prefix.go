@@ -95,8 +95,9 @@ type skillActivateMsg struct {
 
 // skillNoticeMessage builds the ephemeral system notice emitted when the
 // user deactivates, during a turn, a skill whose last activation was the
-// AI's. The message is request-only context (pendingContext): it never
-// joins the persisted transcript.
+// AI's. The message is turn-scoped (join the live transcript so indexes
+// stay aligned, stripped before the turn commits) and its meta keeps it
+// out of the UI.
 func skillNoticeMessage(name string) provider.Message {
 	return provider.Message{
 		ID:      provider.NewMessageID(),

@@ -10,6 +10,7 @@ import {
   buildWidgetDocument,
   makeScriptNonce,
   widgetCSP,
+  type WidgetDocParams,
 } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
 import { compileJsxModule } from "../../web/src/indirect-code/components/generative-ui/jsx-compile";
 import { GEN_UI_LIB_FILES, LIB_MODULE_FILES, readVendorFile } from "./gen-ui-libs";
@@ -57,13 +58,13 @@ import { lookup } from "node:dns";
 const STORE_MAX = 400;
 const STORE_MAX_BYTES = 64 * 1024 * 1024;
 
-type Entry = { id: string; body: string; bytes: number };
+type Entry<T> = { id: string; body: T; bytes: number };
 
-function makeStore() {
-  const map = new Map<string, Entry>();
+function makeStore<T = string>(measure: (body: T) => number = (body) => (body as string).length) {
+  const map = new Map<string, Entry<T>>();
   let bytes = 0;
   return {
-    get(id: string): Entry | undefined {
+    get(id: string): Entry<T> | undefined {
       const e = map.get(id);
       if (e) {
         // Refresh LRU position.
@@ -72,18 +73,18 @@ function makeStore() {
       }
       return e;
     },
-    put(id: string, body: string): Entry {
+    put(id: string, body: T): Entry<T> {
       const existing = map.get(id);
       if (existing) {
         map.delete(id);
         map.set(id, existing);
         return existing;
       }
-      const entry: Entry = { id, body, bytes: body.length };
+      const entry: Entry<T> = { id, body, bytes: measure(body) };
       map.set(id, entry);
       bytes += entry.bytes;
       while (map.size > STORE_MAX || bytes > STORE_MAX_BYTES) {
-        const oldest = map.entries().next().value as [string, Entry] | undefined;
+        const oldest = map.entries().next().value as [string, Entry<T>] | undefined;
         if (!oldest) break;
         map.delete(oldest[0]);
         bytes -= oldest[1].bytes;
@@ -94,7 +95,12 @@ function makeStore() {
   };
 }
 
-const widgets = makeStore();
+/** Stored widget: the document itself is rendered per request origin. */
+type WidgetDoc = Omit<WidgetDocParams, "origin">;
+
+const widgets = makeStore<WidgetDoc>(
+  (doc) => doc.theme.length + doc.moduleUrl.length + doc.importMap.length + doc.stateJSON.length + doc.scriptNonce.length,
+);
 const modules = makeStore();
 
 /** Content-addressed id: identical content maps to one entry. */
@@ -202,6 +208,44 @@ function isIPv4Literal(host: string): boolean {
   return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
 }
 
+/**
+ * The 8 hextets of an IPv6 literal, or null when it is not one. A trailing
+ * dotted quad (IPv4-mapped / IPv4-compatible / NAT64) is folded into the low
+ * two groups: the WHATWG URL parser canonicalizes it to exactly that form
+ * (`http://[::ffff:127.0.0.1]` -> hostname `[::ffff:7f00:1]`), which the
+ * dotted-decimal check would never see.
+ */
+function parseIPv6Literal(host: string): number[] | null {
+  let s = host;
+  const tail = /(?:^|:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(s);
+  if (tail) {
+    if (!tail.index) return null; // bare dotted quad: not an IPv6 literal
+    const oct = tail[1].split(".").map(Number);
+    if (oct.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+    const hi = ((oct[0] << 8) | oct[1]).toString(16);
+    const lo = ((oct[2] << 8) | oct[3]).toString(16);
+    s = `${s.slice(0, tail.index)}:${hi}:${lo}`;
+  }
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const groups = [...head, ...rest];
+  if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
+  if (halves.length === 1) return groups.length === 8 ? groups.map((g) => parseInt(g, 16)) : null;
+  // "::" compresses at least one all-zero group.
+  if (groups.length > 7) return null;
+  return [
+    ...head.map((g) => parseInt(g, 16)),
+    ...new Array<number>(8 - groups.length).fill(0),
+    ...rest.map((g) => parseInt(g, 16)),
+  ];
+}
+
+function ipv4FromHextets(hi: number, lo: number): string {
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+}
+
 /** True for any address a widget must never reach through the proxy. */
 export function isBlockedAddress(host: string): boolean {
   const h = host.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0];
@@ -224,12 +268,27 @@ export function isBlockedAddress(host: string): boolean {
     );
   }
   if (h.includes(":")) {
-    // IPv6 literal.
-    if (h === "::1" || h === "::") return true; // loopback / unspecified
-    if (/^f[cd]/.test(h)) return true; // ULA
-    if (/^fe[89ab]/.test(h)) return true; // link-local
-    const v4 = /:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(h); // v4-mapped
-    if (v4) return isBlockedAddress(v4[1]);
+    const words = parseIPv6Literal(h);
+    if (!words) return true; // malformed literal: fail closed
+    const [w0, w1, w2, w3, w4, w5, w6, w7] = words;
+    // Addresses that carry an IPv4 target inside: check the target with the
+    // IPv4 policy (loopback, RFC1918, metadata, …).
+    const embedded = () => isBlockedAddress(ipv4FromHextets(w6, w7));
+    // IPv4-mapped ::ffff:0:0/96 and IPv4-compatible ::/96 (deprecated).
+    if (w0 === 0 && w1 === 0 && w2 === 0 && w3 === 0 && w4 === 0 && w5 === 0xffff) return embedded();
+    if (w0 === 0 && w1 === 0 && w2 === 0 && w3 === 0 && w4 === 0 && w5 === 0) {
+      return w6 === 0 && w7 <= 1 ? true : embedded(); // :: / ::1 or the quad
+    }
+    // NAT64 well-known prefix 64:ff9b::/96.
+    if (w0 === 0x64 && w1 === 0xff9b && w2 === 0 && w3 === 0 && w4 === 0 && w5 === 0) return embedded();
+    // 6to4 2002::/16 carries the IPv4 destination in bits 16–47.
+    if (w0 === 0x2002) return isBlockedAddress(ipv4FromHextets(w1, w2));
+    // Only global unicast (2000::/3) leaves the box: loopback, unspecified,
+    // link-local, site-local, ULA, multicast and every other reserved range
+    // stay blocked.
+    if ((w0 & 0xe000) !== 0x2000) return true;
+    // 2001:db8::/32 is documentation-only (not routable).
+    if (w0 === 0x2001 && w1 === 0x0db8) return true;
     return false;
   }
   // Hostname: obvious internal names never leave the box.
@@ -420,7 +479,6 @@ export async function handleGenUiRoute(
     if (existing) {
       return json({ success: true, id: existing.id, url: `/api/indirect-code/gen-ui/widgets/${existing.id}` }, { req });
     }
-    const nonce = makeScriptNonce();
     const importMap = buildJsxImportMap({
       react: "/api/indirect-code/gen-ui/lib/react-shim.js",
       libs: Object.fromEntries(
@@ -430,16 +488,15 @@ export async function handleGenUiRoute(
         ]),
       ),
     });
-    const origin = requestOrigin(req, server);
-    const doc = buildWidgetDocument({
+    // The document embeds the deployment origin in its CSP meta tag, so it
+    // is rendered on GET (per request origin), never stored baked.
+    const entry = widgets.put(id, {
       theme,
       moduleUrl,
       importMap,
       stateJSON,
-      scriptNonce: nonce,
-      origin,
+      scriptNonce: makeScriptNonce(),
     });
-    const entry = widgets.put(id, doc);
     return json({ success: true, id: entry.id, url: `/api/indirect-code/gen-ui/widgets/${entry.id}` }, { req });
   }
 
@@ -447,15 +504,20 @@ export async function handleGenUiRoute(
   if (widgetMatch && req.method === "GET") {
     const entry = widgets.get(widgetMatch[1]);
     if (!entry) return err(404, "widget not found", req);
-    // The nonce lives in the stored document: the CSP header must carry the
-    // same value (the doc is immutable, so it can be re-derived on read).
-    const nonceMatch = /script-src 'nonce-([0-9a-f]{32})'/.exec(entry.body);
-    const nonce = nonceMatch?.[1] || "";
-    return new Response(entry.body, {
+    // Header and <meta> CSP are both pinned to THIS request's origin: a
+    // widget posted via one host and fetched via another (localhost vs
+    // 127.0.0.1, LAN IP, reverse proxy) would otherwise intersect its
+    // module loads away (the browser enforces both policies).
+    const origin = requestOrigin(req, server);
+    return new Response(buildWidgetDocument({ ...entry.body, origin }), {
       headers: {
         "content-type": "text/html; charset=utf-8",
-        "cache-control": "public, max-age=31536000, immutable",
-        "content-security-policy": widgetCSP(nonce, requestOrigin(req, server)),
+        // The rendered document varies with the request origin, so shared
+        // caches must not pin one origin's copy for everyone. Browsers still
+        // cache it per URL (the URL host IS the origin).
+        "cache-control": "private, max-age=31536000, immutable",
+        "vary": "host",
+        "content-security-policy": widgetCSP(entry.body.scriptNonce, origin),
         "x-content-type-options": "nosniff",
       },
     });
@@ -490,7 +552,13 @@ export async function handleGenUiRoute(
       entry = await fetchImage(raw);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      const status = /too large/.test(message) ? 413 : /did not answer|not an image/.test(message) ? 415 : 400;
+      const status = /too large/.test(message)
+        ? 413
+        : /did not answer|not an image/.test(message)
+          ? 415
+          : /blocked (?:host|address)/.test(message)
+            ? 403
+            : 400;
       return err(status, `image: ${message}`, req);
     }
     putImage(raw, entry);

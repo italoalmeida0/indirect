@@ -87,6 +87,18 @@ func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		}
 	}
 	wait := time.Duration(a.MaxWaitSeconds * float64(time.Second))
+	// Subscribe BEFORE the initial status check: a job that finishes in
+	// the window between BgTaskStatus and the subscription would otherwise
+	// never close wake and bg_await would dead-wait for the full duration.
+	var wake <-chan struct{}
+	if t.Host != nil {
+		// Child channel so the registry watcher exits when the wait itself
+		// ends (timer, cancel or early wake): otherwise every bg_await call
+		// leaks one polling goroutine until the turn ends.
+		done := make(chan struct{})
+		defer close(done)
+		wake = t.Host.WaitForAnyJob(t.SessionID, done)
+	}
 	// Pinned-task shortcut: the wait is justified by a task that is still
 	// running. Unknown/foreign ids warn (never fail); an already-terminal
 	// task returns immediately with a pointer to bg_check.
@@ -119,16 +131,6 @@ func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress
 	// from the tool start). Progress events append forever, so a per-second
 	// tick would pile "29s left28s left…" into the transcript.
 	_ = progress
-
-	var wake <-chan struct{}
-	if t.Host != nil {
-		// Child context so the registry watcher exits when the wait
-		// itself ends (timer, cancel or early wake): otherwise every
-		// bg_await call leaks one polling goroutine until the turn ends.
-		awaitCtx, stopWatch := context.WithCancel(context.Background())
-		defer stopWatch()
-		wake = t.Host.WaitForAnyJob(t.SessionID, awaitCtx.Done())
-	}
 
 	start := time.Now()
 	select {

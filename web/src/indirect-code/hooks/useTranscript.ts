@@ -1,4 +1,5 @@
 import { createTranscriptOrder, type TranscriptCursor } from "../transcript/order";
+import { nextHistoryCursor } from "../transcript/history";
 import type { DaemonCommand } from "../daemon-protocol";
 import { batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -656,11 +657,10 @@ export function createTranscript(opts: {
     setTurnActivity(previous => normalizeTurnActivity(r.turn, previous));
     setTurnClock(Date.now());
     if (r.history && typeof r.history.oldestTurn === "number") {
-      setHistoryCursor({
-        oldestTurn: r.history.oldestTurn,
-        hasOlder: !!r.history.hasOlder,
-        totalTurns: r.history.totalTurns ?? 0,
-      });
+      const tailHistory = r.history;
+      // A tail snapshot must not regress the pagination frontier once the
+      // reader pulled older turns and a seal proves they are loaded.
+      setHistoryCursor((prev) => nextHistoryCursor(prev, tailHistory, sealedBlocks()));
     } else {
       setHistoryCursor(null);
     }

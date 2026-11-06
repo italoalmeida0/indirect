@@ -846,7 +846,16 @@ func (a *sessionActor) finishTurn(ok bool) {
 	// activation-related is durable).
 	a.endTurnSkills()
 	a.pendingContext = nil // unconsumed notices are turn-scoped: drop them
-	a.rec.Messages = stripSkillArtifacts(a.rec.Messages, a.rec.TurnSeq)
+	keepFrom := -1
+	if a.rec.Compaction != nil {
+		keepFrom = a.rec.Compaction.KeepFrom
+	}
+	a.rec.Messages, keepFrom = stripSkillArtifacts(a.rec.Messages, a.rec.TurnSeq, keepFrom)
+	if a.rec.Compaction != nil {
+		// The strip removed transcript rows the compaction anchor indexed;
+		// shifting it keeps projection from hiding the kept tail.
+		a.rec.Compaction.KeepFrom = keepFrom
+	}
 	if a.cancel != nil {
 		a.cancel = nil
 	}
@@ -1208,6 +1217,9 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 	if c := a.rec.Compaction; c != nil && idx <= c.KeepFrom {
 		a.rec.Compaction = nil
 	}
+	// Attachments are only kept when a surviving row or the new row (ids)
+	// still references them; discarded turns must not leak files.
+	pruneOrphanAttachments(a.rec, ids)
 	// Insert the new user row in the boundary's place (same turn number:
 	// a re-run of that turn, like a tool retry — numbering stays stable).
 	row := seededUserMessage(a.rec, text, ids)
@@ -1278,7 +1290,14 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:keep]...)
 	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, keep)
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
-	pruneOrphanAttachments(a.rec, nil)
+	// A compaction summary derived from the cut prefix is stale (same rule
+	// as discard&resend / edit-regenerate).
+	if c := a.rec.Compaction; c != nil && keep <= c.KeepFrom {
+		a.rec.Compaction = nil
+	}
+	// ids are the new row's attachments (the edited message's or fresh
+	// uploads); without them pruning would delete the files the row inlines.
+	pruneOrphanAttachments(a.rec, ids)
 	// Insert the new user row (same turn number: a re-run of that turn).
 	row := seededUserMessage(a.rec, text, ids)
 	row.TurnIndex = dropTurnForPrefix(a.rec.Messages)

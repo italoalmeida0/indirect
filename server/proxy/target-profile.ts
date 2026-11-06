@@ -37,8 +37,17 @@ export const MAX_TOOL_ID_LENGTH = 64;
  *  that, so the gateway compacts over-long ids per attempt: `tc1`, `tc2`, …
  *  in first-seen order, applied consistently to the call and its result.
  *  Ids within the limit pass through untouched (byte-fidelity rule stands
- *  for every well-behaved provider). */
-export function compactToolIds(body: Record<string, unknown>): Record<string, unknown> {
+ *  for every well-behaved provider).
+ *
+ *  `maxLen` is the target's accepted cap (profile.maxToolIdLength);
+ *  `Infinity` (or any non-finite value) disables compaction entirely.
+ *  Never mutates the input: failover reuses one body across attempts, so
+ *  each attempt gets its own containers and the caller's stays intact. */
+export function compactToolIds(
+  body: Record<string, unknown>,
+  maxLen: number = MAX_TOOL_ID_LENGTH,
+): Record<string, unknown> {
+  if (!Number.isFinite(maxLen)) return body;
   const map = new Map<string, string>();
   let seq = 0;
   // Reserve existing ids before allocating replacements, including results
@@ -57,56 +66,91 @@ export function compactToolIds(body: Record<string, unknown>): Record<string, un
     if (typeof id !== "string") return id;
     const known = map.get(id);
     if (known) return known;
-    if (id.length <= MAX_TOOL_ID_LENGTH) return id;
+    if (id.length <= maxLen) return id;
     do { seq += 1; } while (reserved.has(`tc${seq}`));
     const replacement = `tc${seq}`;
     reserved.add(replacement);
     map.set(id, replacement);
     return replacement;
   };
+  // Copy-on-write: rebuild only the arrays/objects whose ids changed.
+  // Unchanged siblings keep their exact references (and the whole body is
+  // returned as-is when nothing needed a shorter id).
+  const compactArray = (items: unknown[], compact: (item: unknown) => unknown): unknown[] | null => {
+    let next: unknown[] | null = null;
+    items.forEach((item, idx) => {
+      const compacted = compact(item);
+      if (compacted === item) return;
+      if (!next) next = [...items];
+      next[idx] = compacted;
+    });
+    return next;
+  };
   // Chat + Anthropic-messages shapes share role/message layout; Responses
   // `input` items carry the same ids under different keys.
-  let touched = false;
-  const touch = (v: unknown, nv: unknown): unknown => {
-    if (nv !== v) touched = true;
-    return nv;
-  };
-  const compactMessage = (m: Record<string, unknown>): void => {
+  const compactMessage = (raw: unknown): unknown => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const m = raw as Record<string, unknown>;
+    let next: Record<string, unknown> | null = null;
+    const replace = (key: string, value: unknown): void => {
+      if (!next) next = { ...m };
+      next[key] = value;
+    };
     if (m.role === "assistant") {
       const calls = m.tool_calls;
       if (Array.isArray(calls)) {
-        for (const raw of calls) {
-          const tc = asRecord(raw);
-          if ("id" in tc) tc.id = touch(tc.id, short(tc.id));
-        }
+        const compacted = compactArray(calls, (rawCall) => {
+          const tc = asRecord(rawCall);
+          if (!("id" in tc)) return rawCall;
+          const id = short(tc.id);
+          return id === tc.id ? rawCall : { ...tc, id };
+        });
+        if (compacted) replace("tool_calls", compacted);
       }
-      for (const b of asArr(m.content)) {
-        const block = asRecord(b);
-        if (block.type === "tool_use" && "id" in block) block.id = touch(block.id, short(block.id));
+      const blocks = m.content;
+      if (Array.isArray(blocks)) {
+        const compacted = compactArray(blocks, (rawBlock) => {
+          const block = asRecord(rawBlock);
+          if (block.type !== "tool_use" || !("id" in block)) return rawBlock;
+          const id = short(block.id);
+          return id === block.id ? rawBlock : { ...block, id };
+        });
+        if (compacted) replace("content", compacted);
       }
     } else if (m.role === "tool" && "tool_call_id" in m) {
-      m.tool_call_id = touch(m.tool_call_id, short(m.tool_call_id));
+      const id = short(m.tool_call_id);
+      if (id !== m.tool_call_id) replace("tool_call_id", id);
     } else {
-      for (const b of asArr(m.content)) {
-        const block = asRecord(b);
-        if (block.type === "tool_result" && "tool_use_id" in block) {
-          block.tool_use_id = touch(block.tool_use_id, short(block.tool_use_id));
-        }
+      const blocks = m.content;
+      if (Array.isArray(blocks)) {
+        const compacted = compactArray(blocks, (rawBlock) => {
+          const block = asRecord(rawBlock);
+          if (block.type !== "tool_result" || !("tool_use_id" in block)) return rawBlock;
+          const id = short(block.tool_use_id);
+          return id === block.tool_use_id ? rawBlock : { ...block, tool_use_id: id };
+        });
+        if (compacted) replace("content", compacted);
       }
     }
+    return next ?? raw;
   };
-  // Chat + Anthropic-messages shapes share role/message layout; Responses
-  // `input` items carry the same ids under different keys.
-  for (const m of asArr(body.messages)) compactMessage(asRecord(m));
+  let out: Record<string, unknown> | null = null;
+  const messages = body.messages;
+  if (Array.isArray(messages)) {
+    const compacted = compactArray(messages, compactMessage);
+    if (compacted) out = { ...body, messages: compacted };
+  }
   const input = body.input;
   if (Array.isArray(input)) {
-    for (const raw of input) {
-      const item = asRecord(raw);
-      if ("call_id" in item) item.call_id = touch(item.call_id, short(item.call_id));
-    }
+    const compacted = compactArray(input, (rawItem) => {
+      const item = asRecord(rawItem);
+      if (!("call_id" in item)) return rawItem;
+      const id = short(item.call_id);
+      return id === item.call_id ? rawItem : { ...item, call_id: id };
+    });
+    if (compacted) out = { ...(out ?? body), input: compacted };
   }
-  if (!touched) return body;
-  return { ...body };
+  return out ?? body;
 }
 /** Per-target normalization profile: what THIS upstream attempt accepts. */
 export interface TargetProfile {
@@ -350,15 +394,9 @@ export function normalizeForTarget(
     out = rest;
   }
   // compactToolIds is itself conservative (same reference when compliant).
-  // NOTE: it currently always caps at 64; profile.maxToolIdLength below
-  // that is honored by pre-checking, above it by skipping.
-  if (profile.maxToolIdLength >= 64) {
-    out = compactToolIds(out);
-  } else if (profile.maxToolIdLength < 64) {
-    // Narrower-than-known cap: compact with a temporary stricter view is
-    // not supported by compactToolIds; ids over the profile cap are still
-    // compacted by the 64-rule (safe superset: valid everywhere ≤64 is valid).
-    out = compactToolIds(out);
+  // The profile owns the cap: Infinity means the target accepts any length.
+  if (Number.isFinite(profile.maxToolIdLength)) {
+    out = compactToolIds(out, profile.maxToolIdLength);
   }
   out = applyBlockFilter(out, profile.dropBlockTypes);
   return out;

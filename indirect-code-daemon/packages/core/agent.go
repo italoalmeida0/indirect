@@ -1173,7 +1173,20 @@ func (a *Agent) executeTools(ctx context.Context, msg provider.Message, sink fun
 		if !ok || tc.Server {
 			continue
 		}
-		res := a.runOneTool(ctx, tc, sink)
+		var res ToolResult
+		if err := ctx.Err(); err != nil {
+			// The turn is cancelled: do not start another side effect. Still
+			// emit a result per call so the persisted transcript keeps one
+			// tool_result for every tool_use (providers reject orphans).
+			res = ToolResult{
+				StartedAt: time.Now().UnixMilli(),
+				Content:   []provider.Content{provider.TextBlock{Text: "aborted: " + err.Error()}},
+				IsError:   true,
+			}
+			res.Content = WrapToolResultContent(res)
+		} else {
+			res = a.runOneTool(ctx, tc, sink)
+		}
 		if res.IsError {
 			hadError = true
 		}

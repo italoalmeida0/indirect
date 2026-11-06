@@ -152,7 +152,10 @@ async function phase(name, url, runFn) {
     const mod = await import(url);
     if (runFn) await runFn(mod);
   } catch (e) {
-    R.errors.push({ phase: name, message: String((e && e.message) || e).slice(0, 2000) });
+    // Through the page's reporter so the stack position is extracted and
+    // mapped back to the model's source (a direct push has no position and
+    // never gets a code frame).
+    window.__lint_push(name, e, "phase error");
   }
   return R.errors.length === before;
 }
@@ -202,9 +205,70 @@ function testModuleSource(testCode: string): string {
 
 /* ---------------- phases ---------------- */
 
-function compilePhase(source: string): { ok: boolean; code: string; map: SourceMapIndex | null; errors: WidgetLintError[] } {
+/**
+ * Replace the widget import specifier with an audit-allowed placeholder
+ * without losing the model's positions: the rewrite keeps every line and
+ * only shifts columns on the lines it touches, so a position maps back by
+ * the replaced span's length delta. Frames and findings must always show
+ * the model's own `test` text, never the internal placeholder.
+ */
+function rewriteWidgetSpecifier(test: string, placeholder: string): {
+  src: string;
+  toOriginal: (pos: SourcePosition) => SourcePosition;
+} {
+  const spec = /(from\s*|\bimport\s*(?:\(\s*)?)(["'])(\.\/)?widget(\.tsx)?\2/g;
+  const rewrites: { line: number; start: number; end: number; original: number }[] = [];
+  let src = "";
+  let line = 1;
+  let lineStart = 0;
+  const append = (text: string) => {
+    src += text;
+    const nl = text.lastIndexOf("\n");
+    if (nl >= 0) {
+      line += text.split("\n").length - 1;
+      lineStart = src.length - (text.length - nl - 1);
+    }
+  };
+  let copied = 0;
+  for (const m of test.matchAll(spec)) {
+    const at = m.index ?? 0;
+    append(test.slice(copied, at));
+    append(m[1]);
+    const replacement = `${m[2]}${placeholder}${m[2]}`;
+    rewrites.push({
+      line,
+      start: src.length - lineStart,
+      end: src.length - lineStart + replacement.length,
+      original: m[0].length - m[1].length,
+    });
+    append(replacement);
+    copied = at + m[0].length;
+  }
+  append(test.slice(copied));
+  return {
+    src,
+    toOriginal: (pos) => {
+      let shift = 0;
+      for (const r of rewrites) {
+        if (r.line !== pos.line) continue;
+        if (pos.column >= r.end) shift += r.end - r.start - r.original;
+        else if (pos.column > r.start) {
+          return { line: pos.line, column: r.start - shift + Math.min(pos.column - r.start, r.original) };
+        }
+      }
+      return { line: pos.line, column: pos.column - shift };
+    },
+  };
+}
+
+function compilePhase(
+  source: string,
+  frameSource: string = source,
+  remap?: (pos: SourcePosition) => SourcePosition,
+): { ok: boolean; code: string; map: SourceMapIndex | null; errors: WidgetLintError[] } {
   const compiled = compileWidgetForLint(source);
   if (!compiled.ok) {
+    const pos = compiled.pos && remap ? remap(compiled.pos) : compiled.pos;
     const auditLike = /import|specifier|parseable|unsupported syntax|forbidden/i.test(compiled.error);
     return {
       ok: false,
@@ -212,21 +276,25 @@ function compilePhase(source: string): { ok: boolean; code: string; map: SourceM
       map: null,
       errors: [{
         phase: auditLike ? "audit" : "compile",
-        message: withFrame(compiled.error, source, compiled.pos),
-        line: compiled.pos?.line,
-        column: compiled.pos?.column,
+        message: withFrame(compiled.error, frameSource, pos),
+        line: pos?.line,
+        column: pos?.column,
       }],
     };
   }
   // Capabilities the boundary stripped are lint findings too (with the
   // ORIGINAL line they sit on): the widget saved WITHOUT them, and the
   // model needs to know why its code behaves differently.
-  const errors: WidgetLintError[] = compiled.findings.map((f) => ({
-    phase: "audit" as const,
-    line: f.line,
-    column: f.column,
-    message: withFrame(`${f.reason} — removed from the module (the widget runs without it)`, source, f.line ? { line: f.line, column: f.column ?? 0 } : undefined),
-  }));
+  const errors: WidgetLintError[] = compiled.findings.map((f) => {
+    const pos = f.line ? { line: f.line, column: f.column ?? 0 } : undefined;
+    const mapped = pos && remap ? remap(pos) : pos;
+    return {
+      phase: "audit" as const,
+      line: mapped?.line,
+      column: mapped?.column,
+      message: withFrame(`${f.reason} — removed from the module (the widget runs without it)`, frameSource, mapped),
+    };
+  });
   return { ok: true, code: compiled.code, map: compiled.map, errors };
 }
 
@@ -273,18 +341,20 @@ async function runWidgetLintInner(req: WidgetLintRequest): Promise<WidgetLintRes
 
   let testModule: string | null = null;
   let testMap: SourceMapIndex | null = null;
+  let testRemap: ((pos: SourcePosition) => SourcePosition) | undefined;
   const testSource = req.test ?? "";
   if (req.test && req.test.trim()) {
     // The test imports the widget module with the "widget" specifier —
     // route it through an allowed placeholder for the audit, then back to
-    // the colocated ./widget.js the lint page maps.
+    // the colocated ./widget.js the lint page maps. Compilation still
+    // reports positions and frames in the MODEL's test source.
     const placeholder = "https://esm.sh/__widget__";
-    const widgetSpec = /(from\s*|\bimport\s*(?:\(\s*)?)(["'])(\.\/)?widget(\.tsx)?\2/g;
-    const src = req.test.replace(widgetSpec, (_m, pre: string, q: string) => `${pre}${q}${placeholder}${q}`);
-    if (!src.includes(placeholder)) {
+    const rewritten = rewriteWidgetSpecifier(req.test, placeholder);
+    if (!rewritten.src.includes(placeholder)) {
       errors.push({ phase: "test", message: `test code must import the widget module ("widget" or "./widget") to exercise its exports` });
     } else {
-      const compiledTest = compilePhase(src);
+      testRemap = rewritten.toOriginal;
+      const compiledTest = compilePhase(rewritten.src, req.test, rewritten.toOriginal);
       if (!compiledTest.ok) {
         // The test-code boundary failure keeps the historical "audit"
         // phase label (the boundary = transform + audit).
@@ -306,6 +376,7 @@ async function runWidgetLintInner(req: WidgetLintRequest): Promise<WidgetLintRes
     timeoutS: testModule ? Math.min(LINT_TIMEOUT_S, TEST_TIMEOUT_S + 5) : LINT_TIMEOUT_S,
     widgetMap: compiled.map,
     testMap: testMap,
+    testRemap,
     widgetSource: req.source,
     testSource: testSource,
   });
@@ -339,6 +410,8 @@ type ObscuraRun = {
   /** Original-source mapping + text for code frames (widget / test). */
   widgetMap: SourceMapIndex | null;
   testMap: SourceMapIndex | null;
+  /** Rewritten-test → model-test positions (widget placeholder subst.). */
+  testRemap?: (pos: SourcePosition) => SourcePosition;
   widgetSource: string;
   testSource: string;
 };
@@ -420,7 +493,7 @@ function finalizePageError(e: PageError, run: ObscuraRun): WidgetLintError {
   let pos: SourcePosition | undefined;
   if (e.line && map) {
     const orig = map.originalPositionFor(e.line, typeof e.column === "number" && e.column > 0 ? e.column - 1 : 0);
-    if (orig) pos = orig;
+    if (orig) pos = isTest && run.testRemap ? run.testRemap(orig) : orig;
     else pos = { line: e.line, column: 0 };
   } else if (e.line) {
     pos = { line: e.line, column: 0 };
@@ -512,6 +585,14 @@ async function runInObscura(run: ObscuraRun): Promise<{ errors: WidgetLintError[
     let last: Awaited<ReturnType<typeof obscuraOnce>> | null = null;
     while (Date.now() < deadline) {
       last = await obscuraOnce(binary, dir, Math.max(2, Math.ceil((deadline - Date.now()) / 1000)));
+      // A binary that cannot even spawn never produces a page result: report
+      // the loader diagnostic immediately instead of retrying to the deadline.
+      if (last.stderr.startsWith("lint browser cannot start")) {
+        return {
+          errors: [{ phase: "render", message: last.stderr.trim().slice(0, 2000) }],
+          webgl: null,
+        };
+      }
       if (last.parsed && last.parsed.done) {
         return {
           errors: dedupeErrors((last.parsed.errors || []).map((e) => finalizePageError(e, run))),

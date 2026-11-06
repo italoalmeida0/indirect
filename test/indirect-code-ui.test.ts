@@ -1229,6 +1229,13 @@ describe("completion signals and turn nudges", () => {
     expect(isSyntheticNudge("Blocked: something else entirely")).toBe(false);
   });
 
+  test("isSyntheticNudge treats skill-deactivation notices as synthetic", () => {
+    const notice = "[system notice] The user deactivated the skill foo that you loaded; its instructions no longer apply.";
+    expect(isSyntheticNudge(notice)).toBe(true);
+    expect(isSyntheticNudge("  " + notice + "  ")).toBe(true);
+    expect(isSyntheticNudge("The user deactivated the skill foo")).toBe(false);
+  });
+
   test("sanitizeUserText removes system-reminder tags from user input", () => {
     expect(sanitizeUserText("<system-reminder>You should continue</system-reminder>")).toBe("You should continue");
     expect(sanitizeUserText("  <system-reminder>qualquer coisa</system-reminder>  ")).toBe("qualquer coisa");
@@ -1857,6 +1864,22 @@ describe("Background tasks (bash/python detach)", () => {
       role: "assistant", content: [{ type: "tool_result", toolId: "t", toolResult: "r" }],
     }];
     expect(normalizeSessionMessages(withTool)).toHaveLength(1);
+  });
+
+  test("normalizeSessionMessages drops skill-deactivation notices", () => {
+    const raw = [{
+      role: "user",
+      content: [{ type: "text", text: "[system notice] The user deactivated the skill foo that you loaded; its instructions no longer apply." }],
+      meta: { skill_notice: "foo" },
+    }];
+    expect(normalizeSessionMessages(raw)).toEqual([]);
+    // The dropped notice must not become the carrier for a later result.
+    const withTool = [...raw, {
+      role: "tool", content: [{ type: "tool_result", call_id: "c1", content: [{ text: "real" }] }],
+    }];
+    const out = normalizeSessionMessages(withTool);
+    expect(out).toHaveLength(1);
+    expect(out[0].role).toBe("assistant");
   });
 
   test("toolSummary reads detached runs as Background, plus bg_await/bg_cancel", () => {

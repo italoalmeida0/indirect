@@ -87,6 +87,116 @@ describe("compactToolIds (strict 64-char tool id cap)", () => {
     expect(out.input[1].call_id).toBe("tc1");
     expect(out.input[2].call_id).toBe("tc2");
   });
+
+  const record = (v: unknown): Record<string, unknown> => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("expected an object");
+    return v as Record<string, unknown>;
+  };
+  const list = (v: unknown): unknown[] => {
+    if (!Array.isArray(v)) throw new Error("expected an array");
+    return v;
+  };
+
+  test("Infinity disables compaction entirely (same reference)", () => {
+    const body = {
+      model: "m",
+      messages: [
+        { role: "assistant", content: null, tool_calls: [{ id: LONG, type: "function", function: { name: "t", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: LONG, content: "ok" },
+      ],
+    };
+    expect(compactToolIds(body, Infinity)).toBe(body);
+    const profile: TargetProfile = { ...DEFAULT_PROFILE, maxToolIdLength: Infinity, dropBlockTypes: [] };
+    expect(normalizeForTarget(body, profile)).toBe(body);
+  });
+
+  test("a custom cap below 64 compacts ids the 64-rule would keep", () => {
+    const medium = `call_${"a".repeat(35)}`; // 40 chars: fine for 64, too long for 32
+    const profile: TargetProfile = { ...DEFAULT_PROFILE, maxToolIdLength: 32, dropBlockTypes: [] };
+    const out = normalizeForTarget({
+      model: "m",
+      messages: [
+        { role: "assistant", content: null, tool_calls: [{ id: medium, type: "function", function: { name: "t", arguments: "{}" } }] },
+        { role: "tool", tool_call_id: medium, content: "ok" },
+      ],
+    }, profile);
+    const msgs = list(out.messages);
+    expect(record(list(record(msgs[0]).tool_calls)[0]).id).toBe("tc1");
+    expect(record(msgs[1]).tool_call_id).toBe("tc1");
+  });
+
+  test("a custom cap above 64 keeps ids the default rule would compact", () => {
+    const medium = `call_${"b".repeat(75)}`; // 80 chars: too long for 64, fine for 128
+    const body = {
+      model: "m",
+      messages: [
+        { role: "assistant", content: null, tool_calls: [{ id: medium, type: "function", function: { name: "t", arguments: "{}" } }] },
+      ],
+    };
+    expect(compactToolIds(body, 128)).toBe(body);
+    const profile: TargetProfile = { ...DEFAULT_PROFILE, maxToolIdLength: 128, dropBlockTypes: [] };
+    expect(normalizeForTarget(body, profile)).toBe(body);
+    const msgs = list(compactToolIds(body).messages);
+    expect(record(list(record(msgs[0]).tool_calls)[0]).id).toBe("tc1");
+  });
+
+  test("compaction never mutates the caller's nested objects (failover-safe)", () => {
+    const fn = { name: "t", arguments: "{}" };
+    const call = { id: LONG, type: "function", function: fn };
+    const calls = [call];
+    const assistant = { role: "assistant", content: null, tool_calls: calls };
+    const toolMsg = { role: "tool", tool_call_id: LONG, content: "ok" };
+    const messages = [assistant, toolMsg];
+    const body = { model: "m", messages };
+
+    const out = compactToolIds(body);
+    const outMessages = list(out.messages);
+    const outAssistant = record(outMessages[0]);
+    const outCalls = list(outAssistant.tool_calls);
+    const outCall = record(outCalls[0]);
+    expect(outCall.id).toBe("tc1");
+    expect(record(outMessages[1]).tool_call_id).toBe("tc1");
+    // The input graph is untouched, all the way down.
+    expect(body.messages).toBe(messages);
+    expect(assistant.tool_calls).toBe(calls);
+    expect(call.id).toBe(LONG);
+    expect(toolMsg.tool_call_id).toBe(LONG);
+    // Only the changed containers were cloned; untouched values share refs.
+    expect(out).not.toBe(body);
+    expect(out.messages).not.toBe(messages);
+    expect(outMessages[0]).not.toBe(assistant);
+    expect(outMessages[1]).not.toBe(toolMsg);
+    expect(outAssistant.tool_calls).not.toBe(calls);
+    expect(outCalls[0]).not.toBe(call);
+    expect(outCall.function).toBe(fn);
+    // A second attempt normalizes the same pristine body consistently.
+    const again = list(compactToolIds(body).messages);
+    expect(record(list(record(again[0]).tool_calls)[0]).id).toBe("tc1");
+    expect(record(again[1]).tool_call_id).toBe("tc1");
+  });
+
+  test("anthropic blocks and responses input items stay immutable too", () => {
+    const useId = `toolu_${"x".repeat(100)}`;
+    const inputId = `call_${"y".repeat(100)}`;
+    const use = { type: "tool_use", id: useId, name: "t", input: { a: 1 } };
+    const result = { type: "tool_result", tool_use_id: useId, content: "ok" };
+    const assistant = { role: "assistant", content: [use] };
+    const user = { role: "user", content: [result] };
+    const item = { type: "function_call", call_id: inputId, name: "t", arguments: "{}" };
+    const body = { model: "m", messages: [assistant, user], input: [item] };
+
+    const out = compactToolIds(body);
+    const outMessages = list(out.messages);
+    const outUse = record(list(record(outMessages[0]).content)[0]);
+    const outResult = record(list(record(outMessages[1]).content)[0]);
+    expect(outUse.id).toBe("tc1");
+    expect(outResult.tool_use_id).toBe("tc1");
+    expect(record(list(out.input)[0]).call_id).toBe("tc2");
+    expect(use.id).toBe(useId);
+    expect(result.tool_use_id).toBe(useId);
+    expect(item.call_id).toBe(inputId);
+    expect(outUse.input).toBe(use.input);
+  });
 });
 
 
