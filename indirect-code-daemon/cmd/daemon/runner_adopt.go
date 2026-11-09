@@ -67,6 +67,11 @@ func (b *bgSupervisor) adoptRunners() {
 	for _, st := range states {
 		switch {
 		case st.Terminal():
+			rec := b.loadRecordForAdoption(st.SessionID)
+			if rec != nil && sessionHasBackgroundDelivery(rec, st.JobID) {
+				b.cleanupRunnerIdentity(st.JobID)
+				continue
+			}
 			// Restore the session tail/status before acknowledging the notice.
 			// The out log also repairs a copy interrupted by a crash.
 			if err := repairTerminalCopy(root, st); err != nil {
@@ -80,14 +85,34 @@ func (b *bgSupervisor) adoptRunners() {
 			switch runner.ReadDisposition(root, st.JobID) {
 			case runner.DispBackground:
 				b.retainNotice(st.JobID, st.SessionID, runnerNoticeText(st), true)
+			case runner.DispCancelled:
+				b.retainNotice(st.JobID, st.SessionID, runnerCancelNoticeText(st), false)
 			default:
 				// inline / suppressed / absent: silent.
 			}
 		case pidAlive(pidString(st.PID)) && !processutil.Matches(st.PID, st.ProcessIdentity):
 			trace("runner.identity.unverified", map[string]any{"job": st.JobID})
+			reapStoredCommand(st)
 			b.cleanupRunnerIdentity(st.JobID)
 			continue
 		case processutil.Matches(st.PID, st.ProcessIdentity):
+			disp := runner.ReadDisposition(root, st.JobID)
+			if disp == runner.DispCancelled || disp == runner.DispSuppressed {
+				stopRunner(root, st.JobID, st.PID, st.ProcessIdentity)
+				reapStoredCommand(st)
+				code := -1
+				end := now
+				st.Status, st.ExitCode, st.EndedAt = runner.StatusKilled, &code, &end
+				_ = runner.WriteState(root, st)
+				rec := b.loadRecordForAdoption(st.SessionID)
+				b.sessionInbox(st.SessionID, bgTaskRecoverMsg{JobID: st.JobID})
+				if disp == runner.DispCancelled && (rec == nil || !sessionHasBackgroundDelivery(rec, st.JobID)) {
+					b.retainNotice(st.JobID, st.SessionID, runnerCancelNoticeText(st), false)
+				} else {
+					b.cleanupRunnerIdentity(st.JobID)
+				}
+				continue
+			}
 			if b.orphaned(st, now) {
 				// F5b: the session has moved past this job (or is gone):
 				// blunt and clean — kill the group and clean the state.
@@ -135,13 +160,21 @@ func (b *bgSupervisor) adoptRunners() {
 			if err := runner.WriteState(root, st); err != nil {
 				continue
 			}
+			rec := b.loadRecordForAdoption(st.SessionID)
+			if rec != nil && sessionHasBackgroundDelivery(rec, st.JobID) {
+				b.cleanupRunnerIdentity(st.JobID)
+				continue
+			}
 			b.sessionInbox(st.SessionID, bgTaskRecoverMsg{JobID: st.JobID})
 			// V2R-001: a dead runner still honours the disposition — a
 			// suppressed (assistant) cancel or an inline foreground return
 			// must NOT become a wake-up just because the runner died before
 			// writing its terminal state (the cancel race).
-			if runner.ReadDisposition(root, st.JobID) == runner.DispBackground {
+			switch runner.ReadDisposition(root, st.JobID) {
+			case runner.DispBackground:
 				b.retainNotice(st.JobID, st.SessionID, runnerNoticeText(st), true)
+			case runner.DispCancelled:
+				b.retainNotice(st.JobID, st.SessionID, runnerCancelNoticeText(st), false)
 			}
 		}
 	}
@@ -154,16 +187,20 @@ func (b *bgSupervisor) adoptOne(st *runner.State) {
 	if _, exists := b.jobs[st.JobID]; exists {
 		return
 	}
+	fp := st.Fingerprint
+	if fp == "" && !st.NoDedupe {
+		fp = bgFingerprint(st.Kind, st.Label)
+	}
 	j := &bgJob{
 		ID: st.JobID, Kind: st.Kind, SessionID: st.SessionID,
-		Label: truncateBgLabel(st.Label), Fingerprint: bgFingerprint(st.Kind, st.Label),
+		Label: truncateBgLabel(st.Label), Fingerprint: fp, NoDedupe: st.NoDedupe,
 		PID: st.PID, Identity: st.ProcessIdentity,
 		Runner:    true,
 		Status:    BgStatusRunning,
 		StartedAt: st.StartedAt,
 		LogPath:   st.LogPath, BrainLog: st.BrainPath, StderrPath: "",
 		done: make(chan struct{}),
-		stop: func() { stopRunner(b.rootDir(), st.JobID, st.PID) },
+		stop: func() { go stopRunner(b.rootDir(), st.JobID, st.PID) },
 	}
 	if b.jobs == nil {
 		b.jobs = map[string]*bgJob{}
@@ -308,6 +345,11 @@ func (b *bgSupervisor) watchAdopted(jobID string, st *runner.State) {
 			if err := repairTerminalCopy(b.rootDir(), cur); err != nil {
 				trace("runner.copy.repair_failed", map[string]any{"job": cur.JobID, "error": err.Error()})
 			}
+			disp := runner.ReadDisposition(b.rootDir(), jobID)
+			if disp == runner.DispCancelled || disp == runner.DispSuppressed {
+				b.finishAdopted(jobID, BgStatusCancelled, runnerCancelNoticeText(cur))
+				return
+			}
 			status := BgStatusDone
 			if cur.Status != runner.StatusDone || (cur.ExitCode != nil && *cur.ExitCode != 0) {
 				status = BgStatusError
@@ -327,6 +369,11 @@ func (b *bgSupervisor) watchAdopted(jobID string, st *runner.State) {
 				cur.Status, cur.ExitCode, cur.EndedAt = runner.StatusKilled, &code, &end
 				cur.OutcomeUnknown = true
 				_ = runner.WriteState(b.rootDir(), cur)
+				disp := runner.ReadDisposition(b.rootDir(), jobID)
+				if disp == runner.DispCancelled || disp == runner.DispSuppressed {
+					b.finishAdopted(jobID, BgStatusCancelled, runnerCancelNoticeText(cur))
+					return
+				}
 				b.finishAdopted(jobID, BgStatusError, runnerNoticeText(cur))
 				return
 			}
@@ -343,6 +390,11 @@ func (b *bgSupervisor) watchAdopted(jobID string, st *runner.State) {
 			cur.OutcomeUnknown = true
 			if err := runner.WriteState(b.rootDir(), cur); err != nil {
 				continue
+			}
+			disp := runner.ReadDisposition(b.rootDir(), jobID)
+			if disp == runner.DispCancelled || disp == runner.DispSuppressed {
+				b.finishAdopted(jobID, BgStatusCancelled, runnerCancelNoticeText(cur))
+				return
 			}
 			b.finishAdopted(jobID, BgStatusError, runnerNoticeText(cur))
 			return
@@ -395,6 +447,20 @@ func (b *bgSupervisor) orphaned(st *runner.State, now int64) bool {
 	return now-st.StartedAt > orphanAfterMs
 }
 
+// sessionHasBackgroundDelivery reports whether the transcript already folded
+// the terminal notice for jobID.
+func sessionHasBackgroundDelivery(rec *SessionRecord, jobID string) bool {
+	if rec == nil || jobID == "" {
+		return false
+	}
+	for _, m := range rec.Messages {
+		if m.Meta["background_delivery"] == jobID {
+			return true
+		}
+	}
+	return false
+}
+
 // sessionKnowsJob reports whether the transcript links this job
 // (placeholder text or delivered notice carries the id).
 func sessionKnowsJob(rec *SessionRecord, jobID string) bool {
@@ -444,6 +510,14 @@ func runnerNoticeText(st *runner.State) string {
 	return fmt.Sprintf("[Background %s task %s] %s. Read the output with bg_check (job_id %s).", st.Kind, st.JobID, status, st.JobID)
 }
 
+func runnerCancelNoticeText(st *runner.State) string {
+	label := st.Label
+	if label == "" {
+		label = st.Kind
+	}
+	return fmt.Sprintf("Background task %s cancelled by user.", truncateBgLabel(label))
+}
+
 // gcRunners retires acknowledged runner identities and unused binaries.
 // Full output logs and brain copies are retained; runners/out is GC-exempt.
 func (b *bgSupervisor) gcRunners(now int64) {
@@ -468,10 +542,6 @@ func (b *bgSupervisor) gcRunners(now int64) {
 		// A live job's files are owned by onFinish/onCancel, never by GC.
 		if _, ok := b.jobs[st.JobID]; !ok {
 			if _, pending := b.notices[st.JobID]; pending {
-				aliveVersions[st.RunnerVersion] = true
-				continue
-			}
-			if runner.ReadDisposition(root, st.JobID) == runner.DispBackground {
 				aliveVersions[st.RunnerVersion] = true
 				continue
 			}

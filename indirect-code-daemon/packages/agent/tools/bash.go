@@ -87,10 +87,11 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			env = append(env, "USER="+u.Username)
 		}
 	}
+	label := ClipLabel(a.Command)
 	proc, err := startWith(runCtx, t.Starter, ExecSpec{
 		JobID:       core.ExecutionID(ctx),
 		Kind:        "bash",
-		Command:     a.Command,
+		Command:     label,
 		Argv:        []string{sh.path, sh.flag, a.Command},
 		CWD:         cwd,
 		Env:         env,
@@ -223,6 +224,16 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		<-done
 		return finishSync(waitErr)
 	case <-time.After(AutoBackgroundAfter):
+		select {
+		case waitErr := <-waitCh:
+			<-done
+			return finishSync(waitErr)
+		case <-ctx.Done():
+			waitErr := <-waitCh
+			<-done
+			return finishSync(waitErr)
+		default:
+		}
 	}
 	if t.Slow == nil {
 		// No background host (tests, offline use): keep blocking.
@@ -246,7 +257,9 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			return core.ToolResult{}, fmt.Errorf("could not persist background disposition; process stopped, inspect it with bg_check (job_id %q): %w", proc.JobID, err)
 		}
 	}
-	// From here the job owns the process lifetime.
+	// From here the job owns the process lifetime. Pass the full unclipped
+	// command so the duplicate-guard fingerprint hashes the entire command;
+	// the supervisor and session actor clip the stored/display label.
 	jobID, fullLog, stream, deliver := t.Slow("bash", a.Command, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, StartedAt: start.UnixMilli(), Stop: func() {
 		runCancel()
 		proc.Stop()
@@ -256,7 +269,10 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		proc.Stop()
 		<-waitCh
 		<-done
-		proc.Cleanup(false)
+		if proc.Disposition != nil && proc.JobID != "" {
+			_ = proc.Disposition(proc.JobID, DispInline)
+		}
+		proc.Cleanup(true)
 		return core.ToolResult{}, fmt.Errorf("could not register background job; process stopped (job_id %q)", proc.JobID)
 	}
 	// Handoff under the pump's mutex: flush the pre-detach buffer FIRST

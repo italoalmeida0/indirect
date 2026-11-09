@@ -227,3 +227,81 @@ func mustJSONRaw(t *testing.T, v any) []byte {
 	t.Helper()
 	return mustJSON(t, v)
 }
+
+func TestSandboxReadOnlyBlocksGitFlagsAndNestedShell(t *testing.T) {
+	root := t.TempDir()
+	sb := NewSandbox(root)
+	sb.SetProjectReadOnly(true)
+
+	allowed := []string{
+		"git status --short",
+		"git -C . status",
+		"git --no-pager log -n 5",
+		"git -c color.ui=false diff",
+		"ls -la",
+		"cat README.md",
+	}
+	for _, cmd := range allowed {
+		if err := sb.CheckCommand(cmd); err != nil {
+			t.Fatalf("expected %q to be allowed in read-only mode, got: %v", cmd, err)
+		}
+	}
+
+	blocked := []string{
+		"git -C . commit -m pwned",
+		"git --git-dir=.git push origin main",
+		"git -c core.pager=touch_pwned log",
+		"git -c core.hooksPath=/tmp status",
+		"git -c alias.status=!rm status",
+		"sh -c \"rm -rf /\"",
+		"bash -c 'touch pwned'",
+		"sh script.sh",
+		"eval \"rm -f a.txt\"",
+		"env rm -f a.txt",
+		"command rm -f a.txt",
+		"nice -n 10 rm a.txt",
+		"echo $(rm a.txt)",
+		"echo `touch a.txt`",
+		"find . -name '*.tmp' -delete",
+		"find . -exec rm {} +",
+		"sed -i 's/a/b/' file.txt",
+		"cat file.txt > out.txt",
+		"cat file.txt >> out.txt",
+		"python -c \"open('x','w').write('1')\"",
+		"node -e \"require('fs').writeFileSync('x','1')\"",
+		"perl -e 'open(F,\">x\")'",
+		"ruby -e 'File.write(\"x\",\"1\")'",
+		"go build ./...",
+		"make all",
+		"npm install",
+		"exec_script ; rm -rf src",
+	}
+	for _, cmd := range blocked {
+		if err := sb.CheckCommand(cmd); err == nil {
+			t.Fatalf("expected %q to be blocked in read-only mode", cmd)
+		}
+	}
+
+	sb.Lock()
+	for _, lockedCmd := range []string{
+		"sh -c 'cat $HOME/.ssh/id_rsa'",
+		"bash -c \"cat ~/.ssh/id_rsa\"",
+		"echo $(cat $HOME/.ssh/id_rsa)",
+		"exec_script ; cd /etc",
+	} {
+		if err := sb.CheckCommand(lockedCmd); err == nil {
+			t.Fatalf("expected %q to be blocked in locked mode", lockedCmd)
+		}
+	}
+
+	perms := &PermissionSet{}
+	perms.Bash.Mode = "allowlist"
+	perms.Bash.Allow = []string{"exec_script", "node"}
+	sb.Permissions = perms
+	if err := sb.CheckExecScriptPermission(); err != nil {
+		t.Fatalf("expected CheckExecScriptPermission to pass, got: %v", err)
+	}
+	if err := sb.CheckBashPermission("exec_script ; rm -rf src"); err == nil {
+		t.Fatal("expected CheckBashPermission to reject 'exec_script ; rm -rf src'")
+	}
+}

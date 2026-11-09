@@ -14,7 +14,7 @@ import (
 func registryForTest() core.Registry {
 	return core.NewRegistry(
 		&tools.ReadTool{}, &tools.WriteTool{}, &tools.EditTool{},
-		&tools.BashTool{}, &tools.PythonTool{}, &tools.GlobTool{}, &tools.SearchTool{},
+		&tools.BashTool{}, &tools.ExecScriptTool{}, &tools.GlobTool{}, &tools.SearchTool{},
 		&tools.InspectTool{}, &tools.SearchWebTool{}, &tools.FetchURLTool{},
 		&tools.QuestionTool{}, &tools.TodoTool{}, &tools.SummaryTool{},
 		&tools.FinishEntireRequestTool{},
@@ -141,7 +141,7 @@ func TestSkillsRegistryModeCeiling(t *testing.T) {
 func TestModeRegistryExcludesForeignModeTools(t *testing.T) {
 	full := registryForTest()
 	talk := registryNames(modeRegistry(full, "talk"))
-	for _, banned := range []string{"read", "write", "edit", "patch", "bash", "python", "glob", "search", "inspect", "summary", "bg_await", "bg_check", "bg_cancel", "finish_entire_request"} {
+	for _, banned := range []string{"read", "write", "edit", "patch", "bash", "exec_script", "glob", "search", "inspect", "summary", "bg_await", "bg_check", "bg_cancel", "finish_entire_request"} {
 		if talk[banned] {
 			t.Errorf("talk must not advertise %q", banned)
 		}

@@ -22,3 +22,19 @@ func TestParseOutNameRoundTripsJobWithDunders(t *testing.T) {
 		t.Fatalf("multi-dunder round-trip: %q -> %q %q %d %v", name, sid, jid, ms, ok)
 	}
 }
+
+func TestSpecValidateRejectsEmptyExecScriptCode(t *testing.T) {
+	s := Spec{
+		JobID:     "j1",
+		SessionID: "s1",
+		Kind:      "exec_script",
+		Path:      "/bin/daemon",
+		Code:      "   ",
+		OutPath:   "/tmp/out.log",
+		BrainPath: "/tmp/brain.log",
+		Root:      "/tmp",
+	}
+	if err := s.Validate(); err == nil {
+		t.Fatal("expected Validate() to reject exec_script spec with empty code even when Path is set")
+	}
+}

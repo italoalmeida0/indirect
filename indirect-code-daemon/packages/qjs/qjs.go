@@ -30,6 +30,7 @@ import (
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 #include "shim.h"
 */
 import "C"
@@ -71,12 +72,11 @@ type entry struct {
 	resolve  ResolveModule
 	deadline time.Time
 	timedOut bool
-	// edges is the import graph as recorded at normalization time, loaded
-	// names the modules already linked, and calls counts every loader call so
-	// a pathological graph is bounded by work rather than by names.
-	edges  map[string][]string
-	loaded map[string]bool
-	calls  int
+	// edges is the import graph as recorded at normalization time, and calls
+	// counts every loader call so a pathological graph is bounded by work
+	// rather than by names.
+	edges map[string][]string
+	calls int
 }
 
 func (e *entry) markTimeout() {
@@ -175,22 +175,30 @@ func EvalModule(req Module) (snapshot string, err error) {
 		resolve:  req.Resolve,
 		deadline: time.Now().Add(timeout),
 		edges:    map[string][]string{},
-		loaded:   map[string]bool{},
 	}
 	handle := register(en)
 	defer unregister(handle)
 
 	cname := C.CString(req.Name)
 	defer C.free(unsafe.Pointer(cname))
-	csrc := C.CString(string(req.Source))
+	csrc := (*C.char)(C.malloc(C.size_t(len(req.Source) + 1)))
+	if csrc == nil {
+		return "", fmt.Errorf("%s: out of memory", req.Name)
+	}
 	defer C.free(unsafe.Pointer(csrc))
+	C.memcpy(unsafe.Pointer(csrc), unsafe.Pointer(&req.Source[0]), C.size_t(len(req.Source)))
+	*(*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(csrc)) + uintptr(len(req.Source)))) = 0
 	cprelude := C.CString(preludeSource)
 	defer C.free(unsafe.Pointer(cprelude))
 
 	var cerr *C.char
 	run := C.qjs_new(C.uintptr_t(handle), cprelude, &cerr)
 	if run == nil {
-		return "", fmt.Errorf("%s: %s", req.Name, takeCString(&cerr, "could not create the skill sandbox"))
+		msg := takeCString(&cerr, "could not create the skill sandbox")
+		if en.timedOut {
+			return "", fmt.Errorf("%s: %w (%s)", req.Name, ErrTimeout, timeout)
+		}
+		return "", fmt.Errorf("%s: %s", req.Name, msg)
 	}
 	defer C.qjs_free_run(run)
 

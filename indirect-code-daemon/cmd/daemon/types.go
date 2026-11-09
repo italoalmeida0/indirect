@@ -187,7 +187,7 @@ type SessionRecord struct {
 	// (15 min per request). Persisted so a respawn recomputes the remainder
 	// instead of resetting the timer — a restart never bypasses the timeout.
 	ApprovalDeadlineUnix int64 `json:"approvalDeadlineUnix,omitempty"`
-	// BgTasks holds the session-global background tasks (bash/python that
+	// BgTasks holds the session-global background tasks (bash/exec_script that
 	// outlived the 10s foreground window). Logs live HERE, not in files:
 	// Content keeps the tail (RAM 100KB live, 50KB persisted at terminal),
 	// Total/Dropped counters let bg_check report stable line ranges even
@@ -203,7 +203,7 @@ type SessionRecord struct {
 // report stable ranges ("lines X–Y of N, Z dropped above").
 type BgTask struct {
 	ID           string `json:"id"`
-	Kind         string `json:"kind"` // "bash" | "python"
+	Kind         string `json:"kind"` // "bash" | "exec_script"
 	Label        string `json:"label"`
 	Status       string `json:"status"` // "running" | "done" | "error" | "cancelled"
 	StartedAt    int64  `json:"startedAt"`

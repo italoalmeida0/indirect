@@ -46,6 +46,7 @@ package skills
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	pathpkg "path"
@@ -198,6 +199,47 @@ func SourcesFS(fsys fs.FS, dir string) ([]Source, []error) {
 	return out, errs
 }
 
+const (
+	maxSkillFilesPerDir      = 256
+	maxTotalSkillSourceBytes = 16 << 20
+)
+
+func readSkillFileBounded(p string, maxBytes int64) ([]byte, error) {
+	linfo, err := os.Lstat(p)
+	if err != nil {
+		return nil, err
+	}
+	if !linfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("skill %s: must be a regular file (got %s)", filepath.Base(p), linfo.Mode().Type())
+	}
+	if linfo.Size() > maxBytes {
+		return nil, fmt.Errorf("skill %s: source too large (%d bytes, max %d)", filepath.Base(p), linfo.Size(), maxBytes)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	finfo, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !finfo.Mode().IsRegular() {
+		return nil, fmt.Errorf("skill %s: must be a regular file (got %s)", filepath.Base(p), finfo.Mode().Type())
+	}
+	if finfo.Size() > maxBytes {
+		return nil, fmt.Errorf("skill %s: source too large (%d bytes, max %d)", filepath.Base(p), finfo.Size(), maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("skill %s: source too large (%d bytes, max %d)", filepath.Base(p), len(data), maxBytes)
+	}
+	return data, nil
+}
+
 // readDirSources reads the top-level *.js files of an OS directory.
 // ok=false means "no store here": a missing dir (empty, no error) or an
 // unreadable one (the error rides errs).
@@ -217,13 +259,23 @@ func readDirSources(dir string) (roots []Source, errs []error, ok bool) {
 		names = append(names, e.Name())
 	}
 	sort.Strings(names)
+	if len(names) > maxSkillFilesPerDir {
+		errs = append(errs, fmt.Errorf("skills directory %s has too many .js files (%d, max %d)", dir, len(names), maxSkillFilesPerDir))
+		names = names[:maxSkillFilesPerDir]
+	}
 	roots = make([]Source, 0, len(names))
+	var totalBytes int64
 	for _, name := range names {
 		p := filepath.Join(dir, name)
-		data, err := os.ReadFile(p)
+		data, err := readSkillFileBounded(p, qjs.MaxSourceBytes)
 		if err != nil {
 			errs = append(errs, err)
 			continue
+		}
+		totalBytes += int64(len(data))
+		if totalBytes > maxTotalSkillSourceBytes {
+			errs = append(errs, fmt.Errorf("skill %s: skills directory exceeds total source budget (%d bytes)", name, maxTotalSkillSourceBytes))
+			break
 		}
 		roots = append(roots, Source{Path: p, Data: data})
 	}
@@ -436,6 +488,11 @@ func decodePermissions(v any, file string) (map[string]PermSpec, error) {
 			return nil, err
 		}
 		out[tool] = spec
+		if tool == "python" {
+			if _, hasExec := raw["exec_script"]; !hasExec {
+				out["exec_script"] = spec
+			}
+		}
 	}
 	return out, nil
 }

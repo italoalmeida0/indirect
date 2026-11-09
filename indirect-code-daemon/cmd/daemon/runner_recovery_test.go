@@ -111,7 +111,7 @@ func TestRecoveryCancelPersistenceFailureKeepsJobRunning(t *testing.T) {
 	if err := os.WriteFile(runner.RunnersDir(root), []byte("blocked"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if b.onCancel("job", "assistant") || stopped || b.jobs["job"].Status != BgStatusRunning {
+	if b.onCancel("job", "assistant") == true || stopped || b.jobs["job"].Status != BgStatusRunning {
 		t.Fatal("cancel proceeded without durably recording suppression")
 	}
 }

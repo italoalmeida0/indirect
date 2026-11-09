@@ -271,7 +271,7 @@ host revokes that access; the host's files stay on the host.
 - **Sessions and projects** — multiple hosts, projects and conversations,
   session search, pinned sessions, rename/delete, attachments and previews,
   fork, undo, edit-and-resend and a message queue while a turn is running.
-- **Agent tools** — file read/write/edit, glob and search, `bash`, `python`,
+- **Agent tools** — file read/write/edit, glob and search, `bash`, `exec_script`,
   URL fetch, web search, todo lists, questions back to the user and background
   jobs. Tool calls can require approval (safe mode) or run auto-approved; an
   optional jail confines filesystem tools to the session directory.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"indirect/indirect-code-daemon/internal/durable"
@@ -115,8 +116,13 @@ func (t *recordedTool) Execute(ctx context.Context, args json.RawMessage, progre
 			return receiptResult(&rec)
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	scopeDir := filepath.Dir(path)
+	_, scopeStatErr := os.Stat(scopeDir)
+	if err := os.MkdirAll(scopeDir, 0o700); err != nil {
 		return core.ToolResult{}, err
+	}
+	if os.IsNotExist(scopeStatErr) {
+		pruneOldExecutionScopes(t.root, t.sid, t.scope)
 	}
 	rec := executionReceipt{Version: 1, ID: id, Fingerprint: fingerprint, Phase: "prepared"}
 	raw, _ := json.Marshal(rec)
@@ -138,7 +144,7 @@ func (t *recordedTool) Execute(ctx context.Context, args json.RawMessage, progre
 		return core.ToolResult{}, err
 	} // retain uncertain claim
 	result, runErr := t.Tool.Execute(core.WithExecutionID(ctx, id), args, progress)
-	if t.Name() == "bash" || t.Name() == "python" {
+	if t.Name() == "bash" || t.Name() == "exec_script" {
 		// A wrapper exit (including persistence failure) is not proof that
 		// the user's command failed before producing an external effect.
 		if _, claimErr := os.Stat(filepath.Join(runner.RunnersDir(t.root), id+".launch")); claimErr == nil {
@@ -213,4 +219,54 @@ func (t *recordedTool) resolve(rec *executionReceipt, path string) (core.ToolRes
 		return core.ToolResult{}, unknownExecution(rec.ID)
 	}
 	return result, nil
+}
+
+func pruneOldExecutionScopes(root, sid, currentScope string) {
+	const maxRetainedScopes = 16
+	sidDir := filepath.Join(root, "executions", sid)
+	entries, err := os.ReadDir(sidDir)
+	if err != nil || len(entries) <= maxRetainedScopes {
+		return
+	}
+	type scopeDir struct {
+		name  string
+		mtime int64
+	}
+	var cands []scopeDir
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == currentScope {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		dirPath := filepath.Join(sidDir, e.Name())
+		files, err := os.ReadDir(dirPath)
+		if err != nil {
+			continue
+		}
+		allCompleted := true
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join(dirPath, f.Name()))
+			var rec executionReceipt
+			if err != nil || json.Unmarshal(raw, &rec) != nil || rec.Phase != "completed" {
+				allCompleted = false
+				break
+			}
+		}
+		if allCompleted {
+			cands = append(cands, scopeDir{name: e.Name(), mtime: info.ModTime().UnixNano()})
+		}
+	}
+	if len(cands) <= maxRetainedScopes {
+		return
+	}
+	sort.Slice(cands, func(i, j int) bool { return cands[i].mtime < cands[j].mtime })
+	for i := 0; i < len(cands)-maxRetainedScopes; i++ {
+		_ = os.RemoveAll(filepath.Join(sidDir, cands[i].name))
+	}
 }

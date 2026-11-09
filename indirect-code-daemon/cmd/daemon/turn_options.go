@@ -231,7 +231,7 @@ func completionArgName(mode string) string {
 // auto-activates a tool — grants do.
 var modeExclusive = map[string][]string{
 	"agentic": {
-		"read", "write", "edit", "bash", "python", "glob", "search", "inspect",
+		"read", "write", "edit", "bash", "exec_script", "glob", "search", "inspect",
 		"summary", "bg_await", "bg_check", "bg_cancel", completionToolName,
 	},
 	"talk": {},
@@ -254,9 +254,7 @@ func modeAutoTools(mode string) []string {
 // (Registry.Get resolves it) and follows edit's ceiling.
 func modeAllows(mode, tool string) bool {
 	mode = canonicalSessionMode(mode)
-	if tool == "patch" {
-		tool = "edit"
-	}
+	tool = skillPolicyTool(tool)
 	for other, list := range modeExclusive {
 		if other == mode {
 			continue
@@ -320,10 +318,14 @@ func skillsRegistry(reg core.Registry, eff skills.Effective) core.Registry {
 // it), so it follows edit's grant instead of being denied as an unlisted
 // tool.
 func skillPolicyTool(tool string) string {
-	if tool == "patch" {
+	switch tool {
+	case "patch":
 		return "edit"
+	case "python":
+		return "exec_script"
+	default:
+		return tool
 	}
-	return tool
 }
 
 // skillsArgRestriction rejects a tool call carrying an argument key the

@@ -22,6 +22,7 @@
   var MAX_STRING_BYTES = 4 * 1024 * 1024;
 
   var OBJECT_PROTO = Object.prototype;
+  var ARRAY_PROTO = Array.prototype;
 
   /* Every intrinsic the snapshot boundary relies on is captured HERE, before
      any module code runs: a module may reassign Object.keys, JSON.stringify,
@@ -237,6 +238,9 @@
     }
     var text;
     if (isArray(value)) {
+      if (getPrototypeOf(value) !== ARRAY_PROTO) {
+        fail("holds a " + describe(value) + " value (plain data only)");
+      }
       var length = getOwnPropertyDescriptor(value, "length").value;
       text = "[";
       for (var i = 0; i < length; i++) {

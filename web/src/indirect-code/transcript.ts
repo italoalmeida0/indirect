@@ -2,16 +2,16 @@ import type { ChatMessage, ContentBlock, RenderBlock, ToolUnit, TurnBalloon, Tur
 import { formatDurationSecs } from "./utils/format";
 import { displayToolArgs, withoutContinueNudges, withoutTodoActivity } from "./live";
 
-/** bg_cancel/bg_check kind: python vs terminal. The daemon includes the
- * kind in the result header ("Background Task (python) — …"); fall back
+/** bg_cancel/bg_check kind: exec_script vs terminal. The daemon includes the
+ * kind in the result header ("Background Task (exec_script) — …"); fall back
  * to the job registry via toolDetails when present. */
-function bgTaskKind(args: any, res: string, env?: Record<string, string>): string {
+function bgTaskKind(args: any, res: string, env?: Record<string, string>): "bash" | "exec_script" | "python" {
   const k = String(env?.kind || "").toLowerCase();
-  if (k === "python" || k === "bash") return k;
-  const m = /Background Task \((bash|python)\)/.exec(res || "");
-  if (m) return m[1];
+  if (k === "exec_script" || k === "python" || k === "bash") return k;
+  const m = /Background Task \((bash|exec_script|python)\)/.exec(res || "");
+  if (m) return m[1] as "bash" | "exec_script" | "python";
   const ak = String((args as any)?.kind || "").toLowerCase();
-  if (ak === "python") return "python";
+  if (ak === "exec_script" || ak === "python") return ak;
   return "bash";
 }
 function bgCancelKind(args: any, res: string, env?: Record<string, string>): string {
@@ -521,10 +521,16 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       // Clean UI: never show the id. "Canceled <kind> Background Task".
       const env = (u.result?.toolDetails as any)?.env;
       const kind = bgCancelKind(args, res, env);
+      const isErr = Boolean(u.result && (u.result.isError || env?.error));
+      const notCancelled = Boolean(
+        u.result &&
+        ((u.result.toolDetails as any)?.cancelled === false ||
+          (env && (env.cancelled === false || env.cancelled === "false")))
+      );
       return {
-        icon: kind === "python" ? "mdi:language-python" : "lucide:terminal",
-        verb: u.result ? "Canceled" : "Canceling",
-        target: `${kind === "python" ? "Python" : "Terminal"} Background Task`,
+        icon: kind === "exec_script" ? "mdi:language-javascript" : kind === "python" ? "mdi:language-python" : "lucide:terminal",
+        verb: !u.result ? "Canceling" : isErr ? "Failed" : notCancelled ? "Checked" : "Canceled",
+        target: `${kind === "exec_script" || kind === "python" ? "Script" : "Terminal"} Background Task`,
       };
     }
     case "bg_check": {
@@ -533,7 +539,7 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       const kind = bgCheckKind(args, res, env);
       const range = bgCheckRange(res, env);
       return {
-        icon: kind === "python" ? "mdi:language-python" : "lucide:terminal",
+        icon: kind === "exec_script" ? "mdi:language-javascript" : kind === "python" ? "mdi:language-python" : "lucide:terminal",
         verb: "Read",
         target: range ? `Background Task#${range}` : "Background Task",
       };
@@ -594,27 +600,44 @@ export function toolSummary(u: ToolUnit): ToolSummary {
         target: host.length > 90 ? host.slice(0, 90) + "…" : host || "url",
       };
     }
+    case "exec_script":
     case "python": {
-      // Script mode shows the file; code mode shows the first meaningful line.
-      if (args.script) {
-        const a = Array.isArray(args.args) ? args.args : [];
-        const suffix = a.length > 0 ? ` ${a.map(String).join(" ")}` : "";
-        const target = `${baseNameOf(args.script) || args.script}${suffix}`;
-        return {
-          icon: "mdi:language-python",
-          verb: "Ran",
-          target: target.length > 90 ? target.slice(0, 90) + "…" : target,
-        };
-      }
-      const first = String(args.code || "")
-        .split("\n")
-        .map((l) => l.trim())
-        .find((l) => l && !l.startsWith("#"));
+      const codeStr = String(args.code || "");
+      const scriptStr = String(args.script || "");
+      const extractFirstCodeLine = (src: string): string => {
+        let i = 0;
+        const n = src.length;
+        while (i < n) {
+          while (i < n && (src[i] === " " || src[i] === "\t" || src[i] === "\r" || src[i] === "\n")) i++;
+          if (i >= n) break;
+          if ((src[i] === "/" && src[i + 1] === "/") || src[i] === "#") {
+            while (i < n && src[i] !== "\n") i++;
+            continue;
+          }
+          if (src[i] === "/" && src[i + 1] === "*") {
+            i += 2;
+            while (i < n && !(src[i] === "*" && src[i + 1] === "/")) i++;
+            if (i < n) i += 2;
+            continue;
+          }
+          let lineEnd = src.indexOf("\n", i);
+          if (lineEnd < 0) lineEnd = n;
+          return src.slice(i, lineEnd).trim();
+        }
+        return "";
+      };
+      const first = codeStr.trim()
+        ? extractFirstCodeLine(codeStr)
+        : scriptStr.trim()
+          ? [baseNameOf(scriptStr) || scriptStr, ...(Array.isArray(args.args) ? args.args.map(String) : [])].join(" ")
+          : "";
       const one = (first || "snippet").replace(/\s+/g, " ").trim();
       const bg = (u.result?.toolDetails as any)?.background_job_id;
       const verb = typeof bg === "string" && bg ? "Background" : "Ran";
+      const legacyLang = typeof args.legacy_lang === "string" ? args.legacy_lang.trim().toLowerCase() : "";
+      const isLegacyPython = name === "python" || legacyLang === "python" || legacyLang === "python3" || (!codeStr.trim() && Boolean(scriptStr.trim()));
       return {
-        icon: "mdi:language-python",
+        icon: isLegacyPython ? "mdi:language-python" : "mdi:language-javascript",
         verb,
         target: one.length > 90 ? one.slice(0, 90) + "…" : one,
       };

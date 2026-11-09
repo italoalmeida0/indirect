@@ -75,7 +75,7 @@ func (a *sessionActor) restoreRunnerTask(jobID string) (int64, error) {
 		return previous.TotalBytes, fmt.Errorf("runner owner mismatch")
 	}
 	disp := runner.ReadDisposition(root, jobID)
-	if disp != runner.DispBackground && disp != runner.DispSuppressed {
+	if disp != runner.DispBackground && disp != runner.DispSuppressed && disp != runner.DispCancelled {
 		return previous.TotalBytes, nil
 	}
 	task := previous
@@ -91,7 +91,7 @@ func (a *sessionActor) restoreRunnerTask(jobID string) (int64, error) {
 		if st.Status != runner.StatusDone || task.ExitCode != 0 {
 			task.Status = BgStatusError
 		}
-		if disp == runner.DispSuppressed || previous.Status == BgStatusCancelled {
+		if disp == runner.DispSuppressed || disp == runner.DispCancelled || previous.Status == BgStatusCancelled {
 			task.Status = BgStatusCancelled
 		}
 		task.EndedAt = NowIfZero(st)

@@ -111,7 +111,7 @@ frontend + daemon. Run checks from the appropriate project root.
 ## Runner and background tasks
 
 - Protocol details: `docs/runner-protocol.md`, `docs/runner-plan.md`.
-  Every bash/python command runs in a self-copied `--runner`, starting immediately.
+  Every bash/exec_script command runs in a self-copied `--runner`, starting immediately.
   It appends to `runners/out/<sessionId>__<jobId>__<startedAt>.log` (filename is
   identity, GC-exempt) and COPIES the log to `brain/` at terminal transitions.
   `runners/<job>.state.json` is the recovery contract; loopback IPC is only an

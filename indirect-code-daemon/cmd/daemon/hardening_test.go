@@ -31,9 +31,9 @@ func TestBackgroundCrashHelper(t *testing.T) {
 	tools.AutoBackgroundAfter = 20 * time.Millisecond
 	logDir := filepath.Join(dir, "brain")
 	var err error
-	if os.Getenv("HARDENING_CRASH_KIND") == "python" {
-		tool := &tools.PythonTool{CWD: dir, Sandbox: tools.NewSandbox(dir), Slow: w.slowHook(), LogDir: logDir}
-		_, err = tool.Execute(context.Background(), json.RawMessage(`{"code":"import time,sys\nfor i in range(300):\n print('alive', flush=True)\n print('stderr-alive', file=sys.stderr, flush=True)\n time.sleep(.1)"}`), nil)
+	if os.Getenv("HARDENING_CRASH_KIND") == "exec_script" {
+		tool := &tools.ExecScriptTool{CWD: dir, Sandbox: tools.NewSandbox(dir), Slow: w.slowHook(), LogDir: logDir}
+		_, err = tool.Execute(context.Background(), json.RawMessage(`{"code":"for (let i = 0; i < 300; i++) { console.log('alive'); console.error('stderr-alive'); await new Promise(r => setTimeout(r, 100)); }"}`), nil)
 	} else {
 		tool := &tools.BashTool{CWD: dir, Sandbox: tools.NewSandbox(dir), Slow: w.slowHook(), LogDir: logDir}
 		_, err = tool.Execute(context.Background(), json.RawMessage(`{"command":"while true; do echo alive; sleep .1; done"}`), nil)
@@ -48,13 +48,8 @@ func TestBackgroundSurvivesDaemonExitAndCanBeStopped(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX crash fixture")
 	}
-	for _, kind := range []string{"bash", "python"} {
+	for _, kind := range []string{"bash", "exec_script"} {
 		t.Run(kind, func(t *testing.T) {
-			if kind == "python" {
-				if _, err := tools.PythonAvailable(); err != nil {
-					t.Skip(err)
-				}
-			}
 			dir := t.TempDir()
 			cmd := exec.Command(os.Args[0], "-test.run=^TestBackgroundCrashHelper$")
 			cmd.Env = append(os.Environ(), "HARDENING_CRASH_DIR="+dir, "HARDENING_CRASH_KIND="+kind)
@@ -80,11 +75,15 @@ func TestBackgroundSurvivesDaemonExitAndCanBeStopped(t *testing.T) {
 				t.Fatal(err)
 			}
 			deadline := time.Now().Add(3 * time.Second)
+			errLogPath := pf.StderrPath
+			if errLogPath == "" {
+				errLogPath = pf.LogPath
+			}
 			for {
 				after, err := os.Stat(pf.LogPath)
 				stderrReady := true
-				if kind == "python" {
-					data, readErr := os.ReadFile(pf.StderrPath)
+				if kind == "exec_script" {
+					data, readErr := os.ReadFile(errLogPath)
 					stderrReady = readErr == nil && strings.Contains(string(data), "stderr-alive")
 				}
 				// stdout and stderr are separate writes; observing one does not
@@ -97,8 +96,8 @@ func TestBackgroundSurvivesDaemonExitAndCanBeStopped(t *testing.T) {
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
-			if kind == "python" {
-				data, err := os.ReadFile(pf.StderrPath)
+			if kind == "exec_script" {
+				data, err := os.ReadFile(errLogPath)
 				if err != nil || !strings.Contains(string(data), "stderr-alive") {
 					t.Fatalf("stderr not preserved: %v", err)
 				}
@@ -113,7 +112,7 @@ func TestBackgroundSurvivesDaemonExitAndCanBeStopped(t *testing.T) {
 			if j == nil || j.Status != BgStatusRunning || j.stop == nil {
 				t.Fatal("live child was not safely re-adopted")
 			}
-			if !b.onCancel(pf.JobID, "user") {
+			if b.onCancel(pf.JobID, "user") != true {
 				t.Fatal("cancel failed")
 			}
 			deadline = time.Now().Add(3 * time.Second)

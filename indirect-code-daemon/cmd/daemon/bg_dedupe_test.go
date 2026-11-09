@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/runner"
 )
 
 func TestBgFingerprint(t *testing.T) {
@@ -13,7 +14,7 @@ func TestBgFingerprint(t *testing.T) {
 	if a != b {
 		t.Fatal("surrounding whitespace must not change the fingerprint")
 	}
-	if bgFingerprint("python", "bun test") == bgFingerprint("bash", "bun test") {
+	if bgFingerprint("exec_script", "bun test") == bgFingerprint("bash", "bun test") {
 		t.Fatal("kind must be part of the fingerprint")
 	}
 	if bgFingerprint("bash", "bun test | tail -4") == bgFingerprint("bash", "bun test | tail -5") {
@@ -29,18 +30,13 @@ func TestBgCallLabel(t *testing.T) {
 	if !ok || kind != "bash" || label != "bun test" {
 		t.Fatalf("bash label derivation: kind=%q label=%q ok=%v", kind, label, ok)
 	}
-	kind, label, ok = bgCallLabel(provider.ToolCallBlock{Name: "python", Arguments: json.RawMessage(`{"code":"  print(1)  "}`)})
-	if !ok || kind != "python" || label != "print(1)" {
-		t.Fatalf("python code label derivation: kind=%q label=%q ok=%v", kind, label, ok)
-	}
-	// Script mode: the file content can change under the same
-	// invocation, so dedupe never applies.
-	if _, _, ok := bgCallLabel(provider.ToolCallBlock{Name: "python", Arguments: json.RawMessage(`{"script":"x.py"}`)}); ok {
-		t.Fatal("python script mode must not dedupe")
+	kind, label, ok = bgCallLabel(provider.ToolCallBlock{Name: "exec_script", Arguments: json.RawMessage(`{"code":"  console.log(1)  "}`)})
+	if !ok || kind != "exec_script" || label != "console.log(1)" {
+		t.Fatalf("exec_script code label derivation: kind=%q label=%q ok=%v", kind, label, ok)
 	}
 	// env/stdin/workdir change execution without touching the label.
-	if _, _, ok := bgCallLabel(provider.ToolCallBlock{Name: "python", Arguments: json.RawMessage(`{"code":"print(1)","env":{"A":"1"}}`)}); ok {
-		t.Fatal("python with env must not dedupe")
+	if _, _, ok := bgCallLabel(provider.ToolCallBlock{Name: "exec_script", Arguments: json.RawMessage(`{"code":"console.log(1)","env":{"A":"1"}}`)}); ok {
+		t.Fatal("exec_script with env must not dedupe")
 	}
 	if _, _, ok := bgCallLabel(provider.ToolCallBlock{Name: "read", Arguments: json.RawMessage(`{"path":"x"}`)}); ok {
 		t.Fatal("non-shell tools must not dedupe")
@@ -79,5 +75,36 @@ func TestFindRunningByFingerprint(t *testing.T) {
 	}
 	if got := b.findRunningByFingerprint("s1", "nope"); got != nil {
 		t.Fatalf("expected no match for a different fingerprint, got %+v", got)
+	}
+}
+
+func TestAdoptOnePreservesNoDedupe(t *testing.T) {
+	b := &bgSupervisor{
+		dataDir: t.TempDir(),
+		jobs:    map[string]*bgJob{},
+	}
+	st := &runner.State{
+		JobID:     "job_nodedupe",
+		SessionID: "s1",
+		Kind:      "exec_script",
+		Label:     "console.log(1)",
+		NoDedupe:  true,
+		PID:       999999,
+		StartedAt: 1000,
+	}
+	b.adoptOne(st)
+	j := b.jobs["job_nodedupe"]
+	if j == nil {
+		t.Fatal("expected adopted job")
+	}
+	j.closeDone()
+	if j.Fingerprint != "" {
+		t.Fatalf("expected empty fingerprint when NoDedupe is true, got %q", j.Fingerprint)
+	}
+	if !j.NoDedupe {
+		t.Fatal("expected NoDedupe to be preserved on adopted bgJob")
+	}
+	if got := b.findRunningByFingerprint("s1", bgFingerprint("exec_script", "console.log(1)")); got != nil {
+		t.Fatalf("NoDedupe adopted job must not match fingerprint lookup, got %+v", got)
 	}
 }

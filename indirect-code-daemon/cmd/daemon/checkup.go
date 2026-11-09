@@ -3,26 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
 
-// probePython is a PATH-only lookup (python3, then python). No version
-// parsing, no downloads — the daemon's EnsurePython owns that.
-func probePython() (string, error) {
-	for _, name := range []string{"python3", "python"} {
-		if p, err := exec.LookPath(name); err == nil {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("no python3/python on PATH")
-}
-
 // runCheckup verifies the environment before the daemon starts: daemon
 // binary present and executable, data dir writable, disk space sane,
-// python/shell availability (informational — the daemon degrades, the
+// shell availability (informational — the daemon degrades, the
 // boot role only reports).
 type checkItem struct {
 	name   string
@@ -126,14 +114,9 @@ func runCheckup(dataDir, daemonPath string) *checkReport {
 		r.add("pidfile", true, "absent (fresh start)", false)
 	}
 
-	// Python / shell: informational only. EnsurePython/EnsureShell have
-	// side effects (managed downloads) — the boot role only PROBES here;
-	// the daemon performs the real ensure at startup.
-	if bin, err := probePython(); err == nil && bin != "" {
-		r.add("python", true, bin, false)
-	} else {
-		r.add("python", false, "no usable python (daemon will try managed download, else disable python tool)", false)
-	}
+	// Shell: informational only. EnsureShell has side effects (managed
+	// downloads) — the boot role only PROBES here; the daemon performs
+	// the real ensure at startup.
 	if shell, err := detectShell(); err == nil && shell != "" {
 		r.add("shell", true, shell, false)
 	} else {

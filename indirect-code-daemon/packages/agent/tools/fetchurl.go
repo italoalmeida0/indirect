@@ -182,6 +182,11 @@ func looksLikeHTML(body []byte) bool {
 
 // guard applies the SSRF policy (loopback allowed only in tests).
 func (t *FetchURLTool) guard(host string) error {
+	if t.Sandbox != nil {
+		if err := t.Sandbox.CheckNetHost(host); err != nil {
+			return err
+		}
+	}
 	if t.TestAllowLoopback && isLoopbackHost(host) {
 		return nil
 	}

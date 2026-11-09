@@ -1,7 +1,10 @@
 # packages/qjs — QuickJS late link
 
-QuickJS runs the skill modules (see `packages/skills`). The engine is **not
-built here**: `lib/<platform>/libquickjs.a` holds a prebuilt static archive
+QuickJS powers two distinct, isolated execution modes in Indirect Code:
+1. **Skill sandbox (`EvalModule`)**: pure, zero-I/O evaluation of skill `.js` modules (see `packages/skills`).
+2. **Script runtime (`RunScript`)**: full Node.js / WinterCG Web / shell (`$`) runtime for the `exec_script` agent tool and `--js` CLI role.
+
+The engine is **not built here**: `lib/<platform>/libquickjs.a` holds a prebuilt static archive
 per shipped platform, and the `link_<os>_<arch>.go` files select it through
 cgo `LDFLAGS`. Nothing in this repo compiles QuickJS source; `shim.c` is the
 only C we compile, and it is thin.
@@ -15,19 +18,25 @@ lib/<platform>/libresolv.a        (macOS only) tiny Mach-O archive defining
 lib/macos_frameworks/*.framework  stub .tbd descriptors for the frameworks
                                   Go's crypto/x509 links on darwin
 lib/macos_link_stubs/<platform>/  resolver stub used by cross links
-shim.c / shim.h                   the sandbox bridge (one runtime+context per
-                                  module graph, interrupt handler,
-                                  memory/stack caps, ES module loader)
-prelude.js                        the JS surface: no host API at all, only the
-                                  plain-data snapshot boundary and the removal
-                                  of the dynamic-code surface
-qjs.go / qjs_export.go            Go side of the bridge
+shim.c / shim.h                   C bridge for both modes (pure skill sandbox
+                                  AND full script runtime + event loop pump)
+prelude.js                        skill sandbox JS surface: no host API at all,
+                                  only the plain-data snapshot boundary and the
+                                  removal of the dynamic-code surface
+qjs.go / qjs_export.go            Go side of the skill sandbox bridge
+runtime_prelude.js                script runtime JS surface: Node.js core
+                                  builtins, WinterCG Web globals, CJS require,
+                                  and the $ shell tagged template
+runtime.go / runtime_host.go      Go side of the script runtime: event loop,
+                                  ESM/CJS loader, JailRoots path guard, and
+                                  native Go host ops (fs, crypto, zlib, http,
+                                  https, net, dns, child_process, os, process)
 ```
 
 Platform keys: `x86_64_linux_musl`, `aarch64_linux_musl`, `x86_64_macos`,
 `aarch64_macos`, `x86_64_windows_gnu`, `aarch64_windows_gnu`.
 
-## How a skill module runs
+## How a skill module runs (`EvalModule`)
 
 One `EvalModule` call is one module graph:
 
@@ -51,6 +60,16 @@ One `EvalModule` call is one module graph:
 4. The default export of the ROOT module crosses the snapshot boundary as
    plain JSON data (functions, symbols, class instances, accessors, cycles
    and non-finite numbers are refused, with a size budget).
+
+## How the script runtime runs (`RunScript`)
+
+`RunScript(ctx, ScriptOptions)` creates an isolated `qjs_rt` instance (`qjs_rt_new`) that is completely separate from `EvalModule`:
+
+1. `qjs_rt_new` creates a fresh QuickJS runtime and context, installs the host promise rejection tracker and ESM module loader (`rt_module_normalize` / `rt_module_loader`), evaluates `runtime_prelude.js`, captures internal dispatch hooks in C (`fn_dispatch`, `fn_check_loop`, `fn_after_microtasks`, `fn_unhandled_rejection`, `fn_uncaught_exception`, `fn_require`, `builtins_obj`), and deletes the internal `__qjs_*` dispatch/lifecycle hooks from `globalThis` before user code runs.
+2. User code is evaluated as an ES module (with top-level `await`, `import`, `import.meta.url`/`dirname`/`filename`, plus CJS `require`/`__dirname`/`__filename` globals), with a classic-script fallback if the snippet is not module syntax; in `--js -p` mode, the expression is wrapped in an `async` IIFE and printed to stdout.
+3. A single-threaded Go/C event loop drains microtasks (`JS_ExecutePendingJob`), `process.nextTick`, unhandled promise rejections, and asynchronous completions from Go worker goroutines (timers, `fetch`, `http`/`https` servers, `net` sockets/servers, `child_process`, `$` commands) via `qjs_rt_dispatch` until no active handles remain or `process.exit()` / context cancellation occurs.
+4. When `ScriptOptions.JailRoots` is non-empty (set by the `exec_script` tool unless `/unjail` is active), `checkPath` canonicalizes paths and symlinks and confines all host-level filesystem ops, module resolution (including `package.json` and `node_modules` walks), and `process.chdir` to the allowed roots, while `ScriptOptions.ReadOnlyRoots` rejects mutating filesystem and shell operations inside read-only roots (such as the project workspace during `plan` or `learning` sessions). When jailed, `child_process` and `$` commands run inside a Go-controlled POSIX shell evaluator (supporting built-in POSIX utilities, jailed `.sh`/`.js` scripts, `node` via `--js` with inherited `JailRoots`/`ReadOnlyRoots`, and argument-sanitized `git` with hooks/fsmonitor disabled) and `checkSpawnReqPaths` inspects both command lines and piped stdin before execution. `crypto.subtle` supports `SHA-1`/`256`/`384`/`512`, `HMAC`, `AES-GCM`/`CBC`/`CTR`, `PBKDF2`, `HKDF`, `ECDSA` (`P-256`/`384`/`521`), `Ed25519`, `RSASSA-PKCS1-v1_5`, `RSA-PSS`, and `RSA-OAEP` (and rejects unsupported algorithms with `NotSupportedError`). `node:vm` provides an isolated QuickJS global realm (`JS_NewContext`, with dynamic `import()` disabled unless a callback is supplied) for script evaluation within the same runtime, separate from the pure `EvalModule` skill sandbox.
+5. The multi-call binary exposes this runtime to the agent via the `runner` (`Spec.Kind == "exec_script"`) and to child processes via `indirect-code --js [-e|-p|file.js|-]`.
 
 ## Regenerating the archives
 

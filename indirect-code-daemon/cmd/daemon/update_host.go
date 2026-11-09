@@ -34,7 +34,7 @@ type DaemonServer struct {
 
 	configPath string
 	dataDir    string
-	// sharedDir roots <root>/external (python, unish). Set once at boot
+	// sharedDir roots <root>/external (unish). Set once at boot
 	// from the slot dataDir; the daemon never guesses it elsewhere.
 	sharedDir string
 

@@ -100,10 +100,10 @@ describe("Batch 3 Bug Fixes & Regression Suite", () => {
     expect(relaySrc).toContain('window.removeEventListener("offline", onOffline)');
   });
 
-  test("BUG-T5-R3-06: Python tool output bounded truncation and UI badge", () => {
-    const pySrc = readFileSync(join(root, "indirect-code-daemon/packages/agent/tools/python.go"), "utf-8");
-    expect(pySrc).toContain("truncation := truncateTail(text, defaultMaxLines, defaultMaxBytes)");
-    expect(pySrc).toContain('attrs = append(attrs, core.Attr{Key: "truncated", Value: "true"})');
+  test("BUG-T5-R3-06: exec_script tool output bounded truncation and UI badge", () => {
+    const jsSrc = readFileSync(join(root, "indirect-code-daemon/packages/agent/tools/exec_script.go"), "utf-8");
+    expect(jsSrc).toContain("truncation := truncateTail(text, defaultMaxLines, defaultMaxBytes)");
+    expect(jsSrc).toContain('attrs = append(attrs, core.Attr{Key: "truncated", Value: "true"})');
 
     const editSrc = readFileSync(join(root, "web/src/indirect-code/components/tool/ToolEditBodies.tsx"), "utf-8");
     expect(editSrc).toContain("props.u.result?.toolDetails?.truncated");

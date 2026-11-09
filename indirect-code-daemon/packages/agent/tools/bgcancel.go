@@ -23,6 +23,8 @@ type BgCancelOutcome struct {
 	OK bool
 	// Status is the job status after the attempt ("cancelled", "done", …).
 	Status string
+	// Kind is the background task kind ("bash", "exec_script").
+	Kind string
 	// Notice is the model-facing text.
 	Notice string
 }
@@ -34,7 +36,7 @@ type BgCancelHost interface {
 }
 
 // BgCancelTool force-stops one of this session's background tasks — a
-// detached bash/python process. Only registered in modes whose allowlist
+// detached bash/exec_script process. Only registered in modes whose allowlist
 // includes it (see modeRegistry in the daemon).
 type BgCancelTool struct {
 	Host      BgCancelHost
@@ -43,7 +45,7 @@ type BgCancelTool struct {
 
 func (*BgCancelTool) Name() string { return "bg_cancel" }
 func (*BgCancelTool) Description() string {
-	return `Force-stop one of YOUR background tasks: a bash/python command that went to the background (it gave you its job_id when it detached). The process is killed and the job is marked cancelled; no completion notice is delivered — re-run the command differently instead of waiting. Already-finished jobs cannot be cancelled. Unknown or foreign ids are refused.`
+	return `Force-stop one of YOUR background tasks: a bash/exec_script command that went to the background (it gave you its job_id when it detached). The process is killed and the job is marked cancelled; no completion notice is delivered — re-run the command differently instead of waiting. Already-finished jobs cannot be cancelled. Unknown or foreign ids are refused.`
 }
 func (*BgCancelTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"job_id":{"type":"string","description":"Background job id — the exact job_id from the detached command's placeholder."}},"required":["job_id"]}`)
@@ -73,16 +75,23 @@ func (t *BgCancelTool) Execute(ctx context.Context, raw json.RawMessage, _ func(
 		{Key: "cancelled", Value: fmt.Sprintf("%t", out.OK)},
 		{Key: "status", Value: out.Status},
 	}
+	if out.Kind != "" {
+		attrs = append(attrs, core.Attr{Key: "kind", Value: out.Kind})
+	}
 	if out.Notice != "" {
 		attrs = append(attrs, core.Attr{Key: "info", Value: out.Notice})
+	}
+	details := map[string]any{
+		"background_job_id": a.JobID,
+		"cancelled":         out.OK,
+		"status":            out.Status,
+	}
+	if out.Kind != "" {
+		details["kind"] = out.Kind
 	}
 	return core.ToolResult{
 		Content: nil,
 		Attrs:   attrs,
-		Details: map[string]any{
-			"background_job_id": a.JobID,
-			"cancelled":         out.OK,
-			"status":            out.Status,
-		},
+		Details: details,
 	}, nil
 }

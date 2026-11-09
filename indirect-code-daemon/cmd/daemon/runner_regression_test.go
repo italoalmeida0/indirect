@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,10 +14,7 @@ import (
 	"indirect/indirect-code-daemon/packages/runner"
 )
 
-func TestRegressionRunnerPythonStdin(t *testing.T) {
-	if _, err := tools.PythonAvailable(); err != nil {
-		t.Skip("python tool unavailable on this host")
-	}
+func TestRegressionRunnerExecScriptStdin(t *testing.T) {
 	root, dataDir := runnerTestRoot(t)
 	app, err := buildRealApp()
 	if err != nil {
@@ -25,14 +23,74 @@ func TestRegressionRunnerPythonStdin(t *testing.T) {
 	old := runnerSourceOverride
 	runnerSourceOverride = app
 	defer func() { runnerSourceOverride = old }()
-	tool := &tools.PythonTool{CWD: t.TempDir(), Starter: runnerStarter(root, "sess1", filepath.Join(dataDir, "brain", "sess1"))}
-	raw, _ := json.Marshal(map[string]string{"code": "import sys; print('got:' + sys.stdin.read())", "stdin": "ping"})
+	tool := &tools.ExecScriptTool{CWD: t.TempDir(), Starter: runnerStarter(root, "sess1", filepath.Join(dataDir, "brain", "sess1"))}
+	raw, _ := json.Marshal(map[string]string{"code": "import fs from 'node:fs'; console.log('got:' + fs.readFileSync(0, 'utf8'));", "stdin": "ping"})
 	result, err := tool.Execute(context.Background(), raw, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(resultText(result), "got:ping") {
-		t.Fatalf("runner discarded Python stdin: %q", resultText(result))
+		t.Fatalf("runner discarded exec_script stdin: %q", resultText(result))
+	}
+}
+
+func TestMultiCallJSRole(t *testing.T) {
+	root, _ := runnerTestRoot(t)
+	app, err := buildRealApp()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := runnerSourceOverride
+	runnerSourceOverride = app
+	defer func() { runnerSourceOverride = old }()
+	bin, err := ensureRunnerBinary(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1. -e flag: process.argv[1] is omitted so user args start at process.argv[1] (matching node -e)
+	out, err := exec.Command(bin, "--js", "-e", "import os from 'node:os'; console.log('js-cli:' + os.platform() + ':' + process.argv.slice(1).join(','));", "arg1", "arg2").CombinedOutput()
+	if err != nil {
+		t.Fatalf("--js -e failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), ":arg1,arg2") {
+		t.Fatalf("unexpected --js -e output: %q", string(out))
+	}
+
+	// 2. -p / --print flag
+	outP, err := exec.Command(bin, "--js", "-p", "20 + 22").CombinedOutput()
+	if err != nil {
+		t.Fatalf("--js -p failed: %v\n%s", err, outP)
+	}
+	if strings.TrimSpace(string(outP)) != "42" {
+		t.Fatalf("unexpected --js -p output: %q", string(outP))
+	}
+
+	// 3. Script file with -- separator and flags after script path
+	scriptFile := filepath.Join(t.TempDir(), "cli_test.js")
+	if err := os.WriteFile(scriptFile, []byte(`console.log(JSON.stringify(process.argv.slice(1)));`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outFile, err := exec.Command(bin, "--js", "--", scriptFile, "-e", "--flag").CombinedOutput()
+	if err != nil {
+		t.Fatalf("--js file failed: %v\n%s", err, outFile)
+	}
+	if !strings.Contains(string(outFile), `"-e","--flag"`) {
+		t.Fatalf("unexpected --js file argv output: %q", string(outFile))
+	}
+
+	// 4. Stdin script (-) with $ template tag safe interpolation of metacharacters
+	cmdStdin := exec.Command(bin, "--js", "-", "hello&world|test")
+	cmdStdin.Stdin = strings.NewReader(`
+		const val = process.argv[2];
+		const res = await $` + "`" + `${process.execPath} --js -e "console.log(process.argv[1])" ${val}` + "`" + `.nothrow().quiet();
+		console.log("argv1:" + process.argv[1] + ":interpolated:" + res.text().trim());
+	`)
+	outStdin, err := cmdStdin.CombinedOutput()
+	if err != nil {
+		t.Fatalf("--js - failed: %v\n%s", err, outStdin)
+	}
+	if strings.TrimSpace(string(outStdin)) != "argv1:-:interpolated:hello&world|test" {
+		t.Fatalf("unexpected --js - output: %q", string(outStdin))
 	}
 }
 
@@ -63,7 +121,7 @@ func TestRegressionRunnerAssistantCancelNotReplayed(t *testing.T) {
 	reply := make(chan any, 1)
 	b.onRegister(bgRegisterMsg{Kind: "bash", SessionID: "sess1", JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, Stop: proc.Stop, Reply: reply})
 	<-reply
-	if !b.onCancel(proc.JobID, "assistant") {
+	if b.onCancel(proc.JobID, "assistant") != true {
 		t.Fatal("cancel refused")
 	}
 	<-proc.Exited

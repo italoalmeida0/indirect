@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"indirect/indirect-code-daemon/packages/qjs"
 	"io"
 	"os"
 	"os/exec"
@@ -13,16 +14,114 @@ import (
 // errEmptyArgv is the direct starter's guard against a malformed spec.
 var errEmptyArgv = errors.New("tools: empty argv")
 
+func init() {
+	if len(os.Args) >= 3 && os.Args[1] == "--js-exec-direct" {
+		cwd, _ := os.Getwd()
+		exe, _ := os.Executable()
+		shellPath := os.Getenv("__INDIRECT_SHELL_PATH")
+		shellFlag := os.Getenv("__INDIRECT_SHELL_FLAG")
+		codeSrc := os.Args[2]
+		if codeFile := os.Getenv("__INDIRECT_CODE_FILE"); codeFile != "" {
+			if raw, rerr := os.ReadFile(codeFile); rerr == nil {
+				codeSrc = string(raw)
+			}
+			_ = os.Remove(codeFile)
+		}
+		var jailRoots []string
+		if raw := os.Getenv("__INDIRECT_JAIL_ROOTS"); raw != "" {
+			for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
+				if p = strings.TrimSpace(p); p != "" {
+					jailRoots = append(jailRoots, p)
+				}
+			}
+		}
+		var readOnlyRoots []string
+		if raw := os.Getenv("__INDIRECT_READONLY_ROOTS"); raw != "" {
+			for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
+				if p = strings.TrimSpace(p); p != "" {
+					readOnlyRoots = append(readOnlyRoots, p)
+				}
+			}
+		}
+		var fsReadRoots []string
+		if raw := os.Getenv("__INDIRECT_FS_READ_ROOTS"); raw != "" {
+			for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
+				if p = strings.TrimSpace(p); p != "" {
+					fsReadRoots = append(fsReadRoots, p)
+				}
+			}
+		}
+		var fsWriteRoots []string
+		if raw := os.Getenv("__INDIRECT_FS_WRITE_ROOTS"); raw != "" {
+			for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
+				if p = strings.TrimSpace(p); p != "" {
+					fsWriteRoots = append(fsWriteRoots, p)
+				}
+			}
+		}
+		var netAllow []string
+		if raw := os.Getenv("__INDIRECT_NET_ALLOW"); raw != "" {
+			for _, p := range strings.Split(raw, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					netAllow = append(netAllow, p)
+				}
+			}
+		}
+		_ = os.Unsetenv("__INDIRECT_CODE_FILE")
+		_ = os.Unsetenv("__INDIRECT_SHELL_PATH")
+		_ = os.Unsetenv("__INDIRECT_SHELL_FLAG")
+		_ = os.Unsetenv("__INDIRECT_JAIL_ROOTS")
+		_ = os.Unsetenv("__INDIRECT_READONLY_ROOTS")
+		_ = os.Unsetenv("__INDIRECT_FS_READ_ROOTS")
+		_ = os.Unsetenv("__INDIRECT_FS_WRITE_ROOTS")
+		_ = os.Unsetenv("__INDIRECT_NET_ALLOW")
+		var scriptArgs []string
+		if len(os.Args) > 3 {
+			scriptArgs = os.Args[3:]
+		}
+		code, err := qjs.RunScript(context.Background(), qjs.ScriptOptions{
+			Code:          codeSrc,
+			Filename:      "<exec_script>",
+			CWD:           cwd,
+			Args:          scriptArgs,
+			Stdin:         os.Stdin,
+			Stdout:        os.Stdout,
+			Stderr:        os.Stderr,
+			ShellPath:     shellPath,
+			ShellFlag:     shellFlag,
+			ExecPath:      exe,
+			JailRoots:     jailRoots,
+			ReadOnlyRoots: readOnlyRoots,
+			FSReadRoots:   fsReadRoots,
+			FSWriteRoots:  fsWriteRoots,
+			NetAllow:      netAllow,
+		})
+		if err != nil && code == 0 {
+			code = 1
+		}
+		os.Exit(code)
+	}
+}
+
 // ExecSpec is everything needed to run one command (owner: terminal AND
-// python go through the same runner — it never knows what it runs).
+// exec_script go through the same runner — it never knows what it runs).
 type ExecSpec struct {
-	Kind    string   // "bash" | "python"
-	Command string   // original command text (labels, sandbox already checked)
-	Argv    []string // binary + args (exec semantics)
-	CWD     string
-	Env     []string
-	Stdin   string // inline stdin (python's -c payload)
-	// SplitStderr keeps a separate stderr log (python's legacy shape);
+	Kind          string   // "bash" | "exec_script"
+	Command       string   // original command text (labels, sandbox already checked)
+	Argv          []string // binary + args (exec semantics)
+	CWD           string
+	Env           []string
+	Stdin         string   // inline stdin
+	Code          string   // inline JS code (when Kind == "exec_script")
+	ShellPath     string   // shell path for $ inside exec_script
+	ShellFlag     string   // shell flag for $ inside exec_script
+	JailRoots     []string // sandbox root confinement for exec_script
+	ReadOnlyRoots []string // read-only roots within JailRoots (e.g. plan/learning project root)
+	FSReadRoots   []string // scoped filesystem read roots (PermissionSet.FS.Read)
+	FSWriteRoots  []string // scoped filesystem write roots (PermissionSet.FS.Write)
+	NetAllow      []string // allowed network hosts (PermissionSet.Net.Allow)
+	NoDedupe      bool     // true when stdin/env/work_dir make this run non-dedupable
+	// SplitStderr keeps a separate stderr log;
 	// the runner merges both into one out log and leaves this false.
 	SplitStderr bool
 	LogDir      string // direct-starter temp log directory
@@ -68,22 +167,102 @@ const (
 	DispBackground = "background"
 	DispInline     = "inline"
 	DispSuppressed = "suppressed"
+	DispCancelled  = "cancelled"
 )
 
 // startDirect is today's behavior: a local process whose output lands in
 // a temp file under LogDir; the pump only observes the file (killing the
 // daemon can never SIGPIPE the child).
 func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
+	if spec.Kind == "exec_script" && strings.TrimSpace(spec.Code) == "" {
+		return nil, errEmptyArgv
+	}
+	var codeFilePath string
+	if spec.Kind == "exec_script" && spec.Code != "" {
+		exe, _ := os.Executable()
+		var extraArgs []string
+		if len(spec.Argv) > 1 {
+			extraArgs = spec.Argv[1:]
+		}
+		f, ferr := os.CreateTemp(spec.LogDir, "bg_code_*.js")
+		if ferr != nil {
+			return nil, ferr
+		}
+		_ = f.Chmod(0o600)
+		_, werr := f.WriteString(spec.Code)
+		cerr := f.Close()
+		if werr != nil || cerr != nil {
+			_ = os.Remove(f.Name())
+			if werr != nil {
+				return nil, werr
+			}
+			return nil, cerr
+		}
+		codeFilePath = f.Name()
+		spec.Argv = append([]string{exe, "--js-exec-direct", ""}, extraArgs...)
+	}
 	if len(spec.Argv) == 0 {
+		if codeFilePath != "" {
+			_ = os.Remove(codeFilePath)
+		}
 		return nil, errEmptyArgv
 	}
 	log, err := newProcessLog(spec.LogDir, "bg_"+spec.Kind+"_*.log")
 	if err != nil {
+		if codeFilePath != "" {
+			_ = os.Remove(codeFilePath)
+		}
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, spec.Argv[0], spec.Argv[1:]...)
 	cmd.Dir = spec.CWD
-	cmd.Env = spec.Env
+	env := spec.Env
+	if len(env) == 0 {
+		if spec.Kind == "exec_script" {
+			env = execScriptEnv(nil)
+		} else {
+			env = os.Environ()
+		}
+	} else {
+		env = append([]string(nil), env...)
+	}
+	filtered := make([]string, 0, len(env)+8)
+	for _, kv := range env {
+		k := kv
+		if eq := strings.IndexByte(kv, '='); eq >= 0 {
+			k = kv[:eq]
+		}
+		if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(k)), "__INDIRECT_") {
+			continue
+		}
+		filtered = append(filtered, kv)
+	}
+	env = filtered
+	if codeFilePath != "" {
+		env = append(env, "__INDIRECT_CODE_FILE="+codeFilePath)
+	}
+	if spec.ShellPath != "" {
+		env = append(env, "__INDIRECT_SHELL_PATH="+spec.ShellPath)
+	}
+	if spec.ShellFlag != "" {
+		env = append(env, "__INDIRECT_SHELL_FLAG="+spec.ShellFlag)
+	}
+	if len(spec.JailRoots) > 0 {
+		env = append(env, "__INDIRECT_JAIL_ROOTS="+strings.Join(spec.JailRoots, string(os.PathListSeparator)))
+	}
+	if len(spec.ReadOnlyRoots) > 0 {
+		env = append(env, "__INDIRECT_READONLY_ROOTS="+strings.Join(spec.ReadOnlyRoots, string(os.PathListSeparator)))
+	}
+	if len(spec.FSReadRoots) > 0 {
+		env = append(env, "__INDIRECT_FS_READ_ROOTS="+strings.Join(spec.FSReadRoots, string(os.PathListSeparator)))
+	}
+	if len(spec.FSWriteRoots) > 0 {
+		env = append(env, "__INDIRECT_FS_WRITE_ROOTS="+strings.Join(spec.FSWriteRoots, string(os.PathListSeparator)))
+	}
+	if len(spec.NetAllow) > 0 {
+		env = append(env, "__INDIRECT_NET_ALLOW="+strings.Join(spec.NetAllow, ","))
+	}
+	cmd.Env = env
 	if spec.Stdin != "" {
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	}
@@ -100,6 +279,9 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 		cmd.Stderr = log.file
 	}
 	if err := cmd.Start(); err != nil {
+		if codeFilePath != "" {
+			_ = os.Remove(codeFilePath)
+		}
 		log.close(true)
 		if errLog != nil {
 			errLog.close(true)
@@ -110,6 +292,9 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 	var waitErr error
 	go func() {
 		waitErr = cmd.Wait() // reaped ONCE: cmd.Wait() must never be
+		if codeFilePath != "" {
+			_ = os.Remove(codeFilePath)
+		}
 		close(exited)        // called twice ("Wait was already called")
 	}()
 	proc := &Proc{

@@ -20,7 +20,12 @@ func (b *bgSupervisor) writePidfile(j *bgJob) error {
 	if err := os.MkdirAll(b.bgDir(), 0o700); err != nil {
 		return err
 	}
-	pf := bgPidfile{JobID: j.ID, PID: j.PID, Identity: j.Identity, Runner: j.Runner, SessionID: j.SessionID, Kind: j.Kind, Label: j.Label, LogPath: j.LogPath, StderrPath: j.StderrPath, StartedAt: j.StartedAt}
+	pf := bgPidfile{
+		JobID: j.ID, PID: j.PID, Identity: j.Identity, Runner: j.Runner,
+		SessionID: j.SessionID, Kind: j.Kind, Label: j.Label,
+		Fingerprint: j.Fingerprint, NoDedupe: j.NoDedupe,
+		LogPath: j.LogPath, StderrPath: j.StderrPath, StartedAt: j.StartedAt,
+	}
 	data, err := json.Marshal(pf)
 	if err != nil {
 		return err
@@ -56,9 +61,13 @@ func (b *bgSupervisor) readopt() {
 			b.jobs = map[string]*bgJob{}
 		}
 		if pf.Identity != "" && tools.ProcessIdentity(pf.PID) == pf.Identity {
+			fp := pf.Fingerprint
+			if fp == "" && !pf.NoDedupe {
+				fp = bgFingerprint(pf.Kind, pf.Label)
+			}
 			j := &bgJob{
 				ID: pf.JobID, Kind: pf.Kind, SessionID: pf.SessionID,
-				Label: pf.Label, Fingerprint: bgFingerprint(pf.Kind, pf.Label), PID: pf.PID, Identity: pf.Identity, Status: BgStatusRunning,
+				Label: pf.Label, Fingerprint: fp, NoDedupe: pf.NoDedupe, PID: pf.PID, Identity: pf.Identity, Status: BgStatusRunning,
 				StartedAt: pf.StartedAt, LogPath: pf.LogPath, StderrPath: pf.StderrPath,
 				done: make(chan struct{}),
 			}

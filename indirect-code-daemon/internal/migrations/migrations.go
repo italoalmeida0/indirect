@@ -96,8 +96,22 @@ func hasSessionArtifacts(slotDir string) bool {
 	return false
 }
 
+func hasExecScriptVocabStamp(slotDir string) bool {
+	raw, err := os.ReadFile(versionFile(slotDir))
+	if err != nil {
+		return false
+	}
+	var doc struct {
+		ExecScriptVocab bool `json:"exec_script_vocab"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return false
+	}
+	return doc.ExecScriptVocab
+}
+
 func writeVersion(slotDir string, v int) error {
-	data, err := json.MarshalIndent(map[string]any{"version": v}, "", "  ")
+	data, err := json.MarshalIndent(map[string]any{"version": v, "exec_script_vocab": true}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -175,6 +189,12 @@ func Migrate(slotDir string) ([]int, error) {
 			return applied, fmt.Errorf("migration %d: persist version: %w", m.Version, err)
 		}
 		applied = append(applied, m.Version)
+	}
+	if stored >= 4 && !hasExecScriptVocabStamp(slotDir) && hasSessionArtifacts(slotDir) {
+		if err := applyV4(slotDir); err != nil {
+			return applied, fmt.Errorf("migration 4 (tool-vocabulary-v4) refresh: %w", err)
+		}
+		_ = writeVersion(slotDir, stored)
 	}
 	return applied, nil
 }

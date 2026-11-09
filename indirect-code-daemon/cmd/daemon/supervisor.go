@@ -898,13 +898,14 @@ func (s *sessionSupervisor) purge(id string) error {
 			return err
 		}
 	}
-	for _, path := range []string{filepath.Join(st.sessionsDir(), id), st.brainDir(id)} {
+	for _, path := range []string{filepath.Join(st.sessionsDir(), id), st.brainDir(id), filepath.Join(st.rootDir(), "executions", id)} {
 		if path != "" {
 			if err := os.RemoveAll(path); err != nil {
 				return err
 			}
 		}
 	}
+	purgeSessionDebugPayloads(id)
 	// The purged session's background bookkeeping dies with it (Bug 20):
 	// bg/<job>.pid.json and bg/<job>.notice.json would otherwise leak as
 	// orphan files and get re-delivered to a session that no longer exists.

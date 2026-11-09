@@ -9,7 +9,7 @@ import (
 )
 
 // AutoBackgroundAfter is the fixed threshold after which a still-running
-// bash/python execution detaches into a background job: the tool returns a
+// bash/exec_script execution detaches into a background job: the tool returns a
 // placeholder immediately and the result is delivered when the process
 // finishes (a system-reminder into the live turn, or a wake-up turn when the
 // turn already ended). Fixed by design — no setting exposes it. Tests may
@@ -26,9 +26,8 @@ func autoBackgroundAfter() time.Duration {
 }
 
 // BgLabelMax mirrors the daemon's job label rule: the first 300
-// characters of the bash command (or the python code / script
-// invocation), + … when cut. Notices reference the task exactly the way
-// the card shows it.
+// characters of the bash command (or the exec_script code), + … when cut.
+// Notices reference the task exactly the way the card shows it.
 const BgLabelMax = 300
 
 // ClipLabel keeps the first BgLabelMax characters (+ … when cut).
@@ -61,8 +60,8 @@ func commandFailed(attrs []core.Attr) bool {
 }
 
 // SlowHook detaches a long-running command into a background job. kind is
-// "bash" or "python". stop is the tool's own force-stop for the detached
-// process (process-group kill for bash, context cancel for python) — the
+// "bash" or "exec_script". stop is the tool's own force-stop for the detached
+// process (process-group kill for bash, context cancel for exec_script) — the
 // daemon stores it on the job so bg_cancel can kill the work; nil stop =
 // the job can only be marked cancelled, not stopped. The hook registers
 // the job and returns its id, the absolute path of the job's .log file (in
@@ -90,6 +89,7 @@ type BackgroundProcess struct {
 	// log there at terminal; == LogPath on the direct path).
 	BrainLog   string
 	StderrPath string
+	NoDedupe   bool
 	Stop       func()
 	StartedAt  int64
 }

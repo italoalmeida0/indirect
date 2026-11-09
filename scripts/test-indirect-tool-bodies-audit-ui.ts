@@ -6,7 +6,7 @@ import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const bundle = await Bun.build({ entrypoints: ["test/fixtures/tool-bodies-audit-ui.tsx"], target: "browser", plugins: [iconifyPlugin, solidPlugin] });
 if (!bundle.success) throw new Error(bundle.logs.join("\n"));
-const cssName = Array.from(new Bun.Glob("*.css").scanSync("dist"))[0];
+const cssName = Array.from(new Bun.Glob("**/*.css").scanSync("dist"))[0];
 assert(cssName, "Run bun run build:web first");
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
   const path = new URL(req.url).pathname;
@@ -59,7 +59,7 @@ try {
       // bg_check row: the command/code block sits above the (guttered) log.
       const bgRow = document.querySelector('[data-audit-row="bg_check"]');
       const bgText = (bgRow?.textContent || "").replace(/\s+/g, " ");
-      const bgHasCommand = !!bgRow?.querySelector("[data-code-gutter]") && bgText.includes("train.py");
+      const bgHasCommand = !!bgRow?.querySelector("[data-code-gutter]") && bgText.includes("train.js");
       return {
         body: document.body.textContent || "",
         pres,

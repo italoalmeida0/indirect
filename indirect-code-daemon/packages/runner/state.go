@@ -30,6 +30,8 @@ type State struct {
 	SessionID       string `json:"sessionId"`
 	Kind            string `json:"kind"`
 	Label           string `json:"label"`
+	Fingerprint     string `json:"fingerprint,omitempty"`
+	NoDedupe        bool   `json:"noDedupe,omitempty"`
 	PID             int    `json:"pid"`
 	ProcessIdentity string `json:"processIdentity,omitempty"`
 	CommandIdentity string `json:"commandIdentity,omitempty"`
@@ -145,6 +147,7 @@ const (
 	DispBackground = "background" // registered as a background job: notify on terminal
 	DispInline     = "inline"     // returned inline to the agent: silent
 	DispSuppressed = "suppressed" // cancelled silently (assistant): silent
+	DispCancelled  = "cancelled"  // cancelled explicitly by user: deliver cancel notice
 )
 
 // DispositionPath is <root>/runners/<jobId>.disposition.

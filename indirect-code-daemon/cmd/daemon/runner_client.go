@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"indirect/indirect-code-daemon/internal/durable"
@@ -25,21 +27,31 @@ import (
 
 // runnerSourceOverride lets tests point at a REAL built multi-call
 // binary: the go test binary does not carry the --runner role.
-var runnerSourceOverride = ""
+var (
+	runnerSourceOverride = ""
+	ensureRunnerMu       sync.Mutex
+)
 
 // ensureRunnerBinary returns the runner binary path, self-copying the
 // running executable into runners/ on first use (decided D3: no
 // verification — copy if missing, run it).
 func ensureRunnerBinary(root string) (string, error) {
-	path := runner.BinaryPath(root, daemonVersion)
-	if st, err := os.Stat(path); err == nil && !st.IsDir() && st.Size() > 0 {
-		return path, nil
-	}
+	ensureRunnerMu.Lock()
+	defer ensureRunnerMu.Unlock()
 	exe := runnerSourceOverride
 	if exe == "" {
 		var err error
 		if exe, err = os.Executable(); err != nil {
 			return "", err
+		}
+	}
+	path := runner.BinaryPath(root, daemonVersion)
+	if st, err := os.Stat(path); err == nil && !st.IsDir() && st.Size() > 0 {
+		if daemonVersion != "dev" && runnerSourceOverride == "" {
+			return path, nil
+		}
+		if srcSt, serr := os.Stat(exe); serr == nil && st.Size() == srcSt.Size() && !srcSt.ModTime().After(st.ModTime()) {
+			return path, nil
 		}
 	}
 	if err := os.MkdirAll(runner.RunnersDir(root), 0o700); err != nil {
@@ -61,13 +73,16 @@ func ensureRunnerBinary(root string) (string, error) {
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
+		if st, serr := os.Stat(path); serr == nil && !st.IsDir() && st.Size() > 0 {
+			return path, nil
+		}
 		return "", fmt.Errorf("publish runner: %w", err)
 	}
 	return path, nil
 }
 
 // runnerStarter builds the tools.Starter the daemon injects: every
-// command (bash AND python) runs through the crash-only runner.
+// command (bash AND exec_script) runs through the crash-only runner.
 func runnerStarter(root, sessionID, brainDir string) tools.Starter {
 	return func(ctx context.Context, spec tools.ExecSpec) (*tools.Proc, error) {
 		return startRunner(root, sessionID, brainDir, spec)
@@ -89,7 +104,8 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 	if jobID != sanitizeID(jobID) {
 		return nil, fmt.Errorf("invalid job identity")
 	}
-	claim, err := os.OpenFile(filepath.Join(runner.RunnersDir(root), jobID+".launch"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	claimPath := filepath.Join(runner.RunnersDir(root), jobID+".launch")
+	claim, err := os.OpenFile(claimPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("execution launch already claimed or unavailable: %w", err)
 	}
@@ -104,36 +120,83 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 		err = durable.SyncDir(runner.RunnersDir(root))
 	}
 	if err != nil {
+		_ = os.Remove(claimPath)
 		return nil, err
 	}
 	startedAt := time.Now().UnixMilli()
 	outPath := filepath.Join(runner.OutDir(root), runner.OutName(sessionID, jobID, startedAt))
 	brainPath := filepath.Join(brainDir, fmt.Sprintf("bg_%s__%s.log", sanitizeID(spec.Kind), sanitizeID(jobID)))
 
+	var specPath string
+	var specArgs []string
+	if len(spec.Argv) > 0 {
+		specPath = spec.Argv[0]
+		specArgs = spec.Argv[1:]
+	} else {
+		specPath = bin
+	}
+	rawForFingerprint := spec.Command
+	if spec.Kind == "exec_script" && spec.Code != "" {
+		rawForFingerprint = strings.TrimSpace(spec.Code)
+	} else if spec.Kind == "bash" && len(spec.Argv) >= 3 {
+		rawForFingerprint = spec.Argv[2]
+	}
+	noDedupe := spec.NoDedupe || (spec.Kind == "exec_script" && spec.Stdin != "")
+	var fp string
+	if !noDedupe {
+		fp = bgFingerprint(spec.Kind, rawForFingerprint)
+	}
 	rs := runner.Spec{
-		JobID: jobID, SessionID: sessionID, Kind: spec.Kind, Label: spec.Command,
-		Path: spec.Argv[0], Args: spec.Argv[1:], Env: spec.Env, CWD: spec.CWD,
-		Stdin: spec.Stdin,
-		Root:  root, RunnerVersion: daemonVersion,
+		JobID: jobID, SessionID: sessionID, Kind: spec.Kind, Label: tools.ClipLabel(spec.Command),
+		Fingerprint: fp,
+		NoDedupe:    noDedupe,
+		Path:        specPath, Args: specArgs, Env: spec.Env, CWD: spec.CWD,
+		Stdin:         spec.Stdin,
+		Code:          spec.Code,
+		ShellPath:     spec.ShellPath,
+		ShellFlag:     spec.ShellFlag,
+		JailRoots:     spec.JailRoots,
+		ReadOnlyRoots: spec.ReadOnlyRoots,
+		FSReadRoots:   spec.FSReadRoots,
+		FSWriteRoots:  spec.FSWriteRoots,
+		NetAllow:      spec.NetAllow,
+		Root:          root, RunnerVersion: daemonVersion,
 		OutPath: outPath, BrainPath: brainPath,
 	}
 	raw, err := json.Marshal(rs)
 	if err != nil {
+		_ = os.Remove(claimPath)
 		return nil, err
+	}
+	if len(raw) > maxRunnerSpecBytes {
+		_ = os.Remove(claimPath)
+		return nil, fmt.Errorf("execution spec exceeds maximum size (%d MiB)", maxRunnerSpecBytes>>20)
 	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
+		_ = os.Remove(claimPath)
 		return nil, err
 	}
+	var runnerStderr bytes.Buffer
 	cmd := exec.Command(bin, "--runner")
 	cmd.Stdin = bytes.NewReader(raw)
+	cmd.Stderr = &runnerStderr
 	setChildPgid(cmd)
 	if err := cmd.Start(); err != nil {
+		_ = os.Remove(claimPath)
 		return nil, fmt.Errorf("start runner: %w", err)
 	}
 	exited := make(chan struct{})
 	var waitErr error
 	go func() {
 		waitErr = cmd.Wait() // reaped ONCE (cmd.Wait is not re-callable)
+		if waitErr != nil && runnerStderr.Len() > 0 {
+			if st, serr := os.Stat(outPath); serr != nil || st.Size() == 0 {
+				_ = os.WriteFile(outPath, runnerStderr.Bytes(), 0o600)
+			} else if f, oerr := os.OpenFile(outPath, os.O_WRONLY|os.O_APPEND, 0o600); oerr == nil {
+				_, _ = f.Write(runnerStderr.Bytes())
+				_ = f.Close()
+			}
+		}
 		close(exited)
 	}()
 	// Capture birth identity while we still own the child, including the
@@ -155,9 +218,11 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 		Pump:    tools.TailLog(outPath),
 		Cleanup: func(remove bool) {
 			if remove || runner.ReadDisposition(root, jobID) == runner.DispInline {
-				_ = os.Remove(runner.StatePath(root, jobID))
-				_ = os.Remove(runner.DispositionPath(root, jobID))
-				_ = os.Remove(filepath.Join(runner.RunnersDir(root), jobID+".launch"))
+				if st, err := runner.ReadState(runner.StatePath(root, jobID)); err == nil && !st.OutcomeUnknown && st.Terminal() && st.OutputReady {
+					_ = os.Remove(runner.StatePath(root, jobID))
+					_ = os.Remove(runner.DispositionPath(root, jobID))
+					_ = os.Remove(filepath.Join(runner.RunnersDir(root), jobID+".launch"))
+				}
 			}
 		},
 		Disposition: func(jid, disp string) error {

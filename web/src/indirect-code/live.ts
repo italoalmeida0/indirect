@@ -22,7 +22,7 @@ export function displayToolArgs(raw?: string): Record<string, any> {
   if (!raw) return {};
   try { const parsed = JSON.parse(raw); return parsed && typeof parsed === "object" ? parsed : {}; } catch { /* incomplete argument stream */ }
   const values: Record<string, any> = { _raw: raw };
-  for (const field of ["path", "command", "content", "pattern", "old_text", "new_text"]) {
+  for (const field of ["path", "command", "code", "script", "content", "pattern", "old_text", "new_text"]) {
     const text = partialString(raw, field);
     if (text !== undefined) values[field] = text;
   }

@@ -9,16 +9,15 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/processutil"
 	"indirect/indirect-code-daemon/packages/runner"
 )
 
-// Background job kinds + statuses (same wire values as v1).
+// Background job statuses (same wire values as v1).
 const (
-	BgKindBash   = "bash"
-	BgKindPython = "python"
-
 	BgStatusRunning   = "running"
 	BgStatusDone      = "done"
 	BgStatusError     = "error"
@@ -45,6 +44,7 @@ type bgJob struct {
 	// Fingerprint keys the exact command behind the job (duplicate
 	// guard); empty for jobs adopted without a registration label.
 	Fingerprint string
+	NoDedupe    bool
 	PID         int
 	Identity    string
 	// Runner marks a crash-only runner-backed job (V2R-003): its durable
@@ -76,16 +76,18 @@ func (j *bgJob) closeDone() {
 // bgPidfile is written per job so a supervisor (re)start can re-adopt live
 // processes. Jobs are NEVER re-run: re-adoption only.
 type bgPidfile struct {
-	JobID      string `json:"jobId"`
-	PID        int    `json:"pid"`
-	SessionID  string `json:"sessionId"`
-	Kind       string `json:"kind"`
-	Label      string `json:"label"`
-	Identity   string `json:"identity,omitempty"`
-	Runner     bool   `json:"runner,omitempty"`
-	StderrPath string `json:"stderrPath,omitempty"`
-	LogPath    string `json:"logPath"`
-	StartedAt  int64  `json:"startedAt"`
+	JobID       string `json:"jobId"`
+	PID         int    `json:"pid"`
+	SessionID   string `json:"sessionId"`
+	Kind        string `json:"kind"`
+	Label       string `json:"label"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	NoDedupe    bool   `json:"noDedupe,omitempty"`
+	Identity    string `json:"identity,omitempty"`
+	Runner      bool   `json:"runner,omitempty"`
+	StderrPath  string `json:"stderrPath,omitempty"`
+	LogPath     string `json:"logPath"`
+	StartedAt   int64  `json:"startedAt"`
 }
 
 // ---- supervisor messages ----
@@ -104,6 +106,7 @@ type bgRegisterMsg struct {
 	// there at terminal). The completion notice points HERE so a jailed
 	// session can read it (V2R-010); the live tail keeps using LogPath.
 	BrainLog  string
+	NoDedupe  bool
 	StartedAt int64
 	Stop      func()
 	Reply    chan any
@@ -283,12 +286,17 @@ func (b *bgSupervisor) onRegister(m bgRegisterMsg) {
 	if startedAt <= 0 {
 		startedAt = time.Now().UnixMilli() - 10000
 	}
+	fp := bgFingerprint(m.Kind, m.Label)
+	if m.NoDedupe {
+		fp = ""
+	}
 	j := &bgJob{
 		ID:          jobID,
 		Kind:        m.Kind,
 		SessionID:   m.SessionID,
 		Label:       truncateBgLabel(m.Label),
-		Fingerprint: bgFingerprint(m.Kind, m.Label),
+		Fingerprint: fp,
+		NoDedupe:    m.NoDedupe,
 		PID:         m.PID, Identity: tools.ProcessIdentity(m.PID),
 		Runner:    m.JobID != "",
 		Status:    BgStatusRunning,
@@ -346,14 +354,32 @@ func (b *bgSupervisor) onFinish(jobID, status, result string, exitCodes ...int) 
 		b.sessionInboxDurable(j.SessionID, bgTaskFinishMsg{JobID: j.ID, Status: status, ExitCode: exitCode})
 	}
 	// Adoption must retain the durable delivery choice, including cancellation.
-	if j.Runner && runner.ReadDisposition(b.rootDir(), j.ID) != runner.DispBackground {
-		j.closeDone()
-		return
+	if j.Runner {
+		disp := runner.ReadDisposition(b.rootDir(), j.ID)
+		if disp != runner.DispBackground {
+			if disp == runner.DispCancelled {
+				b.deliver(j, false)
+			} else if b.notices[j.ID] == nil {
+				b.cleanupRunnerIdentity(j.ID)
+			}
+			j.stop = nil
+			j.cancel = nil
+			j.ctx = nil
+			j.Result = truncateUTF8String(j.Result, 4096)
+			j.closeDone()
+			b.pruneTerminalJobs()
+			return
+		}
 	}
 	b.deliver(j, status == BgStatusDone || status == BgStatusError || status == BgStatusOrphaned)
+	j.stop = nil
+	j.cancel = nil
+	j.ctx = nil
+	j.Result = truncateUTF8String(j.Result, 4096)
 	b.wakeSession(j.SessionID)
 	trace("bg.wake", map[string]any{"job": j.ID, "sid": j.SessionID, "woke": 1})
 	j.closeDone()
+	b.pruneTerminalJobs()
 	// Full output remains in runners/out and its brain copy. The session
 	// stores a bounded display tail; it cannot replace the original log.
 }
@@ -365,12 +391,29 @@ func (b *bgSupervisor) cleanupRunnerIdentity(jobID string) {
 		return
 	}
 	root := b.rootDir()
-	_ = os.Remove(runner.StatePath(root, jobID))
-	_ = os.Remove(runner.DispositionPath(root, jobID))
-	_ = os.Remove(filepath.Join(runner.RunnersDir(root), jobID+".launch"))
+	removeFiles := func() {
+		_ = os.Remove(runner.StatePath(root, jobID))
+		_ = os.Remove(runner.DispositionPath(root, jobID))
+		_ = os.Remove(filepath.Join(runner.RunnersDir(root), jobID+".launch"))
+	}
+	if st, err := runner.ReadState(runner.StatePath(root, jobID)); err == nil && !st.Terminal() && processutil.Matches(st.PID, st.ProcessIdentity) {
+		pid, ident := st.PID, st.ProcessIdentity
+		go func() {
+			deadline := time.Now().Add(12 * time.Second)
+			for time.Now().Before(deadline) {
+				if !processutil.Matches(pid, ident) {
+					break
+				}
+				time.Sleep(25 * time.Millisecond)
+			}
+			removeFiles()
+		}()
+		return
+	}
+	removeFiles()
 }
 
-func (b *bgSupervisor) onCancel(jobID, by string) bool {
+func (b *bgSupervisor) onCancel(jobID, by string) any {
 	j, ok := b.jobs[jobID]
 	if !ok || j.Status != BgStatusRunning {
 		return false
@@ -378,13 +421,13 @@ func (b *bgSupervisor) onCancel(jobID, by string) bool {
 	// Persist the delivery decision before stopping or dropping recovery
 	// metadata. A failed write must not turn a silent cancel into a wake-up.
 	if j.Runner {
-		disp := runner.DispBackground
-		if by == "assistant" {
-			disp = runner.DispSuppressed
+		disp := runner.DispSuppressed
+		if by == "user" {
+			disp = runner.DispCancelled
 		}
 		if err := runner.WriteDisposition(b.rootDir(), j.ID, disp); err != nil {
 			trace("bg.cancel.persist_failed", map[string]any{"job": j.ID, "error": err.Error()})
-			return false
+			return err
 		}
 	}
 	if j.stop != nil {
@@ -409,10 +452,17 @@ func (b *bgSupervisor) onCancel(jobID, by string) bool {
 	b.sessionInboxDurable(j.SessionID, bgTaskFinishMsg{JobID: j.ID, Status: BgStatusCancelled, ExitCode: -1})
 	if by == "user" {
 		b.deliver(j, false)
+	} else if j.Runner && b.notices[j.ID] == nil {
+		b.cleanupRunnerIdentity(j.ID)
 	}
+	j.stop = nil
+	j.cancel = nil
+	j.ctx = nil
+	j.Result = ""
 	b.wakeSession(j.SessionID)
 	trace("bg.wake", map[string]any{"job": j.ID, "sid": j.SessionID, "woke": 1})
 	j.closeDone()
+	b.pruneTerminalJobs()
 	return true
 }
 
@@ -498,6 +548,7 @@ type bgQueryMsg struct {
 
 type bgQueryResult struct {
 	Status  string
+	Kind    string
 	Label   string
 	Owner   string
 	Running bool
@@ -530,11 +581,11 @@ func (b *bgSupervisor) cancelJob(callerSessionID, jobID string) (tools.BgCancelO
 	case <-time.After(replyTimeout):
 		return tools.BgCancelOutcome{}, fmt.Errorf("bg supervisor unreachable")
 	}
-	var status, label, owner string
+	var status, kind, label, owner string
 	select {
 	case r := <-reply:
 		if q, ok := r.(bgQueryResult); ok && q.Found {
-			status, label, owner = q.Status, q.Label, q.Owner
+			status, kind, label, owner = q.Status, q.Kind, q.Label, q.Owner
 		}
 	case <-time.After(replyTimeout):
 		return tools.BgCancelOutcome{}, fmt.Errorf("bg supervisor unreachable")
@@ -543,7 +594,7 @@ func (b *bgSupervisor) cancelJob(callerSessionID, jobID string) (tools.BgCancelO
 		return tools.BgCancelOutcome{}, fmt.Errorf("bg_cancel: no background task %q in this session", jobID)
 	}
 	if status != BgStatusRunning {
-		return tools.BgCancelOutcome{OK: false, Status: status, Notice: fmt.Sprintf("Background task %s already finished (status %s) — nothing to cancel.", label, status)}, nil
+		return tools.BgCancelOutcome{OK: false, Status: status, Kind: kind, Notice: fmt.Sprintf("Background task %s already finished (status %s) — nothing to cancel.", label, status)}, nil
 	}
 	creply := make(chan any, 1)
 	select {
@@ -553,13 +604,16 @@ func (b *bgSupervisor) cancelJob(callerSessionID, jobID string) (tools.BgCancelO
 	}
 	select {
 	case r := <-creply:
+		if cerr, isErr := r.(error); isErr && cerr != nil {
+			return tools.BgCancelOutcome{}, fmt.Errorf("could not persist cancellation for background task %s: %w", label, cerr)
+		}
 		if ok, _ := r.(bool); !ok {
-			return tools.BgCancelOutcome{OK: false, Status: status, Notice: fmt.Sprintf("Background task %s already finished — nothing to cancel.", label)}, nil
+			return tools.BgCancelOutcome{OK: false, Status: status, Kind: kind, Notice: fmt.Sprintf("Background task %s already finished — nothing to cancel.", label)}, nil
 		}
 	case <-time.After(replyTimeout):
 		return tools.BgCancelOutcome{}, fmt.Errorf("bg supervisor unreachable")
 	}
-	return tools.BgCancelOutcome{OK: true, Status: BgStatusCancelled, Notice: fmt.Sprintf("Background task %s cancelled: the work is stopped and its result will NOT be delivered. Re-run it differently instead of waiting.", label)}, nil
+	return tools.BgCancelOutcome{OK: true, Status: BgStatusCancelled, Kind: kind, Notice: fmt.Sprintf("Background task %s cancelled: the work is stopped and its result will NOT be delivered. Re-run it differently instead of waiting.", label)}, nil
 }
 
 // ---- delivery (completion/cancel notices to the owner session) ----
@@ -684,15 +738,45 @@ func (b *bgSupervisor) sessionInboxDurable(sessionID string, payloads ...any) {
 	}()
 }
 
+func truncateUTF8String(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	for maxBytes > 0 && !utf8.ValidString(s[:maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
+
 func (b *bgSupervisor) tryNotice(n *pendingNotice) {
 	if b.session == nil {
 		return
 	}
 	inbox, _, ok := b.session(n.SessionID)
 	if !ok {
+		n.Attempts++
+		if n.Attempts > 3 {
+			sessFile := filepath.Join(b.dataDir, "sessions", n.SessionID+".jsonl")
+			sessDir := filepath.Join(b.dataDir, "sessions", n.SessionID)
+			_, errFile := os.Stat(sessFile)
+			_, errDir := os.Stat(sessDir)
+			if (os.IsNotExist(errFile) && os.IsNotExist(errDir)) || n.Attempts > 256 {
+				delete(b.notices, n.JobID)
+				_ = os.Remove(b.noticePath(n.JobID))
+				b.cleanupRunnerIdentity(n.JobID)
+				b.pruneTerminalJobs()
+			}
+		}
 		return
 	}
 	n.Attempts++
+	if n.Attempts > 512 {
+		delete(b.notices, n.JobID)
+		_ = os.Remove(b.noticePath(n.JobID))
+		b.cleanupRunnerIdentity(n.JobID)
+		b.pruneTerminalJobs()
+		return
+	}
 	select {
 	case inbox <- Envelope{SessionID: n.SessionID, Payload: bgNoticeMsg{JobID: n.JobID, Text: n.Text, Finished: n.Finished}}:
 	default:
@@ -723,7 +807,38 @@ func (b *bgSupervisor) onAck(m bgAckMsg) {
 	_ = os.Remove(b.noticePath(m.JobID))
 	// Fully done: terminal + folded. Drop the identity files now.
 	b.cleanupRunnerIdentity(m.JobID)
+	b.pruneTerminalJobs()
 	trace("bg.notice.acked", map[string]any{"job": m.JobID})
+}
+
+// pruneTerminalJobs bounds the in-memory b.jobs table so completed/cancelled
+// tasks do not accumulate without bound over a long-lived daemon process.
+func (b *bgSupervisor) pruneTerminalJobs() {
+	const maxTerminalJobs = 256
+	terminalCount := 0
+	for _, j := range b.jobs {
+		if j.Status != BgStatusRunning && b.notices[j.ID] == nil {
+			terminalCount++
+		}
+	}
+	for terminalCount > maxTerminalJobs {
+		var oldestID string
+		var oldestEnd int64
+		for id, j := range b.jobs {
+			if j.Status == BgStatusRunning || b.notices[id] != nil {
+				continue
+			}
+			if oldestID == "" || j.EndedAt < oldestEnd || (j.EndedAt == oldestEnd && id < oldestID) {
+				oldestID = id
+				oldestEnd = j.EndedAt
+			}
+		}
+		if oldestID == "" {
+			break
+		}
+		delete(b.jobs, oldestID)
+		terminalCount--
+	}
 }
 
 // dropNoticesFor terminates pending delivery for a deleted session —
@@ -733,47 +848,67 @@ func (b *bgSupervisor) dropNoticesFor(sessionID string) {
 		if n.SessionID == sessionID {
 			delete(b.notices, id)
 			_ = os.Remove(b.noticePath(id))
+			b.cleanupRunnerIdentity(id)
+		}
+	}
+	for id, j := range b.jobs {
+		if j.SessionID == sessionID && j.Status != BgStatusRunning {
+			delete(b.jobs, id)
+			b.cleanupRunnerIdentity(id)
 		}
 	}
 }
 
 // PurgeSessionBookkeeping removes the bg/ bookkeeping files (pid + notice)
-// owned by a purged session. Supervisor purge deletes the session's records
-// but has no view into bg/; leaving the files there would orphan them forever
-// and let boot re-deliver notices for a session that no longer exists.
+// and runner identities owned by a purged session. Supervisor purge deletes
+// the session's records but has no view into bg/ or runners/; leaving the
+// files there would orphan them forever and let boot re-deliver notices for
+// a session that no longer exists.
 // Errors are ignored (best-effort cleanup): a locked/unreadable file stays
 // for the next sweep instead of failing the purge.
 func (b *bgSupervisor) PurgeSessionBookkeeping(sessionID string) {
-	entries, err := os.ReadDir(b.bgDir())
-	if err != nil {
-		return
+	if entries, err := os.ReadDir(b.bgDir()); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			path := filepath.Join(b.bgDir(), name)
+			switch {
+			case strings.HasSuffix(name, ".pid.json"):
+				var pf bgPidfile
+				raw, err := os.ReadFile(path)
+				if err != nil || json.Unmarshal(raw, &pf) != nil {
+					continue // unreadable: not ours to delete
+				}
+				if pf.SessionID == sessionID {
+					_ = os.Remove(path)
+				}
+			case strings.HasSuffix(name, ".notice.json"):
+				var n pendingNotice
+				raw, err := os.ReadFile(path)
+				if err != nil || json.Unmarshal(raw, &n) != nil {
+					continue // unreadable: not ours to delete
+				}
+				if n.SessionID == sessionID {
+					_ = os.Remove(path)
+				}
+			}
+		}
 	}
-	for _, e := range entries {
-		if e.IsDir() {
+	root := b.rootDir()
+	for _, st := range runner.LoadStates(root) {
+		if st.SessionID != sessionID {
 			continue
 		}
-		name := e.Name()
-		path := filepath.Join(b.bgDir(), name)
-		switch {
-		case strings.HasSuffix(name, ".pid.json"):
-			var pf bgPidfile
-			raw, err := os.ReadFile(path)
-			if err != nil || json.Unmarshal(raw, &pf) != nil {
-				continue // unreadable: not ours to delete
-			}
-			if pf.SessionID == sessionID {
-				_ = os.Remove(path)
-			}
-		case strings.HasSuffix(name, ".notice.json"):
-			var n pendingNotice
-			raw, err := os.ReadFile(path)
-			if err != nil || json.Unmarshal(raw, &n) != nil {
-				continue // unreadable: not ours to delete
-			}
-			if n.SessionID == sessionID {
-				_ = os.Remove(path)
-			}
+		if !st.Terminal() && processutil.Matches(st.PID, st.ProcessIdentity) {
+			_ = processutil.SignalIdentity(st.PID, st.ProcessIdentity, 9)
+			reapStoredCommand(st)
 		}
+		b.cleanupRunnerIdentity(st.JobID)
+	}
+	if validSessionID(sessionID) {
+		_ = os.RemoveAll(filepath.Join(root, "executions", sessionID))
 	}
 }
 
@@ -811,7 +946,7 @@ func (b *bgSupervisor) loadNotices() {
 
 func (b *bgSupervisor) onQuery(jobID string) bgQueryResult {
 	if j, ok := b.jobs[jobID]; ok {
-		return bgQueryResult{Status: j.Status, Label: j.Label, Owner: j.SessionID, Running: j.Status == BgStatusRunning, Found: true}
+		return bgQueryResult{Status: j.Status, Kind: j.Kind, Label: j.Label, Owner: j.SessionID, Running: j.Status == BgStatusRunning, Found: true}
 	}
 	return bgQueryResult{}
 }
@@ -848,9 +983,5 @@ func bgAppendLogLine(logPath, line string) {
 }
 
 func truncateBgLabel(s string) string {
-	r := []rune(s)
-	if len(r) <= bgLabelMax {
-		return s
-	}
-	return string(r[:bgLabelMax]) + "…"
+	return tools.ClipLabel(s)
 }

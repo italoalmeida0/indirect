@@ -28,7 +28,6 @@ import (
 //	    daemon.log                daemon stdout (install scripts wire it)
 //	    update-last.log           last --update attempt (stable copy)
 //	  external/
-//	    python/                   managed interpreter
 //	    bin/unish[.exe]           managed shell
 //
 // Nothing else lives at the root. In particular: no sessions/, config.json,

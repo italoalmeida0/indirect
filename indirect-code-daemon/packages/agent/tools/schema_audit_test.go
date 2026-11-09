@@ -22,7 +22,7 @@ func TestToolSchemasAreValidJSON(t *testing.T) {
 		&InspectTool{},
 		&SearchWebTool{},
 		&FetchURLTool{},
-		&PythonTool{},
+		&ExecScriptTool{},
 		&FinishEntireRequestTool{},
 		&SummaryTool{},
 		&TodoTool{},

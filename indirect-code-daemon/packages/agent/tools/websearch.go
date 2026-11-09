@@ -86,6 +86,11 @@ func (t *SearchWebTool) Execute(ctx context.Context, raw json.RawMessage, progre
 	if a.Offset < 0 {
 		return core.ToolResult{}, fmt.Errorf("search_web: `offset` must be >= 0")
 	}
+	if t.Sandbox != nil {
+		if err := t.Sandbox.CheckNetHost("html.duckduckgo.com"); err != nil {
+			return core.ToolResult{}, err
+		}
+	}
 	// Network tools bypass the filesystem jail (they touch no local files);
 	// only the SSRF guard in fetch_url constrains destinations.
 	text, cached, results, err := t.search(ctx, q, count, a.Offset)

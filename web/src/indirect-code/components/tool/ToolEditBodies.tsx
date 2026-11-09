@@ -150,29 +150,46 @@ export function ToolEditBodies(props: ToolPartProps) {
             scrollKey={props.m.key()}
           />
         </Show>
-        <Show when={props.m.name() === "python"}>
-          <Show
-            when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.m.bgRunning() ? "Running in background…" : props.active ? "Running Python…" : null}</div>}
-          >
-            <Show when={props.m.args().script}>
-              <div class="flex items-center gap-1.5 px-3 pt-2 text-[11px] text-ink-500">
-                <FileIcon path={String(props.m.args().script || "")} />
-                <span class="font-mono truncate">{String(props.m.args().script || "")}{Array.isArray(props.m.args().args) && props.m.args().args.length > 0 ? ` ${props.m.args().args.map(String).join(" ")}` : ""}</span>
-              </div>
-            </Show>
-            <Show when={props.m.args().code}>
-              <CodeBlock embedded follow={() => props.m.open() && props.running} text={String(props.m.args().code || "")} language="python" wrap={false} scrollKey={`${props.m.key()}:code`} />
-            </Show>
-            <div class="border-t border-line/40">
-              <Show when={props.u.result?.toolDetails?.truncated}>
-                <div class="px-3 py-1 bg-ink-900/60 border-b border-line/30 text-[10px] text-ink-500 font-mono">
-                  Output truncated (showing last {String(props.u.result?.toolDetails?.page || "portion")})
-                </div>
-              </Show>
-              <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.bgRunning() ? (props.m.bgStream() || props.m.prog() || "Running in background…") : props.m.output() || "No output"} language={undefined} plain wrap={false} scrollKey={`${props.m.key()}:out`} />
-            </div>
-          </Show>
+        <Show when={props.m.name() === "exec_script" || props.m.name() === "python"}>
+          {(() => {
+            const isLegacyPy = () => {
+              const a = props.m.args();
+              const leg = typeof a.legacy_lang === "string" ? a.legacy_lang.trim().toLowerCase() : "";
+              return props.m.name() === "python" || leg === "python" || leg === "python3" || (!String(a.code || "").trim() && Boolean(String(a.script || "").trim()));
+            };
+            return (
+              <>
+                <Show when={props.m.args().code || props.m.args().script}>
+                  <div class="border-b border-line/40">
+                    <CodeBlock
+                      embedded
+                      follow={() => props.m.open() && props.running}
+                      text={
+                        String(props.m.args().code || "").trim()
+                          ? String(props.m.args().code)
+                          : [String(props.m.args().script || ""), ...(Array.isArray(props.m.args().args) ? props.m.args().args.map(String) : [])].filter(Boolean).join(" ")
+                      }
+                      language={isLegacyPy() ? "python" : "javascript"}
+                      wrap={false}
+                      maxH="max-h-40"
+                      scrollKey={`${props.m.key()}:code`}
+                    />
+                  </div>
+                </Show>
+                <Show
+                  when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream() || (props.u.result?.toolDetails as any)?.env?.error}
+                  fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.m.bgRunning() ? "Running in background…" : props.active ? (isLegacyPy() ? "Running Python…" : "Running JavaScript…") : null}</div>}
+                >
+                  <Show when={props.u.result?.toolDetails?.truncated}>
+                    <div class="px-3 py-1 bg-ink-900/60 border-b border-line/30 text-[10px] text-ink-500 font-mono">
+                      Output truncated (showing last {String(props.u.result?.toolDetails?.page || "portion")})
+                    </div>
+                  </Show>
+                  <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.bgRunning() ? (props.m.bgStream() || props.m.prog() || "Running in background…") : props.m.output() || props.m.prog() || String((props.u.result?.toolDetails as any)?.env?.error || "No output")} language={undefined} plain wrap={false} scrollKey={`${props.m.key()}:out`} />
+                </Show>
+              </>
+            );
+          })()}
         </Show>
 </>
   );
