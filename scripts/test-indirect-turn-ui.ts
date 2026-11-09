@@ -84,7 +84,7 @@ import assert from "node:assert/strict";
  // Hidden progress notes do not split runs; append into stable chunks of five.
  await page.evaluate(()=>{(window as any).turnUI.setHideNotes(true);(window as any).turnUI.setVerbose(false);});
  const commands=Array.from({length:12},(_,i)=>[
-   {type:'tool_call',toolId:`cmd${i}`,toolName:i%2?'python':'bash',toolArgs:'{}'},
+   {type:'tool_call',toolId:`cmd${i}`,toolName:i%2?'exec_script':'bash',toolArgs:'{}'},
    {type:'tool_result',toolId:`cmd${i}`,toolResult:'done'},
    {type:'text',text:`Step ${i} completed`},
  ]).flat();

@@ -119,22 +119,19 @@ func TestBgStreamIncludesPreDetachOutput(t *testing.T) {
 	}
 }
 
-func TestBgStreamIncludesPreDetachOutputPython(t *testing.T) {
-	if _, err := tools.PythonAvailable(); err != nil {
-		t.Skip("no python3 interpreter on this host (musl/Alpine)")
-	}
+func TestBgStreamIncludesPreDetachOutputExecScript(t *testing.T) {
 	dir := t.TempDir()
 	tools.AutoBackgroundAfter = 300 * time.Millisecond
 	defer func() { tools.AutoBackgroundAfter = 10 * time.Second }()
 	var mu sync.Mutex
 	var streamed []string
-	pt := &tools.PythonTool{
+	pt := &tools.ExecScriptTool{
 		CWD: dir, LogDir: dir,
 		Slow: func(kind, label string, p tools.BackgroundProcess) (string, string, func(string), func(string, bool, int)) {
 			return "bg_1", p.BrainLog, func(chunk string) { mu.Lock(); streamed = append(streamed, chunk); mu.Unlock() }, func(string, bool, int) {}
 		},
 	}
-	code := "import time\nprint('PY-EARLY')\ntime.sleep(1)\nprint('PY-LATE')\n"
+	code := "console.log('JS-EARLY'); await new Promise(r => setTimeout(r, 800)); console.log('JS-LATE');"
 	args, _ := json.Marshal(map[string]any{"code": code})
 	if _, err := pt.Execute(context.Background(), args, func(string) {}); err != nil {
 		t.Fatal(err)
@@ -144,7 +141,7 @@ func TestBgStreamIncludesPreDetachOutputPython(t *testing.T) {
 		mu.Lock()
 		all := strings.Join(streamed, "")
 		mu.Unlock()
-		if strings.Contains(all, "PY-LATE") {
+		if strings.Contains(all, "JS-LATE") {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -152,8 +149,8 @@ func TestBgStreamIncludesPreDetachOutputPython(t *testing.T) {
 	mu.Lock()
 	joined := strings.Join(streamed, "")
 	mu.Unlock()
-	if !strings.Contains(joined, "PY-EARLY") || !strings.Contains(joined, "PY-LATE") {
-		t.Fatalf("python bg stream lost output: %q", joined)
+	if !strings.Contains(joined, "JS-EARLY") || !strings.Contains(joined, "JS-LATE") {
+		t.Fatalf("exec_script bg stream lost output: %q", joined)
 	}
 }
 

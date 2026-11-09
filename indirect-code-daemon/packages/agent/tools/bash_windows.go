@@ -38,7 +38,7 @@ func setProcessGroup(cmd *exec.Cmd) {
 // unix exec bits: any existing non-directory with an executable extension
 // (.exe/.bat/.cmd/.com, plus extensionless files like the managed unish
 // copy without its suffix) counts. Without this, every probe on Windows
-// fails and the daemon re-downloads unish/python on every start.
+// fails and the daemon re-downloads unish on every start.
 func isExecutableFile(path string) bool {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {

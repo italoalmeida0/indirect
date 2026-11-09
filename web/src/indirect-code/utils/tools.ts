@@ -7,7 +7,7 @@ export function tryParseArgs(a?: string): any {
 
 export function toolCatOf(name?: string): ToolCat {
   if (name === "read" || name === "glob" || name === "search" || name === "inspect") return "explore";
-  if (name === "bash" || name === "python") return "command";
+  if (name === "bash" || name === "exec_script" || name === "python") return "command";
   if (name === "edit" || name === "write" || name === "patch") return "edit";
   return "other";
 }

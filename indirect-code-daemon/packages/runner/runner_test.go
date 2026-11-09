@@ -314,8 +314,8 @@ func TestMaybeSelfCleanRemovesOnlyDeadGenerations(t *testing.T) {
 }
 
 // The runner must feed the spec's stdin to the command (V2R-006) — the
-// generic path behind Python's -c payload. Uses `cat` so it runs wherever
-// a POSIX shell exists (the Python-specific test skips without python).
+// generic path behind exec_script's payload. Uses `cat` so it runs wherever
+// a POSIX shell exists.
 func TestRunFeedsStdin(t *testing.T) {
 	root := t.TempDir()
 	started := NowMs()

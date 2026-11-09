@@ -104,7 +104,12 @@ export function parseContentBlocks(m: any): ContentBlock[] {
         toolStartedAt:c.started_at, toolDurationMs:c.started_at ? (c.duration_ms || 0) : undefined,
         isError: !!(c.is_error ?? c.isError ?? c.is_error === true),
         toolDetails: Object.keys(envAttrs).length
-          ? { ...details, env: envAttrs, footer: [...(Array.isArray((details as any)?.footer) ? (details as any).footer : []), ...footer] }
+          ? {
+              ...details,
+              ...(envAttrs.truncated === "true" ? { truncated: true, ...(envAttrs.page ? { page: envAttrs.page } : {}) } : {}),
+              env: envAttrs,
+              footer: [...(Array.isArray((details as any)?.footer) ? (details as any).footer : []), ...footer],
+            }
           : details,
       });
       return;

@@ -34,7 +34,7 @@ function exitBadgeTone(code: number) {
 /**
  * Background tasks card (below the transcript, above the queue).
  *
- * Session-global tasks (daemon BgTasks): one row per bash/python task of
+ * Session-global tasks (daemon BgTasks): one row per bash/exec_script task of
  * the open session. The daemon status determines the running/archive split
  * on every client; archiving never changes or deletes a task. Both views
  * start with the three newest tasks and retain access to their logs.
@@ -50,7 +50,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
   const graceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const tasks = createMemo(() => bg.sessionJobs()
-    .filter((j) => j.kind === "bash" || j.kind === "python")
+    .filter((j) => j.kind === "bash" || j.kind === "exec_script" || j.kind === "python")
     .sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id)));
   const running = createMemo(() => tasks().filter((j) => j.status === "running"));
   const archived = createMemo(() => tasks().filter((j) => j.status !== "running"));
@@ -199,7 +199,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                     <Iconify icon={taskState(job.status).icon} size={14} class={job.status === "running" ? "animate-spin" : ""} />
                   </span>
                   <Iconify
-                    icon={job.kind === "python" ? "mdi:language-python" : "lucide:terminal"}
+                    icon={job.kind === "exec_script" ? "mdi:language-javascript" : job.kind === "python" ? "mdi:language-python" : "lucide:terminal"}
                     size={14}
                     class="shrink-0 text-ink-500"
                   />
@@ -275,7 +275,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                       <div class="min-w-full w-fit">
                         <Show when={job.label}>
                           <div class="border-b border-line/40">
-                            <CodeBlock embedded text={job.label} language={job.kind === "python" ? "python" : "bash"} wrap={false} scrollKey={`bg:${job.id}:cmd`} />
+                            <CodeBlock embedded text={job.label} language={job.kind === "exec_script" ? "javascript" : job.kind === "python" ? "python" : "bash"} wrap={false} scrollKey={`bg:${job.id}:cmd`} />
                           </div>
                         </Show>
                         <div data-bg-log>

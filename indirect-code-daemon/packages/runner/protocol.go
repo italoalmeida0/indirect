@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -121,11 +122,12 @@ func DecodeLine(line []byte) (any, error) {
 	}
 }
 
-// Conn is a JSON-lines connection with a read deadline helper.
+// Conn is a JSON-lines connection with a read/write deadline helper.
 type Conn struct {
-	rw  io.ReadWriter
-	in  *bufio.Scanner
-	out io.Writer
+	writeMu sync.Mutex
+	rw      io.ReadWriter
+	in      *bufio.Scanner
+	out     io.Writer
 }
 
 func NewConn(rw io.ReadWriter) *Conn {
@@ -134,8 +136,17 @@ func NewConn(rw io.ReadWriter) *Conn {
 	return &Conn{rw: rw, in: sc, out: rw}
 }
 
-// Send writes one message (best-effort by caller policy).
-func (c *Conn) Send(msg any) error { return EncodeLine(c.out, msg) }
+// Send writes one message (best-effort by caller policy) with a bounded write deadline
+// so a stalled peer can never block the runner broadcaster or terminal exit.
+func (c *Conn) Send(msg any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if d, ok := c.rw.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		_ = d.SetWriteDeadline(time.Now().Add(2 * time.Second))
+		defer func() { _ = d.SetWriteDeadline(time.Time{}) }()
+	}
+	return EncodeLine(c.out, msg)
+}
 
 // Recv returns the next decoded message. (nil, nil) = ignorable line;
 // (nil, err) = connection over.

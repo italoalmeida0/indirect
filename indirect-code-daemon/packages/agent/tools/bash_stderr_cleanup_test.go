@@ -8,6 +8,9 @@ import (
 )
 
 func TestBashStderrCapture(t *testing.T) {
+	if currentShell().path == "" {
+		t.Skip("shell is unavailable on this host")
+	}
 	tool := &BashTool{CWD: t.TempDir()}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": "printf 'stdout-msg\n'; printf 'stderr-msg\n' >&2",
@@ -31,6 +34,9 @@ func TestBashStderrCapture(t *testing.T) {
 }
 
 func TestBashTempLogCleanup(t *testing.T) {
+	if currentShell().path == "" {
+		t.Skip("shell is unavailable on this host")
+	}
 	tool := &BashTool{CWD: t.TempDir()}
 	// Generate >50KB of output so that openTempFile is triggered
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
@@ -54,6 +60,9 @@ func TestBashTempLogCleanup(t *testing.T) {
 }
 
 func TestBashUserFallback(t *testing.T) {
+	if currentShell().path == "" {
+		t.Skip("shell is unavailable on this host")
+	}
 	origUser := os.Getenv("USER")
 	defer func() {
 		if origUser != "" {

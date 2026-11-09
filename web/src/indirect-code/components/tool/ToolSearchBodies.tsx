@@ -215,14 +215,17 @@ export function ToolSearchBodies(props: ToolPartProps) {
         </Show>
         <Show when={props.m.name() === "bg_check"}>
           {/* The task's command/code above the log (envelope command=): the
-              label is the raw command for bash and the code/script for
-              python — same two-part layout as the bash body. */}
+              label is the raw command for bash and the code for
+              exec_script — same two-part layout as the bash body. */}
           <Show when={String(((props.u.result?.toolDetails as any)?.env?.command || "") as string)}>
             <div class="border-b border-line/40">
               <CodeBlock
                 embedded
                 text={String(((props.u.result?.toolDetails as any)?.env?.command || "") as string)}
-                language={String(((props.u.result?.toolDetails as any)?.env?.kind || "") as string) === "python" ? "python" : "bash"}
+                language={(() => {
+                  const k = String(((props.u.result?.toolDetails as any)?.env?.kind || "") as string);
+                  return k === "exec_script" ? "javascript" : k === "python" ? "python" : "bash";
+                })()}
                 wrap={false}
                 scrollKey={`${props.m.key()}:cmd`}
               />
@@ -237,7 +240,15 @@ export function ToolSearchBodies(props: ToolPartProps) {
           </Show>
         </Show>
         <Show when={props.m.name() === "bg_cancel" && !props.m.running()}>
-          <div class="px-3 py-2 text-[11px] text-ink-500">Background task canceled.</div>
+          <div class="px-3 py-2 text-[11px] text-ink-500">
+            {props.u.result?.isError || (props.u.result?.toolDetails as any)?.env?.error
+              ? (props.m.output() || String((props.u.result?.toolDetails as any)?.env?.error || "Failed to cancel background task."))
+              : (props.u.result?.toolDetails as any)?.cancelled === false ||
+                (props.u.result?.toolDetails as any)?.env?.cancelled === false ||
+                (props.u.result?.toolDetails as any)?.env?.cancelled === "false"
+                ? (props.m.output() || "Background task already finished.")
+                : "Background task canceled."}
+          </div>
           {/* Canceled body stays minimal — the header says it all. */}
         </Show>
         <Show when={props.m.name() === "bash"}>
@@ -273,7 +284,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
             </pre>
           </Show>
         </Show>
-        <Show when={!(props.m.name() === "bash" || props.m.name() === "bg_await" || props.m.name() === "bg_check" || props.m.name() === "bg_cancel" || props.m.name() === "edit" || props.m.name() === "read" || props.m.name() === "write" || props.m.name() === "python" || props.m.name() === "search" || props.m.name() === "inspect" || props.m.name() === "glob" || props.m.name() === "question" || props.m.name() === "patch" || props.m.name() === "search_web" || props.m.name() === "fetch_url" || props.m.name() === "widget_set" || props.m.name() === "widget_read" || props.m.name() === "widget_edit" || props.m.name() === "widget_list" || props.m.name() === "widget_lint")}>
+        <Show when={!(props.m.name() === "bash" || props.m.name() === "bg_await" || props.m.name() === "bg_check" || props.m.name() === "bg_cancel" || props.m.name() === "edit" || props.m.name() === "read" || props.m.name() === "write" || props.m.name() === "exec_script" || props.m.name() === "python" || props.m.name() === "search" || props.m.name() === "inspect" || props.m.name() === "glob" || props.m.name() === "question" || props.m.name() === "patch" || props.m.name() === "search_web" || props.m.name() === "fetch_url" || props.m.name() === "widget_set" || props.m.name() === "widget_read" || props.m.name() === "widget_edit" || props.m.name() === "widget_list" || props.m.name() === "widget_lint")}>
           <Show
             when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream()}
             fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.m.name() === "question" ? "Waiting for your answers…" : props.ctx.pendingApproval()?.callId === props.u.call?.toolId ? "Waiting for approval…" : props.active ? "Running…" : null}</div>}

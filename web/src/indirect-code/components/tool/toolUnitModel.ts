@@ -1,5 +1,4 @@
-import { createDisclosure } from "../Disclosure";
-import { createMemo } from "solid-js";
+import { createEffect, createMemo, createSignal, on } from "solid-js";
 import { tryParseArgs } from "../../utils/tools";
 import { isHeaderOnlySleep, toolSummary, terminalPresentation } from "../../transcript";
 import { toolRowKey } from "../../utils/titles";
@@ -7,6 +6,19 @@ import { formatDurationSecs } from "../../utils/format";
 import { bodyWithoutFooter, stripToolEnvelopeDetailed, type FooterFact } from "../../utils/envelope";
 import type { ToolUnit } from "../../types";
 import type { TranscriptRenderCtx } from "../TranscriptBlocks";
+
+/** Manual choices survive snapshots, but expire when the activity phase changes. */
+export function createDisclosure(phase: () => string, autoOpen: () => boolean, allowAutomatic = () => true) {
+  const [manual, setManual] = createSignal<boolean>();
+  // Preserve the reader's expanded content when work finishes off the tail.
+  const automatic = createMemo<boolean>((previous) => {
+    const next = autoOpen();
+    return previous !== undefined && !allowAutomatic() ? previous : next;
+  });
+  createEffect(on(phase, () => { if (allowAutomatic()) setManual(undefined); }, { defer: true }));
+  const open = () => manual() ?? automatic();
+  return { open, toggle: () => setManual(!open()) };
+}
 
 /** Reactive model of a tool row: memos derived from ToolUnit.
  * Called synchronously within the component (same Solid owner),
@@ -42,10 +54,10 @@ const { open, toggle } = createDisclosure(() => `${running()}:${active()}`,
 /** Header-only rows stay clickable but never reveal a body. */
 const openBody = () => open() && expandable();
 // Full shell command for the highlighted header: commands[] joined with
-// the effective joiner (&& or ;), else the single command. Python rows
-// show script + args or the first code line (same as the summary).
+// the effective joiner (&& or ;), else the single command. exec_script rows
+// show the first code line (same as the summary).
 const bashHeaderCmd = () => {
-  if (name() === "python") return sum().target || "";
+  if (name() === "exec_script" || name() === "python") return sum().target || "";
   const a: any = args();
   if (Array.isArray(a.commands) && a.commands.length > 0) {
     return a.commands.map(String).join(a.stopOnError === false ? " ; " : " && ");
@@ -99,7 +111,7 @@ const sleepLabel = () => {
   return when ? `${when} · ${summary}` : summary;
 };
 const elapsed = () => {
-  if (name() !== "bash" && name() !== "python" && !name().startsWith("mcp__")) return "";
+  if (name() !== "bash" && name() !== "exec_script" && name() !== "python" && !name().startsWith("mcp__")) return "";
   const duration = u.result?.toolDurationMs ?? terminal().durationMs;
   if (duration !== undefined) return ctx.elapsedLabel(duration);
   // A running background job ticks off the background clock so the row

@@ -108,9 +108,9 @@ const units: any[] = [
     },
   },
   {
-    call: { toolId: "py1", toolName: "python", toolArgs: JSON.stringify({ code: "import json\nfrom collections import Counter\n\nwith open('runners/out/summary.json') as f:\n    data = json.load(f)\n\ncounts = Counter(entry['status'] for entry in data['jobs'])\nprint(dict(counts))\nprint('total', sum(counts.values()))" }) },
+    call: { toolId: "js1", toolName: "exec_script", toolArgs: JSON.stringify({ code: "import fs from 'node:fs';\n\nconst data = JSON.parse(fs.readFileSync('runners/out/summary.json', 'utf8'));\nconst counts = {};\nfor (const entry of data.jobs) counts[entry.status] = (counts[entry.status] || 0) + 1;\nconsole.log(counts);\nconsole.log('total', data.jobs.length);" }) },
     result: {
-      toolResult: "{'done': 12, 'running': 2, 'error': 1}\ntotal 15",
+      toolResult: "{ done: 12, running: 2, error: 1 }\ntotal 15",
       toolDetails: { env: { exit: "0" }, footer: facts("exit 0", "2 lines", "0.6s") },
     },
   },
@@ -160,7 +160,7 @@ const units: any[] = [
     call: { toolId: "bgcheck1", toolName: "bg_check", toolArgs: JSON.stringify({ job_id: "bg_1", offset: 1, limit: 50 }) },
     result: {
       toolResult: "1:epoch 1/10 loss 2.41\n2:epoch 2/10 loss 1.87\n3:epoch 3/10 loss 1.32\n4:epoch 4/10 loss 0.98\n5:epoch 5/10 loss 0.71",
-      toolDetails: { env: { kind: "python", status: "running", command: "train.py", page: "1-5/12", next: "6", info: "No output yet." }, footer: facts("running", "page 1-5/12", "more lines: offset 6", "No output yet.") },
+      toolDetails: { env: { kind: "exec_script", status: "running", command: "train.js", page: "1-5/12", next: "6", info: "No output yet." }, footer: facts("running", "page 1-5/12", "more lines: offset 6", "No output yet.") },
     },
   },
   {
@@ -189,7 +189,7 @@ render(() => (
 ), document.getElementById("root")!);
 
 bg.noteSessionTasks([
-  { id: "bg_1", kind: "python", label: "python train.py --epochs 10", status: "running", startedAt: Date.now() - 45_000, content: "epoch 1/10 loss 2.41\nepoch 2/10 loss 1.87\nepoch 3/10 loss 1.32\nepoch 4/10 loss 0.98\nepoch 5/10 loss 0.71\n" },
+  { id: "bg_1", kind: "exec_script", label: "const res = await runTraining({ epochs: 10 });", status: "running", startedAt: Date.now() - 45_000, content: "epoch 1/10 loss 2.41\nepoch 2/10 loss 1.87\nepoch 3/10 loss 1.32\nepoch 4/10 loss 0.98\nepoch 5/10 loss 0.71\n" },
   { id: "bg_2", kind: "bash", label: "bun run build:daemon:all", status: "done", startedAt: Date.now() - 300_000, endedAt: Date.now() - 120_000, exitCode: 0, content: "[build] linux/amd64\n[build] linux/arm64\n[build] darwin/amd64\n[build] OK -> indirect-code-daemon/dist\n" },
   { id: "bg_3", kind: "bash", label: "go test ./...", status: "error", startedAt: Date.now() - 600_000, endedAt: Date.now() - 500_000, exitCode: 2, content: "--- FAIL: TestRunnerRecovery (0.42s)\n    runner_recovery_test.go:88: unexpected state\nFAIL\n" },
 ] as any);

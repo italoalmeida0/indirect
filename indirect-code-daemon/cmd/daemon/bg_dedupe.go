@@ -12,7 +12,7 @@ import (
 )
 
 // Exact-duplicate background guard: reissuing the identical bash or
-// python-code command while an identical job is still running spawns
+// exec_script command while an identical job is still running spawns
 // a duplicate computation whose output the model usually never
 // reads (it reads the first job, or none). The guard refuses the
 // duplicate BEFORE execution and points at the running job instead.
@@ -32,10 +32,9 @@ func bgFingerprint(kind, label string) string {
 
 // bgCallLabel derives the background-job kind+label a tool call will
 // register under, mirroring the label the tools pass to the slow
-// hook: bash uses the raw command, python code mode uses the trimmed
-// code. ok=false when dedupe must not apply: other tools, python
-// script mode (file content can change under the same invocation),
-// and python code whose env/stdin/work_dir alter execution without
+// hook: bash uses the raw command, exec_script uses the trimmed
+// code. ok=false when dedupe must not apply: other tools, and
+// exec_script code whose env/stdin/work_dir alter execution without
 // touching the label.
 func bgCallLabel(call provider.ToolCallBlock) (kind, label string, ok bool) {
 	switch call.Name {
@@ -47,25 +46,26 @@ func bgCallLabel(call provider.ToolCallBlock) (kind, label string, ok bool) {
 			return "", "", false
 		}
 		return "bash", a.Command, true
-	case "python":
+	case "exec_script":
 		var a struct {
-			Code    string            `json:"code"`
-			Script  string            `json:"script"`
-			Stdin   string            `json:"stdin"`
-			Workdir string            `json:"work_dir"`
-			Env     map[string]string `json:"env"`
+			Code       string            `json:"code"`
+			Stdin      string            `json:"stdin"`
+			Workdir    string            `json:"work_dir"`
+			Env        map[string]string `json:"env"`
+			LegacyLang string            `json:"legacy_lang"`
+			Args       []string          `json:"args"`
 		}
 		if json.Unmarshal(call.Arguments, &a) != nil {
 			return "", "", false
 		}
-		if strings.TrimSpace(a.Script) != "" || a.Stdin != "" || strings.TrimSpace(a.Workdir) != "" || len(a.Env) > 0 {
+		if a.LegacyLang != "" || a.Stdin != "" || strings.TrimSpace(a.Workdir) != "" || len(a.Env) > 0 || len(a.Args) > 0 {
 			return "", "", false
 		}
 		code := strings.TrimSpace(a.Code)
 		if code == "" {
 			return "", "", false
 		}
-		return "python", code, true
+		return "exec_script", code, true
 	}
 	return "", "", false
 }

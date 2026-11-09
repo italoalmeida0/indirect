@@ -564,19 +564,22 @@ describe("Indirect Code toolSummary", () => {
       call: { type: "tool_call", toolId: "9", toolName: "question" }
     })).toEqual({ icon: "lucide:message-circle", verb: "Asking", target: "Questions" });
   });
-  test("summarizes python code and script calls", () => {
+  test("summarizes exec_script code calls", () => {
     // Code mode shows the first meaningful line (skips blanks/comments).
     expect(toolSummary({
-      call: { type: "tool_call", toolId: "p1", toolName: "python", toolArgs: JSON.stringify({ code: "# calc\n\nprint(sum(range(10)))" }) }
-    })).toEqual({ icon: "mdi:language-python", verb: "Ran", target: "print(sum(range(10)))" });
-    // Script mode shows the file plus CLI args.
-    expect(toolSummary({
-      call: { type: "tool_call", toolId: "p2", toolName: "python", toolArgs: JSON.stringify({ script: "scripts/seed.py", args: ["--dry"] }) }
-    })).toEqual({ icon: "mdi:language-python", verb: "Ran", target: "seed.py --dry" });
+      call: { type: "tool_call", toolId: "p1", toolName: "exec_script", toolArgs: JSON.stringify({ code: "// calc\n\nconsole.log(45)" }) }
+    })).toEqual({ icon: "mdi:language-javascript", verb: "Ran", target: "console.log(45)" });
     // Empty code falls back to a clean placeholder (never blank).
     expect(toolSummary({
-      call: { type: "tool_call", toolId: "p3", toolName: "python", toolArgs: "{}" }
-    })).toEqual({ icon: "mdi:language-python", verb: "Ran", target: "snippet" });
+      call: { type: "tool_call", toolId: "p3", toolName: "exec_script", toolArgs: "{}" }
+    })).toEqual({ icon: "mdi:language-javascript", verb: "Ran", target: "snippet" });
+    // Legacy python calls (code-mode with legacy_lang and script-mode with script/args) keep python icon and target.
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "p4", toolName: "exec_script", toolArgs: JSON.stringify({ code: "# comment\nprint(42)", legacy_lang: "python" }) }
+    })).toEqual({ icon: "mdi:language-python", verb: "Ran", target: "print(42)" });
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "p5", toolName: "exec_script", toolArgs: JSON.stringify({ script: "scripts/train.py", args: ["--epochs", "5"] }) }
+    })).toEqual({ icon: "mdi:language-python", verb: "Ran", target: "train.py --epochs 5" });
     // Exit footers parse for duration, same as bash.
     expect(terminalPresentation("ok\n[exit 0]  Took 0.1s")).toEqual({ output: "ok", durationMs: 100 });
   });
@@ -631,7 +634,7 @@ describe("Indirect Code tool segments", () => {
     call: { type: "tool_call", toolId: id, toolName: name, toolArgs: "{}" },
   });
   test("chunks long runs into five without moving earlier calls when appending", () => {
-    const units = Array.from({length:50}, (_,i) => unit(i % 2 ? "python" : "bash", String(i)));
+    const units = Array.from({length:50}, (_,i) => unit(i % 2 ? "exec_script" : "bash", String(i)));
     expect(partitionToolSegs(units).map((s) => s.kind === "group" ? s.units.length : 1)).toEqual(Array(10).fill(5));
     expect(partitionToolSegs(units.slice(0, 6)).map((s) => s.kind === "group" ? s.units.length : 1)).toEqual([5, 1]);
     expect(partitionToolSegs([...units, unit("bash", "50")]).slice(0, 10)).toEqual(partitionToolSegs(units));
@@ -1827,7 +1830,7 @@ describe("Turn audit regressions", () => {
   });
 });
 
-describe("Background tasks (bash/python detach)", () => {
+describe("Background tasks (bash/exec_script detach)", () => {
   test("detach placeholder rows keep their text (no fold: results live in the bg card)", () => {
     const wire: any[] = [{
       role: "assistant",
@@ -1900,6 +1903,34 @@ describe("Background tasks (bash/python detach)", () => {
       call: { type: "tool_call", toolId: "t", toolName: "bg_cancel", toolArgs: JSON.stringify({ job_id: "bg_9" }) },
       result: { type: "tool_result", toolId: "t", toolResult: "cancelled" },
     } as any).verb).toBe("Canceled");
+    const jsSync = toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "exec_script", toolArgs: JSON.stringify({ code: "// comment\nconsole.log(42);" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "42" },
+    } as any);
+    expect(jsSync.icon).toBe("mdi:language-javascript");
+    expect(jsSync.verb).toBe("Ran");
+    expect(jsSync.target).toBe("console.log(42);");
+    const jsBg = toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "exec_script", toolArgs: JSON.stringify({ code: "await new Promise(r => setTimeout(r, 20000));" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "moved to background", toolDetails: { background_job_id: "bg_js" } },
+    } as any);
+    expect(jsBg.verb).toBe("Background");
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "bg_cancel", toolArgs: JSON.stringify({ job_id: "bg_js" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "Background Task (exec_script) — cancelled", toolDetails: { env: { kind: "exec_script" } } },
+    } as any)).toMatchObject({ icon: "mdi:language-javascript", verb: "Canceled", target: "Script Background Task" });
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "bg_check", toolArgs: JSON.stringify({ job_id: "bg_js" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "1:hello", toolDetails: { env: { kind: "exec_script", page: "1-1/1" } } },
+    } as any)).toMatchObject({ icon: "mdi:language-javascript", verb: "Read", target: "Background Task#L1-1" });
+    expect(specialTitle([
+      { call: { type: "tool_call", toolId: "1", toolName: "bash" } },
+      { call: { type: "tool_call", toolId: "2", toolName: "exec_script" } },
+    ] as any)).toBe("Ran 2 commands");
+    expect(partitionToolSegs([
+      { call: { type: "tool_call", toolId: "1", toolName: "bash" } },
+      { call: { type: "tool_call", toolId: "2", toolName: "exec_script" } },
+    ] as any)).toHaveLength(1);
   });
 
   test("bg_await rows are header-only in every state (no body, no chevron)", () => {
@@ -1909,7 +1940,7 @@ describe("Background tasks (bash/python detach)", () => {
     expect(isHeaderOnlySleep("bg_await", true)).toBe(true);
     expect(isHeaderOnlySleep("bash", false)).toBe(false);
     expect(isHeaderOnlySleep("bash", true)).toBe(false);
-    expect(isHeaderOnlySleep("python", false)).toBe(false);
+    expect(isHeaderOnlySleep("exec_script", false)).toBe(false);
   });
 
   test("aggregate keeps detached bash and finished bg_await units with their results", () => {
@@ -1984,7 +2015,7 @@ describe("Background hook (session-owned tasks)", () => {
       expect(bg.running()).toEqual([]);
       expect(bg.sessionContent("bg_1")).toBe("history-live-1");
       // Register/finish events touch the list without a full refresh.
-      bg.noteSessionTaskEvent({ type: "bg_task_registered", sessionId: "s1", jobId: "bg_9", kind: "python", label: "code" });
+      bg.noteSessionTaskEvent({ type: "bg_task_registered", sessionId: "s1", jobId: "bg_9", kind: "exec_script", label: "code" });
       expect(bg.sessionJobs().some((t) => t.id === "bg_9")).toBe(true);
       bg.noteSessionTaskEvent({ type: "bg_task_finished", sessionId: "s1", jobId: "bg_9", status: "done" });
       expect(bg.sessionJobs().find((t) => t.id === "bg_9")?.status).toBe("done");

@@ -28,6 +28,11 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 	if err := json.Unmarshal(rawMessage, &row); err != nil {
 		return provider.Message{}, err
 	}
+	for i, n := range row.AddedToolNames {
+		if n == "python" {
+			row.AddedToolNames[i] = "exec_script"
+		}
+	}
 	msg := provider.Message{ID: row.ID, Role: row.Role, Time: row.Time, Meta: row.Meta, AddedToolNames: row.AddedToolNames, TurnIndex: row.TurnIndex}
 	for _, raw := range row.Content {
 		var head struct {
@@ -63,6 +68,23 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 				Server           bool            `json:"server"`
 			}
 			_ = json.Unmarshal(raw, &tc)
+			if tc.Name == "python" {
+				tc.Name = "exec_script"
+				var args map[string]json.RawMessage
+				if len(tc.Arguments) == 0 || string(tc.Arguments) == "null" {
+					args = make(map[string]json.RawMessage)
+				} else if err := json.Unmarshal(tc.Arguments, &args); err == nil && args == nil {
+					args = make(map[string]json.RawMessage)
+				}
+				if args != nil {
+					if _, exists := args["legacy_lang"]; !exists {
+						args["legacy_lang"] = json.RawMessage(`"python"`)
+						if encoded, err := json.Marshal(args); err == nil {
+							tc.Arguments = encoded
+						}
+					}
+				}
+			}
 			msg.Content = append(msg.Content, provider.ToolCallBlock{
 				ID:               tc.ID,
 				Name:             tc.Name,

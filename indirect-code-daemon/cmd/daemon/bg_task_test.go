@@ -70,7 +70,7 @@ func TestBgChunkTrimsHeadWithStableLines(t *testing.T) {
 
 func TestBgFinishTrimsToFinalCap(t *testing.T) {
 	rec := testBgRec()
-	registerBg(rec, "bg_1", "python", "code")
+	registerBg(rec, "bg_1", "exec_script", "code")
 	applyBgChunk(rec, "bg_1", strings.Repeat("y\n", 50000), bgLiveCap)
 	applyBgFinish(rec, &BgFinish{JobID: "bg_1", Status: BgStatusDone, ExitCode: 0, EndedAt: 9})
 	task := rec.BgTasks[0]

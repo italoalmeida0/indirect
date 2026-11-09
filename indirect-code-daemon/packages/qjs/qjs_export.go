@@ -2,6 +2,8 @@ package qjs
 
 /*
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 */
 import "C"
 
@@ -24,6 +26,10 @@ func guQjsModuleEdge(handle C.uintptr_t, base *C.char, name *C.char, outErr **C.
 		return 0
 	}
 	from, to := C.GoString(base), C.GoString(name)
+	if err := checkSpecifier(to); err != nil {
+		*outErr = C.CString(err.Error())
+		return 1
+	}
 	path, cycle := en.addEdge(from, to)
 	if !cycle {
 		return 0
@@ -39,7 +45,7 @@ func guQjsModuleEdge(handle C.uintptr_t, base *C.char, name *C.char, outErr **C.
 // only memoizes a module after it has finished linking.
 //
 //export guQjsModuleSource
-func guQjsModuleSource(handle C.uintptr_t, name *C.char, outSrc **C.char, outErr **C.char) C.int {
+func guQjsModuleSource(handle C.uintptr_t, name *C.char, outSrc **C.char, outSrcLen *C.size_t, outErr **C.char) C.int {
 	en := lookup(uintptr(handle))
 	if en == nil {
 		*outErr = C.CString("skill sandbox is gone")
@@ -63,9 +69,9 @@ func guQjsModuleSource(handle C.uintptr_t, name *C.char, outSrc **C.char, outErr
 	// while a cycle is still linking, so a unique-name budget would let A->B->A
 	// recurse until the deadline. A real graph stays close to its module count.
 	en.calls++
-	if en.calls > MaxGraphModules*4 {
+	if en.calls > MaxGraphModules {
 		*outErr = C.CString(fmt.Sprintf(
-			"import graph is too large or cyclic (%d module loads, limit %d)", en.calls-1, MaxGraphModules*4))
+			"import graph is too large or cyclic (%d module loads, limit %d)", en.calls-1, MaxGraphModules))
 		return 1
 	}
 
@@ -74,7 +80,6 @@ func guQjsModuleSource(handle C.uintptr_t, name *C.char, outSrc **C.char, outErr
 		*outErr = C.CString(err.Error())
 		return 1
 	}
-	en.loaded[specifier] = true
 	if time.Now().After(en.deadline) {
 		en.markTimeout()
 		*outErr = C.CString(ErrTimeout.Error())
@@ -88,7 +93,17 @@ func guQjsModuleSource(handle C.uintptr_t, name *C.char, outSrc **C.char, outErr
 		*outErr = C.CString(fmt.Sprintf("%s: source too large (%d bytes, max %d)", specifier, len(source), MaxSourceBytes))
 		return 1
 	}
-	*outSrc = C.CString(string(source))
+	buf := (*C.char)(C.malloc(C.size_t(len(source) + 1)))
+	if buf == nil {
+		*outErr = C.CString("out of memory")
+		return 1
+	}
+	C.memcpy(unsafe.Pointer(buf), unsafe.Pointer(&source[0]), C.size_t(len(source)))
+	*(*C.char)(unsafe.Pointer(uintptr(unsafe.Pointer(buf)) + uintptr(len(source)))) = 0
+	*outSrc = buf
+	if outSrcLen != nil {
+		*outSrcLen = C.size_t(len(source))
+	}
 	return 0
 }
 
@@ -103,7 +118,7 @@ func checkSpecifier(specifier string) error {
 	if module == "" {
 		return fmt.Errorf("cannot import %q: no module name", specifier)
 	}
-	if strings.ContainsAny(module, "/\\.") || strings.Contains(module, "..") {
+	if strings.ContainsAny(module, "/\\") || strings.Contains(module, "..") || strings.HasPrefix(module, ".") || strings.HasSuffix(module, ".") {
 		return fmt.Errorf("cannot import %q: %q must be a module name, not a path", specifier, module)
 	}
 	return nil

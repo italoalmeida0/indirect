@@ -2220,11 +2220,12 @@ func (a *sessionActor) onBgTaskRegister(m bgTaskRegisterMsg) {
 		if startedAt <= 0 {
 			startedAt = time.Now().UnixMilli() - 10000
 		}
-		task := &BgTask{ID: m.JobID, Kind: m.Kind, Label: m.Label, Status: BgStatusRunning, StartedAt: startedAt}
+		clippedLabel := tools.ClipLabel(m.Label)
+		task := &BgTask{ID: m.JobID, Kind: m.Kind, Label: clippedLabel, Status: BgStatusRunning, StartedAt: startedAt}
 		upsertBgTask(a.rec, task)
 		a.saveOrAppend(walEvent{Type: walTypeBgTask, BgTask: task})
 		a.pingChange()
-		a.emit(map[string]any{"type": "bg_task_registered", "hostId": a.hostID(), "sessionId": a.id, "jobId": m.JobID, "kind": m.Kind, "label": m.Label, "startedAt": task.StartedAt})
+		a.emit(map[string]any{"type": "bg_task_registered", "hostId": a.hostID(), "sessionId": a.id, "jobId": m.JobID, "kind": m.Kind, "label": clippedLabel, "startedAt": task.StartedAt})
 	}
 	if m.Reply != nil {
 		select {

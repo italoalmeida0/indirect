@@ -122,6 +122,7 @@ func (r Registry) suggest(name string) string {
 // registered (shell-style verbs, pre-rename vocabulary) to the registered tool
 // that serves the same job. Used only in the unknown-tool error hint.
 var toolAliasHints = map[string]string{
+	"python":                        "exec_script",
 	"grep":                          "search",
 	"find":                          "glob",
 	"cat":                           "read",

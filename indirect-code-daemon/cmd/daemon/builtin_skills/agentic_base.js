@@ -8,7 +8,7 @@ export default {
     write: "ask",
     edit: "ask",
     bash: "ask",
-    python: "ask",
+    exec_script: "ask",
     glob: "ask",
     search: "ask",
     inspect: "ask",

@@ -51,6 +51,7 @@ var v4ToolRenames = map[string]string{
 	"mark_task_as_complete":         "finish_entire_request",
 	"mark_plan_as_ready_to_execute": "finish_entire_request",
 	"sleep":                         "bg_await",
+	"python":                        "exec_script",
 }
 
 // v4ArgRenames maps every legacy argument key to its current snake_case key.
@@ -239,6 +240,7 @@ func renameCallBlock(raw json.RawMessage) (json.RawMessage, bool) {
 	if err := json.Unmarshal(nameRaw, &name); err != nil {
 		return nil, false
 	}
+	origName := name
 	newName, renamed := v4ToolRenames[name]
 	changed := false
 	if renamed {
@@ -246,6 +248,24 @@ func renameCallBlock(raw json.RawMessage) (json.RawMessage, bool) {
 			block["name"] = encoded
 			name = newName
 			changed = true
+		}
+	}
+	if origName == "python" {
+		var args map[string]json.RawMessage
+		argsRaw, hasArgs := block["arguments"]
+		if !hasArgs || len(argsRaw) == 0 || string(argsRaw) == "null" {
+			args = make(map[string]json.RawMessage)
+		} else if err := json.Unmarshal(argsRaw, &args); err == nil && args == nil {
+			args = make(map[string]json.RawMessage)
+		}
+		if args != nil {
+			if _, exists := args["legacy_lang"]; !exists {
+				args["legacy_lang"] = json.RawMessage(`"python"`)
+				if encoded, err := json.Marshal(args); err == nil {
+					block["arguments"] = encoded
+					changed = true
+				}
+			}
 		}
 	}
 	if argsRaw, ok := block["arguments"]; ok {
@@ -264,6 +284,31 @@ func renameCallBlock(raw json.RawMessage) (json.RawMessage, bool) {
 	return out, true
 }
 
+var v4ArgRenameOrder = []string{
+	"comprehensive_summary",
+	"summary",
+	"notes",
+	"seconds",
+	"waitingFor",
+	"oldText",
+	"newText",
+	"caseSensitive",
+	"caseInsensitive",
+	"contextLines",
+	"filesOnly",
+	"onlyMatching",
+	"maxResults",
+	"maxFileBytes",
+	"respectGitignore",
+	"timeoutSec",
+	"maxChars",
+	"showHidden",
+	"gitStatus",
+	"maxEntries",
+	"workdir",
+	"decideLater",
+}
+
 // renameArgs renames legacy argument keys of one call. Renames that would
 // collide with an existing non-empty current argument are dropped, so a
 // message can never lose a value. ok is false when nothing changed.
@@ -274,7 +319,8 @@ func renameArgs(toolName string, raw json.RawMessage) (json.RawMessage, bool) {
 	}
 	isCompletion := completionTools[toolName]
 	changed := false
-	for legacy, current := range v4ArgRenames {
+	for _, legacy := range v4ArgRenameOrder {
+		current := v4ArgRenames[legacy]
 		value, ok := args[legacy]
 		if !ok {
 			continue

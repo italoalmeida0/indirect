@@ -48,7 +48,7 @@ func TestBgCheckTailDefault(t *testing.T) {
 
 func TestBgCheckTruncationAndTerminal(t *testing.T) {
 	tool := &BgCheckTool{Host: fakeBgCheckHost{res: BgCheckResult{
-		Found: true, Kind: "python", Label: "train.py", Status: "done", ExitCode: 0,
+		Found: true, Kind: "exec_script", Label: "console.log('train')", Status: "done", ExitCode: 0,
 		Text: "last", From: 1000, To: 1000, Total: 1000, Dropped: 999, Truncated: true,
 	}}, SessionID: "s"}
 	res := bgCheck(t, tool, `{"job_id":"bg_2","offset":1000,"limit":10}`)

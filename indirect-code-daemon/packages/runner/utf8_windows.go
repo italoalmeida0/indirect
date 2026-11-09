@@ -6,16 +6,9 @@ import (
 	"syscall"
 )
 
-// Windows UTF-8 defaults (extracted from unish, owner-sanctioned): the
-// classic agent papercut is "UnicodeEncodeError: 'charmap' codec can't
-// encode ..." when a child (python, node, ...) prints unicode under a
-// cp1252/cp850 console. Two layers:
-//
-//  1. Our own console: SetConsoleOutputCP(CP_UTF8) so the runner itself
-//     renders/accepts UTF-8.
-//  2. Env defaults for the command (and grandchildren): UTF-8 stdio for
-//     python unless the user already decided otherwise — explicit user
-//     settings ALWAYS win.
+// Windows UTF-8 defaults (extracted from unish, owner-sanctioned):
+// SetConsoleOutputCP(CP_UTF8) and SetConsoleCP(CP_UTF8) configure the runner's
+// console so child processes render and accept UTF-8 under cp1252/cp850 hosts.
 
 var (
 	modKernel32UTF8  = syscall.NewLazyDLL("kernel32.dll")
@@ -31,21 +24,7 @@ func init() {
 	_, _, _ = procSetConsoleCP.Call(uintptr(cpUTF8))
 }
 
-// utf8Env adds UTF-8 stdio defaults the child env does not already set.
+// utf8Env returns the child environment (console codepage is set to UTF-8 in init).
 func utf8Env(env []string) []string {
-	defaults := map[string]string{
-		"PYTHONIOENCODING": "utf-8",
-		"PYTHONUTF8":       "1",
-	}
-	for _, kv := range env {
-		for k := range defaults {
-			if len(kv) > len(k) && kv[:len(k)+1] == k+"=" {
-				delete(defaults, k) // explicit user setting wins
-			}
-		}
-	}
-	for k, v := range defaults {
-		env = append(env, k+"="+v)
-	}
 	return env
 }

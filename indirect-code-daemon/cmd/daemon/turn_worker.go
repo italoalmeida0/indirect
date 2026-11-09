@@ -214,6 +214,8 @@ type turnBridge struct {
 	// after the running job started (its result cannot be stale).
 	mutationSeq     int
 	jobMutationMark map[string]int
+	toolNames       map[string]string
+	sandbox         *tools.Sandbox
 	agent           *core.Agent
 	client          provider.Client
 	modelInfo       provider.Model
@@ -239,6 +241,7 @@ func (w *turnBridge) run() error {
 	w.modelToUse = w.modelInfo.ID
 
 	sb := tools.NewSandbox(w.sessionCWD)
+	w.sandbox = sb
 	brainDir := w.env.brainDir(w.env.actorID)
 	if brainDir != "" {
 		sb.AllowExtra(brainDir)
@@ -259,6 +262,7 @@ func (w *turnBridge) run() error {
 	if err := w.resolveSkillPolicy(); err != nil {
 		return err
 	}
+	w.applySandboxSkillPolicy()
 
 	// Every command runs through the crash-only runner (decided D6).
 	// Tests and headless workers without a store keep the direct path.
@@ -277,9 +281,7 @@ func (w *turnBridge) run() error {
 		&tools.InspectTool{CWD: w.sessionCWD, Sandbox: sb},
 		&tools.SearchWebTool{CWD: w.sessionCWD, Sandbox: sb},
 		&tools.FetchURLTool{CWD: w.sessionCWD, Sandbox: sb},
-	}
-	if _, err := tools.PythonAvailable(); err == nil {
-		baseTools = append(baseTools, &tools.PythonTool{CWD: w.sessionCWD, Sandbox: sb, Slow: w.slowHook(), LogDir: brainDir, Starter: runnerStart})
+		&tools.ExecScriptTool{CWD: w.sessionCWD, Sandbox: sb, Slow: w.slowHook(), LogDir: brainDir, Starter: runnerStart},
 	}
 	bgCancelTool := &tools.BgCancelTool{Host: w, SessionID: w.env.actorID}
 	bgCheckTool := &tools.BgCheckTool{Host: w, SessionID: w.env.actorID}
@@ -304,7 +306,7 @@ func (w *turnBridge) run() error {
 			return fmt.Errorf("execution recovery record unavailable")
 		}
 		scope := executionHash(fmt.Sprintf("%s:%d:%d:%s", w.env.actorID, header.TurnIndex, header.StartedAt, header.ExecutionScope))
-		for _, name := range []string{"bash", "python", "write", "edit"} {
+		for _, name := range []string{"bash", "exec_script", "write", "edit"} {
 			if tool, ok := w.reg[name]; ok {
 				w.reg[name] = &recordedTool{Tool: tool, root: w.env.store.rootDir(), sid: w.env.actorID, scope: scope, cwd: w.sessionCWD}
 			}
@@ -503,6 +505,7 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 		if err := w.resolveSkillPolicy(); err != nil {
 			return err
 		}
+		w.applySandboxSkillPolicy()
 		if len(rr.context) > 0 {
 			w.agent.SetMessages(append(w.agent.History(), rr.context...))
 			for _, m := range rr.context {
@@ -547,6 +550,52 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 	w.agent.SetTools(w.effectiveRegistry())
 	w.agent.CompletionTool = modeCompletionTool(w.skillEff.Mode)
 	return nil
+}
+
+func (w *turnBridge) applySandboxSkillPolicy() {
+	if w.sandbox == nil {
+		return
+	}
+	ro := w.skillEff.ToolDecision("write") == skills.PolicyDeny && w.skillEff.ToolDecision("edit") == skills.PolicyDeny
+	w.sandbox.SetProjectReadOnly(ro)
+	if ro {
+		w.sandbox.Lock()
+	} else if !w.cfg.Settings.JailByDefault && !w.snap.jailed {
+		w.sandbox.Unlock()
+	}
+	readDenied := w.skillEff.ToolDecision("read") == skills.PolicyDeny &&
+		w.skillEff.ToolDecision("glob") == skills.PolicyDeny &&
+		w.skillEff.ToolDecision("search") == skills.PolicyDeny &&
+		w.skillEff.ToolDecision("inspect") == skills.PolicyDeny
+	netDenied := w.skillEff.ToolDecision("fetch_url") == skills.PolicyDeny &&
+		w.skillEff.ToolDecision("search_web") == skills.PolicyDeny
+	if readDenied || netDenied {
+		var perms tools.PermissionSet
+		brainDir := w.env.brainDir(w.env.actorID)
+		if !readDenied {
+			if w.sessionCWD != "" {
+				perms.FS.Read = append(perms.FS.Read, w.sessionCWD)
+			}
+			if brainDir != "" {
+				perms.FS.Read = append(perms.FS.Read, brainDir)
+			}
+		}
+		if !ro {
+			if w.sessionCWD != "" {
+				perms.FS.Write = append(perms.FS.Write, w.sessionCWD)
+			}
+		}
+		if brainDir != "" {
+			perms.FS.Write = append(perms.FS.Write, brainDir)
+		}
+		if !netDenied {
+			perms.Net.Allow = []string{"*"}
+		}
+		perms.Bash.Mode = "ask"
+		w.sandbox.SetPermissions(&perms)
+	} else {
+		w.sandbox.SetPermissions(nil)
+	}
 }
 
 func (w *turnBridge) wrapClient(c provider.Client) provider.Client {
@@ -845,7 +894,7 @@ func (w *turnBridge) slowHook() tools.SlowHook {
 		logPath := process.LogPath
 		reply := make(chan any, 1)
 		select {
-		case w.env.bg.inbox <- Envelope{Payload: bgRegisterMsg{Kind: kind, SessionID: w.env.actorID, Label: label, LogPath: logPath, BrainLog: process.BrainLog, StderrPath: process.StderrPath, PID: process.PID, JobID: process.JobID, StartedAt: process.StartedAt, Stop: process.Stop, Reply: reply}}:
+		case w.env.bg.inbox <- Envelope{Payload: bgRegisterMsg{Kind: kind, SessionID: w.env.actorID, Label: label, LogPath: logPath, BrainLog: process.BrainLog, StderrPath: process.StderrPath, NoDedupe: process.NoDedupe, PID: process.PID, JobID: process.JobID, StartedAt: process.StartedAt, Stop: process.Stop, Reply: reply}}:
 		case <-w.ctx.Done():
 			if process.Stop != nil {
 				process.Stop()
@@ -1095,9 +1144,19 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 			payload["event"] = map[string]any{"type": "tool_progress", "id": e.ID, "text": e.Text}
 		}
 	case core.EvToolCall:
+		if w.toolNames == nil {
+			w.toolNames = make(map[string]string)
+		}
+		w.toolNames[e.ID] = e.Name
 		payload["event"] = map[string]any{"type": "tool_call", "id": e.ID, "name": e.Name, "args": e.Args}
 	case core.EvToolResult:
 		w.declareWait("", time.Time{}) // tool finished: declared wait over
+		if toolName := w.toolNames[e.ID]; (toolName == "bash" || toolName == "exec_script") && !e.Result.IsError {
+			det, _ := e.Details.(map[string]any)
+			if det == nil || det["background_job_id"] == nil {
+				w.mutationSeq++
+			}
+		}
 		var sb strings.Builder
 		for _, c := range e.Result.Content {
 			if tb, ok := c.(provider.TextBlock); ok {
@@ -1126,7 +1185,7 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 				wait = max(wait, time.Duration(min(max(args.MaxWaitSeconds, 1), 3600)*float64(time.Second))+2*tuneWatchEvery)
 			}
 		}
-		if e.Name == "bash" || e.Name == "python" {
+		if e.Name == "bash" || e.Name == "exec_script" {
 			// Commands inside the foreground window are expected silence:
 			// they detach at AutoBackgroundAfter, so the wait must cover
 			// the detach deadline, not just the tool poll interval.

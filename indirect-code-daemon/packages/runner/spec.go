@@ -30,17 +30,29 @@ const (
 )
 
 // Spec is everything needed to run one command — the runner is generic
-// (terminal AND python go through it; it never knows what it runs).
+// (terminal AND exec_script go through it; it never knows what it runs).
 type Spec struct {
 	JobID     string   `json:"jobId"`
 	SessionID string   `json:"sessionId"`
-	Kind      string   `json:"kind"`  // "bash" | "python" | …
+	Kind      string   `json:"kind"`  // "bash" | "exec_script" | …
 	Label     string   `json:"label"` // human label for the UI row
 	Path      string   `json:"path"`  // binary
 	Args      []string `json:"args"`  // argv after the binary (exec semantics)
 	Env       []string `json:"env"`   // full environment
 	CWD       string   `json:"cwd"`
-	// Stdin is the inline payload fed to the command (python's -c input).
+	// Code is the inline JavaScript source when Kind == "exec_script" (executed
+	// in-process by --runner-command via packages/qjs). Kept out of state.json.
+	Code          string   `json:"code,omitempty"`
+	ShellPath     string   `json:"shellPath,omitempty"`
+	ShellFlag     string   `json:"shellFlag,omitempty"`
+	JailRoots     []string `json:"jailRoots,omitempty"`
+	ReadOnlyRoots []string `json:"readOnlyRoots,omitempty"`
+	FSReadRoots   []string `json:"fsReadRoots,omitempty"`
+	FSWriteRoots  []string `json:"fsWriteRoots,omitempty"`
+	NetAllow      []string `json:"netAllow,omitempty"`
+	Fingerprint   string   `json:"fingerprint,omitempty"`
+	NoDedupe      bool     `json:"noDedupe,omitempty"`
+	// Stdin is the inline payload fed to the command's standard input.
 	// Kept OUT of the durable state/log: it is launch data, not metadata.
 	Stdin string `json:"stdin,omitempty"`
 
@@ -59,7 +71,11 @@ func (s *Spec) Validate() error {
 	if s.JobID == "" || s.SessionID == "" {
 		return fmt.Errorf("runner: jobId and sessionId are required")
 	}
-	if s.Path == "" {
+	if s.Kind == "exec_script" {
+		if strings.TrimSpace(s.Code) == "" {
+			return fmt.Errorf("runner: code is required for exec_script")
+		}
+	} else if s.Path == "" {
 		return fmt.Errorf("runner: path is required")
 	}
 	if s.OutPath == "" || s.BrainPath == "" {

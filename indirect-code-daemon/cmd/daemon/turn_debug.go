@@ -44,7 +44,10 @@ var (
 	sessionDebugRecords = make(map[string][]SessionDebugPayload)
 )
 
-const maxSessionDebugRecords = 30
+const (
+	maxSessionDebugRecords  = 30
+	maxSessionDebugSessions = 64
+)
 
 func recordSessionDebugPayload(sessionID string, p SessionDebugPayload) {
 	if sessionID == "" {
@@ -59,6 +62,37 @@ func recordSessionDebugPayload(sessionID string, p SessionDebugPayload) {
 		records = records[len(records)-maxSessionDebugRecords:]
 	}
 	sessionDebugRecords[sessionID] = records
+
+	for len(sessionDebugRecords) > maxSessionDebugSessions {
+		var oldestSID string
+		var oldestTS int64
+		for sid, recs := range sessionDebugRecords {
+			if sid == sessionID {
+				continue
+			}
+			var ts int64
+			if len(recs) > 0 {
+				ts = recs[len(recs)-1].Timestamp
+			}
+			if oldestSID == "" || ts < oldestTS {
+				oldestSID = sid
+				oldestTS = ts
+			}
+		}
+		if oldestSID == "" {
+			break
+		}
+		delete(sessionDebugRecords, oldestSID)
+	}
+}
+
+func purgeSessionDebugPayloads(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	sessionDebugMu.Lock()
+	delete(sessionDebugRecords, sessionID)
+	sessionDebugMu.Unlock()
 }
 
 func getSessionDebugPayloads(sessionID string) []SessionDebugPayload {
@@ -86,7 +120,7 @@ func buildNativeToolsList(cwd string, mode string) []DebugToolInfo {
 		&tools.InspectTool{CWD: cwd, Sandbox: sb},
 		&tools.SearchWebTool{CWD: cwd, Sandbox: sb},
 		&tools.FetchURLTool{CWD: cwd, Sandbox: sb},
-		&tools.PythonTool{CWD: cwd, Sandbox: sb},
+		&tools.ExecScriptTool{CWD: cwd, Sandbox: sb},
 		&tools.BgCancelTool{},
 		&tools.BgCheckTool{},
 		&tools.BgAwaitTool{},
@@ -157,13 +191,13 @@ func simulateSessionPrompt(dcfg DaemonConfig, rec *SessionRecord, promptText str
 		&tools.ReadTool{CWD: rec.CWD, Sandbox: sb},
 		&tools.WriteTool{CWD: rec.CWD, Sandbox: sb},
 		&tools.EditTool{CWD: rec.CWD, Sandbox: sb},
-		&tools.BashTool{CWD: rec.CWD, Sandbox: sb},
+		&tools.BashTool{CWD: rec.CWD, Sandbox: sb, LogDir: brainDir},
 		&tools.GlobTool{CWD: rec.CWD, Sandbox: sb},
 		&tools.SearchTool{CWD: rec.CWD, Sandbox: sb},
 		&tools.InspectTool{CWD: rec.CWD, Sandbox: sb},
 		&tools.SearchWebTool{CWD: rec.CWD, Sandbox: sb},
 		&tools.FetchURLTool{CWD: rec.CWD, Sandbox: sb},
-		&tools.PythonTool{CWD: rec.CWD, Sandbox: sb},
+		&tools.ExecScriptTool{CWD: rec.CWD, Sandbox: sb, LogDir: brainDir},
 		&tools.BgCancelTool{},
 		&tools.BgCheckTool{},
 		&tools.BgAwaitTool{},

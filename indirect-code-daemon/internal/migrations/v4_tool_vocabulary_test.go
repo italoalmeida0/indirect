@@ -58,10 +58,10 @@ func TestV4RenameArgsPerTool(t *testing.T) {
 			absent: []string{"showHidden", "maxEntries"},
 		},
 		{
-			name:   "python keeps seconds",
-			msg:    oldToolCall("python", `{"seconds":5}`),
-			want:   []string{`"seconds":5`, `"name":"python"`},
-			absent: nil,
+			name:   "python renames to exec_script and keeps seconds",
+			msg:    oldToolCall("python", `{"seconds":5,"workdir":"/tmp"}`),
+			want:   []string{`"seconds":5`, `"work_dir":"/tmp"`, `"name":"exec_script"`},
+			absent: []string{`"name":"python"`, `"workdir"`},
 		},
 		{
 			name:   "search snake_case",
@@ -157,6 +157,19 @@ func TestV4FindLegacyVocabulary(t *testing.T) {
 	clean, _ := migrateOneMessage(t, oldToolCall("bg_await", `{"max_wait_seconds":1,"waiting_for":"bg_1","reason":"r"}`))
 	if got := findLegacyVocabulary(json.RawMessage(clean)); got != "" {
 		t.Fatalf("clean message reported as legacy: %q", got)
+	}
+}
+
+func TestV4PythonNonObjectArgsAndScriptMode(t *testing.T) {
+	// Script-mode python call keeps script/args and adds legacy_lang: "python".
+	gotScript, ok := migrateOneMessage(t, oldToolCall("python", `{"script":"run.py","args":["--fast"]}`))
+	if !ok || !contains(gotScript, `"name":"exec_script"`) || !contains(gotScript, `"legacy_lang":"python"`) || !contains(gotScript, `"script":"run.py"`) {
+		t.Fatalf("script-mode python migration unexpected: %s", gotScript)
+	}
+	// Non-object arguments must not be overwritten with an empty map.
+	gotArr, ok := migrateOneMessage(t, oldToolCall("python", `[1,2,3]`))
+	if !ok || !contains(gotArr, `"name":"exec_script"`) || !contains(gotArr, `"arguments":[1,2,3]`) {
+		t.Fatalf("non-object arguments lost: %s", gotArr)
 	}
 }
 

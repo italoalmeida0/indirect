@@ -23,7 +23,7 @@ func installGrantingTestSkills(t *testing.T) map[string]skills.SessionSkill {
 	yolo := skills.PermSpec{Policy: skills.PolicyYolo}
 	swapSkillRegistry(&skillStore{list: map[string]skills.Skill{
 		"build": {Name: "build", Mode: "agentic", Permissions: map[string]skills.PermSpec{
-			"read": ask, "write": ask, "edit": ask, "bash": ask, "python": ask,
+			"read": ask, "write": ask, "edit": ask, "bash": ask, "exec_script": ask,
 			"glob": ask, "search": ask, "inspect": ask,
 			"search_web": ask, "fetch_url": ask,
 			"bg_await": ask, "bg_check": ask, "bg_cancel": ask,

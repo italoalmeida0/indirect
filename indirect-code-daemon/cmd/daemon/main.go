@@ -19,10 +19,12 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/qjs"
 
 	"github.com/gorilla/websocket"
 )
@@ -52,6 +54,9 @@ type link struct {
 // (--worker / the update handoff flags / --slot). Everything else is
 // boot. No legacy shapes: an invocation that mixes roles fails loudly.
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--js" {
+		os.Exit(jsMain(os.Args[2:]))
+	}
 	// Runner role first: it is spec-driven (stdin) and flag-agnostic.
 	for _, a := range os.Args[1:] {
 		if a == "--" {
@@ -70,6 +75,169 @@ func main() {
 		return
 	}
 	bootMain()
+}
+
+func jsMain(args []string) int {
+	var (
+		code       string
+		filename   string
+		scriptArgs []string
+		omitArgv1  bool
+		stdin      io.Reader = os.Stdin
+	)
+
+	stripLeadingDashDash := func(s []string) []string {
+		if len(s) > 0 && s[0] == "--" {
+			return s[1:]
+		}
+		return s
+	}
+
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+		// After `--`, if no token remains or the next token is `-`, read and execute stdin.
+		if len(args) == 0 || args[0] == "-" {
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "js error reading stdin: %v\n", err)
+				return 1
+			}
+			code = string(raw)
+			stdin = nil
+			if len(args) == 0 {
+				filename = "<stdin>"
+				omitArgv1 = true
+			} else {
+				filename = "-"
+				scriptArgs = args[1:]
+			}
+		} else {
+			filePath := args[0]
+			absPath, err := filepath.Abs(filePath)
+			if err != nil {
+				absPath = filePath
+			}
+			raw, err := os.ReadFile(absPath)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", filePath, err)
+				return 1
+			}
+			code = string(raw)
+			filename = absPath
+			scriptArgs = args[1:]
+		}
+	} else if len(args) == 0 || args[0] == "-" {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "js error reading stdin: %v\n", err)
+			return 1
+		}
+		code = string(raw)
+		stdin = nil
+		if len(args) == 0 {
+			filename = "<stdin>"
+			omitArgv1 = true
+		} else {
+			filename = "-"
+			scriptArgs = args[1:]
+		}
+	} else if args[0] == "-e" || args[0] == "--eval" || args[0] == "-p" || args[0] == "--print" {
+		isPrint := args[0] == "-p" || args[0] == "--print"
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "js error: %s requires a code argument\n", args[0])
+			return 1
+		}
+		code = args[1]
+		if isPrint {
+			quoted, _ := json.Marshal(code)
+			code = fmt.Sprintf(`{
+  let __qjs_p_val;
+  const __qjs_p_src = %s;
+  try {
+    __qjs_p_val = eval(__qjs_p_src);
+  } catch (__qjs_p_err) {
+    if (__qjs_p_err instanceof SyntaxError && /\bawait\b/.test(__qjs_p_src)) {
+      const __AF = Object.getPrototypeOf(async function(){}).constructor;
+      if (typeof require !== "undefined" && typeof __dirname !== "undefined") {
+        __qjs_p_val = (new __AF("exports", "require", "module", "__filename", "__dirname", "return (\n" + __qjs_p_src + "\n)"))(exports, require, module, __filename, __dirname);
+      } else {
+        __qjs_p_val = (new __AF("return (\n" + __qjs_p_src + "\n)"))();
+      }
+    } else {
+      throw __qjs_p_err;
+    }
+  }
+  Promise.resolve(__qjs_p_val).then((__v) => console.log(__v));
+}`, string(quoted))
+		}
+		filename = "<eval>"
+		omitArgv1 = true
+		scriptArgs = stripLeadingDashDash(args[2:])
+	} else if args[0] == "-v" || args[0] == "--version" {
+		fmt.Println("v22.0.0")
+		return 0
+	} else if strings.HasPrefix(args[0], "-") {
+		fmt.Fprintf(os.Stderr, "%s: bad option: %s\n", os.Args[0], args[0])
+		return 9
+	} else {
+		filePath := args[0]
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			absPath = filePath
+		}
+		raw, err := os.ReadFile(absPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", filePath, err)
+			return 1
+		}
+		code = string(raw)
+		filename = absPath
+		scriptArgs = args[1:]
+	}
+
+	cwd, _ := os.Getwd()
+	exe, _ := os.Executable()
+	shPath, shFlag := tools.ShellForTests()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigc := make(chan os.Signal, 2)
+	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigc)
+	var sigCode atomic.Int32
+	go func() {
+		select {
+		case s := <-sigc:
+			if s == syscall.SIGINT {
+				sigCode.Store(130)
+			} else {
+				sigCode.Store(143)
+			}
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	exitCode, err := qjs.RunScript(ctx, qjs.ScriptOptions{
+		Code:      code,
+		Filename:  filename,
+		CWD:       cwd,
+		Args:      scriptArgs,
+		OmitArgv1: omitArgv1,
+		Stdin:     stdin,
+		Stdout:    os.Stdout,
+		Stderr:    os.Stderr,
+		ExecPath:  exe,
+		ShellPath: shPath,
+		ShellFlag: shFlag,
+	})
+	if sc := int(sigCode.Load()); sc != 0 {
+		return sc
+	}
+	if err != nil && exitCode == 0 {
+		return 1
+	}
+	return exitCode
 }
 
 func workerMode(args []string) bool {
@@ -195,20 +363,10 @@ func daemonMain() {
 		}
 	}
 
-	// Python/shell checks (same as v1: failure disables tools, not boot).
+	// Shell check (failure disables bash, not boot; exec_script is always built-in).
 	sharedDir := filepath.Join(root.rootDir(), "external")
-	if bin, err := tools.EnsurePython(sharedDir); err != nil {
-		tools.SetPythonOverride("", err)
-	} else {
-		tools.SetPythonOverride(bin, nil)
-	}
 	if err := tools.EnsureShell(sharedDir); err != nil {
-		if bin, perr := tools.PythonAvailable(); perr == nil && bin != "" {
-			fmt.Printf("Warning: no shell available (%v); bash tool disabled, python tool active.\n", err)
-		} else {
-			fmt.Printf("Error: no usable shell or python (%v).\n", err)
-			os.Exit(1)
-		}
+		fmt.Printf("Warning: no shell available (%v); bash tool disabled, exec_script tool active.\n", err)
 	}
 
 	// Builtin skills (builtin_skills/*.js) are embedded in the binary and

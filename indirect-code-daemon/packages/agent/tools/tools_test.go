@@ -642,7 +642,7 @@ func TestDumpToolsSchema(t *testing.T) {
 		&FetchURLTool{},
 		&GlobTool{},
 		&InspectTool{},
-		&PythonTool{},
+		&ExecScriptTool{},
 		&QuestionTool{},
 		&ReadTool{},
 		&SearchTool{},

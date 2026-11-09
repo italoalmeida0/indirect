@@ -95,7 +95,7 @@ describe("Fixer B2-4 Regression Tests", () => {
       expect(src).not.toContain('props.m.bgRunning() || props.m.isDetachedBg()');
     });
 
-    test("ToolEditBodies python block displays output when bgRunning() is false", () => {
+    test("ToolEditBodies exec_script block displays output when bgRunning() is false", () => {
       const src = readFileSync("web/src/indirect-code/components/tool/ToolEditBodies.tsx", "utf-8");
       expect(src).toContain('text={props.m.bgRunning() ?');
       expect(src).not.toContain('props.m.bgRunning() || props.m.isDetachedBg()');

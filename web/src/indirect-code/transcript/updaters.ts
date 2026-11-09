@@ -293,7 +293,14 @@ export function appendToolResult(
   const index = target >= 0 ? target : fallback;
   const carrier = index >= 0 ? prev[index] : undefined;
   const detailed = result == null ? null : stripToolEnvelopeDetailed(result);
-  const env = detailed && Object.keys(detailed.attrs).length ? { ...(details as any), env: detailed.attrs, footer: detailed.footer } : details;
+  const env = detailed && Object.keys(detailed.attrs).length
+    ? {
+        ...(details as any),
+        ...(detailed.attrs.truncated === "true" ? { truncated: true, ...(detailed.attrs.page ? { page: detailed.attrs.page } : {}) } : {}),
+        env: detailed.attrs,
+        footer: detailed.footer,
+      }
+    : details;
   const resBlock: ContentBlock = {
     type: "tool_result", toolId: callId,
     toolResult: detailed ? detailed.body : result,

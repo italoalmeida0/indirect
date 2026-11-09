@@ -55,6 +55,80 @@ func (s *Sandbox) SetPermissions(p *PermissionSet) {
 	s.Permissions = p
 }
 
+const deniedScopeSentinel = "__NONE__"
+
+// FSReadScopes returns the scoped filesystem read roots when a PermissionSet is
+// attached to the sandbox (or []string{"__NONE__"} when read is empty/denied).
+// Returns nil when no PermissionSet is active.
+func (s *Sandbox) FSReadScopes() []string {
+	if s == nil || s.Permissions == nil {
+		return nil
+	}
+	if len(s.Permissions.FS.Read) == 0 {
+		return []string{deniedScopeSentinel}
+	}
+	return append([]string(nil), s.Permissions.FS.Read...)
+}
+
+// FSWriteScopes returns the scoped filesystem write roots when a PermissionSet
+// is attached to the sandbox (or []string{"__NONE__"} when write is empty/denied).
+// Returns nil when no PermissionSet is active.
+func (s *Sandbox) FSWriteScopes() []string {
+	if s == nil || s.Permissions == nil {
+		return nil
+	}
+	if len(s.Permissions.FS.Write) == 0 {
+		return []string{deniedScopeSentinel}
+	}
+	return append([]string(nil), s.Permissions.FS.Write...)
+}
+
+// NetAllowScopes returns the allowed network hosts when a PermissionSet is
+// attached to the sandbox (or []string{"__NONE__"} when net.allow is empty).
+// Returns nil when no PermissionSet is active.
+func (s *Sandbox) NetAllowScopes() []string {
+	if s == nil || s.Permissions == nil {
+		return nil
+	}
+	if len(s.Permissions.Net.Allow) == 0 {
+		return []string{deniedScopeSentinel}
+	}
+	return append([]string(nil), s.Permissions.Net.Allow...)
+}
+
+// CheckNetHost verifies that host is permitted by s.Permissions.Net.Allow.
+// No-op when s.Permissions is nil.
+func (s *Sandbox) CheckNetHost(host string) error {
+	if s == nil || s.Permissions == nil {
+		return nil
+	}
+	if len(s.Permissions.Net.Allow) == 0 {
+		return fmt.Errorf("permission denied: this agent has no network permission")
+	}
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" {
+		return fmt.Errorf("permission denied: empty network host")
+	}
+	bareHost := h
+	if idx := strings.LastIndexByte(h, ':'); idx > 0 && !strings.Contains(h[:idx], ":") {
+		bareHost = h[:idx]
+	}
+	bareHost = strings.Trim(bareHost, "[]")
+	for _, pat := range s.Permissions.Net.Allow {
+		p := strings.ToLower(strings.TrimSpace(pat))
+		if p == "" {
+			continue
+		}
+		if p == "*" || p == h || p == bareHost {
+			return nil
+		}
+		if strings.HasPrefix(p, "*.") && strings.HasSuffix(bareHost, p[1:]) {
+			return nil
+		}
+	}
+	return fmt.Errorf("permission denied: network host %q is outside declared allowlist", host)
+}
+
 func (s *Sandbox) CheckReadPath(path string) error {
 	if err := s.CheckPath(path); err != nil {
 		return err
@@ -71,6 +145,11 @@ func (s *Sandbox) CheckReadPath(path string) error {
 func (s *Sandbox) CheckWritePath(path string) error {
 	if err := s.CheckPath(path); err != nil {
 		return err
+	}
+	if s != nil && s.ProjectReadOnly() {
+		if target, err := canonicalOrParent(path); err == nil && !s.isUnderExtraRoot(target) {
+			return fmt.Errorf("permission denied: project workspace is read-only in this session")
+		}
 	}
 	if s == nil || s.Permissions == nil {
 		return nil
@@ -98,6 +177,32 @@ func checkScopedPath(op, path string, scopes []string) error {
 	return fmt.Errorf("permission denied: %s %q is outside declared scopes", op, path)
 }
 
+func (s *Sandbox) CheckExecScriptPermission() error {
+	if s == nil || s.Permissions == nil {
+		return nil
+	}
+	mode := strings.ToLower(strings.TrimSpace(s.Permissions.Bash.Mode))
+	if mode == "" {
+		mode = "none"
+	}
+	switch mode {
+	case "none":
+		return fmt.Errorf("permission denied: this agent has no bash permission")
+	case "ask":
+		return nil
+	case "allowlist":
+		for _, name := range s.Permissions.Bash.Allow {
+			base := strings.TrimSuffix(strings.ToLower(filepath.Base(strings.TrimSpace(name))), ".exe")
+			if base == "exec_script" {
+				return nil
+			}
+		}
+		return fmt.Errorf("permission denied: bash command %q is not in allowlist", "exec_script")
+	default:
+		return fmt.Errorf("permission denied: unsupported bash mode %q", mode)
+	}
+}
+
 func (s *Sandbox) CheckBashPermission(cmd string) error {
 	if s == nil || s.Permissions == nil {
 		return nil
@@ -114,16 +219,16 @@ func (s *Sandbox) CheckBashPermission(cmd string) error {
 		// every launch. Unlike durable consent, ask mode is never cached.
 		return nil
 	case "allowlist":
+		allowed := map[string]bool{}
+		for _, name := range s.Permissions.Bash.Allow {
+			allowed[filepath.Base(strings.TrimSpace(name))] = true
+		}
 		if strings.ContainsAny(cmd, "`\n\r<>") || strings.Contains(cmd, "$(") {
 			return fmt.Errorf("permission denied: bash allowlist does not permit substitution or redirection")
 		}
 		names := commandNames(cmd)
 		if len(names) == 0 {
 			return fmt.Errorf("permission denied: empty command")
-		}
-		allowed := map[string]bool{}
-		for _, name := range s.Permissions.Bash.Allow {
-			allowed[filepath.Base(strings.TrimSpace(name))] = true
 		}
 		for _, name := range names {
 			if !allowed[name] {
