@@ -4,6 +4,12 @@ import type { createMentions } from "../hooks/useMentions";
 import { FloatMenu } from "./FloatMenu";
 import { FileIcon } from "../presentation";
 
+function splitFilePath(path: string): { dir: string; base: string } {
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  if (slash < 0) return { dir: "", base: path };
+  return { dir: path.slice(0, slash + 1), base: path.slice(slash + 1) };
+}
+
 export function MentionMenu(props: {
   mentions: ReturnType<typeof createMentions>;
   inputId: string;
@@ -18,39 +24,51 @@ export function MentionMenu(props: {
     <FloatMenu
       anchor={() => document.getElementById(props.inputId)}
       open={props.mentions.open()}
+      onClose={() => props.mentions.keyDown(new KeyboardEvent("keydown", { key: "Escape" }))}
       placement="top-start"
       width="min(28rem, calc(100vw - 1.5rem))"
     >
-      <div class="px-2.5 py-1 text-[11px] font-medium text-fg-muted flex items-center justify-between">
+      <div class="px-2.5 py-1 border-b border-border-subtle mb-0.5 text-[11px] font-medium text-fg-muted flex items-center justify-between">
         <span>Workspace files</span>
         <Show when={props.mentions.files().length > 0}>
-          <span class="tabular-nums text-[10px] text-fg-muted">{props.mentions.files().length}</span>
+          <span class="font-mono tabular-nums text-[10px] text-fg-muted">{props.mentions.files().length}</span>
         </Show>
       </div>
       <div
         ref={list}
         role="listbox"
         aria-label="File mentions"
-        class="max-h-60 overflow-y-auto px-0.5 space-y-0.5"
+        class="max-h-60 overflow-y-auto px-0.5 py-0.5 space-y-0.5 [scrollbar-gutter:stable]"
       >
         <For each={props.mentions.files()}>
-          {(path, i) => (
-            <button
-              role="option"
-              aria-selected={i() === props.mentions.index()}
-              onMouseDown={(e) => e.preventDefault()}
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => props.mentions.pick(path)}
-              class={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors ${
-                i() === props.mentions.index()
-                  ? "bg-accent-subtle text-fg font-medium"
-                  : "hover:bg-surface-muted text-fg-secondary hover:text-fg"
-              }`}
-            >
-              <FileIcon path={path} size={14} />
-              <span class="truncate">{path}</span>
-            </button>
-          )}
+          {(path, i) => {
+            const parts = splitFilePath(path);
+            const active = () => i() === props.mentions.index();
+            return (
+              <button
+                type="button"
+                role="option"
+                aria-label={path}
+                aria-selected={active()}
+                onMouseDown={(e) => e.preventDefault()}
+                onPointerDown={(e) => press(e.currentTarget)}
+                onClick={() => props.mentions.pick(path)}
+                class={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors ${
+                  active()
+                    ? "bg-accent-subtle text-fg"
+                    : "hover:bg-surface-muted text-fg-secondary hover:text-fg"
+                }`}
+              >
+                <FileIcon path={path} size={14} />
+                <span class="truncate min-w-0">
+                  <Show when={parts.dir}>
+                    <span class="text-fg-muted">{parts.dir}</span>
+                  </Show>
+                  <span class={active() ? "font-medium text-fg" : "text-fg"}>{parts.base}</span>
+                </span>
+              </button>
+            );
+          }}
         </For>
         <Show when={!props.mentions.files().length}>
           <p class="px-2.5 py-2.5 text-xs text-fg-muted">

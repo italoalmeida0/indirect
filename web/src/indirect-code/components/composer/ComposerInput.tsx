@@ -30,7 +30,7 @@ export function ComposerInput() {
 <>
 <MentionMenu mentions={c.mentions} inputId="rc-composer" />
 <Show when={dragActive()}>
-  <div class="mx-3 mt-2.5 flex items-center justify-center gap-2 rounded-control border border-dashed border-accent bg-accent-subtle px-3 py-2 text-xs font-medium text-accent pointer-events-none">
+  <div class="mx-3 mt-2.5 flex items-center justify-center gap-2 rounded-lg border border-dashed border-accent bg-accent-subtle px-3 py-2 text-xs font-medium text-accent pointer-events-none">
     <Iconify icon="lucide:upload-cloud" size={14} />
     <span>Drop files to attach to prompt</span>
   </div>
@@ -41,9 +41,9 @@ export function ComposerInput() {
     <span>Preparing {c.preparingAttachments()} file(s)...</span>
   </p>
 </Show>
-{/* Attachment chips (chatbot-style) */}
+{/* Attachment chips */}
 <Show when={c.pendingAttachments().length > 0}>
-  <div class="flex flex-wrap gap-1.5 px-3.5 pt-3">
+  <div class="flex flex-wrap gap-1.5 px-3.5 pt-2.5">
     <For each={c.pendingAttachments()}>
       {(att) => (
         <div
@@ -57,16 +57,19 @@ export function ComposerInput() {
             }
           }}
           aria-label={`Preview ${att.name}`}
-          class="relative group flex items-center gap-1.5 bg-surface-subtle rounded-control border border-border pl-2 pr-2.5 py-1 text-xs max-w-[200px] cursor-pointer hover:border-border-strong hover:bg-surface-muted shadow-resting transition-colors"
+          class="group flex items-center gap-1.5 bg-surface-subtle rounded-md border border-border pl-2 pr-1 py-1 text-xs max-w-[220px] cursor-pointer hover:border-border-strong hover:bg-surface-muted transition-colors"
           data-rc-tip={`${att.name} (${Math.max(1, Math.round(att.size / 1024))}KB) — click to preview`}
         >
           <Show
             when={att.loading}
-            fallback={<FileIcon path={att.name} size={18} />}
+            fallback={<FileIcon path={att.name} size={15} />}
           >
-            <span class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
+            <span class="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
           </Show>
           <span class="truncate text-fg font-medium">{att.name}</span>
+          <span class="shrink-0 font-mono text-[10px] text-fg-muted tabular-nums">
+            {Math.max(1, Math.round(att.size / 1024))}K
+          </span>
           <Show when={att.uploading}>
             <span class="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
           </Show>
@@ -76,11 +79,11 @@ export function ComposerInput() {
               e.stopPropagation();
               c.removePendingAttachment(att.key);
             }}
-            class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-surface-raised hover:bg-danger hover:border-danger text-fg-secondary hover:text-accent-foreground transition-colors shadow-resting cursor-pointer"
+            class="shrink-0 flex h-4 w-4 items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors cursor-pointer"
             disabled={c.sending()}
             data-rc-tip="Remove" aria-label="Remove"
           >
-            <Iconify icon="lucide:x" size={10} />
+            <Iconify icon="lucide:x" size={11} />
           </button>
         </div>
       )}

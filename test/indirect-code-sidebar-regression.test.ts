@@ -38,7 +38,7 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
 
     test("active project has visual background highlight", () => {
       const src = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
-      expect(src).toContain("bg-ink-800/60 font-medium text-ink-100 rounded-md");
+      expect(src).toContain("bg-surface-muted/55 font-medium text-fg");
     });
   });
 

@@ -39,24 +39,24 @@ export function Composer() {
   <StatusBanners />
     <Show when={!collapsed()}>
     <Show when={!s.workspaceBlocked()} fallback={
-      <div role="status" class="rounded-panel border border-warning/35 bg-warning-subtle/40 px-4 py-3.5 text-sm text-fg-secondary shadow-resting" data-workspace-unavailable>
-        <div class="flex items-center gap-2 font-medium text-fg">
-          <Iconify icon="lucide:folder-x" size={17} class="text-warning shrink-0" />
+      <div role="status" class="rounded-lg border border-warning/35 bg-warning-subtle px-4 py-3 text-xs text-fg-secondary" data-workspace-unavailable>
+        <div class="flex items-center gap-2 font-medium text-fg text-[13px]">
+          <Iconify icon="lucide:folder-x" size={15} class="text-warning shrink-0" />
           <span>{s.workspaceState() === "missing" ? "The project folder was deleted" : "The project folder is unavailable"}</span>
         </div>
-        <p class="mt-1.5 text-xs text-fg-muted">{s.workspaceState() === "missing" ? "Recreate this folder on the host to continue this conversation." : "Restore access to this folder on the host to continue."}</p>
-        <p class="mt-1 font-mono text-xs text-fg-secondary break-all">{s.workspacePath()}</p>
+        <p class="mt-1 text-xs text-fg-muted">{s.workspaceState() === "missing" ? "Recreate this folder on the host to continue this conversation." : "Restore access to this folder on the host to continue."}</p>
+        <p class="mt-1 font-mono text-[11px] text-fg-secondary break-all">{s.workspacePath()}</p>
         <div class="mt-2.5 flex items-center gap-2">
-          <button type="button" onClick={s.checkWorkspace} class="rounded-control border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Check again</button>
+          <button type="button" onClick={s.checkWorkspace} class="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Check again</button>
           <Show when={t.sessionStatus() === "running"}>
-            <button type="button" onClick={t.cancelCurrentTurn} class="rounded-control border border-danger/35 bg-danger-subtle px-2.5 py-1 text-xs font-medium text-danger hover:opacity-90 transition-opacity cursor-pointer">Stop turn</button>
+            <button type="button" onClick={t.cancelCurrentTurn} class="rounded-md border border-danger/35 bg-danger-subtle px-2.5 py-1 text-xs font-medium text-danger hover:opacity-90 transition-opacity cursor-pointer">Stop turn</button>
           </Show>
         </div>
       </div>
     }>
     <div class="rc-composer relative flex flex-col">
     <ComposerInput />
-    <div class="rc-composer-toolbar flex items-end justify-between gap-2 px-2.5 py-2">
+    <div class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 py-1.5">
       <div class="flex flex-1 min-w-0 flex-wrap items-center gap-1 text-xs text-fg-secondary">
       <ToolbarContext />
       <ToolbarModel />

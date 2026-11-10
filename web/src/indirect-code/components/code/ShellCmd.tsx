@@ -36,7 +36,7 @@ export function ShellCmd(props: { text: string; prompt?: string }) {
   };
   return (
     <code class="font-mono truncate min-w-0">
-      <span class="text-ink-600 select-none">{props.prompt ?? "$ "}</span>
+      <span class="text-fg-muted/75 select-none">{props.prompt ?? "$ "}</span>
       <For each={parts()}>{(p) =>
         p.c ? <span class={p.c}>{p.t}</span> : <span>{p.t}</span>
       }</For>

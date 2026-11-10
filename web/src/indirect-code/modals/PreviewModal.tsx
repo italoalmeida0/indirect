@@ -43,16 +43,40 @@ export function PreviewModal() {
             const t = f().text;
             return t ? Math.max(1, Math.round(t.length / 4)) : 0;
           };
+          const footprintPct = () =>
+            Math.min(100, ((m.truncateTokens() || 16000) / 128000) * 100);
+
           return (
-            <div class="space-y-3.5">
-              {/* Bespoke File Telemetry & Action Toolbar */}
-              <div class="rc-studio-well flex items-center justify-between gap-2.5 px-3 py-2 flex-wrap">
-                <div class="flex items-center gap-1.5 flex-wrap">
+            <div class="rounded-panel border border-border bg-surface overflow-hidden">
+              {/* IDE File Preview Header Bar */}
+              <div class="flex items-center justify-between gap-2 border-b border-border bg-surface-subtle px-3 py-2 flex-wrap">
+                <div class="flex items-center gap-2 min-w-0 font-mono text-[11px] text-fg-muted tabular-nums">
+                  <Iconify
+                    icon={f().dataUrl ? "lucide:image" : "lucide:file-code-2"}
+                    size={13}
+                    class="shrink-0 text-fg-secondary"
+                  />
+                  <span class="rounded border border-border bg-surface px-1.5 py-0.5 text-fg-secondary">
+                    {f().dataUrl ? "image" : lang()}
+                  </span>
+                  <Show when={f().text}>
+                    <span class="text-border-strong" aria-hidden="true">
+                      ·
+                    </span>
+                    <span>{lineCount()} lines</span>
+                    <span class="text-border-strong" aria-hidden="true">
+                      ·
+                    </span>
+                    <span>~{compactTokens(estTokens())} tok</span>
+                  </Show>
+                </div>
+
+                <div class="flex items-center gap-1.5 flex-wrap ml-auto">
                   <Show when={f().truncated && f().fullText}>
                     <button
                       type="button"
                       onClick={m.restorePreviewFile}
-                      class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-control border bg-warning-subtle border-warning/35 text-warning hover:bg-warning/20 transition-colors cursor-pointer"
+                      class="inline-flex items-center gap-1.5 rounded-md border border-warning/35 bg-warning-subtle px-2.5 py-1 text-xs font-medium text-warning hover:bg-warning/15 transition-colors cursor-pointer"
                     >
                       <Iconify icon="lucide:rotate-ccw" size={12} />
                       <span>Restore Full</span>
@@ -62,10 +86,10 @@ export function PreviewModal() {
                     <button
                       type="button"
                       onClick={() => m.setShowTruncateInput(!m.showTruncateInput())}
-                      class={`flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-control border transition-colors cursor-pointer ${
+                      class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
                         m.showTruncateInput()
-                          ? "border-accent bg-accent-subtle text-accent"
-                          : "border-border bg-surface text-fg-secondary hover:text-fg hover:bg-surface-muted"
+                          ? "border-accent bg-accent-subtle text-fg"
+                          : "border-border bg-surface text-fg-secondary hover:bg-surface-muted hover:text-fg"
                       }`}
                       data-rc-tip="Limit preview length"
                       aria-label="Limit preview length"
@@ -78,11 +102,11 @@ export function PreviewModal() {
                     <button
                       type="button"
                       onClick={() => {
-                        copyWithToast(f().text || "");
+                        void copyWithToast(f().text || "");
                         m.setPreviewCopied(true);
                         setTimeout(() => m.setPreviewCopied(false), 1500);
                       }}
-                      class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-control border border-border bg-surface text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                      class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       <Iconify
                         icon={m.previewCopied() ? "lucide:check" : "lucide:copy"}
@@ -96,42 +120,29 @@ export function PreviewModal() {
                     <button
                       type="button"
                       onClick={m.downloadPreviewFile}
-                      class="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-control border border-border bg-surface text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                      class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       <Iconify icon="lucide:download" size={12} />
                       <span>Download</span>
                     </button>
                   </Show>
                 </div>
-
-                <div class="flex items-center gap-2 text-[11px] font-mono text-fg-muted ml-auto">
-                  <Show when={f().text}>
-                    <span>{lineCount()} lines</span>
-                    <span class="text-border-strong">·</span>
-                    <span>~{compactTokens(estTokens())} tok</span>
-                    <span class="text-border-strong">·</span>
-                  </Show>
-                  <span class="rounded-md border border-border bg-surface px-2 py-0.5 text-fg-secondary">
-                    {f().dataUrl ? "image" : lang()}
-                  </span>
-                </div>
               </div>
 
-              {/* Truncate input card */}
+              {/* Inline Preview Slicer Drawer */}
               <Show when={m.showTruncateInput() && !f().dataUrl}>
-                <div class="rc-studio-card p-3.5 space-y-3">
-                  {/* Context Window Footprint Slicer Bar */}
-                  <div class="rc-studio-well p-2.5 space-y-1.5" aria-hidden="true">
+                <div class="border-b border-border bg-surface px-3.5 py-3 space-y-3">
+                  <div class="space-y-1.5" aria-hidden="true">
                     <div class="flex items-center justify-between text-[11px]">
-                      <span class="text-fg-secondary font-medium">128K Context Window Footprint</span>
-                      <span class="font-mono text-accent">
-                        {Math.min(100, ((m.truncateTokens() || 16000) / 128000) * 100).toFixed(1)}% of 128K window
+                      <span class="font-medium text-fg-secondary">128K context window share</span>
+                      <span class="font-mono text-fg-muted tabular-nums">
+                        {footprintPct().toFixed(1)}% of 128K
                       </span>
                     </div>
                     <div class="h-1.5 rounded-full bg-surface-muted overflow-hidden">
                       <div
-                        class="h-full bg-accent rounded-full transition-all"
-                        style={{ width: `${Math.min(100, ((m.truncateTokens() || 16000) / 128000) * 100)}%` }}
+                        class="h-full rounded-full bg-accent transition-[width] duration-150"
+                        style={{ width: `${footprintPct()}%` }}
                       />
                     </div>
                   </div>
@@ -157,7 +168,7 @@ export function PreviewModal() {
                     <button
                       type="button"
                       onClick={() => m.setShowTruncateInput(false)}
-                      class="text-xs text-fg-secondary hover:text-fg px-2.5 py-1 cursor-pointer"
+                      class="rounded-md px-2.5 py-1 text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       Cancel
                     </button>
@@ -174,8 +185,8 @@ export function PreviewModal() {
                 </div>
               </Show>
 
-              {/* Code / Image Content Viewer */}
-              <div class="max-h-[55vh] overflow-auto rounded-panel border border-border bg-surface-subtle p-4 shadow-resting">
+              {/* Code / Media Frame */}
+              <div class="max-h-[56vh] overflow-auto bg-background/50 p-4">
                 <Show
                   when={f().dataUrl}
                   fallback={
@@ -187,8 +198,12 @@ export function PreviewModal() {
                     />
                   }
                 >
-                  <div class="flex items-center justify-center p-4">
-                    <img src={f().dataUrl} alt={f().name || "Preview"} class="max-w-full rounded-xl object-contain shadow-raised" />
+                  <div class="flex items-center justify-center p-2">
+                    <img
+                      src={f().dataUrl}
+                      alt={f().name || "Preview"}
+                      class="max-w-full rounded-lg border border-border object-contain"
+                    />
                   </div>
                 </Show>
               </div>

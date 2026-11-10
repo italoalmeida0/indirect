@@ -63,10 +63,10 @@ function renderThinkingRow(
     live()
       ? `Thinking ${formatDurationSecs(ctx.thinkingElapsed())}`
       : entry.msg.thinkingDuration !== undefined
-        ? `Thinking ${formatDurationSecs(entry.msg.thinkingDuration)}`
+        ? `Thought ${formatDurationSecs(entry.msg.thinkingDuration)}`
         : open()
           ? "Hide thinking"
-          : "Thinking";
+          : "Thought";
   return (
     <div style={hidden() ? { display: "none" } : undefined} data-thinking-row={key}>
       <button
@@ -75,21 +75,19 @@ function renderThinkingRow(
         onClick={toggle}
         aria-expanded={open()}
         aria-label={label()}
-        class="group/tool w-full flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-lg cursor-pointer hover:bg-surface-muted/70 text-[13px] text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent transition-colors"
+        class="group/tool inline-flex max-w-full items-center gap-1.5 py-0.5 px-1.5 -ml-1.5 rounded-md cursor-pointer hover:bg-surface-muted/55 text-[12.5px] text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent transition-colors"
       >
-        <Iconify icon="lucide:brain" size={13} class={`shrink-0 ${live() ? "text-accent" : "text-fg-muted"}`} />
-        <span class={`shrink-0 ${live() ? "ui-shimmer font-medium" : "text-fg-muted group-hover/tool:text-fg-secondary"}`}>{label()}</span>
-        <span class="flex-1" />
         <Iconify
-          icon="lucide:chevron-down"
+          icon="lucide:chevron-right"
           size={12}
-          class={`shrink-0 text-fg-muted transition-transform duration-150 ${open() ? "rotate-180" : ""}`}
+          class={`shrink-0 text-fg-muted/80 transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
         />
+        <span class={`truncate ${live() ? "ui-shimmer font-medium text-fg-secondary" : "text-fg-muted group-hover/tool:text-fg-secondary"}`}>{label()}</span>
       </button>
       <DisclosureBody open={open()}>
         <div
           ref={(el) => onCleanup(followTail(el, () => open() && streaming()))}
-          class="rc-markdown w-full text-xs leading-relaxed break-words overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] max-h-64 ml-2 pl-3 pb-1 border-l-2 border-border/70 text-fg-secondary"
+          class="rc-markdown w-full text-xs leading-relaxed break-words overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] max-h-64 pl-4 py-1 text-fg-muted"
         >
           <StreamingMarkdown basic streaming={streaming()} active={open() && !hidden()}>
             {entry.block.reasoning || "(thinking…)"}
@@ -139,38 +137,39 @@ function renderTurnAggregate(
   const visibleRuns = createMemo(() => groupToolRuns(series.entries));
   const onlyThinking = createMemo(() => series.entries.every((e) => e.kind === "thinking") && series.units.length === 0);
   return (
-    <div class="w-full rounded-xl border border-t border-border/75 bg-surface-subtle/50 overflow-hidden my-1 shadow-2xs">
+    <div class="w-full border-t border-transparent my-0.5">
       <button
+        type="button"
         onPointerDown={(e) => press(e.currentTarget)}
         onClick={toggle}
-        class="w-full flex items-center gap-2 px-3 py-2 hover:bg-surface-muted/60 transition-colors cursor-pointer text-left"
+        aria-expanded={open()}
+        class="group/agg inline-flex max-w-full items-center gap-1.5 py-0.5 text-[13px] text-fg-muted hover:text-fg transition-colors cursor-pointer text-left"
       >
         <Show
           when={!running()}
           fallback={
-            <span class="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
+            <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-fg rounded-full animate-spin shrink-0" />
           }
         >
-          <Iconify icon="lucide:bot" size={14} class="shrink-0 text-accent" />
+          <Iconify
+            icon="lucide:chevron-right"
+            size={13}
+            class={`shrink-0 text-fg-muted/80 group-hover/agg:text-fg transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
+          />
         </Show>
-        <span class={`text-[13px] font-medium truncate flex-1 min-w-0 ${running() ? "ui-shimmer" : "text-fg"}`}>
+        <span class={`truncate min-w-0 ${running() ? "ui-shimmer font-medium text-fg-secondary" : ""}`}>
           {summary()}
         </span>
         <Show when={ctx.specialProgress(series.units)}>
           {(t) => (
-            <span class="font-mono text-[11px] text-fg-muted truncate max-w-[40%] shrink-0">
+            <span class="font-mono text-[11px] text-fg-muted/80 truncate max-w-[16rem] shrink-0">
               {t()}
             </span>
           )}
         </Show>
-        <Iconify
-          icon="lucide:chevron-down"
-          size={12}
-          class={`shrink-0 text-fg-muted transition-transform duration-150 ${open() ? "rotate-180" : ""}`}
-        />
       </button>
       <DisclosureBody open={open()}>
-        <div class="border-t border-border/60 px-2 py-1.5 space-y-0.5 bg-surface/40">
+        <div class="ml-[6px] mt-1 mb-1.5 pl-3.5 border-l border-border/70 space-y-0.5">
           <For each={series.entries}>
             {(entry, ei) => {
               const tail = () => ei() === lastEntryIdx();
@@ -246,13 +245,14 @@ function renderImageBlock(ctx: TranscriptRenderCtx, block: ContentBlock) {
     <Show
       when={src()}
       fallback={
-        <div class="flex items-center gap-1.5 text-[11px] text-ink-500 border border-line/60 rounded-lg px-2 py-1">
+        <div class="flex items-center gap-1.5 text-[11px] text-fg-muted border border-border/60 rounded-lg px-2 py-1">
           <Iconify icon="lucide:image" size={12} />
           <span>[attached {block.text || "image"}]</span>
         </div>
       }
     >
       <button
+        type="button"
         onClick={() =>
           ctx.setPreviewFile({
             name: "attached image",
@@ -260,7 +260,7 @@ function renderImageBlock(ctx: TranscriptRenderCtx, block: ContentBlock) {
             dataUrl: src(),
           })
         }
-        class="block rounded-lg overflow-hidden border border-line/60 hover:border-ink-500 transition-colors cursor-pointer"
+        class="block rounded-lg overflow-hidden border border-border/70 hover:border-border-strong transition-colors cursor-pointer"
         data-rc-tip="Open preview" aria-label="Open preview"
       >
         <img src={src()} class="max-h-64 max-w-full object-contain" />
@@ -303,18 +303,20 @@ function renderToolSegs(ctx: TranscriptRenderCtx, msgId: string, units: () => To
           return (
             <div class="w-full" data-toolseg={segKey(seg)} style={{ "overflow-anchor": "none" }}>
               <Show when={seg.units.length > 1}><button
+                type="button"
                 onClick={toggle}
-                class="w-full flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg hover:bg-surface-muted/70 text-[13px] text-fg-secondary hover:text-fg transition-colors cursor-pointer"
+                aria-expanded={open()}
+                class="inline-flex max-w-full items-center gap-1.5 py-0.5 px-1.5 -ml-1.5 rounded-md hover:bg-surface-muted/55 text-[12.5px] text-fg-muted hover:text-fg transition-colors cursor-pointer"
               >
-                <span class="font-medium">{groupTitle(seg.cat, seg.units)}</span>
                 <Iconify
-                  icon="lucide:chevron-down"
+                  icon="lucide:chevron-right"
                   size={12}
-                  class={`text-fg-muted transition-transform ${open() ? "rotate-180" : ""}`}
+                  class={`shrink-0 text-fg-muted/80 transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
                 />
+                <span class="truncate">{groupTitle(seg.cat, seg.units)}</span>
               </button></Show>
               <DisclosureBody open={seg.units.length === 1 || open()}>
-                <div class={seg.units.length > 1 ? "ml-3 border-l border-border/60 pl-1.5 space-y-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
+                <div class={seg.units.length > 1 ? "ml-[5px] border-l border-border/60 pl-3 space-y-0.5 mt-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
                   <For each={seg.units}>
                     {(u) => {
                       // Keep fallback keys relative to the complete tool run.

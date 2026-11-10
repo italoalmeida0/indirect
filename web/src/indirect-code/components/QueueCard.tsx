@@ -27,21 +27,22 @@ export function QueueCard() {
   return (
     <Show when={items().length > 0}>
       <div class={`${ui.convWidthClass()} mx-auto`}>
-        <div class="rc-studio-card rounded-xl px-3.5 py-2 shadow-resting">
+        <div class="rounded-xl border border-border/75 bg-surface-subtle/60 px-3 py-2">
           <div class="flex items-center gap-2">
-            <Iconify icon="lucide:list-end" size={14} class="text-accent shrink-0" />
+            <Iconify icon="lucide:list-end" size={13} class="text-fg-muted shrink-0" />
             <span class="text-xs font-medium text-fg">Queued Messages</span>
-            <span class="rounded-full bg-accent-subtle border border-accent/25 px-2 py-0.5 font-mono text-[10px] font-medium text-accent tabular-nums">
-              {items().length}
+            <span class="font-mono text-[11px] text-fg-muted tabular-nums">
+              ({items().length})
             </span>
-            <span class="text-[11px] text-fg-muted hidden sm:inline">Sends after agent finishes working</span>
+            <span class="text-[11px] text-fg-muted hidden sm:inline">· Sends after current turn</span>
             <span class="flex-1" />
             <button
+              type="button"
               onClick={() => q.toggleCollapsed(sid())}
               class="p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
               aria-label={collapsed() ? "Expand queue" : "Collapse queue"}
             >
-              <Iconify icon={collapsed() ? "lucide:chevron-up" : "lucide:chevron-down"} size={14} />
+              <Iconify icon={collapsed() ? "lucide:chevron-up" : "lucide:chevron-down"} size={13} />
             </button>
           </div>
           <Show when={!collapsed()}>
@@ -91,7 +92,7 @@ function QueueEditRow(props: { queueId: string }) {
         value={q.editingQueueText()}
         onInput={(e) => q.setEditingQueueText(e.currentTarget.value)}
         rows={2}
-        class="rc-studio-well w-full rounded-lg px-2.5 py-1.5 text-sm text-fg resize-y focus:outline-none focus:border-accent"
+        class="w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-sm text-fg resize-y focus:outline-none focus:border-accent placeholder:text-fg-muted transition-colors"
       />
       <Show when={q.editDraft.pendingAttachments().length > 0}>
         <div class="flex flex-wrap gap-1.5">

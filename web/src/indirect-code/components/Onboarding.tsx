@@ -31,19 +31,18 @@ export function Onboarding() {
   return (
     <div class="flex-1 min-h-0 flex flex-col items-center p-4 sm:p-6 bg-background text-center overflow-y-auto">
       <div class="max-w-xl w-full mx-auto space-y-6 my-auto py-8">
-        {/* Title & Subtitle */}
+        {/* Workstation Pairing Hero */}
         <div>
           <IndirectBrand />
           <p class="text-[13px] text-fg-secondary mt-5 max-w-md mx-auto leading-relaxed">
-            Connect a machine to work with your coding agent from anywhere. Your projects and conversations stay local on that host.
+            Pair a workstation or server to run your coding agent from anywhere. Source files, git state, and sessions stay local on that machine.
           </p>
         </div>
 
-        {/* Action: Connect / Pair */}
         <Show
           when={m.pairingData()}
           fallback={
-            <div class="space-y-6 pt-2">
+            <div class="space-y-7 pt-1">
               <div>
                 <Btn
                   onClick={() => m.generatePairingToken({ silent: true })}
@@ -52,27 +51,41 @@ export function Onboarding() {
                 >
                   <Show
                     when={!m.pairingLoading()}
-                    fallback={<Iconify icon="lucide:refresh-cw" size={16} class="animate-spin" />}
+                    fallback={<Iconify icon="lucide:refresh-cw" size={15} class="animate-spin" />}
                   >
-                    <Iconify icon="lucide:plus" size={16} />
+                    <Iconify icon="lucide:plus" size={15} />
                   </Show>
                   <span>Connect a host</span>
                 </Btn>
               </div>
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-left max-w-lg mx-auto">
+
+              {/* Minimal Hairline Architecture Rail */}
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-0 sm:divide-x divide-border border-t border-border pt-5 text-left max-w-lg mx-auto">
                 <For
                   each={[
-                    { icon: "lucide:hard-drive", title: "Local ownership", desc: "Source files, git state, and sessions stay on your host." },
-                    { icon: "lucide:terminal-square", title: "Zero-config binary", desc: "Single Go daemon with background runner supervision." },
-                    { icon: "lucide:laptop", title: "Multi-device sync", desc: "Resume live turns seamlessly from desktop or mobile." },
+                    {
+                      icon: "lucide:hard-drive",
+                      title: "Local ownership",
+                      desc: "Repositories, credentials, and transcripts stay on your machine.",
+                    },
+                    {
+                      icon: "lucide:terminal-square",
+                      title: "Single-binary daemon",
+                      desc: "Supervised Go worker with durable background task runners.",
+                    },
+                    {
+                      icon: "lucide:laptop",
+                      title: "Multi-device relay",
+                      desc: "Resume live turns cleanly across desktop and mobile.",
+                    },
                   ]}
                 >
-                  {(f) => (
-                    <div class="rc-studio-card p-3 space-y-1.5">
-                      <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-accent-subtle text-accent">
-                        <Iconify icon={f.icon} size={14} />
+                  {(f, idx) => (
+                    <div class={idx() > 0 ? "sm:pl-4 pr-2 space-y-1" : "pr-2 space-y-1"}>
+                      <div class="flex items-center gap-1.5 text-xs font-medium text-fg">
+                        <Iconify icon={f.icon} size={13} class="shrink-0 text-fg-muted" />
+                        <span>{f.title}</span>
                       </div>
-                      <div class="text-xs font-medium text-fg">{f.title}</div>
                       <p class="text-[11px] text-fg-muted leading-relaxed">{f.desc}</p>
                     </div>
                   )}
@@ -81,122 +94,141 @@ export function Onboarding() {
             </div>
           }
         >
-          {/* Bespoke Pairing Terminal Studio Card */}
           {(() => {
             const cmds = () => indirectInstallCommands(m.pairingData()?.connectUrl || "");
             const activeCmd = () => (osTab() === "windows" ? cmds().windows : cmds().unix);
             return (
-              <div class="rc-studio-card p-4 sm:p-5 text-left space-y-4">
-                <div class="flex items-center justify-between gap-3 pb-3 border-b border-border">
+              <div class="rounded-panel border border-border bg-surface p-4 sm:p-5 text-left space-y-4">
+                {/* Token Header */}
+                <div class="flex items-center justify-between gap-3 pb-3 border-b border-border flex-wrap">
                   <div class="flex items-center gap-2">
-                    <span class="w-2.5 h-2.5 rounded-full bg-success animate-pulse" />
-                    <span class="text-xs font-medium text-fg">Ready to connect</span>
+                    <span class="h-2 w-2 rounded-full bg-success animate-pulse" />
+                    <span class="text-xs font-medium text-fg">Ready to pair workstation</span>
                   </div>
-                  <Badge tone="green">Valid for ~15m</Badge>
+                  <Badge tone="green">Valid ~15m</Badge>
                 </div>
 
-                {/* Step 1: one-line install */}
-                <div class="space-y-2.5">
-                  <div class="text-xs font-medium text-fg">
-                    1. Copy the command for your system and run it once in a terminal:
-                  </div>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onPointerDown={(e) => press(e.currentTarget)}
-                      onClick={() => copyCmd("unix", cmds().unix)}
-                      class={`flex items-center justify-between gap-2 p-3 rounded-panel border transition-all cursor-pointer group ${
-                        osTab() === "unix"
-                          ? "border-accent bg-accent-subtle shadow-resting"
-                          : "border-border bg-surface hover:border-border-strong hover:bg-surface-muted"
-                      }`}
+                {/* Unified Terminal Command Block */}
+                <div class="rounded-control border border-border bg-background/60 overflow-hidden">
+                  <div class="flex items-center justify-between gap-2 border-b border-border bg-surface-subtle px-2.5 py-1.5 flex-wrap">
+                    <div
+                      role="tablist"
+                      aria-label="Target operating system"
+                      class="inline-flex items-center gap-1"
                     >
-                      <span class="flex items-center gap-2 text-xs font-medium text-fg">
-                        <Iconify icon="lucide:terminal" size={14} class="text-accent" />
-                        Linux & macOS
-                      </span>
-                      <Iconify
-                        icon={copiedKey() === "unix" ? "lucide:check" : "lucide:copy"}
-                        size={14}
-                        class={copiedKey() === "unix" ? "text-success" : "text-fg-muted group-hover:text-accent"}
-                      />
-                    </button>
-                    <button
-                      type="button"
-                      onPointerDown={(e) => press(e.currentTarget)}
-                      onClick={() => copyCmd("windows", cmds().windows)}
-                      class={`flex items-center justify-between gap-2 p-3 rounded-panel border transition-all cursor-pointer group ${
-                        osTab() === "windows"
-                          ? "border-accent bg-accent-subtle shadow-resting"
-                          : "border-border bg-surface hover:border-border-strong hover:bg-surface-muted"
-                      }`}
-                    >
-                      <span class="flex items-center gap-2 text-xs font-medium text-fg">
-                        <Iconify icon="lucide:app-window" size={14} class="text-accent" />
-                        Windows
-                      </span>
-                      <Iconify
-                        icon={copiedKey() === "windows" ? "lucide:check" : "lucide:copy"}
-                        size={14}
-                        class={copiedKey() === "windows" ? "text-success" : "text-fg-muted group-hover:text-accent"}
-                      />
-                    </button>
-                  </div>
-
-                  <div class="rc-studio-well overflow-hidden">
-                    <div class="flex items-center justify-between gap-2 border-b border-border bg-surface/60 px-3 py-1.5">
-                      <span class="font-mono text-[11px] font-medium text-fg-secondary">
-                        {osTab() === "windows" ? "PowerShell" : "POSIX Shell"}
-                      </span>
                       <button
                         type="button"
-                        onClick={() => copyCmd(osTab(), activeCmd())}
-                        class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[11px] font-medium text-accent hover:bg-accent-subtle transition-colors cursor-pointer"
+                        role="tab"
+                        aria-selected={osTab() === "unix"}
+                        onPointerDown={(e) => press(e.currentTarget)}
+                        onClick={() => setOsTab("unix")}
+                        class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                          osTab() === "unix"
+                            ? "border-border bg-surface text-fg"
+                            : "border-transparent text-fg-muted hover:text-fg"
+                        }`}
                       >
-                        <Iconify icon={copiedKey() === osTab() ? "lucide:check" : "lucide:copy"} size={11} />
-                        <span>{copiedKey() === osTab() ? "Copied" : "Copy"}</span>
+                        <Iconify icon="lucide:terminal" size={12} />
+                        <span>Linux & macOS</span>
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={osTab() === "windows"}
+                        onPointerDown={(e) => press(e.currentTarget)}
+                        onClick={() => setOsTab("windows")}
+                        class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                          osTab() === "windows"
+                            ? "border-border bg-surface text-fg"
+                            : "border-transparent text-fg-muted hover:text-fg"
+                        }`}
+                      >
+                        <Iconify icon="lucide:app-window" size={12} />
+                        <span>Windows</span>
                       </button>
                     </div>
-                    <div class="overflow-x-auto p-3 font-mono text-[11px] leading-relaxed text-fg select-all">
-                      <span class="mr-2 text-accent select-none">{osTab() === "windows" ? "PS>" : "$"}</span>
-                      <span class="break-all">{activeCmd()}</span>
-                    </div>
+
+                    <button
+                      type="button"
+                      onPointerDown={(e) => press(e.currentTarget)}
+                      onClick={() => copyCmd(osTab(), activeCmd())}
+                      class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                    >
+                      <Iconify
+                        icon={copiedKey() === osTab() ? "lucide:check" : "lucide:copy"}
+                        size={12}
+                        class={copiedKey() === osTab() ? "text-success" : "text-fg-secondary"}
+                      />
+                      <span>{copiedKey() === osTab() ? "Copied" : "Copy command"}</span>
+                    </button>
                   </div>
 
-                  <p class="text-[11px] text-fg-muted leading-relaxed">
-                    Installs Indirect Code, connects this host, and keeps it available in the background.
-                  </p>
+                  <div class="overflow-x-auto p-3.5 font-mono text-[11px] leading-relaxed text-fg select-all">
+                    <span class="mr-2 select-none text-accent">
+                      {osTab() === "windows" ? "PS>" : "$"}
+                    </span>
+                    <span class="break-all">{activeCmd()}</span>
+                  </div>
                 </div>
 
-                {/* Live Status */}
-                <div class="p-3.5 rounded-panel bg-accent-subtle border border-accent/25 flex items-center gap-3">
-                  <div class="w-8 h-8 rounded-lg bg-surface/80 flex items-center justify-center text-accent shrink-0 border border-accent/20">
-                    <Iconify icon="lucide:refresh-cw" size={15} class="animate-spin" />
-                  </div>
-                  <div class="text-xs min-w-0">
-                    <p class="font-medium text-fg">Waiting for your host…</p>
-                    <p class="text-fg-secondary text-[11px] mt-0.5">
-                      Run the command above in your terminal. This screen will connect automatically.
-                    </p>
-                  </div>
+                {/* Minimal 3-Step Rail */}
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-0 sm:divide-x divide-border border-y border-border py-3.5">
+                  <For
+                    each={[
+                      {
+                        step: "01",
+                        title: "Paste in terminal",
+                        desc: "Run once on the machine you want to pair.",
+                      },
+                      {
+                        step: "02",
+                        title: "Daemon registers",
+                        desc: "Installs Indirect Code and pairs via this token.",
+                      },
+                      {
+                        step: "03",
+                        title: "Auto-connects",
+                        desc: "This workspace opens as soon as the host checks in.",
+                      },
+                    ]}
+                  >
+                    {(item, idx) => (
+                      <div class={idx() > 0 ? "sm:pl-3.5 pr-2 space-y-0.5" : "pr-2 space-y-0.5"}>
+                        <div class="flex items-center gap-1.5">
+                          <span class="font-mono text-[10px] font-medium text-accent">
+                            {item.step}
+                          </span>
+                          <span class="text-[11px] font-medium text-fg">{item.title}</span>
+                        </div>
+                        <p class="text-[11px] text-fg-muted leading-relaxed">{item.desc}</p>
+                      </div>
+                    )}
+                  </For>
                 </div>
 
-                {/* Action Buttons */}
-                <div class="flex items-center justify-end gap-2 pt-1 text-xs flex-wrap">
-                  <button
-                    type="button"
-                    onClick={h.loadHosts}
-                    class="px-3 py-1.5 rounded-control border border-border bg-surface text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer font-medium"
-                  >
-                    Check Connection
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => m.generatePairingToken({ silent: true })}
-                    class="px-3 py-1.5 rounded-control border border-border bg-surface-muted hover:bg-surface-strong text-fg transition-colors cursor-pointer font-medium"
-                  >
-                    Regenerate Token
-                  </button>
+                {/* Live Listening Status + Actions */}
+                <div class="flex items-center justify-between gap-3 flex-wrap text-xs">
+                  <div class="flex items-center gap-2 text-fg-secondary min-w-0">
+                    <Iconify icon="lucide:refresh-cw" size={13} class="shrink-0 animate-spin text-accent" />
+                    <span class="truncate">Waiting for your host…</span>
+                  </div>
+
+                  <div class="flex items-center gap-2 ml-auto flex-wrap">
+                    <button
+                      type="button"
+                      onClick={h.loadHosts}
+                      class="rounded-control border border-border bg-surface px-3 py-1.5 font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                    >
+                      Check Connection
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => m.generatePairingToken({ silent: true })}
+                      class="rounded-control border border-border bg-surface-subtle px-3 py-1.5 font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                    >
+                      Regenerate Token
+                    </button>
+                  </div>
                 </div>
               </div>
             );

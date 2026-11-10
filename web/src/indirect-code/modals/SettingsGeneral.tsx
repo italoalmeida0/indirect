@@ -1,9 +1,48 @@
-import { Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { press } from "../../ds/motion/press";
-import { Badge, Segmented, setThemeMode, themeMode } from "../../ui";
+import {
+  ACCENTS,
+  Badge,
+  accent,
+  setAccent,
+  setThemeMode,
+  theme,
+  themeMode,
+  type AccentName,
+  type ThemeMode,
+} from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal, useUI } from "../ctx";
 import { pushSupported } from "../hooks/usePushSubscription";
+
+const THEME_OPTIONS: Array<{ value: ThemeMode; label: string }> = [
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+  { value: "high-contrast", label: "Contrast" },
+  { value: "system", label: "System" },
+];
+
+type ConvWidth = "narrow" | "default" | "wide";
+
+const WIDTH_OPTIONS: Array<{
+  value: ConvWidth;
+  label: string;
+  px: string;
+  caption: string;
+  colPct: string;
+}> = [
+  { value: "narrow", label: "Narrow", px: "576px", caption: "Focused", colPct: "44%" },
+  { value: "default", label: "Default", px: "768px", caption: "Balanced", colPct: "66%" },
+  { value: "wide", label: "Wide", px: "1024px", caption: "Studio", colPct: "88%" },
+];
+
+const COMPACT_RULER_STOPS = [50, 65, 80, 95] as const;
+const COMPACT_TICKS = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95] as const;
+
+function snapCompactPct(raw: number): number {
+  const clamped = Math.max(50, Math.min(95, raw));
+  return Math.round(clamped / 5) * 5;
+}
 
 function Toggle(props: {
   on: () => boolean;
@@ -25,6 +64,665 @@ function Toggle(props: {
   );
 }
 
+function ThemePreviewChrome(props: { mode: ThemeMode }) {
+  if (props.mode === "system") {
+    return (
+      <div
+        aria-hidden="true"
+        class="relative h-11 w-full rounded-md overflow-hidden border border-border/80 grid grid-cols-2"
+      >
+        {/* Day half */}
+        <div
+          class="flex h-full overflow-hidden"
+          style={{ background: "oklch(0.985 0 0)" }}
+        >
+          <div
+            class="w-3 h-full shrink-0 flex flex-col gap-1 p-1"
+            style={{
+              background: "oklch(0.95 0 0)",
+              "border-right": "1px solid oklch(0.89 0 0)",
+            }}
+          >
+            <span class="h-1 w-full rounded-full" style={{ background: "oklch(0.76 0 0)" }} />
+            <span class="h-1 w-2/3 rounded-full" style={{ background: "oklch(0.84 0 0)" }} />
+          </div>
+          <div class="flex-1 p-1.5 flex flex-col gap-1">
+            <span
+              class="ml-auto h-1.5 w-3/5 rounded-full"
+              style={{ background: "var(--accent)" }}
+            />
+            <span class="h-1 w-4/5 rounded-full" style={{ background: "oklch(0.28 0 0)" }} />
+            <span class="mt-auto h-1.5 w-full rounded-xs" style={{ background: "oklch(0.93 0 0)" }} />
+          </div>
+        </div>
+        {/* Night half */}
+        <div
+          class="flex h-full overflow-hidden"
+          style={{
+            background: "oklch(0.19 0 0)",
+            "border-left": "1px solid oklch(0.5 0 0 / 0.35)",
+          }}
+        >
+          <div class="flex-1 p-1.5 flex flex-col gap-1">
+            <span
+              class="ml-auto h-1.5 w-3/5 rounded-full"
+              style={{ background: "var(--accent)" }}
+            />
+            <span class="h-1 w-4/5 rounded-full" style={{ background: "oklch(0.86 0 0)" }} />
+            <span class="mt-auto h-1.5 w-full rounded-xs" style={{ background: "oklch(0.26 0 0)" }} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isLight = () => props.mode === "light";
+  const isContrast = () => props.mode === "high-contrast";
+
+  return (
+    <div
+      aria-hidden="true"
+      class="h-11 w-full rounded-md overflow-hidden flex"
+      style={{
+        background: isContrast()
+          ? "oklch(0 0 0)"
+          : isLight()
+            ? "oklch(0.985 0 0)"
+            : "oklch(0.19 0 0)",
+        border: isContrast()
+          ? "1px solid oklch(1 0 0)"
+          : isLight()
+            ? "1px solid oklch(0.88 0 0)"
+            : "1px solid oklch(0.31 0 0)",
+      }}
+    >
+      <div
+        class="w-4 h-full shrink-0 flex flex-col gap-1 p-1"
+        style={{
+          background: isContrast()
+            ? "oklch(0.06 0 0)"
+            : isLight()
+              ? "oklch(0.95 0 0)"
+              : "oklch(0.225 0 0)",
+          "border-right": isContrast()
+            ? "1px solid oklch(1 0 0)"
+            : isLight()
+              ? "1px solid oklch(0.89 0 0)"
+              : "1px solid oklch(0.29 0 0)",
+        }}
+      >
+        <span
+          class="h-1 w-full rounded-full"
+          style={{
+            background: isContrast()
+              ? "oklch(1 0 0)"
+              : isLight()
+                ? "oklch(0.72 0 0)"
+                : "oklch(0.46 0 0)",
+          }}
+        />
+        <span
+          class="h-1 w-3/4 rounded-full"
+          style={{
+            background: isContrast()
+              ? "oklch(0.82 0 0)"
+              : isLight()
+                ? "oklch(0.83 0 0)"
+                : "oklch(0.35 0 0)",
+          }}
+        />
+      </div>
+      <div class="flex-1 p-1.5 flex flex-col gap-1 min-w-0">
+        <span
+          class="ml-auto h-1.5 w-2/5 rounded-full"
+          style={{
+            background: isContrast() ? "oklch(0.90 0.15 192)" : "var(--accent)",
+          }}
+        />
+        <span
+          class="h-1 w-4/5 rounded-full"
+          style={{
+            background: isContrast()
+              ? "oklch(1 0 0)"
+              : isLight()
+                ? "oklch(0.26 0 0)"
+                : "oklch(0.88 0 0)",
+          }}
+        />
+        <span
+          class="h-1 w-3/5 rounded-full"
+          style={{
+            background: isContrast()
+              ? "oklch(0.82 0 0)"
+              : isLight()
+                ? "oklch(0.66 0 0)"
+                : "oklch(0.52 0 0)",
+          }}
+        />
+        <span
+          class="mt-auto h-1.5 w-full rounded-xs"
+          style={{
+            background: isContrast()
+              ? "oklch(0.18 0 0)"
+              : isLight()
+                ? "oklch(0.93 0 0)"
+                : "oklch(0.26 0 0)",
+            border: isContrast() ? "1px solid oklch(1 0 0)" : "none",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ThemeStudioPicker() {
+  let groupEl: HTMLDivElement | undefined;
+  const activeAccentLabel = () =>
+    ACCENTS.find((a) => a.id === accent())?.label ?? "Teal";
+
+  const onRadioKeyDown = (e: KeyboardEvent) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const idx = THEME_OPTIONS.findIndex((o) => o.value === themeMode());
+    const delta = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+    const nextIdx = (idx + delta + THEME_OPTIONS.length) % THEME_OPTIONS.length;
+    const next = THEME_OPTIONS[nextIdx]!;
+    setThemeMode(next.value);
+    groupEl?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIdx]?.focus();
+  };
+
+  return (
+    <div class="space-y-3">
+      <div>
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <span class="text-xs font-medium text-fg">Theme</span>
+          <span class="text-[11px] text-fg-muted">
+            {themeMode() === "system"
+              ? "Follows OS appearance"
+              : themeMode() === "high-contrast"
+                ? "Maximum WCAG contrast"
+                : `${themeMode() === "dark" ? "Dark" : "Light"} surface`}
+          </span>
+        </div>
+        <div
+          ref={groupEl}
+          role="radiogroup"
+          aria-label="Theme"
+          onKeyDown={onRadioKeyDown}
+          class="grid grid-cols-2 sm:grid-cols-4 gap-2"
+        >
+          <For each={THEME_OPTIONS}>
+            {(opt) => {
+              const active = () => themeMode() === opt.value;
+              return (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={active()}
+                  tabIndex={active() ? 0 : -1}
+                  onPointerDown={(e) => press(e.currentTarget)}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setThemeMode(opt.value, {
+                      x: rect.left + rect.width / 2,
+                      y: rect.top + rect.height / 2,
+                    });
+                  }}
+                  class={`flex flex-col gap-2 rounded-control border p-2 text-left transition-colors cursor-pointer ${
+                    active()
+                      ? "border-accent bg-accent-subtle/40 text-fg"
+                      : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle text-fg-secondary"
+                  }`}
+                >
+                  <ThemePreviewChrome mode={opt.value} />
+                  <div class="flex items-center justify-between gap-1.5 px-0.5 w-full">
+                    <span class="text-xs font-medium text-fg">{opt.label}</span>
+                    <span
+                      aria-hidden="true"
+                      class={`h-2 w-2 shrink-0 rounded-full transition-colors ${
+                        active() ? "bg-accent" : "border border-border-strong bg-transparent"
+                      }`}
+                    />
+                  </div>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+      </div>
+
+      {/* Accent Swatches */}
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-medium text-fg">Accent</span>
+          <span class="font-mono text-[11px] text-fg-muted">
+            {theme() === "high-contrast" ? `${activeAccentLabel()} (Contrast override)` : activeAccentLabel()}
+          </span>
+        </div>
+        <div
+          role="radiogroup"
+          aria-label="Accent color"
+          class="flex flex-wrap items-center gap-1.5"
+        >
+          <For each={ACCENTS}>
+            {(item) => {
+              const selected = () => accent() === item.id;
+              return (
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={selected()}
+                  aria-label={item.label}
+                  onPointerDown={(e) => press(e.currentTarget)}
+                  onClick={() => setAccent(item.id as AccentName)}
+                  class={`relative flex h-6 w-6 items-center justify-center rounded-full transition-transform cursor-pointer ${
+                    selected()
+                      ? "ring-2 ring-fg ring-offset-2 ring-offset-surface scale-105"
+                      : "opacity-80 hover:opacity-100 hover:scale-105"
+                  }`}
+                  style={{ background: item.swatch }}
+                >
+                  <Show when={selected()}>
+                    <Iconify
+                      icon="lucide:check"
+                      size={12}
+                      style={{ color: "oklch(1 0 0)" }}
+                    />
+                  </Show>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ColumnWidthPicker(props: {
+  value: () => string;
+  onChange: (v: ConvWidth) => void;
+}) {
+  let groupEl: HTMLDivElement | undefined;
+  const currentOpt = () =>
+    WIDTH_OPTIONS.find((o) => o.value === props.value()) ?? WIDTH_OPTIONS[1]!;
+
+  const onRadioKeyDown = (e: KeyboardEvent) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const idx = WIDTH_OPTIONS.findIndex((o) => o.value === currentOpt().value);
+    const delta = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+    const nextIdx = (idx + delta + WIDTH_OPTIONS.length) % WIDTH_OPTIONS.length;
+    const next = WIDTH_OPTIONS[nextIdx]!;
+    props.onChange(next.value);
+    groupEl?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIdx]?.focus();
+  };
+
+  return (
+    <div>
+      <div class="flex items-center justify-between gap-2 mb-2">
+        <span class="text-xs font-medium text-fg">Conversation width</span>
+        <span class="font-mono text-[11px] text-fg-muted tabular-nums">
+          {currentOpt().px} · {currentOpt().caption}
+        </span>
+      </div>
+      <div
+        ref={groupEl}
+        role="radiogroup"
+        aria-label="Conversation width"
+        onKeyDown={onRadioKeyDown}
+        class="grid grid-cols-3 gap-2"
+      >
+        <For each={WIDTH_OPTIONS}>
+          {(opt) => {
+            const active = () => currentOpt().value === opt.value;
+            return (
+              <button
+                type="button"
+                role="radio"
+                aria-checked={active()}
+                tabIndex={active() ? 0 : -1}
+                onPointerDown={(e) => press(e.currentTarget)}
+                onClick={() => props.onChange(opt.value)}
+                class={`flex flex-col gap-2 rounded-control border p-2 text-left transition-colors cursor-pointer group ${
+                  active()
+                    ? "border-accent bg-accent-subtle/40 text-fg"
+                    : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle text-fg-secondary"
+                }`}
+              >
+                {/* Miniature Viewport Column Schematic */}
+                <div
+                  aria-hidden="true"
+                  class="h-11 w-full rounded-md border border-border/80 bg-background/80 px-1.5 py-1.5 flex justify-center overflow-hidden"
+                >
+                  <div
+                    class={`h-full flex flex-col gap-1 rounded-xs border px-1.5 py-1 transition-colors ${
+                      active()
+                        ? "border-accent/45 bg-surface"
+                        : "border-border/70 bg-surface-subtle/70"
+                    }`}
+                    style={{ width: opt.colPct }}
+                  >
+                    <span
+                      class={`ml-auto h-1 w-2/5 rounded-full ${
+                        active() ? "bg-accent" : "bg-fg-muted/50"
+                      }`}
+                    />
+                    <span class="h-1 w-4/5 rounded-full bg-fg/40" />
+                    <span class="h-1 w-3/5 rounded-full bg-fg-muted/35" />
+                    <span class="mt-auto h-1 w-full rounded-full bg-border-strong/60" />
+                  </div>
+                </div>
+                <div class="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-0.5 px-0.5 w-full min-w-0">
+                  <span class="text-xs font-medium text-fg truncate">{opt.label}</span>
+                  <span class="font-mono text-[10px] text-fg-muted tabular-nums">
+                    <span class="hidden sm:inline">· </span>
+                    <span class="sm:hidden sr-only"> · </span>
+                    {opt.px}
+                  </span>
+                </div>
+              </button>
+            );
+          }}
+        </For>
+      </div>
+    </div>
+  );
+}
+
+function AutoCompactGauge(props: {
+  value: () => number;
+  onChange: (pct: number) => void;
+}) {
+  const [dragging, setDragging] = createSignal(false);
+  const [lastAutoPct, setLastAutoPct] = createSignal(
+    props.value() > 0 ? snapCompactPct(props.value()) : 80,
+  );
+  let trackEl: HTMLDivElement | undefined;
+
+  createEffect(() => {
+    const v = props.value();
+    if (v > 0) setLastAutoPct(snapCompactPct(v));
+  });
+
+  const isOff = () => props.value() <= 0;
+  const activePct = () => (isOff() ? lastAutoPct() : Math.max(50, Math.min(95, props.value())));
+  const headroomPct = () => 100 - activePct();
+
+  const pctFromClientX = (clientX: number): number => {
+    if (!trackEl) return activePct();
+    const rect = trackEl.getBoundingClientRect();
+    if (rect.width <= 0) return activePct();
+    const raw = ((clientX - rect.left) / rect.width) * 100;
+    return snapCompactPct(raw);
+  };
+
+  const commitPct = (next: number) => {
+    const snapped = snapCompactPct(next);
+    setLastAutoPct(snapped);
+    if (props.value() !== snapped) {
+      props.onChange(snapped);
+    }
+  };
+
+  const onTrackPointerDown = (e: PointerEvent) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    e.preventDefault();
+    const target = e.currentTarget as HTMLDivElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {}
+    target.focus({ preventScroll: true });
+    setDragging(true);
+    commitPct(pctFromClientX(e.clientX));
+  };
+
+  const onTrackPointerMove = (e: PointerEvent) => {
+    if (!dragging()) return;
+    commitPct(pctFromClientX(e.clientX));
+  };
+
+  const endDrag = (e: PointerEvent) => {
+    if (!dragging()) return;
+    try {
+      (e.currentTarget as HTMLDivElement).releasePointerCapture(e.pointerId);
+    } catch {}
+    setDragging(false);
+  };
+
+  const onSliderKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+      e.preventDefault();
+      commitPct(isOff() ? lastAutoPct() : activePct() - 5);
+    } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+      e.preventDefault();
+      commitPct(isOff() ? lastAutoPct() : activePct() + 5);
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      commitPct(50);
+    } else if (e.key === "End") {
+      e.preventDefault();
+      commitPct(95);
+    }
+  };
+
+  return (
+    <div class="rounded-panel border border-border bg-surface-subtle/55 p-3.5 space-y-3">
+      {/* Gauge Header: Title + Live Partition Readout + Off / Auto Toggle */}
+      <div class="flex items-start sm:items-center justify-between gap-2.5 flex-wrap">
+        <div class="min-w-0">
+          <div class="text-xs font-medium text-fg">Auto-compact threshold</div>
+          <div class="mt-0.5 font-mono text-[11px] tabular-nums">
+            <Show
+              when={!isOff()}
+              fallback={<span class="text-fg-muted">Manual /compact only</span>}
+            >
+              <span class="text-accent font-medium">{activePct()}% trigger</span>
+              <span class="mx-1.5 text-fg-muted">·</span>
+              <span class="text-warning">{headroomPct()}% headroom</span>
+            </Show>
+          </div>
+        </div>
+
+        <div
+          role="group"
+          aria-label="Auto-compaction mode"
+          class="inline-flex items-center rounded-pill border border-border bg-surface p-0.5 shrink-0"
+        >
+          <button
+            type="button"
+            aria-pressed={isOff()}
+            onClick={() => props.onChange(0)}
+            class={`rounded-pill px-2.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+              isOff()
+                ? "bg-fg text-background"
+                : "text-fg-muted hover:text-fg"
+            }`}
+          >
+            Off
+          </button>
+          <button
+            type="button"
+            aria-pressed={!isOff()}
+            onClick={() => {
+              if (isOff()) props.onChange(lastAutoPct());
+            }}
+            class={`rounded-pill px-2.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+              !isOff()
+                ? "bg-accent text-accent-foreground"
+                : "text-fg-muted hover:text-fg"
+            }`}
+          >
+            Auto
+          </button>
+        </div>
+      </div>
+
+      {/* Zone Legend */}
+      <div class="flex items-center justify-between gap-2 text-[11px]" aria-hidden="true">
+        <span class="inline-flex items-center gap-1.5 text-fg-secondary">
+          <span
+            class={`h-2 w-2 rounded-xs ${
+              isOff() ? "bg-fg-muted/40" : "bg-accent"
+            }`}
+          />
+          <span>Conversation history</span>
+        </span>
+        <span class="inline-flex items-center gap-1.5 text-fg-muted">
+          <span>Compaction reserve</span>
+          <span
+            class={`h-2 w-2 rounded-xs ${
+              isOff() ? "bg-border-strong/50" : "bg-warning"
+            }`}
+          />
+        </span>
+      </div>
+
+      {/* Unified Calibrated Partition Track + Proportional Ruler Scale */}
+      <div>
+        <div
+          ref={trackEl}
+          role="slider"
+          tabIndex={0}
+          aria-label="Auto-compact threshold"
+          aria-valuemin={50}
+          aria-valuemax={95}
+          aria-valuenow={isOff() ? 50 : activePct()}
+          aria-valuetext={
+            isOff()
+              ? "Manual /compact only (Off)"
+              : `${activePct()}% trigger · ${headroomPct()}% headroom`
+          }
+          onPointerDown={onTrackPointerDown}
+          onPointerMove={onTrackPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          onKeyDown={onSliderKeyDown}
+          class={`relative h-9 w-full rounded-lg border select-none touch-none ${
+            isOff()
+              ? "border-border bg-surface cursor-pointer"
+              : "border-border-strong/80 bg-surface cursor-ew-resize"
+          }`}
+        >
+          {/* Clipped inner two-zone fill */}
+          <div class="absolute inset-0 rounded-[7px] overflow-hidden flex pointer-events-none">
+            <div
+              class={`h-full flex items-center pl-2.5 ${
+                dragging() ? "transition-none" : "transition-[width] duration-150 ease-out"
+              } ${
+                isOff()
+                  ? "bg-surface-muted/60"
+                  : "bg-accent-subtle border-r border-accent"
+              }`}
+              style={{ width: `${isOff() ? 100 : activePct()}%` }}
+            >
+              <span class="font-mono text-[10px] text-fg-secondary tabular-nums">
+                {isOff() ? "0% → 100% unreserved" : `0% → ${activePct()}%`}
+              </span>
+            </div>
+            <Show when={!isOff()}>
+              <div class="h-full flex-1 bg-warning-subtle flex items-center justify-end pr-2 overflow-hidden">
+                <Show when={headroomPct() >= 15}>
+                  <span class="font-mono text-[10px] text-warning tabular-nums">
+                    {headroomPct()}%
+                  </span>
+                </Show>
+              </div>
+            </Show>
+          </div>
+
+          {/* 50% minimum auto-trigger dashed floor + 5% calibration ticks */}
+          <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
+            <span class="absolute top-0 bottom-0 left-1/2 border-l border-dashed border-border-strong/70" />
+            <For each={COMPACT_TICKS}>
+              {(tick) => {
+                const major = tick === 50 || tick === 65 || tick === 80 || tick === 95;
+                return (
+                  <span
+                    class={`absolute bottom-0 -translate-x-1/2 w-px ${
+                      major ? "h-2 bg-border-strong" : "h-1 bg-border-strong/60"
+                    }`}
+                    style={{ left: `${tick}%` }}
+                  />
+                );
+              }}
+            </For>
+          </div>
+
+          {/* Tactile Partition Handle */}
+          <div
+            aria-hidden="true"
+            class={`absolute -top-1 -bottom-1 w-4 -translate-x-1/2 rounded-md border flex items-center justify-center gap-0.5 pointer-events-none shadow-resting ${
+              dragging()
+                ? "transition-none scale-105 border-accent bg-surface-raised"
+                : "transition-[left,transform,opacity] duration-150 ease-out bg-surface-raised"
+            } ${
+              isOff()
+                ? "border-border opacity-45"
+                : "border-border-strong"
+            }`}
+            style={{ left: `${activePct()}%` }}
+          >
+            <span class="h-3 w-px rounded-full bg-fg-muted" />
+            <span class="h-3 w-px rounded-full bg-fg-muted" />
+          </div>
+        </div>
+
+        {/* Proportionally Aligned Calibrated Ruler Scale */}
+        <div
+          role="group"
+          aria-label="Auto-compact threshold presets"
+          class="relative h-5 w-full mt-1 select-none"
+        >
+          <span
+            aria-hidden="true"
+            class="absolute left-0 top-1.5 font-mono text-[10px] text-fg-muted/70 tabular-nums leading-none pointer-events-none"
+          >
+            0%
+          </span>
+          <For each={COMPACT_RULER_STOPS}>
+            {(mark) => {
+              const selected = () => !isOff() && activePct() === mark;
+              return (
+                <button
+                  type="button"
+                  aria-pressed={selected()}
+                  onPointerDown={(e) => press(e.currentTarget)}
+                  onClick={() => commitPct(mark)}
+                  style={{ left: `${mark}%` }}
+                  class="absolute top-0 -translate-x-1/2 flex flex-col items-center gap-0.5 border-0 bg-transparent px-1 py-0 cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg rounded-xs"
+                >
+                  <span
+                    aria-hidden="true"
+                    class={`w-px h-1 transition-colors ${
+                      selected()
+                        ? "bg-accent"
+                        : "bg-border-strong group-hover:bg-fg-muted"
+                    }`}
+                  />
+                  <span
+                    class={`font-mono text-[10px] tabular-nums leading-none transition-colors ${
+                      selected()
+                        ? "text-fg font-medium"
+                        : "text-fg-muted group-hover:text-fg"
+                    }`}
+                  >
+                    {mark}%
+                  </span>
+                </button>
+              );
+            }}
+          </For>
+        </div>
+      </div>
+
+      <p class="text-[11px] text-fg-muted leading-relaxed">
+        Drag the partition or pick a stop to summarize older turns automatically once context usage crosses the trigger.
+      </p>
+    </div>
+  );
+}
+
 export function SettingsGeneralSection() {
   const m = useModal();
   const ui = useUI();
@@ -34,146 +732,83 @@ export function SettingsGeneralSection() {
   const compactPct = () => m.daemonSettings().autoCompactPercent ?? 80;
 
   return (
-    <div class="space-y-4">
-      {/* 1. Appearance & Layout Studio */}
-      <section id="rc-set-appearance" class="rc-studio-card p-4 space-y-4">
-        <div class="flex items-start justify-between gap-3">
-          <div class="flex items-center gap-2.5">
-            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-subtle text-accent">
-              <Iconify icon="lucide:palette" size={15} />
-            </div>
-            <div>
-              <h3 class="text-sm font-medium text-fg">Appearance</h3>
-              <p class="text-[11px] text-fg-muted">
-                Color mode, reading column proportions, and stream verbosity.
-              </p>
-            </div>
-          </div>
+    <div class="divide-y divide-border">
+      {/* 1. Appearance & Layout */}
+      <section id="rc-set-appearance" class="py-5 first:pt-4 space-y-4">
+        <div>
+          <h3 class="text-sm font-medium text-fg">Appearance</h3>
+          <p class="text-xs text-fg-muted mt-0.5">
+            Surface theme, workspace accent, reading column geometry, and stream verbosity.
+          </p>
         </div>
 
-        <div class="space-y-3.5 text-xs">
-          <div>
-            <div class="flex items-center justify-between gap-2 mb-1.5">
-              <span class="font-medium text-fg">Theme</span>
-              <span class="text-[11px] text-fg-muted">Light, dark, high-contrast, or system</span>
-            </div>
-            <Segmented
-              value={themeMode()}
-              onChange={setThemeMode}
-              class="grid grid-cols-4"
-              options={[
-                { value: "light", label: "Light" },
-                { value: "dark", label: "Dark" },
-                { value: "high-contrast", label: "Contrast" },
-                { value: "system", label: "System" },
-              ]}
-            />
-          </div>
+        <div class="space-y-4 text-xs">
+          <ThemeStudioPicker />
 
-          <div>
-            <div class="flex items-center justify-between gap-2 mb-1.5">
-              <span class="font-medium text-fg">Conversation Width</span>
-              <span class="font-mono text-[11px] text-fg-muted">
-                {ui.convWidth() === "narrow"
-                  ? "576px (Focused)"
-                  : ui.convWidth() === "wide"
-                    ? "1024px (Studio)"
-                    : "768px (Balanced)"}
-              </span>
-            </div>
-            <Segmented
-              value={ui.convWidth()}
-              onChange={(v) => {
-                ui.setConvWidth(v);
-                try { localStorage.setItem("llmgw-rc-width", v); } catch {}
-              }}
-              class="grid grid-cols-3"
-              options={[
-                { value: "narrow", label: "Narrow" },
-                { value: "default", label: "Default" },
-                { value: "wide", label: "Wide" },
-              ]}
-            />
-            {/* Bespoke Column Geometry Miniature Preview */}
-            <div class="rc-studio-well mt-2 px-3 py-2" aria-hidden="true">
-              <div class="mx-auto flex flex-col gap-1 rounded-md border border-border/80 bg-surface px-2.5 py-1.5 transition-all duration-200"
-                style={{
-                  width: ui.convWidth() === "narrow" ? "52%" : ui.convWidth() === "wide" ? "94%" : "72%",
-                }}
-              >
-                <div class="ml-auto h-1.5 w-2/5 rounded-full bg-surface-strong" />
-                <div class="h-1.5 w-4/5 rounded-full bg-accent/45" />
-                <div class="h-1.5 w-3/5 rounded-full bg-surface-muted" />
-              </div>
-            </div>
-          </div>
+          <ColumnWidthPicker
+            value={ui.convWidth}
+            onChange={(v) => {
+              ui.setConvWidth(v);
+              try {
+                localStorage.setItem("llmgw-rc-width", v);
+              } catch {}
+            }}
+          />
 
-          <div class="rc-studio-well divide-y divide-border overflow-hidden">
-            <div class="flex items-center justify-between gap-4 p-3">
+          <div class="divide-y divide-border/70 border-t border-border/70 pt-1">
+            <div class="flex items-center justify-between gap-4 py-2.5">
               <div class="min-w-0">
                 <div class="font-medium text-fg">Verbose Agent Chat</div>
                 <div class="mt-0.5 text-[11px] text-fg-muted">
                   Display intermediate thinking steps and tool trace segments.
                 </div>
               </div>
-              <button
-                type="button"
-                onPointerDown={(e) => press(e.currentTarget)}
-                onClick={() => {
+              <Toggle
+                on={() => ui.verboseChat()}
+                label="Verbose agent chat"
+                onToggle={() => {
                   const v = !ui.verboseChat();
                   ui.setVerboseChat(v);
-                  try { localStorage.setItem("llmgw-rc-verbose", v ? "1" : "0"); } catch {}
+                  try {
+                    localStorage.setItem("llmgw-rc-verbose", v ? "1" : "0");
+                  } catch {}
                 }}
-                class="ui-switch-track shrink-0 cursor-pointer"
-                role="switch"
-                aria-checked={ui.verboseChat()}
-                aria-label="Verbose agent chat"
-              >
-                <span class="ui-switch-thumb" />
-              </button>
+              />
             </div>
+
             <Show when={ui.verboseChat()}>
-              <div class="flex items-center justify-between gap-4 bg-surface/40 p-3 pl-5">
-                <div class="min-w-0 border-l-2 border-accent/40 pl-3">
+              <div class="flex items-center justify-between gap-4 py-2.5 pl-3.5">
+                <div class="min-w-0 border-l border-border-strong pl-3">
                   <div class="font-medium text-fg">Hide Tool Call Messages</div>
                   <div class="mt-0.5 text-[11px] text-fg-muted leading-relaxed">
                     Group short intermediate commentary into tool trace blocks. Messages with 50+ tokens always stay visible.
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onPointerDown={(e) => press(e.currentTarget)}
-                  onClick={() => {
+                <Toggle
+                  on={() => ui.hideToolMessages()}
+                  label="Hide tool call messages"
+                  onToggle={() => {
                     const v = !ui.hideToolMessages();
                     ui.setHideToolMessages(v);
-                    try { localStorage.setItem("llmgw-rc-hide-tool-messages", v ? "1" : "0"); } catch {}
+                    try {
+                      localStorage.setItem("llmgw-rc-hide-tool-messages", v ? "1" : "0");
+                    } catch {}
                   }}
-                  class="ui-switch-track shrink-0 cursor-pointer"
-                  role="switch"
-                  aria-checked={ui.hideToolMessages()}
-                  aria-label="Hide tool call messages"
-                >
-                  <span class="ui-switch-thumb" />
-                </button>
+                />
               </div>
             </Show>
           </div>
         </div>
       </section>
 
-      {/* 2. Turn Notifications & Push Telemetry */}
-      <section id="rc-set-notifications" class="rc-studio-card p-4 space-y-3.5">
+      {/* 2. Turn Notifications & Push */}
+      <section id="rc-set-notifications" class="py-5 space-y-3.5">
         <div class="flex items-center justify-between gap-3 flex-wrap">
-          <div class="flex items-center gap-2.5">
-            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-subtle text-accent">
-              <Iconify icon="lucide:bell" size={15} />
-            </div>
-            <div>
-              <h3 class="text-sm font-medium text-fg">Turn notifications</h3>
-              <p class="text-[11px] text-fg-muted">
-                Background alerts across hosts and closed browser tabs.
-              </p>
-            </div>
+          <div>
+            <h3 class="text-sm font-medium text-fg">Turn notifications</h3>
+            <p class="text-xs text-fg-muted mt-0.5">
+              Background alerts across hosts and closed browser tabs.
+            </p>
           </div>
           <Show when={ui.pushSub.supported()}>
             <Badge
@@ -197,8 +832,8 @@ export function SettingsGeneralSection() {
         </div>
 
         <div class="space-y-3 text-xs">
-          <div class="rc-studio-well divide-y divide-border overflow-hidden">
-            <div class="flex items-center justify-between gap-4 p-3">
+          <div class="divide-y divide-border/70 border-y border-border/70">
+            <div class="flex items-center justify-between gap-4 py-2.5">
               <div class="min-w-0">
                 <div class="font-medium text-fg">Notify when a turn finishes</div>
                 <div class="mt-0.5 text-[11px] text-fg-muted leading-relaxed">
@@ -218,9 +853,10 @@ export function SettingsGeneralSection() {
                 }}
               />
             </div>
+
             <Show when={ui.turnNotify.notifyOn()}>
-              <div class="flex items-center justify-between gap-4 bg-surface/40 p-3 pl-5">
-                <div class="min-w-0 border-l-2 border-accent/40 pl-3">
+              <div class="flex items-center justify-between gap-4 py-2.5 pl-3.5">
+                <div class="min-w-0 border-l border-border-strong pl-3">
                   <div class="font-medium text-fg">Play a sound</div>
                   <div class="mt-0.5 text-[11px] text-fg-muted">
                     Short chime with the notification (only while a tab is open).
@@ -236,18 +872,18 @@ export function SettingsGeneralSection() {
           </div>
 
           <Show when={ui.turnNotify.notifyOn() && ui.turnNotify.permission() === "denied"}>
-            <p class="rounded-md border border-danger/30 bg-danger-subtle px-3 py-2 text-[11px] text-danger">
+            <p class="rounded-control border border-danger/30 bg-danger-subtle px-3 py-2 text-[11px] text-danger">
               Browser notifications are blocked for this site — allow them in the browser site settings, then use Test below.
             </p>
           </Show>
 
-          <div class="flex items-center justify-between gap-3 flex-wrap pt-0.5">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
             <button
               type="button"
               onClick={() => ui.turnNotify.testNotify()}
               class="inline-flex items-center gap-1.5 rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer"
             >
-              <Iconify icon="lucide:bell-ring" size={13} class="text-accent" />
+              <Iconify icon="lucide:bell-ring" size={13} class="text-fg-secondary" />
               <span>Test notification</span>
             </button>
             <Show when={ui.pushSub.supported()}>
@@ -267,29 +903,27 @@ export function SettingsGeneralSection() {
         </div>
       </section>
 
-      {/* 3. Daemon Release & Update Slot Studio */}
-      <section id="rc-set-updates" class="rc-studio-card p-4 space-y-3.5">
+      {/* 3. Updates */}
+      <section id="rc-set-updates" class="py-5 space-y-3.5">
         <div class="flex items-center justify-between gap-3 flex-wrap">
-          <div class="flex items-center gap-2.5">
-            <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-subtle text-accent">
-              <Iconify icon="lucide:arrow-down-to-line" size={15} />
-            </div>
-            <div>
-              <h3 class="text-sm font-medium text-fg">Updates</h3>
-              <p class="text-[11px] text-fg-muted">
-                Daemon slot binary version and update checks.
-              </p>
-            </div>
+          <div>
+            <h3 class="text-sm font-medium text-fg">Updates</h3>
+            <p class="text-xs text-fg-muted mt-0.5">
+              Daemon slot binary version and update checks.
+            </p>
           </div>
           <Show when={du.info()?.current}>
-            <span class="rounded-full border border-border bg-surface px-2.5 py-0.5 font-mono text-[11px] text-fg-secondary">
+            <span class="rounded-pill border border-border bg-surface-subtle px-2.5 py-0.5 font-mono text-[11px] text-fg-secondary">
               {du.info()?.current}
             </span>
           </Show>
         </div>
 
         <div class="space-y-3 text-xs">
-          <label for="settings-auto-update" class="rc-studio-well flex items-center justify-between gap-4 p-3 cursor-pointer select-none">
+          <label
+            for="settings-auto-update"
+            class="flex items-center justify-between gap-4 border-y border-border/70 py-2.5 cursor-pointer select-none"
+          >
             <span class="min-w-0">
               <span class="text-fg font-medium block">Auto-update daemon</span>
               <span class="block text-[11px] text-fg-muted font-normal mt-0.5 leading-relaxed">
@@ -313,9 +947,9 @@ export function SettingsGeneralSection() {
             </span>
           </label>
 
-          <div class="rc-studio-well flex items-center justify-between gap-3 flex-wrap px-3 py-2.5">
+          <div class="flex items-center justify-between gap-3 flex-wrap">
             <div class="flex items-center gap-2 min-w-0 text-fg-secondary">
-              <Iconify icon="lucide:package-check" size={14} class="shrink-0 text-accent" />
+              <Iconify icon="lucide:package-check" size={14} class="shrink-0 text-fg-muted" />
               <span class="min-w-0 leading-relaxed">
                 {(() => {
                   const i = du.info();
@@ -326,7 +960,10 @@ export function SettingsGeneralSection() {
                   else if (i.checkedAt) s += " — up to date";
                   if (hostStatus() === "updating") s += " (updating)";
                   else if ((i as any).mismatchWant) {
-                    const left = Math.max(0, 1 - Math.floor((Date.now() - ((i as any).mismatchAt || 0)) / 60000));
+                    const left = Math.max(
+                      0,
+                      1 - Math.floor((Date.now() - ((i as any).mismatchAt || 0)) / 60000),
+                    );
                     s += ` (mirror stale: wanted ${(i as any).mismatchWant}, got ${(i as any).mismatchGot || "?"}${left > 0 ? ` — retry in ~${left}min` : ""})`;
                   }
                   return s + ".";
@@ -336,17 +973,30 @@ export function SettingsGeneralSection() {
             <div class="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                class="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                class="rounded-control border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                 onClick={() => du.checkNow()}
               >
                 Check now
               </button>
-              <Show when={(() => { const i = du.info(); return !!i && !!i.available && i.available !== i.current && hostStatus() !== "updating"; })()}>
+              <Show
+                when={(() => {
+                  const i = du.info();
+                  return (
+                    !!i &&
+                    !!i.available &&
+                    i.available !== i.current &&
+                    hostStatus() !== "updating"
+                  );
+                })()}
+              >
                 <button
                   type="button"
-                  class="rounded-md bg-accent px-2.5 py-1 text-xs font-medium text-accent-foreground hover:bg-accent-strong transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  class="rounded-control bg-accent px-2.5 py-1 text-xs font-medium text-accent-foreground hover:bg-accent-strong transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   disabled={du.applying()}
-                  onClick={() => { du.apply(); m.cancelSettings(); }}
+                  onClick={() => {
+                    du.apply();
+                    m.cancelSettings();
+                  }}
                 >
                   {du.applying() ? "Updating…" : "Update now"}
                 </button>
@@ -354,11 +1004,18 @@ export function SettingsGeneralSection() {
             </div>
           </div>
 
-          <Show when={(() => { const i = du.info(); return !!i && (i.lifecycle === "failed" || i.lifecycle === "done"); })()}>
+          <Show
+            when={(() => {
+              const i = du.info();
+              return !!i && (i.lifecycle === "failed" || i.lifecycle === "done");
+            })()}
+          >
             <p class="text-[11px] text-fg-muted">
               {(() => {
                 const i = du.info();
-                if (i?.lifecycle === "failed") return `Last update ${i.target || ""} failed: ${i.failedReason || i.error || "unknown error"}.`;
+                if (i?.lifecycle === "failed") {
+                  return `Last update ${i.target || ""} failed: ${i.failedReason || i.error || "unknown error"}.`;
+                }
                 return `Last update finished: now running ${i?.current || ""}.`;
               })()}
             </p>
@@ -369,73 +1026,27 @@ export function SettingsGeneralSection() {
         </div>
       </section>
 
-      {/* 4. Runtime, Context Compaction & Security Studio */}
-      <section id="rc-set-runtime" class="rc-studio-card p-4 space-y-4">
-        <div class="flex items-center gap-2.5">
-          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-subtle text-accent">
-            <Iconify icon="lucide:sliders-horizontal" size={15} />
-          </div>
-          <div>
-            <h3 class="text-sm font-medium text-fg">Advanced</h3>
-            <p class="text-[11px] text-fg-muted">
-              Context compaction budget, approval sandbox, proxy routing, and auto-titling.
-            </p>
-          </div>
+      {/* 4. Advanced Runtime & Context Compaction */}
+      <section id="rc-set-runtime" class="py-5 last:pb-1 space-y-4">
+        <div>
+          <h3 class="text-sm font-medium text-fg">Advanced</h3>
+          <p class="text-xs text-fg-muted mt-0.5">
+            Context compaction partition, approval defaults, TLS policy, and upstream proxy.
+          </p>
         </div>
 
         <div class="space-y-4 text-xs">
-          <div>
-            <div class="flex items-center justify-between gap-2 mb-1.5">
-              <label class="font-medium text-fg">Auto-compact threshold</label>
-              <span class="font-mono text-[11px] text-accent">
-                {compactPct() === 0 ? "Manual only" : `Compacts at ${compactPct()}%`}
-              </span>
-            </div>
-            <Segmented
-              value={String(compactPct())}
-              onChange={(v) =>
-                m.setDaemonSettings({ ...m.daemonSettings(), autoCompactPercent: Number(v) })
-              }
-              class="grid grid-cols-6"
-              options={[0, 70, 80, 85, 90, 95].map((v) => ({
-                value: String(v),
-                label: v === 0 ? "Off" : `${v}%`,
-              }))}
-            />
-            {/* Bespoke Context Compaction Trigger Zone Meter */}
-            <div class="rc-studio-well mt-2 p-2.5 space-y-1.5" aria-hidden="true">
-              <div class="flex items-center justify-between text-[10px] font-mono">
-                <span class="text-fg-secondary">
-                  {compactPct() === 0
-                    ? "Auto-compaction disabled · manual compact only"
-                    : `Active conversation buffer: 0% → ${compactPct()}%`}
-                </span>
-                <span class="text-accent">
-                  {compactPct() === 0
-                    ? "100% raw"
-                    : `${100 - compactPct()}% headroom reserve`}
-                </span>
-              </div>
-              <div class="h-2 rounded-full bg-surface-muted overflow-hidden flex">
-                <div
-                  class="h-full bg-accent transition-all duration-200"
-                  style={{ width: `${compactPct() === 0 ? 100 : compactPct()}%` }}
-                />
-                <div class="h-full bg-warning/55 flex-1 transition-all duration-200" />
-              </div>
-            </div>
-            <p class="text-[11px] text-fg-muted mt-1.5">
-              Compact the transcript automatically past this context usage.
-            </p>
-          </div>
+          <AutoCompactGauge
+            value={compactPct}
+            onChange={(pct) =>
+              m.setDaemonSettings({ ...m.daemonSettings(), autoCompactPercent: pct })
+            }
+          />
 
-          <div class="rc-studio-well divide-y divide-border overflow-hidden">
-            <div class="flex items-center justify-between gap-4 p-3">
+          <div class="divide-y divide-border/70 border-y border-border/70">
+            <div class="flex items-center justify-between gap-4 py-2.5">
               <div class="min-w-0">
-                <div class="flex items-center gap-1.5 font-medium text-fg">
-                  <Iconify icon="lucide:shield" size={13} class="text-accent" />
-                  <span>Jail new conversations</span>
-                </div>
+                <div class="font-medium text-fg">Jail new conversations</div>
                 <div class="mt-0.5 text-[11px] text-fg-muted">
                   Start every session jailed: file writes and shell commands need approval first.
                 </div>
@@ -443,16 +1054,18 @@ export function SettingsGeneralSection() {
               <Toggle
                 on={() => m.daemonSettings().jailByDefault ?? false}
                 onToggle={() =>
-                  m.setDaemonSettings({ ...m.daemonSettings(), jailByDefault: !(m.daemonSettings().jailByDefault ?? false) })
+                  m.setDaemonSettings({
+                    ...m.daemonSettings(),
+                    jailByDefault: !(m.daemonSettings().jailByDefault ?? false),
+                  })
                 }
                 label="Jail new conversations"
               />
             </div>
 
-            <div class="flex items-center justify-between gap-4 p-3">
+            <div class="flex items-center justify-between gap-4 py-2.5">
               <div class="min-w-0">
-                <div class="flex items-center gap-1.5 font-medium text-fg">
-                  <Iconify icon="lucide:lock-open" size={13} class={m.daemonSettings().insecureTls ? "text-warning" : "text-fg-muted"} />
+                <div class="flex items-center gap-2 font-medium text-fg flex-wrap">
                   <span>Skip TLS verification</span>
                   <Show when={m.daemonSettings().insecureTls}>
                     <Badge tone="amber">Insecure</Badge>
@@ -465,18 +1078,21 @@ export function SettingsGeneralSection() {
               <Toggle
                 on={() => m.daemonSettings().insecureTls ?? false}
                 onToggle={() =>
-                  m.setDaemonSettings({ ...m.daemonSettings(), insecureTls: !(m.daemonSettings().insecureTls ?? false) })
+                  m.setDaemonSettings({
+                    ...m.daemonSettings(),
+                    insecureTls: !(m.daemonSettings().insecureTls ?? false),
+                  })
                 }
                 label="Skip TLS verification"
               />
             </div>
 
-            <label for="settings-auto-title" class="flex items-center justify-between gap-4 p-3 cursor-pointer select-none">
+            <label
+              for="settings-auto-title"
+              class="flex items-center justify-between gap-4 py-2.5 cursor-pointer select-none"
+            >
               <span class="min-w-0">
-                <span class="flex items-center gap-1.5 text-fg font-medium">
-                  <Iconify icon="lucide:sparkles" size={13} class="text-accent" />
-                  <span>Auto-generate conversation titles</span>
-                </span>
+                <span class="text-fg font-medium block">Auto-generate conversation titles</span>
                 <span class="block text-[11px] text-fg-muted font-normal mt-0.5">
                   The host asks the model for a short title after the first exchange. Off leaves "New conversation".
                 </span>
@@ -487,7 +1103,10 @@ export function SettingsGeneralSection() {
                   type="checkbox"
                   checked={!(m.daemonSettings().noAutoTitle ?? false)}
                   onChange={(e) =>
-                    m.setDaemonSettings({ ...m.daemonSettings(), noAutoTitle: !e.currentTarget.checked })
+                    m.setDaemonSettings({
+                      ...m.daemonSettings(),
+                      noAutoTitle: !e.currentTarget.checked,
+                    })
                   }
                   class="sr-only peer"
                 />
@@ -510,14 +1129,17 @@ export function SettingsGeneralSection() {
                 {(m.daemonSettings().httpProxy ?? "").trim() ? "Explicit proxy" : "Env default"}
               </Badge>
             </div>
-            <div class="rc-studio-well flex items-center gap-2 px-2.5 py-1.5 focus-within:border-accent transition-colors">
+            <div class="flex items-center gap-2 rounded-control border border-border-strong/80 bg-surface px-3 py-1.5 focus-within:border-fg transition-colors">
               <Iconify icon="lucide:globe" size={14} class="shrink-0 text-fg-muted" />
               <input
                 id="settings-upstream-proxy"
                 type="text"
                 value={m.daemonSettings().httpProxy ?? ""}
                 onInput={(e) =>
-                  m.setDaemonSettings({ ...m.daemonSettings(), httpProxy: e.currentTarget.value })
+                  m.setDaemonSettings({
+                    ...m.daemonSettings(),
+                    httpProxy: e.currentTarget.value,
+                  })
                 }
                 placeholder="http://host:port (empty = environment default)"
                 class="min-w-0 flex-1 bg-transparent font-mono text-xs text-fg placeholder:text-fg-muted outline-none"

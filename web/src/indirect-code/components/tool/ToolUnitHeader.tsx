@@ -24,28 +24,30 @@ export function ToolUnitHeader(props: ToolPartProps) {
         if (props.m.expandable()) press(e.currentTarget);
       }}
       onClick={props.m.toggle}
-      class="group/tool w-full flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-lg cursor-pointer hover:bg-surface-muted/70 transition-colors text-[13px]"
+      class={`group/tool w-full flex items-center gap-2 py-0.5 px-1.5 -ml-1.5 rounded-md transition-colors text-[12.5px] ${
+        props.m.expandable() ? "cursor-pointer hover:bg-surface-muted/55" : ""
+      }`}
     >
       <Show
         when={!(props.running && props.active && !props.u.result)}
         fallback={
-          <span class="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
+          <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-fg rounded-full animate-spin shrink-0" />
         }
       >
         <Iconify
           icon={props.m.sum().icon}
-          size={14}
-          class="shrink-0 text-fg-muted group-hover/tool:text-fg-secondary transition-colors"
+          size={13}
+          class="shrink-0 text-fg-muted/80 group-hover/tool:text-fg-secondary transition-colors"
         />
       </Show>
       <span class="text-fg-muted shrink-0">{props.m.sum().verb}</span>
-      <span class="flex items-center gap-2 min-w-0 flex-1">
-        <span class="inline-flex items-center gap-2 min-w-0 flex-1" data-rc-tip={targetPath() ? absoluteRemotePath(targetPath(), props.ctx.activeSession()?.cwd || "", props.ctx.projects().find((p: { protected?: boolean }) => p.protected)?.path) : undefined}>
-          <Show when={targetPath()}><FileIcon path={targetPath()} /></Show>
+      <span class="flex items-center gap-1.5 min-w-0 flex-1">
+        <span class="inline-flex items-center gap-1.5 min-w-0 flex-1" data-rc-tip={targetPath() ? absoluteRemotePath(targetPath(), props.ctx.activeSession()?.cwd || "", props.ctx.projects().find((p: { protected?: boolean }) => p.protected)?.path) : undefined}>
+          <Show when={targetPath()}><FileIcon path={targetPath()} size={13} /></Show>
           <Show when={props.m.name() === "bash" || props.m.name() === "exec_script" || props.m.name() === "python"} fallback={
-            <span class="truncate text-fg font-medium min-w-0">{props.m.name() === "bg_await" ? props.m.sleepLabel() : props.m.sum().target}</span>
+            <span class="truncate text-fg-secondary group-hover/tool:text-fg min-w-0 transition-colors">{props.m.name() === "bg_await" ? props.m.sleepLabel() : props.m.sum().target}</span>
           }>
-            <span class="truncate text-fg min-w-0 text-[12.5px]"><ShellCmd prompt={props.m.name() === "exec_script" || props.m.name() === "python" ? "> " : "$ "} text={collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "")} /></span>
+            <span class="truncate text-fg-secondary group-hover/tool:text-fg min-w-0 text-[12px] transition-colors"><ShellCmd prompt={props.m.name() === "exec_script" || props.m.name() === "python" ? "> " : "$ "} text={collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "")} /></span>
           </Show>
         </span>
       </span>
@@ -63,16 +65,16 @@ export function ToolUnitHeader(props: ToolPartProps) {
         </span>
       </Show>
       <Show when={props.m.sum().stat && props.m.sum().statAdd == null}>
-        <span class="text-[11px] text-fg-muted shrink-0">{props.m.sum().stat}</span>
+        <span class="text-[11px] text-fg-muted/80 shrink-0 tabular-nums">{props.m.sum().stat}</span>
       </Show>
-      <Show when={props.m.elapsed() && !props.m.isDetachedBg()}><span data-tool-duration class="text-[11px] text-fg-muted tabular-nums shrink-0">{props.m.elapsed()}</span></Show>
+      <Show when={props.m.elapsed() && !props.m.isDetachedBg()}><span data-tool-duration class="text-[11px] text-fg-muted/80 tabular-nums shrink-0">{props.m.elapsed()}</span></Show>
       {/* Header-only rows (bg_await) keep the clickable row but hide the
           chevron: there is never a body to reveal. */}
       <Show when={props.m.expandable()}>
         <Iconify
-          icon="lucide:chevron-down"
+          icon="lucide:chevron-right"
           size={12}
-          class={`shrink-0 text-fg-muted transition-transform ${props.m.open() ? "rotate-180" : ""}`}
+          class={`shrink-0 text-fg-muted/60 group-hover/tool:text-fg-muted transition-transform duration-150 ${props.m.open() ? "rotate-90 text-fg-muted" : ""}`}
         />
       </Show>
     </div>

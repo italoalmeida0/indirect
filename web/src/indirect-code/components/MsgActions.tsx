@@ -66,7 +66,7 @@ export function AssistantMsgActions(props: MsgActionState & { onRegenerate: () =
       </Show>
       <MsgIconBtn tip="Regenerate response" icon="lucide:rotate-cw" onClick={props.onRegenerate} />
       <Show when={props.duration}>
-        <span data-turn-duration class="ml-1.5 text-[11px] text-ink-500 tabular-nums" aria-label={`Turn duration: ${props.duration}`}>{props.duration}</span>
+        <span data-turn-duration class="ml-1.5 text-[11px] text-fg-muted tabular-nums" aria-label={`Turn duration: ${props.duration}`}>{props.duration}</span>
       </Show>
     </div>
   );

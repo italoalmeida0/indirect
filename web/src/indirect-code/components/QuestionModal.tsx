@@ -59,20 +59,18 @@ export function QuestionPanel(props: {
     if (q.multiple) setDrafts(step(), "selected", checked ? [...d.selected, label] : d.selected.filter((v) => v !== label));
     else setDrafts(step(), {selected:[label], custom:false});
   }
-  return <section aria-label="Questions from assistant" class="rc-studio-card mb-3 overflow-hidden rounded-2xl shadow-raised">
-    <div class="flex items-center gap-2.5 px-4 py-3 border-b border-border/70 bg-surface-subtle/70 text-xs text-fg-secondary">
-      <div class="w-6 h-6 rounded-lg bg-accent-subtle border border-accent/25 flex items-center justify-center text-accent shrink-0">
-        <Icon icon="lucide:message-circle-question" size={14} />
-      </div>
+  return <section aria-label="Questions from assistant" class="mb-3 overflow-hidden rounded-xl border border-border bg-surface shadow-resting">
+    <div class="flex items-center gap-2 px-3.5 py-2.5 border-b border-border/65 bg-surface-subtle/60 text-xs text-fg-secondary">
+      <Icon icon="lucide:message-circle-question" size={14} class="text-fg-muted shrink-0" />
       <span class="font-medium text-fg">Your input is needed</span>
       <Show when={questions().length > 1}>
-        <div class="hidden sm:flex items-center gap-1 ml-2" aria-hidden="true">
+        <div class="hidden sm:flex items-center gap-1 ml-1.5" aria-hidden="true">
           <For each={questions()}>
             {(_, idx) => (
               <span
-                class={`h-1.5 rounded-full transition-all duration-200 ${
+                class={`h-1 rounded-full transition-all duration-200 ${
                   idx() === step()
-                    ? "w-4 bg-accent"
+                    ? "w-3.5 bg-fg"
                     : ready(idx())
                     ? "w-1.5 bg-success"
                     : "w-1.5 bg-border-strong"
@@ -82,7 +80,7 @@ export function QuestionPanel(props: {
           </For>
         </div>
       </Show>
-      <span class="ml-auto rounded-full border border-border bg-surface px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-fg-secondary" aria-live="polite">
+      <span class="ml-auto font-mono text-[11px] tabular-nums text-fg-muted" aria-live="polite">
         {step()+1} of {questions().length}
       </span>
     </div>
@@ -213,7 +211,7 @@ export function QuestionPanel(props: {
             <span class="text-xs font-medium text-fg-secondary">Type your own answer</span>
           </label>
           <Show when={draft().custom}>
-            <textarea aria-label="Your answer" placeholder="Type your own answer or provide more details..." value={draft().text} maxLength={4000} rows={2} onInput={(e) => setDrafts(step(), "text", e.currentTarget.value)} class="rc-studio-well block w-full resize-y rounded-xl px-3.5 py-2.5 text-sm text-fg outline-none focus:border-accent/60 placeholder:text-fg-muted transition-colors" />
+            <textarea aria-label="Your answer" placeholder="Type your own answer or provide more details..." value={draft().text} maxLength={4000} rows={2} onInput={(e) => setDrafts(step(), "text", e.currentTarget.value)} class="block w-full resize-y rounded-xl border border-border bg-surface-subtle/75 px-3.5 py-2.5 text-sm text-fg outline-none focus:border-accent/65 focus:bg-surface placeholder:text-fg-muted transition-colors" />
           </Show>
         </div>
       </fieldset>

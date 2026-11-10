@@ -11,19 +11,21 @@ export function ToolbarSend() {
     <div class="flex shrink-0 items-center gap-1.5">
       <Show when={t.sessionStatus() === "running"}>
         <button
+          type="button"
           onPointerDown={(e) => {
             if (!e.currentTarget.disabled) press(e.currentTarget);
           }}
           onClick={t.cancelCurrentTurn}
           disabled={t.turnActivity()?.status === "cancelling"}
-          class="ui-button ui-button-danger ui-button-sm w-8 h-8 p-0 disabled:opacity-60"
+          class="h-8 w-8 shrink-0 rounded-full inline-flex items-center justify-center border border-danger/35 bg-danger-subtle text-danger hover:bg-danger/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
           data-rc-tip={t.turnActivity()?.status === "cancelling" ? "Stopping…" : "Stop"}
           aria-label={t.turnActivity()?.status === "cancelling" ? "Stopping turn" : "Stop"}
         >
-          <Iconify icon="lucide:square" size={13} />
+          <span class="h-2.5 w-2.5 rounded-[2px] bg-current" aria-hidden="true" />
         </button>
       </Show>
       <button
+        type="button"
         onPointerDown={(e) => {
           if (!e.currentTarget.disabled) press(e.currentTarget);
         }}
@@ -34,11 +36,11 @@ export function ToolbarSend() {
             ? !c.inputPrompt().trim() && c.pendingAttachments().length === 0
             : (!c.inputPrompt().trim() && c.pendingAttachments().length === 0) || !s.activeProject())
         }
-        class="rc-composer-send ui-button ui-button-primary ui-button-sm w-8 h-8 p-0"
+        class="rc-composer-send h-8 w-8 shrink-0 rounded-full inline-flex items-center justify-center bg-fg text-background hover:opacity-90 active:opacity-80 disabled:bg-surface-muted disabled:text-fg-muted disabled:opacity-100 disabled:cursor-not-allowed transition-all cursor-pointer"
         data-rc-tip={c.sending() ? "Uploading attachments..." : !s.activeSessionId() ? "Start conversation" : "Send"}
         aria-label={!s.activeSessionId() ? "Start conversation" : "Send"}
       >
-        <Iconify icon="lucide:arrow-right" size={14} />
+        <Iconify icon="lucide:arrow-up" size={15} />
       </button>
     </div>
   );
