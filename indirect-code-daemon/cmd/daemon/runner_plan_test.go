@@ -204,6 +204,8 @@ func TestRunnerForegroundWindowThroughBashTool(t *testing.T) {
 
 	// LONG: shorten only this window so the detach case stays fast.
 	tools.AutoBackgroundAfter = 300 * time.Millisecond
+	delivered := make(chan struct{})
+	var deliverOnce sync.Once
 	var mu sync.Mutex
 	var registered tools.BackgroundProcess
 	long := &tools.BashTool{
@@ -213,16 +215,42 @@ func TestRunnerForegroundWindowThroughBashTool(t *testing.T) {
 			mu.Lock()
 			registered = p
 			mu.Unlock()
-			return "bg_" + "t9", p.BrainLog, func(string) {}, func(string, bool, int) {}
+			return "bg_" + "t9", p.BrainLog, func(string) {}, func(string, bool, int) {
+				deliverOnce.Do(func() { close(delivered) })
+			}
 		},
 	}
 	res, err = long.Execute(context.Background(), bashJSON(t, "echo early; sleep 2"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
 	mu.Lock()
 	p := registered
 	mu.Unlock()
+	var stopOnce sync.Once
+	stopLong := func() {
+		if p.PID == 0 {
+			return
+		}
+		stopOnce.Do(func() {
+			if p.Stop != nil {
+				p.Stop()
+			}
+			select {
+			case <-delivered:
+			case <-time.After(10 * time.Second):
+				t.Errorf("background delivery did not complete after Stop")
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) && pidAlive(strconv.Itoa(p.PID)) {
+				time.Sleep(50 * time.Millisecond)
+			}
+			if pidAlive(strconv.Itoa(p.PID)) {
+				t.Errorf("runner pid %d still alive after Stop", p.PID)
+			}
+		})
+	}
+	t.Cleanup(stopLong)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if p.PID == 0 {
 		t.Fatal("long command never registered a background job")
 	}
@@ -241,8 +269,8 @@ func TestRunnerForegroundWindowThroughBashTool(t *testing.T) {
 	if !strings.Contains(text, "bg_check") {
 		t.Fatalf("placeholder must point at bg_check, got: %q", text)
 	}
-	// Stop cleans the tree.
-	p.Stop()
+	// Stop cleans the tree and waits for detached reaper/tailer handles to close.
+	stopLong()
 }
 
 // T12: crash windows AT the terminal transition. The runner records

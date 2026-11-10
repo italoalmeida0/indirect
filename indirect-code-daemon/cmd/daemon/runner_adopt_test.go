@@ -100,6 +100,21 @@ func spawnTestRunner(t *testing.T, root, dataDir, command string) *tools.Proc {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		select {
+		case <-proc.Exited:
+		default:
+			proc.Stop()
+			select {
+			case <-proc.Exited:
+			case <-time.After(10 * time.Second):
+			}
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) && pidAlive(strconv.Itoa(proc.PID)) {
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
 	// Only report ready once the runner published its state (the contract
 	// the adoption scan reads).
 	waitFor(t, 5*time.Second, func() bool {
@@ -227,7 +242,14 @@ func TestRunnerKillTakesTheTreeDown(t *testing.T) {
 	command := "sh -c 'echo $$ > " + marker + "; sleep 30'"
 	proc := spawnTestRunner(t, root, dataDir, command)
 	t.Cleanup(proc.Stop)
-	waitFor(t, 5*time.Second, func() bool { return fileHas(marker, "") || fileExists(marker) })
+	waitFor(t, 5*time.Second, func() bool {
+		raw, err := os.ReadFile(marker)
+		if err != nil || !strings.Contains(string(raw), "\n") {
+			return false
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		return err == nil && pid > 0
+	})
 
 	raw, _ := os.ReadFile(marker)
 	gcPid, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
@@ -235,6 +257,11 @@ func TestRunnerKillTakesTheTreeDown(t *testing.T) {
 		t.Fatalf("grandchild pid: %q", raw)
 	}
 	proc.Stop()
+	select {
+	case <-proc.Exited:
+	case <-time.After(10 * time.Second):
+		t.Fatal("runner did not exit after Stop")
+	}
 	deadline := time.Now().Add(8 * time.Second)
 	for time.Now().Before(deadline) && pidAlive(strconv.Itoa(gcPid)) {
 		time.Sleep(100 * time.Millisecond)
