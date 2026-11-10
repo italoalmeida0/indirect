@@ -15,14 +15,18 @@ export function ToolbarModel() {
 <Show when={!ui.isMobile()}>
 <div>
   <button
+    type="button"
     ref={c.modelBtn}
     data-menubtn
+    aria-expanded={ui.modelMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={(e) => {
       e.stopPropagation();
       ui.setModelMenuOpen(!ui.modelMenuOpen());
       s.setProjectMenuOpen(false);
       c.setAddContextOpen(false);
+      c.setModeMenuOpen(false);
+      c.setAccessMenuOpen(false);
       ui.setUsageOpen(false);
     }}
     class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
@@ -31,11 +35,19 @@ export function ToolbarModel() {
     <Iconify icon="lucide:cpu" size={13} class="shrink-0 text-fg-muted" />
     <span class="max-w-[130px] sm:max-w-[190px] truncate text-fg">{c.activeModelName()}</span>
     <Show when={formatEffort(c.effort())}>
-      <span class="rounded border border-border/80 bg-surface-subtle px-1 py-0.5 text-[10px] font-medium text-fg-muted shrink-0 leading-none">{formatEffort(c.effort())}</span>
+      <span class="rounded border border-border/80 bg-surface-subtle px-1 py-0.5 font-mono text-[10px] font-medium text-fg-muted shrink-0 leading-none">{formatEffort(c.effort())}</span>
     </Show>
     <Iconify icon="lucide:chevron-down" size={11} class={`shrink-0 text-fg-muted transition-transform duration-150 ${ui.modelMenuOpen() ? "rotate-180" : ""}`} />
   </button>
-  <FloatMenu anchor={() => c.modelBtn} open={ui.modelMenuOpen()} role="dialog" aria-label="Select model" placement="top-start" width="min(25rem, calc(100vw - 1.5rem))">
+  <FloatMenu
+    anchor={() => c.modelBtn}
+    open={ui.modelMenuOpen()}
+    onClose={() => ui.setModelMenuOpen(false)}
+    role="dialog"
+    aria-label="Select model"
+    placement="top-start"
+    width="min(26rem, calc(100vw - 1.5rem))"
+  >
     <div>{c.modelPickerBody()}</div>
   </FloatMenu>
 

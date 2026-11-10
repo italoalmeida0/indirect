@@ -101,7 +101,7 @@ export function DiffView(props: {
         requestAnimationFrame(() => restoreToolScroll(props.scrollKey, el));
       }}
       onScroll={props.embedded ? undefined : (e) => recordToolScroll(props.scrollKey, e.currentTarget)}
-      class={`font-mono text-[11px] leading-relaxed select-text ${
+      class={`font-mono text-[11.5px] leading-relaxed select-text ${
         props.embedded
           ? "overflow-visible"
           : "overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] max-h-96"
@@ -114,26 +114,26 @@ export function DiffView(props: {
             <For each={shown()}>
               {(r) => (
                 <div
-                  class={`flex items-start px-2 py-0.5 whitespace-pre ${
+                  class={`flex items-start pr-2.5 py-0.5 whitespace-pre ${
                     r.kind === "add"
-                      ? "bg-success-subtle text-success"
+                      ? "rc-diff-row-add text-success"
                       : r.kind === "del"
-                        ? "bg-danger-subtle text-danger"
+                        ? "rc-diff-row-del text-danger"
                         : r.kind === "header"
-                          ? "text-ink-500 text-[10px]"
+                          ? "rc-diff-row-ctx text-fg-muted text-[10px]"
                           : r.kind === "ellipsis"
-                            ? "text-ink-600/70"
-                            : "text-ink-400"
+                            ? "rc-diff-row-ctx text-fg-muted/70"
+                            : "rc-diff-row-ctx text-fg-secondary"
                   }`}
                 >
-                  <div class="sticky left-0 z-10 flex items-start bg-inherit shrink-0">
+                  <div class="sticky left-0 z-10 flex items-start bg-inherit pl-2.5 pr-1 shrink-0">
                     <Show when={hasGutter()}>
-                      <span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">
+                      <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
                         {r.lineNum || ""}
                       </span>
                     </Show>
                     <span
-                      class={`select-none w-3.5 shrink-0 text-center font-medium ${
+                      class={`select-none w-4 shrink-0 text-center font-medium ${
                         r.kind === "add"
                           ? "text-success"
                           : r.kind === "del"
@@ -154,26 +154,26 @@ export function DiffView(props: {
           <For each={rows()}>
             {(r) => (
               <div
-                class={`flex items-start px-2 py-0.5 whitespace-pre ${
+                class={`flex items-start pr-2.5 py-0.5 whitespace-pre ${
                   r.kind === "add"
-                    ? "bg-success-subtle"
+                    ? "rc-diff-row-add"
                     : r.kind === "del"
-                      ? "bg-danger-subtle"
+                      ? "rc-diff-row-del"
                       : r.kind === "header"
-                        ? "text-ink-500 text-[10px]"
+                        ? "rc-diff-row-ctx text-fg-muted text-[10px]"
                         : r.kind === "ellipsis"
-                          ? "text-ink-600/70"
-                          : "text-ink-400"
+                          ? "rc-diff-row-ctx text-fg-muted/70"
+                          : "rc-diff-row-ctx text-fg-secondary"
                 }`}
               >
-                <div class="sticky left-0 z-10 flex items-start bg-inherit shrink-0">
+                <div class="sticky left-0 z-10 flex items-start bg-inherit pl-2.5 pr-1 shrink-0">
                   <Show when={hasGutter()}>
-                    <span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">
+                    <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
                       {r.lineNum || ""}
                     </span>
                   </Show>
                   <span
-                    class={`select-none w-3.5 shrink-0 text-center font-medium ${
+                    class={`select-none w-4 shrink-0 text-center font-medium ${
                       r.kind === "add"
                         ? "text-success"
                         : r.kind === "del"
@@ -193,13 +193,14 @@ export function DiffView(props: {
       </div>
       <Show when={hidden() > 0}>
         <button
+          type="button"
           onClick={() => {
             setExpanded(true);
             requestAnimationFrame(() => {
               containerRef?.scrollIntoView({ behavior: "smooth", block: "nearest" });
             });
           }}
-          class="px-3 py-1 text-[11px] text-ink-500 hover:text-ink-200 cursor-pointer"
+          class="w-full text-left px-3 py-1.5 border-t border-border/50 bg-surface-subtle text-[11px] font-mono text-fg-muted hover:text-fg hover:bg-surface-muted/60 transition-colors cursor-pointer"
         >
           +{hidden()} more lines
         </button>

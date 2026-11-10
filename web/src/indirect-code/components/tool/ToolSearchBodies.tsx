@@ -17,7 +17,7 @@ function flagBadge(flag: string) {
         ? "bg-success-subtle text-success"
         : flag === "D" || flag === "R"
           ? "bg-danger-subtle text-danger"
-          : "bg-ink-800 text-ink-300";
+          : "bg-surface-muted text-fg-secondary";
   return (
     <span class={`shrink-0 rounded px-1 py-px font-mono text-[10px] ${color}`}>{flag}</span>
   );
@@ -37,15 +37,15 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={props.m.name() === "search"}>
           <Show
             when={props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Searching…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Searching…" : null}</div>}
           >
-            <div class="px-3 py-1.5 text-[11px] text-ink-500 font-mono">
-              <span class="text-ink-300">/{String(props.m.args().pattern || "")}/</span>
-              <span class="ml-1.5 rounded bg-ink-700/60 px-1 py-px text-[10px]">regex</span>
-              {props.m.args().path && String(props.m.args().path) !== "." ? <span class="ml-1.5">in {String(props.m.args().path)}</span> : null}
-              {props.m.args().only_matching ? <span class="ml-1.5 rounded bg-ink-700/60 px-1 py-px text-[10px]">only-matching</span> : null}
-              {props.m.args().count ? <span class="ml-1.5 rounded bg-ink-700/60 px-1 py-px text-[10px]">count</span> : null}
-              {props.m.args().files_only ? <span class="ml-1.5 rounded bg-ink-700/60 px-1 py-px text-[10px]">files-only</span> : null}
+            <div class="px-3 py-1.5 border-b border-border/55 bg-surface/45 text-[11px] text-fg-muted font-mono flex flex-wrap items-center gap-1.5">
+              <span class="text-fg">/{String(props.m.args().pattern || "")}/</span>
+              <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">regex</span>
+              {props.m.args().path && String(props.m.args().path) !== "." ? <span>in {String(props.m.args().path)}</span> : null}
+              {props.m.args().only_matching ? <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">only-matching</span> : null}
+              {props.m.args().count ? <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">count</span> : null}
+              {props.m.args().files_only ? <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">files-only</span> : null}
             </div>
             <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.terminal().output || props.m.output() || props.m.prog() || ""} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
           </Show>
@@ -53,7 +53,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={props.m.name() === "inspect" || props.m.name() === "widget_list"}>
           <Show
             when={props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Listing…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Listing…" : null}</div>}
           >
             <Show
               when={inspectTree()}
@@ -63,32 +63,32 @@ export function ToolSearchBodies(props: ToolPartProps) {
             >
               {(t) => (
                 <>
-                  <div class="px-3 pt-2 pb-1 font-mono text-[11px] text-ink-500">
+                  <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted">
                     {t().scope && t().scope !== "./" ? t().scope : props.m.name() === "widget_list" ? "widgets" : "workspace"} · {t().count} {t().count === 1 ? "entry" : "entries"}
                     {t().capped ? ` (capped at ${t().capped})` : ""}
                   </div>
-                  <ul class="px-1.5 pb-1.5">
+                  <ul class="px-1.5 py-1">
                     <For each={t().entries}>
                       {(e) => (
-                        <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-ink-900/70 text-[12px]">
+                        <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-surface-muted/65 text-[12px] transition-colors">
                           <span style={{ "padding-left": `${e.depth * 14}px` }} class="flex min-w-0 flex-1 items-center gap-1.5">
                             <Show
                               when={e.isDir}
                               fallback={<FileIcon path={e.name} size={13} />}
                             >
-                              <Iconify icon="lucide:folder" size={13} class="shrink-0 text-ink-500" />
+                              <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
                             </Show>
-                            <span class="truncate font-mono text-ink-200">
+                            <span class="truncate font-mono text-fg">
                               {e.name}
                               {e.isDir ? "/" : ""}
                             </span>
                           </span>
                           {flagBadge(e.flag)}
                           <Show when={e.flag === "•"}>
-                            <span class="h-1 w-1 shrink-0 rounded-full bg-ink-600" />
+                            <span class="h-1 w-1 shrink-0 rounded-full bg-fg-muted" />
                           </Show>
                           <Show when={e.size}>
-                            <span class="shrink-0 font-mono text-[10.5px] text-ink-500">
+                            <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
                               {e.size}
                               {e.lines !== undefined ? ` · ${e.lines} lines` : ""}
                               {e.mtime ? ` · ${e.mtime}` : ""}
@@ -106,7 +106,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={props.m.name() === "glob"}>
           <Show
             when={props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Finding files…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Finding files…" : null}</div>}
           >
             <Show
               when={globList()}
@@ -118,25 +118,25 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 <>
                   <Show
                     when={!g().none}
-                    fallback={<div class="px-3 py-2 text-[11px] text-ink-600">No files matched the pattern.</div>}
+                    fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">No files matched the pattern.</div>}
                   >
-                    <div class="px-3 pt-2 pb-1 font-mono text-[11px] text-ink-500">
+                    <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
                       {g().files.length} {g().files.length === 1 ? "file" : "files"}
                     </div>
-                    <ul ref={(el) => onCleanup(followTail(el, () => props.m.open() && props.running))} class="px-1.5 pb-1.5">
+                    <ul ref={(el) => onCleanup(followTail(el, () => props.m.open() && props.running))} class="px-1.5 py-1">
                       <For each={g().files}>
                         {(f) => (
-                          <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-ink-900/70 text-[12px]">
+                          <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-surface-muted/65 text-[12px] transition-colors">
                             <Show when={f.endsWith("/")} fallback={<FileIcon path={f} size={13} />}>
-                              <Iconify icon="lucide:folder" size={13} class="shrink-0 text-ink-500" />
+                              <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
                             </Show>
-                            <span class="truncate font-mono text-ink-200">{f}</span>
+                            <span class="truncate font-mono text-fg">{f}</span>
                           </li>
                         )}
                       </For>
                     </ul>
                     <Show when={g().truncated}>
-                      <p class="px-3 pb-2 text-[10px] text-ink-600">Truncated: showing first {g().files.length} matches — narrow the pattern</p>
+                      <p class="px-3 pb-2 text-[10px] text-fg-muted">Truncated: showing first {g().files.length} matches — narrow the pattern</p>
                     </Show>
                   </Show>
                 </>
@@ -147,11 +147,11 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={props.m.name() === "search_web"}>
           <Show
             when={props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Searching the web…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Searching the web…" : null}</div>}
           >
-            <div class="px-3 pt-2 pb-1 text-[11px] text-ink-500">
-              <span class="font-mono text-ink-300">“{String(props.m.args().query || props.m.webDetails()?.query || "")}”</span>
-              <Show when={props.m.webDetails()?.cached}><span class="ml-1.5 rounded bg-ink-700/60 px-1 py-px text-[10px]">cached</span></Show>
+            <div class="px-3 pt-2 pb-1.5 text-[11px] text-fg-muted">
+              <span class="font-mono text-fg">“{String(props.m.args().query || props.m.webDetails()?.query || "")}”</span>
+              <Show when={props.m.webDetails()?.cached}><span class="ml-1.5 rounded border border-border/70 bg-surface-muted px-1.5 py-px text-[10px] text-fg-secondary">cached</span></Show>
             </div>
             <Show when={(props.m.webDetails()?.results || []).length > 0} fallback={
               <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.terminal().output || props.m.output() || props.m.prog() || ""} language={undefined} plain wrap={false} scrollKey={`${props.m.key()}:results`} />
@@ -212,7 +212,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
               label is the raw command for bash and the code for
               exec_script — same two-part layout as the bash body. */}
           <Show when={String(((props.u.result?.toolDetails as any)?.env?.command || "") as string)}>
-            <div class="border-b border-line/40">
+            <div class="border-b border-border/60 bg-surface/50">
               <CodeBlock
                 embedded
                 text={String(((props.u.result?.toolDetails as any)?.env?.command || "") as string)}
@@ -227,14 +227,14 @@ export function ToolSearchBodies(props: ToolPartProps) {
           </Show>
           <Show
             when={props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Reading background task…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Reading background task…" : null}</div>}
           >
             {/* Log output: numbered, plain, unwrapped. Metadata sits in the footer. */}
             <CodeBlock embedded numbered follow={() => props.m.open() && props.running} text={props.m.output() || props.m.prog() || ""} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
           </Show>
         </Show>
         <Show when={props.m.name() === "bg_cancel" && !props.m.running()}>
-          <div class="px-3 py-2 text-[11px] text-ink-500">
+          <div class="px-3 py-2 text-[11px] text-fg-secondary">
             {props.u.result?.isError || (props.u.result?.toolDetails as any)?.env?.error
               ? (props.m.output() || String((props.u.result?.toolDetails as any)?.env?.error || "Failed to cancel background task."))
               : (props.u.result?.toolDetails as any)?.cancelled === false ||
@@ -246,12 +246,12 @@ export function ToolSearchBodies(props: ToolPartProps) {
           {/* Canceled body stays minimal — the header says it all. */}
         </Show>
         <Show when={props.m.name() === "bash"}>
-          <div class="border-b border-line/40">
+          <div class="border-b border-border/60 bg-surface/50">
             <CodeBlock embedded text={props.m.bashHeaderCmd()} language="bash" wrap={false} maxH="max-h-40" scrollKey={`${props.m.key()}:cmd`} />
           </div>
           <Show
             when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Running…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Running…" : null}</div>}
           >
             <CodeBlock embedded
               follow={() => props.m.open() && props.running}
@@ -268,11 +268,11 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={props.m.name() === "widget_lint"}>
           <Show
             when={props.u.result?.toolDetails?.display || props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Linting widget…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Linting widget…" : null}</div>}
           >
             {/* Lint is plain text — but a failed lint paints it red. */}
             <pre
-              class={`px-3 py-2 text-[11px] whitespace-pre-wrap ${props.u.result && props.u.result.toolDetails?.lint_ok === false ? "text-danger" : "text-ink-300"}`}
+              class={`px-3 py-2 font-mono text-[11px] whitespace-pre-wrap ${props.u.result && props.u.result.toolDetails?.lint_ok === false ? "text-danger" : "text-fg-secondary"}`}
             >
               {String(props.u.result?.toolDetails?.display || props.m.output() || props.m.prog())}
             </pre>
@@ -281,7 +281,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={!(props.m.name() === "bash" || props.m.name() === "bg_await" || props.m.name() === "bg_check" || props.m.name() === "bg_cancel" || props.m.name() === "edit" || props.m.name() === "read" || props.m.name() === "write" || props.m.name() === "exec_script" || props.m.name() === "python" || props.m.name() === "search" || props.m.name() === "inspect" || props.m.name() === "glob" || props.m.name() === "question" || props.m.name() === "patch" || props.m.name() === "search_web" || props.m.name() === "fetch_url" || props.m.name() === "widget_set" || props.m.name() === "widget_read" || props.m.name() === "widget_edit" || props.m.name() === "widget_list" || props.m.name() === "widget_lint")}>
           <Show
             when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.m.name() === "question" ? "Waiting for your answers…" : props.ctx.pendingApproval()?.callId === props.u.call?.toolId ? "Waiting for approval…" : props.active ? "Running…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.m.name() === "question" ? "Waiting for your answers…" : props.ctx.pendingApproval()?.callId === props.u.call?.toolId ? "Waiting for approval…" : props.active ? "Running…" : null}</div>}
           >
             <pre
               ref={(el) => {
@@ -290,7 +290,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 onCleanup(followTail(el, () => props.m.open() && props.running));
               }}
               onScroll={(e) => recordToolScroll(props.m.key(), e.currentTarget)}
-              class="px-3 py-2 text-[11px] text-ink-300 whitespace-pre"
+              class="px-3 py-2 font-mono text-[11px] text-fg-secondary whitespace-pre"
             >
               {props.m.output() || props.m.prog() || ""}
             </pre>

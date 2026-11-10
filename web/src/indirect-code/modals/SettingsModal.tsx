@@ -47,7 +47,7 @@ export function SettingsModal() {
         </>
       }
     >
-      <div class="w-full space-y-4">
+      <div class="w-full min-w-0 space-y-4">
         <Show when={m.settingsError() || m.settingsChanged()}>
           <div
             role="alert"
@@ -73,21 +73,21 @@ export function SettingsModal() {
 
         <fieldset
           disabled={m.savingSettings()}
-          class="min-w-0 space-y-4 disabled:opacity-60"
+          class="min-w-0 disabled:opacity-60"
         >
           <Show when={ui.appNotice()}>
             {(notice) => (
               <div
-                role={notice().kind === "err" ? "alert" : "status"}
-                class="rounded-control border border-border bg-surface-subtle px-3.5 py-2.5 text-xs text-fg-secondary"
+                role="status"
+                class="mb-4 rounded-control border border-border bg-surface-subtle px-3.5 py-2.5 text-xs text-fg-secondary"
               >
                 {notice().message}
               </div>
             )}
           </Show>
 
-          {/* Bespoke Host Telemetry & Studio Section Strip */}
-          <div class="rc-studio-well flex flex-wrap items-center justify-between gap-2.5 px-3 py-2">
+          {/* Host Telemetry & Section Navigation Hairline Strip */}
+          <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border">
             <div class="flex items-center gap-2 min-w-0">
               <span
                 class={`h-2 w-2 shrink-0 rounded-full ${
@@ -117,27 +117,26 @@ export function SettingsModal() {
                     : "Offline"}
               </Badge>
             </div>
-            <div class="flex items-center gap-1 flex-wrap">
+            <nav aria-label="Settings sections" class="flex items-center gap-0.5 flex-wrap">
               <For
                 each={[
-                  { id: "rc-set-appearance", icon: "lucide:palette", label: "Appearance" },
-                  { id: "rc-set-notifications", icon: "lucide:bell", label: "Alerts" },
-                  { id: "rc-set-updates", icon: "lucide:arrow-down-to-line", label: "Updates" },
-                  { id: "rc-set-runtime", icon: "lucide:sliders-horizontal", label: "Runtime" },
+                  { id: "rc-set-appearance", label: "Appearance" },
+                  { id: "rc-set-notifications", label: "Alerts" },
+                  { id: "rc-set-updates", label: "Updates" },
+                  { id: "rc-set-runtime", label: "Runtime" },
                 ]}
               >
                 {(sec) => (
                   <button
                     type="button"
                     onClick={() => jumpTo(sec.id)}
-                    class="inline-flex items-center gap-1 rounded-md border border-transparent px-2 py-1 text-[11px] font-medium text-fg-secondary hover:border-border hover:bg-surface hover:text-fg transition-colors cursor-pointer"
+                    class="inline-flex items-center rounded-md px-2 py-1 text-[11px] font-medium text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                   >
-                    <Iconify icon={sec.icon} size={12} class="text-fg-muted" />
-                    <span>{sec.label}</span>
+                    {sec.label}
                   </button>
                 )}
               </For>
-            </div>
+            </nav>
           </div>
 
           <Show when={activeTab() === "general" || !activeTab()}>

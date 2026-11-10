@@ -1,6 +1,7 @@
 import { createEffect, createSignal, untrack, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { animate } from "../../../ds/motion/animate";
+import { createGlide } from "../../../ds/motion/glide";
 import { press } from "../../../ds/motion/press";
 import { reducedMotion } from "../../../ds/motion/reduced";
 import { motionTokens } from "../../../ds/motion/tokens";
@@ -310,108 +311,268 @@ export function ToolbarContext() {
     return c.selectedSkills().filter((name) => !isModeSkill(name) && saved[name]?.enabled).length;
   }
 
-  const modeSkillList = () => (
-    <div role="menu" aria-label="Agent mode" class="space-y-0.5">
-      <For each={modeSkills()}>
-        {(mode) => {
-          const active = () => activeModeSkillName() === mode.name;
-          return (
-            <button
-              role="menuitemradio"
-              aria-checked={active()}
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => chooseModeSkill(mode.name)}
-              class={`w-full flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors cursor-pointer ${
-                active()
-                  ? "border-accent/25 bg-accent-subtle text-fg"
-                  : "border-transparent hover:bg-surface-muted text-fg-secondary"
-              }`}
+  function activeAdditionalCount() {
+    const saved = m.savedSkills?.() ?? {};
+    return effectiveSelectedSkills().filter((name) => !isModeSkill(name) && saved[name]?.enabled).length;
+  }
+
+  const PostureSection = () => {
+    const [postureTrack, setPostureTrack] = createSignal<HTMLDivElement>();
+    const [postureInd, setPostureInd] = createSignal<HTMLSpanElement>();
+    const [hoveredMode, setHoveredMode] = createSignal<string | null>(null);
+    createGlide({
+      container: postureTrack,
+      indicator: postureInd,
+      target: () => {
+        void activeModeSkillName();
+        void modeSkills().length;
+        return postureTrack()?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]') ?? null;
+      },
+    });
+    const captionSpec = () => {
+      const h = hoveredMode();
+      if (h) {
+        const found = modeSkills().find((x) => x.name === h);
+        if (found) return found;
+      }
+      return currentModeSpec();
+    };
+    return (
+      <Show when={modeSkills().length > 0}>
+        <div class="px-1.5 pt-1 pb-1.5">
+          <div class="flex items-center justify-between px-1 pb-1.5">
+            <span class="text-[11px] font-medium text-fg-muted">Execution posture</span>
+          </div>
+          <Show
+            when={modeSkills().length > 1}
+            fallback={
+              <div role="menu" aria-label="Agent mode">
+                <For each={modeSkills()}>
+                  {(mode) => {
+                    const active = () => activeModeSkillName() === mode.name;
+                    return (
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active()}
+                        onPointerDown={(e) => press(e.currentTarget)}
+                        onClick={() => chooseModeSkill(mode.name)}
+                        class="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface-subtle px-2.5 py-2 text-left transition-colors cursor-pointer"
+                      >
+                        <Iconify icon={mode.icon} size={14} class="text-accent shrink-0" />
+                        <span class="flex-1 min-w-0">
+                          <span class="flex items-center gap-1.5">
+                            <span class="text-xs font-medium text-fg">{mode.label}</span>
+                            <span class="inline-flex items-center gap-1 rounded border border-border bg-surface px-1.5 py-px text-[10px] font-medium text-fg-muted">
+                              <Iconify icon="lucide:lock" size={9} class="shrink-0" />
+                              <span>Locked</span>
+                            </span>
+                          </span>
+                          <span class="block text-[11px] text-fg-muted mt-0.5 leading-snug">{mode.description}</span>
+                        </span>
+                      </button>
+                    );
+                  }}
+                </For>
+              </div>
+            }
+          >
+            <div
+              ref={setPostureTrack}
+              data-glide=""
+              role="menu"
+              aria-label="Agent mode"
+              onPointerLeave={() => setHoveredMode(null)}
+              class="ui-segmented relative flex w-full items-center p-0.5 gap-0.5"
             >
-              <Iconify icon={mode.icon} size={16} class={active() ? "text-accent shrink-0" : "text-fg-muted shrink-0"} />
-              <span class="flex-1 min-w-0">
-                <span class="font-medium text-fg block">{mode.label}</span>
-                <span class="block text-[11px] text-fg-muted mt-0.5 leading-snug">{mode.description}</span>
-              </span>
-              <Show when={active()}>
-                <Iconify icon="lucide:check" size={14} class="text-accent shrink-0" />
-              </Show>
-            </button>
-          );
-        }}
-      </For>
-    </div>
-  );
+              <span ref={setPostureInd} class="ui-segmented-indicator" aria-hidden="true" />
+              <For each={modeSkills()}>
+                {(mode) => {
+                  const active = () => activeModeSkillName() === mode.name;
+                  return (
+                    <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={active()}
+                      onPointerEnter={() => setHoveredMode(mode.name)}
+                      onFocus={() => setHoveredMode(mode.name)}
+                      onBlur={() => setHoveredMode((cur) => (cur === mode.name ? null : cur))}
+                      onPointerDown={(e) => press(e.currentTarget)}
+                      onClick={() => chooseModeSkill(mode.name)}
+                      class={`ui-segment flex-auto px-2 py-1.5 text-xs font-medium flex items-center justify-center gap-1.5 rounded-md cursor-pointer transition-colors ${
+                        active() ? "text-fg" : "text-fg-muted hover:text-fg-secondary"
+                      }`}
+                    >
+                      <Iconify
+                        icon={mode.icon}
+                        size={13}
+                        class={active() ? "text-accent shrink-0" : "text-fg-muted shrink-0"}
+                      />
+                      <span>{mode.label}</span>
+                      <span class="sr-only"> — {mode.description}</span>
+                    </button>
+                  );
+                }}
+              </For>
+            </div>
+            <div class="mt-1.5 px-1 flex items-start gap-1.5 text-[11px] text-fg-muted min-h-[1rem]">
+              <span class="mt-1.5 h-1 w-1 rounded-full bg-accent shrink-0" aria-hidden="true" />
+              <span class="line-clamp-2 leading-snug">{captionSpec()?.description}</span>
+            </div>
+          </Show>
+        </div>
+      </Show>
+    );
+  };
 
   const additionalSkillList = () => (
     <>
-      <ul class="space-y-0.5" ref={(el) => attachSortable(el, { onReorder: reorderAdditional })}>
-        <For each={additionalSkills()} fallback={<li class="px-2.5 py-2 text-xs text-fg-muted">No additional skills on this host.</li>}>
-          {([name, skill]) => {
-            const selected = () => effectiveSelectedSkills().includes(name);
-            return (
-              <li data-id={name} class="flex items-center gap-1">
-                <button data-handle aria-label={`Reorder ${name}`} class="shrink-0 px-1 py-2 text-fg-muted hover:text-fg cursor-grab transition-colors" onClick={(e) => e.stopPropagation()}>
-                  <Iconify icon="lucide:grip-vertical" size={14} />
-                </button>
-                <div role="menu" aria-label={`Skill ${name}`} class="flex-1 flex min-w-0">
+      <div class="max-h-56 overflow-y-auto px-0.5 [scrollbar-gutter:stable]">
+        <ul class="space-y-0.5" ref={(el) => attachSortable(el, { onReorder: reorderAdditional })}>
+          <For each={additionalSkills()} fallback={<li class="px-2 py-2 text-xs text-fg-muted">No additional skills on this host.</li>}>
+            {([name, skill]) => {
+              const selected = () => effectiveSelectedSkills().includes(name);
+              return (
+                <li data-id={name} class="group/skill flex items-center gap-1 rounded-md px-1 py-0.5 hover:bg-surface-muted/65 transition-colors">
                   <button
-                    role="menuitemcheckbox"
-                    aria-checked={selected()}
-                    onPointerDown={(e) => press(e.currentTarget)}
-                    onClick={() => toggleAdditional(name)}
-                    class={`flex-1 min-w-0 rounded-lg px-2 py-1.5 flex items-center gap-2 text-left transition-colors cursor-pointer ${
-                      selected() ? "bg-accent-subtle/60 text-fg" : "hover:bg-surface-muted text-fg-secondary"
+                    type="button"
+                    data-handle
+                    aria-label={`Reorder ${name}`}
+                    class={`shrink-0 p-1 rounded text-fg-muted hover:text-fg cursor-grab active:cursor-grabbing transition-opacity ${
+                      ui.isMobile() ? "opacity-60" : "opacity-0 group-hover/skill:opacity-70 focus-visible:opacity-100"
                     }`}
+                    onClick={(e) => e.stopPropagation()}
                   >
-                    <Iconify icon="lucide:puzzle" size={14} class={selected() ? "text-accent shrink-0" : "text-fg-muted shrink-0"} />
-                    <span class="flex-1 min-w-0">
-                      <span class="font-medium text-fg block truncate">{name}</span>
-                      <span class="block text-[11px] text-fg-muted leading-snug">{skill?.description}</span>
-                    </span>
-                    <Show when={selected()}>
-                      <Iconify icon="lucide:check" size={14} class="text-accent shrink-0" />
-                    </Show>
+                    <Iconify icon="lucide:grip-vertical" size={13} />
                   </button>
-                </div>
-                <Show when={originalUsable(skill?.usable) === "ask"}>
-                  <button
-                    aria-label={`Change activation policy for ${name}: ${shownUsable(name)}`}
-                    onPointerDown={(e) => press(e.currentTarget)}
-                    onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }}
-                    class={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-                      shownUsable(name) === "yolo"
-                        ? "border-accent/35 bg-accent-subtle text-accent"
-                        : shownUsable(name) === "deny"
-                        ? "border-danger/35 bg-danger-subtle text-danger"
-                        : "border-border bg-surface-subtle text-fg-secondary hover:bg-surface-muted"
-                    }`}
-                  >
-                    {shownUsable(name)}
-                  </button>
-                </Show>
-                <Show when={originalUsable(skill?.usable) === "yolo"}>
-                  <span class="shrink-0 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-fg-muted">yolo</span>
-                </Show>
-                <Show when={originalUsable(skill?.usable) === "deny"}>
-                  <span class="shrink-0 rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-fg-muted">hidden</span>
-                </Show>
-              </li>
-            );
-          }}
-        </For>
-      </ul>
+                  <div role="menu" aria-label={`Skill ${name}`} class="flex-1 flex min-w-0">
+                    <button
+                      type="button"
+                      role="menuitemcheckbox"
+                      aria-checked={selected()}
+                      onPointerDown={(e) => press(e.currentTarget)}
+                      onClick={() => toggleAdditional(name)}
+                      class="flex-1 min-w-0 py-1 pr-1.5 flex items-center gap-2 text-left cursor-pointer"
+                    >
+                      <span
+                        aria-hidden="true"
+                        class={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
+                          selected()
+                            ? "border-accent bg-accent text-accent-foreground"
+                            : "border-border-strong bg-surface group-hover/skill:border-fg-muted"
+                        }`}
+                      >
+                        <Show when={selected()}>
+                          <Iconify icon="lucide:check" size={10} />
+                        </Show>
+                      </span>
+                      <span class="flex-1 min-w-0">
+                        <span class={`font-mono text-xs block truncate ${selected() ? "font-medium text-fg" : "text-fg-secondary"}`}>
+                          {name}
+                        </span>
+                        <Show when={skill?.description}>
+                          <span class="block text-[11px] text-fg-muted leading-tight truncate mt-0.5">
+                            {skill?.description}
+                          </span>
+                        </Show>
+                      </span>
+                    </button>
+                  </div>
+                  <Show when={originalUsable(skill?.usable) === "ask"}>
+                    <button
+                      type="button"
+                      aria-label={`Change activation policy for ${name}: ${shownUsable(name)}`}
+                      onPointerDown={(e) => press(e.currentTarget)}
+                      onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }}
+                      class={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none transition-colors cursor-pointer ${
+                        shownUsable(name) === "yolo"
+                          ? "border-warning/35 bg-warning-subtle text-warning hover:bg-warning/20"
+                          : shownUsable(name) === "deny"
+                          ? "border-danger/35 bg-danger-subtle text-danger hover:bg-danger/20"
+                          : "border-border bg-surface-subtle text-fg-secondary hover:bg-surface-muted hover:text-fg"
+                      }`}
+                    >
+                      {shownUsable(name)}
+                    </button>
+                  </Show>
+                  <Show when={originalUsable(skill?.usable) === "yolo"}>
+                    <span class="shrink-0 rounded-md border border-warning/25 bg-warning-subtle/60 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-warning">yolo</span>
+                  </Show>
+                  <Show when={originalUsable(skill?.usable) === "deny"}>
+                    <span class="shrink-0 rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-fg-muted">hidden</span>
+                  </Show>
+                </li>
+              );
+            }}
+          </For>
+        </ul>
+      </div>
       <Show when={(m.skillErrors?.() ?? []).length > 0}>
         <div role="status" class="mx-1 mt-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2.5 py-2 text-[11px] text-warning">
           <div class="flex items-center gap-1.5 font-medium">
             <Iconify icon="lucide:circle-alert" size={12} />
             <span>{(m.skillErrors?.() ?? []).length === 1 ? "1 skill file failed to load" : `${(m.skillErrors?.() ?? []).length} skill files failed to load`}</span>
           </div>
-          <ul class="mt-1 space-y-0.5 text-fg-secondary">
+          <ul class="mt-1 space-y-0.5 text-fg-secondary font-mono text-[10px]">
             <For each={m.skillErrors?.() ?? []}>{(err) => <li class="break-words">{err}</li>}</For>
           </ul>
         </div>
       </Show>
     </>
+  );
+
+  const permissionsList = (closeOnPick: boolean) => (
+    <div role="menu" aria-label="Agent permissions" class="space-y-1 px-0.5 pb-0.5">
+      <For
+        each={[
+          { full: false, label: "Ask for approval", description: "Ask before every tool call, including reads and commands.", icon: "lucide:hand" },
+          { full: true, label: "Full access", description: "Allow all tool calls without asking (YOLO).", icon: "lucide:shield-alert" },
+        ]}
+      >
+        {(access) => {
+          const active = () => c.yoloMode() === access.full;
+          return (
+            <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={active()}
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={() => {
+                c.setYoloMode(access.full);
+                c.configureSession();
+                if (closeOnPick) c.setAccessMenuOpen(false);
+              }}
+              class={`w-full flex items-start gap-2.5 px-2.5 py-2 text-left rounded-lg border transition-colors cursor-pointer ${
+                active()
+                  ? access.full
+                    ? "border-warning/30 bg-warning-subtle text-warning hover:bg-warning/20"
+                    : "border-border bg-surface-subtle text-fg"
+                  : access.full
+                  ? "border-transparent hover:bg-warning-subtle/50 text-fg-secondary"
+                  : "border-transparent hover:bg-surface-muted text-fg-secondary"
+              }`}
+            >
+              <Iconify
+                icon={access.icon}
+                size={15}
+                class={`mt-0.5 shrink-0 ${access.full ? "text-warning" : active() ? "text-accent" : "text-fg-muted"}`}
+              />
+              <span class="flex-1 min-w-0">
+                <span class={`block text-xs font-medium ${access.full ? "text-warning" : "text-fg"}`}>{access.label}</span>
+                <span class={`block mt-0.5 text-[11px] leading-snug ${access.full && active() ? "text-warning/85" : "text-fg-muted"}`}>
+                  {access.description}
+                </span>
+              </span>
+              <span class="w-4 mt-0.5 flex items-center justify-end shrink-0">
+                <Show when={active()}>
+                  <Iconify icon="lucide:check" size={13} class={access.full ? "text-warning shrink-0" : "text-accent shrink-0"} />
+                </Show>
+              </span>
+            </button>
+          );
+        }}
+      </For>
+    </div>
   );
 
   return (
@@ -441,11 +602,11 @@ export function ToolbarContext() {
     placement="top-start"
     width={
       ui.isMobile()
-        ? subView() === "model"
-          ? "min(22rem, calc(100vw - 1.5rem))"
-          : subView() === "mode" || subView() === "access"
-          ? "min(20rem, calc(100vw - 1.5rem))"
-          : "min(16.5rem, calc(100vw - 1.5rem))"
+        ? subView() === "model" || subView() === "mode"
+          ? "min(24rem, calc(100vw - 1rem))"
+          : subView() === "access"
+          ? "min(21rem, calc(100vw - 1rem))"
+          : "min(17rem, calc(100vw - 1.25rem))"
         : "13rem"
     }
   >
@@ -568,12 +729,15 @@ export function ToolbarContext() {
           <Show when={!approvalSelectorHidden()}>
           <MenuItem
             icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"}
-            iconClass={c.yoloMode() ? "text-danger" : ""}
+            iconClass={c.yoloMode() ? "text-warning" : "text-fg-muted"}
             onClick={() => switchSubView("access")}
           >
             <span class="flex-1">Permissions</span>
-            <span class={`text-[11px] font-medium ${c.yoloMode() ? "text-danger" : "text-fg-secondary"}`}>
-              {c.yoloMode() ? "Full access" : "Ask for approval"}
+            <span class={`inline-flex items-center gap-1.5 text-[11px] font-medium ${c.yoloMode() ? "text-warning" : "text-fg-secondary"}`}>
+              <Show when={c.yoloMode()}>
+                <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
+              </Show>
+              <span>{c.yoloMode() ? "Full access" : "Ask for approval"}</span>
             </span>
             <Iconify icon="lucide:chevron-right" size={13} class="text-fg-muted shrink-0 ml-1" />
           </MenuItem>
@@ -583,8 +747,9 @@ export function ToolbarContext() {
 
       <Show when={subView() === "model"}>
         <div ref={animateSubView}>
-          <div class="flex items-center justify-between px-1.5 py-1 mb-1 border-b border-border/70">
+          <div class="flex items-center justify-between px-1.5 py-1 border-b border-border-subtle">
             <button
+              type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
               class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
@@ -594,9 +759,10 @@ export function ToolbarContext() {
             </button>
             <span class="font-medium text-xs text-fg">Select model</span>
             <button
+              type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
-              class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs cursor-pointer transition-colors"
+              class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -607,8 +773,9 @@ export function ToolbarContext() {
 
       <Show when={subView() === "mode"}>
         <div ref={animateSubView}>
-          <div class="flex items-center justify-between px-1.5 py-1 mb-1 border-b border-border/70">
+          <div class="flex items-center justify-between px-1.5 py-1 mb-0.5 border-b border-border-subtle">
             <button
+              type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
               class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
@@ -616,24 +783,29 @@ export function ToolbarContext() {
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
             </button>
-            <span class="font-medium text-xs text-fg">Agent mode</span>
+            <span class="font-medium text-xs text-fg">Mode & Skills</span>
             <button
+              type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => {
                 applyDraft();
                 c.setAddContextOpen(false);
               }}
-              class="px-2.5 py-0.5 rounded-md bg-accent hover:bg-accent-strong text-accent-foreground font-medium text-xs cursor-pointer transition-colors"
+              class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
             >
               Done
             </button>
           </div>
-          <Show when={modeSkills().length > 0}>
-            <p class="px-2.5 py-1.5 text-[11px] font-medium text-fg-muted">Mode</p>
-            {modeSkillList()}
-          </Show>
-          <div class="mt-1.5 border-t border-border/70 pt-2">
-            <p class="px-2.5 pb-1 text-[11px] font-medium text-fg-muted">Additional skills</p>
+          <PostureSection />
+          <div class={`${modeSkills().length > 0 ? "mt-1 border-t border-border-subtle pt-1.5" : "pt-1"}`}>
+            <div class="flex items-center justify-between px-2.5 pb-1">
+              <span class="text-[11px] font-medium text-fg-muted">Skill matrix</span>
+              <Show when={additionalSkills().length > 0}>
+                <span class="font-mono text-[10px] text-fg-muted tabular-nums">
+                  {activeAdditionalCount()}/{additionalSkills().length} active
+                </span>
+              </Show>
+            </div>
             {additionalSkillList()}
           </div>
         </div>
@@ -641,8 +813,9 @@ export function ToolbarContext() {
 
       <Show when={subView() === "access"}>
         <div ref={animateSubView}>
-          <div class="flex items-center justify-between px-1.5 py-1 mb-1 border-b border-border/70">
+          <div class="flex items-center justify-between px-1.5 py-1 mb-1 border-b border-border-subtle">
             <button
+              type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
               class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
@@ -652,57 +825,16 @@ export function ToolbarContext() {
             </button>
             <span class="font-medium text-xs text-fg">Permissions</span>
             <button
+              type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
-              class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs cursor-pointer transition-colors"
+              class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
             >
               Done
             </button>
           </div>
-          <p class="px-2.5 py-1.5 text-[11px] text-fg-muted">How should actions be approved?</p>
-          <div role="menu" aria-label="Agent permissions" class="space-y-1">
-          <For
-            each={[
-              { full: false, label: "Ask for approval", description: "Ask before every tool call, including reads and commands.", icon: "lucide:hand" },
-              { full: true, label: "Full access", description: "Allow all tool calls without asking (YOLO).", icon: "lucide:shield-alert" },
-            ]}
-          >
-            {(access) => {
-              const active = () => c.yoloMode() === access.full;
-              return (
-                <button
-                  role="menuitemradio"
-                  aria-checked={active()}
-                  onPointerDown={(e) => press(e.currentTarget)}
-                  onClick={() => {
-                    c.setYoloMode(access.full);
-                    c.configureSession();
-                  }}
-                  class={`w-full flex items-center gap-3 px-2.5 py-2.5 text-left rounded-lg border cursor-pointer transition-colors ${
-                    active()
-                      ? access.full
-                        ? "border-danger/30 bg-danger-subtle/60"
-                        : "border-accent/25 bg-accent-subtle"
-                      : "border-transparent hover:bg-surface-muted"
-                  }`}
-                >
-                  <Iconify icon={access.icon} size={18} class={access.full ? "text-danger shrink-0" : active() ? "text-accent shrink-0" : "text-fg-muted shrink-0"} />
-                  <span class="flex-1 min-w-0">
-                    <span class={`font-medium block ${access.full ? "text-danger" : "text-fg"}`}>
-                      {access.label}
-                    </span>
-                    <span class={`block mt-0.5 text-[11px] leading-snug ${access.full ? "text-danger/80" : "text-fg-muted"}`}>
-                      {access.description}
-                    </span>
-                  </span>
-                  <Show when={active()}>
-                    <Iconify icon="lucide:check" size={14} class={access.full ? "text-danger shrink-0" : "text-accent shrink-0"} />
-                  </Show>
-                </button>
-              );
-            }}
-          </For>
-          </div>
+          <p class="px-2.5 py-1 text-[11px] font-medium text-fg-muted">Execution permissions</p>
+          {permissionsList(false)}
         </div>
       </Show>
 
@@ -713,59 +845,59 @@ export function ToolbarContext() {
 {/* Desktop only: Mode and Permissions in the toolbar */}
 <Show when={!ui.isMobile()}>
 <div>
-  <button ref={c.modeBtn} data-menubtn aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`} aria-expanded={c.modeMenuOpen()}
+  <button type="button" ref={c.modeBtn} data-menubtn aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`} aria-expanded={c.modeMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.modeMenuOpen(); ui.closeMenus(); c.setModeMenuOpen(next); }}
     class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer">
-    <Iconify icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")} size={14} class="text-accent" />
-    <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}<Show when={additionalCount() > 0}><span class="text-accent">{` +${additionalCount()}`}</span></Show></span>
+    <Iconify icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")} size={13} class="text-accent shrink-0" />
+    <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}<Show when={additionalCount() > 0}><span class="font-mono text-[11px] text-accent">{` +${additionalCount()}`}</span></Show></span>
     <Iconify icon="lucide:chevron-down" size={11} class={`text-fg-muted transition-transform duration-150 ${c.modeMenuOpen() ? "rotate-180" : ""}`} />
   </button>
-  <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} onClose={() => c.setModeMenuOpen(false)} role="dialog" aria-label="Mode & Skills" placement="top-start" width="min(21rem, calc(100vw - 1.5rem))">
-    <div class="flex items-center justify-between px-2.5 py-1.5 border-b border-border/70 mb-1">
+  <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} onClose={() => c.setModeMenuOpen(false)} role="dialog" aria-label="Mode & Skills" placement="top-start" width="min(24.5rem, calc(100vw - 1.5rem))">
+    <div class="flex items-center justify-between px-2.5 py-1 border-b border-border-subtle mb-0.5">
       <span class="font-medium text-xs text-fg">Mode & Skills</span>
       <button
+        type="button"
         onPointerDown={(e) => press(e.currentTarget)}
         onClick={() => {
           applyDraft();
           c.setModeMenuOpen(false);
         }}
-        class="px-2.5 py-0.5 rounded-md bg-accent hover:bg-accent-strong text-accent-foreground font-medium text-xs cursor-pointer transition-colors"
+        class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
       >
         Done
       </button>
     </div>
-    <Show when={modeSkills().length > 0}>
-      <p class="px-2.5 py-1 text-[11px] font-medium text-fg-muted">Mode</p>
-      {modeSkillList()}
-    </Show>
-    <div class="mt-1.5 border-t border-border/70 pt-2"><p class="px-2.5 pb-1 text-[11px] font-medium text-fg-muted">Additional skills</p>
+    <PostureSection />
+    <div class={`${modeSkills().length > 0 ? "mt-1 border-t border-border-subtle pt-1.5" : "pt-1"}`}>
+      <div class="flex items-center justify-between px-2.5 pb-1">
+        <span class="text-[11px] font-medium text-fg-muted">Skill matrix</span>
+        <Show when={additionalSkills().length > 0}>
+          <span class="font-mono text-[10px] text-fg-muted tabular-nums">
+            {activeAdditionalCount()}/{additionalSkills().length} active
+          </span>
+        </Show>
+      </div>
       {additionalSkillList()}
     </div>
   </FloatMenu>
 </div>
 <Show when={!approvalSelectorHidden()}>
 <div>
-  <button ref={c.accessBtn} data-menubtn aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`} aria-expanded={c.accessMenuOpen()}
+  <button type="button" ref={c.accessBtn} data-menubtn aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`} aria-expanded={c.accessMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.accessMenuOpen(); ui.closeMenus(); c.setAccessMenuOpen(next); }}
-    class={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium cursor-pointer transition-colors ${
-      c.yoloMode() ? "bg-danger-subtle/70 text-danger hover:bg-danger-subtle" : "text-fg-secondary hover:text-fg hover:bg-surface-muted"
+    class={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-medium cursor-pointer transition-colors ${
+      c.yoloMode() ? "border-warning/30 bg-warning-subtle text-warning hover:bg-warning/20" : "border-transparent text-fg-secondary hover:text-fg hover:bg-surface-muted"
     }`}>
-    <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={14} class={c.yoloMode() ? "text-danger" : "text-fg-muted"} /><span class={`hidden sm:inline ${c.yoloMode() ? "text-danger" : ""}`}>{c.yoloMode() ? "Full access" : "Ask for approval"}</span>
+    <Show when={c.yoloMode()}>
+      <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
+    </Show>
+    <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={13} class={c.yoloMode() ? "text-warning shrink-0" : "text-fg-muted shrink-0"} /><span class={`hidden sm:inline ${c.yoloMode() ? "text-warning" : ""}`}>{c.yoloMode() ? "Full access" : "Ask for approval"}</span>
   </button>
-  <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="min(22rem, calc(100vw - 1.5rem))">
-    <p class="px-2.5 py-1.5 text-[11px] font-medium text-fg-muted">How should actions be approved?</p>
-    <div role="menu" aria-label="Agent permissions" class="space-y-1">
-    <For each={[{full:false, label:"Ask for approval", description:"Ask before every tool call, including reads and commands.", icon:"lucide:hand"}, {full:true, label:"Full access", description:"Allow all tool calls without asking (YOLO).", icon:"lucide:shield-alert"}]}>{(access) => {
-      const active = () => c.yoloMode() === access.full;
-      return (
-        <button role="menuitemradio" aria-checked={active()} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { c.setYoloMode(access.full); c.configureSession(); c.setAccessMenuOpen(false); }} class={`w-full flex items-center gap-3 px-2.5 py-2.5 text-left rounded-lg border transition-colors cursor-pointer ${active() ? (access.full ? "border-danger/30 bg-danger-subtle/60" : "border-accent/25 bg-accent-subtle") : "border-transparent hover:bg-surface-muted"}`}>
-          <Iconify icon={access.icon} size={18} class={access.full ? "text-danger shrink-0" : active() ? "text-accent shrink-0" : "text-fg-muted shrink-0"} /><span class="flex-1 min-w-0"><span class={`font-medium block ${access.full ? "text-danger" : "text-fg"}`}>{access.label}</span><span class={`block mt-0.5 text-[11px] leading-snug ${access.full ? "text-danger/80" : "text-fg-muted"}`}>{access.description}</span></span><Show when={active()}><Iconify icon="lucide:check" size={14} class={access.full ? "text-danger shrink-0" : "text-accent shrink-0"} /></Show>
-        </button>
-      );
-    }}</For>
-    </div>
+  <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="min(21rem, calc(100vw - 1.5rem))">
+    <p class="px-2.5 py-1 text-[11px] font-medium text-fg-muted border-b border-border-subtle mb-1">Execution permissions</p>
+    {permissionsList(true)}
   </FloatMenu>
 </div>
 </Show>

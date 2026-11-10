@@ -40,22 +40,22 @@ export function ApprovalCard(props: ApprovalCardProps) {
           return [];
         })();
         return (
-          <div class={`${props.convWidthClass()} mx-auto rc-studio-card rounded-2xl p-4 shadow-raised`}>
-            <div class="flex items-center gap-2.5 text-[13px] flex-wrap">
-              <div class="w-7 h-7 rounded-lg bg-accent-subtle border border-accent/25 flex items-center justify-center text-accent shrink-0">
-                <Iconify icon="lucide:shield-check" size={15} />
+          <div class={`${props.convWidthClass()} mx-auto rounded-xl border border-border bg-surface p-3.5 shadow-resting`}>
+            <div class="flex items-center gap-2 text-[13px] flex-wrap">
+              <div class="w-6 h-6 rounded-md bg-warning-subtle border border-warning/25 flex items-center justify-center text-warning shrink-0">
+                <Iconify icon="lucide:shield-alert" size={13} />
               </div>
               <span class="font-medium text-fg">Review tool call</span>
-              <span class="rounded-md border border-border bg-surface-subtle px-2 py-0.5 font-mono text-[11px] text-fg-secondary">
+              <span class="font-mono text-[11.5px] text-fg-muted">
                 {name}
               </span>
               <span class="ml-auto text-[11px] text-fg-muted flex items-center gap-1.5">
                 <span class="w-1.5 h-1.5 rounded-full bg-warning" />
-                Safe mode · nothing ran yet
+                Safe mode
               </span>
             </div>
             {/* Human summary per tool (never raw JSON) */}
-            <div class="mt-3 rc-studio-well rounded-xl overflow-hidden">
+            <div class="mt-2.5 rounded-lg border border-border/75 bg-surface-subtle overflow-hidden">
               <Show when={name === "bash"}>
                 <div class="px-3.5 py-2.5">
                   <div class="text-[11px] font-medium text-fg-muted mb-1">Run command</div>
@@ -193,32 +193,35 @@ export function ApprovalCard(props: ApprovalCardProps) {
                 </pre>
               </details>
             </div>
-            <div class="mt-3.5 flex items-center justify-end gap-2 flex-wrap">
+            <div class="mt-3 flex items-center justify-end gap-2 flex-wrap">
               <button
+                type="button"
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.respondApproval(false)}
-                class="px-3.5 py-1.5 rounded-xl text-xs font-medium text-fg-secondary hover:text-fg border border-border bg-surface hover:bg-surface-muted transition-colors cursor-pointer"
+                class="px-3 py-1.5 rounded-lg text-xs font-medium text-fg-secondary hover:text-fg border border-border bg-surface hover:bg-surface-muted transition-colors cursor-pointer"
               >
                 Reject
               </button>
               <Show when={!isUnsupportedLegacyPython}>
                 <button
-                  onPointerDown={(e) => press(e.currentTarget)}
-                  onClick={() => props.respondApproval(true)}
-                  class="px-4 py-1.5 rounded-xl bg-accent hover:bg-accent-strong text-accent-foreground text-xs font-medium border border-transparent shadow-2xs transition-colors cursor-pointer"
-                >
-                  Allow once
-                </button>
-                <button
+                  type="button"
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => {
                     props.setYoloMode(true);
                     props.respondApproval(true, true);
                   }}
-                  class="px-3.5 py-1.5 rounded-xl border border-accent/35 bg-accent-subtle text-accent hover:bg-accent hover:text-accent-foreground text-xs font-medium transition-colors cursor-pointer"
+                  class="px-3 py-1.5 rounded-lg border border-warning/35 bg-warning-subtle text-warning hover:bg-warning/20 text-xs font-medium transition-colors cursor-pointer"
                   data-rc-tip="Enable Full access and allow all tool calls" aria-label="Always allow — enable Full access"
                 >
                   Always allow
+                </button>
+                <button
+                  type="button"
+                  onPointerDown={(e) => press(e.currentTarget)}
+                  onClick={() => props.respondApproval(true)}
+                  class="px-3.5 py-1.5 rounded-lg bg-fg text-background hover:opacity-90 text-xs font-medium transition-opacity cursor-pointer"
+                >
+                  Allow once
                 </button>
               </Show>
             </div>

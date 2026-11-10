@@ -63,173 +63,121 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
   }
 
   return (
-    <div class="w-full flex justify-center my-3 select-text">
-      <div class="rc-studio-card w-full max-w-2xl rounded-xl p-3.5 shadow-2xs transition-all">
-        {/* Header Bar */}
-        <div class="flex items-center justify-between gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={() => setExpanded(!expanded())}
-            class="flex items-center gap-2 cursor-pointer text-left group focus:outline-none"
-          >
-            <div class="flex items-center justify-center w-6 h-6 rounded-lg bg-accent-subtle border border-accent/25 text-accent transition-colors">
-              <Iconify icon="lucide:archive" size={13} />
-            </div>
-            <div class="flex items-center gap-1.5 flex-wrap">
-              <span class="text-xs font-medium text-fg group-hover:text-accent transition-colors">
-                Context Compacted
-              </span>
-              <Show when={count() > 0}>
-                <span class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-surface-subtle text-fg-secondary border border-border">
-                  #{count()}
-                </span>
-              </Show>
-              <Show when={isSplitTurn()}>
-                <span class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-accent-subtle text-accent border border-accent/25">
-                  Split Turn
-                </span>
-              </Show>
-            </div>
-          </button>
+    <div class="w-full my-3 select-text">
+      {/* Minimal horizontal timeline divider */}
+      <div class="flex items-center gap-3">
+        <div class="h-px flex-1 bg-border/65" />
+        <button
+          type="button"
+          onPointerDown={(e) => press(e.currentTarget)}
+          onClick={() => setExpanded(!expanded())}
+          class="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-surface-subtle px-2.5 py-1 text-[11px] text-fg-secondary hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+        >
+          <Iconify icon="lucide:archive" size={11} class="text-fg-muted shrink-0" />
+          <span class="font-medium">Context Compacted</span>
+          <Show when={count() > 0}>
+            <span class="font-mono text-[10px] text-fg-muted">#{count()}</span>
+          </Show>
+          <Show when={isSplitTurn()}>
+            <span class="text-[10px] text-fg-muted">· Split Turn</span>
+          </Show>
+          <Show when={hasUsage()}>
+            <span class="hidden sm:inline font-mono text-[10px] text-fg-muted tabular-nums">
+              · {compactTokens(inTok())}→{compactTokens(outTok())}
+            </span>
+          </Show>
+          <Show when={!expanded() && previewSnippet()}>
+            <span class="sr-only">{previewSnippet()}</span>
+          </Show>
+          <Iconify
+            icon="lucide:chevron-right"
+            size={11}
+            class={`text-fg-muted transition-transform duration-150 ${expanded() ? "rotate-90" : ""}`}
+          />
+        </button>
+        <div class="h-px flex-1 bg-border/65" />
+      </div>
 
-          {/* Right Action & Metric Pills */}
-          <div class="flex items-center gap-1.5">
-            <Show when={hasUsage()}>
-              <div
-                class="hidden sm:flex items-center gap-1.5 text-[11px] font-mono text-fg-secondary bg-surface-subtle px-2 py-0.5 rounded-md border border-border/80"
-              >
-                <Iconify icon="lucide:cpu" size={11} class="text-fg-muted" />
-                <span>
-                  {compactTokens(inTok())} in · {compactTokens(outTok())} out
-                </span>
-                <Show when={costUsd() > 0}>
-                  <span class="text-fg-muted">(${costUsd().toFixed(4)})</span>
+      {/* Expanded Summary Sheet */}
+      <DisclosureBody open={expanded()}>
+        <div class="mt-2.5 rounded-xl border border-border/75 bg-surface-subtle/60 p-3.5 space-y-3">
+          <div class="flex items-center justify-between gap-2 text-[11px] text-fg-muted">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono tabular-nums">
+              <Show when={hasUsage()}>
+                <span>In {compactTokens(inTok())}</span>
+                <Show when={cacheTok() > 0}>
+                  <span>Cache {compactTokens(cacheTok())}</span>
                 </Show>
-              </div>
-            </Show>
-
+                <span>Out {compactTokens(outTok())}</span>
+                <Show when={reasoningTok() > 0}>
+                  <span>Think {compactTokens(reasoningTok())}</span>
+                </Show>
+                <Show when={costUsd() > 0}>
+                  <span>${costUsd().toFixed(4)}</span>
+                </Show>
+              </Show>
+            </div>
             <Show when={cleanedSummary()}>
               <button
                 type="button"
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={handleCopy}
-                class="p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                 aria-label="Copy compaction summary"
               >
-                <Iconify icon={copied() ? "lucide:check" : "lucide:copy"} size={13} class={copied() ? "text-success" : ""} />
+                <Iconify icon={copied() ? "lucide:check" : "lucide:copy"} size={12} class={copied() ? "text-success" : ""} />
+                <span>{copied() ? "Copied" : "Copy"}</span>
               </button>
             </Show>
-
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => setExpanded(!expanded())}
-              class="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-            >
-              <span>{expanded() ? "Hide" : "View"}</span>
-              <Iconify
-                icon={expanded() ? "lucide:chevron-up" : "lucide:chevron-down"}
-                size={13}
-              />
-            </button>
           </div>
-        </div>
 
-        {/* Collapsed Snippet */}
-        <Show when={!expanded() && previewSnippet()}>
-          <div
-            onClick={() => setExpanded(true)}
-            class="mt-2 text-[11px] text-fg-muted hover:text-fg-secondary line-clamp-2 cursor-pointer select-none leading-relaxed"
+          <Show when={hasFiles()}>
+            <div class="space-y-1.5 text-[11px] border-t border-border/55 pt-2.5">
+              <Show when={modifiedFiles().length > 0}>
+                <div class="flex items-start gap-2">
+                  <span class="text-fg-muted shrink-0 pt-0.5">Modified</span>
+                  <div class="flex flex-wrap gap-1">
+                    <For each={modifiedFiles()}>
+                      {(file) => (
+                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-secondary font-mono text-[10px]">
+                          <FileIcon path={file} size={11} />
+                          <span>{baseNameOf(file)}</span>
+                        </span>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </Show>
+              <Show when={readFiles().length > 0}>
+                <div class="flex items-start gap-2">
+                  <span class="text-fg-muted shrink-0 pt-0.5">Read</span>
+                  <div class="flex flex-wrap gap-1">
+                    <For each={readFiles()}>
+                      {(file) => (
+                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-secondary font-mono text-[10px]">
+                          <FileIcon path={file} size={11} />
+                          <span>{baseNameOf(file)}</span>
+                        </span>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </Show>
+            </div>
+          </Show>
+
+          <Show
+            when={cleanedSummary()}
+            fallback={
+              <div class="text-xs text-fg-muted italic">No summary text available.</div>
+            }
           >
-            {previewSnippet()}
-          </div>
-        </Show>
-
-        {/* Expanded Content View */}
-        <DisclosureBody open={expanded()}>
-          <div class="mt-3 pt-3 border-t border-border/70 space-y-3">
-            {/* File Operations Chips */}
-            <Show when={hasFiles()}>
-              <div class="space-y-2 text-[11px]">
-                <Show when={modifiedFiles().length > 0}>
-                  <div class="flex items-start gap-2">
-                    <span class="text-fg-muted font-medium shrink-0 pt-0.5">Modified:</span>
-                    <div class="flex flex-wrap gap-1.5">
-                      <For each={modifiedFiles()}>
-                        {(file) => (
-                          <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-surface-subtle border border-border text-fg-secondary font-mono text-[10px]">
-                            <FileIcon path={file} size={11} />
-                            <span>{baseNameOf(file)}</span>
-                          </span>
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                </Show>
-                <Show when={readFiles().length > 0}>
-                  <div class="flex items-start gap-2">
-                    <span class="text-fg-muted font-medium shrink-0 pt-0.5">Read:</span>
-                    <div class="flex flex-wrap gap-1.5">
-                      <For each={readFiles()}>
-                        {(file) => (
-                          <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-surface-subtle border border-border text-fg-secondary font-mono text-[10px]">
-                            <FileIcon path={file} size={11} />
-                            <span>{baseNameOf(file)}</span>
-                          </span>
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                </Show>
-              </div>
-            </Show>
-
-            {/* Token Usage Details Bar */}
-            <Show when={hasUsage()}>
-              <div class="rc-studio-well flex flex-wrap items-center gap-x-4 gap-y-1 p-2.5 rounded-lg font-mono text-[11px] text-fg-secondary">
-                <div>
-                  <span class="text-fg-muted mr-1">Input:</span>
-                  <span class="text-fg font-medium">{compactTokens(inTok())}</span>
-                </div>
-                <Show when={cacheTok() > 0}>
-                  <div>
-                    <span class="text-fg-muted mr-1">Cache:</span>
-                    <span class="text-fg font-medium">{compactTokens(cacheTok())}</span>
-                  </div>
-                </Show>
-                <div>
-                  <span class="text-fg-muted mr-1">Output:</span>
-                  <span class="text-fg font-medium">{compactTokens(outTok())}</span>
-                </div>
-                <Show when={reasoningTok() > 0}>
-                  <div>
-                    <span class="text-fg-muted mr-1">Reasoning:</span>
-                    <span class="text-fg font-medium">{compactTokens(reasoningTok())}</span>
-                  </div>
-                </Show>
-                <Show when={costUsd() > 0}>
-                  <div class="border-l border-border pl-3">
-                    <span class="text-fg-muted mr-1">Cost:</span>
-                    <span class="text-fg font-medium">${costUsd().toFixed(4)}</span>
-                  </div>
-                </Show>
-              </div>
-            </Show>
-
-            {/* Markdown Summary Content */}
-            <Show
-              when={cleanedSummary()}
-              fallback={
-                <div class="text-xs text-fg-muted italic">No summary text available.</div>
-              }
-            >
-              <div class="rc-markdown text-xs max-h-96 overflow-y-auto px-1 py-0.5">
-                <StreamingMarkdown class="text-xs">{cleanedSummary()}</StreamingMarkdown>
-              </div>
-            </Show>
-          </div>
-        </DisclosureBody>
-      </div>
+            <div class="rc-markdown text-xs max-h-96 overflow-y-auto border-t border-border/55 pt-2.5">
+              <StreamingMarkdown class="text-xs">{cleanedSummary()}</StreamingMarkdown>
+            </div>
+          </Show>
+        </div>
+      </DisclosureBody>
     </div>
   );
 }

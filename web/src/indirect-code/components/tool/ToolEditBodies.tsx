@@ -100,14 +100,16 @@ export function ToolEditBodies(props: ToolPartProps) {
           collapsible rows already are the "open file/diff" view). */}
       <Show when={(props.m.name() === "edit" || props.m.name() === "patch" || props.m.name() === "widget_edit") && props.u.result}>
         <Show when={props.u.result?.toolDetails?.dry_run === true}>
-          <div class="mx-3 mt-2 mb-1 inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
-            <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
+          <div class="px-3 pt-2 pb-1">
+            <span class="inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
+              <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
+            </span>
           </div>
         </Show>
         <Show
           when={sections().length > 0}
           fallback={
-            <div class="px-3 py-2 text-[11px] text-ink-600">
+            <div class="px-3 py-2 text-[11px] text-fg-muted">
               No changes
             </div>
           }
@@ -119,18 +121,20 @@ export function ToolEditBodies(props: ToolPartProps) {
       </Show>
         <Show when={(props.m.name() === "edit" || props.m.name() === "patch" || props.m.name() === "widget_edit") && !props.u.result}>
           <Show when={props.u.result?.toolDetails?.dry_run === true}>
-            <div class="mx-3 mt-2 mb-1 inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
-              <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
+            <div class="px-3 pt-2 pb-1">
+              <span class="inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
+                <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
+              </span>
             </div>
           </Show>
-          <div class="px-3 py-2 text-[11px] text-ink-600">
+          <div class="px-3 py-2 text-[11px] text-fg-muted">
             {props.active ? (props.u.result?.toolDetails?.dry_run === true ? "Previewing edit…" : "Applying edit…") : null}
           </div>
         </Show>
         <Show when={props.m.name() === "read" || props.m.name() === "widget_read"}>
           <Show
             when={props.u.result?.toolDetails?.display || props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.active ? "Reading file…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Reading file…" : null}</div>}
           >
             <CodeBlock embedded numbered
               follow={() => props.m.open() && props.running}
@@ -160,7 +164,7 @@ export function ToolEditBodies(props: ToolPartProps) {
             return (
               <>
                 <Show when={props.m.args().code || props.m.args().script}>
-                  <div class="border-b border-line/40">
+                  <div class="border-b border-border/60 bg-surface/50">
                     <CodeBlock
                       embedded
                       follow={() => props.m.open() && props.running}
@@ -178,10 +182,10 @@ export function ToolEditBodies(props: ToolPartProps) {
                 </Show>
                 <Show
                   when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream() || (props.u.result?.toolDetails as any)?.env?.error}
-                  fallback={<div class="px-3 py-2 text-[11px] text-ink-600">{props.m.bgRunning() ? "Running in background…" : props.active ? (isLegacyPy() ? "Running Python…" : "Running JavaScript…") : null}</div>}
+                  fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.m.bgRunning() ? "Running in background…" : props.active ? (isLegacyPy() ? "Running Python…" : "Running JavaScript…") : null}</div>}
                 >
                   <Show when={props.u.result?.toolDetails?.truncated}>
-                    <div class="px-3 py-1 bg-ink-900/60 border-b border-line/30 text-[10px] text-ink-500 font-mono">
+                    <div class="px-3 py-1 bg-surface-muted/65 border-b border-border/55 text-[10.5px] text-fg-muted font-mono">
                       Output truncated (showing last {String(props.u.result?.toolDetails?.page || "portion")})
                     </div>
                   </Show>

@@ -102,7 +102,7 @@ export function TranscriptView() {
   aria-label="Conversation"
   class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 md:px-8 select-text [overflow-anchor:none] [scrollbar-gutter:stable]"
 >
-<div ref={t.setChatContentRef} class="pt-6 pb-10 space-y-3"
+<div ref={t.setChatContentRef} class="pt-6 pb-10 space-y-5"
 >
   {/* Conversation Messages.
       buildRenderBlocks fuses consecutive assistant messages that
@@ -114,11 +114,12 @@ export function TranscriptView() {
   <Show when={t.historyHasOlder() || t.hiddenSeals() > 0}>
     <div class="flex justify-center">
       <button
+        type="button"
         onClick={() => t.loadOlder()}
         disabled={t.loadingOlder()}
-        class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-surface-raised border border-border text-fg-secondary shadow-resting hover:text-fg hover:border-border-strong transition-colors cursor-pointer disabled:opacity-60"
+        class="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs text-fg-secondary border border-border/80 bg-surface-subtle hover:text-fg hover:border-border-strong transition-colors cursor-pointer disabled:opacity-60"
       >
-        <Iconify icon="lucide:chevron-up" size={13} class="text-accent" />
+        <Iconify icon="lucide:chevron-up" size={13} class="text-fg-muted" />
         {/* Whole sealed blocks only: while older turns exist on the
             daemon the button fetches the next seal; otherwise it reveals
             the next hidden seal. No bubble math — seams always fall on
@@ -182,13 +183,13 @@ export function TranscriptView() {
                 when={isEditing()}
                 fallback={
                   <Show when={textOf().trim()}>
-                    <div class="rc-user-bubble bg-surface-muted/90 border border-border/80 text-fg px-4 py-2.5 rounded-2xl rounded-tr-md shadow-2xs">
+                    <div class="rc-user-bubble bg-surface-muted/85 text-fg px-4 py-2.5 rounded-2xl">
                       <p class="whitespace-pre-line text-sm leading-relaxed">{textOf()}</p>
                     </div>
                   </Show>
                 }
               >
-                <div class="rc-studio-card w-full p-3.5 rounded-2xl border border-accent/40 shadow-raised">
+                <div class="w-full p-3.5 rounded-2xl border border-border-strong bg-surface">
                   <MentionMenu mentions={t.editMentions} inputId="rc-editing-msg" />
                   <div class="flex flex-wrap gap-2 mb-2">
                     <For each={t.editingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-lg border border-border bg-surface-subtle px-2 py-0.5 text-xs text-fg-secondary">
@@ -285,9 +286,9 @@ export function TranscriptView() {
                 }
               >
                 <div class="dot-typing flex items-center gap-1.5 px-1 py-2">
-                  <span class="w-1.5 h-1.5 bg-accent rounded-full inline-block" />
-                  <span class="w-1.5 h-1.5 bg-accent rounded-full inline-block" />
-                  <span class="w-1.5 h-1.5 bg-accent rounded-full inline-block" />
+                  <span class="w-1.5 h-1.5 bg-fg-muted rounded-full inline-block" />
+                  <span class="w-1.5 h-1.5 bg-fg-muted rounded-full inline-block" />
+                  <span class="w-1.5 h-1.5 bg-fg-muted rounded-full inline-block" />
                 </div>
               </Show>
 

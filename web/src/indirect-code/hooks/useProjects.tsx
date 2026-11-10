@@ -214,7 +214,8 @@ export function createProjects(opts: {
         h(
           "button",
           {
-            class: "px-3 py-2 text-xs text-ink-500 hover:text-ink-200 cursor-pointer",
+            type: "button",
+            class: "px-2 py-1 text-[11.5px] text-fg-muted hover:text-fg transition-colors cursor-pointer",
             "aria-expanded": () => !!expandedSessionLists()[key],
             onClick: () => setExpandedSessionLists((prev) => ({ ...prev, [key]: !prev[key] })),
           },

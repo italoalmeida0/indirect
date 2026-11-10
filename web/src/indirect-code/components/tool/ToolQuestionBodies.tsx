@@ -16,9 +16,9 @@ export function ToolQuestionBodies(props: ToolPartProps) {
     <Show when={props.m.name() === "question"}>
       <Show
         when={items().length > 0}
-        fallback={<div class="px-3 py-2 text-[11px] text-ink-600">Waiting for your answers…</div>}
+        fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">Waiting for your answers…</div>}
       >
-        <div class="px-3 py-2 space-y-3">
+        <div class="px-3 py-2.5 space-y-3">
           <For each={items()}>
             {(q, i) => {
               const picked = (label: string) => q.answers.includes(label);
@@ -27,41 +27,41 @@ export function ToolQuestionBodies(props: ToolPartProps) {
               return (
                 <div>
                   <div class="flex items-center gap-1.5">
-                    <span class="shrink-0 rounded bg-ink-800 px-1.5 py-px font-mono text-[10px] text-ink-400">
+                    <span class="shrink-0 rounded border border-border/70 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-muted tabular-nums">
                       Q{i() + 1}
                     </span>
                     <Show when={q.header}>
-                      <span class="truncate text-[12px] font-medium text-ink-200">{q.header}</span>
+                      <span class="truncate text-[12px] font-medium text-fg">{q.header}</span>
                     </Show>
                     <Show when={q.multiple}>
-                      <span class="shrink-0 rounded bg-ink-800 px-1.5 py-px text-[10px] text-ink-400">
+                      <span class="shrink-0 rounded border border-border/70 bg-surface px-1.5 py-px text-[10px] text-fg-muted">
                         multi-select
                       </span>
                     </Show>
                   </div>
                   <Show when={q.question}>
-                    <p class="mt-1 text-[12.5px] leading-snug text-ink-300">{q.question}</p>
+                    <p class="mt-1 text-[12.5px] leading-snug text-fg-secondary">{q.question}</p>
                   </Show>
                   <Show when={q.options.length > 0 || custom().length > 0 || !answered()}>
                     <ul class="mt-1.5 space-y-1">
                       <For each={q.options}>
                         {(o) => (
                           <li
-                            class={`flex items-start gap-2 rounded-lg border px-2 py-1.5 text-[12px] leading-snug ${
+                            class={`flex items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] leading-snug ${
                               answered() && picked(o.label)
-                                ? "border-success/40 bg-success-subtle text-ink-100"
-                                : "border-line/50 text-ink-400"
+                                ? "border-success/40 bg-success-subtle text-fg"
+                                : "border-border/70 bg-surface/50 text-fg-secondary"
                             }`}
                           >
                             <Iconify
                               icon={answered() && picked(o.label) ? "lucide:check-circle-2" : "lucide:circle"}
                               size={13}
-                              class={`mt-0.5 shrink-0 ${answered() && picked(o.label) ? "text-success" : "text-ink-600"}`}
+                              class={`mt-0.5 shrink-0 ${answered() && picked(o.label) ? "text-success" : "text-fg-muted/70"}`}
                             />
                             <span class="min-w-0">
                               <span class="block font-medium">{o.label}</span>
                               <Show when={o.description}>
-                                <span class="block text-[11px] text-ink-500">{o.description}</span>
+                                <span class="block text-[11px] text-fg-muted">{o.description}</span>
                               </Show>
                             </span>
                           </li>
@@ -72,10 +72,10 @@ export function ToolQuestionBodies(props: ToolPartProps) {
                           const isDecideLater = c.startsWith("Decide later");
                           return (
                             <li
-                              class={`flex items-start gap-2 rounded-lg border px-2 py-1.5 text-[12px] leading-snug ${
+                              class={`flex items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] leading-snug ${
                                 isDecideLater
-                                  ? "border-accent/40 bg-accent-subtle text-ink-100"
-                                  : "border-success/40 bg-success-subtle text-ink-100"
+                                  ? "border-accent/40 bg-accent-subtle text-fg"
+                                  : "border-success/40 bg-success-subtle text-fg"
                               }`}
                             >
                               <Iconify
@@ -85,7 +85,7 @@ export function ToolQuestionBodies(props: ToolPartProps) {
                               />
                               <span class="min-w-0">
                                 <span class="block font-medium">{c}</span>
-                                <span class="block text-[11px] text-ink-500">
+                                <span class="block text-[11px] text-fg-muted">
                                   {isDecideLater ? "Delegated to assistant" : "Custom answer"}
                                 </span>
                               </span>
@@ -100,7 +100,7 @@ export function ToolQuestionBodies(props: ToolPartProps) {
             }}
           </For>
           <Show when={!answered()}>
-            <p class="text-[11px] text-ink-600">Waiting for your answers…</p>
+            <p class="text-[11px] text-fg-muted">Waiting for your answers…</p>
           </Show>
         </div>
       </Show>

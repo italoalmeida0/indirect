@@ -55,11 +55,11 @@ export function StatusBanners() {
   </div>
 </Show>
 <Show when={s.activeSessionId() && t.turnActivity()}>
-  <div role="status" data-turn-status class="mb-2 flex items-center gap-2 text-xs text-fg-muted min-w-0">
+  <div role="status" data-turn-status class="mb-1.5 flex items-center gap-2 px-1 text-xs text-fg-muted min-w-0">
     <Iconify icon={t.sessionStatus() === "running" ? "lucide:loader-circle" : "lucide:clock-3"} size={13} class={t.sessionStatus() === "running" ? "animate-spin shrink-0 text-accent" : "shrink-0 text-fg-muted"} />
     <span class="shrink-0 font-medium text-fg-secondary">{t.turnLabel()}</span>
     <Show when={t.turnHint()}>{(hint) =>
-      <span class="min-w-0 flex-1 truncate whitespace-nowrap overflow-hidden text-fg-muted">| {hint()}</span>
+      <span class="min-w-0 flex-1 truncate whitespace-nowrap overflow-hidden font-mono text-[11px] text-fg-muted">· {hint()}</span>
     }</Show>
     <ComposerCollapseToggle withHint={!t.turnHint()} />
   </div>
@@ -67,18 +67,18 @@ export function StatusBanners() {
 {/* No turn row (idle conversation): the chevron still needs a home, so it
     rides its own right-aligned row. */}
 <Show when={s.activeSessionId() && !t.turnActivity()}>
-  <div class="mb-2 flex items-center justify-end text-xs text-fg-muted min-w-0">
+  <div class="mb-1 flex items-center justify-end px-1 text-xs text-fg-muted min-w-0">
     <ComposerCollapseToggle withHint={false} />
   </div>
 </Show>
 <Show when={s.activeSessionId() && t.todos().length && !collapsed()}>
-  <section aria-label="Task checklist" class="mb-2 rounded-xl border border-border bg-surface-subtle/90 shadow-2xs text-xs overflow-hidden">
-    <button onPointerDown={(e) => press(e.currentTarget)} onClick={() => t.toggleTodosOpen()} aria-expanded={t.todosOpen()} class="w-full px-3 py-2 flex items-center gap-2 text-fg-secondary hover:bg-surface-muted/60 transition-colors cursor-pointer">
-      <Iconify icon="lucide:list-checks" size={14} class={completedTodos() === t.todos().length ? "text-success shrink-0" : "text-accent shrink-0"} />
+  <section aria-label="Task checklist" class="mb-2 rounded-lg border border-border bg-surface-subtle text-xs overflow-hidden">
+    <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={() => t.toggleTodosOpen()} aria-expanded={t.todosOpen()} class="w-full px-3 py-1.5 flex items-center gap-2 text-fg-secondary hover:bg-surface-muted/60 transition-colors cursor-pointer">
+      <Iconify icon="lucide:list-checks" size={13} class={completedTodos() === t.todos().length ? "text-success shrink-0" : "text-accent shrink-0"} />
       <span class="font-medium text-fg">Task plan</span>
-      <span class="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-surface px-2 py-0.5 text-[11px] font-medium tabular-nums text-fg-secondary">
+      <span class="inline-flex items-center gap-1.5 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums text-fg-secondary">
         <span>{completedTodos()}/{t.todos().length}</span>
-        <span class="w-10 h-1 rounded-full bg-surface-muted overflow-hidden">
+        <span class="w-8 h-1 rounded-full bg-surface-muted overflow-hidden">
           <span
             class={`block h-full rounded-full transition-all duration-300 ${completedTodos() === t.todos().length ? "bg-success" : "bg-accent"}`}
             style={{ width: `${todoPercent()}%` }}
@@ -88,30 +88,30 @@ export function StatusBanners() {
       <span class="flex-1 truncate text-left text-fg-muted">{!t.todosOpen() ? t.todos().find((item) => item.status === "in_progress")?.text : ""}</span>
       <Iconify icon="lucide:chevron-down" size={13} class={`shrink-0 text-fg-muted transition-transform duration-150 ${t.todosOpen() ? "rotate-180" : ""}`} />
     </button>
-    <Show when={t.todosOpen()}><ol class="px-3 pb-2.5 pt-1 border-t border-border/60 space-y-1.5 max-h-44 overflow-y-auto">
+    <Show when={t.todosOpen()}><ol class="px-3 pb-2 pt-1.5 border-t border-border-subtle space-y-1.5 max-h-44 overflow-y-auto">
       <For each={t.todos()}>{(item) => <li class="flex items-start gap-2" data-todo-status={item.status}>
-        <Iconify icon={item.status === "completed" ? "lucide:circle-check" : item.status === "in_progress" ? t.sessionStatus() === "running" ? "lucide:loader-circle" : "lucide:circle-dot" : "lucide:circle"} size={14} class={`mt-0.5 shrink-0 ${item.status === "completed" ? "text-success" : item.status === "in_progress" ? (t.sessionStatus() === "running" ? "animate-spin text-accent" : "text-accent") : "text-fg-muted"}`} />
+        <Iconify icon={item.status === "completed" ? "lucide:circle-check" : item.status === "in_progress" ? t.sessionStatus() === "running" ? "lucide:loader-circle" : "lucide:circle-dot" : "lucide:circle"} size={13} class={`mt-0.5 shrink-0 ${item.status === "completed" ? "text-success" : item.status === "in_progress" ? (t.sessionStatus() === "running" ? "animate-spin text-accent" : "text-accent") : "text-fg-muted"}`} />
         <span class={item.status === "completed" ? "text-fg-muted line-through" : "text-fg"}>{item.text}</span>
       </li>}</For>
     </ol></Show>
   </section>
 </Show>
 <Show when={ui.appNotice()}>{(notice) =>
-  <div role={notice().kind === "err" ? "alert" : "status"} class={`mb-3 flex items-start gap-2.5 rounded-xl border px-3 py-2.5 text-xs shadow-2xs ${notice().kind === "err" ? "border-danger/35 bg-danger-subtle text-fg" : "border-border bg-surface-raised text-fg-secondary"}`}>
-    <Iconify icon={notice().kind === "err" ? "lucide:circle-alert" : "lucide:check-circle-2"} size={15} class={`shrink-0 mt-0.5 ${notice().kind === "err" ? "text-danger" : "text-success"}`} />
+  <div role={notice().kind === "err" ? "alert" : "status"} class={`mb-2.5 flex items-start gap-2.5 rounded-lg border px-3 py-2 text-xs ${notice().kind === "err" ? "border-danger/35 bg-danger-subtle text-fg" : "border-border bg-surface-raised text-fg-secondary"}`}>
+    <Iconify icon={notice().kind === "err" ? "lucide:circle-alert" : "lucide:check-circle-2"} size={14} class={`shrink-0 mt-0.5 ${notice().kind === "err" ? "text-danger" : "text-success"}`} />
     <span class="min-w-0 flex-1 break-words">{notice().message}</span>
-    <button aria-label="Dismiss notification" onClick={() => ui.setAppNotice(null)} class="p-0.5 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"><Iconify icon="lucide:x" size={13} /></button>
+    <button type="button" aria-label="Dismiss notification" onClick={() => ui.setAppNotice(null)} class="p-0.5 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"><Iconify icon="lucide:x" size={13} /></button>
   </div>
 }</Show>
 <Show when={h.activeHost() && (h.connectionState() !== "connected" || h.activeHost()?.status !== "online")}>
   <div class="rc-delayed-banner">
-    <div role="status" class="mb-2 rounded-xl border border-warning/30 bg-warning-subtle/60 p-3 text-xs text-fg flex items-start gap-2.5 shadow-2xs">
-      <Iconify icon="lucide:unplug" size={15} class="text-warning shrink-0 mt-0.5" />
+    <div role="status" class="mb-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-fg flex items-start gap-2.5">
+      <Iconify icon="lucide:unplug" size={14} class="text-warning shrink-0 mt-0.5" />
       <div class="flex-1 min-w-0">
         <p class="font-medium text-fg">{typeof navigator !== "undefined" && !navigator.onLine ? "Network offline" : h.connectionState() !== "connected" ? "Reconnecting to the gateway…" : `${h.activeHost()?.name || "Host"} is offline`}</p>
         <p class="mt-0.5 text-fg-secondary">{typeof navigator !== "undefined" && !navigator.onLine ? "Check your internet connection to continue." : h.connectionState() !== "connected" ? "Restoring connection to gateway..." : "Start the daemon on this host to continue."}</p>
       </div>
-      <button onPointerDown={(e) => press(e.currentTarget)} onClick={h.reconnect || h.loadHosts} class="shrink-0 rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Retry</button>
+      <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={h.reconnect || h.loadHosts} class="shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Retry</button>
     </div>
   </div>
 </Show>

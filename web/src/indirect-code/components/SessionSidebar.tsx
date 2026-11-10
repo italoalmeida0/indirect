@@ -21,10 +21,10 @@ export function SessionStopButton(props: {
       disabled={props.isCancelling}
       class={`w-4.5 h-4.5 rounded flex items-center justify-center shrink-0 border border-transparent transition-colors ${
         props.isCancelling
-          ? "text-ink-500 opacity-60 cursor-default"
+          ? "text-fg-muted opacity-60 cursor-default"
           : hovered()
             ? "text-danger bg-danger-subtle border-danger/35 cursor-pointer"
-            : "text-success cursor-pointer"
+            : "text-fg-muted cursor-pointer"
       } focus-visible:ring-1 focus-visible:ring-danger focus:outline-none`}
       data-rc-tip={props.isCancelling ? "Stopping…" : "Stop"}
       aria-label={props.isCancelling ? "Stopping turn" : "Stop turn"}
@@ -35,7 +35,7 @@ export function SessionStopButton(props: {
           <Iconify
             icon="lucide:loader-2"
             size={12}
-            class={`animate-spin ${props.isCancelling ? "text-ink-500" : "text-success"}`}
+            class={`animate-spin ${props.isCancelling ? "text-fg-muted" : "text-accent"}`}
           />
         }
       >
@@ -89,12 +89,12 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
         ctx.setRenamingId(s.id);
         ctx.setRenameText(s.title);
       }}
-      class={`group flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg cursor-pointer text-[13px] transition-colors ${
+      class={`group flex h-7.5 items-center gap-1.5 px-2 rounded-md cursor-pointer text-[12.5px] transition-colors ${
         isActive() && !ctx.selectionMode()
           ? "bg-surface-muted font-medium text-fg"
           : selected()
-            ? "bg-accent-subtle text-fg ring-1 ring-accent/40"
-            : "text-fg-secondary hover:bg-surface-muted/60 hover:text-fg"
+            ? "bg-surface-muted text-fg ring-1 ring-border-strong"
+            : "text-fg-secondary hover:bg-surface-muted/65 hover:text-fg"
       }`}
       data-rc-tip={`${s.title}\n${s.cwd}`}
     >
@@ -105,18 +105,18 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
             e.stopPropagation();
             ctx.toggleSessionSelect(s.id);
           }}
-          class={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
-            selected() ? "bg-accent border-accent" : "border-border-strong bg-surface"
+          class={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors ${
+            selected() ? "bg-fg border-fg" : "border-border-strong bg-surface"
           }`}
           data-rc-tip="Select" aria-label="Select"
         >
           <Show when={selected()}>
-            <Iconify icon="lucide:check" size={11} class="text-accent-foreground" />
+            <Iconify icon="lucide:check" size={10} class="text-background" />
           </Show>
         </button>
       </Show>
       <Show when={s.pinned && !ctx.selectionMode()}>
-        <Iconify icon="lucide:pin" size={11} class="text-accent shrink-0" />
+        <Iconify icon="lucide:pin" size={11} class="text-fg-muted shrink-0" />
       </Show>
       <Show
         when={ctx.renamingId() === s.id}
@@ -130,15 +130,15 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                 onCancel={(e) => ctx.cancelTurnForSession(s.id, e)}
               />
             </Show>
-            <div class="relative flex items-center justify-end shrink-0 min-w-[48px]">
-              <span class="rc-row-time text-[10px] text-ink-500 transition-opacity group-hover:opacity-0 group-hover:pointer-events-none">
+            <div class="relative flex items-center justify-end shrink-0 min-w-[44px]">
+              <span class="rc-row-time text-[10px] text-ink-500 transition-opacity tabular-nums group-hover:opacity-0 group-hover:pointer-events-none">
                 {timeAgo(sessionTimeLabel(s))}
               </span>
               <Show when={!ctx.selectionMode()}>
-                <div class="rc-row-actions absolute right-0 flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <div class="rc-row-actions absolute right-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
                     onClick={(e) => ctx.togglePin(s.id, e)}
-                    class="rc-row-action p-0.5 text-ink-500 hover:text-ink-200 cursor-pointer"
+                    class="rc-row-action rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip={s.pinned ? "Unpin" : "Pin"} aria-label={s.pinned ? "Unpin" : "Pin"}
                   >
                     <Iconify icon={s.pinned ? "lucide:pin-off" : "lucide:pin"} size={11} />
@@ -149,14 +149,14 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                       ctx.setRenamingId(s.id);
                       ctx.setRenameText(s.title);
                     }}
-                    class="rc-row-action p-0.5 text-ink-600 hover:text-ink-200 cursor-pointer"
+                    class="rc-row-action rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip="Rename" aria-label="Rename"
                   >
                     <Iconify icon="lucide:pencil" size={11} />
                   </button>
                   <button
                     onClick={(e) => ctx.deleteSession(s.id, e)}
-                    class="rc-row-action p-0.5 text-ink-600 hover:text-danger cursor-pointer"
+                    class="rc-row-action rounded p-0.5 text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer"
                     data-rc-tip="Delete" aria-label="Delete"
                   >
                     <Iconify icon="lucide:trash-2" size={11} />
@@ -169,7 +169,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
       >
         <input
           type="text"
-          class="flex-1 min-w-0 bg-surface border border-accent rounded px-1.5 py-0.5 text-[13px] text-fg focus:outline-none"
+          class="flex-1 min-w-0 bg-surface border border-border-strong rounded px-1.5 py-0.5 text-[12.5px] text-fg focus:outline-none"
           value={ctx.renameText()}
           onInput={(e) => ctx.setRenameText(e.currentTarget.value)}
           onKeyDown={(e) => {

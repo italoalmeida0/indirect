@@ -105,7 +105,7 @@ describe("Fixer B2-4 Regression Tests", () => {
   describe("BUG-T5-02 & BUG-T5-03: BackgroundCard UX", () => {
     test("BackgroundCard row has cursor-pointer and onClick handler on header", () => {
       const src = readFileSync("web/src/indirect-code/components/BackgroundCard.tsx", "utf-8");
-      expect(src).toContain('cursor-pointer hover:bg-elev/50');
+      expect(src).toContain('cursor-pointer hover:bg-surface-muted/60');
       expect(src).toContain('onClick={() => toggle(job.id)}');
     });
 

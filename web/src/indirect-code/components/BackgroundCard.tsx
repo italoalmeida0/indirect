@@ -190,7 +190,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
             {(job) => (
               <div class="rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden" data-bg-row={job.id}>
                 <div
-                  class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-elev/50 rounded-lg transition-colors"
+                  class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-muted/60 transition-colors"
                   onClick={() => toggle(job.id)}
                 >
                   <span
@@ -277,7 +277,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                     >
                       <div class="min-w-full w-fit">
                         <Show when={job.label}>
-                          <div class="border-b border-border/60">
+                          <div class="border-b border-border/60 bg-surface/50">
                             <CodeBlock embedded text={job.label} language={job.kind === "exec_script" ? "javascript" : job.kind === "python" ? "python" : "bash"} wrap={false} scrollKey={`bg:${job.id}:cmd`} />
                           </div>
                         </Show>

@@ -37,43 +37,77 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
           ? "Updating…"
           : "Offline";
 
+  const hostName = () => h.activeHost()?.name || h.activeHost()?.hostname || "Select host";
+
   return (
     <>
-      <button
-        type="button"
-        ref={btn}
-        data-menubtn
-        aria-label={`Select host: ${h.activeHost()?.name || h.activeHost()?.hostname || "Select host"} ${statusLabel()}`}
-        aria-haspopup="menu"
-        aria-expanded={h.hostMenuOpen()}
-        onClick={() => {
-          // Same instance re-clicked while open -> close. A stale open
-          // from the OTHER card -> steal it (switch anchor here).
-          const next = h.hostMenuAnchor() === props.id ? !h.hostMenuOpen() : true;
-          ui.closeMenus();
-          h.setHostMenuAnchor(props.id);
-          h.setHostMenuOpen(next);
-        }}
-        class="w-full flex items-center gap-2.5 rounded-panel border border-border bg-surface px-2.5 py-2 text-left hover:bg-surface-muted hover:border-border-strong shadow-resting transition-all cursor-pointer"
+      <Show
+        when={props.id === "sidebar"}
+        fallback={
+          <button
+            type="button"
+            ref={btn}
+            data-menubtn
+            aria-label={`Select host: ${hostName()} ${statusLabel()}`}
+            aria-haspopup="menu"
+            aria-expanded={h.hostMenuOpen()}
+            onClick={() => {
+              const next = h.hostMenuAnchor() === props.id ? !h.hostMenuOpen() : true;
+              ui.closeMenus();
+              h.setHostMenuAnchor(props.id);
+              h.setHostMenuOpen(next);
+            }}
+            class="w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-surface-muted transition-colors cursor-pointer"
+          >
+            <span aria-hidden="true" class="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface-subtle text-fg-muted shrink-0">
+              <Iconify icon="lucide:monitor" size={14} />
+            </span>
+            <span aria-hidden="true" class="flex-1 min-w-0">
+              <span class="block truncate text-xs font-medium text-fg">{hostName()}</span>
+              <span class="mt-0.5 flex items-center gap-1.5 text-[11px] text-fg-muted">
+                <span class={`h-1.5 w-1.5 rounded-full shrink-0 ${statusDot()}`} />
+                <span class="truncate">{statusLabel()}</span>
+              </span>
+            </span>
+            <Iconify icon="lucide:chevrons-up-down" size={13} class="text-fg-muted shrink-0" />
+          </button>
+        }
       >
-        <span aria-hidden="true" class="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-surface-subtle text-accent shrink-0">
-          <Iconify icon="lucide:monitor" size={15} />
-        </span>
-        <span aria-hidden="true" class="flex-1 min-w-0">
-          <span class="block truncate text-xs font-medium text-fg">
-            {h.activeHost()?.name || h.activeHost()?.hostname || "Select host"}
+        <button
+          type="button"
+          ref={btn}
+          data-menubtn
+          aria-label={`Select host: ${hostName()} ${statusLabel()}`}
+          aria-haspopup="menu"
+          aria-expanded={h.hostMenuOpen()}
+          onClick={() => {
+            const next = h.hostMenuAnchor() === props.id ? !h.hostMenuOpen() : true;
+            ui.closeMenus();
+            h.setHostMenuAnchor(props.id);
+            h.setHostMenuOpen(next);
+          }}
+          class={`rc-nav-row text-left cursor-pointer ${
+            mine()
+              ? "bg-surface-muted text-fg"
+              : "text-fg-secondary hover:bg-surface-muted/75 hover:text-fg"
+          }`}
+        >
+          <span aria-hidden="true" class="rc-nav-icon text-fg-muted">
+            <Iconify icon="lucide:monitor" size={14} />
           </span>
-          <span class="mt-0.5 flex items-center gap-1.5 text-[11px] text-fg-muted">
+          <span aria-hidden="true" class="min-w-0 flex-1 truncate font-medium text-fg">
+            {hostName()}
+          </span>
+          <span aria-hidden="true" class="inline-flex shrink-0 items-center gap-1.5 text-[11px] text-fg-muted">
             <span class={`h-1.5 w-1.5 rounded-full shrink-0 ${statusDot()}`} />
-            <span class="truncate">{statusLabel()}</span>
+            <Iconify icon="lucide:chevrons-up-down" size={12} class="text-fg-muted/80" />
           </span>
-        </span>
-        <Iconify icon="lucide:chevrons-up-down" size={13} class="text-fg-muted shrink-0" />
-      </button>
-      <FloatMenu anchor={() => (btn?.isConnected ? btn : undefined)} open={mine()} placement="top-start" width="18rem">
-        <div class="px-2.5 py-1.5 text-[11px] font-medium text-fg-muted flex items-center justify-between">
+        </button>
+      </Show>
+      <FloatMenu anchor={() => (btn?.isConnected ? btn : undefined)} open={mine()} placement="top-start" width="17.5rem">
+        <div class="px-2 py-1 text-[11px] font-medium text-fg-muted flex items-center justify-between select-none">
           <span>Your hosts</span>
-          <span class="font-mono text-[10px]">{h.hosts().length}</span>
+          <span class="font-mono text-[10px] tabular-nums">{h.hosts().length}</span>
         </div>
         <div role="menu" aria-label="Hosts" class="space-y-0.5">
           <For each={h.hosts()}>{(host) => {
@@ -83,17 +117,17 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
                 type="button"
                 role="menuitemradio"
                 aria-checked={active()}
-                class={`w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors cursor-pointer ${
+                class={`w-full flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors cursor-pointer ${
                   active()
-                    ? "bg-accent-subtle text-fg"
-                    : "hover:bg-surface-muted focus-visible:bg-surface-muted text-fg-secondary hover:text-fg"
+                    ? "bg-surface-muted text-fg"
+                    : "hover:bg-surface-muted/70 focus-visible:bg-surface-muted/70 text-fg-secondary hover:text-fg"
                 }`}
                 onClick={() => { h.setHostMenuOpen(false); h.setActiveHostId(host.id); }}
               >
-                <span class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-surface text-fg-muted">
-                  <Iconify icon="lucide:monitor" size={14} class={active() ? "text-accent" : ""} />
+                <span class="relative flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/80 bg-surface-subtle text-fg-muted">
+                  <Iconify icon="lucide:monitor" size={13} class={active() ? "text-fg" : ""} />
                   <span
-                    class={`absolute -right-0.5 -bottom-0.5 h-2 w-2 rounded-full ring-2 ring-surface ${
+                    class={`absolute -right-0.5 -bottom-0.5 h-2 w-2 rounded-full ring-2 ring-surface-raised ${
                       host.status === "online" ? "bg-success" : host.status === "updating" ? "bg-warning" : "bg-fg-muted"
                     }`}
                   />
@@ -106,16 +140,16 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
                   </span>
                 </span>
                 <Show when={active()}>
-                  <Iconify icon="lucide:check" size={14} class="text-accent shrink-0" />
+                  <Iconify icon="lucide:check" size={13} class="text-fg shrink-0" />
                 </Show>
               </button>
             );
           }}</For>
         </div>
-        <div class="mt-1.5 border-t border-border pt-1.5 space-y-0.5">
+        <div class="mt-1 border-t border-border/70 pt-1 space-y-0.5">
           <button
             type="button"
-            class="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+            class="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted/70 transition-colors cursor-pointer"
             onClick={() => { h.setHostMenuOpen(false); void h.loadHosts(); }}
           >
             <Iconify icon="lucide:refresh-cw" size={13} class="text-fg-muted" />
@@ -123,15 +157,15 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
           </button>
           <button
             type="button"
-            class="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+            class="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted/70 transition-colors cursor-pointer"
             onClick={() => { h.setHostMenuOpen(false); void m.generatePairingToken(); }}
           >
-            <Iconify icon="lucide:plus" size={13} class="text-accent" />
+            <Iconify icon="lucide:plus" size={13} class="text-fg-muted" />
             <span>Connect another host</span>
           </button>
           <button
             type="button"
-            class="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-danger hover:bg-danger-subtle transition-colors cursor-pointer"
+            class="w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-danger hover:bg-danger-subtle transition-colors cursor-pointer"
             onClick={() => { h.setHostMenuOpen(false); void h.removeHost(); }}
           >
             <Iconify icon="lucide:trash-2" size={13} />

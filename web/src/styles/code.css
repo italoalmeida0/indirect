@@ -1,7 +1,7 @@
 /* Indirect Code workspace: syntax theme, markdown, transcript and composer chrome. */
 
 /* Highlight.js syntax theme */
-.hljs { color: var(--ink-100); background: transparent; }
+.hljs { color: var(--foreground); background: transparent; }
 
 /* Remote Code chat: loading dots (chatbot dot-typing) */
 .dot-typing span { animation: rc-pulse-dot 1.4s infinite both; }
@@ -22,7 +22,7 @@
 .thinking-indicator { display: inline-flex; align-items: center; gap: 2px; }
 .thinking-indicator span {
   width: 3px; height: 3px; border-radius: 9999px;
-  background: var(--ink-400); animation: rc-pulse-dot 1.2s infinite both;
+  background: var(--text-secondary); animation: rc-pulse-dot 1.2s infinite both;
 }
 /* Remote Code: delayed reconnect/offline banner (3s delay prevents layout flicker on brief reconnects) */
 @keyframes rc-delayed-banner {
@@ -55,12 +55,12 @@
 
 /* Indirect Code markdown (Tarnav output) — semantic tokens so light,
  * dark and high-contrast themes flip cleanly. Never hardcode hex here. */
-.rc-markdown { color: var(--ink-200); font-size: 0.875rem; line-height: 1.65; }
+.rc-markdown { color: color-mix(in oklab, var(--foreground) 94%, var(--text-secondary)); font-size: 0.875rem; line-height: 1.65; }
 .rc-markdown > *:first-child { margin-top: 0; }
 .rc-markdown > *:last-child { margin-bottom: 0; }
 .rc-markdown p { margin: 0 0 0.65rem; }
 .rc-markdown h1, .rc-markdown h2, .rc-markdown h3, .rc-markdown h4 {
-  color: var(--ink-100); font-weight: 500; letter-spacing: -0.015em; line-height: 1.3;
+  color: var(--foreground); font-weight: 500; letter-spacing: -0.015em; line-height: 1.3;
   margin: 1rem 0 0.45rem;
 }
 .rc-markdown h1 { font-size: 1.15rem; }
@@ -68,7 +68,7 @@
 .rc-markdown h3 { font-size: 0.95rem; }
 .rc-markdown ul, .rc-markdown ol { margin: 0 0 0.65rem; padding-left: 1.3rem; }
 .rc-markdown li { margin: 0.2rem 0; }
-.rc-markdown li::marker { color: var(--ink-500); }
+.rc-markdown li::marker { color: var(--text-muted); }
 .rc-markdown a {
   color: var(--accent);
   text-decoration: underline;
@@ -80,11 +80,11 @@
 .rc-markdown code:not(pre code),
 [data-streamdown="inline-code"] {
   font-family: var(--font-code);
-  font-size: 0.8em;
-  padding: 0.12rem 0.36rem;
-  border-radius: 0.35rem;
-  background: var(--surface-muted);
-  border: 1px solid color-mix(in oklab, var(--border) 75%, transparent);
+  font-size: 0.81em;
+  padding: 0.11rem 0.34rem;
+  border-radius: 0.3rem;
+  background: color-mix(in oklab, var(--surface-muted) 80%, transparent);
+  border: 0;
   color: var(--code-inline);
 }
 /* File icon inside inline code: baseline-aligned, icon keeps its own tone. */
@@ -103,35 +103,34 @@ html[data-theme="light"] [data-streamdown="inline-code"] {
 .rc-user-bubble {
   min-width: 0; max-width: 100%; max-height: 400px;
   overflow-y: auto; overflow-wrap: anywhere;
-  box-shadow: var(--shadow-resting);
 }
 .rc-markdown pre {
-  margin: 0 0 0.65rem; padding: 0.75rem 0.9rem; border-radius: 0.75rem;
-  background: var(--surface-subtle); border: 1px solid var(--border);
-  box-shadow: var(--shadow-resting);
+  margin: 0 0 0.65rem; padding: 0.75rem 0.9rem; border-radius: 0.65rem;
+  background: var(--surface-subtle);
+  border: 1px solid color-mix(in oklab, var(--border) 75%, transparent);
   overflow-x: auto; font-size: 0.78rem; line-height: 1.55;
 }
 .rc-markdown pre code { background: transparent; border: 0; padding: 0; color: inherit; }
 /* Compact code headers keep copy clear of the content on every screen. */
 .tarnav-codeblock {
   position: relative; min-width: 0; max-width: 100%; margin-bottom: 0.85rem;
-  border: 1px solid var(--border); border-radius: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--border) 75%, transparent);
+  border-radius: 0.65rem;
   background: var(--surface-subtle);
-  box-shadow: var(--shadow-resting);
   overflow: hidden;
 }
 .tarnav-code-header {
   display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
-  min-height: 32px; padding: 4px 10px 4px 12px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in oklab, var(--surface-muted) 60%, var(--surface));
+  min-height: 30px; padding: 3px 8px 3px 12px;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 55%, transparent);
+  background: transparent;
   color: var(--text-muted); font-size: 11px; font-weight: 500; line-height: 1.4;
 }
 .tarnav-code-language { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tarnav-codeblock > .font-mono { border-radius: 0 0 0.75rem 0.75rem; scrollbar-gutter: auto; }
+.tarnav-codeblock > .font-mono { border-radius: 0 0 0.65rem 0.65rem; scrollbar-gutter: auto; }
 .rc-markdown .tarnav-codeblock pre[data-streamdown="code-block"] {
   margin: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none;
-  overflow: visible; padding: 0.8rem 0.95rem;
+  overflow: visible; padding: 0.75rem 0.9rem;
 }
 .rc-markdown-control, .rc-msg-action {
   display: inline-flex; align-items: center; justify-content: center;
@@ -161,30 +160,84 @@ html.mobile .rc-message-actions { opacity: 1; }
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 32%, transparent);
 }
 
-/* Indirect Code workspace surfaces: composer, studio instruments & floating menus. */
-.rc-composer-card {
+/* Indirect Code workspace surfaces: sidebar rail, composer & floating menus. */
+.rc-nav-row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  height: 2rem;
+  min-height: 2rem;
+  padding-block: 0;
+  padding-inline: 0.625rem;
+  border: 0;
+  border-radius: 0.5rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+  text-decoration: none;
+  transition:
+    color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+.rc-nav-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+}
+
+/* Zed / Codex-grade code & diff lanes: opaque sticky gutters prevent
+ * horizontal code scroll bleed while keeping subtle semantic tints. */
+.rc-code-gutter {
+  color: color-mix(in oklab, var(--text-muted) 72%, transparent);
+  border-right: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
+}
+.rc-diff-row-ctx {
+  background-color: var(--surface-subtle);
+}
+.rc-diff-row-add {
+  background-color: color-mix(in oklab, var(--success) 12%, var(--surface-subtle));
+}
+.rc-diff-row-del {
+  background-color: color-mix(in oklab, var(--danger) 11%, var(--surface-subtle));
+}
+:root[data-theme="dark"] .rc-diff-row-add {
+  background-color: color-mix(in oklab, var(--success) 15%, var(--surface-subtle));
+}
+:root[data-theme="dark"] .rc-diff-row-del {
+  background-color: color-mix(in oklab, var(--danger) 14%, var(--surface-subtle));
+}
+:root[data-theme="high-contrast"] .rc-code-gutter {
+  color: var(--text-muted);
+  border-right-color: var(--border-subtle);
+}
+:root[data-theme="high-contrast"] .rc-diff-row-add {
+  background-color: color-mix(in oklab, var(--success) 20%, var(--surface-subtle));
+}
+:root[data-theme="high-contrast"] .rc-diff-row-del {
+  background-color: color-mix(in oklab, var(--danger) 20%, var(--surface-subtle));
+}
+.rc-composer {
   background: var(--surface);
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-raised);
+  border-radius: var(--radius-surface);
+  box-shadow: var(--shadow-resting);
   transition:
     border-color var(--duration-fast) var(--ease-standard),
     box-shadow var(--duration-fast) var(--ease-standard),
     background-color var(--duration-fast) var(--ease-standard);
 }
-.rc-composer-card:focus-within {
+@media (hover: hover) and (pointer: fine) {
+  .rc-composer:hover:not(:focus-within) {
+    border-color: color-mix(in oklab, var(--border-strong) 75%, var(--border));
+  }
+}
+.rc-composer:focus-within {
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-raised), 0 0 0 3px color-mix(in oklab, var(--accent) 12%, transparent);
-}
-.rc-studio-card {
-  background: var(--surface-subtle);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-panel);
-  box-shadow: var(--shadow-resting);
-}
-.rc-studio-well {
-  background: color-mix(in oklab, var(--surface-muted) 65%, var(--background));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-raised);
 }
 .rc-float-menu {
   background: var(--surface-raised);
@@ -257,7 +310,7 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
   --callout-color: var(--info);
   border-color: var(--callout-color);
   background: color-mix(in oklab, var(--callout-color) 8%, transparent);
-  color: var(--ink-200);
+  color: var(--foreground);
   font-style: normal;
   padding: 0.5rem 0.85rem;
 }
@@ -268,7 +321,7 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
 [data-callout="warning"] { --callout-color: var(--warning); }
 [data-callout="caution"] { --callout-color: var(--danger); }
 .rc-markdown img { max-width: 100%; border-radius: 0.6rem; }
-.rc-markdown hr { border: none; border-top: 1px solid var(--line); margin: 0.9rem 0; }
+.rc-markdown hr { border: none; border-top: 1px solid var(--border); margin: 0.9rem 0; }
 
 /* text-xs modifier for .rc-markdown and renderer elements */
 .rc-markdown.text-xs,
@@ -289,19 +342,19 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
 }
 .rc-markdown.text-xs h1, .rc-markdown .text-xs h1, .text-xs.rc-markdown h1, .text-xs [data-streamdown="heading-1"] {
   font-size: 0.92rem !important;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.3;
   margin: 0.5rem 0 0.25rem !important;
 }
 .rc-markdown.text-xs h2, .rc-markdown .text-xs h2, .text-xs.rc-markdown h2, .text-xs [data-streamdown="heading-2"] {
   font-size: 0.85rem !important;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.3;
   margin: 0.45rem 0 0.2rem !important;
 }
 .rc-markdown.text-xs h3, .rc-markdown .text-xs h3, .text-xs.rc-markdown h3, .text-xs [data-streamdown="heading-3"] {
   font-size: 0.8rem !important;
-  font-weight: 650;
+  font-weight: 500;
   line-height: 1.3;
   margin: 0.4rem 0 0.2rem !important;
 }
@@ -309,7 +362,7 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
 .rc-markdown.text-xs h5, .rc-markdown .text-xs h5, .text-xs.rc-markdown h5, .text-xs [data-streamdown="heading-5"],
 .rc-markdown.text-xs h6, .rc-markdown .text-xs h6, .text-xs.rc-markdown h6, .text-xs [data-streamdown="heading-6"] {
   font-size: 0.75rem !important;
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.3;
   margin: 0.35rem 0 0.15rem !important;
 }

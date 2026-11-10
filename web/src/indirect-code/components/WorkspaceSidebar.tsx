@@ -66,12 +66,12 @@ export function WorkspaceSidebar() {
   }`}
 >
   {/* Brand Header */}
-  <div class="rc-workspace-header rc-sidebar-header flex items-center justify-between gap-2 px-3.5 shrink-0 border-b border-border/80 select-none">
+  <div class="rc-workspace-header rc-sidebar-header flex items-center justify-between gap-2 px-3.5 shrink-0 border-b border-border/60 select-none">
     <div class="flex items-center gap-2.5 min-w-0">
       <img
         src="/indirect-icon.svg"
         alt="Indirect"
-        class="w-5 h-5 shrink-0 object-contain rounded"
+        class="w-4.5 h-4.5 shrink-0 object-contain rounded"
       />
       <span class="text-[13px] font-medium tracking-tight text-fg truncate">
         Indirect Code
@@ -80,15 +80,17 @@ export function WorkspaceSidebar() {
     <Show when={ui.sidebarOpen()}><SidebarToggle /></Show>
   </div>
 
-  {/* Primary Navigation */}
-  <div class="p-2 space-y-1">
+  {/* Primary Navigation — single strict optical grid */}
+  <nav aria-label="Workspace navigation" class="px-2 pt-2 pb-1.5 space-y-0.5 shrink-0">
     <a
       href="#/"
       onPointerDown={(e) => press(e.currentTarget)}
-      class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-fg-muted hover:text-fg hover:bg-surface-muted/70 transition-colors"
+      class="rc-nav-row text-fg-muted hover:text-fg hover:bg-surface-muted/75"
     >
-      <Iconify icon="lucide:arrow-left" size={13} />
-      <span>Back to Gateway</span>
+      <span aria-hidden="true" class="rc-nav-icon">
+        <Iconify icon="lucide:arrow-left" size={14} />
+      </span>
+      <span class="truncate">Back to Gateway</span>
     </a>
     <button
       type="button"
@@ -97,10 +99,16 @@ export function WorkspaceSidebar() {
         s.startNewConversation();
         ui.closeSidebarOnMobile();
       }}
-      class="ui-button ui-button-outline w-full justify-start bg-surface shadow-resting"
+      class={`rc-nav-row text-left cursor-pointer ${
+        s.draftMode?.() && !ui.historyView?.()
+          ? "bg-surface-muted font-medium text-fg"
+          : "text-fg-secondary hover:text-fg hover:bg-surface-muted/75"
+      }`}
     >
-      <Iconify icon="lucide:plus" size={14} class="text-accent" />
-      <span>New Conversation</span>
+      <span aria-hidden="true" class="rc-nav-icon text-fg-muted">
+        <Iconify icon="lucide:square-pen" size={14} />
+      </span>
+      <span class="truncate">New Conversation</span>
     </button>
     <button
       type="button"
@@ -109,28 +117,29 @@ export function WorkspaceSidebar() {
         ui.setHistoryView(true);
         ui.closeSidebarOnMobile();
       }}
-      class={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
+      class={`rc-nav-row text-left cursor-pointer ${
         ui.historyView?.()
-          ? "bg-accent-subtle text-accent font-medium"
-          : "text-fg-secondary hover:text-fg hover:bg-surface-muted/70"
+          ? "bg-surface-muted font-medium text-fg"
+          : "text-fg-secondary hover:text-fg hover:bg-surface-muted/75"
       }`}
     >
-      <span class="flex items-center gap-2 min-w-0">
-        <Iconify icon="lucide:clock" size={13} class={ui.historyView?.() ? "text-accent" : "text-fg-muted"} />
-        <span class="truncate">Conversation History</span>
+      <span aria-hidden="true" class="rc-nav-icon text-fg-muted">
+        <Iconify icon="lucide:history" size={14} />
       </span>
+      <span class="min-w-0 flex-1 truncate">Conversation History</span>
       <Show when={!ui.isMobile()}>
-        <kbd class="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-fg-muted">
-          Ctrl+K
-        </kbd>
+        <span aria-hidden="true" class="shrink-0 font-mono text-[10.5px] text-fg-muted/75">
+          Ctrl K
+        </span>
       </Show>
     </button>
-  </div>
+  </nav>
 
+  <div class="mx-2.5 border-t border-border/60 shrink-0" />
 
-  {/* Projects */}
-  <div class="flex-1 overflow-y-auto px-2 pb-2 space-y-3 min-h-0 [scrollbar-gutter:stable]">
-      <div class="flex items-center justify-between px-1.5 py-1 border-b border-line/50">
+  {/* Projects & Sessions */}
+  <div class="flex-1 overflow-y-auto px-2 pt-2 pb-2 space-y-2 min-h-0 [scrollbar-gutter:stable]">
+      <div class="flex items-center justify-between px-1 pb-0.5">
         <Show
           when={s.selectionMode()}
           fallback={
@@ -165,29 +174,30 @@ export function WorkspaceSidebar() {
           }
         >
           <div class="flex items-center gap-2">
-            <span class="text-[11px] font-medium text-ink-300">
+            <span class="text-[11px] font-medium text-fg-secondary tabular-nums">
               {s.selectedSessions().size} selected
             </span>
             <button
+              type="button"
               onClick={() => s.selectAllSessions()}
-              class="px-1.5 py-0.5 rounded text-[11px] font-medium text-ink-400 hover:text-ink-100 hover:bg-ink-800/60 cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded text-[11px] font-medium text-fg-muted hover:text-fg hover:bg-surface-muted cursor-pointer transition-colors"
             >
               {s.sessions().length > 0 && s.selectedSessions().size === s.sessions().length ? "Deselect All" : "Select All"}
             </button>
           </div>
         </Show>
         <div class="flex items-center gap-0.5">
-          {/* Selection mode toggle (chatbot) */}
+          {/* Selection mode toggle */}
           <button
             type="button"
             onClick={() => {
               if (s.selectionMode()) s.exitSelectionMode();
               else s.setSelectionMode(true);
             }}
-            class={`p-1.5 rounded-md transition-colors cursor-pointer ${s.selectionMode() ? "bg-accent-subtle text-accent" : "text-fg-muted hover:text-fg hover:bg-surface-muted"}`}
+            class={`flex h-6.5 w-6.5 items-center justify-center rounded-md transition-colors cursor-pointer ${s.selectionMode() ? "bg-surface-muted text-fg" : "text-fg-muted hover:text-fg hover:bg-surface-muted/75"}`}
             data-rc-tip={s.selectionMode() ? "Exit selection mode" : "Select conversations"} aria-label={s.selectionMode() ? "Exit selection mode" : "Select conversations"}
           >
-            <Iconify icon={s.selectionMode() ? "lucide:x" : "lucide:list-todo"} size={13} />
+            <Iconify icon={s.selectionMode() ? "lucide:x" : "lucide:list-checks"} size={13} />
           </button>
         <div>
           <button
@@ -198,7 +208,7 @@ export function WorkspaceSidebar() {
               e.stopPropagation();
               s.setNewProjectMenuOpen(!s.newProjectMenuOpen());
             }}
-            class="p-1.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+            class="flex h-6.5 w-6.5 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted/75 transition-colors cursor-pointer"
             data-rc-tip="Create new project" aria-label="Create new project"
           >
             <Iconify icon="lucide:folder-plus" size={13} />
@@ -211,9 +221,9 @@ export function WorkspaceSidebar() {
                   s.setNewProjectMenuOpen(false);
                   s.openNewProjectModal();
                 }}
-                class="w-full text-left px-2.5 py-1.5 rounded-lg text-fg hover:bg-surface-muted flex items-center gap-2 cursor-pointer transition-colors"
+                class="w-full text-left px-2 py-1.5 rounded-md text-fg hover:bg-surface-muted flex items-center gap-2 cursor-pointer transition-colors"
               >
-                <Iconify icon="lucide:folder-plus" size={13} class="text-accent" />
+                <Iconify icon="lucide:folder-plus" size={13} class="text-fg-muted" />
                 <span>New Project</span>
               </button>
               <button
@@ -223,7 +233,7 @@ export function WorkspaceSidebar() {
                   s.setNewProjectMenuOpen(false);
                   s.quickStartProject();
                 }}
-                class="w-full text-left px-2.5 py-1.5 rounded-lg text-fg-secondary hover:text-fg hover:bg-surface-muted flex items-center gap-2 cursor-pointer transition-colors"
+                class="w-full text-left px-2 py-1.5 rounded-md text-fg-secondary hover:text-fg hover:bg-surface-muted flex items-center gap-2 cursor-pointer transition-colors"
               >
                 <Iconify icon="lucide:zap" size={13} class="text-warning" />
                 <span>Quick Start</span>
@@ -236,7 +246,7 @@ export function WorkspaceSidebar() {
         <div class="space-y-0.5">
           <For
             each={s.visibleSessions("talk", s.talkSessions?.() ?? [])}
-            fallback={<div class="px-2.5 py-2 text-xs text-ink-600">No talk conversations yet.</div>}
+            fallback={<div class="px-2.5 py-2 text-xs text-fg-muted">No talk conversations yet.</div>}
           >
             {(sess) => renderRow(sess)}
           </For>
@@ -248,27 +258,29 @@ export function WorkspaceSidebar() {
         when={s.projects().length > 0}
         fallback={
           <button
+            type="button"
             onClick={s.openNewProjectModal}
-            class="w-full text-left px-2.5 py-2 rounded-lg border border-dashed border-line text-xs text-ink-500 hover:text-ink-300 hover:border-ink-500 transition-colors cursor-pointer"
+            class="w-full text-left px-2.5 py-2 rounded-lg border border-dashed border-border text-xs text-fg-muted hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
           >
             + Select a project folder on the host
           </button>
         }
       >
-       <div class="space-y-2">
+       <div class="space-y-1.5">
             <For each={s.projects()}>
               {(p) => {
                 const list = () => s.projectSessions(p.id);
+                const activeProj = () => s.activeProjectId() === p.id || p.id === (s.activeProject()?.id || "");
                 return (
                   <div>
                     <div
                       onClick={() => {
                         s.pickProject(p.id);
                       }}
-                      class={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-colors ${
-                        s.activeProjectId() === p.id || p.id === (s.activeProject()?.id || "")
-                          ? "bg-ink-800/60 font-medium text-ink-100 rounded-md"
-                          : "text-ink-400 hover:bg-ink-900/60 hover:text-ink-200"
+                      class={`group flex h-7.5 items-center gap-1.5 px-2 rounded-md cursor-pointer text-[12.5px] transition-colors ${
+                        activeProj()
+                          ? "bg-surface-muted/55 font-medium text-fg hover:bg-surface-muted/80"
+                          : "text-fg-secondary hover:bg-surface-muted/65 hover:text-fg"
                       }`}
                       data-rc-tip={p.path}
                     >
@@ -280,7 +292,7 @@ export function WorkspaceSidebar() {
                           e.stopPropagation();
                           s.toggleProjectExpanded(p.id);
                         }}
-                        class="p-0.5 -ml-0.5 rounded text-ink-500 hover:text-ink-200 hover:bg-ink-800/60 cursor-pointer shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                        class="p-0.5 -ml-0.5 rounded text-fg-muted hover:text-fg hover:bg-surface-muted cursor-pointer shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
                       >
                         <Iconify
                           icon="lucide:chevron-right"
@@ -297,26 +309,35 @@ export function WorkspaceSidebar() {
                         }}
                         class="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-accent rounded"
                       >
-                        <Iconify icon="lucide:folder" size={14} class="shrink-0 text-ink-500" />
+                        <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
                         <span class="truncate flex-1 font-medium">{p.name}</span>
                       </button>
                       <button
+                        type="button"
                         aria-label={`Copy path for ${p.name}`}
                         data-rc-tip="Copy project path"
                         onClick={(e) => {
                           e.stopPropagation();
                           void copyWithToast(p.path);
                         }}
-                        class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 p-1 text-ink-500 hover:text-ink-100 cursor-pointer"
+                        class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                       >
-                        <Iconify icon="lucide:copy" size={12} />
+                        <Iconify icon="lucide:copy" size={11} />
                       </button>
-                      <button aria-label={`New conversation in ${p.name}`} data-rc-tip="New conversation in this project" onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
-                        class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 p-1 text-ink-500 hover:text-ink-100 cursor-pointer"><Iconify icon="lucide:plus" size={14} /></button>
+                      <button
+                        type="button"
+                        aria-label={`New conversation in ${p.name}`}
+                        data-rc-tip="New conversation in this project"
+                        onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
+                        class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                      >
+                        <Iconify icon="lucide:plus" size={13} />
+                      </button>
                       <Show when={!p.protected}>
                         <button
+                          type="button"
                           onClick={(e) => s.deleteProject(p.id, e)}
-                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-0.5 text-ink-600 hover:text-danger cursor-pointer shrink-0"
+                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded p-0.5 text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer shrink-0"
                           data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
                         >
                           <Iconify icon="lucide:x" size={12} />
@@ -324,7 +345,7 @@ export function WorkspaceSidebar() {
                       </Show>
                     </div>
                     <Show when={s.isProjectExpanded(p)}>
-                      <div class="ml-[13px] mt-0.5 space-y-0.5 border-l border-line/50 pl-1.5">
+                      <div class="ml-[15px] mt-0.5 space-y-0.5 border-l border-border/60 pl-2">
                         <For each={s.visibleSessions(p.id, list())}>
                           {(sess) => renderRow(sess)}
                         </For>
@@ -337,7 +358,7 @@ export function WorkspaceSidebar() {
             </For>
             <Show when={s.looseSessions().length > 0}>
               <div>
-                <div class="px-2 py-1.5 text-[11px] font-medium text-ink-600">
+                <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
                   Not in Project
                 </div>
                 <div class="space-y-0.5">
@@ -352,11 +373,11 @@ export function WorkspaceSidebar() {
       </Show>
       </Show>
     </div>
-  {/* Batch bar (chatbot selection mode) */}
+  {/* Batch bar (selection mode) */}
   <Show when={s.selectionMode()}>
-    <div class="p-2 border-t border-border bg-surface">
+    <div class="p-2 border-t border-border/70 bg-surface">
       <div class="flex items-center justify-between gap-2">
-        <span class="text-[11px] text-fg-muted pl-1 truncate">
+        <span class="text-[11px] text-fg-muted pl-1 truncate tabular-nums">
           {s.selectedSessions().size > 0
             ? `${s.selectedSessions().size} selected`
             : "Select conversations to delete"}
@@ -366,7 +387,7 @@ export function WorkspaceSidebar() {
             type="button"
             onClick={s.pinSelected}
             disabled={s.selectedSessions().size === 0}
-            class={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border border-border transition-colors ${
+            class={`px-2 py-1 rounded-md text-[11px] font-medium border border-border transition-colors ${
               s.selectedSessions().size > 0
                 ? "bg-surface-subtle text-fg-secondary hover:text-fg hover:bg-surface-muted cursor-pointer"
                 : "opacity-50 cursor-not-allowed bg-surface-subtle text-fg-muted"
@@ -378,7 +399,7 @@ export function WorkspaceSidebar() {
             type="button"
             onClick={s.deleteSelected}
             disabled={s.selectedSessions().size === 0}
-            class={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${
+            class={`px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${
               s.selectedSessions().size > 0
                 ? "bg-danger-subtle border-danger/35 text-danger hover:opacity-90 cursor-pointer"
                 : "opacity-50 cursor-not-allowed bg-surface-subtle border-border text-fg-muted"
@@ -391,21 +412,23 @@ export function WorkspaceSidebar() {
     </div>
   </Show>
 
-  <div class="p-2 border-t border-border space-y-1.5 bg-surface-subtle">
+  <div class="px-2 py-2 border-t border-border/60 space-y-0.5 bg-surface-subtle shrink-0">
     {/* Daemon update: primary rounded-full button above host selector */}
     <Show when={(() => { const i = ui.daemonUpdate.info(); return !!i && !!i.available && i.available !== i.current; })()}>{(() => {
       const i = ui.daemonUpdate.info()!;
       const busy = ui.daemonUpdate.applying() || hosts.activeHost()?.status === "updating";
       return (
-        <button
-          type="button"
-          onClick={() => ui.daemonUpdate.apply()}
-          disabled={busy}
-          class="ui-button ui-button-primary w-full rounded-full h-[1.5rem] min-h-[1.5rem] py-0 text-xs gap-1.5"
-        >
-          <Iconify icon="lucide:arrow-down-to-line" size={13} />
-          <span>{busy ? "Updating…" : `Update to ${i.available}`}</span>
-        </button>
+        <div class="px-0.5 pb-1">
+          <button
+            type="button"
+            onClick={() => ui.daemonUpdate.apply()}
+            disabled={busy}
+            class="ui-button ui-button-primary w-full rounded-full h-[1.5rem] min-h-[1.5rem] py-0 text-xs gap-1.5"
+          >
+            <Iconify icon="lucide:arrow-down-to-line" size={13} />
+            <span>{busy ? "Updating…" : `Update to ${i.available}`}</span>
+          </button>
+        </div>
       );
     })()}</Show>
     <HostCard id="sidebar" />
@@ -414,12 +437,14 @@ export function WorkspaceSidebar() {
     <button
       type="button"
       onPointerDown={(e) => press(e.currentTarget)}
-      onClick={() => m.openSettings()}
+      onClick={() => m.openSettings?.()}
       aria-label="Host & agent settings: Settings"
-      class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted/70 transition-colors cursor-pointer"
+      class="rc-nav-row text-left text-fg-secondary hover:text-fg hover:bg-surface-muted/75 cursor-pointer"
     >
-      <Iconify icon="lucide:settings" size={14} class="text-fg-muted" />
-      <span>Settings</span>
+      <span aria-hidden="true" class="rc-nav-icon text-fg-muted">
+        <Iconify icon="lucide:settings" size={14} />
+      </span>
+      <span class="truncate">Settings</span>
     </button>
   </div>
 </aside>
