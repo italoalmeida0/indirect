@@ -358,6 +358,9 @@ func evalPathSymlinksAndJunctionsEx(p string, allowMissingLeaf bool) (string, er
 			fi, lerr := os.Lstat(cand)
 			if lerr != nil {
 				if allowMissingLeaf && (errors.Is(lerr, os.ErrNotExist) || strings.ContainsAny(part, "*?<>\"|")) {
+					if evaled, eerr := filepath.EvalSymlinks(built); eerr == nil {
+						built = filepath.Clean(evaled)
+					}
 					return filepath.Clean(filepath.Join(append([]string{built}, parts[idx:]...)...)), nil
 				}
 				return "", lerr
@@ -6419,11 +6422,12 @@ func (en *rtEntry) checkSpawnCmdline(cwd string, src string, envOrig map[string]
 					if strings.HasPrefix(a, "-") {
 						continue
 					}
-					p := a
-					if !filepath.IsAbs(p) {
-						p = filepath.Join(curCWD, p)
-					}
-					if err := en.checkWritePath(p); err != nil {
+					p := joinCWDPath(curCWD, a)
+					if baseCmd == "rm" || baseCmd == "rmdir" {
+						if err := en.checkSubtreeWritable(p); err != nil {
+							return err
+						}
+					} else if err := en.checkWritePath(p); err != nil {
 						return err
 					}
 				}
@@ -6432,11 +6436,8 @@ func (en *rtEntry) checkSpawnCmdline(cwd string, src string, envOrig map[string]
 					if strings.HasPrefix(a, "-") {
 						continue
 					}
-					p := a
-					if !filepath.IsAbs(p) {
-						p = filepath.Join(curCWD, p)
-					}
-					if err := en.checkWritePath(p); err != nil {
+					p := joinCWDPath(curCWD, a)
+					if err := en.checkSubtreeWritable(p); err != nil {
 						return err
 					}
 				}
@@ -6851,7 +6852,7 @@ func isDollarShellFallback(en *rtEntry, req cpSpawnReq) bool {
 		return true
 	}
 	if s, ok := req.Shell.(string); ok && s == "$" {
-		return runtime.GOOS == "windows" && en.shellPath == ""
+		return en.shellPath == ""
 	}
 	return false
 }
@@ -10653,7 +10654,7 @@ func (en *rtEntry) evalPOSIXSimpleCmd(ctx context.Context, sc posixSimpleCmd, cw
 			}
 			for _, rawP := range paths {
 				p := joinCWDPath(*cwd, rawP)
-				if err := en.checkWritePath(p); err != nil {
+				if err := en.checkSubtreeWritable(p); err != nil {
 					_, _ = stderrBuf.Write([]byte(err.Error() + "\n"))
 					exitCode = 1
 					continue
@@ -10733,7 +10734,7 @@ func (en *rtEntry) evalPOSIXSimpleCmd(ctx context.Context, sc posixSimpleCmd, cw
 			for _, srcRaw := range srcs {
 				src := joinCWDPath(*cwd, srcRaw)
 				if baseProg == "mv" {
-					if err := en.checkWritePath(src); err != nil {
+					if err := en.checkSubtreeWritable(src); err != nil {
 						_, _ = stderrBuf.Write([]byte(err.Error() + "\n"))
 						exitCode = 1
 						continue
@@ -11786,7 +11787,17 @@ func (en *rtEntry) evalPOSIXSimpleCmd(ctx context.Context, sc posixSimpleCmd, cw
 			exitCode = 126
 			break
 		}
-		cmd := exec.CommandContext(ctx, prog, args...)
+		execProg := prog
+		execArgs := args
+		if lp, lerr := lookPathWithEnv(prog, *cwd, envMapToSlice(cmdEnv)); lerr == nil {
+			execProg = lp
+		}
+		if en.execPath != "" && (prog == en.execPath || strings.EqualFold(filepath.Clean(execProg), filepath.Clean(en.execPath))) {
+			if len(execArgs) > 0 && execArgs[0] != "--js" && execArgs[0] != "--worker" && execArgs[0] != "--runner" && execArgs[0] != "--runner-command" && execArgs[0] != "--update-start" && execArgs[0] != "--update-end" && execArgs[0] != "--slot" && !strings.HasPrefix(execArgs[0], "-test.") {
+				execArgs = append([]string{"--js"}, execArgs...)
+			}
+		}
+		cmd := exec.CommandContext(ctx, execProg, execArgs...)
 		cmd.Dir = *cwd
 		en.enforceChildEnvMap(cmdEnv)
 		cmd.Env = envMapToSlice(cmdEnv)
@@ -17797,6 +17808,7 @@ func (en *rtEntry) pumpNetConn(connID int32, conn net.Conn) {
 				return
 			}
 			en.netMu.Lock()
+			alreadyHalfClosed := en.netHalfClosed[connID]
 			nw := en.netWriters[connID]
 			delete(en.netWriters, connID)
 			delete(en.netConns, connID)
@@ -17809,7 +17821,7 @@ func (en *rtEntry) pumpNetConn(connID int32, conn net.Conn) {
 			}
 			_ = conn.Close()
 			meta := "{}"
-			if !errors.Is(err, net.ErrClosed) {
+			if !errors.Is(err, net.ErrClosed) && !(alreadyHalfClosed && strings.Contains(strings.ToLower(err.Error()), "connection reset by peer")) {
 				b, _ := json.Marshal(map[string]any{"error": err.Error()})
 				meta = string(b)
 			}

@@ -3454,7 +3454,7 @@ func TestRunScript_Round19AdversarialFixes(t *testing.T) {
 			assert.deepStrictEqual(Array.from(new Uint8Array(clonedSab)), [1, 2, 3, 4]);
 		}
 		assert.strictEqual(
-			new Intl.DateTimeFormat("de-DE", { dateStyle: "long" }).format(new Date("2024-01-02T00:00:00Z")),
+			new Intl.DateTimeFormat("de-DE", { dateStyle: "long", timeZone: "UTC" }).format(new Date("2024-01-02T00:00:00Z")),
 			"2. Januar 2024"
 		);
 
@@ -5949,7 +5949,7 @@ func TestRunScript_Round32AdversarialFixes(t *testing.T) {
 
 		// 12. net.Socket client remoteFamily and performance.timeOrigin + performance.now()
 		{
-			const srv = net.createServer((s) => s.end("hi"));
+			const srv = net.createServer((s) => { s.on("error", () => {}); s.end("hi"); });
 			await new Promise((r) => srv.listen(0, "127.0.0.1", r));
 			const port = srv.address().port;
 			const family = await new Promise((resolve, reject) => {

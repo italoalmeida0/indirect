@@ -184,6 +184,9 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 		if len(spec.Argv) > 1 {
 			extraArgs = spec.Argv[1:]
 		}
+		if spec.LogDir != "" {
+			_ = os.MkdirAll(spec.LogDir, 0o700)
+		}
 		f, ferr := os.CreateTemp(spec.LogDir, "bg_code_*.js")
 		if ferr != nil {
 			return nil, ferr

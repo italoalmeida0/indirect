@@ -18,7 +18,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { $ } from "bun";
-import { ensureZig, macosFrameworkDir } from "./indirect-zig";
+import { ensureZig, macosFrameworkDir, macosLinkStubDir } from "./indirect-zig";
 import { verifyDaemonBinary } from "./verify-daemon-binary";
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -88,11 +88,12 @@ for (const target of TARGETS) {
     CC: `${zig} cc -target ${target.triple}`,
   };
   if (target.goos === "darwin") {
-    // Go links crypto/x509's CoreFoundation/Security frameworks on darwin;
-    // cross-linking has no SDK, so the repo's stub .tbd descriptors point at
-    // the framework names and dynamic_lookup defers symbol binding to load
-    // time on macOS (the real frameworks are there).
-    env.CGO_LDFLAGS = `-F${frameworkDir} -Wl,-undefined,dynamic_lookup`;
+    // Go links crypto/x509's CoreFoundation/Security frameworks and -lresolv
+    // on darwin; cross-linking has no SDK, so the repo's stub .tbd descriptors
+    // and libresolv stub archive satisfy the linker while dynamic_lookup defers
+    // symbol binding to load time on macOS (the real frameworks/libSystem are there).
+    const linkStubDir = macosLinkStubDir(DAEMON_DIR, target.goarch);
+    env.CGO_LDFLAGS = `-F${frameworkDir} -L${linkStubDir} -Wl,-undefined,dynamic_lookup`;
   }
   console.log(`==> ${name} (multi-call: boot + worker)`);
   // -buildvcs=false: the artifacts are committed to the repo, so their bytes
