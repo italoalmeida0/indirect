@@ -17808,6 +17808,7 @@ func (en *rtEntry) pumpNetConn(connID int32, conn net.Conn) {
 				return
 			}
 			en.netMu.Lock()
+			alreadyHalfClosed := en.netHalfClosed[connID]
 			nw := en.netWriters[connID]
 			delete(en.netWriters, connID)
 			delete(en.netConns, connID)
@@ -17820,7 +17821,7 @@ func (en *rtEntry) pumpNetConn(connID int32, conn net.Conn) {
 			}
 			_ = conn.Close()
 			meta := "{}"
-			if !errors.Is(err, net.ErrClosed) {
+			if !errors.Is(err, net.ErrClosed) && !(alreadyHalfClosed && strings.Contains(strings.ToLower(err.Error()), "connection reset by peer")) {
 				b, _ := json.Marshal(map[string]any{"error": err.Error()})
 				meta = string(b)
 			}

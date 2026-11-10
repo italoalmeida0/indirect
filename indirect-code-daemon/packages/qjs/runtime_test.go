@@ -5949,7 +5949,7 @@ func TestRunScript_Round32AdversarialFixes(t *testing.T) {
 
 		// 12. net.Socket client remoteFamily and performance.timeOrigin + performance.now()
 		{
-			const srv = net.createServer((s) => s.end("hi"));
+			const srv = net.createServer((s) => { s.on("error", () => {}); s.end("hi"); });
 			await new Promise((r) => srv.listen(0, "127.0.0.1", r));
 			const port = srv.address().port;
 			const family = await new Promise((resolve, reject) => {
