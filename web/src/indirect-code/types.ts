@@ -70,7 +70,6 @@ export interface TurnChangedFile {
   diff?: string;
   additions?: number;
   deletions?: number;
-  undone?: boolean;
 }
 
 export interface TurnBalloon {

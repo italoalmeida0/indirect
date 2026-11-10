@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { createGlide } from "../../ds/motion/glide";
 import { press } from "../../ds/motion/press";
@@ -10,13 +10,62 @@ import { HostCard } from "./HostCard";
 import { SidebarToggle } from "./SidebarToggle";
 import type { SessionSummary } from "../types";
 
+interface SessionMenuState {
+  sessionId: string;
+  anchor: HTMLElement;
+  fallback: SessionSummary;
+}
+
 export function WorkspaceSidebar() {
   const hosts = useHost();
   const s = useSession();
   const t = useTranscriptCtx();
   const m = useModal();
   const ui = useUI();
+  const [sessionMenu, setSessionMenu] = createSignal<SessionMenuState | null>(null);
+  let activeLongPressCancel: (() => void) | null = null;
+  const cancelActiveLongPress = () => {
+    activeLongPressCancel?.();
+    activeLongPressCancel = null;
+  };
+  const closeSessionMenu = () => setSessionMenu(null);
+  const openSessionMenu = (sess: SessionSummary, anchor: HTMLElement) => {
+    ui.closeMenus?.();
+    setSessionMenu({ sessionId: sess.id, anchor, fallback: sess });
+  };
+  const resolveMenuSession = (menu: SessionMenuState): SessionSummary =>
+    s.sessions?.().find((item) => item.id === menu.sessionId) ?? menu.fallback;
+
+  createEffect(() => {
+    if (!ui.sidebarOpen()) {
+      cancelActiveLongPress();
+      setSessionMenu(null);
+    }
+  });
+
+  createEffect(() => {
+    const menu = sessionMenu();
+    if (!menu) return;
+    const onDocPointerDown = (e: PointerEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target?.closest("[data-floatmenu]")) return;
+      setSessionMenu(null);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setSessionMenu(null);
+      }
+    };
+    document.addEventListener("pointerdown", onDocPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    onCleanup(() => {
+      document.removeEventListener("pointerdown", onDocPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    });
+  });
+
   const rowCtx = (): SessionRowCtx => ({
+    isMobile: ui.isMobile,
     activeSessionId: s.activeSessionId,
     selectedSessions: s.selectedSessions,
     selectionMode: s.selectionMode,
@@ -34,6 +83,11 @@ export function WorkspaceSidebar() {
     sessionStatus: t.sessionStatus,
     turnActivity: t.turnActivity,
     cancelTurnForSession: t.cancelTurnForSession,
+    openContextMenu: openSessionMenu,
+    contextMenuSessionId: () => sessionMenu()?.sessionId ?? null,
+    registerLongPressCancel: (cancel) => {
+      activeLongPressCancel = cancel;
+    },
   });
   const renderRow = (sess: SessionSummary) => SessionRow(rowCtx(), sess);
   const [viewSwitchEl, setViewSwitchEl] = createSignal<HTMLDivElement>();
@@ -138,7 +192,13 @@ export function WorkspaceSidebar() {
   <div class="mx-2.5 border-t border-border/60 shrink-0" />
 
   {/* Projects & Sessions */}
-  <div class="flex-1 overflow-y-auto px-2 pt-2 pb-2 space-y-2 min-h-0 [scrollbar-gutter:stable]">
+  <div
+    onScroll={() => {
+      cancelActiveLongPress();
+      if (sessionMenu()) setSessionMenu(null);
+    }}
+    class="flex-1 overflow-y-auto px-2 pt-2 pb-2 space-y-2 min-h-0 [scrollbar-gutter:stable]"
+  >
       <div class="flex items-center justify-between px-1 pb-0.5">
         <Show
           when={s.selectionMode()}
@@ -373,6 +433,88 @@ export function WorkspaceSidebar() {
       </Show>
       </Show>
     </div>
+  {/* Session long-press / right-click context menu */}
+  <Show when={sessionMenu()} keyed>
+    {(menu) => {
+      const target = () => resolveMenuSession(menu);
+      return (
+        <FloatMenu
+          anchor={() => (menu.anchor.isConnected ? menu.anchor : undefined)}
+          open={true}
+          placement="bottom-start"
+          width="13.5rem"
+          aria-label="Conversation actions"
+          onClose={closeSessionMenu}
+        >
+          <div
+            data-session-menu-header
+            class="px-2.5 py-1.5 mb-0.5 border-b border-border/60 text-[11px] font-medium text-fg-muted truncate select-none"
+          >
+            {target().title}
+          </div>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => {
+              const sess = target();
+              closeSessionMenu();
+              s.togglePin(sess.id, e);
+            }}
+            class="w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 min-h-8 text-left text-xs text-fg hover:bg-surface-muted transition-colors cursor-pointer select-none"
+          >
+            <Iconify
+              icon={target().pinned ? "lucide:pin-off" : "lucide:pin"}
+              size={13}
+              class="text-fg-muted shrink-0"
+            />
+            <span>{target().pinned ? "Unpin conversation" : "Pin conversation"}</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const sess = target();
+              closeSessionMenu();
+              s.setRenameText(sess.title);
+              s.setRenamingId(sess.id);
+            }}
+            class="w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 min-h-8 text-left text-xs text-fg hover:bg-surface-muted transition-colors cursor-pointer select-none"
+          >
+            <Iconify icon="lucide:pencil" size={13} class="text-fg-muted shrink-0" />
+            <span>Rename</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const sess = target();
+              closeSessionMenu();
+              if (!s.selectionMode()) s.setSelectionMode?.(true);
+              s.toggleSessionSelect(sess.id);
+            }}
+            class="w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 min-h-8 text-left text-xs text-fg hover:bg-surface-muted transition-colors cursor-pointer select-none"
+          >
+            <Iconify icon="lucide:check-square" size={13} class="text-fg-muted shrink-0" />
+            <span>Select</span>
+          </button>
+          <div role="separator" class="my-1 border-t border-border/70" />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={(e) => {
+              const sess = target();
+              closeSessionMenu();
+              void s.deleteSession(sess.id, e);
+            }}
+            class="w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 min-h-8 text-left text-xs text-danger hover:bg-danger-subtle transition-colors cursor-pointer select-none"
+          >
+            <Iconify icon="lucide:trash-2" size={13} class="shrink-0" />
+            <span>Delete</span>
+          </button>
+        </FloatMenu>
+      );
+    }}
+  </Show>
   {/* Batch bar (selection mode) */}
   <Show when={s.selectionMode()}>
     <div class="p-2 border-t border-border/70 bg-surface">

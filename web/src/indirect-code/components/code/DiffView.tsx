@@ -1,29 +1,28 @@
-import { createEffect, createSignal, For, Show, onCleanup } from "solid-js";
-import { escapeHtml, highlightCode, languageForPath } from "../../utils/lang";
-import { diffRows, type ParsedDiffLine } from "../../utils/diffLines";
+import { createEffect, createMemo, createSignal, For, Show, onCleanup } from "solid-js";
+import {
+  isCodeHighlightReady,
+  languageForPath,
+  preloadCodeHighlight,
+} from "../../utils/lang";
+import { diffRows } from "../../utils/diffLines";
+import {
+  buildDiffRows,
+  buildDiffRowsSync,
+  type DiffRow,
+} from "../../utils/inlineDiff";
 import { recordToolScroll, restoreToolScroll } from "../../utils/scrollMemory";
 
-/**
- * Renders a unified context diff (daemon edit results and turn-change
- * balloons). Diff marker lines (+/-) keep their red/green lane so
- * added/removed still jump out; the line BODY is syntax-highlighted per the
- * file extension. Line numbers come embedded ("<n>:[ +-]code") or are
- * derived from the @@ hunk headers of plain unified diffs; a truncate
- * control caps long diffs exactly like the file preview.
- */
-export interface DiffRow {
-  lineNum: string;
-  marker: string;
-  codeHtml: string;
-  rawCode: string;
-  kind: ParsedDiffLine["kind"];
-}
+export { buildDiffRows, buildDiffRowsSync, type DiffRow };
+
+const FOLD_LOOKAHEAD_LINES = 24;
 
 /**
  * Renders a unified context diff (daemon edit results and turn-change
- * balloons). Diff marker lines (+/-) keep their red/green lane with an
- * isolated line-number gutter; the line BODY is syntax-highlighted per the
- * file extension without marker/number interference.
+ * balloons). Diff marker lines (+/-) keep their semantic lane with dual
+ * old/new line-number gutters (for unified `@@` diffs) or a single line-number
+ * gutter (for daemon numbered edit results), dedicated `@@` hunk header bars,
+ * stateful multi-line syntax highlighting across hunks, and VS Code / GitHub
+ * intra-line word & character diff highlights.
  */
 export function DiffView(props: {
   text: string;
@@ -35,62 +34,60 @@ export function DiffView(props: {
 }) {
   let containerRef: HTMLDivElement | null = null;
   const [expanded, setExpanded] = createSignal(false);
-  const [rows, setRows] = createSignal<DiffRow[] | null>(null);
-  const lines = () => diffRows(props.text || "");
+  const [hlReady, setHlReady] = createSignal(isCodeHighlightReady());
+
+  const allLines = createMemo(() => diffRows(props.text || ""));
   const max = () => props.max ?? 80;
-  const shown = () => {
-    const all = lines();
-    return expanded() ? all : all.slice(0, max());
-  };
-  const hidden = () => Math.max(0, lines().length - shown().length);
+  const shownCount = createMemo(() => {
+    const total = allLines().length;
+    return expanded() ? total : Math.min(total, max());
+  });
+  const hidden = createMemo(() => Math.max(0, allLines().length - shownCount()));
+
+  const isDualGutter = createMemo(() =>
+    allLines().some((r) => r.oldLineNum !== undefined || r.newLineNum !== undefined),
+  );
+  const hasSingleGutter = createMemo(
+    () => !isDualGutter() && allLines().some((r) => r.lineNum !== ""),
+  );
+  const dualColWidth = createMemo(() => {
+    let maxDigits = 2;
+    for (const r of allLines()) {
+      if (r.oldLineNum && r.oldLineNum.length > maxDigits) maxDigits = r.oldLineNum.length;
+      if (r.newLineNum && r.newLineNum.length > maxDigits) maxDigits = r.newLineNum.length;
+    }
+    return `${Math.max(2.1, (maxDigits + 1.15) * 0.56).toFixed(2)}rem`;
+  });
+
+  const rows = createMemo<DiffRow[]>(() => {
+    hlReady();
+    const all = allLines();
+    const count = shownCount();
+    if (count === 0) return [];
+    const windowEnd = expanded() ? all.length : Math.min(all.length, count + FOLD_LOOKAHEAD_LINES);
+    const lang = languageForPath(props.name);
+    return buildDiffRowsSync(all.slice(0, windowEnd), lang).slice(0, count);
+  });
 
   createEffect(() => {
-    const currentLines = shown();
     const lang = languageForPath(props.name);
+    if (!lang || hlReady()) return;
     let cancelled = false;
-
-    void Promise.all(
-      currentLines.map(async (p) => {
-        let codeHtml: string;
-        if (p.kind === "header" || p.kind === "ellipsis") {
-          codeHtml = escapeHtml(p.code);
-        } else {
-          codeHtml = await highlightCode(p.code, lang);
-        }
-        return {
-          lineNum: p.lineNum,
-          marker: p.marker,
-          codeHtml,
-          rawCode: p.code,
-          kind: p.kind,
-        };
-      }),
-    ).then((result) => {
-      if (!cancelled) {
-        setRows(result);
-        requestAnimationFrame(() => restoreToolScroll(props.scrollKey, containerRef));
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setRows(
-          currentLines.map((p) => ({
-            lineNum: p.lineNum,
-            marker: p.marker,
-            codeHtml: escapeHtml(p.code),
-            rawCode: p.code,
-            kind: p.kind,
-          })),
-        );
-        requestAnimationFrame(() => restoreToolScroll(props.scrollKey, containerRef));
-      }
-    });
-
     onCleanup(() => {
       cancelled = true;
     });
+    void preloadCodeHighlight()
+      .then(() => {
+        if (!cancelled) setHlReady(true);
+      })
+      .catch(() => {});
   });
 
-  const hasGutter = () => shown().some((r) => r.lineNum !== "");
+  createEffect(() => {
+    rows();
+    if (props.embedded) return;
+    requestAnimationFrame(() => restoreToolScroll(props.scrollKey, containerRef));
+  });
 
   return (
     <div
@@ -108,66 +105,72 @@ export function DiffView(props: {
       }`}
     >
       <div class="min-w-full w-fit">
-        <Show
-          when={rows() !== null}
-          fallback={
-            <For each={shown()}>
-              {(r) => (
-                <div
-                  class={`flex items-start pr-2.5 py-0.5 whitespace-pre ${
-                    r.kind === "add"
-                      ? "rc-diff-row-add text-success"
-                      : r.kind === "del"
-                        ? "rc-diff-row-del text-danger"
-                        : r.kind === "header"
-                          ? "rc-diff-row-ctx text-fg-muted text-[10px]"
-                          : r.kind === "ellipsis"
-                            ? "rc-diff-row-ctx text-fg-muted/70"
-                            : "rc-diff-row-ctx text-fg-secondary"
-                  }`}
-                >
-                  <div class="sticky left-0 z-10 flex items-start bg-inherit pl-2.5 pr-1 shrink-0">
-                    <Show when={hasGutter()}>
-                      <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
-                        {r.lineNum || ""}
+        <For each={rows()}>
+          {(r) => (
+            <Show
+              when={!r.hunkHeader}
+              fallback={
+                <div class="rc-diff-hunk flex items-center pr-2.5 py-1 whitespace-pre">
+                  <div class="sticky left-0 z-10 flex items-center bg-inherit pl-2.5 pr-1 shrink-0">
+                    <Show when={isDualGutter()}>
+                      <span
+                        class="rc-code-gutter-old select-none text-right font-mono text-[10px] tabular-nums shrink-0 pr-1.5"
+                        style={{ "min-width": dualColWidth() }}
+                      />
+                      <span
+                        class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums shrink-0 pr-2 mr-1.5"
+                        style={{ "min-width": dualColWidth() }}
+                      >
+                        ⋯
                       </span>
                     </Show>
-                    <span
-                      class={`select-none w-4 shrink-0 text-center font-medium ${
-                        r.kind === "add"
-                          ? "text-success"
-                          : r.kind === "del"
-                            ? "text-danger"
-                            : "text-transparent"
-                      }`}
-                    >
-                      {r.marker || " "}
-                    </span>
+                    <Show when={hasSingleGutter()}>
+                      <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
+                        ⋯
+                      </span>
+                    </Show>
+                    <span class="select-none w-4 shrink-0 text-center text-transparent"> </span>
                   </div>
-                  {/* eslint-disable-next-line solid/no-innerhtml */}
-                  <code class="tok flex-1" innerHTML={escapeHtml(r.code || " ")} />
+                  <code class="font-mono text-[11px] flex-1">
+                    <span class="rc-diff-hunk-range">{r.hunkHeader!.range}</span>
+                    <Show when={r.hunkHeader!.context}>
+                      <span class="rc-diff-hunk-ctx"> {r.hunkHeader!.context}</span>
+                    </Show>
+                  </code>
                 </div>
-              )}
-            </For>
-          }
-        >
-          <For each={rows()}>
-            {(r) => (
+              }
+            >
               <div
                 class={`flex items-start pr-2.5 py-0.5 whitespace-pre ${
                   r.kind === "add"
                     ? "rc-diff-row-add"
                     : r.kind === "del"
                       ? "rc-diff-row-del"
-                      : r.kind === "header"
-                        ? "rc-diff-row-ctx text-fg-muted text-[10px]"
-                        : r.kind === "ellipsis"
-                          ? "rc-diff-row-ctx text-fg-muted/70"
-                          : "rc-diff-row-ctx text-fg-secondary"
+                      : r.kind === "meta"
+                        ? "rc-diff-meta text-fg-muted"
+                        : r.kind === "header"
+                          ? "rc-diff-row-ctx text-fg-muted text-[10px]"
+                          : r.kind === "ellipsis"
+                            ? "rc-diff-row-ctx text-fg-muted/70"
+                            : "rc-diff-row-ctx text-fg-secondary"
                 }`}
               >
                 <div class="sticky left-0 z-10 flex items-start bg-inherit pl-2.5 pr-1 shrink-0">
-                  <Show when={hasGutter()}>
+                  <Show when={isDualGutter()}>
+                    <span
+                      class="rc-code-gutter-old select-none text-right font-mono text-[10px] tabular-nums shrink-0 pr-1.5"
+                      style={{ "min-width": dualColWidth() }}
+                    >
+                      {r.oldLineNum || ""}
+                    </span>
+                    <span
+                      class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums shrink-0 pr-2 mr-1.5"
+                      style={{ "min-width": dualColWidth() }}
+                    >
+                      {r.newLineNum || ""}
+                    </span>
+                  </Show>
+                  <Show when={hasSingleGutter()}>
                     <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
                       {r.lineNum || ""}
                     </span>
@@ -184,12 +187,21 @@ export function DiffView(props: {
                     {r.marker || " "}
                   </span>
                 </div>
-                {/* eslint-disable-next-line solid/no-innerhtml */}
-                <code class="tok flex-1" innerHTML={r.codeHtml || " "} />
+                <Show
+                  when={r.kind !== "meta"}
+                  fallback={
+                    <code class="font-mono text-[10.5px] italic text-fg-muted flex-1">
+                      {r.rawCode || " "}
+                    </code>
+                  }
+                >
+                  {/* eslint-disable-next-line solid/no-innerhtml */}
+                  <code class="tok flex-1" innerHTML={r.codeHtml || " "} />
+                </Show>
               </div>
-            )}
-          </For>
-        </Show>
+            </Show>
+          )}
+        </For>
       </div>
       <Show when={hidden() > 0}>
         <button

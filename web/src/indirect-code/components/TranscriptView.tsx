@@ -319,8 +319,6 @@ export function TranscriptView() {
                 balloon={b}
                 expanded={tc.isExpanded(`turn-${b.turnIndex}`)}
                 onToggle={() => tc.toggleExpanded(`turn-${b.turnIndex}`)}
-                undoBusy={tc.undoBusy() === b.turnIndex}
-                onUndo={(path?: string) => tc.undoTurn(b.turnIndex, path)}
                 live={b.live}
                 onReview={() => tc.requestBalloons()}
               />

@@ -85,7 +85,6 @@ export type DaemonCommand = CommandBase &
   | { type: "daemon_update_check" }
   | { type: "daemon_update_apply" }
   | { type: "daemon_update_toggle"; enabled: boolean }
-  | { type: "undo_turn_changes"; sessionId: string; turnIndex: number; path?: string; requestId?: string }
     | {
         type: "update_config";
         expectedRevision?: string;
@@ -143,7 +142,6 @@ export type DaemonEvent = EventBase &
     | { type: "folders"; requestId?: string; error?: string; folders?: WireRecord[]; parent?: string; path?: string }
     | { type: "turn_file_changes"; sessionId: string; live?: boolean; balloon?: WireRecord }
     | { type: "turn_changes"; sessionId: string; requestId?: string; balloons?: WireRecord[]; live?: WireRecord }
-    | { type: "turn_changes_undone"; sessionId: string; requestId?: string; turnIndex?: number; results?: WireRecord[]; complete?: boolean; warning?: string; error?: string }
     | { type: "attachment_uploaded"; requestId?: string; sessionId?: string; attachment?: WireRecord }
     | { type: "search_results"; query?: string; results?: WireRecord[] }
     | { type: "notice"; message?: string; level?: string }

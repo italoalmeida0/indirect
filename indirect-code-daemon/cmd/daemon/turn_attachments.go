@@ -389,36 +389,3 @@ func jailNotice(jailed bool) string {
 	}
 	return "Sandbox unlocked for future turns."
 }
-
-// onUndo runs undo of turn changes (actor-local disk ops).
-func (a *sessionActor) onUndo(m undoMsg) undoResult {
-	rec := a.rec
-	if a.state != stateIdle {
-		return undoResult{Error: "Stop the current turn first"}
-	}
-	var target *filetrack.TurnChanges
-	for i := range rec.FileBalloons {
-		if rec.FileBalloons[i].TurnIndex == m.TurnIndex {
-			target = &rec.FileBalloons[i]
-			break
-		}
-	}
-	if target == nil {
-		return undoResult{Error: "Turn has no file changes"}
-	}
-	results, complete := undoTurnBalloon(rec.CWD, target, m.Path)
-	if err := a.store.saveSessionSync(rec); err != nil {
-		a.storageError(err)
-		return undoResult{Error: err.Error(), Results: undoPayloads(results)}
-	}
-	a.pingChange()
-	return undoResult{Results: undoPayloads(results), Complete: complete}
-}
-
-func undoPayloads(results []undoFileResult) []any {
-	out := make([]any, 0, len(results))
-	for _, r := range results {
-		out = append(out, map[string]any{"path": r.Path, "rel": r.Rel, "ok": r.OK, "message": r.Message})
-	}
-	return out
-}

@@ -121,14 +121,21 @@ describe("mobile touch affordances (drawer, row actions, hit targets)", () => {
     expect(src).toMatch(/fixed inset-0 z-30[^"]*"[\s\S]{0,120}setSidebarOpen\(false\)/);
   });
 
-  test("session row pin/delete are visible and sized on touch", () => {
+  test("session rows stay clean on mobile and expose actions via long-press popup + inline rename Save/Cancel", () => {
     const src = read("web/src/indirect-code/components/SessionSidebar.tsx");
+    const ws = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
+    // Desktop keeps hover-revealed .rc-row-actions; mobile suppresses inline row action clutter.
     expect(src).toContain("rc-row-actions");
     expect(src).toContain("rc-row-action ");
-    // Desktop keeps the hover reveal; mobile overrides it in CSS.
-    expect(css).toContain("html.mobile .rc-sidebar .rc-row-actions");
-    expect(css).toMatch(/html\.mobile \.rc-sidebar \.rc-row-actions \{[\s\S]*?opacity: 1;/);
-    expect(css).toMatch(/html\.mobile \.rc-sidebar \.rc-row-action \{[\s\S]*?min-width: 2\.25rem;[\s\S]*?min-height: 2\.25rem;/);
+    expect(src).toContain("!ctx.isMobile() && !ctx.selectionMode()");
+    expect(css).not.toContain("html.mobile .rc-sidebar .rc-row-actions");
+    expect(css).not.toContain("html.mobile .rc-sidebar .rc-row-action");
+    // Long-press + context menu + explicit Save/Cancel rename affordances.
+    expect(src).toContain('aria-label="Save rename"');
+    expect(src).toContain('aria-label="Cancel rename"');
+    expect(ws).toContain('aria-label="Conversation actions"');
+    expect(ws).toContain("Pin conversation");
+    expect(ws).toContain("Unpin conversation");
   });
 
   test("sidebar toggle, composer add and send meet the 36px touch target", () => {

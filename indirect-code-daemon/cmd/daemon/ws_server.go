@@ -916,16 +916,6 @@ func (s *wsServer) handleRaw(raw []byte) {
 		_ = json.Unmarshal(raw, &req)
 		s.onGetTurnChanges(req.SessionID, req.RequestID)
 
-	case "undo_turn_changes":
-		var req struct {
-			SessionID string `json:"sessionId"`
-			TurnIndex int    `json:"turnIndex"`
-			Path      string `json:"path"`
-			RequestID string `json:"requestId"`
-		}
-		_ = json.Unmarshal(raw, &req)
-		s.onUndoTurnChanges(req.SessionID, req.TurnIndex, req.Path, req.RequestID)
-
 	case "update_config":
 		s.onUpdateConfig(raw)
 
@@ -1753,36 +1743,6 @@ func (s *wsServer) onGetTurnChanges(sessionID, requestID string) {
 		return
 	}
 	s.emit(map[string]any{"type": "turn_changes", "hostId": s.host(), "sessionId": sessionID, "requestId": requestID, "balloons": fileBalloonPayloads(rec.FileBalloons)})
-}
-
-func (s *wsServer) onUndoTurnChanges(sessionID string, turnIndex int, path, requestID string) {
-	res := s.sessions.route(sessionID, false)
-	if res.Error != "" {
-		return
-	}
-	rr := make(chan any, 1)
-	select {
-	case res.Inbox <- Envelope{SessionID: sessionID, Payload: undoMsg{TurnIndex: turnIndex, Path: path, Reply: rr}}:
-	case <-time.After(replyTimeout):
-		return
-	}
-	select {
-	case r := <-rr:
-		if ur, ok := r.(undoResult); ok {
-			msg := map[string]any{"type": "turn_changes_undone", "hostId": s.host(), "sessionId": sessionID, "requestId": requestID, "turnIndex": turnIndex, "results": ur.Results, "complete": ur.Complete}
-			if ur.Error != "" {
-				msg["error"] = ur.Error
-			}
-			if ur.Warning != "" {
-				msg["warning"] = ur.Warning
-			}
-			s.emit(msg)
-			if ur.Error == "" {
-				s.notifyChange("sessions")
-			}
-		}
-	case <-time.After(replyTimeout):
-	}
 }
 
 func (s *wsServer) onUpdateConfig(raw []byte) {

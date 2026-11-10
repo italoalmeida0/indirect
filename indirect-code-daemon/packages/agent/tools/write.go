@@ -65,13 +65,9 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 		if old, err := os.ReadFile(path); err == nil {
 			capped, tooLarge := cappedSnapshot(old)
 			if looksBinary(old) {
-				if tooLarge {
-					t.Changes.NoteBinaryEdit(path, "")
-				} else {
-					t.Changes.NoteBinaryEdit(path, capped)
-				}
+				t.Changes.NoteBinaryEdit(path, tooLarge)
 			} else if tooLarge {
-				t.Changes.NoteBinaryEdit(path, "")
+				t.Changes.NoteBinaryEdit(path, true)
 			} else {
 				t.Changes.NoteWrite(path, true, capped)
 			}

@@ -5,11 +5,32 @@ import type { DaemonCommand } from "../daemon-protocol";
 
 export type { TurnBalloon, TurnChangedFile };
 
-export interface UndoFileResult {
-  path: string;
-  rel?: string;
-  ok: boolean;
-  message?: string;
+export type DiffStatCell = "add" | "del" | "neutral";
+
+/** Computes a 5-block proportional +/- visual stat bar (GitHub / VS Code style). */
+export function diffStatBlocks(adds: number, dels: number): DiffStatCell[] {
+  const a = Math.max(0, Math.floor(adds || 0));
+  const d = Math.max(0, Math.floor(dels || 0));
+  const total = a + d;
+  if (total === 0) return ["neutral", "neutral", "neutral", "neutral", "neutral"];
+  let addCount = 0;
+  let delCount = 0;
+  if (total <= 5) {
+    addCount = a;
+    delCount = d;
+  } else if (a === 0) {
+    delCount = 5;
+  } else if (d === 0) {
+    addCount = 5;
+  } else {
+    addCount = Math.min(4, Math.max(1, Math.round((a / total) * 5)));
+    delCount = 5 - addCount;
+  }
+  const out: DiffStatCell[] = [];
+  for (let i = 0; i < addCount; i++) out.push("add");
+  for (let i = 0; i < delCount; i++) out.push("del");
+  while (out.length < 5) out.push("neutral");
+  return out;
 }
 
 /** Accept the old daemon's disk-shaped broadcasts as well as current wire data. */
@@ -29,15 +50,7 @@ function normalizeBalloon(b: any): TurnBalloon {
 export function createTurnChanges(opts: {
   send: (payload: DaemonCommand) => void;
   getSessionId: () => string;
-  getHostId?: () => string;
-  toast: (message: string, kind?: "ok" | "err") => void;
-  showConfirm?: (o: {
-    title?: string;
-    message?: string;
-    confirmText?: string;
-    cancelText?: string;
-    danger?: boolean;
-  }) => Promise<boolean>;
+  toast?: (message: string, kind?: "ok" | "err") => void;
 }) {
   const [state, setState] = createStore<{ balloons: TurnBalloon[] }>({ balloons: [] });
   const balloons = () => state.balloons;
@@ -67,14 +80,10 @@ export function createTurnChanges(opts: {
     });
     setState("balloons", reconcile(rows, { merge: true }));
   }
-  const [undoBusy, setUndoBusy] = createSignal<number | null>(null);
   const [expanded, setExpanded] = createSignal<Record<string, boolean>>({});
-  let resetGeneration = 0;
 
   function reset() {
-    resetGeneration++;
     setBalloons([]);
-    setUndoBusy(null);
     setExpanded({});
   }
 
@@ -178,74 +187,6 @@ export function createTurnChanges(opts: {
     setBalloons(list.sort((a, b) => a.turnIndex - b.turnIndex));
   }
 
-  async function undoTurn(turnIndex: number, path?: string) {
-    const sid = opts.getSessionId();
-    const host = opts.getHostId?.() || "";
-    const generation = resetGeneration;
-    if (!sid || undoBusy() !== null) return;
-    if (opts.showConfirm) {
-      const balloon = balloons().find((b) => b.turnIndex === turnIndex);
-      const pendingFiles = (balloon?.files || []).filter((f) => !f.undone);
-      const count = path ? 1 : (pendingFiles.length || balloon?.files?.length || 1);
-      const confirmed = await opts.showConfirm({
-        title: "Undo turn changes?",
-        message: path
-          ? `Revert changes to "${path}"? This will restore the file to its state before this turn.`
-          : `Revert all file changes from this turn (${count} file${count === 1 ? "" : "s"})? This will restore files to their state before this turn.`,
-        confirmText: "Revert changes",
-        cancelText: "Cancel",
-        danger: true,
-      });
-      if (!confirmed) return;
-    }
-    // Confirmation is asynchronous. Do not send an undo to a new session or
-    // host if the user switched while the dialog was open.
-    if (generation !== resetGeneration || opts.getSessionId() !== sid ||
-      (opts.getHostId && opts.getHostId() !== host)) return;
-    setUndoBusy(turnIndex);
-    opts.send({
-      type: "undo_turn_changes",
-      sessionId: sid,
-      turnIndex,
-      path,
-      requestId: crypto.randomUUID(),
-    });
-  }
-
-  function noteUndone(msg: any) {
-    setUndoBusy(null);
-    const results: UndoFileResult[] = Array.isArray(msg?.results) ? msg.results : [];
-    const failed = results.filter((r) => !r.ok);
-    if (msg?.error) {
-      opts.toast(msg.error, "err");
-      return;
-    }
-    if (msg?.complete === false || failed.length > 0) {
-      opts.toast(
-        msg?.warning || `Could not apply the complete undo (${failed.length} file(s) left unchanged).`,
-        "err",
-      );
-    } else if (results.length > 0) {
-      opts.toast(`Turn changes undone (${results.length} file(s)).`, "ok");
-    }
-    if (results.length > 0) {
-      const okPaths = new Set(results.filter((r) => r.ok).flatMap((r) => [r.path, r.rel].filter(Boolean) as string[]));
-      if (okPaths.size > 0 && typeof msg?.turnIndex === "number") {
-        setBalloons((prev) =>
-          prev.map((b) =>
-            b.turnIndex !== msg.turnIndex || b.live
-              ? b
-              : {
-                  ...b,
-                  files: b.files.map((f) => (okPaths.has(f.path) || (f.rel && okPaths.has(f.rel)) ? { ...f, undone: true } : f)),
-                },
-          ),
-        );
-      }
-    }
-    requestBalloons();
-  }
-
   function toggleExpanded(key: string) {
     setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
   }
@@ -255,7 +196,6 @@ export function createTurnChanges(opts: {
 
   return {
     balloons,
-    undoBusy,
     reset,
     dropAbove,
     applySnapshot,
@@ -263,8 +203,6 @@ export function createTurnChanges(opts: {
     noteHistoryBalloons,
     requestBalloons,
     noteTurnChanges,
-    noteUndone,
-    undoTurn,
     toggleExpanded,
     isExpanded,
   };

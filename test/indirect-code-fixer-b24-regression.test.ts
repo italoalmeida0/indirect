@@ -117,24 +117,27 @@ describe("Fixer B2-4 Regression Tests", () => {
     });
   });
 
-  describe("BUG-R3-T2-04: TurnChangesBalloon Undo button disabled after complete undo", () => {
-    test("Undo button is disabled and displays Undone when undoneCount() === files().length", () => {
+  describe("TurnChangesBalloon is strictly read-only with pro diffstat and status badges", () => {
+    test("TurnChangesBalloon renders zero Undo buttons, badges, or callbacks and includes 5-block diffstat and Expand/Collapse all", () => {
       const src = readFileSync("web/src/indirect-code/components/TurnChangesBalloon.tsx", "utf-8");
-      expect(src).toContain("undoneCount() === files().length ? \"Undone\" : \"Undo\"");
-      expect(src).toContain("disabled={props.undoBusy || undoneCount() === files().length}");
+      expect(src).not.toContain("onUndo");
+      expect(src).not.toContain("undoBusy");
+      expect(src).not.toContain("undoneCount");
+      expect(src).not.toContain("lucide:undo-2");
+      expect(src).toContain("diffStatBlocks");
+      expect(src).toContain("Collapse all");
+      expect(src).toContain("Expand all");
+      expect(src).toContain('label: "A"');
+      expect(src).toContain('label: "M"');
+      expect(src).toContain('label: "D"');
+      expect(src).toContain('label: "BIN"');
     });
-  });
 
-  describe("BUG-R3-T2-05: TurnChangesBalloon per-file undo buttons", () => {
-    test("FileChangesRow renders per-file Undo button invoking onUndo(f.path)", () => {
-      const src = readFileSync("web/src/indirect-code/components/TurnChangesBalloon.tsx", "utf-8");
-      expect(src).toContain("props.onUndo!(props.f.path)");
-      expect(src).toContain("onUndo={(p) => props.onUndo(p)}");
-    });
-
-    test("TranscriptView passes path to tc.undoTurn", () => {
+    test("TranscriptView renders TurnChangesBalloon without undo props", () => {
       const src = readFileSync("web/src/indirect-code/components/TranscriptView.tsx", "utf-8");
-      expect(src).toContain("onUndo={(path?: string) => tc.undoTurn(b.turnIndex, path)}");
+      expect(src).not.toContain("undoTurn");
+      expect(src).not.toContain("undoBusy");
+      expect(src).not.toContain("onUndo");
     });
   });
 

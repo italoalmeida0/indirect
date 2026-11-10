@@ -1,9 +1,6 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
@@ -152,124 +149,19 @@ func broadcastLiveChanges(emit func(any), hostID, sessionID string, tfc *turnFil
 	})
 }
 
-// undoTurnChanges applies reverse patches for one balloon (or a single file
-// of it). Returns per-file results; partial failures are reported, never
-// silent. The balloon itself is never deleted.
-type undoFileResult struct {
-	Path    string `json:"path"`
-	Rel     string `json:"rel"`
-	OK      bool   `json:"ok"`
-	Message string `json:"message,omitempty"`
-}
-
-// undoTurnChanges is re-wired in V2.3 (WS command path).
-
-func undoOneFile(cwd string, f *filetrack.ChangedFile) undoFileResult {
-	res := undoFileResult{Path: f.Path, Rel: f.Rel, OK: true}
-	switch f.Status {
-	case "new":
-		if f.Before != "" {
-			res.OK = false
-			res.Message = "file has previous content; not removed"
-			return res
-		}
-		// New file: remove it only if the current content still matches what
-		// the turn left behind (never delete user changes made afterwards).
-		data, err := os.ReadFile(f.Path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				res.Message = "already gone"
-				return res
-			}
-			res.OK = false
-			res.Message = fmt.Sprintf("read failed: %s", err)
-			return res
-		}
-		if string(data) != f.After {
-			res.OK = false
-			res.Message = "file changed after the turn; not removed"
-			return res
-		}
-		if err := os.Remove(f.Path); err != nil {
-			res.OK = false
-			res.Message = fmt.Sprintf("remove failed: %s", err)
-			return res
-		}
-		res.Message = "removed"
-		return res
-	case "deleted":
-		// Restore the snapshot content (parent dirs may be gone too).
-		if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
-			res.OK = false
-			res.Message = fmt.Sprintf("mkdir failed: %s", err)
-			return res
-		}
-		if err := os.WriteFile(f.Path, []byte(f.Before), 0o644); err != nil {
-			res.OK = false
-			res.Message = fmt.Sprintf("write failed: %s", err)
-			return res
-		}
-		res.Message = "restored"
-		return res
-	case "modified":
-		if f.ReversePatch == "" {
-			res.OK = false
-			res.Message = "no reverse patch stored"
-			return res
-		}
-		data, err := os.ReadFile(f.Path)
-		if err != nil {
-			res.OK = false
-			res.Message = fmt.Sprintf("read failed: %s", err)
-			return res
-		}
-		restored, applied, err := filetrack.ApplyReversePatch(f.ReversePatch, string(data))
-		if err != nil {
-			res.OK = false
-			res.Message = fmt.Sprintf("patch failed: %s", err)
-			return res
-		}
-		failed := 0
-		for _, ok := range applied {
-			if !ok {
-				failed++
-			}
-		}
-		if failed > 0 {
-			res.OK = false
-			res.Message = fmt.Sprintf("could not apply the complete undo (%d of %d hunks applied); file left unchanged", len(applied)-failed, len(applied))
-			return res
-		}
-		if err := os.WriteFile(f.Path, []byte(restored), 0o644); err != nil {
-			res.OK = false
-			res.Message = fmt.Sprintf("write failed: %s", err)
-			return res
-		}
-		res.Message = "restored"
-		return res
-	case "binary", "too_large":
-		if f.Before == "" {
-			res.OK = false
-			res.Message = "file without snapshot cannot be restored"
-			return res
-		}
-		if err := os.MkdirAll(filepath.Dir(f.Path), 0o755); err != nil {
-			res.OK = false
-			res.Message = fmt.Sprintf("mkdir failed: %s", err)
-			return res
-		}
-		if err := os.WriteFile(f.Path, []byte(f.Before), 0o644); err != nil {
-			res.OK = false
-			res.Message = fmt.Sprintf("write failed: %s", err)
-			return res
-		}
-		res.Message = "restored"
-		return res
-	default:
-		res.OK = false
-		res.Message = fmt.Sprintf("status %q cannot be undone", f.Status)
-		return res
+// dropBalloonsAbove keeps balloons anchored at/below keep (message index).
+func dropBalloonsAbove(in []filetrack.TurnChanges, keep int) []filetrack.TurnChanges {
+	if len(in) == 0 {
+		return in
 	}
+	out := make([]filetrack.TurnChanges, 0, len(in))
+	for _, b := range in {
+		if b.MessageIndex > keep {
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 // Disk uses historical snake_case keys; all foreground surfaces use camelCase.

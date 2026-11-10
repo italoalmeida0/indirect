@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show, onCleanup } from "solid-js";
 import { useDisclosureActive } from "./Disclosure";
-import { escapeHtml, highlightCode } from "../utils/lang";
+import { escapeHtml, highlightCode, splitHighlightedLines } from "../utils/lang";
 import { followTail, recordToolScroll, restoreToolScroll } from "../utils/scrollMemory";
 
 export { ShellCmd } from "./code/ShellCmd";
@@ -98,12 +98,12 @@ export function CodeBlock(props: {
     void (props.plain ? Promise.resolve(escapeHtml(cleanCode)) : highlightCode(cleanCode, lang))
       .then((h) => {
         if (cancelled) return;
-        const htmlLines = h.split("\n");
+        const htmlLines = splitHighlightedLines(h);
         setRows(
           parsed.map((p, i) => ({
             lineNum: p.lineNum,
             code: p.code,
-            html: htmlLines[i] || escapeHtml(p.code),
+            html: htmlLines[i] ?? escapeHtml(p.code),
           })),
         );
         requestAnimationFrame(() => restoreToolScroll(props.scrollKey, containerRef));

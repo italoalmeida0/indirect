@@ -1,6 +1,7 @@
 import type { ChatMessage, ContentBlock, RenderBlock, ToolUnit, TurnBalloon, TurnEntry } from "./types";
 import { formatDurationSecs } from "./utils/format";
 import { displayToolArgs, withoutContinueNudges, withoutTodoActivity } from "./live";
+import { extractTodoItems, resolveWidgetId } from "./utils/tools";
 
 /** bg_cancel/bg_check kind: exec_script vs terminal. The daemon includes the
  * kind in the result header ("Background Task (exec_script) — …"); fall back
@@ -447,10 +448,75 @@ function extractQuestionItems(args: any): any[] {
 }
 
 
+function editsLineStat(edits: unknown): { add: number; del: number } {
+  if (!Array.isArray(edits)) return { add: 0, del: 0 };
+  let add = 0;
+  let del = 0;
+  for (const item of edits) {
+    if (!item || typeof item !== "object") continue;
+    const oldRaw = (item as any).old_text ?? (item as any).old;
+    const newRaw = (item as any).new_text ?? (item as any).new;
+    if (typeof oldRaw !== "string" && typeof newRaw !== "string") continue;
+    const oldLines = typeof oldRaw === "string" && oldRaw.length > 0 ? oldRaw.split("\n") : [];
+    const newLines = typeof newRaw === "string" && newRaw.length > 0 ? newRaw.split("\n") : [];
+    let prefix = 0;
+    while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) {
+      prefix++;
+    }
+    let suffix = 0;
+    while (
+      suffix < oldLines.length - prefix &&
+      suffix < newLines.length - prefix &&
+      oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+    ) {
+      suffix++;
+    }
+    del += oldLines.length - prefix - suffix;
+    add += newLines.length - prefix - suffix;
+  }
+  return { add, del };
+}
+
+function shortBgJobId(raw: string): string {
+  const id = raw.trim();
+  if (id.length <= 20) return id;
+  return `${id.slice(0, 8)}…${id.slice(-6)}`;
+}
+
+function countBgListJobs(res: string, details: any): number | null {
+  if (Array.isArray(details?.jobs)) return details.jobs.length;
+  if (Array.isArray(details?.tasks)) return details.tasks.length;
+  if (typeof details?.total === "number") return details.total;
+  const trimmed = (res || "").trim();
+  if (!trimmed) return null;
+  if (/^(?:\(none\b|no (?:active |running )?background\b)/i.test(trimmed)) return 0;
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return parsed.length;
+      if (parsed && typeof parsed === "object") {
+        if (Array.isArray(parsed.jobs)) return parsed.jobs.length;
+        if (Array.isArray(parsed.tasks)) return parsed.tasks.length;
+      }
+    } catch {
+      // ignore non-JSON output
+    }
+  }
+  const headerCount = /\((\d+)\s+(?:job|jobs|task|tasks|entr(?:y|ies))\)/i.exec(trimmed);
+  if (headerCount) return Number(headerCount[1]);
+  const lines = trimmed
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !/^(?:background (?:jobs|tasks)|jobs|tasks)\b[:\s]*$/i.test(l));
+  if (lines.length === 1 && /\b(?:none|0 jobs|0 tasks)\b/i.test(lines[0])) return 0;
+  return lines.length > 0 ? lines.length : null;
+}
+
 export function toolSummary(u: ToolUnit): ToolSummary {
   const name = u.call?.toolName || "tool";
   const args = displayToolArgs(u.call?.toolArgs);
   const res = u.result?.toolResult || "";
+  const details = u.result?.toolDetails as any;
   if (name.startsWith("mcp__")) {
     return { icon: "lucide:plug", verb: "MCP", target: name.slice(5).replace(/_[a-f0-9]{12}$/, "").replaceAll("__", " / "), stat: u.result ? (u.result.isError ? "Failed" : "Complete") : undefined };
   }
@@ -495,7 +561,7 @@ export function toolSummary(u: ToolUnit): ToolSummary {
     }
     case "bash": {
       const cmd = String(args.command || "").replace(/\s+/g, " ").trim();
-      const bg = (u.result?.toolDetails as any)?.background_job_id;
+      const bg = details?.background_job_id;
       // Detached runs (placeholder or folded result) read as background
       // work in the turn and the card, never as a plain synchronous run.
       const verb = typeof bg === "string" && bg ? "Background" : "Ran";
@@ -519,12 +585,12 @@ export function toolSummary(u: ToolUnit): ToolSummary {
     }
     case "bg_cancel": {
       // Clean UI: never show the id. "Canceled <kind> Background Task".
-      const env = (u.result?.toolDetails as any)?.env;
+      const env = details?.env;
       const kind = bgCancelKind(args, res, env);
       const isErr = Boolean(u.result && (u.result.isError || env?.error));
       const notCancelled = Boolean(
         u.result &&
-        ((u.result.toolDetails as any)?.cancelled === false ||
+        (details?.cancelled === false ||
           (env && (env.cancelled === false || env.cancelled === "false")))
       );
       return {
@@ -535,13 +601,35 @@ export function toolSummary(u: ToolUnit): ToolSummary {
     }
     case "bg_check": {
       // Reads like a file: "Background Task#Lfrom-to", kind icon.
-      const env = (u.result?.toolDetails as any)?.env;
+      const env = details?.env;
       const kind = bgCheckKind(args, res, env);
       const range = bgCheckRange(res, env);
       return {
         icon: kind === "exec_script" ? "mdi:language-javascript" : kind === "python" ? "mdi:language-python" : "lucide:terminal",
         verb: "Read",
         target: range ? `Background Task#${range}` : "Background Task",
+      };
+    }
+    case "bg_tail": {
+      const env = details?.env;
+      const kind = bgCheckKind(args, res, env);
+      const range = bgCheckRange(res, env);
+      const rawId = String(args.job_id || args.id || details?.background_job_id || "").trim();
+      const label = rawId ? shortBgJobId(rawId) : "Background Task";
+      return {
+        icon: kind === "exec_script" ? "mdi:language-javascript" : kind === "python" ? "mdi:language-python" : "lucide:terminal",
+        verb: u.result ? "Tailed" : "Tailing",
+        target: range ? `${label}#${range}` : label,
+        stat: env?.status ? String(env.status) : undefined,
+      };
+    }
+    case "bg_list": {
+      const jobCount = u.result ? countBgListJobs(res, details) : null;
+      return {
+        icon: "lucide:layers",
+        verb: u.result ? "Checked" : "Checking",
+        target: "Background jobs",
+        stat: jobCount !== null ? `${jobCount} job${jobCount === 1 ? "" : "s"}` : undefined,
       };
     }
     case "search": {
@@ -567,11 +655,11 @@ export function toolSummary(u: ToolUnit): ToolSummary {
         ...edits.map((e: any) => baseNameOf(e?.file || e?.path) || e?.file || e?.path),
       ].filter(Boolean))];
       const shown = files.slice(0, 3).join(", ") + (files.length > 3 ? ` +${files.length - 3}` : "");
-      const isPreview = u.result?.toolDetails?.dry_run === true;
+      const isPreview = details?.dry_run === true;
       const verb = isPreview ? (name === "patch" ? "Preview patch" : "Preview edit") : (name === "patch" ? "Patch" : "Edited");
       // Prefer the frontend-only display rendering (details.display); the
       // AI-visible text is a one-line confirmation with no diff.
-      const st = diffStat(u.result?.toolDetails?.display ?? res);
+      const st = diffStat(details?.display ?? res);
       return {
         icon: "lucide:file-diff",
         verb,
@@ -632,7 +720,7 @@ export function toolSummary(u: ToolUnit): ToolSummary {
           ? [baseNameOf(scriptStr) || scriptStr, ...(Array.isArray(args.args) ? args.args.map(String) : [])].join(" ")
           : "";
       const one = (first || "snippet").replace(/\s+/g, " ").trim();
-      const bg = (u.result?.toolDetails as any)?.background_job_id;
+      const bg = details?.background_job_id;
       const verb = typeof bg === "string" && bg ? "Background" : "Ran";
       const legacyLang = typeof args.legacy_lang === "string" ? args.legacy_lang.trim().toLowerCase() : "";
       const isLegacyPython = name === "python" || legacyLang === "python" || legacyLang === "python3" || (!codeStr.trim() && Boolean(scriptStr.trim()));
@@ -652,44 +740,169 @@ export function toolSummary(u: ToolUnit): ToolSummary {
         stat: n > 0 ? `${n} lines` : undefined,
       };
     }
-    case "widget_set": {
-      if (args.delete) {
-        return { icon: "lucide:trash-2", verb: "Deleted", target: String(args.id || "widget") };
-      }
-      const content = String(args.content || "");
-      const n = content ? content.split("\n").length : 0;
-      const lintOk = (u.result?.toolDetails as any)?.lint_ok;
+    case "use_skill": {
+      const skillName = String(args.name || args.skill || details?.skill || "").trim();
       return {
-        icon: "lucide:file-text",
-        verb: "Created",
-        target: String(args.id || "widget"),
-        stat: n > 0 ? `${n} lines` : lintOk === false ? "lint failed" : undefined,
+        icon: "lucide:sparkles",
+        verb: u.result ? "Loaded skill" : "Loading skill",
+        target: skillName || "skill",
+        stat: args.once ? "this turn" : undefined,
+      };
+    }
+    case "todo":
+    case "todowrite": {
+      const items = extractTodoItems(args, res, details);
+      const total = items.length > 0 ? items.length : Number(details?.total || 0);
+      const done = items.length > 0
+        ? items.filter((it) => it.status === "completed").length
+        : Number(details?.done || 0);
+      const activeItem = items.find((it) => it.status === "in_progress");
+      const rawTarget = activeItem?.text
+        ? activeItem.text
+        : total > 0 && done === total
+          ? "All tasks completed"
+          : "Task plan";
+      return {
+        icon: "lucide:list-todo",
+        verb: u.result ? "Updated plan" : "Updating plan",
+        target: rawTarget.length > 80 ? rawTarget.slice(0, 80) + "…" : rawTarget,
+        stat: total > 0 ? `${done}/${total} done` : undefined,
+      };
+    }
+    case "todoread": {
+      const items = extractTodoItems(args, res, details);
+      const total = items.length > 0 ? items.length : Number(details?.total || 0);
+      const done = items.length > 0
+        ? items.filter((it) => it.status === "completed").length
+        : Number(details?.done || 0);
+      const activeItem = items.find((it) => it.status === "in_progress");
+      const rawTarget = activeItem?.text ? activeItem.text : "Task plan";
+      return {
+        icon: "lucide:list-checks",
+        verb: u.result ? "Checked plan" : "Checking plan",
+        target: rawTarget.length > 80 ? rawTarget.slice(0, 80) + "…" : rawTarget,
+        stat: total > 0 ? `${done}/${total} done` : undefined,
+      };
+    }
+    case "widget_set": {
+      const id = resolveWidgetId(args, details);
+      const srcFile = args.src_file ? (baseNameOf(String(args.src_file)) || String(args.src_file)) : "";
+      if (args.delete || details?.deleted) {
+        return {
+          icon: "lucide:trash-2",
+          verb: u.result ? "Deleted widget" : "Deleting widget",
+          target: id || "widget",
+        };
+      }
+      const target = id && srcFile ? `${id} ← ${srcFile}` : (id || srcFile || "widget");
+      const content = String(args.content || "");
+      const totalLines = Number(details?.total_lines || 0) || (content ? content.split("\n").length : 0);
+      const lintFailed = details?.lint_ok === false || details?.lint?.ok === false || /LINT FAILED:/i.test(res);
+      const st = details?.diff ? diffStat(String(details.diff)) : { add: 0, del: 0 };
+      return {
+        icon: lintFailed ? "lucide:shield-alert" : "lucide:layout-template",
+        verb: !u.result ? "Saving widget" : srcFile ? "Imported widget" : "Saved widget",
+        target,
+        ...(lintFailed
+          ? { stat: "lint failed" }
+          : st.add > 0 || st.del > 0
+            ? { statAdd: st.add, statDel: st.del }
+            : totalLines > 0
+              ? { stat: `${totalLines} line${totalLines === 1 ? "" : "s"}` }
+              : {}),
       };
     }
     case "widget_read": {
+      const id = resolveWidgetId(args, details) || "widget";
+      const off = Math.max(1, Number(args.offset || details?.start_line || 1));
+      const lines = res ? res.split("\n").length : Number(details?.total_lines || 0);
+      const lim = Number(args.limit || 0);
+      const end = lim > 0 ? off + lim - 1 : (lines > 0 ? off + lines - 1 : 0);
+      const hasRange = end > 0 || Boolean(args.offset) || Boolean(args.limit);
       return {
-        icon: "lucide:eye",
-        verb: "Read",
-        target: String(args.id || "widget"),
+        icon: "lucide:code-2",
+        verb: "Read widget",
+        target: hasRange ? `${id}#L${off}-${Math.max(end, off)}` : id,
       };
     }
     case "widget_edit": {
+      const id = resolveWidgetId(args, details) || "widget";
+      const edits = Array.isArray(args.edits) ? args.edits : [];
+      const fromResult = diffStat(String(details?.display ?? details?.diff ?? res));
+      const st = fromResult.add > 0 || fromResult.del > 0 ? fromResult : editsLineStat(edits);
       return {
-        icon: "lucide:file-text",
-        verb: "Edited",
-        target: String(args.id || "widget"),
-        stat: `${(args.edits || []).length} replacement${(args.edits || []).length === 1 ? "" : "s"}`,
+        icon: "lucide:file-diff",
+        verb: u.result ? "Edited widget" : "Editing widget",
+        target: id,
+        ...(st.add > 0 || st.del > 0
+          ? { statAdd: st.add, statDel: st.del }
+          : edits.length > 0
+            ? { stat: `${edits.length} edit${edits.length === 1 ? "" : "s"}` }
+            : {}),
       };
     }
     case "widget_list": {
-      return { icon: "lucide:list-tree", verb: "Widgets", target: "" };
+      const total = typeof details?.total === "number"
+        ? details.total
+        : (() => {
+            const m = /^widgets \((\d+) entr/m.exec(res);
+            return m ? Number(m[1]) : null;
+          })();
+      return {
+        icon: "lucide:layout-grid",
+        verb: "Listed",
+        target: "widgets",
+        stat: total !== null ? `${total} widget${total === 1 ? "" : "s"}` : undefined,
+      };
     }
     case "widget_lint": {
-      const lintOk = (u.result?.toolDetails as any)?.lint_ok;
+      const id = resolveWidgetId(args, details) || "widget";
+      const lint = details?.lint;
+      const failed = details?.lint_ok === false || lint?.ok === false || /LINT FAILED:/i.test(res);
+      const skipped = Boolean(lint?.skipped || /lint skipped/i.test(res));
+      const errCount = Array.isArray(lint?.errors)
+        ? lint.errors.length
+        : (() => {
+            const m = /LINT FAILED:.*\((\d+)\s+error/i.exec(res);
+            return m ? Number(m[1]) : 0;
+          })();
+      const dur = typeof lint?.durationMs === "number"
+        ? lint.durationMs
+        : (() => {
+            const m = /LINT OK:.*\((\d+)ms\)/i.exec(res);
+            return m ? Number(m[1]) : null;
+          })();
       return {
-        icon: "lucide:shield-check",
-        verb: lintOk === false ? "Lint failed" : "Lint",
-        target: String(args.id || "widget"),
+        icon: failed ? "lucide:shield-alert" : "lucide:shield-check",
+        verb: !u.result ? "Linting widget" : failed ? "Lint failed" : "Linted widget",
+        target: id,
+        stat: !u.result
+          ? undefined
+          : skipped
+            ? "skipped"
+            : failed
+              ? (errCount > 0 ? `${errCount} error${errCount === 1 ? "" : "s"}` : "failed")
+              : dur !== null
+                ? `${dur}ms`
+                : "passed",
+      };
+    }
+    case "summary": {
+      const snippet = typeof args.for_user === "string" ? args.for_user.replace(/\s+/g, " ").trim() : "";
+      return {
+        icon: "lucide:milestone",
+        verb: "Summary",
+        target: snippet ? (snippet.length > 80 ? snippet.slice(0, 80) + "…" : snippet) : "Progress checkpoint",
+      };
+    }
+    case "finish_entire_request": {
+      const snippet = typeof args.final_message_to_user === "string"
+        ? args.final_message_to_user.replace(/\s+/g, " ").trim()
+        : "";
+      return {
+        icon: "lucide:check-circle-2",
+        verb: "Completed",
+        target: snippet ? (snippet.length > 80 ? snippet.slice(0, 80) + "…" : snippet) : "Final response",
       };
     }
     default: {
@@ -697,19 +910,10 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       // a result and let the body carry the text. The target repeats the
       // daemon's command label when it knows one; never echo body lines.
       if (!u.call?.toolName) {
-        const env = (u.result?.toolDetails as any)?.env || {};
+        const env = details?.env || {};
         return { icon: "lucide:file-text", verb: "Result", target: String(env.command || "") };
       }
-      // Session meta tools: friendly labels instead of the raw tool name.
-      switch (name) {
-        case "summary":
-        case "finish_entire_request":
-          return { icon: "lucide:check-circle-2", verb: "Summary", target: "" };
-        case "todo":
-          return { icon: "lucide:list-checks", verb: "Tasks", target: "" };
-        default:
-          return { icon: "lucide:wrench", verb: name, target: "" };
-      }
+      return { icon: "lucide:wrench", verb: name, target: "" };
     }
   }
 }

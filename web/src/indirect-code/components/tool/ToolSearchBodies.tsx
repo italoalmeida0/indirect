@@ -4,9 +4,119 @@ import { StreamingMarkdown } from "../StreamingMarkdown";
 import { Icon as Iconify } from "../../../components/icon";
 import { CodeBlock } from "../CodeBlock";
 import { FileIcon } from "../../presentation";
-import { recordToolScroll, restoreToolScroll } from "../../utils/scrollMemory";
 import { parseGlobList, parseInspectTree } from "../../utils/toolTrees";
+import { isDaemonBuiltinTool } from "../../utils/tools";
 import type { ToolPartProps } from "./toolUnitModel";
+
+interface ParsedBgJobItem {
+  id: string;
+  kind: "bash" | "exec_script" | "python";
+  status: string;
+  label: string;
+  exitCode?: number;
+}
+
+function normalizeBgKind(raw: unknown): "bash" | "exec_script" | "python" {
+  const k = String(raw || "").trim().toLowerCase();
+  if (k === "exec_script" || k === "javascript" || k === "js") return "exec_script";
+  if (k === "python" || k === "py") return "python";
+  return "bash";
+}
+
+function parseBgListJobs(rawText: string, details: any): { jobs: ParsedBgJobItem[] } | null {
+  const fromObjArray = (arr: unknown[]): { jobs: ParsedBgJobItem[] } => ({
+    jobs: arr
+      .filter((it): it is Record<string, any> => Boolean(it && typeof it === "object"))
+      .map((it, idx) => ({
+        id: String(it.id ?? it.job_id ?? idx + 1),
+        kind: normalizeBgKind(it.kind),
+        status: String(it.status || "running").toLowerCase(),
+        label: String(it.label ?? it.command ?? it.code ?? it.id ?? it.job_id ?? "Background task").trim(),
+        ...(typeof it.exit_code === "number"
+          ? { exitCode: it.exit_code }
+          : typeof it.exitCode === "number"
+            ? { exitCode: it.exitCode }
+            : {}),
+      })),
+  });
+
+  if (Array.isArray(details?.jobs)) return fromObjArray(details.jobs);
+  if (Array.isArray(details?.tasks)) return fromObjArray(details.tasks);
+
+  const trimmed = (rawText || "").trim();
+  if (!trimmed) return null;
+  if (/^(?:\(none\b|no (?:active |running )?background\b)/i.test(trimmed)) {
+    return { jobs: [] };
+  }
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return fromObjArray(parsed);
+      if (parsed && typeof parsed === "object") {
+        if (Array.isArray(parsed.jobs)) return fromObjArray(parsed.jobs);
+        if (Array.isArray(parsed.tasks)) return fromObjArray(parsed.tasks);
+      }
+    } catch {
+      // fall through to line parser
+    }
+  }
+
+  const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const jobs: ParsedBgJobItem[] = [];
+  let sawHeader = false;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    if (i === 0 && /^(?:background (?:jobs|tasks)|jobs|tasks)\b/i.test(ln)) {
+      sawHeader = true;
+      continue;
+    }
+    if (/^\(none\b/i.test(ln)) {
+      sawHeader = true;
+      continue;
+    }
+    const bracketMatch = /^(?:[-*•]\s*)?\[([a-z_-]+)\]\s*(\S+)(?:\s*\((bash|exec_script|python)\))?(?:\s*[—:-]\s*(.+))?$/i.exec(ln);
+    if (bracketMatch) {
+      jobs.push({
+        status: bracketMatch[1].toLowerCase(),
+        id: bracketMatch[2],
+        kind: normalizeBgKind(bracketMatch[3]),
+        label: (bracketMatch[4] || bracketMatch[2]).trim(),
+      });
+      continue;
+    }
+    const parenMatch = /^(?:[-*•]\s*)?(\S+)\s*\(([^)]+)\)(?:\s*[:—-]\s*(.+))?$/.exec(ln);
+    if (parenMatch) {
+      const meta = parenMatch[2].split(",").map((s) => s.trim());
+      const kindPart = meta.find((m) => /^(?:bash|exec_script|python)$/i.test(m));
+      const statusPart = meta.find((m) => /^(?:running|completed|done|failed|exited|cancelled|canceled|stopped)$/i.test(m));
+      const exitMatch = meta.map((m) => /^exit\s+(-?\d+)$/i.exec(m)).find(Boolean);
+      if (statusPart || kindPart) {
+        jobs.push({
+          id: parenMatch[1],
+          kind: normalizeBgKind(kindPart),
+          status: (statusPart || "running").toLowerCase(),
+          label: (parenMatch[3] || parenMatch[1]).trim(),
+          ...(exitMatch ? { exitCode: Number(exitMatch[1]) } : {}),
+        });
+        continue;
+      }
+    }
+    return null;
+  }
+  if (!sawHeader && jobs.length === 0) return null;
+  return { jobs };
+}
+
+function looksLikeJsonPayload(raw: string): boolean {
+  const t = (raw || "").trim();
+  if (!(t.startsWith("{") && t.endsWith("}")) && !(t.startsWith("[") && t.endsWith("]"))) return false;
+  try {
+    JSON.parse(t);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function flagBadge(flag: string) {
   if (!flag || flag === "•") return null;
@@ -25,12 +135,16 @@ function flagBadge(flag: string) {
 
 export function ToolSearchBodies(props: ToolPartProps) {
   const inspectTree = createMemo(() => {
-    if (props.m.name() !== "inspect" && props.m.name() !== "widget_list") return null;
+    if (props.m.name() !== "inspect") return null;
     return parseInspectTree(props.m.terminal().output || props.m.output() || "");
   });
   const globList = createMemo(() => {
     if (props.m.name() !== "glob") return null;
     return parseGlobList(props.m.output() || "");
+  });
+  const bgListParsed = createMemo(() => {
+    if (props.m.name() !== "bg_list") return null;
+    return parseBgListJobs(props.m.output() || "", props.u.result?.toolDetails);
   });
   return (
 <>
@@ -50,7 +164,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
             <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.terminal().output || props.m.output() || props.m.prog() || ""} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
           </Show>
         </Show>
-        <Show when={props.m.name() === "inspect" || props.m.name() === "widget_list"}>
+        <Show when={props.m.name() === "inspect"}>
           <Show
             when={props.m.output() || props.m.prog()}
             fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Listing…" : null}</div>}
@@ -64,7 +178,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
               {(t) => (
                 <>
                   <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted">
-                    {t().scope && t().scope !== "./" ? t().scope : props.m.name() === "widget_list" ? "widgets" : "workspace"} · {t().count} {t().count === 1 ? "entry" : "entries"}
+                    {t().scope && t().scope !== "./" ? t().scope : "workspace"} · {t().count} {t().count === 1 ? "entry" : "entries"}
                     {t().capped ? ` (capped at ${t().capped})` : ""}
                   </div>
                   <ul class="px-1.5 py-1">
@@ -91,7 +205,9 @@ export function ToolSearchBodies(props: ToolPartProps) {
                             <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
                               {e.size}
                               {e.lines !== undefined ? ` · ${e.lines} lines` : ""}
-                              {e.mtime ? ` · ${e.mtime}` : ""}
+                              <Show when={e.mtime}>
+                                <span class="hidden sm:inline">{" · " + e.mtime}</span>
+                              </Show>
                             </span>
                           </Show>
                         </li>
@@ -207,11 +323,27 @@ export function ToolSearchBodies(props: ToolPartProps) {
             </Show>
           </Show>
         </Show>
-        <Show when={props.m.name() === "bg_check"}>
+        <Show when={props.m.name() === "bg_check" || props.m.name() === "bg_tail"}>
           {/* The task's command/code above the log (envelope command=): the
               label is the raw command for bash and the code for
               exec_script — same two-part layout as the bash body. */}
-          <Show when={String(((props.u.result?.toolDetails as any)?.env?.command || "") as string)}>
+          <Show
+            when={String(((props.u.result?.toolDetails as any)?.env?.command || "") as string)}
+            fallback={
+              <Show when={props.m.args().job_id || (props.u.result?.toolDetails as any)?.env?.status}>
+                <div class="flex items-center justify-between gap-2 border-b border-border/55 bg-surface/45 px-3 py-1.5 text-[11px]">
+                  <span class="font-mono text-fg-secondary truncate">
+                    {String(props.m.args().job_id || "background task")}
+                  </span>
+                  <Show when={(props.u.result?.toolDetails as any)?.env?.status}>
+                    <span class="shrink-0 rounded border border-border/70 bg-surface-muted px-1.5 py-px font-mono text-[10px] text-fg-secondary">
+                      {String((props.u.result?.toolDetails as any)?.env?.status)}
+                    </span>
+                  </Show>
+                </div>
+              </Show>
+            }
+          >
             <div class="border-b border-border/60 bg-surface/50">
               <CodeBlock
                 embedded
@@ -227,23 +359,140 @@ export function ToolSearchBodies(props: ToolPartProps) {
           </Show>
           <Show
             when={props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Reading background task…" : null}</div>}
+            fallback={
+              <div class="px-3 py-2 text-[11px] text-fg-muted">
+                {String((props.u.result?.toolDetails as any)?.env?.info || "") ||
+                  (props.active ? "Reading background task…" : "No log output yet.")}
+              </div>
+            }
           >
             {/* Log output: numbered, plain, unwrapped. Metadata sits in the footer. */}
             <CodeBlock embedded numbered follow={() => props.m.open() && props.running} text={props.m.output() || props.m.prog() || ""} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
           </Show>
         </Show>
+        <Show when={props.m.name() === "bg_list"}>
+          <Show
+            when={bgListParsed()}
+            fallback={
+              <Show
+                when={props.m.output() || props.m.prog()}
+                fallback={
+                  <div class="px-3 py-2 text-[11px] text-fg-muted">
+                    {props.active ? "Checking background jobs…" : "No background jobs in this session."}
+                  </div>
+                }
+              >
+                <CodeBlock
+                  embedded
+                  follow={() => props.m.open() && props.running}
+                  text={props.m.output() || props.m.prog() || ""}
+                  language={undefined}
+                  plain
+                  wrap={false}
+                  scrollKey={props.m.key()}
+                />
+              </Show>
+            }
+          >
+            {(list) => (
+              <>
+                <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
+                  background jobs · {list().jobs.length} {list().jobs.length === 1 ? "job" : "jobs"}
+                </div>
+                <Show
+                  when={list().jobs.length > 0}
+                  fallback={<div class="px-3 py-2 text-[11.5px] text-fg-muted">No background jobs in this session.</div>}
+                >
+                  <ul class="px-1.5 py-1">
+                    <For each={list().jobs}>
+                      {(job) => {
+                        const isRunning = () => job.status === "running";
+                        const isFailed = () =>
+                          job.status === "failed" ||
+                          (typeof job.exitCode === "number" && job.exitCode !== 0 && !isRunning());
+                        const isDone = () =>
+                          job.status === "completed" || job.status === "done" || (job.status === "exited" && !isFailed());
+                        return (
+                          <li class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 hover:bg-surface-muted/65 text-[12px] transition-colors">
+                            <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                              <Iconify
+                                icon={
+                                  job.kind === "exec_script"
+                                    ? "mdi:language-javascript"
+                                    : job.kind === "python"
+                                      ? "mdi:language-python"
+                                      : "lucide:terminal"
+                                }
+                                size={13}
+                                class="shrink-0 text-fg-muted"
+                              />
+                              <span class="truncate font-mono text-fg">{job.label}</span>
+                            </div>
+                            <div class="flex items-center gap-1.5 shrink-0">
+                              <Show when={typeof job.exitCode === "number" && !isRunning()}>
+                                <span class="font-mono text-[10px] text-fg-muted tabular-nums">exit {job.exitCode}</span>
+                              </Show>
+                              <span
+                                class={`rounded border px-1.5 py-px font-mono text-[10px] ${
+                                  isRunning()
+                                    ? "border-accent/35 bg-accent-subtle text-accent"
+                                    : isFailed()
+                                      ? "border-danger/35 bg-danger-subtle text-danger"
+                                      : isDone()
+                                        ? "border-success/35 bg-success-subtle text-success"
+                                        : "border-border/70 bg-surface-muted text-fg-secondary"
+                                }`}
+                              >
+                                {job.status}
+                              </span>
+                            </div>
+                          </li>
+                        );
+                      }}
+                    </For>
+                  </ul>
+                </Show>
+              </>
+            )}
+          </Show>
+        </Show>
         <Show when={props.m.name() === "bg_cancel" && !props.m.running()}>
-          <div class="px-3 py-2 text-[11px] text-fg-secondary">
-            {props.u.result?.isError || (props.u.result?.toolDetails as any)?.env?.error
-              ? (props.m.output() || String((props.u.result?.toolDetails as any)?.env?.error || "Failed to cancel background task."))
-              : (props.u.result?.toolDetails as any)?.cancelled === false ||
-                (props.u.result?.toolDetails as any)?.env?.cancelled === false ||
-                (props.u.result?.toolDetails as any)?.env?.cancelled === "false"
-                ? (props.m.output() || "Background task already finished.")
-                : "Background task canceled."}
-          </div>
-          {/* Canceled body stays minimal — the header says it all. */}
+          {(() => {
+            const isErr = () => Boolean(props.u.result?.isError || (props.u.result?.toolDetails as any)?.env?.error);
+            const alreadyDone = () =>
+              Boolean(
+                (props.u.result?.toolDetails as any)?.cancelled === false ||
+                  (props.u.result?.toolDetails as any)?.env?.cancelled === false ||
+                  (props.u.result?.toolDetails as any)?.env?.cancelled === "false",
+              );
+            return (
+              <div class="flex items-center justify-between gap-2 px-3 py-2 text-[11.5px]">
+                <div class="flex items-center gap-2 min-w-0">
+                  <Iconify
+                    icon={isErr() ? "lucide:alert-circle" : alreadyDone() ? "lucide:info" : "lucide:square"}
+                    size={13}
+                    class={`shrink-0 ${isErr() ? "text-danger" : "text-fg-muted"}`}
+                  />
+                  <span class={`truncate ${isErr() ? "text-danger" : "text-fg-secondary"}`}>
+                    {isErr()
+                      ? props.m.output() || String((props.u.result?.toolDetails as any)?.env?.error || "Failed to cancel background task.")
+                      : alreadyDone()
+                        ? props.m.output() || "Background task already finished."
+                        : "Background task canceled."}
+                  </span>
+                </div>
+                <span
+                  class={`shrink-0 rounded border px-1.5 py-px font-mono text-[10px] ${
+                    isErr()
+                      ? "border-danger/35 bg-danger-subtle text-danger"
+                      : "border-border/70 bg-surface-muted text-fg-secondary"
+                  }`}
+                >
+                  {isErr() ? "failed" : alreadyDone() ? "finished" : "canceled"}
+                </span>
+              </div>
+            );
+          })()}
         </Show>
         <Show when={props.m.name() === "bash"}>
           <div class="border-b border-border/60 bg-surface/50">
@@ -265,35 +514,40 @@ export function ToolSearchBodies(props: ToolPartProps) {
             />
           </Show>
         </Show>
-        <Show when={props.m.name() === "widget_lint"}>
-          <Show
-            when={props.u.result?.toolDetails?.display || props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Linting widget…" : null}</div>}
-          >
-            {/* Lint is plain text — but a failed lint paints it red. */}
-            <pre
-              class={`px-3 py-2 font-mono text-[11px] whitespace-pre-wrap ${props.u.result && props.u.result.toolDetails?.lint_ok === false ? "text-danger" : "text-fg-secondary"}`}
-            >
-              {String(props.u.result?.toolDetails?.display || props.m.output() || props.m.prog())}
-            </pre>
-          </Show>
+        <Show when={props.m.name() === "summary"}>
+          <div class="px-3 py-2 text-xs leading-relaxed text-fg-secondary rc-markdown">
+            <StreamingMarkdown basic={true}>
+              {String(props.m.args().for_user || props.m.output() || "Progress checkpoint recorded.")}
+            </StreamingMarkdown>
+          </div>
         </Show>
-        <Show when={!(props.m.name() === "bash" || props.m.name() === "bg_await" || props.m.name() === "bg_check" || props.m.name() === "bg_cancel" || props.m.name() === "edit" || props.m.name() === "read" || props.m.name() === "write" || props.m.name() === "exec_script" || props.m.name() === "python" || props.m.name() === "search" || props.m.name() === "inspect" || props.m.name() === "glob" || props.m.name() === "question" || props.m.name() === "patch" || props.m.name() === "search_web" || props.m.name() === "fetch_url" || props.m.name() === "widget_set" || props.m.name() === "widget_read" || props.m.name() === "widget_edit" || props.m.name() === "widget_list" || props.m.name() === "widget_lint")}>
+        <Show when={props.m.name() === "finish_entire_request"}>
+          <div class="px-3 py-2 text-xs leading-relaxed text-fg rc-markdown">
+            <StreamingMarkdown basic={true}>
+              {String(props.m.args().final_message_to_user || props.m.output() || "Final response delivered.")}
+            </StreamingMarkdown>
+          </div>
+        </Show>
+        <Show when={!isDaemonBuiltinTool(props.m.name())}>
           <Show
             when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream()}
-            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.m.name() === "question" ? "Waiting for your answers…" : props.ctx.pendingApproval()?.callId === props.u.call?.toolId ? "Waiting for approval…" : props.active ? "Running…" : null}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.ctx.pendingApproval()?.callId === props.u.call?.toolId ? "Waiting for approval…" : props.active ? "Running…" : null}</div>}
           >
-            <pre
-              ref={(el) => {
-                restoreToolScroll(props.m.key(), el);
-                requestAnimationFrame(() => restoreToolScroll(props.m.key(), el));
-                onCleanup(followTail(el, () => props.m.open() && props.running));
-              }}
-              onScroll={(e) => recordToolScroll(props.m.key(), e.currentTarget)}
-              class="px-3 py-2 font-mono text-[11px] text-fg-secondary whitespace-pre"
-            >
-              {props.m.output() || props.m.prog() || ""}
-            </pre>
+            {(() => {
+              const text = () => props.m.output() || props.m.prog() || "";
+              const isJson = () => looksLikeJsonPayload(text());
+              return (
+                <CodeBlock
+                  embedded
+                  follow={() => props.m.open() && props.running}
+                  text={text()}
+                  language={isJson() ? "json" : undefined}
+                  plain={!isJson()}
+                  wrap={false}
+                  scrollKey={props.m.key()}
+                />
+              );
+            })()}
           </Show>
         </Show>
 </>

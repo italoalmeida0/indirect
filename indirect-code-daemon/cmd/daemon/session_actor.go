@@ -438,8 +438,6 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.emit(map[string]any{"type": "notice", "sessionId": a.id, "message": jailNotice(m.Jail)})
 	case attachUploadMsg:
 		m.Reply <- a.onAttachUpload(m)
-	case undoMsg:
-		m.Reply <- a.onUndo(m)
 	case workerTitleMsg:
 		if m.gen == a.gen && a.rec.Title == m.original && needsAutoTitle(a.rec) {
 			title := m.title

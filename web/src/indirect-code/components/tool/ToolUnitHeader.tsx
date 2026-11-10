@@ -8,14 +8,28 @@ import type { ToolPartProps } from "./toolUnitModel";
 
 export function ToolUnitHeader(props: ToolPartProps) {
   const targetPath = () => {
-    if (props.m.name().startsWith("mcp__")) return "";
+    const n = props.m.name();
+    if (n.startsWith("mcp__")) return "";
     const a = props.m.args();
     if (a.path) return String(a.path);
     if (a.file) return String(a.file);
+    if (n === "widget_set" && a.src_file) return String(a.src_file);
     if (Array.isArray(a.edits) && a.edits.length === 1) {
       return String(a.edits[0]?.path || a.edits[0]?.file || "");
     }
     return "";
+  };
+
+  const isMonoIdentifier = () => {
+    const n = props.m.name();
+    return (
+      n === "use_skill" ||
+      n === "widget_set" ||
+      n === "widget_edit" ||
+      n === "widget_read" ||
+      n === "widget_lint" ||
+      n === "bg_tail"
+    );
   };
 
   return (
@@ -45,7 +59,7 @@ export function ToolUnitHeader(props: ToolPartProps) {
         <span class="inline-flex items-center gap-1.5 min-w-0 flex-1" data-rc-tip={targetPath() ? absoluteRemotePath(targetPath(), props.ctx.activeSession()?.cwd || "", props.ctx.projects().find((p: { protected?: boolean }) => p.protected)?.path) : undefined}>
           <Show when={targetPath()}><FileIcon path={targetPath()} size={13} /></Show>
           <Show when={props.m.name() === "bash" || props.m.name() === "exec_script" || props.m.name() === "python"} fallback={
-            <span class="truncate text-fg-secondary group-hover/tool:text-fg min-w-0 transition-colors">{props.m.name() === "bg_await" ? props.m.sleepLabel() : props.m.sum().target}</span>
+            <span class={`truncate text-fg-secondary group-hover/tool:text-fg min-w-0 transition-colors ${isMonoIdentifier() ? "font-mono text-[12px]" : ""}`}>{props.m.name() === "bg_await" ? props.m.sleepLabel() : props.m.sum().target}</span>
           }>
             <span class="truncate text-fg-secondary group-hover/tool:text-fg min-w-0 text-[12px] transition-colors"><ShellCmd prompt={props.m.name() === "exec_script" || props.m.name() === "python" ? "> " : "$ "} text={collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "")} /></span>
           </Show>

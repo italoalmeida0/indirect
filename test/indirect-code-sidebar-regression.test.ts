@@ -19,6 +19,26 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
       expect(src).toMatch(/data-rc-tip="Rename"/);
       expect(src).toMatch(/setRenamingId\(s\.id\)/);
     });
+
+    test("SessionSidebar hides inline .rc-row-actions on mobile and renders explicit Save/Cancel rename buttons", () => {
+      const src = read("web/src/indirect-code/components/SessionSidebar.tsx");
+      expect(src).toContain("isMobile: () => boolean;");
+      expect(src).toContain("<Show when={!ctx.isMobile() && !ctx.selectionMode()}>");
+      expect(src).toContain('aria-label="Rename conversation"');
+      expect(src).toContain('aria-label="Save rename"');
+      expect(src).toContain('aria-label="Cancel rename"');
+      expect(src).toContain("if (cancellingRename || ctx.isMobile()) return;");
+    });
+
+    test("WorkspaceSidebar wires session long-press context FloatMenu with Pin, Rename, Select, and Delete", () => {
+      const ws = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
+      expect(ws).toContain("isMobile: ui.isMobile");
+      expect(ws).toContain('aria-label="Conversation actions"');
+      expect(ws).toContain("Pin conversation");
+      expect(ws).toContain("Unpin conversation");
+      expect(ws).toContain("lucide:check-square");
+      expect(ws).toContain("if (!s.selectionMode()) s.setSelectionMode?.(true);");
+    });
   });
 
   describe("BUG-T3-03, BUG-T3-04 & BUG-R3-T4-06: Project row, chevron, visual highlight, and accessibility", () => {

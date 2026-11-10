@@ -145,7 +145,7 @@ func (t *EditTool) executeInternal(ctx context.Context, raw json.RawMessage, isP
 	// Scratch-space edits are never tracked: they are not user-facing changes.
 	if t.Changes != nil && !IsBrainPath(t.BrainDir, abs) {
 		if capped, tooLarge := cappedSnapshot(data); tooLarge {
-			t.Changes.NoteBinaryEdit(abs, "")
+			t.Changes.NoteBinaryEdit(abs, true)
 		} else {
 			t.Changes.NoteEditBefore(abs, capped)
 		}

@@ -68,6 +68,15 @@ import assert from "node:assert/strict";
  await page.evaluate((files:any[])=>(window as any).turnUI.changes.noteBalloon({turnIndex:1,files},false),files);await settle();
  assert(await page.evaluate(()=>(window as any).diffNode===document.querySelector('#changes .font-mono.overflow-x-auto')),'live-to-finished preserves diff DOM');
  assert(await page.locator('#changes .font-mono.overflow-x-auto').isVisible(),'finished diff stays open');
+ assert.equal(await page.locator('#changes').getByText(/undo/i).count(),0,'TurnChangesBalloon must never render Undo controls');
+ await page.evaluate(()=>(window as any).turnUI.changes.noteBalloon({turnIndex:1,files:[{path:'src/a.ts',rel:'src/a.ts',status:'new',additions:2,deletions:0,diff:'+first\n+second'},{path:'z.ts',rel:'z.ts',status:'modified',additions:1,deletions:1,diff:'@@ -1 +1 @@\n-old\n+new'}]},false));await settle();
+ assert.equal(await page.locator('#changes').getByText(/undo/i).count(),0,'multi-file TurnChangesBalloon renders zero Undo controls');
+ assert(await page.locator('#changes button',{hasText:'Expand all'}).isVisible(),'Expand all button renders when >1 changed files');
+ await page.locator('#changes button',{hasText:'Expand all'}).click();await settle();
+ assert.equal(await page.locator('#changes .font-mono.overflow-x-auto:visible').count(),2,'Expand all opens every file diff');
+ assert(await page.locator('#changes button',{hasText:'Collapse all'}).isVisible(),'Expand all switches to Collapse all');
+ await page.locator('#changes button',{hasText:'Collapse all'}).click();await settle();
+ assert.equal(await page.locator('#changes .font-mono.overflow-x-auto:visible').count(),0,'Collapse all closes every file diff');
  await page.evaluate(() => (window as any).turnUI.changes.noteTurnChanges({balloons:null}));await settle();
  assert.equal(await page.locator('#changes button').count(),0,'an empty authoritative snapshot clears obsolete balloons');
  // This is a new turn, not the previously collapsed carrier with id "a".
