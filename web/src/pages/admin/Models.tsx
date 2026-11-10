@@ -2,9 +2,9 @@ import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "
 import { batch, createSignal, For, Show, createResource, createMemo, createEffect } from "solid-js";
 
 import { api, type ModelDto, type ProviderDto, type RoutingMode, type SyncOutcome, type ToolCallMode } from "../../api";
-import { PageTitle } from "../../index";
+import { PageTitle } from "../../chrome";
 import { attachSortable } from "../../sortable";
-import { Badge, Btn, Card, EmptyState, Icon, IconBtn, Icons, Modal, ModalField, ModalNotice, ModalSection, Segmented, Select, SwitchCard, toast, fmtNum } from "../../ui";
+import { Badge, Btn, Card, EmptyState, Icon, IconBtn, Icons, Modal, ModalField, ModalNotice, ModalSection, Segmented, Select, StepperField, SwitchCard, TokenTagField, toast, fmtNum } from "../../ui";
 import { UsageGrid } from "../../aggrid";
 import type { ColDef, GridApi } from "ag-grid-community";
 
@@ -422,6 +422,7 @@ export default function AdminModelsPage() {
     return (
       <input
         type="checkbox"
+        aria-label={`Enable ${m.id}`}
         checked={m.enabled}
         onChange={() => toggleEnabled(m)}
         class="w-4 h-4 rounded border-line bg-elev accent-brand-500 cursor-pointer"
@@ -593,36 +594,36 @@ export default function AdminModelsPage() {
                       <div class="flex items-start justify-between gap-2">
                         <div class="min-w-0">
                           <div class="flex items-center gap-2 flex-wrap">
-                            <span class="text-sm font-semibold font-mono text-ink-100 truncate">{m.id}</span>
+                            <span class="text-sm font-medium font-mono text-fg truncate">{m.id}</span>
                             <Badge tone={m.enabled ? "green" : "zinc"}>
                               {m.enabled ? "Active" : "Disabled"}
                             </Badge>
                           </div>
-                          <div class="text-xs text-ink-400 mt-1 flex items-center gap-2">
-                            <span class="px-2 py-0.5 rounded bg-card border border-line text-ink-300">{m.providerName || "No provider"}</span>
+                          <div class="text-xs text-fg-secondary mt-1 flex items-center gap-2">
+                            <span class="px-2 py-0.5 rounded bg-card border border-line text-fg-secondary">{m.providerName || "No provider"}</span>
                             <Show when={m.upstreamModel && m.upstreamModel !== m.id}>
-                              <span class="font-mono text-ink-500 truncate">{m.upstreamModel}</span>
+                              <span class="font-mono text-fg-muted truncate">{m.upstreamModel}</span>
                             </Show>
                           </div>
                         </div>
-                        <div class="text-right shrink-0 text-xs text-ink-400">
+                        <div class="text-right shrink-0 text-xs text-fg-secondary">
                           <div>{m.contextLength ? `${fmtNum(m.contextLength)} ctx` : "—"}</div>
                         </div>
                       </div>
 
                       {/* Pricing row */}
-                      <div class="pt-2 border-t border-line/50 grid grid-cols-3 gap-2 text-[11px] text-ink-400">
+                      <div class="pt-2 border-t border-line/50 grid grid-cols-3 gap-2 text-xs text-fg-secondary">
                         <div>
-                          <span class="text-ink-500 block">Input</span>
-                          <span class="font-mono text-ink-200">{pricePerMillion(m.pricingInput)}</span>
+                          <span class="text-fg-muted block">Input</span>
+                          <span class="font-mono text-fg">{pricePerMillion(m.pricingInput)}</span>
                         </div>
                         <div>
-                          <span class="text-ink-500 block">Cache read</span>
-                          <span class="font-mono text-ink-200">{pricePerMillion(m.pricingInputCache)}</span>
+                          <span class="text-fg-muted block">Cache read</span>
+                          <span class="font-mono text-fg">{pricePerMillion(m.pricingInputCache)}</span>
                         </div>
                         <div>
-                          <span class="text-ink-500 block">Output</span>
-                          <span class="font-mono text-ink-200">{pricePerMillion(m.pricingOutput)}</span>
+                          <span class="text-fg-muted block">Output</span>
+                          <span class="font-mono text-fg">{pricePerMillion(m.pricingOutput)}</span>
                         </div>
                       </div>
 
@@ -630,7 +631,7 @@ export default function AdminModelsPage() {
                       <div class="pt-2 border-t border-line flex items-center justify-between">
                         <button
                           type="button"
-                          class="text-xs text-ink-400 hover:text-ink-200 cursor-pointer"
+                          class="text-xs text-fg-secondary hover:text-fg cursor-pointer"
                           onClick={() => toggleEnabled(m)}
                         >
                           {m.enabled ? "Disable" : "Enable"}
@@ -638,14 +639,14 @@ export default function AdminModelsPage() {
                         <div class="flex items-center gap-1.5">
                           <button
                             type="button"
-                            class="h-9 px-3 rounded-lg flex items-center gap-1.5 text-xs text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer transition-colors"
+                            class="h-9 px-3 rounded-lg flex items-center gap-1.5 text-xs text-fg-secondary hover:text-fg hover:bg-card border border-line cursor-pointer transition-colors"
                             onClick={() => openEditor(m)}
                           >
                             <Icon name={Icons.edit} size={14} /> Edit
                           </button>
                           <button
                             type="button"
-                            class="h-9 w-9 rounded-lg flex items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-card border border-line cursor-pointer transition-colors"
+                            class="h-9 w-9 rounded-lg flex items-center justify-center text-fg-secondary hover:text-fg hover:bg-card border border-line cursor-pointer transition-colors"
                             title="Clone model"
                             onClick={() => cloneModel(m)}
                           >
@@ -653,7 +654,7 @@ export default function AdminModelsPage() {
                           </button>
                           <button
                             type="button"
-                            class="h-9 w-9 rounded-lg flex items-center justify-center text-rose-500 hover:bg-rose-500/10 border border-rose-500/30 cursor-pointer transition-colors"
+                            class="h-9 w-9 rounded-lg flex items-center justify-center text-danger hover:bg-danger-subtle border border-danger/30 cursor-pointer transition-colors"
                             title="Delete model"
                             onClick={() => setConfirmDelete(m)}
                           >
@@ -709,7 +710,7 @@ export default function AdminModelsPage() {
                   value={fId()}
                   onInput={(e) => setFId(e.currentTarget.value)}
                   placeholder="e.g. gpt-4o, claude-3-7-sonnet"
-                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                  class="ui-field font-mono"
                 />
               </ModalField>
 
@@ -726,9 +727,52 @@ export default function AdminModelsPage() {
             title="Routing Targets · Fallback Order"
             info="The gateway cascades requests top-down. If an upstream provider hits billing (402) or transient rate limits, the gateway rewrites the model and cascades to the next candidate."
           >
-            <div class="space-y-2.5">
+            <div class="space-y-3">
+              {/* Exclusive Live Failover Cascade Topology Pipeline */}
+              <div class="rounded-xl border border-line bg-surface-subtle p-3 space-y-2" aria-hidden="true">
+                <div class="flex items-center justify-between text-[11px] text-fg-muted">
+                  <span class="tracking-wider font-medium">Live Failover Cascade Topology</span>
+                  <span class="font-mono text-accent">
+                    {fTargets().filter((t) => t.enabled).length} of {fTargets().length} targets active
+                  </span>
+                </div>
+                <div class="flex items-center gap-1.5 overflow-x-auto py-1 text-xs font-mono">
+                  <span class="px-2 py-1 rounded-md border border-line bg-surface text-fg shrink-0">
+                    {fId().trim() || "public-id"}
+                  </span>
+                  <For each={fTargets()}>
+                    {(t, idx) => {
+                      const pName = () =>
+                        (providers() ?? []).find((p) => p.id === t.providerId)?.name || "Unselected";
+                      return (
+                        <>
+                          <span class="text-fg-muted shrink-0">➔</span>
+                          <span
+                            class={`px-2 py-1 rounded-md border shrink-0 flex items-center gap-1.5 ${
+                              t.enabled
+                                ? idx() === 0
+                                  ? "border-accent/45 bg-accent-subtle text-accent-strong"
+                                  : "border-line-strong bg-surface text-fg-secondary"
+                                : "border-line bg-surface/40 text-fg-muted line-through opacity-60"
+                            }`}
+                          >
+                            <span class="text-[10px] px-1 rounded bg-surface-subtle border border-line/60">
+                              #{idx() + 1}
+                            </span>
+                            <span>{pName()}</span>
+                            <Show when={t.upstreamModel.trim() && t.upstreamModel.trim() !== fId().trim()}>
+                              <span class="text-fg-muted">({t.upstreamModel.trim()})</span>
+                            </Show>
+                          </span>
+                        </>
+                      );
+                    }}
+                  </For>
+                </div>
+              </div>
+
               {/* Column header (desktop / tablet) */}
-              <div class="hidden sm:flex items-center gap-2 text-[11px] text-ink-400 px-2 select-none">
+              <div class="hidden sm:flex items-center gap-2 text-xs text-fg-secondary px-2 select-none">
                 <span class="w-5 text-center">#</span>
                 <span class="w-[38%]">Provider endpoint</span>
                 <span class="w-4 text-center" />
@@ -751,17 +795,17 @@ export default function AdminModelsPage() {
                   {(t, i) => (
                     <div
                       data-id={String(i())}
-                      class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-2.5 rounded-xl border border-line bg-ink-950/70 p-2.5 transition-colors hover:border-ink-600"
+                      class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-2.5 rounded-xl border border-line bg-surface-subtle p-2.5 transition-colors hover:border-line-hover"
                     >
                       {/* Top bar on mobile / left side on desktop */}
                       <div class="flex items-center gap-2 flex-1 sm:flex-none sm:w-[38%] min-w-0">
                         <span
                           data-handle
-                          class="text-ink-500 hover:text-ink-200 transition-colors shrink-0 cursor-grab active:cursor-grabbing p-1"
+                          class="text-fg-muted hover:text-fg transition-colors shrink-0 cursor-grab active:cursor-grabbing p-1"
                         >
                           <Icon name={Icons.grip} size={14} />
                         </span>
-                        <span class="text-xs font-mono font-medium text-ink-400 w-5 shrink-0 text-center">
+                        <span class="text-xs font-mono font-medium text-fg-secondary w-5 shrink-0 text-center">
                           {i() + 1}
                         </span>
                         <div class="flex-1 sm:w-full min-w-0">
@@ -775,21 +819,30 @@ export default function AdminModelsPage() {
                         {/* Mobile quick actions (Active + Remove) */}
                         <div class="flex sm:hidden items-center gap-2 shrink-0 ml-auto pl-1">
                           <label
-                            class="flex items-center gap-1 shrink-0 cursor-pointer text-xs text-ink-300"
+                            class={`inline-flex items-center gap-1.5 shrink-0 cursor-pointer rounded-pill border px-2 py-1 text-xs font-medium transition-colors ${
+                              t.enabled
+                                ? "border-accent/45 bg-accent-subtle text-accent"
+                                : "border-line bg-surface text-fg-muted"
+                            }`}
                           >
                             <input
                               type="checkbox"
                               checked={t.enabled}
                               onChange={(e) => updateTarget(i(), { enabled: e.currentTarget.checked })}
-                              class="w-4 h-4 rounded border-line bg-ink-900 accent-brand-500 cursor-pointer"
+                              class="sr-only"
                             />
-                            <span class="text-[11px] font-medium text-ink-400">On</span>
+                            <span
+                              class={`w-1.5 h-1.5 rounded-pill ${
+                                t.enabled ? "bg-accent" : "bg-fg-muted/50"
+                              }`}
+                            />
+                            <span>{t.enabled ? "On" : "Off"}</span>
                           </label>
                           <button
                             type="button"
                             disabled={fTargets().length <= 1}
                             onClick={() => setFTargets((prev) => prev.filter((_, j) => j !== i()))}
-                            class="p-1 rounded text-ink-400 hover:text-rose-400 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer shrink-0"
+                            class="p-1 rounded text-fg-secondary hover:text-danger disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer shrink-0"
                           >
                             <Icon name={Icons.x} size={15} />
                           </button>
@@ -797,38 +850,47 @@ export default function AdminModelsPage() {
                       </div>
 
                       {/* Direction arrow on desktop */}
-                      <span class="hidden sm:inline text-ink-500 text-xs shrink-0 select-none">→</span>
+                      <span class="hidden sm:inline text-fg-muted text-xs shrink-0 select-none">→</span>
 
                       {/* Model input: on mobile shows inline arrow, takes remaining space */}
                       <div class="flex-1 min-w-0 flex items-center gap-2 pl-7 sm:pl-0">
-                        <span class="sm:hidden text-ink-500 text-xs shrink-0 select-none">→</span>
+                        <span class="sm:hidden text-fg-muted text-xs shrink-0 select-none">→</span>
                         <input
                           type="text"
                           value={t.upstreamModel}
                           onInput={(e) => updateTarget(i(), { upstreamModel: e.currentTarget.value })}
                           placeholder={fId() || "defaults to public id"}
-                          class="w-full rounded-lg border border-line bg-ink-900/60 px-3 py-1.5 sm:py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                          class="ui-field font-mono"
                         />
                       </div>
 
                       {/* Desktop actions */}
                       <div class="hidden sm:flex items-center gap-2 shrink-0">
                         <label
-                          class="flex items-center gap-1 shrink-0 cursor-pointer text-xs text-ink-300 px-1"
+                          class={`inline-flex items-center gap-1.5 shrink-0 cursor-pointer rounded-pill border px-2.5 py-1 text-xs font-medium transition-colors ${
+                            t.enabled
+                              ? "border-accent/45 bg-accent-subtle text-accent"
+                              : "border-line bg-surface text-fg-muted hover:text-fg-secondary"
+                          }`}
                         >
                           <input
                             type="checkbox"
                             checked={t.enabled}
                             onChange={(e) => updateTarget(i(), { enabled: e.currentTarget.checked })}
-                            class="w-4 h-4 rounded border-line bg-ink-900 accent-brand-500 cursor-pointer"
+                            class="sr-only"
                           />
-                          <span class="text-[11px] font-medium text-ink-400">On</span>
+                          <span
+                            class={`w-1.5 h-1.5 rounded-pill ${
+                              t.enabled ? "bg-accent" : "bg-fg-muted/50"
+                            }`}
+                          />
+                          <span>{t.enabled ? "On" : "Off"}</span>
                         </label>
                         <button
                           type="button"
                           disabled={fTargets().length <= 1}
                           onClick={() => setFTargets((prev) => prev.filter((_, j) => j !== i()))}
-                          class="p-1 rounded text-ink-400 hover:text-rose-400 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer shrink-0"
+                          class="p-1 rounded text-fg-secondary hover:text-danger disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer shrink-0"
                         >
                           <Icon name={Icons.x} size={15} />
                         </button>
@@ -882,7 +944,7 @@ export default function AdminModelsPage() {
             <button
               type="button"
               onClick={() => setShowAdvanced(!showAdvanced())}
-              class="w-full flex items-center justify-between px-4 py-3 text-xs font-medium text-ink-300 hover:text-ink-100 hover:bg-card/40 transition-colors cursor-pointer"
+              class="w-full flex items-center justify-between px-4 py-3 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-card/40 transition-colors cursor-pointer"
             >
               <span class="flex items-center gap-2">
                 <Icon
@@ -892,7 +954,7 @@ export default function AdminModelsPage() {
                 />
                 <span>Advanced parameters & pricing</span>
               </span>
-              <span class="text-[10px] text-ink-500 bg-ink-950/60 px-2 py-0.5 rounded border border-line/60">Optional</span>
+              <span class="text-xs text-fg-muted bg-surface-subtle px-2 py-0.5 rounded border border-line/60">Optional</span>
             </button>
             <Show when={showAdvanced()}>
               <div class="p-4 pt-3 border-t border-line space-y-4 bg-card/20">
@@ -903,7 +965,7 @@ export default function AdminModelsPage() {
                         value={fName()}
                         onInput={(e) => setFName(e.currentTarget.value)}
                         placeholder="defaults to id"
-                        class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                        class="ui-field"
                       />
                     </ModalField>
                     <ModalField label="Description">
@@ -911,93 +973,205 @@ export default function AdminModelsPage() {
                         type="text"
                         value={fDesc()}
                         onInput={(e) => setFDesc(e.currentTarget.value)}
-                        class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                        class="ui-field"
                       />
                     </ModalField>
                   </div>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <ModalField label="Context length">
-                      <input
-                        type="number"
-                        value={fContext()}
-                        onInput={(e) => setFContext(e.currentTarget.value)}
-                        class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 focus:border-brand-500 focus:outline-none transition-colors"
-                      />
-                    </ModalField>
-                    <ModalField label="Max output">
-                      <input
-                        type="number"
-                        value={fMaxOut()}
-                        onInput={(e) => setFMaxOut(e.currentTarget.value)}
-                        class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 focus:border-brand-500 focus:outline-none transition-colors"
-                      />
-                    </ModalField>
-                  </div>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <ModalField label="Input modalities (csv)">
-                      <input
-                        type="text"
-                        value={fInMod()}
-                        onInput={(e) => setFInMod(e.currentTarget.value)}
-                        placeholder="text, image"
-                        class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                      />
-                    </ModalField>
-                    <ModalField label="Output modalities (csv)">
-                      <input
-                        type="text"
-                        value={fOutMod()}
-                        onInput={(e) => setFOutMod(e.currentTarget.value)}
-                        placeholder="text"
-                        class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                      />
-                    </ModalField>
-                  </div>
-                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <ModalField label="Sampling params (csv)">
-                      <input
-                        type="text"
-                        value={fSampling()}
-                        onInput={(e) => setFSampling(e.currentTarget.value)}
-                        placeholder="temperature, top_p"
-                        class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                      />
-                    </ModalField>
-                    <ModalField label="Features (csv)">
-                      <input
-                        type="text"
-                        value={fFeatures()}
-                        onInput={(e) => setFFeatures(e.currentTarget.value)}
-                        placeholder="tools, reasoning"
-                        class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                      />
-                    </ModalField>
-                  </div>
-                  <ModalField label="Reasoning efforts (csv)">
-                    <input
-                      type="text"
-                      value={fEfforts()}
-                      onInput={(e) => setFEfforts(e.currentTarget.value)}
-                      placeholder="low, medium, high"
-                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <StepperField
+                      label="Context length"
+                      ariaLabel="Context length"
+                      min={0}
+                      step={8192}
+                      unit="tokens"
+                      value={fContext()}
+                      onInput={setFContext}
+                      placeholder="128000"
+                      presets={[
+                        { label: "32K", value: "32768" },
+                        { label: "128K", value: "131072" },
+                        { label: "200K", value: "200000" },
+                        { label: "1M", value: "1048576" },
+                      ]}
                     />
-                  </ModalField>
-                  <div>
-                    <div class="text-xs font-medium text-ink-300 mb-2">Pricing (per token, USD strings)</div>
+                    <StepperField
+                      label="Max output"
+                      ariaLabel="Max output"
+                      min={0}
+                      step={1024}
+                      unit="tokens"
+                      value={fMaxOut()}
+                      onInput={setFMaxOut}
+                      placeholder="16384"
+                      presets={[
+                        { label: "4K", value: "4096" },
+                        { label: "8K", value: "8192" },
+                        { label: "16K", value: "16384" },
+                        { label: "64K", value: "65536" },
+                      ]}
+                    />
+                  </div>
+
+                  {/* Exclusive Context vs. Max Output Memory Allocation Bar */}
+                  <Show when={Number(fContext()) > 0}>
+                    <div class="rounded-xl border border-line bg-surface p-3 space-y-1.5" aria-hidden="true">
+                      <div class="flex items-center justify-between text-xs">
+                        <span class="text-fg-secondary font-medium">Window Memory Allocation</span>
+                        <span class="font-mono text-[11px] text-accent">
+                          {fmtNum(Number(fContext()) || 0)} total ·{" "}
+                          {Number(fMaxOut()) > 0
+                            ? `${Math.min(100, ((Number(fMaxOut()) / Number(fContext())) * 100)).toFixed(1)}% max completion share`
+                            : "unbounded completion share"}
+                        </span>
+                      </div>
+                      <div class="h-2 rounded-full bg-surface-muted overflow-hidden flex">
+                        <div
+                          class="h-full bg-accent/45 transition-all"
+                          style={{
+                            width: `${Math.max(
+                              10,
+                              100 - Math.min(90, ((Number(fMaxOut()) || 0) / (Number(fContext()) || 1)) * 100),
+                            )}%`,
+                          }}
+                        />
+                        <div class="h-full bg-accent flex-1 transition-all" />
+                      </div>
+                      <div class="flex items-center justify-between text-[10px] font-mono text-fg-muted">
+                        <span>Prompt & History Buffer ({fmtNum(Math.max(0, (Number(fContext()) || 0) - (Number(fMaxOut()) || 0)))} tok)</span>
+                        <span>Completion Ceiling ({fmtNum(Number(fMaxOut()) || 0)} tok)</span>
+                      </div>
+                    </div>
+                  </Show>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <TokenTagField
+                      label="Input modalities (csv)"
+                      ariaLabel="Input modalities (csv)"
+                      value={fInMod()}
+                      onInput={setFInMod}
+                      placeholder="text, image"
+                      suggestions={["text", "image", "audio", "video", "pdf"]}
+                    />
+                    <TokenTagField
+                      label="Output modalities (csv)"
+                      ariaLabel="Output modalities (csv)"
+                      value={fOutMod()}
+                      onInput={setFOutMod}
+                      placeholder="text"
+                      suggestions={["text", "image", "audio"]}
+                    />
+                  </div>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    <TokenTagField
+                      label="Sampling params (csv)"
+                      ariaLabel="Sampling params (csv)"
+                      value={fSampling()}
+                      onInput={setFSampling}
+                      placeholder="temperature, top_p"
+                      suggestions={["temperature", "top_p", "top_k", "max_tokens", "stop", "seed", "frequency_penalty", "presence_penalty"]}
+                    />
+                    <TokenTagField
+                      label="Features (csv)"
+                      ariaLabel="Features (csv)"
+                      value={fFeatures()}
+                      onInput={setFFeatures}
+                      placeholder="tools, reasoning"
+                      suggestions={["tools", "reasoning", "streaming", "json_mode", "vision", "prompt_caching"]}
+                    />
+                  </div>
+                  <TokenTagField
+                    label="Reasoning efforts (csv)"
+                    ariaLabel="Reasoning efforts (csv)"
+                    value={fEfforts()}
+                    onInput={setFEfforts}
+                    placeholder="low, medium, high"
+                    suggestions={["low", "medium", "high"]}
+                  />
+                  <div class="space-y-3">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                      <div class="text-xs font-medium text-fg-secondary">Pricing (per token, USD strings · live 1M preview)</div>
+                      {/* Exclusive Quick Tokenomics Tier Presets */}
+                      <div class="flex items-center gap-1.5 flex-wrap" aria-hidden="true">
+                        <For
+                          each={[
+                            { label: "Flash ($0.15/$0.60)", p: "0.00000015", c: "0.0000006", r: "0.00000004" },
+                            { label: "Sonnet ($3/$15)", p: "0.000003", c: "0.000015", r: "0.0000003" },
+                            { label: "Frontier ($5/$25)", p: "0.000005", c: "0.000025", r: "0.0000005" },
+                          ]}
+                        >
+                          {(preset) => (
+                            <button
+                              type="button"
+                              tabIndex={-1}
+                              onClick={() =>
+                                setFPricing((prev) => ({
+                                  ...prev,
+                                  prompt: preset.p,
+                                  completion: preset.c,
+                                  input_cache_reads: preset.r,
+                                }))
+                              }
+                              class="px-2 py-0.5 rounded-pill border border-line bg-surface hover:border-accent/40 text-[11px] font-mono text-fg-secondary hover:text-fg transition-colors cursor-pointer"
+                            >
+                              {preset.label}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </div>
+
                     <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
                       <For each={PRICING_KEYS}>
                         {(k) => (
-                          <ModalField label={k}>
+                          <div class="rounded-control border border-line bg-surface p-2.5 space-y-1.5">
+                            <div class="flex items-center justify-between gap-1.5 text-xs">
+                              <span class="font-medium text-fg-secondary truncate">{k}</span>
+                              <span class="font-mono text-[11px] px-1.5 py-0.5 rounded bg-surface-muted border border-line/60 text-accent shrink-0">
+                                {pricePerMillion(fPricing()[k] ?? "") === "—"
+                                  ? "$0 / 1M"
+                                  : `${pricePerMillion(fPricing()[k] ?? "")} / 1M`}
+                              </span>
+                            </div>
                             <input
                               type="text"
+                              aria-label={k}
                               value={fPricing()[k] ?? ""}
                               onInput={(e) => setFPricing((prev) => ({ ...prev, [k]: e.currentTarget.value }))}
                               placeholder="0.00000475"
-                              class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                              class="ui-field font-mono text-xs"
                             />
-                          </ModalField>
+                          </div>
                         )}
                       </For>
+                    </div>
+
+                    {/* Exclusive Live Turn Cost Simulator Receipt */}
+                    <div class="rounded-xl border border-line bg-surface p-3 grid grid-cols-3 gap-2 text-xs" aria-hidden="true">
+                      {(() => {
+                        const pTok = Number(fPricing().prompt || 0) || 0;
+                        const cTok = Number(fPricing().completion || 0) || 0;
+                        const cacheTok = Number(fPricing().input_cache_reads || 0) || pTok * 0.1;
+                        const reqFee = Number(fPricing().request || 0) || 0;
+                        const chatTurn = 4000 * pTok + 1000 * cTok + reqFee;
+                        const agentTurn = 16000 * cacheTok + 4000 * pTok + 2000 * cTok + reqFee;
+                        const batch1k = chatTurn * 1000;
+                        const fmt = (v: number) => (v <= 0 ? "$0.0000" : v < 0.01 ? `$${v.toFixed(4)}` : `$${v.toFixed(2)}`);
+                        return (
+                          <>
+                            <div class="rounded-lg bg-surface-subtle border border-line/60 p-2">
+                              <div class="text-[10px] text-fg-muted">1 Chat Turn (4K in / 1K out)</div>
+                              <div class="font-mono font-medium text-fg mt-0.5">{fmt(chatTurn)}</div>
+                            </div>
+                            <div class="rounded-lg bg-surface-subtle border border-line/60 p-2">
+                              <div class="text-[10px] text-fg-muted">1 Agent Turn (16K cache + 6K)</div>
+                              <div class="font-mono font-medium text-fg mt-0.5">{fmt(agentTurn)}</div>
+                            </div>
+                            <div class="rounded-lg bg-surface-subtle border border-line/60 p-2">
+                              <div class="text-[10px] text-fg-muted">1,000 Turns Batch Est.</div>
+                              <div class="font-mono font-medium text-accent mt-0.5">{fmt(batch1k)}</div>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -1035,12 +1209,12 @@ export default function AdminModelsPage() {
       >
         <div class="space-y-4">
           <ModalNotice tone="danger" title="Confirm model deletion">
-            Delete model <strong class="text-white">{confirmDelete()?.id}</strong>? Requests targeting
+            Delete model <strong class="text-fg">{confirmDelete()?.id}</strong>? Requests targeting
             this model ID in router mode will immediately fail with 404 Not Found.
           </ModalNotice>
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">Deletion impact:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">Deletion impact:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>Model is removed from registry and routing fallback tables.</li>
               <li>Calls in router mode specifying this model will return 404.</li>
               <li>Historical usage metrics and spend records remain safely stored.</li>
@@ -1078,12 +1252,12 @@ export default function AdminModelsPage() {
       >
         <div class="space-y-4">
           <ModalNotice tone="danger" title="Bulk deletion">
-            Delete <strong class="text-white">{selected().size}</strong> selected model
+            Delete <strong class="text-fg">{selected().size}</strong> selected model
             {selected().size === 1 ? "" : "s"}? Router-mode requests for these models will immediately return 404.
           </ModalNotice>
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">Bulk purge summary:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">Bulk purge summary:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>All {selected().size} model definitions will be dropped from routing.</li>
               <li>Pass-through requests remain unaffected.</li>
               <li>Usage ledger records and historical logs will be preserved.</li>

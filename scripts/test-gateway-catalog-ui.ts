@@ -113,7 +113,7 @@ try {
     assert(await menu.evaluate((element: HTMLElement) => { const rect = element.getBoundingClientRect(); return rect.left >= 11 && rect.right <= innerWidth - 11 && rect.top >= 0 && rect.bottom <= innerHeight; }), `${label}: sort menu left viewport`);
     return { trigger, menu };
   };
-  const cases = [{ route: "keys", label: "api keys" }, { route: "admin/providers", label: "providers" }, { route: "admin/models", label: "models" }, { route: "admin/users", label: "users" }, { route: "admin/keys", label: "all api keys" }, { route: "admin/audit", label: "audit events" }];
+  const cases = [{ route: "keys", label: "api keys" }, { route: "admin/providers", label: "providers" }, { route: "admin/models", label: "models" }, { route: "admin/users", label: "users" }, { route: "admin/keys", label: "api keys" }, { route: "admin/audit", label: "audit events" }];
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" }); await setup(page);
   for (const item of cases) {
     console.log(`[catalog-ui] Desktop ${item.label}`);

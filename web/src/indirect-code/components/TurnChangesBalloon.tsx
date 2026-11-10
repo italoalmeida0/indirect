@@ -19,11 +19,11 @@ export interface TurnChangesBalloonProps {
 function statusMeta(status: TurnChangedFile["status"]) {
   switch (status) {
     case "new":
-      return { icon: "lucide:file-plus", cls: "text-emerald-400" };
+      return { icon: "lucide:file-plus", cls: "text-success" };
     case "modified":
-      return { icon: "lucide:file-diff", cls: "text-amber-800 dark:text-amber-200" };
+      return { icon: "lucide:file-diff", cls: "text-warning" };
     case "deleted":
-      return { icon: "lucide:file-minus", cls: "text-red-400" };
+      return { icon: "lucide:file-minus", cls: "text-danger" };
     case "binary":
       return { icon: "lucide:file-exclamation-point", cls: "text-ink-400" };
     default:
@@ -79,13 +79,13 @@ function FileChangesRow(props: {
         <span class="text-[11px] font-mono text-ink-200 truncate">
           {props.f.rel || props.f.path}
         </span>
-        <span class={`text-[10px] uppercase tracking-wide flex items-center gap-1 shrink-0 ${meta().cls}`}>
+        <span class={`text-[10px] flex items-center gap-1 shrink-0 ${meta().cls}`}>
           <Iconify icon={meta().icon} size={12} />
         </span>
         <Show when={(props.f.additions || 0) > 0 || (props.f.deletions || 0) > 0}>
           <span class="text-[10px] font-mono ml-auto shrink-0">
-            <span class="text-emerald-400">+{props.f.additions || 0}</span>{" "}
-            <span class="text-red-400">-{props.f.deletions || 0}</span>
+            <span class="text-success">+{props.f.additions || 0}</span>{" "}
+            <span class="text-danger">-{props.f.deletions || 0}</span>
           </span>
         </Show>
         <Show when={props.f.undone}>
@@ -145,7 +145,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
               class="text-ink-500 group-hover:text-ink-200 transition-colors"
             />
             <Iconify icon={props.live ? "lucide:loader-circle" : "lucide:files"} size={14} class={props.live ? "text-accent-400 animate-spin" : "text-accent-400"} />
-            <span class="text-xs font-semibold text-ink-100">
+            <span class="text-xs font-medium text-ink-100">
               File changes
             </span>
             <span class="text-[11px] text-ink-500">
@@ -153,8 +153,8 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
             </span>
             <Show when={totalAdds() > 0 || totalDels() > 0}>
               <span class="text-[11px] font-mono">
-                <span class="text-emerald-400">+{totalAdds()}</span>{" "}
-                <span class="text-red-400">-{totalDels()}</span>
+                <span class="text-success">+{totalAdds()}</span>{" "}
+                <span class="text-danger">-{totalDels()}</span>
               </span>
             </Show>
             <Show when={!props.live && undoneCount() > 0}>

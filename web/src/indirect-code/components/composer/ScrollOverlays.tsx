@@ -25,8 +25,8 @@ export function ScrollOverlays() {
 {/* Slash Command Autocomplete Menu */}
 <FloatMenu anchor={() => document.getElementById("rc-composer")} open={c.slashMatches().length > 0} placement="top-start" width="40rem">
   <div ref={slashList} class="p-1.5 max-h-60 overflow-y-auto">
-    <div class="px-2 py-1 text-[10px] uppercase font-bold text-ink-500 tracking-wider">
-      Slash Commands
+    <div class="px-2 py-1 text-xs font-medium text-ink-500">
+      Slash commands
     </div>
     <For each={c.slashMatches()}>
       {(sc, idx) => (
@@ -39,11 +39,11 @@ export function ScrollOverlays() {
               : "text-ink-200 hover:bg-ink-800"
           }`}
         >
-          <div class="flex items-center gap-2 font-mono font-semibold">
+          <div class="flex items-center gap-2 font-mono font-medium">
             <span>{sc.cmd}</span>
-            <span class="text-[11px] opacity-70">{sc.args}</span>
+            <span class="text-xs opacity-70">{sc.args}</span>
           </div>
-          <span class="text-[11px] opacity-80">{sc.desc}</span>
+          <span class="text-xs opacity-80">{sc.desc}</span>
         </button>
       )}
     </For>

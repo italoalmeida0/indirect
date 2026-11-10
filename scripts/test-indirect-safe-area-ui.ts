@@ -16,7 +16,7 @@ for (const [route, name] of Object.entries(names)) {
   bundles.set(`/${route}.js`, result.outputs[0]);
 }
 const dist = path.join(root, "dist");
-const cssName = Array.from(new Bun.Glob("*.css").scanSync(dist))[0];
+const cssName = Array.from(new Bun.Glob("assets/*.css").scanSync(dist))[0]?.replaceAll("\\", "/");
 assert(cssName, "Run bun run build:web first");
 const css = (await Bun.file(path.join(dist, cssName)).text()).replace(
   /env\(safe-area-inset-(top|right|bottom|left),\s*([^)]*)\)/g, "var(--test-safe-$1, $2)",

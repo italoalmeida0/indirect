@@ -22,11 +22,11 @@ export function ShellCmd(props: { text: string; prompt?: string }) {
       if (m.index > last) out.push({ t: src.slice(last, m.index), c: "" });
       const [full, comment, str, vr, op, _pre, flag, num] = m;
       if (comment) out.push({ t: full, c: "text-ink-600 italic" });
-      else if (str) out.push({ t: full, c: "text-emerald-300" });
-      else if (vr) out.push({ t: full, c: "text-amber-800 dark:text-amber-200" });
-      else if (op) out.push({ t: full, c: "text-rose-300" });
-      else if (flag) out.push({ t: full, c: "text-sky-300" });
-      else if (num) out.push({ t: full, c: "text-violet-300" });
+      else if (str) out.push({ t: full, c: "text-success" });
+      else if (vr) out.push({ t: full, c: "text-warning" });
+      else if (op) out.push({ t: full, c: "text-danger" });
+      else if (flag) out.push({ t: full, c: "text-tone-blue" });
+      else if (num) out.push({ t: full, c: "text-tone-violet" });
       else out.push({ t: full, c: "" });
       last = m.index + full.length;
       if (full.length === 0) re.lastIndex++;

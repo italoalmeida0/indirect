@@ -5,7 +5,7 @@ import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const bundle = await Bun.build({ entrypoints: ["test/fixtures/indirect-streaming-ui.tsx"], target: "browser", plugins: [iconifyPlugin, solidPlugin] });
 if (!bundle.success) throw new Error(bundle.logs.join("\n"));
-const cssName = Array.from(new Bun.Glob("*.css").scanSync("dist"))[0];
+const cssName = Array.from(new Bun.Glob("assets/*.css").scanSync("dist"))[0];
 assert(cssName, "Run bun run build:web first");
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
   const path = new URL(req.url).pathname;
@@ -62,7 +62,7 @@ try {
     assert.equal((await page.evaluate(() => (window as any).copiedText)).trimEnd(), body.trimEnd());
     assert.equal(await copy.getAttribute('data-copy-state'), 'copied');
     await page.locator('.tarnav-codeblock > .font-mono').evaluate((el: HTMLElement) => { el.scrollTop = 0; el.scrollLeft = 0; });
-    assert.equal(await page.locator('.rc-table-wrap button').count(), 0, "tables have no controls");
+    assert.equal(await page.locator('.rc-table-wrap button').count(), 2, "tables have copy and CSV download controls");
     assert.equal(await page.locator('.tarnav-code-language').textContent(), 'python');
     // Keyboard focus reveals controls even after the pointer leaves the message.
     await page.mouse.move(0, 0);

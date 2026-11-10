@@ -11,9 +11,9 @@ export function ToolFooter(props: { facts: FooterFact[] }) {
             <span
               class={`rounded border px-1 py-px font-mono text-[10px] leading-tight tabular-nums ${
                 f.tone === "fail"
-                  ? "border-rose-500/40 text-rose-400"
+                  ? "border-danger/40 text-danger"
                   : f.tone === "ok"
-                    ? "border-emerald-500/40 text-emerald-400"
+                    ? "border-success/40 text-success"
                     : "border-line/60 text-ink-500"
               }`}
             >

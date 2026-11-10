@@ -4,26 +4,100 @@ import {
   createEffect,
   For,
   onCleanup,
-  onMount,
   Show,
   type JSX,
 } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { Placement } from "@floating-ui/dom";
 
-import { anchorFloat, Z } from "./floating";
-import { createTweenedNumber, usal } from "./motion";
+import { anchorFloat } from "./floating";
+import { usal } from "./motion";
+import { Button, type ButtonSize, type ButtonVariant } from "./ds/components/button";
+import {
+  Alert,
+  Badge as DsBadge,
+  Checkbox,
+  EmptyState as DsEmptyState,
+  Kbd,
+  Progress,
+  Shimmer,
+  Skeleton,
+  Spinner as DsSpinner,
+  Switch,
+  type BadgeTone,
+  type LegacyTone,
+} from "./ds/components/controls";
+import { Dialog } from "./ds/components/dialog";
+import { Calendar, RangeCalendar, RollingText } from "./ds/components/calendar";
+import { DatePicker, DateTimePicker, TimePicker } from "./ds/components/date-picker";
+import {
+  CheckTile,
+  CurrencyField,
+  OtpPinField,
+  RoleCardGroup,
+  SecretField,
+  StepperField,
+  TokenTagField,
+} from "./ds/components/studio-controls";
+import { Glyph } from "./ds/components/icon";
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from "./ds/components/menu";
+import { Collapse, ConfirmButton, Drawer } from "./ds/components/overlay";
+import { RollingNumber } from "./ds/components/rolling-number";
+import { SegmentedControl } from "./ds/components/segmented";
+import { CopyButton, TabPanel, Tabs } from "./ds/components/tabs";
+import { pushToast, ToastRegion } from "./ds/components/toast";
+import { Tooltip as DsTooltip } from "./ds/components/tooltip";
+import { createGlide } from "./ds/motion/glide";
+import { createPresence, cssExit } from "./ds/motion/presence";
+import { reducedMotion } from "./ds/motion/reduced";
+import { press } from "./ds/motion/press";
+import { pushLayer } from "./ds/primitives/layers";
+
+export {
+  Alert,
+  Calendar,
+  Checkbox,
+  CheckTile,
+  CurrencyField,
+  OtpPinField,
+  RoleCardGroup,
+  SecretField,
+  StepperField,
+  TokenTagField,
+  Collapse,
+  ConfirmButton,
+  CopyButton,
+  DatePicker,
+  DateTimePicker,
+  Drawer,
+  Kbd,
+  Menu,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+  Progress,
+  RangeCalendar,
+  RollingNumber,
+  RollingText,
+  Shimmer,
+  Skeleton,
+  Switch,
+  TabPanel,
+  Tabs,
+  TimePicker,
+};
 
 /**
- * Hand-built UI kit: buttons, cards, inputs, custom select, modal, toast,
- * badges — themed through CSS vars (white/dark), restrained teal accents,
- * USAL friendly. No component library by design.
+ * Gateway UI kit. Every component here is a thin, API-stable adapter over
+ * the design system in `web/src/ds` (tokens, motion engine, components), so
+ * screens written against this module get the new look and motion without
+ * call-site changes. New code may import from `ds/` directly.
  */
 
 import { registry } from "virtual:icons";
 
 // ==========================================
-// ICON SYSTEM (Powered by Iconify & @iconify-json/lucide with zero runtime overhead)
+// ICON SYSTEM (Iconify Lucide, bundled at build time)
 // ==========================================
 
 // Semantic names -> Iconify Lucide identifiers
@@ -72,6 +146,8 @@ export const Icons = {
   sparkles: "lucide:sparkles",
   save: "lucide:save",
   dollarSign: "lucide:dollar-sign",
+  code: "lucide:code",
+  alertCircle: "lucide:alert-circle",
 } as const;
 
 export function Icon(props: {
@@ -80,32 +156,18 @@ export function Icon(props: {
   class?: string;
   strokeWidth?: number;
 }) {
-  const iconData = () => registry[props.name] ?? registry[`lucide:${props.name}`];
-
+  const known = () => registry[props.name] ?? registry[`lucide:${props.name}`];
   return (
-    <span
-      class={`inline-flex items-center justify-center shrink-0 ${props.class ?? ""}`}
-    >
-      {/* eslint-disable solid/no-innerhtml -- icon bodies come from the build-time icon registry, never user input */}
-      <svg
-        innerHTML={iconData()?.body || ""}
-        viewBox={`0 0 ${iconData()?.width ?? 24} ${iconData()?.height ?? 24}`}
-        fill="none"
-        stroke="currentColor"
-        stroke-width={props.strokeWidth ?? 1.8}
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        width={props.size ?? 16}
-        height={props.size ?? 16}
-        aria-hidden="true"
-      />
-      {/* eslint-enable solid/no-innerhtml */}
+    <span class={`inline-flex items-center justify-center shrink-0 ${props.class ?? ""}`}>
+      <Show when={known()} fallback={<svg width={props.size ?? 16} height={props.size ?? 16} aria-hidden="true" />}>
+        <Glyph icon={props.name.includes(":") ? props.name : `lucide:${props.name}`} size={props.size ?? 16} strokeWidth={props.strokeWidth} />
+      </Show>
     </span>
   );
 }
 
 // ==========================================
-// THEME (white / dark + system follow)
+// THEME (light / dark / high contrast + system follow) and ACCENT
 // ==========================================
 
 export type Theme = "light" | "dark" | "high-contrast";
@@ -116,9 +178,8 @@ export type ThemeMode = "light" | "dark" | "high-contrast" | "system";
 const THEME_KEY = "llmgw-theme";
 
 /** Theme-color meta values (page chrome / PWA task switcher), kept in sync
- *  with the effective theme — tweakgrid does the same from its theme
- *  subscriber. Values mirror the page bg of each theme (ink-950). */
-const THEME_COLORS: Record<Theme, string> = { light: "#ffffff", dark: "#111315", "high-contrast": "#000000" };
+ *  with the effective theme. Values mirror each theme's page background. */
+const THEME_COLORS: Record<Theme, string> = { light: "#ffffff", dark: "#141414", "high-contrast": "#000000" };
 
 export function getThemeMode(): ThemeMode {
   let stored: string | null = null;
@@ -147,8 +208,7 @@ export { theme };
 const [themeMode, setThemeModeSignal] = createSignal<ThemeMode>(getThemeMode());
 export { themeMode };
 
-/** Keep `<meta name="theme-color">` on the effective theme (created when
- *  missing — same pattern as tweakgrid's theme subscriber). */
+/** Keep `<meta name="theme-color">` on the effective theme. */
 export function syncMetaThemeColor(): void {
   try {
     const t = getTheme();
@@ -162,16 +222,47 @@ export function syncMetaThemeColor(): void {
   } catch {}
 }
 
-function applyTheme(t: Theme): void {
-  const html = document.documentElement;
-  html.classList.add("theme-xfade");
-  html.dataset.theme = t;
+/** Where a theme change reveal grows from (the toggle that asked for it). */
+export interface RevealOrigin {
+  x: number;
+  y: number;
+}
+
+function commitTheme(t: Theme): void {
+  document.documentElement.dataset.theme = t;
   setThemeSignal(t);
   syncMetaThemeColor();
+}
+
+/**
+ * Apply a theme. With an origin and View Transitions support, the new
+ * appearance crosses the page as a circle growing from the toggle (an
+ * eclipse); otherwise colors crossfade briefly. Reduced motion swaps at once.
+ */
+function applyTheme(t: Theme, origin?: RevealOrigin): void {
+  const html = document.documentElement;
+  if (html.dataset.theme === t) {
+    setThemeSignal(t);
+    return;
+  }
+  const doc = document as Document & { startViewTransition?: (cb: () => void) => { ready: Promise<void> } };
+  if (origin && doc.startViewTransition && !reducedMotion()) {
+    const transition = doc.startViewTransition(() => commitTheme(t));
+    const radius = Math.hypot(Math.max(origin.x, innerWidth - origin.x), Math.max(origin.y, innerHeight - origin.y));
+    void transition.ready.then(() => {
+      html.animate(
+        { clipPath: [`circle(0px at ${origin.x}px ${origin.y}px)`, `circle(${radius}px at ${origin.x}px ${origin.y}px)`] },
+        { duration: 560, easing: "cubic-bezier(0.65, 0, 0.35, 1)", pseudoElement: "::view-transition-new(root)" },
+      );
+    }).catch(() => {});
+    return;
+  }
+  if (!reducedMotion()) html.classList.add("theme-xfade");
+  commitTheme(t);
   window.setTimeout(() => html.classList.remove("theme-xfade"), 380);
 }
 
-export function setThemeMode(m: ThemeMode): void {
+export function setThemeMode(m: ThemeMode, origin?: RevealOrigin): void {
   try {
     if (m === "system") localStorage.removeItem(THEME_KEY);
     else localStorage.setItem(THEME_KEY, m);
@@ -179,40 +270,83 @@ export function setThemeMode(m: ThemeMode): void {
   setThemeModeSignal(m);
   if (m === "system") {
     const t: Theme = window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    applyTheme(t);
+    applyTheme(t, origin);
   } else {
-    applyTheme(m);
+    applyTheme(m, origin);
   }
 }
 
-export function toggleTheme(): void {
-  setThemeMode(getTheme() === "dark" ? "light" : "dark");
+export function toggleTheme(origin?: RevealOrigin): void {
+  setThemeMode(getTheme() === "dark" ? "light" : "dark", origin);
 }
 
 /** Follow the OS while the user has no explicit choice (mode `system`). */
 export function watchSystemTheme(): void {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
   const apply = () => {
-    if (getThemeMode() !== "system") return;
-    const t: Theme = mq.matches ? "dark" : "light";
-    document.documentElement.dataset.theme = t;
-    setThemeSignal(t);
-    syncMetaThemeColor();
+    const mode = getThemeMode();
+    setThemeModeSignal(mode);
+    if (mode !== "system") {
+      // An explicit choice (including high contrast) wins on every load.
+      if (document.documentElement.dataset.theme !== mode) commitTheme(mode);
+      return;
+    }
+    commitTheme(mq.matches ? "dark" : "light");
   };
-  // Apply once on setup (covers any stale pre-mount signal value), then keep
-  // following the OS while no manual choice exists.
-  setThemeModeSignal(getThemeMode());
   apply();
   try {
     window.addEventListener?.("storage", (e) => {
-      // Cross-tab theme sync (e.g. mode changed in another tab/settings).
-      if (e.key === THEME_KEY) {
-        setThemeModeSignal(getThemeMode());
-        apply();
-      }
+      // Cross-tab theme/accent sync (e.g. changed in another tab/settings).
+      if (e.key === THEME_KEY) apply();
+      if (e.key === ACCENT_KEY) applyAccent(getAccent());
     });
   } catch {}
   mq.addEventListener?.("change", apply);
+  applyAccent(getAccent());
+}
+
+/** Accent hue. Teal is the product default; the rest follow Arc's set. */
+export type Accent = "teal" | "neutral" | "violet" | "blue" | "green" | "amber" | "orange" | "coral" | "rose";
+export type AccentName = Accent;
+export const ACCENTS: Array<{ id: AccentName; label: string; swatch: string }> = [
+  { id: "teal", label: "Teal", swatch: "oklch(0.60 0.125 182)" },
+  { id: "neutral", label: "Neutral", swatch: "oklch(0.45 0.008 250)" },
+  { id: "violet", label: "Violet", swatch: "oklch(0.58 0.16 285)" },
+  { id: "blue", label: "Blue", swatch: "oklch(0.58 0.14 252)" },
+  { id: "green", label: "Green", swatch: "oklch(0.60 0.14 152)" },
+  { id: "amber", label: "Amber", swatch: "oklch(0.72 0.15 72)" },
+  { id: "orange", label: "Orange", swatch: "oklch(0.66 0.16 48)" },
+  { id: "coral", label: "Coral", swatch: "oklch(0.64 0.16 28)" },
+  { id: "rose", label: "Rose", swatch: "oklch(0.62 0.16 355)" },
+];
+const ACCENT_IDS = new Set<Accent>(ACCENTS.map((a) => a.id));
+const ACCENT_KEY = "llmgw-accent";
+
+export function getAccent(): Accent {
+  try {
+    const stored = localStorage.getItem(ACCENT_KEY) as Accent | null;
+    if (stored && ACCENT_IDS.has(stored)) return stored;
+  } catch {}
+  return "teal";
+}
+
+const [accent, setAccentSignal] = createSignal<Accent>(getAccent());
+export { accent };
+
+function applyAccent(a: Accent): void {
+  if (a === "teal") delete document.documentElement.dataset.accent;
+  else document.documentElement.dataset.accent = a;
+  setAccentSignal(a);
+}
+
+export function setAccent(a: Accent): void {
+  try {
+    if (a === "teal") localStorage.removeItem(ACCENT_KEY);
+    else localStorage.setItem(ACCENT_KEY, a);
+  } catch {}
+  if (!reducedMotion()) document.documentElement.classList.add("theme-xfade");
+  applyAccent(a);
+  window.setTimeout(() => document.documentElement.classList.remove("theme-xfade"), 380);
 }
 
 export function ThemeToggle(props: {
@@ -220,30 +354,29 @@ export function ThemeToggle(props: {
   tooltipPlacement?: Placement;
 }) {
   const label = () => {
-    if (themeMode() === "system") return "Theme follows the system — switch to manual";
+    if (themeMode() === "system") return "Theme follows the system. Switch to manual";
     return theme() === "dark" ? "Switch to light theme" : "Switch to dark theme";
   };
   return (
-    <Tooltip content={label()} placement={props.tooltipPlacement ?? "bottom"}>
+    <DsTooltip content={label()} placement={props.tooltipPlacement ?? "bottom"}>
       <button
         type="button"
-        onClick={toggleTheme}
+        onClick={(event) => {
+          const rect = event.currentTarget.getBoundingClientRect();
+          toggleTheme({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+        }}
         aria-label="Toggle theme"
-        class={`relative flex h-9 w-9 items-center justify-center rounded-lg text-ink-400 hover:text-ink-100 hover:bg-ink-800/60 transition-all duration-300 cursor-pointer ${props.class ?? ""}`}
+        ref={press}
+        class={`ui-icon-button ${props.class ?? ""}`}
       >
         <span
-          class="flex items-center justify-center transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]"
-          style={{
-            transform: theme() === "dark" ? "rotate(0deg)" : "rotate(180deg)",
-          }}
+          class="flex items-center justify-center transition-transform duration-500 ease-spring"
+          style={{ transform: theme() === "dark" ? "rotate(0deg)" : "rotate(180deg)" }}
         >
-          <Icon
-            name={theme() === "dark" ? Icons.sun : themeMode() === "system" ? Icons.monitor : Icons.moon}
-            size={18}
-          />
+          <Glyph icon={theme() === "dark" ? Icons.sun : themeMode() === "system" ? Icons.monitor : Icons.moon} size={18} />
         </span>
       </button>
-    </Tooltip>
+    </DsTooltip>
   );
 }
 
@@ -251,30 +384,47 @@ export function ThemeToggle(props: {
 // COMPONENTS
 // ==========================================
 
+const BTN_VARIANT: Record<string, ButtonVariant> = {
+  primary: "primary",
+  brand: "primary",
+  ghost: "ghost",
+  danger: "danger",
+  outline: "secondary",
+  secondary: "secondary",
+  subtle: "secondary",
+};
+
 export function Btn(props: {
-  variant?: "primary" | "brand" | "ghost" | "danger" | "outline";
-  size?: "sm" | "md";
+  variant?: "primary" | "brand" | "ghost" | "danger" | "outline" | "secondary" | "subtle";
+  size?: "xs" | "sm" | "md" | "lg";
   onClick?: (e: MouseEvent) => void;
   disabled?: boolean;
+  loading?: boolean;
   type?: "button" | "submit";
   class?: string;
   title?: string;
   children: JSX.Element;
 }) {
+  // Legacy sizes: the default control is the compact 36px one; `sm` or `xs` is the
+  // dense 28px row action; `lg` is the full 44px form action.
+  const size = (): ButtonSize => (props.size === "sm" || props.size === "xs" ? "xs" : props.size === "lg" ? "md" : "sm");
   const btn = (
-    <button
+    <Button
+      variant={BTN_VARIANT[props.variant ?? "primary"]}
+      size={size()}
       type={props.type ?? "button"}
-      class={`ui-button ui-button-${props.variant ?? "primary"} ${props.size === "sm" ? "ui-button-sm" : ""} ${props.class ?? ""}`}
+      class={props.class}
       onClick={props.onClick}
       disabled={props.disabled}
+      loading={props.loading}
     >
       {props.children}
-    </button>
+    </Button>
   );
   // title floats as a themed Tooltip (never two competing labels).
   return (
     <Show when={props.title} fallback={btn}>
-      {(title) => <Tooltip content={title()}>{btn}</Tooltip>}
+      {(title) => <DsTooltip content={title()}>{btn}</DsTooltip>}
     </Show>
   );
 }
@@ -282,19 +432,14 @@ export function Btn(props: {
 export function Card(props: {
   class?: string;
   interactive?: boolean;
-  /** Optional USAL entrance tokens ("fade-u duration-250"), so a card that a
-   *  route or tab mounts carries its own motion (see `usal` in motion.ts). */
+  /** Optional entrance tokens ("fade-u delay-100"): one entrance on mount. */
   motion?: string;
   children: JSX.Element;
 }) {
   return (
     <div
-      class={`ui-card ${
-        props.interactive
-          ? "ui-card-interactive"
-          : ""
-      } ${props.class ?? ""}`}
-      {...(props.motion ? usal(props.motion) : {})}
+      ref={(node) => { if (props.motion) usal(props.motion).ref(node); }}
+      class={`ui-card ${props.interactive ? "ui-card-interactive" : ""} ${props.class ?? ""}`}
     >
       {props.children}
     </div>
@@ -307,11 +452,11 @@ export function CardHeader(props: {
   right?: JSX.Element;
 }) {
   return (
-    <div class="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
-      <div>
-        <h2 class="text-sm font-semibold text-ink-100">{props.title}</h2>
+    <div class="ui-card-header">
+      <div class="min-w-0">
+        <h2 class="ui-card-title">{props.title}</h2>
         <Show when={props.subtitle}>
-          <p class="text-xs text-ink-400 mt-0.5">{props.subtitle}</p>
+          <p class="ui-card-subtitle">{props.subtitle}</p>
         </Show>
       </div>
       {props.right}
@@ -319,89 +464,64 @@ export function CardHeader(props: {
   );
 }
 
-/** Small tinted icon tile, used on stat cards and the topbar page marker. */
+/** A plain icon beside a stat (design rule: no icons in rounded tiles). */
 export function IconTile(props: { icon: string; class?: string }) {
   return (
-    <div
-      class={`rounded-lg bg-ink-900 border border-line text-ink-400 flex items-center justify-center shrink-0 ${props.class ?? "w-10 h-10"}`}
-    >
-      <Icon name={props.icon} size={20} />
-    </div>
-  );
-}
-
-/** Standardized icon-only row/list action button. Neutral by default;
- *  `danger` turns rose on hover. The label lives in a floating Tooltip +
- *  aria-label (no native title, so grids/modals never clip it). */
-export function IconBtn(props: {
-  icon: string;
-  title: string;
-  danger?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <Tooltip content={props.title}>
-      <button
-        type="button"
-        aria-label={props.title}
-        disabled={props.disabled}
-        onClick={props.onClick}
-        class={`flex items-center justify-center rounded-lg p-2 transition-all duration-200 active:translate-y-px disabled:opacity-40 disabled:pointer-events-none cursor-pointer ${
-          props.danger
-            ? "text-ink-400 hover:text-rose-500 hover:bg-rose-500/10"
-            : "text-ink-400 hover:text-ink-100 hover:bg-ink-800/60"
-        }`}
-      >
-        <Icon name={props.icon} size={16} />
-      </button>
-    </Tooltip>
-  );
-}
-
-/** Green/red pill showing a percent change vs the previous period (▲/▼). */
-export function DeltaPill(props: { pct: number; class?: string }) {
-  const up = () => props.pct >= 0;
-  return (
-    <span
-      class={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tabular-nums ${
-        up()
-          ? "bg-emerald-500/10 text-emerald-500"
-          : "bg-rose-500/10 text-rose-500"
-      } ${props.class ?? ""}`}
-    >
-      <span class="text-[7px] leading-none">{up() ? "▲" : "▼"}</span>
-      {`${Math.abs(Math.round(props.pct))}%`}
+    <span class={`inline-flex items-center justify-center shrink-0 text-fg-muted ${props.class ?? ""}`}>
+      <Glyph icon={props.icon} size={20} />
     </span>
   );
 }
 
-/** Compact segmented control with a raised active option. */
+/** Icon-only row/list action. The label is a Tooltip + aria-label (no native
+ *  title, so grids/modals never clip it); `danger` turns red on hover. */
+export function IconBtn(props: {
+  icon: string;
+  title?: string;
+  label?: string;
+  danger?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  const tip = () => props.title ?? props.label ?? "";
+  return (
+    <DsTooltip content={tip()}>
+      <button
+        type="button"
+        aria-label={tip()}
+        disabled={props.disabled}
+        onClick={() => props.onClick?.()}
+        ref={press}
+        class={`ui-icon-button ${props.danger ? "ui-icon-button-danger" : ""}`}
+      >
+        <Glyph icon={props.icon} size={16} />
+      </button>
+    </DsTooltip>
+  );
+}
+
+/** Percent change vs the previous period. Status color plus an arrow, never
+ *  color alone. */
+export function DeltaPill(props: { pct: number; class?: string }) {
+  const up = () => props.pct >= 0;
+  return (
+    <DsBadge tone={up() ? "success" : "danger"} size="sm" class={props.class}>
+      <Glyph icon={up() ? "lucide:arrow-up-right" : "lucide:arrow-down-right"} size={12} />
+      {`${Math.abs(Math.round(props.pct))}%`}
+    </DsBadge>
+  );
+}
+
+/** Segmented control with a gliding raised highlight. */
 export function Segmented<T extends string>(props: {
   value: T;
   onChange: (v: T) => void;
-  options: Array<{ value: T; label: string }>;
+  options: Array<{ value: T; label: string; badge?: number | string }>;
   class?: string;
+  label?: string;
+  ariaLabel?: string;
 }) {
-  return (
-    <div
-      class={`ui-segmented ${props.class ?? ""}`}
-      role="group"
-    >
-      <For each={props.options}>
-        {(o) => (
-          <button
-            type="button"
-            aria-pressed={o.value === props.value}
-            onClick={() => props.onChange(o.value)}
-            class="ui-segment"
-          >
-            {o.label}
-          </button>
-        )}
-      </For>
-    </div>
-  );
+  return <SegmentedControl value={props.value} onChange={props.onChange} options={props.options} class={props.class} label={props.label ?? props.ariaLabel} />;
 }
 
 /**
@@ -428,19 +548,15 @@ export function compactParts(n: number): { count: string; suffix: string } {
 }
 
 /**
- * Animated number: counts up from 0 (compact — 950, 12.5K, 1.14M — never wraps).
- * The tween owns the text node, so a data refresh animates FROM the value on
- * screen instead of re-creating the element (which used to replay the whole
- * card entrance and could leave a stale number behind).
+ * Animated number (compact: 950, 12.5K, 1.14M). Digits roll to the new
+ * value on a spring; tabular digits keep the width stable; reduced motion
+ * shows the value directly.
  */
 export function CountUp(props: { value: number; class?: string }) {
-  const animated = createTweenedNumber(() =>
-    Math.round(Math.max(0, props.value)),
-  );
-  const parts = () => compactParts(animated());
+  const parts = () => compactParts(Math.round(Math.max(0, props.value)));
   return (
     <span class={`tabular-nums inline-flex items-baseline ${props.class ?? ""}`}>
-      <span>{parts().count}</span>
+      <RollingNumber value={parts().count} />
       <Show when={parts().suffix}>
         {(suffix) => <span class="text-[0.85em] font-medium ml-0.5">{suffix()}</span>}
       </Show>
@@ -460,49 +576,88 @@ export function Input(props: {
   autocomplete?: string;
   required?: boolean;
   hint?: string;
+  error?: string;
   disabled?: boolean;
 }) {
   const [revealed, setRevealed] = createSignal(false);
   const inputId = createUniqueId();
   const hintId = createUniqueId();
+  const describedBy = () => (props.hint || props.error ? hintId : undefined);
   return (
     <div class="block">
       <Show when={props.label}>
-        <label for={inputId} class="block text-xs font-medium text-ink-300 mb-1.5">
-          {props.label}
-        </label>
+        <label for={inputId} class="ui-label">{props.label}</label>
       </Show>
-      <div class="relative">
-      <input
+      <div class={props.type === "password" ? "ui-field-adorned" : undefined}>
+        <input
+          id={inputId}
+          aria-describedby={describedBy()}
+          aria-invalid={props.error ? "true" : undefined}
+          type={props.type === "password" && revealed() ? "text" : props.type ?? "text"}
+          value={props.value}
+          onInput={(e) => props.onInput(e.currentTarget.value)}
+          placeholder={props.placeholder}
+          min={props.min}
+          max={props.max}
+          step={props.step}
+          autocomplete={props.autocomplete}
+          required={props.required}
+          disabled={props.disabled}
+          class="ui-field"
+        />
+        <Show when={props.type === "password"}>
+          <span class="ui-field-adornment">
+            <button
+              type="button"
+              aria-label={revealed() ? "Hide password" : "Show password"}
+              aria-pressed={revealed()}
+              disabled={props.disabled}
+              onClick={() => setRevealed(!revealed())}
+              class="ui-icon-button"
+            >
+              <Glyph icon={revealed() ? "lucide:eye-off" : Icons.eye} size={16} />
+            </button>
+          </span>
+        </Show>
+      </div>
+      <Show when={props.error} fallback={<Show when={props.hint}><span id={hintId} class="ui-hint">{props.hint}</span></Show>}>
+        <span id={hintId} class="ui-error-text">{props.error}</span>
+      </Show>
+    </div>
+  );
+}
+
+export function Textarea(props: {
+  label?: string;
+  value: string;
+  onInput: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+  hint?: string;
+  error?: string;
+  disabled?: boolean;
+}) {
+  const inputId = createUniqueId();
+  const hintId = createUniqueId();
+  const describedBy = () => (props.hint || props.error ? hintId : undefined);
+  return (
+    <div class="block">
+      <Show when={props.label}>
+        <label for={inputId} class="ui-label">{props.label}</label>
+      </Show>
+      <textarea
         id={inputId}
-        aria-describedby={props.hint ? hintId : undefined}
-        type={props.type === "password" && revealed() ? "text" : props.type ?? "text"}
+        rows={props.rows ?? 3}
+        aria-describedby={describedBy()}
+        aria-invalid={props.error ? "true" : undefined}
         value={props.value}
         onInput={(e) => props.onInput(e.currentTarget.value)}
         placeholder={props.placeholder}
-        min={props.min}
-        max={props.max}
-        step={props.step}
-        autocomplete={props.autocomplete}
-        required={props.required}
         disabled={props.disabled}
-        class={`ui-field ${props.type === "password" ? "pr-10" : ""}`}
+        class="ui-field py-2 min-h-[4.5rem]"
       />
-      <Show when={props.type === "password"}>
-        <button
-          type="button"
-          aria-label={revealed() ? "Hide password" : "Show password"}
-          aria-pressed={revealed()}
-          disabled={props.disabled}
-          onClick={() => setRevealed(!revealed())}
-          class="absolute inset-y-px right-px flex w-9 items-center justify-center rounded-r-lg border-l border-line text-ink-400 hover:text-ink-100 hover:bg-ink-800/50 cursor-pointer disabled:opacity-50"
-        >
-          <Icon name={revealed() ? "lucide:eye-off" : Icons.eye} size={15} />
-        </button>
-      </Show>
-      </div>
-      <Show when={props.hint}>
-        <span id={hintId} class="block text-xs text-ink-500 mt-1.5">{props.hint}</span>
+      <Show when={props.error} fallback={<Show when={props.hint}><span id={hintId} class="ui-hint">{props.hint}</span></Show>}>
+        <span id={hintId} class="ui-error-text">{props.error}</span>
       </Show>
     </div>
   );
@@ -514,28 +669,41 @@ export function Input(props: {
  * A portaled listbox chooses its opening side once and stays anchored while
  * scrolling or resizing, including inside a Modal. Listeners exist only while
  * open; keyboard navigation scrolls the menu without moving the page.
+ * Motion: the list grows from the trigger, rows rise in with a short
+ * stagger, one highlight glides between rows, and closing is faster.
  */
 export function Select(props: {
   label?: string;
   ariaLabel?: string;
   value: string;
   onChange: (v: string) => void;
-  options: Array<{ value: string; label: string }>;
+  options: Array<{ value: string; label: string; hint?: string }>;
   hint?: string;
   variant?: "toolbar";
   icon?: string;
   triggerLabel?: string;
   menuTitle?: string;
+  searchable?: boolean;
 }) {
   const id = createUniqueId();
   const [open, setOpen] = createSignal(false);
   const [highlight, setHighlight] = createSignal(0);
+  const [listEl, setListEl] = createSignal<HTMLDivElement>();
+  const [indicator, setIndicator] = createSignal<HTMLSpanElement>();
   let root!: HTMLDivElement;
   let button!: HTMLButtonElement;
-  let list: HTMLDivElement | undefined;
   let typeahead = "";
   let typeTimer: ReturnType<typeof setTimeout> | undefined;
+  const presence = createPresence(open, { exit: (el) => cssExit(el, 130) });
   const current = () => props.options.find((option) => option.value === props.value) ?? { value: props.value, label: props.value || "Select…" };
+  createGlide({
+    container: listEl,
+    indicator,
+    target: () => {
+      const index = highlight();
+      return listEl()?.querySelector<HTMLElement>(`[data-option-index="${index}"]`) ?? null;
+    },
+  });
   const close = (restoreFocus = false) => {
     setOpen(false);
     typeahead = "";
@@ -552,13 +720,18 @@ export function Select(props: {
   };
   createEffect(() => {
     if (!open()) return;
-    const outside = (event: PointerEvent | FocusEvent) => {
-      if (event.target instanceof Node && !root.contains(event.target) && !list?.contains(event.target)) close();
+    const offLayer = pushLayer({
+      kind: "menu",
+      contains: (node) => root.contains(node) || !!listEl()?.contains(node),
+      onEscape: () => close(true),
+      onOutside: () => close(),
+    });
+    const outside = (event: FocusEvent) => {
+      if (event.target instanceof Node && !root.contains(event.target) && !listEl()?.contains(event.target)) close();
     };
-    document.addEventListener("pointerdown", outside);
     document.addEventListener("focusin", outside);
     onCleanup(() => {
-      document.removeEventListener("pointerdown", outside);
+      offLayer();
       document.removeEventListener("focusin", outside);
     });
   });
@@ -610,6 +783,7 @@ export function Select(props: {
     if (!open()) return;
     const index = highlight();
     queueMicrotask(() => {
+      const list = listEl();
       const option = list?.querySelector<HTMLElement>(`[data-option-index="${index}"]`);
       if (!list?.isConnected || !option) return;
       const top = option.offsetTop, bottom = top + option.offsetHeight;
@@ -618,145 +792,76 @@ export function Select(props: {
     });
   });
   return <div class={`ui-select ${props.variant === "toolbar" ? "ui-select-toolbar" : "block"}`}>
-    <Show when={props.label}><span id={`${id}-label`} class="block text-xs font-medium text-ink-300 mb-1.5">{props.label}</span></Show>
+    <Show when={props.label}><span id={`${id}-label`} class="ui-label">{props.label}</span></Show>
     <div ref={root} class="relative" onKeyDown={onKeyDown}>
       <button ref={button} type="button" role="combobox" aria-label={props.ariaLabel} aria-labelledby={!props.ariaLabel && props.label ? `${id}-label` : undefined}
         aria-haspopup="listbox" aria-expanded={open()} aria-controls={open() ? `${id}-list` : undefined} aria-activedescendant={open() ? `${id}-option-${highlight()}` : undefined} aria-describedby={`${id}-value${props.hint ? ` ${id}-hint` : ""}`}
         title={current().label} onClick={() => open() ? close() : openMenu()}
-        class={props.variant === "toolbar" ? `analytics-control ui-select-trigger ${open() || props.value ? "is-active" : ""}` : `ui-field text-left flex items-center justify-between gap-2 cursor-pointer ${open() ? "border-brand-500" : ""}`}>
-        <Show when={props.icon}><Icon name={props.icon!} size={15} /></Show>
+        class={props.variant === "toolbar" ? `analytics-control ui-select-trigger ${open() || props.value ? "is-active" : ""}` : "ui-field text-left flex items-center justify-between gap-2 cursor-pointer"}>
+        <Show when={props.icon}><Glyph icon={props.icon!} size={15} /></Show>
         <span class="min-w-0 truncate">{props.triggerLabel ?? current().label}</span>
-        <Icon name={Icons.chevronDown} size={13} class={`ui-select-chevron text-ink-500 ${open() ? "is-open" : ""}`} />
+        <Glyph icon={Icons.chevronDown} size={14} class={`ui-select-chevron ${open() ? "is-open" : ""}`} />
       </button>
       <span id={`${id}-value`} class="sr-only">{current().label}</span>
-      <Show when={open()}><Portal><div id={`${id}-list`} ref={(element) => {
-        list = element;
+      <Show when={presence.present()}><Portal><div id={`${id}-list`} data-glide="" ref={(element) => {
+        setListEl(element);
+        presence.ref(element);
         const anchor = button.getBoundingClientRect();
         const maxHeight = props.variant === "toolbar" ? 400 : 320;
-        const expectedHeight = Math.min(maxHeight, props.options.length * (window.matchMedia("(pointer: coarse)").matches ? 44 : 36) + (props.menuTitle ? 44 : 8));
+        const expectedHeight = Math.min(maxHeight, props.options.length * (window.matchMedia("(pointer: coarse)").matches ? 44 : 36) + (props.menuTitle ? 44 : 10));
         const below = document.documentElement.clientHeight - anchor.bottom;
         onCleanup(anchorFloat(button, element, {
           placement: below >= expectedHeight + 16 || below >= anchor.top ? "bottom-start" : "top-start",
           flip: false,
-          gap: 8,
+          gap: 6,
           padding: 12,
           matchWidth: props.variant !== "toolbar",
           maxHeight,
         }));
-        onCleanup(() => { list = undefined; });
+        onCleanup(() => setListEl(undefined));
       }} role="listbox" aria-label={props.ariaLabel ?? props.label ?? "Options"} onKeyDown={onKeyDown}
-        class={`${props.variant === "toolbar" ? "analytics-popover ui-select-toolbar-menu" : "ui-popover"} ui-select-menu anim-float-in overflow-y-auto p-1`}>
+        class={`ui-popover ui-menu ui-select-menu ${props.variant === "toolbar" ? "ui-select-toolbar-menu" : ""}`}>
+        <span ref={setIndicator} class="ui-menu-highlight" aria-hidden="true" />
         <Show when={props.menuTitle}><div class="ui-select-menu-title" role="presentation">{props.menuTitle}</div></Show>
         <For each={props.options}>{(option, index) => <button id={`${id}-option-${index()}`} type="button" role="option" tabIndex={-1} aria-selected={option.value === props.value} data-option-index={index()} data-hl={index() === highlight() ? "1" : "0"}
+          style={{ "--i": index() }}
           onClick={() => pick(option.value)} onPointerEnter={() => setHighlight(index())}
           onPointerDown={(event) => { if (event.pointerType === "mouse") event.preventDefault(); }}
           class={`ui-select-option ${option.value === props.value ? "is-selected" : ""}`}>
-          <span class="min-w-0 truncate">{option.label}</span><Show when={option.value === props.value}><Icon name={Icons.check} size={14} /></Show>
+          <span class="min-w-0 truncate">{option.label}</span><Show when={option.value === props.value}><Glyph icon={Icons.check} size={14} class="ui-select-check" /></Show>
         </button>}</For>
       </div></Portal></Show>
     </div>
-    <Show when={props.hint}><span id={`${id}-hint`} class="block text-xs text-ink-500 mt-1.5">{props.hint}</span></Show>
+    <Show when={props.hint}><span id={`${id}-hint`} class="ui-hint">{props.hint}</span></Show>
   </div>;
 }
 
 /**
- * Floating-ui tooltip: hover (hover-capable pointers) or keyboard focus shows
- * it; flip + shift keep it inside the viewport; Portal above the modal layer.
- * Replaces native `title` — instant, themed, never clipped.
+ * Floating tooltip: hover (precise pointers) or keyboard focus shows it;
+ * flip + shift keep it inside the viewport; portaled above the modal layer.
+ * Replaces native `title`: themed, never clipped, instant within a group.
  */
 export function Tooltip(props: {
   content: JSX.Element;
   placement?: Placement;
-  /** Hover-intent delay in ms (default 150). */
+  /** Hover-intent delay in ms. */
   delay?: number;
   disabled?: boolean;
   children: JSX.Element;
 }) {
-  const [show, setShow] = createSignal(false);
-  let anchor: HTMLSpanElement | undefined;
-  let showTimer: number | undefined;
-
-  const open = () => {
-    if (props.disabled) return;
-    // Touch devices don't hover — a tap shouldn't pin a tooltip on screen.
-    // Same source of truth as the CSS: the pre-paint html.mobile flag.
-    if (document.documentElement.classList.contains("mobile")) return;
-    window.clearTimeout(showTimer);
-    showTimer = window.setTimeout(
-      () => setShow(true),
-      props.delay ?? 150,
-    );
-  };
-  const close = () => {
-    window.clearTimeout(showTimer);
-    setShow(false);
-  };
-  const onFocusIn = () => {
-    // Keyboard focus only (the wrapper itself is never focusable).
-    if (anchor?.querySelector(":focus-visible")) setShow(true);
-  };
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") close();
-  };
-  onMount(() => window.addEventListener("keydown", onKey));
-  onCleanup(() => {
-    window.removeEventListener("keydown", onKey);
-    window.clearTimeout(showTimer);
-  });
-
+  // Handled by DsTooltip (if (props.disabled) return; inside the open guard).
   return (
-    <>
-      <span
-        ref={anchor}
-        class="inline-flex max-w-full"
-        onMouseEnter={open}
-        onMouseLeave={close}
-        onFocusIn={onFocusIn}
-        onFocusOut={close}
-      >
-        {props.children}
-      </span>
-      <Show when={show()}>
-        <Portal>
-          <div
-            ref={(el) => {
-              onCleanup(
-                anchorFloat(anchor!, el, {
-                  placement: props.placement ?? "top",
-                  gap: 8,
-                }),
-              );
-            }}
-            role="tooltip"
-            class="ui-popover anim-float-in pointer-events-none w-max max-w-[calc(100vw-1rem)] whitespace-pre-wrap break-words px-2 py-1 text-[11px] font-medium text-ink-100"
-          >
-            {props.content}
-          </div>
-        </Portal>
-      </Show>
-    </>
+    <DsTooltip content={props.content} placement={props.placement} delay={props.delay} disabled={props.disabled}>
+      {props.children}
+    </DsTooltip>
   );
 }
 
 export function Badge(props: {
-  tone: "green" | "red" | "amber" | "zinc" | "indigo" | "blue";
+  tone: BadgeTone | LegacyTone;
   children: JSX.Element;
 }) {
-  const tones = {
-    green: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
-    red: "bg-rose-500/10 text-rose-500 border-rose-500/20",
-    amber: "bg-amber-500/10 text-amber-500 border-amber-500/20",
-    zinc: "bg-ink-800/70 text-ink-300 border-ink-600/60",
-    indigo: "bg-brand-500/10 text-brand-500 border-brand-500/20",
-    blue: "bg-brand-500/10 text-brand-500 border-brand-500/20",
-  };
-  return (
-    <span
-      class={`max-h-5 min-h-5 max-w-fit min-w-fit inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${tones[props.tone]}`}
-    >
-      {props.children}
-    </span>
-  );
+  return <DsBadge tone={props.tone}>{props.children}</DsBadge>;
 }
 
 export function ModalSection(props: {
@@ -774,20 +879,20 @@ export function ModalSection(props: {
         <div class="flex items-start sm:items-center justify-between gap-3 flex-wrap">
           <div class="min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
-              <h4 class="text-xs sm:text-sm font-semibold text-ink-100">
+              <h4 class="text-sm font-medium text-fg">
                 {props.title}
               </h4>
               <Show when={props.info}>
-                <Tooltip content={props.info}>
-                  <span tabindex="0" aria-label={props.info} class="inline-flex text-ink-400 hover:text-ink-200 cursor-help transition-colors">
-                    <Icon name="lucide:info" size={12} />
+                <DsTooltip content={props.info}>
+                  <span role="button" tabindex="0" aria-label={props.info} class="inline-flex text-fg-muted hover:text-fg cursor-help transition-colors">
+                    <Glyph icon="lucide:info" size={14} />
                   </span>
-                </Tooltip>
+                </DsTooltip>
               </Show>
               {props.badge}
             </div>
             <Show when={props.subtitle}>
-              <p class="text-xs text-ink-400 leading-relaxed mt-0.5">
+              <p class="text-sm text-fg-secondary mt-0.5">
                 {props.subtitle}
               </p>
             </Show>
@@ -804,12 +909,8 @@ export function ModalSection(props: {
 
 export function OrDivider(props: { text?: string; class?: string }) {
   return (
-    <div class={`flex items-center gap-3 my-3 ${props.class ?? ""}`}>
-      <div class="h-px bg-line/80 flex-1" />
-      <span class="text-[11px] font-medium text-ink-500 uppercase tracking-wider">
-        {props.text ?? "Or"}
-      </span>
-      <div class="h-px bg-line/80 flex-1" />
+    <div class={`ui-divider my-3 ${props.class ?? ""}`}>
+      {props.text ?? "Or"}
     </div>
   );
 }
@@ -820,16 +921,23 @@ export function ModalField(props: {
   children: JSX.Element;
   class?: string;
 }) {
+  const fieldId = createUniqueId();
+  let root: HTMLDivElement | undefined;
+  createEffect(() => {
+    if (!props.label || !root) return;
+    const control = root.querySelector<HTMLElement>("input, textarea, select");
+    if (control && !control.id && !control.getAttribute("aria-label") && !control.getAttribute("aria-labelledby")) {
+      control.id = fieldId;
+    }
+  });
   return (
-    <div class={`space-y-1.5 ${props.class ?? ""}`}>
+    <div ref={root} class={props.class ?? ""}>
       <Show when={props.label}>
-        <label class="block text-xs font-medium text-ink-300">
-          {props.label}
-        </label>
+        <label for={fieldId} class="ui-label">{props.label}</label>
       </Show>
       {props.children}
       <Show when={props.hint}>
-        <p class="text-[11px] text-ink-500">{props.hint}</p>
+        <p class="ui-hint">{props.hint}</p>
       </Show>
     </div>
   );
@@ -838,40 +946,42 @@ export function ModalField(props: {
 export function SwitchCard(props: {
   checked: boolean;
   onChange: (checked: boolean) => void;
-  title: string;
+  title?: string;
+  label?: string;
   description?: string;
   badge?: JSX.Element;
   disabled?: boolean;
   class?: string;
 }) {
+  const heading = () => props.title ?? props.label ?? "";
   return (
     <label
       class={`ui-switch-card select-none ${
         props.disabled ? "opacity-50 pointer-events-none" : ""
       } ${props.class ?? ""}`}
     >
-      <span class="relative shrink-0">
-      <input
-        type="checkbox"
-        role="switch"
-        class="peer sr-only"
-        aria-label={props.title}
-        checked={props.checked}
-        aria-checked={props.checked}
-        disabled={props.disabled}
-        onChange={(e) => props.onChange(e.currentTarget.checked)}
-      />
-      <span class="ui-switch-track" aria-hidden="true"><span class="ui-switch-thumb" /></span>
+      <span class="relative shrink-0 pt-px">
+        <input
+          type="checkbox"
+          role="switch"
+          class="peer sr-only"
+          aria-label={heading()}
+          checked={props.checked}
+          aria-checked={props.checked}
+          disabled={props.disabled}
+          onChange={(e) => props.onChange(e.currentTarget.checked)}
+        />
+        <span class="ui-switch-track" aria-hidden="true"><span class="ui-switch-thumb" /></span>
       </span>
       <span class="min-w-0 flex-1">
         <span class="flex items-center gap-2 flex-wrap">
-          <span class="text-xs font-medium text-ink-100">
-            {props.title}
+          <span class="text-sm font-medium text-fg">
+            {heading()}
           </span>
           {props.badge}
         </span>
         <Show when={props.description}>
-          <span class="block text-xs text-ink-400 leading-relaxed mt-0.5">
+          <span class="block text-sm text-fg-secondary mt-0.5">
             {props.description}
           </span>
         </Show>
@@ -893,11 +1003,13 @@ export function FilterChip(props: {
     <button
       type="button"
       disabled={props.disabled}
-      onClick={props.onClick}
-      class={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-all cursor-pointer select-none border ${
+      onClick={() => props.onClick?.()}
+      aria-pressed={!!props.selected}
+      ref={press}
+      class={`inline-flex min-h-8 items-center gap-1.5 px-3 rounded-pill text-sm font-medium transition-colors cursor-pointer select-none border ${
         props.selected
-          ? "bg-accent-500 text-accent-fg border-accent-500 font-semibold shadow-sm"
-          : "bg-ink-900/60 text-ink-300 border-line hover:border-ink-500 hover:text-ink-100"
+          ? "bg-accent-subtle text-accent-strong border-transparent"
+          : "bg-surface text-fg-secondary border-border hover:border-border-strong hover:text-fg"
       } ${props.disabled ? "opacity-40 cursor-not-allowed" : ""} ${props.class ?? ""}`}
     >
       <span>{props.children}</span>
@@ -905,13 +1017,14 @@ export function FilterChip(props: {
       <Show when={props.selected && props.onRemove}>
         <span
           role="button"
+          aria-label="Remove filter"
           onClick={(e) => {
             e.stopPropagation();
             props.onRemove?.();
           }}
           class="hover:opacity-75 p-0.5 rounded transition-opacity"
         >
-          <Icon name={Icons.x} size={11} />
+          <Glyph icon={Icons.x} size={12} />
         </span>
       </Show>
     </button>
@@ -924,26 +1037,12 @@ export function ModalNotice(props: {
   children: JSX.Element;
   class?: string;
 }) {
-  const tones = {
-    info: "border-brand-500/30 bg-brand-500/10 text-brand-400",
-    warn: "border-amber-500/30 bg-amber-500/10 text-amber-400",
-    danger: "border-rose-500/30 bg-rose-500/10 text-rose-400",
-    success: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
-  };
   return (
-    <div
-      class={`rounded-lg border p-3 text-xs leading-relaxed ${tones[props.tone ?? "info"]} ${props.class ?? ""}`}
-    >
-      <Show when={props.title}>
-        <div class="font-semibold text-ink-100 mb-1">{props.title}</div>
-      </Show>
-      <div class="text-ink-300">{props.children}</div>
-    </div>
+    <Alert tone={props.tone ?? "info"} title={props.title} class={props.class}>
+      {props.children}
+    </Alert>
   );
 }
-
-const modalStack: HTMLElement[] = [];
-let previousBodyOverflow = "";
 
 export function Modal(props: {
   open: boolean;
@@ -958,213 +1057,54 @@ export function Modal(props: {
   children: JSX.Element;
   bodyRef?: (el: HTMLDivElement | undefined) => void;
 }) {
-  const titleId = createUniqueId();
-  const descriptionId = createUniqueId();
-  const desc = () => props.subtitle ?? props.description;
-
-  const setupDialog = (panel: HTMLDivElement) => {
-    const previousFocus = document.activeElement as HTMLElement | null;
-    if (modalStack.length === 0) {
-      previousBodyOverflow = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-    }
-    modalStack.push(panel);
-    const focusable = () => Array.from(panel.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex="0"]',
-    )).filter((el) => el.getClientRects().length > 0);
-    const raf = requestAnimationFrame(() => {
-      if (modalStack.at(-1) === panel) (panel.querySelector<HTMLElement>("[autofocus]") || focusable()[0] || panel).focus();
-    });
-    const onKey = (e: KeyboardEvent) => {
-      if (modalStack.at(-1) !== panel || e.defaultPrevented) return;
-      // Floating menus own Escape before the dialog beneath them.
-      if (document.querySelector("[data-floatmenu], [role=listbox]")) return;
-      if (e.key === "Escape") { e.preventDefault(); props.onClose(); }
-      if (e.key !== "Tab") return;
-      const items = focusable();
-      const first = items[0] || panel;
-      const last = items.at(-1) || panel;
-      if (!panel.contains(document.activeElement) || document.activeElement === panel || (e.shiftKey && document.activeElement === first)) {
-        e.preventDefault(); (e.shiftKey ? last : first).focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault(); first.focus();
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    onCleanup(() => {
-      cancelAnimationFrame(raf);
-      document.removeEventListener("keydown", onKey);
-      const wasTop = modalStack.at(-1) === panel;
-      const index = modalStack.indexOf(panel);
-      if (index >= 0) modalStack.splice(index, 1);
-      if (modalStack.length === 0) document.body.style.overflow = previousBodyOverflow;
-      if (wasTop && previousFocus?.isConnected) previousFocus.focus();
-    });
-  };
   return (
-    <Show when={props.open}>
-      <Portal>
-        <div
-          class="ui-dialog-backdrop fixed inset-0 overflow-y-auto flex items-center justify-center"
-          style={{ "z-index": Z.modal }}
-          onMouseDown={props.onClose}
-        >
-          <div
-            ref={setupDialog}
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby={titleId}
-            aria-describedby={desc() ? descriptionId : undefined}
-            tabindex="-1"
-            class={`ui-dialog anim-pop-in flex my-auto min-h-0 w-full flex-col ${
-              props.width ?? "max-w-xl"
-            } ${
-              props.fullOnMobile !== false
-                ? "ui-dialog-full sm:max-h-[90dvh]"
-                : "max-h-[calc(100dvh-2rem)] sm:max-h-[90dvh]"
-            } outline-none overflow-hidden`}
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div class="ui-dialog-header flex shrink-0 items-start justify-between gap-3 px-4 py-3.5 border-b border-line">
-              <div class="min-w-0 flex-1">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <h3
-                    id={titleId}
-                    class="text-sm font-semibold text-ink-100 tracking-tight break-words"
-                  >
-                    {props.title}
-                  </h3>
-                  {props.badge}
-                </div>
-                <Show when={desc()}>
-                  <p
-                    id={descriptionId}
-                    class="mt-1 text-xs text-ink-400 leading-relaxed font-normal"
-                  >
-                    {desc()}
-                  </p>
-                </Show>
-              </div>
-              <button
-                type="button"
-                onClick={props.onClose}
-                class="shrink-0 rounded-lg p-1.5 text-ink-400 hover:text-ink-100 hover:bg-elev active:scale-95 transition-colors cursor-pointer"
-                aria-label="Close"
-              >
-                <Icon name={Icons.x} size={16} />
-              </button>
-            </div>
-
-            {/* Body */}
-            <div
-              ref={(el) => props.bodyRef?.(el)}
-              class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4 space-y-4 text-[13px]"
-            >
-              {props.children}
-            </div>
-
-            {/* Footer */}
-            <Show when={props.footer}>
-              <div class="ui-dialog-footer flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line px-4 py-2.5">
-                {props.footer}
-              </div>
-            </Show>
-          </div>
-        </div>
-      </Portal>
-    </Show>
+    <Dialog
+      open={props.open}
+      onClose={props.onClose}
+      title={props.title}
+      description={props.description}
+      subtitle={props.subtitle}
+      badge={props.badge}
+      width={props.width}
+      fullOnMobile={props.fullOnMobile}
+      footer={props.footer}
+      bodyRef={props.bodyRef}
+    >
+      {props.children}
+    </Dialog>
   );
 }
 
 // ===== Toasts =====
-
-interface Toast {
-  id: number;
-  kind: "ok" | "err";
-  text: string;
-}
-
-const [toasts, setToasts] = createSignal<Toast[]>([]);
-let toastId = 0;
 
 /** Capitalize the first letter for display (leaves the rest untouched). */
 export function capitalize(s: string): string {
   return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-export function toast(text: string, kind: "ok" | "err" = "ok"): void {
-  const id = ++toastId;
-  setToasts((t) => [...t.slice(-3), { id, kind, text: capitalize(text) }]);
-  setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
+/** Background result notification (foreground actions confirm in place). */
+function toastFn(text: string, kind: "ok" | "err" = "ok"): void {
+  pushToast(capitalize(text), kind);
 }
+toastFn.success = (text: string) => toastFn(text, "ok");
+toastFn.error = (text: string) => toastFn(text, "err");
+export const toast = toastFn;
 
 export function Toasts() {
-  return (
-    <div
-      class="fixed bottom-4 right-4 flex flex-col gap-2 items-end"
-      style={{ "z-index": Z.toast }}
-    >
-      <For each={toasts()}>
-        {(t) => (
-          <div
-            class={`anim-slide-in rounded-xl border px-4 py-2.5 text-sm shadow-xl shadow-black/10 max-w-sm bg-elev ${
-              t.kind === "ok"
-                ? "border-emerald-500/30 text-emerald-500"
-                : "border-rose-500/30 text-rose-500"
-            }`}
-          >
-            {t.text}
-          </div>
-        )}
-      </For>
-    </div>
-  );
+  return <ToastRegion />;
 }
 
 export function Spinner(props: { class?: string }) {
-  return (
-    <svg
-      class={`animate-spin ${props.class ?? "w-4 h-4"}`}
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-    >
-      <circle
-        class="opacity-20"
-        cx="12"
-        cy="12"
-        r="10"
-        stroke="currentColor"
-        stroke-width="4"
-      />
-      <path
-        d="M22 12a10 10 0 0 0-10-10"
-        stroke="currentColor"
-        stroke-width="4"
-        stroke-linecap="round"
-      />
-    </svg>
-  );
+  return <DsSpinner class={props.class ?? "w-4 h-4"} />;
 }
 
 export function EmptyState(props: {
   icon: string;
   title: string;
   hint?: string;
+  description?: string;
 }) {
-  return (
-    <div class="flex flex-col items-center justify-center py-12 text-center" {...usal("fade-u duration-250")}>
-      <div class="w-11 h-11 rounded-2xl bg-ink-800/70 border border-line flex items-center justify-center text-ink-400 mb-3">
-        <Icon name={props.icon} size={20} />
-      </div>
-      <p class="text-sm font-medium text-ink-200">{props.title}</p>
-      <Show when={props.hint}>
-        <p class="text-xs text-ink-500 mt-1 max-w-xs">{props.hint}</p>
-      </Show>
-    </div>
-  );
+  return <DsEmptyState icon={props.icon} title={props.title} hint={props.hint ?? props.description} />;
 }
 
 export function ProgressBar(props: {
@@ -1172,22 +1112,8 @@ export function ProgressBar(props: {
   max: number;
   danger?: boolean;
 }) {
-  const pct = () =>
-    Math.min(100, props.max > 0 ? (props.value / props.max) * 100 : 0);
-  return (
-    <div
-      class="w-full h-2 rounded-full bg-ink-800 overflow-hidden"
-      role="progressbar"
-      aria-valuenow={Math.round(pct())}
-      aria-valuemin={0}
-      aria-valuemax={100}
-    >
-      <div
-        class={`h-full rounded-full transition-all duration-700 ${props.danger && pct() > 85 ? "bg-rose-500" : "bg-brand-500"}`}
-        style={{ width: `${pct()}%` }}
-      />
-    </div>
-  );
+  const pct = () => (props.max > 0 ? (props.value / props.max) * 100 : 0);
+  return <Progress value={props.value} max={props.max} tone={props.danger && pct() > 85 ? "danger" : "default"} />;
 }
 
 // ===== Formatting helpers =====
@@ -1317,7 +1243,7 @@ export async function copyWithToast(text: string): Promise<void> {
   if (await copyToClipboard(text)) toast("Copied");
   else
     toast(
-      "Could not copy automatically — select the text and copy manually",
+      "Could not copy automatically. Select the text and copy it manually",
       "err",
     );
 }

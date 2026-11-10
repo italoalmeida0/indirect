@@ -3,13 +3,12 @@ import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "
 import { createMemo, createResource, createSignal, For, Show } from "solid-js";
 
 import { api, currentSession, type AdminUserDto, type BillingPlanDto } from "../../api";
-import { PageTitle } from "../../index";
+import { PageTitle } from "../../chrome";
 import {
   Badge,
   Btn,
   Card,
   EmptyState,
-  FilterChip,
   Icon,
   IconBtn,
   Icons,
@@ -17,6 +16,7 @@ import {
   ModalField,
   ModalNotice,
   ModalSection,
+  RoleCardGroup,
   SwitchCard,
   Select,
   fmtCost,
@@ -215,22 +215,22 @@ export default function AdminUsersPage() {
     return (
       <div class="flex items-center gap-1.5 whitespace-nowrap">
         <Show when={u.hasPassword}>
-          <span title="Password configured" class="inline-flex text-ink-300">
+          <span title="Password configured" class="inline-flex text-fg-secondary">
             <Icon name={Icons.key} size={13} />
           </span>
         </Show>
         <Show when={u.totpEnabled}>
-          <span title="Two-factor authentication active" class="inline-flex text-emerald-400">
+          <span title="Two-factor authentication active" class="inline-flex text-success">
             <Icon name={Icons.shield} size={13} />
           </span>
         </Show>
         <Show when={u.googleLinked}>
-          <span title="Google account linked" class="inline-flex text-indigo-400 font-semibold text-[11px]">
+          <span title="Google account linked" class="inline-flex text-accent font-medium text-xs">
             G
           </span>
         </Show>
         <Show when={!u.hasPassword && !u.totpEnabled && !u.googleLinked}>
-          <span class="text-[11px] text-ink-500">—</span>
+          <span class="text-xs text-fg-muted">—</span>
         </Show>
       </div>
     );
@@ -330,52 +330,47 @@ export default function AdminUsersPage() {
           <Show when={!view.mobile()}><div class="p-2"><UsageGrid columnDefs={cols} datasource={usersDatasource} cacheBlockSize={25} refreshDeps={view.refreshKey()} storageKey="llmgw-grid:admin.users.list" sort={view.sort()} onSortChanged={view.setSort} /></div></Show>
           <Show when={view.mobile()}><div class="catalog-mobile p-3 space-y-3"><For each={view.rows()}>
               {(u) => (
-                <div class="p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
+                <div class="p-4 rounded-control border border-line bg-surface-muted space-y-3 shadow-xs">
                   <div class="flex items-start justify-between gap-2">
                     <div class="min-w-0">
                       <div class="flex items-center gap-2 flex-wrap">
-                        <span class="text-sm font-semibold text-ink-100 truncate">{u.name || u.email}</span>
+                        <span class="text-sm font-medium text-fg truncate">{u.name || u.email}</span>
                         <Badge tone={u.role === "admin" ? "indigo" : "zinc"}>{u.role}</Badge>
                       </div>
-                      <div class="text-xs text-ink-400 truncate mt-0.5">{u.email}</div>
+                      <div class="text-xs text-fg-secondary truncate mt-0.5">{u.email}</div>
                     </div>
-                    <div class="text-right shrink-0 text-[11px] text-ink-400">
+                    <div class="text-right shrink-0 text-xs text-fg-secondary">
                       <div>Keys: {u.keyCount}</div><div>{u.planName ?? "Unlimited"}</div>
                       <div>{u.lastLoginAt ? fmtDate(u.lastLoginAt) : "Never logged in"}</div>
                     </div>
                   </div>
 
-                  <div class="pt-2 border-t border-line flex items-center justify-between text-xs text-ink-400">
+                  <div class="pt-2 border-t border-line flex items-center justify-between text-xs text-fg-secondary">
                     <div class="flex items-center gap-1.5">
-                      <span class="text-[11px]">Security:</span>
+                      <span class="text-xs">Security:</span>
                       <SecurityCell data={u} />
                     </div>
                     <div class="flex items-center gap-1">
                       <IconBtn icon="lucide:wallet" title="Manage plan and resets" onClick={() => setPlanUser(u)} />
                       <button
                         type="button"
-                        class="h-9 px-2.5 rounded-lg flex items-center gap-1 text-xs text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer"
+                        class="ui-button ui-button-outline ui-button-sm"
                         onClick={() => setEditing({ ...u })}
                       >
                         <Icon name={Icons.edit} size={14} /> Edit
                       </button>
-                      <button
-                        type="button"
-                        class="h-9 w-9 rounded-lg flex items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-card border border-line cursor-pointer"
+                      <IconBtn
+                        icon={Icons.key}
                         title="Send password reset link"
                         onClick={() => sendReset(u)}
-                      >
-                        <Icon name={Icons.key} size={14} />
-                      </button>
+                      />
                       <Show when={u.id !== meId()}>
-                        <button
-                          type="button"
-                          class="h-9 w-9 rounded-lg flex items-center justify-center text-rose-500 hover:bg-rose-500/10 border border-rose-500/30 cursor-pointer"
+                        <IconBtn
+                          icon={Icons.trash}
                           title="Delete user"
+                          danger
                           onClick={() => setConfirmDelete(u)}
-                        >
-                          <Icon name={Icons.trash} size={14} />
-                        </button>
+                        />
                       </Show>
                     </div>
                   </div>
@@ -412,6 +407,52 @@ export default function AdminUsersPage() {
         }
       >
         <div class="space-y-6">
+          {/* Exclusive Live Identity Passport & RBAC Capabilities Matrix */}
+          <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-3" aria-hidden="true">
+            <div class="flex items-center justify-between gap-3">
+              <div class="flex items-center gap-3 min-w-0">
+                <div class="w-10 h-10 rounded-xl bg-accent-subtle border border-accent/40 text-accent font-mono text-xs font-medium flex items-center justify-center shrink-0">
+                  {(name().trim() || email().trim() || "U").slice(0, 2).toUpperCase()}
+                </div>
+                <div class="min-w-0">
+                  <div class="text-xs font-medium text-fg truncate">
+                    {name().trim() || "New Gateway Member"}
+                  </div>
+                  <div class="text-[11px] font-mono text-fg-muted truncate">
+                    {email().trim() || "name@example.com"}
+                  </div>
+                </div>
+              </div>
+              <Badge tone={role() === "admin" ? "indigo" : role() === "project_manager" ? "amber" : "green"}>
+                {role() === "admin" ? "Administrator" : role() === "project_manager" ? "Project Manager" : "Standard User"}
+              </Badge>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px]">
+              <For
+                each={[
+                  { label: "Personal Keys", granted: true },
+                  { label: "Project Members", granted: role() === "project_manager" || role() === "admin" },
+                  { label: "Model Registry", granted: role() === "admin" },
+                  { label: "Billing & Org", granted: role() === "admin" },
+                ]}
+              >
+                {(cap) => (
+                  <div
+                    class={`rounded-md border px-2 py-1 flex items-center justify-between gap-1 ${
+                      cap.granted
+                        ? "border-accent/35 bg-surface text-fg"
+                        : "border-line bg-surface/40 text-fg-muted opacity-60"
+                    }`}
+                  >
+                    <span class="truncate font-medium">{cap.label}</span>
+                    <span class="font-mono">{cap.granted ? "✓" : "—"}</span>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+
           <ModalSection
             title="User Credentials"
             subtitle="Account login email and display identity."
@@ -423,7 +464,7 @@ export default function AdminUsersPage() {
                   value={email()}
                   onInput={(e) => setEmail(e.currentTarget.value)}
                   placeholder="name@example.com"
-                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                  class="ui-field"
                 />
               </ModalField>
 
@@ -433,33 +474,22 @@ export default function AdminUsersPage() {
                   value={name()}
                   onInput={(e) => setName(e.currentTarget.value)}
                   placeholder="e.g. Alice Smith"
-                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                  class="ui-field"
                 />
               </ModalField>
 
               <Select label="Spending plan" value={newPlan()} onChange={setNewPlan} options={planOptions()} />
-              <ModalField label="Gateway role" hint="Determines access to the admin dashboard and registry controls.">
-                <div class="flex flex-wrap gap-2 pt-1">
-                  <FilterChip
-                    selected={role() === "user"}
-                    onClick={() => setRole("user")}
-                  >
-                    User
-                  </FilterChip>
-                  <FilterChip
-                    selected={role() === "project_manager"}
-                    onClick={() => setRole("project_manager")}
-                  >
-                    Project manager
-                  </FilterChip>
-                  <FilterChip
-                    selected={role() === "admin"}
-                    onClick={() => setRole("admin")}
-                  >
-                    Admin
-                  </FilterChip>
-                </div>
-              </ModalField>
+              <RoleCardGroup
+                label="Gateway role"
+                hint="Determines access to the admin dashboard and registry controls."
+                value={role()}
+                onChange={(v) => setRole(v as "user" | "project_manager" | "admin")}
+                options={[
+                  { value: "user", label: "User", description: "Personal keys & projects", icon: Icons.users },
+                  { value: "project_manager", label: "Project manager", description: "Manage assigned projects", icon: Icons.folder },
+                  { value: "admin", label: "Admin", description: "Full gateway control", icon: Icons.shield },
+                ]}
+              />
             </div>
           </ModalSection>
 
@@ -506,6 +536,55 @@ export default function AdminUsersPage() {
         <Show when={editing()}>
           {(u) => (
             <div class="space-y-6">
+              {/* Exclusive Live Identity Passport & RBAC Capabilities Matrix */}
+              <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-3" aria-hidden="true">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="flex items-center gap-3 min-w-0">
+                    <div
+                      class={`w-10 h-10 rounded-xl border font-mono text-xs font-medium flex items-center justify-center shrink-0 ${
+                        u().status === "banned"
+                          ? "bg-danger-subtle border-danger/40 text-danger"
+                          : "bg-accent-subtle border-accent/40 text-accent"
+                      }`}
+                    >
+                      {(u().name.trim() || u().email.trim() || "U").slice(0, 2).toUpperCase()}
+                    </div>
+                    <div class="min-w-0">
+                      <div class="text-xs font-medium text-fg truncate">{u().name || u().email}</div>
+                      <div class="text-[11px] font-mono text-fg-muted truncate">{u().email}</div>
+                    </div>
+                  </div>
+                  <div class="flex items-center gap-1.5 shrink-0">
+                    <Badge tone={u().status === "active" ? "green" : "red"}>{u().status}</Badge>
+                    <Badge tone={u().role === "admin" ? "indigo" : "zinc"}>{u().role}</Badge>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px]">
+                  <For
+                    each={[
+                      { label: "Personal Keys", granted: u().status === "active" },
+                      { label: "Project Members", granted: u().status === "active" && (u().role === "project_manager" || u().role === "admin") },
+                      { label: "Model Registry", granted: u().status === "active" && u().role === "admin" },
+                      { label: "Billing & Org", granted: u().status === "active" && u().role === "admin" },
+                    ]}
+                  >
+                    {(cap) => (
+                      <div
+                        class={`rounded-md border px-2 py-1 flex items-center justify-between gap-1 ${
+                          cap.granted
+                            ? "border-accent/35 bg-surface text-fg"
+                            : "border-line bg-surface/40 text-fg-muted opacity-60"
+                        }`}
+                      >
+                        <span class="truncate font-medium">{cap.label}</span>
+                        <span class="font-mono">{cap.granted ? "✓" : "✕"}</span>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              </div>
+
               <ModalSection
                 title="Account Information"
                 subtitle="Primary identity and access privileges."
@@ -516,51 +595,34 @@ export default function AdminUsersPage() {
                       type="text"
                       value={u().name}
                       onInput={(e) => setEditing({ ...u(), name: e.currentTarget.value })}
-                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                      class="ui-field"
                     />
                   </ModalField>
 
-                  <ModalField label="Gateway role">
-                    <div class="flex flex-wrap gap-2 pt-1">
-                      <FilterChip
-                        selected={u().role === "user"}
-                        onClick={() => setEditing({ ...u(), role: "user" })}
-                      >
-                        User
-                      </FilterChip>
-                      <FilterChip
-                        selected={u().role === "project_manager"}
-                        onClick={() => setEditing({ ...u(), role: "project_manager" })}
-                      >
-                        Project manager
-                      </FilterChip>
-                      <FilterChip
-                        selected={u().role === "admin"}
-                        onClick={() => setEditing({ ...u(), role: "admin" })}
-                      >
-                        Admin
-                      </FilterChip>
-                    </div>
-                  </ModalField>
+                  <RoleCardGroup
+                    label="Gateway role"
+                    value={u().role}
+                    onChange={(v) => setEditing({ ...u(), role: v as "user" | "project_manager" | "admin" })}
+                    options={[
+                      { value: "user", label: "User", description: "Personal keys & projects", icon: Icons.users },
+                      { value: "project_manager", label: "Project manager", description: "Manage assigned projects", icon: Icons.folder },
+                      { value: "admin", label: "Admin", description: "Full gateway control", icon: Icons.shield },
+                    ]}
+                  />
                   <p class="text-xs text-ink-400">Project managers can manage members only in financial projects where they have manager membership. They do not gain administration access.</p>
                   <div class="rounded-lg border border-line p-3 space-y-2"><p class="text-xs text-ink-400 break-all">User ID: {u().id}</p><Btn size="sm" variant="outline" onClick={() => { setPolicyUser(u()); setPolicyTab("financial"); setEditing(null); }}>Financial and corporate access</Btn></div>
 
-                  <ModalField label="Account status" hint="Banning immediately revokes active sessions and blocks all proxy keys.">
-                    <div class="flex flex-wrap gap-2 pt-1">
-                      <FilterChip
-                        selected={u().status === "active"}
-                        onClick={() => setEditing({ ...u(), status: "active" })}
-                      >
-                        Active
-                      </FilterChip>
-                      <FilterChip
-                        selected={u().status === "banned"}
-                        onClick={() => setEditing({ ...u(), status: "banned" })}
-                      >
-                        Banned
-                      </FilterChip>
-                    </div>
-                  </ModalField>
+                  <RoleCardGroup
+                    label="Account status"
+                    hint="Banning immediately revokes active sessions and blocks all proxy keys."
+                    columns={2}
+                    value={u().status}
+                    onChange={(v) => setEditing({ ...u(), status: v as "active" | "banned" })}
+                    options={[
+                      { value: "active", label: "Active", description: "Authenticated & permitted", icon: Icons.check, tone: "success" },
+                      { value: "banned", label: "Banned", description: "All sessions & keys blocked", icon: Icons.ban, tone: "danger" },
+                    ]}
+                  />
                 </div>
               </ModalSection>
             </div>
@@ -595,9 +657,9 @@ export default function AdminUsersPage() {
         }
       >
         <div class="space-y-4">
-          <div class="rounded-xl border border-line bg-ink-950/80 p-3.5 space-y-2">
-            <div class="text-xs text-ink-400 font-medium">One-time setup URL</div>
-            <code class="block font-mono text-xs text-emerald-300 break-all select-all bg-ink-900/60 p-2.5 rounded-lg border border-line/40">
+          <div class="rounded-control border border-line bg-surface-muted p-3.5 space-y-2">
+            <div class="text-xs text-fg-secondary font-medium">One-time setup URL</div>
+            <code class="block font-mono text-xs text-success break-all select-all bg-surface p-2.5 rounded-lg border border-line/60">
               {inviteLink()}
             </code>
           </div>
@@ -637,11 +699,11 @@ export default function AdminUsersPage() {
       >
         <div class="space-y-4">
           <ModalNotice tone="warn" title="Reset TOTP authentication">
-            Reset two-factor authentication for <strong class="text-white">{confirmReset2fa()?.email}</strong>? Their existing authenticator app keys will be discarded.
+            Reset two-factor authentication for <strong class="text-fg font-medium">{confirmReset2fa()?.email}</strong>? Their existing authenticator app keys will be discarded.
           </ModalNotice>
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">Security reset outcome:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-control border border-line bg-surface-muted p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">Security reset outcome:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>TOTP secret will be wiped from the account.</li>
               <li>Active sessions will remain logged in.</li>
               <li>The user will be prompted to enroll a new authenticator upon their next login.</li>
@@ -682,12 +744,12 @@ export default function AdminUsersPage() {
       >
         <div class="space-y-4">
           <ModalNotice tone="danger" title="Confirm account deletion">
-            Delete <strong class="text-white">{confirmDelete()?.email}</strong>? All their active sessions,
+            Delete <strong class="text-fg font-medium">{confirmDelete()?.email}</strong>? All their active sessions,
             gateway API keys, and authentication credentials will be permanently erased.
           </ModalNotice>
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">Permanent erasure details:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-control border border-line bg-surface-muted p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">Permanent erasure details:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>User row, password hashes, and TOTP secrets are permanently removed.</li>
               <li>All gateway API keys owned by this user are deleted.</li>
               <li>Historical usage records remain safely kept for audit and financial accounting.</li>

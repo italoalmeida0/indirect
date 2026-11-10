@@ -23,9 +23,9 @@ export function SessionStopButton(props: {
         props.isCancelling
           ? "text-ink-500 opacity-60 cursor-default"
           : hovered()
-            ? "text-rose-400 bg-rose-950/60 border-rose-800/40 cursor-pointer"
-            : "text-emerald-400 cursor-pointer"
-      } focus-visible:ring-1 focus-visible:ring-rose-500 focus:outline-none`}
+            ? "text-danger bg-danger-subtle border-danger/35 cursor-pointer"
+            : "text-success cursor-pointer"
+      } focus-visible:ring-1 focus-visible:ring-danger focus:outline-none`}
       data-rc-tip={props.isCancelling ? "Stopping…" : "Stop"}
       aria-label={props.isCancelling ? "Stopping turn" : "Stop turn"}
     >
@@ -35,14 +35,14 @@ export function SessionStopButton(props: {
           <Iconify
             icon="lucide:loader-2"
             size={12}
-            class={`animate-spin ${props.isCancelling ? "text-ink-500" : "text-emerald-400"}`}
+            class={`animate-spin ${props.isCancelling ? "text-ink-500" : "text-success"}`}
           />
         }
       >
         <Iconify
           icon="lucide:square"
           size={9}
-          class="text-rose-400 fill-current"
+          class="text-danger fill-current"
         />
       </Show>
     </button>
@@ -155,7 +155,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                   </button>
                   <button
                     onClick={(e) => ctx.deleteSession(s.id, e)}
-                    class="rc-row-action p-0.5 text-ink-600 hover:text-rose-400 cursor-pointer"
+                    class="rc-row-action p-0.5 text-ink-600 hover:text-danger cursor-pointer"
                     data-rc-tip="Delete" aria-label="Delete"
                   >
                     <Iconify icon="lucide:trash-2" size={11} />

@@ -3,7 +3,7 @@ import { Portal } from "solid-js/web";
 import type { Placement } from "@floating-ui/dom";
 import { anchorFloat } from "../../floating";
 
-/** Local popover menu on the shared floating-ui layer (Portal + flip/shift).
+/** Local popover menu on the shared floating-ui layer (Portal + flip/shift, default `role="menu"`).
  *
  * Every action inside MUST close the menu first (like the host card's
  * remove does): an open floating menu lives in a Portal above everything
@@ -15,6 +15,8 @@ export function FloatMenu(props: {
   open: boolean;
   placement?: Placement;
   width?: string;
+  role?: JSX.HTMLAttributes<HTMLDivElement>["role"];
+  "aria-label"?: string;
   onClose?: () => void;
   children: JSX.Element;
 }) {
@@ -28,9 +30,11 @@ export function FloatMenu(props: {
             onCleanup(anchorFloat(a, el, { placement: props.placement ?? "bottom-start", maxHeight: 520 }));
           }}
           data-floatmenu
-          role="menu"
+          data-density="compact"
+          role={props.role ?? "menu"}
+          aria-label={props["aria-label"]}
           tabIndex={-1}
-          class="ui-popover anim-float-in max-w-[calc(100vw-1rem)] overflow-y-auto p-1 text-xs [scrollbar-gutter:stable] focus:outline-none"
+          class="ui-popover ui-menu anim-float-in max-w-[calc(100vw-1rem)] overflow-y-auto p-1.5 text-xs [scrollbar-gutter:stable] focus:outline-none"
           style={props.width ? { width: props.width } : undefined}
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}

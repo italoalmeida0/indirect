@@ -1,5 +1,5 @@
-import { For, Show } from "solid-js";
-import { Btn, Modal, ModalNotice } from "../../ui";
+import { createMemo, For, Show } from "solid-js";
+import { Badge, Btn, Modal, ModalNotice } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useSession } from "../ctx";
 import { sameRemotePath } from "../paths";
@@ -14,6 +14,30 @@ export function NewProjectModal() {
     if (s.folderCurrent() && sameRemotePath(path, s.folderCurrent())) return true;
     return /^(?:[a-zA-Z]:[\\/]|[\\/]|~)/.test(path);
   };
+
+  const breadcrumbs = createMemo(() => {
+    const raw = (s.folderCurrent() || s.newProjectPath()).trim();
+    if (!raw) return [] as Array<{ label: string; path: string }>;
+    const isWin = /^[a-zA-Z]:[\\/]/.test(raw);
+    const sep = isWin && raw.includes("\\") ? "\\" : "/";
+    const normalized = raw.replace(/[\\/]+/g, sep);
+    const parts = normalized.split(sep).filter(Boolean);
+    const crumbs: Array<{ label: string; path: string }> = [];
+    if (normalized.startsWith("/")) {
+      crumbs.push({ label: "/", path: "/" });
+    }
+    let acc = normalized.startsWith("/") ? "" : "";
+    parts.forEach((part, idx) => {
+      if (idx === 0 && isWin) {
+        acc = `${part}${sep}`;
+        crumbs.push({ label: part, path: acc });
+      } else {
+        acc = acc ? (acc.endsWith(sep) ? `${acc}${part}` : `${acc}${sep}${part}`) : (normalized.startsWith("/") ? `/${part}` : part);
+        crumbs.push({ label: part, path: acc });
+      }
+    });
+    return crumbs.slice(-5);
+  });
 
   return (
     <Modal
@@ -48,9 +72,35 @@ export function NewProjectModal() {
       }
     >
       <div class="space-y-4">
+        {/* Exclusive Host Filesystem Quick-Jump & OS Syntax Bar */}
+        <div class="flex items-center justify-between gap-2 flex-wrap text-xs" aria-hidden="true">
+          <div class="flex items-center gap-1.5">
+            <span class="text-ink-500 text-[11px]">Quick jump:</span>
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={() => s.requestFolders("~")}
+              class="px-2 py-0.5 rounded-md border border-line bg-ink-900/60 hover:bg-ink-800 text-ink-300 font-mono text-[11px] cursor-pointer transition-colors"
+            >
+              ~ Home
+            </button>
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={() => s.requestFolders("/")}
+              class="px-2 py-0.5 rounded-md border border-line bg-ink-900/60 hover:bg-ink-800 text-ink-300 font-mono text-[11px] cursor-pointer transition-colors"
+            >
+              / Root
+            </button>
+          </div>
+          <span class="text-[11px] font-mono text-ink-400 bg-ink-900/60 px-2 py-0.5 rounded border border-line/60">
+            {/^[a-zA-Z]:[\\/]/.test(s.newProjectPath().trim()) ? "Windows Drive Path" : "POSIX Host Path"}
+          </span>
+        </div>
+
         {/* Navigation / Path input bar */}
         <form
-          class="flex items-center gap-2 p-1.5 rounded-xl border border-line bg-ink-950/70 focus-within:border-brand-500 transition-all"
+          class="flex items-center gap-2 p-1.5 rounded-xl border border-line bg-ink-950/70 focus-within:border-accent transition-all"
           onSubmit={(e) => {
             e.preventDefault();
             s.requestFolders(s.newProjectPath());
@@ -86,8 +136,26 @@ export function NewProjectModal() {
 
         {/* Directory browser container */}
         <div class="rounded-xl border border-line bg-ink-950/60 overflow-hidden">
-          <div class="flex items-center justify-end gap-3 px-4 py-2.5 border-b border-line bg-ink-900/50">
-            <div class="flex items-center gap-2 shrink-0">
+          <div class="flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-line bg-ink-900/50 flex-wrap">
+            <div class="flex items-center gap-1 min-w-0 flex-wrap">
+              <For each={breadcrumbs()}>
+                {(crumb, idx) => (
+                  <>
+                    <Show when={idx() > 0}>
+                      <span class="text-ink-600 text-xs select-none">/</span>
+                    </Show>
+                    <button
+                      type="button"
+                      onClick={() => s.requestFolders(crumb.path)}
+                      class="px-2 py-0.5 rounded-md text-xs font-mono text-ink-300 hover:text-ink-100 hover:bg-ink-800 border border-transparent hover:border-line/60 transition-colors cursor-pointer truncate max-w-36"
+                    >
+                      {crumb.label}
+                    </button>
+                  </>
+                )}
+              </For>
+            </div>
+            <div class="flex items-center gap-2 shrink-0 ml-auto">
               <Show when={!s.folderLoading() && s.folderEntries()}>
                 <span class="text-[11px] text-ink-500 font-mono">
                   {s.folderEntries().length} folders
@@ -144,7 +212,7 @@ export function NewProjectModal() {
                       <Iconify
                         icon="lucide:folder"
                         size={15}
-                        class="shrink-0 text-ink-500 group-hover:text-brand-400 transition-colors"
+                        class="shrink-0 text-ink-500 group-hover:text-accent transition-colors"
                       />
                       <span class="truncate font-mono text-xs">{folder.name}</span>
                     </span>
@@ -157,6 +225,17 @@ export function NewProjectModal() {
                 )}
               </For>
             </Show>
+          </div>
+          <div class="flex items-center justify-between gap-2 px-3.5 py-2 border-t border-line bg-ink-900/40 text-xs">
+            <div class="flex items-center gap-2 min-w-0">
+              <Iconify icon="lucide:folder-check" size={14} class="text-accent shrink-0" />
+              <span class="font-mono text-ink-300 truncate">
+                {s.newProjectPath().trim() || "No folder selected"}
+              </span>
+            </div>
+            <Badge tone={isCurrentValid() ? "green" : "zinc"}>
+              {isCurrentValid() ? "Ready" : "Select path"}
+            </Badge>
           </div>
         </div>
       </div>

@@ -15,6 +15,9 @@ import {
   Badge,
   Btn,
   Card,
+  CopyButton,
+  CurrencyField,
+  DateTimePicker,
   EmptyState,
   FilterChip,
   Icon,
@@ -26,8 +29,10 @@ import {
   ModalSection,
   OrDivider,
   ProgressBar,
+  StepperField,
   Select,
   SwitchCard,
+  Tabs,
   copyWithToast,
   fmtDate,
   fmtCost,
@@ -489,57 +494,57 @@ export default function KeysPage() {
           <Show when={!view.mobile()}><div class="p-2"><Show when={presentation()} keyed>{(_mode) => <UsageGrid columnDefs={cols()} datasource={keysDatasource} cacheBlockSize={25} refreshDeps={view.refreshKey()} storageKey="llmgw-grid:keys.user" sort={view.sort()} onSortChanged={view.setSort} />}</Show></div></Show>
           <Show when={view.mobile()}><div class="catalog-mobile p-3 space-y-3"><For each={view.rows()}>
                   {(k) => (
-                    <div class="p-4 rounded-xl border border-line bg-elev space-y-3 shadow-xs">
+                    <div class="p-4 rounded-control border border-line bg-surface-muted space-y-3 shadow-xs">
                       {/* Key name full width without premature ellipsis */}
                       <div class="space-y-1.5">
                         <div class="flex items-start justify-between gap-2">
-                          <h4 class="text-sm font-semibold text-ink-100 break-normal min-w-0">{k.name}</h4>
-                          <span class="text-[11px] text-ink-400 shrink-0 font-mono">
+                          <h4 class="text-sm font-medium text-fg break-normal min-w-0">{k.name}</h4>
+                          <span class="text-xs text-fg-secondary shrink-0 font-mono">
                             {k.expiresAt ? `Exp: ${fmtDate(k.expiresAt)}` : "Permanent"}
                           </span>
                         </div>
                         <div class="flex items-center justify-between text-xs gap-2">
                           <div class="flex items-center gap-2">
-                            <code class="text-xs font-mono text-ink-300 bg-ink-950/60 px-2 py-0.5 rounded border border-line/60">{k.prefix}…</code>
+                            <code class="text-xs font-mono text-fg-secondary bg-surface px-2 py-0.5 rounded border border-line/60">{k.prefix}…</code>
                             <Badge tone={k.status === "active" ? "green" : k.status === "exhausted" ? "amber" : "zinc"}>
                               {k.status}
                             </Badge>
                           </div>
-                          <span class="text-[11px] text-ink-500">
+                          <span class="text-xs text-fg-muted">
                             {k.lastUsedAt ? `Used: ${fmtDate(k.lastUsedAt)}` : "Never used"}
                           </span>
                         </div>
                       </div>
 
                       <Show when={isUsdKey(k) && (k.totalLimitUsd !== null || k.dailyLimitUsd !== null)}>
-                        <div class="pt-2 border-t border-line/50 space-y-1.5 text-xs text-ink-400">
+                        <div class="pt-2 border-t border-line/50 space-y-1.5 text-xs text-fg-secondary">
                           <Show when={isUsdKey(k) && k.dailyLimitUsd !== null}>
                             <div class="flex justify-between">
                               <span>Daily limit</span>
-                              <span class="font-mono text-ink-200">{isUsdKey(k) ? fmtCost(k.dailyLimitUsd!) : ""}</span>
+                              <span class="font-mono text-fg">{isUsdKey(k) ? fmtCost(k.dailyLimitUsd!) : ""}</span>
                             </div>
                           </Show>
                           <Show when={isUsdKey(k) && k.totalLimitUsd !== null}>
                             <div class="flex justify-between">
                               <span>Total cap</span>
-                              <span class="font-mono text-ink-200">{isUsdKey(k) ? `${fmtCost(k.spendTotalUsd)} / ${fmtCost(k.totalLimitUsd!)}` : ""}</span>
+                              <span class="font-mono text-fg">{isUsdKey(k) ? `${fmtCost(k.spendTotalUsd)} / ${fmtCost(k.totalLimitUsd!)}` : ""}</span>
                             </div>
                           </Show>
                         </div>
                       </Show>
 
                       <Show when={isPercentKey(k) && (k.totalLimitConfigured || k.dailyLimitConfigured)}>
-                        <div class="pt-2 border-t border-line/50 space-y-1.5 text-xs text-ink-400">
+                        <div class="pt-2 border-t border-line/50 space-y-1.5 text-xs text-fg-secondary">
                           <Show when={isPercentKey(k) && k.dailyLimitConfigured}>
                             <div class="flex justify-between">
                               <span>Daily allowance</span>
-                              <span class="font-mono text-ink-200">{isPercentKey(k) ? `${(k.dailyUsedPercent ?? 0).toLocaleString("en", { maximumFractionDigits: 1 })}% used` : ""}</span>
+                              <span class="font-mono text-fg">{isPercentKey(k) ? `${(k.dailyUsedPercent ?? 0).toLocaleString("en", { maximumFractionDigits: 1 })}% used` : ""}</span>
                             </div>
                           </Show>
                           <Show when={isPercentKey(k) && k.totalLimitConfigured}>
                             <div class="flex justify-between">
                               <span>Lifetime allowance</span>
-                              <span class="font-mono text-ink-200">{isPercentKey(k) ? `${(k.totalUsedPercent ?? 0).toLocaleString("en", { maximumFractionDigits: 1 })}% used` : ""}</span>
+                              <span class="font-mono text-fg">{isPercentKey(k) ? `${(k.totalUsedPercent ?? 0).toLocaleString("en", { maximumFractionDigits: 1 })}% used` : ""}</span>
                             </div>
                           </Show>
                         </div>
@@ -548,7 +553,7 @@ export default function KeysPage() {
                       <div class="pt-2 border-t border-line/60 flex items-center justify-end gap-1.5">
                         <button
                           type="button"
-                          class="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer disabled:opacity-30 transition-colors"
+                          class="ui-button ui-button-outline ui-button-sm"
                           disabled={!k.revealable}
                           onClick={() => copyKey(k)}
                         >
@@ -556,7 +561,7 @@ export default function KeysPage() {
                         </button>
                         <button
                           type="button"
-                          class="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-ink-300 hover:text-ink-100 hover:bg-card border border-line cursor-pointer disabled:opacity-30 transition-colors"
+                          class="ui-button ui-button-outline ui-button-sm"
                           disabled={k.status === "revoked"}
                           onClick={() => openEdit(k)}
                         >
@@ -565,20 +570,18 @@ export default function KeysPage() {
                         <Show when={k.status !== "revoked"}>
                           <button
                             type="button"
-                            class="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium text-ink-400 hover:text-amber-400 hover:bg-amber-500/10 hover:border-amber-500/30 border border-line cursor-pointer transition-colors"
+                            class="ui-button ui-button-outline ui-button-sm hover:text-warning hover:border-warning/40"
                             onClick={() => setConfirmRevoke(k)}
                           >
                             <Icon name={Icons.ban} size={13} /> Revoke
                           </button>
                         </Show>
-                        <button
-                          type="button"
-                          class="h-8 w-8 rounded-lg flex items-center justify-center text-ink-400 hover:text-rose-400 hover:bg-rose-500/10 hover:border-rose-500/30 border border-line cursor-pointer transition-colors"
+                        <IconBtn
+                          icon={Icons.trash}
+                          label="Delete key"
+                          danger
                           onClick={() => setConfirmDelete(k)}
-                          aria-label="Delete key"
-                        >
-                          <Icon name={Icons.trash} size={13} />
-                        </button>
+                        />
                       </div>
                     </div>
                   )}
@@ -604,17 +607,53 @@ export default function KeysPage() {
         }
       >
         <div class="space-y-4">
+          {/* Exclusive Live Cryptographic Key Passport */}
+          <div class="rounded-xl border border-line bg-surface-subtle p-3.5 flex items-center justify-between gap-3 flex-wrap" aria-hidden="true">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-9 h-9 rounded-lg bg-accent-subtle border border-accent/35 text-accent flex items-center justify-center shrink-0">
+                <Icon name={Icons.key} size={16} />
+              </div>
+              <div class="min-w-0">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-xs font-medium text-fg truncate">
+                    {form().name.trim() || "untitled-gateway-key"}
+                  </span>
+                  <code class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-surface border border-line text-fg-secondary">
+                    gw_••••••••••••
+                  </code>
+                </div>
+                <div class="text-[11px] text-fg-muted mt-0.5 flex items-center gap-2 flex-wrap">
+                  <span>SHA-256 hashed</span>
+                  <span>·</span>
+                  <span>
+                    {form().projectId
+                      ? `Project: ${(readProjects() ?? []).find((p) => p.id === form().projectId)?.name ?? "Assigned"}`
+                      : "Personal ledger"}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center gap-1.5 shrink-0">
+              <Badge tone={form().preset === "never" ? "green" : "amber"}>
+                {form().preset === "never" ? "Permanent ∞" : form().preset === "custom" ? "Custom TTL" : `${form().preset} TTL`}
+              </Badge>
+              <Badge tone={form().rpm ? "indigo" : "zinc"}>
+                {form().rpm ? `${form().rpm} RPM` : "No RPM cap"}
+              </Badge>
+            </div>
+          </div>
+
           <ModalField label="Key name">
             <input
               type="text"
               value={form().name}
               onInput={(e) => setForm({ ...form(), name: e.currentTarget.value })}
               placeholder="e.g. production-agent-01"
-              class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+              class="ui-field"
             />
           </ModalField>
 
-          <Show when={readProjects()?.length || projects.error}><Show when={projects.error} fallback={<Select label="Financial project" value={form().projectId} onChange={(id) => setForm({ ...form(), projectId: id })} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((p) => p.kind === "project" && p.status === "active").map((p) => ({ value: p.id, label: p.name }))]} />}><p role="alert" class="text-xs text-ink-400">Financial projects could not be loaded. Reload to choose a project.</p></Show></Show>
+          <Show when={readProjects()?.length || projects.error}><Show when={projects.error} fallback={<Select label="Financial project" value={form().projectId} onChange={(id) => setForm({ ...form(), projectId: id })} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((p) => p.kind === "project" && p.status === "active").map((p) => ({ value: p.id, label: p.name }))]} />}><p role="alert" class="text-xs text-fg-secondary">Financial projects could not be loaded. Reload to choose a project.</p></Show></Show>
           <ModalSection title="Expiration">
             <div class="space-y-2.5">
               <div class="flex flex-wrap gap-2">
@@ -634,7 +673,7 @@ export default function KeysPage() {
                   <button
                     type="button"
                     onClick={() => setForm({ ...form(), preset: "never", customDate: "" })}
-                    class="text-xs text-brand-400 hover:text-brand-300 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                    class="text-xs text-accent hover:text-accent-strong inline-flex items-center gap-1 cursor-pointer transition-colors"
                   >
                     <span>↺ Reset to permanent</span>
                   </button>
@@ -643,20 +682,18 @@ export default function KeysPage() {
 
               <OrDivider text="Or specify custom date" />
 
-              <ModalField label="Custom expiration">
-                <input
-                  type="datetime-local"
-                  value={form().customDate}
-                  onInput={(e) =>
-                    setForm({
-                      ...form(),
-                      preset: e.currentTarget.value ? "custom" : "never",
-                      customDate: e.currentTarget.value,
-                    })
-                  }
-                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                />
-              </ModalField>
+              <DateTimePicker
+                label="Custom expiration"
+                ariaLabel="Custom expiration"
+                value={form().customDate}
+                onChange={(val) =>
+                  setForm({
+                    ...form(),
+                    preset: val ? "custom" : "never",
+                    customDate: val,
+                  })
+                }
+              />
             </div>
           </ModalSection>
 
@@ -665,57 +702,90 @@ export default function KeysPage() {
               title="USD spending limits"
               info="All billable input, cached input, output and reasoning count in USD. Key limits are independent of the account plan."
             >
-              <div class="space-y-3">
-                <div class="flex items-center justify-between flex-wrap gap-2">
-                  <span class="text-xs text-ink-400">Quick limit presets:</span>
-                  <div class="flex flex-wrap gap-1.5">
-                    <For each={[
-                      { label: "$1 / day", val: "1" },
-                      { label: "$5 / day", val: "5" },
-                      { label: "$10 / day", val: "10" },
-                      { label: "$50 / day", val: "50" },
-                    ]}>
-                      {(preset) => (
-                        <button
-                          type="button"
-                          onClick={() => setForm({ ...form(), dailyLimitUsd: preset.val, totalLimitUsd: String(Number(preset.val) * 10) })}
-                          class="px-2 py-1 rounded bg-ink-900/60 hover:bg-ink-800 text-[11px] text-ink-300 hover:text-ink-100 border border-line/60 transition-colors cursor-pointer"
-                        >
-                          {preset.label}
-                        </button>
-                      )}
-                    </For>
-                    <button
-                      type="button"
-                      onClick={() => setForm({ ...form(), dailyLimitUsd: "", totalLimitUsd: "" })}
-                      class="px-2 py-1 rounded bg-ink-900/60 hover:bg-ink-800 text-[11px] text-ink-400 hover:text-ink-200 border border-line/60 transition-colors cursor-pointer"
+              <div class="space-y-3.5">
+                {/* Exclusive Synchronized Burn Runway Balancer */}
+                <div class="rounded-xl border border-line bg-surface-subtle p-3 space-y-2.5" aria-hidden="true">
+                  <div class="flex items-center justify-between gap-2 flex-wrap text-xs">
+                    <span class="font-medium text-fg">Synchronized Burn Profiles</span>
+                    <span class="font-mono text-[11px] text-accent">
+                      {(() => {
+                        const d = Number(form().dailyLimitUsd);
+                        const t = Number(form().totalLimitUsd);
+                        if (!form().dailyLimitUsd && !form().totalLimitUsd) return "∞ Unrestricted daily & lifetime burn";
+                        if (d > 0 && t > 0) {
+                          if (d > t) return "⚠ Daily cap exceeds lifetime ceiling";
+                          return `${(t / d).toFixed(1)} full-burn days before lifetime exhaustion`;
+                        }
+                        if (d > 0) return `${fmtCost(d)}/day recurring · ∞ lifetime`;
+                        return `No daily cap · ${fmtCost(t || 0)} lifetime ceiling`;
+                      })()}
+                    </span>
+                  </div>
+                  <div class="grid grid-cols-5 gap-1.5">
+                    <For
+                      each={[
+                        { label: "Sandbox", d: "1", t: "10" },
+                        { label: "Dev", d: "5", t: "50" },
+                        { label: "Staging", d: "20", t: "200" },
+                        { label: "Prod", d: "100", t: "1000" },
+                        { label: "No Cap", d: "", t: "" },
+                      ]}
                     >
-                      Unlimited
-                    </button>
+                      {(prof) => {
+                        const active = () => form().dailyLimitUsd === prof.d && form().totalLimitUsd === prof.t;
+                        return (
+                          <button
+                            type="button"
+                            tabIndex={-1}
+                            onClick={() => setForm({ ...form(), dailyLimitUsd: prof.d, totalLimitUsd: prof.t })}
+                            class={`rounded-lg border px-2 py-1.5 text-left transition-all cursor-pointer ${
+                              active()
+                                ? "border-accent bg-accent-subtle text-accent-strong"
+                                : "border-line bg-surface hover:border-line-strong text-fg-secondary"
+                            }`}
+                          >
+                            <div class="text-[10px] font-medium tracking-wider text-fg-muted">{prof.label}</div>
+                            <div class="text-[11px] font-mono font-medium text-fg mt-0.5">
+                              {prof.d ? `$${prof.d}/d · $${prof.t}` : "∞ / ∞"}
+                            </div>
+                          </button>
+                        );
+                      }}
+                    </For>
                   </div>
                 </div>
 
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <ModalField label="Daily limit (USD)" hint="Resets 00:00 UTC">
-                    <input
-                      type="number" aria-label="Daily limit (USD)"
-                      min={0} step="0.01" inputMode="decimal"
-                      value={form().dailyLimitUsd}
-                      onInput={(e) => setForm({ ...form(), dailyLimitUsd: e.currentTarget.value })}
-                      placeholder="Unlimited"
-                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                    />
-                  </ModalField>
-                  <ModalField label="Lifetime limit (USD)" hint="Permanent cap">
-                    <input
-                      type="number" aria-label="Lifetime limit (USD)"
-                      min={0} step="0.01" inputMode="decimal"
-                      value={form().totalLimitUsd}
-                      onInput={(e) => setForm({ ...form(), totalLimitUsd: e.currentTarget.value })}
-                      placeholder="Unlimited"
-                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                    />
-                  </ModalField>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <CurrencyField
+                    label="Daily limit (USD)"
+                    ariaLabel="Daily limit (USD)"
+                    value={form().dailyLimitUsd}
+                    onInput={(v) => setForm({ ...form(), dailyLimitUsd: v })}
+                    step={1}
+                    hint="Resets 00:00 UTC · empty = unlimited"
+                    presets={[
+                      { label: "$1", value: "1" },
+                      { label: "$5", value: "5" },
+                      { label: "$10", value: "10" },
+                      { label: "$50", value: "50" },
+                      { label: "∞", value: "" },
+                    ]}
+                  />
+                  <CurrencyField
+                    label="Lifetime limit (USD)"
+                    ariaLabel="Lifetime limit (USD)"
+                    value={form().totalLimitUsd}
+                    onInput={(v) => setForm({ ...form(), totalLimitUsd: v })}
+                    step={10}
+                    hint="Permanent cap across key lifetime"
+                    presets={[
+                      { label: "$10", value: "10" },
+                      { label: "$50", value: "50" },
+                      { label: "$100", value: "100" },
+                      { label: "$500", value: "500" },
+                      { label: "∞", value: "" },
+                    ]}
+                  />
                 </div>
               </div>
             </ModalSection>
@@ -729,18 +799,38 @@ export default function KeysPage() {
                 title="Enable per-minute rate limiting (RPM)"
               />
               <Show when={form().rpm !== ""}>
-                <div class="pl-12">
-                  <ModalField label="Maximum requests per minute" hint="Sliding 60-second window (default 120 RPM)">
-                    <input
-                      type="number"
-                      min={1}
-                      max={1000000}
-                      value={form().rpm}
-                      onInput={(e) => setForm({ ...form(), rpm: e.currentTarget.value })}
-                      placeholder="120"
-                      class="w-full max-w-xs rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                    />
-                  </ModalField>
+                <div class="pl-12 space-y-2.5">
+                  {/* Exclusive RPM-to-RPS Throughput Telemetry Bar */}
+                  <div class="rounded-lg border border-line bg-surface-subtle px-3 py-2 flex items-center justify-between gap-2 text-xs" aria-hidden="true">
+                    <span class="text-fg-secondary">Sustained throughput equivalent</span>
+                    <span class="font-mono font-medium text-accent">
+                      {((Number(form().rpm) || 0) / 60).toFixed(1)} req/sec ·{" "}
+                      {(Number(form().rpm) || 0) <= 60
+                        ? "Low concurrency"
+                        : (Number(form().rpm) || 0) <= 300
+                          ? "Standard agent load"
+                          : "High-frequency burst"}
+                    </span>
+                  </div>
+                  <StepperField
+                    label="Maximum requests per minute"
+                    ariaLabel="Maximum requests per minute"
+                    min={1}
+                    max={1000000}
+                    step={10}
+                    unit="RPM"
+                    value={form().rpm}
+                    onInput={(v) => setForm({ ...form(), rpm: v })}
+                    placeholder="120"
+                    hint="Sliding 60-second window (default 120 RPM)"
+                    presets={[
+                      { label: "60 RPM", value: "60" },
+                      { label: "120 RPM", value: "120" },
+                      { label: "300 RPM", value: "300" },
+                      { label: "600 RPM", value: "600" },
+                      { label: "1,200 RPM", value: "1200" },
+                    ]}
+                  />
                 </div>
               </Show>
             </div>
@@ -785,7 +875,7 @@ export default function KeysPage() {
               value={form().name}
               onInput={(e) => setForm({ ...form(), name: e.currentTarget.value })}
               placeholder="e.g. production-agent-01"
-              class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+              class="ui-field"
             />
           </ModalField>
 
@@ -809,7 +899,7 @@ export default function KeysPage() {
                   <button
                     type="button"
                     onClick={() => setForm({ ...form(), preset: "never", customDate: "" })}
-                    class="text-xs text-brand-400 hover:text-brand-300 inline-flex items-center gap-1 cursor-pointer transition-colors"
+                    class="text-xs text-accent hover:text-accent-strong inline-flex items-center gap-1 cursor-pointer transition-colors"
                   >
                     <span>↺ Reset to permanent</span>
                   </button>
@@ -818,20 +908,18 @@ export default function KeysPage() {
 
               <OrDivider text="Or specify custom date" />
 
-              <ModalField label="Custom expiration">
-                <input
-                  type="datetime-local"
-                  value={form().customDate}
-                  onInput={(e) =>
-                    setForm({
-                      ...form(),
-                      preset: e.currentTarget.value ? "custom" : "never",
-                      customDate: e.currentTarget.value,
-                    })
-                  }
-                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                />
-              </ModalField>
+              <DateTimePicker
+                label="Custom expiration"
+                ariaLabel="Custom expiration"
+                value={form().customDate}
+                onChange={(val) =>
+                  setForm({
+                    ...form(),
+                    preset: val ? "custom" : "never",
+                    customDate: val,
+                  })
+                }
+              />
             </div>
           </ModalSection>
 
@@ -840,29 +928,37 @@ export default function KeysPage() {
               title="USD spending limits"
               info="All billable usage counts in USD. Leave a field empty for no key-level cap; the account plan still applies."
             >
-              <div class="space-y-3">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <ModalField label="Daily limit (USD)" hint="Resets at midnight UTC · empty = unlimited">
-                    <input
-                      type="number" aria-label="Daily limit (USD)"
-                      min={0} step="0.01" inputMode="decimal"
-                      value={form().dailyLimitUsd}
-                      onInput={(e) => setForm({ ...form(), dailyLimitUsd: e.currentTarget.value })}
-                      placeholder="Unlimited"
-                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                    />
-                  </ModalField>
-                  <ModalField label="Lifetime limit (USD)" hint="Across the entire lifetime of this key">
-                    <input
-                      type="number" aria-label="Lifetime limit (USD)"
-                      min={0} step="0.01" inputMode="decimal"
-                      value={form().totalLimitUsd}
-                      onInput={(e) => setForm({ ...form(), totalLimitUsd: e.currentTarget.value })}
-                      placeholder="Unlimited"
-                      class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                    />
-                  </ModalField>
-                </div>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <CurrencyField
+                  label="Daily limit (USD)"
+                  ariaLabel="Daily limit (USD)"
+                  value={form().dailyLimitUsd}
+                  onInput={(v) => setForm({ ...form(), dailyLimitUsd: v })}
+                  step={1}
+                  hint="Resets at midnight UTC · empty = unlimited"
+                  presets={[
+                    { label: "$1", value: "1" },
+                    { label: "$5", value: "5" },
+                    { label: "$10", value: "10" },
+                    { label: "$50", value: "50" },
+                    { label: "∞", value: "" },
+                  ]}
+                />
+                <CurrencyField
+                  label="Lifetime limit (USD)"
+                  ariaLabel="Lifetime limit (USD)"
+                  value={form().totalLimitUsd}
+                  onInput={(v) => setForm({ ...form(), totalLimitUsd: v })}
+                  step={10}
+                  hint="Across the entire lifetime of this key"
+                  presets={[
+                    { label: "$10", value: "10" },
+                    { label: "$50", value: "50" },
+                    { label: "$100", value: "100" },
+                    { label: "$500", value: "500" },
+                    { label: "∞", value: "" },
+                  ]}
+                />
               </div>
             </ModalSection>
           </Show>
@@ -876,17 +972,25 @@ export default function KeysPage() {
               />
               <Show when={form().rpm !== ""}>
                 <div class="pl-12">
-                  <ModalField label="Requests per minute" hint="Sliding 60-second window">
-                    <input
-                      type="number"
-                      min={1}
-                      max={1000000}
-                      value={form().rpm}
-                      onInput={(e) => setForm({ ...form(), rpm: e.currentTarget.value })}
-                      placeholder="120"
-                      class="w-full max-w-xs rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                    />
-                  </ModalField>
+                  <StepperField
+                    label="Requests per minute"
+                    ariaLabel="Requests per minute"
+                    min={1}
+                    max={1000000}
+                    step={10}
+                    unit="RPM"
+                    value={form().rpm}
+                    onInput={(v) => setForm({ ...form(), rpm: v })}
+                    placeholder="120"
+                    hint="Sliding 60-second window"
+                    presets={[
+                      { label: "60 RPM", value: "60" },
+                      { label: "120 RPM", value: "120" },
+                      { label: "300 RPM", value: "300" },
+                      { label: "600 RPM", value: "600" },
+                      { label: "1,200 RPM", value: "1200" },
+                    ]}
+                  />
                 </div>
               </Show>
             </div>
@@ -898,7 +1002,7 @@ export default function KeysPage() {
       <Modal
         open={!!newToken()}
         onClose={() => setNewToken("")}
-        title="API key generated successfully"
+        title="API key generated"
         subtitle="Copy your key and integration snippets now. For security, raw tokens cannot be retrieved again once closed."
         width="max-w-xl billing-dialog"
         footer={
@@ -921,19 +1025,12 @@ export default function KeysPage() {
         }
       >
         <div class="space-y-5">
-          <div class="rounded-xl border border-emerald-500/30 bg-ink-950/80 p-4 space-y-2">
+          <div class="rounded-control border border-success/35 bg-surface-muted p-4 space-y-2">
             <div class="flex items-center justify-between text-xs">
-              <span class="font-medium text-emerald-400">Gateway Secret Key</span>
-              <button
-                type="button"
-                onClick={() => copyWithToast(newToken())}
-                class="text-xs text-ink-400 hover:text-ink-100 flex items-center gap-1 cursor-pointer transition-colors"
-              >
-                <Icon name={Icons.copy} size={12} />
-                <span>Copy secret</span>
-              </button>
+              <span class="font-medium text-success">Gateway secret key</span>
+              <CopyButton text={newToken()} label="Copy secret key" />
             </div>
-            <code class="block font-mono text-xs text-emerald-300 break-all select-all pt-1 bg-ink-900/50 p-2.5 rounded-lg border border-line/40">
+            <code class="block font-mono text-xs text-fg break-all select-all pt-1 bg-surface p-2.5 rounded-lg border border-line/60">
               {newToken()}
             </code>
           </div>
@@ -943,43 +1040,18 @@ export default function KeysPage() {
             subtitle="Plug this gateway key into your application or SDK configuration:"
           >
             <div class="space-y-2.5">
-              <div class="flex items-center gap-1.5 border-b border-line pb-2">
-                <button
-                  type="button"
-                  onClick={() => setSnippetTab("curl")}
-                  class={`px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
-                    snippetTab() === "curl"
-                      ? "bg-accent-500 text-accent-fg shadow-sm"
-                      : "text-ink-400 hover:text-ink-100 hover:bg-ink-800/50"
-                  }`}
-                >
-                  cURL
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSnippetTab("python")}
-                  class={`px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
-                    snippetTab() === "python"
-                      ? "bg-accent-500 text-accent-fg shadow-sm"
-                      : "text-ink-400 hover:text-ink-100 hover:bg-ink-800/50"
-                  }`}
-                >
-                  Python (OpenAI)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSnippetTab("node")}
-                  class={`px-3 py-1 rounded-md text-xs font-medium transition-colors cursor-pointer ${
-                    snippetTab() === "node"
-                      ? "bg-accent-500 text-accent-fg shadow-sm"
-                      : "text-ink-400 hover:text-ink-100 hover:bg-ink-800/50"
-                  }`}
-                >
-                  Node.js
-                </button>
-              </div>
+              <Tabs
+                value={snippetTab()}
+                onChange={setSnippetTab}
+                ariaLabel="SDK snippet language"
+                items={[
+                  { value: "curl", label: "cURL" },
+                  { value: "python", label: "Python (OpenAI)" },
+                  { value: "node", label: "Node.js" },
+                ]}
+              />
 
-              <pre class="overflow-x-auto rounded-xl border border-line bg-ink-950/80 p-3.5 text-[11px] font-mono text-ink-200 leading-relaxed">
+              <pre class="overflow-x-auto rounded-control border border-line bg-surface-muted p-3.5 text-xs font-mono text-fg-secondary leading-relaxed">
                 <Show when={snippetTab() === "curl"}>
 {`curl ${window.location.origin}/v1/chat/completions \\
   -H "Authorization: Bearer ${newToken()}" \\
@@ -1033,34 +1105,25 @@ console.log(response.choices[0].message.content);`}
         width="max-w-lg"
         footer={
           <>
-            <button
-              type="button"
-              onClick={() => setConfirmRevoke(null)}
-              class="border border-line bg-transparent hover:bg-elev text-ink-300 hover:text-ink-100 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-            >
+            <Btn variant="outline" size="sm" onClick={() => setConfirmRevoke(null)}>
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={revoke}
-              disabled={busy()}
-              class="bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg text-xs font-medium shadow-sm transition-colors cursor-pointer"
-            >
-              {busy() ? "Revoking…" : "Revoke key"}
-            </button>
+            </Btn>
+            <Btn variant="danger" size="sm" loading={busy()} onClick={revoke}>
+              Revoke key
+            </Btn>
           </>
         }
       >
         <div class="space-y-4">
           <ModalNotice tone="danger" title="Confirm key deactivation">
             Revoking will immediately cause all SDK and API requests using{" "}
-            <strong class="text-white">{confirmRevoke()?.name}</strong> (
-            <code class="text-rose-300">{confirmRevoke()?.prefix}…</code>) to fail with 401 Unauthorized.
+            <strong class="text-fg font-medium">{confirmRevoke()?.name}</strong> (
+            <code class="text-danger">{confirmRevoke()?.prefix}…</code>) to fail with 401 Unauthorized.
           </ModalNotice>
 
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">What happens when you revoke:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-control border border-line bg-surface-muted p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">What happens when you revoke:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>In-flight requests already accepted will complete normally.</li>
               <li>Any new request presenting this token is immediately rejected.</li>
               <li>Historical usage records and audit logs are safely preserved.</li>
@@ -1078,34 +1141,25 @@ console.log(response.choices[0].message.content);`}
         width="max-w-lg"
         footer={
           <>
-            <button
-              type="button"
-              onClick={() => setConfirmDelete(null)}
-              class="border border-line bg-transparent hover:bg-elev text-ink-300 hover:text-ink-100 px-3.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer"
-            >
+            <Btn variant="outline" size="sm" onClick={() => setConfirmDelete(null)}>
               Cancel
-            </button>
-            <button
-              type="button"
-              onClick={hardDelete}
-              disabled={busy()}
-              class="bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white px-4 py-1.5 rounded-lg text-xs font-medium shadow-sm transition-colors cursor-pointer"
-            >
-              {busy() ? "Deleting…" : "Delete permanently"}
-            </button>
+            </Btn>
+            <Btn variant="danger" size="sm" loading={busy()} onClick={hardDelete}>
+              Delete permanently
+            </Btn>
           </>
         }
       >
         <div class="space-y-4">
           <ModalNotice tone="danger" title="Purge database record">
             Permanently delete{" "}
-            <strong class="text-white">{confirmDelete()?.name}</strong> (
-            <code class="text-rose-300">{confirmDelete()?.prefix}…</code>)? This action cannot be undone.
+            <strong class="text-fg font-medium">{confirmDelete()?.name}</strong> (
+            <code class="text-danger">{confirmDelete()?.prefix}…</code>)? This action cannot be undone.
           </ModalNotice>
 
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">Database purge consequences:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-control border border-line bg-surface-muted p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">Database purge consequences:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>The API key record is completely removed from the SQLite database.</li>
               <li>All aggregated token and cost usage data remains preserved for audit history.</li>
               <li>Any applications using this token will fail with 401 Unauthorized.</li>

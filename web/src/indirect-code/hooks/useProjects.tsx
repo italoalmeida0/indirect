@@ -1,5 +1,6 @@
 import type { DaemonCommand } from "../daemon-protocol";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Show, type JSX } from "solid-js";
+import h from "solid-js/h";
 import { projectForDirectory, compareSessions } from "../paths";
 import type { Project, SessionSummary } from "../types";
 import type { FoldersEvent, ProjectCreatedEvent, SearchResultsEvent } from "../daemon-protocol";
@@ -205,9 +206,21 @@ export function createProjects(opts: {
     if (expandedSessionLists()[key]) return list;
     return sortedSessions(list).slice(0, 10);
   }
-  function sessionListToggle(key: string, count: number) {
-    return <Show when={count > 10}><button class="px-3 py-2 text-xs text-ink-500 hover:text-ink-200 cursor-pointer" aria-expanded={!!expandedSessionLists()[key]}
-      onClick={() => setExpandedSessionLists((prev) => ({ ...prev, [key]: !prev[key] }))}>{expandedSessionLists()[key] ? "Show less" : `See all (${count})`}</button></Show>;
+  function sessionListToggle(key: string, count: number): JSX.Element {
+    return h(
+      Show,
+      { when: () => count > 10 },
+      () =>
+        h(
+          "button",
+          {
+            class: "px-3 py-2 text-xs text-ink-500 hover:text-ink-200 cursor-pointer",
+            "aria-expanded": () => !!expandedSessionLists()[key],
+            onClick: () => setExpandedSessionLists((prev) => ({ ...prev, [key]: !prev[key] })),
+          },
+          () => (expandedSessionLists()[key] ? "Show less" : `See all (${count})`),
+        ),
+    ) as unknown as JSX.Element;
   }
   function sessionsOfProject(projectId: string) {
     return opts.sessions().filter((s) => projectForDirectory(s.cwd, opts.projects())?.id === projectId);

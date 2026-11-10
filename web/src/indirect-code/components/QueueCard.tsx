@@ -29,7 +29,7 @@ export function QueueCard() {
       <div class={`${ui.convWidthClass()} mx-auto`}>
         <div class="bg-ink-900 border border-line/70 rounded-xl px-3 py-1">
           <div class="flex items-center gap-2">
-            <span class="text-xs font-semibold text-ink-200">Queued Messages</span>
+            <span class="text-xs font-medium text-ink-200">Queued Messages</span>
             <span class="text-[11px] font-mono bg-ink-800 border border-line/60 rounded px-1.5 py-0.5 text-ink-300">
               {items().length}
             </span>
@@ -106,7 +106,7 @@ function QueueEditRow(props: { queueId: string }) {
                 <button
                   aria-label={`Remove ${a.name}`}
                   onClick={() => q.editDraft.removePendingAttachment(a.key)}
-                  class="cursor-pointer px-0.5 hover:text-rose-400"
+                  class="cursor-pointer px-0.5 hover:text-danger"
                 >
                   ×
                 </button>

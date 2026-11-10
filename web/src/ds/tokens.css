@@ -1,0 +1,295 @@
+/*
+ * Design tokens.
+ *
+ * The semantic layer follows Arc's foundation (uiarc.dev, MIT): a neutral
+ * oklch ramp, a single accent spent with intent, status roles that mean
+ * status, concentric radii, a 4px spacing grid and one motion vocabulary.
+ * Components and pages use the ROLES below, never raw colors.
+ *
+ * Themes:  [data-theme] = light | dark | high-contrast   (on <html>)
+ * Accent:  [data-accent] = teal (default) | neutral | violet | blue | green |
+ *          amber | orange | coral | rose
+ * Density: [data-density="compact"] on any subtree (Indirect Code workspace)
+ *
+ * Tailwind utilities for these roles are declared in the @theme block of
+ * web/style.tailwindcss.css (bg-surface, text-fg-secondary, rounded-control…).
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Neutral ramp: referenced by the roles only. */
+  --neutral-0: oklch(100% 0 0);
+  --neutral-1: oklch(99% 0 0);
+  --neutral-2: oklch(97.8% 0 0);
+  --neutral-3: oklch(95.8% 0 0);
+  --neutral-4: oklch(91.5% 0 0);
+  --neutral-5: oklch(84% 0 0);
+  --neutral-6: oklch(64% 0 0);
+  --neutral-7: oklch(49% 0 0);
+  --neutral-8: oklch(40% 0 0);
+  --neutral-9: oklch(34% 0 0);
+  --neutral-10: oklch(23% 0 0);
+  --neutral-11: oklch(15% 0 0);
+
+  /* Page and surfaces. --surface-subtle is a project addition: rails,
+   * sidebars and footers that sit between the page and a hover fill. */
+  --background: var(--neutral-0);
+  --surface: var(--neutral-0);
+  --surface-raised: var(--neutral-0);
+  --surface-subtle: oklch(98.6% 0 0);
+  --surface-muted: var(--neutral-2);
+  --surface-strong: var(--neutral-3);
+
+  /* Text. */
+  --foreground: var(--neutral-11);
+  --text-secondary: var(--neutral-8);
+  --text-muted: var(--neutral-7);
+
+  /* Lines. */
+  --border: oklch(93.5% 0 0);
+  --border-subtle: oklch(96.5% 0 0);
+  --border-strong: oklch(82% 0 0);
+
+  /* Accent (default teal, the product's brand hue). */
+  --accent: oklch(51% 0.09 182);
+  --accent-strong: oklch(43% 0.08 182);
+  --accent-subtle: oklch(51% 0.09 182 / 0.11);
+  --accent-foreground: oklch(100% 0 0);
+
+  /* Selection controls (switch, checkbox, radio, slider). Thumbs stay white
+   * in both states so they always read against the track. */
+  --control-on: oklch(51% 0.09 182);
+  --control-glyph: oklch(100% 0 0);
+  --control-track: oklch(89.5% 0 0);
+  --control-track-hover: oklch(86% 0 0);
+  --control-thumb: oklch(100% 0 0);
+  --control-thumb-on: oklch(100% 0 0);
+  --control-thumb-shadow: 0 0 0 0.5px oklch(0% 0 0 / 0.07), 0 1px 2px oklch(0% 0 0 / 0.14), 0 2px 6px oklch(0% 0 0 / 0.06);
+  --control-on-subtle: color-mix(in oklab, var(--control-on) 10%, transparent);
+  --control-fill: var(--control-on);
+
+  /* Categorical palette: tags, chart series and status. Tint with
+   * color-mix(in oklab, …), never by editing the oklch values. */
+  --tone-teal: oklch(50% 0.095 182);
+  --tone-sky: oklch(51% 0.11 240);
+  --tone-orchid: oklch(52% 0.17 322);
+  --tone-violet: oklch(51% 0.16 290);
+  --tone-rose: oklch(53% 0.18 10);
+  --tone-amber: oklch(55% 0.12 68);
+  --tone-green: oklch(50% 0.12 162);
+
+  /* Status means status: success, attention, failure, information. */
+  --success: var(--tone-green);
+  --warning: var(--tone-amber);
+  --danger: var(--tone-rose);
+  --info: var(--tone-sky);
+  --success-subtle: color-mix(in oklab, var(--success) 11%, transparent);
+  --warning-subtle: color-mix(in oklab, var(--warning) 13%, transparent);
+  --danger-subtle: color-mix(in oklab, var(--danger) 10%, transparent);
+  --info-subtle: color-mix(in oklab, var(--info) 11%, transparent);
+
+  /* Shadows only on layers that float. Cards rest on a border. */
+  --shadow-resting: 0 1px 2px oklch(0% 0 0 / 0.035);
+  --shadow-raised: 0 6px 18px oklch(0% 0 0 / 0.065), 0 1px 3px oklch(0% 0 0 / 0.035);
+  --shadow-floating: 0 20px 48px oklch(0% 0 0 / 0.105), 0 3px 10px oklch(0% 0 0 / 0.045);
+  --overlay-scrim: oklch(10% 0 0 / 0.46);
+
+  /* Spacing: a 4px grid. */
+  --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem;
+  --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem;
+  --space-12: 3rem; --space-16: 4rem; --space-20: 5rem; --space-24: 6rem;
+
+  /* Concentric radii: a nested corner is the outer radius minus the padding. */
+  --radius-control: 1.125rem;
+  --radius-panel: 1.625rem;
+  --radius-surface: 2.125rem;
+  --radius-pill: 9999px;
+  --radius-inner: 0.625rem;
+
+  --control-height-xs: 1.75rem;
+  --control-height-sm: 2.25rem;
+  --control-height-md: 2.75rem;
+  --control-height-lg: 3.125rem;
+
+  /* Type. Geist for headings 30px and up, Inter for the rest, weights 400
+   * and 500 only. --text-2xs is reserved for dense workspace metadata. */
+  --font-display: "Geist Variable", "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-code: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --tracking-display: -0.03em;
+  --tracking-body: -0.01em;
+  --leading-display: 1.1;
+  --leading-body: 1.4;
+
+  /* Motion (CSS side). JS uses web/src/ds/motion/tokens.ts with the same values. */
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-exit: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* Critically damped spring: fast start, smooth settle, never overshoots. */
+  --ease-spring: linear(0, 0.0213, 0.0739, 0.1443, 0.2235, 0.305, 0.3849, 0.4606, 0.5305, 0.594, 0.6508, 0.7011, 0.7452, 0.7836, 0.8168, 0.8454, 0.8699, 0.8907, 0.9084, 0.9234, 0.9361, 0.9467, 0.9557, 0.9632, 0.9694, 0.9747, 0.979, 0.9826, 0.9857, 0.9882, 0.9902, 0.992, 0.9934, 0.9946, 0.9955, 0.9963, 1);
+  --duration-instant: 100ms;
+  --duration-fast: 130ms;
+  --duration-standard: 190ms;
+  --duration-considered: 360ms;
+  --duration-spring: 420ms;
+
+  /* Stacking order. Floating layers (menus, tooltips) sit above toasts and
+   * dialogs so a menu opened inside a dialog is never hidden. */
+  --z-base: 0;
+  --z-sticky: 20;
+  --z-shell: 30;
+  --z-drawer: 40;
+  --z-modal: 50;
+  --z-toast: 60;
+  --z-floating: 70;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: oklch(19% 0 0);
+  --surface: oklch(21.5% 0 0);
+  --surface-raised: oklch(24% 0 0);
+  --surface-subtle: oklch(20.5% 0 0);
+  --surface-muted: oklch(26% 0 0);
+  --surface-strong: oklch(29% 0 0);
+  --foreground: oklch(96% 0 0);
+  --text-secondary: oklch(77% 0 0);
+  --text-muted: oklch(64% 0 0);
+  --border: oklch(29% 0 0);
+  --border-subtle: oklch(25% 0 0);
+  --border-strong: oklch(40% 0 0);
+  --accent: oklch(80% 0.1 182);
+  --accent-strong: oklch(88% 0.08 182);
+  --accent-subtle: oklch(70% 0.1 182 / 0.18);
+  --accent-foreground: oklch(19% 0 0);
+  --control-on: oklch(64% 0.1 182);
+  --control-glyph: oklch(100% 0 0);
+  --control-track: oklch(33% 0 0);
+  --control-track-hover: oklch(37% 0 0);
+  --control-thumb: oklch(97% 0 0);
+  --control-thumb-on: oklch(100% 0 0);
+  --control-fill: oklch(64% 0.1 182);
+  --control-thumb-shadow: 0 0 0 0.5px oklch(0% 0 0 / 0.3), 0 1px 2px oklch(0% 0 0 / 0.35), 0 2px 6px oklch(0% 0 0 / 0.2);
+  --tone-teal: oklch(79% 0.13 182);
+  --tone-sky: oklch(79% 0.095 236);
+  --tone-orchid: oklch(76% 0.15 322);
+  --tone-violet: oklch(74% 0.125 290);
+  --tone-rose: oklch(71% 0.155 8);
+  --tone-amber: oklch(83% 0.12 78);
+  --tone-green: oklch(79% 0.14 162);
+  --success-subtle: color-mix(in oklab, var(--success) 15%, transparent);
+  --warning-subtle: color-mix(in oklab, var(--warning) 15%, transparent);
+  --danger-subtle: color-mix(in oklab, var(--danger) 15%, transparent);
+  --info-subtle: color-mix(in oklab, var(--info) 15%, transparent);
+  --shadow-resting: 0 1px 2px oklch(0% 0 0 / 0.18);
+  --shadow-raised: 0 8px 22px oklch(0% 0 0 / 0.22);
+  --shadow-floating: 0 22px 55px oklch(0% 0 0 / 0.34), 0 0 0 1px oklch(100% 0 0 / 0.04);
+  --overlay-scrim: oklch(5% 0 0 / 0.56);
+}
+
+/* Accents. Teal is the default (declared on :root above). */
+:root[data-accent="neutral"] { --accent: oklch(33% 0 0); --accent-strong: oklch(24% 0 0); --accent-subtle: oklch(33% 0 0 / 0.1); --accent-foreground: oklch(100% 0 0); --control-on: oklch(23% 0 0); --control-thumb-on: oklch(100% 0 0); --control-glyph: oklch(100% 0 0); --control-fill: oklch(23% 0 0); }
+:root[data-accent="violet"] { --accent: #7747ff; --accent-strong: #5528ce; --accent-subtle: rgb(119 71 255 / 0.13); --accent-foreground: #fff; --control-on: #7747ff; --control-thumb-on: #fff; --control-glyph: #fff; --control-fill: #7747ff; }
+:root[data-accent="blue"] { --accent: #0562ef; --accent-strong: #074db7; --accent-subtle: rgb(5 98 239 / 0.12); --accent-foreground: #fff; --control-on: #0562ef; --control-thumb-on: #fff; --control-glyph: #fff; --control-fill: #0562ef; }
+:root[data-accent="green"] { --accent: #0b9a66; --accent-strong: #087c54; --accent-subtle: rgb(13 184 121 / 0.13); --accent-foreground: #fff; --control-on: #10a870; --control-thumb-on: #fff; --control-glyph: #fff; --control-fill: #10a870; }
+:root[data-accent="amber"] { --accent: #b57400; --accent-strong: #9c6300; --accent-subtle: rgb(243 173 32 / 0.16); --accent-foreground: #20190d; --control-on: #eda11a; --control-thumb-on: #fff; --control-glyph: #2a1c03; --control-fill: #eda11a; }
+:root[data-accent="orange"] { --accent: #d4690f; --accent-strong: #aa4700; --accent-subtle: rgb(244 129 32 / 0.13); --accent-foreground: #17130f; --control-on: #f07818; --control-thumb-on: #fff; --control-glyph: #fff; --control-fill: #f07818; }
+:root[data-accent="coral"] { --accent: #dc4a40; --accent-strong: #b92c27; --accent-subtle: rgb(241 95 85 / 0.14); --accent-foreground: #fff; --control-on: #ec564b; --control-thumb-on: #fff; --control-glyph: #fff; --control-fill: #ec564b; }
+:root[data-accent="rose"] { --accent: #d73a8a; --accent-strong: #ae2570; --accent-subtle: rgb(237 78 157 / 0.14); --accent-foreground: #fff; --control-on: #e64494; --control-thumb-on: #fff; --control-glyph: #fff; --control-fill: #e64494; }
+:root[data-theme="dark"][data-accent="neutral"] { --accent: oklch(80% 0 0); --accent-strong: oklch(91% 0 0); --accent-subtle: oklch(80% 0 0 / 0.13); --accent-foreground: oklch(19% 0 0); --control-on: oklch(93% 0 0); --control-thumb-on: oklch(19% 0 0); --control-glyph: oklch(19% 0 0); --control-fill: oklch(62% 0 0); }
+:root[data-theme="dark"][data-accent="violet"] { --accent: #a78bff; --accent-strong: #c7b7ff; --accent-subtle: rgb(119 71 255 / 0.22); --accent-foreground: #140b2e; --control-on: #8a66ff; --control-fill: #8a66ff; }
+:root[data-theme="dark"][data-accent="blue"] { --accent: #6ba3ff; --accent-strong: #a4c7ff; --accent-subtle: rgb(5 98 239 / 0.22); --accent-foreground: #071a33; --control-on: #3b82f6; --control-fill: #3b82f6; }
+:root[data-theme="dark"][data-accent="green"] { --accent: #53dca6; --accent-strong: #93efd0; --accent-subtle: rgb(13 184 121 / 0.2); --accent-foreground: #08201a; --control-on: #1fae78; --control-fill: #1fae78; }
+:root[data-theme="dark"][data-accent="amber"] { --accent: #ffcb62; --accent-strong: #ffe0a1; --accent-subtle: rgb(243 173 32 / 0.2); --accent-foreground: #20190d; --control-on: #e8a52a; --control-glyph: #241803; --control-fill: #e8a52a; }
+:root[data-theme="dark"][data-accent="orange"] { --accent: #ffad5e; --accent-strong: #ffd0a0; --accent-subtle: rgb(244 129 32 / 0.2); --accent-foreground: #17130f; --control-on: #ef873a; --control-fill: #ef873a; }
+:root[data-theme="dark"][data-accent="coral"] { --accent: #ff9386; --accent-strong: #ffc1ba; --accent-subtle: rgb(241 95 85 / 0.2); --accent-foreground: #21110f; --control-on: #ec6a60; --control-fill: #ec6a60; }
+:root[data-theme="dark"][data-accent="rose"] { --accent: #ff8bc5; --accent-strong: #ffc0df; --accent-subtle: rgb(237 78 157 / 0.2); --accent-foreground: #250f1b; --control-on: #e457a0; --control-fill: #e457a0; }
+
+/* High contrast wins over any accent: pure black and white, bright marks,
+ * every boundary drawn. Declared after the accents on purpose. */
+:root[data-theme="high-contrast"] {
+  color-scheme: dark;
+  --background: #000;
+  --surface: #000;
+  --surface-raised: #0d0d0d;
+  --surface-subtle: #050505;
+  --surface-muted: #1f1f1f;
+  --surface-strong: #2b2b2b;
+  --foreground: #fff;
+  --text-secondary: #ededed;
+  --text-muted: #cfcfcf;
+  --border: #fff;
+  --border-subtle: #9a9a9a;
+  --border-strong: #fff;
+  --accent: #22ffee;
+  --accent-strong: #9ffff7;
+  --accent-subtle: rgb(34 255 238 / 0.2);
+  --accent-foreground: #000;
+  --control-on: #22ffee;
+  --control-glyph: #000;
+  --control-track: #4d4d4d;
+  --control-track-hover: #666;
+  --control-thumb: #fff;
+  --control-thumb-on: #000;
+  --control-fill: #22ffee;
+  --control-thumb-shadow: 0 0 0 1px #000;
+  --tone-teal: #3ff5e0;
+  --tone-sky: #7cc8ff;
+  --tone-orchid: #ff8cf0;
+  --tone-violet: #c3b0ff;
+  --tone-rose: #ff7a9a;
+  --tone-amber: #ffd166;
+  --tone-green: #6dffb0;
+  --success-subtle: rgb(109 255 176 / 0.18);
+  --warning-subtle: rgb(255 209 102 / 0.18);
+  --danger-subtle: rgb(255 122 154 / 0.18);
+  --info-subtle: rgb(124 200 255 / 0.18);
+  --shadow-resting: 0 0 0 1px #fff;
+  --shadow-raised: 0 0 0 1px #fff;
+  --shadow-floating: 0 0 0 1px #fff, 0 12px 36px rgb(0 0 0 / 0.6);
+  --overlay-scrim: rgb(0 0 0 / 0.78);
+}
+
+/* Compact density: same grammar, tighter controls and smaller radii, for
+ * the dense Indirect Code workspace. Concentric rules still apply. */
+[data-density="compact"] {
+  --radius-control: 0.625rem;
+  --radius-panel: 0.875rem;
+  --radius-surface: 1.125rem;
+  --radius-inner: 0.375rem;
+  --control-height-xs: 1.5rem;
+  --control-height-sm: 1.75rem;
+  --control-height-md: 2rem;
+  --control-height-lg: 2.5rem;
+}
+
+/* Chart series: series 1 is the accent; 2 to 4 come from the categorical
+ * tones, swapped per accent so no two series share a hue. (Arc derives them
+ * with relative color syntax, which Bun's CSS parser cannot read yet.) */
+:root {
+  --series-1: var(--accent);
+  --series-2: var(--tone-violet);
+  --series-3: var(--tone-amber);
+  --series-4: var(--tone-sky);
+}
+:root[data-accent="neutral"] { --series-1: var(--tone-sky); --series-4: var(--tone-teal); }
+:root[data-accent="violet"] { --series-2: var(--tone-teal); }
+:root[data-accent="blue"] { --series-4: var(--tone-orchid); }
+:root[data-accent="amber"], :root[data-accent="orange"] { --series-3: var(--tone-teal); }
+:root[data-accent="coral"], :root[data-accent="rose"] { --series-2: var(--tone-violet); --series-4: var(--tone-teal); }
+/* Focus. Pointer focus never draws a ring. Keyboard focus (:focus-visible)
+ * draws one subtle accent outline everywhere (WCAG 2.4.7). Text fields show
+ * focus with their border and caret; menu items and options with their
+ * highlight fill; tabindex="-1" targets only receive focus from script.
+ * Tune with --focus-outline, --focus-outline-width, --focus-outline-offset. */
+:focus:not(:focus-visible),
+:is(input:not([type="button"], [type="checkbox"], [type="color"], [type="file"], [type="image"], [type="radio"], [type="range"], [type="reset"], [type="submit"]), textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [tabindex="-1"]):focus {
+  outline: none !important;
+}
+:focus-visible:not(input:not([type="button"], [type="checkbox"], [type="color"], [type="file"], [type="image"], [type="radio"], [type="range"], [type="reset"], [type="submit"]), textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="option"], [tabindex="-1"]) {
+  outline: var(--focus-outline-width, 2px) solid var(--focus-outline, color-mix(in oklab, var(--accent-strong) 72%, transparent)) !important;
+  outline-offset: var(--focus-outline-offset, 2px) !important;
+}
+:root[data-theme="high-contrast"] { --focus-outline: var(--accent); --focus-outline-width: 3px; }

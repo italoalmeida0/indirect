@@ -22,25 +22,25 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
           <FileIcon path={props.sec.file} size={14} />
           <span class="font-mono font-medium text-ink-200 truncate">{props.sec.file || "edit"}</span>
           <Show when={props.sec.status === "error"}>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono">
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-danger-subtle text-danger font-mono">
               failed
             </span>
           </Show>
           <Show when={props.sec.status === "dry_run"}>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-800 dark:text-amber-200 font-mono">
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-warning-subtle text-warning font-mono">
               preview
             </span>
           </Show>
           <Show when={stat().add > 0 || stat().del > 0}>
             <span class="font-mono text-[10.5px] shrink-0">
               <Show when={stat().add > 0}>
-                <span class="text-emerald-400">+{stat().add}</span>
+                <span class="text-success">+{stat().add}</span>
               </Show>
               <Show when={stat().add > 0 && stat().del > 0}>
                 <span class="text-ink-600"> </span>
               </Show>
               <Show when={stat().del > 0}>
-                <span class="text-rose-400">-{stat().del}</span>
+                <span class="text-danger">-{stat().del}</span>
               </Show>
             </span>
           </Show>
@@ -60,7 +60,7 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
       </div>
       <Show when={open()}>
         <Show when={props.sec.error}>
-          <div class="px-3 py-2 text-[11.5px] text-rose-400 font-mono bg-rose-500/5 border-t border-rose-500/15">
+          <div class="px-3 py-2 text-[11.5px] text-danger font-mono bg-danger-subtle border-t border-danger/20">
             {props.sec.error}
           </div>
         </Show>
@@ -100,8 +100,8 @@ export function ToolEditBodies(props: ToolPartProps) {
           collapsible rows already are the "open file/diff" view). */}
       <Show when={(props.m.name() === "edit" || props.m.name() === "patch" || props.m.name() === "widget_edit") && props.u.result}>
         <Show when={props.u.result?.toolDetails?.dry_run === true}>
-          <div class="mx-3 mt-2 mb-1 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
-            <Iconify icon="lucide:eye" size={12} /> Dry run — no files written
+          <div class="mx-3 mt-2 mb-1 inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
+            <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
           </div>
         </Show>
         <Show
@@ -119,8 +119,8 @@ export function ToolEditBodies(props: ToolPartProps) {
       </Show>
         <Show when={(props.m.name() === "edit" || props.m.name() === "patch" || props.m.name() === "widget_edit") && !props.u.result}>
           <Show when={props.u.result?.toolDetails?.dry_run === true}>
-            <div class="mx-3 mt-2 mb-1 inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200">
-              <Iconify icon="lucide:eye" size={12} /> Dry run — no files written
+            <div class="mx-3 mt-2 mb-1 inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
+              <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
             </div>
           </Show>
           <div class="px-3 py-2 text-[11px] text-ink-600">

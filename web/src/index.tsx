@@ -6,12 +6,11 @@ import {
   createEffect,
   createMemo,
   createResource,
-  lazy,
   onCleanup,
   onMount,
+  untrack,
   Show,
   For,
-  Suspense,
   type JSX,
 } from "solid-js";
 
@@ -25,12 +24,16 @@ import {
 import {
   Icon,
   Icons,
+  ThemeToggle,
   Toasts,
   Tooltip,
   toast,
   watchSystemTheme,
 } from "./ui";
-import { setMotionEnabled } from "./motion";
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from "./ds/components/menu";
+import { Drawer } from "./ds/components/overlay";
+import { IconSwap } from "./ds/components/tabs";
+import { createGlide } from "./ds/motion/glide";
 import LoginPage from "./pages/Login";
 import SetPasswordPage from "./pages/SetPassword";
 import { PlanLimits } from "./billing";
@@ -44,21 +47,51 @@ import { PlanLimits } from "./billing";
  * The login and set-password pages stay eager: they are the entry point for
  * an unauthenticated visitor and splitting them would only add a round trip.
  */
-const DashboardPage = lazy(() => import("./pages/Dashboard"));
-const IndirectCodePage = lazy(() => import("./indirect-code/IndirectCodePage"));
-const CodeDevPage = lazy(() => import("./indirect-code/CodeDevPage"));
-const KeysPage = lazy(() => import("./pages/Keys"));
-const UsagePage = lazy(() => import("./pages/Usage"));
-const SettingsPage = lazy(() => import("./pages/Settings"));
-const AdminProvidersPage = lazy(() => import("./pages/admin/Providers"));
-const AdminModelsPage = lazy(() => import("./pages/admin/Models"));
-const AdminPlansPage = lazy(() => import("./pages/admin/Plans"));
-const AdminUsersPage = lazy(() => import("./pages/admin/Users"));
-const AdminKeysPage = lazy(() => import("./pages/admin/Keys"));
-const AdminStatsPage = lazy(() => import("./pages/admin/Stats"));
-const AdminAuditPage = lazy(() => import("./pages/admin/Audit"));
-const ProjectsPage = lazy(() => import("./pages/Projects"));
-const OrganizationPage = lazy(() => import("./pages/admin/Organization"));
+function RouteLoading(): JSX.Element {
+  return (
+    <div class="route-loading" role="status" aria-live="polite" aria-busy="true">
+      <span class="route-loading-dot" />
+      <span class="route-loading-dot" />
+      <span class="route-loading-dot" />
+      <span class="sr-only">Loading</span>
+    </div>
+  );
+}
+
+function lazyRoute<T extends (props: any) => JSX.Element>(loader: () => Promise<{ default: T }>): T {
+  let cached: T | undefined;
+  let pending: Promise<{ default: T }> | undefined;
+  return ((props: any) => {
+    const [comp, setComp] = createSignal<T | undefined>(cached);
+    if (!cached) {
+      (pending ??= loader()).then((mod) => {
+        cached = mod.default;
+        setComp(() => cached);
+      });
+    }
+    return createMemo(() => {
+      const C = comp();
+      return C ? untrack(() => C(props)) : <RouteLoading />;
+    }) as unknown as JSX.Element;
+  }) as unknown as T;
+}
+
+const DashboardPage = lazyRoute(() => import("./pages/Dashboard"));
+const IndirectCodePage = lazyRoute(() => import("./indirect-code/IndirectCodePage"));
+const CodeDevPage = lazyRoute(() => import("./indirect-code/CodeDevPage"));
+const KeysPage = lazyRoute(() => import("./pages/Keys"));
+const UsagePage = lazyRoute(() => import("./pages/Usage"));
+const SettingsPage = lazyRoute(() => import("./pages/Settings"));
+const AdminProvidersPage = lazyRoute(() => import("./pages/admin/Providers"));
+const AdminModelsPage = lazyRoute(() => import("./pages/admin/Models"));
+const AdminPlansPage = lazyRoute(() => import("./pages/admin/Plans"));
+const AdminUsersPage = lazyRoute(() => import("./pages/admin/Users"));
+const AdminKeysPage = lazyRoute(() => import("./pages/admin/Keys"));
+const AdminStatsPage = lazyRoute(() => import("./pages/admin/Stats"));
+const AdminAuditPage = lazyRoute(() => import("./pages/admin/Audit"));
+const ProjectsPage = lazyRoute(() => import("./pages/Projects"));
+const OrganizationPage = lazyRoute(() => import("./pages/admin/Organization"));
+const GalleryPage = lazyRoute(() => import("./ds/gallery/GalleryPage"));
 
 /**
  * Hash router. All app routes live under `#/…` so the static server never
@@ -136,6 +169,7 @@ const ADMIN_GROUPS: NavGroup[] = [
 const ADMIN_NAV: NavItem[] = ADMIN_GROUPS.flatMap((group) => group.items);
 
 function pageInfo(path: string): NavItem {
+  if (path === "/ds") return { path: "/ds", label: "Design system", icon: Icons.sparkles };
   const all = [...USER_NAV, ...ADMIN_NAV];
   return (
     all.find((i) =>
@@ -149,20 +183,7 @@ function pageInfo(path: string): NavItem {
 /** Placeholder while a route chunk downloads. Deliberately minimal: it is
  *  visible for one round trip on a cold cache, never on a warm one. */
 function RouteChunk(props: { children: JSX.Element }): JSX.Element {
-  return (
-    <Suspense
-      fallback={
-        <div class="route-loading" role="status" aria-live="polite" aria-busy="true">
-          <span class="route-loading-dot" />
-          <span class="route-loading-dot" />
-          <span class="route-loading-dot" />
-          <span class="sr-only">Loading</span>
-        </div>
-      }
-    >
-      {props.children}
-    </Suspense>
-  );
+  return <>{props.children}</>;
 }
 
 function isActive(item: NavItem, current: string): boolean {
@@ -173,44 +194,42 @@ function isActive(item: NavItem, current: string): boolean {
       : current.startsWith(item.path);
 }
 
-/** Icon-rail button with hover tooltip (desktop rail). */
+/** Rail link. The active item is marked by the gliding indicator (desktop)
+ *  and by accent on its icon; collapsed rails show the label as a tooltip. */
 function RailItem(props: { item: NavItem; current: string; badge?: number }) {
   const active = () => isActive(props.item, props.current);
   return (
-      <a
-        href={`#${props.item.path}`}
-        class={`gateway-nav relative flex h-9 w-9 lg:w-60 items-center justify-center lg:justify-start lg:px-2.5 gap-2.5 rounded-lg transition-colors duration-150 ${
-          active()
-            ? "text-ink-100"
-            : "text-ink-400 hover:text-ink-100 hover:bg-ink-800/60"
-        }`}
-        aria-label={props.item.label}
-        aria-current={active() ? "page" : undefined}
-      >
-        <Show when={props.item.icon == "indirect-code"} fallback={
-          <Icon name={props.item.icon} size={17} />
-        }>
-          <img
-            src="/indirect-icon.svg"
-            alt="Indirect"
-            class="w-[17px] h-[17px] shrink-0 object-contain rounded"
-          />
-        </Show>
-        <span class="hidden lg:block text-xs font-medium truncate">{props.item.label}</span>
-        <Show when={(props.badge ?? 0) > 0}>
-          <span class="hidden lg:inline-flex lg:ml-auto min-w-4 h-4 px-1.5 items-center justify-center rounded-md bg-elev border border-line text-ink-400 text-[10px] font-mono leading-none tabular-nums">
-            {props.badge}
-          </span>
-        </Show>
-      </a>
+    <a
+      href={`#${props.item.path}`}
+      class="gateway-nav relative z-[1] flex h-9 w-9 lg:w-60 items-center justify-center lg:justify-start lg:px-2.5 gap-2.5"
+      aria-current={active() ? "page" : undefined}
+    >
+      <Show when={props.item.icon == "indirect-code"} fallback={
+        <span class="gateway-nav-icon inline-flex"><Icon name={props.item.icon} size={17} /></span>
+      }>
+        <img
+          src="/indirect-icon.svg"
+          alt=""
+          class="w-[17px] h-[17px] shrink-0 object-contain rounded"
+        />
+      </Show>
+      <span class="sr-only lg:not-sr-only lg:block text-sm truncate">{props.item.label}</span>
+      <Show when={(props.badge ?? 0) > 0}>
+        <span class="hidden lg:inline-flex lg:ml-auto min-w-5 h-5 px-1.5 items-center justify-center rounded-pill bg-surface-muted text-fg-muted text-2xs font-medium leading-none tabular-nums">
+          {" "}{props.badge}
+        </span>
+      </Show>
+    </a>
   );
 }
 
 function AppShell(props: { children: JSX.Element }) {
-  createEffect(() => setMotionEnabled(route().path !== "/code"));
-  onCleanup(() => setMotionEnabled(true));
   const user = () => currentSession()!.user;
   const [mobileNav, setMobileNav] = createSignal(false);
+  const [userMenu, setUserMenu] = createSignal(false);
+  const [nav, setNav] = createSignal<HTMLElement>();
+  const [navIndicator, setNavIndicator] = createSignal<HTMLSpanElement>();
+  const [avatar, setAvatar] = createSignal<HTMLButtonElement>();
 
   const [keys] = createResource(async () => {
     try {
@@ -225,6 +244,16 @@ function AppShell(props: { children: JSX.Element }) {
     () => (keys() ?? []).filter((k) => k.status === "active").length,
   );
   const info = createMemo(() => pageInfo(route().path));
+
+  // One highlight glides along the rail to the active page.
+  createGlide({
+    container: nav,
+    indicator: navIndicator,
+    target: () => {
+      void route().path;
+      return nav()?.querySelector<HTMLElement>('[aria-current="page"]') ?? null;
+    },
+  });
 
   const logout = async () => {
     try {
@@ -244,57 +273,49 @@ function AppShell(props: { children: JSX.Element }) {
   const mobileLink = (item: NavItem) => (
     <a
       href={`#${item.path}`}
-      class={`flex items-center gap-3 rounded-xl px-4 py-3 text-sm transition-colors ${
+      aria-current={isActive(item, route().path) ? "page" : undefined}
+      class={`flex min-h-11 items-center gap-3 rounded-control px-3 text-sm transition-colors ${
         isActive(item, route().path)
-          ? "bg-brand-500/10 text-brand-500 font-semibold"
-          : "text-ink-300 hover:bg-ink-800/60 hover:text-ink-100"
+          ? "bg-accent-subtle text-accent-strong font-medium"
+          : "text-fg-secondary hover:bg-surface-muted hover:text-fg"
       }`}
     >
-      <Show when={item.icon == "indirect-code"} fallback={
-         <Icon name={item.icon} size={20} />
-        }>
-          <img
-            src="/indirect-icon.svg"
-            alt="Indirect"
-            class="w-[20px] h-[20px] shrink-0 object-contain rounded"
-          />
+      <Show when={item.icon == "indirect-code"} fallback={<Icon name={item.icon} size={18} />}>
+        <img src="/indirect-icon.svg" alt="Indirect" class="w-[18px] h-[18px] shrink-0 object-contain rounded" />
       </Show>
       {item.label}
     </a>
   );
 
+  const initial = () => (user().name || user().email).slice(0, 1).toUpperCase();
+
   return (
     <div class="gw-shell min-h-screen">
       {/* ===== desktop icon rail ===== */}
-      <aside class="gateway-rail hidden md:flex fixed inset-y-0 left-0 w-16 lg:w-64 flex-col items-center py-4 border-r border-line z-30">
+      <aside class="gateway-rail hidden md:flex fixed inset-y-0 left-0 w-16 lg:w-64 flex-col items-center py-4 border-r border-border z-30">
         <a href="#/" class="gw-rail-brand flex items-center gap-2.5 lg:w-60 lg:px-2" aria-label="Indirect Gateway">
-          <img
-        src="/indirect-icon.svg"
-        alt="Indirect"
-        class="w-8 h-8 shrink-0 object-contain rounded"
-      />
-          <span class="hidden lg:block truncate text-[13px] font-semibold tracking-tight font-mono uppercase">Indirect Gateway</span>
+          <img src="/indirect-icon.svg" alt="Indirect" class="gw-rail-logo w-8 h-8 shrink-0 object-contain rounded" />
+          <span class="hidden lg:block truncate text-sm font-medium text-fg">Indirect Gateway</span>
         </a>
         <nav
-          class="flex-1 min-h-0 overflow-y-auto flex flex-col items-center gap-1 mt-6"
+          ref={setNav}
+          class="gw-nav relative flex-1 min-h-0 w-full overflow-y-auto overflow-x-hidden flex flex-col items-center gap-0.5 mt-6"
           aria-label="Main navigation"
+          data-glide=""
         >
+          <span ref={setNavIndicator} class="gw-nav-indicator" aria-hidden="true" />
           <For each={USER_NAV}>
             {(item) => (
-              <RailItem
-                item={item}
-                current={route().path}
-                badge={item.path === "/keys" ? activeKeyCount() : 0}
-              />
+              <RailItem item={item} current={route().path} badge={item.path === "/keys" ? activeKeyCount() : 0} />
             )}
           </For>
           <Show when={user().role === "admin"}>
-            <span class="w-6 lg:w-56 h-px bg-line mt-4 mb-2 shrink-0" />
+            <span class="w-6 lg:w-56 h-px bg-border mt-4 mb-2 shrink-0" />
             <div class="w-full flex flex-col items-center" role="group" aria-label="Administration">
               <For each={ADMIN_GROUPS}>
                 {(group, index) => (
                   <div class="gw-nav-group w-full flex flex-col items-center gap-0.5" role="group" aria-label={group.label}>
-                    <span class={`gw-nav-group-label hidden lg:block w-60 px-2.5 pt-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-ink-500 ${index() === 0 ? "" : "mt-1"}`}>
+                    <span class={`gw-nav-group-label hidden lg:block w-60 px-2.5 pt-2 pb-1 text-xs text-fg-muted ${index() === 0 ? "" : "mt-2"}`}>
                       {group.label}
                     </span>
                     <For each={group.items}>
@@ -306,13 +327,9 @@ function AppShell(props: { children: JSX.Element }) {
             </div>
           </Show>
         </nav>
-        <div class="flex items-center justify-center lg:justify-start lg:w-60 lg:px-2 pt-3">
+        <div class="flex items-center justify-center lg:justify-start lg:w-60 lg:px-0.5 pt-3">
           <Tooltip content="Sign out" placement="right" delay={50}>
-            <button
-              onClick={logout}
-              class="flex h-9 w-9 items-center justify-center rounded-lg text-ink-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
-              aria-label="Sign out"
-            >
+            <button onClick={logout} class="ui-icon-button ui-icon-button-danger" aria-label="Sign out">
               <Icon name={Icons.logout} size={17} />
             </button>
           </Tooltip>
@@ -320,80 +337,89 @@ function AppShell(props: { children: JSX.Element }) {
       </aside>
 
       {/* ===== mobile top bar ===== */}
-      <div class="gw-header md:hidden sticky top-0 z-40 border-b border-line bg-ink-950/90 backdrop-blur">
+      <div class="gw-header md:hidden sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur">
         <div class="gw-mobile-header flex items-center justify-between h-14 px-4">
           <a href="#/" class="gw-mobile-brand flex items-center gap-2.5" aria-label="Indirect Gateway">
-            <img
-              src="/indirect-icon.svg"
-              alt="Indirect"
-              class="w-8 h-8 shrink-0 object-contain rounded"
-            />
-            <span class="truncate text-[13px] font-semibold tracking-tight font-mono uppercase">
-              Indirect Gateway
-            </span>
+            <img src="/indirect-icon.svg" alt="Indirect" class="w-8 h-8 shrink-0 object-contain rounded" />
+            <span class="truncate text-sm font-medium">Indirect Gateway</span>
           </a>
           <div class="gw-mobile-actions flex items-center gap-1">
+            <ThemeToggle />
             <button
-              class="flex h-10 w-10 items-center justify-center rounded-xl text-ink-300 hover:bg-ink-800/60 transition-colors cursor-pointer"
+              class="ui-icon-button ui-icon-button-md"
               onClick={() => setMobileNav(!mobileNav())}
               aria-label="Menu"
+              aria-expanded={mobileNav()}
             >
-              <Icon name={mobileNav() ? Icons.x : Icons.menu} size={20} />
+              <IconSwap icon={mobileNav() ? Icons.x : Icons.menu} size={20} />
             </button>
           </div>
         </div>
-        <Show when={mobileNav()}>
-          <div class="border-t border-line anim-fade-in bg-ink-950 px-3 py-3 space-y-0.5 max-h-[calc(100dvh-3.5rem)] overflow-y-auto overscroll-contain">
-            <For each={USER_NAV}>{mobileLink}</For>
-            <Show when={user().role === "admin"}>
-              <For each={ADMIN_GROUPS}>
-                {(group) => (
-                  <div class="pt-3">
-                    <div class="px-4 pb-1 text-[10px] font-medium uppercase tracking-wider text-ink-500">
-                      {group.label}
-                    </div>
-                    <For each={group.items}>{mobileLink}</For>
-                  </div>
-                )}
-              </For>
-            </Show>
-            <button
-              onClick={logout}
-              class="mt-3 w-full flex items-center gap-3 rounded-xl px-4 py-3 text-sm text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
-            >
-              <Icon name={Icons.logout} size={20} />
-              Sign out
-            </button>
-          </div>
-        </Show>
       </div>
+      <Drawer open={mobileNav()} onClose={() => setMobileNav(false)} label="Navigation" side="left">
+        <div class="flex items-center gap-2.5 px-4 pt-[calc(var(--sat)+1rem)] pb-3 border-b border-border-subtle">
+          <img src="/indirect-icon.svg" alt="" class="w-7 h-7 shrink-0 object-contain rounded" />
+          <span class="text-sm font-medium">Indirect Gateway</span>
+        </div>
+        <nav class="flex-1 overflow-y-auto overscroll-contain px-3 py-3 space-y-0.5" aria-label="Main navigation">
+          <For each={USER_NAV}>{mobileLink}</For>
+          <Show when={user().role === "admin"}>
+            <For each={ADMIN_GROUPS}>
+              {(group) => (
+                <div class="pt-3">
+                  <div class="px-3 pb-1 text-xs text-fg-muted">{group.label}</div>
+                  <For each={group.items}>{mobileLink}</For>
+                </div>
+              )}
+            </For>
+          </Show>
+        </nav>
+        <div class="border-t border-border-subtle p-3 pb-[calc(var(--sab)+0.75rem)]">
+          <button onClick={logout} class="flex min-h-11 w-full items-center gap-3 rounded-control px-3 text-sm text-danger hover:bg-danger-subtle transition-colors cursor-pointer">
+            <Icon name={Icons.logout} size={18} />
+            Sign out
+          </button>
+        </div>
+      </Drawer>
 
       <main class="md:pl-16 lg:pl-64">
         {/* ===== desktop header ===== */}
-        <header
-          class="gw-header hidden md:flex sticky top-0 z-20 h-14 items-center justify-between gap-4 border-b border-line bg-ink-950/95 backdrop-blur px-6"
-        >
-          <div class="flex items-center gap-2.5 min-w-0 text-xs">
-            <span class="text-ink-500">{route().path.startsWith("/admin") ? "Administration" : "Workspace"}</span>
-            <span class="text-ink-600" aria-hidden="true">/</span>
-            <span class="text-ink-200 font-medium truncate">{info().label}</span>
-          </div>
-          <div class="gw-user flex items-center gap-3 shrink-0">
-            <div class="hidden lg:block text-right mr-1">
-              <div class="text-xs font-semibold truncate max-w-44">
-                {user().name || user().email}
-              </div>
-              <div class="gw-user-email text-[11px] text-ink-500 truncate max-w-44">
-                {user().email}
-              </div>
-            </div>
-            <div class="gw-user-avatar w-8 h-8 rounded-lg border border-line bg-card text-ink-300 flex items-center justify-center text-xs font-medium">
-              {(user().name || user().email).slice(0, 1).toUpperCase()}
-            </div>
+        <header class="gw-header hidden md:flex sticky top-0 z-20 h-14 items-center justify-between gap-4 border-b border-border bg-background/90 backdrop-blur px-6">
+          <nav class="flex items-center gap-2 min-w-0 text-sm" aria-label="Breadcrumb">
+            <span class="text-fg-muted">{route().path.startsWith("/admin") ? "Administration" : "Workspace"}</span>
+            <Icon name={Icons.chevronRight} size={14} class="text-fg-muted" />
+            <span class="text-fg font-medium truncate" aria-current="page">{info().label}</span>
+          </nav>
+          <div class="gw-user flex items-center gap-2 shrink-0">
+            <ThemeToggle />
+            <button
+              ref={setAvatar}
+              type="button"
+              class="flex items-center gap-2.5 rounded-pill py-1 pl-1 pr-1 lg:pr-3 hover:bg-surface-muted transition-colors cursor-pointer"
+              aria-haspopup="menu"
+              aria-expanded={userMenu()}
+              onClick={() => setUserMenu(!userMenu())}
+            >
+              <span class="sr-only">Account: </span>
+              <span class="gw-user-avatar w-8 h-8 rounded-pill border border-border bg-surface text-fg-secondary flex items-center justify-center text-sm font-medium" aria-hidden="true">
+                {initial()}
+              </span>
+              <span class="hidden lg:block text-left">
+                <span class="block text-sm font-medium truncate max-w-44 leading-tight">{user().name || user().email}</span>
+                <span class="gw-user-email block text-xs text-fg-muted truncate max-w-44 leading-tight" aria-hidden="true">{user().email}</span>
+              </span>
+            </button>
+            <Menu open={userMenu()} onClose={() => setUserMenu(false)} anchor={avatar} placement="bottom-end" label="Account">
+              <MenuLabel>{user().email}</MenuLabel>
+              <MenuItem icon={Icons.cog} index={0} onSelect={() => navigate("/settings")}>Settings</MenuItem>
+              <MenuItem icon={Icons.key} index={1} onSelect={() => navigate("/keys")}>API keys</MenuItem>
+              <MenuSeparator />
+              <MenuItem icon={Icons.logout} index={2} danger onSelect={() => void logout()}>Sign out</MenuItem>
+            </Menu>
           </div>
         </header>
 
-        <div class="mx-auto max-w-7xl px-4 sm:px-6 py-6">
+        <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 py-6 lg:py-8">
           {props.children}
         </div>
       </main>
@@ -469,7 +495,8 @@ function Root() {
                   if (p === "/limits") return <PlanLimits />;
                   if (p === "/settings") return <SettingsPage />;
                   if (p === "/projects") return <ProjectsPage />;
-                  if (p.startsWith("/admin") && !isAdmin) return <div class="space-y-3"><h1 class="text-2xl font-semibold">Administration access required</h1><p role="alert" class="text-sm text-ink-400">Your account does not have permission to use this page.</p><a href="#/projects" class="text-accent-500 underline">Open your financial projects</a></div>;
+                  if (p === "/ds") return <GalleryPage />;
+                  if (p.startsWith("/admin") && !isAdmin) return <div class="space-y-3"><h1 class="text-2xl font-medium text-fg">Administration access required</h1><p role="alert" class="text-sm text-fg-secondary">Your account does not have permission to use this page.</p><a href="#/projects" class="text-accent underline">Open your financial projects</a></div>;
                   if (p.startsWith("/admin") && isAdmin) {
                     if (p === "/admin" || p === "/admin/stats")
                       return <AdminStatsPage />;

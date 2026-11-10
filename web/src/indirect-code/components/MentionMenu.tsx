@@ -1,4 +1,5 @@
 import { For, Show, createEffect } from "solid-js";
+import { press } from "../../ds/motion/press";
 import type { createMentions } from "../hooks/useMentions";
 import { FloatMenu } from "./FloatMenu";
 import { FileIcon } from "../presentation";
@@ -33,8 +34,9 @@ export function MentionMenu(props: {
               role="option"
               aria-selected={i() === props.mentions.index()}
               onMouseDown={(e) => e.preventDefault()}
+              onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => props.mentions.pick(path)}
-              class={`w-full flex items-center gap-2 text-left p-2 rounded-lg cursor-pointer ${i() === props.mentions.index() ? "bg-ink-100 text-ink-950" : "hover:bg-elev text-ink-200"}`}
+              class={`w-full flex items-center gap-2 text-left p-2 rounded-lg cursor-pointer transition-colors ${i() === props.mentions.index() ? "bg-ink-100 text-ink-950 font-medium" : "hover:bg-elev text-ink-200"}`}
             >
               <FileIcon path={path} size={14} />
               <span class="truncate">{path}</span>

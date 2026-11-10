@@ -240,7 +240,7 @@ try {
   await mobile.locator(".request-activity").scrollIntoViewIfNeeded();
   await mobile.screenshot({ path: path.join(output, "monthly-touch.png") });
   await mobile.close();
-  assert(reads.every((url) => url.pathname.endsWith("filter-options") || url.pathname === "/api/usage/daily" || url.pathname === "/api/usage/overview" || url.pathname === "/api/keys"), "Overview introduced an extra analytics endpoint");
+  assert(reads.every((url) => url.pathname.endsWith("filter-options") || url.pathname === "/api/usage/daily" || url.pathname === "/api/usage/overview" || url.pathname === "/api/keys" || url.pathname === "/api/billing" || url.pathname === "/api/me/financial-policy"), "Overview introduced an extra analytics endpoint");
   assert.deepEqual(errors, [], "Browser runtime errors");
   console.log(`Overview UI passed: three spend lines, token bars, request heatmap, date scopes, keyboard, responsive layouts, themes, reduced motion, monthly and empty data. Screenshots: ${output}`);
 } catch (error) {

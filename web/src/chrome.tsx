@@ -19,7 +19,7 @@ export function navigate(to: string): void {
 export function LogoMark(props: { class?: string }) {
   return (
     <div
-      class={`rounded-lg bg-brand-500 text-ink-950 flex items-center justify-center border border-brand-600/30 shadow-sm ${props.class ?? "w-8 h-8"}`}
+      class={`rounded-lg bg-accent text-accent-fg flex items-center justify-center border border-line shadow-sm ${props.class ?? "w-8 h-8"}`}
     >
       <svg viewBox="0 0 32 32" class="w-[62%] h-[62%]" aria-hidden="true">
         <path
@@ -46,12 +46,12 @@ export function PageTitle(props: {
     >
       <div>
         <h1
-          class="text-2xl leading-tight font-semibold tracking-tight"
+          class="text-2xl leading-tight font-medium tracking-tight text-fg"
         >
           {props.title}
         </h1>
         <Show when={props.subtitle}>
-          <p class="text-xs leading-relaxed text-ink-400 mt-1.5">{props.subtitle}</p>
+          <p class="text-xs leading-relaxed text-fg-secondary mt-1.5">{props.subtitle}</p>
         </Show>
       </div>
       {props.right}

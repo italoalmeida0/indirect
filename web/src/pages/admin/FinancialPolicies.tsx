@@ -1,6 +1,6 @@
 import { createEffect, createResource, createSignal, For, Show } from "solid-js";
 import { api, type BudgetPresentation, type FinancialPolicyDto, type FinancialProjectDto, type ModelDto, type ModelPolicyDto } from "../../api";
-import { Badge, Btn, Card, EmptyState, Icons, Input, Modal, ModalNotice, Select, SwitchCard, toast } from "../../ui";
+import { Badge, Btn, Card, CheckTile, EmptyState, Icons, Input, Modal, ModalNotice, Select, SwitchCard, toast } from "../../ui";
 
 const failure = (error: unknown) => error instanceof Error ? error.message : "Request failed";
 const budgetOptions = [{ value: "usd", label: "Amounts in USD" }, { value: "percent", label: "Budget percentages" }, { value: "hidden", label: "Hide financial amounts" }];
@@ -18,9 +18,9 @@ export function FinancialDefaults() {
     try { await api("PATCH", "/api/admin/financial-policy", { budgetPresentation: presentation(), showModelPrices: prices() }); await refetch(); toast("Financial defaults saved"); }
     catch (e) { setError(failure(e)); } finally { setBusy(false); }
   };
-  return <Card class="p-4 sm:p-5 space-y-4" motion="fade-u duration-250"><h2 class="font-semibold text-ink-100">Financial visibility</h2><p class="text-sm text-ink-400">These defaults apply to users and project managers. Administrators retain financial visibility. User overrides are available in Administration → Users.</p>
+  return <Card class="p-4 sm:p-5 space-y-4" motion="fade-u duration-250"><h2 class="font-medium text-fg">Financial visibility</h2><p class="text-sm text-fg-secondary">These defaults apply to users and project managers. Administrators retain financial visibility. User overrides are available in Administration → Users.</p>
     <Show when={data.error}><p role="alert" class="text-sm">{failure(data.error)}</p><Btn variant="outline" size="sm" onClick={() => refetch()}>Retry defaults</Btn></Show>
-    <Show when={readData()}><Select label="Budget presentation" value={presentation()} onChange={setPresentation} options={budgetOptions} /><SwitchCard title="Show model prices" description="Independent of budget presentation. Controls model price discovery." checked={prices()} onChange={setPrices} /><p class="text-xs text-ink-400">Percentage mode shows finite-budget consumption without USD amounts. Hidden mode keeps operational limits and renewal information available.</p><Show when={error()}><p role="alert" class="text-sm">{error()}</p></Show><Btn disabled={busy()} onClick={save}>{busy() ? "Saving…" : "Save financial defaults"}</Btn></Show>
+    <Show when={readData()}><Select label="Budget presentation" value={presentation()} onChange={setPresentation} options={budgetOptions} /><SwitchCard title="Show model prices" description="Independent of budget presentation. Controls model price discovery." checked={prices()} onChange={setPrices} /><p class="text-xs text-fg-secondary">Percentage mode shows finite-budget consumption without USD amounts. Hidden mode keeps operational limits and renewal information available.</p><Show when={error()}><p role="alert" class="text-sm">{error()}</p></Show><Btn disabled={busy()} onClick={save}>{busy() ? "Saving…" : "Save financial defaults"}</Btn></Show>
   </Card>;
 }
 
@@ -67,13 +67,83 @@ export function ModelPolicies() {
     catch (e) { setError(failure(e)); } finally { setBusy(false); }
   };
   const remove = async () => { const policy = deleting(); if (!policy) return; setBusy(true); setError(""); try { await api("DELETE", `/api/admin/model-policies/${encodeURIComponent(policy.id)}`); setDeleting(null); await refetch(); toast("Model policy deleted"); } catch (e) { setError(failure(e)); } finally { setBusy(false); } };
-  return <div class="space-y-4"><div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="font-semibold text-ink-100">Model access policies</h2><p class="text-xs text-ink-400 mt-1">Default access plus additional public model IDs granted to project keys.</p></div><Btn onClick={() => open("new")}>New model policy</Btn></div>
+  return <div class="space-y-4"><div class="flex flex-wrap items-center justify-between gap-3"><div><h2 class="font-medium text-fg">Model access policies</h2><p class="text-xs text-fg-secondary mt-1">Default access plus additional public model IDs granted to project keys.</p></div><Btn onClick={() => open("new")}>New model policy</Btn></div>
     <ModalNotice>An explicitly empty default list leaves model access unrestricted. Deleted model IDs stay denied until the list is deliberately replaced. Project lists add grants to the default list. Administrators can reach all available models.</ModalNotice>
     <Show when={policies.error}><Card class="p-4" motion="fade-u duration-200"><p role="alert">{failure(policies.error)}</p><Btn size="sm" variant="outline" onClick={() => refetch()}>Retry policies</Btn></Card></Show>
     <Show when={readPolicies() && !readPolicies()!.length}><EmptyState icon={Icons.layers} title="No model policies" hint="All available models are accessible until you configure a default policy." /></Show>
-    <For each={readPolicies()}>{(policy) => <Card class="p-4 flex flex-wrap items-center justify-between gap-3"><div class="min-w-0"><h3 class="font-semibold text-sm break-words">{policy.name} <Badge tone={policy.enabled ? "green" : "zinc"}>{policy.enabled ? "Enabled" : "Disabled"}</Badge></h3><p class="text-xs text-ink-400 mt-1">{policy.kind === "default" ? "Installation default" : `Project: ${readProjects()?.find((p) => p.id === policy.project_id)?.name ?? policy.project_id ?? "Unassigned"}`} · {policy.models.length ? `${policy.models.length} model IDs` : "Empty list"}</p><Show when={policy.missingModels?.length}><p class="text-xs text-ink-300 mt-2">{policy.missingModels!.length} deleted model ID(s) retained as denied entries. Edit to review.</p></Show></div><div class="flex gap-2"><Btn variant="outline" size="sm" onClick={() => open(policy)}>Edit {policy.name}</Btn><Btn variant="ghost" size="sm" onClick={() => { setError(""); setDeleting(policy); }}>Delete {policy.name}</Btn></div></Card>}</For>
-    <Modal open={editing() !== null} onClose={() => !busy() && setEditing(null)} title={editing() === "new" ? "New model policy" : "Edit model policy"}><form onSubmit={save} class="space-y-4"><Input label="Policy name" value={name()} onInput={setName} required /><Show when={editing() === "new"}><Select label="Policy scope" value={kind()} onChange={setKind} options={[{ value: "default", label: "Installation default" }, { value: "project", label: "Project grant" }]} /><Show when={kind() === "project"}><Select label="Financial project" value={projectId()} onChange={setProjectId} options={[{ value: "", label: "Select a project" }, ...(readProjects() ?? []).filter((p) => p.kind === "project").map((p) => ({ value: p.id, label: p.name }))]} /></Show></Show><SwitchCard title="Enable model policy" checked={enabled()} onChange={setEnabled} /><Input label="Find models" value={search()} onInput={setSearch} /><p class="text-xs text-ink-400">{selected().length} selected. Public IDs are used for every protocol and model discovery.</p>
-      <Show when={models.error}><p role="alert">{failure(models.error)}</p></Show><div class="max-h-64 overflow-y-auto rounded-lg border border-line divide-y divide-line"><For each={(readModels() ?? []).filter((model) => `${model.name} ${model.id}`.toLowerCase().includes(search().toLowerCase()))}>{(model) => <label class="flex items-center gap-3 p-3 text-sm cursor-pointer"><input type="checkbox" class="accent-accent-500 shrink-0" checked={selected().includes(model.id)} onChange={(e) => { setModelsChanged(true); setSelected((ids) => e.currentTarget.checked ? [...ids, model.id] : ids.filter((id) => id !== model.id)); }} /><span class="min-w-0"><span class="block break-words">{model.name}</span><span class="block break-all text-xs text-ink-400">{model.id}{model.enabled ? "" : " · disabled"}</span></span></label>}</For></div>
+    <For each={readPolicies()}>{(policy) => <Card class="p-4 flex flex-wrap items-center justify-between gap-3"><div class="min-w-0"><h3 class="font-medium text-sm text-fg break-words">{policy.name} <Badge tone={policy.enabled ? "green" : "zinc"}>{policy.enabled ? "Enabled" : "Disabled"}</Badge></h3><p class="text-xs text-fg-secondary mt-1">{policy.kind === "default" ? "Installation default" : `Project: ${readProjects()?.find((p) => p.id === policy.project_id)?.name ?? policy.project_id ?? "Unassigned"}`} · {policy.models.length ? `${policy.models.length} model IDs` : "Empty list"}</p><Show when={policy.missingModels?.length}><p class="text-xs text-fg-secondary mt-2">{policy.missingModels!.length} deleted model ID(s) retained as denied entries. Edit to review.</p></Show></div><div class="flex gap-2"><Btn variant="outline" size="sm" onClick={() => open(policy)}>Edit {policy.name}</Btn><Btn variant="ghost" size="sm" onClick={() => { setError(""); setDeleting(policy); }}>Delete {policy.name}</Btn></div></Card>}</For>
+    <Modal open={editing() !== null} onClose={() => !busy() && setEditing(null)} title={editing() === "new" ? "New model policy" : "Edit model policy"}><form onSubmit={save} class="space-y-4">
+      {/* Exclusive Policy Enforcement Posture Meter */}
+      <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-2.5" aria-hidden="true">
+        <div class="flex items-center justify-between gap-2 flex-wrap">
+          <div class="text-xs font-medium text-fg">
+            {kind() === "default"
+              ? selected().length === 0
+                ? "Unrestricted Default Posture"
+                : "Strict Installation Allowlist"
+              : "Additive Project Grant"}
+          </div>
+          <Badge tone={!enabled() ? "zinc" : selected().length > 0 ? "green" : "indigo"}>
+            {!enabled()
+              ? "Policy Disabled"
+              : `${selected().length} / ${(readModels() ?? []).length} models`}
+          </Badge>
+        </div>
+        <div class="h-1.5 rounded-full bg-surface overflow-hidden">
+          <div
+            class="h-full bg-accent transition-all"
+            style={{
+              width: `${
+                (readModels() ?? []).length > 0
+                  ? Math.min(100, (selected().length / (readModels() ?? []).length) * 100)
+                  : 0
+              }%`,
+            }}
+          />
+        </div>
+        <div class="text-[11px] text-fg-muted">
+          {kind() === "default"
+            ? selected().length === 0
+              ? "Empty installation default permits all active registry models."
+              : `Only the ${selected().length} selected model(s) are reachable unless expanded by a project grant.`
+            : `Grants ${selected().length} additional model(s) to keys assigned to this financial project.`}
+        </div>
+      </div>
+
+      <Input label="Policy name" value={name()} onInput={setName} required /><Show when={editing() === "new"}><Select label="Policy scope" value={kind()} onChange={setKind} options={[{ value: "default", label: "Installation default" }, { value: "project", label: "Project grant" }]} /><Show when={kind() === "project"}><Select label="Financial project" value={projectId()} onChange={setProjectId} options={[{ value: "", label: "Select a project" }, ...(readProjects() ?? []).filter((p) => p.kind === "project").map((p) => ({ value: p.id, label: p.name }))]} /></Show></Show><SwitchCard title="Enable model policy" checked={enabled()} onChange={setEnabled} /><Input label="Find models" value={search()} onInput={setSearch} />
+      <div class="flex items-center justify-between gap-2 text-xs text-ink-400">
+        <span>{selected().length} selected. Public IDs are used for every protocol and model discovery.</span>
+        <Show when={(readModels() ?? []).length > 0}>
+          <div class="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setModelsChanged(true);
+                const visibleIds = (readModels() ?? [])
+                  .filter((model) => `${model.name} ${model.id}`.toLowerCase().includes(search().toLowerCase()))
+                  .map((m) => m.id);
+                setSelected((prev) => Array.from(new Set([...prev, ...visibleIds])));
+              }}
+              class="px-2 py-0.5 rounded border border-line bg-surface-subtle hover:bg-surface text-fg-secondary hover:text-fg cursor-pointer transition-colors"
+            >
+              Select visible
+            </button>
+            <Show when={selected().length > 0}>
+              <button
+                type="button"
+                onClick={() => {
+                  setModelsChanged(true);
+                  setSelected([]);
+                }}
+                class="px-2 py-0.5 rounded border border-line bg-surface-subtle hover:bg-surface text-fg-secondary hover:text-fg cursor-pointer transition-colors"
+              >
+                Clear
+              </button>
+            </Show>
+          </div>
+        </Show>
+      </div>
+      <Show when={models.error}><p role="alert">{failure(models.error)}</p></Show><div class="max-h-64 overflow-y-auto rounded-lg border border-line bg-surface-subtle p-2 space-y-1.5"><For each={(readModels() ?? []).filter((model) => `${model.name} ${model.id}`.toLowerCase().includes(search().toLowerCase()))}>{(model) => <CheckTile checked={selected().includes(model.id)} onChange={(checked) => { setModelsChanged(true); setSelected((ids) => checked ? [...ids, model.id] : ids.filter((id) => id !== model.id)); }} title={model.name} subtitle={`${model.id}${model.enabled ? "" : " · disabled"}`} badge={!model.enabled ? <Badge tone="zinc">disabled</Badge> : undefined} />}</For></div>
       <Show when={(editing() !== "new" && editing() !== null && (editing() as ModelPolicyDto).missingModels?.length && !modelsChanged()) || selected().some((id) => !readModels()?.some((model) => model.id === id))}><ModalNotice tone="warn">Some selected IDs are no longer in the registry. Saving only the name or enabled state preserves these denied entries. Remove them explicitly before changing model selection. An empty default list permits all models.<Btn variant="outline" size="sm" onClick={() => { setModelsChanged(true); setSelected((ids) => ids.filter((id) => readModels()?.some((model) => model.id === id))); }}>Remove unavailable IDs</Btn></ModalNotice></Show><Show when={error()}><p role="alert">{error()}</p></Show><div class="flex flex-wrap gap-2 justify-end"><Btn variant="ghost" disabled={busy()} onClick={() => setEditing(null)}>Cancel</Btn><Btn type="submit" disabled={busy() || !name().trim() || (kind() === "project" && !projectId()) || !readModels()}>Save model policy</Btn></div></form></Modal>
     <Modal open={!!deleting()} onClose={() => !busy() && setDeleting(null)} title="Delete model policy"><p class="text-sm text-ink-300 mb-4">Delete {deleting()?.name}? Effective model access changes immediately.</p><Show when={error()}><p role="alert" class="text-sm mb-3">{error()}</p></Show><div class="flex justify-end gap-2"><Btn variant="ghost" disabled={busy()} onClick={() => setDeleting(null)}>Cancel</Btn><Btn variant="danger" disabled={busy()} onClick={remove}>Delete policy</Btn></div></Modal>
   </div>;

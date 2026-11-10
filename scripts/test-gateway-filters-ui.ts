@@ -149,6 +149,26 @@ try {
   await page.getByRole("button", { name: "Filter usage", exact: true }).click();
   const openingPosition = await popupPosition();
   await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
+  assert(
+    await page.evaluate(() => {
+      const pop = document.querySelector<HTMLElement>(".analytics-popover");
+      const layout = document.querySelector<HTMLElement>(".analytics-filter-layout");
+      const opts = document.querySelector<HTMLElement>(".analytics-options");
+      return !!pop && !!layout && !!opts && pop.scrollWidth <= pop.clientWidth && layout.scrollWidth <= layout.clientWidth && opts.scrollWidth <= opts.clientWidth;
+    }),
+    "Filter popover overflowed horizontally when opening Model category",
+  );
+  await page.getByRole("button", { name: "Filter by Provider", exact: true }).click();
+  assert(
+    await page.evaluate(() => {
+      const pop = document.querySelector<HTMLElement>(".analytics-popover");
+      const layout = document.querySelector<HTMLElement>(".analytics-filter-layout");
+      const opts = document.querySelector<HTMLElement>(".analytics-options");
+      return !!pop && !!layout && !!opts && pop.scrollWidth <= pop.clientWidth && layout.scrollWidth <= layout.clientWidth && opts.scrollWidth <= opts.clientWidth;
+    }),
+    "Filter popover overflowed horizontally when switching from Model to Provider",
+  );
+  await page.getByRole("button", { name: "Filter by Model", exact: true }).click();
   await assertStableLeft(openingPosition.x, "Expanding a category");
   await page.getByRole("button", { name: "Next filter options", exact: true }).click();
   await page.getByRole("button", { name: "Previous filter options", exact: true }).click();

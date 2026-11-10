@@ -17,9 +17,9 @@ export function AnalyticsHero(props: {
   return (
     <div class="flex items-start justify-between gap-3">
       <div class="min-w-0">
-        <div class="text-xs font-medium text-ink-500 mb-2 truncate">{props.label}</div>
+        <div class="text-xs font-medium text-fg-secondary mb-2 truncate">{props.label}</div>
         <div
-          class="text-[32px] sm:text-[38px] leading-tight font-light tracking-tight truncate"
+          class="font-display text-[32px] sm:text-[38px] leading-tight font-normal tracking-tight text-fg truncate"
           title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
         >
           {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
@@ -45,7 +45,7 @@ export function AnalyticsBucket(props: {
 }) {
   return (
     <div class="min-w-0 flex-1">
-      <div class="flex items-center gap-1.5 text-[11px] text-ink-400 font-medium">
+      <div class="flex items-center gap-1.5 text-xs text-fg-secondary font-medium">
         <span
           class="w-1.5 h-1.5 rounded-full inline-block shrink-0"
           style={{ background: props.color }}
@@ -53,14 +53,14 @@ export function AnalyticsBucket(props: {
         <span class="whitespace-nowrap shrink-0">{props.label}</span>
       </div>
       <div
-        class="text-sm sm:text-base font-semibold text-ink-100 tabular-nums leading-tight mt-1 whitespace-nowrap"
+        class="text-sm sm:text-base font-medium text-fg tabular-nums leading-tight mt-1 whitespace-nowrap"
         title={props.cost !== undefined ? fmtCost(props.cost, { compact: false }) : props.count !== undefined ? props.count.toLocaleString() : undefined}
       >
         {props.cost !== undefined ? fmtCost(props.cost) : <CountUp value={props.count ?? 0} />}
       </div>
       <div class="mt-1 h-4 flex items-center">
-        <Show when={props.delta !== null} fallback={<span class="text-[10px] text-ink-600 leading-none">—</span>}>
-          <DeltaPill pct={props.delta!} class="text-[10px] px-1 py-0 leading-none shrink-0" />
+        <Show when={props.delta !== null} fallback={<span class="text-xs text-fg-muted leading-none">—</span>}>
+          <DeltaPill pct={props.delta!} class="text-2xs px-1 py-0 leading-none shrink-0" />
         </Show>
       </div>
     </div>

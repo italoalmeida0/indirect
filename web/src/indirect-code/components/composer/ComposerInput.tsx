@@ -63,7 +63,7 @@ export function ComposerInput() {
               e.stopPropagation();
               c.removePendingAttachment(att.key);
             }}
-            class="absolute -top-1.5 -right-1.5 bg-ink-700 hover:bg-rose-500 rounded-full p-0.5 transition-colors shadow cursor-pointer"
+            class="absolute -top-1.5 -right-1.5 bg-ink-700 hover:bg-danger text-fg hover:text-accent-foreground rounded-full p-0.5 transition-colors shadow cursor-pointer"
             disabled={c.sending()}
             data-rc-tip="Remove" aria-label="Remove"
           >

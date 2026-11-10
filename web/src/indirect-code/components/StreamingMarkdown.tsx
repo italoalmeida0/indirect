@@ -1,4 +1,4 @@
-import { createEffect, For, Show } from "solid-js";
+import { createEffect, For, Show, useContext } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { TarnavMarkdown } from "./TarnavMarkdown";
 import { GenerativeUiWidget } from "./generative-ui/renderer";
@@ -8,7 +8,7 @@ import {
   withGenerativeUiSegmentIds,
   type GenerativeUiSegmentWithId,
 } from "./generative-ui/dsl";
-import { useComposerCtx, useHost, useSession } from "../ctx";
+import { ComposerCtx, HostCtx, SessionCtx } from "../ctx";
 
 /**
  * Transcript adapter: the actual markdown renderer is TarnavMarkdown, with
@@ -27,9 +27,9 @@ export function StreamingMarkdown(props: {
   class?: string;
   basic?: boolean;
 }) {
-  const composer = useComposerCtx();
-  const host = useHost();
-  const session = useSession();
+  const composer = useContext(ComposerCtx);
+  const host = useContext(HostCtx);
+  const session = useContext(SessionCtx);
   // Widget source access (WS get_widget) — only when the page mounted the
   // contexts (plain fixtures render the static card).
   const widgetCtx = () => {
@@ -76,10 +76,10 @@ export function StreamingMarkdown(props: {
             frozen={() => frozenIds().has(seg.id)}
             ctx={widgetCtx()}
             onSendPrompt={(text) => {
-              composer.setInputPrompt(text);
-              void composer.sendPrompt();
+              composer?.setInputPrompt(text);
+              void composer?.sendPrompt();
             }}
-            onPrefillPrompt={(text) => composer.setInputPrompt(text)}
+            onPrefillPrompt={(text) => composer?.setInputPrompt(text)}
           />
         )
       }

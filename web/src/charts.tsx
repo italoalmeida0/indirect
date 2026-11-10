@@ -71,8 +71,8 @@ function DailyTooltip(props: {
   metric: "tokens" | "requests" | "cost";
 }) {
   return (
-    <div class="z-20 min-w-36 rounded-xl border border-line bg-elev px-3 py-2 text-[11px] text-ink-200 shadow-xl shadow-black/10">
-      <div class="mb-1.5 font-semibold text-ink-100">
+    <div class="z-20 min-w-36 rounded-xl border border-line bg-elev px-3 py-2 text-xs text-ink-200 shadow-xl shadow-black/10">
+      <div class="mb-1.5 font-medium text-ink-100">
         {props.data.label ?? props.data.date}
       </div>
       <Show
@@ -83,7 +83,7 @@ function DailyTooltip(props: {
             fallback={
               <div class="flex items-center justify-between gap-4">
                 <span>Requests</span>
-                <strong class="font-semibold text-ink-100">
+                <strong class="font-medium text-ink-100">
                   {fmtNum(props.data.reqs ?? 0)}
                 </strong>
               </div>
@@ -92,25 +92,25 @@ function DailyTooltip(props: {
             <div class="space-y-1">
               <div class="flex items-center justify-between gap-4">
                 <span>Input</span>
-                <strong class="font-semibold text-ink-100">
+                <strong class="font-medium text-ink-100">
                   {fmtNum(props.data.in_tok)}
                 </strong>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <span>Input cache</span>
-                <strong class="font-semibold text-ink-100">
+                <strong class="font-medium text-ink-100">
                   {fmtNum(props.data.cache_tok ?? 0)}
                 </strong>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <span>Output</span>
-                <strong class="font-semibold text-ink-100">
+                <strong class="font-medium text-ink-100">
                   {fmtNum(props.data.out_tok)}
                 </strong>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <span>Requests</span>
-                <strong class="font-semibold text-ink-100">
+                <strong class="font-medium text-ink-100">
                   {fmtNum(props.data.reqs ?? 0)}
                 </strong>
               </div>
@@ -121,25 +121,25 @@ function DailyTooltip(props: {
         <div class="space-y-1">
           <div class="flex items-center justify-between gap-4">
             <span>Input cost</span>
-            <strong class="font-semibold text-ink-100">
+            <strong class="font-medium text-ink-100">
               {fmtCost(props.data.cost_in ?? 0)}
             </strong>
           </div>
           <div class="flex items-center justify-between gap-4">
             <span>Cache cost</span>
-            <strong class="font-semibold text-ink-100">
+            <strong class="font-medium text-ink-100">
               {fmtCost(props.data.cost_cache ?? 0)}
             </strong>
           </div>
           <div class="flex items-center justify-between gap-4">
             <span>Output cost</span>
-            <strong class="font-semibold text-ink-100">
+            <strong class="font-medium text-ink-100">
               {fmtCost(props.data.cost_out ?? 0)}
             </strong>
           </div>
           <div class="flex items-center justify-between gap-4 border-t border-line/60 pt-1">
             <span class="font-medium text-ink-100">Total cost</span>
-            <strong class="font-semibold text-emerald-400">
+            <strong class="font-medium text-success">
               {fmtCost(props.data.cost ?? 0)}
             </strong>
           </div>

@@ -23,7 +23,8 @@ const workerBundle = await Bun.build({
   target: "browser",
 });
 if (!workerBundle.success) throw new Error(workerBundle.logs.join("\n"));
-const cssName = Array.from(new Bun.Glob("*.css").scanSync("dist"))[0];
+const cssFiles = Array.from(new Bun.Glob("assets/*.css").scanSync("dist")).sort();
+const cssText = (await Promise.all(cssFiles.map((f) => Bun.file(`dist/${f.replaceAll("\\", "/")}`).text()))).join("\n");
 const session = Bun.file("test/fixtures/sessions/real-session.jsonl");
 if (!(await session.exists())) {
   console.log("SKIP: test/fixtures/sessions/real-session.jsonl missing");
@@ -36,7 +37,7 @@ const server = Bun.serve({
   fetch(req) {
     const p = new URL(req.url).pathname;
     if (p === "/bundle.js") return new Response(bundle.outputs[0]);
-    if (p === "/app.css") return new Response(Bun.file("dist/" + cssName));
+    if (p === "/app.css") return new Response(cssText, { headers: { "content-type": "text/css" } });
     if (p === "/session.jsonl") return new Response(session);
     if (p === "/workers/history-worker.js") return new Response(workerBundle.outputs[0]);
     return new Response(

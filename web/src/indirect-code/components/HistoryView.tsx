@@ -109,7 +109,7 @@ export function HistoryView(props: HistoryViewProps) {
     <div class="flex-1 overflow-y-auto px-4 md:px-8 py-8">
       <div class="max-w-2xl mx-auto">
         <div class="flex items-center justify-between mb-4">
-          <h2 class="text-base font-semibold text-ink-100">Conversation History</h2>
+          <h2 class="text-base font-medium text-ink-100">Conversation History</h2>
           <button
             onClick={() => props.setHistoryView(false)}
             class="p-1.5 rounded-lg text-ink-400 hover:text-ink-100 hover:bg-ink-900 cursor-pointer"
@@ -169,7 +169,7 @@ export function HistoryView(props: HistoryViewProps) {
         >
           {/* Daemon full-text hits (message content, host-local) */}
           <Show when={filteredSearchResults().length > 0}>
-            <div class="px-1 pb-1 text-[10px] uppercase font-bold text-ink-600 tracking-wider">
+            <div class="px-1 pb-1 text-[11px] font-medium text-fg-muted">
               Message matches
             </div>
             <div class="space-y-1 mb-4">
@@ -201,7 +201,7 @@ export function HistoryView(props: HistoryViewProps) {
           </Show>
 
           <Show when={filteredSessions().length > 0}>
-            <div class="px-1 pb-1 text-[10px] uppercase font-bold text-ink-600 tracking-wider">
+            <div class="px-1 pb-1 text-[11px] font-medium text-fg-muted">
               Conversations
             </div>
             <div class="space-y-1">

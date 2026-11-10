@@ -116,9 +116,9 @@ export function DiffView(props: {
                 <div
                   class={`flex items-start px-2 py-0.5 whitespace-pre ${
                     r.kind === "add"
-                      ? "bg-emerald-500/10 text-emerald-300"
+                      ? "bg-success-subtle text-success"
                       : r.kind === "del"
-                        ? "bg-rose-500/10 text-rose-300"
+                        ? "bg-danger-subtle text-danger"
                         : r.kind === "header"
                           ? "text-ink-500 text-[10px]"
                           : r.kind === "ellipsis"
@@ -133,11 +133,11 @@ export function DiffView(props: {
                       </span>
                     </Show>
                     <span
-                      class={`select-none w-3.5 shrink-0 text-center font-bold ${
+                      class={`select-none w-3.5 shrink-0 text-center font-medium ${
                         r.kind === "add"
-                          ? "text-emerald-400"
+                          ? "text-success"
                           : r.kind === "del"
-                            ? "text-rose-400"
+                            ? "text-danger"
                             : "text-transparent"
                       }`}
                     >
@@ -156,9 +156,9 @@ export function DiffView(props: {
               <div
                 class={`flex items-start px-2 py-0.5 whitespace-pre ${
                   r.kind === "add"
-                    ? "bg-emerald-500/10"
+                    ? "bg-success-subtle"
                     : r.kind === "del"
-                      ? "bg-rose-500/10"
+                      ? "bg-danger-subtle"
                       : r.kind === "header"
                         ? "text-ink-500 text-[10px]"
                         : r.kind === "ellipsis"
@@ -173,11 +173,11 @@ export function DiffView(props: {
                     </span>
                   </Show>
                   <span
-                    class={`select-none w-3.5 shrink-0 text-center font-bold ${
+                    class={`select-none w-3.5 shrink-0 text-center font-medium ${
                       r.kind === "add"
-                        ? "text-emerald-400"
+                        ? "text-success"
                         : r.kind === "del"
-                          ? "text-rose-400"
+                          ? "text-danger"
                           : "text-transparent"
                     }`}
                   >

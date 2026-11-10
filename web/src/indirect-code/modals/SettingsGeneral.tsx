@@ -1,4 +1,5 @@
-import { For, Show } from "solid-js";
+import { Show } from "solid-js";
+import { press } from "../../ds/motion/press";
 import { Segmented, setThemeMode, themeMode } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal, useUI } from "../ctx";
@@ -11,6 +12,7 @@ function Toggle(props: {
 }) {
   return (
     <button
+      onPointerDown={(e) => press(e.currentTarget)}
       onClick={props.onToggle}
       class="ui-switch-track shrink-0 cursor-pointer"
       role="switch"
@@ -33,7 +35,7 @@ export function SettingsGeneralSection() {
   return (
 <>
 <div class="border-b border-line pb-4 last:border-0 last:pb-0 space-y-3">
-  <h3 class="text-sm font-semibold text-ink-100 flex items-center gap-2">
+  <h3 class="text-sm font-medium text-ink-100 flex items-center gap-2">
     <Iconify icon="lucide:palette" size={15} class="text-ink-500" />
     <span>Appearance</span>
 
@@ -109,28 +111,25 @@ export function SettingsGeneralSection() {
       <div class="text-[11px] text-ink-500 mt-0.5 mb-2">
         Maximum width of the conversation panel.
       </div>
-      <div class="ui-segmented grid grid-cols-3">
-        <For each={[["narrow", "Narrow"], ["default", "Default"], ["wide", "Wide"]] as const}>
-          {([v, label]) => (
-            <button
-              onClick={() => {
-                ui.setConvWidth(v);
-                try { localStorage.setItem("llmgw-rc-width", v); } catch {}
-              }}
-              aria-pressed={ui.convWidth() === v}
-              class="ui-segment"
-            >
-              {label}
-            </button>
-          )}
-        </For>
-      </div>
+      <Segmented
+        value={ui.convWidth()}
+        onChange={(v) => {
+          ui.setConvWidth(v);
+          try { localStorage.setItem("llmgw-rc-width", v); } catch {}
+        }}
+        class="grid grid-cols-3"
+        options={[
+          { value: "narrow", label: "Narrow" },
+          { value: "default", label: "Default" },
+          { value: "wide", label: "Wide" },
+        ]}
+      />
     </div>
   </div>
 </div>
 
 <div class="border-b border-line pb-4 last:border-0 last:pb-0 space-y-3">
-  <h3 class="text-sm font-semibold text-ink-100 flex items-center gap-2">
+  <h3 class="text-sm font-medium text-ink-100 flex items-center gap-2">
     <Iconify icon="lucide:bell" size={15} class="text-ink-500" />
     <span>Turn notifications</span>
   </h3>
@@ -171,7 +170,7 @@ export function SettingsGeneralSection() {
       </div>
     </Show>
     <Show when={ui.turnNotify.notifyOn() && ui.turnNotify.permission() === "denied"}>
-      <p class="text-[11px] text-rose-500">
+      <p class="text-[11px] text-danger">
         Browser notifications are blocked for this site — allow them in the browser site settings, then use Test below.
       </p>
     </Show>
@@ -200,23 +199,31 @@ export function SettingsGeneralSection() {
 </div>
 
 <div class="border-b border-line pb-4 last:border-0 last:pb-0 space-y-3">
-  <h3 class="text-sm font-semibold text-ink-100 flex items-center gap-2">
+  <h3 class="text-sm font-medium text-ink-100 flex items-center gap-2">
     <Iconify icon="lucide:arrow-down-to-line" size={15} class="text-ink-500" />
     <span>Updates</span>
   </h3>
   <div class="space-y-3 text-xs">
-    <label for="settings-auto-update" class="flex items-start gap-2 cursor-pointer select-none">
-      <input
-        id="settings-auto-update"
-        type="checkbox"
-        checked={du.info()?.autoUpdate ?? true}
-        onChange={(e) => du.toggle(e.currentTarget.checked)}
-        class="rounded accent-brand-500 mt-0.5"
-      />
-      <span>
-        <span class="text-ink-200 font-medium">Auto-update daemon</span>
+    <label for="settings-auto-update" class="flex items-center justify-between gap-4 py-1.5 cursor-pointer select-none">
+      <span class="min-w-0">
+        <span class="text-ink-200 font-medium block">Auto-update daemon</span>
         <span class="block text-[11px] text-ink-500 font-normal mt-0.5">
           Preference saved for when automatic updates become available. For now, check on start, reconnect and every 10 minutes; use Update now to apply.
+        </span>
+      </span>
+      <span class="relative inline-flex items-center shrink-0">
+        <input
+          id="settings-auto-update"
+          type="checkbox"
+          checked={du.info()?.autoUpdate ?? true}
+          onChange={(e) => du.toggle(e.currentTarget.checked)}
+          class="sr-only peer"
+        />
+        <span
+          class="ui-switch-track shrink-0 cursor-pointer"
+          aria-checked={du.info()?.autoUpdate ?? true}
+        >
+          <span class="ui-switch-thumb" />
         </span>
       </span>
     </label>
@@ -244,7 +251,7 @@ export function SettingsGeneralSection() {
       </button>
       <Show when={(() => { const i = du.info(); return !!i && !!i.available && i.available !== i.current && hostStatus() !== "updating"; })()}>
         <button
-          class="cursor-pointer text-brand-400 hover:text-brand-300 text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          class="cursor-pointer text-accent hover:text-accent-hover text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={du.applying()}
           onClick={() => { du.apply(); m.cancelSettings(); }}
         >
@@ -262,13 +269,13 @@ export function SettingsGeneralSection() {
       </p>
     </Show>
     <Show when={du.info()?.error}>
-      <p class="text-[11px] text-red-400">{du.info()?.error}</p>
+      <p class="text-[11px] text-danger">{du.info()?.error}</p>
     </Show>
   </div>
 </div>
 
 <div class="border-b border-line pb-4 last:border-0 last:pb-0 space-y-3">
-  <h3 class="text-sm font-semibold text-ink-100 flex items-center gap-2">
+  <h3 class="text-sm font-medium text-ink-100 flex items-center gap-2">
     <Iconify icon="lucide:sliders-horizontal" size={15} class="text-ink-500" />
     <span>Advanced</span>
   </h3>
@@ -277,20 +284,44 @@ export function SettingsGeneralSection() {
       <label class="block font-medium text-ink-200 mb-1">
         Auto-compact threshold
       </label>
-      <div class="ui-segmented grid grid-cols-6">
-        <For each={[0, 70, 80, 85, 90, 95]}>
-          {(v) => (
-            <button
-              onClick={() =>
-                m.setDaemonSettings({ ...m.daemonSettings(), autoCompactPercent: v })
-              }
-              aria-pressed={(m.daemonSettings().autoCompactPercent ?? 80) === v}
-              class="ui-segment"
-            >
-              {v === 0 ? "Off" : `${v}%`}
-            </button>
-          )}
-        </For>
+      <Segmented
+        value={String(m.daemonSettings().autoCompactPercent ?? 80)}
+        onChange={(v) =>
+          m.setDaemonSettings({ ...m.daemonSettings(), autoCompactPercent: Number(v) })
+        }
+        class="grid grid-cols-6"
+        options={[0, 70, 80, 85, 90, 95].map((v) => ({
+          value: String(v),
+          label: v === 0 ? "Off" : `${v}%`,
+        }))}
+      />
+      {/* Exclusive Context Compaction Trigger Zone Meter */}
+      <div class="mt-2 rounded-lg border border-line bg-ink-950/60 p-2.5 space-y-1.5" aria-hidden="true">
+        <div class="flex items-center justify-between text-[10px] font-mono">
+          <span class="text-ink-400">
+            {(m.daemonSettings().autoCompactPercent ?? 80) === 0
+              ? "Auto-compaction disabled · manual compact only"
+              : `Active conversation buffer: 0% → ${m.daemonSettings().autoCompactPercent ?? 80}%`}
+          </span>
+          <span class="text-accent">
+            {(m.daemonSettings().autoCompactPercent ?? 80) === 0
+              ? "100% raw"
+              : `${100 - (m.daemonSettings().autoCompactPercent ?? 80)}% headroom reserve`}
+          </span>
+        </div>
+        <div class="h-1.5 rounded-full bg-ink-900 overflow-hidden flex">
+          <div
+            class="h-full bg-accent transition-all"
+            style={{
+              width: `${
+                (m.daemonSettings().autoCompactPercent ?? 80) === 0
+                  ? 100
+                  : m.daemonSettings().autoCompactPercent ?? 80
+              }%`,
+            }}
+          />
+          <div class="h-full bg-warning/50 flex-1 transition-all" />
+        </div>
       </div>
       <p class="text-[11px] text-ink-500 mt-1">
         Compact the transcript automatically past this context usage.
@@ -349,24 +380,32 @@ export function SettingsGeneralSection() {
 </div>
 
 <div class="border-b border-line pb-4 last:border-0 last:pb-0 space-y-3">
-  <h3 class="text-sm font-semibold text-ink-100 flex items-center gap-2">
+  <h3 class="text-sm font-medium text-ink-100 flex items-center gap-2">
     <Iconify icon="lucide:type" size={15} class="text-ink-500" />
     <span>Title Generator</span>
   </h3>
-  <label for="settings-auto-title" class="flex items-start gap-2 cursor-pointer select-none text-xs">
-    <input
-      id="settings-auto-title"
-      type="checkbox"
-      checked={!(m.daemonSettings().noAutoTitle ?? false)}
-      onChange={(e) =>
-        m.setDaemonSettings({ ...m.daemonSettings(), noAutoTitle: !e.currentTarget.checked })
-      }
-      class="rounded accent-brand-500 mt-0.5"
-    />
-    <span>
-      <span class="text-ink-200 font-medium">Auto-generate conversation titles</span>
+  <label for="settings-auto-title" class="flex items-center justify-between gap-4 py-1.5 cursor-pointer select-none text-xs">
+    <span class="min-w-0">
+      <span class="text-ink-200 font-medium block">Auto-generate conversation titles</span>
       <span class="block text-[11px] text-ink-500 font-normal mt-0.5">
         The host asks the model for a short title after the first exchange. Off leaves "New conversation".
+      </span>
+    </span>
+    <span class="relative inline-flex items-center shrink-0">
+      <input
+        id="settings-auto-title"
+        type="checkbox"
+        checked={!(m.daemonSettings().noAutoTitle ?? false)}
+        onChange={(e) =>
+          m.setDaemonSettings({ ...m.daemonSettings(), noAutoTitle: !e.currentTarget.checked })
+        }
+        class="sr-only peer"
+      />
+      <span
+        class="ui-switch-track shrink-0 cursor-pointer"
+        aria-checked={!(m.daemonSettings().noAutoTitle ?? false)}
+      >
+        <span class="ui-switch-thumb" />
       </span>
     </span>
   </label>

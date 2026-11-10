@@ -4,7 +4,7 @@ import { createAnalyticsReport } from "../../analytics-report";
 import { AnalyticsHistoryNotice } from "../../analytics-history";
 import { AnalyticsSummary } from "../../AnalyticsSummary";
 import { AnalyticsError, AnalyticsLoading, AnalyticsSection, ApiKeyUsageCard, CacheUsageChart, ModelUsageChart, RequestOutcomesChart, ProviderMixChart, UserEfficiencyChart, UserSpendChart } from "../../AnalyticsCharts";
-import { PageTitle } from "../../index";
+import { PageTitle } from "../../chrome";
 import { Icon, fmtNum } from "../../ui";
 
 export default function StatsPage() {

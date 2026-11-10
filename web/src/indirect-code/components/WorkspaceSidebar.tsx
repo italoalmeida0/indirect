@@ -1,5 +1,7 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
+import { createGlide } from "../../ds/motion/glide";
+import { press } from "../../ds/motion/press";
 import { copyWithToast } from "../../ui";
 import { useHost, useModal, useSession, useTranscriptCtx, useUI } from "../ctx";
 import { SessionRow, type SessionRowCtx } from "./SessionSidebar";
@@ -34,6 +36,16 @@ export function WorkspaceSidebar() {
     cancelTurnForSession: t.cancelTurnForSession,
   });
   const renderRow = (sess: SessionSummary) => SessionRow(rowCtx(), sess);
+  const [viewSwitchEl, setViewSwitchEl] = createSignal<HTMLDivElement>();
+  const [viewSwitchInd, setViewSwitchInd] = createSignal<HTMLSpanElement>();
+  createGlide({
+    container: viewSwitchEl,
+    indicator: viewSwitchInd,
+    target: () => {
+      void (s.sidebarView?.() ?? "projects");
+      return viewSwitchEl()?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? null;
+    },
+  });
   return (
 <>
 <Show when={ui.isMobile() && ui.sidebarOpen()}>
@@ -43,12 +55,14 @@ export function WorkspaceSidebar() {
   />
 </Show>
 <aside
+  inert={!ui.sidebarOpen() || undefined}
+  aria-hidden={!ui.sidebarOpen() || undefined}
   class={`rc-sidebar border-r border-line flex flex-col shrink-0 transition-all duration-200 ${
     ui.sidebarOpen()
       ? ui.isMobile()
         ? "fixed inset-y-0 left-0 z-40 w-[85vw] max-w-xs shadow-2xl"
         : "w-64"
-      : "w-0 overflow-hidden border-r-0"
+      : "w-0 overflow-hidden border-r-0 pointer-events-none"
   }`}
 >
   {/* Brand Header */}
@@ -59,7 +73,7 @@ export function WorkspaceSidebar() {
         alt="Indirect"
         class="w-5 h-5 shrink-0 object-contain rounded"
       />
-      <span class="text-[13px] font-semibold tracking-tight text-ink-100 truncate font-mono uppercase">
+      <span class="text-[13px] font-medium tracking-tight text-fg truncate">
         Indirect Code
       </span>
     </div>
@@ -70,12 +84,14 @@ export function WorkspaceSidebar() {
   <div class="p-2">
     <a
       href="#/"
+      onPointerDown={(e) => press(e.currentTarget)}
       class="w-full flex items-center gap-2 px-3 py-1.5 mb-1 rounded-lg text-xs text-ink-500 hover:text-ink-300 hover:bg-ink-900/60 transition-colors"
     >
       <Iconify icon="lucide:arrow-left" size={13} />
       <span>Back to Gateway</span>
     </a>
     <button
+      onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => {
         s.startNewConversation();
         ui.closeSidebarOnMobile();
@@ -86,6 +102,7 @@ export function WorkspaceSidebar() {
       <span>New Conversation</span>
     </button>
     <button
+      onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => {
         ui.setHistoryView(true);
         ui.closeSidebarOnMobile();
@@ -105,18 +122,29 @@ export function WorkspaceSidebar() {
           when={s.selectionMode()}
           fallback={
             /* Projects | Talk view switch (persisted across reloads) */
-            <div class="flex items-center rounded-md bg-ink-900/60 p-0.5" role="group" aria-label="Sidebar list view">
+            <div
+              ref={setViewSwitchEl}
+              data-glide=""
+              class="ui-segmented ui-segmented-sm"
+              role="group"
+              aria-label="Sidebar list view"
+            >
+              <span ref={setViewSwitchInd} class="ui-segmented-indicator" aria-hidden="true" />
               <button
-                onClick={() => s.setSidebarView("projects")}
-                aria-pressed={s.sidebarView() === "projects"}
-                class={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${s.sidebarView() === "projects" ? "bg-ink-800 text-ink-100 font-medium" : "text-ink-500 hover:text-ink-300"}`}
+                type="button"
+                onPointerDown={(e) => press(e.currentTarget)}
+                onClick={() => s.setSidebarView?.("projects")}
+                aria-pressed={(s.sidebarView?.() ?? "projects") === "projects"}
+                class="ui-segment px-2.5 text-[11px] cursor-pointer"
               >
                 Projects
               </button>
               <button
-                onClick={() => s.setSidebarView("talk")}
-                aria-pressed={s.sidebarView() === "talk"}
-                class={`px-2 py-0.5 rounded text-[11px] cursor-pointer ${s.sidebarView() === "talk" ? "bg-ink-800 text-ink-100 font-medium" : "text-ink-500 hover:text-ink-300"}`}
+                type="button"
+                onPointerDown={(e) => press(e.currentTarget)}
+                onClick={() => s.setSidebarView?.("talk")}
+                aria-pressed={(s.sidebarView?.() ?? "projects") === "talk"}
+                class="ui-segment px-2.5 text-[11px] cursor-pointer"
               >
                 Talk
               </button>
@@ -187,18 +215,18 @@ export function WorkspaceSidebar() {
           </div>
         </div>
       </div>
-      <Show when={s.sidebarView() === "talk"}>
+      <Show when={(s.sidebarView?.() ?? "projects") === "talk"}>
         <div class="space-y-0.5">
           <For
-            each={s.visibleSessions("talk", s.talkSessions())}
+            each={s.visibleSessions("talk", s.talkSessions?.() ?? [])}
             fallback={<div class="px-2.5 py-2 text-xs text-ink-600">No talk conversations yet.</div>}
           >
             {(sess) => renderRow(sess)}
           </For>
-          {s.sessionListToggle("talk", s.talkSessions().length)}
+          {s.sessionListToggle?.("talk", (s.talkSessions?.() ?? []).length)}
         </div>
       </Show>
-      <Show when={s.sidebarView() === "projects"}>
+      <Show when={(s.sidebarView?.() ?? "projects") === "projects"}>
       <Show
         when={s.projects().length > 0}
         fallback={
@@ -217,21 +245,10 @@ export function WorkspaceSidebar() {
                 return (
                   <div>
                     <div
-                      role="button"
-                      tabIndex={0}
-                      aria-label={p.name}
                       onClick={() => {
                         s.pickProject(p.id);
                       }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          if (e.target === e.currentTarget) {
-                            e.preventDefault();
-                            s.pickProject(p.id);
-                          }
-                        }
-                      }}
-                      class={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-colors focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 ${
+                      class={`group flex items-center gap-1.5 px-2 py-1.5 rounded-md cursor-pointer text-[13px] transition-colors ${
                         s.activeProjectId() === p.id || p.id === (s.activeProject()?.id || "")
                           ? "bg-ink-800/60 font-medium text-ink-100 rounded-md"
                           : "text-ink-400 hover:bg-ink-900/60 hover:text-ink-200"
@@ -254,8 +271,18 @@ export function WorkspaceSidebar() {
                           class={`shrink-0 transition-transform ${s.isProjectExpanded(p) ? "rotate-90" : ""}`}
                         />
                       </button>
-                      <Iconify icon="lucide:folder" size={14} class="shrink-0 text-ink-500" />
-                      <span class="truncate flex-1 font-medium">{p.name}</span>
+                      <button
+                        type="button"
+                        aria-label={p.name}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          s.pickProject(p.id);
+                        }}
+                        class="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 rounded"
+                      >
+                        <Iconify icon="lucide:folder" size={14} class="shrink-0 text-ink-500" />
+                        <span class="truncate flex-1 font-medium">{p.name}</span>
+                      </button>
                       <button
                         aria-label={`Copy path for ${p.name}`}
                         data-rc-tip="Copy project path"
@@ -272,7 +299,7 @@ export function WorkspaceSidebar() {
                       <Show when={!p.protected}>
                         <button
                           onClick={(e) => s.deleteProject(p.id, e)}
-                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-0.5 text-ink-600 hover:text-rose-400 cursor-pointer shrink-0"
+                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 p-0.5 text-ink-600 hover:text-danger cursor-pointer shrink-0"
                           data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
                         >
                           <Iconify icon="lucide:x" size={12} />
@@ -334,7 +361,7 @@ export function WorkspaceSidebar() {
             disabled={s.selectedSessions().size === 0}
             class={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${
               s.selectedSessions().size > 0
-                ? "bg-rose-500/10 border-rose-500/30 text-rose-300 hover:bg-rose-500/20 cursor-pointer"
+                ? "bg-danger-subtle border-danger/35 text-danger hover:opacity-90 cursor-pointer"
                 : "opacity-50 cursor-not-allowed bg-ink-900 border-line/70 text-ink-500"
             }`}
           >
@@ -365,8 +392,9 @@ export function WorkspaceSidebar() {
     {/* () => … — openSettings takes an optional section id; passing it
         directly would feed the MouseEvent in as the section. */}
     <button
+      onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => m.openSettings()}
-      aria-label="Host & agent settings"
+      aria-label="Host & agent settings: Settings"
       class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-ink-500 hover:text-ink-200 hover:bg-ink-900/60 transition-colors cursor-pointer"
     >
       <Iconify icon="lucide:settings" size={14} />

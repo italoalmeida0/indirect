@@ -71,9 +71,13 @@ frontend + daemon. Run checks from the appropriate project root.
   Collapsing the composer hides input, toolbar, footer AND the entire task plan;
   it is unavailable in `draftMode` or a blocked workspace.
 - Frontend: SolidJS + Tailwind v4. Use semantic theme tokens (`ink-*`,
-  `accent-*`, `brand-*`, `card`/`elev`/`line`), not hardcoded hex. UI kit in
-  `web/src/ui.tsx`; `usal` helpers in `web/src/motion.ts`. Never put `data-usal`
-  on Modal/toasts: retained transforms break fixed positioning. Modal entrance
+  `accent`/`accent-subtle`, `success`/`warning`/`danger`/`info`, `tone-*`,
+  `card`/`elev`/`line`), not hardcoded hex or raw Tailwind color palettes
+  (enforced by `bun scripts/check-design-tokens.ts`). Design system tokens,
+  WAAPI spring motion engine (`ds/motion/`) and primitives live in
+  `web/src/ds/` (`docs/design-system.md`); UI kit façade in `web/src/ui.tsx`;
+  entrance helpers in `web/src/motion.ts`. Never put `data-usal` on
+  Modal/toasts: retained transforms break fixed positioning. Modal entrance
   uses fill-mode `backwards`, not `both`. Solid memos evaluate eagerly: declare
   dependencies above `createMemo` (typecheck cannot catch initial-render TDZ).
 - Gateway catalog screens share `web/src/catalog.tsx` and external include/exclude

@@ -1,0 +1,239 @@
+/* App shell: installed-app safe areas, window controls overlay, scrollbars, entrance keyframes and the route placeholder. */
+
+/* Installed apps fill the display. Mobile safe areas and desktop WCO have
+ * separate rules: a standalone phone never matches window-controls-overlay. */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+}
+
+/* The same two-column workspace is used in every display mode. Its brand
+ * row and conversation header become the titlebar in an installed window. */
+.rc-workspace-header { height: 3rem; }
+.rc-window-header { padding-inline: 1rem; }
+
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  /* The shell keeps its edge-to-edge background while its contents fit
+   * inside the native safe rectangle. Fixed drawers need their own insets. */
+  .rc-app-shell, .rc-app-shell .rc-sidebar.fixed {
+    padding: var(--sat) var(--sar) var(--sab) var(--sal);
+  }
+  .rc-update-screen {
+    inset: var(--sat) var(--sar) var(--sab) var(--sal);
+  }
+  .rc-safe-bottom { padding-bottom: 0.5rem; }
+
+  .gw-shell { padding: var(--sat) var(--sar) var(--sab) var(--sal); }
+  .gw-shell .gw-header { top: var(--sat); }
+  .gw-shell .gateway-rail { top: var(--sat); bottom: var(--sab); left: var(--sal); }
+  .gw-shell::before {
+    content: "";
+    position: fixed;
+    inset: 0 0 auto;
+    height: var(--sat);
+    background: var(--ink-950);
+    z-index: 40;
+    pointer-events: none;
+  }
+
+  /* Portaled dialogs sit outside the workspace shell; the backdrop padding
+   * above already adds the notch and home-indicator insets. */
+  .ui-dialog {
+    max-height: calc(100dvh - var(--sat) - var(--sab) - 2 * var(--dialog-gap));
+  }
+}
+
+@media (display-mode: window-controls-overlay) {
+  :root {
+    --wco-top: calc(env(titlebar-area-y, 0px) + env(titlebar-area-height, 33px));
+    --wco-left: env(titlebar-area-x, 0px);
+    --wco-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+    --wco-header-height: max(2.5rem, var(--wco-top));
+  }
+  .rc-workspace-header { height: var(--wco-header-height); }
+  .rc-sidebar-header {
+    padding-left: max(0.875rem, calc(var(--wco-left) + 0.5rem));
+    padding-right: max(0.875rem, calc(100% - 100vw + var(--wco-right) + 0.5rem));
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .rc-window-header {
+    padding-left: max(1rem, calc(var(--wco-left) - var(--rc-sidebar-width) + 0.5rem));
+    padding-right: calc(var(--wco-right) + 1rem);
+  }
+  .rc-window-content {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .rc-sidebar-toggle, .gw-header button, .gw-header a {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+
+  /* The dashboard's existing header owns both the native controls and the
+   * page controls. One opaque sticky surface keeps scrolled content out. */
+  .gw-shell { --gw-rail-width: 0px; }
+  .gw-shell .gw-header {
+    background: var(--ink-950);
+    backdrop-filter: none;
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .gw-shell header.gw-header {
+    height: var(--wco-header-height);
+    padding-left: max(1.5rem, calc(var(--wco-left) - var(--gw-rail-width) + 0.5rem));
+    padding-right: calc(var(--wco-right) + 1.5rem);
+  }
+  .gw-user-email { display: none; }
+  .gw-user-avatar { width: 1.75rem; height: 1.75rem; }
+  .gw-shell .gateway-rail { padding-top: 0; }
+  .gw-rail-brand { min-height: var(--wco-header-height); min-width: 0; margin-top: 0.25rem; }
+  .gw-rail-logo { width: 1.75rem; height: 1.75rem; }
+  .gw-mobile-header {
+    height: var(--wco-header-height);
+    padding-left: max(0.5rem, calc(var(--wco-left) + 0.5rem));
+    padding-right: calc(var(--wco-right) + 0.5rem);
+  }
+  .gw-mobile-brand > span { display: none; }
+  .gw-mobile-brand > div { width: 1.5rem; height: 1.5rem; }
+  .gw-mobile-actions button { width: 1.75rem; height: 1.75rem; }
+  @media (min-width: 768px) {
+    .gw-shell { --gw-rail-width: 4rem; }
+  }
+  @media (min-width: 1024px) {
+    .gw-shell { --gw-rail-width: 16rem; }
+    .gw-rail-brand { padding-left: max(0.5rem, var(--wco-left)); }
+  }
+  @media (min-width: 768px) and (max-width: 1023px) {
+    /* A compact rail cannot fit beside left-side native controls. */
+    .gw-shell .gateway-rail { padding-top: min(var(--wco-left), var(--wco-top)); }
+  }
+  .rc-safe-bottom { padding-bottom: max(var(--sab), 0.5rem); }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ink-700);
+  border-radius: 8px;
+  border: 2px solid var(--ink-950);
+}
+/* Touch devices never show hover affordances — keep the thumb subtle. */
+html:not(.mobile) ::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-600);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+::-webkit-resizer {
+  background: transparent;
+}
+/* Firefox: thin overlay-style scrollbars on desktop only. */
+@-moz-document url-prefix() {
+  html:not(.mobile) * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--ink-700) transparent;
+  }
+}
+/* Mobile (html.mobile, set before first paint in web/index.html): hide
+ * scrollbars — overlay momentum scrolling already signals position, and
+ * thin desktop rails just eat layout width on a phone. Scrolling itself
+ * is untouched. `.no-scrollbar` does the same opt-in for any element. */
+html.mobile ::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+html.mobile * {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes grow-y {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* fill-mode "backwards" (not "both"): a retained `transform` would create a
+   containing block and break position:fixed descendants (e.g. modal). */
+.anim-fade-in {
+  animation: fade-in 0.25s ease-out backwards;
+}
+.anim-slide-in {
+  animation: slide-in 0.2s ease-out backwards;
+}
+.anim-pop-in {
+  animation: pop-in 0.18s ease-out backwards;
+}
+/* Floating-ui layers (tooltips, select menus): floating.ts positions via
+   left/top and sets transformOrigin from the resolved placement, so this
+   transform animation is safe — no fight over the inline transform. */
+.anim-float-in {
+  animation: float-in 0.14s ease-out backwards;
+}
+
+/* Route chunk placeholder. Each route loads its own bundle, so a cold cache
+ * shows this for a single round trip instead of a blank content area. */
+.route-loading { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 240px; color: var(--ink-500); }
+.route-loading-dot { width: 6px; height: 6px; border-radius: 9999px; background: currentColor; opacity: .35; animation: route-loading-pulse 1s ease-in-out infinite; }
+.route-loading-dot:nth-child(2) { animation-delay: .15s; }
+.route-loading-dot:nth-child(3) { animation-delay: .3s; }
+@keyframes route-loading-pulse { 0%, 100% { opacity: .2; transform: scale(.85); } 50% { opacity: .8; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .route-loading-dot { animation: none; opacity: .5; } }

@@ -1,7 +1,7 @@
 import { createResource, createSignal, For, Show } from "solid-js";
 import { api, type BillingPlanDto } from "../../api";
-import { PageTitle } from "../../index";
-import { Badge, Btn, Card, Icon, Icons, Modal, ModalField, SwitchCard, fmtCost, toast } from "../../ui";
+import { PageTitle } from "../../chrome";
+import { Badge, Btn, Card, CurrencyField, Icon, Icons, Modal, ModalField, SwitchCard, fmtCost, toast } from "../../ui";
 
 export default function AdminPlansPage() {
   const [plans, actions] = createResource(async () => (await api<{ plans: BillingPlanDto[] }>("GET", "/api/admin/plans")).plans);
@@ -47,13 +47,148 @@ export default function AdminPlansPage() {
     </Show>
     <p class="billing-footnote">Preview uses {days} days in the current UTC month. Monthly renewal: first day, 00:00 UTC. Weekly renewal: Monday, 00:00 UTC. A 5-hour window starts on first use.</p>
     <Modal open={!!editing()} onClose={() => { if (!busy()) setEditing(null); }} width="max-w-xl billing-dialog" title={editing() === "new" ? "Create plan" : "Edit plan"} description="Amounts are spending allowances, not subscription prices." footer={<><Btn variant="outline" size="sm" disabled={busy()} onClick={() => setEditing(null)}>Cancel</Btn><Btn size="sm" disabled={busy() || !name().trim() || !unlimited() && (!Number.isFinite(Number(amount())) || Number(amount()) < .01 || Number(amount()) > 1_000_000)} onClick={save}>{busy() ? "Saving…" : "Save plan"}</Btn></>}>
-      <div class="space-y-5"><ModalField label="Plan name"><input class="ui-field" aria-label="Plan name" maxLength={64} value={name()} onInput={(event) => setName(event.currentTarget.value)} placeholder="e.g. Pro" /></ModalField>
+      <div class="space-y-5">
+        {/* Exclusive Plan Blueprint Header & Tier Archetypes */}
+        <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-3">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <div class="flex items-center gap-2">
+              <span class="w-7 h-7 rounded-lg bg-accent-subtle border border-accent/35 text-accent inline-flex items-center justify-center">
+                <Icon name="lucide:layers" size={14} />
+              </span>
+              <div>
+                <div class="text-xs font-medium text-fg">Plan Blueprint & Quota Architecture</div>
+                <div class="text-[11px] text-fg-muted">
+                  {unlimited()
+                    ? "Unrestricted enterprise ceiling across all billing windows"
+                    : `${fmtCost(Number(amount()) || 0)}/mo · ~${fmtCost((Number(amount()) || 0) / days)}/day average pace (${days}d UTC month)`}
+                </div>
+              </div>
+            </div>
+            <Badge tone={unlimited() ? "indigo" : "green"}>
+              {unlimited() ? "∞ Unlimited Tier" : `${fmtCost(Number(amount()) || 0)} / mo`}
+            </Badge>
+          </div>
+
+          <div class="grid grid-cols-5 gap-1.5" aria-hidden="true">
+            <For
+              each={[
+                { label: "Starter", usd: "20", tag: "$20/mo", unlim: false },
+                { label: "Pro", usd: "100", tag: "$100/mo", unlim: false },
+                { label: "Team", usd: "250", tag: "$250/mo", unlim: false },
+                { label: "Scale", usd: "1000", tag: "$1K/mo", unlim: false },
+                { label: "Infinite", usd: "100", tag: "∞ No cap", unlim: true },
+              ]}
+            >
+              {(tier) => {
+                const active = () =>
+                  tier.unlim ? unlimited() : !unlimited() && Number(amount()) === Number(tier.usd);
+                return (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => {
+                      setUnlimited(tier.unlim);
+                      if (!tier.unlim) setAmount(tier.usd);
+                      if (!name().trim()) setName(tier.label);
+                    }}
+                    class={`rounded-lg border p-2 text-left transition-all cursor-pointer ${
+                      active()
+                        ? "border-accent bg-accent-subtle text-accent-strong shadow-2xs"
+                        : "border-line bg-surface hover:border-line-strong text-fg-secondary"
+                    }`}
+                  >
+                    <div class="text-[10px] tracking-wider text-fg-muted font-medium">{tier.label}</div>
+                    <div class="text-xs font-mono font-medium mt-0.5 text-fg">{tier.tag}</div>
+                  </button>
+                );
+              }}
+            </For>
+          </div>
+        </div>
+
+        <ModalField label="Plan name"><input class="ui-field" aria-label="Plan name" maxLength={64} value={name()} onInput={(event) => setName(event.currentTarget.value)} placeholder="e.g. Pro" /></ModalField>
         <SwitchCard checked={unlimited()} onChange={(value) => setUnlimited(value)} title="Unlimited spending" description="No account spending ceiling. Individual key limits still apply." />
-        <Show when={!unlimited()}><ModalField label="Monthly allowance (USD)" hint="Renews at the beginning of each calendar month"><input class="ui-field billing-money-input" type="number" inputMode="decimal" aria-label="Monthly allowance (USD)" min="0.01" max="1000000" step="0.01" value={amount()} onInput={(event) => setAmount(event.currentTarget.value)} /></ModalField>
+        <Show when={!unlimited()}>
+          <CurrencyField
+            label="Monthly allowance (USD)"
+            ariaLabel="Monthly allowance (USD)"
+            hint="Renews at the beginning of each calendar month"
+            min="0.01"
+            max="1000000"
+            step="0.01"
+            allowEmpty={false}
+            value={amount()}
+            onInput={setAmount}
+            presets={[
+              { label: "$25", value: "25" },
+              { label: "$100", value: "100" },
+              { label: "$250", value: "250" },
+              { label: "$500", value: "500" },
+              { label: "$1,000", value: "1000" },
+            ]}
+          />
+
+          {/* Exclusive Temporal Cascade Window Architect */}
+          <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <div>
+                <h3 class="text-xs font-medium text-fg">Temporal Quota Cascade</h3>
+                <p class="text-[11px] text-fg-muted">Proportional sub-windows prevent a single burst from exhausting the entire month.</p>
+              </div>
+              <span class="text-[11px] font-mono text-fg-secondary bg-surface px-2 py-0.5 rounded border border-line">
+                {days}d UTC cycle
+              </span>
+            </div>
+
+            {/* Visual Proportion Waterfall Bar */}
+            <div class="space-y-1.5" aria-hidden="true">
+              <div class="grid grid-cols-3 gap-2 text-[11px]">
+                <div class="rounded-lg border border-accent/40 bg-surface p-2">
+                  <div class="flex items-center justify-between text-fg-muted">
+                    <span>1 · Monthly Pool</span>
+                    <span class="font-mono text-accent">100%</span>
+                  </div>
+                  <div class="text-sm font-mono font-medium text-fg mt-0.5">{fmtCost(Number(amount()) || 0)}</div>
+                  <div class="h-1.5 rounded-full bg-surface-muted mt-1.5 overflow-hidden">
+                    <div class="h-full bg-accent rounded-full w-full" />
+                  </div>
+                </div>
+
+                <div class={`rounded-lg border p-2 transition-colors ${weekly() ? "border-accent/40 bg-surface" : "border-line bg-surface/50 opacity-60"}`}>
+                  <div class="flex items-center justify-between text-fg-muted">
+                    <span>2 · 7-Day Slice</span>
+                    <span class="font-mono">{((7 / days) * 100).toFixed(1)}%</span>
+                  </div>
+                  <div class="text-sm font-mono font-medium text-fg mt-0.5">
+                    {weekly() ? fmtCost((Number(amount()) || 0) * 7 / days) : "Unbounded"}
+                  </div>
+                  <div class="h-1.5 rounded-full bg-surface-muted mt-1.5 overflow-hidden">
+                    <div class="h-full bg-accent rounded-full transition-all" style={{ width: weekly() ? `${Math.max(12, (7 / days) * 100)}%` : "0%" }} />
+                  </div>
+                </div>
+
+                <div class={`rounded-lg border p-2 transition-colors ${session() ? "border-accent/40 bg-surface" : "border-line bg-surface/50 opacity-60"}`}>
+                  <div class="flex items-center justify-between text-fg-muted">
+                    <span>3 · 5-Hr Burst</span>
+                    <span class="font-mono">{((5 / (days * 24)) * 100).toFixed(2)}%</span>
+                  </div>
+                  <div class="text-sm font-mono font-medium text-fg mt-0.5">
+                    {session() ? fmtCost((Number(amount()) || 0) * 5 / (days * 24)) : "Unbounded"}
+                  </div>
+                  <div class="h-1.5 rounded-full bg-surface-muted mt-1.5 overflow-hidden">
+                    <div class="h-full bg-accent rounded-full transition-all" style={{ width: session() ? "18%" : "0%" }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="space-y-2 pt-1">
+              <SwitchCard checked={weekly()} onChange={setWeekly} title="Weekly allowance" description={`${fmtCost(Number(amount()) * 7 / days)} per week this month · renews Monday`} />
+              <SwitchCard checked={session()} onChange={setSession} title="5-hour sessions" description={`${fmtCost(Number(amount()) * 5 / (days * 24))} per session this month · starts on first use`} />
+            </div>
+          </div>
+
           <p class="text-xs text-ink-500 leading-relaxed">Configure model prices in Models before assigning a spending limit.</p>
-          <div class="billing-option-heading"><h3>Optional distribution</h3><p>Off by default. These limits share the monthly budget.</p></div>
-          <SwitchCard checked={weekly()} onChange={setWeekly} title="Weekly allowance" description={`${fmtCost(Number(amount()) * 7 / days)} per week this month · renews Monday`} />
-          <SwitchCard checked={session()} onChange={setSession} title="5-hour sessions" description={`${fmtCost(Number(amount()) * 5 / (days * 24))} per session this month · starts on first use`} />
           <Show when={editing() !== "new"}><p class="text-xs text-ink-500 leading-relaxed">Changes apply to all members immediately. Existing spend and active sessions are preserved.</p></Show>
         </Show>
       </div>

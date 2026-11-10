@@ -1,6 +1,10 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Show, untrack } from "solid-js";
 import { createStore } from "solid-js/store";
 import { Icon } from "../../components/icon";
+import { animate } from "../../ds/motion/animate";
+import { press } from "../../ds/motion/press";
+import { reducedMotion } from "../../ds/motion/reduced";
+import { motionTokens } from "../../ds/motion/tokens";
 
 export interface PendingQuestion {
   id: string;
@@ -29,8 +33,24 @@ export function QuestionPanel(props: {
   };
   const ready = (i: number) => answers(i).length > 0 && (!drafts[i]?.custom || !!drafts[i]?.text.trim());
   let heading: HTMLLegendElement | undefined;
+  let fieldsetRef: HTMLFieldSetElement | undefined;
   function move(next: number) {
+    const dir = next >= step() ? 1 : -1;
     setStep(next);
+    if (fieldsetRef && !untrack(reducedMotion)) {
+      animate(
+        fieldsetRef,
+        { opacity: 1, translate: "0px 0px", filter: "blur(0px)" },
+        { duration: 0.22, ease: motionTokens.ease.enter },
+        {
+          from: {
+            opacity: 0.25,
+            translate: `${dir * 16}px 0px`,
+            filter: "blur(2.5px)",
+          },
+        },
+      );
+    }
     requestAnimationFrame(() => heading?.focus());
   }
   function choose(label: string, checked: boolean) {
@@ -50,7 +70,7 @@ export function QuestionPanel(props: {
       if (step() < questions().length-1) move(step()+1);
       else if (props.connected && drafts.every((_, i) => ready(i))) props.onSubmit(drafts.map((_, i) => answers(i)));
     }}>
-      <fieldset disabled={props.submitting} class="px-4 py-3 max-h-[38vh] overflow-y-auto min-w-0">
+      <fieldset ref={fieldsetRef} disabled={props.submitting} class="px-4 py-3 max-h-[38vh] overflow-y-auto min-w-0">
         <legend ref={heading} tabIndex={-1} class="float-left w-full mb-3 outline-none">
           <span class="block text-[11px] font-medium text-ink-500 mb-1">{question().header}</span>
           <span class="block text-sm font-medium text-ink-100 whitespace-pre-wrap break-words">{question().question}</span>
@@ -89,11 +109,11 @@ export function QuestionPanel(props: {
           </Show>
         </div>
       </fieldset>
-      <Show when={props.error}><p role="alert" class="px-4 pb-2 text-xs text-rose-400">{props.error}</p></Show>
+      <Show when={props.error}><p role="alert" class="px-4 pb-2 text-xs text-danger">{props.error}</p></Show>
       <div class="flex items-center gap-2 border-t border-line px-4 py-3">
-        <button type="button" disabled={step() === 0 || props.submitting} onClick={() => move(step()-1)} class="rounded-lg px-3 py-2 text-xs text-ink-300 hover:bg-elev disabled:opacity-40 cursor-pointer disabled:cursor-default">Back</button>
+        <button type="button" disabled={step() === 0 || props.submitting} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} onClick={() => move(step()-1)} class="rounded-lg px-3 py-2 text-xs text-ink-300 hover:bg-elev disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">Back</button>
         <Show when={!props.connected}><span class="text-[11px] text-ink-500">Reconnecting…</span></Show>
-        <button type="submit" disabled={!ready(step()) || props.submitting || (step() === questions().length-1 && !props.connected)} class="ml-auto rounded-lg bg-ink-100 text-ink-950 px-4 py-2 text-xs font-medium hover:bg-ink-200 disabled:opacity-40 cursor-pointer disabled:cursor-default">
+        <button type="submit" disabled={!ready(step()) || props.submitting || (step() === questions().length-1 && !props.connected)} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} class="ml-auto rounded-lg bg-ink-100 text-ink-950 px-4 py-2 text-xs font-medium hover:bg-ink-200 disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">
           {props.submitting ? "Sending…" : step() < questions().length-1 ? "Next" : "Send answers"}
         </button>
       </div>
