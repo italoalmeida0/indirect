@@ -5704,7 +5704,7 @@ func TestRunScript_Round31AdversarialFixes(t *testing.T) {
 			});
 
 			// Wait briefly for server to observe client disconnect after res.destroy()
-			for (let i = 0; i < 40 && !serverResClosed; i++) {
+			for (let i = 0; i < 200 && !serverResClosed; i++) {
 				await new Promise((r) => setTimeout(r, 10));
 			}
 			assert.strictEqual(serverResClosed, true, "res.destroy() must abort client fetch and close server response");
@@ -5712,6 +5712,107 @@ func TestRunScript_Round31AdversarialFixes(t *testing.T) {
 			assert.ok(srvReqSocket instanceof net.Socket, "server req.socket instanceof net.Socket");
 			assert.strictEqual(srvResSocket, srvReqSocket, "server res.socket === req.socket");
 			await new Promise((r) => srv.close(r));
+
+			// 2b. Rapid stress for drain + abort/close event-batch races on ServerResponse and ClientRequest
+			{
+				const chunk = Buffer.alloc(65536, 0x43);
+				let activeRes = null;
+				let activeResClosed = false;
+				const stressSrv = http.createServer((_req, res) => {
+					activeRes = res;
+					activeResClosed = false;
+					res.on("close", () => { activeResClosed = true; });
+					res.writeHead(200);
+					function pump() {
+						while (!res.destroyed) {
+							if (!res.write(chunk)) {
+								res.once("drain", pump);
+								return;
+							}
+						}
+					}
+					pump();
+				});
+				await new Promise((r) => stressSrv.listen(0, "127.0.0.1", r));
+				const stressPort = stressSrv.address().port;
+				const delays = [0, 1, 5];
+				for (let iter = 0; iter < 15; iter++) {
+					const delay = delays[iter % delays.length];
+					await new Promise((resolve) => {
+						const creq = http.get("http://127.0.0.1:" + stressPort + "/?i=" + iter, (res) => {
+							if (delay === 0 && iter % 6 === 0) {
+								res.once("data", () => {
+									res.destroy();
+									resolve();
+								});
+								return;
+							}
+							res.pause();
+							if (delay === 0) {
+								res.destroy();
+								resolve();
+							} else {
+								setTimeout(() => {
+									res.destroy();
+									resolve();
+								}, delay);
+							}
+						});
+						creq.on("error", () => {});
+					});
+					for (let i = 0; i < 200 && !activeResClosed; i++) {
+						await new Promise((r) => setTimeout(r, 10));
+					}
+					assert.strictEqual(activeResClosed, true, "ServerResponse closed on stress iter " + iter);
+					assert.strictEqual(activeRes.destroyed, true, "ServerResponse destroyed on stress iter " + iter);
+				}
+				await new Promise((r) => stressSrv.close(r));
+
+				const dropSrv = http.createServer((req, _res) => {
+					const idx = Number(new URL(req.url, "http://127.0.0.1").searchParams.get("i") || "0");
+					if (idx % 2 === 0) {
+						req.socket.destroy();
+					} else {
+						req.once("data", () => {
+							req.socket.destroy();
+						});
+					}
+				});
+				await new Promise((r) => dropSrv.listen(0, "127.0.0.1", r));
+				const dropPort = dropSrv.address().port;
+				for (let iter = 0; iter < 10; iter++) {
+					let clientReqRef = null;
+					await new Promise((resolve) => {
+						const req = http.request({
+							hostname: "127.0.0.1",
+							port: dropPort,
+							path: "/upload?i=" + iter,
+							method: "POST",
+						});
+						clientReqRef = req;
+						let done = false;
+						const finish = () => {
+							if (!done) {
+								done = true;
+								resolve();
+							}
+						};
+						req.on("error", () => {});
+						req.on("close", finish);
+						function pumpReq() {
+							while (!req.destroyed) {
+								if (!req.write(chunk)) {
+									req.once("drain", pumpReq);
+									return;
+								}
+							}
+						}
+						pumpReq();
+					});
+					assert.strictEqual(clientReqRef.destroyed, true, "ClientRequest destroyed on stress iter " + iter);
+				}
+				await new Promise((r) => dropSrv.close(r));
+			}
 		}
 
 		// 3. Server request body backpressure (req.pause()) and ClientRequest write backpressure

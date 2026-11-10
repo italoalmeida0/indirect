@@ -14349,7 +14349,8 @@
         throw err;
       }
       if (b.byteLength > 0) {
-        hostCall("http.writeFetchBody", JSON.stringify({ id, eof: false }), b);
+        const ok = hostCall("http.writeFetchBody", JSON.stringify({ id, eof: false }), b);
+        if (ok === "closed") return false;
       }
       return true;
     };
@@ -14372,7 +14373,10 @@
       await new Promise((resolve, reject) => {
         stream.on("data", (c) => {
           try {
-            if (c !== undefined && c !== null) writeChunk(c);
+            if (c !== undefined && c !== null && !writeChunk(c)) {
+              resolve();
+              return;
+            }
           } catch (e) {
             reject(e);
           }
@@ -15638,6 +15642,7 @@
         }
       };
       const emitReqClose = () => {
+        this._pendingWriteCb = null;
         if (!this._closeEmitted) {
           this._closeEmitted = true;
           this.emit("close");
@@ -15695,6 +15700,11 @@
           if (!im.destroyed) im.push(null);
         } catch (err) {
           this._clearTimeout();
+          this._pendingWriteCb = null;
+          this.destroyed = true;
+          if (this.socket && !this.socket.destroyed) {
+            this.socket.destroyed = true;
+          }
           if (!im.destroyed) {
             if (this._aborted) {
               im.aborted = true;
@@ -15710,6 +15720,11 @@
     _handleFetchError(err) {
       this._clearTimeout();
       if (!this._aborted) {
+        this._pendingWriteCb = null;
+        this.destroyed = true;
+        if (this.socket && !this.socket.destroyed) {
+          this.socket.destroyed = true;
+        }
         const rawMsg = err && err.cause ? err.cause.message || String(err.cause) : (err ? err.message || String(err) : "Request failed");
         const reqErr = classifyNetworkError(rawMsg);
         this.emit("error", reqErr);
@@ -15740,6 +15755,11 @@
         if (this._fetchId && !this._aborted) {
           try {
             const ok = hostCall("http.writeFetchBody", JSON.stringify({ id: this._fetchId, eof: false }), b);
+            if (ok === "closed") {
+              this._backpressured = true;
+              cb();
+              return;
+            }
             if (ok === "false") {
               this._backpressured = true;
               this._pendingWriteCb = cb;

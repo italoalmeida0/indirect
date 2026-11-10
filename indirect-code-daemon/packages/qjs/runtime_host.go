@@ -16746,21 +16746,29 @@ func (en *rtEntry) opHTTPWriteFetchBody(argsStr string, chunk []byte) (string, [
 		delete(en.fetchBodies, req.ID)
 	}
 	en.fetchMu.Unlock()
-	if bw != nil {
-		var ok = true
-		if len(chunk) > 0 {
-			var werr error
-			ok, werr = bw.Enqueue(chunk)
-			if werr != nil {
-				return "", nil, false, "ERR_OUT_OF_RANGE", werr
-			}
-		}
+	if bw == nil {
 		if req.EOF {
-			bw.EnqueueClose()
+			return "true", nil, false, "", nil
 		}
-		if !ok {
-			return "false", nil, false, "", nil
+		return "closed", nil, false, "", nil
+	}
+	ok := true
+	if len(chunk) > 0 || !req.EOF {
+		var werr error
+		ok, werr = bw.Enqueue(chunk)
+		if werr != nil {
+			if req.EOF {
+				bw.EnqueueClose()
+				return "true", nil, false, "", nil
+			}
+			return "closed", nil, false, "", nil
 		}
+	}
+	if req.EOF {
+		bw.EnqueueClose()
+	}
+	if !ok {
+		return "false", nil, false, "", nil
 	}
 	return "true", nil, false, "", nil
 }
@@ -17567,7 +17575,7 @@ func (en *rtEntry) opHTTPServerRespond(argsStr string, body []byte) (string, []b
 	hs := en.servers[req.ServerID]
 	en.srvMu.Unlock()
 	if hs == nil {
-		return "", nil, false, "", nil
+		return "false", nil, false, "", nil
 	}
 	hs.reqsMu.Lock()
 	pReq := hs.reqs[req.ReqID]
@@ -17575,12 +17583,13 @@ func (en *rtEntry) opHTTPServerRespond(argsStr string, body []byte) (string, []b
 		delete(hs.reqs, req.ReqID)
 	}
 	hs.reqsMu.Unlock()
-	canContinue := true
+	canContinue := false
 	if pReq != nil {
-		bodyCopy := make([]byte, len(body))
-		copy(bodyCopy, body)
 		pReq.mu.Lock()
 		if !pReq.closed {
+			canContinue = true
+			bodyCopy := make([]byte, len(body))
+			copy(bodyCopy, body)
 			pReq.queuedBytes += len(bodyCopy)
 			if !isDone && pReq.queuedBytes >= 64*1024 {
 				pReq.needDrain = true
