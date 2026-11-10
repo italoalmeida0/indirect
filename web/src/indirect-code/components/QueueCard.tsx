@@ -27,35 +27,37 @@ export function QueueCard() {
   return (
     <Show when={items().length > 0}>
       <div class={`${ui.convWidthClass()} mx-auto`}>
-        <div class="bg-ink-900 border border-line/70 rounded-xl px-3 py-1">
+        <div class="rc-studio-card rounded-xl px-3.5 py-2 shadow-resting">
           <div class="flex items-center gap-2">
-            <span class="text-xs font-medium text-ink-200">Queued Messages</span>
-            <span class="text-[11px] font-mono bg-ink-800 border border-line/60 rounded px-1.5 py-0.5 text-ink-300">
+            <Iconify icon="lucide:list-end" size={14} class="text-accent shrink-0" />
+            <span class="text-xs font-medium text-fg">Queued Messages</span>
+            <span class="rounded-full bg-accent-subtle border border-accent/25 px-2 py-0.5 font-mono text-[10px] font-medium text-accent tabular-nums">
               {items().length}
             </span>
-            <span class="text-[11px] text-ink-500">Sends after agent finishes working</span>
+            <span class="text-[11px] text-fg-muted hidden sm:inline">Sends after agent finishes working</span>
             <span class="flex-1" />
             <button
               onClick={() => q.toggleCollapsed(sid())}
-              class="p-1 rounded-md text-ink-500 hover:text-ink-200 hover:bg-ink-800 transition-colors cursor-pointer"
+              class="p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
               aria-label={collapsed() ? "Expand queue" : "Collapse queue"}
             >
               <Iconify icon={collapsed() ? "lucide:chevron-up" : "lucide:chevron-down"} size={14} />
             </button>
           </div>
           <Show when={!collapsed()}>
-            <div class="flex flex-col">
+            <div class="mt-1.5 pt-1.5 border-t border-border/60 flex flex-col divide-y divide-border/50">
               <For each={items()}>
                 {(item) => (
-                  <div class="py-1 border-t border-line/40 first:border-t-0">
+                  <div class="py-1.5 first:pt-0 last:pb-0">
                     <Show
                       when={q.editingQueueId() === item.id}
                       fallback={
-                        <div class="flex items-center gap-1 min-w-0">
-                          <span class="flex-1 truncate text-sm text-ink-200">{item.text}</span>
+                        <div class="flex items-center gap-1.5 min-w-0">
+                          <span class="flex-1 truncate text-sm text-fg">{item.text}</span>
                           <Show when={item.attachmentIds.length > 0}>
-                            <span class="text-[10px] font-mono text-ink-500 shrink-0">
-                              📎{item.attachmentIds.length}
+                            <span class="inline-flex items-center gap-1 rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 text-[10px] font-mono text-fg-secondary shrink-0">
+                              <Iconify icon="lucide:paperclip" size={10} />
+                              {item.attachmentIds.length}
                             </span>
                           </Show>
                           <MsgIconBtn tip="Send now (steers next step)" icon="lucide:arrow-right" compact onClick={() => q.sendNow(item.id)} />
@@ -84,29 +86,29 @@ function QueueEditRow(props: { queueId: string }) {
   let fileRef: HTMLInputElement | undefined;
 
   return (
-    <div class="flex flex-col gap-1.5">
+    <div class="flex flex-col gap-2 py-0.5">
       <textarea
         value={q.editingQueueText()}
         onInput={(e) => q.setEditingQueueText(e.currentTarget.value)}
         rows={2}
-        class="w-full bg-ink-950 border border-line/70 rounded-lg px-2 py-1.5 text-sm text-ink-100 resize-y focus:outline-none focus:border-accent-500"
+        class="rc-studio-well w-full rounded-lg px-2.5 py-1.5 text-sm text-fg resize-y focus:outline-none focus:border-accent"
       />
       <Show when={q.editDraft.pendingAttachments().length > 0}>
         <div class="flex flex-wrap gap-1.5">
           <For each={q.editDraft.pendingAttachments()}>
             {(a) => (
-              <span class="flex items-center gap-1 text-[11px] bg-ink-950 border border-line/70 px-2 py-1 rounded-lg text-ink-300">
+              <span class="flex items-center gap-1 text-[11px] bg-surface-subtle border border-border px-2 py-1 rounded-lg text-fg-secondary">
                 <FileIcon path={a.name} size={13} />
                 <button
                   onClick={() => a.serverId ? m.openStoredPreview(s.activeSessionId(), a.serverId) : m.previewPending(a)}
-                  class="hover:underline truncate max-w-40"
+                  class="hover:underline truncate max-w-40 cursor-pointer"
                 >
                   {a.name}
                 </button>
                 <button
                   aria-label={`Remove ${a.name}`}
                   onClick={() => q.editDraft.removePendingAttachment(a.key)}
-                  class="cursor-pointer px-0.5 hover:text-danger"
+                  class="cursor-pointer px-0.5 text-fg-muted hover:text-danger transition-colors"
                 >
                   ×
                 </button>

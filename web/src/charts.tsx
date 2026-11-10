@@ -1,3 +1,4 @@
+import { computePosition, flip, offset, shift } from "@floating-ui/dom";
 import {
   Axis,
   AxisCursor,
@@ -11,9 +12,11 @@ import {
   Point,
 } from "solid-charts";
 import { curveMonotoneX } from "solid-charts/curves";
-import { Show, createMemo, type JSX } from "solid-js";
+import { Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js";
+import { Portal } from "solid-js/web";
 
 import type { DailyPoint } from "./api";
+import { Z } from "./floating";
 import { fmtCost, fmtNum, pointLabel } from "./ui";
 
 const IN_BAR = "var(--chart-strong)";
@@ -66,83 +69,254 @@ function ChartFrame(props: { height: number; children: JSX.Element }) {
   );
 }
 
+/**
+ * Portals a solid-charts `<AxisTooltip>` payload to `document.body` via
+ * `@floating-ui/dom` so `.ui-card { overflow: hidden }` and compact chart
+ * heights never clip multi-row tooltips at card or viewport boundaries.
+ */
+export function ChartPortalTooltip(props: { class?: string; children: JSX.Element }) {
+  const [active, setActive] = createSignal(false);
+  let wrapperEl: HTMLElement | null = null;
+  let floatingEl: HTMLDivElement | null = null;
+  let lastClientX: number | null = null;
+  let lastClientY: number | null = null;
+  let cancelled = false;
+  onCleanup(() => {
+    cancelled = true;
+  });
+
+  const reposition = () => {
+    if (cancelled || !wrapperEl || !floatingEl || !wrapperEl.isConnected || !floatingEl.isConnected) {
+      return;
+    }
+    const svgEl = wrapperEl.querySelector<SVGSVGElement>("svg[data-sc-chart]") ?? wrapperEl;
+    const svgRect = svgEl.getBoundingClientRect();
+    if (
+      svgRect.width <= 0 ||
+      svgRect.height <= 0 ||
+      svgRect.bottom < 0 ||
+      svgRect.top > window.innerHeight
+    ) {
+      setActive(false);
+      return;
+    }
+    const cursorEl = wrapperEl.querySelector<SVGLineElement>("[data-sc-axis-cursor]");
+    const cursorRect = cursorEl?.getBoundingClientRect();
+    const hasCursor =
+      cursorRect && (cursorRect.left > 0 || cursorRect.top > 0 || cursorRect.height > 0);
+    const anchorX = hasCursor
+      ? cursorRect.left + cursorRect.width / 2
+      : lastClientX !== null
+        ? Math.max(svgRect.left, Math.min(svgRect.right, lastClientX))
+        : svgRect.left + svgRect.width / 2;
+    const anchorY =
+      lastClientY !== null
+        ? Math.max(svgRect.top + 8, Math.min(svgRect.bottom - 8, lastClientY))
+        : svgRect.top + svgRect.height * 0.4;
+
+    const virtualRef = {
+      getBoundingClientRect: () => ({
+        width: 0,
+        height: 0,
+        x: anchorX,
+        y: anchorY,
+        left: anchorX,
+        right: anchorX,
+        top: anchorY,
+        bottom: anchorY,
+      }),
+    };
+
+    void computePosition(virtualRef, floatingEl, {
+      strategy: "fixed",
+      placement: "right",
+      middleware: [
+        offset(14),
+        flip({ padding: 12, fallbackPlacements: ["left", "top", "bottom"] }),
+        shift({ padding: 12 }),
+      ],
+    }).then(({ x, y }) => {
+      if (cancelled || !floatingEl) return;
+      floatingEl.style.left = `${Math.round(x)}px`;
+      floatingEl.style.top = `${Math.round(y)}px`;
+      floatingEl.style.visibility = "visible";
+    });
+  };
+
+  const setupProbe = (probe: HTMLSpanElement) => {
+    let raf = 0;
+    let teardown: (() => void) | undefined;
+
+    const connect = () => {
+      if (cancelled) return;
+      const hostEl = probe.closest<HTMLElement>("[data-sc-axis-tooltip]");
+      const wrap = hostEl?.closest<HTMLElement>("[data-sc-wrapper]") ?? null;
+      if (!hostEl || !wrap) {
+        raf = requestAnimationFrame(connect);
+        return;
+      }
+      wrapperEl = wrap;
+      const syncActive = () => {
+        const visible = hostEl.style.opacity === "1";
+        setActive(visible);
+        if (visible) reposition();
+      };
+      const obs = new MutationObserver(syncActive);
+      obs.observe(hostEl, { attributes: true, attributeFilter: ["style"] });
+
+      const onMove = (e: MouseEvent | PointerEvent) => {
+        lastClientX = e.clientX;
+        lastClientY = e.clientY;
+        syncActive();
+      };
+      const onLeave = () => {
+        setActive(false);
+      };
+      const onDocPointerDown = (e: PointerEvent) => {
+        if (wrap && e.target instanceof Node && !wrap.contains(e.target)) {
+          setActive(false);
+        }
+      };
+      const onViewportChange = () => {
+        if (active()) reposition();
+      };
+
+      wrap.addEventListener("mousemove", onMove, { passive: true });
+      wrap.addEventListener("pointermove", onMove, { passive: true });
+      wrap.addEventListener("mouseleave", onLeave, { passive: true });
+      document.addEventListener("pointerdown", onDocPointerDown, { passive: true });
+      window.addEventListener("scroll", onViewportChange, { capture: true, passive: true });
+      window.addEventListener("resize", onViewportChange, { passive: true });
+      syncActive();
+
+      teardown = () => {
+        obs.disconnect();
+        wrap.removeEventListener("mousemove", onMove);
+        wrap.removeEventListener("pointermove", onMove);
+        wrap.removeEventListener("mouseleave", onLeave);
+        document.removeEventListener("pointerdown", onDocPointerDown);
+        window.removeEventListener("scroll", onViewportChange, true);
+        window.removeEventListener("resize", onViewportChange);
+      };
+    };
+
+    connect();
+    onCleanup(() => {
+      cancelAnimationFrame(raf);
+      teardown?.();
+    });
+  };
+
+  const setupFloating = (el: HTMLDivElement) => {
+    floatingEl = el;
+    Object.assign(el.style, {
+      position: "fixed",
+      left: "0px",
+      top: "0px",
+      zIndex: String(Z.floating),
+      pointerEvents: "none",
+      visibility: "hidden",
+    });
+    reposition();
+    const fRaf = requestAnimationFrame(reposition);
+    const ro = new ResizeObserver(reposition);
+    ro.observe(el);
+    onCleanup(() => {
+      cancelAnimationFrame(fRaf);
+      ro.disconnect();
+      if (floatingEl === el) floatingEl = null;
+    });
+  };
+
+  return (
+    <>
+      <span ref={setupProbe} aria-hidden="true" />
+      <Show when={active()}>
+        <Portal>
+          <div ref={setupFloating} data-chart-portal-tooltip="" class={props.class ?? "chart-tooltip"}>
+            {props.children}
+          </div>
+        </Portal>
+      </Show>
+    </>
+  );
+}
+
 function DailyTooltip(props: {
   data: DailyChartPoint;
   metric: "tokens" | "requests" | "cost";
+  lines?: boolean;
 }) {
   return (
-    <div class="z-20 min-w-36 rounded-xl border border-line bg-elev px-3 py-2 text-xs text-ink-200 shadow-xl shadow-black/10">
-      <div class="mb-1.5 font-medium text-ink-100">
-        {props.data.label ?? props.data.date}
-      </div>
+    <div class="analytics-chart-tooltip min-w-44">
+      <strong>{props.data.label ?? props.data.date}</strong>
       <Show
         when={props.metric === "cost"}
         fallback={
           <Show
             when={props.metric === "tokens"}
             fallback={
-              <div class="flex items-center justify-between gap-4">
-                <span>Requests</span>
-                <strong class="font-medium text-ink-100">
-                  {fmtNum(props.data.reqs ?? 0)}
-                </strong>
+              <div>
+                <span>
+                  <i style={{ background: OUT_BAR }} />
+                  Requests
+                </span>
+                <b>{fmtNum(props.data.reqs ?? 0)}</b>
               </div>
             }
           >
-            <div class="space-y-1">
-              <div class="flex items-center justify-between gap-4">
-                <span>Input</span>
-                <strong class="font-medium text-ink-100">
-                  {fmtNum(props.data.in_tok)}
-                </strong>
-              </div>
-              <div class="flex items-center justify-between gap-4">
-                <span>Input cache</span>
-                <strong class="font-medium text-ink-100">
-                  {fmtNum(props.data.cache_tok ?? 0)}
-                </strong>
-              </div>
-              <div class="flex items-center justify-between gap-4">
-                <span>Output</span>
-                <strong class="font-medium text-ink-100">
-                  {fmtNum(props.data.out_tok)}
-                </strong>
-              </div>
-              <div class="flex items-center justify-between gap-4">
-                <span>Requests</span>
-                <strong class="font-medium text-ink-100">
-                  {fmtNum(props.data.reqs ?? 0)}
-                </strong>
-              </div>
+            <div>
+              <span>
+                <i style={{ background: IN_BAR }} />
+                Input
+              </span>
+              <b>{fmtNum(props.data.in_tok)}</b>
+            </div>
+            <div>
+              <span>
+                <i style={{ background: CACHE_BAR }} />
+                Input cache
+              </span>
+              <b>{fmtNum(props.data.cache_tok ?? 0)}</b>
+            </div>
+            <div>
+              <span>
+                <i style={{ background: OUT_BAR }} />
+                Output
+              </span>
+              <b>{fmtNum(props.data.out_tok)}</b>
+            </div>
+            <div class="border-t border-border pt-1.5 mt-1.5">
+              <span>Requests</span>
+              <b>{fmtNum(props.data.reqs ?? 0)}</b>
             </div>
           </Show>
         }
       >
-        <div class="space-y-1">
-          <div class="flex items-center justify-between gap-4">
-            <span>Input cost</span>
-            <strong class="font-medium text-ink-100">
-              {fmtCost(props.data.cost_in ?? 0)}
-            </strong>
-          </div>
-          <div class="flex items-center justify-between gap-4">
-            <span>Cache cost</span>
-            <strong class="font-medium text-ink-100">
-              {fmtCost(props.data.cost_cache ?? 0)}
-            </strong>
-          </div>
-          <div class="flex items-center justify-between gap-4">
-            <span>Output cost</span>
-            <strong class="font-medium text-ink-100">
-              {fmtCost(props.data.cost_out ?? 0)}
-            </strong>
-          </div>
-          <div class="flex items-center justify-between gap-4 border-t border-line/60 pt-1">
-            <span class="font-medium text-ink-100">Total cost</span>
-            <strong class="font-medium text-success">
-              {fmtCost(props.data.cost ?? 0)}
-            </strong>
-          </div>
+        <div>
+          <span>
+            <i style={{ background: IN_BAR }} />
+            Input cost
+          </span>
+          <b>{fmtCost(props.data.cost_in ?? 0)}</b>
+        </div>
+        <div>
+          <span>
+            <i style={{ background: CACHE_BAR }} />
+            Cache cost
+          </span>
+          <b>{fmtCost(props.data.cost_cache ?? 0)}</b>
+        </div>
+        <div>
+          <span>
+            <i style={{ background: props.lines ? "var(--chart-brand)" : OUT_BAR }} />
+            Output cost
+          </span>
+          <b>{fmtCost(props.data.cost_out ?? 0)}</b>
+        </div>
+        <div class="border-t border-border pt-1.5 mt-1.5">
+          <span class="font-medium text-fg">Total cost</span>
+          <b class="text-success">{fmtCost(props.data.cost ?? 0)}</b>
         </div>
       </Show>
     </div>
@@ -255,9 +429,13 @@ export function DailyChart(props: {
                       stroke-dasharray="3 3"
                       class="chart-cursor"
                     />
-                    <AxisTooltip class="chart-tooltip">
+                    <AxisTooltip style={{ visibility: "hidden", width: "0px", height: "0px", overflow: "hidden" }}>
                       {(tooltip) => (
-                        <DailyTooltip data={tooltip.data} metric={metric()} />
+                        <ChartPortalTooltip class="chart-tooltip">
+                          <Show when={tooltip.data}>
+                            {(d) => <DailyTooltip data={d()} metric={metric()} lines={lines()} />}
+                          </Show>
+                        </ChartPortalTooltip>
                       )}
                     </AxisTooltip>
                   </Axis>

@@ -61,35 +61,35 @@ function FileChangesRow(props: {
   );
 
   return (
-    <div ref={rowRef} class="rounded-lg border border-line/50 overflow-hidden">
+    <div ref={rowRef} class="rounded-lg border border-border/70 overflow-hidden bg-surface/60">
       <div
         onClick={() => { if (isExpandable()) setOpen(!open()); }}
-        class={`flex items-center gap-2 px-2.5 py-1.5 bg-ink-900/60 transition-colors select-none ${
-          isExpandable() ? "cursor-pointer hover:bg-ink-900" : ""
+        class={`flex items-center gap-2 px-2.5 py-1.5 bg-surface-subtle/70 transition-colors select-none ${
+          isExpandable() ? "cursor-pointer hover:bg-surface-muted/70" : ""
         }`}
       >
         <Show when={isExpandable()}>
           <Iconify
             icon="lucide:chevron-right"
             size={12}
-            class={`shrink-0 text-ink-500 transition-transform ${open() ? "rotate-90" : ""}`}
+            class={`shrink-0 text-fg-muted transition-transform ${open() ? "rotate-90" : ""}`}
           />
         </Show>
         <FileIcon path={props.f.rel || props.f.path} size={13} />
-        <span class="text-[11px] font-mono text-ink-200 truncate">
+        <span class="text-[11px] font-mono text-fg truncate">
           {props.f.rel || props.f.path}
         </span>
         <span class={`text-[10px] flex items-center gap-1 shrink-0 ${meta().cls}`}>
           <Iconify icon={meta().icon} size={12} />
         </span>
         <Show when={(props.f.additions || 0) > 0 || (props.f.deletions || 0) > 0}>
-          <span class="text-[10px] font-mono ml-auto shrink-0">
+          <span class="text-[10px] font-mono ml-auto shrink-0 tabular-nums">
             <span class="text-success">+{props.f.additions || 0}</span>{" "}
             <span class="text-danger">-{props.f.deletions || 0}</span>
           </span>
         </Show>
         <Show when={props.f.undone}>
-          <span class="text-[10px] px-1.5 py-0.5 rounded bg-ink-800 text-ink-300 border border-line/60 shrink-0">
+          <span class="text-[10px] px-1.5 py-0.5 rounded bg-surface-muted text-fg-secondary border border-border shrink-0">
             undone
           </span>
         </Show>
@@ -101,7 +101,7 @@ function FileChangesRow(props: {
               e.stopPropagation();
               props.onUndo!(props.f.path);
             }}
-            class="text-[10px] px-1.5 py-0.5 rounded border border-line/70 text-ink-300 hover:text-ink-100 hover:bg-ink-800 transition-colors cursor-pointer disabled:opacity-50 shrink-0 ml-1.5 flex items-center gap-1"
+            class="text-[10px] px-2 py-0.5 rounded-md border border-border bg-surface text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer disabled:opacity-50 shrink-0 ml-1.5 flex items-center gap-1"
             aria-label={`Undo changes to ${props.f.rel || props.f.path}`}
           >
             <Iconify icon="lucide:undo-2" size={11} />
@@ -110,12 +110,12 @@ function FileChangesRow(props: {
         </Show>
       </div>
       <DisclosureBody open={open() && hasDiff()}>
-        <div class="border-t border-line/30 bg-ink-950/40">
+        <div class="border-t border-border/60 bg-surface-subtle/30">
           <DiffView text={props.f.diff || ""} name={props.f.rel || props.f.path} scrollKey={props.scrollKey} />
         </div>
       </DisclosureBody>
       <DisclosureBody open={open() && !hasDiff()}>
-        <div class="px-2.5 py-1.5 text-[11px] text-ink-500 border-t border-line/30">
+        <div class="px-2.5 py-1.5 text-[11px] text-fg-muted border-t border-border/60">
           {props.f.status === "binary" ? "Binary file — no textual diff." : "File too large for a textual diff."}
         </div>
       </DisclosureBody>
@@ -132,7 +132,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
   return (
     <Show when={files().length > 0}>
       <div class="w-full flex justify-center my-3 select-text">
-        <div class="w-full max-w-2xl rounded-xl border border-line/70 bg-card p-1 shadow-xs transition-all">
+        <div class="rc-studio-card w-full max-w-2xl rounded-xl px-3.5 py-2.5 shadow-2xs transition-all">
         <div class="flex items-center justify-between gap-2 flex-wrap">
           <button
             type="button"
@@ -142,23 +142,23 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
             <Iconify
               icon={props.expanded ? "lucide:chevron-down" : "lucide:chevron-right"}
               size={14}
-              class="text-ink-500 group-hover:text-ink-200 transition-colors"
+              class="text-fg-muted group-hover:text-fg transition-colors"
             />
-            <Iconify icon={props.live ? "lucide:loader-circle" : "lucide:files"} size={14} class={props.live ? "text-accent-400 animate-spin" : "text-accent-400"} />
-            <span class="text-xs font-medium text-ink-100">
+            <Iconify icon={props.live ? "lucide:loader-circle" : "lucide:files"} size={14} class={props.live ? "text-accent animate-spin" : "text-accent"} />
+            <span class="text-xs font-medium text-fg">
               File changes
             </span>
-            <span class="text-[11px] text-ink-500">
+            <span class="rounded-full border border-border/80 bg-surface-subtle px-2 py-0.5 text-[10px] font-medium text-fg-secondary tabular-nums">
               {files().length} file{files().length === 1 ? "" : "s"}
             </span>
             <Show when={totalAdds() > 0 || totalDels() > 0}>
-              <span class="text-[11px] font-mono">
+              <span class="text-[11px] font-mono tabular-nums">
                 <span class="text-success">+{totalAdds()}</span>{" "}
                 <span class="text-danger">-{totalDels()}</span>
               </span>
             </Show>
             <Show when={!props.live && undoneCount() > 0}>
-              <span class="text-[10px] px-1.5 py-0.5 rounded bg-ink-800 text-ink-300 border border-line/60">
+              <span class="text-[10px] px-1.5 py-0.5 rounded bg-surface-muted text-fg-secondary border border-border">
                 undone{undoneCount() < files().length ? " (partial)" : ""}
               </span>
             </Show>
@@ -170,9 +170,9 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                 e.stopPropagation();
                 props.onReview!();
               }}
-              class="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border border-line/70 text-ink-300 hover:text-ink-100 hover:bg-ink-800 transition-colors cursor-pointer"
+              class="flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-lg border border-border bg-surface text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
             >
-              <Iconify icon="lucide:refresh-cw" size={13} />
+              <Iconify icon="lucide:refresh-cw" size={12} />
               Refresh
             </button>
           </Show>
@@ -185,20 +185,20 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                 if (undoneCount() === files().length) return;
                 props.onUndo();
               }}
-              class={`flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg border border-line/70 transition-colors ${
+              class={`flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-lg border transition-colors ${
                 undoneCount() === files().length
-                  ? "text-ink-600 border-line/40 cursor-default opacity-50"
-                  : "text-ink-300 hover:text-ink-100 hover:bg-ink-800 cursor-pointer disabled:opacity-50"
+                  ? "text-fg-muted border-border/50 bg-surface-subtle/50 cursor-default opacity-60"
+                  : "border-border bg-surface text-fg-secondary hover:text-fg hover:bg-surface-muted cursor-pointer disabled:opacity-50"
               }`}
             >
-              <Iconify icon={props.undoBusy ? "lucide:loader-circle" : "lucide:undo-2"} size={13} class={props.undoBusy ? "animate-spin" : ""} />
+              <Iconify icon={props.undoBusy ? "lucide:loader-circle" : "lucide:undo-2"} size={12} class={props.undoBusy ? "animate-spin" : ""} />
               {props.undoBusy ? "Undoing…" : undoneCount() === files().length ? "Undone" : "Undo"}
             </button>
           </Show>
         </div>
 
         <DisclosureBody open={props.expanded}>
-          <div class="mt-2 flex flex-col gap-2">
+          <div class="mt-2.5 pt-2.5 border-t border-border/60 flex flex-col gap-1.5">
             <For each={files()}>
               {(f) => (
                 <FileChangesRow

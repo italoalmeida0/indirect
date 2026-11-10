@@ -21,11 +21,11 @@ export function ShellCmd(props: { text: string; prompt?: string }) {
     while ((m = re.exec(src)) !== null && guard++ < 500) {
       if (m.index > last) out.push({ t: src.slice(last, m.index), c: "" });
       const [full, comment, str, vr, op, _pre, flag, num] = m;
-      if (comment) out.push({ t: full, c: "text-ink-600 italic" });
+      if (comment) out.push({ t: full, c: "text-fg-muted italic" });
       else if (str) out.push({ t: full, c: "text-success" });
       else if (vr) out.push({ t: full, c: "text-warning" });
       else if (op) out.push({ t: full, c: "text-danger" });
-      else if (flag) out.push({ t: full, c: "text-tone-blue" });
+      else if (flag) out.push({ t: full, c: "text-tone-sky" });
       else if (num) out.push({ t: full, c: "text-tone-violet" });
       else out.push({ t: full, c: "" });
       last = m.index + full.length;

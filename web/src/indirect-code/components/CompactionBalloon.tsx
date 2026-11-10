@@ -64,7 +64,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
 
   return (
     <div class="w-full flex justify-center my-3 select-text">
-      <div class="w-full max-w-2xl rounded-xl border border-line/70 bg-card p-3 shadow-xs transition-all">
+      <div class="rc-studio-card w-full max-w-2xl rounded-xl p-3.5 shadow-2xs transition-all">
         {/* Header Bar */}
         <div class="flex items-center justify-between gap-2 flex-wrap">
           <button
@@ -72,20 +72,20 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
             onClick={() => setExpanded(!expanded())}
             class="flex items-center gap-2 cursor-pointer text-left group focus:outline-none"
           >
-            <div class="flex items-center justify-center w-6 h-6 rounded-lg bg-elev border border-line text-ink-300 group-hover:text-ink-100 transition-colors">
+            <div class="flex items-center justify-center w-6 h-6 rounded-lg bg-accent-subtle border border-accent/25 text-accent transition-colors">
               <Iconify icon="lucide:archive" size={13} />
             </div>
             <div class="flex items-center gap-1.5 flex-wrap">
-              <span class="text-xs font-medium text-ink-200 group-hover:text-ink-100 transition-colors">
+              <span class="text-xs font-medium text-fg group-hover:text-accent transition-colors">
                 Context Compacted
               </span>
               <Show when={count() > 0}>
-                <span class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-elev text-ink-400 border border-line/50">
+                <span class="px-1.5 py-0.5 text-[10px] font-mono rounded bg-surface-subtle text-fg-secondary border border-border">
                   #{count()}
                 </span>
               </Show>
               <Show when={isSplitTurn()}>
-                <span class="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-accent-500/10 text-accent-400 border border-accent-500/20">
+                <span class="px-2 py-0.5 text-[10px] font-medium rounded-full bg-accent-subtle text-accent border border-accent/25">
                   Split Turn
                 </span>
               </Show>
@@ -93,17 +93,17 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
           </button>
 
           {/* Right Action & Metric Pills */}
-          <div class="flex items-center gap-2">
+          <div class="flex items-center gap-1.5">
             <Show when={hasUsage()}>
               <div
-                class="hidden sm:flex items-center gap-1.5 text-[11px] font-mono text-ink-400 bg-elev/70 px-2 py-0.5 rounded-md border border-line/50"
+                class="hidden sm:flex items-center gap-1.5 text-[11px] font-mono text-fg-secondary bg-surface-subtle px-2 py-0.5 rounded-md border border-border/80"
               >
-                <Iconify icon="lucide:cpu" size={11} class="text-ink-500" />
+                <Iconify icon="lucide:cpu" size={11} class="text-fg-muted" />
                 <span>
                   {compactTokens(inTok())} in · {compactTokens(outTok())} out
                 </span>
                 <Show when={costUsd() > 0}>
-                  <span class="text-ink-500">(${costUsd().toFixed(4)})</span>
+                  <span class="text-fg-muted">(${costUsd().toFixed(4)})</span>
                 </Show>
               </div>
             </Show>
@@ -113,10 +113,10 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                 type="button"
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={handleCopy}
-                class="p-1 rounded-md text-ink-400 hover:text-ink-200 hover:bg-elev transition-colors cursor-pointer"
+                class="p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                 aria-label="Copy compaction summary"
               >
-                <Iconify icon={copied() ? "lucide:check" : "lucide:copy"} size={13} />
+                <Iconify icon={copied() ? "lucide:check" : "lucide:copy"} size={13} class={copied() ? "text-success" : ""} />
               </button>
             </Show>
 
@@ -124,7 +124,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => setExpanded(!expanded())}
-              class="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-ink-400 hover:text-ink-200 hover:bg-elev transition-colors cursor-pointer"
+              class="flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
             >
               <span>{expanded() ? "Hide" : "View"}</span>
               <Iconify
@@ -139,7 +139,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
         <Show when={!expanded() && previewSnippet()}>
           <div
             onClick={() => setExpanded(true)}
-            class="mt-2 text-[11px] text-ink-400 hover:text-ink-300 line-clamp-2 cursor-pointer select-none"
+            class="mt-2 text-[11px] text-fg-muted hover:text-fg-secondary line-clamp-2 cursor-pointer select-none leading-relaxed"
           >
             {previewSnippet()}
           </div>
@@ -147,17 +147,17 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
 
         {/* Expanded Content View */}
         <DisclosureBody open={expanded()}>
-          <div class="mt-3 pt-3 border-t border-line/60 space-y-3">
+          <div class="mt-3 pt-3 border-t border-border/70 space-y-3">
             {/* File Operations Chips */}
             <Show when={hasFiles()}>
               <div class="space-y-2 text-[11px]">
                 <Show when={modifiedFiles().length > 0}>
                   <div class="flex items-start gap-2">
-                    <span class="text-ink-500 font-medium shrink-0 pt-0.5">Modified:</span>
+                    <span class="text-fg-muted font-medium shrink-0 pt-0.5">Modified:</span>
                     <div class="flex flex-wrap gap-1.5">
                       <For each={modifiedFiles()}>
                         {(file) => (
-                          <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-elev border border-line/60 text-ink-300 font-mono text-[10px]">
+                          <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-surface-subtle border border-border text-fg-secondary font-mono text-[10px]">
                             <FileIcon path={file} size={11} />
                             <span>{baseNameOf(file)}</span>
                           </span>
@@ -168,11 +168,11 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                 </Show>
                 <Show when={readFiles().length > 0}>
                   <div class="flex items-start gap-2">
-                    <span class="text-ink-500 font-medium shrink-0 pt-0.5">Read:</span>
+                    <span class="text-fg-muted font-medium shrink-0 pt-0.5">Read:</span>
                     <div class="flex flex-wrap gap-1.5">
                       <For each={readFiles()}>
                         {(file) => (
-                          <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-elev border border-line/60 text-ink-300 font-mono text-[10px]">
+                          <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-surface-subtle border border-border text-fg-secondary font-mono text-[10px]">
                             <FileIcon path={file} size={11} />
                             <span>{baseNameOf(file)}</span>
                           </span>
@@ -186,31 +186,31 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
 
             {/* Token Usage Details Bar */}
             <Show when={hasUsage()}>
-              <div class="flex flex-wrap items-center gap-x-4 gap-y-1 p-2 rounded-lg bg-elev/60 border border-line/50 font-mono text-[11px] text-ink-400">
+              <div class="rc-studio-well flex flex-wrap items-center gap-x-4 gap-y-1 p-2.5 rounded-lg font-mono text-[11px] text-fg-secondary">
                 <div>
-                  <span class="text-ink-500 mr-1">Input:</span>
-                  <span class="text-ink-200">{compactTokens(inTok())}</span>
+                  <span class="text-fg-muted mr-1">Input:</span>
+                  <span class="text-fg font-medium">{compactTokens(inTok())}</span>
                 </div>
                 <Show when={cacheTok() > 0}>
                   <div>
-                    <span class="text-ink-500 mr-1">Cache:</span>
-                    <span class="text-ink-200">{compactTokens(cacheTok())}</span>
+                    <span class="text-fg-muted mr-1">Cache:</span>
+                    <span class="text-fg font-medium">{compactTokens(cacheTok())}</span>
                   </div>
                 </Show>
                 <div>
-                  <span class="text-ink-500 mr-1">Output:</span>
-                  <span class="text-ink-200">{compactTokens(outTok())}</span>
+                  <span class="text-fg-muted mr-1">Output:</span>
+                  <span class="text-fg font-medium">{compactTokens(outTok())}</span>
                 </div>
                 <Show when={reasoningTok() > 0}>
                   <div>
-                    <span class="text-ink-500 mr-1">Reasoning:</span>
-                    <span class="text-ink-200">{compactTokens(reasoningTok())}</span>
+                    <span class="text-fg-muted mr-1">Reasoning:</span>
+                    <span class="text-fg font-medium">{compactTokens(reasoningTok())}</span>
                   </div>
                 </Show>
                 <Show when={costUsd() > 0}>
-                  <div class="border-l border-line/60 pl-3">
-                    <span class="text-ink-500 mr-1">Cost:</span>
-                    <span class="text-ink-200">${costUsd().toFixed(4)}</span>
+                  <div class="border-l border-border pl-3">
+                    <span class="text-fg-muted mr-1">Cost:</span>
+                    <span class="text-fg font-medium">${costUsd().toFixed(4)}</span>
                   </div>
                 </Show>
               </div>
@@ -220,7 +220,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
             <Show
               when={cleanedSummary()}
               fallback={
-                <div class="text-xs text-ink-500 italic">No summary text available.</div>
+                <div class="text-xs text-fg-muted italic">No summary text available.</div>
               }
             >
               <div class="rc-markdown text-xs max-h-96 overflow-y-auto px-1 py-0.5">

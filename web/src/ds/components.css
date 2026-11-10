@@ -745,7 +745,10 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
   box-shadow: var(--shadow-raised);
   transition: border-color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
 }
-.rc-composer:focus-within { border-color: color-mix(in oklab, var(--foreground) 55%, var(--border-strong)); }
+.rc-composer:focus-within {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--border-strong));
+  box-shadow: var(--shadow-raised), 0 0 0 3px color-mix(in oklab, var(--accent) 11%, transparent);
+}
 .rc-composer-toolbar { border-top: 1px solid var(--border-subtle); background: transparent; border-radius: 0 0 var(--radius-surface) var(--radius-surface); }
 .rc-brand-image { height: 15rem; }
 .rc-brand-name { margin-top: -1rem; font-family: var(--font-display); font-size: 2.5rem; font-weight: 500; letter-spacing: var(--tracking-display); line-height: 1.2; }

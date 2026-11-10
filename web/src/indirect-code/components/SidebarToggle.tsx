@@ -9,8 +9,9 @@ export function SidebarToggle() {
     : "Expand sidebar";
   return (
     <button
+      type="button"
       onClick={() => ui.setSidebarOpen(!ui.sidebarOpen())}
-      class="rc-sidebar-toggle flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-400 hover:bg-ink-800/60 hover:text-ink-100 transition-colors cursor-pointer"
+      class="rc-sidebar-toggle flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
       data-rc-tip={label()}
       aria-label={label()}
     >

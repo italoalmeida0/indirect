@@ -1,4 +1,4 @@
-import { createEffect, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { MentionMenu } from "../MentionMenu";
@@ -10,6 +10,7 @@ export function ComposerInput() {
   const m = useModal();
   const ui = useUI();
   let textareaRef: HTMLTextAreaElement | undefined;
+  const [dragActive, setDragActive] = createSignal(false);
 
   createEffect(() => {
     const text = c.inputPrompt();
@@ -28,7 +29,18 @@ export function ComposerInput() {
   return (
 <>
 <MentionMenu mentions={c.mentions} inputId="rc-composer" />
-<Show when={c.preparingAttachments() > 0}><p role="status" class="px-3.5 pt-2 text-xs text-ink-500">Preparing {c.preparingAttachments()} file(s)...</p></Show>
+<Show when={dragActive()}>
+  <div class="mx-3 mt-2.5 flex items-center justify-center gap-2 rounded-control border border-dashed border-accent bg-accent-subtle px-3 py-2 text-xs font-medium text-accent pointer-events-none">
+    <Iconify icon="lucide:upload-cloud" size={14} />
+    <span>Drop files to attach to prompt</span>
+  </div>
+</Show>
+<Show when={c.preparingAttachments() > 0}>
+  <p role="status" class="px-3.5 pt-2.5 flex items-center gap-1.5 text-xs text-fg-muted">
+    <Iconify icon="lucide:loader-2" size={12} class="animate-spin text-accent" />
+    <span>Preparing {c.preparingAttachments()} file(s)...</span>
+  </p>
+</Show>
 {/* Attachment chips (chatbot-style) */}
 <Show when={c.pendingAttachments().length > 0}>
   <div class="flex flex-wrap gap-1.5 px-3.5 pt-3">
@@ -45,25 +57,26 @@ export function ComposerInput() {
             }
           }}
           aria-label={`Preview ${att.name}`}
-          class="relative group flex items-center gap-1.5 bg-ink-950 rounded-lg border border-line/70 pl-1.5 pr-2 py-1 text-xs max-w-[180px] cursor-pointer hover:border-ink-500 transition-colors focus:outline-none focus:ring-1 focus:ring-brand-500"
-          data-rc-tip={`${att.name} (${Math.round(att.size / 1024)}KB) — click to preview`}
+          class="relative group flex items-center gap-1.5 bg-surface-subtle rounded-control border border-border pl-2 pr-2.5 py-1 text-xs max-w-[200px] cursor-pointer hover:border-border-strong hover:bg-surface-muted shadow-resting transition-colors"
+          data-rc-tip={`${att.name} (${Math.max(1, Math.round(att.size / 1024))}KB) — click to preview`}
         >
           <Show
             when={att.loading}
-            fallback={<FileIcon path={att.name} size={20} />}
+            fallback={<FileIcon path={att.name} size={18} />}
           >
-            <span class="w-5 h-5 border-2 border-ink-500 border-t-transparent rounded-full animate-spin shrink-0" />
+            <span class="w-4 h-4 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
           </Show>
-          <span class="truncate text-ink-300">{att.name}</span>
+          <span class="truncate text-fg font-medium">{att.name}</span>
           <Show when={att.uploading}>
-            <span class="w-3 dot-spin border-2 border-ink-500 border-t-transparent rounded-full animate-spin shrink-0" />
+            <span class="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
           </Show>
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               c.removePendingAttachment(att.key);
             }}
-            class="absolute -top-1.5 -right-1.5 bg-ink-700 hover:bg-danger text-fg hover:text-accent-foreground rounded-full p-0.5 transition-colors shadow cursor-pointer"
+            class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full border border-border bg-surface-raised hover:bg-danger hover:border-danger text-fg-secondary hover:text-accent-foreground transition-colors shadow-resting cursor-pointer"
             disabled={c.sending()}
             data-rc-tip="Remove" aria-label="Remove"
           >
@@ -76,13 +89,21 @@ export function ComposerInput() {
 </Show>
 
 {/* Input row: textarea occupies remaining width, clear button takes its own size */}
-<div class="flex items-start">
+<div
+  class="flex items-start"
+  onDragEnter={(e) => {
+    if (e.dataTransfer?.types?.includes("Files")) setDragActive(true);
+  }}
+  onDragLeave={(e) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragActive(false);
+  }}
+>
   <textarea
     id="rc-composer"
     ref={textareaRef}
     disabled={s.creatingSession() || c.sending()}
     rows={1}
-    class="flex-1 min-w-0 bg-transparent text-[13px] text-ink-100 placeholder:text-ink-500 focus:outline-none resize-none px-3.5 pt-3 pb-2 max-h-[160px] min-h-[56px] overflow-y-auto [scrollbar-gutter:stable]"
+    class="flex-1 min-w-0 bg-transparent text-[13px] leading-relaxed text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-2 max-h-[160px] min-h-[56px] overflow-y-auto [scrollbar-gutter:stable]"
     placeholder="Ask anything, @ to mention, / for actions"
     value={c.inputPrompt()}
     onFocus={() => c.mentions.setFocused(true)}
@@ -119,9 +140,13 @@ export function ComposerInput() {
         c.handleFiles(files);
       }
     }}
-    onDragOver={(e) => e.preventDefault()}
+    onDragOver={(e) => {
+      e.preventDefault();
+      if (e.dataTransfer?.types?.includes("Files")) setDragActive(true);
+    }}
     onDrop={(e) => {
       e.preventDefault();
+      setDragActive(false);
       try {
         const files = Array.from(e.dataTransfer?.files || []);
         if (files.length > 0) c.handleFiles(files);
@@ -169,11 +194,12 @@ export function ComposerInput() {
   />
   <Show when={c.inputPrompt().length > 0}>
     <button
+      type="button"
       onClick={() => {
         c.setInputPrompt("");
         if (textareaRef) textareaRef.style.height = "";
       }}
-      class="shrink-0 mr-2.5 mt-2.5 p-1 rounded-md text-ink-600 hover:text-ink-300 hover:bg-ink-800 transition-colors cursor-pointer"
+      class="shrink-0 mr-2.5 mt-2.5 p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
       data-rc-tip="Clear input" aria-label="Clear input"
     >
       <Iconify icon="lucide:x" size={13} />

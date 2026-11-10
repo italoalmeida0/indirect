@@ -85,7 +85,7 @@ function highlightJsonLine(line: string, searchMatch?: string): string {
           const colonIdx = match.lastIndexOf(":");
           const keyPart = match.slice(0, colonIdx);
           const colonPart = match.slice(colonIdx);
-          return `<span class="text-tone-blue font-medium">${keyPart}</span><span class="text-ink-400">${colonPart}</span>`;
+          return `<span class="text-tone-sky font-medium">${keyPart}</span><span class="text-ink-400">${colonPart}</span>`;
         }
         return `<span class="text-success">${match}</span>`;
       }
@@ -189,8 +189,8 @@ function JsonHighlightViewer(props: {
   return (
     <div class={`flex flex-col border border-line rounded-lg bg-ink-900/90 overflow-hidden font-mono text-xs ${props.class || ""}`}>
       {/* Viewer toolbar */}
-      <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 gap-2 text-[11px]">
-        <div class="flex items-center gap-2">
+      <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex flex-wrap items-center justify-between shrink-0 gap-2 text-[11px]">
+        <div class="flex flex-wrap items-center gap-2 min-w-0">
           <Show when={props.title}>
             <span class="font-medium text-ink-300 text-xs">
               {props.title}
@@ -201,7 +201,7 @@ function JsonHighlightViewer(props: {
           </span>
         </div>
 
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           {/* Quick search input */}
           <div class="relative flex items-center">
             <input
@@ -872,36 +872,36 @@ export default function CodeDevPage() {
   });
 
   return (
-    <div class="flex flex-col h-screen w-screen bg-ink-950 text-ink-100 font-sans select-text overflow-hidden">
+    <div class="flex flex-col min-h-dvh lg:h-screen w-full max-w-full bg-ink-950 text-ink-100 font-sans select-text overflow-x-hidden lg:overflow-hidden">
       {/* ===== TOP BAR / HEADER ===== */}
-      <header class="flex items-center justify-between px-4 py-2 bg-ink-900 border-b border-line shrink-0 gap-3 z-20">
-        <div class="flex items-center gap-3 min-w-0">
-          <div class="flex items-center gap-2">
-            <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-accent-subtle text-accent font-mono font-medium text-xs border border-accent-border shadow-sm">
+      <header class="flex flex-wrap items-center justify-between px-4 py-2 bg-ink-900 border-b border-line shrink-0 gap-3 z-20">
+        <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-accent-subtle text-accent font-mono font-medium text-xs border border-accent/35 shadow-2xs shrink-0">
               DEV
             </span>
-            <div class="flex flex-col">
-              <span class="font-medium text-sm tracking-tight flex items-center gap-1.5 font-mono">
+            <div class="flex flex-col min-w-0">
+              <span class="font-medium text-sm tracking-tight flex flex-wrap items-center gap-1.5 font-mono">
                 Indirect Code // Network Inspector
-                <span class="text-xs px-1.5 py-0.2 rounded bg-success-subtle text-success font-mono font-normal">
+                <span class="text-xs px-1.5 py-0.5 rounded bg-success-subtle text-success font-mono font-normal">
                   DevTools style
                 </span>
               </span>
-              <span class="text-xs text-ink-400 font-mono">
+              <span class="text-xs text-ink-400 font-mono hidden sm:inline">
                 Exact AI Wire Payloads, Full System Prompt & Native Tools
               </span>
             </div>
           </div>
 
-          <div class="h-5 w-px bg-line mx-1" />
+          <div class="h-5 w-px bg-line mx-1 hidden md:block" />
 
           {/* Host Selector */}
-          <div class="flex items-center gap-1.5">
-            <span class="text-xs text-ink-400 font-mono">Host:</span>
+          <div class="flex items-center gap-1.5 min-w-0 max-w-full">
+            <span class="text-xs text-ink-400 font-mono shrink-0">Host:</span>
             <select
               value={hosts.activeHostId()}
               onChange={(e) => hosts.setActiveHostId(e.currentTarget.value)}
-              class="bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-accent"
+              class="min-w-0 max-w-[14rem] bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-accent truncate"
             >
               <For each={hosts.hosts()}>
                 {(h) => (
@@ -914,12 +914,12 @@ export default function CodeDevPage() {
           </div>
 
           {/* Session Selector */}
-          <div class="flex items-center gap-1.5 max-w-xs">
-            <span class="text-xs text-ink-400 font-mono">Session:</span>
+          <div class="flex items-center gap-1.5 min-w-0 max-w-full sm:max-w-xs">
+            <span class="text-xs text-ink-400 font-mono shrink-0">Session:</span>
             <select
               value={selectedSessionId()}
               onChange={(e) => setSelectedSessionId(e.currentTarget.value)}
-              class="bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-accent truncate"
+              class="min-w-0 flex-1 max-w-[14rem] sm:max-w-[16rem] bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-accent truncate"
             >
               <option value="">-- No session (Default) --</option>
               <For each={sessions()}>
@@ -938,7 +938,7 @@ export default function CodeDevPage() {
             <span
               class={`text-xs px-2 py-0.5 rounded font-mono font-medium flex items-center gap-1.5 ${
                 activeSession()?.status === "running"
-                  ? "bg-success-subtle text-success border border-success-border animate-pulse"
+                  ? "bg-success-subtle text-success border border-success/35 animate-pulse"
                   : "bg-ink-800 text-ink-400 border border-line"
               }`}
             >
@@ -953,7 +953,7 @@ export default function CodeDevPage() {
         </div>
 
         {/* Action Controls */}
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
           {/* Preserve Log Toggle */}
           <label
             class="flex items-center gap-1 text-xs text-ink-400 hover:text-ink-200 cursor-pointer font-mono mr-2"
@@ -982,8 +982,8 @@ export default function CodeDevPage() {
           <span
             class={`text-xs font-mono px-2 py-0.5 rounded flex items-center gap-1 ${
               relay.wsOpen()
-                ? "bg-success-subtle text-success border border-success-border"
-                : "bg-danger-subtle text-danger border border-danger-border"
+                ? "bg-success-subtle text-success border border-success/35"
+                : "bg-danger-subtle text-danger border border-danger/35"
             }`}
           >
             <span
@@ -1004,7 +1004,7 @@ export default function CodeDevPage() {
       </header>
 
       {/* ===== MAIN NAV TABS ===== */}
-      <div class="flex items-center px-4 bg-ink-900 border-b border-line shrink-0 gap-1 text-xs font-mono">
+      <div class="flex items-center px-4 bg-ink-900 border-b border-line shrink-0 gap-1 text-xs font-mono overflow-x-auto whitespace-nowrap">
         <button
           onClick={() => setActiveTab("payloads")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
@@ -1085,9 +1085,9 @@ export default function CodeDevPage() {
       <div class="flex-1 min-h-0 overflow-hidden flex flex-col">
         {/* 1. LLM PAYLOADS TAB (Chrome DevTools Network Style) */}
         <Show when={activeTab() === "payloads"}>
-          <div class="flex-1 min-h-0 flex overflow-hidden">
+          <div class="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
             {/* Left Pane: Requests Network Table / List */}
-            <div class="w-88 border-r border-line bg-ink-900/60 flex flex-col shrink-0">
+            <div class="w-full max-h-56 lg:max-h-none lg:w-88 border-b lg:border-b-0 lg:border-r border-line bg-ink-900/60 flex flex-col shrink-0">
               {/* Table search & counter */}
               <div class="p-2 border-b border-line flex items-center gap-2">
                 <input
@@ -1129,7 +1129,7 @@ export default function CodeDevPage() {
                               ? "bg-warning-subtle border-warning text-ink-100"
                               : "bg-accent-subtle border-accent text-ink-100"
                             : req.isSimulated
-                              ? "border-warning-border hover:bg-ink-800/40 text-ink-300"
+                              ? "border-warning/35 hover:bg-ink-800/40 text-ink-300"
                               : "border-transparent hover:bg-ink-800/40 text-ink-300"
                         }`}
                       >
@@ -1158,7 +1158,7 @@ export default function CodeDevPage() {
                             {req.model || "default"}
                           </span>
                           <Show when={req.isSimulated}>
-                            <span class="text-2xs px-1 py-0.2 rounded bg-warning-subtle text-warning font-medium border border-warning-border flex items-center gap-1">
+                            <span class="text-2xs px-1 py-0.5 rounded bg-warning-subtle text-warning font-medium border border-warning/35 flex items-center gap-1">
                               <Icon name="lucide:flame" size={10} /> Smoke
                             </span>
                           </Show>
@@ -1185,7 +1185,7 @@ export default function CodeDevPage() {
             </div>
 
             {/* Right Pane: Inspector / Chrome DevTools Network Style */}
-            <div class="flex-1 min-h-0 flex flex-col bg-ink-950 overflow-hidden">
+            <div class="flex-1 min-h-[26rem] lg:min-h-0 flex flex-col bg-ink-950 overflow-hidden">
               <Show
                 when={selectedPayload()}
                 fallback={
@@ -1198,14 +1198,14 @@ export default function CodeDevPage() {
                 {(req) => (
                   <div class="flex-1 flex flex-col min-h-0">
                     {/* Header banner info */}
-                    <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 font-mono text-xs">
-                      <div class="flex items-center gap-3">
+                    <div class="px-4 py-2 bg-ink-900 border-b border-line flex flex-wrap items-center justify-between gap-2 shrink-0 font-mono text-xs">
+                      <div class="flex flex-wrap items-center gap-3">
                         <Show when={req().isSimulated}>
-                          <span class="px-2 py-0.5 rounded bg-warning-subtle text-warning font-medium border border-warning-border text-xs flex items-center gap-1">
+                          <span class="px-2 py-0.5 rounded bg-warning-subtle text-warning font-medium border border-warning/35 text-xs flex items-center gap-1">
                             <Icon name="lucide:flame" size={12} /> Smoke simulation (0 tokens)
                           </span>
                         </Show>
-                        <span class="font-medium text-accent">
+                        <span class="font-medium text-accent break-all">
                           {req().endpoint || "POST /messages"}
                         </span>
                         <span class="text-ink-400">
@@ -1229,7 +1229,7 @@ export default function CodeDevPage() {
                     </div>
 
                     {/* Inspector Sub-Tabs (Chrome Network style) */}
-                    <div class="flex items-center px-4 bg-ink-900/60 border-b border-line shrink-0 gap-1 text-xs font-mono">
+                    <div class="flex items-center px-4 bg-ink-900/60 border-b border-line shrink-0 gap-1 text-xs font-mono overflow-x-auto whitespace-nowrap">
                       <button
                         onClick={() => setPayloadSubTab("raw")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
@@ -1334,10 +1334,10 @@ export default function CodeDevPage() {
                                     <span
                                       class={`px-2 py-0.5 rounded text-xs font-mono font-medium ${
                                         m.role === "user"
-                                          ? "bg-tone-blue-subtle text-tone-blue border border-tone-blue/30"
+                                          ? "bg-info-subtle text-tone-sky border border-tone-sky/30"
                                           : m.role === "assistant"
-                                            ? "bg-tone-violet-subtle text-tone-violet border border-tone-violet/30"
-                                            : "bg-warning-subtle text-warning border border-warning-border"
+                                            ? "bg-accent-subtle text-tone-violet border border-tone-violet/30"
+                                            : "bg-warning-subtle text-warning border border-warning/35"
                                       }`}
                                     >
                                       {m.role}
@@ -1497,7 +1497,7 @@ export default function CodeDevPage() {
             <Show when={liveThinking() || liveText()}>
               <div class="p-3 bg-ink-900/80 border-b border-line shrink-0 flex flex-col gap-2 max-h-48 overflow-y-auto">
                 <Show when={liveThinking()}>
-                  <div class="bg-warning-subtle border border-warning-border p-2.5 rounded text-xs text-ink-200">
+                  <div class="bg-warning-subtle border border-warning/35 p-2.5 rounded text-xs text-ink-200">
                     <div class="text-xs text-warning font-medium mb-1 flex items-center gap-1">
                       <span class="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
                       Live chain-of-thought (streaming)
@@ -1509,9 +1509,9 @@ export default function CodeDevPage() {
                 </Show>
 
                 <Show when={liveText()}>
-                  <div class="bg-tone-blue-subtle border border-tone-blue/30 p-2.5 rounded text-xs text-ink-200">
-                    <div class="text-xs text-tone-blue font-medium mb-1 flex items-center gap-1">
-                      <span class="w-1.5 h-1.5 rounded-full bg-tone-blue animate-pulse" />
+                  <div class="bg-info-subtle border border-tone-sky/30 p-2.5 rounded text-xs text-ink-200">
+                    <div class="text-xs text-tone-sky font-medium mb-1 flex items-center gap-1">
+                      <span class="w-1.5 h-1.5 rounded-full bg-tone-sky animate-pulse" />
                       Live assistant text (streaming)
                     </div>
                     <pre class="whitespace-pre-wrap text-xs leading-relaxed max-h-32 overflow-y-auto">
@@ -1551,11 +1551,11 @@ export default function CodeDevPage() {
                             <span
                               class={`px-1.5 py-0.5 rounded text-xs font-medium ${
                                 ev.type === "debug_llm_request"
-                                  ? "bg-tone-violet-subtle text-tone-violet border border-tone-violet/30"
+                                  ? "bg-accent-subtle text-tone-violet border border-tone-violet/30"
                                   : ev.type.startsWith("tool")
-                                    ? "bg-warning-subtle text-warning border border-warning-border"
+                                    ? "bg-warning-subtle text-warning border border-warning/35"
                                     : ev.type.startsWith("turn")
-                                      ? "bg-tone-blue-subtle text-tone-blue border border-tone-blue/30"
+                                      ? "bg-info-subtle text-tone-sky border border-tone-sky/30"
                                       : "bg-ink-800 text-ink-300 border border-line"
                               }`}
                             >
@@ -1609,7 +1609,7 @@ export default function CodeDevPage() {
                 </span>
                 <button
                   onClick={() => copyText(systemPrompt(), "System Prompt")}
-                  class="px-3 py-1.5 bg-accent-subtle text-accent hover:bg-accent/20 rounded border border-accent-border text-xs font-mono flex items-center gap-1.5 cursor-pointer"
+                  class="px-3 py-1.5 bg-accent-subtle text-accent hover:bg-accent/20 rounded border border-accent/35 text-xs font-mono flex items-center gap-1.5 cursor-pointer"
                 >
                   <Icon name={Icons.copy} size={13} />
                   Copy System Prompt
@@ -1658,12 +1658,12 @@ export default function CodeDevPage() {
                         <div class="flex items-center gap-2.5">
                           <span class="font-medium text-sm text-accent">{t.name}</span>
                           <Show when={t.isAuto}>
-                            <span class="px-1.5 py-0.2 rounded bg-tone-violet-subtle text-tone-violet text-xs font-medium">
+                            <span class="px-1.5 py-0.5 rounded bg-accent-subtle text-tone-violet text-xs font-medium">
                               Auto tool
                             </span>
                           </Show>
                           <Show when={t.deferred}>
-                            <span class="px-1.5 py-0.2 rounded bg-warning-subtle text-warning text-xs">
+                            <span class="px-1.5 py-0.5 rounded bg-warning-subtle text-warning text-xs">
                               Deferred
                             </span>
                           </Show>
@@ -1724,10 +1724,10 @@ export default function CodeDevPage() {
                           {new Date(f.timestamp).toLocaleTimeString()}
                         </span>
                         <span
-                          class={`px-1.5 py-0.2 rounded text-xs font-medium ${
+                          class={`px-1.5 py-0.5 rounded text-xs font-medium ${
                             f.direction === "out"
-                              ? "bg-warning-subtle text-warning border border-warning-border"
-                              : "bg-tone-blue-subtle text-tone-blue border border-tone-blue/30"
+                              ? "bg-warning-subtle text-warning border border-warning/35"
+                              : "bg-info-subtle text-tone-sky border border-tone-sky/30"
                           }`}
                         >
                           {f.direction === "out" ? "OUT" : "IN"}
@@ -1751,9 +1751,9 @@ export default function CodeDevPage() {
 
         {/* 6. WAL STATE TAB */}
         <Show when={activeTab() === "wal"}>
-          <div class="flex-1 min-h-0 flex overflow-hidden font-mono text-xs">
+          <div class="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden font-mono text-xs">
             {/* Left list: WAL event sequence */}
-            <div class="w-80 border-r border-line bg-ink-900/60 flex flex-col shrink-0">
+            <div class="w-full max-h-56 lg:max-h-none lg:w-80 border-b lg:border-b-0 lg:border-r border-line bg-ink-900/60 flex flex-col shrink-0">
               <div class="px-3 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0">
                 <span class="font-medium text-ink-200 text-xs">WAL event log ({filteredWalEvents().length})</span>
                 <input
@@ -1779,13 +1779,13 @@ export default function CodeDevPage() {
                       const isSel = () => selectedWalSeq() === ev.seq || (selectedWalSeq() === null && filteredWalEvents()[0]?.seq === ev.seq);
                       const typeBadgeColor = (type: string) => {
                         switch (type) {
-                          case "header": return "bg-warning-subtle text-warning border-warning-border";
-                          case "options": return "bg-tone-violet-subtle text-tone-violet border-tone-violet/30";
-                          case "msg": return "bg-success-subtle text-success border-success-border";
-                          case "title": return "bg-tone-blue-subtle text-tone-blue border-tone-blue/30";
-                          case "usage": return "bg-tone-teal-subtle text-tone-teal border-tone-teal/30";
-                          case "todos": return "bg-tone-blue-subtle text-tone-blue border-tone-blue/30";
-                          case "widgets": return "bg-tone-rose-subtle text-tone-rose border-tone-rose/30";
+                          case "header": return "bg-warning-subtle text-warning border-warning/35";
+                          case "options": return "bg-accent-subtle text-tone-violet border-tone-violet/30";
+                          case "msg": return "bg-success-subtle text-success border-success/35";
+                          case "title": return "bg-info-subtle text-tone-sky border-tone-sky/30";
+                          case "usage": return "bg-success-subtle text-tone-teal border-tone-teal/30";
+                          case "todos": return "bg-info-subtle text-tone-sky border-tone-sky/30";
+                          case "widgets": return "bg-danger-subtle text-tone-rose border-tone-rose/30";
                           default: return "bg-ink-700/40 text-ink-300 border-line";
                         }
                       };
@@ -1803,7 +1803,7 @@ export default function CodeDevPage() {
                           <div class="flex items-center justify-between text-xs">
                             <div class="flex items-center gap-1.5">
                               <span class="text-ink-500 font-medium">#{ev.seq}</span>
-                              <span class={`px-1.5 py-0.2 rounded text-xs font-medium border ${typeBadgeColor(ev.type)}`}>
+                              <span class={`px-1.5 py-0.5 rounded text-xs font-medium border ${typeBadgeColor(ev.type)}`}>
                                 {ev.type}
                               </span>
                             </div>
@@ -1871,7 +1871,7 @@ export default function CodeDevPage() {
       </div>
 
       {/* ===== BOTTOM BAR: SMOKE SIMULATOR & PROMPT SENDER ===== */}
-      <footer class="px-4 py-2.5 bg-ink-900 border-t border-line shrink-0 flex items-center gap-2.5 font-mono text-xs z-20">
+      <footer class="px-4 py-2.5 bg-ink-900 border-t border-line shrink-0 flex flex-wrap items-center gap-2.5 font-mono text-xs z-20">
         <span class="text-ink-400 shrink-0 font-medium">Prompt action:</span>
         <input
           type="text"
@@ -1888,14 +1888,14 @@ export default function CodeDevPage() {
               }
             }
           }}
-          class="flex-1 bg-ink-950 border border-line rounded px-3 py-1.5 text-xs text-ink-100 placeholder-ink-600 focus:outline-none focus:border-accent"
+          class="flex-1 min-w-[200px] bg-ink-950 border border-line rounded px-3 py-1.5 text-xs text-ink-100 placeholder-ink-600 focus:outline-none focus:border-accent"
         />
 
         {/* Smoke Simulation Button */}
         <button
           onClick={runSmokeSimulation}
           disabled={isSimulating()}
-          class="px-3.5 py-1.5 bg-warning-subtle hover:bg-warning/20 text-warning font-medium rounded border border-warning-border text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-sm"
+          class="px-3.5 py-1.5 bg-warning-subtle hover:bg-warning/20 text-warning font-medium rounded border border-warning/35 text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-2xs"
           title="Simulate prompt right now without calling LLM (0 tokens billed)"
         >
           <Icon name="lucide:flame" size={13} />
@@ -1906,7 +1906,7 @@ export default function CodeDevPage() {
         <button
           onClick={sendQuickPrompt}
           disabled={!promptInput().trim() || !selectedSessionId()}
-          class="px-3.5 py-1.5 bg-accent hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed text-ink-on-accent font-medium rounded text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+          class="px-3.5 py-1.5 bg-accent hover:bg-accent-strong disabled:opacity-40 disabled:cursor-not-allowed text-accent-foreground font-medium rounded text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
           title="Send real turn prompt to the session"
         >
           <Icon name={Icons.send} size={13} />

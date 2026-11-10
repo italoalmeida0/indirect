@@ -23,13 +23,13 @@ export function MsgIconBtn(props: {
       disabled={props.disabled}
       class={
         props.compact
-          ? `rc-msg-action p-1 rounded-md text-ink-500 hover:text-ink-200 hover:bg-ink-900 transition-colors cursor-pointer ${props.danger ? "hover:text-danger" : ""}`
-          : `rc-msg-action p-1.5 rounded-md text-ink-500 hover:text-ink-200 ${props.danger ? "hover:text-danger hover:bg-ink-900" : "hover:bg-elev"} transition-colors cursor-pointer disabled:opacity-40`
+          ? `rc-msg-action p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer ${props.danger ? "hover:text-danger hover:bg-danger-subtle/60" : ""}`
+          : `rc-msg-action p-1.5 rounded-md text-fg-muted hover:text-fg ${props.danger ? "hover:text-danger hover:bg-danger-subtle/60" : "hover:bg-surface-muted"} transition-colors cursor-pointer disabled:opacity-40`
       }
       data-rc-tip={props.tip}
       aria-label={props.tip}
     >
-      <Iconify icon={props.copied ? "lucide:check" : props.icon} size={props.size ?? (props.compact ? 13 : 14)} />
+      <Iconify icon={props.copied ? "lucide:check" : props.icon} size={props.size ?? (props.compact ? 13 : 14)} class={props.copied ? "text-success" : ""} />
     </button>
   );
 }

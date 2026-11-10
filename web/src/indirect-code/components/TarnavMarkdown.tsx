@@ -56,7 +56,7 @@ const CLS: Record<string, string> = {
   "list-item": "py-1",
   "horizontal-rule": "my-6 border-(--line)",
   strong: "font-semibold",
-  link: "wrap-anywhere font-medium text-primary underline",
+  link: "wrap-anywhere font-medium text-accent underline underline-offset-2",
   "heading-1": "mt-6 mb-2 font-semibold text-3xl",
   "heading-2": "mt-6 mb-2 font-semibold text-2xl",
   "heading-3": "mt-6 mb-2 font-semibold text-xl",

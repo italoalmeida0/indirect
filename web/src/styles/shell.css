@@ -67,7 +67,7 @@
     -webkit-app-region: drag;
     app-region: drag;
   }
-  .rc-sidebar-toggle, .gw-header button, .gw-header a {
+  .rc-sidebar-toggle, .rc-window-header button, .gw-header button, .gw-header a {
     -webkit-app-region: no-drag;
     app-region: no-drag;
   }

@@ -25,16 +25,17 @@ export function ToolbarModel() {
       c.setAddContextOpen(false);
       ui.setUsageOpen(false);
     }}
-    class="flex items-center gap-1 px-1.5 py-1 rounded-md hover:bg-ink-800 font-medium transition-colors cursor-pointer"
+    class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
     data-rc-tip="Switch model" aria-label={`Switch model: ${c.activeModelName()}${formatEffort(c.effort()) ? ` ${formatEffort(c.effort())}` : ""}`}
   >
-    <span class="max-w-[120px] sm:max-w-[180px] truncate">{c.activeModelName()}</span>
+    <Iconify icon="lucide:cpu" size={13} class="shrink-0 text-fg-muted" />
+    <span class="max-w-[130px] sm:max-w-[190px] truncate text-fg">{c.activeModelName()}</span>
     <Show when={formatEffort(c.effort())}>
-      <span class="text-ink-500 shrink-0 text-[11px]">{" "}{formatEffort(c.effort())}</span>
+      <span class="rounded border border-border/80 bg-surface-subtle px-1 py-0.5 text-[10px] font-medium text-fg-muted shrink-0 leading-none">{formatEffort(c.effort())}</span>
     </Show>
-    <Iconify icon="lucide:chevron-down" size={11} class={`shrink-0 transition-transform duration-150 ${ui.modelMenuOpen() ? "rotate-180" : ""}`} />
+    <Iconify icon="lucide:chevron-down" size={11} class={`shrink-0 text-fg-muted transition-transform duration-150 ${ui.modelMenuOpen() ? "rotate-180" : ""}`} />
   </button>
-  <FloatMenu anchor={() => c.modelBtn} open={ui.modelMenuOpen()} role="dialog" aria-label="Select model" placement="top-start" width="26rem">
+  <FloatMenu anchor={() => c.modelBtn} open={ui.modelMenuOpen()} role="dialog" aria-label="Select model" placement="top-start" width="min(25rem, calc(100vw - 1.5rem))">
     <div>{c.modelPickerBody()}</div>
   </FloatMenu>
 

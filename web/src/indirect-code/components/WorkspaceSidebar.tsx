@@ -57,16 +57,16 @@ export function WorkspaceSidebar() {
 <aside
   inert={!ui.sidebarOpen() || undefined}
   aria-hidden={!ui.sidebarOpen() || undefined}
-  class={`rc-sidebar border-r border-line flex flex-col shrink-0 transition-all duration-200 ${
+  class={`rc-sidebar bg-surface-subtle border-r border-border flex flex-col shrink-0 transition-all duration-200 ${
     ui.sidebarOpen()
       ? ui.isMobile()
-        ? "fixed inset-y-0 left-0 z-40 w-[85vw] max-w-xs shadow-2xl"
+        ? "fixed inset-y-0 left-0 z-40 w-[85vw] max-w-xs shadow-floating"
         : "w-64"
       : "w-0 overflow-hidden border-r-0 pointer-events-none"
   }`}
 >
   {/* Brand Header */}
-  <div class="rc-workspace-header rc-sidebar-header flex items-center justify-between gap-2 px-3.5 shrink-0 border-b border-line select-none">
+  <div class="rc-workspace-header rc-sidebar-header flex items-center justify-between gap-2 px-3.5 shrink-0 border-b border-border/80 select-none">
     <div class="flex items-center gap-2.5 min-w-0">
       <img
         src="/indirect-icon.svg"
@@ -80,37 +80,50 @@ export function WorkspaceSidebar() {
     <Show when={ui.sidebarOpen()}><SidebarToggle /></Show>
   </div>
 
-  {/* New Conversation */}
-  <div class="p-2">
+  {/* Primary Navigation */}
+  <div class="p-2 space-y-1">
     <a
       href="#/"
       onPointerDown={(e) => press(e.currentTarget)}
-      class="w-full flex items-center gap-2 px-3 py-1.5 mb-1 rounded-lg text-xs text-ink-500 hover:text-ink-300 hover:bg-ink-900/60 transition-colors"
+      class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-fg-muted hover:text-fg hover:bg-surface-muted/70 transition-colors"
     >
       <Iconify icon="lucide:arrow-left" size={13} />
       <span>Back to Gateway</span>
     </a>
     <button
+      type="button"
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => {
         s.startNewConversation();
         ui.closeSidebarOnMobile();
       }}
-      class="ui-button ui-button-outline w-full justify-start"
+      class="ui-button ui-button-outline w-full justify-start bg-surface shadow-resting"
     >
-      <Iconify icon="lucide:plus" size={14} />
+      <Iconify icon="lucide:plus" size={14} class="text-accent" />
       <span>New Conversation</span>
     </button>
     <button
+      type="button"
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => {
         ui.setHistoryView(true);
         ui.closeSidebarOnMobile();
       }}
-      class="w-full flex items-center gap-2 px-3 py-1.5 mt-1 rounded-lg text-xs text-ink-500 hover:text-ink-300 hover:bg-ink-900/60 transition-colors cursor-pointer"
+      class={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs transition-colors cursor-pointer ${
+        ui.historyView?.()
+          ? "bg-accent-subtle text-accent font-medium"
+          : "text-fg-secondary hover:text-fg hover:bg-surface-muted/70"
+      }`}
     >
-      <Iconify icon="lucide:clock" size={13} />
-      <span>Conversation History</span>
+      <span class="flex items-center gap-2 min-w-0">
+        <Iconify icon="lucide:clock" size={13} class={ui.historyView?.() ? "text-accent" : "text-fg-muted"} />
+        <span class="truncate">Conversation History</span>
+      </span>
+      <Show when={!ui.isMobile()}>
+        <kbd class="rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] text-fg-muted">
+          Ctrl+K
+        </kbd>
+      </Show>
     </button>
   </div>
 
@@ -166,49 +179,53 @@ export function WorkspaceSidebar() {
         <div class="flex items-center gap-0.5">
           {/* Selection mode toggle (chatbot) */}
           <button
+            type="button"
             onClick={() => {
               if (s.selectionMode()) s.exitSelectionMode();
               else s.setSelectionMode(true);
             }}
-            class={`p-1 rounded cursor-pointer ${s.selectionMode() ? "bg-ink-800 text-ink-100" : "text-ink-500 hover:text-ink-200 hover:bg-ink-900"}`}
+            class={`p-1.5 rounded-md transition-colors cursor-pointer ${s.selectionMode() ? "bg-accent-subtle text-accent" : "text-fg-muted hover:text-fg hover:bg-surface-muted"}`}
             data-rc-tip={s.selectionMode() ? "Exit selection mode" : "Select conversations"} aria-label={s.selectionMode() ? "Exit selection mode" : "Select conversations"}
           >
             <Iconify icon={s.selectionMode() ? "lucide:x" : "lucide:list-todo"} size={13} />
           </button>
         <div>
           <button
+            type="button"
             ref={(el) => (s.newProjBtn = el)}
             data-menubtn
             onClick={(e) => {
               e.stopPropagation();
               s.setNewProjectMenuOpen(!s.newProjectMenuOpen());
             }}
-            class="p-1 rounded text-ink-500 hover:text-ink-200 hover:bg-ink-900 cursor-pointer"
+            class="p-1.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
             data-rc-tip="Create new project" aria-label="Create new project"
           >
             <Iconify icon="lucide:folder-plus" size={13} />
           </button>
-          <FloatMenu anchor={() => s.newProjBtn} open={s.newProjectMenuOpen()} placement="bottom-start" width="11rem">
+          <FloatMenu anchor={() => s.newProjBtn} open={s.newProjectMenuOpen()} placement="bottom-start" width="11.5rem">
               <button
+                type="button"
                 onClick={() => {
                   s.newProjBtn?.focus();
                   s.setNewProjectMenuOpen(false);
                   s.openNewProjectModal();
                 }}
-                class="w-full text-left px-2.5 py-1.5 rounded-lg text-ink-200 hover:bg-ink-800/60 flex items-center gap-2 cursor-pointer"
+                class="w-full text-left px-2.5 py-1.5 rounded-lg text-fg hover:bg-surface-muted flex items-center gap-2 cursor-pointer transition-colors"
               >
-                <Iconify icon="lucide:folder-plus" size={13} />
+                <Iconify icon="lucide:folder-plus" size={13} class="text-accent" />
                 <span>New Project</span>
               </button>
               <button
+                type="button"
                 onClick={() => {
                   s.newProjBtn?.focus();
                   s.setNewProjectMenuOpen(false);
                   s.quickStartProject();
                 }}
-                class="w-full text-left px-2.5 py-1.5 rounded-lg text-ink-300 hover:bg-ink-800/60 flex items-center gap-2 cursor-pointer"
+                class="w-full text-left px-2.5 py-1.5 rounded-lg text-fg-secondary hover:text-fg hover:bg-surface-muted flex items-center gap-2 cursor-pointer transition-colors"
               >
-                <Iconify icon="lucide:zap" size={13} />
+                <Iconify icon="lucide:zap" size={13} class="text-warning" />
                 <span>Quick Start</span>
               </button>
           </FloatMenu>
@@ -263,7 +280,7 @@ export function WorkspaceSidebar() {
                           e.stopPropagation();
                           s.toggleProjectExpanded(p.id);
                         }}
-                        class="p-0.5 -ml-0.5 rounded text-ink-500 hover:text-ink-200 hover:bg-ink-800/60 cursor-pointer shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500"
+                        class="p-0.5 -ml-0.5 rounded text-ink-500 hover:text-ink-200 hover:bg-ink-800/60 cursor-pointer shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
                       >
                         <Iconify
                           icon="lucide:chevron-right"
@@ -278,7 +295,7 @@ export function WorkspaceSidebar() {
                           e.stopPropagation();
                           s.pickProject(p.id);
                         }}
-                        class="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 rounded"
+                        class="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-accent rounded"
                       >
                         <Iconify icon="lucide:folder" size={14} class="shrink-0 text-ink-500" />
                         <span class="truncate flex-1 font-medium">{p.name}</span>
@@ -337,32 +354,34 @@ export function WorkspaceSidebar() {
     </div>
   {/* Batch bar (chatbot selection mode) */}
   <Show when={s.selectionMode()}>
-    <div class="p-2 border-t border-line/70 bg-ink-950/95">
+    <div class="p-2 border-t border-border bg-surface">
       <div class="flex items-center justify-between gap-2">
-        <span class="text-[11px] text-ink-500 pl-1 truncate">
+        <span class="text-[11px] text-fg-muted pl-1 truncate">
           {s.selectedSessions().size > 0
             ? `${s.selectedSessions().size} selected`
             : "Select conversations to delete"}
         </span>
         <div class="flex items-center gap-1.5 shrink-0">
           <button
+            type="button"
             onClick={s.pinSelected}
             disabled={s.selectedSessions().size === 0}
-            class={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border border-line/70 transition-colors ${
+            class={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border border-border transition-colors ${
               s.selectedSessions().size > 0
-                ? "bg-ink-900 text-ink-300 hover:text-ink-100 cursor-pointer"
-                : "opacity-50 cursor-not-allowed bg-ink-900 text-ink-500"
+                ? "bg-surface-subtle text-fg-secondary hover:text-fg hover:bg-surface-muted cursor-pointer"
+                : "opacity-50 cursor-not-allowed bg-surface-subtle text-fg-muted"
             }`}
           >
             Pin / Unpin
           </button>
           <button
+            type="button"
             onClick={s.deleteSelected}
             disabled={s.selectedSessions().size === 0}
             class={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition-colors ${
               s.selectedSessions().size > 0
                 ? "bg-danger-subtle border-danger/35 text-danger hover:opacity-90 cursor-pointer"
-                : "opacity-50 cursor-not-allowed bg-ink-900 border-line/70 text-ink-500"
+                : "opacity-50 cursor-not-allowed bg-surface-subtle border-border text-fg-muted"
             }`}
           >
             Delete
@@ -372,13 +391,14 @@ export function WorkspaceSidebar() {
     </div>
   </Show>
 
-  <div class="p-2 border-t border-line/70 space-y-1">
+  <div class="p-2 border-t border-border space-y-1.5 bg-surface-subtle">
     {/* Daemon update: primary rounded-full button above host selector */}
     <Show when={(() => { const i = ui.daemonUpdate.info(); return !!i && !!i.available && i.available !== i.current; })()}>{(() => {
       const i = ui.daemonUpdate.info()!;
       const busy = ui.daemonUpdate.applying() || hosts.activeHost()?.status === "updating";
       return (
         <button
+          type="button"
           onClick={() => ui.daemonUpdate.apply()}
           disabled={busy}
           class="ui-button ui-button-primary w-full rounded-full h-[1.5rem] min-h-[1.5rem] py-0 text-xs gap-1.5"
@@ -392,12 +412,13 @@ export function WorkspaceSidebar() {
     {/* () => … — openSettings takes an optional section id; passing it
         directly would feed the MouseEvent in as the section. */}
     <button
+      type="button"
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => m.openSettings()}
       aria-label="Host & agent settings: Settings"
-      class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-ink-500 hover:text-ink-200 hover:bg-ink-900/60 transition-colors cursor-pointer"
+      class="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted/70 transition-colors cursor-pointer"
     >
-      <Iconify icon="lucide:settings" size={14} />
+      <Iconify icon="lucide:settings" size={14} class="text-fg-muted" />
       <span>Settings</span>
     </button>
   </div>

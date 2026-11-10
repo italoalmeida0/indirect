@@ -75,20 +75,21 @@ function renderThinkingRow(
         onClick={toggle}
         aria-expanded={open()}
         aria-label={label()}
-        class="group/tool w-full flex items-center gap-2 pl-1 pr-1.5 py-1 rounded-lg cursor-pointer hover:bg-ink-900/70 text-[13px] text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 transition-colors"
+        class="group/tool w-full flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-lg cursor-pointer hover:bg-surface-muted/70 text-[13px] text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent transition-colors"
       >
-        <span class={`shrink-0 ${live() ? "ui-shimmer font-medium" : "text-ink-500"}`}>{label()}</span>
+        <Iconify icon="lucide:brain" size={13} class={`shrink-0 ${live() ? "text-accent" : "text-fg-muted"}`} />
+        <span class={`shrink-0 ${live() ? "ui-shimmer font-medium" : "text-fg-muted group-hover/tool:text-fg-secondary"}`}>{label()}</span>
         <span class="flex-1" />
         <Iconify
           icon="lucide:chevron-down"
           size={12}
-          class={`shrink-0 text-ink-600 transition-transform duration-150 ${open() ? "rotate-180" : ""}`}
+          class={`shrink-0 text-fg-muted transition-transform duration-150 ${open() ? "rotate-180" : ""}`}
         />
       </button>
       <DisclosureBody open={open()}>
         <div
           ref={(el) => onCleanup(followTail(el, () => open() && streaming()))}
-          class="rc-markdown w-full text-xs leading-relaxed break-words overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] max-h-64 pl-1 pb-1 text-ink-400"
+          class="rc-markdown w-full text-xs leading-relaxed break-words overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] max-h-64 ml-2 pl-3 pb-1 border-l-2 border-border/70 text-fg-secondary"
         >
           <StreamingMarkdown basic streaming={streaming()} active={open() && !hidden()}>
             {entry.block.reasoning || "(thinking…)"}
@@ -138,26 +139,26 @@ function renderTurnAggregate(
   const visibleRuns = createMemo(() => groupToolRuns(series.entries));
   const onlyThinking = createMemo(() => series.entries.every((e) => e.kind === "thinking") && series.units.length === 0);
   return (
-    <div class="w-full border-t border-line/60 overflow-hidden mt-1">
+    <div class="w-full rounded-xl border border-t border-border/75 bg-surface-subtle/50 overflow-hidden my-1 shadow-2xs">
       <button
         onPointerDown={(e) => press(e.currentTarget)}
         onClick={toggle}
-        class="w-full flex items-center gap-2 px-3 py-2 hover:bg-ink-900/60 transition-colors cursor-pointer text-left"
+        class="w-full flex items-center gap-2 px-3 py-2 hover:bg-surface-muted/60 transition-colors cursor-pointer text-left"
       >
         <Show
           when={!running()}
           fallback={
-            <span class="w-3.5 h-3.5 border-2 border-ink-500 border-t-transparent rounded-full animate-spin shrink-0" />
+            <span class="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
           }
         >
-          <Iconify icon="lucide:bot" size={14} class="shrink-0 text-ink-500" />
+          <Iconify icon="lucide:bot" size={14} class="shrink-0 text-accent" />
         </Show>
-        <span class={`text-[13px] font-medium truncate flex-1 min-w-0 ${running() ? "ui-shimmer" : "text-ink-300"}`}>
+        <span class={`text-[13px] font-medium truncate flex-1 min-w-0 ${running() ? "ui-shimmer" : "text-fg"}`}>
           {summary()}
         </span>
         <Show when={ctx.specialProgress(series.units)}>
           {(t) => (
-            <span class="font-mono text-[11px] text-ink-600 truncate max-w-[40%] shrink-0">
+            <span class="font-mono text-[11px] text-fg-muted truncate max-w-[40%] shrink-0">
               {t()}
             </span>
           )}
@@ -165,11 +166,11 @@ function renderTurnAggregate(
         <Iconify
           icon="lucide:chevron-down"
           size={12}
-          class={`shrink-0 text-ink-600 transition-transform duration-150 ${open() ? "rotate-180" : ""}`}
+          class={`shrink-0 text-fg-muted transition-transform duration-150 ${open() ? "rotate-180" : ""}`}
         />
       </button>
       <DisclosureBody open={open()}>
-        <div class="border-t border-line/60 px-2 py-1.5 space-y-0.5">
+        <div class="border-t border-border/60 px-2 py-1.5 space-y-0.5 bg-surface/40">
           <For each={series.entries}>
             {(entry, ei) => {
               const tail = () => ei() === lastEntryIdx();
@@ -303,17 +304,17 @@ function renderToolSegs(ctx: TranscriptRenderCtx, msgId: string, units: () => To
             <div class="w-full" data-toolseg={segKey(seg)} style={{ "overflow-anchor": "none" }}>
               <Show when={seg.units.length > 1}><button
                 onClick={toggle}
-                class="w-full flex items-center gap-1.5 pl-1 pr-1.5 py-1 rounded-lg hover:bg-ink-900/70 text-[13px] text-ink-400 hover:text-ink-200 cursor-pointer"
+                class="w-full flex items-center gap-1.5 pl-1.5 pr-2 py-1 rounded-lg hover:bg-surface-muted/70 text-[13px] text-fg-secondary hover:text-fg transition-colors cursor-pointer"
               >
                 <span class="font-medium">{groupTitle(seg.cat, seg.units)}</span>
                 <Iconify
                   icon="lucide:chevron-down"
                   size={12}
-                  class={`text-ink-600 transition-transform ${open() ? "rotate-180" : ""}`}
+                  class={`text-fg-muted transition-transform ${open() ? "rotate-180" : ""}`}
                 />
               </button></Show>
               <DisclosureBody open={seg.units.length === 1 || open()}>
-                <div class={seg.units.length > 1 ? "ml-3 border-l border-line/40 pl-1.5 space-y-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
+                <div class={seg.units.length > 1 ? "ml-3 border-l border-border/60 pl-1.5 space-y-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
                   <For each={seg.units}>
                     {(u) => {
                       // Keep fallback keys relative to the complete tool run.

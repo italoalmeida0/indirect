@@ -59,10 +59,32 @@ export function QuestionPanel(props: {
     if (q.multiple) setDrafts(step(), "selected", checked ? [...d.selected, label] : d.selected.filter((v) => v !== label));
     else setDrafts(step(), {selected:[label], custom:false});
   }
-  return <section aria-label="Questions from assistant" class="mb-3 overflow-hidden rounded-2xl border border-line bg-card shadow-lg">
-    <div class="flex items-center gap-2 px-4 py-3 border-b border-line text-xs text-ink-400">
-      <Icon icon="lucide:message-circle" size={15} /><span class="font-medium text-ink-200">Your input is needed</span>
-      <span class="ml-auto" aria-live="polite">{step()+1} of {questions().length}</span>
+  return <section aria-label="Questions from assistant" class="rc-studio-card mb-3 overflow-hidden rounded-2xl shadow-raised">
+    <div class="flex items-center gap-2.5 px-4 py-3 border-b border-border/70 bg-surface-subtle/70 text-xs text-fg-secondary">
+      <div class="w-6 h-6 rounded-lg bg-accent-subtle border border-accent/25 flex items-center justify-center text-accent shrink-0">
+        <Icon icon="lucide:message-circle-question" size={14} />
+      </div>
+      <span class="font-medium text-fg">Your input is needed</span>
+      <Show when={questions().length > 1}>
+        <div class="hidden sm:flex items-center gap-1 ml-2" aria-hidden="true">
+          <For each={questions()}>
+            {(_, idx) => (
+              <span
+                class={`h-1.5 rounded-full transition-all duration-200 ${
+                  idx() === step()
+                    ? "w-4 bg-accent"
+                    : ready(idx())
+                    ? "w-1.5 bg-success"
+                    : "w-1.5 bg-border-strong"
+                }`}
+              />
+            )}
+          </For>
+        </div>
+      </Show>
+      <span class="ml-auto rounded-full border border-border bg-surface px-2.5 py-0.5 text-[11px] font-medium tabular-nums text-fg-secondary" aria-live="polite">
+        {step()+1} of {questions().length}
+      </span>
     </div>
     <form onSubmit={(e) => {
       e.preventDefault();
@@ -70,13 +92,15 @@ export function QuestionPanel(props: {
       if (step() < questions().length-1) move(step()+1);
       else if (props.connected && drafts.every((_, i) => ready(i))) props.onSubmit(drafts.map((_, i) => answers(i)));
     }}>
-      <fieldset ref={fieldsetRef} disabled={props.submitting} class="px-4 py-3 max-h-[38vh] overflow-y-auto min-w-0">
+      <fieldset ref={fieldsetRef} disabled={props.submitting} class="px-4 py-3.5 max-h-[42vh] overflow-y-auto min-w-0">
         <legend ref={heading} tabIndex={-1} class="float-left w-full mb-3 outline-none">
-          <span class="block text-[11px] font-medium text-ink-500 mb-1">{question().header}</span>
-          <span class="block text-sm font-medium text-ink-100 whitespace-pre-wrap break-words">{question().question}</span>
+          <Show when={question().header}>
+            <span class="block text-[11px] font-medium text-accent mb-1">{question().header}</span>
+          </Show>
+          <span class="block text-sm font-medium text-fg whitespace-pre-wrap break-words leading-snug">{question().question}</span>
         </legend>
         <div class="clear-both space-y-2">
-          <Show when={question().multiple}><p class="text-[11px] text-ink-500">Select all that apply.</p></Show>
+          <Show when={question().multiple}><p class="text-[11px] text-fg-muted">Select all that apply.</p></Show>
           <For each={(() => {
             const opts = [...(question().options || [])];
             const rec = ((question() as any).recommend as string | undefined || "").trim().toLowerCase();
@@ -85,35 +109,119 @@ export function QuestionPanel(props: {
               if (i > 0) { const [r] = opts.splice(i, 1); opts.unshift(r); }
             }
             return opts;
-          })()}>{(option) => <label class={`flex items-start gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors ${draft().selected.includes(option.label) ? "border-ink-400 bg-elev" : "border-line hover:bg-elev/70"}`}>
-            <input type={question().multiple ? "checkbox" : "radio"} name={`${props.request.id}-${step()}`} checked={draft().selected.includes(option.label)} onChange={(e) => choose(option.label, e.currentTarget.checked)} class="mt-0.5 accent-accent-500 shrink-0" />
-            <span class="min-w-0"><span class="block text-xs font-medium text-ink-200 break-words">{option.label}{(question() as any).recommend && option.label.trim().toLowerCase() === ((question() as any).recommend as string).trim().toLowerCase() ? <span class="ml-1.5 rounded bg-accent-500/15 px-1.5 py-px text-[10px] font-medium text-accent-400">(Recommended)</span> : null}</span><Show when={option.description}><span class="block mt-1 text-xs text-ink-500 break-words">{option.description}</span></Show></span>
-          </label>}</For>
+          })()}>{(option) => {
+            const isSelected = () => draft().selected.includes(option.label);
+            const isRec = () => Boolean((question() as any).recommend && option.label.trim().toLowerCase() === ((question() as any).recommend as string).trim().toLowerCase());
+            return (
+              <label
+                onPointerDown={(e) => press(e.currentTarget)}
+                class={`flex items-start gap-3 rounded-xl border px-3.5 py-2.5 cursor-pointer transition-colors ${
+                  isSelected()
+                    ? "border-accent/45 bg-accent-subtle/65 shadow-2xs"
+                    : "border-border bg-surface/60 hover:bg-surface-muted/70 hover:border-border-strong"
+                }`}
+              >
+                <input
+                  type={question().multiple ? "checkbox" : "radio"}
+                  name={`${props.request.id}-${step()}`}
+                  checked={isSelected()}
+                  onChange={(e) => choose(option.label, e.currentTarget.checked)}
+                  class="sr-only"
+                />
+                <span
+                  aria-hidden="true"
+                  class={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border transition-colors ${
+                    question().multiple ? "rounded-[5px]" : "rounded-full"
+                  } ${
+                    isSelected()
+                      ? "border-accent bg-accent text-accent-foreground"
+                      : "border-border-strong bg-surface"
+                  }`}
+                >
+                  <Show when={isSelected()}>
+                    <Show
+                      when={question().multiple}
+                      fallback={<span class="h-1.5 w-1.5 rounded-full bg-accent-foreground" />}
+                    >
+                      <Icon icon="lucide:check" size={11} />
+                    </Show>
+                  </Show>
+                </span>
+                <span class="min-w-0 flex-1">
+                  <span class="flex items-center gap-1.5 flex-wrap text-xs font-medium text-fg break-words">
+                    <span>{option.label}</span>
+                    <Show when={isRec()}>
+                      <span class="rounded-full border border-accent/25 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">
+                        Recommended
+                      </span>
+                    </Show>
+                  </span>
+                  <Show when={option.description}>
+                    <span class="block mt-1 text-xs text-fg-muted break-words leading-snug">{option.description}</span>
+                  </Show>
+                </span>
+              </label>
+            );
+          }}</For>
           <Show when={(question() as any).decide_later && !question().multiple}>
-            <button type="button" onClick={() => {
+            <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={() => {
               if (props.submitting) return;
               if (step() < questions().length-1) { setDrafts(step(), {selected:[DELEGATE_LABEL], custom:false}); move(step()+1); }
               else if (props.connected) props.onSubmit(drafts.map((_, i) => i === step() ? [DELEGATE_LABEL] : answers(i)));
-            }} class="flex w-full items-center gap-2 rounded-xl border border-dashed border-line px-3 py-2.5 text-left text-xs text-ink-400 transition-colors hover:border-ink-500 hover:text-ink-200 cursor-pointer">
-              <Icon icon="lucide:sparkles" size={14} /><span>{DELEGATE_LABEL} — the assistant proceeds with its best judgment</span>
+            }} class="flex w-full items-center gap-2.5 rounded-xl border border-dashed border-border-strong px-3.5 py-2.5 text-left text-xs text-fg-secondary transition-colors hover:border-accent/50 hover:bg-accent-subtle/30 hover:text-fg cursor-pointer">
+              <Icon icon="lucide:sparkles" size={14} class="text-accent shrink-0" />
+              <span>{DELEGATE_LABEL} — the assistant proceeds with its best judgment</span>
             </button>
           </Show>
-          <label class={`flex items-center gap-3 rounded-xl border px-3 py-2.5 cursor-pointer transition-colors ${draft().custom ? "border-ink-400 bg-elev" : "border-line hover:bg-elev/70"}`}>
-            <input type={question().multiple ? "checkbox" : "radio"} name={`${props.request.id}-${step()}`} checked={draft().custom} onChange={(e) => {
-              setDrafts(step(), "custom", e.currentTarget.checked);
-              if (!question().multiple) setDrafts(step(), "selected", []);
-            }} class="accent-accent-500 shrink-0" /><span class="text-xs text-ink-300">Type your own answer</span>
+          <label
+            onPointerDown={(e) => press(e.currentTarget)}
+            class={`flex items-center gap-3 rounded-xl border px-3.5 py-2.5 cursor-pointer transition-colors ${
+              draft().custom
+                ? "border-accent/45 bg-accent-subtle/65 shadow-2xs"
+                : "border-border bg-surface/60 hover:bg-surface-muted/70 hover:border-border-strong"
+            }`}
+          >
+            <input
+              type={question().multiple ? "checkbox" : "radio"}
+              name={`${props.request.id}-${step()}`}
+              checked={draft().custom}
+              onChange={(e) => {
+                setDrafts(step(), "custom", e.currentTarget.checked);
+                if (!question().multiple) setDrafts(step(), "selected", []);
+              }}
+              class="sr-only"
+            />
+            <span
+              aria-hidden="true"
+              class={`flex h-4 w-4 shrink-0 items-center justify-center border transition-colors ${
+                question().multiple ? "rounded-[5px]" : "rounded-full"
+              } ${
+                draft().custom
+                  ? "border-accent bg-accent text-accent-foreground"
+                  : "border-border-strong bg-surface"
+              }`}
+            >
+              <Show when={draft().custom}>
+                <Show
+                  when={question().multiple}
+                  fallback={<span class="h-1.5 w-1.5 rounded-full bg-accent-foreground" />}
+                >
+                  <Icon icon="lucide:check" size={11} />
+                </Show>
+              </Show>
+            </span>
+            <span class="text-xs font-medium text-fg-secondary">Type your own answer</span>
           </label>
           <Show when={draft().custom}>
-            <textarea aria-label="Your answer" placeholder="Type your own answer or provide more details..." value={draft().text} maxLength={4000} rows={2} onInput={(e) => setDrafts(step(), "text", e.currentTarget.value)} class="block w-full resize-y rounded-xl border border-line bg-elev px-3 py-2 text-sm text-ink-100 outline-none focus:border-ink-400 placeholder:text-ink-500" />
+            <textarea aria-label="Your answer" placeholder="Type your own answer or provide more details..." value={draft().text} maxLength={4000} rows={2} onInput={(e) => setDrafts(step(), "text", e.currentTarget.value)} class="rc-studio-well block w-full resize-y rounded-xl px-3.5 py-2.5 text-sm text-fg outline-none focus:border-accent/60 placeholder:text-fg-muted transition-colors" />
           </Show>
         </div>
       </fieldset>
       <Show when={props.error}><p role="alert" class="px-4 pb-2 text-xs text-danger">{props.error}</p></Show>
-      <div class="flex items-center gap-2 border-t border-line px-4 py-3">
-        <button type="button" disabled={step() === 0 || props.submitting} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} onClick={() => move(step()-1)} class="rounded-lg px-3 py-2 text-xs text-ink-300 hover:bg-elev disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">Back</button>
-        <Show when={!props.connected}><span class="text-[11px] text-ink-500">Reconnecting…</span></Show>
-        <button type="submit" disabled={!ready(step()) || props.submitting || (step() === questions().length-1 && !props.connected)} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} class="ml-auto rounded-lg bg-ink-100 text-ink-950 px-4 py-2 text-xs font-medium hover:bg-ink-200 disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">
+      <div class="flex items-center gap-2 border-t border-border/70 bg-surface-subtle/40 px-4 py-3">
+        <button type="button" disabled={step() === 0 || props.submitting} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} onClick={() => move(step()-1)} class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">Back</button>
+        <Show when={!props.connected}><span class="text-[11px] text-warning flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />Reconnecting…</span></Show>
+        <button type="submit" disabled={!ready(step()) || props.submitting || (step() === questions().length-1 && !props.connected)} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} class="ml-auto rounded-lg bg-accent hover:bg-accent-strong text-accent-foreground px-4 py-1.5 text-xs font-medium shadow-2xs disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">
           {props.submitting ? "Sending…" : step() < questions().length-1 ? "Next" : "Send answers"}
         </button>
       </div>

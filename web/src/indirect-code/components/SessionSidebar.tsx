@@ -91,31 +91,32 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
       }}
       class={`group flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg cursor-pointer text-[13px] transition-colors ${
         isActive() && !ctx.selectionMode()
-          ? "bg-ink-800 text-ink-50"
+          ? "bg-surface-muted font-medium text-fg"
           : selected()
-            ? "bg-ink-900 text-ink-100 ring-1 ring-ink-500/50"
-            : "text-ink-400 hover:bg-ink-900/60 hover:text-ink-200"
+            ? "bg-accent-subtle text-fg ring-1 ring-accent/40"
+            : "text-fg-secondary hover:bg-surface-muted/60 hover:text-fg"
       }`}
       data-rc-tip={`${s.title}\n${s.cwd}`}
     >
       <Show when={ctx.selectionMode()}>
         <button
+          type="button"
           onClick={(e) => {
             e.stopPropagation();
             ctx.toggleSessionSelect(s.id);
           }}
           class={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${
-            selected() ? "bg-ink-100 border-ink-100" : "border-line bg-ink-950"
+            selected() ? "bg-accent border-accent" : "border-border-strong bg-surface"
           }`}
           data-rc-tip="Select" aria-label="Select"
         >
           <Show when={selected()}>
-            <Iconify icon="lucide:check" size={11} class="text-ink-950" />
+            <Iconify icon="lucide:check" size={11} class="text-accent-foreground" />
           </Show>
         </button>
       </Show>
       <Show when={s.pinned && !ctx.selectionMode()}>
-        <Iconify icon="lucide:pin" size={11} class="text-ink-500 shrink-0" />
+        <Iconify icon="lucide:pin" size={11} class="text-accent shrink-0" />
       </Show>
       <Show
         when={ctx.renamingId() === s.id}
@@ -168,7 +169,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
       >
         <input
           type="text"
-          class="flex-1 min-w-0 bg-ink-950 border border-ink-500 rounded px-1.5 py-0.5 text-[13px] text-ink-100 focus:outline-none"
+          class="flex-1 min-w-0 bg-surface border border-accent rounded px-1.5 py-0.5 text-[13px] text-fg focus:outline-none"
           value={ctx.renameText()}
           onInput={(e) => ctx.setRenameText(e.currentTarget.value)}
           onKeyDown={(e) => {

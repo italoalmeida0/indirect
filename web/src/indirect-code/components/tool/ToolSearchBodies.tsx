@@ -158,19 +158,19 @@ export function ToolSearchBodies(props: ToolPartProps) {
             }>
               <ol class="px-3 pb-2 space-y-1.5">
                 <For each={(props.m.webDetails()?.results || []).slice(0, 10)}>{(r: any, i: () => number) =>
-                  <li class="group rounded-lg border border-line/60 bg-elev/50 px-2.5 py-1.5 transition-colors hover:border-ink-500">
+                  <li class="group rounded-lg border border-border/80 bg-surface px-2.5 py-1.5 transition-colors hover:border-border-strong">
                     <a href={String(r.url || "")} target="_blank" rel="noreferrer"
                        class="flex items-baseline gap-1.5 text-[12px] leading-snug">
-                      <span class="shrink-0 font-mono text-[10px] text-ink-600">{i() + 1}.</span>
-                      <span class="font-medium text-ink-100 group-hover:text-accent-300 group-hover:underline line-clamp-1">{String(r.title || r.url || "")}</span>
+                      <span class="shrink-0 font-mono text-[10px] text-fg-muted">{i() + 1}.</span>
+                      <span class="font-medium text-fg group-hover:text-accent group-hover:underline line-clamp-1">{String(r.title || r.url || "")}</span>
                     </a>
-                    <div class="mt-0.5 truncate font-mono text-[10px] text-ink-600">{String(r.url || "")}</div>
-                    <Show when={r.snippet}><p class="mt-0.5 text-[11px] leading-snug text-ink-400 line-clamp-2">{String(r.snippet)}</p></Show>
+                    <div class="mt-0.5 truncate font-mono text-[10px] text-fg-muted">{String(r.url || "")}</div>
+                    <Show when={r.snippet}><p class="mt-0.5 text-[11px] leading-snug text-fg-secondary line-clamp-2">{String(r.snippet)}</p></Show>
                   </li>
                 }</For>
               </ol>
               <Show when={(props.m.webDetails()?.results || []).length > 10}>
-                <p class="px-3 pb-2 text-[10px] text-ink-600">+{(props.m.webDetails()?.results || []).length - 10} more matches</p>
+                <p class="px-3 pb-2 text-[10px] text-fg-muted">+{(props.m.webDetails()?.results || []).length - 10} more matches</p>
               </Show>
             </Show>
           </Show>
@@ -178,37 +178,31 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={props.m.name() === "fetch_url"}>
           <Show
             when={props.m.output() || props.m.prog()}
-            fallback={<div class="px-3 py-2 text-[11px] text-ink-600">Fetching {String(props.m.args().url || "URL")}{props.active ? "…" : ""}</div>}
+            fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">Fetching {String(props.m.args().url || "URL")}{props.active ? "…" : ""}</div>}
           >
-            <a href={String(props.m.fetchDetails()?.url || props.m.args().url || "")} target="_blank" rel="noreferrer"
-               class="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-line/60 bg-elev/50 px-2.5 py-2 transition-colors hover:border-ink-500">
-              <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-500/15 font-mono text-[11px] font-medium text-accent-300">
-                {(props.m.fetchDetails()?.host || "?").slice(0, 1).toUpperCase()}
-              </span>
-              <span class="min-w-0">
-                <span class="block truncate text-[12px] font-medium text-ink-100">{String(props.m.fetchDetails()?.title || props.m.fetchDetails()?.host || props.m.args().url || "Article")}</span>
-                <span class="block truncate font-mono text-[10px] text-ink-500">{String(props.m.fetchDetails()?.host || "")}</span>
-              </span>
-              <Iconify icon="lucide:external-link" size={12} class="ml-auto shrink-0 text-ink-500" />
-            </a>
+            <div class="px-3 pt-2">
+              <a href={String(props.m.fetchDetails()?.url || props.m.args().url || "")} target="_blank" rel="noreferrer"
+                 class="flex items-center gap-2 rounded-lg border border-border/80 bg-surface px-2.5 py-2 transition-colors hover:border-border-strong">
+                <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-accent/25 bg-accent-subtle font-mono text-[11px] font-medium text-accent">
+                  {(props.m.fetchDetails()?.host || "?").slice(0, 1).toUpperCase()}
+                </span>
+                <span class="min-w-0">
+                  <span class="block truncate text-[12px] font-medium text-fg">{String(props.m.fetchDetails()?.title || props.m.fetchDetails()?.host || props.m.args().url || "Article")}</span>
+                  <span class="block truncate font-mono text-[10px] text-fg-muted">{String(props.m.fetchDetails()?.host || "")}</span>
+                </span>
+                <Iconify icon="lucide:external-link" size={12} class="ml-auto shrink-0 text-fg-muted" />
+              </a>
+            </div>
             <Show when={props.m.fetchDetails()?.content} fallback={
-              <div class="border-t border-line/50 mt-2">
+              <div class="border-t border-border/60 mt-2">
                 <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.terminal().output || props.m.output() || props.m.prog() || ""} language="markdown" plain wrap={false} scrollKey={`${props.m.key()}:content`} />
               </div>
             }>
-              <div
-                ref={(el) => {
-                  restoreToolScroll(props.m.key(), el);
-                  requestAnimationFrame(() => restoreToolScroll(props.m.key(), el));
-                  onCleanup(followTail(el, () => props.m.open() && props.running));
-                }}
-                onScroll={(e) => recordToolScroll(props.m.key(), e.currentTarget)}
-                class="px-3 py-2 text-[12.5px] leading-relaxed text-ink-200 article-body"
-              >
+              <div class="px-3 py-2 text-[12.5px] leading-relaxed text-fg article-body">
                 <StreamingMarkdown basic={true}>{String(props.m.fetchDetails()?.content || "")}</StreamingMarkdown>
               </div>
               <Show when={props.m.fetchDetails()?.truncated}>
-                <p class="px-3 pb-1 text-[10px] text-ink-600">Truncated</p>
+                <p class="px-3 pb-1 text-[10px] text-fg-muted">Truncated</p>
               </Show>
             </Show>
           </Show>

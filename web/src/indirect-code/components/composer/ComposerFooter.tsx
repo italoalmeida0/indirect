@@ -12,6 +12,14 @@ export function ComposerFooter() {
   const s = useSession();
   const t = useTranscriptCtx();
   const ui = useUI();
+  const pct = () => c.activeContext().percent;
+  const barToneClass = () => {
+    const p = pct() ?? 0;
+    if (p >= 92) return "bg-danger";
+    if (p >= 78) return "bg-warning";
+    return "bg-accent";
+  };
+
   return (
 <>
 <Show when={s.draftMode() && c.pendingMode?.() !== "talk"}>
@@ -22,6 +30,7 @@ export function ComposerFooter() {
         Default: project of the newest conversation (daemon). */}
     <div>
       <button
+        type="button"
         ref={s.projBtn}
         data-menubtn
         onPointerDown={(e) => press(e.currentTarget)}
@@ -32,116 +41,178 @@ export function ComposerFooter() {
           c.setAddContextOpen(false);
           ui.setUsageOpen(false);
         }}
-        class="ui-button ui-button-outline ui-button-sm gap-2"
+        class="ui-button ui-button-outline ui-button-sm gap-2 shadow-resting"
         data-rc-tip="Project" aria-label={`Project: ${s.activeProject()?.name || "Select project"}`}
       >
-        <Iconify icon="lucide:folder" size={13} />
-        <span class="max-w-[110px] truncate">
+        <Iconify icon="lucide:folder" size={13} class="text-accent" />
+        <span class="max-w-[140px] truncate">
           {s.activeProject()?.name || "Select project"}
         </span>
-        <Iconify icon="lucide:chevron-down" size={11} class={`transition-transform duration-150 ${s.projectMenuOpen() ? "rotate-180" : ""}`} />
+        <Iconify icon="lucide:chevron-down" size={11} class={`text-fg-muted transition-transform duration-150 ${s.projectMenuOpen() ? "rotate-180" : ""}`} />
       </button>
       <FloatMenu anchor={() => s.projBtn} open={s.projectMenuOpen()} placement="bottom" width="18rem">
-          <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
-            Project
+          <div class="px-2.5 py-1.5 text-[11px] font-medium text-fg-muted flex items-center justify-between">
+            <span>Project</span>
+            <span class="font-mono text-[10px]">{s.projects().length}</span>
           </div>
-          <div class="max-h-56 overflow-y-auto [scrollbar-gutter:stable]">
+          <div class="max-h-56 overflow-y-auto space-y-0.5 [scrollbar-gutter:stable]">
             <For
               each={s.projects()}
               fallback={
-                <div class="px-2.5 py-2 text-[11px] text-ink-600">
+                <div class="px-2.5 py-2 text-[11px] text-fg-muted">
                   No projects yet.
                 </div>
               }
             >
-              {(p) => (
-                <button
-                  onClick={() => {
-                    s.pickProject(p.id);
-                    s.setProjectMenuOpen(false);
-                  }}
-                  class={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer ${
-                    p.id === s.activeProject()?.id
-                      ? "bg-ink-800 text-ink-100"
-                      : "text-ink-300 hover:bg-ink-800/60"
-                  }`}
-                  data-rc-tip={p.path} aria-label={`${p.name} (${p.path})`}
-                >
-                  <span class="flex items-center gap-1.5 min-w-0">
-                    <Iconify icon="lucide:folder" size={13} class="shrink-0 text-ink-500" />
-                    <span class="truncate">{p.name}</span>
-                  </span>
-                  <Show when={p.id === s.activeProject()?.id}>
-                    <Iconify icon="lucide:check" size={13} />
-                  </Show>
-                </button>
-              )}
+              {(p) => {
+                const active = () => p.id === s.activeProject()?.id;
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      s.pickProject(p.id);
+                      s.setProjectMenuOpen(false);
+                    }}
+                    class={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer transition-colors ${
+                      active()
+                        ? "bg-accent-subtle text-fg font-medium"
+                        : "text-fg-secondary hover:text-fg hover:bg-surface-muted"
+                    }`}
+                    data-rc-tip={p.path} aria-label={`${p.name} (${p.path})`}
+                  >
+                    <span class="flex items-center gap-2 min-w-0">
+                      <Iconify icon="lucide:folder" size={13} class={`shrink-0 ${active() ? "text-accent" : "text-fg-muted"}`} />
+                      <span class="truncate">{p.name}</span>
+                    </span>
+                    <Show when={active()}>
+                      <Iconify icon="lucide:check" size={13} class="text-accent shrink-0" />
+                    </Show>
+                  </button>
+                );
+              }}
             </For>
           </div>
-          <button
-            onClick={() => {
-              s.setProjectMenuOpen(false);
-              s.openNewProjectModal();
-            }}
-            class="mt-1 w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-ink-400 hover:bg-ink-800/60 hover:text-ink-200 flex items-center gap-2 cursor-pointer border-t border-line/60"
-          >
-            <Iconify icon="lucide:folder-plus" size={13} />
-            <span>New project…</span>
-          </button>
+          <div class="mt-1 border-t border-border pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                s.setProjectMenuOpen(false);
+                s.openNewProjectModal();
+              }}
+              class="w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg flex items-center gap-2 cursor-pointer transition-colors"
+            >
+              <Iconify icon="lucide:folder-plus" size={13} class="text-accent" />
+              <span>New project…</span>
+            </button>
+          </div>
       </FloatMenu>
     </div>
   </div>
 </Show>
 <Show when={s.activeSessionId()}>
-  <div class="flex items-center justify-between gap-3 text-[11px] text-ink-500" data-composer-footer>
-    <span class="flex items-center gap-1.5 min-w-0" data-rc-tip={s.currentProject()?.path}><Iconify icon="lucide:folder" size={13} /><span class="truncate">{s.currentProject()?.name || baseNameOf(s.activeSession()?.cwd) || "Project"}</span></span>
-    <FloatMenu anchor={() => ui.contextBtn} open={ui.usageOpen()} placement="top-end" width="19rem">
-      <div class="p-1.5 text-xs">
-        <div class="font-medium text-ink-200 mb-3">Conversation context</div>
-        <div class="text-lg font-medium text-ink-100 tabular-nums">{c.activeContext().label}</div>
-        <p class="text-[11px] text-ink-500 mt-1 leading-relaxed">
-          {c.activeContext().window > 0 ? `${compactTokens(c.activeContext().window)} tokens configured in the gateway.` : "Context limit not configured in the gateway."}
-          {" "}Measured from the latest model request and its response.
-        </p>
-        <Show when={c.activeContext().percent !== null}>
-          <div class="h-1.5 rounded-full bg-elev overflow-hidden mt-3" role="progressbar" aria-label="Context used" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, c.activeContext().percent ?? 0)}>
-            <div class="h-full rounded-full bg-accent-500" style={{ width: `${Math.min(100, c.activeContext().percent ?? 0)}%` }} />
+  <div class="flex items-center justify-between gap-3 px-1 py-1.5 text-[11px] text-fg-muted" data-composer-footer>
+    <span class="flex items-center gap-1.5 min-w-0" data-rc-tip={s.currentProject()?.path}>
+      <Iconify icon="lucide:folder" size={12} class="shrink-0 text-fg-muted" />
+      <span class="truncate">{s.currentProject()?.name || baseNameOf(s.activeSession()?.cwd) || "Project"}</span>
+    </span>
+    <FloatMenu anchor={() => ui.contextBtn} open={ui.usageOpen()} placement="top-end" width="20rem">
+      <div class="p-2 text-xs space-y-3">
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-medium text-fg">Conversation context</span>
+            <Show when={pct() !== null}>
+              <span class="rounded-full bg-surface-muted px-2 py-0.5 font-mono text-[10px] font-medium text-fg-secondary tabular-nums">
+                {Math.min(100, pct() ?? 0)}% full
+              </span>
+            </Show>
           </div>
-        </Show>
-        <div class="font-medium text-ink-200 mb-2 mt-4 pt-3 border-t border-line">Session usage</div>
-        <Show
-          when={t.activeUsage()}
-          fallback={
-            <p class="text-ink-500 text-[11px]">
-              No usage reported yet. Run the agent to see input / cache / output tokens here.
-            </p>
-          }
-        >
-          {(u) => {
-            const costs = usageCosts(u());
-            const chip = (v: number | undefined) =>
-              costs ? <span class="text-ink-600 ml-1.5">${fmtUsd(v || 0)}</span> : null;
-            return (
-            <div class="space-y-1.5 font-mono text-[11px]">
-              <Show when={costs && costs.total > 0}>
-                <div class="flex justify-between pb-1 border-b border-line/60"><span class="text-ink-500">Total</span><span class="text-ink-100">${fmtUsd(costs!.total)}</span></div>
-              </Show>
-              <div class="flex justify-between"><span class="text-ink-500">Input</span><span class="text-ink-200">{compactTokens(u().inTok)}{chip(costs?.input)}</span></div>
-              <div class="flex justify-between"><span class="text-ink-500">Cache{(() => { const p = cacheHitPct(u()); return p === null ? "" : ` (${p}%)`; })()}</span><span class="text-ink-200">{compactTokens(u().cacheTok)}{chip(costs?.cache)}</span></div>
-              <div class="flex justify-between"><span class="text-ink-500">Output</span><span class="text-ink-200">{compactTokens(u().outTok)}{chip(costs?.output)}</span></div>
-              <div class="flex justify-between"><span class="text-ink-500">Reasoning</span><span class="text-ink-200">{compactTokens(u().reasoningTok)}{chip(costs?.reasoning)}</span></div>
+          <div class="text-lg font-medium text-fg tabular-nums tracking-tight">{c.activeContext().label}</div>
+          <p class="text-[11px] text-fg-muted leading-relaxed">
+            {c.activeContext().window > 0 ? `${compactTokens(c.activeContext().window)} tokens configured in the gateway.` : "Context limit not configured in the gateway."}
+            {" "}Measured from the latest model request and its response.
+          </p>
+          <Show when={pct() !== null}>
+            <div
+              class="h-2 rounded-full bg-surface-muted overflow-hidden mt-2"
+              role="progressbar"
+              aria-label="Context used"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={Math.min(100, pct() ?? 0)}
+            >
+              <div class={`h-full rounded-full transition-all duration-200 ${barToneClass()}`} style={{ width: `${Math.min(100, pct() ?? 0)}%` }} />
             </div>
-            );
-          }}
-        </Show>
+          </Show>
+        </div>
+
+        <div class="pt-2.5 border-t border-border space-y-2">
+          <div class="font-medium text-fg">Session usage</div>
+          <Show
+            when={t.activeUsage()}
+            fallback={
+              <p class="text-fg-muted text-[11px] leading-relaxed">
+                No usage reported yet. Run the agent to see input / cache / output tokens here.
+              </p>
+            }
+          >
+            {(u) => {
+              const costs = usageCosts(u());
+              const totalTok = () => Math.max(1, (u().inTok || 0) + (u().cacheTok || 0) + (u().outTok || 0) + (u().reasoningTok || 0));
+              const chip = (v: number | undefined) =>
+                costs ? <span class="text-fg-muted ml-1.5">${fmtUsd(v || 0)}</span> : null;
+              return (
+                <div class="space-y-2">
+                  {/* Proportional Token Distribution Bar */}
+                  <div class="h-1.5 rounded-full bg-surface-muted overflow-hidden flex gap-px" aria-hidden="true">
+                    <div class="h-full bg-accent" style={{ width: `${((u().inTok || 0) / totalTok()) * 100}%` }} />
+                    <div class="h-full bg-tone-sky" style={{ width: `${((u().cacheTok || 0) / totalTok()) * 100}%` }} />
+                    <div class="h-full bg-tone-violet" style={{ width: `${((u().outTok || 0) / totalTok()) * 100}%` }} />
+                    <div class="h-full bg-tone-amber" style={{ width: `${((u().reasoningTok || 0) / totalTok()) * 100}%` }} />
+                  </div>
+                  <div class="rc-studio-well p-2.5 space-y-1.5 font-mono text-[11px]">
+                    <Show when={costs && costs.total > 0}>
+                      <div class="flex justify-between pb-1.5 mb-1 border-b border-border">
+                        <span class="text-fg-secondary font-sans font-medium">Total spend</span>
+                        <span class="text-fg font-medium">${fmtUsd(costs!.total)}</span>
+                      </div>
+                    </Show>
+                    <div class="flex items-center justify-between">
+                      <span class="flex items-center gap-1.5 text-fg-secondary"><span class="h-1.5 w-1.5 rounded-full bg-accent" />Input</span>
+                      <span class="text-fg">{compactTokens(u().inTok)}{chip(costs?.input)}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <span class="flex items-center gap-1.5 text-fg-secondary"><span class="h-1.5 w-1.5 rounded-full bg-tone-sky" />Cache{(() => { const p = cacheHitPct(u()); return p === null ? "" : ` (${p}%)`; })()}</span>
+                      <span class="text-fg">{compactTokens(u().cacheTok)}{chip(costs?.cache)}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <span class="flex items-center gap-1.5 text-fg-secondary"><span class="h-1.5 w-1.5 rounded-full bg-tone-violet" />Output</span>
+                      <span class="text-fg">{compactTokens(u().outTok)}{chip(costs?.output)}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <span class="flex items-center gap-1.5 text-fg-secondary"><span class="h-1.5 w-1.5 rounded-full bg-tone-amber" />Reasoning</span>
+                      <span class="text-fg">{compactTokens(u().reasoningTok)}{chip(costs?.reasoning)}</span>
+                    </div>
+                  </div>
+                </div>
+              );
+            }}
+          </Show>
+        </div>
       </div>
     </FloatMenu>
     <Tooltip content="Conversation context and session usage" disabled={ui.usageOpen()}>
-      <button ref={ui.contextBtn} data-menubtn aria-label={`Conversation context: ${c.activeContext().label}`} aria-expanded={ui.usageOpen()}
+      <button
+        type="button"
+        ref={ui.contextBtn}
+        data-menubtn
+        aria-label={`Conversation context: ${c.activeContext().label}`}
+        aria-expanded={ui.usageOpen()}
         onPointerDown={(e) => press(e.currentTarget)}
         onClick={() => { const next = !ui.usageOpen(); ui.closeMenus(); ui.setUsageOpen(next); }}
-        class="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] tabular-nums text-ink-400 hover:bg-elev hover:text-ink-200 transition-colors cursor-pointer">
-        <Iconify icon="lucide:chart-pie" size={12} /><span>{c.activeContext().label}</span>
+        class="flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] tabular-nums text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+      >
+        <Iconify icon="lucide:chart-pie" size={12} class="text-accent" />
+        <span>{c.activeContext().label}</span>
       </button>
     </Tooltip>
   </div>
