@@ -28,7 +28,7 @@ export function Composer() {
   // needs its own bottom breathing room (nothing below it to add any).
   const wrapperClass = () => s.draftMode()
     ? "rc-draft flex-1 min-h-0 overflow-y-auto flex flex-col px-4 py-10"
-    : `rc-safe-bottom min-h-0 overflow-y-auto px-4 pt-2 bg-ink-950 relative z-20${collapsed() ? " pb-2" : ""}`;
+    : `rc-safe-bottom min-h-0 overflow-y-auto px-4 pt-2 bg-background relative z-20${collapsed() ? " pb-2" : ""}`;
   return (
 <>
 
@@ -39,17 +39,25 @@ export function Composer() {
   <StatusBanners />
     <Show when={!collapsed()}>
     <Show when={!s.workspaceBlocked()} fallback={
-      <div role="status" class="rounded-2xl border border-line bg-elev px-4 py-3 text-sm text-ink-300" data-workspace-unavailable>
-        <div class="flex items-center gap-2 font-medium text-ink-100"><Iconify icon="lucide:folder-x" size={17} />{s.workspaceState() === "missing" ? "The project folder was deleted" : "The project folder is unavailable"}</div>
-        <p class="mt-1.5 text-xs text-ink-500">{s.workspaceState() === "missing" ? "Recreate this folder on the host to continue this conversation." : "Restore access to this folder on the host to continue."}</p>
-        <p class="font-mono text-xs break-all">{s.workspacePath()}</p>
-        <div class="mt-2 flex gap-3"><button onClick={s.checkWorkspace} class="text-xs text-ink-200 hover:underline cursor-pointer">Check again</button><Show when={t.sessionStatus() === "running"}><button onClick={t.cancelCurrentTurn} class="text-xs text-ink-200 hover:underline cursor-pointer">Stop turn</button></Show></div>
+      <div role="status" class="rounded-panel border border-warning/35 bg-warning-subtle/40 px-4 py-3.5 text-sm text-fg-secondary shadow-resting" data-workspace-unavailable>
+        <div class="flex items-center gap-2 font-medium text-fg">
+          <Iconify icon="lucide:folder-x" size={17} class="text-warning shrink-0" />
+          <span>{s.workspaceState() === "missing" ? "The project folder was deleted" : "The project folder is unavailable"}</span>
+        </div>
+        <p class="mt-1.5 text-xs text-fg-muted">{s.workspaceState() === "missing" ? "Recreate this folder on the host to continue this conversation." : "Restore access to this folder on the host to continue."}</p>
+        <p class="mt-1 font-mono text-xs text-fg-secondary break-all">{s.workspacePath()}</p>
+        <div class="mt-2.5 flex items-center gap-2">
+          <button type="button" onClick={s.checkWorkspace} class="rounded-control border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Check again</button>
+          <Show when={t.sessionStatus() === "running"}>
+            <button type="button" onClick={t.cancelCurrentTurn} class="rounded-control border border-danger/35 bg-danger-subtle px-2.5 py-1 text-xs font-medium text-danger hover:opacity-90 transition-opacity cursor-pointer">Stop turn</button>
+          </Show>
+        </div>
       </div>
     }>
     <div class="rc-composer relative flex flex-col">
     <ComposerInput />
     <div class="rc-composer-toolbar flex items-end justify-between gap-2 px-2.5 py-2">
-      <div class="flex flex-1 min-w-0 flex-wrap items-center gap-0.5 text-xs text-ink-400">
+      <div class="flex flex-1 min-w-0 flex-wrap items-center gap-1 text-xs text-fg-secondary">
       <ToolbarContext />
       <ToolbarModel />
       </div>

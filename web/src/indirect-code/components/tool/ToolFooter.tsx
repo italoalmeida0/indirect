@@ -9,12 +9,12 @@ export function ToolFooter(props: { facts: FooterFact[] }) {
         <For each={props.facts}>
           {(f) => (
             <span
-              class={`rounded border px-1 py-px font-mono text-[10px] leading-tight tabular-nums ${
+              class={`rounded border px-1.5 py-0.5 font-mono text-[10px] leading-tight tabular-nums ${
                 f.tone === "fail"
-                  ? "border-danger/40 text-danger"
+                  ? "border-danger/40 bg-danger-subtle/40 text-danger"
                   : f.tone === "ok"
-                    ? "border-success/40 text-success"
-                    : "border-line/60 text-ink-500"
+                    ? "border-success/40 bg-success-subtle/40 text-success"
+                    : "border-border bg-surface text-fg-muted"
               }`}
             >
               {f.label}

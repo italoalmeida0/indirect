@@ -21,7 +21,7 @@ export function ToolBody(props: ToolPartProps) {
         onCleanup(followTail(el, () => props.m.open() && props.running));
       }}
       onScroll={(e) => recordToolScroll(props.m.key(), e.currentTarget)}
-      class="mt-0.5 mb-1.5 rounded-lg border border-line/50 bg-ink-950/60 max-h-96 overflow-auto overscroll-contain [scrollbar-gutter:stable]"
+      class="mt-0.5 mb-1.5 rounded-lg border border-border/75 bg-surface-subtle/65 max-h-96 overflow-auto overscroll-contain [scrollbar-gutter:stable]"
     >
       {/* min-w-full w-fit column: block children (and their borders) stretch
           to the widest sibling, so a horizontal overflow never truncates a

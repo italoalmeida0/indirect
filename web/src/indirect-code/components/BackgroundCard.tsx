@@ -17,18 +17,18 @@ function shortLabel(cmd: string, max = 64) {
 
 function taskState(status: string) {
   switch (status) {
-    case "running": return { label: "Running", icon: "lucide:loader-circle", color: "text-ink-400" };
+    case "running": return { label: "Running", icon: "lucide:loader-circle", color: "text-accent" };
     case "done": return { label: "Completed", icon: "lucide:circle-check", color: "text-success" };
     case "error": return { label: "Failed", icon: "lucide:circle-x", color: "text-danger" };
-    case "cancelled": return { label: "Cancelled", icon: "lucide:circle-slash", color: "text-ink-500" };
-    default: return { label: "Stopped", icon: "lucide:circle-stop", color: "text-ink-500" };
+    case "cancelled": return { label: "Cancelled", icon: "lucide:circle-slash", color: "text-fg-muted" };
+    default: return { label: "Stopped", icon: "lucide:circle-stop", color: "text-fg-muted" };
   }
 }
 
 function exitBadgeTone(code: number) {
-  if (code === 0) return "border-line/60 text-ink-500";
-  if (code === 130 || code === 143) return "border-warning/40 text-warning";
-  return "border-danger/40 text-danger";
+  if (code === 0) return "border-border text-fg-muted bg-surface-subtle";
+  if (code === 130 || code === 143) return "border-warning/40 text-warning bg-warning-subtle/50";
+  return "border-danger/40 text-danger bg-danger-subtle/50";
 }
 
 /**
@@ -161,23 +161,26 @@ export function BackgroundCard(props: { contextKey?: string }) {
   };
   return (
     <Show when={tasks().length > 0}>
-      <div class={`${ui.convWidthClass()} mx-auto border-t border-line/60 px-3 py-2`} data-bg-card>
+      <div class={`${ui.convWidthClass()} mx-auto border-t border-border/70 px-3 py-2.5`} data-bg-card>
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1.5 pb-2">
-          <span class="text-[11px] font-medium text-ink-500">Background tasks</span>
+          <span class="text-[11px] font-medium text-fg-secondary">Background tasks</span>
           <button
             type="button"
-            class={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${showArchived()
+            class={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${showArchived()
               ? "border-accent/35 bg-accent-subtle text-accent"
-              : "border-line/60 text-ink-500 hover:bg-elev hover:text-ink-200"}`}
+              : "border-border bg-surface-subtle text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
             aria-pressed={showArchived()}
             aria-label={`Archived tasks (${archived().length})`}
             onClick={toggleArchive}
             data-bg-archive-toggle
           >
             <Iconify icon="lucide:archive" size={12} />
-            <span class="tabular-nums opacity-80">{archived().length}</span>
+            <span class="tabular-nums">{archived().length}</span>
           </button>
-          <span class="ml-auto text-[10px] text-ink-500 tabular-nums whitespace-nowrap" data-bg-running-count>
+          <span class="ml-auto inline-flex items-center gap-1.5 text-[11px] text-fg-muted tabular-nums whitespace-nowrap" data-bg-running-count>
+            <Show when={running().length > 0}>
+              <span class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+            </Show>
             {running().length} running
           </span>
         </div>
@@ -185,9 +188,9 @@ export function BackgroundCard(props: { contextKey?: string }) {
         <div class="flex flex-col gap-1.5">
           <For each={visible()}>
             {(job) => (
-              <div class="rounded-lg bg-card" data-bg-row={job.id}>
+              <div class="rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden" data-bg-row={job.id}>
                 <div
-                  class="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-elev/50 rounded-lg transition-colors"
+                  class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-elev/50 rounded-lg transition-colors"
                   onClick={() => toggle(job.id)}
                 >
                   <span
@@ -201,26 +204,26 @@ export function BackgroundCard(props: { contextKey?: string }) {
                   <Iconify
                     icon={job.kind === "exec_script" ? "mdi:language-javascript" : job.kind === "python" ? "mdi:language-python" : "lucide:terminal"}
                     size={14}
-                    class="shrink-0 text-ink-500"
+                    class="shrink-0 text-fg-muted"
                   />
-                  <span class="truncate text-ink-200 min-w-0 flex-1 text-[12.5px]">
+                  <span class="truncate text-fg min-w-0 flex-1 text-[12.5px]">
                     <ShellCmd text={shortLabel(job.label || job.id)} />
                   </span>
                   <Show when={job.status !== "running" && job.exitCode !== undefined}>
                     <span
-                      class={`shrink-0 rounded border px-1 py-px font-mono text-[10px] leading-tight tabular-nums ${exitBadgeTone(job.exitCode!)}`}
+                      class={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] leading-tight tabular-nums ${exitBadgeTone(job.exitCode!)}`}
                       data-bg-exit-code={job.exitCode}
                     >
                       exit {job.exitCode}
                     </span>
                   </Show>
-                  <span class="text-[11px] text-ink-500 tabular-nums shrink-0" data-bg-duration>
+                  <span class="text-[11px] text-fg-muted tabular-nums shrink-0" data-bg-duration>
                     {duration(job)}
                   </span>
                   <Show when={job.status === "running"}>
                     <button
                       type="button"
-                      class="shrink-0 inline-flex items-center justify-center rounded p-1 text-ink-500 hover:text-ink-100 hover:bg-elev cursor-pointer"
+                      class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-danger hover:bg-danger-subtle/60 transition-colors cursor-pointer"
                       onClick={(e) => {
                         e.stopPropagation();
                         bg.stop(job.id);
@@ -234,7 +237,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                   <Show when={!showArchived() && job.status !== "running"}>
                     <button
                       type="button"
-                      class="shrink-0 inline-flex items-center justify-center rounded p-1 text-ink-500 hover:text-ink-100 hover:bg-elev cursor-pointer"
+                      class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                       onClick={(e) => {
                         e.stopPropagation();
                         dismiss(job.id);
@@ -247,7 +250,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                   </Show>
                   <button
                     type="button"
-                    class="shrink-0 inline-flex items-center justify-center rounded p-1 text-ink-500 hover:text-ink-100 hover:bg-elev cursor-pointer"
+                    class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                     onClick={(e) => {
                       e.stopPropagation();
                       toggle(job.id);
@@ -259,7 +262,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                   </button>
                 </div>
                 <Show when={isOpen(job.id)}>
-                  <div class="border-t border-line/50 rounded-b-lg overflow-hidden">
+                  <div class="border-t border-border/70 bg-surface-subtle/60 rounded-b-xl overflow-hidden">
                     {/* Single scroll surface for the expanded task body: the
                         command block and the log share one scroller (same
                         contract as ToolBody), never one scrollbar each. */}
@@ -274,7 +277,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                     >
                       <div class="min-w-full w-fit">
                         <Show when={job.label}>
-                          <div class="border-b border-line/40">
+                          <div class="border-b border-border/60">
                             <CodeBlock embedded text={job.label} language={job.kind === "exec_script" ? "javascript" : job.kind === "python" ? "python" : "bash"} wrap={false} scrollKey={`bg:${job.id}:cmd`} />
                           </div>
                         </Show>
@@ -282,7 +285,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                           <CodeBlock embedded text={logText(job) || "No output yet."} language={undefined} plain wrap={false} scrollKey={`bg:${job.id}`} />
                         </div>
                         <Show when={(job.droppedLines || 0) > 0}>
-                          <p class="px-3 pb-1.5 text-[10px] text-ink-600">
+                          <p class="px-3 pb-1.5 text-[10px] text-fg-muted">
                             {job.droppedLines} earlier lines discarded by the tail cap — use bg_check for full paging.
                           </p>
                         </Show>
@@ -296,7 +299,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
           <Show when={selected().length > 3}>
             <button
               type="button"
-              class="self-start px-3 py-2 text-xs text-ink-500 hover:text-ink-200 cursor-pointer"
+              class="self-start px-3 py-1.5 text-xs font-medium text-fg-muted hover:text-fg transition-colors cursor-pointer"
               aria-expanded={expanded()}
               onClick={() => setExpanded((value) => !value)}
               data-bg-list-toggle

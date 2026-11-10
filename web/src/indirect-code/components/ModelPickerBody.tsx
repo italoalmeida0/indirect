@@ -34,76 +34,102 @@ export function ModelPickerBody(props: {
   });
   return (
     <>
-      <div class="px-2 py-1 text-[11px] font-medium text-fg-muted flex items-center justify-between">
+      <div class="px-2.5 py-1 text-[11px] font-medium text-fg-muted flex items-center justify-between">
         <span>Model</span>
         <button
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={props.onRefresh}
-          class="p-0.5 text-ink-600 hover:text-ink-200 cursor-pointer"
+          class="p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
           data-rc-tip="Refresh models" aria-label="Refresh models"
         >
           <Iconify icon="lucide:refresh-cw" size={11} />
         </button>
       </div>
-      <div class="px-2 pb-1">
-        <input
-          type="text"
-          placeholder="Search models..."
-          class="w-full bg-ink-950 border border-line/60 rounded-lg px-2.5 py-1.5 text-[11px] text-ink-100 placeholder:text-ink-600 focus:outline-none focus:border-ink-500"
-          value={props.filter()}
-          onInput={(e) => props.setFilter(e.currentTarget.value)}
-          onClick={(e) => e.stopPropagation()}
-          onMouseDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
-          ref={(el) => setTimeout(() => el?.focus(), 40)}
-        />
+      <div class="px-2 pb-1.5">
+        <div class="rc-studio-well flex items-center gap-1.5 px-2.5 py-1.5 focus-within:border-accent/50 transition-colors">
+          <Iconify icon="lucide:search" size={12} class="shrink-0 text-fg-muted" />
+          <input
+            type="text"
+            placeholder="Search models..."
+            class="w-full min-w-0 bg-transparent text-xs text-fg placeholder:text-fg-muted focus:outline-none"
+            value={props.filter()}
+            onInput={(e) => props.setFilter(e.currentTarget.value)}
+            onClick={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+            ref={(el) => setTimeout(() => el?.focus(), 40)}
+          />
+          <Show when={props.filter()}>
+            <button
+              type="button"
+              aria-label="Clear model filter"
+              onClick={(e) => {
+                e.stopPropagation();
+                props.setFilter("");
+              }}
+              class="shrink-0 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-muted cursor-pointer"
+            >
+              <Iconify icon="lucide:x" size={11} />
+            </button>
+          </Show>
+        </div>
       </div>
-      <div class="max-h-56 overflow-y-auto overflow-x-auto [scrollbar-gutter:stable]">
-        <div class="min-w-full w-max flex flex-col">
+      <div class="max-h-60 overflow-y-auto overflow-x-hidden px-1 pb-1 [scrollbar-gutter:stable]">
+        <div class="flex flex-col space-y-0.5">
           <For
             each={groups()}
             fallback={
-              <div class="px-2.5 py-2 text-[11px] text-ink-600 whitespace-nowrap">
+              <div class="px-2.5 py-3 text-xs text-fg-muted text-center">
                 {props.models().length ? "No models match." : "No compatible models configured in the gateway."}
               </div>
             }
           >
             {(g) => (
               <>
-                <div class="px-2.5 pt-1.5 pb-0.5 text-[11px] font-medium text-fg-muted whitespace-nowrap">
-                  {g.provider}
+                <div class="px-2 pt-2 pb-0.5 text-[11px] font-medium text-fg-muted flex items-center gap-1.5">
+                  <span class="truncate">{g.provider}</span>
+                  <span class="h-px flex-1 bg-border/60" />
                 </div>
                 <For each={g.models}>
-                  {(m) => (
-                    <button
-                      onPointerDown={(e) => press(e.currentTarget)}
-                      onClick={() => props.onPick(m.id)}
-                      class={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-3 cursor-pointer transition-colors ${
-                        m.id === props.activeModelId()
-                          ? "bg-ink-800 text-ink-100 font-medium"
-                          : "text-ink-300 hover:bg-ink-800/60"
-                      }`}
-                    >
-                      <span class="whitespace-nowrap">
-                        {m.name || m.id}
-                        <Show when={m.upstreamModel && m.upstreamModel !== (m.name || m.id)}>
-                          <span class="text-ink-500"> ({m.upstreamModel})</span>
-                        </Show>
-                        <span class="text-ink-500"> {compactTokens(m.context ?? 0)}</span>
-                      </span>
-                      <Show when={m.id === props.activeModelId()}>
-                        <Iconify icon="lucide:check" size={13} class="shrink-0" />
-                      </Show>
-                    </button>
-                  )}
+                  {(m) => {
+                    const active = () => m.id === props.activeModelId();
+                    return (
+                      <button
+                        onPointerDown={(e) => press(e.currentTarget)}
+                        onClick={() => props.onPick(m.id)}
+                        class={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer transition-colors ${
+                          active()
+                            ? "bg-accent-subtle text-fg font-medium"
+                            : "text-fg-secondary hover:text-fg hover:bg-surface-muted"
+                        }`}
+                      >
+                        <span class="min-w-0 flex-1 truncate">
+                          <span>{m.name || m.id}</span>
+                          <Show when={m.upstreamModel && m.upstreamModel !== (m.name || m.id)}>
+                            <span class="text-fg-muted"> ({m.upstreamModel})</span>
+                          </Show>
+                        </span>
+                        <span class="shrink-0 flex items-center gap-1.5">
+                          <Show when={(m.context ?? 0) > 0}>
+                            <span class="rounded border border-border/70 bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] text-fg-muted tabular-nums">
+                              {compactTokens(m.context ?? 0)}
+                            </span>
+                          </Show>
+                          <Show when={active()}>
+                            <Iconify icon="lucide:check" size={13} class="shrink-0 text-accent" />
+                          </Show>
+                        </span>
+                      </button>
+                    );
+                  }}
                 </For>
               </>
             )}
           </For>
         </div>
       </div>
-      <div class="mt-1.5 pt-1.5 border-t border-line/60">
-        <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
+      <div class="mt-1.5 pt-1.5 border-t border-border/70">
+        <div class="px-2.5 py-1 text-[11px] font-medium text-fg-muted">
           Reasoning effort
         </div>
         <div
@@ -123,8 +149,8 @@ export function ModelPickerBody(props: {
                 onClick={() => props.onEffort(lvl)}
                 class={`ui-segment py-1 rounded-md text-center text-[10px] sm:text-[11px] font-medium cursor-pointer ${
                   props.effort() === lvl
-                    ? "text-ink-100"
-                    : "text-ink-400 hover:text-ink-200"
+                    ? "text-fg"
+                    : "text-fg-muted hover:text-fg-secondary"
                 }`}
               >
                 {formatEffort(lvl)}

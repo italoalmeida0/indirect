@@ -7,9 +7,10 @@ import {
   onMount,
   onCleanup,
   Show,
+  useContext,
   type JSX,
 } from "solid-js";
-import { useUI, useHost, useSession } from "./ctx";
+import { useUI, useHost, useSession, TranscriptCtx } from "./ctx";
 import { SidebarToggle } from "./components/SidebarToggle";
 import { Icon as Iconify } from "../components/icon";
 import { IndirectBrand } from "./components/IndirectBrand";
@@ -61,13 +62,59 @@ import { baseMode, effectiveModeSkills } from "./utils/modeSkills";
 function WorkspaceHeader() {
   const ui = useUI();
   const session = useSession();
-  const title = () => ui.historyView() ? "Conversation history"
+  const transcript = useContext(TranscriptCtx);
+  const isHistory = () => Boolean(ui.historyView?.());
+  const title = () => isHistory() ? "Conversation history"
     : session.draftMode() ? "New conversation" : session.activeSession()?.title || "Conversation";
+  const project = () => (!isHistory() ? session.currentProject?.() : null);
+  const running = () => !isHistory() && !session.draftMode() && transcript?.sessionStatus?.() === "running";
   return (
-    <header class="rc-workspace-header rc-window-header shrink-0 border-b border-line/60">
-      <div class="rc-window-content flex h-full min-w-0 items-center gap-3">
+    <header class="rc-workspace-header rc-window-header shrink-0 border-b border-border/80 bg-background/90 backdrop-blur-sm">
+      <div class="rc-window-content flex h-full min-w-0 items-center gap-2.5">
         <Show when={!ui.sidebarOpen()}><SidebarToggle /></Show>
-        <span class="min-w-0 truncate text-xs text-ink-400 select-none">{title()}</span>
+        <div class="flex min-w-0 flex-1 items-center gap-2">
+          <Show when={project()?.name}>
+            <span class="hidden sm:inline-flex max-w-44 shrink-0 items-center gap-1.5 truncate rounded-full border border-border bg-surface-subtle px-2 py-0.5 text-[11px] font-medium text-fg-secondary select-none">
+              <Iconify icon="lucide:folder" size={11} class="shrink-0 text-fg-muted" />
+              <span class="truncate">{project()!.name}</span>
+            </span>
+            <span class="hidden sm:inline text-xs text-fg-muted/50 select-none">/</span>
+          </Show>
+          <Show when={isHistory()}>
+            <Iconify icon="lucide:history" size={13} class="shrink-0 text-accent" />
+          </Show>
+          <span class={`min-w-0 truncate text-xs select-none ${session.draftMode() && !isHistory() ? "text-fg-muted" : "font-medium text-fg"}`}>
+            {title()}
+          </span>
+          <Show when={running()}>
+            <span class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent select-none">
+              <span class="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+              Running
+            </span>
+          </Show>
+        </div>
+        <Show when={!ui.sidebarOpen()}>
+          <div class="ml-auto flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={() => ui.setHistoryView?.(!isHistory())}
+              class={`flex h-7 w-7 items-center justify-center rounded-md transition-colors cursor-pointer ${isHistory() ? "bg-accent-subtle text-accent" : "text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
+              data-rc-tip="Conversation history (Ctrl+K)"
+              aria-label="Search conversations"
+            >
+              <Iconify icon="lucide:search" size={14} />
+            </button>
+            <button
+              type="button"
+              onClick={() => session.startNewConversation?.()}
+              class="flex h-7 w-7 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+              data-rc-tip="New conversation"
+              aria-label="Start new conversation"
+            >
+              <Iconify icon="lucide:plus" size={15} />
+            </button>
+          </div>
+        </Show>
       </div>
     </header>
   );
@@ -133,7 +180,7 @@ export function UpdateFreezeOverlay() {
   };
   return (
     <Show when={updating()}>
-      <div class="rc-update-screen fixed inset-0 z-40 flex flex-col items-center overflow-y-auto bg-ink-950 p-4 text-center sm:p-6">
+      <div class="rc-update-screen fixed inset-0 z-40 flex flex-col items-center overflow-y-auto bg-background p-4 text-center sm:p-6">
         <div class="mx-auto my-auto w-full max-w-xl space-y-6 py-8">
           <div>
             <IndirectBrand />
@@ -144,26 +191,33 @@ export function UpdateFreezeOverlay() {
               {upd()?.target ? `Installing ${upd()?.target}. ` : ""}Sessions are safe, nothing is lost.
             </p>
           </div>
-          <div class="ui-card mx-auto max-w-sm space-y-3 p-4 text-left">
+          <div class="rc-studio-card mx-auto max-w-sm space-y-3.5 p-4 text-left">
             <div class="flex items-center gap-3">
-              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-500/10 text-brand-400">
+              <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-subtle text-accent">
                 <Iconify icon="lucide:refresh-cw" size={16} class="animate-spin" />
               </div>
               <div class="min-w-0 flex-1 text-xs">
-                <p class="font-medium text-ink-200">Updating…</p>
-                <p class="mt-0.5 text-[11px] text-ink-400">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="font-medium text-fg">Updating…</p>
+                  <Show when={upd()?.current && upd()?.target}>
+                    <span class="rounded-full border border-border bg-surface px-2 py-0.5 font-mono text-[10px] text-fg-secondary">
+                      {upd()?.current} → {upd()?.target}
+                    </span>
+                  </Show>
+                </div>
+                <p class="mt-0.5 truncate text-[11px] text-fg-muted">
                   {updatingHost()?.name || updatingHost()?.hostname || updatingHostId()} · {upd()?.current ? `from ${upd()?.current}` : "working"}…
                 </p>
               </div>
             </div>
-            <div class="h-1.5 overflow-hidden rounded-full bg-ink-800">
-              <div class="h-full w-1/3 animate-[rc-update-slide_1.2s_ease-in-out_infinite_alternate] rounded-full bg-brand-500" />
+            <div class="h-1.5 overflow-hidden rounded-full bg-surface-muted">
+              <div class="h-full w-1/3 animate-[rc-update-slide_1.2s_ease-in-out_infinite_alternate] rounded-full bg-accent" />
             </div>
           </div>
           {/* Shared HostCard (same component as the update overlay):
               per-instance anchor ref + opener gating, so the menu can
               never jump to the hidden card. */}
-          <div class="mx-auto w-full max-w-sm rounded-xl border border-line/70 bg-card p-2 text-left">
+          <div class="mx-auto w-full max-w-sm rounded-panel border border-border bg-surface p-2 text-left shadow-resting">
             <HostCard id="overlay" />
           </div>
         </div>

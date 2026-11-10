@@ -1,7 +1,10 @@
 import { For, Show, createMemo, createSignal, onCleanup, type JSX } from "solid-js";
+import { Portal } from "solid-js/web";
 import { Axis, AxisCursor, AxisGrid, AxisLabel, AxisLine, AxisTooltip, Bar, Chart, Line, Point } from "solid-charts";
 import type { AnalyticsEntity, AnalyticsReport, DailyPoint, ModelTimeline } from "./api";
 import { analyticsBuckets, analyticsTotals, cachePercent } from "./analytics-data";
+import { ChartPortalTooltip } from "./charts";
+import { anchorFloat } from "./floating";
 import { Card, Icon, fmtCost, fmtNum, pointLabel } from "./ui";
 import { usal } from "./motion";
 
@@ -37,10 +40,10 @@ function TimelineBars(props: {
             <AxisLabel fill="var(--chart-tick)" font-size="10" interval="preserveStartEnd" labelGap={24} />
             <AxisLine stroke="var(--chart-grid)" />
             <AxisCursor stroke="var(--ink-500)" stroke-dasharray="3 4" class="chart-cursor" />
-            <AxisTooltip class="chart-tooltip">{(tooltip) => <div class="analytics-chart-tooltip">
-              <strong>{bucketDate(tooltip.data.date)}{tooltip.data.lastDate && tooltip.data.lastDate !== tooltip.data.date ? ` – ${bucketDate(tooltip.data.lastDate)}` : ""} · UTC</strong>
-              <For each={props.groups}>{(group, index) => <div><span><i style={{ background: group.color }} />{group.label}</span><b>{format(tooltip.data.values[index()] ?? 0)}</b></div>}</For>
-            </div>}</AxisTooltip>
+            <AxisTooltip style={{ visibility: "hidden", width: "0px", height: "0px", overflow: "hidden" }}>{(tooltip) => <ChartPortalTooltip class="chart-tooltip"><Show when={tooltip.data}>{(d) => <div class="analytics-chart-tooltip">
+              <strong>{bucketDate(d().date)}{d().lastDate && d().lastDate !== d().date ? ` – ${bucketDate(d().lastDate)}` : ""} · UTC</strong>
+              <For each={props.groups}>{(group, index) => <div><span><i style={{ background: group.color }} />{group.label}</span><b>{format(d().values[index()] ?? 0)}</b></div>}</For>
+            </div>}</Show></ChartPortalTooltip>}</AxisTooltip>
           </Axis>
           <For each={props.groups}>{(group, index) => <Bar dataKey={`v${index()}`} stackId={props.stacked === false ? undefined : "usage"} fill={group.color} rx={2} class="analytics-series-bar" />}</For>
         </Chart>
@@ -130,12 +133,12 @@ export function RequestOutcomesChart(props: { outcomes: AnalyticsReport["outcome
           <Axis axis="x" position="bottom" dataKey="label">
             <AxisLabel fill="var(--chart-tick)" font-size="10" interval="preserveStartEnd" labelGap={24} />
             <AxisLine stroke="var(--chart-grid)" /><AxisCursor stroke="var(--ink-500)" stroke-dasharray="3 4" class="chart-cursor" />
-            <AxisTooltip class="chart-tooltip">{(tooltip) => <div class="analytics-chart-tooltip">
-              <strong>{bucketDate(tooltip.data.date)}{tooltip.data.lastDate && tooltip.data.lastDate !== tooltip.data.date ? ` – ${bucketDate(tooltip.data.lastDate)}` : ""} · UTC</strong>
-              <div><span><i style={{ background: "var(--chart-success)" }} />Success (2xx)</span><b>{percent(tooltip.data.success_rate)} · {fmtNum(tooltip.data.success)}</b></div>
-              <div><span><i style={{ background: "var(--chart-error)" }} />Errors</span><b>{percent(tooltip.data.error_rate)} · {fmtNum(tooltip.data.errors)}</b></div>
-              <Show when={tooltip.data.unknown}><div><span>Status unavailable</span><b>{fmtNum(tooltip.data.unknown)}</b></div></Show>
-            </div>}</AxisTooltip>
+            <AxisTooltip style={{ visibility: "hidden", width: "0px", height: "0px", overflow: "hidden" }}>{(tooltip) => <ChartPortalTooltip class="chart-tooltip"><Show when={tooltip.data}>{(d) => <div class="analytics-chart-tooltip">
+              <strong>{bucketDate(d().date)}{d().lastDate && d().lastDate !== d().date ? ` – ${bucketDate(d().lastDate)}` : ""} · UTC</strong>
+              <div><span><i style={{ background: "var(--chart-success)" }} />Success (2xx)</span><b>{percent(d().success_rate)} · {fmtNum(d().success)}</b></div>
+              <div><span><i style={{ background: "var(--chart-error)" }} />Errors</span><b>{percent(d().error_rate)} · {fmtNum(d().errors)}</b></div>
+              <Show when={d().unknown}><div><span>Status unavailable</span><b>{fmtNum(d().unknown)}</b></div></Show>
+            </div>}</Show></ChartPortalTooltip>}</AxisTooltip>
           </Axis>
           <Line dataKey="success_rate" stroke="var(--chart-success)" stroke-width={2.2} fill="none" class="analytics-outcome-line is-success" />
           <Line dataKey="error_rate" stroke="var(--chart-error)" stroke-width={2.2} stroke-dasharray="5 4" fill="none" class="analytics-outcome-line is-error" />
@@ -179,6 +182,7 @@ export function ProviderMixChart(props: { providers: AnalyticsEntity[]; protocol
 export function UserEfficiencyChart(props: { users: AnalyticsEntity[]; period: string; onSelect: (id: string, label: string) => void }) {
   const [width, setWidth] = createSignal(400);
   const [active, setActive] = createSignal<AnalyticsEntity | null>(null);
+  const [hovered, setHovered] = createSignal<{ user: AnalyticsEntity; color: string; anchor: SVGCircleElement } | null>(null);
   const users = () => props.users.filter((user) => user.id !== null);
   const maxRequests = () => Math.max(1, ...users().map((user) => user.reqs));
   const maxCost = () => Math.max(.001, ...users().map((user) => user.cost ?? 0));
@@ -191,18 +195,25 @@ export function UserEfficiencyChart(props: { users: AnalyticsEntity[]; period: s
   return <Card class="analytics-efficiency-chart p-5 min-w-0">
     <ChartHeading title="Spend vs request volume" subtitle={`Top 8 users by spend · Circle size represents output tokens · ${props.period}`} />
     <Show when={users().length} fallback={<ChartEmpty />}>
-      <div ref={watchWidth} class="analytics-scatter">
+      <div ref={watchWidth} class="analytics-scatter" onPointerLeave={() => setHovered(null)}>
         <svg viewBox={`0 0 ${width()} 250`} width="100%" height="250" role="group" aria-label="User spend against request volume">
           <For each={[0, .5, 1]}>{(tick) => <>
-            <line x1="46" x2={width() - 18} y1={196 - tick * 170} y2={196 - tick * 170} stroke="var(--chart-grid)" stroke-dasharray="3 4" />
+            <line x1="46" x2={width() - 24} y1={196 - tick * 170} y2={196 - tick * 170} stroke="var(--chart-grid)" stroke-dasharray="3 4" />
             <text x="38" y={200 - tick * 170} text-anchor="end" fill="var(--chart-tick)" font-size="10">{fmtCost(maxCost() * tick)}</text>
-            <text x={46 + tick * (width() - 64)} y="216" text-anchor={tick === 0 ? "start" : tick === 1 ? "end" : "middle"} fill="var(--chart-tick)" font-size="10">{fmtNum(maxRequests() * tick)}</text>
+            <text x={46 + tick * (width() - 70)} y="216" text-anchor={tick === 0 ? "start" : tick === 1 ? "end" : "middle"} fill="var(--chart-tick)" font-size="10">{fmtNum(maxRequests() * tick)}</text>
           </>}</For>
           <text x={width() / 2} y="241" text-anchor="middle" fill="var(--ink-500)" font-size="10">Requests</text>
-          <For each={users()}>{(user, index) => <circle cx={46 + user.reqs / maxRequests() * (width() - 64)} cy={196 - (user.cost ?? 0) / maxCost() * 170} r={6 + Math.sqrt(user.out_tok / maxOutput()) * 10} fill={colors[index() % 5]} fill-opacity={active()?.id === user.id ? .9 : .55} stroke={colors[index() % 5]} stroke-width="1.5" tabIndex={0} role="button" aria-label={`${user.label}: ${fmtCost(user.cost ?? 0)}, ${fmtNum(user.reqs)} requests. Filter by user.`} onPointerEnter={() => setActive(user)} onFocus={() => setActive(user)} onClick={() => props.onSelect(user.id!, user.label)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onSelect(user.id!, user.label); } }} />}</For>
+          <For each={users()}>{(user, index) => <circle cx={46 + user.reqs / maxRequests() * (width() - 70)} cy={196 - (user.cost ?? 0) / maxCost() * 170} r={6 + Math.sqrt(user.out_tok / maxOutput()) * 10} fill={colors[index() % 5]} fill-opacity={active()?.id === user.id ? .9 : .55} stroke={colors[index() % 5]} stroke-width="1.5" tabIndex={0} role="button" aria-label={`${user.label}: ${fmtCost(user.cost ?? 0)}, ${fmtNum(user.reqs)} requests. Filter by user.`} onPointerEnter={(event) => { setActive(user); setHovered({ user, color: colors[index() % 5]!, anchor: event.currentTarget }); }} onPointerLeave={() => setHovered(null)} onFocus={(event) => { setActive(user); setHovered({ user, color: colors[index() % 5]!, anchor: event.currentTarget }); }} onBlur={() => setHovered(null)} onClick={() => props.onSelect(user.id!, user.label)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); props.onSelect(user.id!, user.label); } }} />}</For>
         </svg>
       </div>
       <div class="analytics-scatter-readout" aria-live="polite"><Show when={active()} fallback={<span>Hover or focus a circle to inspect a user. Select it to filter every chart.</span>}>{(user) => <><strong>{user().label}</strong><span>{fmtCost(user().cost ?? 0)} · {fmtNum(user().reqs)} requests · {percent(cachePercent(user().in_tok, user().cache_tok))} cached</span></>}</Show></div>
+      <Show when={hovered()} keyed>{(item) => <Portal><div class="chart-tooltip" aria-hidden="true" ref={(el) => onCleanup(anchorFloat(item.anchor, el, { placement: "top", gap: 10, padding: 12 }))}><div class="analytics-chart-tooltip">
+        <strong><span class="inline-flex items-center gap-2"><i style={{ background: item.color }} />{item.user.label}</span></strong>
+        <div><span>Spend</span><b>{fmtCost(item.user.cost ?? 0)}</b></div>
+        <div><span>Requests</span><b>{fmtNum(item.user.reqs)}</b></div>
+        <div><span>Output tokens</span><b>{fmtNum(item.user.out_tok)}</b></div>
+        <div><span>Cache hit rate</span><b>{percent(cachePercent(item.user.in_tok, item.user.cache_tok))}</b></div>
+      </div></div></Portal>}</Show>
     </Show>
   </Card>;
 }

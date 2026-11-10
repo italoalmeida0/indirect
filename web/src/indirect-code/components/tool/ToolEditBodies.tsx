@@ -13,14 +13,14 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
   const stat = () => diffStat(props.sec.diff);
 
   return (
-    <div class="border-b border-line/40 last:border-b-0">
+    <div class="border-b border-border/60 last:border-b-0">
       <div
         onClick={() => setOpen(!open())}
-        class="group/file flex items-center justify-between gap-2 px-3 py-1.5 bg-ink-900/40 hover:bg-ink-900/70 text-[12px] cursor-pointer transition-colors select-none"
+        class="group/file flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle/70 hover:bg-surface-muted/70 text-[12px] cursor-pointer transition-colors select-none"
       >
         <div class="flex items-center gap-2 min-w-0 flex-1">
           <FileIcon path={props.sec.file} size={14} />
-          <span class="font-mono font-medium text-ink-200 truncate">{props.sec.file || "edit"}</span>
+          <span class="font-mono font-medium text-fg truncate">{props.sec.file || "edit"}</span>
           <Show when={props.sec.status === "error"}>
             <span class="text-[10px] px-1.5 py-0.5 rounded bg-danger-subtle text-danger font-mono">
               failed
@@ -32,12 +32,12 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
             </span>
           </Show>
           <Show when={stat().add > 0 || stat().del > 0}>
-            <span class="font-mono text-[10.5px] shrink-0">
+            <span class="font-mono text-[10.5px] shrink-0 tabular-nums">
               <Show when={stat().add > 0}>
                 <span class="text-success">+{stat().add}</span>
               </Show>
               <Show when={stat().add > 0 && stat().del > 0}>
-                <span class="text-ink-600"> </span>
+                <span class="text-fg-muted"> </span>
               </Show>
               <Show when={stat().del > 0}>
                 <span class="text-danger">-{stat().del}</span>
@@ -45,7 +45,7 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
             </span>
           </Show>
           <Show when={props.sec.matches !== undefined && stat().add === 0 && stat().del === 0}>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-ink-800 text-ink-400 font-mono">
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-surface-muted text-fg-secondary font-mono">
               {props.sec.matches} {props.sec.matches === 1 ? "match" : "matches"}
             </span>
           </Show>
@@ -54,7 +54,7 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
           <Iconify
             icon="lucide:chevron-down"
             size={12}
-            class={`text-ink-500 transition-transform ${open() ? "rotate-180" : ""}`}
+            class={`text-fg-muted transition-transform ${open() ? "rotate-180" : ""}`}
           />
         </div>
       </div>
@@ -65,7 +65,7 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
           </div>
         </Show>
         <Show when={props.sec.diff}>
-          <div class="border-t border-line/20">
+          <div class="border-t border-border/50">
             <DiffView text={props.sec.diff} max={60} name={props.sec.file} scrollKey={props.scrollKey} embedded />
           </div>
         </Show>
