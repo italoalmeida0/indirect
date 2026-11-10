@@ -7,11 +7,11 @@ package main
 // disappear until the next tool event repainted it.
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
@@ -81,7 +81,7 @@ func TestTurnChangesNoLiveWithoutTracking(t *testing.T) {
 	}
 }
 
-func TestBinaryFileUndoRestoresContentAndNeverRemoves(t *testing.T) {
+func TestBinaryFileTrackedWithoutSnapshotPayload(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "image.png")
 	origBytes := []byte{0x89, 'P', 'N', 'G', 0x00, 0x01, 0x02}
@@ -96,27 +96,44 @@ func TestBinaryFileUndoRestoresContentAndNeverRemoves(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changed := filetrack.BuildChanged(tracker.Snapshot(), dir)
+	snap := tracker.Snapshot()
+	if len(snap) != 1 || snap[0].Before != "" {
+		t.Fatalf("expected binary snapshot without retained bytes, got %+v", snap)
+	}
+
+	changed := filetrack.BuildChanged(snap, dir)
 	if len(changed) != 1 {
 		t.Fatalf("expected 1 changed file, got %d", len(changed))
 	}
 	if changed[0].Status != "binary" {
 		t.Fatalf("expected status binary, got %s", changed[0].Status)
 	}
-	if changed[0].Before != string(origBytes) {
-		t.Fatalf("expected Before to hold original binary bytes")
-	}
+}
 
-	res := undoOneFile(dir, &changed[0])
-	if !res.OK {
-		t.Fatalf("undoOneFile failed: %s", res.Message)
+func TestLegacyUndoneSessionLoadsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	st := newDiskStore(dir)
+	sessID := "sess-legacy-undone"
+	p := st.sessionFile(sessID)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
 	}
-
-	restored, err := os.ReadFile(binPath)
+	jsonl := strings.Join([]string{
+		`{"v":1,"kind":"turn","turn":1,"messages":[{"role":"user","turn_index":1,"content":[{"type":"text","text":"edit"}]},{"role":"assistant","turn_index":1,"content":[{"type":"text","text":"done"}]}],"balloon":{"turn_index":1,"at":10,"message_index":2,"files":[{"path":"/w/app.ts","rel":"app.ts","status":"modified","diff":"@@ -1 +1 @@\n-old\n+new\n","additions":1,"deletions":1,"before":"old\n","after":"new\n","reverse_patch":"@@ -1 +1 @@\n","undone":true}]},"usage":{}}`,
+		`{"v":1,"kind":"meta","id":"sess-legacy-undone","cwd":"/w","title":"Legacy","status":"idle","turnSeq":1}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(p, []byte(jsonl), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rec, _, err := st.loadSessionFused(sessID)
 	if err != nil {
-		t.Fatalf("file should exist after undo: %v", err)
+		t.Fatalf("loadSessionFused failed on legacy undone session: %v", err)
 	}
-	if !bytes.Equal(restored, origBytes) {
-		t.Fatalf("restored bytes %v != orig bytes %v", restored, origBytes)
+	if len(rec.FileBalloons) != 1 || len(rec.FileBalloons[0].Files) != 1 {
+		t.Fatalf("expected 1 balloon with 1 file, got %+v", rec.FileBalloons)
+	}
+	f := rec.FileBalloons[0].Files[0]
+	if f.Rel != "app.ts" || f.Status != "modified" || f.Additions != 1 || f.Deletions != 1 || !strings.Contains(f.Diff, "+new") {
+		t.Fatalf("unexpected file metadata: %+v", f)
 	}
 }

@@ -4,6 +4,7 @@ import { ToolFooter } from "./ToolFooter";
 import { ToolEditBodies } from "./ToolEditBodies";
 import { ToolSearchBodies } from "./ToolSearchBodies";
 import { ToolQuestionBodies } from "./ToolQuestionBodies";
+import { ToolWidgetBodies } from "./ToolWidgetBodies";
 import type { ToolPartProps } from "./toolUnitModel";
 
 /**
@@ -30,6 +31,7 @@ export function ToolBody(props: ToolPartProps) {
         <ToolEditBodies {...props} />
         <ToolSearchBodies {...props} />
         <ToolQuestionBodies {...props} />
+        <ToolWidgetBodies {...props} />
         <ToolFooter facts={props.m.footer()} />
       </div>
     </div>

@@ -39,6 +39,6 @@ render(() => {
       forking={false} canFork={false} showCopy copied={false} onCopy={() => {}} onFork={() => {}} onRegenerate={() => {}} />}</For></Show></div>
     <div id="changes"><For each={changes.balloons()}>{(b) => <TurnChangesBalloon balloon={b}
       expanded={changes.isExpanded(String(b.turnIndex))} onToggle={() => changes.toggleExpanded(String(b.turnIndex))}
-      undoBusy={false} onUndo={() => {}} live={b.live} />}</For></div>
+      live={b.live} />}</For></div>
   </>;
 }, document.getElementById("root")!);

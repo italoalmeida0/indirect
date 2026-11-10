@@ -49,10 +49,9 @@ try {
    bg.noteSessionTasks([{id:'job',kind:'bash',status:'done',content:'line one\n',totalLines:1,totalBytes:9,seq:1}],'s');
    return {snapshot:bg.sessionContent('job'),liveTailAlreadyInSnapshot:bg.liveTail('job')};
  });
- const undo=await page.evaluate(async()=>{
- const a=(window as any).flowRegression;a.setSid('original');const before=a.sent.length;const pending=a.undo.undoTurn(3);
- a.setSid('other-session');a.confirmUndo(true);await pending;
- return {before,after:a.sent.length};
+ const turnChangesReadOnly=await page.evaluate(()=>{
+ const a=(window as any).flowRegression;
+ return {hasUndoTurn:'undoTurn' in a.changes,hasNoteUndone:'noteUndone' in a.changes,hasUndoBusy:'undoBusy' in a.changes};
  });
  const draft=await page.evaluate(()=>{
  const a=(window as any).flowRegression;const {t}=a;a.setSid('my-session');t.resetForSession();
@@ -121,7 +120,7 @@ try {
  assert.deepEqual(freshAck.after,freshAck.before);assert(freshAck.after.includes('new-answer'));
  assert.equal(lateAck.after,lateAck.before);assert.equal(lateAck.after,2);
  assert.equal(background.snapshot,'line one\n');assert.equal(background.liveTailAlreadyInSnapshot,'');
- assert.equal(undo.after,undo.before);assert.equal(draft.after,'unsaved important text');
+ assert.deepEqual(turnChangesReadOnly,{hasUndoTurn:false,hasNoteUndone:false,hasUndoBusy:false});assert.equal(draft.after,'unsaved important text');
  assert.deepEqual(errors,[]);
- console.log('PASS: mirror errors, stale ACKs, edit/fork draft preservation, confirmation races, UTF-8 snapshot joins, undo target, task cleanup.');
+ console.log('PASS: mirror errors, stale ACKs, edit/fork draft preservation, confirmation races, UTF-8 snapshot joins, read-only turn changes, task cleanup.');
 }finally{await browser.close();server.stop(true)}

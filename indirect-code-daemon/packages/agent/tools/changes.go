@@ -20,7 +20,7 @@ type ChangeTracker interface {
 	NoteWrite(absPath string, existed bool, oldContent string)
 	NoteEditBefore(absPath, beforeContent string)
 	NoteBinaryNew(absPath string)
-	NoteBinaryEdit(absPath string, oldContent string)
+	NoteBinaryEdit(absPath string, tooLarge bool)
 }
 
 // IsBrainPath reports whether abs lives under the per-session private

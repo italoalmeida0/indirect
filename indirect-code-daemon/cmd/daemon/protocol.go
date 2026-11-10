@@ -463,20 +463,6 @@ type attachUploadResult struct {
 	Attachment messageAttachment
 }
 
-// undoMsg runs undo of turn changes.
-type undoMsg struct {
-	TurnIndex int
-	Path      string
-	Reply     chan any
-}
-
-type undoResult struct {
-	Error    string
-	Warning  string
-	Results  []any
-	Complete bool
-}
-
 // workerEmitMsg fences streaming events from a quarantined turn.
 type workerEmitMsg struct {
 	gen   int

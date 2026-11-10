@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, onCleanup, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { timeAgo } from "../utils/format";
 import { sessionTimeLabel } from "../paths";
@@ -49,8 +49,9 @@ export function SessionStopButton(props: {
   );
 }
 
-/** Sidebar session line (full row with inline rename + hover actions). */
+/** Sidebar session line (full row with inline rename + hover/context actions). */
 export interface SessionRowCtx {
+  isMobile: () => boolean;
   activeSessionId: () => string | null;
   selectedSessions: () => Set<string>;
   selectionMode: () => boolean;
@@ -68,14 +69,120 @@ export interface SessionRowCtx {
   sessionStatus: () => string;
   turnActivity: () => { status: string } | null;
   cancelTurnForSession: (id: string, e: MouseEvent | KeyboardEvent) => void;
+  openContextMenu?: (session: SessionSummary, anchor: HTMLElement) => void;
+  contextMenuSessionId?: () => string | null;
+  registerLongPressCancel?: (cancel: () => void) => void;
 }
+
+const LONG_PRESS_MS = 420;
+const LONG_PRESS_MOVE_PX = 8;
 
 export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
   const isActive = () => s.id === ctx.activeSessionId();
   const selected = () => ctx.selectedSessions().has(s.id);
+  const menuOpen = () => ctx.contextMenuSessionId?.() === s.id;
+  const isRenaming = () => ctx.renamingId() === s.id;
+
+  let longPressTimer: ReturnType<typeof setTimeout> | undefined;
+  let startX = 0;
+  let startY = 0;
+  let longPressActive = false;
+  let suppressClickUntil = 0;
+  let cancellingRename = false;
+
+  const clearLongPress = () => {
+    if (longPressTimer !== undefined) {
+      clearTimeout(longPressTimer);
+      longPressTimer = undefined;
+    }
+  };
+  onCleanup(clearLongPress);
+
+  const commitRename = () => {
+    if (cancellingRename) return;
+    const trimmed = ctx.renameText().trim();
+    if (trimmed && trimmed !== s.title) {
+      ctx.submitRename(s.id);
+    } else {
+      ctx.setRenameText(s.title);
+      ctx.setRenamingId(null);
+    }
+  };
+
+  const cancelRename = () => {
+    cancellingRename = true;
+    ctx.setRenameText(s.title);
+    ctx.setRenamingId(null);
+    setTimeout(() => {
+      cancellingRename = false;
+    }, 150);
+  };
+
   return (
     <div
-      onClick={() => {
+      data-session-id={s.id}
+      onPointerDown={(e) => {
+        if (isRenaming()) return;
+        const target = e.target as HTMLElement | null;
+        if (target?.closest("button, input")) return;
+        const isTouchHold = e.pointerType === "touch" || (ctx.isMobile() && e.button === 0);
+        if (!isTouchHold || !ctx.openContextMenu) return;
+        clearLongPress();
+        longPressActive = false;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rowEl = e.currentTarget;
+        ctx.registerLongPressCancel?.(clearLongPress);
+        longPressTimer = setTimeout(() => {
+          longPressTimer = undefined;
+          longPressActive = true;
+          ctx.openContextMenu?.(s, rowEl);
+        }, LONG_PRESS_MS);
+      }}
+      onPointerMove={(e) => {
+        if (longPressTimer === undefined) return;
+        if (
+          Math.abs(e.clientX - startX) > LONG_PRESS_MOVE_PX ||
+          Math.abs(e.clientY - startY) > LONG_PRESS_MOVE_PX
+        ) {
+          clearLongPress();
+        }
+      }}
+      onPointerUp={(e) => {
+        clearLongPress();
+        if (longPressActive) {
+          longPressActive = false;
+          suppressClickUntil = Date.now() + 400;
+          e.stopPropagation();
+        }
+      }}
+      onPointerCancel={() => {
+        clearLongPress();
+        if (longPressActive) {
+          longPressActive = false;
+          suppressClickUntil = Date.now() + 400;
+        }
+      }}
+      onContextMenu={(e) => {
+        if (isRenaming() || !ctx.openContextMenu) return;
+        e.preventDefault();
+        e.stopPropagation();
+        clearLongPress();
+        if (e.button !== 2) {
+          longPressActive = true;
+          suppressClickUntil = Date.now() + 400;
+        }
+        ctx.openContextMenu(s, e.currentTarget);
+      }}
+      onClick={(e) => {
+        if (longPressActive || Date.now() < suppressClickUntil) {
+          longPressActive = false;
+          suppressClickUntil = 0;
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        if (isRenaming()) return;
         if (ctx.selectionMode()) {
           ctx.toggleSessionSelect(s.id);
           return;
@@ -85,18 +192,20 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
         ctx.closeSidebarOnMobile();
       }}
       onDblClick={() => {
-        if (ctx.selectionMode()) return;
-        ctx.setRenamingId(s.id);
+        if (ctx.selectionMode() || ctx.isMobile()) return;
         ctx.setRenameText(s.title);
+        ctx.setRenamingId(s.id);
       }}
-      class={`group flex h-7.5 items-center gap-1.5 px-2 rounded-md cursor-pointer text-[12.5px] transition-colors ${
+      class={`group flex ${ctx.isMobile() ? "min-h-8.5 py-0.5" : "h-7.5"} items-center gap-1.5 px-2 rounded-md cursor-pointer text-[12.5px] transition-colors touch-manipulation select-none [-webkit-touch-callout:none] ${
         isActive() && !ctx.selectionMode()
           ? "bg-surface-muted font-medium text-fg"
           : selected()
             ? "bg-surface-muted text-fg ring-1 ring-border-strong"
-            : "text-fg-secondary hover:bg-surface-muted/65 hover:text-fg"
+            : menuOpen()
+              ? "bg-surface-muted/80 text-fg"
+              : "text-fg-secondary hover:bg-surface-muted/65 hover:text-fg"
       }`}
-      data-rc-tip={`${s.title}\n${s.cwd}`}
+      data-rc-tip={isRenaming() || menuOpen() ? undefined : `${s.title}\n${s.cwd}`}
     >
       <Show when={ctx.selectionMode()}>
         <button
@@ -119,10 +228,10 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
         <Iconify icon="lucide:pin" size={11} class="text-fg-muted shrink-0" />
       </Show>
       <Show
-        when={ctx.renamingId() === s.id}
+        when={isRenaming()}
         fallback={
           <>
-            <span class="truncate flex-1 min-w-0">{s.title}</span>
+            <span class="truncate flex-1 min-w-0 select-none">{s.title}</span>
             <Show when={s.status === "running" || (s.id === ctx.activeSessionId() && ctx.sessionStatus() === "running")}>
               <SessionStopButton
                 sessionId={s.id}
@@ -130,13 +239,20 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                 onCancel={(e) => ctx.cancelTurnForSession(s.id, e)}
               />
             </Show>
-            <div class="relative flex items-center justify-end shrink-0 min-w-[44px]">
-              <span class="rc-row-time text-[10px] text-ink-500 transition-opacity tabular-nums group-hover:opacity-0 group-hover:pointer-events-none">
+            <div class={`relative flex items-center justify-end shrink-0 ${!ctx.isMobile() ? "min-w-[44px]" : ""}`}>
+              <span
+                class={`rc-row-time text-[10px] text-ink-500 transition-opacity tabular-nums ${
+                  !ctx.isMobile() && !ctx.selectionMode()
+                    ? "group-hover:opacity-0 group-hover:pointer-events-none"
+                    : ""
+                }`}
+              >
                 {timeAgo(sessionTimeLabel(s))}
               </span>
-              <Show when={!ctx.selectionMode()}>
+              <Show when={!ctx.isMobile() && !ctx.selectionMode()}>
                 <div class="rc-row-actions absolute right-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button
+                    type="button"
                     onClick={(e) => ctx.togglePin(s.id, e)}
                     class="rc-row-action rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip={s.pinned ? "Unpin" : "Pin"} aria-label={s.pinned ? "Unpin" : "Pin"}
@@ -144,10 +260,11 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                     <Iconify icon={s.pinned ? "lucide:pin-off" : "lucide:pin"} size={11} />
                   </button>
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
-                      ctx.setRenamingId(s.id);
                       ctx.setRenameText(s.title);
+                      ctx.setRenamingId(s.id);
                     }}
                     class="rc-row-action rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip="Rename" aria-label="Rename"
@@ -155,6 +272,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                     <Iconify icon="lucide:pencil" size={11} />
                   </button>
                   <button
+                    type="button"
                     onClick={(e) => ctx.deleteSession(s.id, e)}
                     class="rc-row-action rounded p-0.5 text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer"
                     data-rc-tip="Delete" aria-label="Delete"
@@ -167,28 +285,79 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
           </>
         }
       >
-        <input
-          type="text"
-          class="flex-1 min-w-0 bg-surface border border-border-strong rounded px-1.5 py-0.5 text-[12.5px] text-fg focus:outline-none"
-          value={ctx.renameText()}
-          onInput={(e) => ctx.setRenameText(e.currentTarget.value)}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") ctx.submitRename(s.id);
-            if (e.key === "Escape") ctx.setRenamingId(null);
-          }}
-          onBlur={() => {
-            if (ctx.renamingId() === s.id) {
-              if (ctx.renameText().trim() && ctx.renameText().trim() !== s.title) {
-                ctx.submitRename(s.id);
-              } else {
-                ctx.setRenamingId(null);
-              }
-            }
-          }}
+        <div
+          class="flex-1 min-w-0 flex items-center gap-1"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
-          ref={(el) => setTimeout(() => el?.select(), 30)}
-        />
+          onDblClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="text"
+            aria-label="Rename conversation"
+            class="flex-1 min-w-0 h-6 bg-surface border border-border-strong rounded px-1.5 py-0.5 text-[12.5px] text-fg select-text focus:outline-none focus:border-accent"
+            value={ctx.renameText()}
+            onInput={(e) => ctx.setRenameText(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitRename();
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                cancelRename();
+              }
+            }}
+            onBlur={() => {
+              if (cancellingRename || ctx.isMobile()) return;
+              if (ctx.renamingId() === s.id) {
+                if (ctx.renameText().trim() && ctx.renameText().trim() !== s.title) {
+                  ctx.submitRename(s.id);
+                } else {
+                  ctx.setRenamingId(null);
+                }
+              }
+            }}
+            onClick={(e) => e.stopPropagation()}
+            ref={(el) => setTimeout(() => { el?.focus(); el?.select(); }, 30)}
+          />
+          <button
+            type="button"
+            aria-label="Save rename"
+            data-rc-tip="Save"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              commitRename();
+            }}
+            class="h-6 w-6 shrink-0 rounded flex items-center justify-center text-accent hover:bg-surface-subtle transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+          >
+            <Iconify icon="lucide:check" size={13} />
+          </button>
+          <button
+            type="button"
+            aria-label="Cancel rename"
+            data-rc-tip="Cancel"
+            onPointerDown={(e) => {
+              cancellingRename = true;
+              setTimeout(() => {
+                cancellingRename = false;
+              }, 250);
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              cancelRename();
+            }}
+            class="h-6 w-6 shrink-0 rounded flex items-center justify-center text-fg-muted hover:text-fg hover:bg-surface-subtle transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-strong"
+          >
+            <Iconify icon="lucide:x" size={13} />
+          </button>
+        </div>
       </Show>
     </div>
   );

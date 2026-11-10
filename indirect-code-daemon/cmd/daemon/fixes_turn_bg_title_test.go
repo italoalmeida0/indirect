@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"indirect/indirect-code-daemon/packages/filetrack"
 	"indirect/indirect-code-daemon/packages/provider"
 )
 
@@ -39,45 +38,6 @@ func TestBrowseFoldersNonExistent(t *testing.T) {
 	_, _, _, err = browseFolders(invalidChild)
 	if err == nil {
 		t.Fatalf("expected error when parent is a regular file, got nil")
-	}
-}
-
-// BUG-03: undoTurnBalloon marks f.Undone = true on files in the balloon
-func TestUndoTurnBalloonMarksUndone(t *testing.T) {
-	tempDir := t.TempDir()
-	testFile := filepath.Join(tempDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("modified content\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	b := &filetrack.TurnChanges{
-		TurnIndex: 1,
-		Files: []filetrack.ChangedFile{
-			{
-				Path:         testFile,
-				Rel:          "test.txt",
-				Status:       "modified",
-				ReversePatch: "@@ -1 +1 @@\n-modified content\n+original content\n",
-				Undone:       false,
-			},
-		},
-	}
-
-	results, complete := undoTurnBalloon(tempDir, b, "")
-	if !complete {
-		t.Fatalf("undoTurnBalloon incomplete: %+v", results)
-	}
-	if !b.Files[0].Undone {
-		t.Fatalf("expected b.Files[0].Undone == true, got false")
-	}
-
-	// Verify restored content on disk
-	content, err := os.ReadFile(testFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(content)) != "original content" {
-		t.Fatalf("unexpected content on disk: %q", string(content))
 	}
 }
 

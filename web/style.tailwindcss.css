@@ -216,15 +216,8 @@ html[data-theme="high-contrast"] {
   --chart-soft: #888;
 }
 
-/* Mobile touch affordances: no hover on touch, so sidebar row actions stay
- * visible and controls meet the 36px (2.25rem) hit target. */
-html.mobile .rc-sidebar .rc-row-actions {
-  opacity: 1;
-}
-html.mobile .rc-sidebar .rc-row-action {
-  min-width: 2.25rem;
-  min-height: 2.25rem;
-}
+/* Mobile touch affordances: primary chrome controls meet the 36px (2.25rem)
+ * hit target; session row actions open via long-press context menu. */
 html.mobile .rc-sidebar-toggle,
 html.mobile .rc-composer-add,
 html.mobile .rc-composer-send {

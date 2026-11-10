@@ -189,8 +189,12 @@ html.mobile .rc-message-actions { opacity: 1; }
   flex-shrink: 0;
 }
 
-/* Zed / Codex-grade code & diff lanes: opaque sticky gutters prevent
- * horizontal code scroll bleed while keeping subtle semantic tints. */
+/* VS Code / GitHub pro-grade code & diff lanes: opaque sticky gutters prevent
+ * horizontal code scroll bleed while keeping subtle whole-line tints and crisp
+ * intra-line word/character emphasis across light, dark, and high-contrast. */
+.rc-code-gutter-old {
+  color: color-mix(in oklab, var(--text-muted) 68%, transparent);
+}
 .rc-code-gutter {
   color: color-mix(in oklab, var(--text-muted) 72%, transparent);
   border-right: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
@@ -199,26 +203,84 @@ html.mobile .rc-message-actions { opacity: 1; }
   background-color: var(--surface-subtle);
 }
 .rc-diff-row-add {
-  background-color: color-mix(in oklab, var(--success) 12%, var(--surface-subtle));
+  background-color: color-mix(in oklab, var(--success) 10%, var(--surface-subtle));
 }
 .rc-diff-row-del {
-  background-color: color-mix(in oklab, var(--danger) 11%, var(--surface-subtle));
+  background-color: color-mix(in oklab, var(--danger) 10%, var(--surface-subtle));
+}
+.rc-diff-row-add .rc-code-gutter,
+.rc-diff-row-add .rc-code-gutter-old {
+  color: color-mix(in oklab, var(--success) 72%, var(--text-muted));
+}
+.rc-diff-row-del .rc-code-gutter,
+.rc-diff-row-del .rc-code-gutter-old {
+  color: color-mix(in oklab, var(--danger) 72%, var(--text-muted));
+}
+.rc-diff-word-add {
+  background-color: color-mix(in oklab, var(--success) 27%, transparent);
+  border-radius: 2px;
+}
+.rc-diff-word-del {
+  background-color: color-mix(in oklab, var(--danger) 25%, transparent);
+  border-radius: 2px;
+}
+.rc-diff-hunk {
+  background-color: color-mix(in oklab, var(--info) 7%, var(--surface-muted));
+  border-top: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 65%, transparent);
+}
+.rc-diff-hunk:first-child {
+  border-top: 0;
+}
+.rc-diff-hunk-range {
+  color: color-mix(in oklab, var(--info) 85%, var(--text-secondary));
+}
+.rc-diff-hunk-ctx {
+  color: var(--text-muted);
+}
+.rc-diff-meta {
+  background-color: color-mix(in oklab, var(--surface-muted) 55%, var(--surface-subtle));
 }
 :root[data-theme="dark"] .rc-diff-row-add {
-  background-color: color-mix(in oklab, var(--success) 15%, var(--surface-subtle));
+  background-color: color-mix(in oklab, var(--success) 13%, var(--surface-subtle));
 }
 :root[data-theme="dark"] .rc-diff-row-del {
-  background-color: color-mix(in oklab, var(--danger) 14%, var(--surface-subtle));
+  background-color: color-mix(in oklab, var(--danger) 13%, var(--surface-subtle));
+}
+:root[data-theme="dark"] .rc-diff-word-add {
+  background-color: color-mix(in oklab, var(--success) 32%, transparent);
+}
+:root[data-theme="dark"] .rc-diff-word-del {
+  background-color: color-mix(in oklab, var(--danger) 30%, transparent);
+}
+:root[data-theme="dark"] .rc-diff-hunk {
+  background-color: color-mix(in oklab, var(--info) 10%, var(--surface-muted));
+}
+:root[data-theme="high-contrast"] .rc-code-gutter-old {
+  color: var(--text-muted);
 }
 :root[data-theme="high-contrast"] .rc-code-gutter {
   color: var(--text-muted);
   border-right-color: var(--border-subtle);
 }
 :root[data-theme="high-contrast"] .rc-diff-row-add {
-  background-color: color-mix(in oklab, var(--success) 20%, var(--surface-subtle));
+  background-color: color-mix(in oklab, var(--success) 18%, var(--surface-subtle));
 }
 :root[data-theme="high-contrast"] .rc-diff-row-del {
-  background-color: color-mix(in oklab, var(--danger) 20%, var(--surface-subtle));
+  background-color: color-mix(in oklab, var(--danger) 18%, var(--surface-subtle));
+}
+:root[data-theme="high-contrast"] .rc-diff-word-add {
+  background-color: color-mix(in oklab, var(--success) 38%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--success) 78%, transparent);
+}
+:root[data-theme="high-contrast"] .rc-diff-word-del {
+  background-color: color-mix(in oklab, var(--danger) 38%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--danger) 78%, transparent);
+}
+:root[data-theme="high-contrast"] .rc-diff-hunk {
+  background-color: var(--surface-muted);
+  border-top-color: var(--border-subtle);
+  border-bottom-color: var(--border-subtle);
 }
 .rc-composer {
   background: var(--surface);
@@ -245,22 +307,6 @@ html.mobile .rc-message-actions { opacity: 1; }
   box-shadow: var(--shadow-floating);
 }
 
-/* Sidebar rows: pin/delete are hover-revealed on desktop. Touch devices have
- * no hover, so the actions stay visible, in flow, and the timestamp is
- * dropped to leave room for a comfortable target. */
-html.mobile .rc-sidebar .rc-row-actions {
-  opacity: 1;
-  position: static;
-  gap: 0.125rem;
-}
-html.mobile .rc-sidebar .rc-row-time { display: none; }
-html.mobile .rc-sidebar .rc-row-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 2.25rem;
-  min-height: 2.25rem;
-}
 /* Minimum comfortable touch targets for the composer/workspace chrome. */
 html.mobile .rc-sidebar-toggle,
 html.mobile .rc-composer-add,

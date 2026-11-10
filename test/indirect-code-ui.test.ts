@@ -1158,42 +1158,36 @@ describe("balloon tail cuts", () => {
     expect(tc.balloons().map((b) => b.turnIndex)).toEqual([4, 5]);
   });
 
-  test("undoTurn prompts for confirmation before sending and honors cancellation", async () => {
-    const { createTurnChanges } = await import("../web/src/indirect-code/hooks/useTurnChanges");
+  test("createTurnChanges exposes read-only change tracking with zero undo controls and diffStatBlocks computes 5-cell bars", async () => {
+    const { createTurnChanges, diffStatBlocks } = await import("../web/src/indirect-code/hooks/useTurnChanges");
     const sent: any[] = [];
-    let confirmPrompt: any = null;
-    let confirmResult = false;
     const tc = createTurnChanges({
       send: (p) => sent.push(p),
       getSessionId: () => "sess-1",
-      toast: () => {},
-      showConfirm: async (opts) => {
-        confirmPrompt = opts;
-        return confirmResult;
-      },
     });
+    expect("undoTurn" in tc).toBe(false);
+    expect("noteUndone" in tc).toBe(false);
+    expect("undoBusy" in tc).toBe(false);
+
     tc.applySnapshot({
       fileBalloons: [
-        { turnIndex: 1, files: [{ path: "foo.ts" }, { path: "bar.ts" }] },
+        { turnIndex: 1, files: [{ path: "foo.ts", status: "modified", additions: 8, deletions: 2 }, { path: "bar.ts", status: "new", additions: 4, deletions: 0 }] },
       ],
     });
+    expect(tc.balloons()).toHaveLength(1);
+    expect(tc.balloons()[0].files).toHaveLength(2);
 
-    // User cancels confirmation -> nothing sent
-    confirmResult = false;
-    await tc.undoTurn(1);
-    expect(confirmPrompt).not.toBeNull();
-    expect(confirmPrompt.title).toBe("Undo turn changes?");
-    expect(confirmPrompt.message).toContain("2 files");
-    expect(confirmPrompt.danger).toBe(true);
-    expect(sent.length).toBe(0);
-
-    // User confirms -> undo_turn_changes is sent
-    confirmResult = true;
-    await tc.undoTurn(1);
-    expect(sent.length).toBe(1);
-    expect(sent[0].type).toBe("undo_turn_changes");
+    tc.requestBalloons();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].type).toBe("get_turn_changes");
     expect(sent[0].sessionId).toBe("sess-1");
-    expect(sent[0].turnIndex).toBe(1);
+
+    expect(diffStatBlocks(0, 0)).toEqual(["neutral", "neutral", "neutral", "neutral", "neutral"]);
+    expect(diffStatBlocks(2, 1)).toEqual(["add", "add", "del", "neutral", "neutral"]);
+    expect(diffStatBlocks(12, 3)).toEqual(["add", "add", "add", "add", "del"]);
+    expect(diffStatBlocks(100, 1)).toEqual(["add", "add", "add", "add", "del"]);
+    expect(diffStatBlocks(1, 100)).toEqual(["add", "del", "del", "del", "del"]);
+    expect(diffStatBlocks(10, 0)).toEqual(["add", "add", "add", "add", "add"]);
   });
 });
 

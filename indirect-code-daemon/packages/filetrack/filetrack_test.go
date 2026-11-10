@@ -1,6 +1,7 @@
 package filetrack
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,9 +96,6 @@ func TestModifiedAndDeleted(t *testing.T) {
 	if !strings.Contains(m.Diff, "-b") || !strings.Contains(m.Diff, "+B") || !strings.Contains(m.Diff, "+d") {
 		t.Fatalf("modified diff wrong:\n%s", m.Diff)
 	}
-	if m.ReversePatch == "" {
-		t.Fatal("modified must carry a reverse patch")
-	}
 	if !strings.Contains(d.Diff, "-x") {
 		t.Fatalf("deleted diff wrong:\n%s", d.Diff)
 	}
@@ -116,24 +114,18 @@ func TestReadOnlyIsNotChanged(t *testing.T) {
 	}
 }
 
-func TestReversePatchRoundTrip(t *testing.T) {
-	before := "line1\nline2\nline3\n"
-	after := "line1\nLINE2\nline3\nline4\n"
-	rp := MakeReversePatch(after, before)
-	if rp == "" {
-		t.Fatal("empty reverse patch")
+func TestLegacyBalloonJSONIgnoresRemovedUndoFields(t *testing.T) {
+	raw := `{"turn_index":2,"at":100,"message_index":4,"files":[{"path":"/w/a.ts","rel":"a.ts","status":"modified","diff":"@@ -1 +1 @@\n-old\n+new\n","additions":1,"deletions":1,"before":"old\n","after":"new\n","reverse_patch":"@@ -1 +1 @@\n","undone":true}]}`
+	var tc TurnChanges
+	if err := json.Unmarshal([]byte(raw), &tc); err != nil {
+		t.Fatalf("unmarshal legacy TurnChanges failed: %v", err)
 	}
-	restored, applied, err := ApplyReversePatch(rp, after)
-	if err != nil {
-		t.Fatal(err)
+	if tc.TurnIndex != 2 || tc.MessageIndex != 4 || len(tc.Files) != 1 {
+		t.Fatalf("unexpected TurnChanges: %+v", tc)
 	}
-	for _, ok := range applied {
-		if !ok {
-			t.Fatalf("hunk not applied: %v", applied)
-		}
-	}
-	if restored != before {
-		t.Fatalf("round trip failed: %q", restored)
+	f := tc.Files[0]
+	if f.Rel != "a.ts" || f.Status != "modified" || f.Additions != 1 || f.Deletions != 1 || !strings.Contains(f.Diff, "+new") {
+		t.Fatalf("unexpected ChangedFile: %+v", f)
 	}
 }
 

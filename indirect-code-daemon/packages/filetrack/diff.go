@@ -21,16 +21,7 @@ type ChangedFile struct {
 	Diff string `json:"diff,omitempty"`
 	// Additions/Deletions count diff lines (not hunks).
 	Additions int `json:"additions"`
-	Deletions  int `json:"deletions"`
-	// Before is the snapshot content (undo source). Empty for new files.
-	Before string `json:"before,omitempty"`
-	// After is the content at end of turn (verification for undo of new files).
-	After string `json:"after,omitempty"`
-	// ReversePatch is the diff-match-patch text that maps After -> Before.
-	// Applied to the current disk content on undo (fuzzy, may partially fail).
-	ReversePatch string `json:"reverse_patch,omitempty"`
-	// Undone is set once an undo has been applied for this file.
-	Undone bool `json:"undone,omitempty"`
+	Deletions int `json:"deletions"`
 }
 
 // TurnChanges is the persistent balloon of one finished turn.
@@ -163,34 +154,12 @@ func unifiedFromDiffs(path string, diffs []diffmatchpatch.Diff) (string, int, in
 	return sb.String(), additions, deletions
 }
 
-// MakeReversePatch builds the diff-match-patch text mapping after -> before,
-// used by undo. Empty when both sides are equal.
-func MakeReversePatch(after, before string) string {
-	if after == before {
-		return ""
-	}
-	dmp := newDMP()
-	return dmp.PatchToText(dmp.PatchMake(after, before))
-}
-
-// ApplyReversePatch applies a reverse patch to the current content.
-// Returns the restored text and per-hunk applied flags.
-func ApplyReversePatch(reversePatch, current string) (string, []bool, error) {
-	dmp := newDMP()
-	patches, err := dmp.PatchFromText(reversePatch)
-	if err != nil {
-		return "", nil, err
-	}
-	out, applied := dmp.PatchApply(patches, current)
-	return out, applied, nil
-}
-
 // currentState describes what is on disk right now for a tracked path.
 type currentState struct {
 	exists   bool
-	binary    bool
-	tooLarge  bool
-	content   string
+	binary   bool
+	tooLarge bool
+	content  string
 }
 
 func statCurrent(absPath string) currentState {
@@ -216,8 +185,7 @@ func statCurrent(absPath string) currentState {
 //   - on disk, marked new -> new (full content as + diff when textual).
 //   - on disk, binary/too_large -> listed without textual diff.
 //   - on disk, textual, identical to snapshot -> skipped (merely read).
-//   - on disk, textual, different -> modified with unified diff + reverse
-//     patch for undo.
+//   - on disk, textual, different -> modified with unified diff.
 func BuildChanged(tracked []TrackedFile, cwd string) []ChangedFile {
 	out := []ChangedFile{}
 	for _, tf := range tracked {
@@ -234,7 +202,6 @@ func BuildChanged(tracked []TrackedFile, cwd string) []ChangedFile {
 			out = append(out, ChangedFile{
 				Path: tf.Path, Rel: rel, Status: "deleted",
 				Diff: diff, Deletions: dels,
-				Before: tf.Before,
 			})
 			continue
 		}
@@ -251,7 +218,6 @@ func BuildChanged(tracked []TrackedFile, cwd string) []ChangedFile {
 			out = append(out, ChangedFile{
 				Path: tf.Path, Rel: rel, Status: "new",
 				Diff: diff, Additions: adds,
-				After: cur.content,
 			})
 			continue
 		}
@@ -262,7 +228,6 @@ func BuildChanged(tracked []TrackedFile, cwd string) []ChangedFile {
 			}
 			out = append(out, ChangedFile{
 				Path: tf.Path, Rel: rel, Status: status,
-				Before: tf.Before,
 			})
 			continue
 		}
@@ -273,8 +238,6 @@ func BuildChanged(tracked []TrackedFile, cwd string) []ChangedFile {
 		out = append(out, ChangedFile{
 			Path: tf.Path, Rel: rel, Status: "modified",
 			Diff: diff, Additions: adds, Deletions: dels,
-			Before: tf.Before, After: cur.content,
-			ReversePatch: MakeReversePatch(cur.content, tf.Before),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })

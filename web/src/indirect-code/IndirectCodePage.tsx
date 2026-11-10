@@ -416,9 +416,6 @@ export default function IndirectCodePage() {
   const turnChanges = createTurnChanges({
     send: (payload) => relay.send(payload),
     getSessionId: () => activeSessionId(),
-    getHostId: () => hosts.activeHostId(),
-    toast: notice.toast,
-    showConfirm: modals.showConfirm,
   });
 
   const composer = createComposer({
@@ -897,12 +894,6 @@ export default function IndirectCodePage() {
       case "turn_changes": {
         if (msg.sessionId && msg.sessionId === activeSessionId()) {
           turnChanges.noteTurnChanges(msg);
-        }
-        break;
-      }
-      case "turn_changes_undone": {
-        if (msg.sessionId && msg.sessionId === activeSessionId()) {
-          turnChanges.noteUndone(msg);
         }
         break;
       }
