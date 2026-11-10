@@ -5159,14 +5159,22 @@
 
     function parseDateString(str) {
       const s = String(str);
-      const rawMs = origDateParse.call(OrigDate, s);
-      if (Number.isNaN(rawMs)) return NaN;
       if (/^\s*[+-]?\d{4,6}(?:-\d{2}(?:-\d{2})?)?\s*$/.test(s)) {
-        return rawMs;
+        return origDateParse.call(OrigDate, s);
       }
       if (/(?:Z|GMT|UTC|[+-]\d{1,2}(?::?\d{2})?)\s*(?:\([^)]*\))?\s*$/i.test(s)) {
-        return rawMs;
+        return origDateParse.call(OrigDate, s);
       }
+      const trimmed = s.trim();
+      const utcCandidate = /^\d{4}-\d{2}-\d{2}[T ]/.test(trimmed)
+        ? trimmed.replace(/^(\d{4}-\d{2}-\d{2}) /, "$1T") + "Z"
+        : trimmed + " GMT";
+      const utcMs = origDateParse.call(OrigDate, utcCandidate);
+      if (!Number.isNaN(utcMs)) {
+        return localFieldsToUTCMs(utcMs);
+      }
+      const rawMs = origDateParse.call(OrigDate, s);
+      if (Number.isNaN(rawMs)) return NaN;
       return localFieldsToUTCMs(rawMs);
     }
 

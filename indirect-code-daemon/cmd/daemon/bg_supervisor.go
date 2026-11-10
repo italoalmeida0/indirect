@@ -310,6 +310,9 @@ func (b *bgSupervisor) onRegister(m bgRegisterMsg) {
 	if b.jobs == nil {
 		b.jobs = map[string]*bgJob{}
 	}
+	if j.Runner && runner.ReadDisposition(b.rootDir(), j.ID) == "" {
+		_ = runner.WriteDisposition(b.rootDir(), j.ID, runner.DispBackground)
+	}
 	if err := b.writePidfile(j); err != nil {
 		if j.stop != nil {
 			j.stop()

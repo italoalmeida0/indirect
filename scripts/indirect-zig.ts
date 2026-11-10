@@ -268,3 +268,10 @@ export async function ensureZig(): Promise<string> {
 export function macosFrameworkDir(daemonDir: string): string {
   return join(daemonDir, "packages", "qjs", "lib", "macos_frameworks");
 }
+
+// Stub libresolv.a for cross-linking darwin targets from non-macOS hosts
+// without shadowing the real macOS SDK libresolv on native darwin builds.
+export function macosLinkStubDir(daemonDir: string, goarch: string): string {
+  const arch = goarch === "arm64" ? "aarch64_macos" : "x86_64_macos";
+  return join(daemonDir, "packages", "qjs", "lib", "macos_link_stubs", arch);
+}

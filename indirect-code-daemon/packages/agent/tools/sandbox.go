@@ -1112,6 +1112,9 @@ func canonical(p string) (string, error) {
 			fi, lerr := os.Lstat(cand)
 			if lerr != nil {
 				if hops > 0 && errors.Is(lerr, os.ErrNotExist) {
+					if evaled, eerr := filepath.EvalSymlinks(built); eerr == nil {
+						built = filepath.Clean(evaled)
+					}
 					return filepath.Clean(filepath.Join(append([]string{built}, parts[idx:]...)...)), nil
 				}
 				return "", lerr
