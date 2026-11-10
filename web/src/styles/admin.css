@@ -1,0 +1,42 @@
+/* Administration: organization hub and operations. */
+
+/* ===== Organization hub =====
+ * Installation settings keep their section rail visible on desktop and turn
+ * into a compact two-column launcher on narrow screens. */
+.org-page { min-width: 0; }
+.org-hub { display: grid; grid-template-columns: 264px minmax(0, 1fr); align-items: start; gap: 24px; }
+.org-hub-nav { position: sticky; top: 5rem; display: flex; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); }
+.org-hub-link { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 10px; border: 1px solid transparent; border-radius: var(--radius-control); text-align: left; color: var(--text-secondary); cursor: pointer; transition: background-color 140ms, border-color 140ms, color 140ms; }
+.org-hub-link:hover { background: var(--surface-muted); color: var(--foreground); }
+.org-hub-link[aria-current="true"] { background: var(--accent-subtle); color: var(--foreground); }
+.org-hub-link:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.org-hub-link-icon { display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; flex-shrink: 0; margin-top: 1px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); color: var(--text-muted); transition: color 140ms, border-color 140ms, background-color 140ms; }
+.org-hub-link[aria-current="true"] .org-hub-link-icon { color: var(--accent-strong); border-color: color-mix(in oklab, var(--accent) 30%, var(--border)); background: var(--surface); }
+.org-hub-link-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; padding-top: 1px; }
+.org-hub-link-title { font-size: var(--text-xs); font-weight: 500; line-height: 1.35; color: inherit; }
+.org-hub-link-hint { font-size: var(--text-2xs); line-height: 1.5; color: var(--text-muted); }
+.org-hub-link[aria-current="true"] .org-hub-link-hint { color: var(--text-secondary); }
+.org-hub-link-chevron { margin: 7px 0 0 auto; flex-shrink: 0; color: var(--text-muted); }
+.org-hub-link[aria-current="true"] .org-hub-link-chevron { color: var(--accent-strong); }
+.org-hub-content { min-width: 0; }
+.org-hub-content > * { margin: 0; }
+@media (max-width: 900px) {
+  .org-hub { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .org-hub-nav { position: static; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; }
+  .org-hub-link { align-items: center; padding: 9px; }
+  .org-hub-link-icon { width: 26px; height: 26px; margin-top: 0; }
+  .org-hub-link-hint, .org-hub-link-chevron { display: none; }
+  .org-hub-link-title { font-size: var(--text-xs); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .org-hub-link, .org-hub-link-icon { transition: none; }
+}
+
+/* Operational counters read as a row of metric tiles instead of loose text. */
+.ops-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ops-stat { min-width: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-subtle); }
+.ops-stat dt { color: var(--text-secondary); font-size: var(--text-xs); font-weight: 500; line-height: 1.4; }
+.ops-stat dd { margin-top: 6px; color: var(--foreground); font-family: var(--font-code); font-size: 20px; line-height: 1.25; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+@media (min-width: 640px) {
+  .ops-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

@@ -86,7 +86,7 @@ import assert from "node:assert/strict";
  const commands=Array.from({length:12},(_,i)=>[
    {type:'tool_call',toolId:`cmd${i}`,toolName:i%2?'exec_script':'bash',toolArgs:'{}'},
    {type:'tool_result',toolId:`cmd${i}`,toolResult:'done'},
-   {type:'text',text:`Step ${i} completed`},
+   ...(i<11?[{type:'text',text:`Step ${i} completed`}]:[]),
  ]).flat();
  await send(commands);
  assert.deepEqual(await page.locator('[data-toolseg] > button').allTextContents(),['Ran 5 commands','Ran 5 commands','Ran 2 commands']);

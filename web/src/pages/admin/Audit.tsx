@@ -1,7 +1,7 @@
 import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "../../catalog";
 import { For, Show } from "solid-js";
 
-import { PageTitle } from "../../index";
+import { PageTitle } from "../../chrome";
 import { Badge, Card, EmptyState, Icons } from "../../ui";
 import { UsageGrid, timeFormatter } from "../../aggrid";
 import type { ColDef } from "ag-grid-community";
@@ -63,9 +63,9 @@ function formatMeta(meta?: string) {
         <div class="flex items-center gap-1.5 flex-wrap">
           <For each={entries}>
             {([k, v]) => (
-              <span class="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-elev border border-line text-ink-300">
-                <span class="text-ink-500">{k}:</span>
-                <span class="font-mono text-ink-200 truncate max-w-[140px]">{String(v)}</span>
+              <span class="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-surface-muted border border-line text-fg-secondary">
+                <span class="text-fg-muted">{k}:</span>
+                <span class="font-mono text-fg truncate max-w-[140px]">{String(v)}</span>
               </span>
             )}
           </For>

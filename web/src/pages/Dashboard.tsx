@@ -4,7 +4,6 @@ import {
   ErrorBoundary,
   For,
   Show,
-  Suspense,
   type JSX,
   type Resource,
 } from "solid-js";
@@ -32,9 +31,9 @@ import { usal, usalItems } from "../motion";
 import {
   Card,
   Btn,
+  CopyButton,
   Icon,
   Icons,
-  copyWithToast,
 } from "../ui";
 
 /** Compare the selected window with the immediately preceding equal window. */
@@ -142,16 +141,14 @@ export default function DashboardPage() {
           />
         )}
       >
-        <Suspense fallback={<OverviewSkeleton spend={showUsd()} />}>
-          <OverviewBody
-            series={series}
-            previous={previous}
-            keys={keys}
-            filters={filters}
-            showUsd={showUsd()}
-            onRetry={retryOverview}
-          />
-        </Suspense>
+        <OverviewBody
+          series={series}
+          previous={previous}
+          keys={keys}
+          filters={filters}
+          showUsd={showUsd()}
+          onRetry={retryOverview}
+        />
       </ErrorBoundary>
     </div>
   );
@@ -166,17 +163,17 @@ function OverviewBody(props: {
   onRetry: () => void;
 }): JSX.Element {
   const data = createMemo(() => {
-    const result = props.series();
+    const result = props.series.latest;
     return result?.ok ? result : undefined;
   });
   const error = createMemo(() => {
-    const result = props.series();
+    const result = props.series.latest;
     return result && !result.ok ? result.error : undefined;
   });
   // Stable identities: the chart, heatmap and delta memos all read these, so
   // every unrelated signal (theme, policy, a sibling card) reused the array.
   const view = createMemo(() => data()?.points ?? []);
-  const comparison = createMemo(() => props.previous.loading ? [] : props.previous()?.points ?? []);
+  const comparison = createMemo(() => props.previous.loading ? [] : props.previous.latest?.points ?? []);
   // Keep the three buckets visible alongside the requested combined headline.
   const winIn = createMemo(() =>
     view().reduce((s, d) => s + (d.in_tok ?? 0), 0),
@@ -236,12 +233,19 @@ function OverviewBody(props: {
       <Show when={error()}>
         {(message) => <OverviewError message={message()} onRetry={props.onRetry} />}
       </Show>
-      <AnalyticsHistoryNotice history={data()?.history} previous={props.previous()?.history} />
+      <AnalyticsHistoryNotice history={data()?.history} previous={props.previous.latest?.history} />
 
       {/* Keep the previous window visible while refreshing. NOT keyed: a
           refetch swaps values inside the mounted cards, so the entrance never
           replays and the numbers animate from what is already on screen. */}
-      <Show when={data()}>
+      <Show
+        when={data()}
+        fallback={
+          <Show when={!error()}>
+            <OverviewSkeleton spend={props.showUsd} />
+          </Show>
+        }
+      >
         {(current) => (
           <div
             class={`overview-charts grid grid-cols-1 ${props.showUsd ? "md:grid-cols-2" : ""} gap-5 mb-5`}
@@ -355,7 +359,7 @@ function OverviewBody(props: {
 
         <Card class="p-5 min-w-0">
           <div class="mb-4">
-            <h2 class="text-sm font-semibold text-ink-100">
+            <h2 class="text-sm font-medium text-fg">
               Endpoint configuration
             </h2>
           </div>
@@ -368,7 +372,7 @@ function OverviewBody(props: {
               label="Anthropic-compatible"
               value={`${location.origin}/anthropic/v1`}
             />
-            <Show when={props.keys()?.length === 0}>
+            <Show when={props.keys.latest?.length === 0}>
               <button
                 onClick={() => navigate("/keys")}
                 class="ui-button ui-button-primary group mt-1 w-full justify-between"
@@ -393,10 +397,10 @@ function OverviewError(props: { message: string; onRetry: () => void }): JSX.Ele
   return (
     <Card class="overview-error p-4 sm:p-5 mb-5">
       <div class="overview-error-row" role="alert">
-        <Icon name="lucide:circle-alert" size={18} class="overview-error-icon text-amber-500" />
+        <Icon name="lucide:circle-alert" size={18} class="overview-error-icon text-warning" />
         <div class="min-w-0 flex-1">
-          <p class="text-sm font-medium text-ink-100">Usage analytics could not be loaded</p>
-          <p class="text-xs text-ink-400 mt-1">
+          <p class="text-sm font-medium text-fg">Usage analytics could not be loaded</p>
+          <p class="text-xs text-fg-secondary mt-1">
             {props.message.replace(/\.$/, "")}. Retry the selected period.
           </p>
         </div>
@@ -499,19 +503,12 @@ function OverviewSkeleton(props: { spend: boolean }): JSX.Element {
 function EndpointRow(props: { label: string; value: string }): JSX.Element {
   return (
     <div class="min-w-0">
-      <div class="text-xs font-medium text-ink-400 mb-1.5">{props.label}</div>
-      <div class="min-w-0 flex items-center justify-between rounded-xl bg-elev border border-line pl-3.5 pr-1.5 py-1.5 gap-2 transition-colors hover:border-ink-600 focus-within:border-brand-500">
-        <span class="text-xs text-ink-200 select-all font-mono truncate min-w-0 flex-1">
+      <div class="text-xs font-medium text-fg-secondary mb-1.5">{props.label}</div>
+      <div class="min-w-0 flex items-center justify-between rounded-control bg-surface-muted border border-line pl-3.5 pr-1.5 py-1.5 gap-2 transition-colors hover:border-line-strong focus-within:border-accent">
+        <span class="text-xs text-fg select-all font-mono truncate min-w-0 flex-1">
           {props.value}
         </span>
-        <button
-          type="button"
-          onClick={() => copyWithToast(props.value)}
-          class="h-7 w-7 shrink-0 rounded-lg bg-card/60 border border-line/60 flex items-center justify-center text-ink-400 hover:text-ink-100 hover:bg-card transition-colors cursor-pointer"
-          title="Copy endpoint URL"
-        >
-          <Icon name={Icons.copy} size={13} />
-        </button>
+        <CopyButton text={props.value} label="Copy endpoint URL" />
       </div>
     </div>
   );

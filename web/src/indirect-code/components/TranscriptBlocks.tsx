@@ -1,5 +1,6 @@
 import { createEffect, createMemo, For, Show, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
+import { press } from "../../ds/motion/press";
 import { createDisclosure, DisclosureBody } from "./Disclosure";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { followTail } from "../utils/scrollMemory";
@@ -70,17 +71,18 @@ function renderThinkingRow(
     <div style={hidden() ? { display: "none" } : undefined} data-thinking-row={key}>
       <button
         type="button"
+        onPointerDown={(e) => press(e.currentTarget)}
         onClick={toggle}
         aria-expanded={open()}
         aria-label={label()}
-        class="group/tool w-full flex items-center gap-2 pl-1 pr-1.5 py-1 rounded-lg cursor-pointer hover:bg-ink-900/70 text-[13px] text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500"
+        class="group/tool w-full flex items-center gap-2 pl-1 pr-1.5 py-1 rounded-lg cursor-pointer hover:bg-ink-900/70 text-[13px] text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-brand-500 transition-colors"
       >
-        <span class="text-ink-500 shrink-0">{label()}</span>
+        <span class={`shrink-0 ${live() ? "ui-shimmer font-medium" : "text-ink-500"}`}>{label()}</span>
         <span class="flex-1" />
         <Iconify
           icon="lucide:chevron-down"
           size={12}
-          class={`shrink-0 text-ink-600 transition-transform ${open() ? "rotate-180" : ""}`}
+          class={`shrink-0 text-ink-600 transition-transform duration-150 ${open() ? "rotate-180" : ""}`}
         />
       </button>
       <DisclosureBody open={open()}>
@@ -138,6 +140,7 @@ function renderTurnAggregate(
   return (
     <div class="w-full border-t border-line/60 overflow-hidden mt-1">
       <button
+        onPointerDown={(e) => press(e.currentTarget)}
         onClick={toggle}
         class="w-full flex items-center gap-2 px-3 py-2 hover:bg-ink-900/60 transition-colors cursor-pointer text-left"
       >
@@ -149,7 +152,7 @@ function renderTurnAggregate(
         >
           <Iconify icon="lucide:bot" size={14} class="shrink-0 text-ink-500" />
         </Show>
-        <span class="text-[13px] font-medium text-ink-300 truncate flex-1 min-w-0">
+        <span class={`text-[13px] font-medium truncate flex-1 min-w-0 ${running() ? "ui-shimmer" : "text-ink-300"}`}>
           {summary()}
         </span>
         <Show when={ctx.specialProgress(series.units)}>
@@ -162,7 +165,7 @@ function renderTurnAggregate(
         <Iconify
           icon="lucide:chevron-down"
           size={12}
-          class={`shrink-0 text-ink-600 transition-transform ${open() ? "rotate-180" : ""}`}
+          class={`shrink-0 text-ink-600 transition-transform duration-150 ${open() ? "rotate-180" : ""}`}
         />
       </button>
       <DisclosureBody open={open()}>

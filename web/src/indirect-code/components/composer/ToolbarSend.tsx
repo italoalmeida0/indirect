@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
+import { press } from "../../../ds/motion/press";
 import { useComposerCtx, useSession, useTranscriptCtx } from "../../ctx";
 
 export function ToolbarSend() {
@@ -10,6 +11,9 @@ export function ToolbarSend() {
     <div class="flex shrink-0 items-center gap-1.5">
       <Show when={t.sessionStatus() === "running"}>
         <button
+          onPointerDown={(e) => {
+            if (!e.currentTarget.disabled) press(e.currentTarget);
+          }}
           onClick={t.cancelCurrentTurn}
           disabled={t.turnActivity()?.status === "cancelling"}
           class="ui-button ui-button-danger ui-button-sm w-8 h-8 p-0 disabled:opacity-60"
@@ -20,6 +24,9 @@ export function ToolbarSend() {
         </button>
       </Show>
       <button
+        onPointerDown={(e) => {
+          if (!e.currentTarget.disabled) press(e.currentTarget);
+        }}
         onClick={c.sendPrompt}
         disabled={
           s.creatingSession() || c.sending() || c.preparingAttachments() > 0 || !c.activeModel() ||

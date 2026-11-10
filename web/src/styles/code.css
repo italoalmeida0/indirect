@@ -1,0 +1,318 @@
+/* Indirect Code workspace: syntax theme, markdown, transcript and composer chrome. */
+
+/* Highlight.js syntax theme */
+.hljs { color: var(--ink-100); background: transparent; }
+
+/* Remote Code chat: loading dots (chatbot dot-typing) */
+.dot-typing span { animation: rc-pulse-dot 1.4s infinite both; }
+.dot-typing span:nth-child(2) { animation-delay: 0.2s; }
+.dot-typing span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes rc-pulse-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* Remote Code: OS-style update progress slide (indeterminate bar) */
+@keyframes rc-update-slide {
+  from { margin-left: 0; }
+  to { margin-left: calc(100% - 33%); }
+}
+
+/* Live "Thinking Ns" shimmer (chatbot thinking-indicator) */
+.thinking-indicator { display: inline-flex; align-items: center; gap: 2px; }
+.thinking-indicator span {
+  width: 3px; height: 3px; border-radius: 9999px;
+  background: var(--ink-400); animation: rc-pulse-dot 1.2s infinite both;
+}
+/* Remote Code: delayed reconnect/offline banner (3s delay prevents layout flicker on brief reconnects) */
+@keyframes rc-delayed-banner {
+  from {
+    opacity: 0;
+    max-height: 0;
+    margin-bottom: 0;
+    overflow: hidden;
+    pointer-events: none;
+    visibility: hidden;
+  }
+  to {
+    opacity: 1;
+    max-height: 200px;
+    margin-bottom: 0.75rem;
+    overflow: visible;
+    pointer-events: auto;
+    visibility: visible;
+  }
+}
+.rc-delayed-banner {
+  opacity: 0;
+  max-height: 0;
+  margin-bottom: 0;
+  overflow: hidden;
+  pointer-events: none;
+  visibility: hidden;
+  animation: rc-delayed-banner 0.3s ease-out 3s forwards;
+}
+
+/* Indirect Code markdown (Tarnav output) — semantic tokens so both
+ * white/dark themes flip for free. Never hardcode hex here. */
+.rc-markdown { color: var(--ink-200); font-size: 0.875rem; line-height: 1.6; }
+.rc-markdown > *:first-child { margin-top: 0; }
+.rc-markdown > *:last-child { margin-bottom: 0; }
+.rc-markdown p { margin: 0 0 0.6rem; }
+.rc-markdown h1, .rc-markdown h2, .rc-markdown h3, .rc-markdown h4 {
+  color: var(--ink-100); font-weight: 650; line-height: 1.3;
+  margin: 0.9rem 0 0.4rem;
+}
+.rc-markdown h1 { font-size: 1.15rem; }
+.rc-markdown h2 { font-size: 1.05rem; }
+.rc-markdown h3 { font-size: 0.95rem; }
+.rc-markdown ul, .rc-markdown ol { margin: 0 0 0.6rem; padding-left: 1.25rem; }
+.rc-markdown li { margin: 0.15rem 0; }
+.rc-markdown li::marker { color: var(--ink-500); }
+.rc-markdown a { color: var(--brand-400); text-decoration: underline; text-underline-offset: 2px; }
+.rc-markdown code:not(pre code),
+[data-streamdown="inline-code"] {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8em; padding: 0.1rem 0.32rem; border-radius: 0.3rem;
+  background: var(--ink-800); color: var(--code-inline);
+}
+/* File icon inside inline code: baseline-aligned, icon keeps its own tone. */
+[data-streamdown="inline-code"] > svg {
+  vertical-align: -0.15em; margin-right: 0.3em;
+}
+html[data-theme="dark"] .rc-markdown code:not(pre code),
+html[data-theme="dark"] [data-streamdown="inline-code"] {
+  color: var(--code-inline);
+}
+html[data-theme="light"] .rc-markdown code:not(pre code),
+html[data-theme="light"] [data-streamdown="inline-code"] {
+  color: var(--code-inline);
+}
+/* Long user text stays inside its bubble, including unbroken base64/URLs. */
+.rc-user-bubble {
+  min-width: 0; max-width: 100%; max-height: 400px;
+  overflow-y: auto; overflow-wrap: anywhere;
+}
+.rc-markdown pre {
+  margin: 0 0 0.6rem; padding: 0.7rem 0.85rem; border-radius: 0.75rem;
+  background: var(--ink-900); border: 1px solid var(--line);
+  overflow-x: auto; font-size: 0.78rem; line-height: 1.55;
+}
+.rc-markdown pre code { background: transparent; padding: 0; color: inherit; }
+/* Compact code headers keep copy clear of the content on every screen. */
+.tarnav-codeblock {
+  position: relative; min-width: 0; max-width: 100%; margin-bottom: 0.8rem;
+  border: 1px solid var(--line); border-radius: 0.75rem; background: var(--ink-900);
+}
+.tarnav-code-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  min-height: 32px; padding: 3px 10px; border-bottom: 1px solid var(--line);
+  color: var(--ink-500); font-size: 11px; line-height: 1.4;
+}
+.tarnav-code-language { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tarnav-codeblock > .font-mono { border-radius: 0 0 0.75rem 0.75rem; scrollbar-gutter: auto; }
+.rc-markdown .tarnav-codeblock pre[data-streamdown="code-block"] {
+  margin: 0; border: 0; border-radius: 0; background: transparent;
+  overflow: visible; padding: 0.8rem 0.9rem;
+}
+.rc-markdown-control, .rc-msg-action {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0; min-width: 24px; min-height: 24px;
+}
+.rc-markdown-control {
+  width: 24px; height: 24px; padding: 4px; border: 0; border-radius: 4px;
+  color: var(--ink-500); background: transparent; cursor: pointer;
+  transition: color .15s, background-color .15s;
+}
+html:not(.mobile) .rc-markdown-control:hover, html.mobile .rc-markdown-control:active { color: var(--ink-100); background: var(--elev); }
+.rc-markdown-control:focus-visible, .rc-msg-action:focus-visible {
+  outline: 1px solid var(--ink-400); outline-offset: 1px;
+}
+.rc-markdown-control[data-copy-state="copied"] { color: var(--ink-100); }
+.rc-markdown-control[data-copy-state="error"] { color: var(--brand-400); }
+/* Reveal-on-hover on desktop; always visible on touch (no hover there). */
+html:not(.mobile) .rc-message-actions { opacity: 0; }
+html:not(.mobile) .group\/msg:hover .rc-message-actions,
+html:not(.mobile) .group\/msg:focus-within .rc-message-actions { opacity: 1; }
+html.mobile .rc-message-actions { opacity: 1; }
+
+/* Sidebar rows: pin/delete are hover-revealed on desktop. Touch devices have
+ * no hover, so the actions stay visible, in flow, and the timestamp is
+ * dropped to leave room for a comfortable target. */
+html.mobile .rc-sidebar .rc-row-actions {
+  opacity: 1;
+  position: static;
+  gap: 0.125rem;
+}
+html.mobile .rc-sidebar .rc-row-time { display: none; }
+html.mobile .rc-sidebar .rc-row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+}
+/* Minimum comfortable touch targets for the composer/workspace chrome. */
+html.mobile .rc-sidebar-toggle,
+html.mobile .rc-composer-add,
+html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
+.rc-markdown blockquote {
+  margin: 0 0 0.6rem; padding: 0.15rem 0 0.15rem 0.8rem;
+  border-left: 2px solid var(--line); color: var(--ink-400);
+}
+.rc-markdown table { width: 100%; border-collapse: collapse; margin: 0 0 0.6rem; font-size: 0.8rem; }
+.rc-markdown th, .rc-markdown td {
+  border: 1px solid var(--line); padding: 0.35rem 0.6rem; text-align: left;
+}
+.rc-markdown th { background: var(--ink-900); color: var(--ink-100); font-weight: 600; }
+.rc-markdown th[align="center"], .rc-markdown td[align="center"] { text-align: center; }
+.rc-markdown th[align="right"], .rc-markdown td[align="right"] { text-align: right; }
+.rc-markdown td { vertical-align: top; min-width: 5rem; overflow-wrap: anywhere; }
+.rc-table-wrap { margin: 0.85rem 0; min-width: 0; max-width: 100%; }
+.rc-table-scroll { border: 1px solid var(--line); border-radius: 0.65rem; }
+.rc-markdown .rc-table-scroll table { margin: 0; border: 0; border-spacing: 0; border-collapse: separate; }
+.rc-markdown .rc-table-scroll th, .rc-markdown .rc-table-scroll td {
+  border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  padding: 0.55rem 0.75rem;
+}
+.rc-markdown .rc-table-scroll tr > :last-child { border-right: 0; }
+.rc-markdown .rc-table-scroll tbody tr:last-child > td { border-bottom: 0; }
+.rc-markdown li:has(> input[type="checkbox"]) { list-style: none; }
+.rc-markdown input[type="checkbox"] {
+  appearance: none; display: inline-grid; place-content: center; vertical-align: -0.15em;
+  width: 1em; height: 1em; margin-right: 0.4em; border: 1px solid var(--line); border-radius: 50%;
+}
+.rc-markdown input[type="checkbox"]:checked::after {
+  content: ""; width: 0.5em; height: 0.25em; border: solid var(--ink-400); border-width: 0 0 1px 1px;
+  transform: translateY(-0.08em) rotate(-45deg);
+}
+.rc-markdown li:has(> input[type="checkbox"]:checked) { color: var(--ink-500); }
+.rc-markdown equation-block { display: block; max-width: 100%; overflow-x: auto; }
+.rc-markdown blockquote[data-callout] { border-color: var(--callout-color); color: var(--ink-200); font-style: normal; }
+.rc-callout-label { color: var(--callout-color); font-weight: 600; margin-bottom: 0.25rem; }
+[data-callout="note"] { --callout-color: var(--info); }
+[data-callout="tip"] { --callout-color: var(--success); }
+[data-callout="important"] { --callout-color: var(--tone-violet); }
+[data-callout="warning"] { --callout-color: var(--warning); }
+[data-callout="caution"] { --callout-color: var(--danger); }
+.rc-markdown img { max-width: 100%; border-radius: 0.6rem; }
+.rc-markdown hr { border: none; border-top: 1px solid var(--line); margin: 0.9rem 0; }
+
+/* text-xs modifier for .rc-markdown and renderer elements */
+.rc-markdown.text-xs,
+.rc-markdown .text-xs,
+.text-xs.rc-markdown,
+[data-streamdown].text-xs,
+.text-xs [data-streamdown] {
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.rc-markdown.text-xs p,
+.rc-markdown .text-xs p,
+.text-xs.rc-markdown p,
+.text-xs [data-streamdown] p {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  margin: 0 0 0.4rem;
+}
+.rc-markdown.text-xs h1, .rc-markdown .text-xs h1, .text-xs.rc-markdown h1, .text-xs [data-streamdown="heading-1"] {
+  font-size: 0.92rem !important;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 0.5rem 0 0.25rem !important;
+}
+.rc-markdown.text-xs h2, .rc-markdown .text-xs h2, .text-xs.rc-markdown h2, .text-xs [data-streamdown="heading-2"] {
+  font-size: 0.85rem !important;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 0.45rem 0 0.2rem !important;
+}
+.rc-markdown.text-xs h3, .rc-markdown .text-xs h3, .text-xs.rc-markdown h3, .text-xs [data-streamdown="heading-3"] {
+  font-size: 0.8rem !important;
+  font-weight: 650;
+  line-height: 1.3;
+  margin: 0.4rem 0 0.2rem !important;
+}
+.rc-markdown.text-xs h4, .rc-markdown .text-xs h4, .text-xs.rc-markdown h4, .text-xs [data-streamdown="heading-4"],
+.rc-markdown.text-xs h5, .rc-markdown .text-xs h5, .text-xs.rc-markdown h5, .text-xs [data-streamdown="heading-5"],
+.rc-markdown.text-xs h6, .rc-markdown .text-xs h6, .text-xs.rc-markdown h6, .text-xs [data-streamdown="heading-6"] {
+  font-size: 0.75rem !important;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 0.35rem 0 0.15rem !important;
+}
+.rc-markdown.text-xs ul, .rc-markdown.text-xs ol,
+.rc-markdown .text-xs ul, .rc-markdown .text-xs ol,
+.text-xs.rc-markdown ul, .text-xs.rc-markdown ol,
+.text-xs [data-streamdown="unordered-list"],
+.text-xs [data-streamdown="ordered-list"] {
+  margin: 0 0 0.4rem;
+  padding-left: 1rem;
+}
+.rc-markdown.text-xs li,
+.rc-markdown .text-xs li,
+.text-xs.rc-markdown li,
+.text-xs [data-streamdown="list-item"] {
+  margin: 0.1rem 0;
+  font-size: 0.75rem;
+}
+.rc-markdown.text-xs code:not(pre code),
+.rc-markdown .text-xs code:not(pre code),
+.text-xs.rc-markdown code:not(pre code),
+.text-xs [data-streamdown="inline-code"] {
+  font-size: 0.72rem !important;
+  padding: 0.05rem 0.25rem;
+}
+.rc-markdown.text-xs pre,
+.rc-markdown .text-xs pre,
+.text-xs.rc-markdown pre,
+.text-xs pre {
+  margin: 0 0 0.4rem;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+.rc-markdown.text-xs table,
+.rc-markdown .text-xs table,
+.text-xs.rc-markdown table,
+.text-xs [data-streamdown="table"] {
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+}
+.rc-markdown.text-xs th, .rc-markdown.text-xs td,
+.rc-markdown .text-xs th, .rc-markdown .text-xs td,
+.text-xs.rc-markdown th, .text-xs.rc-markdown td,
+.text-xs [data-streamdown="table-header-cell"],
+.text-xs [data-streamdown="table-cell"] {
+  font-size: 0.72rem !important;
+  padding: 0.2rem 0.4rem !important;
+}
+.rc-markdown.text-xs blockquote,
+.rc-markdown .text-xs blockquote,
+.text-xs.rc-markdown blockquote,
+.text-xs [data-streamdown="blockquote"] {
+  margin: 0 0 0.4rem;
+  padding: 0.1rem 0 0.1rem 0.6rem;
+  font-size: 0.75rem;
+}
+.text-xs.space-y-4 > * + *,
+.text-xs .space-y-4 > * + *,
+.rc-markdown.text-xs .space-y-4 > * + *,
+.rc-markdown .text-xs.space-y-4 > * + * {
+  margin-top: 0.45rem !important;
+}
+.hljs-comment, .hljs-quote { color: var(--code-com); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag { color: var(--code-kw); font-weight: 500; }
+.hljs-number, .hljs-literal, .hljs-variable, .hljs-template-variable { color: var(--code-num); }
+.hljs-string, .hljs-doctag { color: var(--code-str); }
+.hljs-title, .hljs-section, .hljs-selector-id { color: var(--code-fn); font-weight: 500; }
+.hljs-type, .hljs-class .hljs-title { color: var(--code-type); font-weight: 500; }
+.hljs-tag, .hljs-name, .hljs-attribute { color: var(--code-name); }
+.hljs-regexp, .hljs-link { color: var(--code-regex); }
+.hljs-symbol, .hljs-bullet { color: var(--code-op); }
+.hljs-built_in, .hljs-builtin-name { color: var(--code-builtin); }
+.hljs-meta { color: var(--code-meta); }
+.hljs-deletion { color: var(--danger); background: var(--danger-subtle); }
+.hljs-addition { color: var(--success); background: var(--success-subtle); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 500; }

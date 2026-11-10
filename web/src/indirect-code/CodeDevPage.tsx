@@ -85,17 +85,17 @@ function highlightJsonLine(line: string, searchMatch?: string): string {
           const colonIdx = match.lastIndexOf(":");
           const keyPart = match.slice(0, colonIdx);
           const colonPart = match.slice(colonIdx);
-          return `<span class="text-sky-300 font-semibold">${keyPart}</span><span class="text-ink-400">${colonPart}</span>`;
+          return `<span class="text-tone-blue font-medium">${keyPart}</span><span class="text-ink-400">${colonPart}</span>`;
         }
-        return `<span class="text-emerald-300">${match}</span>`;
+        return `<span class="text-success">${match}</span>`;
       }
       if (/true|false/.test(match)) {
-        return `<span class="text-amber-400 font-bold">${match}</span>`;
+        return `<span class="text-warning font-medium">${match}</span>`;
       }
       if (/null/.test(match)) {
-        return `<span class="text-rose-400 italic font-semibold">${match}</span>`;
+        return `<span class="text-danger italic font-medium">${match}</span>`;
       }
-      return `<span class="text-purple-300 font-mono">${match}</span>`;
+      return `<span class="text-tone-violet font-mono">${match}</span>`;
     },
   );
 
@@ -116,7 +116,7 @@ function highlightJsonLine(line: string, searchMatch?: string): string {
           }
           return part.replace(
             re,
-            `<mark class="bg-amber-400 text-ink-950 rounded px-0.5 font-bold">$1</mark>`,
+            `<mark class="bg-warning-subtle text-warning rounded px-0.5 font-medium">$1</mark>`,
           );
         })
         .join("");
@@ -192,11 +192,11 @@ function JsonHighlightViewer(props: {
       <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 gap-2 text-[11px]">
         <div class="flex items-center gap-2">
           <Show when={props.title}>
-            <span class="font-bold text-ink-300 uppercase tracking-wider text-[10px]">
+            <span class="font-medium text-ink-300 text-xs">
               {props.title}
             </span>
           </Show>
-          <span class="text-ink-500 text-[10px]">
+          <span class="text-ink-500 text-xs">
             {lines().length} lines • {new Blob([formattedStr()]).size} bytes
           </span>
         </div>
@@ -209,7 +209,7 @@ function JsonHighlightViewer(props: {
               placeholder="Find in JSON..."
               value={search()}
               onInput={(e) => setSearch(e.currentTarget.value)}
-              class="bg-ink-950 border border-line rounded px-2 py-0.5 text-[11px] text-ink-200 placeholder-ink-600 focus:outline-none focus:border-brand-500 w-36"
+              class="bg-ink-950 border border-line rounded px-2 py-0.5 text-xs text-ink-200 placeholder-ink-600 focus:outline-none focus:border-accent w-36"
             />
             <Show when={search()}>
               <button
@@ -224,7 +224,7 @@ function JsonHighlightViewer(props: {
           {/* Pretty / Compact toggle */}
           <button
             onClick={() => setIsCompact(!isCompact())}
-            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-[10px] cursor-pointer"
+            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-xs cursor-pointer"
             title="Toggle compact or pretty JSON"
           >
             {isCompact() ? "Pretty" : "Compact"}
@@ -233,7 +233,7 @@ function JsonHighlightViewer(props: {
           {/* Copy Button */}
           <button
             onClick={copyJson}
-            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-brand-400 rounded border border-line text-[10px] flex items-center gap-1 cursor-pointer"
+            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-accent rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
             title="Copy full JSON"
           >
             <Icon name={Icons.copy} size={11} />
@@ -243,7 +243,7 @@ function JsonHighlightViewer(props: {
           {/* Download Button */}
           <button
             onClick={downloadJson}
-            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-[10px] flex items-center gap-1 cursor-pointer"
+            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
             title="Download JSON file"
           >
             <Icon name={Icons.save} size={11} />
@@ -877,17 +877,17 @@ export default function CodeDevPage() {
       <header class="flex items-center justify-between px-4 py-2 bg-ink-900 border-b border-line shrink-0 gap-3 z-20">
         <div class="flex items-center gap-3 min-w-0">
           <div class="flex items-center gap-2">
-            <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-brand-500/20 text-brand-400 font-mono font-bold text-xs border border-brand-500/40 shadow-sm">
+            <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-accent-subtle text-accent font-mono font-medium text-xs border border-accent-border shadow-sm">
               DEV
             </span>
             <div class="flex flex-col">
-              <span class="font-bold text-sm tracking-tight flex items-center gap-1.5 font-mono">
-                INDIRECT CODE // NETWORK INSPECTOR
-                <span class="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-400 font-mono font-normal">
-                  CHROME DEVTOOLS STYLE
+              <span class="font-medium text-sm tracking-tight flex items-center gap-1.5 font-mono">
+                Indirect Code // Network Inspector
+                <span class="text-xs px-1.5 py-0.2 rounded bg-success-subtle text-success font-mono font-normal">
+                  DevTools style
                 </span>
               </span>
-              <span class="text-[11px] text-ink-400 font-mono">
+              <span class="text-xs text-ink-400 font-mono">
                 Exact AI Wire Payloads, Full System Prompt & Native Tools
               </span>
             </div>
@@ -901,7 +901,7 @@ export default function CodeDevPage() {
             <select
               value={hosts.activeHostId()}
               onChange={(e) => hosts.setActiveHostId(e.currentTarget.value)}
-              class="bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-brand-500"
+              class="bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-accent"
             >
               <For each={hosts.hosts()}>
                 {(h) => (
@@ -919,7 +919,7 @@ export default function CodeDevPage() {
             <select
               value={selectedSessionId()}
               onChange={(e) => setSelectedSessionId(e.currentTarget.value)}
-              class="bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-brand-500 truncate"
+              class="bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-accent truncate"
             >
               <option value="">-- No session (Default) --</option>
               <For each={sessions()}>
@@ -936,18 +936,18 @@ export default function CodeDevPage() {
           {/* Status Badge */}
           <Show when={activeSession()}>
             <span
-              class={`text-[11px] px-2 py-0.5 rounded font-mono font-semibold flex items-center gap-1.5 ${
+              class={`text-xs px-2 py-0.5 rounded font-mono font-medium flex items-center gap-1.5 ${
                 activeSession()?.status === "running"
-                  ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 animate-pulse"
+                  ? "bg-success-subtle text-success border border-success-border animate-pulse"
                   : "bg-ink-800 text-ink-400 border border-line"
               }`}
             >
               <span
                 class={`w-1.5 h-1.5 rounded-full ${
-                  activeSession()?.status === "running" ? "bg-emerald-400" : "bg-ink-500"
+                  activeSession()?.status === "running" ? "bg-success" : "bg-ink-500"
                 }`}
               />
-              {activeSession()?.status?.toUpperCase()}
+              {activeSession()?.status}
             </span>
           </Show>
         </div>
@@ -956,7 +956,7 @@ export default function CodeDevPage() {
         <div class="flex items-center gap-2">
           {/* Preserve Log Toggle */}
           <label
-            class="flex items-center gap-1 text-[11px] text-ink-400 hover:text-ink-200 cursor-pointer font-mono mr-2"
+            class="flex items-center gap-1 text-xs text-ink-400 hover:text-ink-200 cursor-pointer font-mono mr-2"
             title="Preserve captured logs across session switches"
           >
             <input
@@ -971,25 +971,25 @@ export default function CodeDevPage() {
           {/* Chrome-Style Clear Network Log Button */}
           <button
             onClick={clearAllNetworkLogs}
-            class="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-ink-800 hover:bg-rose-950/40 hover:text-rose-400 text-ink-300 rounded border border-line font-mono transition-colors cursor-pointer"
+            class="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-ink-800 hover:bg-danger-subtle hover:text-danger text-ink-300 rounded border border-line font-mono transition-colors cursor-pointer"
             title="Clear all recorded network payloads and events (Frontend-only)"
           >
-            <Icon name="lucide:ban" size={13} class="text-rose-400" />
+            <Icon name="lucide:ban" size={13} class="text-danger" />
             Clear Log
           </button>
 
           {/* WS Connection Indicator */}
           <span
-            class={`text-[10px] font-mono px-2 py-0.5 rounded flex items-center gap-1 ${
+            class={`text-xs font-mono px-2 py-0.5 rounded flex items-center gap-1 ${
               relay.wsOpen()
-                ? "bg-emerald-950 text-emerald-400 border border-emerald-800"
-                : "bg-rose-950 text-rose-400 border border-rose-800"
+                ? "bg-success-subtle text-success border border-success-border"
+                : "bg-danger-subtle text-danger border border-danger-border"
             }`}
           >
             <span
-              class={`w-1.5 h-1.5 rounded-full ${relay.wsOpen() ? "bg-emerald-400" : "bg-rose-400"}`}
+              class={`w-1.5 h-1.5 rounded-full ${relay.wsOpen() ? "bg-success" : "bg-danger"}`}
             />
-            {relay.wsOpen() ? "RELAY LIVE" : "DISCONNECTED"}
+            {relay.wsOpen() ? "Relay live" : "Disconnected"}
           </span>
 
           <button
@@ -1009,7 +1009,7 @@ export default function CodeDevPage() {
           onClick={() => setActiveTab("payloads")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "payloads"
-              ? "border-brand-500 text-brand-400 bg-brand-500/10"
+              ? "border-accent text-accent bg-accent-subtle"
               : "border-transparent text-ink-400 hover:text-ink-200"
           }`}
         >
@@ -1021,14 +1021,14 @@ export default function CodeDevPage() {
           onClick={() => setActiveTab("stream")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "stream"
-              ? "border-brand-500 text-brand-400 bg-brand-500/10"
+              ? "border-accent text-accent bg-accent-subtle"
               : "border-transparent text-ink-400 hover:text-ink-200"
           }`}
         >
           <Icon name={Icons.play} size={14} />
           Live Event Stream ({liveEvents().length})
           <Show when={activeSession()?.status === "running"}>
-            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+            <span class="w-2 h-2 rounded-full bg-success animate-ping" />
           </Show>
         </button>
 
@@ -1036,7 +1036,7 @@ export default function CodeDevPage() {
           onClick={() => setActiveTab("system")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "system"
-              ? "border-brand-500 text-brand-400 bg-brand-500/10"
+              ? "border-accent text-accent bg-accent-subtle"
               : "border-transparent text-ink-400 hover:text-ink-200"
           }`}
         >
@@ -1048,7 +1048,7 @@ export default function CodeDevPage() {
           onClick={() => setActiveTab("tools")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "tools"
-              ? "border-brand-500 text-brand-400 bg-brand-500/10"
+              ? "border-accent text-accent bg-accent-subtle"
               : "border-transparent text-ink-400 hover:text-ink-200"
           }`}
         >
@@ -1060,7 +1060,7 @@ export default function CodeDevPage() {
           onClick={() => setActiveTab("wal")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "wal"
-              ? "border-brand-500 text-brand-400 bg-brand-500/10"
+              ? "border-accent text-accent bg-accent-subtle"
               : "border-transparent text-ink-400 hover:text-ink-200"
           }`}
         >
@@ -1072,7 +1072,7 @@ export default function CodeDevPage() {
           onClick={() => setActiveTab("frames")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "frames"
-              ? "border-brand-500 text-brand-400 bg-brand-500/10"
+              ? "border-accent text-accent bg-accent-subtle"
               : "border-transparent text-ink-400 hover:text-ink-200"
           }`}
         >
@@ -1095,11 +1095,11 @@ export default function CodeDevPage() {
                   placeholder="Filter requests..."
                   value={requestFilter()}
                   onInput={(e) => setRequestFilter(e.currentTarget.value)}
-                  class="bg-ink-950 border border-line rounded px-2.5 py-1 text-xs font-mono text-ink-200 placeholder-ink-600 focus:outline-none focus:border-brand-500 flex-1"
+                  class="bg-ink-950 border border-line rounded px-2.5 py-1 text-xs font-mono text-ink-200 placeholder-ink-600 focus:outline-none focus:border-accent flex-1"
                 />
                 <button
                   onClick={clearAllNetworkLogs}
-                  class="p-1 hover:bg-rose-900/40 rounded text-ink-400 hover:text-rose-400 cursor-pointer"
+                  class="p-1 hover:bg-danger-subtle rounded text-ink-400 hover:text-danger cursor-pointer"
                   title="Clear requests log"
                 >
                   <Icon name={Icons.trash} size={14} />
@@ -1113,7 +1113,7 @@ export default function CodeDevPage() {
                   fallback={
                     <div class="p-8 text-center text-xs text-ink-500 flex flex-col items-center gap-2">
                       <span>No requests captured yet.</span>
-                      <span class="text-[11px] text-ink-600">
+                      <span class="text-xs text-ink-600">
                         Recordings stay in your browser until you clear them. Dispatch a real prompt or click "Smoke Test" below!
                       </span>
                     </div>
@@ -1126,45 +1126,45 @@ export default function CodeDevPage() {
                         class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-[3px] ${
                           selectedPayload()?.id === req.id
                             ? req.isSimulated
-                              ? "bg-amber-500/15 border-amber-500 text-ink-100"
-                              : "bg-brand-500/15 border-brand-500 text-ink-100"
+                              ? "bg-warning-subtle border-warning text-ink-100"
+                              : "bg-accent-subtle border-accent text-ink-100"
                             : req.isSimulated
-                              ? "border-amber-500/40 hover:bg-ink-800/40 text-ink-300"
+                              ? "border-warning-border hover:bg-ink-800/40 text-ink-300"
                               : "border-transparent hover:bg-ink-800/40 text-ink-300"
                         }`}
                       >
-                        <div class="flex items-center justify-between text-[11px]">
+                        <div class="flex items-center justify-between text-xs">
                           <div class="flex items-center gap-1.5">
                             <span
                               class={`w-2 h-2 rounded-full ${
                                 req.isSimulated
-                                  ? "bg-amber-400"
+                                  ? "bg-warning"
                                   : req.stopReason === "error"
-                                    ? "bg-rose-500"
-                                    : "bg-emerald-400"
+                                    ? "bg-danger"
+                                    : "bg-success"
                               }`}
                             />
-                            <span class="font-bold text-ink-200">
+                            <span class="font-medium text-ink-200">
                               POST /messages
                             </span>
                           </div>
-                          <span class="text-[10px] text-ink-500 tabular-nums">
+                          <span class="text-xs text-ink-500 tabular-nums">
                             {new Date(req.timestamp).toLocaleTimeString()}
                           </span>
                         </div>
 
-                        <div class="flex items-center justify-between text-[11px]">
+                        <div class="flex items-center justify-between text-xs">
                           <span class="truncate text-ink-400">
                             {req.model || "default"}
                           </span>
                           <Show when={req.isSimulated}>
-                            <span class="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30 flex items-center gap-1">
-                              <Icon name="lucide:flame" size={10} /> SMOKE
+                            <span class="text-2xs px-1 py-0.2 rounded bg-warning-subtle text-warning font-medium border border-warning-border flex items-center gap-1">
+                              <Icon name="lucide:flame" size={10} /> Smoke
                             </span>
                           </Show>
                         </div>
 
-                        <div class="flex items-center gap-1.5 text-[10px] text-ink-500 mt-0.5">
+                        <div class="flex items-center gap-1.5 text-xs text-ink-500 mt-0.5">
                           <span>T#{req.turnIndex} S#{req.step}</span>
                           <span>•</span>
                           <span>{req.tools?.length || 0} tools</span>
@@ -1172,7 +1172,7 @@ export default function CodeDevPage() {
                           <span>{req.messages?.length || 0} msgs</span>
                           <Show when={req.usage?.outputTokens}>
                             <span>•</span>
-                            <span class="text-emerald-400 font-medium">
+                            <span class="text-success font-medium">
                               {req.usage.outputTokens} tok
                             </span>
                           </Show>
@@ -1201,11 +1201,11 @@ export default function CodeDevPage() {
                     <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 font-mono text-xs">
                       <div class="flex items-center gap-3">
                         <Show when={req().isSimulated}>
-                          <span class="px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40 text-[11px] flex items-center gap-1">
-                            <Icon name="lucide:flame" size={12} /> SMOKE SIMULATION (0 TOKENS)
+                          <span class="px-2 py-0.5 rounded bg-warning-subtle text-warning font-medium border border-warning-border text-xs flex items-center gap-1">
+                            <Icon name="lucide:flame" size={12} /> Smoke simulation (0 tokens)
                           </span>
                         </Show>
-                        <span class="font-bold text-brand-400">
+                        <span class="font-medium text-accent">
                           {req().endpoint || "POST /messages"}
                         </span>
                         <span class="text-ink-400">
@@ -1213,7 +1213,7 @@ export default function CodeDevPage() {
                         </span>
                         <Show when={req().reasoning}>
                           <span class="text-ink-400">
-                            Effort: <strong class="text-amber-300">{req().reasoning}</strong>
+                            Effort: <strong class="text-warning">{req().reasoning}</strong>
                           </span>
                         </Show>
                         <span class="text-ink-400">
@@ -1222,19 +1222,19 @@ export default function CodeDevPage() {
                       </div>
 
                       <div class="flex items-center gap-2">
-                        <span class="text-ink-500 text-[11px]">
+                        <span class="text-ink-500 text-xs">
                           {new Date(req().timestamp).toLocaleTimeString()}
                         </span>
                       </div>
                     </div>
 
                     {/* Inspector Sub-Tabs (Chrome Network style) */}
-                    <div class="flex items-center px-4 bg-ink-900/60 border-b border-line shrink-0 gap-1 text-[11px] font-mono">
+                    <div class="flex items-center px-4 bg-ink-900/60 border-b border-line shrink-0 gap-1 text-xs font-mono">
                       <button
                         onClick={() => setPayloadSubTab("raw")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "raw"
-                            ? "border-brand-500 text-brand-400"
+                            ? "border-accent text-accent"
                             : "border-transparent text-ink-400 hover:text-ink-200"
                         }`}
                       >
@@ -1245,7 +1245,7 @@ export default function CodeDevPage() {
                         onClick={() => setPayloadSubTab("system")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "system"
-                            ? "border-brand-500 text-brand-400"
+                            ? "border-accent text-accent"
                             : "border-transparent text-ink-400 hover:text-ink-200"
                         }`}
                       >
@@ -1256,7 +1256,7 @@ export default function CodeDevPage() {
                         onClick={() => setPayloadSubTab("messages")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "messages"
-                            ? "border-brand-500 text-brand-400"
+                            ? "border-accent text-accent"
                             : "border-transparent text-ink-400 hover:text-ink-200"
                         }`}
                       >
@@ -1267,7 +1267,7 @@ export default function CodeDevPage() {
                         onClick={() => setPayloadSubTab("tools")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "tools"
-                            ? "border-brand-500 text-brand-400"
+                            ? "border-accent text-accent"
                             : "border-transparent text-ink-400 hover:text-ink-200"
                         }`}
                       >
@@ -1278,7 +1278,7 @@ export default function CodeDevPage() {
                         onClick={() => setPayloadSubTab("headers")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "headers"
-                            ? "border-brand-500 text-brand-400"
+                            ? "border-accent text-accent"
                             : "border-transparent text-ink-400 hover:text-ink-200"
                         }`}
                       >
@@ -1306,17 +1306,17 @@ export default function CodeDevPage() {
                               <span>•</span>
                               <span>Words: <strong class="text-ink-200">{req().system?.split(/\s+/).length || 0}</strong></span>
                               <span>•</span>
-                              <span>Est. Tokens: <strong class="text-amber-400">~{Math.round((req().system?.length || 0) / 4)}</strong></span>
+                              <span>Est. Tokens: <strong class="text-warning">~{Math.round((req().system?.length || 0) / 4)}</strong></span>
                             </div>
                             <button
                               onClick={() => copyText(req().system, "System prompt")}
-                              class="px-2.5 py-1 bg-ink-800 hover:bg-ink-700 text-brand-400 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
+                              class="px-2.5 py-1 bg-ink-800 hover:bg-ink-700 text-accent rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
                             >
                               <Icon name={Icons.copy} size={12} />
                               Copy Prompt
                             </button>
                           </div>
-                          <pre class="bg-ink-950 p-4 rounded-lg border border-line text-ink-200 overflow-x-auto whitespace-pre-wrap font-mono text-[12px] leading-relaxed flex-1 select-text">
+                          <pre class="bg-ink-950 p-4 rounded-lg border border-line text-ink-200 overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-relaxed flex-1 select-text">
                             {req().system || "(No system prompt in this request)"}
                           </pre>
                         </div>
@@ -1328,26 +1328,26 @@ export default function CodeDevPage() {
                           <For each={req().messages}>
                             {(m: any, idx) => (
                               <div class="border border-line rounded-lg bg-ink-900/50 overflow-hidden">
-                                <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex items-center justify-between text-[11px]">
-                                  <span class="font-bold flex items-center gap-2">
+                                <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex items-center justify-between text-xs">
+                                  <span class="font-medium flex items-center gap-2">
                                     <span class="text-ink-500 font-mono">#{idx()}</span>
                                     <span
-                                      class={`px-2 py-0.5 rounded text-[10px] uppercase font-mono font-bold ${
+                                      class={`px-2 py-0.5 rounded text-xs font-mono font-medium ${
                                         m.role === "user"
-                                          ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                                          ? "bg-tone-blue-subtle text-tone-blue border border-tone-blue/30"
                                           : m.role === "assistant"
-                                            ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
-                                            : "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                                            ? "bg-tone-violet-subtle text-tone-violet border border-tone-violet/30"
+                                            : "bg-warning-subtle text-warning border border-warning-border"
                                       }`}
                                     >
                                       {m.role}
                                     </span>
                                   </span>
-                                  <span class="text-ink-500 text-[10px]">
+                                  <span class="text-ink-500 text-xs">
                                     {Array.isArray(m.content) ? `${m.content.length} blocks` : "raw text"}
                                   </span>
                                 </div>
-                                <div class="p-3 text-[11px] overflow-x-auto">
+                                <div class="p-3 text-xs overflow-x-auto">
                                   <Show
                                     when={Array.isArray(m.content)}
                                     fallback={
@@ -1358,14 +1358,14 @@ export default function CodeDevPage() {
                                       <For each={m.content}>
                                         {(block: any) => (
                                           <div class="bg-ink-950 p-3 rounded border border-line/60">
-                                            <div class="text-[10px] text-ink-400 mb-1 font-bold">
-                                              BLOCK: {block.type || (block.Text ? "text" : "data")}
+                                            <div class="text-xs text-ink-400 mb-1 font-medium">
+                                              Block: {block.type || (block.Text ? "text" : "data")}
                                             </div>
                                             <Show
                                               when={block.type === "text" || block.Text}
                                               fallback={<JsonHighlightViewer data={block} maxHeight="200px" />}
                                             >
-                                              <pre class="whitespace-pre-wrap text-ink-200 text-[12px] leading-relaxed">
+                                              <pre class="whitespace-pre-wrap text-ink-200 text-xs leading-relaxed">
                                                 {block.text || block.Text}
                                               </pre>
                                             </Show>
@@ -1388,9 +1388,9 @@ export default function CodeDevPage() {
                             {(t: any) => (
                               <div class="border border-line rounded-lg bg-ink-900/50 p-3">
                                 <div class="flex items-center justify-between mb-1.5">
-                                  <span class="font-bold text-brand-400 text-xs font-mono">{t.name || t.Name}</span>
-                                  <span class="text-[10px] px-1.5 py-0.5 rounded bg-ink-800 text-ink-400 font-mono">
-                                    {t.deferred || t.Deferred ? "DEFERRED" : "ACTIVE"}
+                                  <span class="font-medium text-accent text-xs font-mono">{t.name || t.Name}</span>
+                                  <span class="text-xs px-1.5 py-0.5 rounded bg-ink-800 text-ink-400 font-mono">
+                                    {t.deferred || t.Deferred ? "Deferred" : "Active"}
                                   </span>
                                 </div>
                                 <p class="text-xs text-ink-300 mb-2">{t.description || t.Description}</p>
@@ -1409,7 +1409,7 @@ export default function CodeDevPage() {
                       <Show when={payloadSubTab() === "headers"}>
                         <div class="flex flex-col gap-3">
                           <div class="bg-ink-900/60 p-4 rounded-lg border border-line flex flex-col gap-2">
-                            <span class="font-bold text-ink-200 text-xs border-b border-line pb-1 mb-1">
+                            <span class="font-medium text-ink-200 text-xs border-b border-line pb-1 mb-1">
                               General Request Details
                             </span>
                             <div class="grid grid-cols-2 gap-2 text-xs">
@@ -1427,7 +1427,7 @@ export default function CodeDevPage() {
 
                           <Show when={req().usage}>
                             <div class="bg-ink-900/60 p-4 rounded-lg border border-line flex flex-col gap-2">
-                              <span class="font-bold text-ink-200 text-xs border-b border-line pb-1 mb-1">
+                              <span class="font-medium text-ink-200 text-xs border-b border-line pb-1 mb-1">
                                 Token Usage & Costs
                               </span>
                               <div class="grid grid-cols-2 gap-2 text-xs">
@@ -1454,7 +1454,7 @@ export default function CodeDevPage() {
             {/* Stream toolbar */}
             <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
               <div class="flex items-center gap-3">
-                <span class="font-bold text-ink-200">EVENT FILTER:</span>
+                <span class="font-medium text-ink-200">Event filter:</span>
                 <select
                   value={eventFilter()}
                   onChange={(e) => setEventFilter(e.currentTarget.value)}
@@ -1485,7 +1485,7 @@ export default function CodeDevPage() {
                     setLiveThinking("");
                     setLiveText("");
                   }}
-                  class="px-2.5 py-1 bg-ink-800 hover:bg-rose-950/40 hover:text-rose-400 text-ink-300 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
+                  class="px-2.5 py-1 bg-ink-800 hover:bg-danger-subtle hover:text-danger text-ink-300 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
                 >
                   <Icon name={Icons.trash} size={12} />
                   Clear Stream
@@ -1497,24 +1497,24 @@ export default function CodeDevPage() {
             <Show when={liveThinking() || liveText()}>
               <div class="p-3 bg-ink-900/80 border-b border-line shrink-0 flex flex-col gap-2 max-h-48 overflow-y-auto">
                 <Show when={liveThinking()}>
-                  <div class="bg-amber-950/30 border border-amber-900/40 p-2.5 rounded text-xs text-amber-200">
-                    <div class="text-[10px] text-amber-400 font-bold mb-1 flex items-center gap-1">
-                      <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-                      LIVE CHAIN-OF-THOUGHT (STREAMING)
+                  <div class="bg-warning-subtle border border-warning-border p-2.5 rounded text-xs text-ink-200">
+                    <div class="text-xs text-warning font-medium mb-1 flex items-center gap-1">
+                      <span class="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
+                      Live chain-of-thought (streaming)
                     </div>
-                    <pre class="whitespace-pre-wrap text-[11px] leading-relaxed max-h-32 overflow-y-auto">
+                    <pre class="whitespace-pre-wrap text-xs leading-relaxed max-h-32 overflow-y-auto">
                       {liveThinking()}
                     </pre>
                   </div>
                 </Show>
 
                 <Show when={liveText()}>
-                  <div class="bg-blue-950/30 border border-blue-900/40 p-2.5 rounded text-xs text-blue-200">
-                    <div class="text-[10px] text-blue-400 font-bold mb-1 flex items-center gap-1">
-                      <span class="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
-                      LIVE ASSISTANT TEXT (STREAMING)
+                  <div class="bg-tone-blue-subtle border border-tone-blue/30 p-2.5 rounded text-xs text-ink-200">
+                    <div class="text-xs text-tone-blue font-medium mb-1 flex items-center gap-1">
+                      <span class="w-1.5 h-1.5 rounded-full bg-tone-blue animate-pulse" />
+                      Live assistant text (streaming)
                     </div>
-                    <pre class="whitespace-pre-wrap text-[11px] leading-relaxed max-h-32 overflow-y-auto">
+                    <pre class="whitespace-pre-wrap text-xs leading-relaxed max-h-32 overflow-y-auto">
                       {liveText()}
                     </pre>
                   </div>
@@ -1545,34 +1545,34 @@ export default function CodeDevPage() {
                           class="px-3 py-2 bg-ink-900/80 hover:bg-ink-800/80 flex items-center justify-between cursor-pointer select-none"
                         >
                           <div class="flex items-center gap-2">
-                            <span class="text-[10px] text-ink-500 tabular-nums">
+                            <span class="text-xs text-ink-500 tabular-nums">
                               {new Date(ev.timestamp).toLocaleTimeString()}
                             </span>
                             <span
-                              class={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                              class={`px-1.5 py-0.5 rounded text-xs font-medium ${
                                 ev.type === "debug_llm_request"
-                                  ? "bg-purple-500/20 text-purple-400 border border-purple-500/30"
+                                  ? "bg-tone-violet-subtle text-tone-violet border border-tone-violet/30"
                                   : ev.type.startsWith("tool")
-                                    ? "bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                                    ? "bg-warning-subtle text-warning border border-warning-border"
                                     : ev.type.startsWith("turn")
-                                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                                      ? "bg-tone-blue-subtle text-tone-blue border border-tone-blue/30"
                                       : "bg-ink-800 text-ink-300 border border-line"
                               }`}
                             >
                               {ev.type}
                             </span>
                             <Show when={ev.turnIndex != null}>
-                              <span class="text-[10px] text-ink-400 font-mono">
+                              <span class="text-xs text-ink-400 font-mono">
                                 Turn #{ev.turnIndex}
                               </span>
                             </Show>
                             <Show when={ev.data?.name}>
-                              <span class="text-xs font-bold text-amber-300">
+                              <span class="text-xs font-medium text-warning">
                                 {ev.data.name}
                               </span>
                             </Show>
                           </div>
-                          <span class="text-[10px] text-ink-500">
+                          <span class="text-xs text-ink-500">
                             {isExpanded() ? "▲ collapse" : "▼ expand"}
                           </span>
                         </div>
@@ -1596,7 +1596,7 @@ export default function CodeDevPage() {
           <div class="flex-1 min-h-0 overflow-y-auto p-4 bg-ink-950 flex flex-col gap-3 font-mono">
             <div class="flex items-center justify-between pb-2 border-b border-line shrink-0">
               <div class="flex flex-col">
-                <span class="text-sm font-bold text-brand-400">
+                <span class="text-sm font-medium text-accent">
                   Full Session System Prompt
                 </span>
                 <span class="text-xs text-ink-400">
@@ -1609,7 +1609,7 @@ export default function CodeDevPage() {
                 </span>
                 <button
                   onClick={() => copyText(systemPrompt(), "System Prompt")}
-                  class="px-3 py-1.5 bg-brand-500/20 text-brand-400 hover:bg-brand-500/30 rounded border border-brand-500/40 text-xs font-mono flex items-center gap-1.5 cursor-pointer"
+                  class="px-3 py-1.5 bg-accent-subtle text-accent hover:bg-accent/20 rounded border border-accent-border text-xs font-mono flex items-center gap-1.5 cursor-pointer"
                 >
                   <Icon name={Icons.copy} size={13} />
                   Copy System Prompt
@@ -1617,7 +1617,7 @@ export default function CodeDevPage() {
               </div>
             </div>
 
-            <pre class="bg-ink-900 p-4 rounded-lg border border-line text-ink-200 overflow-x-auto whitespace-pre-wrap text-[12px] leading-relaxed select-text flex-1">
+            <pre class="bg-ink-900 p-4 rounded-lg border border-line text-ink-200 overflow-x-auto whitespace-pre-wrap text-xs leading-relaxed select-text flex-1">
               {systemPrompt() || "Loading system prompt from daemon..."}
             </pre>
           </div>
@@ -1628,7 +1628,7 @@ export default function CodeDevPage() {
           <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-ink-950 font-mono">
             <div class="px-4 py-2.5 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
               <div class="flex items-center gap-3">
-                <span class="font-bold text-brand-400">NATIVE TOOL CATALOG ({filteredTools().length})</span>
+                <span class="font-medium text-accent">Native tool catalog ({filteredTools().length})</span>
                 <input
                   type="text"
                   placeholder="Search tools by name..."
@@ -1637,7 +1637,7 @@ export default function CodeDevPage() {
                   class="bg-ink-800 border border-line rounded px-2.5 py-1 text-xs text-ink-200 focus:outline-none w-64"
                 />
               </div>
-              <span class="text-ink-400 text-[11px]">
+              <span class="text-ink-400 text-xs">
                 Registered tools available in Indirect Code Go daemon
               </span>
             </div>
@@ -1656,24 +1656,24 @@ export default function CodeDevPage() {
                         class="p-3 bg-ink-900 hover:bg-ink-800/80 flex items-center justify-between cursor-pointer select-none"
                       >
                         <div class="flex items-center gap-2.5">
-                          <span class="font-bold text-sm text-brand-400">{t.name}</span>
+                          <span class="font-medium text-sm text-accent">{t.name}</span>
                           <Show when={t.isAuto}>
-                            <span class="px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-400 text-[10px] font-bold">
-                              AUTO TOOL
+                            <span class="px-1.5 py-0.2 rounded bg-tone-violet-subtle text-tone-violet text-xs font-medium">
+                              Auto tool
                             </span>
                           </Show>
                           <Show when={t.deferred}>
-                            <span class="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-400 text-[10px]">
-                              DEFERRED
+                            <span class="px-1.5 py-0.2 rounded bg-warning-subtle text-warning text-xs">
+                              Deferred
                             </span>
                           </Show>
                           <Show when={t.allowedModes && t.allowedModes.length > 0}>
-                            <span class="text-[10px] text-ink-500">
+                            <span class="text-xs text-ink-500">
                               Modes: {t.allowedModes?.join(", ")}
                             </span>
                           </Show>
                         </div>
-                        <span class="text-[11px] text-ink-400">
+                        <span class="text-xs text-ink-400">
                           {isExp() ? "Hide Schema ▲" : "View Schema ▼"}
                         </span>
                       </div>
@@ -1703,12 +1703,12 @@ export default function CodeDevPage() {
         <Show when={activeTab() === "frames"}>
           <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-ink-950 font-mono">
             <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
-              <span class="font-bold text-ink-200">
-                RAW RELAY WEBSOCKET FRAMES ({rawFrames().length})
+              <span class="font-medium text-ink-200">
+                Raw relay WebSocket frames ({rawFrames().length})
               </span>
               <button
                 onClick={() => setRawFrames([])}
-                class="px-2 py-0.5 bg-ink-800 hover:bg-rose-950/40 hover:text-rose-400 text-ink-300 rounded border border-line text-xs cursor-pointer"
+                class="px-2 py-0.5 bg-ink-800 hover:bg-danger-subtle hover:text-danger text-ink-300 rounded border border-line text-xs cursor-pointer"
               >
                 Clear Frames
               </button>
@@ -1718,28 +1718,28 @@ export default function CodeDevPage() {
               <For each={rawFrames()}>
                 {(f) => (
                   <div class="border border-line rounded-lg bg-ink-900/40 p-2.5 text-xs">
-                    <div class="flex items-center justify-between mb-1 text-[11px]">
+                    <div class="flex items-center justify-between mb-1 text-xs">
                       <div class="flex items-center gap-2">
                         <span class="text-ink-500 tabular-nums">
                           {new Date(f.timestamp).toLocaleTimeString()}
                         </span>
                         <span
-                          class={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                          class={`px-1.5 py-0.2 rounded text-xs font-medium ${
                             f.direction === "out"
-                              ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                              : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                              ? "bg-warning-subtle text-warning border border-warning-border"
+                              : "bg-tone-blue-subtle text-tone-blue border border-tone-blue/30"
                           }`}
                         >
                           {f.direction === "out" ? "OUT" : "IN"}
                         </span>
-                        <span class="font-bold text-brand-400">{f.type}</span>
+                        <span class="font-medium text-accent">{f.type}</span>
                         <Show when={f.sessionId}>
-                          <span class="text-ink-400 text-[10px]">
+                          <span class="text-ink-400 text-xs">
                             sid: {f.sessionId ? f.sessionId.slice(0, 8) : ""}
                           </span>
                         </Show>
                       </div>
-                      <span class="text-[10px] text-ink-500">{f.size} bytes</span>
+                      <span class="text-xs text-ink-500">{f.size} bytes</span>
                     </div>
                     <JsonHighlightViewer data={f.payload} maxHeight="180px" />
                   </div>
@@ -1755,13 +1755,13 @@ export default function CodeDevPage() {
             {/* Left list: WAL event sequence */}
             <div class="w-80 border-r border-line bg-ink-900/60 flex flex-col shrink-0">
               <div class="px-3 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0">
-                <span class="font-bold text-ink-200 text-xs">WAL EVENT LOG ({filteredWalEvents().length})</span>
+                <span class="font-medium text-ink-200 text-xs">WAL event log ({filteredWalEvents().length})</span>
                 <input
                   type="text"
                   placeholder="Filter events..."
                   value={walFilter()}
                   onInput={(e) => setWalFilter(e.currentTarget.value)}
-                  class="bg-ink-800 border border-line rounded px-2 py-0.5 text-[11px] text-ink-200 focus:outline-none w-32"
+                  class="bg-ink-800 border border-line rounded px-2 py-0.5 text-xs text-ink-200 focus:outline-none w-32"
                 />
               </div>
 
@@ -1779,13 +1779,13 @@ export default function CodeDevPage() {
                       const isSel = () => selectedWalSeq() === ev.seq || (selectedWalSeq() === null && filteredWalEvents()[0]?.seq === ev.seq);
                       const typeBadgeColor = (type: string) => {
                         switch (type) {
-                          case "header": return "bg-amber-500/20 text-amber-300 border-amber-500/40";
-                          case "options": return "bg-purple-500/20 text-purple-300 border-purple-500/40";
-                          case "msg": return "bg-emerald-500/20 text-emerald-300 border-emerald-500/40";
-                          case "title": return "bg-sky-500/20 text-sky-300 border-sky-500/40";
-                          case "usage": return "bg-teal-500/20 text-teal-300 border-teal-500/40";
-                          case "todos": return "bg-indigo-500/20 text-indigo-300 border-indigo-500/40";
-                          case "widgets": return "bg-pink-500/20 text-pink-300 border-pink-500/40";
+                          case "header": return "bg-warning-subtle text-warning border-warning-border";
+                          case "options": return "bg-tone-violet-subtle text-tone-violet border-tone-violet/30";
+                          case "msg": return "bg-success-subtle text-success border-success-border";
+                          case "title": return "bg-tone-blue-subtle text-tone-blue border-tone-blue/30";
+                          case "usage": return "bg-tone-teal-subtle text-tone-teal border-tone-teal/30";
+                          case "todos": return "bg-tone-blue-subtle text-tone-blue border-tone-blue/30";
+                          case "widgets": return "bg-tone-rose-subtle text-tone-rose border-tone-rose/30";
                           default: return "bg-ink-700/40 text-ink-300 border-line";
                         }
                       };
@@ -1796,24 +1796,24 @@ export default function CodeDevPage() {
                           onClick={() => setSelectedWalSeq(ev.seq)}
                           class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-[3px] ${
                             isSel()
-                              ? "bg-brand-500/15 border-brand-500 text-ink-100"
+                              ? "bg-accent-subtle border-accent text-ink-100"
                               : "border-transparent hover:bg-ink-800/40 text-ink-300"
                           }`}
                         >
-                          <div class="flex items-center justify-between text-[11px]">
+                          <div class="flex items-center justify-between text-xs">
                             <div class="flex items-center gap-1.5">
-                              <span class="text-ink-500 font-bold">#{ev.seq}</span>
-                              <span class={`px-1.5 py-0.2 rounded text-[10px] font-bold border ${typeBadgeColor(ev.type)}`}>
-                                {ev.type.toUpperCase()}
+                              <span class="text-ink-500 font-medium">#{ev.seq}</span>
+                              <span class={`px-1.5 py-0.2 rounded text-xs font-medium border ${typeBadgeColor(ev.type)}`}>
+                                {ev.type}
                               </span>
                             </div>
                             <Show when={ev.timestamp}>
-                              <span class="text-[10px] text-ink-500 tabular-nums">
+                              <span class="text-xs text-ink-500 tabular-nums">
                                 {new Date(ev.timestamp!).toLocaleTimeString()}
                               </span>
                             </Show>
                           </div>
-                          <div class="text-[11px] text-ink-400 truncate">
+                          <div class="text-xs text-ink-400 truncate">
                             {ev.type === "msg" ? (ev.payload?.model || ev.payload?.endpoint || "turn message") :
                              ev.type === "header" ? `turnSeq ${ev.payload?.turnIndex || 1} • ${ev.payload?.model || ""}` :
                              ev.type === "options" ? `mode ${ev.payload?.mode || "agentic"}` :
@@ -1843,15 +1843,15 @@ export default function CodeDevPage() {
                   <div class="flex-1 flex flex-col min-h-0">
                     <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
                       <div class="flex items-center gap-3">
-                        <span class="font-bold text-ink-400">EVENT #{ev().seq}</span>
-                        <span class="font-bold text-brand-400 uppercase">{ev().type}</span>
+                        <span class="font-medium text-ink-400">Event #{ev().seq}</span>
+                        <span class="font-medium text-accent">{ev().type}</span>
                         <Show when={ev().timestamp}>
-                          <span class="text-ink-500 text-[11px]">
+                          <span class="text-ink-500 text-xs">
                             {new Date(ev().timestamp!).toLocaleTimeString()} ({new Date(ev().timestamp!).toISOString()})
                           </span>
                         </Show>
                       </div>
-                      <span class="text-[11px] text-ink-400">WAL Append-Only State</span>
+                      <span class="text-xs text-ink-400">WAL Append-Only State</span>
                     </div>
 
                     <div class="flex-1 overflow-hidden p-4">
@@ -1872,7 +1872,7 @@ export default function CodeDevPage() {
 
       {/* ===== BOTTOM BAR: SMOKE SIMULATOR & PROMPT SENDER ===== */}
       <footer class="px-4 py-2.5 bg-ink-900 border-t border-line shrink-0 flex items-center gap-2.5 font-mono text-xs z-20">
-        <span class="text-ink-400 shrink-0 font-bold">PROMPT ACTION:</span>
+        <span class="text-ink-400 shrink-0 font-medium">Prompt action:</span>
         <input
           type="text"
           placeholder="Type a prompt to send or simulate (Smoke Test)..."
@@ -1888,14 +1888,14 @@ export default function CodeDevPage() {
               }
             }
           }}
-          class="flex-1 bg-ink-950 border border-line rounded px-3 py-1.5 text-xs text-ink-100 placeholder-ink-600 focus:outline-none focus:border-brand-500"
+          class="flex-1 bg-ink-950 border border-line rounded px-3 py-1.5 text-xs text-ink-100 placeholder-ink-600 focus:outline-none focus:border-accent"
         />
 
         {/* Smoke Simulation Button */}
         <button
           onClick={runSmokeSimulation}
           disabled={isSimulating()}
-          class="px-3.5 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-bold rounded border border-amber-500/40 text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-sm"
+          class="px-3.5 py-1.5 bg-warning-subtle hover:bg-warning/20 text-warning font-medium rounded border border-warning-border text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-sm"
           title="Simulate prompt right now without calling LLM (0 tokens billed)"
         >
           <Icon name="lucide:flame" size={13} />
@@ -1906,7 +1906,7 @@ export default function CodeDevPage() {
         <button
           onClick={sendQuickPrompt}
           disabled={!promptInput().trim() || !selectedSessionId()}
-          class="px-3.5 py-1.5 bg-brand-500 hover:bg-brand-600 disabled:opacity-40 disabled:cursor-not-allowed text-ink-950 font-bold rounded text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+          class="px-3.5 py-1.5 bg-accent hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed text-ink-on-accent font-medium rounded text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
           title="Send real turn prompt to the session"
         >
           <Icon name={Icons.send} size={13} />

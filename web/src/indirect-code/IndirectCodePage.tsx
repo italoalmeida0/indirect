@@ -76,7 +76,7 @@ function WorkspaceHeader() {
 /** Edge-to-edge background with native mobile safe-area padding. */
 export function WorkspaceShell(props: { children: JSX.Element }) {
   return (
-    <div class="rc-app-shell fixed inset-0 w-full h-dvh flex flex-col bg-ink-950 text-ink-100 overflow-hidden font-sans select-none z-50">
+    <div data-density="compact" class="rc-app-shell fixed inset-0 w-full h-dvh flex flex-col bg-ink-950 text-ink-100 overflow-hidden font-sans select-none">
       {props.children}
     </div>
   );
@@ -137,10 +137,10 @@ export function UpdateFreezeOverlay() {
         <div class="mx-auto my-auto w-full max-w-xl space-y-6 py-8">
           <div>
             <IndirectBrand />
-            <h2 class="mt-5 text-lg font-semibold text-ink-100">
+            <h2 class="mt-5 text-lg font-medium text-fg">
               Updating {updatingHost()?.name || updatingHost()?.hostname || "daemon"}…
             </h2>
-            <p class="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-ink-400">
+            <p class="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-fg-secondary">
               {upd()?.target ? `Installing ${upd()?.target}. ` : ""}Sessions are safe, nothing is lost.
             </p>
           </div>
@@ -572,12 +572,15 @@ export default function IndirectCodePage() {
   });
 
   // UI state
-  const [sidebarOpen, setSidebarOpen] = createSignal(true);
   // Mobile = the pre-paint html.mobile flag (web/index.html script): the
   // single source of truth (viewport heuristics mislabel touch laptops and
   // small desktop windows). The script keeps the class in sync on
   // resize/orientationchange — this signal just follows it.
   const isMobile = createMobileFlag();
+  const [sidebarOpen, setSidebarOpen] = createSignal(!isMobile());
+  createEffect(() => {
+    setSidebarOpen(!isMobile());
+  });
 
   // Anchor refs for floating menus (floating-ui positions them in a Portal).
   let newProjBtn: HTMLButtonElement | undefined;

@@ -1,5 +1,9 @@
 import { createEffect, createSignal, untrack, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
+import { animate } from "../../../ds/motion/animate";
+import { press } from "../../../ds/motion/press";
+import { reducedMotion } from "../../../ds/motion/reduced";
+import { motionTokens } from "../../../ds/motion/tokens";
 import { attachSortable } from "../../../sortable";
 import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { FloatMenu } from "../FloatMenu";
@@ -23,6 +27,29 @@ export function ToolbarContext() {
 
   // Mobile submenu navigation inside the "+" menu
   const [subView, setSubView] = createSignal<"main" | "model" | "mode" | "access">("main");
+  let subViewDir = 1;
+  const switchSubView = (next: "main" | "model" | "mode" | "access") => {
+    subViewDir = next === "main" ? -1 : 1;
+    setSubView(next);
+  };
+  const animateSubView = (el: HTMLElement) => {
+    if (untrack(reducedMotion)) return;
+    queueMicrotask(() => {
+      if (!el.isConnected) return;
+      animate(
+        el,
+        { opacity: 1, translate: "0px 0px", filter: "blur(0px)" },
+        { duration: 0.22, ease: motionTokens.ease.enter },
+        {
+          from: {
+            opacity: 0.2,
+            translate: `${subViewDir * 14}px 0px`,
+            filter: "blur(2.5px)",
+          },
+        },
+      );
+    });
+  };
 
   // Local draft state while the Mode & Skills popup is open: avoids lag/stutter
   // by deferring network sync and session re-snapshots until "Done" or close.
@@ -55,7 +82,7 @@ export function ToolbarContext() {
     }
     return c.selectedSkills();
   };
-  const effectiveSkillUsables = () => (isEditing() ? draftUsables() : c.skillUsables());
+  const effectiveSkillUsables = () => (isEditing() ? draftUsables() : (c.skillUsables?.() ?? {}));
   const effectiveAgentMode = () => {
     if (isEditing()) return draftAgentMode();
     const opt = optimisticModeSkill();
@@ -63,7 +90,7 @@ export function ToolbarContext() {
       // Look the optimistic pick up in the UNFILTERED catalog: modeSkills()
       // filters by this very function, so asking it here recursed until the
       // stack blew up as soon as a mode pick was pending.
-      const spec = effectiveModeSkills(m.savedSkills(), m.skillsLoaded()).find((x) => x.name === opt);
+      const spec = effectiveModeSkills(m.savedSkills?.() ?? {}, m.skillsLoaded?.() ?? false).find((x) => x.name === opt);
       if (spec) return baseMode(spec.mode);
     }
     return c.agentMode();
@@ -89,7 +116,7 @@ export function ToolbarContext() {
     if (open) {
       untrack(() => {
         const skills = [...c.selectedSkills()];
-        const usables = { ...c.skillUsables() };
+        const usables = { ...(c.skillUsables?.() ?? {}) };
         setDraftSkills(skills);
         setDraftUsables(usables);
         setDraftAgentMode(c.agentMode());
@@ -133,7 +160,7 @@ export function ToolbarContext() {
     const nextSkills = [...kept, ...arrived];
 
     // Usables: only the keys the user actually changed in the popup.
-    const nextUsables = { ...c.skillUsables() };
+    const nextUsables = { ...(c.skillUsables?.() ?? {}) };
     for (const key of new Set([...Object.keys(targetUsables), ...Object.keys(base.usables)])) {
       if (targetUsables[key] !== base.usables[key]) {
         if (targetUsables[key] === undefined) delete nextUsables[key];
@@ -144,7 +171,7 @@ export function ToolbarContext() {
     if (modeChanged) {
       c.setAgentMode(targetMode as any);
     }
-    c.syncSkills(nextSkills, nextUsables);
+    c.syncSkills?.(nextSkills, nextUsables);
     c.configureSession();
   }
 
@@ -161,7 +188,7 @@ export function ToolbarContext() {
    * are offered (a talk session never shows build/plan/learning, an
    * agentic one never shows talk); drafts see the whole list. */
   function modeSkills() {
-    const list = effectiveModeSkills(m.savedSkills(), m.skillsLoaded());
+    const list = effectiveModeSkills(m.savedSkills?.() ?? {}, m.skillsLoaded?.() ?? false);
     if (s.draftMode()) return list;
     const base = baseMode(effectiveAgentMode());
     return list.filter((spec) => baseMode(spec.mode) === base);
@@ -173,10 +200,11 @@ export function ToolbarContext() {
    * fallback for skills the catalog no longer knows). */
   function approvalSelectorHidden() {
     const primary = effectiveSelectedSkills()[0];
+    const saved = m.savedSkills?.() ?? {};
     const ap = primary
-      ? m.savedSkills()[primary]?.approvalMode ?? modeSkills().find((s) => s.name === primary)?.approvalMode
+      ? saved[primary]?.approvalMode ?? modeSkills().find((s) => s.name === primary)?.approvalMode
       : undefined;
-    return ap === "yolo" || c.approvalMode() === "yolo";
+    return ap === "yolo" || c.approvalMode?.() === "yolo";
   }
 
   /** Chooses one of the mode skills as the session's primary skill: it goes
@@ -196,20 +224,21 @@ export function ToolbarContext() {
       openSnapshot = { skills: [...nextSkills], usables: { ...draftUsables() }, mode };
     }
     c.setAgentMode(mode);
-    c.syncSkills(nextSkills, isEditing() ? draftUsables() : undefined);
+    c.syncSkills?.(nextSkills, isEditing() ? draftUsables() : undefined);
     c.configureSession();
   }
 
   /** Additional skills = everything except the 4 mode skills. Displayed
    * order: selected (session priority order) first, then the rest by name. */
   function additionalSkills(): [string, any][] {
+    const saved = m.savedSkills?.() ?? {};
     const sel = effectiveSelectedSkills().filter((n) => !isModeSkill(n));
-    const rest = Object.entries(m.savedSkills())
+    const rest = Object.entries(saved)
       .filter(([n, skill]) => !isModeSkill(n) && skill.enabled && originalUsable(skill.usable) !== "never")
       .map(([n]) => n)
       .filter((n) => !sel.includes(n))
       .sort();
-    return [...sel, ...rest].map((n) => [n, m.savedSkills()[n]] as [string, any]);
+    return [...sel, ...rest].map((n) => [n, saved[n]] as [string, any]);
   }
 
   /** Drag-to-sort of the additional list: active skills keep their order
@@ -224,7 +253,7 @@ export function ToolbarContext() {
       const sel = c.selectedSkills();
       const primary = sel.filter(isModeSkill);
       const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n));
-      c.syncSkills([...primary, ...rest]);
+      c.syncSkills?.([...primary, ...rest]);
     }
   }
 
@@ -234,7 +263,7 @@ export function ToolbarContext() {
       setDraftSkills(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
     } else {
       const sel = c.selectedSkills();
-      c.syncSkills(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
+      c.syncSkills?.(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
     }
   }
 
@@ -252,8 +281,8 @@ export function ToolbarContext() {
     if (isEditing()) {
       setDraftUsables({ ...draftUsables(), [name]: next });
     } else {
-      const map = { ...c.skillUsables(), [name]: next };
-      c.syncSkills(c.selectedSkills(), map);
+      const map = { ...(c.skillUsables?.() ?? {}), [name]: next };
+      c.syncSkills?.(c.selectedSkills(), map);
     }
   }
 
@@ -277,29 +306,35 @@ export function ToolbarContext() {
   }
 
   function additionalCount() {
-    return c.selectedSkills().filter((name) => !isModeSkill(name) && m.savedSkills()[name]?.enabled).length;
+    const saved = m.savedSkills?.() ?? {};
+    return c.selectedSkills().filter((name) => !isModeSkill(name) && saved[name]?.enabled).length;
   }
 
   const modeSkillList = () => (
-    <For each={modeSkills()}>
-      {(mode) => (
-        <button
-          role="menuitemradio"
-          aria-checked={activeModeSkillName() === mode.name}
-          onClick={() => chooseModeSkill(mode.name)}
-          class="w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left hover:bg-elev cursor-pointer"
-        >
-          <Iconify icon={mode.icon} size={16} />
-          <span class="flex-1">
-            <span class="font-medium text-ink-100">{mode.label}</span>
-            <span class="block text-[11px] text-ink-500 mt-0.5">{mode.description}</span>
-          </span>
-          <Show when={activeModeSkillName() === mode.name}>
-            <Iconify icon="lucide:check" size={14} />
-          </Show>
-        </button>
-      )}
-    </For>
+    <div role="menu" aria-label="Agent mode" class="bg-card">
+      <For each={modeSkills()}>
+        {(mode) => (
+          <button
+            role="menuitemradio"
+            aria-checked={activeModeSkillName() === mode.name}
+            onPointerDown={(e) => press(e.currentTarget)}
+            onClick={() => chooseModeSkill(mode.name)}
+            class={`w-full flex items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors cursor-pointer ${
+              activeModeSkillName() === mode.name ? "bg-elev/80" : "hover:bg-elev"
+            }`}
+          >
+            <Iconify icon={mode.icon} size={16} />
+            <span class="flex-1">
+              <span class="font-medium text-ink-100">{mode.label}</span>
+              <span class="block text-[11px] text-ink-500 mt-0.5">{mode.description}</span>
+            </span>
+            <Show when={activeModeSkillName() === mode.name}>
+              <Iconify icon="lucide:check" size={14} />
+            </Show>
+          </button>
+        )}
+      </For>
+    </div>
   );
 
   const additionalSkillList = () => (
@@ -311,23 +346,31 @@ export function ToolbarContext() {
               <button data-handle aria-label={`Reorder ${name}`} class="shrink-0 px-1 py-2 text-ink-600 hover:text-ink-300 cursor-grab" onClick={(e) => e.stopPropagation()}>
                 <Iconify icon="lucide:grip-vertical" size={14} />
               </button>
-              <button
-                role="menuitemcheckbox"
-                aria-checked={effectiveSelectedSkills().includes(name)}
-                onClick={() => toggleAdditional(name)}
-                class="flex-1 rounded-lg px-2 py-2 flex items-center gap-2 text-left hover:bg-elev cursor-pointer"
-              >
-                <Iconify icon="lucide:puzzle" size={14} />
-                <span class="flex-1">
-                  <span class="text-ink-200">{name}</span>
-                  <span class="block text-[11px] text-ink-500">{skill?.description}</span>
-                </span>
-                <Show when={effectiveSelectedSkills().includes(name)}>
-                  <Iconify icon="lucide:check" size={14} />
-                </Show>
-              </button>
+              <div role="menu" aria-label={`Skill ${name}`} class="flex-1 flex bg-card">
+                <button
+                  role="menuitemcheckbox"
+                  aria-checked={effectiveSelectedSkills().includes(name)}
+                  onPointerDown={(e) => press(e.currentTarget)}
+                  onClick={() => toggleAdditional(name)}
+                  class="flex-1 rounded-lg px-2 py-2 flex items-center gap-2 text-left hover:bg-elev transition-colors cursor-pointer"
+                >
+                  <Iconify icon="lucide:puzzle" size={14} />
+                  <span class="flex-1">
+                    <span class="text-ink-200">{name}</span>
+                    <span class="block text-[11px] text-ink-500">{skill?.description}</span>
+                  </span>
+                  <Show when={effectiveSelectedSkills().includes(name)}>
+                    <Iconify icon="lucide:check" size={14} />
+                  </Show>
+                </button>
+              </div>
               <Show when={originalUsable(skill?.usable) === "ask"}>
-                <button aria-label={`Change activation policy for ${name}`} onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }} class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-300 hover:bg-elev cursor-pointer">
+                <button
+                  aria-label={`Change activation policy for ${name}: ${shownUsable(name)}`}
+                  onPointerDown={(e) => press(e.currentTarget)}
+                  onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }}
+                  class="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] text-ink-300 hover:bg-elev transition-colors cursor-pointer"
+                >
                   {shownUsable(name)}
                 </button>
               </Show>
@@ -342,12 +385,12 @@ export function ToolbarContext() {
         </For>
       </ul>
       <Show when={(m.skillErrors?.() ?? []).length > 0}>
-        <div role="status" class="mx-1 mt-1 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-200">
+        <div role="status" class="mx-1 mt-1 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1.5 text-[11px] text-warning">
           <div class="flex items-center gap-1 font-medium">
             <Iconify icon="lucide:circle-alert" size={12} />
             <span>{(m.skillErrors?.() ?? []).length === 1 ? "1 skill file failed to load" : `${(m.skillErrors?.() ?? []).length} skill files failed to load`}</span>
           </div>
-          <ul class="mt-1 space-y-0.5 text-amber-300/90">
+          <ul class="mt-1 space-y-0.5 text-fg-secondary">
             <For each={m.skillErrors?.() ?? []}>{(err) => <li class="break-words">{err}</li>}</For>
           </ul>
         </div>
@@ -361,12 +404,13 @@ export function ToolbarContext() {
   <button
     ref={c.addBtn}
     data-menubtn
+    onPointerDown={(e) => press(e.currentTarget)}
     onClick={(e) => {
       e.stopPropagation();
       c.setAddContextOpen(!c.addContextOpen());
       ui.setModelMenuOpen(false);
     }}
-    class="rc-composer-add w-6 h-6 rounded-full hover:bg-ink-800 flex items-center justify-center cursor-pointer"
+    class="rc-composer-add w-6 h-6 rounded-full hover:bg-ink-800 flex items-center justify-center cursor-pointer transition-colors"
     data-rc-tip={ui.isMobile() ? "Add & Settings" : "Add context"}
     aria-label={ui.isMobile() ? "Add & Settings" : "Add context"}
   >
@@ -376,6 +420,8 @@ export function ToolbarContext() {
     anchor={() => c.addBtn}
     open={c.addContextOpen()}
     onClose={() => c.setAddContextOpen(false)}
+    role="dialog"
+    aria-label={ui.isMobile() ? "Add & Settings" : "Add context"}
     placement="top-start"
     width={
       ui.isMobile()
@@ -392,7 +438,7 @@ export function ToolbarContext() {
       fallback={
         /* Desktop: original "Add context" menu */
         <>
-          <div class="px-2 py-1 text-[10px] uppercase font-bold text-ink-600 tracking-wider">
+          <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
             Add context
           </div>
           <MenuItem
@@ -433,7 +479,7 @@ export function ToolbarContext() {
     >
       {/* Mobile views: Root menu + Subviews */}
       <Show when={subView() === "main"}>
-        <div class="px-2 py-1 text-[10px] uppercase font-bold text-ink-600 tracking-wider">
+        <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
           Add context
         </div>
         <MenuItem
@@ -471,18 +517,18 @@ export function ToolbarContext() {
         </MenuItem>
 
         <div class="mt-1 border-t border-line/60 pt-1">
-          <div class="px-2 py-1 text-[10px] uppercase font-bold text-ink-600 tracking-wider">
+          <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
             Configuration
           </div>
           <MenuItem
             icon="lucide:cpu"
-            onClick={() => setSubView("model")}
+            onClick={() => switchSubView("model")}
           >
             <span class="flex-1 truncate text-ink-100 font-medium text-xs">
               {c.activeModelName()}
             </span>
             <Show when={formatEffort(c.effort())}>
-              <span class="uppercase text-ink-500 shrink-0 text-[10px] ml-1">
+              <span class="text-ink-500 shrink-0 text-[10px] ml-1">
                 {formatEffort(c.effort())}
               </span>
             </Show>
@@ -491,7 +537,7 @@ export function ToolbarContext() {
 
           <MenuItem
             icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")}
-            onClick={() => setSubView("mode")}
+            onClick={() => switchSubView("mode")}
           >
             <span class="flex-1">Mode</span>
             <span class="text-ink-300 font-medium text-[11px] capitalize">
@@ -506,11 +552,11 @@ export function ToolbarContext() {
           <Show when={!approvalSelectorHidden()}>
           <MenuItem
             icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"}
-            iconClass={c.yoloMode() ? "text-brand-500" : ""}
-            onClick={() => setSubView("access")}
+            iconClass={c.yoloMode() ? "text-danger" : ""}
+            onClick={() => switchSubView("access")}
           >
             <span class="flex-1">Permissions</span>
-            <span class={`text-[11px] font-medium ${c.yoloMode() ? "text-brand-500" : "text-ink-300"}`}>
+            <span class={`text-[11px] font-medium ${c.yoloMode() ? "text-danger" : "text-ink-300"}`}>
               {c.yoloMode() ? "Full access" : "Ask for approval"}
             </span>
             <Iconify icon="lucide:chevron-right" size={13} class="text-ink-500 shrink-0 ml-1" />
@@ -520,17 +566,19 @@ export function ToolbarContext() {
       </Show>
 
       <Show when={subView() === "model"}>
-        <div>
+        <div ref={animateSubView}>
           <div class="flex items-center justify-between px-1 py-1 mb-1 border-b border-line/60">
             <button
-              onClick={() => setSubView("main")}
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={() => switchSubView("main")}
               class="px-1.5 py-1 rounded-md hover:bg-ink-800 text-ink-400 hover:text-ink-100 flex items-center gap-1 text-xs cursor-pointer"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
             </button>
-            <span class="font-semibold text-xs text-ink-200">Select model</span>
+            <span class="font-medium text-xs text-ink-200">Select model</span>
             <button
+              onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
               class="px-1.5 py-1 rounded-md hover:bg-ink-800 text-ink-400 hover:text-ink-100 text-xs cursor-pointer"
             >
@@ -542,22 +590,24 @@ export function ToolbarContext() {
       </Show>
 
       <Show when={subView() === "mode"}>
-        <div>
+        <div ref={animateSubView}>
           <div class="flex items-center justify-between px-1 py-1 mb-1 border-b border-line/60">
             <button
-              onClick={() => setSubView("main")}
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={() => switchSubView("main")}
               class="px-1.5 py-1 rounded-md hover:bg-ink-800 text-ink-400 hover:text-ink-100 flex items-center gap-1 text-xs cursor-pointer"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
             </button>
-            <span class="font-semibold text-xs text-ink-200">Agent mode</span>
+            <span class="font-medium text-xs text-ink-200">Agent mode</span>
             <button
+              onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => {
                 applyDraft();
                 c.setAddContextOpen(false);
               }}
-              class="px-2 py-0.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white font-medium text-xs cursor-pointer transition-colors"
+              class="px-2 py-0.5 rounded-md bg-accent hover:bg-accent-hover text-accent-foreground font-medium text-xs cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -574,17 +624,19 @@ export function ToolbarContext() {
       </Show>
 
       <Show when={subView() === "access"}>
-        <div>
+        <div ref={animateSubView}>
           <div class="flex items-center justify-between px-1 py-1 mb-1 border-b border-line/60">
             <button
-              onClick={() => setSubView("main")}
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={() => switchSubView("main")}
               class="px-1.5 py-1 rounded-md hover:bg-ink-800 text-ink-400 hover:text-ink-100 flex items-center gap-1 text-xs cursor-pointer"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
             </button>
-            <span class="font-semibold text-xs text-ink-200">Permissions</span>
+            <span class="font-medium text-xs text-ink-200">Permissions</span>
             <button
+              onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
               class="px-1.5 py-1 rounded-md hover:bg-ink-800 text-ink-400 hover:text-ink-100 text-xs cursor-pointer"
             >
@@ -592,6 +644,7 @@ export function ToolbarContext() {
             </button>
           </div>
           <p class="px-2 py-2 text-ink-400">How should actions be approved?</p>
+          <div role="menu" aria-label="Agent permissions" class="bg-card">
           <For
             each={[
               { full: false, label: "Ask for approval", description: "Ask before every tool call, including reads and commands.", icon: "lucide:hand" },
@@ -602,27 +655,29 @@ export function ToolbarContext() {
               <button
                 role="menuitemradio"
                 aria-checked={c.yoloMode() === access.full}
+                onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => {
                   c.setYoloMode(access.full);
                   c.configureSession();
                 }}
-                class="w-full flex items-center gap-3 px-2 py-3 text-left rounded-lg hover:bg-elev cursor-pointer"
+                class="w-full flex items-center gap-3 px-2 py-3 text-left rounded-lg hover:bg-elev cursor-pointer transition-colors"
               >
-                <Iconify icon={access.icon} size={19} class={access.full ? "text-brand-500" : ""} />
+                <Iconify icon={access.icon} size={19} class={access.full ? "text-danger" : ""} />
                 <span class="flex-1">
-                  <span class={`font-medium ${access.full ? "text-brand-500" : "text-ink-100"}`}>
+                  <span class={`font-medium ${access.full ? "text-danger" : "text-ink-100"}`}>
                     {access.label}
                   </span>
-                  <span class={`block mt-1 text-[11px] ${access.full ? "text-brand-500/80" : "text-ink-500"}`}>
+                  <span class={`block mt-1 text-[11px] ${access.full ? "text-danger/80" : "text-ink-500"}`}>
                     {access.description}
                   </span>
                 </span>
                 <Show when={c.yoloMode() === access.full}>
-                  <Iconify icon="lucide:check" size={14} class={access.full ? "text-brand-500" : ""} />
+                  <Iconify icon="lucide:check" size={14} class={access.full ? "text-danger" : ""} />
                 </Show>
               </button>
             )}
           </For>
+          </div>
         </div>
       </Show>
 
@@ -633,22 +688,24 @@ export function ToolbarContext() {
 {/* Desktop only: Mode and Permissions in the toolbar */}
 <Show when={!ui.isMobile()}>
 <div>
-  <button ref={c.modeBtn} data-menubtn aria-label="Agent mode and skills" aria-expanded={c.modeMenuOpen()}
+  <button ref={c.modeBtn} data-menubtn aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`} aria-expanded={c.modeMenuOpen()}
+    onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.modeMenuOpen(); ui.closeMenus(); c.setModeMenuOpen(next); }}
-    class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs hover:bg-elev cursor-pointer">
+    class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs hover:bg-elev transition-colors cursor-pointer">
     <Iconify icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")} size={14} />
-    <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}</span><Show when={additionalCount() > 0}><span class="text-ink-500">+{additionalCount()}</span></Show>
-    <Iconify icon="lucide:chevron-down" size={11} />
+    <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}<Show when={additionalCount() > 0}><span class="text-ink-500">{` +${additionalCount()}`}</span></Show></span>
+    <Iconify icon="lucide:chevron-down" size={11} class={`transition-transform duration-150 ${c.modeMenuOpen() ? "rotate-180" : ""}`} />
   </button>
-  <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} onClose={() => c.setModeMenuOpen(false)} placement="top-start" width="20rem">
+  <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} onClose={() => c.setModeMenuOpen(false)} role="dialog" aria-label="Mode & Skills" placement="top-start" width="20rem">
     <div class="flex items-center justify-between px-2 py-1.5 border-b border-line/60 mb-1">
-      <span class="font-semibold text-xs text-ink-200">Mode & Skills</span>
+      <span class="font-medium text-xs text-ink-200">Mode & Skills</span>
       <button
+        onPointerDown={(e) => press(e.currentTarget)}
         onClick={() => {
           applyDraft();
           c.setModeMenuOpen(false);
         }}
-        class="px-2.5 py-0.5 rounded-md bg-brand-500 hover:bg-brand-600 text-white font-medium text-xs cursor-pointer transition-colors"
+        class="px-2.5 py-0.5 rounded-md bg-accent hover:bg-accent-hover text-accent-foreground font-medium text-xs cursor-pointer transition-colors"
       >
         Done
       </button>
@@ -664,20 +721,23 @@ export function ToolbarContext() {
 </div>
 <Show when={!approvalSelectorHidden()}>
 <div>
-  <button ref={c.accessBtn} data-menubtn aria-label="Agent permissions" aria-expanded={c.accessMenuOpen()}
+  <button ref={c.accessBtn} data-menubtn aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`} aria-expanded={c.accessMenuOpen()}
+    onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.accessMenuOpen(); ui.closeMenus(); c.setAccessMenuOpen(next); }}
     class={`flex items-center gap-1.5 rounded-full px-2 py-1 text-xs hover:bg-elev cursor-pointer transition-colors ${
-      c.yoloMode() ? "text-brand-500" : ""
+      c.yoloMode() ? "text-danger" : ""
     }`}>
-    <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={14} class={c.yoloMode() ? "text-brand-500" : ""} /><span class={`hidden sm:inline ${c.yoloMode() ? "text-brand-500" : ""}`}>{c.yoloMode() ? "Full access" : "Ask for approval"}</span>
+    <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={14} class={c.yoloMode() ? "text-danger" : ""} /><span class={`hidden sm:inline ${c.yoloMode() ? "text-danger" : ""}`}>{c.yoloMode() ? "Full access" : "Ask for approval"}</span>
   </button>
   <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="22rem">
     <p class="px-2 py-2 text-ink-400">How should actions be approved?</p>
+    <div role="menu" aria-label="Agent permissions" class="bg-card">
     <For each={[{full:false, label:"Ask for approval", description:"Ask before every tool call, including reads and commands.", icon:"lucide:hand"}, {full:true, label:"Full access", description:"Allow all tool calls without asking (YOLO).", icon:"lucide:shield-alert"}]}>{(access) =>
-      <button role="menuitemradio" aria-checked={c.yoloMode() === access.full} onClick={() => { c.setYoloMode(access.full); c.configureSession(); c.setAccessMenuOpen(false); }} class="w-full flex items-center gap-3 px-2 py-3 text-left rounded-lg hover:bg-elev cursor-pointer">
-        <Iconify icon={access.icon} size={19} class={access.full ? "text-brand-500" : ""} /><span class="flex-1"><span class={`font-medium ${access.full ? "text-brand-500" : "text-ink-100"}`}>{access.label}</span><span class={`block mt-1 text-[11px] ${access.full ? "text-brand-500/80" : "text-ink-500"}`}>{access.description}</span></span><Show when={c.yoloMode() === access.full}><Iconify icon="lucide:check" size={14} class={access.full ? "text-brand-500" : ""} /></Show>
+      <button role="menuitemradio" aria-checked={c.yoloMode() === access.full} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { c.setYoloMode(access.full); c.configureSession(); c.setAccessMenuOpen(false); }} class="w-full flex items-center gap-3 px-2 py-3 text-left rounded-lg hover:bg-elev transition-colors cursor-pointer">
+        <Iconify icon={access.icon} size={19} class={access.full ? "text-danger" : ""} /><span class="flex-1"><span class={`font-medium ${access.full ? "text-danger" : "text-ink-100"}`}>{access.label}</span><span class={`block mt-1 text-[11px] ${access.full ? "text-danger/80" : "text-ink-500"}`}>{access.description}</span></span><Show when={c.yoloMode() === access.full}><Iconify icon="lucide:check" size={14} class={access.full ? "text-danger" : ""} /></Show>
       </button>
     }</For>
+    </div>
   </FloatMenu>
 </div>
 </Show>

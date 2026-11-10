@@ -50,7 +50,7 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
       "Content-Security-Policy",
       [
         "default-src 'self'",
-        "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client 'sha256-irJfLmBsOF5THDLD+AWwo/3Pyl3T7p4Nke5b1WhBAu4=' 'sha256-udweQu0/QO+buA7Ub3sQ33gElcVLpH0v6ZhZe9H8LB8='",
+        "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client 'sha256-irJfLmBsOF5THDLD+AWwo/3Pyl3T7p4Nke5b1WhBAu4=' 'sha256-epltEam/2K5Bq/xlpojFaju1SPH4yyuVJZ/+WV4OLMQ='",
         // 'self' hosts sandboxed Generative UI widget documents
         // (/api/indirect-code/gen-ui/widgets/:id, CSP-sandboxed themselves).
         "frame-src 'self' https://accounts.google.com/gsi/",

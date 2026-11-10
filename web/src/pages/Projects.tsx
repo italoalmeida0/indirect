@@ -1,7 +1,7 @@
 import { createEffect, createResource, createSignal, For, Show } from "solid-js";
 import { api, currentFinancialPolicy, currentSession, policyRevision, type FinancialProjectDto, type ProjectMemberDto, type ProjectUsageDto } from "../api";
 import { PageTitle } from "../chrome";
-import { Badge, Btn, Card, EmptyState, Icons, Input, Modal, ModalNotice, Select, fmtCost, fmtNum, toast } from "../ui";
+import { Badge, Btn, Card, CurrencyField, EmptyState, Icons, Input, Modal, ModalNotice, Select, fmtCost, fmtNum, toast } from "../ui";
 
 const message = (error: unknown) => error instanceof Error ? error.message : "Request failed";
 
@@ -94,23 +94,23 @@ export default function ProjectsPage() {
     <Show when={projects.loading && !readProjects()}><p role="status" class="text-sm text-ink-400">Loading financial projects…</p></Show>
     <Show when={readProjects() && !readProjects()!.length}><EmptyState icon={Icons.folder} title="No financial projects" hint={admin() ? "Create a project when you need shared budgets or access policies." : "Your administrator can add you to a financial project."} /></Show>
     <div class="grid gap-4 xl:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)]">
-      <div class="space-y-2"><For each={readProjects()}>{(item) => <button type="button" onClick={() => { setSelected(item.id); setError(""); }} aria-pressed={selected() === item.id} class={`w-full text-left p-4 rounded-xl border transition-colors ${selected() === item.id ? "border-accent-500 bg-accent-500/10" : "border-line bg-card hover:bg-elev"}`}>
-        <div class="flex flex-wrap justify-between gap-2"><span class="font-medium text-sm text-ink-100 break-words">{item.name}</span><Badge tone={item.status === "active" ? "green" : "zinc"}>{item.status}</Badge></div>
-        <p class="text-xs text-ink-400 mt-2">{item.kind === "cost_center" ? "Cost center" : "Project"}{item.membership ? ` · ${item.membership}` : ""}</p>
-        <For each={item.budgets}>{(budget) => <div class="text-xs text-ink-300 mt-2"><Show when={currentFinancialPolicy().budgetPresentation === "usd" && budget.limitUsd !== undefined}><p>{budget.kind === "monthly" ? "Monthly" : "Lifetime"}: {fmtCost(budget.spentUsd ?? 0)} used · {budget.limitUsd === null ? "No shared ceiling" : `${fmtCost(budget.limitUsd!)} ceiling`}</p></Show><Show when={currentFinancialPolicy().budgetPresentation === "percent"}><p>{budget.kind === "monthly" ? "Monthly" : "Lifetime"}: {budget.limitConfigured ? budget.usedPercent == null ? "Budget configured" : `${Math.round(budget.usedPercent)}% used` : "No shared ceiling"}</p></Show></div>}</For>
-        <Show when={currentFinancialPolicy().budgetPresentation === "hidden"}><p class="text-xs text-ink-400 mt-2">Financial amounts are private.</p></Show>
+      <div class="space-y-2"><For each={readProjects()}>{(item) => <button type="button" onClick={() => { setSelected(item.id); setError(""); }} aria-pressed={selected() === item.id} class={`w-full text-left p-4 rounded-control border transition-colors cursor-pointer ${selected() === item.id ? "border-accent bg-accent-subtle" : "border-line bg-surface hover:bg-surface-muted"}`}>
+        <div class="flex flex-wrap justify-between gap-2"><span class="font-medium text-sm text-fg break-words">{item.name}</span><Badge tone={item.status === "active" ? "green" : "zinc"}>{item.status}</Badge></div>
+        <p class="text-xs text-fg-secondary mt-2">{item.kind === "cost_center" ? "Cost center" : "Project"}{item.membership ? ` · ${item.membership}` : ""}</p>
+        <For each={item.budgets}>{(budget) => <div class="text-xs text-fg-secondary mt-2"><Show when={currentFinancialPolicy().budgetPresentation === "usd" && budget.limitUsd !== undefined}><p>{budget.kind === "monthly" ? "Monthly" : "Lifetime"}: {fmtCost(budget.spentUsd ?? 0)} used · {budget.limitUsd === null ? "No shared ceiling" : `${fmtCost(budget.limitUsd!)} ceiling`}</p></Show><Show when={currentFinancialPolicy().budgetPresentation === "percent"}><p>{budget.kind === "monthly" ? "Monthly" : "Lifetime"}: {budget.limitConfigured ? budget.usedPercent == null ? "Budget configured" : `${Math.round(budget.usedPercent)}% used` : "No shared ceiling"}</p></Show></div>}</For>
+        <Show when={currentFinancialPolicy().budgetPresentation === "hidden"}><p class="text-xs text-fg-secondary mt-2">Financial amounts are private.</p></Show>
       </button>}</For></div>
       <Show when={project()}>{(item) => <div class="space-y-4 min-w-0">
-        <Card class="p-4 space-y-4" motion="fade-u duration-250"><div class="flex flex-wrap gap-3 justify-between"><div><h2 class="font-semibold text-ink-100 break-words">{item().name}</h2><p class="text-xs text-ink-400 mt-1 break-all">ID: {item().id}</p></div><Show when={admin()}><Btn variant="outline" size="sm" onClick={() => edit(item())}>Edit project</Btn></Show></div>
-          <Show when={item().description}><p class="text-sm text-ink-400 break-words">{item().description}</p></Show>
-          <Show when={canManage()} fallback={<p class="text-xs text-ink-400">Project reports and member management are available to the assigned project managers.</p>}>
+        <Card class="p-4 space-y-4" motion="fade-u duration-250"><div class="flex flex-wrap gap-3 justify-between"><div><h2 class="font-medium text-fg break-words">{item().name}</h2><p class="text-xs text-fg-secondary mt-1 break-all">ID: {item().id}</p></div><Show when={admin()}><Btn variant="outline" size="sm" onClick={() => edit(item())}>Edit project</Btn></Show></div>
+          <Show when={item().description}><p class="text-sm text-fg-secondary break-words">{item().description}</p></Show>
+          <Show when={canManage()} fallback={<p class="text-xs text-fg-secondary">Project reports and member management are available to the assigned project managers.</p>}>
           <form onSubmit={(event) => { event.preventDefault(); setRange({ from: from(), to: to() }); }} class="grid gap-3 items-end sm:flex sm:flex-wrap"><div class="min-w-0 sm:flex-1"><Input label="Usage from" type="date" value={from()} onInput={setFrom} required /></div><div class="min-w-0 sm:flex-1"><Input label="Usage through" type="date" value={to()} onInput={setTo} required /></div><Btn type="submit" size="sm" disabled={usage.loading}>View report</Btn></form>
-          <Show when={usage.error}><p role="alert" class="text-sm text-ink-300">{message(usage.error)}</p></Show>
-          <Show when={usage.loading}><p role="status" class="text-xs text-ink-400">Loading report…</p></Show>
-          <Show when={readUsage()}>{(report) => <dl class="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm"><div><dt class="text-xs text-ink-400">Requests</dt><dd class="font-mono mt-1">{fmtNum(report().requests)}</dd></div><div><dt class="text-xs text-ink-400">Input tokens</dt><dd class="font-mono mt-1">{fmtNum(report().inputTokens)}</dd></div><div><dt class="text-xs text-ink-400">Cache tokens</dt><dd class="font-mono mt-1">{fmtNum(report().cacheTokens)}</dd></div><div><dt class="text-xs text-ink-400">Output tokens</dt><dd class="font-mono mt-1">{fmtNum(report().outputTokens)}</dd></div><div><dt class="text-xs text-ink-400">Errors</dt><dd class="font-mono mt-1">{fmtNum(report().errorRequests)}</dd></div><Show when={currentFinancialPolicy().budgetPresentation === "usd" && report().costUsd !== undefined}><div><dt class="text-xs text-ink-400">Cost</dt><dd class="font-mono mt-1">{fmtCost(report().costUsd!)}</dd></div></Show></dl>}</Show>
+          <Show when={usage.error}><p role="alert" class="text-sm text-fg-secondary">{message(usage.error)}</p></Show>
+          <Show when={usage.loading}><p role="status" class="text-xs text-fg-secondary">Loading report…</p></Show>
+          <Show when={readUsage()}>{(report) => <dl class="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm"><div><dt class="text-xs text-fg-secondary">Requests</dt><dd class="font-mono mt-1">{fmtNum(report().requests)}</dd></div><div><dt class="text-xs text-fg-secondary">Input tokens</dt><dd class="font-mono mt-1">{fmtNum(report().inputTokens)}</dd></div><div><dt class="text-xs text-fg-secondary">Cache tokens</dt><dd class="font-mono mt-1">{fmtNum(report().cacheTokens)}</dd></div><div><dt class="text-xs text-fg-secondary">Output tokens</dt><dd class="font-mono mt-1">{fmtNum(report().outputTokens)}</dd></div><div><dt class="text-xs text-fg-secondary">Errors</dt><dd class="font-mono mt-1">{fmtNum(report().errorRequests)}</dd></div><Show when={currentFinancialPolicy().budgetPresentation === "usd" && report().costUsd !== undefined}><div><dt class="text-xs text-fg-secondary">Cost</dt><dd class="font-mono mt-1">{fmtCost(report().costUsd!)}</dd></div></Show></dl>}</Show>
           </Show>
         </Card>
-        <Show when={canManage()}><Card class="p-4 space-y-4" motion="fade-u duration-250"><h2 class="font-semibold text-sm text-ink-100">Members and managers</h2><p class="text-xs text-ink-400">Administrators assign managers. Project managers can add and remove members in their assigned projects.</p>
+        <Show when={canManage()}><Card class="p-4 space-y-4" motion="fade-u duration-250"><h2 class="font-medium text-sm text-fg">Members and managers</h2><p class="text-xs text-fg-secondary">Administrators assign managers. Project managers can add and remove members in their assigned projects.</p>
           <Show when={members.error}><p role="alert" class="text-sm">{message(members.error)}</p><Btn size="sm" variant="outline" onClick={() => refetchMembers()}>Retry members</Btn></Show>
           <Show when={readMembers() && !readMembers()!.length}><p class="text-xs text-ink-400">No members yet.</p></Show>
           <ul class="divide-y divide-line"><For each={readMembers()}>{(member) => <li class="flex flex-wrap items-center justify-between gap-2 py-3"><div class="min-w-0"><p class="text-sm break-all">{member.name || member.email}</p><p class="text-xs text-ink-400 break-all">{member.email} · {member.role}</p></div><Show when={admin()}><Select ariaLabel={`Role for ${member.email}`} value={member.role} onChange={(role) => !busy() && changeMembership(member, role)} options={[{ value: "member", label: "Member" }, { value: "manager", label: "Manager" }]} /></Show><Show when={admin() || member.role === "member"}><Btn size="sm" variant="outline" disabled={busy()} onClick={() => removeMember(member)}>Remove {member.name || member.email}</Btn></Show></li>}</For></ul>
@@ -121,9 +121,80 @@ export default function ProjectsPage() {
       </div>}</Show>
     </div>
     <Modal open={editing() !== null} onClose={() => !busy() && setEditing(null)} title={editing() === "new" ? "New financial project" : "Edit financial project"}>
-      <form onSubmit={save} class="space-y-4"><Input label="Project code" value={code()} onInput={setCode} required hint="1–64 letters, numbers, dots, dashes or underscores; start with a letter or digit." /><Input label="Project name" value={name()} onInput={setName} required /><Input label="Project description" value={description()} onInput={setDescription} /><Show when={editing() === "new"} fallback={<p class="text-xs text-ink-400">Scope type: {kind() === "cost_center" ? "Cost center" : "Project"}</p>}><Select label="Scope type" value={kind()} onChange={setKind} options={[{ value: "project", label: "Project" }, { value: "cost_center", label: "Cost center" }]} /></Show>
+      <form onSubmit={save} class="space-y-4">
+        {/* Exclusive Cost Center & Project Hierarchy Blueprint */}
+        <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-2.5" aria-hidden="true">
+          <div class="flex items-center justify-between gap-2 flex-wrap">
+            <span class="text-[11px] font-medium tracking-wider text-fg-muted">
+              Organizational Ledger Topology
+            </span>
+            <Badge tone={kind() === "cost_center" ? "indigo" : "green"}>
+              {kind() === "cost_center" ? "Umbrella Cost Center" : "Assignable Project Scope"}
+            </Badge>
+          </div>
+          <div class="flex items-center gap-2 text-xs font-mono bg-surface rounded-lg border border-line px-3 py-2 overflow-x-auto">
+            <Show when={kind() === "project"}>
+              <span class="text-fg-secondary shrink-0">
+                {costCenter()
+                  ? (readProjects() ?? []).find((p) => p.id === costCenter())?.code || "COST-CENTER"
+                  : "ROOT-LEDGER"}
+              </span>
+              <span class="text-fg-muted shrink-0">──▸</span>
+            </Show>
+            <span class="px-1.5 py-0.5 rounded bg-accent-subtle border border-accent/35 text-accent font-medium shrink-0">
+              {code().trim() || "CODE"}
+            </span>
+            <span class="text-fg truncate font-sans font-medium">
+              {name().trim() || (kind() === "cost_center" ? "Untitled cost center" : "Untitled financial project")}
+            </span>
+            <span class="ml-auto text-[11px] text-fg-muted shrink-0">
+              {(() => {
+                const m = Number(limit());
+                const l = Number(totalLimit());
+                if (m > 0 && l > 0) return `${(l / m).toFixed(1)} mo runway`;
+                if (m > 0) return `${fmtCost(m)}/mo`;
+                if (l > 0) return `${fmtCost(l)} cap`;
+                return "∞ ceiling";
+              })()}
+            </span>
+          </div>
+        </div>
+
+        <Input label="Project code" value={code()} onInput={setCode} required hint="1–64 letters, numbers, dots, dashes or underscores; start with a letter or digit." /><Input label="Project name" value={name()} onInput={setName} required /><Input label="Project description" value={description()} onInput={setDescription} /><Show when={editing() === "new"} fallback={<p class="text-xs text-ink-400">Scope type: {kind() === "cost_center" ? "Cost center" : "Project"}</p>}><Select label="Scope type" value={kind()} onChange={setKind} options={[{ value: "project", label: "Project" }, { value: "cost_center", label: "Cost center" }]} /></Show>
         <Show when={kind() === "project"}><Select label="Cost center" value={costCenter()} onChange={setCostCenter} options={[{ value: "", label: "No cost center" }, ...(readProjects() ?? []).filter((p) => p.kind === "cost_center" && (p.status === "active" || p.id === costCenter())).map((p) => ({ value: p.id, label: p.name }))]} /></Show>
-        <Select label="Responsible user" value={responsible()} onChange={setResponsible} options={[{ value: "", label: "No responsible user" }, ...(readUsers() ?? []).map((user) => ({ value: user.id, label: `${user.name || user.email} · ${user.email}` }))]} hint="Optional. Assign project membership separately." /><Show when={users.error}><p role="alert" class="text-xs">Responsible users could not be loaded. Reload this page to choose a different user.</p></Show><Input label="Shared monthly budget (USD)" type="number" min={0} step="any" value={limit()} onInput={setLimit} hint="Leave empty for no shared ceiling. Account and key limits still apply." /><Input label="Shared lifetime budget (USD)" type="number" min={0} step="any" value={totalLimit()} onInput={setTotalLimit} hint="Optional lifetime ceiling, independent of the monthly budget." />
+        <Select label="Responsible user" value={responsible()} onChange={setResponsible} options={[{ value: "", label: "No responsible user" }, ...(readUsers() ?? []).map((user) => ({ value: user.id, label: `${user.name || user.email} · ${user.email}` }))]} hint="Optional. Assign project membership separately." /><Show when={users.error}><p role="alert" class="text-xs">Responsible users could not be loaded. Reload this page to choose a different user.</p></Show>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+          <CurrencyField
+            label="Shared monthly budget (USD)"
+            ariaLabel="Shared monthly budget (USD)"
+            value={limit()}
+            onInput={setLimit}
+            step={25}
+            hint="Leave empty for no shared ceiling. Account and key limits still apply."
+            presets={[
+              { label: "$50", value: "50" },
+              { label: "$100", value: "100" },
+              { label: "$250", value: "250" },
+              { label: "$500", value: "500" },
+              { label: "∞", value: "" },
+            ]}
+          />
+          <CurrencyField
+            label="Shared lifetime budget (USD)"
+            ariaLabel="Shared lifetime budget (USD)"
+            value={totalLimit()}
+            onInput={setTotalLimit}
+            step={50}
+            hint="Optional lifetime ceiling, independent of the monthly budget."
+            presets={[
+              { label: "$250", value: "250" },
+              { label: "$500", value: "500" },
+              { label: "$1K", value: "1000" },
+              { label: "$5K", value: "5000" },
+              { label: "∞", value: "" },
+            ]}
+          />
+        </div>
         <Show when={editing() !== "new"}><Select label="Project status" value={status()} onChange={setStatus} options={[{ value: "active", label: "Active" }, { value: "archived", label: "Archived" }]} /><ModalNotice>Archiving blocks new project activity and preserves historical records. Key reassignment affects future requests only.</ModalNotice></Show>
         <Show when={error()}><p role="alert" class="text-sm text-ink-300">{error()}</p></Show><div class="flex flex-wrap gap-2 justify-end"><Btn variant="ghost" disabled={busy()} onClick={() => setEditing(null)}>Cancel</Btn><Btn type="submit" disabled={busy() || !name().trim()}>{busy() ? "Saving…" : "Save project"}</Btn></div>
       </form>

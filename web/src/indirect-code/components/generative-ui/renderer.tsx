@@ -391,7 +391,7 @@ export function GenerativeUiWidget(props: {
           `card` token, so the frame seam is invisible. While the widget is
           not ready, a centered loading pill (placeholder text) floats over
           the streaming preview; runtime errors land in the footer below. */}
-      <div class={expanded() ? "group/guhost fixed inset-0 z-[55] flex flex-col overflow-hidden bg-ink-950/95" : "group/guhost"}>
+      <div class={expanded() ? "group/guhost fixed inset-0 z-40 flex flex-col overflow-hidden bg-ink-950/95" : "group/guhost"}>
         <Show when={!streaming()}>
           <div
             class={
@@ -454,7 +454,7 @@ export function GenerativeUiWidget(props: {
           <div class="border-b border-line bg-elev/95 backdrop-blur p-3 text-ink-100">
             <div class="mb-2 flex items-center justify-between">
               <div class="flex items-center gap-2">
-                <span class="text-[12px] font-semibold text-ink-200">Source code</span>
+                <span class="text-[12px] font-medium text-ink-200">Source code</span>
                 <span class="rounded bg-ink-800 px-1.5 py-0.5 text-[11px] text-ink-400 gu-mono">{data().id}.tsx</span>
               </div>
               <div class="flex items-center gap-1">
@@ -506,7 +506,7 @@ export function GenerativeUiWidget(props: {
         </Show>
         <Show when={missing()}>
           <div class="ui-card-mode flex items-center gap-2 px-3 py-1.5">
-            <span class="shrink-0 text-[11px] font-semibold text-rose-500">Widget not found</span>
+            <span class="shrink-0 text-[11px] font-medium text-danger">Widget not found</span>
             <span class="min-w-0 flex-1 truncate text-[11px] text-ink-500 gu-mono">{data().id}</span>
             <Show when={props.onPrefillPrompt}>
               <button
@@ -521,14 +521,14 @@ export function GenerativeUiWidget(props: {
         </Show>
         <Show when={isStatic() && !streaming() && !missing()}>
           <div class="ui-card-mode p-4">
-            <div class="text-[11px] font-semibold text-ink-300">{data().placeholder || "Interactive widget"}</div>
+            <div class="text-[11px] font-medium text-ink-300">{data().placeholder || "Interactive widget"}</div>
             <Show when={Object.keys(data().state ?? {}).length}>
               <pre class="mt-2 max-h-40 overflow-auto rounded-lg border border-line bg-elev/40 p-2 text-[11px] text-ink-400">
                 {JSON.stringify(data().state ?? {}, null, 2)}
               </pre>
             </Show>
             <div class="mt-2 text-[11px] text-ink-500">
-              Static preview — this fence has no <code>widget_id:</code> link to a stored widget source.
+              Static preview · this fence has no <code>widget_id:</code> link to a stored widget source.
             </div>
           </div>
         </Show>
@@ -565,7 +565,7 @@ export function GenerativeUiWidget(props: {
         </Show>
         <Show when={error()}>
           <div class="flex items-center gap-2 border-t border-line bg-elev/60 px-3 py-2">
-            <span class="shrink-0 text-[11px] font-semibold text-rose-500">Widget error</span>
+            <span class="shrink-0 text-[11px] font-medium text-danger">Widget error</span>
             <span class="min-w-0 flex-1 truncate text-[11px] text-ink-400" title={error()}>
               {error()}
             </span>

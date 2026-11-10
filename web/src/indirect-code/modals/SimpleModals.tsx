@@ -41,21 +41,21 @@ export function ChoiceModal() {
                 onClick={() => state()?.resolve(opt.id)}
                 class={`flex items-center justify-between gap-3 rounded-xl border p-3.5 text-left transition-all cursor-pointer group ${
                   opt.primary
-                    ? "border-brand-500/40 bg-brand-500/10 hover:bg-brand-500/15 shadow-sm"
+                    ? "border-accent/40 bg-accent-subtle hover:bg-accent/15 shadow-sm"
                     : "border-line bg-ink-950/60 hover:bg-ink-900 hover:border-ink-500"
                 }`}
               >
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2 flex-wrap">
                     <span
-                      class={`text-xs sm:text-sm font-semibold ${
+                      class={`text-xs sm:text-sm font-medium ${
                         opt.primary ? "text-ink-100" : "text-ink-200"
                       }`}
                     >
                       {opt.label}
                     </span>
                     <Show when={opt.primary}>
-                      <span class="bg-brand-500 text-white text-[10px] font-medium px-2 py-0.5 rounded-full">
+                      <span class="bg-accent text-accent-foreground text-[10px] font-medium px-2 py-0.5 rounded-full">
                         Recommended
                       </span>
                     </Show>
@@ -70,7 +70,7 @@ export function ChoiceModal() {
                   icon="lucide:arrow-right"
                   size={15}
                   class={`shrink-0 transition-transform group-hover:translate-x-0.5 ${
-                    opt.primary ? "text-brand-400" : "text-ink-500"
+                    opt.primary ? "text-accent" : "text-ink-500"
                   }`}
                 />
               </button>
@@ -154,17 +154,17 @@ export function PairModal() {
             return (
               <div class="space-y-4">
                 <div class="space-y-2">
-                  <div class="text-xs font-semibold text-ink-100">
+                  <div class="text-xs font-medium text-ink-100">
                     Pairing Commands
                   </div>
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     <button
                       type="button"
                       onClick={() => copyWithToast(cmds().unix)}
-                      class="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-ink-950/70 border border-line hover:border-brand-500/60 hover:bg-elev/80 transition-all cursor-pointer group text-left"
+                      class="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-ink-950/70 border border-line hover:border-accent/60 hover:bg-elev/80 transition-all cursor-pointer group text-left"
                     >
                       <div>
-                        <div class="text-xs font-semibold text-ink-100 flex items-center gap-1.5">
+                        <div class="text-xs font-medium text-ink-100 flex items-center gap-1.5">
                           <Iconify icon="lucide:terminal" size={13} class="text-ink-400" />
                           <span>Linux & macOS</span>
                         </div>
@@ -172,7 +172,7 @@ export function PairModal() {
                           curl -fsSL … | bash
                         </div>
                       </div>
-                      <div class="p-1.5 rounded-lg bg-ink-900 border border-line group-hover:text-brand-400 transition-colors">
+                      <div class="p-1.5 rounded-lg bg-ink-900 border border-line group-hover:text-accent transition-colors">
                         <Iconify icon="lucide:copy" size={14} />
                       </div>
                     </button>
@@ -180,10 +180,10 @@ export function PairModal() {
                     <button
                       type="button"
                       onClick={() => copyWithToast(cmds().windows)}
-                      class="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-ink-950/70 border border-line hover:border-brand-500/60 hover:bg-elev/80 transition-all cursor-pointer group text-left"
+                      class="flex items-center justify-between gap-3 p-3.5 rounded-xl bg-ink-950/70 border border-line hover:border-accent/60 hover:bg-elev/80 transition-all cursor-pointer group text-left"
                     >
                       <div>
-                        <div class="text-xs font-semibold text-ink-100 flex items-center gap-1.5">
+                        <div class="text-xs font-medium text-ink-100 flex items-center gap-1.5">
                           <Iconify icon="lucide:terminal" size={13} class="text-ink-400" />
                           <span>Windows PowerShell</span>
                         </div>
@@ -191,7 +191,7 @@ export function PairModal() {
                           irm … | iex
                         </div>
                       </div>
-                      <div class="p-1.5 rounded-lg bg-ink-900 border border-line group-hover:text-brand-400 transition-colors">
+                      <div class="p-1.5 rounded-lg bg-ink-900 border border-line group-hover:text-accent transition-colors">
                         <Iconify icon="lucide:copy" size={14} />
                       </div>
                     </button>
@@ -199,8 +199,8 @@ export function PairModal() {
                 </div>
 
                 <div class="p-3.5 rounded-xl bg-ink-900/40 border border-line space-y-2">
-                  <div class="text-xs font-semibold text-ink-200 flex items-center gap-2">
-                    <Iconify icon="lucide:info" size={14} class="text-brand-400" />
+                  <div class="text-xs font-medium text-ink-200 flex items-center gap-2">
+                    <Iconify icon="lucide:info" size={14} class="text-accent" />
                     <span>How pairing works</span>
                   </div>
                   <ol class="space-y-1 text-xs text-ink-400 leading-relaxed list-decimal list-inside">

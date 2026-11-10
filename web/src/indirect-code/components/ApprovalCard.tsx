@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
+import { press } from "../../ds/motion/press";
 import { FileIcon } from "../presentation";
 import { tryParseArgs } from "../utils/tools";
 import { formatDurationSecs } from "../utils/format";
@@ -41,9 +42,9 @@ export function ApprovalCard(props: ApprovalCardProps) {
         return (
           <div class={`${props.convWidthClass()} mx-auto rounded-2xl border border-line/70 bg-ink-900 p-4 shadow-xl`}>
             <div class="flex items-center gap-2 text-[13px]">
-              <Iconify icon="lucide:shield" size={15} class="text-brand-500 shrink-0" />
-              <span class="font-semibold text-ink-100">Review tool call</span>
-              <span class="text-[11px] text-ink-500">Safe mode — nothing ran yet</span>
+              <Iconify icon="lucide:shield" size={15} class="text-accent shrink-0" />
+              <span class="font-medium text-ink-100">Review tool call</span>
+              <span class="text-[11px] text-ink-500">Safe mode · nothing ran yet</span>
             </div>
             {/* Human summary per tool (never raw JSON) */}
             <div class="mt-2.5 rounded-xl border border-line/60 bg-ink-950/70 overflow-hidden">
@@ -143,10 +144,10 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       <For each={editList.slice(0, 2)}>
                         {(e: any) => (
                           <>
-                            <div class="px-2.5 py-1 bg-rose-500/10 text-rose-300 whitespace-pre-wrap break-all max-h-20 overflow-y-auto">
+                            <div class="px-2.5 py-1 bg-danger-subtle text-danger whitespace-pre-wrap break-all max-h-20 overflow-y-auto">
                               {(String(e.old_text || "").split("\n").slice(0, 6).join("\n"))}
                             </div>
-                            <div class="px-2.5 py-1 bg-emerald-500/10 text-emerald-300 whitespace-pre-wrap break-all max-h-20 overflow-y-auto">
+                            <div class="px-2.5 py-1 bg-success-subtle text-success whitespace-pre-wrap break-all max-h-20 overflow-y-auto">
                               {(String(e.new_text || "").split("\n").slice(0, 6).join("\n"))}
                             </div>
                           </>
@@ -186,6 +187,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
             </div>
             <div class="mt-3 flex items-center justify-end gap-2">
               <button
+                onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.respondApproval(false)}
                 class="px-3.5 py-1.5 rounded-xl text-xs font-medium text-ink-300 hover:text-ink-100 border border-line hover:bg-ink-800 transition-colors cursor-pointer"
               >
@@ -193,17 +195,19 @@ export function ApprovalCard(props: ApprovalCardProps) {
               </button>
               <Show when={!isUnsupportedLegacyPython}>
                 <button
+                  onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => props.respondApproval(true)}
-                  class="px-4 py-1.5 rounded-xl bg-ink-100 text-ink-950 hover:bg-accent-400 text-xs font-semibold border border-transparent transition-colors cursor-pointer"
+                  class="px-4 py-1.5 rounded-xl bg-ink-100 text-ink-950 hover:bg-accent-400 text-xs font-medium border border-transparent transition-colors cursor-pointer"
                 >
                   Allow once
                 </button>
                 <button
+                  onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => {
                     props.setYoloMode(true);
                     props.respondApproval(true, true);
                   }}
-                  class="px-3.5 py-1.5 rounded-xl border ui-button-brand text-xs font-semibold hover:brightness-105 active:translate-y-[1px] transition-all cursor-pointer"
+                  class="px-3.5 py-1.5 rounded-xl border ui-button-brand text-xs font-medium hover:brightness-105 active:translate-y-[1px] transition-all cursor-pointer"
                   data-rc-tip="Enable Full access and allow all tool calls" aria-label="Always allow — enable Full access"
                 >
                   Always allow

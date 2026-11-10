@@ -10,7 +10,7 @@ const bundle = await Bun.build({ entrypoints: [fileURLToPath(new URL("../test/fi
 if (!bundle.success) throw new Error(bundle.logs.join("\n"));
 const worker = await Bun.build({ entrypoints: [fileURLToPath(new URL("../web/src/indirect-code/transcript/history-worker.ts", import.meta.url))], target: "browser" });
 if (!worker.success) throw new Error(worker.logs.join("\n"));
-const cssName = Array.from(new Bun.Glob("*.css").scanSync("dist"))[0];
+const cssName = Array.from(new Bun.Glob("assets/*.css").scanSync("dist"))[0];
 if (!cssName) throw new Error("Run bun run build:web before this browser check");
 const css = Bun.file(`dist/${cssName}`);
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req) => {
@@ -147,7 +147,7 @@ try {
   }, table);
   await settle();
   assert.deepEqual(await page.locator("#markdown tbody tr").evaluateAll((rows: Element[]) => rows.map((r) => Array.from(r.children, (c) => c.textContent?.trim()))), [["one", ""], ["two", "three"]], "ragged-table repair does not consume cells that are still streaming");
-  assert.equal(await page.locator('#markdown .rc-table-wrap button').count(), 0);
+  assert.equal(await page.locator('#markdown .rc-table-wrap button').count(), 2);
   const literalTable = "| Language | Fence syntax | Highlight | Previous |\n|:---|:---:|---:|---|\n"
     + ["python", "javascript", "markdown", "bash", "sql"].map((lang) => `| ${lang} | \` \`\`\`${lang} \` | keywords, strings | yes |`).join("\n")
     + "\n\n| Item | Status |\n|---|---|\n| Code block | OK |\n| Table | OK |\n| Right alignment | OK |\n";

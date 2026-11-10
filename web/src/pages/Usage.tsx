@@ -191,7 +191,7 @@ export default function UsagePage() {
 
             {/* Mobile request details with pagination. */}
             <Show when={mobile()}><div class="usage-mobile-requests p-3 space-y-3">
-              <p class="text-[11px] text-ink-500" aria-live="polite">{recentEventsList.loading ? "Loading requests…" : `Showing ${(recentEventsList() ?? []).length} of ${fmtNum(eventCount() ?? 0)} requests`}</p>
+              <p class="text-xs text-fg-muted" aria-live="polite">{recentEventsList.loading ? "Loading requests…" : `Showing ${(recentEventsList() ?? []).length} of ${fmtNum(eventCount() ?? 0)} requests`}</p>
               <div class="space-y-2">
                 <For each={recentEventsList() ?? []}>
                   {(ev, idx) => {
@@ -200,47 +200,47 @@ export default function UsagePage() {
                     const toggle = () => setExpandedEventKey(isExpanded() ? null : rowKey());
 
                     return (
-                      <div class="rounded-xl border border-line bg-elev transition-colors shadow-xs overflow-hidden">
+                      <div class="rounded-control border border-line bg-surface-muted transition-colors shadow-xs overflow-hidden">
                         {/* Primary compact summary row */}
                         <button
                           type="button"
                           aria-expanded={isExpanded()}
                           aria-label={`Inspect request for ${ev.model} at ${new Date(ev.ts).toLocaleString()}`}
                           onClick={toggle}
-                          class="w-full text-left p-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-card/50 transition-colors"
+                          class="w-full text-left p-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-surface transition-colors"
                         >
                           <div class="min-w-0 flex-1 space-y-1.5">
                             <div class="flex items-center justify-between gap-2">
                               <div class="flex items-center gap-1.5 min-w-0">
                                 <StatusCell value={ev.status} />
-                                <span class="text-xs font-semibold text-ink-100 truncate">{ev.model}</span>
+                                <span class="text-xs font-medium text-fg truncate">{ev.model}</span>
                                 <ProtoCell value={ev.proto} />
                               </div>
                               <Show when={showUsd()}>
-                                <span class="font-mono text-xs font-semibold text-accent-400 tabular-nums shrink-0">
+                                <span class="font-mono text-xs font-medium text-accent tabular-nums shrink-0">
                                   {fmtCost(ev.cost)}
                                 </span>
                               </Show>
                             </div>
-                            <div class="flex items-center justify-between text-[11px] text-ink-400 gap-2">
-                              <span class="text-ink-300 truncate min-w-0 font-medium">{ev.key_name || "—"}</span>
-                              <div class="shrink-0 flex items-center gap-1.5 text-ink-500 font-mono text-[10px]">
+                            <div class="flex items-center justify-between text-xs text-fg-secondary gap-2">
+                              <span class="text-fg-secondary truncate min-w-0 font-medium">{ev.key_name || "—"}</span>
+                              <div class="shrink-0 flex items-center gap-1.5 text-fg-muted font-mono text-2xs">
                                 <span>{latencyFormatter({ value: ev.latency_ms })}</span>
                                 <span>·</span>
                                 <span>{new Date(ev.ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
                               </div>
                             </div>
                             {/* Row 3: Token breakdown strip visible on card */}
-                            <div class="flex items-center gap-2 pt-1 border-t border-line/40 text-[10px] text-ink-400 font-mono">
-                              <span>In: <strong class="text-ink-200">{fmtNum(ev.in_tok)}</strong></span>
-                              <span class="text-ink-600">·</span>
-                              <span>Cache: <strong class="text-ink-200">{fmtNum(ev.cache_tok)}</strong></span>
-                              <span class="text-ink-600">·</span>
-                              <span>Out: <strong class="text-ink-200">{fmtNum(ev.out_tok)}</strong></span>
+                            <div class="flex items-center gap-2 pt-1 border-t border-line/40 text-2xs text-fg-secondary font-mono">
+                              <span>In: <strong class="text-fg font-medium">{fmtNum(ev.in_tok)}</strong></span>
+                              <span class="text-fg-muted">·</span>
+                              <span>Cache: <strong class="text-fg font-medium">{fmtNum(ev.cache_tok)}</strong></span>
+                              <span class="text-fg-muted">·</span>
+                              <span>Out: <strong class="text-fg font-medium">{fmtNum(ev.out_tok)}</strong></span>
                             </div>
                           </div>
 
-                          <div class="text-ink-500 shrink-0 self-center pl-1">
+                          <div class="text-fg-muted shrink-0 self-center pl-1">
                             <span
                               class="inline-block transition-transform duration-150"
                               style={{ transform: isExpanded() ? "rotate(180deg)" : "rotate(0deg)" }}
@@ -252,28 +252,28 @@ export default function UsagePage() {
 
                         {/* Collapsible token & pricing breakdown drawer */}
                         <Show when={isExpanded()}>
-                          <div class="px-3.5 pb-3.5 pt-1 border-t border-line/60 bg-ink-950/40 text-[11px] space-y-2">
-                            <div class="grid grid-cols-3 gap-2 pt-2 text-ink-400">
-                              <div class="p-2 rounded-lg bg-card/60 border border-line/40">
-                                <span class="text-ink-500 block text-[10px]">Input</span>
-                                <span class="font-mono text-ink-100 block font-medium">{fmtNum(ev.in_tok)}</span>
-                                <Show when={showUsd()}><span class="text-ink-500 text-[10px] block">{fmtCost(ev.cost_in)}</span></Show>
+                          <div class="px-3.5 pb-3.5 pt-1 border-t border-line/60 bg-surface text-xs space-y-2">
+                            <div class="grid grid-cols-3 gap-2 pt-2 text-fg-secondary">
+                              <div class="p-2 rounded-lg bg-surface-muted border border-line/40">
+                                <span class="text-fg-muted block text-2xs">Input</span>
+                                <span class="font-mono text-fg block font-medium">{fmtNum(ev.in_tok)}</span>
+                                <Show when={showUsd()}><span class="text-fg-muted text-2xs block">{fmtCost(ev.cost_in)}</span></Show>
                               </div>
-                              <div class="p-2 rounded-lg bg-card/60 border border-line/40">
-                                <span class="text-ink-500 block text-[10px]">Cache</span>
-                                <span class="font-mono text-ink-100 block font-medium">{fmtNum(ev.cache_tok)}</span>
-                                <Show when={showUsd()}><span class="text-ink-500 text-[10px] block">{fmtCost(ev.cost_cache)}</span></Show>
+                              <div class="p-2 rounded-lg bg-surface-muted border border-line/40">
+                                <span class="text-fg-muted block text-2xs">Cache</span>
+                                <span class="font-mono text-fg block font-medium">{fmtNum(ev.cache_tok)}</span>
+                                <Show when={showUsd()}><span class="text-fg-muted text-2xs block">{fmtCost(ev.cost_cache)}</span></Show>
                               </div>
-                              <div class="p-2 rounded-lg bg-card/60 border border-line/40">
-                                <span class="text-ink-500 block text-[10px]">Output</span>
-                                <span class="font-mono text-ink-100 block font-medium">{fmtNum(ev.out_tok)}</span>
-                                <Show when={showUsd()}><span class="text-ink-500 text-[10px] block">{fmtCost(ev.cost_out)}</span></Show>
+                              <div class="p-2 rounded-lg bg-surface-muted border border-line/40">
+                                <span class="text-fg-muted block text-2xs">Output</span>
+                                <span class="font-mono text-fg block font-medium">{fmtNum(ev.out_tok)}</span>
+                                <Show when={showUsd()}><span class="text-fg-muted text-2xs block">{fmtCost(ev.cost_out)}</span></Show>
                               </div>
                             </div>
-                            <div class="flex flex-wrap items-center justify-between gap-2 text-[10px] text-ink-500 pt-1">
-                              <span class="min-w-0 break-all">Provider: <strong class="text-ink-300 font-medium">{ev.provider_name || "—"}</strong></span>
+                            <div class="flex flex-wrap items-center justify-between gap-2 text-2xs text-fg-muted pt-1">
+                              <span class="min-w-0 break-all">Provider: <strong class="text-fg-secondary font-medium">{ev.provider_name || "—"}</strong></span>
                               <Show when={ev.upstream_model && ev.upstream_model !== ev.model}>
-                                <span class="min-w-0 break-all">Upstream: <code class="text-ink-400">{ev.upstream_model}</code></span>
+                                <span class="min-w-0 break-all">Upstream: <code class="text-fg-secondary">{ev.upstream_model}</code></span>
                               </Show>
                             </div>
                           </div>
@@ -289,18 +289,18 @@ export default function UsagePage() {
                 <div class="pt-2 flex items-center justify-between gap-2">
                   <button
                     type="button"
-                    class="h-9 px-3.5 rounded-lg border border-line bg-elev text-xs font-medium text-ink-300 hover:text-ink-100 hover:bg-card disabled:opacity-40 disabled:pointer-events-none cursor-pointer transition-colors"
+                    class="ui-button ui-button-outline ui-button-sm"
                     disabled={mobilePage() <= 1}
                     onClick={() => setMobilePage((p) => Math.max(1, p - 1))}
                   >
                     Previous
                   </button>
-                  <span class="text-xs text-ink-400 font-mono tabular-nums">
+                  <span class="text-xs text-fg-secondary font-mono tabular-nums">
                     {mobilePage()} / {totalMobilePages()}
                   </span>
                   <button
                     type="button"
-                    class="h-9 px-3.5 rounded-lg border border-line bg-elev text-xs font-medium text-ink-300 hover:text-ink-100 hover:bg-card disabled:opacity-40 disabled:pointer-events-none cursor-pointer transition-colors"
+                    class="ui-button ui-button-outline ui-button-sm"
                     disabled={mobilePage() >= totalMobilePages()}
                     onClick={() => setMobilePage((p) => Math.min(totalMobilePages(), p + 1))}
                   >

@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import { Modal, Badge, Btn, copyWithToast } from "../../ui";
+import { Modal, Badge, Btn, StepperField, copyWithToast } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { languageForPath } from "../utils/lang";
 import { compactTokens } from "../context";
@@ -41,7 +41,7 @@ export function PreviewModal() {
                 <Show when={f().truncated && f().fullText}>
                   <button
                     onClick={m.restorePreviewFile}
-                    class="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20 transition-colors cursor-pointer"
+                    class="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border bg-warning-subtle border-warning/35 text-warning hover:bg-warning/20 transition-colors cursor-pointer"
                   >
                     <Iconify icon="lucide:rotate-ccw" size={13} />
                     <span>Restore Full</span>
@@ -82,31 +82,48 @@ export function PreviewModal() {
                 </Show>
               </div>
 
-              <div class="text-[11px] font-mono text-ink-500 uppercase tracking-wider">
+              <div class="text-[11px] font-mono text-ink-500">
                 {f().language || languageForPath(f().name)}
               </div>
             </div>
 
             {/* Truncate input card */}
             <Show when={m.showTruncateInput() && !f().dataUrl}>
-              <div class="flex flex-wrap items-center gap-3 p-3.5 rounded-xl bg-ink-950/70 border border-line">
-                <div class="flex items-center gap-1.5 text-ink-400 text-xs">
-                  <Iconify icon="lucide:scissors" size={14} class="text-ink-400" />
-                  <span>Preview limit:</span>
+              <div class="p-3.5 rounded-xl bg-ink-950/70 border border-line space-y-3">
+                {/* Exclusive Context Window Footprint Slicer Bar */}
+                <div class="rounded-lg border border-line bg-ink-900/50 p-2.5 space-y-1.5" aria-hidden="true">
+                  <div class="flex items-center justify-between text-[11px]">
+                    <span class="text-ink-400 font-medium">128K Context Window Footprint</span>
+                    <span class="font-mono text-accent">
+                      {Math.min(100, (((m.truncateTokens() || 16000) / 128000) * 100)).toFixed(1)}% of 128K window
+                    </span>
+                  </div>
+                  <div class="h-1.5 rounded-full bg-ink-950 overflow-hidden">
+                    <div
+                      class="h-full bg-accent rounded-full transition-all"
+                      style={{ width: `${Math.min(100, ((m.truncateTokens() || 16000) / 128000) * 100)}%` }}
+                    />
+                  </div>
                 </div>
-                <input
-                  type="number"
+
+                <StepperField
+                  label="Preview limit"
+                  ariaLabel="Preview limit"
                   min={100}
                   max={200000}
                   step={1000}
-                  class="w-28 bg-ink-900 border border-line rounded-lg px-2.5 py-1 text-ink-100 text-xs font-mono focus:outline-none focus:border-brand-500"
-                  value={m.truncateTokens() || 16000}
-                  onInput={(e) => m.setTruncateTokens(parseInt(e.currentTarget.value) || 16000)}
+                  unit="tokens"
+                  value={String(m.truncateTokens() || 16000)}
+                  onInput={(v) => m.setTruncateTokens(parseInt(v) || 16000)}
+                  hint={`Approximately ${compactTokens((m.truncateTokens() || 16000) * 4)} characters rendered in the preview viewer.`}
+                  presets={[
+                    { label: "4K", value: "4000" },
+                    { label: "16K", value: "16000" },
+                    { label: "32K", value: "32000" },
+                    { label: "64K", value: "64000" },
+                  ]}
                 />
-                <span class="text-xs text-ink-500">
-                  tokens (~{compactTokens((m.truncateTokens() || 16000) * 4)} chars)
-                </span>
-                <div class="flex items-center gap-2 ml-auto">
+                <div class="flex items-center justify-end gap-2">
                   <button
                     onClick={() => m.setShowTruncateInput(false)}
                     class="text-xs text-ink-400 hover:text-ink-100 px-2.5 py-1 cursor-pointer"

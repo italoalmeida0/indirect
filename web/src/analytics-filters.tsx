@@ -3,6 +3,12 @@ import { Portal } from "solid-js/web";
 import { shift } from "@floating-ui/dom";
 import { api } from "./api";
 import { anchorFloat } from "./floating";
+import { RangeCalendar, RollingText } from "./ds/components/calendar";
+import { animate } from "./ds/motion/animate";
+import { createGlide } from "./ds/motion/glide";
+import { press } from "./ds/motion/press";
+import { reducedMotion } from "./ds/motion/reduced";
+import { motionTokens } from "./ds/motion/tokens";
 import { Icon, Icons } from "./ui";
 import { calendarPeriods, localDateTime, presetRange, rangeLabel, rangeUnit, relativePeriods, type AnalyticsRange } from "./analytics-range";
 
@@ -195,61 +201,6 @@ function SearchField(props: { value: string; onInput: (value: string) => void; p
   </div>;
 }
 
-function Calendar(props: { from: string; to: string; setFrom: (value: string) => void; setTo: (value: string) => void }) {
-  const initial = new Date(props.from || Date.now());
-  const [month, setMonth] = createSignal(new Date(initial.getFullYear(), initial.getMonth(), 1));
-  const [choosingEnd, setChoosingEnd] = createSignal(false);
-  const [hover, setHover] = createSignal("");
-  const dateKey = (date: Date) => localDateTime(date.getTime()).slice(0, 10);
-  const fromDay = () => props.from.slice(0, 10);
-  const toDay = () => choosingEnd() && hover() ? hover() : props.to.slice(0, 10);
-  const days = createMemo(() => {
-    const start = new Date(month());
-    start.setDate(1 - start.getDay());
-    return Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i));
-  });
-  const move = (amount: number) => setMonth((current) => new Date(current.getFullYear(), current.getMonth() + amount, 1));
-  const select = (day: string) => {
-    if (!choosingEnd()) {
-      props.setFrom(`${day}T00:00`); props.setTo(`${day}T23:59`); setChoosingEnd(true);
-    } else {
-      const start = fromDay();
-      props.setFrom(`${day < start ? day : start}T00:00`);
-      props.setTo(`${day < start ? start : day}T23:59`);
-      setChoosingEnd(false); setHover("");
-    }
-  };
-  const navigate = (event: KeyboardEvent, date: Date) => {
-    const amounts: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7, Home: -date.getDay(), End: 6 - date.getDay() };
-    if (!(event.key in amounts) && event.key !== "PageUp" && event.key !== "PageDown") return;
-    event.preventDefault(); event.stopPropagation();
-    const next = new Date(date);
-    if (event.key === "PageUp" || event.key === "PageDown") next.setMonth(next.getMonth() + (event.key === "PageUp" ? -1 : 1));
-    else next.setDate(next.getDate() + amounts[event.key]!);
-    if (next.getMonth() !== month().getMonth() || next.getFullYear() !== month().getFullYear()) setMonth(new Date(next.getFullYear(), next.getMonth(), 1));
-    requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(`[data-calendar-date="${dateKey(next)}"]`)?.focus());
-  };
-  return <div class="analytics-calendar">
-    <div class="analytics-calendar-heading">
-      <button type="button" aria-label="Previous month" class="analytics-icon-button" onClick={() => move(-1)}><Icon name="lucide:chevron-left" size={16} /></button>
-      <span aria-live="polite">{month().toLocaleDateString("en", { month: "long", year: "numeric" })}</span>
-      <button type="button" aria-label="Next month" class="analytics-icon-button" onClick={() => move(1)}><Icon name={Icons.chevronRight} size={16} /></button>
-    </div>
-    <div class="analytics-calendar-grid" role="group" aria-label="Choose start and end dates">
-      <For each={["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]}>{(day) => <span class="analytics-weekday">{day}</span>}</For>
-      <For each={days()}>{(date) => {
-        const key = dateKey(date);
-        const selected = () => key === fromDay() || key === toDay();
-        const between = () => key > (fromDay() < toDay() ? fromDay() : toDay()) && key < (fromDay() < toDay() ? toDay() : fromDay());
-        return <button type="button" data-calendar-date={key} aria-label={date.toLocaleDateString("en", { weekday: "long", month: "long", day: "numeric", year: "numeric" })} aria-pressed={selected()} tabIndex={key === (fromDay().slice(0, 7) === dateKey(month()).slice(0, 7) ? fromDay() : dateKey(month())) ? 0 : -1}
-          class={`analytics-day ${date.getMonth() !== month().getMonth() ? "is-outside" : ""} ${selected() ? "is-selected" : between() ? "is-between" : ""} ${key === dateKey(new Date()) ? "is-today" : ""}`}
-          onClick={() => select(key)} onPointerEnter={() => { if (choosingEnd()) setHover(key); }} onKeyDown={(event) => navigate(event, date)}>{date.getDate()}</button>;
-      }}</For>
-    </div>
-    <p class="analytics-calendar-hint" aria-live="polite">{choosingEnd() ? "Choose the end date" : "Choose a start date, then an end date"}</p>
-  </div>;
-}
-
 export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnalyticsFilters>; loading?: boolean; align?: "start" | "end"; label?: string; dateLabel?: string; leadingControl?: JSX.Element }) {
   const f = props.filters;
   const [open, setOpen] = createSignal<"filters" | "period" | null>(null);
@@ -260,8 +211,28 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
   const [draftFrom, setDraftFrom] = createSignal("");
   const [draftTo, setDraftTo] = createSignal("");
   const [calendarVersion, setCalendarVersion] = createSignal(0);
+  const [catListEl, setCatListEl] = createSignal<HTMLDivElement>();
+  const [catIndEl, setCatIndEl] = createSignal<HTMLSpanElement>();
+  const [catHover, setCatHover] = createSignal<HTMLElement | null>(null);
+  const [optListEl, setOptListEl] = createSignal<HTMLDivElement>();
+  const [optIndEl, setOptIndEl] = createSignal<HTMLSpanElement>();
+  const [optHover, setOptHover] = createSignal<HTMLElement | null>(null);
+  const [modeWrapEl, setModeWrapEl] = createSignal<HTMLDivElement>();
+  const [modeIndEl, setModeIndEl] = createSignal<HTMLSpanElement>();
+  const [modeBtnEls, setModeBtnEls] = createSignal<Record<Mode, HTMLButtonElement | undefined>>({ include: undefined, exclude: undefined });
+  const [periodListEl, setPeriodListEl] = createSignal<HTMLDivElement>();
+  const [periodIndEl, setPeriodIndEl] = createSignal<HTMLSpanElement>();
+  const [periodHover, setPeriodHover] = createSignal<HTMLElement | null>(null);
+
+  createGlide({ container: catListEl, indicator: catIndEl, target: catHover });
+  createGlide({ container: optListEl, indicator: optIndEl, target: optHover });
+  createGlide({ container: modeWrapEl, indicator: modeIndEl, target: () => modeBtnEls()[mode()] ?? null });
+  createGlide({ container: periodListEl, indicator: periodIndEl, target: periodHover });
+
   let filterButton!: HTMLButtonElement;
   let periodButton!: HTMLButtonElement;
+  let periodBodyEl: HTMLDivElement | undefined;
+  let optionsPaneEl: HTMLDivElement | undefined;
   const id = createUniqueId();
   const count = () => Object.values(f.selection()).reduce((sum, entry) => sum + entry.include.length + entry.exclude.length, 0);
   const current = () => f.categories().find((category) => category.id === active());
@@ -272,14 +243,37 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
     const labels = selection[mode].map((value) => f.optionLabel(field, value));
     return labels.length ? [{ field, mode, category: category?.label ?? field, labels }] : [];
   })));
+  const rangeDirection = (() => {
+    let lastScore = 0;
+    return createMemo(() => {
+      const r = f.range();
+      const score = (r.from ?? 0) * 2 + r.to;
+      const dir = score >= lastScore ? 1 : -1;
+      lastScore = score;
+      return dir;
+    });
+  })();
+  const animateStep = (el: HTMLElement | undefined, _dir: number) => {
+    if (!el || untrack(reducedMotion)) return;
+    animate(
+      el,
+      { opacity: 1, filter: "blur(0px)" },
+      { duration: 0.14, ease: motionTokens.ease.enter },
+      { from: { opacity: 0, filter: "blur(1.5px)" } },
+    );
+  };
   const close = (focus = false) => {
     const button = open() === "filters" ? filterButton : periodButton;
     f.setField("");
     setOpen(null);
+    setCatHover(null);
+    setOptHover(null);
+    setPeriodHover(null);
     if (focus) button.focus({ preventScroll: true });
   };
   const chooseCategory = (field: string) => {
-    setActive(field); f.setField(field);
+    setActive(field); f.setField(field); setOptHover(null);
+    queueMicrotask(() => animateStep(optionsPaneEl, 1));
     requestAnimationFrame(() => document.getElementById(`${id}-filters`)?.querySelector<HTMLInputElement>(".analytics-options input")?.focus({ preventScroll: true }));
   };
   const periodText = () => {
@@ -294,8 +288,14 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
     const range = f.range();
     setDraftFrom(localDateTime(range.from ?? Date.now() - 7 * 86_400_000));
     setDraftTo(localDateTime(range.to - 1));
+    setPeriodHover(null);
     setCalendarVersion((v) => v + 1); setCustom(true);
+    queueMicrotask(() => animateStep(periodBodyEl, 1));
     requestAnimationFrame(() => document.getElementById(`${id}-period`)?.querySelector<HTMLButtonElement>(".analytics-day[aria-pressed='true']")?.focus({ preventScroll: true }));
+  };
+  const exitCustom = () => {
+    setCustom(false);
+    queueMicrotask(() => animateStep(periodBodyEl, -1));
   };
   const validDraft = () => Number.isFinite(new Date(draftFrom()).getTime()) && Number.isFinite(new Date(draftTo()).getTime()) && new Date(draftFrom()).getTime() <= new Date(draftTo()).getTime();
   const applyCustom = () => {
@@ -303,27 +303,35 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
     f.setRange({ preset: "custom", from: new Date(draftFrom()).getTime(), to: new Date(draftTo()).getTime() + 60_000 });
     close(true);
   };
-  const periodRow = (period: { id: string; label: string }, badge?: string) => <button type="button" data-nav data-initial-focus={f.range().preset === period.id ? "" : undefined} class={`analytics-menu-row ${f.range().preset === period.id ? "is-active" : ""}`} onClick={() => applyPreset(period.id)}>
-    <Show when={badge}><span class="analytics-period-code">{badge}</span></Show><span>{period.label}</span><Show when={f.range().preset === period.id}><Icon name={Icons.check} size={15} class="ml-auto" /></Show>
+  const periodRow = (period: { id: string; label: string }, badge?: string) => <button type="button" data-nav data-initial-focus={f.range().preset === period.id ? "" : undefined} class={`analytics-menu-row ${f.range().preset === period.id ? "is-active" : ""}`} onPointerEnter={(e) => setPeriodHover(e.currentTarget)} onFocus={(e) => setPeriodHover(e.currentTarget)} onPointerDown={(e) => press(e.currentTarget)} onClick={() => applyPreset(period.id)}>
+    <Show when={badge}><span class="analytics-period-code">{badge}</span></Show><span>{period.label}</span><Show when={f.range().preset === period.id}><Icon name={Icons.check} size={15} class="ml-auto text-accent" /></Show>
   </button>;
 
   return <div class={`analytics-toolbar ${props.align === "end" ? "analytics-toolbar-end" : ""}`} aria-label="Analytics filters">
     <div class="analytics-controls">
       {props.leadingControl}
-      <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label={`Filter ${props.label ?? "usage"}`} aria-busy={props.loading || f.pending()} aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
+      <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label={`Filter ${props.label ?? "usage"}`} aria-busy={props.loading || f.pending()} aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
         <Icon name={props.loading || f.pending() ? Icons.refresh : "lucide:list-filter"} size={16} class={props.loading || f.pending() ? "animate-spin motion-reduce:animate-none" : ""} /><span>Filter</span><Show when={count()}><span class="analytics-filter-count">{count()}</span></Show>
       </button>
-      <button ref={periodButton} type="button" class={`analytics-control analytics-period-trigger ${open() === "period" ? "is-active" : ""}`} title={exactRange()} aria-label={`Time range: ${f.label()}`} aria-haspopup="dialog" aria-expanded={open() === "period"} aria-controls={`${id}-period`} onClick={() => { if (open() === "period") close(); else { setCustom(false); setOpen("period"); } }}>
-        <Icon name="lucide:calendar-days" size={15} /><span class="analytics-range-name">{props.dateLabel ? `${props.dateLabel}: ` : ""}{f.label()}</span><span class="analytics-range-dates">{periodText()}</span><Icon name={Icons.chevronDown} size={13} class="text-ink-500" />
+      <button ref={periodButton} type="button" class={`analytics-control analytics-period-trigger ${open() === "period" ? "is-active" : ""}`} title={exactRange()} aria-label={`Time range: ${props.dateLabel ? `${props.dateLabel}: ` : ""}${f.label()} ${periodText()}`} aria-haspopup="dialog" aria-expanded={open() === "period"} aria-controls={`${id}-period`} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { if (open() === "period") close(); else { setCustom(false); setOpen("period"); } }}>
+        <Icon name="lucide:calendar-days" size={15} />
+        <span class="analytics-range-name">
+          <RollingText text={`${props.dateLabel ? `${props.dateLabel}: ` : ""}${f.label()}`} direction={rangeDirection()} />
+        </span>
+        {" "}
+        <span class="analytics-range-dates">
+          <RollingText text={periodText()} direction={rangeDirection()} />
+        </span>
+        <Icon name={Icons.chevronDown} size={13} class={`ui-select-chevron ${open() === "period" ? "is-open" : ""}`} />
       </button>
     </div>
     <Show when={chips().length}>
       <div class="analytics-chips" aria-live="polite">
         <For each={chips()}>{(chip) => <div class={`analytics-chip ${chip.mode === "exclude" ? "is-exclusion" : ""}`}>
-          <button type="button" class="analytics-chip-label" title={chip.labels.join(", ")} onClick={() => { setOpen("filters"); chooseCategory(chip.field); setMode(chip.mode); }}><span>{chip.category}</span><span class="analytics-chip-operator">{chip.mode === "include" ? "is" : "is not"}</span><strong>{chip.labels.slice(0, 2).join(", ")}</strong><Show when={chip.labels.length > 2}><span>+{chip.labels.length - 2}</span></Show></button>
-          <button type="button" class="analytics-chip-remove" aria-label={`Remove ${chip.category} ${chip.mode} filter`} onClick={() => f.clear(chip.field, chip.mode)}><Icon name={Icons.x} size={12} /></button>
+          <button type="button" class="analytics-chip-label" title={chip.labels.join(", ")} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { setOpen("filters"); chooseCategory(chip.field); setMode(chip.mode); }}><span>{chip.category}</span><span class="analytics-chip-operator">{chip.mode === "include" ? "is" : "is not"}</span><strong><RollingText text={chip.labels.slice(0, 2).join(", ")} /></strong><Show when={chip.labels.length > 2}><span>+{chip.labels.length - 2}</span></Show></button>
+          <button type="button" class="analytics-chip-remove" aria-label={`Remove ${chip.category} ${chip.mode} filter`} onPointerDown={(e) => press(e.currentTarget)} onClick={() => f.clear(chip.field, chip.mode)}><Icon name={Icons.x} size={12} /></button>
         </div>}</For>
-        <button type="button" class="analytics-clear" onClick={() => f.clear()}>Clear all</button>
+        <button type="button" class="analytics-clear" onPointerDown={(e) => press(e.currentTarget)} onClick={() => f.clear()}>Clear all</button>
       </div>
     </Show>
     <Show when={open() === "filters"}>
@@ -331,12 +339,13 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
         <div id={`${id}-filters`} class={`analytics-filter-layout ${active() ? "has-detail" : ""}`}>
           <div class="analytics-categories">
             <SearchField value={categorySearch()} onInput={setCategorySearch} placeholder="Search filters…" initial />
-            <div class="analytics-category-list">
+            <div ref={setCatListEl} class="analytics-category-list" data-glide="" onPointerLeave={() => setCatHover(null)}>
+              <span ref={setCatIndEl} class="ui-menu-highlight" aria-hidden="true" />
               <Show when={!f.options.loading} fallback={<p class="analytics-empty">Loading filters…</p>}>
                 <Show when={!f.options.error} fallback={<div class="analytics-empty">Could not load filters.<button type="button" class="analytics-clear block mx-auto mt-2" onClick={() => void f.refetch()}>Try again</button></div>}>
                   <For each={categories()}>{(category) => {
                     const selected = () => (f.selection()[category.id]?.include.length ?? 0) + (f.selection()[category.id]?.exclude.length ?? 0);
-                    return <button type="button" data-nav class={`analytics-menu-row ${active() === category.id ? "is-active" : ""}`} aria-label={`Filter by ${category.label}`} aria-pressed={active() === category.id} onClick={() => chooseCategory(category.id)}><Icon name={categoryIcons[category.id] || category.icon || Icons.layers} size={15} class="text-ink-400" /><span>{category.label}</span><Show when={selected()}><span class="analytics-category-count">{selected()}</span></Show><Icon name={Icons.chevronRight} size={14} class="ml-auto text-ink-500" /></button>;
+                    return <button type="button" data-nav class={`analytics-menu-row ${active() === category.id ? "is-active" : ""}`} aria-label={`Filter by ${category.label}`} aria-pressed={active() === category.id} onPointerEnter={(e) => setCatHover(e.currentTarget)} onFocus={(e) => setCatHover(e.currentTarget)} onPointerDown={(e) => press(e.currentTarget)} onClick={() => chooseCategory(category.id)}><Icon name={categoryIcons[category.id] || category.icon || Icons.layers} size={15} class="text-ink-400" /><span>{category.label}</span><Show when={selected()}><span class="analytics-category-count">{selected()}</span></Show><Icon name={Icons.chevronRight} size={14} class="ml-auto text-ink-500" /></button>;
                   }}</For>
                   <Show when={!categories().length}><p class="analytics-empty">No filters found.</p></Show>
                 </Show>
@@ -344,17 +353,21 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
             </div>
             <div class="analytics-menu-footer"><span>Narrow your view</span><kbd>esc</kbd></div>
           </div>
-          <Show when={current()}>{(category) => <div class="analytics-options">
-            <div class="analytics-option-heading"><button type="button" class="analytics-icon-button" aria-label="Back to filters" onClick={() => { setActive(""); f.setField(""); }}><Icon name="lucide:chevron-left" size={15} /></button><span>{category().label}</span><span class="analytics-result-count">{f.pageLoading() ? "Loading…" : `${(f.page()?.total ?? 0).toLocaleString()} available`}</span></div>
-            <div class="analytics-mode" role="group" aria-label="Filter mode"><For each={["include", "exclude"] as const}>{(value) => <button type="button" aria-pressed={mode() === value} class={mode() === value ? "is-selected" : ""} onClick={() => setMode(value)}><Icon name={value === "include" ? "lucide:plus" : "lucide:minus"} size={13} />{value === "include" ? "Include" : "Exclude"}</button>}</For></div>
+          <Show when={current()}>{(category) => <div ref={optionsPaneEl} class="analytics-options">
+            <div class="analytics-option-heading"><button type="button" class="analytics-icon-button" aria-label="Back to filters" onPointerDown={(e) => press(e.currentTarget)} onClick={() => { setActive(""); f.setField(""); }}><Icon name="lucide:chevron-left" size={15} /></button><span>{category().label}</span><span class="analytics-result-count">{f.pageLoading() ? "Loading…" : `${(f.page()?.total ?? 0).toLocaleString()} available`}</span></div>
+            <div ref={setModeWrapEl} class="analytics-mode" data-glide="" role="group" aria-label="Filter mode">
+              <span ref={setModeIndEl} class="ui-segmented-indicator" aria-hidden="true" />
+              <For each={["include", "exclude"] as const}>{(value) => <button ref={(el) => setModeBtnEls((prev) => ({ ...prev, [value]: el }))} type="button" aria-pressed={mode() === value} class={mode() === value ? "is-selected" : ""} onPointerDown={(e) => press(e.currentTarget)} onClick={() => setMode(value)}><Icon name={value === "include" ? "lucide:plus" : "lucide:minus"} size={13} />{value === "include" ? "Include" : "Exclude"}</button>}</For>
+            </div>
             <SearchField value={f.search()} onInput={f.setSearch} placeholder={`Search ${category().label.toLowerCase()}…`} />
-            <div class="analytics-option-list" role="group" aria-label={`${mode() === "include" ? "Include" : "Exclude"} ${category().label}`}>
+            <div ref={setOptListEl} class="analytics-option-list" data-glide="" role="group" aria-label={`${mode() === "include" ? "Include" : "Exclude"} ${category().label}`} onPointerLeave={() => setOptHover(null)}>
+              <span ref={setOptIndEl} class="ui-menu-highlight" aria-hidden="true" />
               <Show when={!f.pageLoading()} fallback={<p class="analytics-empty" role="status">Loading options for this period…</p>}>
               <Show when={!f.facet.error} fallback={<div class="analytics-empty">Could not load options.<button type="button" class="analytics-clear block mx-auto mt-2" onClick={() => void f.refetchPage()}>Try again</button></div>}>
               <For each={visibleOptions()}>{(option) => {
                 const selected = () => f.selection()[category().id]?.[mode()].includes(option.value) ?? false;
                 const other = () => f.selection()[category().id]?.[mode() === "include" ? "exclude" : "include"].includes(option.value) ?? false;
-                return <button type="button" data-nav class={`analytics-menu-row analytics-option ${selected() ? "is-active" : ""}`} aria-pressed={selected()} disabled={!selected() && !other() && count() >= 250} title={option.value || "Unknown"} onClick={() => f.toggle(category().id, mode(), option.value, option.label)}>
+                return <button type="button" data-nav class={`analytics-menu-row analytics-option ${selected() ? "is-active" : ""}`} aria-pressed={selected()} disabled={!selected() && !other() && count() >= 250} title={option.value || "Unknown"} onPointerEnter={(e) => setOptHover(e.currentTarget)} onFocus={(e) => setOptHover(e.currentTarget)} onPointerDown={(e) => press(e.currentTarget)} onClick={() => f.toggle(category().id, mode(), option.value, option.label)}>
                   <span class={`analytics-checkbox ${selected() ? "is-checked" : ""}`}><Show when={selected()}><Icon name={mode() === "include" ? Icons.check : "lucide:minus"} size={11} strokeWidth={2.5} /></Show></span>
                   <span class="analytics-option-name">{option.label}</span><Show when={other()}><Icon name={mode() === "include" ? "lucide:minus" : "lucide:plus"} size={12} class="text-ink-500" /></Show><span class="analytics-option-count">{option.count.toLocaleString()}</span>
                 </button>;
@@ -377,18 +390,21 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
     </Show>
     <Show when={open() === "period"}>
       <FloatingPanel anchor={periodButton} label="Time range" close={close}>
-        <div id={`${id}-period`}>
+        <div id={`${id}-period`} ref={periodBodyEl}>
           <Show when={!custom()} fallback={<>
-            <div class="analytics-custom-heading"><button type="button" class="analytics-icon-button" aria-label="Back to presets" onClick={() => setCustom(false)}><Icon name="lucide:chevron-left" size={15} /></button><strong>Custom range</strong><span>{timezone}</span></div>
-            <Show when={calendarVersion()} keyed>{(_version) => <Calendar from={draftFrom()} to={draftTo()} setFrom={setDraftFrom} setTo={setDraftTo} />}</Show>
+            <div class="analytics-custom-heading"><button type="button" class="analytics-icon-button" aria-label="Back to presets" onPointerDown={(e) => press(e.currentTarget)} onClick={exitCustom}><Icon name="lucide:chevron-left" size={15} /></button><strong>Custom range</strong><span>{timezone}</span></div>
+            <Show when={calendarVersion()} keyed>{(_version) => <RangeCalendar from={draftFrom()} to={draftTo()} setFrom={setDraftFrom} setTo={setDraftTo} />}</Show>
             <div class="analytics-date-fields"><label>Start<input type="datetime-local" aria-label="Start date and time" value={draftFrom()} onInput={(e) => setDraftFrom(e.currentTarget.value)} /></label><label>End<input type="datetime-local" aria-label="End date and time" value={draftTo()} onInput={(e) => setDraftTo(e.currentTarget.value)} /></label></div>
             <Show when={!validDraft()}><p class="analytics-date-error" role="alert">End must be on or after the start.</p></Show>
-            <div class="analytics-custom-actions"><button type="button" class="analytics-cancel" onClick={() => close(true)}>Cancel</button><button type="button" class="analytics-apply" disabled={!validDraft()} onClick={applyCustom}>Apply range<Icon name="lucide:arrow-right" size={14} /></button></div>
+            <div class="analytics-custom-actions"><button type="button" class="analytics-cancel" onPointerDown={(e) => press(e.currentTarget)} onClick={() => close(true)}>Cancel</button><button type="button" class="analytics-apply" disabled={!validDraft()} onPointerDown={(e) => press(e.currentTarget)} onClick={applyCustom}>Apply range<Icon name="lucide:arrow-right" size={14} /></button></div>
           </>}>
             <div class="analytics-period-heading"><span>Time range</span><span>{timezone}</span></div>
-            <div class="analytics-presets"><For each={relativePeriods}>{(period) => periodRow(period, period.id)}</For></div>
-            <div class="analytics-calendar-presets"><For each={calendarPeriods}>{(period) => periodRow(period)}</For></div>
-            <div class="analytics-presets analytics-period-bottom">{periodRow({ id: "all", label: "All time" })}<button type="button" data-nav class="analytics-menu-row" onClick={beginCustom}><Icon name="lucide:calendar-range" size={15} /><span>Custom range…</span><Icon name={Icons.chevronRight} size={14} class="ml-auto text-ink-500" /></button></div>
+            <div ref={setPeriodListEl} class="analytics-period-list" data-glide="" onPointerLeave={() => setPeriodHover(null)}>
+              <span ref={setPeriodIndEl} class="ui-menu-highlight" aria-hidden="true" />
+              <div class="analytics-presets"><For each={relativePeriods}>{(period) => periodRow(period, period.id)}</For></div>
+              <div class="analytics-calendar-presets"><For each={calendarPeriods}>{(period) => periodRow(period)}</For></div>
+              <div class="analytics-presets analytics-period-bottom">{periodRow({ id: "all", label: "All time" })}<button type="button" data-nav class="analytics-menu-row" onPointerEnter={(e) => setPeriodHover(e.currentTarget)} onFocus={(e) => setPeriodHover(e.currentTarget)} onPointerDown={(e) => press(e.currentTarget)} onClick={beginCustom}><Icon name="lucide:calendar-range" size={15} /><span>Custom range…</span><Icon name={Icons.chevronRight} size={14} class="ml-auto text-ink-500" /></button></div>
+            </div>
           </Show>
         </div>
       </FloatingPanel>

@@ -3,7 +3,7 @@ import { nextHistoryCursor } from "../transcript/history";
 import type { DaemonCommand } from "../daemon-protocol";
 import { batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
-import { copyWithToast } from "../../ui";
+import { copyText } from "../../ds/primitives/clipboard";
 import { clearToolScrolls } from "../utils/scrollMemory";
 import { createTranscriptScroll } from "../scroll";
 import { createRenderBlockBuilder, latestShortTurnMessage } from "../transcript";
@@ -179,7 +179,10 @@ export function createTranscript(opts: {
   function copyMsg(id: string, text: string) {
     const trimmed = (text || "").trim();
     if (!trimmed) return;
-    copyWithToast(trimmed);
+    void copyText(trimmed).then((ok) => {
+      if (ok) opts.toast("Copied", "ok");
+      else opts.toast("Could not copy automatically. Select the text and copy it manually", "err");
+    });
     setCopiedMsgId(id);
     setTimeout(() => setCopiedMsgId((cur) => (cur === id ? null : cur)), 1500);
   }

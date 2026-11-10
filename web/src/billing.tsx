@@ -13,7 +13,7 @@ import {
   type ProjectedBillingPlanDto,
   type UsdBudgetWindowDto,
 } from "./api";
-import { Badge, Btn, Card, Icon, Icons, Modal, ModalField, Select, fmtCost, fmtDate, toast } from "./ui";
+import { Badge, Btn, Card, Icon, Icons, Modal, ModalField, Select, StepperField, fmtCost, fmtDate, toast } from "./ui";
 
 const windowName = (kind: string) => ({ monthly: "Monthly allowance", weekly: "Weekly allowance", session: "5-hour session", both: "Weekly + 5-hour" }[kind] ?? kind);
 const fmtPct = (value: number) => `${Number(value.toFixed(1))}%`;
@@ -139,8 +139,25 @@ function createBilling() {
     controller?.abort(); controller = new AbortController();
     return (await api<{ billing: BillingDto }>("GET", "/api/billing", undefined, controller.signal)).billing;
   });
-  const timer = setInterval(() => { if (document.visibilityState === "visible" && !data.loading) void actions.refetch(); }, 30_000);
-  const visible = () => { if (document.visibilityState === "visible") void actions.refetch(); };
+  const poll = async () => {
+    if (document.visibilityState !== "visible" || data.loading) return;
+    if (!data.latest || data.error) {
+      void actions.refetch();
+      return;
+    }
+    try {
+      controller?.abort();
+      controller = new AbortController();
+      const next = (await api<{ billing: BillingDto }>("GET", "/api/billing", undefined, controller.signal)).billing;
+      if (JSON.stringify(data.latest) !== JSON.stringify(next)) {
+        actions.mutate(next);
+      }
+    } catch {
+      // Keep the current view intact on transient background poll failure.
+    }
+  };
+  const timer = setInterval(() => void poll(), 30_000);
+  const visible = () => void poll();
   document.addEventListener("visibilitychange", visible);
   onCleanup(() => { controller?.abort(); clearInterval(timer); document.removeEventListener("visibilitychange", visible); });
   return { data, ...actions };
@@ -149,9 +166,9 @@ function createBilling() {
 export function PlanUsageCard() {
   const billing = createBilling();
   return <Card class="billing-overview p-5 min-w-0">
-    <div class="billing-heading"><div><span class="billing-eyebrow">Account allowance</span><h2>{billing.data.error ? "Plan & limits" : billing.data()?.plan?.name ?? "Plan & limits"}</h2></div><a class="analytics-control" href="#/limits">View limits<Icon name={Icons.chevronRight} size={13} /></a></div>
+    <div class="billing-heading"><div><span class="billing-eyebrow">Account allowance</span><h2>{billing.data.error ? "Plan & limits" : billing.data.latest?.plan?.name ?? "Plan & limits"}</h2></div><a class="analytics-control" href="#/limits">View limits<Icon name={Icons.chevronRight} size={13} /></a></div>
     <Show when={!billing.data.error} fallback={<div class="billing-error" role="alert">Could not load your allowance.<Btn size="sm" variant="ghost" onClick={() => void billing.refetch()}>Retry</Btn></div>}>
-      <Show when={billing.data()} fallback={<p class="text-xs text-ink-500 py-5">Loading your allowance…</p>}>{(data) => <BillingSummary billing={data()} compact />}</Show>
+      <Show when={billing.data.latest} fallback={<p class="text-xs text-ink-500 py-5">Loading your allowance…</p>}>{(data) => <BillingSummary billing={data()} compact />}</Show>
     </Show>
   </Card>;
 }
@@ -172,7 +189,7 @@ export function PlanLimits() {
   return <div class="billing-page">
     <div class="billing-page-heading"><div><span class="billing-eyebrow">Your account</span><h1>Plan & limits</h1><p>One allowance across every model, API key and connected client.</p></div><Btn variant="outline" size="sm" disabled={billing.data.loading} onClick={() => void billing.refetch()}><Icon name={Icons.refresh} size={14} />Refresh</Btn></div>
     <Show when={!billing.data.error} fallback={<Card class="billing-error"><span role="alert">Your limits could not be loaded.</span><Btn variant="outline" onClick={() => void billing.refetch()}>Try again</Btn></Card>}>
-      <Show when={billing.data()} fallback={<Card class="p-6 text-sm text-ink-500">Loading your plan…</Card>}>{(data) => <>
+      <Show when={billing.data.latest} fallback={<Card class="p-6 text-sm text-ink-500">Loading your plan…</Card>}>{(data) => <>
         <Card class="billing-plan-summary" motion="fade-u duration-300"><div class="billing-heading"><div><span class="billing-eyebrow">Current plan</span><h2>{data().plan?.name ?? "Unlimited"}</h2><p>{describePlanAllowance(data().plan, data().financialPolicy)}</p></div><div class="billing-plan-symbol"><Icon name="lucide:wallet" size={24} /></div></div><BillingSummary billing={data()} /></Card>
         <div class="billing-info-grid">
           <Card class="billing-policy" motion="fade-u duration-250"><Icon name="lucide:shield-check" size={20} /><h2>Clear, shared limits</h2><p>All priced input, cached input, output and reasoning count toward your allowance. Individual API keys can have smaller daily and lifetime spending limits.</p><p>Requests in progress temporarily reserve balance. The unused amount returns when a request finishes. Cancelling before the provider reports usage may consume the reserved amount.</p></Card>
@@ -218,7 +235,77 @@ export function UserPlanManager(props: { user: AdminUserDto | null; close: () =>
       <div class="billing-assignment"><Select label="Account plan" value={selected()} onChange={setSelected} options={[{ value: "", label: "Unlimited — no plan" }, ...current().plans.map((plan) => ({ value: plan.id, label: `${plan.name} · ${plan.monthlyUsd === null ? "Unlimited" : `${fmtCost(plan.monthlyUsd)} / month`}` }))]} /><Btn size="sm" disabled={busy() || selected() === (current().billing.plan?.id ?? "")} onClick={save}>Save plan</Btn></div>
       <p class="text-xs text-ink-500">Changing a plan preserves monthly and weekly spend. A different plan invalidates unused resets.</p>
       <BillingSummary billing={current().billing} />
-      <Show when={resetOptions().length}><div class="billing-grant"><div class="billing-heading"><div><h2>Grant resets</h2><p>The user chooses when to restore a shorter allowance.</p></div><Badge tone="zinc">{current().billing.resets.reduce((sum, grant) => sum + grant.remaining, 0)} available</Badge></div><div class="billing-form-grid"><Select label="Restore" value={kind()} onChange={setKind} options={resetOptions()} /><ModalField label="Number of resets"><input class="ui-field" aria-label="Number of resets" type="number" min="1" max="100" value={count()} onInput={(event) => setCount(event.currentTarget.value)} /></ModalField><ModalField label="Expires" hint="Optional · your local time"><input class="ui-field" aria-label="Reset expiration" type="datetime-local" value={expiry()} onInput={(event) => setExpiry(event.currentTarget.value)} /></ModalField><ModalField label="Note" hint="Visible to the user"><input class="ui-field" aria-label="Reset note" maxLength={256} value={note()} onInput={(event) => setNote(event.currentTarget.value)} /></ModalField></div><div class="flex justify-end mt-4"><Btn size="sm" disabled={busy() || !Number.isInteger(Number(count())) || Number(count()) < 1 || Number(count()) > 100} onClick={grant}>Grant reset</Btn></div></div></Show>
+      <Show when={resetOptions().length}>
+        <div class="billing-grant space-y-4">
+          <div class="billing-heading">
+            <div>
+              <h2>Grant resets</h2>
+              <p>The user chooses when to restore a shorter allowance.</p>
+            </div>
+            <Badge tone="zinc">{current().billing.resets.reduce((sum, grant) => sum + grant.remaining, 0)} available</Badge>
+          </div>
+
+          {/* Exclusive Perforated Allowance Voucher Ticket Preview */}
+          <div class="rounded-xl border border-accent/35 bg-surface-subtle p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 relative overflow-hidden" aria-hidden="true">
+            <div class="flex items-center gap-3 min-w-0">
+              <div class="w-10 h-10 rounded-xl bg-accent-subtle border border-accent/40 text-accent flex flex-col items-center justify-center shrink-0 font-mono">
+                <span class="text-xs font-medium leading-none">×{Number(count()) || 1}</span>
+                <span class="text-[9px] tracking-wider mt-0.5">Pass</span>
+              </div>
+              <div class="min-w-0">
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-xs font-medium text-fg">
+                    {kind() === "both" ? "Weekly + 5-Hour Dual Pass" : kind() === "weekly" ? "7-Day Rolling Window Pass" : "5-Hour Session Burst Pass"}
+                  </span>
+                  <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface border border-line text-fg-secondary">
+                    {expiry() ? `Valid until ${fmtDate(new Date(expiry()).getTime())}` : "No expiration"}
+                  </span>
+                </div>
+                <p class="text-[11px] text-fg-muted truncate mt-0.5">
+                  {note().trim() ? `“${note().trim()}”` : "Forgives settled sub-window spend · monthly ceiling stays intact"}
+                </p>
+              </div>
+            </div>
+            <div class="flex items-center gap-1 shrink-0 sm:border-l sm:border-dashed sm:border-line-strong sm:pl-3">
+              <For
+                each={[
+                  { label: "No expiry", days: 0 },
+                  { label: "+7d", days: 7 },
+                  { label: "+14d", days: 14 },
+                  { label: "+30d", days: 30 },
+                ]}
+              >
+                {(preset) => (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => {
+                      if (preset.days === 0) {
+                        setExpiry("");
+                      } else {
+                        const d = new Date(Date.now() + preset.days * 86400000);
+                        const pad = (n: number) => String(n).padStart(2, "0");
+                        setExpiry(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`);
+                      }
+                    }}
+                    class="px-2 py-1 rounded-md border border-line bg-surface hover:border-accent/40 text-[11px] font-mono text-fg-secondary hover:text-fg transition-colors cursor-pointer"
+                  >
+                    {preset.label}
+                  </button>
+                )}
+              </For>
+            </div>
+          </div>
+
+          <div class="billing-form-grid">
+            <Select label="Restore" value={kind()} onChange={setKind} options={resetOptions()} />
+            <StepperField label="Number of resets" ariaLabel="Number of resets" min={1} max={100} unit="resets" value={count()} onInput={setCount} presets={[{ label: "1x", value: "1" }, { label: "3x", value: "3" }, { label: "5x", value: "5" }, { label: "10x", value: "10" }]} />
+            <ModalField label="Expires" hint="Optional · your local time"><input class="ui-field" aria-label="Reset expiration" type="datetime-local" value={expiry()} onInput={(event) => setExpiry(event.currentTarget.value)} /></ModalField>
+            <ModalField label="Note" hint="Visible to the user"><input class="ui-field" aria-label="Reset note" maxLength={256} value={note()} onInput={(event) => setNote(event.currentTarget.value)} /></ModalField>
+          </div>
+          <div class="flex justify-end mt-4"><Btn size="sm" disabled={busy() || !Number.isInteger(Number(count())) || Number(count()) < 1 || Number(count()) > 100} onClick={grant}>Grant reset</Btn></div>
+        </div>
+      </Show>
     </div>}</Show></Show>
   </Modal>;
 }

@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
+import { press } from "../../../ds/motion/press";
 import { absoluteRemotePath, collapseCwd } from "../../paths";
 import { ShellCmd } from "../CodeBlock";
 import { FileIcon } from "../../presentation";
@@ -19,8 +20,11 @@ export function ToolUnitHeader(props: ToolPartProps) {
 
   return (
     <div
+      onPointerDown={(e) => {
+        if (props.m.expandable()) press(e.currentTarget);
+      }}
       onClick={props.m.toggle}
-      class="group/tool w-full flex items-center gap-2 pl-1 pr-1.5 py-1 rounded-lg cursor-pointer hover:bg-ink-900/70 text-[13px]"
+      class="group/tool w-full flex items-center gap-2 pl-1 pr-1.5 py-1 rounded-lg cursor-pointer hover:bg-ink-900/70 transition-colors text-[13px]"
     >
       <Show
         when={!(props.running && props.active && !props.u.result)}
@@ -48,13 +52,13 @@ export function ToolUnitHeader(props: ToolPartProps) {
       <Show when={props.m.sum().statAdd != null || props.m.sum().statDel != null}>
         <span class="font-mono text-[11px] shrink-0">
           <Show when={(props.m.sum().statAdd || 0) > 0}>
-            <span class="text-emerald-400">+{props.m.sum().statAdd}</span>
+            <span class="text-success">+{props.m.sum().statAdd}</span>
           </Show>
           <Show when={(props.m.sum().statAdd || 0) > 0 && (props.m.sum().statDel || 0) > 0}>
             <span class="text-ink-600"> </span>
           </Show>
           <Show when={(props.m.sum().statDel || 0) > 0}>
-            <span class="text-rose-400">-{props.m.sum().statDel}</span>
+            <span class="text-danger">-{props.m.sum().statDel}</span>
           </Show>
         </span>
       </Show>

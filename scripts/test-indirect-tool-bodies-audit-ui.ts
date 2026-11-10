@@ -6,12 +6,13 @@ import iconifyPlugin from "../plugins/iconify-solid-plugin";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const bundle = await Bun.build({ entrypoints: ["test/fixtures/tool-bodies-audit-ui.tsx"], target: "browser", plugins: [iconifyPlugin, solidPlugin] });
 if (!bundle.success) throw new Error(bundle.logs.join("\n"));
-const cssName = Array.from(new Bun.Glob("**/*.css").scanSync("dist"))[0];
-assert(cssName, "Run bun run build:web first");
+const cssFiles = Array.from(new Bun.Glob("assets/*.css").scanSync("dist")).sort();
+assert(cssFiles.length > 0, "Run bun run build:web first");
+const cssText = (await Promise.all(cssFiles.map((f) => Bun.file(`dist/${f.replaceAll("\\", "/")}`).text()))).join("\n");
 const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
   const path = new URL(req.url).pathname;
   if (path === "/bundle.js") return new Response(bundle.outputs[0]);
-  if (path === "/app.css") return new Response(Bun.file(`dist/${cssName}`));
+  if (path === "/app.css") return new Response(cssText, { headers: { "Content-Type": "text/css" } });
   return new Response('<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/app.css"></head><body><div id="root"></div><script type="module" src="/bundle.js"></script></body></html>', { headers: { "Content-Type": "text/html" } });
 }});
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, headless: true });

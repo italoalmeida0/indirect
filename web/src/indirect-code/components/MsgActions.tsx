@@ -1,5 +1,6 @@
 import { Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
+import { press } from "../../ds/motion/press";
 
 /** Shared transcript action button with mouse, keyboard and touch targets. */
 export function MsgIconBtn(props: {
@@ -15,12 +16,15 @@ export function MsgIconBtn(props: {
   return (
     <button
       type="button"
+      onPointerDown={(e) => {
+        if (!props.disabled) press(e.currentTarget);
+      }}
       onClick={props.onClick}
       disabled={props.disabled}
       class={
         props.compact
-          ? `rc-msg-action p-1 rounded-md text-ink-500 hover:text-ink-200 hover:bg-ink-900 transition-colors cursor-pointer ${props.danger ? "hover:text-rose-400" : ""}`
-          : `rc-msg-action p-1.5 rounded-md text-ink-500 hover:text-ink-200 ${props.danger ? "hover:text-rose-400 hover:bg-ink-900" : "hover:bg-elev"} transition-colors cursor-pointer disabled:opacity-40`
+          ? `rc-msg-action p-1 rounded-md text-ink-500 hover:text-ink-200 hover:bg-ink-900 transition-colors cursor-pointer ${props.danger ? "hover:text-danger" : ""}`
+          : `rc-msg-action p-1.5 rounded-md text-ink-500 hover:text-ink-200 ${props.danger ? "hover:text-danger hover:bg-ink-900" : "hover:bg-elev"} transition-colors cursor-pointer disabled:opacity-40`
       }
       data-rc-tip={props.tip}
       aria-label={props.tip}

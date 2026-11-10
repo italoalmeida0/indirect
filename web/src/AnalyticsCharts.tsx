@@ -85,10 +85,11 @@ export function UserSpendChart(props: { users: AnalyticsEntity[]; period: string
   return <Card class="analytics-user-chart p-5 min-w-0">
     <ChartHeading title="Usage by user" subtitle={`Top 8 by spend · ${props.period}`} value={fmtNum(props.users.reduce((sum, user) => sum + user.members, 0))} note="users with activity" />
     <p class="analytics-chart-hint">Select a user to filter every chart.</p>
-    <Show when={props.users.length} fallback={<ChartEmpty />}><div class="analytics-user-list"><For each={props.users}>{(user, index) => <button type="button" disabled={user.id === null} class="analytics-user-row" aria-label={`Filter by user ${user.label}`} onClick={() => user.id !== null && props.onSelect(user.id, user.label)}>
-      <span class="analytics-user-avatar" style={{ color: user.id === null ? colors[5] : colors[index() % 5] }}>{user.label.slice(0, 2).toUpperCase()}</span>
-      <span class="analytics-user-identity"><strong title={user.label}>{user.label}</strong><small title={user.detail}>{user.detail || `${user.members} users`}</small><span class="analytics-user-bar"><i style={{ width: `${max() > 0 ? (user.cost ?? 0) / max() * 100 : 0}%`, background: user.id === null ? colors[5] : colors[index() % 5] }} /></span></span>
-      <span class="analytics-user-amount"><strong>{fmtCost(user.cost ?? 0)}</strong><small>{fmtNum(user.reqs)} requests</small><small>{percent(cachePercent(user.in_tok, user.cache_tok))} cached</small></span>
+    <Show when={props.users.length} fallback={<ChartEmpty />}><div class="analytics-user-list"><For each={props.users}>{(user, index) => <button type="button" disabled={user.id === null} class="analytics-user-row" onClick={() => user.id !== null && props.onSelect(user.id, user.label)}>
+      <span class="sr-only">Filter by user </span>
+      <span class="analytics-user-avatar" aria-hidden="true" style={{ color: user.id === null ? colors[5] : colors[index() % 5] }}>{user.label.slice(0, 2).toUpperCase()}</span>
+      <span class="analytics-user-identity"><strong title={user.label}>{user.label}</strong><small title={user.detail} aria-hidden="true">{user.detail || `${user.members} users`}</small><span class="analytics-user-bar" aria-hidden="true"><i style={{ width: `${max() > 0 ? (user.cost ?? 0) / max() * 100 : 0}%`, background: user.id === null ? colors[5] : colors[index() % 5] }} /></span></span>
+      <span class="analytics-user-amount" aria-hidden="true"><strong>{fmtCost(user.cost ?? 0)}</strong><small>{fmtNum(user.reqs)} requests</small><small>{percent(cachePercent(user.in_tok, user.cache_tok))} cached</small></span>
     </button>}</For></div></Show>
   </Card>;
 }
@@ -100,11 +101,12 @@ export function ApiKeyUsageCard(props: { keys: AnalyticsEntity[]; period: string
   const tokens = (key: AnalyticsEntity) => key.in_tok + key.cache_tok + key.out_tok;
   return <Card class="analytics-keys-card p-5 min-w-0">
     <ChartHeading title="Usage by API key" subtitle={`Top 8 by ${showSpend() ? "spend" : "request volume"} + other · ${props.period}`} value={fmtNum(props.keys.reduce((sum, key) => sum + key.members, 0))} note="keys with activity" />
-    <Show when={props.keys.length} fallback={<ChartEmpty />}><div class="analytics-key-grid"><For each={props.keys}>{(key, index) => <button type="button" class="analytics-key-tile" disabled={key.id === null} aria-label={`Filter by API key ${key.label}`} onClick={() => key.id !== null && props.onSelect(key.id, key.label)}>
-      <span class="analytics-key-heading"><Icon name="lucide:key-round" size={16} /><span><strong title={key.label}>{key.label}</strong><small title={key.detail}>{key.id === null ? `${key.members} more keys` : key.detail}</small></span><Show when={key.id !== null}><Icon name="lucide:arrow-up-right" size={13} /></Show></span>
-      <span class="analytics-key-metrics"><Show when={showSpend()} fallback={<><span><small>Requests</small><strong>{fmtNum(key.reqs)}</strong></span><span><small>Tokens</small><strong>{fmtNum(tokens(key))}</strong></span></>}><span><small>Spend</small><strong>{fmtCost(key.cost ?? 0)}</strong></span><span><small>Requests</small><strong>{fmtNum(key.reqs)}</strong></span></Show></span>
-      <span class="analytics-user-bar"><i style={{ width: `${total() > 0 ? metric(key) / total() * 100 : 0}%`, background: key.id === null ? colors[5] : colors[index() % 5] }} /></span>
-      <span class="analytics-key-footnote"><span>{percent(cachePercent(key.in_tok, key.cache_tok))} cache hit rate</span><span>{percent(total() > 0 ? metric(key) / total() * 100 : null)} of {showSpend() ? "spend" : "requests"}</span></span>
+    <Show when={props.keys.length} fallback={<ChartEmpty />}><div class="analytics-key-grid"><For each={props.keys}>{(key, index) => <button type="button" class="analytics-key-tile" disabled={key.id === null} onClick={() => key.id !== null && props.onSelect(key.id, key.label)}>
+      <span class="sr-only">Filter by API key </span>
+      <span class="analytics-key-heading"><Icon name="lucide:key-round" size={16} /><span><strong title={key.label}>{key.label}</strong><small title={key.detail} aria-hidden="true">{key.id === null ? `${key.members} more keys` : key.detail}</small></span><Show when={key.id !== null}><Icon name="lucide:arrow-up-right" size={13} /></Show></span>
+      <span class="analytics-key-metrics" aria-hidden="true"><Show when={showSpend()} fallback={<><span><small>Requests</small><strong>{fmtNum(key.reqs)}</strong></span><span><small>Tokens</small><strong>{fmtNum(tokens(key))}</strong></span></>}><span><small>Spend</small><strong>{fmtCost(key.cost ?? 0)}</strong></span><span><small>Requests</small><strong>{fmtNum(key.reqs)}</strong></span></Show></span>
+      <span class="analytics-user-bar" aria-hidden="true"><i style={{ width: `${total() > 0 ? metric(key) / total() * 100 : 0}%`, background: key.id === null ? colors[5] : colors[index() % 5] }} /></span>
+      <span class="analytics-key-footnote" aria-hidden="true"><span>{percent(cachePercent(key.in_tok, key.cache_tok))} cache hit rate</span><span>{percent(total() > 0 ? metric(key) / total() * 100 : null)} of {showSpend() ? "spend" : "requests"}</span></span>
     </button>}</For></div></Show>
   </Card>;
 }
@@ -190,7 +192,7 @@ export function UserEfficiencyChart(props: { users: AnalyticsEntity[]; period: s
     <ChartHeading title="Spend vs request volume" subtitle={`Top 8 users by spend · Circle size represents output tokens · ${props.period}`} />
     <Show when={users().length} fallback={<ChartEmpty />}>
       <div ref={watchWidth} class="analytics-scatter">
-        <svg viewBox={`0 0 ${width()} 250`} width="100%" height="250" role="img" aria-label="User spend against request volume">
+        <svg viewBox={`0 0 ${width()} 250`} width="100%" height="250" role="group" aria-label="User spend against request volume">
           <For each={[0, .5, 1]}>{(tick) => <>
             <line x1="46" x2={width() - 18} y1={196 - tick * 170} y2={196 - tick * 170} stroke="var(--chart-grid)" stroke-dasharray="3 4" />
             <text x="38" y={200 - tick * 170} text-anchor="end" fill="var(--chart-tick)" font-size="10">{fmtCost(maxCost() * tick)}</text>

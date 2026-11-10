@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
+import { press } from "../../../ds/motion/press";
 import { useHost, useSession, useTranscriptCtx, useUI } from "../../ctx";
 import { composerIsCollapsed } from "../../utils/composerState";
 import { IndirectBrand } from "../IndirectBrand";
@@ -17,6 +18,7 @@ function ComposerCollapseToggle(props: { withHint: boolean }) {
     <Show when={s.activeSessionId() && !s.draftMode() && !s.workspaceBlocked()}>
       <button
         type="button"
+        onPointerDown={(e) => press(e.currentTarget)}
         onClick={ui.toggleComposerCollapsed}
         aria-expanded={!collapsed()}
         aria-label={label()}
@@ -84,8 +86,8 @@ export function StatusBanners() {
   </section>
 </Show>
 <Show when={ui.appNotice()}>{(notice) =>
-  <div role={notice().kind === "err" ? "alert" : "status"} class={`mb-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${notice().kind === "err" ? "border-brand-500/30 bg-brand-500/5 text-ink-200" : "border-line bg-elev text-ink-300"}`}>
-    <Iconify icon={notice().kind === "err" ? "lucide:circle-alert" : "lucide:check"} size={15} class={notice().kind === "err" ? "text-brand-500" : "text-ink-400"} />
+  <div role={notice().kind === "err" ? "alert" : "status"} class={`mb-3 flex items-start gap-2 rounded-xl border px-3 py-2.5 text-xs ${notice().kind === "err" ? "border-danger/35 bg-danger-subtle text-fg" : "border-line bg-elev text-ink-300"}`}>
+    <Iconify icon={notice().kind === "err" ? "lucide:circle-alert" : "lucide:check"} size={15} class={notice().kind === "err" ? "text-danger" : "text-ink-400"} />
     <span class="min-w-0 flex-1 break-words">{notice().message}</span>
     <button aria-label="Dismiss notification" onClick={() => ui.setAppNotice(null)} class="text-ink-500 hover:text-ink-100 cursor-pointer"><Iconify icon="lucide:x" size={13} /></button>
   </div>

@@ -6,7 +6,6 @@ import { createTranscript } from "../../web/src/indirect-code/hooks/useTranscrip
 import { AssistantTurnContent, type TranscriptRenderCtx } from "../../web/src/indirect-code/components/TranscriptBlocks";
 import { createRelayInbox } from "../../web/src/indirect-code/relayInbox";
 import { batch } from "solid-js";
-import { setMotionEnabled, USAL } from "../../web/src/motion";
 
 import { AssistantMsgActions, UserMsgActions } from "../../web/src/indirect-code/components/MsgActions";
 import { RemoteHints } from "../../web/src/indirect-code/presentation";
@@ -47,8 +46,9 @@ render(() => {
     socket.onmessage = (event) => inbox.push(JSON.parse(event.data));
     onCleanup(() => socket.close());
   }
-  Object.assign(api, { setWidth, setText, setStreaming, setOpen, setSid, t, inbox, setMotionEnabled, motionReady: USAL.initialized });
-  setMotionEnabled(false);
+  // The design-system motion engine has no document-wide observer (USAL was
+  // removed), so the streaming DOM is never observed: motionReady stays false.
+  Object.assign(api, { setWidth, setText, setStreaming, setOpen, setSid, t, inbox, motionReady: () => false });
   const onCopy = () => { void navigator.clipboard.writeText(text()).then(() => setCopied(true)); };
   return <main class={responsive ? "px-4 md:px-8 py-6 min-h-dvh" : ""}>
     <Show when={responsive}><RemoteHints /></Show>

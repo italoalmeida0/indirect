@@ -12,11 +12,11 @@ function flagBadge(flag: string) {
   if (!flag || flag === "•") return null;
   const color =
     flag === "M"
-      ? "bg-amber-500/15 text-amber-800 dark:text-amber-200"
+      ? "bg-warning-subtle text-warning"
       : flag === "A"
-        ? "bg-emerald-500/15 text-emerald-300"
+        ? "bg-success-subtle text-success"
         : flag === "D" || flag === "R"
-          ? "bg-rose-500/15 text-rose-300"
+          ? "bg-danger-subtle text-danger"
           : "bg-ink-800 text-ink-300";
   return (
     <span class={`shrink-0 rounded px-1 py-px font-mono text-[10px] ${color}`}>{flag}</span>
@@ -182,7 +182,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
           >
             <a href={String(props.m.fetchDetails()?.url || props.m.args().url || "")} target="_blank" rel="noreferrer"
                class="mx-3 mt-2 flex items-center gap-2 rounded-lg border border-line/60 bg-elev/50 px-2.5 py-2 transition-colors hover:border-ink-500">
-              <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-500/15 font-mono text-[11px] font-bold text-accent-300">
+              <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-500/15 font-mono text-[11px] font-medium text-accent-300">
                 {(props.m.fetchDetails()?.host || "?").slice(0, 1).toUpperCase()}
               </span>
               <span class="min-w-0">
@@ -278,7 +278,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
           >
             {/* Lint is plain text — but a failed lint paints it red. */}
             <pre
-              class={`px-3 py-2 text-[11px] whitespace-pre-wrap ${props.u.result && props.u.result.toolDetails?.lint_ok === false ? "text-rose-500" : "text-ink-300"}`}
+              class={`px-3 py-2 text-[11px] whitespace-pre-wrap ${props.u.result && props.u.result.toolDetails?.lint_ok === false ? "text-danger" : "text-ink-300"}`}
             >
               {String(props.u.result?.toolDetails?.display || props.m.output() || props.m.prog())}
             </pre>

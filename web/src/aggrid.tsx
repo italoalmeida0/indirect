@@ -114,7 +114,7 @@ export function UsageGrid(props: {
   const widths = new Map<string, number>();
   let gridRef: AgGridSolidRef | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const darkClass = () => { theme(); return getTheme() === "dark" ? "ag-theme-quartz-dark" : "ag-theme-quartz"; };
+  const darkClass = () => { theme(); return getTheme() !== "light" ? "ag-theme-quartz-dark" : "ag-theme-quartz"; };
   const sortState = (api: GridApi) => api.getColumnState().filter((column) => column.sort).sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0)).map((column) => ({ colId: column.colId, sort: column.sort! }));
   const saveSort = (api: GridApi) => {
     const sort = sortState(api);

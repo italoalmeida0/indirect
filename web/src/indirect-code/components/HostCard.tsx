@@ -26,7 +26,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
       <button
         ref={btn}
         data-menubtn
-        aria-label="Select host"
+        aria-label={`Select host: ${h.activeHost()?.name || h.activeHost()?.hostname || "Select host"} ${h.connectionState() !== "connected" ? "Reconnecting…" : h.activeHost()?.status === "online" ? "Connected" : h.activeHost()?.status === "updating" ? "Updating…" : "Offline"}`}
         aria-haspopup="menu"
         aria-expanded={h.hostMenuOpen()}
         onClick={() => {
@@ -39,21 +39,21 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
         }}
         class="w-full flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-left hover:bg-elev transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 cursor-pointer"
       >
-        <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-card text-ink-400 shrink-0">
+        <span aria-hidden="true" class="flex h-8 w-8 items-center justify-center rounded-lg border border-line bg-card text-ink-400 shrink-0">
           <Iconify icon="lucide:monitor" size={16} />
         </span>
-        <span class="flex-1 min-w-0">
+        <span aria-hidden="true" class="flex-1 min-w-0">
           <span class="block truncate text-xs font-medium text-ink-200">{h.activeHost()?.name || h.activeHost()?.hostname || "Select host"}</span>
           <span class="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-500">
-            <span class={`h-1.5 w-1.5 rounded-full ${h.connectionState() === "connected" && h.activeHost()?.status === "online" ? "bg-accent-500" : "bg-ink-600"}`} />
-            {h.connectionState() !== "connected" ? "Reconnecting…" : h.activeHost()?.status === "online" ? "Connected" : h.activeHost()?.status === "updating" ? "Updating…" : "Offline"}
+            <span class={`h-1.5 w-1.5 rounded-full ${h.connectionState() === "connected" && h.activeHost()?.status === "online" ? "bg-success" : "bg-ink-600"}`} />
+            {" "}{h.connectionState() !== "connected" ? "Reconnecting…" : h.activeHost()?.status === "online" ? "Connected" : h.activeHost()?.status === "updating" ? "Updating…" : "Offline"}
           </span>
         </span>
         <Iconify icon="lucide:chevrons-up-down" size={13} class="text-ink-500 shrink-0" />
       </button>
       <FloatMenu anchor={() => (btn?.isConnected ? btn : undefined)} open={mine()} placement="top-start" width="18rem">
-        <div class="px-2.5 py-2 text-[10px] uppercase tracking-wider font-semibold text-ink-500">Your hosts</div>
-        <div role="menu" aria-label="Hosts" class="space-y-0.5">
+        <div class="px-2.5 py-2 text-xs font-medium text-fg-muted">Your hosts</div>
+        <div role="menu" aria-label="Hosts" class="space-y-0.5 bg-card">
           <For each={h.hosts()}>{(host) => (
             <button role="menuitemradio" aria-checked={host.id === h.activeHostId()}
               class="w-full flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left hover:bg-elev focus-visible:bg-elev cursor-pointer"
@@ -70,7 +70,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
             onClick={() => { h.setHostMenuOpen(false); void h.loadHosts(); }}><Iconify icon="lucide:refresh-cw" size={13} />Refresh hosts</button>
           <button class="w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-ink-200 hover:bg-elev cursor-pointer"
             onClick={() => { h.setHostMenuOpen(false); void m.generatePairingToken(); }}><Iconify icon="lucide:plus" size={13} />Connect another host</button>
-          <button class="w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-brand-500 hover:bg-elev cursor-pointer" onClick={() => { h.setHostMenuOpen(false); void h.removeHost(); }}>
+          <button class="w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-danger hover:bg-elev cursor-pointer" onClick={() => { h.setHostMenuOpen(false); void h.removeHost(); }}>
             <Iconify icon="lucide:trash-2" size={13} />Remove current host
           </button>
         </div>

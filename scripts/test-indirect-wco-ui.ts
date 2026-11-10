@@ -15,7 +15,7 @@ const bundle = await Bun.build({
 });
 assert(bundle.success, bundle.logs.join("\n"));
 const dist = path.join(root, "dist");
-const cssName = Array.from(new Bun.Glob("*.css").scanSync(dist))[0];
+const cssName = Array.from(new Bun.Glob("assets/*.css").scanSync(dist))[0]?.replaceAll("\\", "/");
 assert(cssName, "Run bun run build:web first");
 // Headless tabs have no native titlebar. Substitute only the environment
 // inputs; all layout rules come unchanged from the production stylesheet.

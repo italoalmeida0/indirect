@@ -2,7 +2,7 @@ import { createSignal, onMount, Show } from "solid-js";
 
 import { publicApi, setSession } from "../api";
 import { usal } from "../motion";
-import { Btn, Input, Spinner, Card, Icon, Icons, ThemeToggle, capitalize } from "../ui";
+import { Alert, Btn, Input, Card, Icon, Icons, ThemeToggle, capitalize } from "../ui";
 import { renderGoogleButton } from "../google";
 
 /**
@@ -147,44 +147,41 @@ export default function LoginPage() {
         <div class="flex flex-col items-center mb-6" {...usal("fade-d duration-700")}>
           <div {...usal("zoomin-30 duration-700")}>
             <img
-        src="/indirect-icon.svg"
-        alt="Indirect"
-        class="object-contain w-10 h-10 rounded-xl mb-4"
-      />
+              src="/indirect-icon.svg"
+              alt="Indirect"
+              class="object-contain w-10 h-10 rounded-xl mb-4"
+            />
           </div>
-          <h1
-            class="text-2xl font-semibold tracking-tight font-mono uppercase"
-          >
+          <h1 class="text-2xl font-medium tracking-tight text-fg">
             Indirect
           </h1>
-          <p class="text-sm text-ink-400 mt-1.5">
+          <p class="text-sm text-fg-secondary mt-1.5">
             {mode() === "forgot" ? "Reset your password" : mode() === "2fa" ? "Two-factor verification" : "Sign in to your account"}
           </p>
         </div>
 
-        <Card class="p-5 sm:p-6" {...usal("zoomin-15 duration-600 delay-150")}>
+        <Card class="p-5 sm:p-6" motion="zoomin-15 duration-600 delay-150">
           <Show when={error()}>
-            <div class="mb-4 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3.5 py-2.5 text-sm text-rose-300 dark:text-rose-200 flex items-center gap-2.5 anim-fade-in shadow-xs">
-              <Icon name={Icons.warning} size={16} class="shrink-0 text-rose-400" />
-              <span>{capitalize(error())}</span>
-            </div>
+            <Alert tone="danger" class="mb-4" icon={<Icon name={Icons.warning} size={16} />}>
+              {capitalize(error())}
+            </Alert>
           </Show>
           <Show when={info()}>
-            <div class="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/15 px-3.5 py-2.5 text-sm text-emerald-300 dark:text-emerald-200 anim-fade-in shadow-xs">
+            <Alert tone="success" class="mb-4" icon={<Icon name={Icons.check} size={16} />}>
               {info()}
-            </div>
+            </Alert>
           </Show>
 
           <Show when={mode() === "login"}>
             <form onSubmit={submitLogin} class="space-y-4">
               <Input label="Email" type="email" value={email()} onInput={setEmail} autocomplete="email" required />
               <Input label="Password" type="password" value={password()} onInput={setPassword} autocomplete="current-password" required />
-              <Btn type="submit" class="w-full" disabled={busy()}>
-                {busy() ? <Spinner /> : "Sign in"}
+              <Btn type="submit" class="w-full" loading={busy()}>
+                Sign in
               </Btn>
               <button
                 type="button"
-                class="w-full text-center text-xs text-ink-400 hover:text-ink-200 transition-colors cursor-pointer py-1"
+                class="w-full text-center text-xs text-fg-secondary hover:text-fg transition-colors cursor-pointer py-1"
                 onClick={() => { setMode("forgot"); setError(""); setInfo(""); }}
               >
                 Forgot your password?
@@ -194,8 +191,8 @@ export default function LoginPage() {
 
           <Show when={mode() === "2fa"}>
             <form onSubmit={submit2fa} class="space-y-4">
-              <div class="flex items-center gap-2 text-sm text-ink-200">
-                <span class="text-brand-500">
+              <div class="flex items-center gap-2 text-sm text-fg-secondary">
+                <span class="text-accent">
                   <Icon name={Icons.shield} size={16} />
                 </span>
                 Enter an authenticator code or a recovery code
@@ -208,12 +205,12 @@ export default function LoginPage() {
                 autocomplete="one-time-code"
                 required
               />
-              <Btn type="submit" class="w-full" disabled={busy() || code().trim().length < 6}>
-                {busy() ? <Spinner /> : "Verify"}
+              <Btn type="submit" class="w-full" loading={busy()} disabled={code().trim().length < 6}>
+                Verify
               </Btn>
               <button
                 type="button"
-                class="w-full text-center text-xs text-ink-400 hover:text-ink-200 cursor-pointer py-1"
+                class="w-full text-center text-xs text-fg-secondary hover:text-fg cursor-pointer py-1"
                 onClick={() => { setMode("login"); setError(""); }}
               >
                 Back
@@ -223,14 +220,14 @@ export default function LoginPage() {
 
           <Show when={mode() === "forgot"}>
             <form onSubmit={submitForgot} class="space-y-4">
-              <p class="text-sm text-ink-200">We'll email you a link to reset your password.</p>
+              <p class="text-sm text-fg-secondary">We'll email you a link to reset your password.</p>
               <Input label="Email" type="email" value={email()} onInput={setEmail} autocomplete="email" required />
-              <Btn type="submit" class="w-full" disabled={busy()}>
-                {busy() ? <Spinner /> : "Send reset link"}
+              <Btn type="submit" class="w-full" loading={busy()}>
+                Send reset link
               </Btn>
               <button
                 type="button"
-                class="w-full text-center text-xs text-ink-400 hover:text-ink-200 cursor-pointer py-1"
+                class="w-full text-center text-xs text-fg-secondary hover:text-fg cursor-pointer py-1"
                 onClick={() => { setMode("login"); setError(""); setInfo(""); }}
               >
                 Back to sign in
@@ -248,10 +245,10 @@ export default function LoginPage() {
           </Show>
         </Card>
 
-        <p class="text-center text-[11px] text-ink-500 mt-6">
-          <a href="/terms.html" target="_blank" class="hover:text-ink-300 transition-colors">Terms of Service</a>
+        <p class="text-center text-xs text-fg-muted mt-6">
+          <a href="/terms.html" target="_blank" class="hover:text-fg-secondary transition-colors">Terms of service</a>
           {" · "}
-          <a href="/privacy.html" target="_blank" class="hover:text-ink-300 transition-colors">Privacy Policy</a>
+          <a href="/privacy.html" target="_blank" class="hover:text-fg-secondary transition-colors">Privacy policy</a>
         </p>
       </div>
     </div>

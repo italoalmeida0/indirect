@@ -114,9 +114,17 @@ export function anchorFloat(
     })
       .then(({ x, y, placement }) => {
         if (cancelled) return;
+        const [side = "bottom", align] = placement.split("-");
         el.style.left = `${x}px`;
         el.style.top = `${y}px`;
-        el.style.transformOrigin = `${ORIGIN[placement.split("-")[0]] ?? "top"} center`;
+        // Grow from the trigger: the edge facing it, at the aligned corner.
+        const cross = side === "top" || side === "bottom"
+          ? align === "start" ? "left" : align === "end" ? "right" : "center"
+          : align === "start" ? "top" : align === "end" ? "bottom" : "center";
+        el.style.transformOrigin = side === "top" || side === "bottom"
+          ? `${cross} ${ORIGIN[side] ?? "top"}`
+          : `${ORIGIN[side] ?? "left"} ${cross}`;
+        el.dataset.side = side;
         el.style.visibility = "";
       })
       .catch(() => {});

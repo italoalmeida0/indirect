@@ -49,14 +49,14 @@ export function ToolQuestionBodies(props: ToolPartProps) {
                           <li
                             class={`flex items-start gap-2 rounded-lg border px-2 py-1.5 text-[12px] leading-snug ${
                               answered() && picked(o.label)
-                                ? "border-emerald-500/40 bg-emerald-500/10 text-ink-100"
+                                ? "border-success/40 bg-success-subtle text-ink-100"
                                 : "border-line/50 text-ink-400"
                             }`}
                           >
                             <Iconify
                               icon={answered() && picked(o.label) ? "lucide:check-circle-2" : "lucide:circle"}
                               size={13}
-                              class={`mt-0.5 shrink-0 ${answered() && picked(o.label) ? "text-emerald-400" : "text-ink-600"}`}
+                              class={`mt-0.5 shrink-0 ${answered() && picked(o.label) ? "text-success" : "text-ink-600"}`}
                             />
                             <span class="min-w-0">
                               <span class="block font-medium">{o.label}</span>
@@ -74,14 +74,14 @@ export function ToolQuestionBodies(props: ToolPartProps) {
                             <li
                               class={`flex items-start gap-2 rounded-lg border px-2 py-1.5 text-[12px] leading-snug ${
                                 isDecideLater
-                                  ? "border-accent-500/40 bg-accent-500/10 text-ink-100"
-                                  : "border-emerald-500/40 bg-emerald-500/10 text-ink-100"
+                                  ? "border-accent/40 bg-accent-subtle text-ink-100"
+                                  : "border-success/40 bg-success-subtle text-ink-100"
                               }`}
                             >
                               <Iconify
                                 icon={isDecideLater ? "lucide:sparkles" : "lucide:pencil"}
                                 size={13}
-                                class={`mt-0.5 shrink-0 ${isDecideLater ? "text-accent-400" : "text-emerald-400"}`}
+                                class={`mt-0.5 shrink-0 ${isDecideLater ? "text-accent" : "text-success"}`}
                               />
                               <span class="min-w-0">
                                 <span class="block font-medium">{c}</span>

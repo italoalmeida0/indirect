@@ -18,8 +18,8 @@ function shortLabel(cmd: string, max = 64) {
 function taskState(status: string) {
   switch (status) {
     case "running": return { label: "Running", icon: "lucide:loader-circle", color: "text-ink-400" };
-    case "done": return { label: "Completed", icon: "lucide:circle-check", color: "text-emerald-400" };
-    case "error": return { label: "Failed", icon: "lucide:circle-x", color: "text-rose-400" };
+    case "done": return { label: "Completed", icon: "lucide:circle-check", color: "text-success" };
+    case "error": return { label: "Failed", icon: "lucide:circle-x", color: "text-danger" };
     case "cancelled": return { label: "Cancelled", icon: "lucide:circle-slash", color: "text-ink-500" };
     default: return { label: "Stopped", icon: "lucide:circle-stop", color: "text-ink-500" };
   }
@@ -27,8 +27,8 @@ function taskState(status: string) {
 
 function exitBadgeTone(code: number) {
   if (code === 0) return "border-line/60 text-ink-500";
-  if (code === 130 || code === 143) return "border-amber-500/40 text-amber-400";
-  return "border-rose-500/40 text-rose-400";
+  if (code === 130 || code === 143) return "border-warning/40 text-warning";
+  return "border-danger/40 text-danger";
 }
 
 /**
@@ -163,11 +163,11 @@ export function BackgroundCard(props: { contextKey?: string }) {
     <Show when={tasks().length > 0}>
       <div class={`${ui.convWidthClass()} mx-auto border-t border-line/60 px-3 py-2`} data-bg-card>
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1.5 pb-2">
-          <span class="text-[11px] uppercase tracking-wide text-ink-500">Background tasks</span>
+          <span class="text-[11px] font-medium text-ink-500">Background tasks</span>
           <button
             type="button"
-            class={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-500 ${showArchived()
-              ? "border-brand-500/30 bg-brand-500/10 text-brand-400"
+            class={`inline-flex items-center gap-1 rounded-md border px-1.5 py-1 text-[11px] transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${showArchived()
+              ? "border-accent/35 bg-accent-subtle text-accent"
               : "border-line/60 text-ink-500 hover:bg-elev hover:text-ink-200"}`}
             aria-pressed={showArchived()}
             aria-label={`Archived tasks (${archived().length})`}
@@ -177,7 +177,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
             <Iconify icon="lucide:archive" size={12} />
             <span class="tabular-nums opacity-80">{archived().length}</span>
           </button>
-          <span class="ml-auto text-[10px] uppercase tracking-wide text-ink-500 tabular-nums whitespace-nowrap" data-bg-running-count>
+          <span class="ml-auto text-[10px] text-ink-500 tabular-nums whitespace-nowrap" data-bg-running-count>
             {running().length} running
           </span>
         </div>

@@ -47,8 +47,8 @@ export function Onboarding() {
       <div class="ui-card p-4 text-left space-y-4">
         <div class="flex items-center justify-between pb-3 border-b border-line">
           <div class="flex items-center gap-2">
-            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span class="text-xs font-semibold uppercase tracking-wider text-ink-200">
+            <span class="w-2.5 h-2.5 rounded-full bg-success animate-pulse" />
+            <span class="text-xs font-medium text-ink-200">
               Ready to connect
             </span>
           </div>
@@ -69,13 +69,13 @@ export function Onboarding() {
                   indirectInstallCommands(m.pairingData()?.connectUrl || "").unix,
                 )
               }
-              class="flex items-center justify-between gap-2 p-3 rounded-xl bg-ink-950 border border-line hover:border-brand-500/40 transition-colors cursor-pointer group"
+              class="flex items-center justify-between gap-2 p-3 rounded-xl bg-ink-950 border border-line hover:border-accent/40 transition-colors cursor-pointer group"
             >
               <span class="flex items-center gap-2 text-xs font-medium text-ink-200">
-                <Iconify icon="lucide:terminal" size={14} class="text-brand-400" />
+                <Iconify icon="lucide:terminal" size={14} class="text-accent" />
                 Linux & macOS
               </span>
-              <Iconify icon="lucide:copy" size={14} class="text-ink-500 group-hover:text-brand-300" />
+              <Iconify icon="lucide:copy" size={14} class="text-ink-500 group-hover:text-accent" />
             </button>
             <button
               onClick={() =>
@@ -83,13 +83,13 @@ export function Onboarding() {
                   indirectInstallCommands(m.pairingData()?.connectUrl || "").windows,
                 )
               }
-              class="flex items-center justify-between gap-2 p-3 rounded-xl bg-ink-950 border border-line hover:border-brand-500/40 transition-colors cursor-pointer group"
+              class="flex items-center justify-between gap-2 p-3 rounded-xl bg-ink-950 border border-line hover:border-accent/40 transition-colors cursor-pointer group"
             >
               <span class="flex items-center gap-2 text-xs font-medium text-ink-200">
-                <Iconify icon="lucide:app-window" size={14} class="text-brand-400" />
+                <Iconify icon="lucide:app-window" size={14} class="text-accent" />
                 Windows
               </span>
-              <Iconify icon="lucide:copy" size={14} class="text-ink-500 group-hover:text-brand-300" />
+              <Iconify icon="lucide:copy" size={14} class="text-ink-500 group-hover:text-accent" />
             </button>
           </div>
           <p class="text-[11px] text-ink-500 leading-relaxed">
@@ -99,8 +99,8 @@ export function Onboarding() {
 
 
         {/* Live Status */}
-        <div class="p-4 rounded-xl bg-brand-500/5 border border-brand-500/20 flex items-center gap-3">
-          <div class="w-8 h-8 rounded-lg bg-brand-500/10 flex items-center justify-center text-brand-400 shrink-0">
+        <div class="p-4 rounded-xl bg-accent-subtle border border-accent/25 flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-accent/15 flex items-center justify-center text-accent shrink-0">
             <Iconify icon="lucide:refresh-cw" size={16} class="animate-spin" />
           </div>
           <div class="text-xs">

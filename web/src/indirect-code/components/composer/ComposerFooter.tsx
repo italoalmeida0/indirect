@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
+import { press } from "../../../ds/motion/press";
 import { Tooltip } from "../../../ui";
 import { compactTokens } from "../../context";
 import { baseNameOf, cacheHitPct, fmtUsd, usageCosts } from "../../transcript";
@@ -13,7 +14,7 @@ export function ComposerFooter() {
   const ui = useUI();
   return (
 <>
-<Show when={s.draftMode() && c.pendingMode() !== "talk"}>
+<Show when={s.draftMode() && c.pendingMode?.() !== "talk"}>
   <div class="mt-3 flex justify-center" data-draft-project>
     {/* Project picker — where the next conversation starts. Talk drafts
         have no project (they are born in the default Home project), so
@@ -23,6 +24,7 @@ export function ComposerFooter() {
       <button
         ref={s.projBtn}
         data-menubtn
+        onPointerDown={(e) => press(e.currentTarget)}
         onClick={(e) => {
           e.stopPropagation();
           s.setProjectMenuOpen(!s.projectMenuOpen());
@@ -31,16 +33,16 @@ export function ComposerFooter() {
           ui.setUsageOpen(false);
         }}
         class="ui-button ui-button-outline ui-button-sm gap-2"
-        data-rc-tip="Project" aria-label="Project"
+        data-rc-tip="Project" aria-label={`Project: ${s.activeProject()?.name || "Select project"}`}
       >
         <Iconify icon="lucide:folder" size={13} />
         <span class="max-w-[110px] truncate">
           {s.activeProject()?.name || "Select project"}
         </span>
-        <Iconify icon="lucide:chevron-down" size={11} />
+        <Iconify icon="lucide:chevron-down" size={11} class={`transition-transform duration-150 ${s.projectMenuOpen() ? "rotate-180" : ""}`} />
       </button>
       <FloatMenu anchor={() => s.projBtn} open={s.projectMenuOpen()} placement="bottom" width="18rem">
-          <div class="px-2 py-1 text-[10px] uppercase font-bold text-ink-600 tracking-wider">
+          <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
             Project
           </div>
           <div class="max-h-56 overflow-y-auto [scrollbar-gutter:stable]">
@@ -63,7 +65,7 @@ export function ComposerFooter() {
                       ? "bg-ink-800 text-ink-100"
                       : "text-ink-300 hover:bg-ink-800/60"
                   }`}
-                  data-rc-tip={p.path} aria-label={p.path}
+                  data-rc-tip={p.path} aria-label={`${p.name} (${p.path})`}
                 >
                   <span class="flex items-center gap-1.5 min-w-0">
                     <Iconify icon="lucide:folder" size={13} class="shrink-0 text-ink-500" />
@@ -95,7 +97,7 @@ export function ComposerFooter() {
     <span class="flex items-center gap-1.5 min-w-0" data-rc-tip={s.currentProject()?.path}><Iconify icon="lucide:folder" size={13} /><span class="truncate">{s.currentProject()?.name || baseNameOf(s.activeSession()?.cwd) || "Project"}</span></span>
     <FloatMenu anchor={() => ui.contextBtn} open={ui.usageOpen()} placement="top-end" width="19rem">
       <div class="p-1.5 text-xs">
-        <div class="font-semibold text-ink-200 mb-3">Conversation context</div>
+        <div class="font-medium text-ink-200 mb-3">Conversation context</div>
         <div class="text-lg font-medium text-ink-100 tabular-nums">{c.activeContext().label}</div>
         <p class="text-[11px] text-ink-500 mt-1 leading-relaxed">
           {c.activeContext().window > 0 ? `${compactTokens(c.activeContext().window)} tokens configured in the gateway.` : "Context limit not configured in the gateway."}
@@ -106,7 +108,7 @@ export function ComposerFooter() {
             <div class="h-full rounded-full bg-accent-500" style={{ width: `${Math.min(100, c.activeContext().percent ?? 0)}%` }} />
           </div>
         </Show>
-        <div class="font-semibold text-ink-200 mb-2 mt-4 pt-3 border-t border-line">Session usage</div>
+        <div class="font-medium text-ink-200 mb-2 mt-4 pt-3 border-t border-line">Session usage</div>
         <Show
           when={t.activeUsage()}
           fallback={
@@ -136,8 +138,9 @@ export function ComposerFooter() {
     </FloatMenu>
     <Tooltip content="Conversation context and session usage" disabled={ui.usageOpen()}>
       <button ref={ui.contextBtn} data-menubtn aria-label={`Conversation context: ${c.activeContext().label}`} aria-expanded={ui.usageOpen()}
+        onPointerDown={(e) => press(e.currentTarget)}
         onClick={() => { const next = !ui.usageOpen(); ui.closeMenus(); ui.setUsageOpen(next); }}
-        class="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] tabular-nums text-ink-400 hover:bg-elev hover:text-ink-200 cursor-pointer">
+        class="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] tabular-nums text-ink-400 hover:bg-elev hover:text-ink-200 transition-colors cursor-pointer">
         <Iconify icon="lucide:chart-pie" size={12} /><span>{c.activeContext().label}</span>
       </button>
     </Tooltip>

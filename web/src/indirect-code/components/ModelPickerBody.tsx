@@ -1,5 +1,7 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
+import { createGlide } from "../../ds/motion/glide";
+import { press } from "../../ds/motion/press";
 import { REASONING_LEVELS } from "../constants";
 import { formatEffort } from "../utils/format";
 import { compactTokens, groupModelsByProvider, type GatewayModel } from "../context";
@@ -20,11 +22,22 @@ export function ModelPickerBody(props: {
 }) {
   /** Filtered models grouped by provider (first routing target). */
   const groups = () => groupModelsByProvider(props.filtered());
+  const [effortTrack, setEffortTrack] = createSignal<HTMLDivElement>();
+  const [effortInd, setEffortInd] = createSignal<HTMLSpanElement>();
+  createGlide({
+    container: effortTrack,
+    indicator: effortInd,
+    target: () => {
+      void props.effort();
+      return effortTrack()?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? null;
+    },
+  });
   return (
     <>
-      <div class="px-2 py-1 text-[10px] uppercase font-bold text-ink-600 tracking-wider flex items-center justify-between">
+      <div class="px-2 py-1 text-[11px] font-medium text-fg-muted flex items-center justify-between">
         <span>Model</span>
         <button
+          onPointerDown={(e) => press(e.currentTarget)}
           onClick={props.onRefresh}
           class="p-0.5 text-ink-600 hover:text-ink-200 cursor-pointer"
           data-rc-tip="Refresh models" aria-label="Refresh models"
@@ -57,16 +70,17 @@ export function ModelPickerBody(props: {
           >
             {(g) => (
               <>
-                <div class="px-2.5 pt-1.5 pb-0.5 text-[10px] uppercase font-bold text-ink-600 tracking-wider whitespace-nowrap">
+                <div class="px-2.5 pt-1.5 pb-0.5 text-[11px] font-medium text-fg-muted whitespace-nowrap">
                   {g.provider}
                 </div>
                 <For each={g.models}>
                   {(m) => (
                     <button
+                      onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => props.onPick(m.id)}
-                      class={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-3 cursor-pointer ${
+                      class={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-3 cursor-pointer transition-colors ${
                         m.id === props.activeModelId()
-                          ? "bg-ink-800 text-ink-100"
+                          ? "bg-ink-800 text-ink-100 font-medium"
                           : "text-ink-300 hover:bg-ink-800/60"
                       }`}
                     >
@@ -89,17 +103,27 @@ export function ModelPickerBody(props: {
         </div>
       </div>
       <div class="mt-1.5 pt-1.5 border-t border-line/60">
-        <div class="px-2 py-1 text-[10px] uppercase font-bold text-ink-600 tracking-wider">
+        <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
           Reasoning effort
         </div>
-        <div class="grid grid-cols-7 gap-1 p-1 rounded-lg bg-ink-950 border border-line/50">
+        <div
+          ref={setEffortTrack}
+          data-glide=""
+          class="ui-segmented ui-segmented-sm grid grid-cols-7 gap-0.5 p-1"
+          role="group"
+          aria-label="Reasoning effort"
+        >
+          <span ref={setEffortInd} class="ui-segmented-indicator" aria-hidden="true" />
           <For each={REASONING_LEVELS}>
             {(lvl) => (
               <button
+                type="button"
+                aria-pressed={props.effort() === lvl}
+                onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.onEffort(lvl)}
-                class={`py-1 rounded-md text-center text-[10px] sm:text-[11px] font-medium uppercase cursor-pointer ${
+                class={`ui-segment py-1 rounded-md text-center text-[10px] sm:text-[11px] font-medium cursor-pointer ${
                   props.effort() === lvl
-                    ? "bg-ink-100 text-ink-950"
+                    ? "text-ink-100"
                     : "text-ink-400 hover:text-ink-200"
                 }`}
               >

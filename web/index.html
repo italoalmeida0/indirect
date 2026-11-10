@@ -6,7 +6,7 @@
     <meta name="robots" content="noindex, nofollow" />
     <meta name="description" content="LLM API gateway with a personal dashboard and an Code agent workspace." />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111315" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#141414" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -55,10 +55,14 @@
       (function () {
         try {
           var t = localStorage.getItem("llmgw-theme");
-          if (t !== "light" && t !== "dark") {
+          if (t !== "light" && t !== "dark" && t !== "high-contrast") {
             t = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
           }
           document.documentElement.dataset.theme = t;
+          var a = localStorage.getItem("llmgw-accent");
+          if (a && /^(neutral|violet|blue|green|amber|orange|coral|rose)$/.test(a)) {
+            document.documentElement.dataset.accent = a;
+          }
         } catch (e) {
           document.documentElement.dataset.theme = "light";
         }
@@ -73,7 +77,7 @@
           );
         }
         function syncFavicon() {
-          var t = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+          var t = document.documentElement.dataset.theme === "light" ? "light" : "dark";
           // Deduplicate: only one icon link may exist (browsers pin the
           // first and ignore the rest, so a stray duplicate freezes the icon).
           var links = document.querySelectorAll("link[rel='icon']");
@@ -100,8 +104,8 @@
         // in sync with the effective theme at runtime (same pattern as
         // tweakgrid's theme subscriber).
         function syncThemeColor() {
-          var t = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
-          var content = t === "dark" ? "#111315" : "#ffffff";
+          var t = document.documentElement.dataset.theme;
+          var content = t === "high-contrast" ? "#000000" : t === "dark" ? "#141414" : "#ffffff";
           var metas = document.querySelectorAll('meta[name="theme-color"]');
           // Collapse the static light/dark pair into a single live tag.
           var meta = metas[0];

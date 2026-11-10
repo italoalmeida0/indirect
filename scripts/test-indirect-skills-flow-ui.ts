@@ -106,12 +106,12 @@ try {
   const badge = page.getByRole("button", { name: "Change activation policy for custom" });
   assert.equal((await badge.textContent())?.trim(), "ask", "no override shows the file original (ask)");
   await badge.click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Change activation policy for custom"]')?.textContent?.trim() === "yolo");
+  await page.waitForFunction(() => document.querySelector('[aria-label^="Change activation policy for custom"]')?.textContent?.trim() === "yolo");
   await page.screenshot({ path: "/tmp/skills-flow-badge-yolo.png" });
   await badge.click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Change activation policy for custom"]')?.textContent?.trim() === "deny");
+  await page.waitForFunction(() => document.querySelector('[aria-label^="Change activation policy for custom"]')?.textContent?.trim() === "deny");
   await badge.click();
-  await page.waitForFunction(() => document.querySelector('[aria-label="Change activation policy for custom"]')?.textContent?.trim() === "ask");
+  await page.waitForFunction(() => document.querySelector('[aria-label^="Change activation policy for custom"]')?.textContent?.trim() === "ask");
   await page.screenshot({ path: "/tmp/skills-flow-badge-ask.png" });
   await page.getByRole("menuitemcheckbox").filter({ hasText: "custom" }).click();
   await closeModeMenu();

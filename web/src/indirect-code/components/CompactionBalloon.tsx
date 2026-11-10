@@ -1,5 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
+import { press } from "../../ds/motion/press";
+import { DisclosureBody } from "./Disclosure";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { FileIcon } from "../presentation";
 import { baseNameOf } from "../transcript";
@@ -74,7 +76,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
               <Iconify icon="lucide:archive" size={13} />
             </div>
             <div class="flex items-center gap-1.5 flex-wrap">
-              <span class="text-xs font-semibold text-ink-200 group-hover:text-ink-100 transition-colors">
+              <span class="text-xs font-medium text-ink-200 group-hover:text-ink-100 transition-colors">
                 Context Compacted
               </span>
               <Show when={count() > 0}>
@@ -109,6 +111,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
             <Show when={cleanedSummary()}>
               <button
                 type="button"
+                onPointerDown={(e) => press(e.currentTarget)}
                 onClick={handleCopy}
                 class="p-1 rounded-md text-ink-400 hover:text-ink-200 hover:bg-elev transition-colors cursor-pointer"
                 aria-label="Copy compaction summary"
@@ -119,6 +122,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
 
             <button
               type="button"
+              onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => setExpanded(!expanded())}
               class="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] text-ink-400 hover:text-ink-200 hover:bg-elev transition-colors cursor-pointer"
             >
@@ -142,7 +146,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
         </Show>
 
         {/* Expanded Content View */}
-        <Show when={expanded()}>
+        <DisclosureBody open={expanded()}>
           <div class="mt-3 pt-3 border-t border-line/60 space-y-3">
             {/* File Operations Chips */}
             <Show when={hasFiles()}>
@@ -224,7 +228,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
               </div>
             </Show>
           </div>
-        </Show>
+        </DisclosureBody>
       </div>
     </div>
   );

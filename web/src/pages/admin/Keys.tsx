@@ -2,7 +2,7 @@ import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "
 import { createResource, createSignal, For, Show } from "solid-js";
 
 import { api, type ApiKeyDto, type FinancialProjectDto } from "../../api";
-import { PageTitle } from "../../index";
+import { PageTitle } from "../../chrome";
 import {
   Badge,
   Btn,
@@ -226,7 +226,23 @@ export default function AdminKeysPage() {
         subtitle="Every user's keys — revoke any of them instantly"
       />
 
-      <Modal open={!!assigning()} onClose={() => !busy() && setAssigning(null)} title="Assign financial project"><div class="space-y-4"><p class="text-sm text-ink-300 break-words">{assigning()?.name} · {assigning()?.userEmail ?? assigning()?.userId}</p><Show when={projects.error} fallback={<Select label="Key financial project" value={projectId()} onChange={setProjectId} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((project) => project.kind === "project" && (project.status === "active" || project.id === projectId())).map((project) => ({ value: project.id, label: project.name }))]} />}><p role="alert" class="text-sm">Financial projects could not be loaded.</p><Btn size="sm" variant="outline" onClick={() => refetchProjects()}>Retry projects</Btn></Show><ModalNotice>The key owner must be a member of the selected active project. Reassignment applies to future requests; historical accounting and accepted requests keep their original attribution.</ModalNotice><Show when={assignmentError()}><p role="alert" class="text-sm">{assignmentError()}</p></Show><div class="flex justify-end gap-2"><Btn variant="ghost" disabled={busy()} onClick={() => setAssigning(null)}>Cancel</Btn><Btn disabled={busy() || !!projects.error || projects.loading} onClick={assign}>Save assignment</Btn></div></div></Modal>
+      <Modal open={!!assigning()} onClose={() => !busy() && setAssigning(null)} title="Assign financial project" subtitle="Route future proxy spend from this key into a shared financial project.">
+        <div class="space-y-4">
+          <div class="rounded-control border border-line bg-surface-subtle p-3 flex items-center justify-between gap-3 flex-wrap">
+            <div class="min-w-0">
+              <div class="text-sm font-medium text-fg break-words">{assigning()?.name}</div>
+              <div class="text-xs text-fg-secondary break-all mt-0.5">{assigning()?.userEmail ?? assigning()?.userId}</div>
+            </div>
+            <Show when={assigning()?.prefix}>
+              <code class="text-xs font-mono text-accent bg-surface px-2 py-0.5 rounded border border-line/60">{assigning()?.prefix}…</code>
+            </Show>
+          </div>
+          <Show when={projects.error} fallback={<Select label="Key financial project" value={projectId()} onChange={setProjectId} options={[{ value: "", label: "Personal — no financial project" }, ...(readProjects() ?? []).filter((project) => project.kind === "project" && (project.status === "active" || project.id === projectId())).map((project) => ({ value: project.id, label: project.name }))]} />}><p role="alert" class="text-sm">Financial projects could not be loaded.</p><Btn size="sm" variant="outline" onClick={() => refetchProjects()}>Retry projects</Btn></Show>
+          <ModalNotice>The key owner must be a member of the selected active project. Reassignment applies to future requests; historical accounting and accepted requests keep their original attribution.</ModalNotice>
+          <Show when={assignmentError()}><p role="alert" class="text-sm">{assignmentError()}</p></Show>
+          <div class="flex justify-end gap-2"><Btn variant="ghost" disabled={busy()} onClick={() => setAssigning(null)}>Cancel</Btn><Btn disabled={busy() || !!projects.error || projects.loading} onClick={assign}>Save assignment</Btn></div>
+        </div>
+      </Modal>
       <CatalogToolbar view={view} />
       <CatalogState view={view}><Card>
         <Show when={keyCount() > 0} fallback={<EmptyState icon={Icons.key} title="No matching API keys" hint="Choose another period or adjust your filters." />}>
@@ -268,12 +284,12 @@ export default function AdminKeysPage() {
       >
         <div class="space-y-4">
           <ModalNotice tone="danger" title="Administrative key deactivation">
-            Revoke <strong class="text-white">{confirmRevoke()?.name}</strong> belonging to{" "}
-            <strong class="text-white">{confirmRevoke()?.userEmail}</strong>?
+            Revoke <strong class="text-fg font-medium">{confirmRevoke()?.name}</strong> belonging to{" "}
+            <strong class="text-fg font-medium">{confirmRevoke()?.userEmail}</strong>?
           </ModalNotice>
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">Action consequences:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-control border border-line bg-surface-muted p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">Action consequences:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>All client requests using this key will immediately return 401 Unauthorized.</li>
               <li>Active connections will not be renewed.</li>
               <li>Historical usage logs and aggregates will be preserved.</li>
@@ -311,12 +327,12 @@ export default function AdminKeysPage() {
         <div class="space-y-4">
           <ModalNotice tone="danger" title="Permanent database purge">
             Permanently delete{" "}
-            <strong class="text-white">{confirmDelete()?.name}</strong> belonging to{" "}
-            <strong class="text-white">{confirmDelete()?.userEmail}</strong>?
+            <strong class="text-fg font-medium">{confirmDelete()?.name}</strong> belonging to{" "}
+            <strong class="text-fg font-medium">{confirmDelete()?.userEmail}</strong>?
           </ModalNotice>
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">Database purge consequences:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-control border border-line bg-surface-muted p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">Database purge consequences:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>The API key record is completely erased from SQLite.</li>
               <li>Historical usage event logs and spend aggregates are safely preserved.</li>
               <li>This action cannot be reverted.</li>

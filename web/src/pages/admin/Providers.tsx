@@ -2,10 +2,10 @@ import { CatalogToolbar, CatalogState, CatalogPagination, createCatalog } from "
 import { createSignal, For, Show, createMemo } from "solid-js";
 
 import { api, type AuthStyle, type ProviderDto, type ProviderKeyDto, type SyncOutcome, type SyncPreview } from "../../api";
-import { PageTitle } from "../../index";
+import { PageTitle } from "../../chrome";
 import { usalItems } from "../../motion";
 import { attachSortable } from "../../sortable";
-import { Badge, Btn, Card, EmptyState, Icon, IconBtn, Icons, Modal, ModalField, ModalNotice, ModalSection, Segmented, Select, SwitchCard, toast, fmtDate } from "../../ui";
+import { Badge, Btn, Card, CheckTile, EmptyState, Icon, IconBtn, Icons, Modal, ModalField, ModalNotice, ModalSection, SecretField, Segmented, Select, StepperField, SwitchCard, TokenTagField, toast, fmtDate } from "../../ui";
 import { syncSummary } from "./Models";
 
 /** Badge view of a provider key's failover state. No-skip policy: keys are
@@ -385,30 +385,30 @@ export default function AdminProvidersPage() {
 
                       <div class="min-w-0">
                         <div class="flex items-center gap-2 flex-wrap">
-                          <span class="font-semibold">{p.name}</span>
+                          <span class="font-medium text-fg">{p.name}</span>
                           <Badge tone={p.enabled ? "green" : "zinc"}>{p.enabled ? "Enabled" : "Disabled"}</Badge>
                           {p.openaiBaseUrl && <Badge tone="indigo">OpenAI</Badge>}
                           {p.anthropicBaseUrl && <Badge tone="amber">Anthropic</Badge>}
                           {p.responsesBaseUrl && <Badge tone="indigo">Responses</Badge>}
-                          <span class="text-[11px] text-ink-500">priority {p.priority} · {p.modelCount} model{p.modelCount === 1 ? "" : "s"} · added {fmtDate(p.createdAt)}</span>
+                          <span class="text-xs text-fg-muted">priority {p.priority} · {p.modelCount} model{p.modelCount === 1 ? "" : "s"} · added {fmtDate(p.createdAt)}</span>
                         </div>
-                        <div class="mt-2 hidden min-w-0 space-y-1 text-xs text-ink-400 sm:block">
+                        <div class="mt-2 hidden min-w-0 space-y-1 text-xs text-fg-secondary sm:block">
                           <Show when={p.openaiBaseUrl}>
                             <div class="min-w-0 break-all">
-                              OpenAI: <code class="text-ink-300 break-all">{p.openaiBaseUrl}</code>
-                              <span class="text-ink-600"> · key via {p.openaiAuthStyle === "x-api-key" ? "x-api-key" : "Bearer"}</span>
+                              OpenAI: <code class="text-fg break-all">{p.openaiBaseUrl}</code>
+                              <span class="text-fg-muted"> · key via {p.openaiAuthStyle === "x-api-key" ? "x-api-key" : "Bearer"}</span>
                             </div>
                           </Show>
                           <Show when={p.anthropicBaseUrl}>
                             <div class="min-w-0 break-all">
-                              Anthropic: <code class="text-ink-300 break-all">{p.anthropicBaseUrl}</code>
-                              <span class="text-ink-600"> · key via {p.anthropicAuthStyle === "x-api-key" ? "x-api-key" : "Bearer"}</span>
+                              Anthropic: <code class="text-fg break-all">{p.anthropicBaseUrl}</code>
+                              <span class="text-fg-muted"> · key via {p.anthropicAuthStyle === "x-api-key" ? "x-api-key" : "Bearer"}</span>
                             </div>
                           </Show>
                           <Show when={p.responsesBaseUrl}>
                             <div class="min-w-0 break-all">
-                              Responses: <code class="text-ink-300 break-all">{p.responsesBaseUrl}</code>
-                              <span class="text-ink-600"> · key via {p.responsesAuthStyle === "x-api-key" ? "x-api-key" : "Bearer"}</span>
+                              Responses: <code class="text-fg break-all">{p.responsesBaseUrl}</code>
+                              <span class="text-fg-muted"> · key via {p.responsesAuthStyle === "x-api-key" ? "x-api-key" : "Bearer"}</span>
                             </div>
                           </Show>
                         </div>
@@ -430,12 +430,12 @@ export default function AdminProvidersPage() {
                   {/* upstream keys (fallback order) */}
                   <div class="mt-4 border-t border-line pt-3">
                     <div class="flex items-center justify-between mb-2">
-                      <span class="text-[11px] font-medium uppercase tracking-wider text-ink-500">
+                      <span class="text-xs font-medium text-fg-muted">
                         Upstream keys · fallback order
                       </span>
                       <button
                         type="button"
-                        class="flex items-center gap-1 text-[11px] font-medium text-ink-400 hover:text-ink-100 transition-colors cursor-pointer"
+                        class="flex items-center gap-1 text-xs font-medium text-fg-secondary hover:text-fg transition-colors cursor-pointer"
                         onClick={() => { setNewKeyLabel(""); setNewKeySecret(""); setKeyFor({ id: p.id, name: p.name }); }}
                       >
                         <Icon name={Icons.plus} size={12} /> Add key
@@ -450,12 +450,12 @@ export default function AdminProvidersPage() {
                           const st = () => keyStatus(k);
                           return (
                             <div data-id={k.id} class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 rounded-xl border border-line bg-elev/40 px-2 py-1.5">
-                              <span data-handle class="text-ink-600 hover:text-ink-300 transition-colors shrink-0">
+                              <span data-handle class="text-fg-muted hover:text-fg transition-colors shrink-0">
                                 <Icon name={Icons.grip} size={14} />
                               </span>
                               <Badge tone={st().tone}>{st().label}</Badge>
-                              <span class="min-w-0 flex-1 basis-20 text-xs text-ink-200 font-medium truncate">{k.label || "key"}</span>
-                              <span class="min-w-0 shrink-0 text-[10px] text-ink-600 truncate">
+                              <span class="min-w-0 flex-1 basis-20 text-xs text-fg font-medium truncate">{k.label || "key"}</span>
+                              <span class="min-w-0 shrink-0 text-xs text-fg-muted truncate">
                                 {st().tone === "green" ? "configured ✓" : st().label}
                               </span>
                               <div class="ml-auto flex items-center gap-0.5 shrink-0">
@@ -531,6 +531,111 @@ export default function AdminProvidersPage() {
         }
       >
         <div class="space-y-5">
+          {/* Exclusive Vendor Blueprint Deck & Live Protocol Capability Matrix */}
+          <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-3" aria-hidden="true">
+            <div class="flex items-center justify-between gap-2 flex-wrap">
+              <span class="text-xs font-medium text-fg">Upstream Vendor Blueprints</span>
+              <span class="text-[11px] font-mono text-accent">
+                {[openaiUrl().trim(), anthropicUrl().trim(), responsesUrl().trim()].filter(Boolean).length} of 3 protocols wired
+              </span>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              <For
+                each={[
+                  {
+                    label: "OpenAI",
+                    sub: "Chat + Responses",
+                    oUrl: "https://api.openai.com/v1",
+                    oAuth: "bearer" as AuthStyle,
+                    aUrl: "",
+                    aAuth: "x-api-key" as AuthStyle,
+                    rUrl: "https://api.openai.com/v1",
+                    rAuth: "bearer" as AuthStyle,
+                  },
+                  {
+                    label: "Anthropic",
+                    sub: "Messages /v1",
+                    oUrl: "",
+                    oAuth: "bearer" as AuthStyle,
+                    aUrl: "https://api.anthropic.com/v1",
+                    aAuth: "x-api-key" as AuthStyle,
+                    rUrl: "",
+                    rAuth: "bearer" as AuthStyle,
+                  },
+                  {
+                    label: "OpenRouter",
+                    sub: "Unified Router",
+                    oUrl: "https://openrouter.ai/api/v1",
+                    oAuth: "bearer" as AuthStyle,
+                    aUrl: "https://openrouter.ai/api/v1",
+                    aAuth: "bearer" as AuthStyle,
+                    rUrl: "",
+                    rAuth: "bearer" as AuthStyle,
+                  },
+                  {
+                    label: "Local / vLLM",
+                    sub: "OpenAI compat",
+                    oUrl: "http://127.0.0.1:8000/v1",
+                    oAuth: "bearer" as AuthStyle,
+                    aUrl: "",
+                    aAuth: "x-api-key" as AuthStyle,
+                    rUrl: "",
+                    rAuth: "bearer" as AuthStyle,
+                  },
+                ]}
+              >
+                {(bp) => (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => {
+                      if (!name().trim()) setName(bp.label);
+                      setOpenaiUrl(bp.oUrl);
+                      setOpenaiAuth(bp.oAuth);
+                      setAnthropicUrl(bp.aUrl);
+                      setAnthropicAuth(bp.aAuth);
+                      setResponsesUrl(bp.rUrl);
+                      setResponsesAuth(bp.rAuth);
+                    }}
+                    class="rounded-lg border border-line bg-surface hover:border-accent/45 p-2 text-left transition-all cursor-pointer"
+                  >
+                    <div class="text-xs font-medium text-fg">{bp.label}</div>
+                    <div class="text-[10px] font-mono text-fg-muted mt-0.5">{bp.sub}</div>
+                  </button>
+                )}
+              </For>
+            </div>
+
+            {/* 3-Protocol Live Status Strip */}
+            <div class="grid grid-cols-3 gap-1.5 pt-1 text-[11px] font-mono">
+              <For
+                each={[
+                  { name: "OpenAI /v1", url: openaiUrl(), auth: openaiAuth() },
+                  { name: "Anthropic /v1", url: anthropicUrl(), auth: anthropicAuth() },
+                  { name: "Responses /v1", url: responsesUrl(), auth: responsesAuth() },
+                ]}
+              >
+                {(proto) => (
+                  <div
+                    class={`rounded-lg border px-2.5 py-1.5 ${
+                      proto.url.trim()
+                        ? "border-accent/40 bg-accent-subtle text-accent-strong"
+                        : "border-line bg-surface/50 text-fg-muted"
+                    }`}
+                  >
+                    <div class="flex items-center justify-between gap-1">
+                      <span class="truncate font-medium">{proto.name}</span>
+                      <span>{proto.url.trim() ? "●" : "○"}</span>
+                    </div>
+                    <div class="text-[10px] truncate opacity-80 mt-0.5">
+                      {proto.url.trim() ? `${proto.auth}` : "unconfigured"}
+                    </div>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+
           <ModalSection title="General">
             <div class="space-y-3.5">
               <ModalField label="Provider name">
@@ -539,7 +644,7 @@ export default function AdminProvidersPage() {
                   value={name()}
                   onInput={(e) => setName(e.currentTarget.value)}
                   placeholder="e.g. OpenAI Direct"
-                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                  class="ui-field"
                 />
               </ModalField>
 
@@ -550,24 +655,28 @@ export default function AdminProvidersPage() {
                 description="When disabled, this provider and its models are skipped during failover."
               />
 
-              <ModalField
+              <StepperField
                 label="Priority"
+                ariaLabel="Priority"
+                min={0}
+                max={10000}
+                step={5}
+                unit="tier"
+                value={priority()}
+                onInput={setPriority}
                 hint="Lower number = preferred in failover cascades."
-              >
-                <input
-                  type="number"
-                  min={0}
-                  max={10000}
-                  value={priority()}
-                  onInput={(e) => setPriority(e.currentTarget.value)}
-                  class="w-full max-w-xs rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 focus:border-brand-500 focus:outline-none transition-colors"
-                />
-              </ModalField>
+                presets={[
+                  { label: "0 · Primary", value: "0" },
+                  { label: "10 · Secondary", value: "10" },
+                  { label: "50 · Backup", value: "50" },
+                  { label: "100 · Last", value: "100" },
+                ]}
+              />
             </div>
           </ModalSection>
 
           <ModalSection title="Protocol Endpoints">
-            <div class="space-y-3.5 rounded-xl border border-line bg-ink-900/40 p-3.5">
+            <div class="space-y-3.5 rounded-xl border border-line bg-surface-subtle p-3.5">
               <div class="space-y-2">
                 <ModalField label="OpenAI-compatible base URL">
                   <input
@@ -575,11 +684,11 @@ export default function AdminProvidersPage() {
                     value={openaiUrl()}
                     onInput={(e) => setOpenaiUrl(e.currentTarget.value)}
                     placeholder="https://api.openai.com/v1"
-                    class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                    class="ui-field font-mono"
                   />
                 </ModalField>
                 <div class="flex items-center justify-between gap-3 pt-0.5">
-                  <span class="text-xs text-ink-400">Auth style</span>
+                  <span class="text-xs text-fg-secondary">Auth style</span>
                   <Segmented value={openaiAuth()} onChange={setOpenaiAuth} options={AUTH_STYLE_OPTIONS} />
                 </div>
               </div>
@@ -591,11 +700,11 @@ export default function AdminProvidersPage() {
                     value={anthropicUrl()}
                     onInput={(e) => setAnthropicUrl(e.currentTarget.value)}
                     placeholder="https://api.anthropic.com/v1"
-                    class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                    class="ui-field font-mono"
                   />
                 </ModalField>
                 <div class="flex items-center justify-between gap-3 pt-0.5">
-                  <span class="text-xs text-ink-400">Auth style</span>
+                  <span class="text-xs text-fg-secondary">Auth style</span>
                   <Segmented value={anthropicAuth()} onChange={setAnthropicAuth} options={AUTH_STYLE_OPTIONS} />
                 </div>
               </div>
@@ -607,11 +716,11 @@ export default function AdminProvidersPage() {
                     value={responsesUrl()}
                     onInput={(e) => setResponsesUrl(e.currentTarget.value)}
                     placeholder="https://provider.example.com/v1"
-                    class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                    class="ui-field font-mono"
                   />
                 </ModalField>
                 <div class="flex items-center justify-between gap-3 pt-0.5">
-                  <span class="text-xs text-ink-400">Auth style</span>
+                  <span class="text-xs text-fg-secondary">Auth style</span>
                   <Segmented value={responsesAuth()} onChange={setResponsesAuth} options={AUTH_STYLE_OPTIONS} />
                 </div>
               </div>
@@ -621,33 +730,33 @@ export default function AdminProvidersPage() {
           <ModalSection title="Credentials & Filters">
             <div class="space-y-3.5">
               <Show when={editing() === "new"}>
-                <ModalField
+                <SecretField
                   label="Upstream API key"
+                  ariaLabel="Upstream API key"
+                  value={apiKey()}
+                  onInput={setApiKey}
+                  placeholder="sk-…"
                   hint="Encrypted with AES-256-GCM. Additional keys can be added after saving."
-                >
-                  <input
-                    type="password"
-                    value={apiKey()}
-                    onInput={(e) => setApiKey(e.currentTarget.value)}
-                    placeholder="sk-…"
-                    autocomplete="off"
-                    class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                  />
-                </ModalField>
+                />
               </Show>
 
-              <ModalField
+              <TokenTagField
                 label="Blocked parameters"
+                ariaLabel="Blocked parameters"
+                value={stripParams()}
+                onInput={setStripParams}
+                placeholder="e.g. temperature, max_tokens"
                 hint="Comma-separated query/body keys stripped before forwarding upstream."
-              >
-                <input
-                  type="text"
-                  value={stripParams()}
-                  onInput={(e) => setStripParams(e.currentTarget.value)}
-                  placeholder="e.g. temperature, max_tokens"
-                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-                />
-              </ModalField>
+                suggestions={[
+                  "temperature",
+                  "top_p",
+                  "max_tokens",
+                  "frequency_penalty",
+                  "presence_penalty",
+                  "reasoning_effort",
+                  "parallel_tool_calls",
+                ]}
+              />
             </div>
           </ModalSection>
         </div>
@@ -675,8 +784,8 @@ export default function AdminProvidersPage() {
             title="Endpoint Smoke Test"
             subtitle="Automatic ping to check health and query available models."
           >
-            <Show when={!smokeBusy()} fallback={<div class="text-xs text-ink-400 py-2">Probing endpoints…</div>}>
-              <Show when={smoke()} fallback={<div class="text-xs text-ink-400 py-2">No response data</div>}>
+            <Show when={!smokeBusy()} fallback={<div class="text-xs text-fg-secondary py-2">Probing endpoints…</div>}>
+              <Show when={smoke()} fallback={<div class="text-xs text-fg-secondary py-2">No response data</div>}>
                 {(s) => (
                   <div class="flex flex-wrap gap-2 pt-1">
                     <For each={Object.entries(s()) as Array<[Cap, SmokeResult]>}>
@@ -698,7 +807,7 @@ export default function AdminProvidersPage() {
             title="Interactive Chat Probe"
             subtitle="Sends a live turn upstream to test credentials and streaming responses."
           >
-            <div class="rounded-xl border border-line bg-ink-900/40 p-4 space-y-3.5">
+            <div class="rounded-xl border border-line bg-surface-subtle p-4 space-y-3.5">
               <Show when={(["openai", "anthropic", "responses"] as const).filter((c) => testFor()?.[`${c}BaseUrl` as const]).length > 1}>
                 <Segmented
                   value={probeCap()}
@@ -721,7 +830,7 @@ export default function AdminProvidersPage() {
                 hint={
                   listedModels().length > 0
                     ? "Typing here overrides the dropdown selection above"
-                    : "Model list was empty — enter the ID manually"
+                    : "Model list was empty, enter the ID manually"
                 }
               >
                 <input
@@ -729,7 +838,7 @@ export default function AdminProvidersPage() {
                   value={modelFree()}
                   onInput={(e) => setModelFree(e.currentTarget.value)}
                   placeholder="e.g. gpt-4o-mini / claude-3-5-sonnet"
-                  class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+                  class="ui-field font-mono"
                 />
               </ModalField>
 
@@ -748,25 +857,25 @@ export default function AdminProvidersPage() {
                   <div
                     class={`rounded-xl border px-3.5 py-3 text-xs anim-fade-in ${
                       r().reachable && (r().status ?? 500) < 400
-                        ? "border-emerald-500/30 bg-emerald-500/5"
-                        : "border-rose-500/30 bg-rose-500/5"
+                        ? "border-success/35 bg-success-subtle"
+                        : "border-danger/35 bg-danger-subtle"
                     }`}
                   >
                     <Show
                       when={r().reachable && (r().status ?? 500) < 400}
                       fallback={
-                        <div class="text-rose-400">
+                        <div class="text-danger">
                           {r().reachable
-                            ? `HTTP ${r().status} — ${r().upstreamError ?? "upstream rejected the request"}`
-                            : `Unreachable — ${r().error ?? "unknown error"}`}
+                            ? `HTTP ${r().status}: ${r().upstreamError ?? "upstream rejected the request"}`
+                            : `Unreachable: ${r().error ?? "unknown error"}`}
                         </div>
                       }
                     >
-                      <div class="text-emerald-400 font-medium">
+                      <div class="text-success font-medium">
                         OK · {r().latencyMs}ms · model {r().model}
                       </div>
                       <Show when={r().reply}>
-                        <div class="text-ink-200 mt-1.5 font-mono text-[11px] leading-relaxed bg-ink-950/60 p-2.5 rounded-lg border border-line/40">
+                        <div class="text-fg mt-1.5 font-mono text-xs leading-relaxed bg-surface-subtle p-2.5 rounded-lg border border-line/40">
                           “{r().reply}”
                         </div>
                       </Show>
@@ -783,7 +892,7 @@ export default function AdminProvidersPage() {
       <Modal
         open={!!importFor()}
         onClose={() => setImportFor(null)}
-        title={`Import models — ${importFor()?.name ?? ""}`}
+        title={`Import models · ${importFor()?.name ?? ""}`}
         subtitle="Upstream model preview detected from endpoint. Models will be registered into the gateway registry."
         width="max-w-lg"
         footer={
@@ -806,7 +915,7 @@ export default function AdminProvidersPage() {
         }
       >
         <div class="space-y-4">
-          <p class="text-xs text-ink-400 leading-relaxed">
+          <p class="text-xs text-fg-secondary leading-relaxed">
             The upstream endpoints returned the following model counts. Duplicates between protocols will be unified:
           </p>
           <div class="flex flex-wrap gap-2">
@@ -831,7 +940,7 @@ export default function AdminProvidersPage() {
       <Modal
         open={!!keyFor()}
         onClose={() => setKeyFor(null)}
-        title={`Add upstream key — ${keyFor()?.name ?? ""}`}
+        title={`Add upstream key · ${keyFor()?.name ?? ""}`}
         subtitle="Add a fallback key to this provider's credential pool. Keys rotate automatically upon rate limits."
         width="max-w-lg"
         footer={
@@ -854,29 +963,41 @@ export default function AdminProvidersPage() {
         }
       >
         <div class="space-y-4">
+          {/* Exclusive Key Rotation Pool Slot Visualizer */}
+          <div class="rounded-xl border border-line bg-surface-subtle p-3 space-y-2" aria-hidden="true">
+            <div class="flex items-center justify-between text-[11px] text-fg-muted">
+              <span class="tracking-wider font-medium">Failover Credential Pool</span>
+              <span class="font-mono text-accent">Auto-rotates on HTTP 429 / 402</span>
+            </div>
+            <div class="flex items-center gap-1.5 text-xs font-mono overflow-x-auto py-0.5">
+              <span class="px-2 py-1 rounded border border-line bg-surface text-fg-secondary shrink-0">
+                Existing Pool
+              </span>
+              <span class="text-fg-muted shrink-0">──▸</span>
+              <span class="px-2.5 py-1 rounded border border-accent/45 bg-accent-subtle text-accent-strong font-medium shrink-0">
+                + {newKeyLabel().trim() || "new-fallback-key"}
+              </span>
+            </div>
+          </div>
+
           <ModalField label="Key label (optional)">
             <input
               type="text"
               value={newKeyLabel()}
               onInput={(e) => setNewKeyLabel(e.currentTarget.value)}
               placeholder="e.g. backup billing account, tier-2 pool"
-              class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
+              class="ui-field"
             />
           </ModalField>
 
-          <ModalField
+          <SecretField
             label="Upstream API key"
+            ariaLabel="Upstream API key"
+            value={newKeySecret()}
+            onInput={setNewKeySecret}
+            placeholder="sk-…"
             hint="Appended to the end of the fallback chain. Drag up on the provider card to prioritize."
-          >
-            <input
-              type="password"
-              value={newKeySecret()}
-              onInput={(e) => setNewKeySecret(e.currentTarget.value)}
-              placeholder="sk-…"
-              autocomplete="off"
-              class="w-full rounded-lg border border-line bg-ink-950/70 px-3 py-2 text-xs font-mono text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none transition-colors"
-            />
-          </ModalField>
+          />
         </div>
       </Modal>
 
@@ -909,12 +1030,12 @@ export default function AdminProvidersPage() {
       >
         <div class="space-y-4">
           <ModalNotice tone="warn" title="Confirm key removal">
-            Remove <strong class="text-white">{confirmDeleteKey()?.key.label || "this key"}</strong> from{" "}
-            <strong class="text-white">{confirmDeleteKey()?.provider.name}</strong>'s fallback chain?
+            Remove <strong class="text-fg">{confirmDeleteKey()?.key.label || "this key"}</strong> from{" "}
+            <strong class="text-fg">{confirmDeleteKey()?.provider.name}</strong>'s fallback chain?
           </ModalNotice>
-          <div class="rounded-xl border border-line bg-ink-950/40 p-3.5 space-y-2 text-xs text-ink-300">
-            <div class="font-medium text-ink-100">Key removal impact:</div>
-            <ul class="list-disc list-inside space-y-1 text-ink-400 pl-1">
+          <div class="rounded-xl border border-line bg-surface-subtle p-3.5 space-y-2 text-xs text-fg-secondary">
+            <div class="font-medium text-fg">Key removal impact:</div>
+            <ul class="list-disc list-inside space-y-1 text-fg-secondary pl-1">
               <li>This credential is deleted from SQLite and cannot be used in failover cascades.</li>
               <li>Requests currently in flight will finish normally.</li>
               <li>Other keys in this provider pool remain active.</li>
@@ -952,29 +1073,17 @@ export default function AdminProvidersPage() {
       >
         <div class="space-y-4">
           <ModalNotice tone="danger" title="Confirm provider deletion">
-            Delete <strong class="text-white">{confirmDelete()?.name}</strong>? Upstream proxy requests for its capabilities
+            Delete <strong class="text-fg">{confirmDelete()?.name}</strong>? Upstream proxy requests for its capabilities
             will fail until another enabled provider covers them.
           </ModalNotice>
           <Show when={(confirmDelete()?.modelCount ?? 0) > 0}>
-            <div class="rounded-xl border border-line bg-ink-950/40 p-3.5">
-              <label class="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={deleteModels()}
-                  onChange={(e) => setDeleteModels(e.currentTarget.checked)}
-                  class="w-4 h-4 rounded border-line bg-ink-900 accent-brand-500 mt-0.5 cursor-pointer"
-                />
-                <div class="text-xs text-ink-300">
-                  <div class="font-medium text-ink-100">
-                    Also delete its {confirmDelete()?.modelCount} registered model
-                    {(confirmDelete()?.modelCount ?? 0) === 1 ? "" : "s"}
-                  </div>
-                  <div class="text-ink-400 mt-0.5 leading-relaxed">
-                    If unchecked, models are kept and become orphaned (badge "no provider") so you can re-link them in the Models tab.
-                  </div>
-                </div>
-              </label>
-            </div>
+            <CheckTile
+              checked={deleteModels()}
+              onChange={setDeleteModels}
+              tone="danger"
+              title={`Also delete its ${confirmDelete()?.modelCount} registered model${(confirmDelete()?.modelCount ?? 0) === 1 ? "" : "s"}`}
+              description='If unchecked, models are kept and become orphaned (badge "no provider") so you can re-link them in the Models tab.'
+            />
           </Show>
         </div>
       </Modal>
