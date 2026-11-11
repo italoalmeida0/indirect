@@ -177,10 +177,10 @@
   --tone-orchid: oklch(76% 0.15 322);
   --tone-violet: oklch(74% 0.125 290);
   --tone-rose: oklch(71% 0.155 8);
-  --tone-amber: oklch(83% 0.12 78);
+  --tone-amber: oklch(73.5% 0.105 74);
   --tone-green: oklch(79% 0.14 162);
   --success-subtle: color-mix(in oklab, var(--success) 15%, transparent);
-  --warning-subtle: color-mix(in oklab, var(--warning) 15%, transparent);
+  --warning-subtle: color-mix(in oklab, var(--warning) 13%, transparent);
   --danger-subtle: color-mix(in oklab, var(--danger) 15%, transparent);
   --info-subtle: color-mix(in oklab, var(--info) 15%, transparent);
   --shadow-resting: 0 1px 2px oklch(0% 0 0 / 0.18);
