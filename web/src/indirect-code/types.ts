@@ -53,6 +53,30 @@ export interface CompactionUsage {
   cost_usd?: number;
 }
 
+export interface FoldBlockFailedCommand {
+  command: string;
+  exitCode?: string;
+  firstError?: string;
+}
+
+export interface FoldBlockInfo {
+  id: string;
+  tier: number;
+  startIdx: number;
+  endIdx: number;
+  topic?: string;
+  summary: string;
+  readFiles?: string[];
+  modifiedFiles?: string[];
+  activatedTools?: string[];
+  failedCommands?: FoldBlockFailedCommand[];
+  sourceBlockIds?: string[];
+  retiredByBlockId?: string;
+  rawTokens?: number;
+  blockTokens?: number;
+  createdAt?: number;
+}
+
 export interface CompactionState {
   previousSummary?: string;
   readFiles?: string[];
@@ -61,6 +85,8 @@ export interface CompactionState {
   count?: number;
   keepFrom?: number;
   usage?: CompactionUsage;
+  blocks?: FoldBlockInfo[];
+  prunedBefore?: number;
 }
 
 export interface TurnChangedFile {
