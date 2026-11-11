@@ -41,7 +41,7 @@ export function ToolbarModel() {
       <span
         class={`rounded border px-1 py-0.5 font-mono text-[10px] font-medium shrink-0 leading-none transition-colors ${
           isMaxEffort()
-            ? "border-tone-sky/35 bg-tone-sky/10 text-tone-sky"
+            ? "border-accent/35 bg-accent-subtle text-accent"
             : "border-border/80 bg-surface-subtle text-fg-muted"
         }`}
       >

@@ -712,7 +712,7 @@ export function ToolbarContext() {
               <span
                 class={`shrink-0 font-mono text-[10px] ml-1 ${
                   normalizeEffort(c.effort()) === "max"
-                    ? "text-tone-sky font-medium"
+                    ? "text-accent font-medium"
                     : "text-fg-muted"
                 }`}
               >

@@ -101,14 +101,43 @@ describe("Separated Effort & Model picker contracts", () => {
     "utf8",
   );
 
-  test("EffortPickerBody omits 'Let Muse decide', wires top-right model trigger, stops arrow bubbling, and uses semantic tokens", () => {
+  test("EffortPickerBody omits 'Let Muse decide', wires top-right model trigger, stops arrow bubbling, and uses user accent tokens", () => {
     expect(effortSrc).not.toContain("Muse");
+    expect(effortSrc).not.toContain("tone-sky");
     expect(effortSrc).toContain("aria-label={`Select model: ${props.activeModelName()}`}");
     expect(effortSrc).toContain('role="slider"');
     expect(effortSrc).toContain("e.stopPropagation()");
     expect(effortSrc).toContain("setPointerCapture");
-    expect(effortSrc).toContain("text-tone-sky");
+    expect(effortSrc).toContain("text-accent");
+    expect(effortSrc).toContain("var(--accent)");
+    expect(effortSrc).toContain('attributeFilter: ["data-theme", "data-accent"]');
     expect(effortSrc).toContain("reducedMotion");
+  });
+
+  test("EffortPickerBody uses corner-safe rounded-[inherit] layering, single topmost ring, and canvas corner guard", () => {
+    expect(effortSrc).toContain("rounded-[10px] overflow-hidden isolate");
+    expect(effortSrc).toContain("isCellInsideRoundedTrack");
+    expect(effortSrc).toContain("const cornerRadius = 10;");
+    expect(effortSrc).toContain("const margin = 2.5;");
+    expect(effortSrc).toContain("data-effort-track-ring");
+
+    const inheritedMatches = effortSrc.match(/rounded-\[inherit\]/g) ?? [];
+    expect(inheritedMatches.length).toBeGreaterThanOrEqual(4);
+
+    // Topmost hairline ring must sit after the canvas and before the thumb
+    const canvasPos = effortSrc.indexOf("<canvas");
+    const ringPos = effortSrc.indexOf("data-effort-track-ring");
+    const thumbPos = effortSrc.indexOf("data-effort-thumb");
+    expect(canvasPos).toBeGreaterThan(0);
+    expect(ringPos).toBeGreaterThan(canvasPos);
+    expect(thumbPos).toBeGreaterThan(ringPos);
+  });
+
+  test("ToolbarModel and mobile + menu highlight Max effort with selected accent instead of fixed sky", () => {
+    expect(toolbarModelSrc).not.toContain("tone-sky");
+    expect(toolbarModelSrc).toContain("border-accent/35 bg-accent-subtle text-accent");
+    expect(toolbarCtxSrc).not.toContain("text-tone-sky font-medium");
+    expect(toolbarCtxSrc).toContain('normalizeEffort(c.effort()) === "max"\n                    ? "text-accent font-medium"');
   });
 
   test("ModelPickerBody has no bottom Reasoning effort footer", () => {

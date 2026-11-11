@@ -20,6 +20,24 @@ function cellHash(col: number, row: number, seed: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
+function isCellInsideRoundedTrack(
+  x: number,
+  y: number,
+  cell: number,
+  w: number,
+  h: number,
+  cornerRadius = 10,
+  margin = 2.5,
+): boolean {
+  if (x < margin || y < margin || x + cell > w - margin || y + cell > h - margin) {
+    return false;
+  }
+  const innerR = Math.max(0, cornerRadius - margin);
+  const dx = Math.max(0, cornerRadius - x, x + cell - (w - cornerRadius));
+  const dy = Math.max(0, cornerRadius - y, y + cell - (h - cornerRadius));
+  return dx * dx + dy * dy <= innerR * innerR;
+}
+
 function sampleElementColor(
   probeCtx: CanvasRenderingContext2D,
   el: Element,
@@ -89,24 +107,24 @@ export function EffortPickerBody(props: {
     let cssW = 0;
     let cssH = 0;
     let dpr = 1;
-    let skyRgb: [number, number, number] = [120, 190, 245];
-    let glintRgb: [number, number, number] = [180, 220, 250];
-    let brightSky = true;
+    let accentRgb: [number, number, number] = [90, 190, 175];
+    let glintRgb: [number, number, number] = [170, 225, 215];
+    let brightAccent = true;
     let rafId = 0;
 
     const refreshColors = () => {
-      skyRgb = sampleElementColor(probeCtx, canvas);
-      const skyLum = 0.2126 * skyRgb[0] + 0.7152 * skyRgb[1] + 0.0722 * skyRgb[2];
-      brightSky = skyLum > 140;
-      if (brightSky && thumb) {
+      accentRgb = sampleElementColor(probeCtx, canvas);
+      const accentLum = 0.2126 * accentRgb[0] + 0.7152 * accentRgb[1] + 0.0722 * accentRgb[2];
+      brightAccent = accentLum > 138;
+      if (brightAccent && thumb) {
         const thumbRgb = sampleElementBgColor(probeCtx, thumb);
         glintRgb = [
-          Math.round(skyRgb[0] + (thumbRgb[0] - skyRgb[0]) * 0.42),
-          Math.round(skyRgb[1] + (thumbRgb[1] - skyRgb[1]) * 0.42),
-          Math.round(skyRgb[2] + (thumbRgb[2] - skyRgb[2]) * 0.42),
+          Math.round(accentRgb[0] + (thumbRgb[0] - accentRgb[0]) * 0.42),
+          Math.round(accentRgb[1] + (thumbRgb[1] - accentRgb[1]) * 0.42),
+          Math.round(accentRgb[2] + (thumbRgb[2] - accentRgb[2]) * 0.42),
         ];
       } else {
-        glintRgb = skyRgb;
+        glintRgb = accentRgb;
       }
     };
 
@@ -131,8 +149,10 @@ export function EffortPickerBody(props: {
 
       const cell = 2;
       const pitch = 4;
-      const rows = Math.max(1, Math.floor(cssH / pitch));
-      const cols = Math.max(1, Math.floor((cssW - 2) / pitch));
+      const cornerRadius = 10;
+      const margin = 2.5;
+      const rows = Math.max(1, Math.floor((cssH - 4) / pitch));
+      const cols = Math.max(1, Math.floor((cssW - 4) / pitch));
       const gridH = rows * pitch - (pitch - cell);
       const gridW = cols * pitch - (pitch - cell);
       const y0 = Math.round((cssH - gridH) / 2);
@@ -147,6 +167,9 @@ export function EffortPickerBody(props: {
         const x = x0 + c * pitch;
 
         for (let r = 0; r < rows; r++) {
+          const y = y0 + r * pitch;
+          if (!isCellInsideRoundedTrack(x, y, cell, cssW, cssH, cornerRadius, margin)) continue;
+
           const h0 = cellHash(c, r, 1);
           if (h0 > density) continue;
 
@@ -161,9 +184,9 @@ export function EffortPickerBody(props: {
           const alpha = envelope * (0.18 + 0.82 * Math.pow(spark, 1.35));
           if (alpha < 0.03) continue;
 
-          const rgb = brightSky && spark > 0.78 && u > 0.42 ? glintRgb : skyRgb;
+          const rgb = brightAccent && spark > 0.78 && u > 0.42 ? glintRgb : accentRgb;
           ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${Math.min(1, alpha).toFixed(3)})`;
-          ctx.fillRect(x, y0 + r * pitch, cell, cell);
+          ctx.fillRect(x, y, cell, cell);
         }
       }
     };
@@ -274,7 +297,7 @@ export function EffortPickerBody(props: {
           <span
             data-effort-title
             class={`text-[13px] font-medium transition-colors duration-150 ${
-              isMax() ? "text-tone-sky" : "text-fg"
+              isMax() ? "text-accent" : "text-fg"
             }`}
           >
             {activeSpec().title}
@@ -343,30 +366,24 @@ export function EffortPickerBody(props: {
         onPointerCancel={(e) => finishPointer(e, true)}
         onLostPointerCapture={(e) => finishPointer(e, false)}
         onKeyDown={(e) => handleStepKey(e, false)}
-        class="relative h-9 rounded-[10px] overflow-hidden select-none touch-none cursor-pointer"
-        style={{
-          background: "color-mix(in oklab, var(--control-track) 55%, var(--surface-muted))",
-          "box-shadow": "inset 0 0 0 1px color-mix(in oklab, var(--border) 65%, transparent)",
-        }}
+        class="relative h-9 rounded-[10px] overflow-hidden isolate select-none touch-none cursor-pointer"
       >
-        {/* Normal left progress fill */}
+        {/* Normal recessed track surface, left progress fill, and 7 discrete stop dots */}
         <div
           aria-hidden="true"
-          class={`absolute inset-y-0 left-0 bg-fg/[0.08] pointer-events-none transition-opacity duration-150 ${
+          class={`absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none transition-opacity duration-150 ${
             isMax() ? "opacity-0" : "opacity-100"
           }`}
           style={{
-            width: `calc(14px + ${ratio()} * (100% - 28px))`,
+            background: "color-mix(in oklab, var(--control-track) 55%, var(--surface-muted))",
           }}
-        />
-
-        {/* 7 discrete stop dots */}
-        <div
-          aria-hidden="true"
-          class={`absolute inset-0 pointer-events-none transition-opacity duration-150 ${
-            isMax() ? "opacity-0" : "opacity-100"
-          }`}
         >
+          <div
+            class="absolute inset-y-0 left-0 bg-fg/[0.08]"
+            style={{
+              width: `calc(14px + ${ratio()} * (100% - 28px))`,
+            }}
+          />
           <For each={EFFORT_SPECS}>
             {(_, i) => (
               <span
@@ -380,24 +397,35 @@ export function EffortPickerBody(props: {
           </For>
         </div>
 
-        {/* Max atmosphere + animated pixel matrix */}
+        {/* Max accent atmosphere + animated pixel matrix */}
         <div
           aria-hidden="true"
-          class={`absolute inset-0 pointer-events-none transition-opacity duration-200 ${
+          class={`absolute inset-0 rounded-[inherit] overflow-hidden pointer-events-none transition-opacity duration-200 ${
             isMax() ? "opacity-100" : "opacity-0"
           }`}
           style={{
             background:
-              "linear-gradient(90deg, color-mix(in oklab, var(--tone-sky) 14%, var(--surface-muted)) 0%, color-mix(in oklab, var(--tone-sky) 20%, var(--surface)) 55%, color-mix(in oklab, var(--tone-sky) 26%, var(--surface)) 100%)",
-            "box-shadow": "inset 0 0 0 1px color-mix(in oklab, var(--tone-sky) 28%, transparent)",
+              "linear-gradient(90deg, color-mix(in oklab, var(--accent) 12%, var(--surface-muted)) 0%, color-mix(in oklab, var(--accent) 18%, var(--surface)) 55%, color-mix(in oklab, var(--accent) 24%, var(--surface)) 100%)",
           }}
         >
           <canvas
             ref={setCanvasEl}
             aria-hidden="true"
-            class="absolute inset-0 w-full h-full pointer-events-none text-tone-sky"
+            class="absolute inset-0 w-full h-full rounded-[inherit] pointer-events-none text-accent"
           />
         </div>
+
+        {/* Single topmost border hairline sealing the rounded corners */}
+        <span
+          aria-hidden="true"
+          data-effort-track-ring
+          class="pointer-events-none absolute inset-0 rounded-[inherit] transition-[box-shadow] duration-200"
+          style={{
+            "box-shadow": isMax()
+              ? "inset 0 0 0 1px color-mix(in oklab, var(--accent) 26%, transparent)"
+              : "inset 0 0 0 1px color-mix(in oklab, var(--border) 55%, transparent)",
+          }}
+        />
 
         {/* Tactile pill thumb */}
         <span
