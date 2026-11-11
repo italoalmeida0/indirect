@@ -164,4 +164,15 @@ describe("Separated Effort & Model picker contracts", () => {
     expect(pageSrc).toContain("setEffortMenuOpen(false)");
     expect(pageSrc).toContain("setModelMenuOpen(false)");
   });
+
+  test("ComposerInput starts compact on 1 line (min-h-9) and grows dynamically up to 160px", () => {
+    const inputSrc = readFileSync(
+      path.join(import.meta.dir, "../web/src/indirect-code/components/composer/ComposerInput.tsx"),
+      "utf8",
+    );
+    expect(inputSrc).toContain("rows={1}");
+    expect(inputSrc).toContain("min-h-9");
+    expect(inputSrc).not.toContain("min-h-[56px]");
+    expect(inputSrc).toContain("Math.min(sh, 160)");
+  });
 });

@@ -12,18 +12,25 @@ export function ComposerInput() {
   let textareaRef: HTMLTextAreaElement | undefined;
   const [dragActive, setDragActive] = createSignal(false);
 
+  const syncHeight = (el: HTMLTextAreaElement, text: string) => {
+    if (!text) {
+      el.style.height = "";
+      el.style.overflowY = "hidden";
+      return;
+    }
+    el.style.height = "auto";
+    const sh = el.scrollHeight;
+    el.style.height = Math.min(sh, 160) + "px";
+    el.style.overflowY = sh > 160 ? "auto" : "hidden";
+  };
+
   createEffect(() => {
     const text = c.inputPrompt();
     if (!textareaRef) return;
-    if (!text) {
-      textareaRef.style.height = "";
-    } else {
-      if (textareaRef.value !== text) {
-        textareaRef.value = text;
-      }
-      textareaRef.style.height = "auto";
-      textareaRef.style.height = Math.min(textareaRef.scrollHeight, 160) + "px";
+    if (text && textareaRef.value !== text) {
+      textareaRef.value = text;
     }
+    syncHeight(textareaRef, text);
   });
 
   return (
@@ -106,7 +113,7 @@ export function ComposerInput() {
     ref={textareaRef}
     disabled={s.creatingSession() || c.sending()}
     rows={1}
-    class="flex-1 min-w-0 bg-transparent text-[13px] leading-relaxed text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-2 max-h-[160px] min-h-[56px] overflow-y-auto [scrollbar-gutter:stable]"
+    class="flex-1 min-w-0 bg-transparent text-[13px] leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-2.5 pb-1.5 max-h-[160px] min-h-9 overflow-y-hidden"
     placeholder="Ask anything, @ to mention, / for actions"
     value={c.inputPrompt()}
     onFocus={() => c.mentions.setFocused(true)}
@@ -115,15 +122,10 @@ export function ComposerInput() {
     onClick={(e) => c.mentions.setCaret(e.currentTarget.selectionStart)}
     onKeyUp={(e) => c.mentions.setCaret(e.currentTarget.selectionStart)}
     onInput={(e) => {
-      c.setInputPrompt(e.currentTarget.value);
-      c.mentions.setCaret(e.currentTarget.selectionStart);
       const el = e.currentTarget;
-      if (!el.value) {
-        el.style.height = "";
-      } else {
-        el.style.height = "auto";
-        el.style.height = Math.min(el.scrollHeight, 160) + "px";
-      }
+      c.setInputPrompt(el.value);
+      c.mentions.setCaret(el.selectionStart);
+      syncHeight(el, el.value);
     }}
     onPaste={(e) => {
       const files: File[] = [];
@@ -190,7 +192,7 @@ export function ComposerInput() {
         (!ui.isMobile() || e.ctrlKey || e.metaKey)
       ) {
         e.preventDefault();
-        if (textareaRef) textareaRef.style.height = "";
+        if (textareaRef) syncHeight(textareaRef, "");
         c.sendPrompt();
       }
     }}
@@ -200,9 +202,9 @@ export function ComposerInput() {
       type="button"
       onClick={() => {
         c.setInputPrompt("");
-        if (textareaRef) textareaRef.style.height = "";
+        if (textareaRef) syncHeight(textareaRef, "");
       }}
-      class="shrink-0 mr-2.5 mt-2.5 p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+      class="shrink-0 mr-2.5 mt-1.5 inline-grid h-6 w-6 place-items-center rounded-full text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
       data-rc-tip="Clear input" aria-label="Clear input"
     >
       <Iconify icon="lucide:x" size={13} />
