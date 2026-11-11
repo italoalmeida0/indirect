@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"indirect/indirect-code-daemon/packages/core"
+	"indirect/indirect-code-daemon/packages/provider"
 )
 
 // WriteTool writes content to a file, creating parent directories.
@@ -21,6 +22,9 @@ type WriteTool struct {
 	// change tracking. It is advertised through the mode instructions,
 	// never through this tool's description.
 	BrainDir string
+	// CompactedFileAdvisory optionally returns a concise summary of earlier
+	// compacted eras/decisions touching absPath when overwriting an existing file.
+	CompactedFileAdvisory func(absPath string) string
 }
 
 // isBrainPath reports whether an absolute path lives in the scratch space.
@@ -56,6 +60,8 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 	if err := t.Sandbox.CheckWritePath(path); err != nil {
 		return core.ToolResult{}, err
 	}
+	_, statBeforeErr := os.Stat(path)
+	existed := statBeforeErr == nil
 
 	// Change tracking (first sighting only): if the file existed, snapshot
 	// its old content; if not, mark it as new without storing content
@@ -100,14 +106,22 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 	if len(a.Content) > 0 && !strings.HasSuffix(a.Content, "\n") {
 		totalLines++ // count the last unterminated line
 	}
+	attrs := []core.Attr{
+		{Key: "info", Value: fmt.Sprintf("Successfully wrote to %s", a.Path)},
+		{Key: "path", Value: a.Path},
+		{Key: "lines", Value: fmt.Sprintf("%d", totalLines)},
+	}
+	var content []provider.Content
+	if existed && !t.isBrainPath(path) && t.CompactedFileAdvisory != nil {
+		if adv := strings.TrimSpace(t.CompactedFileAdvisory(path)); adv != "" {
+			note := fmt.Sprintf("[Compacted history advisory for %s]\n%s", a.Path, adv)
+			content = []provider.Content{provider.TextBlock{Text: note}}
+			attrs = append(attrs, core.Attr{Key: "compacted_advisory", Value: "true"})
+		}
+	}
 	return core.ToolResult{
-		// Confirmation is system metadata (info=), not body content: the
-		// model already knows what it wrote and the body stays pure content.
-		Attrs: []core.Attr{
-			{Key: "info", Value: fmt.Sprintf("Successfully wrote to %s", a.Path)},
-			{Key: "path", Value: a.Path},
-			{Key: "lines", Value: fmt.Sprintf("%d", totalLines)},
-		},
+		Content: content,
+		Attrs:   attrs,
 		Details: map[string]any{
 			"display":     display,
 			"path":        path,

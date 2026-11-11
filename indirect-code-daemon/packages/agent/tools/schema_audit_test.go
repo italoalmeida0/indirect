@@ -35,6 +35,8 @@ func TestToolSchemasAreValidJSON(t *testing.T) {
 		&WidgetLintTool{},
 		&WidgetReadTool{},
 		&WidgetEditTool{},
+		&SessionHistoryTool{},
+		&ExploreTool{},
 	}
 	for _, tool := range tools {
 		raw := tool.Schema()

@@ -39,6 +39,10 @@ type FetchURLTool struct {
 	// servers (127.0.0.1). Never set outside tests — production always
 	// guards, including redirect hops.
 	TestAllowLoopback bool
+	// BrainDir is the optional per-session scratch directory. When set,
+	// foreground synchronous outputs exceeding 20KB spill losslessly to
+	// <BrainDir>/tool-<callID>.log while returning a compact inline preview.
+	BrainDir string
 }
 
 func (t *FetchURLTool) Name() string { return "fetch_url" }
@@ -78,7 +82,25 @@ func (t *FetchURLTool) Execute(ctx context.Context, raw json.RawMessage, progres
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	totalChars := len(text)
+	fullText := text
+	totalChars := len(fullText)
+	if strings.TrimSpace(t.BrainDir) != "" && (a.MaxChars <= 0 || a.MaxChars > ArrivalSpillThresholdBytes) && len(fullText) > ArrivalSpillThresholdBytes {
+		if spillRes, ok := maybeSpillOutput(ctx, t.BrainDir, fullText); ok {
+			det := fetchDetail(finalURL, fullText, true)
+			det["output"] = fullText
+			det["full_output_path"] = spillRes.Path
+			return core.ToolResult{
+				Content: []provider.Content{provider.TextBlock{Text: spillRes.Preview}},
+				Attrs: []core.Attr{
+					{Key: "url", Value: finalURL},
+					{Key: "chars", Value: fmt.Sprintf("%d", totalChars)},
+					{Key: "truncated", Value: "true"},
+					{Key: "spilled", Value: "true"},
+				},
+				Details: det,
+			}, nil
+		}
+	}
 	if len(text) > maxChars {
 		text = text[:maxChars]
 		truncated = true

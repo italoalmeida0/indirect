@@ -33,6 +33,10 @@ type BashTool struct {
 	// legacy behavior (block until the command ends).
 	Slow   SlowHook
 	LogDir string
+	// BrainDir is the optional per-session scratch directory. When set,
+	// foreground synchronous outputs exceeding 20KB spill losslessly to
+	// <BrainDir>/tool-<callID>.log while returning a compact inline preview.
+	BrainDir string
 }
 
 type bashArgs struct {
@@ -211,7 +215,28 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 				return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", err)
 			}
 		}
-		return finishBashCommand(a, cwd, start, output, &head, &stderrHead, waitErr, ctx.Err(), runErr, progress)
+		var fullText string
+		var hasFull bool
+		if strings.TrimSpace(t.BrainDir) != "" && output.totalByteCount() > ArrivalSpillThresholdBytes {
+			fullText, hasFull = output.readLossless()
+		}
+		res, err := finishBashCommand(a, cwd, start, output, &head, &stderrHead, waitErr, ctx.Err(), runErr, progress)
+		if err != nil || !hasFull {
+			return res, err
+		}
+		if spillRes, ok := maybeSpillOutput(ctx, t.BrainDir, fullText); ok {
+			res.Content = []provider.Content{provider.TextBlock{Text: spillRes.Preview}}
+			res.Attrs = applySpillAttrs(res.Attrs, spillRes)
+			if det, ok := res.Details.(map[string]any); ok {
+				det["output"] = fullText
+				if stderrHead.Len() == 0 {
+					det["stdout"] = fullText
+				}
+				det["full_output_path"] = spillRes.Path
+				det["truncated"] = true
+			}
+		}
+		return res, nil
 	}
 	select {
 	case waitErr := <-waitCh:
@@ -671,6 +696,33 @@ func (a *outputAccumulator) snapshot(persistIfTruncated bool) outputSnapshot {
 		lastLinePartial: tr.lastLinePartial,
 		fullOutputPath:  a.tempPath,
 	}
+}
+
+func (a *outputAccumulator) totalByteCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.totalBytes
+}
+
+func (a *outputAccumulator) readLossless() (string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.totalBytes == 0 {
+		return "", false
+	}
+	if a.tempFile != nil && a.tempPath != "" {
+		_ = a.tempFile.Sync()
+		if data, err := os.ReadFile(a.tempPath); err == nil {
+			return string(data), true
+		}
+	}
+	if len(a.chunks) > 0 {
+		return string(bytes.Join(a.chunks, nil)), true
+	}
+	if len(a.tail) > 0 {
+		return string(a.tail), true
+	}
+	return "", false
 }
 
 func (a *outputAccumulator) closeTempFile() {

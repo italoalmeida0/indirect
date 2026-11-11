@@ -47,6 +47,10 @@ type ExecScriptTool struct {
 	// legacy behavior (block until the script ends).
 	Slow   SlowHook
 	LogDir string
+	// BrainDir is the optional per-session scratch directory. When set,
+	// foreground synchronous outputs exceeding 20KB spill losslessly to
+	// <BrainDir>/tool-<callID>.log while returning a compact inline preview.
+	BrainDir string
 }
 
 func (t *ExecScriptTool) Name() string { return "exec_script" }
@@ -214,70 +218,77 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		}
 		return nil
 	}
-	select {
-	case out := <-doneCh:
+	finishSync := func(runErr, ctxErr error) (core.ToolResult, error) {
+		var fullText string
+		var hasFull bool
+		if strings.TrimSpace(t.BrainDir) != "" {
+			bufMu.Lock()
+			inMem := stdout.String()
+			dropped := droppedBytes
+			bufMu.Unlock()
+			if dropped > 0 && proc.LogPath != "" {
+				if rawBytes, readErr := os.ReadFile(proc.LogPath); readErr == nil {
+					fullText = strings.TrimSuffix(string(rawBytes), "\n")
+					hasFull = len(fullText) > ArrivalSpillThresholdBytes
+				}
+			}
+			if !hasFull {
+				fullText = strings.TrimSuffix(inMem, "\n")
+				hasFull = len(fullText) > ArrivalSpillThresholdBytes
+			}
+		}
 		inlineErr := markInline()
 		cleanup(true)
 		if inlineErr != nil {
 			return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", inlineErr)
 		}
-		return finishExecScriptCommand(out.runErr, nil, stdout, start, progress, droppedBytes, droppedLines)
+		res, err := finishExecScriptCommand(runErr, ctxErr, stdout, start, progress, droppedBytes, droppedLines)
+		if err != nil || !hasFull {
+			return res, err
+		}
+		if spillRes, ok := maybeSpillOutput(ctx, t.BrainDir, fullText); ok {
+			res.Content = []provider.Content{provider.TextBlock{Text: spillRes.Preview}}
+			res.Attrs = applySpillAttrs(res.Attrs, spillRes)
+			det, ok := res.Details.(map[string]any)
+			if !ok || det == nil {
+				det = make(map[string]any)
+			}
+			det["output"] = fullText
+			det["full_output_path"] = spillRes.Path
+			det["truncated"] = true
+			res.Details = det
+		}
+		return res, nil
+	}
+	select {
+	case out := <-doneCh:
+		return finishSync(out.runErr, nil)
 	case <-ctx.Done():
 		stop()
 		out := <-doneCh
-		inlineErr := markInline()
-		cleanup(true)
-		if inlineErr != nil {
-			return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", inlineErr)
-		}
-		return finishExecScriptCommand(out.runErr, ctx.Err(), stdout, start, progress, droppedBytes, droppedLines)
+		return finishSync(out.runErr, ctx.Err())
 	case <-time.After(AutoBackgroundAfter):
 		select {
 		case out := <-doneCh:
-			inlineErr := markInline()
-			cleanup(true)
-			if inlineErr != nil {
-				return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", inlineErr)
-			}
-			return finishExecScriptCommand(out.runErr, ctx.Err(), stdout, start, progress, droppedBytes, droppedLines)
+			return finishSync(out.runErr, ctx.Err())
 		case <-exited:
 			out := <-doneCh
-			inlineErr := markInline()
-			cleanup(true)
-			if inlineErr != nil {
-				return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", inlineErr)
-			}
-			return finishExecScriptCommand(out.runErr, ctx.Err(), stdout, start, progress, droppedBytes, droppedLines)
+			return finishSync(out.runErr, ctx.Err())
 		case <-ctx.Done():
 			stop()
 			out := <-doneCh
-			inlineErr := markInline()
-			cleanup(true)
-			if inlineErr != nil {
-				return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", inlineErr)
-			}
-			return finishExecScriptCommand(out.runErr, ctx.Err(), stdout, start, progress, droppedBytes, droppedLines)
+			return finishSync(out.runErr, ctx.Err())
 		default:
 		}
 	}
 	if t.Slow == nil {
 		select {
 		case out := <-doneCh:
-			inlineErr := markInline()
-			cleanup(true)
-			if inlineErr != nil {
-				return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", inlineErr)
-			}
-			return finishExecScriptCommand(out.runErr, nil, stdout, start, progress, droppedBytes, droppedLines)
+			return finishSync(out.runErr, nil)
 		case <-ctx.Done():
 			stop()
 			out := <-doneCh
-			inlineErr := markInline()
-			cleanup(true)
-			if inlineErr != nil {
-				return core.ToolResult{}, fmt.Errorf("could not persist inline outcome: %w", inlineErr)
-			}
-			return finishExecScriptCommand(out.runErr, ctx.Err(), stdout, start, progress, droppedBytes, droppedLines)
+			return finishSync(out.runErr, ctx.Err())
 		}
 	}
 	streamMu.Lock()

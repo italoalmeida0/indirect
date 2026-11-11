@@ -25,6 +25,10 @@ type EditTool struct {
 	// BrainDir is the absolute path of the per-session private workspace.
 	// Scratch-space edits are never tracked: they are not user-facing changes.
 	BrainDir string
+	// CompactedFileAdvisory optionally returns a concise summary of earlier
+	// compacted eras/decisions touching absPath; appended only when edit target
+	// matching fails (valid edits are never blocked or altered).
+	CompactedFileAdvisory func(absPath string) string
 }
 
 // textEdit is one targeted replacement.
@@ -164,6 +168,11 @@ func (t *EditTool) executeInternal(ctx context.Context, raw json.RawMessage, isP
 
 	baseContent, newContent, err := applyEditsToNormalizedContent(normalizedContent, a.Edits, path)
 	if err != nil {
+		if !IsBrainPath(t.BrainDir, abs) && t.CompactedFileAdvisory != nil && isEditTargetMatchFailure(err) {
+			if adv := strings.TrimSpace(t.CompactedFileAdvisory(abs)); adv != "" {
+				err = fmt.Errorf("%w\n\nCompacted history note for %s: %s\nHint: call read(%q) to inspect the current file contents or session_history to review prior compacted changes before retrying edit.", err, path, adv, path)
+			}
+		}
 		return core.ToolResult{}, err
 	}
 
@@ -592,6 +601,14 @@ func leadingSpace(s string) string {
 		}
 	}
 	return s
+}
+
+func isEditTargetMatchFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.HasPrefix(msg, "Could not find ") || strings.HasPrefix(msg, "Found ")
 }
 
 func getNotFoundError(path string, editIndex, totalEdits int) error {
