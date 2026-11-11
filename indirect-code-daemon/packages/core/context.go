@@ -11,12 +11,11 @@ import (
 // Pipeline order (BuildContext):
 //
 //	0. projection - append-only history + compaction chain head ->
-//	   [synthetic summary][kept tail] (resolves latest compaction + later entries)
+//	   [synthetic FoldBlocks][ViewLatch-stabilized kept tail]
 //	1. snapshot live transcript
 //	2. filterHidden  - drop messages with Meta["hidden"]="true"
-//	3. PruneOldToolResults - mechanically truncate older tool outputs
-//	4. repairToolUseResultPairs - stub orphan tool_use (aborts)
-//	5. mirrorImagesForProvider - image mirror for text-centric providers (openai/openai-codex)
+//	3. repairToolUseResultPairs - stub orphan tool_use (aborts)
+//	4. mirrorImagesForProvider - image mirror for text-centric providers (openai/openai-codex)
 //
 // Everything produced in step 5 exists only in the request.
 // Persistence (OnMessageAppended) continues to store

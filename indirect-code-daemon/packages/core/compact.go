@@ -2,222 +2,257 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/provider"
 )
 
-// Compact summarizes the conversation and records the result as a
-// chain-head advance over the append-only history. It NEVER rewrites
-// the transcript: a.messages stays intact and context changes purely
-// through projection (compaction advances the chain head;
-// history is immutable; context = latest entry + later entries).
+var errSummarizerToolCall = errors.New("summarizer attempted a tool call")
+
+type compactOptions struct {
+	keepTail         int
+	keepRecentTokens int
+	forceCut         bool
+}
+
+// Compact summarizes older raw transcript spans into append-only FoldBlocks
+// and advances the compaction chain head without mutating a.messages.
 //
-// Inputs are derived from the projectMessages view (latest summary +
-// kept tail), which is also what repeated compactions summarize —
-// the incremental "update previous summary" prompt.
-//
-// keepTail, when > 0, overrides the computed keep floor with an exact
-// message count (used by manual /compact callers and tests). 0 means
-// "compute from the hybrid window" (max(20k, 30% of context tokens)).
-//
-// The agent mutex is NOT held while the summarizer runs: tool
-// execution, queue drains and user input handlers that lock a.mu keep
-// working during the LLM call (previously a compaction mid-loop could
-// deadlock when tool hooks needed the agent lock). The state swap at
-// the end is atomic under the lock.
-//
-// Emitted events via sink are limited to text deltas from the summary
-// call so the UI can show progress. Returns the raw summary text.
+// keepTail, when > 0, specifies an explicit tail message count to retain
+// (manual /compact and unit tests). When keepTail <= 0, the hybrid keep floor
+// (20K..40K tokens) selects the retained suffix.
 func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta string)) (string, error) {
+	return a.compactWithOptions(ctx, compactOptions{
+		keepTail: keepTail,
+		forceCut: keepTail > 0,
+	}, sink)
+}
+
+// CompactToTokenBudget compacts the transcript so the retained raw tail stays
+// near keepRecentTokens, slicing folded history into ~45K-token immutable
+// Tier-1 FoldBlocks and running Tier-2 rollups when needed.
+func (a *Agent) CompactToTokenBudget(ctx context.Context, keepRecentTokens int, onProgress func(string)) (string, error) {
+	if keepRecentTokens <= 0 {
+		keepRecentTokens = CompactionKeepRecentTokens
+	}
+	return a.compactWithOptions(ctx, compactOptions{
+		keepRecentTokens: keepRecentTokens,
+		forceCut:         true,
+	}, onProgress)
+}
+
+func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sink func(delta string)) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	a.mu.Lock()
 	history := append([]provider.Message(nil), a.messages...)
-	state := a.compactionStateLocked()
+	prevState := a.compactionStateLocked()
+	window := a.contextWindow
+	system := a.System
+	toolSpecs := a.Tools.Specs()
 	a.mu.Unlock()
 
 	if len(history) == 0 {
 		return "", fmt.Errorf("nothing to compact")
 	}
-	msgs := projectMessages(history, state)
-	if len(msgs) < CompactionMinMessages && keepTail <= 0 {
+
+	projected := projectMessages(history, prevState)
+	if len(projected) < CompactionMinMessages && !opts.forceCut {
 		return "", fmt.Errorf("nothing to compact: transcript below minimum (%d messages)", CompactionMinMessages)
 	}
 
-	keepTokens := hybridKeepFloor(msgs)
-	keepFrom := len(msgs)
-	if keepTail > 0 {
-		keepFrom = len(msgs) - keepTail
-		if keepFrom < 0 {
-			keepFrom = 0
-		}
-	} else {
-		_, perMsg := provider.ContextTokensByMessage(a.System, a.Tools.Specs(), msgs)
-		keepFrom = FindCutPointMsgs(msgs, keepTokens, perMsg).Index
-	}
-	// On the auto path: when the whole transcript fits under
-	// the keep floor, FindCutPoint returns 0 — meaning "nothing worth
-	// summarizing". Report it instead of force-halving the transcript,
-	// which would drop history without need. Explicit keepTail callers
-	// (manual /compact, overflow retry) asked for that exact split.
-	if keepFrom <= 0 {
-		if keepTail > 0 {
-			keepFrom = len(msgs) / 2
-			if keepFrom <= 0 {
-				keepFrom = 1
+	workingState := &CompactionState{}
+	carryOverSummary := ""
+	if prevState != nil {
+		workingState = prevState.Clone()
+		if len(workingState.Blocks) == 0 {
+			synthetic, legacyKeepFrom := projectionAnchor(workingState, len(history))
+			if synthetic && legacyKeepFrom > 0 {
+				rawSpan := history[:legacyKeepFrom]
+				ops := ExtractFileOps(rawSpan)
+				ops.Read = MergeFileOps(workingState.ReadFiles, ops.Read)
+				ops.Modified = MergeFileOps(workingState.ModifiedFiles, ops.Modified)
+				legacyBlock := FoldBlock{
+					ID:             workingState.allocBlockID(),
+					Tier:           1,
+					StartIdx:       0,
+					EndIdx:         legacyKeepFrom,
+					Topic:          deriveBlockTopic(rawSpan, workingState.PreviousSummary),
+					Summary:        strings.TrimSpace(workingState.PreviousSummary),
+					ReadFiles:      ops.Read,
+					ModifiedFiles:  ops.Modified,
+					FileSpans:      ExtractFileSpans(rawSpan),
+					ActivatedTools: collectActivatedTools(rawSpan),
+					FailedCommands: ExtractFailedCommands(rawSpan),
+					RawTokens:      provider.ContextTokens("", nil, rawSpan),
+					CreatedAt:      time.Now().UnixMilli(),
+				}
+				legacyBlock.BlockTokens = estimateFoldBlockTokens(legacyBlock)
+				workingState.Blocks = append(workingState.Blocks, legacyBlock)
+				workingState.SyncMirrors()
+			} else if legacyKeepFrom == 0 && strings.TrimSpace(workingState.PreviousSummary) != "" {
+				carryOverSummary = strings.TrimSpace(workingState.PreviousSummary)
+			} else if !synthetic {
+				// Corrupt legacy anchor: reset before computing fresh folds.
+				workingState = &CompactionState{}
 			}
-		} else {
-			return "", fmt.Errorf("nothing to compact: transcript fits under the keep floor")
+		} else if ok, _ := projectionAnchor(workingState, len(history)); !ok {
+			workingState = TruncateCompaction(workingState, len(history))
+			if workingState == nil {
+				workingState = &CompactionState{}
+			}
 		}
 	}
-	if keepFrom >= len(msgs) {
+
+	rawStart := 0
+	if len(workingState.Blocks) > 0 {
+		if ok, kf := projectionAnchor(workingState, len(history)); ok {
+			rawStart = kf
+		}
+	}
+	if rawStart >= len(history) {
 		return "", fmt.Errorf("nothing to compact: keep-tail covers the whole transcript")
 	}
 
-	plan := PrepareCompaction(msgs, state, keepTokens)
-	// When the caller forced an explicit keepTail, re-cut the plan to it.
-	if keepTail > 0 {
-		turnStart := -1
-		isSplit := false
-		if keepFrom > 0 && keepFrom < len(msgs) && !isUserBoundary(msgs[keepFrom]) {
-			turnStart = findTurnStartIndex(msgs, keepFrom)
-			if turnStart >= 0 {
-				isSplit = true
-			}
-		}
-		historyEnd := keepFrom
-		var prefixWindow []provider.Message
-		if isSplit && turnStart >= 0 && turnStart < keepFrom {
-			historyEnd = turnStart
-			prefixWindow = msgs[turnStart:keepFrom]
-		}
-		window := msgs[:historyEnd]
-		ops := ExtractFileOps(msgs[:keepFrom])
-		plan = &CompactionPlan{
-			Summarize:      window,
-			TurnPrefix:     prefixWindow,
-			KeepFrom:       keepFrom,
-			TurnStartIndex: turnStart,
-			SplitTurn:      isSplit && len(prefixWindow) > 0,
-			WindowOps:      ops,
-			FileOpsNote:    FormatFileOperations(ops),
-		}
-		if len(window) > 0 {
-			conversation := SerializeConversation(window)
-			if state != nil && state.PreviousSummary != "" {
-				plan.Incremental = true
-				merged := FileOps{
-					Read:     MergeFileOps(state.ReadFiles, ops.Read),
-					Modified: MergeFileOps(state.ModifiedFiles, ops.Modified),
-				}
-				plan.FileOpsNote = FormatFileOperations(merged)
-				plan.Prompt = UpdateSummarizationPrompt(state.PreviousSummary, conversation, plan.FileOpsNote)
-			} else {
-				plan.Prompt = InitialSummarizationPrompt(conversation)
-			}
-		} else if state != nil && state.PreviousSummary != "" {
-			plan.Incremental = true
-			merged := FileOps{
-				Read:     MergeFileOps(state.ReadFiles, ops.Read),
-				Modified: MergeFileOps(state.ModifiedFiles, ops.Modified),
-			}
-			plan.FileOpsNote = FormatFileOperations(merged)
-		}
-		if plan.SplitTurn && len(prefixWindow) > 0 {
-			plan.TurnPrefixPrompt = TurnPrefixSummarizationPrompt(SerializeConversation(prefixWindow))
-		}
-	}
+	unfolded := history[rawStart:]
+	latchedUnfolded := ApplyViewLatchTail(unfolded, rawStart, workingState.PrunedBefore)
 
-	var summary string
-	var totalUsage provider.Usage
-
-	// Split turn path: when a turn is too large to keep, the history
-	// before the split turn and the turn prefix itself are summarized separately
-	// and merged.
-	if plan.SplitTurn && len(plan.TurnPrefix) > 0 {
-		var histSummary string
-		if len(plan.Summarize) > 0 {
-			s, stopLen, u, err := a.runSummarizer(ctx, plan.Prompt, sink)
-			if err != nil {
-				return "", err
+	localCut := 0
+	if opts.keepTail > 0 {
+		localCut = len(unfolded) - opts.keepTail
+		if localCut <= 0 {
+			localCut = len(unfolded) / 2
+			if localCut <= 0 && len(unfolded) >= 2 {
+				localCut = 1
 			}
-			if stopLen {
-				// Retry or report length stop
-			}
-			histSummary = strings.TrimSpace(s)
-			totalUsage = totalUsage.Add(u)
-		} else if state != nil && strings.TrimSpace(state.PreviousSummary) != "" {
-			histSummary = strings.TrimSpace(state.PreviousSummary)
-		} else {
-			histSummary = "No prior history."
 		}
-
-		prefixSummary, _, prefixUsage, err := a.runSummarizer(ctx, plan.TurnPrefixPrompt, sink)
-		if err != nil {
-			return "", err
-		}
-		totalUsage = totalUsage.Add(prefixUsage)
-		summary = fmt.Sprintf("%s\n\n---\n\n**Turn Context (split turn):**\n\n%s", histSummary, strings.TrimSpace(prefixSummary))
+		localCut = adjustPairSafeLocalCut(unfolded, localCut)
 	} else {
-		s, stopLen, u, err := a.runSummarizer(ctx, plan.Prompt, sink)
+		keepTokens := opts.keepRecentTokens
+		if keepTokens <= 0 {
+			keepTokens = hybridKeepFloor(projected)
+		}
+		_, perMsg := provider.ContextTokensByMessage(system, toolSpecs, latchedUnfolded)
+		localCut = FindCutPointMsgs(latchedUnfolded, keepTokens, perMsg).Index
+		if localCut <= 0 {
+			if opts.forceCut && len(unfolded) >= 2 {
+				localCut = adjustPairSafeLocalCut(unfolded, max(1, len(unfolded)/2))
+			} else {
+				return "", fmt.Errorf("nothing to compact: transcript fits under the keep floor")
+			}
+		}
+	}
+
+	if localCut <= 0 {
+		return "", fmt.Errorf("nothing to compact: transcript fits under the keep floor")
+	}
+	rawCutIdx := rawStart + localCut
+	if rawCutIdx > len(history) {
+		rawCutIdx = len(history)
+	}
+	if rawCutIdx >= len(history) {
+		return "", fmt.Errorf("nothing to compact: keep-tail covers the whole transcript")
+	}
+
+	spans := sliceFoldSpans(history, rawStart, rawCutIdx, FoldBlockTargetTokens)
+	if len(spans) == 0 {
+		return "", fmt.Errorf("nothing to compact")
+	}
+
+	var totalUsage provider.Usage
+	for spanIdx, sp := range spans {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		cStart, cEnd := sp[0], sp[1]
+		isFinalSpan := spanIdx == len(spans)-1
+		carry := ""
+		if spanIdx == 0 {
+			carry = carryOverSummary
+		}
+
+		blockSummary, spanUsage, err := a.summarizeSpan(ctx, history, cStart, cEnd, rawCutIdx, isFinalSpan, carry, sink)
 		if err != nil {
 			return "", err
 		}
-		totalUsage = totalUsage.Add(u)
-		if stopLen {
-			// Reject length-truncated summaries and retry once with a
-			// smaller window before giving up.
-			retryFrom := keepFrom + (len(msgs)-keepFrom)/2
-			if retryFrom >= len(msgs) {
-				return "", fmt.Errorf("summary truncated by length; transcript too short to retry")
-			}
-			smaller := PrepareCompaction(msgs[:retryFrom], state, keepTokens)
-			s2, stopLen2, u2, err2 := a.runSummarizer(ctx, smaller.Prompt, sink)
-			if err2 != nil {
-				return "", err2
-			}
-			if stopLen2 {
-				return "", fmt.Errorf("summary truncated by length after retry")
-			}
-			s = s2
-			plan = smaller
-			keepFrom = smaller.KeepFrom
-			totalUsage = totalUsage.Add(u2)
+		totalUsage = totalUsage.Add(spanUsage)
+
+		chunk := history[cStart:cEnd]
+		ops := ExtractFileOps(chunk)
+		if spanIdx == 0 && carry != "" && prevState != nil {
+			ops.Read = MergeFileOps(prevState.ReadFiles, ops.Read)
+			ops.Modified = MergeFileOps(prevState.ModifiedFiles, ops.Modified)
 		}
-		summary = strings.TrimSpace(s)
+		rawToks := provider.ContextTokens("", nil, chunk)
+		blk := FoldBlock{
+			ID:             workingState.allocBlockID(),
+			Tier:           1,
+			StartIdx:       cStart,
+			EndIdx:         cEnd,
+			Topic:          deriveBlockTopic(chunk, blockSummary),
+			Summary:        blockSummary,
+			ReadFiles:      ops.Read,
+			ModifiedFiles:  ops.Modified,
+			FileSpans:      ExtractFileSpans(chunk),
+			ActivatedTools: collectActivatedTools(chunk),
+			FailedCommands: ExtractFailedCommands(chunk),
+			RawTokens:      rawToks,
+			CreatedAt:      time.Now().UnixMilli(),
+		}
+		blk.BlockTokens = estimateFoldBlockTokens(blk)
+
+		// Enforce NET_SHRINK_TOLERANCE: if the model regurgitated content past
+		// the allowed token budget, fall back deterministically to MechanicalBlockSummary.
+		if exceedsShrinkBudget(rawToks, blk.BlockTokens) {
+			mech := MechanicalBlockSummary(chunk, cStart, cEnd)
+			if carry != "" && !strings.Contains(mech, carry) {
+				mech = carry + "\n\n---\n\n" + mech
+			}
+			blk.Summary = mech
+			blk.Topic = deriveBlockTopic(chunk, mech)
+			blk.BlockTokens = estimateFoldBlockTokens(blk)
+		}
+
+		workingState.Blocks = append(workingState.Blocks, blk)
 	}
 
-	summary = strings.TrimSpace(summary)
-	if summary == "" {
-		return "", fmt.Errorf("empty summary from model")
+	// Run Tier-2 merge rollup when active block count > 8 or active block
+	// tokens exceed 15% of the model context window.
+	mergeUsage, err := a.maybeMergeTier2Blocks(ctx, workingState, window, sink)
+	if err != nil {
+		return "", err
 	}
+	totalUsage = totalUsage.Add(mergeUsage)
 
-	// Compute file operations and append to summary
-	ops := plan.WindowOps
-	if state != nil {
-		ops.Read = MergeFileOps(state.ReadFiles, ops.Read)
-		ops.Modified = MergeFileOps(state.ModifiedFiles, ops.Modified)
+	prevCount := 0
+	prevPrunedBefore := 0
+	if prevState != nil {
+		prevCount = prevState.Count
+		prevPrunedBefore = prevState.PrunedBefore
 	}
-	if fileNote := FormatFileOperations(ops); fileNote != "" {
-		summary += "\n\n" + fileNote
-	}
+	workingState.Count = prevCount + 1
 
-	nextState := advanceCompactionChain(plan, summary, state)
-	nextState.KeepFrom = projectionIndexForContext(history, state, plan.KeepFrom)
-	nextState.FirstKeptEntryID = "h" + strconv.Itoa(nextState.KeepFrom)
+	protectBudget := PruneProtectTokens
+	if opts.keepRecentTokens > 0 && opts.keepRecentTokens < protectBudget {
+		protectBudget = opts.keepRecentTokens
+	}
+	workingState.PrunedBefore = max(prevPrunedBefore, ComputeLatchWatermark(history, rawCutIdx, protectBudget))
+	workingState.SyncMirrors()
 	if totalUsage.InputTokens > 0 || totalUsage.OutputTokens > 0 {
-		nextState.Usage = &totalUsage
+		workingState.Usage = &totalUsage
 	}
 
 	a.mu.Lock()
-	a.setCompactionStateLocked(nextState)
+	a.setCompactionStateLocked(workingState)
 	a.rev++
 	onState := a.OnCompactionState
 	a.mu.Unlock()
 
-	// Record token usage for compaction in the agent cost ledger.
 	if totalUsage.InputTokens > 0 || totalUsage.OutputTokens > 0 {
 		cum := a.cost.Add(totalUsage)
 		if a.OnUsage != nil {
@@ -225,92 +260,505 @@ func (a *Agent) Compact(ctx context.Context, keepTail int, sink func(delta strin
 		}
 	}
 
-	// Hosts persist the checkpoint through OnCompactionState (their
-	// own session record); core keeps no persistence backend.
 	if onState != nil {
 		onState(a.CompactionChain())
 	}
 
-	return summary, nil
+	return workingState.PreviousSummary, nil
 }
 
-// MaybeAutoCompact is the proactive compaction trigger for the
-// AutoCompact hook. It is a no-op when the next
-// request still fits; otherwise it runs Compact and returns true.
-//
-// Trigger semantics: the LAST turn's usage approximates the size
-// of the prompt the model just saw; adding the trailing estimate for
-// messages appended since (tool results) yields the
-// next request's projected size. It never uses the cumulative session
-// usage — a cumulative trigger would fire forever once crossed, even
-// right after a successful compaction. The state is evaluated over
-// the projected context, so a previous compaction's discarded prefix
-// cannot inflate the estimate.
-//
-// thresholdPct carries the auto-compact setting (percent of the window
-// the projected context must fit under; <= 0 keeps the legacy
-// fixed-reserve behavior). After one compaction, the projection is
-// re-evaluated and compaction repeats (bounded) until the projection
-// fits under the target — a single pass can otherwise leave a huge
-// transcript still over the threshold, and the next check would only
-// fire on the following model request, mid-turn past the limit.
-//
-// window <= 0 (unknown context window) disables the trigger. A failed
-// summarization does NOT abort the run: false is returned and the
-// request proceeds; the reactive overflow retry stays as the safety
-// net.
+func adjustPairSafeLocalCut(unfolded []provider.Message, localCut int) int {
+	if localCut <= 0 || localCut >= len(unfolded) {
+		return localCut
+	}
+	orig := localCut
+	for localCut > 0 && isToolResultHead(unfolded[localCut]) && !ownsToolCall(unfolded[localCut:], 0) {
+		localCut--
+	}
+	if localCut > 0 {
+		return localCut
+	}
+	for j := orig; j < len(unfolded); j++ {
+		if !isToolResultHead(unfolded[j]) {
+			return j
+		}
+	}
+	return orig
+}
+
+// sliceFoldSpans partitions history[rawStart:rawCutIdx] into contiguous
+// ~targetTokens Tier-1 spans along pair-safe (and preferably user-turn)
+// boundaries without splitting tool_use/tool_result pairs.
+func sliceFoldSpans(history []provider.Message, rawStart, rawCutIdx, targetTokens int) [][2]int {
+	if rawCutIdx <= rawStart {
+		return nil
+	}
+	if targetTokens <= 0 {
+		targetTokens = FoldBlockTargetTokens
+	}
+	spanMsgs := history[rawStart:rawCutIdx]
+	_, perMsg := provider.ContextTokensByMessage("", nil, spanMsgs)
+
+	prefixSum := make([]int, len(spanMsgs)+1)
+	for i := range spanMsgs {
+		t := 0
+		if i < len(perMsg) {
+			t = perMsg[i]
+		}
+		if t <= 0 {
+			t = provider.ContextTokens("", nil, spanMsgs[i:i+1])
+		}
+		if t <= 0 {
+			t = 1
+		}
+		prefixSum[i+1] = prefixSum[i] + t
+	}
+	rangeToks := func(a, b int) int {
+		if b <= a {
+			return 0
+		}
+		return prefixSum[b] - prefixSum[a]
+	}
+
+	var out [][2]int
+	pos := 0
+	for pos < len(spanMsgs) {
+		if rangeToks(pos, len(spanMsgs)) <= targetTokens {
+			out = append(out, [2]int{rawStart + pos, rawCutIdx})
+			break
+		}
+
+		end := pos + 1
+		for end < len(spanMsgs) && rangeToks(pos, end+1) <= targetTokens {
+			end++
+		}
+
+		// Never split an assistant tool call from its immediately following tool results.
+		for end < len(spanMsgs) && isToolResultHead(spanMsgs[end]) {
+			end++
+		}
+
+		if end < len(spanMsgs) && !isUserBoundary(spanMsgs[end]) {
+			snapped := -1
+			for u := end; u > pos; u-- {
+				if isUserBoundary(spanMsgs[u]) && rangeToks(pos, u) >= targetTokens/2 {
+					snapped = u
+					break
+				}
+			}
+			if snapped < 0 {
+				for u := end + 1; u < len(spanMsgs); u++ {
+					if rangeToks(end, u) > targetTokens/3 {
+						break
+					}
+					if isUserBoundary(spanMsgs[u]) {
+						snapped = u
+						break
+					}
+				}
+			}
+			if snapped > pos {
+				end = snapped
+			}
+		}
+
+		// Avoid leaving a tiny trailing sliver when absorbing it stays reasonable.
+		if end < len(spanMsgs) && rangeToks(end, len(spanMsgs)) < targetTokens/4 && rangeToks(pos, len(spanMsgs)) <= targetTokens*3/2 {
+			end = len(spanMsgs)
+		}
+
+		out = append(out, [2]int{rawStart + pos, rawStart + end})
+		pos = end
+	}
+	return out
+}
+
+func (a *Agent) summarizeSpan(
+	ctx context.Context,
+	history []provider.Message,
+	cStart, cEnd, rawCutIdx int,
+	isFinalSpan bool,
+	carryOverSummary string,
+	sink func(delta string),
+) (string, provider.Usage, error) {
+	var totalUsage provider.Usage
+	chunk := history[cStart:cEnd]
+
+	// Check whether this final span splits an active user turn at rawCutIdx.
+	if isFinalSpan && rawCutIdx < len(history) && !isUserBoundary(history[rawCutIdx]) {
+		turnStart := findTurnStartIndex(history, rawCutIdx)
+		if turnStart > cStart && turnStart < cEnd {
+			histChunk := history[cStart:turnStart]
+			histSummary, u1, err := a.summarizeChunkWithFallback(ctx, histChunk, cStart, turnStart, false, carryOverSummary, sink)
+			if err != nil {
+				return "", totalUsage, err
+			}
+			totalUsage = totalUsage.Add(u1)
+
+			prefixChunk := history[turnStart:cEnd]
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, prefixChunk, turnStart, cEnd, true, "", sink)
+			if err != nil {
+				return "", totalUsage, err
+			}
+			totalUsage = totalUsage.Add(u2)
+			combined := fmt.Sprintf("%s\n\n---\n\n**Turn Context (split turn):**\n\n%s", strings.TrimSpace(histSummary), strings.TrimSpace(prefixSummary))
+			return combined, totalUsage, nil
+		}
+		if turnStart < cStart && carryOverSummary != "" {
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, true, "", sink)
+			if err != nil {
+				return "", totalUsage, err
+			}
+			totalUsage = totalUsage.Add(u2)
+			combined := fmt.Sprintf("%s\n\n---\n\n**Turn Context (split turn):**\n\n%s", carryOverSummary, strings.TrimSpace(prefixSummary))
+			return combined, totalUsage, nil
+		}
+		if turnStart >= 0 && turnStart < cStart {
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, true, "", sink)
+			if err != nil {
+				return "", totalUsage, err
+			}
+			totalUsage = totalUsage.Add(u2)
+			return "**Turn Context (split turn):**\n\n" + strings.TrimSpace(prefixSummary), totalUsage, nil
+		}
+	}
+
+	summary, u, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, false, carryOverSummary, sink)
+	totalUsage = totalUsage.Add(u)
+	if err != nil {
+		return "", totalUsage, err
+	}
+	if carryOverSummary != "" && !strings.Contains(summary, carryOverSummary) {
+		summary = carryOverSummary + "\n\n---\n\n" + summary
+	}
+	return summary, totalUsage, nil
+}
+
+func (a *Agent) hasLivePrefixState() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.System != "" || len(a.Tools) > 0 || a.RequestMessages != nil
+}
+
+func (a *Agent) summarizeChunkWithFallback(
+	ctx context.Context,
+	chunk []provider.Message,
+	cStart, cEnd int,
+	isTurnPrefix bool,
+	carryOverSummary string,
+	sink func(delta string),
+) (string, provider.Usage, error) {
+	var totalUsage provider.Usage
+	if err := ctx.Err(); err != nil {
+		return "", totalUsage, err
+	}
+	if a.Client == nil {
+		return MechanicalBlockSummary(chunk, cStart, cEnd), totalUsage, nil
+	}
+
+	checkpoints := ExtractSummaryCheckpoints(chunk)
+	tryStandalone := !a.hasLivePrefixState()
+
+	if !tryStandalone {
+		text, stopLen, u, err := a.runForkedSummarizer(ctx, chunk, cStart, cEnd, checkpoints, isTurnPrefix, false, sink)
+		totalUsage = totalUsage.Add(u)
+		if err == nil && stopLen {
+			if ctx.Err() != nil {
+				return "", totalUsage, ctx.Err()
+			}
+			text2, stopLen2, u2, err2 := a.runForkedSummarizer(ctx, chunk, cStart, cEnd, checkpoints, isTurnPrefix, true, sink)
+			totalUsage = totalUsage.Add(u2)
+			if err2 == nil && !stopLen2 && strings.TrimSpace(text2) != "" {
+				return strings.TrimSpace(text2), totalUsage, nil
+			}
+			if ctx.Err() != nil {
+				return "", totalUsage, ctx.Err()
+			}
+			return MechanicalBlockSummary(chunk, cStart, cEnd), totalUsage, nil
+		}
+		if err == nil && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text), totalUsage, nil
+		}
+		if ctx.Err() != nil {
+			return "", totalUsage, ctx.Err()
+		}
+		if err != nil && IsContextOverflow(err) {
+			tryStandalone = true
+		} else {
+			return MechanicalBlockSummary(chunk, cStart, cEnd), totalUsage, nil
+		}
+	}
+
+	if tryStandalone {
+		prompt := buildStandalonePrompt(chunk, checkpoints, isTurnPrefix, carryOverSummary, serializeBlockBudgetBytes, serializeArgsBudgetBytes, false)
+		text, stopLen, u, err := a.runSummarizer(ctx, prompt, sink)
+		totalUsage = totalUsage.Add(u)
+		if err == nil && stopLen {
+			if ctx.Err() != nil {
+				return "", totalUsage, ctx.Err()
+			}
+			concisePrompt := buildStandalonePrompt(chunk, checkpoints, isTurnPrefix, carryOverSummary, serializeBlockBudgetBytes/2, serializeArgsBudgetBytes/2, true)
+			text2, stopLen2, u2, err2 := a.runSummarizer(ctx, concisePrompt, sink)
+			totalUsage = totalUsage.Add(u2)
+			if err2 == nil && !stopLen2 && strings.TrimSpace(text2) != "" {
+				return strings.TrimSpace(text2), totalUsage, nil
+			}
+		} else if err == nil && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text), totalUsage, nil
+		}
+		if ctx.Err() != nil {
+			return "", totalUsage, ctx.Err()
+		}
+	}
+
+	return MechanicalBlockSummary(chunk, cStart, cEnd), totalUsage, nil
+}
+
+func buildStandalonePrompt(
+	chunk []provider.Message,
+	checkpoints []string,
+	isTurnPrefix bool,
+	carryOverSummary string,
+	blockBudget, argsBudget int,
+	conciseRetry bool,
+) string {
+	conv := serializeConversationWithBudget(chunk, blockBudget, argsBudget)
+	var prompt string
+	if isTurnPrefix {
+		prompt = TurnPrefixSummarizationPrompt(conv)
+	} else if carryOverSummary != "" {
+		ops := ExtractFileOps(chunk)
+		prompt = UpdateSummarizationPrompt(carryOverSummary, conv, FormatFileOperations(ops))
+	} else {
+		prompt = InitialSummarizationPrompt(conv)
+	}
+	if len(checkpoints) > 0 {
+		var sb strings.Builder
+		sb.WriteString(prompt)
+		sb.WriteString("\n\n<summary_checkpoints>\n")
+		for _, cp := range checkpoints {
+			sb.WriteString("- ")
+			sb.WriteString(cp)
+			sb.WriteString("\n")
+		}
+		sb.WriteString("</summary_checkpoints>")
+		prompt = sb.String()
+	}
+	if conciseRetry {
+		prompt += "\n\nIMPORTANT: Keep the summary concise (under 1,000 words) so it completes without length truncation."
+	}
+	return prompt
+}
+
+func buildForkSummarizerDirective(
+	chunk []provider.Message,
+	cStart, cEnd int,
+	checkpoints []string,
+	isTurnPrefix bool,
+	conciseRetry bool,
+) string {
+	endDisp := max(cStart, cEnd-1)
+	firstAnchor := previewMessageAnchor(chunk, true)
+	lastAnchor := previewMessageAnchor(chunk, false)
+	ops := ExtractFileOps(chunk)
+	failed := ExtractFailedCommands(chunk)
+
+	var sb strings.Builder
+	sb.WriteString("<system-reminder>INTERNAL COMPACTION FORK — DO NOT CALL ANY TOOLS.\n")
+	sb.WriteString("DO NOT invoke any tool, function, shell command, or completion tool. Output ONLY the Markdown FoldBlock summary below.\n\n")
+	sb.WriteString(fmt.Sprintf("Target span to summarize: raw transcript messages #%d through #%d (%d messages).\n", cStart, endDisp, len(chunk)))
+	sb.WriteString("Summarize ONLY this target span from the conversation above. Do NOT re-summarize earlier `[FoldBlock ...]` messages and do NOT answer or continue the latest active user turn.\n")
+	if firstAnchor != "" {
+		sb.WriteString(fmt.Sprintf("- Span start anchor (#%d): %s\n", cStart, firstAnchor))
+	}
+	if lastAnchor != "" && cEnd-1 > cStart {
+		sb.WriteString(fmt.Sprintf("- Span end anchor (#%d): %s\n", endDisp, lastAnchor))
+	}
+	if len(ops.Modified) > 0 {
+		sb.WriteString("- Modified files in span: " + strings.Join(ops.Modified, ", ") + "\n")
+	}
+	if len(ops.Read) > 0 {
+		sb.WriteString("- Read files in span: " + strings.Join(ops.Read, ", ") + "\n")
+	}
+	if len(failed) > 0 {
+		sb.WriteString("- Failed commands in span:\n")
+		for _, fc := range failed {
+			sb.WriteString(fmt.Sprintf("  * `%s` (exit %s)", fc.Command, fc.ExitCode))
+			if fc.FirstError != "" {
+				sb.WriteString(": " + fc.FirstError)
+			}
+			sb.WriteString("\n")
+		}
+	}
+	if len(checkpoints) > 0 {
+		sb.WriteString("- Recorded progress checkpoints (`for_me` notes) in span:\n")
+		for _, cp := range checkpoints {
+			sb.WriteString("  * " + strings.Join(strings.Fields(cp), " ") + "\n")
+		}
+	}
+	sb.WriteString("\n")
+	if isTurnPrefix {
+		sb.WriteString(TurnPrefixSummarizationPromptTemplate)
+	} else {
+		sb.WriteString(`Write a dense, factual Markdown summary using these exact headings:
+## Goal
+## Constraints
+## Progress
+## Decisions
+## Next Steps
+## Critical Context
+
+Preserve exact file paths, symbol names, root causes, error diagnostics, and verified outcomes.`)
+	}
+	if conciseRetry {
+		sb.WriteString("\nKeep total output concise (under 1,000 words) so the summary finishes cleanly within budget.")
+	}
+	sb.WriteString("\n\nREMEMBER: DO NOT CALL ANY TOOLS. Output ONLY the Markdown summary.</system-reminder>")
+	return sb.String()
+}
+
+func previewMessageAnchor(chunk []provider.Message, fromStart bool) string {
+	if len(chunk) == 0 {
+		return ""
+	}
+	idx := 0
+	step := 1
+	if !fromStart {
+		idx = len(chunk) - 1
+		step = -1
+	}
+	for ; idx >= 0 && idx < len(chunk); idx += step {
+		m := chunk[idx]
+		if m.Meta != nil && (m.Meta[MetaHidden] == "true" || m.Meta["compaction"] == "true") {
+			continue
+		}
+		var snippet string
+		for _, c := range m.Content {
+			switch b := c.(type) {
+			case provider.TextBlock:
+				t := strings.TrimSpace(StripLeadingSystemPrompt(b.Text))
+				if t != "" {
+					snippet = string(m.Role) + ": " + t
+				}
+			case provider.ToolCallBlock:
+				snippet = fmt.Sprintf("assistant tool_use %s", b.Name)
+			case provider.ToolResultBlock:
+				t := strings.TrimSpace(stripToolResultEnvelope(toolResultText(b)))
+				if t != "" {
+					snippet = "tool_result: " + t
+				}
+			}
+			if snippet != "" {
+				break
+			}
+		}
+		if snippet != "" {
+			snippet = strings.Join(strings.Fields(snippet), " ")
+			return truncateRunes(snippet, 220)
+		}
+	}
+	return ""
+}
+
+// runForkedSummarizer executes a Prefix-Warm Forked Summarizer call that reuses
+// the agent's exact live request prefix (BuildContextLocked + RequestMessages,
+// byte-identical System, Tools, skill_prefix, omitted ToolChoice, and
+// Reasoning: "minimum" when reasoning is active) plus 1 trailing user directive.
+func (a *Agent) runForkedSummarizer(
+	ctx context.Context,
+	chunk []provider.Message,
+	cStart, cEnd int,
+	checkpoints []string,
+	isTurnPrefix bool,
+	conciseRetry bool,
+	sink func(delta string),
+) (string, bool, provider.Usage, error) {
+	directive := buildForkSummarizerDirective(chunk, cStart, cEnd, checkpoints, isTurnPrefix, conciseRetry)
+	return a.runWarmPrefixDirective(ctx, directive, sink)
+}
+
+func (a *Agent) runWarmPrefixDirective(ctx context.Context, directive string, sink func(delta string)) (string, bool, provider.Usage, error) {
+	a.mu.Lock()
+	baseMsgs := a.BuildContextLocked()
+	if a.RequestMessages != nil {
+		baseMsgs = a.RequestMessages(baseMsgs)
+	}
+	reasoning := ""
+	if provider.NormalizeReasoning(a.Reasoning) != "" {
+		reasoning = "minimum"
+	}
+	reqMsgs := make([]provider.Message, 0, len(baseMsgs)+1)
+	reqMsgs = append(reqMsgs, baseMsgs...)
+	reqMsgs = append(reqMsgs, provider.Message{
+		Role:    provider.RoleUser,
+		Content: []provider.Content{provider.TextBlock{Text: directive}},
+		Time:    time.Now(),
+		Meta:    map[string]string{"compaction": "summarizer_fork"},
+	})
+	req := provider.Request{
+		Model:     a.Model,
+		System:    a.System,
+		Messages:  reqMsgs,
+		Tools:     a.Tools.Specs(),
+		Reasoning: reasoning,
+		MaxTokens: 4096,
+		SessionID: a.SessionID,
+	}
+	a.mu.Unlock()
+
+	return a.streamSummarizerRequest(ctx, req, sink)
+}
+
+// MaybeAutoCompact is the proactive compaction trigger for the AutoCompact hook.
 func (a *Agent) MaybeAutoCompact(ctx context.Context, window int, sink func(delta string)) (bool, error) {
 	return a.MaybeAutoCompactAt(ctx, window, 0, sink)
 }
 
-// MaybeAutoCompactAt is MaybeAutoCompact honoring a threshold percent.
+// MaybeAutoCompactAt evaluates the wire-ready projected context against window
+// and thresholdPct, compacting proactively when needed.
 func (a *Agent) MaybeAutoCompactAt(ctx context.Context, window int, thresholdPct int, sink func(delta string)) (bool, error) {
 	if window <= 0 {
 		return false, nil
 	}
 	a.mu.Lock()
-	history := append([]provider.Message(nil), a.messages...)
-	state := a.compactionStateLocked()
+	a.contextWindow = window
 	a.mu.Unlock()
 
-	msgs := projectMessages(history, state)
+	system, tools, msgs := a.ContextSnapshot()
 	if len(msgs) <= CompactionMinMessages {
 		return false, nil
 	}
-	// Single ruler: the counted request payload. Provider usage is
-	// metrics only and never feeds this decision.
-	system, tools := a.System, a.Tools.Specs()
 	if !ShouldCompactAt(window, provider.ContextTokens(system, tools, msgs), thresholdPct) {
 		return false, nil
 	}
+
+	target := compactTargetTokens(window, thresholdPct)
 	for attempt := 0; ; attempt++ {
-		summary, err := a.Compact(ctx, 0, sink)
+		var (
+			summary string
+			err     error
+		)
+		if attempt == 0 {
+			summary, err = a.Compact(ctx, 0, sink)
+		} else {
+			budget := max(1024, min(target/2, CompactionKeepRecentTokens/(1<<attempt)))
+			summary, err = a.CompactToTokenBudget(ctx, budget, sink)
+		}
 		if err != nil || summary == "" {
 			return attempt > 0, nil
 		}
-		a.mu.Lock()
-		history = append([]provider.Message(nil), a.messages...)
-		state = a.compactionStateLocked()
-		a.mu.Unlock()
-		msgs = projectMessages(history, state)
+		system, tools, msgs = a.ContextSnapshot()
 		if !ShouldCompactAt(window, provider.ContextTokens(system, tools, msgs), thresholdPct) {
 			return true, nil
 		}
-		// One compaction per hook firing used to be enough when the
-		// keep floor was small relative to the window; with large
-		// transcripts a single pass can still sit over the target.
-		// Retry bounded: each pass must shrink the projection, and
-		// the loop never spans more than two extra passes, so a
-		// pathological summarizer cannot stall the turn.
 		if attempt >= 2 {
 			return true, nil
 		}
 	}
 }
 
-// runSummarizer issues one summarization request with tool use disabled
-// and cache bypassed. It rejects assistant tool calls outright and
-// reports whether the turn stopped for length plus the token usage.
+// runSummarizer issues a standalone summarization request with
+// SummarizationSystemPrompt and rejects tool calls immediately.
 func (a *Agent) runSummarizer(ctx context.Context, prompt string, sink func(delta string)) (string, bool, provider.Usage, error) {
 	req := provider.Request{
 		Model:     a.Model,
@@ -326,8 +774,14 @@ func (a *Agent) runSummarizer(ctx context.Context, prompt string, sink func(delt
 			},
 		},
 	}
+	return a.streamSummarizerRequest(ctx, req, sink)
+}
 
-	stream, err := a.Client.Stream(ctx, req)
+func (a *Agent) streamSummarizerRequest(ctx context.Context, req provider.Request, sink func(delta string)) (string, bool, provider.Usage, error) {
+	reqCtx, cancelReq := context.WithCancel(ctx)
+	defer cancelReq()
+
+	stream, err := a.Client.Stream(reqCtx, req)
 	if err != nil {
 		return "", false, provider.Usage{}, err
 	}
@@ -345,9 +799,13 @@ func (a *Agent) runSummarizer(ctx context.Context, prompt string, sink func(delt
 			}
 		case provider.EventToolStart, provider.EventToolArgs, provider.EventToolEnd:
 			sawToolCall = true
+			cancelReq()
 		case provider.EventUsage:
 			runUsage = runUsage.Add(e.Usage)
 		case provider.EventDone:
+			if sawToolCall {
+				break
+			}
 			if e.Err != nil {
 				return "", false, runUsage, e.Err
 			}
@@ -357,15 +815,291 @@ func (a *Agent) runSummarizer(ctx context.Context, prompt string, sink func(delt
 		}
 	}
 	if sawToolCall {
-		return "", false, runUsage, fmt.Errorf("summarizer attempted a tool call; retrying without tools is not supported by this provider route")
+		return "", false, runUsage, errSummarizerToolCall
 	}
 	return sb.String(), stopLen, runUsage, nil
 }
 
-// advanceCompactionChain advances the incremental chain head after a
-// successful summarization: merged file ops + new summary + count. The
-// transcript itself is untouched — the caller fills the projection
-// anchor (KeepFrom) with projectionIndexForContext.
+func (a *Agent) maybeMergeTier2Blocks(
+	ctx context.Context,
+	state *CompactionState,
+	window int,
+	sink func(delta string),
+) (provider.Usage, error) {
+	var totalUsage provider.Usage
+	if state == nil {
+		return totalUsage, nil
+	}
+
+	needsMerge := func(active []FoldBlock) bool {
+		if len(active) < Tier2MergeBatchSize {
+			return false
+		}
+		if len(active) > Tier2MergeBlockThreshold {
+			return true
+		}
+		if window > 0 && sumFoldBlockTokens(active) > window*Tier2MergeWindowPct/100 {
+			return true
+		}
+		return false
+	}
+
+	for {
+		active := state.ActiveBlocks()
+		if !needsMerge(active) {
+			break
+		}
+		if err := ctx.Err(); err != nil {
+			return totalUsage, err
+		}
+
+		// Find the oldest contiguous batch of Tier2MergeBatchSize Tier-1 active blocks.
+		batchIdx := -1
+		for i := 0; i+Tier2MergeBatchSize <= len(active); i++ {
+			allT1 := true
+			for j := 0; j < Tier2MergeBatchSize; j++ {
+				b := active[i+j]
+				if b.Tier > 1 {
+					allT1 = false
+					break
+				}
+				if j > 0 && b.StartIdx != active[i+j-1].EndIdx {
+					allT1 = false
+					break
+				}
+			}
+			if allT1 {
+				batchIdx = i
+				break
+			}
+		}
+		if batchIdx < 0 {
+			break
+		}
+
+		group := active[batchIdx : batchIdx+Tier2MergeBatchSize]
+		var (
+			readFiles      []string
+			modFiles       []string
+			fileSpans      []string
+			activatedTools []string
+			failedCmds     []FailedCommandSummary
+			sourceIDs      []string
+			rawToksSum     int
+			sourceBlkToks  int
+		)
+		for _, b := range group {
+			readFiles = MergeFileOps(readFiles, b.ReadFiles)
+			modFiles = MergeFileOps(modFiles, b.ModifiedFiles)
+			fileSpans = MergeFileOps(fileSpans, b.FileSpans)
+			activatedTools = MergeFileOps(activatedTools, b.ActivatedTools)
+			failedCmds = unionFailedCommands(failedCmds, b.FailedCommands)
+			sourceIDs = append(sourceIDs, b.ID)
+			rawToksSum += b.RawTokens
+			if b.BlockTokens > 0 {
+				sourceBlkToks += b.BlockTokens
+			} else {
+				sourceBlkToks += estimateFoldBlockTokens(b)
+			}
+		}
+
+		mergedSummary, u, err := a.summarizeTier2Group(ctx, group, sink)
+		totalUsage = totalUsage.Add(u)
+		if err != nil {
+			return totalUsage, err
+		}
+
+		t2ID := state.allocBlockID()
+		t2 := FoldBlock{
+			ID:             t2ID,
+			Tier:           2,
+			StartIdx:       group[0].StartIdx,
+			EndIdx:         group[len(group)-1].EndIdx,
+			Topic:          deriveTier2Topic(group, mergedSummary),
+			Summary:        mergedSummary,
+			ReadFiles:      readFiles,
+			ModifiedFiles:  modFiles,
+			FileSpans:      fileSpans,
+			ActivatedTools: activatedTools,
+			FailedCommands: failedCmds,
+			SourceBlockIDs: sourceIDs,
+			RawTokens:      rawToksSum,
+			CreatedAt:      time.Now().UnixMilli(),
+		}
+		t2.BlockTokens = estimateFoldBlockTokens(t2)
+
+		// Tier-2 block must shrink relative to the combined Tier-1 blocks it replaces.
+		if exceedsShrinkBudget(max(sourceBlkToks, rawToksSum), t2.BlockTokens) || (sourceBlkToks >= netShrinkFloorTokens && t2.BlockTokens > int(float64(sourceBlkToks)*NetShrinkTolerance)) {
+			t2.Summary = mechanicalTier2Summary(group)
+			t2.Topic = deriveTier2Topic(group, t2.Summary)
+			t2.BlockTokens = estimateFoldBlockTokens(t2)
+		}
+
+		retireSet := map[string]bool{}
+		for _, id := range sourceIDs {
+			retireSet[id] = true
+		}
+		for i := range state.Blocks {
+			if retireSet[state.Blocks[i].ID] && state.Blocks[i].RetiredByBlockID == "" {
+				state.Blocks[i].RetiredByBlockID = t2ID
+			}
+		}
+		state.Blocks = append(state.Blocks, t2)
+	}
+
+	return totalUsage, nil
+}
+
+func (a *Agent) summarizeTier2Group(ctx context.Context, group []FoldBlock, sink func(delta string)) (string, provider.Usage, error) {
+	var totalUsage provider.Usage
+	if err := ctx.Err(); err != nil {
+		return "", totalUsage, err
+	}
+	if a.Client == nil {
+		return mechanicalTier2Summary(group), totalUsage, nil
+	}
+
+	var eras strings.Builder
+	for _, b := range group {
+		eras.WriteString(fmt.Sprintf("<era id=%q msgs=\"#%d-#%d\">\n%s\n</era>\n\n",
+			b.ID, b.StartIdx, max(b.StartIdx, b.EndIdx-1), strings.TrimSpace(b.Summary)))
+	}
+
+	if a.hasLivePrefixState() {
+		directive := fmt.Sprintf(`<system-reminder>INTERNAL TIER-2 COMPACTION ROLLUP — DO NOT CALL ANY TOOLS.
+Consolidate the %d chronological FoldBlock summaries below (covering messages #%d–#%d) into a single dense Tier-2 Markdown summary using headings:
+## Goal
+## Constraints
+## Progress
+## Decisions
+## Next Steps
+## Critical Context
+
+Preserve durable decisions, file paths, root causes, and unresolved items while removing superseded intermediate steps.
+
+%sREMEMBER: DO NOT CALL ANY TOOLS. Output ONLY the consolidated Markdown summary.</system-reminder>`,
+			len(group), group[0].StartIdx, max(group[0].StartIdx, group[len(group)-1].EndIdx-1), eras.String())
+
+		text, stopLen, u, err := a.runWarmPrefixDirective(ctx, directive, sink)
+		totalUsage = totalUsage.Add(u)
+		if err == nil && !stopLen && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text), totalUsage, nil
+		}
+		if ctx.Err() != nil {
+			return "", totalUsage, ctx.Err()
+		}
+		if err == nil || !IsContextOverflow(err) {
+			return mechanicalTier2Summary(group), totalUsage, nil
+		}
+	}
+
+	standalonePrompt := fmt.Sprintf("Consolidate these %d chronological conversation era summaries (#%d–#%d) into one cohesive summary using the required format. Preserve durable decisions, key file paths, errors, and pending work.\n\n%s",
+		len(group), group[0].StartIdx, max(group[0].StartIdx, group[len(group)-1].EndIdx-1), eras.String())
+	text, stopLen, u, err := a.runSummarizer(ctx, standalonePrompt, sink)
+	totalUsage = totalUsage.Add(u)
+	if err == nil && !stopLen && strings.TrimSpace(text) != "" {
+		return strings.TrimSpace(text), totalUsage, nil
+	}
+	if ctx.Err() != nil {
+		return "", totalUsage, ctx.Err()
+	}
+	return mechanicalTier2Summary(group), totalUsage, nil
+}
+
+func mechanicalTier2Summary(group []FoldBlock) string {
+	var sb strings.Builder
+	sb.WriteString("## Progress\n")
+	for _, b := range group {
+		endDisp := max(b.StartIdx, b.EndIdx-1)
+		headline := b.Topic
+		if headline == "" {
+			headline = firstSummaryLine(b.Summary)
+		}
+		if headline == "" {
+			headline = "Compacted era"
+		}
+		sb.WriteString(fmt.Sprintf("- **%s (#%d–#%d)**: %s\n", b.ID, b.StartIdx, endDisp, truncateRunes(headline, 240)))
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func estimateFoldBlockTokens(b FoldBlock) int {
+	msg := renderFoldBlockMessage(b, false, 0, nil)
+	return provider.ContextTokens("", nil, []provider.Message{msg})
+}
+
+func sumFoldBlockTokens(blocks []FoldBlock) int {
+	sum := 0
+	for _, b := range blocks {
+		if b.BlockTokens > 0 {
+			sum += b.BlockTokens
+		} else {
+			sum += estimateFoldBlockTokens(b)
+		}
+	}
+	return sum
+}
+
+func exceedsShrinkBudget(rawTokens, candidateBlockTokens int) bool {
+	limit := int(float64(rawTokens) * NetShrinkTolerance)
+	if limit < netShrinkFloorTokens {
+		limit = netShrinkFloorTokens
+	}
+	return candidateBlockTokens > limit
+}
+
+func deriveBlockTopic(chunk []provider.Message, summary string) string {
+	for _, m := range chunk {
+		if m.Role != provider.RoleUser {
+			continue
+		}
+		if m.Meta != nil && (m.Meta[MetaHidden] == "true" || m.Meta["compaction"] == "true") {
+			continue
+		}
+		txt := strings.TrimSpace(StripLeadingSystemPrompt(extractText(m)))
+		if txt == "" || strings.HasPrefix(txt, "<system-warn>") {
+			continue
+		}
+		line := strings.Join(strings.Fields(txt), " ")
+		return truncateRunes(line, 96)
+	}
+	return firstSummaryLine(summary)
+}
+
+func deriveTier2Topic(group []FoldBlock, summary string) string {
+	var topics []string
+	for _, b := range group {
+		if b.Topic != "" && !containsString(topics, b.Topic) {
+			topics = append(topics, truncateRunes(b.Topic, 40))
+		}
+		if len(topics) >= 2 {
+			break
+		}
+	}
+	if len(topics) > 0 {
+		return truncateRunes(strings.Join(topics, " → "), 96)
+	}
+	return firstSummaryLine(summary)
+}
+
+func firstSummaryLine(summary string) string {
+	for _, rawLine := range strings.Split(summary, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if line == "" || strings.HasPrefix(line, "#") || line == "---" {
+			continue
+		}
+		line = strings.TrimPrefix(line, "- ")
+		line = strings.TrimPrefix(line, "* ")
+		line = strings.Join(strings.Fields(line), " ")
+		if line != "" {
+			return truncateRunes(line, 96)
+		}
+	}
+	return ""
+}
+
+// advanceCompactionChain advances the legacy single-summary chain head after a
+// standalone plan evaluation. Kept for unit-test compatibility.
 func advanceCompactionChain(plan *CompactionPlan, summary string, prev *CompactionState) *CompactionState {
 	var readFiles, modFiles []string
 	if prev != nil {
@@ -387,27 +1121,26 @@ func advanceCompactionChain(plan *CompactionPlan, summary string, prev *Compacti
 	}
 }
 
-// projectionIndexForContext maps a cut point expressed in projected-
-// context coordinates (what PrepareCompaction/FindCutPoint produce)
-// back to a history index for the new chain head.
-//
-// Layout: context[0] is the old synthetic summary and
-// context[i>=1] == history[state.KeepFrom+i-1].
-//
-// The old synthetic summary (context index 0 of an active projection)
-// is never a keep candidate — the new summary supersedes it — so a cut
-// at 0 clamps to 1.
+// projectionIndexForContext maps a cut point expressed in projected-context
+// coordinates back to a raw history index.
 func projectionIndexForContext(history []provider.Message, state *CompactionState, ctxKeepFrom int) int {
 	active, base := projectionAnchor(state, len(history))
 	if active {
-		idx := ctxKeepFrom
-		if idx <= 0 {
-			idx = 1
+		synCount := 1
+		if state != nil && len(state.Blocks) > 0 {
+			synCount = len(state.ActiveBlocks())
+			if synCount <= 0 {
+				synCount = 1
+			}
 		}
-		if idx >= len(history)-base+1 {
+		idx := ctxKeepFrom
+		if idx < synCount {
+			idx = synCount
+		}
+		if idx >= len(history)-base+synCount {
 			return len(history)
 		}
-		return base + idx - 1
+		return base + idx - synCount
 	}
 	if ctxKeepFrom < 0 {
 		return 0
@@ -418,16 +1151,15 @@ func projectionIndexForContext(history []provider.Message, state *CompactionStat
 	return ctxKeepFrom
 }
 
-// SeedCompactionState primes the incremental chain head, e.g. from the
-// compaction row restored out of the session file on resume. A nil state
-// clears the chain (fresh session).
+// SeedCompactionState primes the compaction state (e.g. restored from session
+// storage on resume). A nil state clears the chain.
 func (a *Agent) SeedCompactionState(state *CompactionState) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.compactionState = state
+	a.compactionState = state.Clone()
 }
 
-// CompactionChain returns a copy of the current chain head, or nil.
+// CompactionChain returns a deep copy of the current compaction state, or nil.
 func (a *Agent) CompactionChain() *CompactionState {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -435,27 +1167,18 @@ func (a *Agent) CompactionChain() *CompactionState {
 }
 
 func (a *Agent) compactionStateLocked() *CompactionState {
-	if a.compactionState == nil {
-		return nil
-	}
-	cp := *a.compactionState
-	cp.ReadFiles = append([]string(nil), a.compactionState.ReadFiles...)
-	cp.ModifiedFiles = append([]string(nil), a.compactionState.ModifiedFiles...)
-	return &cp
+	return a.compactionState.Clone()
 }
 
 func (a *Agent) setCompactionStateLocked(state *CompactionState) {
-	a.compactionState = state
+	if state != nil {
+		state.SyncMirrors()
+	}
+	a.compactionState = state.Clone()
 }
 
-// hybridKeepFloor computes the keep floor: a 20k-token floor, raised
-// toward 30% of the transcript on large histories (so 1M-token windows
-// keep working context instead of summarizing 98% away), but capped at
-// CompactionKeepMaxTokens so a huge transcript does not land at a huge
-// size after compacting: without the cap, a 500k transcript keeps ~150k
-// verbatim plus the summary, while a small one lands near 20k — the
-// wide variance users see. Counts are btdby4 payload tokens
-// (system/tools excluded here: the floor only walks the message tail).
+// hybridKeepFloor computes the keep floor: a 20k-token baseline raised toward
+// 30% of the projected transcript on large windows, capped at 40k tokens.
 func hybridKeepFloor(msgs []provider.Message) int {
 	total := provider.ContextTokens("", nil, msgs)
 	floor := CompactionKeepRecentTokens

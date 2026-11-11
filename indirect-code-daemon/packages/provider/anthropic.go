@@ -246,6 +246,12 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 
 	req.Messages = placeholderEmptyUserTurns(req.Messages)
 	req.Messages = RepairOrphanedToolResults(req.Messages)
+	compactionCacheIdx := -1
+	for i, m := range req.Messages {
+		if m.Role == RoleUser && m.Meta != nil && m.Meta["compaction_last_block"] == "true" {
+			compactionCacheIdx = i
+		}
+	}
 	appendMessage := func(role string, blocks []interface{}) {
 		if len(blocks) == 0 {
 			return
@@ -258,10 +264,13 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 		}
 		out.Messages = append(out.Messages, anthMessage{Role: role, Content: blocks})
 	}
-	for _, msg := range req.Messages {
+	for msgIdx, msg := range req.Messages {
 		switch msg.Role {
 		case RoleUser:
 			blocks := buildAnthUserContent(msg.Content)
+			if msgIdx == compactionCacheIdx && len(blocks) > 0 {
+				stampLastBlockCacheControl(blocks)
+			}
 			appendMessage("user", blocks)
 		case RoleAssistant:
 			var blocks []interface{}
@@ -342,18 +351,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 	for i := len(out.Messages) - 1; i >= 0; i-- {
 		if out.Messages[i].Role == "user" {
 			if blocks, ok := out.Messages[i].Content.([]interface{}); ok && len(blocks) > 0 {
-				lastIdx := len(blocks) - 1
-				switch b := blocks[lastIdx].(type) {
-				case anthTextBlock:
-					b.CacheControl = &anthCacheControl{Type: "ephemeral"}
-					blocks[lastIdx] = b
-				case anthImageBlock:
-					b.CacheControl = &anthCacheControl{Type: "ephemeral"}
-					blocks[lastIdx] = b
-				case anthToolResultBlock:
-					b.CacheControl = &anthCacheControl{Type: "ephemeral"}
-					blocks[lastIdx] = b
-				}
+				stampLastBlockCacheControl(blocks)
 				out.Messages[i].Content = blocks
 			}
 			break
@@ -438,6 +436,24 @@ func buildAnthUserContent(blocks []Content) []interface{} {
 		return []interface{}{anthTextBlock{Type: "text", Text: anthropicEmptyTextPlaceholder}}
 	}
 	return out
+}
+
+func stampLastBlockCacheControl(blocks []interface{}) {
+	if len(blocks) == 0 {
+		return
+	}
+	lastIdx := len(blocks) - 1
+	switch b := blocks[lastIdx].(type) {
+	case anthTextBlock:
+		b.CacheControl = &anthCacheControl{Type: "ephemeral"}
+		blocks[lastIdx] = b
+	case anthImageBlock:
+		b.CacheControl = &anthCacheControl{Type: "ephemeral"}
+		blocks[lastIdx] = b
+	case anthToolResultBlock:
+		b.CacheControl = &anthCacheControl{Type: "ephemeral"}
+		blocks[lastIdx] = b
+	}
 }
 
 func buildAnthToolResultContent(blocks []Content) interface{} {

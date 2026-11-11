@@ -282,6 +282,9 @@ type Agent struct {
 	// compactionState is the incremental chain head. Seeded from the session file on resume
 	// (SeedCompactionState) and advanced by every Compact call.
 	compactionState *CompactionState
+	// contextWindow caches the last known model context window reported to
+	// MaybeAutoCompactAt so Tier-2 merge checks can enforce the 15% cap.
+	contextWindow int
 	// rev increments whenever the transcript slice is replaced or a
 	// message is appended. The UI uses it as a cheap redraw cache key
 	// so typing doesn't copy/rebuild a long transcript on
@@ -341,13 +344,17 @@ func (a *Agent) History() []provider.Message {
 
 // ContextSnapshot returns the provider-neutral inputs that make up the
 // current model context. Hosts use the snapshot for read-only inspection
-// without racing a tool-registry replacement or transcript append.
-// Messages are the projected context (same view Messages returns).
+// and token estimation without racing a tool-registry replacement or
+// transcript append. Messages reflect the actual post-projection,
+// post-filter, post-ViewLatch, and post-RequestMessages context.
 func (a *Agent) ContextSnapshot() (system string, tools []provider.Tool, messages []provider.Message) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	messages = append([]provider.Message(nil),
-		projectMessages(append([]provider.Message(nil), a.messages...), a.compactionStateLocked())...)
+	msgs := a.BuildContextLocked()
+	if a.RequestMessages != nil {
+		msgs = a.RequestMessages(msgs)
+	}
+	messages = append([]provider.Message(nil), msgs...)
 	return a.System, a.Tools.Specs(), messages
 }
 
@@ -656,6 +663,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			assistantMsg   provider.Message
 			discardedChars int
 			err            error
+			overflowPasses int
 		)
 		for attempt := 0; ; attempt++ {
 			stop, assistantMsg, discardedChars, err = a.oneTurn(ctx, sink)
@@ -664,11 +672,18 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 				break
 			}
 			// Reactive recovery: if the provider rejected due to context overflow,
-			// compact the transcript and retry immediately instead of hard-failing the turn.
-			if IsContextOverflow(err) && attempt == 0 {
+			// run up to 2 token-budgeted compaction passes instead of hard-failing.
+			if IsContextOverflow(err) && overflowPasses < 2 {
+				overflowPasses++
 				sink(EvToolProgress{Text: "Context limit reached upstream; automatically compacting older context…"})
-				keepTail := max(1, len(a.Messages())/2)
-				if summary, compactErr := a.Compact(ctx, keepTail, nil); compactErr == nil && summary != "" {
+				keepBudget := CompactionKeepRecentTokens / 2
+				if overflowPasses > 1 {
+					keepBudget = CompactionKeepRecentTokens / 8
+				}
+				if summary, compactErr := a.CompactToTokenBudget(ctx, keepBudget, nil); compactErr == nil && summary != "" {
+					continue
+				}
+				if overflowPasses > 1 && a.latchOverflowTail(keepBudget) {
 					continue
 				}
 			}
@@ -905,9 +920,8 @@ func (a *Agent) dropLastAssistantMessage() {
 // BuildContext derives the request context for the next model call
 // from the live transcript without mutating it.
 //
-// Pipeline: snapshot -> filterHidden ->
-// PruneOldToolResults -> repairToolUseResultPairs ->
-// provider image mirror.
+// Pipeline: snapshot + projection (FoldBlocks + monotonic ViewLatch) ->
+// filterHidden -> repairToolUseResultPairs -> provider image mirror.
 //
 // Steps after the snapshot are request-only: mirrors never persist
 // and never feed back into a.messages. Callers hold no lock; the
@@ -928,14 +942,40 @@ func (a *Agent) BuildContext() []provider.Message {
 // buildContextFromLocked runs the derivation pipeline over an
 // already-snapshotted transcript. Both BuildContext (unlocked) and
 // BuildContextLocked share it so the pipeline exists in one place.
+// Sliding PruneOldToolResults is intentionally NOT run here: monotonic
+// ViewLatch inside projectMessages keeps middle bytes 100% cache-stable.
 func (a *Agent) buildContextFromLocked(msgs []provider.Message, clientName string) []provider.Message {
 	msgs = filterHidden(msgs)
-	msgs = PruneOldToolResults(msgs)
 	msgs = repairToolUseResultPairs(msgs)
 	if mirror := mirrorImagesForProvider(clientName, msgs); mirror != nil {
 		msgs = append(msgs, *mirror)
 	}
 	return msgs
+}
+
+// latchOverflowTail advances CompactionState.PrunedBefore as a last-resort
+// overflow recovery step when no further raw messages can be folded away.
+func (a *Agent) latchOverflowTail(protectTokens int) bool {
+	a.mu.Lock()
+	history := append([]provider.Message(nil), a.messages...)
+	state := a.compactionStateLocked()
+	if state == nil {
+		state = &CompactionState{}
+	}
+	wm := ComputeLatchWatermark(history, state.KeepFrom, protectTokens)
+	if wm <= state.PrunedBefore {
+		a.mu.Unlock()
+		return false
+	}
+	state.PrunedBefore = wm
+	a.setCompactionStateLocked(state)
+	a.rev++
+	onState := a.OnCompactionState
+	a.mu.Unlock()
+	if onState != nil {
+		onState(a.CompactionChain())
+	}
+	return true
 }
 
 // BuildContextLocked is BuildContext for callers already holding mu.

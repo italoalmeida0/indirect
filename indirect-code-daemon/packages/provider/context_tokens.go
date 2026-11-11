@@ -141,12 +141,6 @@ func anthropicCountMessage(msg Message) (string, any) {
 						"type": "redacted_thinking", "data": v.Encrypted,
 					})
 				}
-				if v.Summary != "" {
-					if text != "" {
-						text += "\n"
-					}
-					text += v.Summary
-				}
 			}
 		}
 		flush()
