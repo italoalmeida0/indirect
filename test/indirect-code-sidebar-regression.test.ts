@@ -121,8 +121,10 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
     test("NewProjectModal renders as a chromeless directory picker without nested card or duplicate footers", () => {
       const modalSrc = read("web/src/indirect-code/modals/NewProjectModal.tsx");
       expect(modalSrc).toContain("chromeless");
+      expect(modalSrc).toContain('width="max-w-2xl"');
       expect(modalSrc).not.toContain("Browse the host filesystem");
       expect(modalSrc).not.toContain("rounded-panel border border-border");
+      expect(modalSrc).not.toContain("rounded-md border border-border");
       expect(modalSrc).not.toContain("divide-y");
     });
 

@@ -53,7 +53,7 @@ export function NewProjectModal() {
         crumbs.push({ label: part, path: acc });
       }
     });
-    return crumbs.slice(-5);
+    return crumbs.slice(-7);
   });
 
   const handleListKeyDown = (e: KeyboardEvent) => {
@@ -117,20 +117,20 @@ export function NewProjectModal() {
       open={s.showNewProjectModal()}
       onClose={closeModal}
       title="Select project folder"
-      width="max-w-lg"
+      width="max-w-2xl"
       chromeless
     >
       {/* Top Navigation, Breadcrumbs & Close */}
-      <div class="flex items-center gap-1.5 border-b border-border-subtle bg-surface-subtle/60 px-3 py-2.5">
+      <div class="flex items-center gap-1 border-b border-border-subtle bg-surface-subtle/60 px-3 py-2.5">
         <button
           type="button"
           disabled={!canGoParent()}
           onClick={() => s.requestFolders(s.folderParent())}
           data-rc-tip="Parent folder"
           aria-label="Parent folder"
-          class="inline-grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-surface text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
+          class="inline-grid h-7 w-7 shrink-0 place-items-center rounded-full text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
         >
-          <Iconify icon="lucide:arrow-up" size={13} />
+          <Iconify icon="lucide:arrow-up" size={14} />
         </button>
 
         <button
@@ -138,18 +138,18 @@ export function NewProjectModal() {
           onClick={() => s.requestFolders("~")}
           data-rc-tip="Home directory"
           aria-label="Home directory"
-          class="inline-grid h-7 w-7 shrink-0 place-items-center rounded-md border border-transparent text-fg-muted hover:border-border hover:bg-surface hover:text-fg transition-colors cursor-pointer"
+          class="inline-grid h-7 w-7 shrink-0 place-items-center rounded-full text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
         >
-          <Iconify icon="lucide:home" size={13} />
+          <Iconify icon="lucide:home" size={14} />
         </button>
 
-        <span class="mx-0.5 h-3.5 w-px shrink-0 bg-border" aria-hidden="true" />
+        <span class="mx-1 h-3.5 w-px shrink-0 bg-border-subtle" aria-hidden="true" />
 
         <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <For
             each={breadcrumbs()}
             fallback={
-              <span class="truncate px-1.5 text-xs font-medium text-fg-secondary">
+              <span class="truncate px-2 text-xs font-medium text-fg-secondary">
                 Select project folder
               </span>
             }
@@ -167,10 +167,10 @@ export function NewProjectModal() {
                     type="button"
                     data-rc-tip={crumb.path}
                     onClick={() => s.requestFolders(crumb.path)}
-                    class={`max-w-36 shrink-0 truncate rounded-md border px-1.5 py-0.5 font-mono text-xs transition-colors cursor-pointer ${
+                    class={`max-w-44 shrink-0 truncate rounded-full px-2 py-0.5 font-mono text-xs transition-colors cursor-pointer ${
                       isLeaf()
-                        ? "border-border bg-surface text-fg font-medium"
-                        : "border-transparent text-fg-secondary hover:border-border hover:bg-surface hover:text-fg"
+                        ? "bg-surface-muted text-fg font-medium"
+                        : "text-fg-secondary hover:bg-surface-muted hover:text-fg"
                     }`}
                   >
                     {crumb.label}
@@ -182,7 +182,7 @@ export function NewProjectModal() {
         </div>
 
         <Show when={!s.folderLoading() && s.folderEntries()}>
-          <span class="hidden sm:inline shrink-0 pl-1 font-mono text-[11px] text-fg-muted tabular-nums">
+          <span class="hidden sm:inline shrink-0 px-1.5 font-mono text-[11px] text-fg-muted tabular-nums">
             {s.folderEntries().length}{" "}
             {s.folderEntries().length === 1 ? "folder" : "folders"}
           </span>
@@ -193,7 +193,7 @@ export function NewProjectModal() {
           aria-label="Close"
           data-rc-tip="Close"
           onClick={closeModal}
-          class="ml-0.5 inline-grid h-7 w-7 shrink-0 place-items-center rounded-full text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+          class="inline-grid h-7 w-7 shrink-0 place-items-center rounded-full text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
         >
           <Iconify icon="lucide:x" size={15} />
         </button>
@@ -201,7 +201,7 @@ export function NewProjectModal() {
 
       {/* Direct Path Input Bar */}
       <form
-        class="flex items-center gap-2.5 border-b border-border-subtle bg-surface/50 pl-[18px] pr-3.5 py-2 focus-within:bg-surface transition-colors"
+        class="flex items-center gap-2.5 border-b border-border-subtle bg-surface/50 pl-[18px] pr-3 py-2 focus-within:bg-surface transition-colors"
         onSubmit={(e) => {
           e.preventDefault();
           s.requestFolders(s.newProjectPath());
@@ -225,7 +225,7 @@ export function NewProjectModal() {
         <button
           type="submit"
           data-rc-tip="Navigate to path"
-          class="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border bg-surface-subtle px-2 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+          class="inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
         >
           <span>Go</span>
           <Iconify icon="lucide:corner-down-left" size={11} />
@@ -247,7 +247,7 @@ export function NewProjectModal() {
         role="group"
         aria-label="Host folders"
         onKeyDown={handleListKeyDown}
-        class="h-[min(42vh,18rem)] min-h-44 overflow-y-auto p-1.5 space-y-0.5 [scrollbar-gutter:stable]"
+        class="h-[min(54vh,25rem)] min-h-48 overflow-y-auto p-1.5 space-y-0.5 [scrollbar-gutter:stable]"
       >
         <Show
           when={!s.folderLoading()}
@@ -324,7 +324,7 @@ export function NewProjectModal() {
                     aria-label={`Open ${folder.name}`}
                     data-rc-tip="Open folder"
                     onClick={() => s.requestFolders(folder.path)}
-                    class="inline-grid h-6 w-6 shrink-0 place-items-center rounded-md text-fg-muted/70 opacity-75 group-hover:opacity-100 hover:bg-surface hover:text-fg transition-all cursor-pointer"
+                    class="inline-grid h-6 w-6 shrink-0 place-items-center rounded-full text-fg-muted/70 opacity-75 group-hover:opacity-100 hover:bg-surface hover:text-fg transition-all cursor-pointer"
                   >
                     <Iconify icon="lucide:chevron-right" size={14} />
                   </button>
