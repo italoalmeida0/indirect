@@ -733,11 +733,8 @@ export function ToolbarContext() {
             onClick={() => switchSubView("access")}
           >
             <span class="flex-1">Permissions</span>
-            <span class={`inline-flex items-center gap-1.5 text-[11px] font-medium ${c.yoloMode() ? "text-warning" : "text-fg-secondary"}`}>
-              <Show when={c.yoloMode()}>
-                <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
-              </Show>
-              <span>{c.yoloMode() ? "Full access" : "Ask for approval"}</span>
+            <span class={`inline-flex items-center text-[11px] font-medium ${c.yoloMode() ? "text-warning" : "text-fg-secondary"}`}>
+              <span>{c.yoloMode() ? "Full" : "Ask"}</span>
             </span>
             <Iconify icon="lucide:chevron-right" size={13} class="text-fg-muted shrink-0 ml-1" />
           </MenuItem>
@@ -887,13 +884,9 @@ export function ToolbarContext() {
   <button type="button" ref={c.accessBtn} data-menubtn aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`} aria-expanded={c.accessMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.accessMenuOpen(); ui.closeMenus(); c.setAccessMenuOpen(next); }}
-    class={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs font-medium cursor-pointer transition-colors ${
-      c.yoloMode() ? "border-warning/30 bg-warning-subtle text-warning hover:bg-warning/20" : "border-transparent text-fg-secondary hover:text-fg hover:bg-surface-muted"
-    }`}>
-    <Show when={c.yoloMode()}>
-      <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
-    </Show>
-    <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={13} class={c.yoloMode() ? "text-warning shrink-0" : "text-fg-muted shrink-0"} /><span class={`hidden sm:inline ${c.yoloMode() ? "text-warning" : ""}`}>{c.yoloMode() ? "Full access" : "Ask for approval"}</span>
+    class={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${c.yoloMode() ? "text-warning" : "text-fg-secondary hover:text-fg"}`}>
+    <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={13} class={c.yoloMode() ? "text-warning shrink-0" : "text-fg-muted shrink-0"} />
+    <span class="hidden sm:inline">{c.yoloMode() ? "Full" : "Ask"}</span>
   </button>
   <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="min(21rem, calc(100vw - 1.5rem))">
     <p class="px-2.5 py-1 text-[11px] font-medium text-fg-muted border-b border-border-subtle mb-1">Execution permissions</p>

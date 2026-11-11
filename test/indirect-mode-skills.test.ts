@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -141,5 +143,24 @@ describe("session mirror summary (list pulls)", () => {
     expect(session.skills?.notes).toEqual({ priority: 2, active: true, usable: "yolo" });
     expect(session.skills?.plan).toEqual({ priority: 3, active: false, usable: "" });
     expect(session.approvalMode).toBe("yolo");
+  });
+});
+
+describe("composer execution-permission trigger (ToolbarContext)", () => {
+  const src = readFileSync(
+    path.join(import.meta.dir, "..", "web/src/indirect-code/components/composer/ToolbarContext.tsx"),
+    "utf8",
+  );
+
+  test("desktop trigger and mobile summary show borderless short Full/Ask labels without status dots while menu and aria-label keep full descriptions", () => {
+    expect(src).toContain('aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`}');
+    expect(src).toContain(
+      'class={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${c.yoloMode() ? "text-warning" : "text-fg-secondary hover:text-fg"}`}',
+    );
+    expect(src).toContain('<span class="hidden sm:inline">{c.yoloMode() ? "Full" : "Ask"}</span>');
+    expect(src).toContain('<span>{c.yoloMode() ? "Full" : "Ask"}</span>');
+    expect(src).not.toContain("h-1.5 w-1.5 rounded-full bg-warning");
+    expect(src).toContain('label: "Ask for approval"');
+    expect(src).toContain('label: "Full access"');
   });
 });
