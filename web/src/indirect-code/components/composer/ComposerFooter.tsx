@@ -38,6 +38,7 @@ export function ComposerFooter() {
         onClick={(e) => {
           e.stopPropagation();
           s.setProjectMenuOpen(!s.projectMenuOpen());
+          ui.setEffortMenuOpen(false);
           ui.setModelMenuOpen(false);
           c.setAddContextOpen(false);
           c.setModeMenuOpen(false);

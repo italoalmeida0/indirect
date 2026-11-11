@@ -1,34 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
-import { createGlide } from "../../ds/motion/glide";
 import { press } from "../../ds/motion/press";
-import { REASONING_LEVELS } from "../constants";
-import { formatEffort } from "../utils/format";
 import { compactTokens, groupModelsByProvider, type GatewayModel } from "../context";
-
-function effortDepth(raw: string): number {
-  switch ((raw || "").trim().toLowerCase()) {
-    case "none":
-    case "off":
-      return 0;
-    case "minimum":
-    case "min":
-      return 1;
-    case "low":
-      return 2;
-    case "medium":
-    case "med":
-    case "medi":
-      return 3;
-    case "high":
-      return 4;
-    case "xhigh":
-    case "max":
-      return 5;
-    default:
-      return 3;
-  }
-}
 
 /** Session choices, also remembered by the daemon for the next draft. */
 export function ModelPickerBody(props: {
@@ -38,14 +11,11 @@ export function ModelPickerBody(props: {
   setFilter: (v: string) => void;
   activeModelId: () => string;
   onPick: (id: string) => void;
-  effort: () => string;
-  onEffort: (lvl: string) => void;
   onRefresh: () => void;
+  onBackToEffort?: () => void;
 }) {
   const [selectedProvider, setSelectedProvider] = createSignal<string>("all");
   const [highlightedId, setHighlightedId] = createSignal<string | null>(null);
-  const [effortTrack, setEffortTrack] = createSignal<HTMLDivElement>();
-  const [effortInd, setEffortInd] = createSignal<HTMLSpanElement>();
   let listRef: HTMLDivElement | undefined;
 
   const scrollModelIntoView = (id: string) => {
@@ -88,20 +58,26 @@ export function ModelPickerBody(props: {
     return list[0]!.id;
   });
 
-  const activeBars = createMemo(() => effortDepth(props.effort()));
-
-  createGlide({
-    container: effortTrack,
-    indicator: effortInd,
-    target: () => {
-      void props.effort();
-      return effortTrack()?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? null;
-    },
-  });
-
   return (
     <>
       <div class="flex items-center gap-2 px-2.5 py-1.5 border-b border-border-subtle">
+        <Show when={props.onBackToEffort}>
+          <button
+            type="button"
+            aria-label="Back to effort"
+            data-rc-tip="Back to effort"
+            onMouseDown={(e) => e.preventDefault()}
+            onPointerDown={(e) => press(e.currentTarget)}
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onBackToEffort?.();
+            }}
+            class="shrink-0 p-1 -ml-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+          >
+            <Iconify icon="lucide:arrow-left" size={13} />
+          </button>
+          <span class="h-3.5 w-px bg-border-subtle shrink-0" aria-hidden="true" />
+        </Show>
         <Iconify icon="lucide:search" size={13} class="shrink-0 text-fg-muted" />
         <input
           type="text"
@@ -307,59 +283,6 @@ export function ModelPickerBody(props: {
                   </For>
                 </div>
               </div>
-            )}
-          </For>
-        </div>
-      </div>
-
-      <div class="pt-1.5 pb-0.5 px-1 border-t border-border-subtle">
-        <div class="px-1.5 pb-1.5 flex items-center justify-between gap-2">
-          <span class="text-[11px] font-medium text-fg-muted">Reasoning effort</span>
-          <span class="inline-flex items-center gap-2" aria-hidden="true">
-            <span class="inline-flex items-end gap-[2px] h-3.5" data-effort-meter={activeBars()}>
-              <For each={[1, 2, 3, 4, 5]}>
-                {(bar) => (
-                  <span
-                    class={`w-[2.5px] rounded-full transition-colors duration-150 ${
-                      bar <= activeBars()
-                        ? props.effort().toLowerCase() === "max"
-                          ? "bg-warning"
-                          : "bg-accent"
-                        : "bg-border-strong/50"
-                    }`}
-                    style={{ height: `${4 + bar * 2}px` }}
-                  />
-                )}
-              </For>
-            </span>
-            <span class="font-mono text-[10px] font-medium text-fg-secondary tabular-nums min-w-[2.25rem] text-right">
-              {formatEffort(props.effort()) || "MED"}
-            </span>
-          </span>
-        </div>
-        <div
-          ref={setEffortTrack}
-          data-glide=""
-          class="ui-segmented ui-segmented-sm grid grid-cols-7 gap-0.5 p-0.5 w-full"
-          role="group"
-          aria-label="Reasoning effort"
-        >
-          <span ref={setEffortInd} class="ui-segmented-indicator" aria-hidden="true" />
-          <For each={REASONING_LEVELS}>
-            {(lvl) => (
-              <button
-                type="button"
-                aria-pressed={props.effort() === lvl}
-                onPointerDown={(e) => press(e.currentTarget)}
-                onClick={() => props.onEffort(lvl)}
-                class={`ui-segment px-0.5 py-1 rounded-md text-center font-mono text-[10px] font-medium cursor-pointer ${
-                  props.effort() === lvl
-                    ? "text-fg"
-                    : "text-fg-muted hover:text-fg-secondary"
-                }`}
-              >
-                {formatEffort(lvl)}
-              </button>
             )}
           </For>
         </div>

@@ -9,7 +9,7 @@ import { attachSortable } from "../../../sortable";
 import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { FloatMenu } from "../FloatMenu";
 import { MenuItem } from "../MenuItem";
-import { formatEffort } from "../../utils/format";
+import { formatEffort, normalizeEffort } from "../../utils/format";
 import { baseMode, effectiveModeSkills, isModeSkillName as isModeSkill, originalUsable } from "../../utils/modeSkills";
 
 /** The 4 mode skills form the single-choice primary selector. They render
@@ -27,10 +27,11 @@ export function ToolbarContext() {
   const ui = useUI();
 
   // Mobile submenu navigation inside the "+" menu
-  const [subView, setSubView] = createSignal<"main" | "model" | "mode" | "access">("main");
+  const [subView, setSubView] = createSignal<"main" | "effort" | "model" | "mode" | "access">("main");
   let subViewDir = 1;
-  const switchSubView = (next: "main" | "model" | "mode" | "access") => {
-    subViewDir = next === "main" ? -1 : 1;
+  const switchSubView = (next: "main" | "effort" | "model" | "mode" | "access") => {
+    const cur = subView();
+    subViewDir = next === "main" || (cur === "model" && next === "effort") ? -1 : 1;
     setSubView(next);
   };
   const animateSubView = (el: HTMLElement) => {
@@ -584,8 +585,11 @@ export function ToolbarContext() {
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={(e) => {
       e.stopPropagation();
-      c.setAddContextOpen(!c.addContextOpen());
+      const next = !c.addContextOpen();
+      ui.closeMenus();
+      ui.setEffortMenuOpen?.(false);
       ui.setModelMenuOpen(false);
+      c.setAddContextOpen(next);
     }}
     class="rc-composer-add w-7 h-7 rounded-full text-fg-secondary hover:text-fg hover:bg-surface-muted flex items-center justify-center cursor-pointer transition-colors"
     data-rc-tip={ui.isMobile() ? "Add & Settings" : "Add context"}
@@ -604,7 +608,7 @@ export function ToolbarContext() {
       ui.isMobile()
         ? subView() === "model" || subView() === "mode"
           ? "min(24rem, calc(100vw - 1rem))"
-          : subView() === "access"
+          : subView() === "effort" || subView() === "access"
           ? "min(21rem, calc(100vw - 1rem))"
           : "min(17rem, calc(100vw - 1.25rem))"
         : "13rem"
@@ -699,13 +703,19 @@ export function ToolbarContext() {
           </div>
           <MenuItem
             icon="lucide:cpu"
-            onClick={() => switchSubView("model")}
+            onClick={() => switchSubView("effort")}
           >
             <span class="flex-1 truncate text-fg font-medium text-xs">
               {c.activeModelName()}
             </span>
             <Show when={formatEffort(c.effort())}>
-              <span class="text-fg-muted shrink-0 text-[10px] ml-1">
+              <span
+                class={`shrink-0 font-mono text-[10px] ml-1 ${
+                  normalizeEffort(c.effort()) === "max"
+                    ? "text-tone-sky font-medium"
+                    : "text-fg-muted"
+                }`}
+              >
                 {formatEffort(c.effort())}
               </span>
             </Show>
@@ -742,13 +752,39 @@ export function ToolbarContext() {
         </div>
       </Show>
 
-      <Show when={subView() === "model"}>
+      <Show when={subView() === "effort"}>
         <div ref={animateSubView}>
           <div class="flex items-center justify-between px-1.5 py-1 border-b border-border-subtle">
             <button
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
+              class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+            >
+              <Iconify icon="lucide:chevron-left" size={14} />
+              <span>Back</span>
+            </button>
+            <span class="font-medium text-xs text-fg">Effort</span>
+            <button
+              type="button"
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={() => c.setAddContextOpen(false)}
+              class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
+            >
+              Done
+            </button>
+          </div>
+          <div>{c.effortPickerBody(() => switchSubView("model"))}</div>
+        </div>
+      </Show>
+
+      <Show when={subView() === "model"}>
+        <div ref={animateSubView}>
+          <div class="flex items-center justify-between px-1.5 py-1 border-b border-border-subtle">
+            <button
+              type="button"
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={() => switchSubView("effort")}
               class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
@@ -764,7 +800,7 @@ export function ToolbarContext() {
               Done
             </button>
           </div>
-          <div>{c.modelPickerBody()}</div>
+          <div>{c.modelPickerBody(false)}</div>
         </div>
       </Show>
 

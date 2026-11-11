@@ -84,7 +84,8 @@ export interface ComposerCtxValue extends Composer {
   modeBtn: SessionOptions["modeBtn"];
   accessBtn: SessionOptions["accessBtn"];
   configureSession: SessionOptions["configureSession"];
-  modelPickerBody: () => JSX.Element;
+  effortPickerBody: (onOpenModelPicker?: () => void) => JSX.Element;
+  modelPickerBody: (withBackToEffort?: boolean) => JSX.Element;
   activeContext: () => ReturnType<typeof contextDisplay>;
   addBtn: HTMLButtonElement | undefined;
   modelBtn: HTMLButtonElement | undefined;
@@ -114,6 +115,8 @@ export interface UICtxValue extends Notice {
   composerCollapsed: () => boolean;
   setComposerCollapsed: (v: boolean | ((p: boolean) => boolean)) => void;
   toggleComposerCollapsed: () => void;
+  effortMenuOpen: () => boolean;
+  setEffortMenuOpen: (v: boolean | ((p: boolean) => boolean)) => void;
   modelMenuOpen: () => boolean;
   setModelMenuOpen: (v: boolean | ((p: boolean) => boolean)) => void;
   usageOpen: () => boolean;

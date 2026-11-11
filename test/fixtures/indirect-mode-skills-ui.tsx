@@ -156,6 +156,7 @@ render(() => {
     modeBtn: options.modeBtn,
     accessBtn: options.accessBtn,
     configureSession: options.configureSession,
+    effortPickerBody: () => <div>effort</div>,
     modelPickerBody: () => <div>models</div>,
     activeContext: () => ({ label: "0%", window: 0, percent: null }),
     addBtn: undefined,
@@ -199,6 +200,8 @@ render(() => {
   const uiValue = {
     isMobile: () => false,
     closeMenus: () => {},
+    effortMenuOpen: () => false,
+    setEffortMenuOpen: () => {},
     setModelMenuOpen: () => {},
     sidebarOpen,
     setSidebarOpen,

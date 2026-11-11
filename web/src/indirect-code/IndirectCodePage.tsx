@@ -24,6 +24,7 @@ import { Onboarding } from "./components/Onboarding";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { TranscriptView } from "./components/TranscriptView";
 import { Composer } from "./components/Composer";
+import { EffortPickerBody } from "./components/EffortPickerBody";
 import { ModelPickerBody } from "./components/ModelPickerBody";
 import {
   NewProjectModal, ChoiceModal, ConfirmModal, PairModal,
@@ -602,12 +603,13 @@ export default function IndirectCodePage() {
     }
     setHistoryViewSignal(next);
   }
+  const [effortMenuOpen, setEffortMenuOpen] = createSignal(false);
   const [modelMenuOpen, setModelMenuOpen] = createSignal(false);
   const [usageOpen, setUsageOpen] = createSignal(false);
   const [modelFilter, setModelFilter] = createSignal("");
   /** Fresh snapshot on every open: stale scroll position/filter never linger. */
   createEffect(() => {
-    if (modelMenuOpen()) setModelFilter("");
+    if (modelMenuOpen() || composer.addContextOpen()) setModelFilter("");
   });
   const filteredGatewayModels = createMemo(() => {
     const q = modelFilter().trim().toLowerCase();
@@ -1190,8 +1192,32 @@ export default function IndirectCodePage() {
     }
   }
 
+  function effortPickerBody(onOpenModelPicker?: () => void) {
+    return (
+      <EffortPickerBody
+        effort={options.effort}
+        activeModelName={activeModelName}
+        autoFocus={!isMobile()}
+        onEffortPreview={(lvl) => {
+          options.setEffort(lvl);
+        }}
+        onEffortCommit={(lvl) => {
+          options.setEffort(lvl);
+          options.configureSession();
+        }}
+        onOpenModelPicker={
+          onOpenModelPicker ??
+          (() => {
+            setEffortMenuOpen(false);
+            setModelMenuOpen(true);
+          })
+        }
+      />
+    );
+  }
+
   /** Session choices, also remembered by the daemon for the next draft. */
-  function modelPickerBody() {
+  function modelPickerBody(withBackToEffort = false) {
     return (
       <ModelPickerBody
         models={gatewayModels}
@@ -1199,16 +1225,18 @@ export default function IndirectCodePage() {
         filter={modelFilter}
         setFilter={setModelFilter}
         activeModelId={options.activeModel}
+        onBackToEffort={
+          withBackToEffort
+            ? () => {
+                setModelMenuOpen(false);
+                setEffortMenuOpen(true);
+              }
+            : undefined
+        }
         onPick={(id) => {
           options.setActiveModel(id);
           setModelMenuOpen(false);
           options.configureSession();
-        }}
-        effort={options.effort}
-        onEffort={(lvl) => {
-          options.setEffort(lvl);
-          options.configureSession();
-          setModelMenuOpen(false);
         }}
         onRefresh={async () => {
           await loadGatewayModels();
@@ -1247,7 +1275,7 @@ export default function IndirectCodePage() {
         return;
       }
       if (e.key === "Escape") {
-        if (document.querySelector("[role=dialog]")) return;
+        if (document.querySelector("[role=dialog]:not([data-floatmenu])")) return;
         if (modals.confirmState()) {
           modals.confirmState()?.resolve(false);
           modals.setConfirmState(null);
@@ -1454,6 +1482,7 @@ export default function IndirectCodePage() {
     hosts.setHostMenuOpen(false);
     projects.setNewProjectMenuOpen(false);
     composer.setAddContextOpen(false);
+    setEffortMenuOpen(false);
     setModelMenuOpen(false);
     projects.setProjectMenuOpen(false);
     setUsageOpen(false);
@@ -1517,6 +1546,7 @@ export default function IndirectCodePage() {
     modeBtn: options.modeBtn,
     accessBtn: options.accessBtn,
     configureSession: options.configureSession,
+    effortPickerBody,
     modelPickerBody,
     activeContext,
     addBtn,
@@ -1549,6 +1579,8 @@ export default function IndirectCodePage() {
     composerCollapsed,
     setComposerCollapsed,
     toggleComposerCollapsed,
+    effortMenuOpen,
+    setEffortMenuOpen,
     modelMenuOpen,
     setModelMenuOpen,
     usageOpen,
