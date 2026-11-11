@@ -27,7 +27,8 @@ func installGrantingTestSkills(t *testing.T) map[string]skills.SessionSkill {
 			"glob": ask, "search": ask, "inspect": ask,
 			"search_web": ask, "fetch_url": ask,
 			"bg_await": ask, "bg_check": ask, "bg_cancel": ask,
-			"question": yolo, "todo": yolo,
+			"explore": ask,
+			"question": yolo, "todo": yolo, "session_history": yolo,
 		}},
 	}})
 	t.Cleanup(func() { swapSkillRegistry(prev) })

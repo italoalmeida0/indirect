@@ -134,6 +134,8 @@ func buildNativeToolsList(cwd string, mode string) []DebugToolInfo {
 		&tools.FinishEntireRequestTool{Mode: mode},
 		&tools.SummaryTool{},
 		&tools.UseSkillTool{},
+		&tools.SessionHistoryTool{},
+		&tools.ExploreTool{CWD: cwd, Sandbox: sb},
 	}
 
 	normMode := canonicalSessionMode(mode)
@@ -211,6 +213,8 @@ func simulateSessionPrompt(dcfg DaemonConfig, rec *SessionRecord, promptText str
 		&tools.FinishEntireRequestTool{Mode: opt.Mode},
 		&tools.SummaryTool{},
 		&tools.UseSkillTool{},
+		&tools.SessionHistoryTool{},
+		&tools.ExploreTool{CWD: rec.CWD, Sandbox: sb},
 	}
 	masterReg := core.NewRegistry(baseTools...)
 	eff, _ := skillRegistry().resolveSession(rec.Skills, opt.Mode)

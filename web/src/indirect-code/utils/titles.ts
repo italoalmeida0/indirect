@@ -42,6 +42,8 @@ export function specialTitle(units: ToolUnit[], extra?: { texts?: number; though
   const widgetInspects = count("widget_read", "widget_list");
   const summaries = count("summary");
   const finishes = count("finish_entire_request");
+  const historyLookups = count("session_history");
+  const explorations = count("explore");
   const mcp = names.filter((n) => n.startsWith("mcp__")).length;
 
   const accounted =
@@ -62,6 +64,8 @@ export function specialTitle(units: ToolUnit[], extra?: { texts?: number; though
     widgetInspects +
     summaries +
     finishes +
+    historyLookups +
+    explorations +
     mcp;
   const others = Math.max(0, units.length - accounted);
 
@@ -86,6 +90,8 @@ export function specialTitle(units: ToolUnit[], extra?: { texts?: number; though
   if (widgetInspects > 0) parts.push(`Inspected ${plural(widgetInspects, "widget")}`);
   if (summaries > 0) parts.push(`Recorded ${plural(summaries, "summary", "summaries")}`);
   if (finishes > 0) parts.push("Completed response");
+  if (historyLookups > 0) parts.push(`Searched ${plural(historyLookups, "history query", "history queries")}`);
+  if (explorations > 0) parts.push(`Delegated ${plural(explorations, "investigation")}`);
   if (mcp > 0) parts.push(`Used ${plural(mcp, "MCP tool")}`);
   if (others > 0) parts.push(plural(others, "call"));
   if ((extra?.texts || 0) > 0) parts.push(plural(extra!.texts!, "note"));

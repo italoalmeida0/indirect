@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -216,6 +218,9 @@ type turnBridge struct {
 	jobMutationMark map[string]int
 	toolNames       map[string]string
 	sandbox         *tools.Sandbox
+	brainDir        string
+	exploreTool     *tools.ExploreTool
+	usageMu         sync.Mutex
 	agent           *core.Agent
 	client          provider.Client
 	modelInfo       provider.Model
@@ -243,6 +248,7 @@ func (w *turnBridge) run() error {
 	sb := tools.NewSandbox(w.sessionCWD)
 	w.sandbox = sb
 	brainDir := w.env.brainDir(w.env.actorID)
+	w.brainDir = brainDir
 	if brainDir != "" {
 		sb.AllowExtra(brainDir)
 	}
@@ -271,17 +277,21 @@ func (w *turnBridge) run() error {
 		runnerStart = runnerStarter(w.env.store.rootDir(), w.env.actorID, brainDir)
 	}
 
+	fetchBrainDir := ""
+	if canonicalSessionMode(w.snap.options.Mode) == "agentic" {
+		fetchBrainDir = brainDir
+	}
 	baseTools := []core.Tool{
 		&tools.ReadTool{CWD: w.sessionCWD, Sandbox: sb, Changes: w.tfc.tracker, BrainDir: brainDir, Convert: w.requestConvert},
-		&tools.WriteTool{CWD: w.sessionCWD, Sandbox: sb, Changes: w.tfc.tracker, BrainDir: brainDir},
-		&tools.EditTool{CWD: w.sessionCWD, Sandbox: sb, Changes: w.tfc.tracker, BrainDir: brainDir},
-		&tools.BashTool{CWD: w.sessionCWD, Sandbox: sb, Slow: w.slowHook(), LogDir: brainDir, Starter: runnerStart},
+		&tools.WriteTool{CWD: w.sessionCWD, Sandbox: sb, Changes: w.tfc.tracker, BrainDir: brainDir, CompactedFileAdvisory: w.compactedFileAdvisory},
+		&tools.EditTool{CWD: w.sessionCWD, Sandbox: sb, Changes: w.tfc.tracker, BrainDir: brainDir, CompactedFileAdvisory: w.compactedFileAdvisory},
+		&tools.BashTool{CWD: w.sessionCWD, Sandbox: sb, Slow: w.slowHook(), LogDir: brainDir, BrainDir: brainDir, Starter: runnerStart},
 		&tools.GlobTool{CWD: w.sessionCWD, Sandbox: sb},
 		&tools.SearchTool{CWD: w.sessionCWD, Sandbox: sb},
 		&tools.InspectTool{CWD: w.sessionCWD, Sandbox: sb},
 		&tools.SearchWebTool{CWD: w.sessionCWD, Sandbox: sb},
-		&tools.FetchURLTool{CWD: w.sessionCWD, Sandbox: sb},
-		&tools.ExecScriptTool{CWD: w.sessionCWD, Sandbox: sb, Slow: w.slowHook(), LogDir: brainDir, Starter: runnerStart},
+		&tools.FetchURLTool{CWD: w.sessionCWD, Sandbox: sb, BrainDir: fetchBrainDir},
+		&tools.ExecScriptTool{CWD: w.sessionCWD, Sandbox: sb, Slow: w.slowHook(), LogDir: brainDir, BrainDir: brainDir, Starter: runnerStart},
 	}
 	bgCancelTool := &tools.BgCancelTool{Host: w, SessionID: w.env.actorID}
 	bgCheckTool := &tools.BgCheckTool{Host: w, SessionID: w.env.actorID}
@@ -298,7 +308,21 @@ func (w *turnBridge) run() error {
 	finishTool := &tools.FinishEntireRequestTool{Mode: determineFinishMode(w.snap), OnFinish: func() error { return nil }, IncompleteCheck: w.finishBlockWarning}
 	summaryTool := &tools.SummaryTool{}
 	useSkillTool := &tools.UseSkillTool{Host: w}
-	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool, bgCheckTool), widgetSetTool, widgetListTool, widgetLintTool, widgetReadTool, widgetEditTool, useSkillTool)...)
+	sessionHistoryTool := &tools.SessionHistoryTool{Source: w.sessionHistorySnapshot}
+	exploreTool := &tools.ExploreTool{
+		Client:         w.newSubagentClient(w.modelInfo),
+		Model:          w.modelToUse,
+		CWD:            w.sessionCWD,
+		Sandbox:        sb,
+		BrainDir:       brainDir,
+		Reasoning:      w.snap.options.Effort,
+		MaxTokens:      maxOutputTokens(w.modelInfo),
+		SessionID:      w.env.actorID,
+		SessionHistory: sessionHistoryTool,
+		OnUsage:        w.onSubagentUsage,
+	}
+	w.exploreTool = exploreTool
+	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool, bgCheckTool), widgetSetTool, widgetListTool, widgetLintTool, widgetReadTool, widgetEditTool, useSkillTool, sessionHistoryTool, exploreTool)...)
 
 	if w.env.store != nil {
 		header, err := w.env.store.readWALHeader(w.env.actorID)
@@ -359,8 +383,7 @@ func (w *turnBridge) run() error {
 	sink := func(ev core.AgentEvent) { w.handleEvent(ev) }
 	if w.snap.compact {
 		w.handleEvent(core.EvToolProgress{Text: "Compacting older context…"})
-		_, err := w.agent.Compact(w.ctx, max(2, len(w.agent.Messages())*7/10), func(delta string) { w.handleEvent(core.EvToolProgress{Text: delta}) })
-		return err
+		return w.runManualCompact(func(delta string) { w.handleEvent(core.EvToolProgress{Text: delta}) })
 	}
 	var turnErr error
 	if w.snap.resume || w.snap.seeded {
@@ -537,6 +560,12 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 	w.modelToUse = w.modelInfo.ID
 	w.agent.Client, w.agent.Model, w.agent.Reasoning = w.client, w.modelToUse, rf.options.Effort
 	w.agent.MaxTokens = maxOutputTokens(w.modelInfo)
+	if w.exploreTool != nil {
+		w.exploreTool.Client = w.newSubagentClient(requestModel)
+		w.exploreTool.Model = w.modelToUse
+		w.exploreTool.Reasoning = rf.options.Effort
+		w.exploreTool.MaxTokens = maxOutputTokens(w.modelInfo)
+	}
 	liveCfg := w.env.cfg.load()
 	var cfg DaemonConfig
 	if liveCfg != nil {
@@ -1027,7 +1056,7 @@ func (w *turnBridge) onCompactionState(state *core.CompactionState) {
 	if state == nil {
 		return
 	}
-	cp := *state
+	cp := state.Clone()
 	usage := w.agent.Cost()
 	var ctxCopy *SessionContext
 	func() {
@@ -1036,8 +1065,8 @@ func (w *turnBridge) onCompactionState(state *core.CompactionState) {
 			ctxCopy = estimateContext(w.agent, w.modelInfo)
 		}
 	}()
-	w.sendInbox(walAppendMsg{ev: walEvent{Type: walTypeCompaction, Compaction: &cp, Usage: &usage, Context: ctxCopy}})
-	w.emit(tailContentEvent(w.cfg.HostID, w.env.actorID, "session_compacted", w.compactionView(&cp, usage, ctxCopy), 0, map[string]any{
+	w.sendInbox(walAppendMsg{ev: walEvent{Type: walTypeCompaction, Compaction: cp, Usage: &usage, Context: ctxCopy}})
+	w.emit(tailContentEvent(w.cfg.HostID, w.env.actorID, "session_compacted", w.compactionView(cp, usage, ctxCopy), 0, map[string]any{
 		"context": ctxCopy, "usage": usage, "auto": !w.snap.compact,
 	}))
 }
@@ -1065,18 +1094,23 @@ func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEven
 	if cctx.Err() != nil {
 		return nil
 	}
+	threshold := w.cfg.Settings.AutoCompactThreshold
+	if w.env.cfg != nil {
+		if liveCfg := w.env.cfg.load(); liveCfg != nil {
+			threshold = liveCfg.Settings.AutoCompactThreshold
+		}
+	}
+	// AutoCompactThreshold <= 0 means "Off" in UI (0% -> 100% unreserved):
+	// disable proactive auto-compaction while leaving reactive IsContextOverflow active.
+	if threshold <= 0 {
+		return nil
+	}
 	window := w.modelInfo.ContextWindow
 	if window <= 0 {
 		return nil
 	}
-	msgs := w.agent.Messages()
-	system, tls := w.agent.ContextTools()
+	system, tls, msgs := w.agent.ContextSnapshot()
 	used := provider.ContextTokens(system, tls, msgs)
-	threshold := w.cfg.Settings.AutoCompactThreshold
-	// One ruler for gate and action: the threshold percent decides, so
-	// the configured 80% fires at 80% — not at the legacy fixed
-	// reserve (~92% on a 200k window), which let turns run past the
-	// limit. threshold <= 0 keeps the legacy fixed-reserve behavior.
 	needs := core.ShouldCompactAt(window, used, threshold)
 	if !needs {
 		if usable := window - maxOutputTokens(w.modelInfo) - 20000; usable > 0 {
@@ -1190,6 +1224,9 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 			// they detach at AutoBackgroundAfter, so the wait must cover
 			// the detach deadline, not just the tool poll interval.
 			wait = max(wait, tools.AutoBackgroundAfter+2*tuneWatchEvery)
+		}
+		if e.Name == "explore" {
+			wait = max(wait, tuneWaitProvider)
 		}
 		w.declareWait("tool", time.Now().Add(wait))
 		payload["event"] = map[string]any{"type": "tool_execution_start", "id": e.ID, "startedAt": e.StartedAt}
@@ -1325,4 +1362,252 @@ func buildTurnPrompt(attachments []AttachmentRef, promptText string, attachmentI
 // built from disk + WAL replay, agent.Continue picks up the pending loop.
 func runResumeWorker(env workerEnv, ctx context.Context, snap *workerSnapshot) {
 	runTurnWorker(ctx, env, *snap)
+}
+
+func (w *turnBridge) newSubagentClient(model provider.Model) provider.Client {
+	if strings.TrimSpace(w.cfg.GatewayURL) == "" && w.client != nil {
+		return w.client
+	}
+	apiBase := strings.TrimRight(w.cfg.GatewayURL, "/") + "/anthropic/v1"
+	return provider.WithHTTPClient(
+		provider.NewGatewayAnthropic(w.cfg.APIKey, apiBase, model),
+		provider.NewHTTPClientWithProxy(w.cfg.Settings.Insecure, w.cfg.Settings.HTTPProxy),
+	)
+}
+
+func (w *turnBridge) runManualCompact(progress func(string)) error {
+	history := w.agent.History()
+	chain := w.agent.CompactionChain()
+	rawStart := 0
+	if chain != nil && chain.KeepFrom > 0 && chain.KeepFrom <= len(history) {
+		rawStart = chain.KeepFrom
+	}
+	unfolded := history[rawStart:]
+	unfoldedTokens := provider.ContextTokens("", nil, unfolded)
+	if unfoldedTokens < 2000 {
+		_, err := w.agent.Compact(w.ctx, max(2, len(unfolded)*7/10), progress)
+		return err
+	}
+	keepBudget := min(core.CompactionKeepRecentTokens, max(1, unfoldedTokens*45/100))
+	_, err := w.agent.CompactToTokenBudget(w.ctx, keepBudget, progress)
+	return err
+}
+
+func (w *turnBridge) onSubagentUsage(delta provider.Usage) {
+	if w.agent == nil {
+		return
+	}
+	w.usageMu.Lock()
+	next := w.agent.Cost().Add(delta)
+	w.agent.SeedCost(next)
+	w.usageMu.Unlock()
+	w.handleEvent(core.EvUsage{Usage: delta, Cumulative: next})
+}
+
+func (w *turnBridge) sessionHistorySnapshot() tools.SessionHistorySnapshot {
+	var msgs []provider.Message
+	var chain *core.CompactionState
+	if w.agent != nil {
+		msgs = w.agent.History()
+		chain = w.agent.CompactionChain()
+	} else {
+		msgs = cloneMessages(w.snap.messages)
+		chain = w.snap.compaction.Clone()
+	}
+	return buildSessionHistorySnapshot(msgs, chain, w.brainDir)
+}
+
+func buildSessionHistorySnapshot(msgs []provider.Message, chain *core.CompactionState, brainDir string) tools.SessionHistorySnapshot {
+	snap := tools.SessionHistorySnapshot{
+		Messages: msgs,
+		BrainDir: brainDir,
+	}
+	if chain == nil {
+		return snap
+	}
+	snap.KeepFrom = chain.KeepFrom
+	if len(chain.Blocks) > 0 {
+		snap.Blocks = make([]tools.SessionHistoryBlock, 0, len(chain.Blocks))
+		for _, b := range chain.Blocks {
+			var failed []string
+			if len(b.FailedCommands) > 0 {
+				failed = make([]string, 0, len(b.FailedCommands))
+				for _, fc := range b.FailedCommands {
+					line := fc.Command
+					if fc.ExitCode != "" {
+						line += " (exit " + fc.ExitCode + ")"
+					}
+					if fc.FirstError != "" {
+						line += ": " + fc.FirstError
+					}
+					failed = append(failed, line)
+				}
+			}
+			snap.Blocks = append(snap.Blocks, tools.SessionHistoryBlock{
+				ID:               b.ID,
+				Tier:             b.Tier,
+				StartIdx:         b.StartIdx,
+				EndIdx:           b.EndIdx,
+				Topic:            b.Topic,
+				Summary:          b.Summary,
+				ReadFiles:        append([]string(nil), b.ReadFiles...),
+				ModifiedFiles:    append([]string(nil), b.ModifiedFiles...),
+				FailedCommands:   failed,
+				RetiredByBlockID: b.RetiredByBlockID,
+			})
+		}
+	} else if chain.KeepFrom > 0 && strings.TrimSpace(chain.PreviousSummary) != "" {
+		snap.Blocks = []tools.SessionHistoryBlock{{
+			ID:            "b1",
+			Tier:          1,
+			StartIdx:      0,
+			EndIdx:        chain.KeepFrom,
+			Summary:       chain.PreviousSummary,
+			ReadFiles:     append([]string(nil), chain.ReadFiles...),
+			ModifiedFiles: append([]string(nil), chain.ModifiedFiles...),
+		}}
+	}
+	return snap
+}
+
+func (w *turnBridge) compactedFileAdvisory(absPath string) string {
+	var msgs []provider.Message
+	var chain *core.CompactionState
+	if w.agent != nil {
+		msgs = w.agent.History()
+		chain = w.agent.CompactionChain()
+	} else {
+		msgs = w.snap.messages
+		chain = w.snap.compaction
+	}
+	return compactedFileAdvisoryFor(w.sessionCWD, msgs, chain, absPath)
+}
+
+func canonicalAdvisoryPath(cwd, raw string) string {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return ""
+	}
+	if !filepath.IsAbs(p) && cwd != "" {
+		p = filepath.Join(cwd, p)
+	}
+	p = filepath.ToSlash(filepath.Clean(p))
+	if runtime.GOOS == "windows" {
+		p = strings.ToLower(p)
+	}
+	return p
+}
+
+func wasFileReadInLiveTail(cwd string, tail []provider.Message, target string) bool {
+	if target == "" || len(tail) == 0 {
+		return false
+	}
+	readCallIDs := map[string]bool{}
+	for _, msg := range tail {
+		for _, c := range msg.Content {
+			switch block := c.(type) {
+			case provider.ToolCallBlock:
+				if block.Name != "read" || block.ID == "" {
+					continue
+				}
+				var args struct {
+					Path string `json:"path"`
+				}
+				if json.Unmarshal(block.Arguments, &args) == nil && canonicalAdvisoryPath(cwd, args.Path) == target {
+					readCallIDs[block.ID] = true
+				}
+			case provider.ToolResultBlock:
+				if readCallIDs[block.CallID] && !block.IsError {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func compactedFileAdvisoryFor(cwd string, history []provider.Message, state *core.CompactionState, absPath string) string {
+	if state == nil {
+		return ""
+	}
+	target := canonicalAdvisoryPath(cwd, absPath)
+	if target == "" {
+		return ""
+	}
+
+	active := state.ActiveBlocks()
+	keepFrom := state.KeepFrom
+	if len(active) > 0 {
+		if keepFrom <= 0 {
+			keepFrom = active[len(active)-1].EndIdx
+		}
+		if keepFrom < 0 || keepFrom > len(history) {
+			return ""
+		}
+		if wasFileReadInLiveTail(cwd, history[keepFrom:], target) {
+			return ""
+		}
+		var refs []string
+		lastID := ""
+		for _, b := range active {
+			op := ""
+			for _, f := range b.ModifiedFiles {
+				if canonicalAdvisoryPath(cwd, f) == target {
+					op = "modified"
+					break
+				}
+			}
+			if op == "" {
+				for _, f := range b.ReadFiles {
+					if canonicalAdvisoryPath(cwd, f) == target {
+						op = "read"
+						break
+					}
+				}
+			}
+			if op == "" {
+				continue
+			}
+			endDisp := max(b.StartIdx, b.EndIdx-1)
+			ref := fmt.Sprintf("%s (%s, msgs #%d–#%d", b.ID, op, b.StartIdx, endDisp)
+			if topic := strings.TrimSpace(b.Topic); topic != "" {
+				if len(topic) > 48 {
+					topic = strings.TrimSpace(topic[:48]) + "…"
+				}
+				ref += " — " + topic
+			}
+			ref += ")"
+			refs = append(refs, ref)
+			lastID = b.ID
+		}
+		if len(refs) == 0 {
+			return ""
+		}
+		return fmt.Sprintf("Touched in compacted era %s and unread in live tail; run read or session_history (block_id=%q) before relying on stale assumptions.", strings.Join(refs, ", "), lastID)
+	}
+
+	if len(state.Blocks) == 0 && state.KeepFrom > 0 && state.KeepFrom <= len(history) && strings.TrimSpace(state.PreviousSummary) != "" {
+		if wasFileReadInLiveTail(cwd, history[state.KeepFrom:], target) {
+			return ""
+		}
+		op := ""
+		for _, f := range state.ModifiedFiles {
+			if canonicalAdvisoryPath(cwd, f) == target {
+				op = "modified"
+				break
+			}
+		}
+		if op == "" {
+			for _, f := range state.ReadFiles {
+				if canonicalAdvisoryPath(cwd, f) == target {
+					op = "read"
+					break
+				}
+			}
+		}
+		if op != "" {
+			return fmt.Sprintf("Touched (%s) in compacted history (msgs #0–#%d) and unread in live tail; run read or session_history before relying on stale assumptions.", op, max(0, state.KeepFrom-1))
+		}
+	}
+	return ""
 }

@@ -231,7 +231,7 @@ func completionArgName(mode string) string {
 // auto-activates a tool — grants do.
 var modeExclusive = map[string][]string{
 	"agentic": {
-		"read", "write", "edit", "bash", "exec_script", "glob", "search", "inspect",
+		"read", "write", "edit", "bash", "exec_script", "glob", "search", "inspect", "explore",
 		"summary", "bg_await", "bg_check", "bg_cancel", completionToolName,
 	},
 	"talk": {},

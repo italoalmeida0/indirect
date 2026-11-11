@@ -300,13 +300,18 @@ func renderMiddleDiagnostics(lines []string, midStart, midEnd, lineCap, budget i
 		return "", 0, 0
 	}
 
+	diagLineCap := max(lineCap, 240)
 	var renderedSpans []string
 	used := 0
 	for spanIdx, sp := range rawSpans {
 		var spanLines []string
 		for lineIdx := sp.start; lineIdx <= sp.end; lineIdx++ {
 			prefix := fmt.Sprintf("L%d: ", lineIdx+1)
-			spanLines = append(spanLines, prefix+clipPreviewLine(lines[lineIdx], lineCap))
+			capForLine := lineCap
+			if isDiagnosticErrorLine(lines[lineIdx]) {
+				capForLine = diagLineCap
+			}
+			spanLines = append(spanLines, prefix+clipPreviewLine(lines[lineIdx], capForLine))
 		}
 		block := strings.Join(spanLines, "\n")
 		sepLen := 0
@@ -322,7 +327,7 @@ func renderMiddleDiagnostics(lines []string, midStart, midEnd, lineCap, budget i
 					if !isDiagnosticErrorLine(lines[lineIdx]) {
 						continue
 					}
-					entry := fmt.Sprintf("L%d: %s", lineIdx+1, clipPreviewLine(lines[lineIdx], lineCap))
+					entry := fmt.Sprintf("L%d: %s", lineIdx+1, clipPreviewLine(lines[lineIdx], diagLineCap))
 					if used+len(entry)+1 > budget && len(anchors) > 0 {
 						break
 					}

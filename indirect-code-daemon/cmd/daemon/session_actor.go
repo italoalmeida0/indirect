@@ -844,15 +844,9 @@ func (a *sessionActor) finishTurn(ok bool) {
 	// activation-related is durable).
 	a.endTurnSkills()
 	a.pendingContext = nil // unconsumed notices are turn-scoped: drop them
-	keepFrom := -1
-	if a.rec.Compaction != nil {
-		keepFrom = a.rec.Compaction.KeepFrom
-	}
-	a.rec.Messages, keepFrom = stripSkillArtifacts(a.rec.Messages, a.rec.TurnSeq, keepFrom)
-	if a.rec.Compaction != nil {
-		// The strip removed transcript rows the compaction anchor indexed;
-		// shifting it keeps projection from hiding the kept tail.
-		a.rec.Compaction.KeepFrom = keepFrom
+	a.rec.Messages = stripSkillArtifactsWithCompaction(a.rec.Messages, a.rec.TurnSeq, a.rec.Compaction)
+	if a.rec.Compaction != nil && len(a.rec.Compaction.Blocks) > 0 && len(a.rec.Compaction.ActiveBlocks()) == 0 {
+		a.rec.Compaction = nil
 	}
 	if a.cancel != nil {
 		a.cancel = nil
@@ -1210,11 +1204,9 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 	// Cut the boundary turn and everything below it.
 	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:idx]...)
 	a.rec.FileBalloons = filterBalloonsBelow(a.rec.FileBalloons, m.TurnID)
-	// A compaction summary derived from the edited boundary is stale. Clear it
-	// before the new seeded turn so Continue cannot project away the edit.
-	if c := a.rec.Compaction; c != nil && idx <= c.KeepFrom {
-		a.rec.Compaction = nil
-	}
+	// Truncate compaction blocks straddling or above the cut boundary while
+	// preserving earlier completed FoldBlocks strictly below the cut.
+	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, len(a.rec.Messages))
 	// Attachments are only kept when a surviving row or the new row (ids)
 	// still references them; discarded turns must not leak files.
 	pruneOrphanAttachments(a.rec, ids)
@@ -1288,11 +1280,9 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:keep]...)
 	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, keep)
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
-	// A compaction summary derived from the cut prefix is stale (same rule
-	// as discard&resend / edit-regenerate).
-	if c := a.rec.Compaction; c != nil && keep <= c.KeepFrom {
-		a.rec.Compaction = nil
-	}
+	// Truncate compaction blocks straddling or above the cut prefix while
+	// preserving earlier completed FoldBlocks strictly below the cut.
+	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, len(a.rec.Messages))
 	// ids are the new row's attachments (the edited message's or fresh
 	// uploads); without them pruning would delete the files the row inlines.
 	pruneOrphanAttachments(a.rec, ids)
@@ -1682,6 +1672,19 @@ func filterBalloonsBelow(balloons []filetrack.TurnChanges, turnID int) []filetra
 	return out
 }
 
+// truncateSessionCompaction rolls back compaction blocks straddling or above
+// effectiveCut when raw history is cut or edited. Legacy single-summary states
+// (len(Blocks)==0) lack exact span bounds and clear whenever effectiveCut <= KeepFrom.
+func truncateSessionCompaction(state *core.CompactionState, effectiveCut int) *core.CompactionState {
+	if state == nil {
+		return nil
+	}
+	if len(state.Blocks) == 0 && effectiveCut <= state.KeepFrom {
+		return nil
+	}
+	return core.TruncateCompaction(state, effectiveCut)
+}
+
 func (a *sessionActor) onEditRegenerate(m editRegenerateMsg) {
 	if a.state != stateIdle {
 		m.Reply <- promptResult{Error: "stop the turn first"}
@@ -1703,6 +1706,7 @@ func (a *sessionActor) onEditRegenerate(m editRegenerateMsg) {
 	// persisted record keeps stale balloons and unpaired rows.
 	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, keep)
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
+	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, len(a.rec.Messages))
 	pruneOrphanAttachments(a.rec, nil)
 	a.rec.Status = "idle"
 	a.rec.UpdatedAt = time.Now().UnixMilli()
@@ -1800,10 +1804,7 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 		}
 	}
 	rec.TurnSeq = maxTurn
-	if st := a.rec.Compaction; st != nil && st.KeepFrom >= 0 && st.KeepFrom <= end {
-		cp := *st
-		rec.Compaction = &cp
-	}
+	rec.Compaction = core.TruncateCompaction(a.rec.Compaction, end)
 	// Bg tasks: the fork inherits the TERMINAL ones (their logs are
 	// history the user can read with bg_check). Running tasks stay with
 	// the owning session — their runner/pids belong to it; the fork card
@@ -1986,8 +1987,7 @@ func (a *sessionActor) onWALAppend(m walAppendMsg) {
 		a.rec.Todos = append([]tools.TodoItem{}, ev.Todos...)
 	case walTypeCompaction:
 		if ev.Compaction != nil {
-			cp := *ev.Compaction
-			a.rec.Compaction = &cp
+			a.rec.Compaction = ev.Compaction.Clone()
 		}
 		if ev.Usage != nil {
 			a.rec.Usage = *ev.Usage

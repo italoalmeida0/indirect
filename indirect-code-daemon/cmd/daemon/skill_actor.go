@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
 	"indirect/indirect-code-daemon/packages/skills"
 )
@@ -222,6 +223,19 @@ func (a *sessionActor) endTurnSkills() bool {
 // kept tail left, so the returned anchor subtracts those removals and is
 // clamped to the new transcript length.
 func stripSkillArtifacts(msgs []provider.Message, turnIdx int, anchor int) ([]provider.Message, int) {
+	return stripSkillArtifactsOn(msgs, turnIdx, anchor, nil)
+}
+
+func stripSkillArtifactsWithCompaction(msgs []provider.Message, turnIdx int, comp *core.CompactionState) []provider.Message {
+	anchor := -1
+	if comp != nil {
+		anchor = comp.KeepFrom
+	}
+	out, _ := stripSkillArtifactsOn(msgs, turnIdx, anchor, comp)
+	return out
+}
+
+func stripSkillArtifactsOn(msgs []provider.Message, turnIdx int, anchor int, comp *core.CompactionState) ([]provider.Message, int) {
 	callIDs := map[string]bool{}
 	for _, msg := range msgs {
 		if msg.TurnIndex != turnIdx {
@@ -270,12 +284,33 @@ func stripSkillArtifacts(msgs []provider.Message, turnIdx int, anchor int) ([]pr
 				out = append(out, msg)
 			}
 		}
-		if dropped && i < anchor {
-			adjusted--
+		if dropped {
+			if comp != nil {
+				// len(out) is the dropped message's index in the progressively
+				// shifted array after all earlier drops have already shifted comp.
+				core.ShiftCompactionOnDrop(comp, len(out))
+			}
+			if i < anchor {
+				adjusted--
+			}
 		}
 	}
 	if adjusted >= 0 && adjusted > len(out) {
 		adjusted = len(out)
+	}
+	if comp != nil {
+		if comp.KeepFrom > len(out) {
+			comp.KeepFrom = len(out)
+		}
+		if comp.PrunedBefore > len(out) {
+			comp.PrunedBefore = len(out)
+		}
+		for i := range comp.Blocks {
+			if comp.Blocks[i].EndIdx > len(out) {
+				comp.Blocks[i].EndIdx = len(out)
+			}
+		}
+		comp.SyncMirrors()
 	}
 	return out, adjusted
 }

@@ -905,6 +905,24 @@ export function toolSummary(u: ToolUnit): ToolSummary {
         target: snippet ? (snippet.length > 80 ? snippet.slice(0, 80) + "…" : snippet) : "Final response",
       };
     }
+    case "session_history": {
+      const q = typeof args.query === "string" ? args.query.replace(/\s+/g, " ").trim() : "";
+      const blockId = typeof args.block_id === "string" ? args.block_id.trim() : "";
+      const rawTarget = q || (blockId ? `era ${blockId}` : "transcript");
+      return {
+        icon: "lucide:history",
+        verb: u.result ? "Searched history" : "Searching history",
+        target: rawTarget.length > 90 ? rawTarget.slice(0, 90) + "…" : rawTarget,
+      };
+    }
+    case "explore": {
+      const task = typeof args.task === "string" ? args.task.replace(/\s+/g, " ").trim() : "";
+      return {
+        icon: "lucide:compass",
+        verb: u.result ? "Explored" : "Exploring",
+        target: task ? (task.length > 90 ? task.slice(0, 90) + "…" : task) : "codebase",
+      };
+    }
     default: {
       // Result without its call (a late or replayed tool_result): label it as
       // a result and let the body carry the text. The target repeats the

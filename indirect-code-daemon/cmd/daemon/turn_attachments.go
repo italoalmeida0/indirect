@@ -291,6 +291,7 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:m.Index+1]...)
 	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, m.Index+1)
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
+	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, min(m.Index, len(a.rec.Messages)))
 	pruneOrphanAttachments(a.rec, nil)
 	a.rec.UpdatedAt = time.Now().UnixMilli()
 	removed := before - len(a.rec.Messages)

@@ -332,3 +332,26 @@ func TestFetchURLToolArrivalSpillAndReadToolExemption(t *testing.T) {
 		t.Fatalf("ReadTool unexpectedly truncated/spilled output (len=%d)", len(got))
 	}
 }
+
+func TestArrivalSpillTimestampedErrorCodeSurvivesSecondPass(t *testing.T) {
+	var sb strings.Builder
+	for i := 1; i <= 220; i++ {
+		fmt.Fprintf(&sb, "[2026-11-11T12:00:00Z] [INFO] worker-%03d processing pipeline batch checkpoint status=nominal bytes=4096\n", i)
+	}
+	sb.WriteString("[2026-11-11T12:00:01Z] [ERROR] FATAL_LSM_SPILL_CODE_8841: corrupted WAL segment header in partition-7\n")
+	for i := 222; i <= 450; i++ {
+		fmt.Fprintf(&sb, "[2026-11-11T12:00:02Z] [INFO] worker-%03d post-run telemetry flush completed status=nominal bytes=4096\n", i)
+	}
+	full := sb.String()
+	spillPath := "/brain/sess-x/tool-call_99.log"
+	preview, _, _ := buildArrivalSpillPreview(full, spillPath)
+	if len(preview) > arrivalSpillMaxPreviewBytes {
+		t.Fatalf("preview exceeded 6KB ceiling: got %d bytes", len(preview))
+	}
+	if !strings.Contains(preview, "FATAL_LSM_SPILL_CODE_8841: corrupted WAL segment header in partition-7") {
+		t.Fatalf("second-pass preview clipped middle timestamped error identifier:\n%s", preview)
+	}
+	if !strings.Contains(preview, "[Full output saved to "+spillPath) {
+		t.Fatalf("preview missing saved-file footer:\n%s", preview)
+	}
+}

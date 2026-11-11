@@ -49,14 +49,14 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 		}
 	}
 	agentic := list["agentic_base"]
-	if agentic.Usable != "never" || agentic.Mode != "agentic" || len(agentic.Permissions) != 15 {
+	if agentic.Usable != "never" || agentic.Mode != "agentic" || len(agentic.Permissions) != 17 {
 		t.Fatalf("agentic_base conversion drifted: %+v", agentic)
 	}
-	if agentic.Permissions["read"].Policy != skills.PolicyAsk {
+	if agentic.Permissions["read"].Policy != skills.PolicyAsk || agentic.Permissions["session_history"].Policy != skills.PolicyYolo || agentic.Permissions["explore"].Policy != skills.PolicyAsk {
 		t.Fatalf("agentic_base must keep the base grants: %+v", agentic.Permissions)
 	}
 	talk := list["talk"]
-	if talk.Mode != "talk" || talk.ApprovalMode != "yolo" || talk.Usable != "deny" || talk.Permissions["search_web"].Policy != skills.PolicyYolo || !strings.HasPrefix(talk.Body, "You are a helpful AI assistant.") {
+	if talk.Mode != "talk" || talk.ApprovalMode != "yolo" || talk.Usable != "deny" || talk.Permissions["search_web"].Policy != skills.PolicyYolo || talk.Permissions["session_history"].Policy != skills.PolicyYolo || !strings.HasPrefix(talk.Body, "You are a helpful AI assistant.") {
 		t.Fatalf("talk conversion drifted: %+v", talk)
 	}
 	if talk.Permissions["widget_set"].Policy != skills.PolicyYolo || talk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {

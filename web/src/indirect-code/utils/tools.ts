@@ -36,6 +36,8 @@ export const DAEMON_BUILTIN_TOOLS = [
   "widget_edit",
   "summary",
   "finish_entire_request",
+  "session_history",
+  "explore",
 ] as const;
 
 const DAEMON_BUILTIN_SET: ReadonlySet<string> = new Set<string>(DAEMON_BUILTIN_TOOLS);

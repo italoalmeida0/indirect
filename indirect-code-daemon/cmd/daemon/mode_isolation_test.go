@@ -22,6 +22,7 @@ func registryForTest() core.Registry {
 		&tools.UseSkillTool{},
 		&tools.WidgetSetTool{}, &tools.WidgetListTool{}, &tools.WidgetLintTool{},
 		&tools.WidgetReadTool{}, &tools.WidgetEditTool{},
+		&tools.SessionHistoryTool{}, &tools.ExploreTool{},
 	)
 }
 
@@ -117,19 +118,21 @@ func TestSkillsRegistryModeCeiling(t *testing.T) {
 		Mode:       "talk",
 		HasVisible: true,
 		Chain: []skills.Skill{{Name: "talky", Permissions: map[string]skills.PermSpec{
-			"read":       {Policy: skills.PolicyYolo},
-			"bash":       {Policy: skills.PolicyYolo},
-			"search_web": {Policy: skills.PolicyAsk},
-			"widget_set": {Policy: skills.PolicyAsk},
+			"read":            {Policy: skills.PolicyYolo},
+			"bash":            {Policy: skills.PolicyYolo},
+			"explore":         {Policy: skills.PolicyYolo},
+			"search_web":      {Policy: skills.PolicyAsk},
+			"widget_set":      {Policy: skills.PolicyAsk},
+			"session_history": {Policy: skills.PolicyYolo},
 		}}},
 	}
 	got := registryNames(skillsRegistry(full, eff))
-	for _, banned := range []string{"read", "bash", "write", "edit", "patch", "summary", "finish_entire_request"} {
+	for _, banned := range []string{"read", "bash", "write", "edit", "patch", "explore", "summary", "finish_entire_request"} {
 		if got[banned] {
 			t.Errorf("talk must never expose %q", banned)
 		}
 	}
-	for _, keep := range []string{"search_web", "widget_set", "use_skill"} {
+	for _, keep := range []string{"search_web", "widget_set", "session_history", "use_skill"} {
 		if !got[keep] {
 			t.Errorf("talk must expose %q (granted or auto)", keep)
 		}
@@ -270,6 +273,7 @@ func TestToolDescriptionsDoNotEnumerateModes(t *testing.T) {
 		&tools.QuestionTool{}, &tools.TodoTool{}, &tools.SummaryTool{},
 		&tools.FinishEntireRequestTool{Mode: "build"}, &tools.FinishEntireRequestTool{Mode: "plan"},
 		&tools.BgAwaitTool{}, &tools.BgCheckTool{}, &tools.BgCancelTool{},
+		&tools.SessionHistoryTool{}, &tools.ExploreTool{},
 	}
 	for _, tool := range all {
 		desc := tool.Description()

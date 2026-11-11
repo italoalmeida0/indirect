@@ -43,22 +43,37 @@ beforeAll(async () => {
   }
   const code = await bundle.outputs[0]!.text();
   const blobUrl = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
-  const hadWindow = "window" in globalThis;
-  const prevWindow = (globalThis as any).window;
-  if (!hadWindow) {
-    (globalThis as any).window = {
-      document: { addEventListener() {}, removeEventListener() {} },
-    };
+  const g = globalThis as Record<string, any>;
+  const hadWindow = "window" in g;
+  const prevWindow = g.window;
+  const hadWindowDoc = Boolean(
+    g.window && typeof g.window === "object" && "document" in g.window,
+  );
+  const prevWindowDoc = g.window?.document;
+  const hadDocument = "document" in g;
+  const prevDocument = g.document;
+  const fakeDoc = { addEventListener() {}, removeEventListener() {} };
+  if (!g.document) g.document = fakeDoc;
+  if (!g.window || typeof g.window !== "object") {
+    g.window = { document: g.document };
+  } else if (!g.window.document) {
+    g.window.document = g.document;
   }
   try {
     mod = await import(blobUrl);
   } finally {
     URL.revokeObjectURL(blobUrl);
     if (!hadWindow) {
-      delete (globalThis as any).window;
+      delete g.window;
     } else {
-      (globalThis as any).window = prevWindow;
+      g.window = prevWindow;
+      if (g.window && typeof g.window === "object") {
+        if (!hadWindowDoc) delete g.window.document;
+        else g.window.document = prevWindowDoc;
+      }
     }
+    if (!hadDocument) delete g.document;
+    else g.document = prevDocument;
   }
 });
 
