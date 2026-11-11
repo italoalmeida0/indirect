@@ -1,7 +1,7 @@
 import { createTranscriptOrder, type TranscriptCursor } from "../transcript/order";
 import { nextHistoryCursor } from "../transcript/history";
 import type { DaemonCommand } from "../daemon-protocol";
-import { batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { copyText } from "../../ds/primitives/clipboard";
 import { clearToolScrolls } from "../utils/scrollMemory";
@@ -583,10 +583,75 @@ export function createTranscript(opts: {
   let contextVersion = 0;
   let snapshotVersion = 0;
   let pendingSnapshot: { replay: (() => void)[] } | null = null;
+  let lastAppliedTranscriptSig: { sid: string; host: string; sig: string } | null = null;
+
+  function hashFeedStr(h: { a: number; b: number; chars: number }, s: string) {
+    let a = (h.a ^ s.length) | 0;
+    let b = (h.b + s.length) | 0;
+    for (let i = 0; i < s.length; i++) {
+      const code = s.charCodeAt(i);
+      a = Math.imul(a ^ code, 16777619);
+      b = (Math.imul(b, 31) + code) | 0;
+    }
+    h.a = a;
+    h.b = b;
+    h.chars += s.length;
+  }
+
+  function hashFeedVal(h: { a: number; b: number; chars: number }, v: any, depth: number) {
+    if (v === null || v === undefined) {
+      hashFeedStr(h, v === null ? "N" : "U");
+      return;
+    }
+    const t = typeof v;
+    if (t === "string") {
+      hashFeedStr(h, "S:");
+      hashFeedStr(h, v);
+      return;
+    }
+    if (t === "number" || t === "boolean") {
+      hashFeedStr(h, `${t[0]}:${String(v)};`);
+      return;
+    }
+    if (depth > 5) return;
+    if (Array.isArray(v)) {
+      hashFeedStr(h, `[${v.length}:`);
+      for (let i = 0; i < v.length; i++) hashFeedVal(h, v[i], depth + 1);
+      hashFeedStr(h, "]");
+      return;
+    }
+    if (t === "object") {
+      const keys = Object.keys(v);
+      hashFeedStr(h, `{${keys.length}:`);
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i]!;
+        hashFeedStr(h, k);
+        hashFeedVal(h, v[k], depth + 1);
+      }
+      hashFeedStr(h, "}");
+    }
+  }
+
+  function hashTranscriptPayload(rawMsgs: any[], compaction: any, history: any): string {
+    const h = { a: -2128831035, b: 5381, chars: 0 };
+    const len = Array.isArray(rawMsgs) ? rawMsgs.length : 0;
+    hashFeedVal(h, rawMsgs, 0);
+    hashFeedVal(h, compaction ?? null, 0);
+    hashFeedVal(h, history ?? null, 0);
+    const firstId = len > 0 ? String(rawMsgs[0]?.id ?? rawMsgs[0]?.role ?? "") : "";
+    const lastId = len > 0 ? String(rawMsgs[len - 1]?.id ?? rawMsgs[len - 1]?.role ?? "") : "";
+    return `${len}:${h.chars}:${h.a >>> 0}:${h.b >>> 0}:${firstId}:${lastId}`;
+  }
+
   async function applySessionContent(sessionId: string, rawMsgs: any[], compaction?: any, history?: any, overlay?: any) {
     if(sessionId!==opts.getSessionId()) return;
     const version = ++snapshotVersion;
     const host = opts.getHostId();
+    const rawInput = rawMsgs;
+    const isLiveOverlay = Boolean(
+      overlay?.status === "running" || overlay?.liveMessage || overlay?.pendingToolResults?.length,
+    );
+    if (isLiveOverlay) lastAppliedTranscriptSig = null;
     if (overlay?.liveMessage) rawMsgs=[...rawMsgs,overlay.liveMessage];
     if (overlay?.pendingToolResults?.length) {
       // A transient result can only decorate a call in this snapshot. Older
@@ -609,7 +674,10 @@ export function createTranscript(opts: {
       tail = await normalized;
     }
     if (version !== snapshotVersion || sessionId !== opts.getSessionId() || host !== opts.getHostId()) return;
-    const orderedReplay=transcriptOrder.snapshot(overlay?.transcript);
+    const orderedReplay: (() => void)[] | null =
+      overlay?.preOrderedReplay !== undefined
+        ? overlay.preOrderedReplay
+        : transcriptOrder.snapshot(overlay?.transcript);
     if (orderedReplay===null) { pendingSnapshot=null; return; }
     const replay = overlay?.transcript ? orderedReplay : pendingSnapshot?.replay || [];
     pendingSnapshot = null;
@@ -628,6 +696,15 @@ export function createTranscript(opts: {
       // was normalizing. Replay only the events after this exact snapshot.
       for (const apply of replay) apply();
     });
+    if (!isLiveOverlay && replay.length === 0) {
+      lastAppliedTranscriptSig = {
+        sid: sessionId,
+        host,
+        sig: hashTranscriptPayload(rawInput, compaction, history),
+      };
+    } else {
+      lastAppliedTranscriptSig = null;
+    }
     if (initialScrollSession === sessionId) {
       initialScrollSession = "";
       if (pendingScrollMsgIdx != null) {
@@ -642,6 +719,7 @@ export function createTranscript(opts: {
   onCleanup(() => {
     snapshotVersion++;
     pendingSnapshot = null;
+    lastAppliedTranscriptSig = null;
     historyWorker?.terminate();
     for (const waiter of historyWorkerWaiters.values()) waiter.resolve([]);
     historyWorkerWaiters.clear();
@@ -652,7 +730,7 @@ export function createTranscript(opts: {
 
   /** Transcript-owned block of the session_data event (model/options live in
    * the options domain; workspace in the workspace domain — the page composes). */
-  function applySnapshot(sid: string, r: any, onApplied?:()=>void) {
+  function applySnapshot(sid: string, r: any, onApplied?:()=>void, snapOpts?: { requestId?: string }) {
     const applyMetadata = () => {
     if (r.workspace) setWorkspaceSnapshot(r.workspace);
     setSessionStatus(r.status === "running" ? "running" : "idle");
@@ -683,7 +761,42 @@ export function createTranscript(opts: {
     setSessionContexts((prev) => ({ ...prev, [sid]: r.context ?? null }));
     onApplied?.();
     };
-    applySessionContent(sid, r.messages || r.Messages || [], r.compaction, r.history, {...r, applyMetadata});
+
+    const rawMsgs = r.messages || r.Messages || [];
+    if (
+      !snapOpts?.requestId &&
+      sid === opts.getSessionId() &&
+      initialScrollSession !== sid &&
+      pendingSnapshot === null &&
+      r.status !== "running" &&
+      untrack(sessionStatus) !== "running" &&
+      !r.liveMessage &&
+      !(r.pendingToolResults?.length) &&
+      lastAppliedTranscriptSig !== null &&
+      lastAppliedTranscriptSig.sid === sid &&
+      lastAppliedTranscriptSig.host === opts.getHostId()
+    ) {
+      const nextSig = hashTranscriptPayload(rawMsgs, r.compaction, r.history);
+      if (nextSig === lastAppliedTranscriptSig.sig) {
+        const orderedReplay = transcriptOrder.snapshot(r.transcript);
+        if (orderedReplay === null) return;
+        if (orderedReplay.length === 0) {
+          snapshotVersion++;
+          batch(() => {
+            applyMetadata();
+          });
+          return;
+        }
+        applySessionContent(sid, rawMsgs, r.compaction, r.history, {
+          ...r,
+          applyMetadata,
+          preOrderedReplay: orderedReplay,
+        });
+        return;
+      }
+    }
+
+    applySessionContent(sid, rawMsgs, r.compaction, r.history, { ...r, applyMetadata });
   }
 
   // Point-in-time workspace received in the snapshot — redirected by the page via
@@ -701,6 +814,7 @@ export function createTranscript(opts: {
   }
   function appendReasoningDelta(delta: string) {
     if (!delta) return;
+    lastAppliedTranscriptSig = null;
     if (thinkingStart() === null) startThinkingTimer();
     setMessages((prev) => reduceReasoningDelta(prev, delta));
     // The live clock/ticks belong to this message's first reasoning block.
@@ -708,9 +822,11 @@ export function createTranscript(opts: {
   }
   function appendToolArgsDelta(callId: string, delta: string) {
     if (!delta) return;
+    lastAppliedTranscriptSig = null;
     setMessages((prev) => reduceToolArgs(prev, callId, delta));
   }
   function appendToolResult(callId: string, result: string | undefined, isError?: boolean, startedAt?: number, durationMs?: number, details?: any, messageId?:string) {
+    lastAppliedTranscriptSig = null;
     setMessages((prev) => reduceToolResult(prev, callId, result, isError, startedAt, durationMs, details, messageId));
   }
   function cancelTurnForSession(sessionId: string, e?: MouseEvent | KeyboardEvent) {
@@ -1111,6 +1227,7 @@ export function createTranscript(opts: {
     if (sessionId !== opts.getSessionId()) return;
     if (keep >= -1) {
       contextVersion++;
+      lastAppliedTranscriptSig = null;
       setMessages((prev: ChatMessage[]) => cutTail(prev, keep));
       // The past changed: drop seals + cursor (a fresh tail arrives
       // next and re-seals).
@@ -1145,6 +1262,9 @@ export function createTranscript(opts: {
     if(cursor) { transcriptOrder.event(cursor,()=>handleAgentEvent(sessionId,ev)); return; }
     if (!ev || sessionId !== opts.getSessionId()) return;
     if (pendingSnapshot) { pendingSnapshot.replay.push(() => handleAgentEvent(sessionId, ev)); return; }
+    if (ev.type !== "usage" && ev.type !== "todo_update" && ev.type !== "tool_progress" && ev.type !== "tool_execution_start" && ev.type !== "compact_progress") {
+      lastAppliedTranscriptSig = null;
+    }
     if (ev.type === "turn_start") {
       setSessionStatus("running");
       setTurnActivity((turn) => !turn || turn.endedAt ? { startedAt: Date.now(), status: "running" } : turn);
@@ -1309,6 +1429,7 @@ export function createTranscript(opts: {
     contextVersion++; transcriptOrder.reset();
     pendingFetchIds.clear();
     snapshotVersion++; pendingSnapshot = null;
+    lastAppliedTranscriptSig = null;
     forkRequestId = "";
     forkHostId = "";
     forkSessionId = "";
@@ -1352,10 +1473,12 @@ export function createTranscript(opts: {
     });
   }
   function pushUserMessage(msg: ChatMessage) {
+    lastAppliedTranscriptSig = null;
     setMessages((prev) => [...prev, msg]);
   }
   /** Marks turn start in composer (status + activity + tail). */
   function beginTurn() {
+    lastAppliedTranscriptSig = null;
     setSessionStatus("running");
     // Sending a message re-engages the pin: the reader expects to follow
     // their own turn even while reading further up.

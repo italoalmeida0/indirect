@@ -249,6 +249,13 @@ export default function IndirectCodePage() {
     reconnect: (id) => { relay.resetBackoff(); relay.connect(id); },
   });
 
+  let causalClock = 0;
+  const confirmedPullClocks: { sessions: number; config: number } = { sessions: 0, config: 0 };
+  const inFlightPullClocks = new Map<
+    number,
+    { hostId: string; collection: "sessions" | "config"; clockAtSend: number }
+  >();
+
   const relay = createRelay({
     getHostId: () => hosts.activeHostId(),
     onMessage: (data) => {
@@ -289,6 +296,7 @@ export default function IndirectCodePage() {
       if (activeSessionId()) { transcript.fetchSession(activeSessionId()); turnChanges.requestBalloons(); }
     },
     onClose: () => {
+      inFlightPullClocks.clear();
       options.resetPendingChoice();
       transcript.clearForkRequest();
       transcript.setForking(false);
@@ -309,7 +317,20 @@ export default function IndirectCodePage() {
   const isHostOnline = () => hosts.activeHost()?.status === "online";
 
   const mirror = createMirror({
-    send: (payload) => relay.send(payload),
+    send: (payload) => {
+      if (
+        payload.type === "pull" &&
+        typeof (payload as any).id === "number" &&
+        (payload.collection === "sessions" || payload.collection === "config")
+      ) {
+        inFlightPullClocks.set((payload as any).id, {
+          hostId: String((payload as any).hostId || hosts.activeHostId() || ""),
+          collection: payload.collection,
+          clockAtSend: causalClock,
+        });
+      }
+      relay.send(payload);
+    },
     isOpen: () => relay.wsOpen(),
     getHostId: () => hosts.activeHostId(),
   });
@@ -391,9 +412,9 @@ export default function IndirectCodePage() {
     // daemon skill list wins; the 4-skill cache answers before it loads.
     getSkill: (name) => {
       const real = settings.savedSkills()[name];
-      if (real) return { mode: real.mode, usable: real.usable };
+      if (real) return { mode: real.mode, usable: real.usable, approvalMode: real.approvalMode };
       const cached = effectiveModeSkills(undefined, false).find((m) => m.name === name);
-      return cached ? { mode: cached.mode, usable: cached.usable } : undefined;
+      return cached ? { mode: cached.mode, usable: cached.usable, approvalMode: cached.approvalMode } : undefined;
     },
     listModeSkills: () => {
       const list = effectiveModeSkills(settings.savedSkills(), settings.skillsLoaded());
@@ -401,6 +422,12 @@ export default function IndirectCodePage() {
       return (locked ? list.filter((m) => baseMode(m.mode) === locked) : list).map((m) => m.name);
     },
     getLockedMode: () => lockedSessionMode(),
+    getMirrorSession: (sid) => mirror.sessions().find((x) => x.id === sid),
+    getSavedSelection: () => mirror.configDoc()?.lastSelection,
+    causalPullClock: {
+      nextClock: () => ++causalClock,
+      confirmedClock: (collection) => confirmedPullClocks[collection],
+    },
   });
 
   const review = createReview({
@@ -689,6 +716,7 @@ export default function IndirectCodePage() {
       transcript.scrollToMessage(messageIdx);
       return;
     }
+    closeMenus();
     options.resetPending();
     setDraftMode(false);
     transcript.resetForSession();
@@ -722,6 +750,9 @@ export default function IndirectCodePage() {
   // Open a centered draft without creating a conversation on the host.
   function startNewConversation(projectId?: string) {
     if (creatingSession()) return;
+    closeMenus();
+    options.resetPendingChoice();
+    options.setEffortPreviewing(false);
     transcript.resetForSession();
     setDraftMode(true);
     setHistoryView(false);
@@ -732,13 +763,16 @@ export default function IndirectCodePage() {
     } catch {}
     turnChanges.reset();
     notice.setAppNotice(null);
-    options.applyOptions(options.getLastLocalSelection() || mirror.configDoc()?.lastSelection);
+    const remembered = options.getLastLocalSelection() || mirror.configDoc()?.lastSelection;
+    const catalog = gatewayModels();
+    options.setActiveModel(catalog.find((m) => m.id === remembered?.model)?.id || catalog[0]?.id || "");
+    options.applyOptions(remembered);
     // Draft bootstrap: a clean skill slate (nothing from the session that
     // was on screen carries over — selection, usable overrides, approval
     // mode), seeded with the remembered primary skill; a mode skill is
     // mandatory when one exists, even before the official skill list
     // arrives (cache answers).
-    options.resetDraftSkills(options.getLastLocalSelection() || mirror.configDoc()?.lastSelection);
+    options.resetDraftSkills(remembered);
     composer.clearAttachments();
     if (projectId) projects.setActiveProjectId(projectId);
     if (isMobile()) setSidebarOpen(false);
@@ -802,6 +836,32 @@ export default function IndirectCodePage() {
   // {reasoning_id,summary}, {mime_type,data}). Parse both (utils/wire,
   // transcript/updaters).
   function handleIncomingMessage(msg: DaemonMessage) {
+    const replyId = (msg as { id?: unknown }).id;
+    if (typeof replyId === "number" && inFlightPullClocks.has(replyId)) {
+      const req = inFlightPullClocks.get(replyId)!;
+      const replyCol = (msg as { collection?: unknown }).collection;
+      if (msg.hostId === req.hostId && (typeof replyCol !== "string" || replyCol === req.collection)) {
+        inFlightPullClocks.delete(replyId);
+        if (
+          req.hostId === hosts.activeHostId() &&
+          Array.isArray((msg as { items?: unknown }).items) &&
+          !(msg as { error?: unknown }).error &&
+          msg.type !== "error"
+        ) {
+          confirmedPullClocks[req.collection] = Math.max(confirmedPullClocks[req.collection], req.clockAtSend);
+          if (req.collection === "config") {
+            const c0 = (msg as { items?: any[] }).items?.[0];
+            const pulledSaved = c0 ? (c0.lastSelection ?? c0.last_selection) : undefined;
+            if (pulledSaved !== undefined) {
+              const curSaved = untrack(() => mirror.configDoc()?.lastSelection);
+              if (curSaved === undefined || options.matchesDraftChoice(pulledSaved, curSaved)) {
+                options.reconcileSavedSelection(curSaved ?? pulledSaved);
+              }
+            }
+          }
+        }
+      }
+    }
     // SignalDB sync protocol messages (pull responses / change pings) are
     // owned by the data layer; everything else is event-driven below.
     if (mirror.dataLayer.handleMessage(msg)) return;
@@ -856,6 +916,8 @@ export default function IndirectCodePage() {
         if (!creatingSession() || msg.requestId !== creationRequestId) break;
         const r = msg.session;
         if (!r?.id) break;
+        closeMenus();
+        options.setEffortPreviewing(false);
         setCreatingSession(false);
         setDraftMode(false);
         const firstDraft = composer.inputPrompt();
@@ -951,12 +1013,19 @@ export default function IndirectCodePage() {
           if (r.bgTasks) background.noteSessionTasks(r.bgTasks, sid);
         }
         if (sid && sid === activeSessionId()) {
-          transcript.applySnapshot(sid, r, () => {
-            turnChanges.applySnapshot(r);
-            options.reconcileServerSelection(sid, r.model, r.options, gatewayModels().map((m) => m.id), gatewayModels()[0]?.id || "");
-            options.applyApprovalMode(r.approvalMode);
-            options.applySessionSkills(r.skills);
-          });
+          const catalog = gatewayModels();
+          const modelIds = catalog.map((m) => m.id);
+          const fallbackModelId = catalog[0]?.id || "";
+          options.reconcileLiveSelection(sid, r.model, r.options, modelIds, fallbackModelId, r.updatedAt);
+          options.applyLiveSessionSkills(sid, r.skills, r.approvalMode, r.updatedAt);
+          transcript.applySnapshot(
+            sid,
+            r,
+            () => {
+              turnChanges.applySnapshot(r);
+            },
+            { requestId: msg.requestId },
+          );
         }
         break;
       }
@@ -1196,8 +1265,12 @@ export default function IndirectCodePage() {
     return (
       <EffortPickerBody
         effort={options.effort}
+        effortPreviewing={options.effortPreviewing}
         activeModelName={activeModelName}
         autoFocus={!isMobile()}
+        onEffortPreviewChange={(active) => {
+          options.setEffortPreviewing(active);
+        }}
         onEffortPreview={(lvl) => {
           options.setEffort(lvl);
         }}
@@ -1234,9 +1307,10 @@ export default function IndirectCodePage() {
             : undefined
         }
         onPick={(id) => {
+          const changed = options.activeModel() !== id;
           options.setActiveModel(id);
+          if (changed) options.configureSession();
           setModelMenuOpen(false);
-          options.configureSession();
         }}
         onRefresh={async () => {
           await loadGatewayModels();
@@ -1318,6 +1392,11 @@ export default function IndirectCodePage() {
       // Switching hosts swaps the whole world: nothing from the previous
       // daemon may bleed through (frontend = dumb monitor).
       untrack(() => {
+        closeMenus();
+        causalClock = 0;
+        confirmedPullClocks.sessions = 0;
+        confirmedPullClocks.config = 0;
+        inFlightPullClocks.clear();
         options.resetPending();
         options.resetSkillState();
         transcript.clearForkRequest(); transcript.setForking(false);
@@ -1438,29 +1517,35 @@ export default function IndirectCodePage() {
   // Sync active session state (todosOpen, options) from mirror to UI
   createEffect(() => {
     const s = activeSession();
+    const catalog = gatewayModels();
     if (!s) return;
     if (typeof s.todosOpen === "boolean") {
       transcript.applyTodosOpenFromRemote(s.todosOpen);
     }
     if (s.model || s.options) {
-      options.reconcileServerSelection(s.id, s.model, s.options, gatewayModels().map((m) => m.id), gatewayModels()[0]?.id || "");
+      options.reconcileMirrorSelection(
+        s.id,
+        s.model,
+        s.options,
+        catalog.map((m) => m.id),
+        catalog[0]?.id || "",
+        { rowRef: s, updatedAt: s.updatedAt },
+      );
     }
-    options.applyApprovalMode(s.approvalMode);
-    options.applyMirrorSessionSkills(s.id, s.skills);
+    options.applyMirrorSessionSkills(s.id, s.skills, s.approvalMode, { rowRef: s, updatedAt: s.updatedAt });
   });
 
   createEffect(() => {
     const catalog = gatewayModels();
     const saved = mirror.configDoc()?.lastSelection;
-    if (options.getLastLocalSelection() && options.matchesChoice(saved, options.getLastLocalSelection())) options.clearLastLocalSelection();
+    const selection = options.reconcileSavedSelection(saved);
     if (activeSessionId()) return;
-    const selection = options.getLastLocalSelection() || saved;
-    options.setActiveModel(catalog.find((m) => m.id === selection?.model)?.id || catalog[0]?.id || "");
-    options.applyOptions(selection);
-    // Draft bootstrap (same as startNewConversation): the remembered
-    // primary skill seeds a draft nobody settled yet; an in-draft pick is
-    // never undone by a later config refresh.
     untrack(() => {
+      options.setActiveModel(catalog.find((m) => m.id === selection?.model)?.id || catalog[0]?.id || "");
+      options.applyOptions(selection);
+      // Draft bootstrap (same as startNewConversation): the remembered
+      // primary skill seeds a draft nobody settled yet; an in-draft pick is
+      // never undone by a later config refresh.
       options.resetDraftSkills(selection, false);
     });
   });

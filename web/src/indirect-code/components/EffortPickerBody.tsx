@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, untrack } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { press } from "../../ds/motion/press";
 import { reducedMotion } from "../../ds/motion/reduced";
@@ -64,9 +64,11 @@ function sampleElementBgColor(
 
 export function EffortPickerBody(props: {
   effort: () => string;
+  effortPreviewing?: () => boolean;
   activeModelName: () => string;
   onEffortPreview: (lvl: EffortLevel) => void;
   onEffortCommit: (lvl: EffortLevel) => void;
+  onEffortPreviewChange?: (previewing: boolean) => void;
   onOpenModelPicker: () => void;
   autoFocus?: boolean;
 }) {
@@ -77,6 +79,7 @@ export function EffortPickerBody(props: {
   let sliderRef: HTMLDivElement | undefined;
   let activePointerId: number | null = null;
   let startCommittedLevel: EffortLevel | null = null;
+  let lastPreviewedLevel: EffortLevel | null = null;
 
   const stepIdx = createMemo(() => resolveEffortIndex(props.effort()));
   const activeSpec = createMemo(() => EFFORT_SPECS[stepIdx()]!);
@@ -89,6 +92,23 @@ export function EffortPickerBody(props: {
         wrapperRef?.focus({ preventScroll: true });
       });
       onCleanup(() => window.cancelAnimationFrame(id));
+    }
+  });
+
+  onCleanup(() => {
+    if (activePointerId !== null) {
+      const startLvl = startCommittedLevel;
+      const stillPreviewing = props.effortPreviewing ? untrack(props.effortPreviewing) : true;
+      activePointerId = null;
+      startCommittedLevel = null;
+      lastPreviewedLevel = null;
+      if (stillPreviewing) {
+        props.onEffortPreviewChange?.(false);
+        const currentLvl = EFFORT_SPECS[resolveEffortIndex(untrack(() => props.effort()))]!.level;
+        if (startLvl && startLvl !== currentLvl) {
+          props.onEffortPreview(startLvl);
+        }
+      }
     }
   });
 
@@ -240,8 +260,10 @@ export function EffortPickerBody(props: {
   const finishPointer = (e: PointerEvent, revert: boolean) => {
     if (activePointerId !== e.pointerId) return;
     const startLvl = startCommittedLevel;
+    const previewLvl = lastPreviewedLevel;
     activePointerId = null;
     startCommittedLevel = null;
+    lastPreviewedLevel = null;
     setDragging(false);
     const el = e.currentTarget as HTMLElement;
     if (el.hasPointerCapture?.(e.pointerId)) {
@@ -250,18 +272,20 @@ export function EffortPickerBody(props: {
       } catch {}
     }
     if (revert) {
+      props.onEffortPreviewChange?.(false);
       if (startLvl && startLvl !== EFFORT_SPECS[stepIdx()]!.level) {
         props.onEffortPreview(startLvl);
       }
       return;
     }
-    const finalLvl =
-      e.type === "pointerup" ? levelFromPointer(el, e.clientX) : EFFORT_SPECS[stepIdx()]!.level;
-    if (finalLvl !== EFFORT_SPECS[stepIdx()]!.level) {
-      props.onEffortPreview(finalLvl);
+    const endLvl =
+      e.type === "pointerup" ? levelFromPointer(el, e.clientX) : (previewLvl ?? EFFORT_SPECS[stepIdx()]!.level);
+    if (endLvl !== EFFORT_SPECS[stepIdx()]!.level) {
+      props.onEffortPreview(endLvl);
     }
-    if (finalLvl !== startLvl) {
-      props.onEffortCommit(finalLvl);
+    props.onEffortPreviewChange?.(false);
+    if (endLvl !== startLvl) {
+      props.onEffortCommit(endLvl);
     }
   };
 
@@ -345,19 +369,24 @@ export function EffortPickerBody(props: {
           const el = e.currentTarget;
           wrapperRef?.focus({ preventScroll: true });
           activePointerId = e.pointerId;
-          startCommittedLevel = EFFORT_SPECS[stepIdx()]!.level;
+          const committedLvl = EFFORT_SPECS[stepIdx()]!.level;
+          startCommittedLevel = committedLvl;
+          lastPreviewedLevel = committedLvl;
+          props.onEffortPreviewChange?.(true);
           setDragging(true);
           try {
             el.setPointerCapture(e.pointerId);
           } catch {}
           const nextLvl = levelFromPointer(el, e.clientX);
-          if (nextLvl !== EFFORT_SPECS[stepIdx()]!.level) {
+          lastPreviewedLevel = nextLvl;
+          if (nextLvl !== committedLvl) {
             props.onEffortPreview(nextLvl);
           }
         }}
         onPointerMove={(e) => {
           if (activePointerId !== e.pointerId) return;
           const nextLvl = levelFromPointer(e.currentTarget, e.clientX);
+          lastPreviewedLevel = nextLvl;
           if (nextLvl !== EFFORT_SPECS[stepIdx()]!.level) {
             props.onEffortPreview(nextLvl);
           }

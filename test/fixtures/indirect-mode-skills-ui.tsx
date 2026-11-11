@@ -82,9 +82,9 @@ render(() => {
     getSessionId: sid,
     getSkill: (name) => {
       const real = official()[name];
-      if (real) return { mode: real.mode, usable: real.usable };
+      if (real) return { mode: real.mode, usable: real.usable, approvalMode: real.approvalMode };
       const cached = effectiveModeSkills(undefined, false).find((m) => m.name === name);
-      return cached ? { mode: cached.mode, usable: cached.usable } : undefined;
+      return cached ? { mode: cached.mode, usable: cached.usable, approvalMode: cached.approvalMode } : undefined;
     },
     listModeSkills: () => {
       const list = effectiveModeSkills(official(), loaded());
@@ -92,6 +92,8 @@ render(() => {
       return (locked ? list.filter((m) => baseMode(m.mode) === locked) : list).map((m) => m.name);
     },
     getLockedMode: () => lockedSessionMode(),
+    getMirrorSession: (id) => sessions().find((s) => s.id === id),
+    getSavedSelection: () => lastSelection(),
   });
   const c = createComposer({
     ...opts,
@@ -113,19 +115,22 @@ render(() => {
     isCreatingSession: () => false,
   });
   function selectSession(id: string) {
+    options.resetPending();
     setSid(id);
     setDraftMode(false);
     const sess = sessions().find((s) => s.id === id);
     if (sess) {
       options.applyOptions(sess.options);
       options.applyApprovalMode(sess.approvalMode);
-      options.applyMirrorSessionSkills(sess.id, sess.skills);
+      options.applySessionSkills(sess.skills);
     }
   }
   /** Mirrors IndirectCodePage.startNewConversation: the previous session's
    * skill state never carries over; the remembered selection seeds the
    * primary mode skill. */
   function startNewConversation(projectId?: string) {
+    options.resetPendingChoice();
+    options.setEffortPreviewing(false);
     if (projectId) projects.setActiveProjectId(projectId);
     setSid("");
     setDraftMode(true);

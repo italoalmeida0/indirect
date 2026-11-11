@@ -81,13 +81,38 @@ export function createTurnChanges(opts: {
     setState("balloons", reconcile(rows, { merge: true }));
   }
   const [expanded, setExpanded] = createSignal<Record<string, boolean>>({});
+  let lastSnapshotSig = "";
+
+  function computeSnapshotSig(r: any): string {
+    const raw = Array.isArray(r?.fileBalloons) ? r.fileBalloons : [];
+    const running = r?.status === "running" ? 1 : 0;
+    const seq = typeof r?.turnSeq === "number" ? r.turnSeq : 0;
+    if (raw.length === 0) return `0|${running}|${seq}`;
+    const parts: string[] = [`${raw.length}|${running}|${seq}`];
+    for (let i = 0; i < raw.length; i++) {
+      const b = raw[i];
+      const ti = b?.turnIndex ?? b?.turn_index ?? "";
+      const mi = b?.messageIndex ?? b?.message_index ?? "";
+      const files = Array.isArray(b?.files) ? b.files : [];
+      parts.push(`${ti}:${mi}:${files.length}`);
+      for (let j = 0; j < files.length; j++) {
+        const f = files[j];
+        parts.push(`${f?.path || ""}:${f?.status || ""}:${f?.additions || 0}:${f?.deletions || 0}`);
+      }
+    }
+    return parts.join("|");
+  }
 
   function reset() {
+    lastSnapshotSig = "";
     setBalloons([]);
     setExpanded({});
   }
 
   function applySnapshot(r: any) {
+    const sig = computeSnapshotSig(r);
+    if (lastSnapshotSig && sig === lastSnapshotSig) return;
+    lastSnapshotSig = sig;
     const list = (Array.isArray(r?.fileBalloons) ? r.fileBalloons : []).map(normalizeBalloon);
     setBalloons((prev) => {
       // Dedupe by turn: the incoming list wins per turn (same rule as
@@ -112,6 +137,7 @@ export function createTurnChanges(opts: {
    * past the kept message prefix, mirroring the daemon's
    * dropBalloonsAbove. Unanchored balloons (no messageIndex) are kept. */
   function dropAbove(keepIndex: number) {
+    lastSnapshotSig = "";
     setBalloons((prev) =>
       prev.filter(
         (b) =>
@@ -123,6 +149,7 @@ export function createTurnChanges(opts: {
   function upsert(balloon: any, live: boolean) {
     balloon = normalizeBalloon(balloon);
     if (!balloon || typeof balloon.turnIndex !== "number") return;
+    lastSnapshotSig = "";
     const files = balloon.files || [];
     if (files.length === 0) {
       setBalloons((prev) => prev.filter((b) => b.turnIndex !== balloon.turnIndex || (live && !b.live)));
@@ -151,6 +178,7 @@ export function createTurnChanges(opts: {
     if (!Array.isArray(list)) return;
     const pages = list.map(normalizeBalloon).filter((b: any) => b && typeof b.turnIndex === "number" && (b.files?.length || 0) > 0);
     if (pages.length === 0) return;
+    lastSnapshotSig = "";
     setBalloons((prev) => {
       const known = new Set(prev.map((b) => b.turnIndex));
       const merged = [...pages.filter((b) => !known.has(b.turnIndex)).map((b) => ({ ...b, live: false })), ...prev];
@@ -166,6 +194,7 @@ export function createTurnChanges(opts: {
 
   function noteTurnChanges(msg: any) {
     if (msg?.error) return;
+    lastSnapshotSig = "";
     const list: TurnBalloon[] = (Array.isArray(msg?.balloons) ? msg.balloons : [])
       .map(normalizeBalloon)
       .filter((b: any) => typeof b?.turnIndex === "number" && b?.files?.length > 0)

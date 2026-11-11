@@ -1,4 +1,4 @@
-import { createEffect, createSignal, untrack, For, Show } from "solid-js";
+import { batch, createEffect, createSignal, untrack, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { animate } from "../../../ds/motion/animate";
 import { createGlide } from "../../../ds/motion/glide";
@@ -59,44 +59,11 @@ export function ToolbarContext() {
   const [draftUsables, setDraftUsables] = createSignal<Record<string, string>>({});
   const [draftAgentMode, setDraftAgentMode] = createSignal<string>("");
   const [isEditing, setIsEditing] = createSignal(false);
-  const [optimisticModeSkill, setOptimisticModeSkill] = createSignal<string | null>(null);
-
-  createEffect(() => {
-    s.activeSessionId();
-    setOptimisticModeSkill(null);
-  });
-
-  createEffect(() => {
-    const opt = optimisticModeSkill();
-    if (!opt) return;
-    if (c.selectedSkills()[0] === opt) {
-      setOptimisticModeSkill(null);
-    }
-  });
 
   const isMenuOpen = () => c.modeMenuOpen() || (c.addContextOpen() && subView() === "mode");
-  const effectiveSelectedSkills = () => {
-    if (isEditing()) return draftSkills();
-    const opt = optimisticModeSkill();
-    if (opt) {
-      const rest = c.selectedSkills().filter((n) => n !== opt && !isModeSkill(n));
-      return [opt, ...rest];
-    }
-    return c.selectedSkills();
-  };
+  const effectiveSelectedSkills = () => (isEditing() ? draftSkills() : c.selectedSkills());
   const effectiveSkillUsables = () => (isEditing() ? draftUsables() : (c.skillUsables?.() ?? {}));
-  const effectiveAgentMode = () => {
-    if (isEditing()) return draftAgentMode();
-    const opt = optimisticModeSkill();
-    if (opt) {
-      // Look the optimistic pick up in the UNFILTERED catalog: modeSkills()
-      // filters by this very function, so asking it here recursed until the
-      // stack blew up as soon as a mode pick was pending.
-      const spec = effectiveModeSkills(m.savedSkills?.() ?? {}, m.skillsLoaded?.() ?? false).find((x) => x.name === opt);
-      if (spec) return baseMode(spec.mode);
-    }
-    return c.agentMode();
-  };
+  const effectiveAgentMode = () => (isEditing() ? draftAgentMode() : c.agentMode());
 
   const arraysEqual = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
   const recordsEqual = (a: Record<string, string>, b: Record<string, string>) => {
@@ -134,7 +101,6 @@ export function ToolbarContext() {
 
   function applyDraft() {
     if (!isEditing()) return;
-    setIsEditing(false);
     const targetSkills = draftSkills();
     const targetUsables = draftUsables();
     const targetMode = draftAgentMode();
@@ -143,11 +109,9 @@ export function ToolbarContext() {
     const userChangedSkills = !arraysEqual(targetSkills, base.skills);
     const userChangedUsables = !recordsEqual(targetUsables, base.usables);
     const modeChanged = targetMode !== "" && targetMode !== base.mode;
-    if (!userChangedSkills && !userChangedUsables && !modeChanged) return;
-
-    const primaryMode = targetSkills.find(isModeSkill);
-    if (primaryMode) {
-      setOptimisticModeSkill(primaryMode);
+    if (!userChangedSkills && !userChangedUsables && !modeChanged) {
+      setIsEditing(false);
+      return;
     }
 
     // Rebase the user's edit onto the live selection: keep the draft order
@@ -170,10 +134,13 @@ export function ToolbarContext() {
       }
     }
 
-    if (modeChanged) {
-      c.setAgentMode(targetMode as any);
-    }
-    c.syncSkills?.(nextSkills, nextUsables);
+    batch(() => {
+      setIsEditing(false);
+      if (modeChanged) {
+        c.setAgentMode(targetMode as any);
+      }
+      c.syncSkills?.(nextSkills, nextUsables);
+    });
     c.configureSession();
   }
 
@@ -215,18 +182,28 @@ export function ToolbarContext() {
     const spec = modeSkills().find((s) => s.name === name);
     if (!spec) return;
     const mode = baseMode(spec.mode);
-    const rest = (isEditing() ? draftSkills() : c.selectedSkills()).filter((n) => n !== name && !isModeSkill(n));
+    const currentSkills = isEditing() ? draftSkills() : c.selectedSkills();
+    const rest = currentSkills.filter((n) => n !== name && !isModeSkill(n));
     const nextSkills = [name, ...rest];
-    setOptimisticModeSkill(name);
-    if (isEditing()) {
-      setDraftAgentMode(mode);
-      setDraftSkills(nextSkills);
-      // The pick commits the whole draft right away: it becomes the new
-      // base, so closing the popup only sends what changes after it.
-      openSnapshot = { skills: [...nextSkills], usables: { ...draftUsables() }, mode };
+    const nextUsables = isEditing() ? draftUsables() : undefined;
+    const alreadyCommitted =
+      arraysEqual(c.selectedSkills(), nextSkills) &&
+      c.agentMode() === mode &&
+      (!nextUsables || recordsEqual(nextUsables, c.skillUsables?.() ?? {}));
+    if (alreadyCommitted && (!isEditing() || (arraysEqual(draftSkills(), nextSkills) && draftAgentMode() === mode))) {
+      return;
     }
-    c.setAgentMode(mode);
-    c.syncSkills?.(nextSkills, isEditing() ? draftUsables() : undefined);
+    batch(() => {
+      if (isEditing()) {
+        setDraftAgentMode(mode);
+        setDraftSkills(nextSkills);
+        // The pick commits the whole draft right away: it becomes the new
+        // base, so closing the popup only sends what changes after it.
+        openSnapshot = { skills: [...nextSkills], usables: { ...draftUsables() }, mode };
+      }
+      c.setAgentMode(mode);
+      c.syncSkills?.(nextSkills, nextUsables);
+    });
     c.configureSession();
   }
 
@@ -539,8 +516,10 @@ export function ToolbarContext() {
               aria-checked={active()}
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => {
-                c.setYoloMode(access.full);
-                c.configureSession();
+                if (c.yoloMode() !== access.full) {
+                  c.setYoloMode(access.full);
+                  c.configureSession();
+                }
                 if (closeOnPick) c.setAccessMenuOpen(false);
               }}
               class={`w-full flex items-start gap-2.5 px-2.5 py-2 text-left rounded-lg border transition-colors cursor-pointer ${
