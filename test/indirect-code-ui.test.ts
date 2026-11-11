@@ -366,8 +366,12 @@ test("hides checklist calls and results while preserving text, other tools and s
 describe("Indirect Code context", () => {
   test("uses configured gateway limits and keeps context separate from cumulative usage", () => {
     const context = { usedTokens: 432500, windowTokens: 200000, model: "custom/alias", estimated: false };
-    expect(contextDisplay(context, { id: context.model, name: "Alias", provider: "Test", upstreamModel: "alias", context: 1024000, output: 65536 }).label).toBe("433K (42%)");
+    const display = contextDisplay(context, { id: context.model, name: "Alias", provider: "Test", upstreamModel: "alias", context: 1024000, output: 65536 });
+    expect(display.tokensLabel).toBe("433K");
+    expect(display.label).toBe("433K (42%)");
+    expect(contextDisplay({ ...context, estimated: true }, { id: context.model, name: "Alias", provider: "Test", upstreamModel: "alias", context: 1024000, output: 65536 }).tokensLabel).toBe("~433K");
     expect(contextDisplay(context, { id: context.model, name: "Alias", provider: "", upstreamModel: "", context: 0, output: 0 }).percent).toBeNull();
+    expect(contextDisplay(null).tokensLabel).toBe("Context —");
     expect(contextDisplay(null).label).toBe("Context —");
     expect(compactTokens(128000)).toBe("128K");
     expect(compactTokens(1000000)).toBe("1.00M");

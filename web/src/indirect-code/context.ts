@@ -62,8 +62,9 @@ export function contextDisplay(context: SessionContext | null, model?: GatewayMo
   const window = model ? (model.context ?? 0) : (context?.windowTokens ?? 0);
   const used = context?.usedTokens ?? null;
   const percent = used !== null && window > 0 ? Math.round(used * 100 / window) : null;
+  const tokensLabel = used === null ? "Context —" : `${context?.estimated ? "~" : ""}${compactTokens(used)}`;
   return {
-    used, window, percent,
-    label: used === null ? "Context —" : `${context?.estimated ? "~" : ""}${compactTokens(used)}${percent === null ? "" : ` (${percent}%)`}`,
+    used, window, percent, tokensLabel,
+    label: percent === null ? tokensLabel : `${tokensLabel} (${percent}%)`,
   };
 }

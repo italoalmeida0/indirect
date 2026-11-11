@@ -12,6 +12,10 @@ export function ComposerFooter() {
   const t = useTranscriptCtx();
   const ui = useUI();
   const pct = () => c.activeContext().percent;
+  const contextTokensLabel = () => {
+    const ctx = c.activeContext();
+    return ctx.tokensLabel ?? ctx.label.replace(/\s*\(\d+%\)$/, "");
+  };
   const barToneClass = () => {
     const p = pct() ?? 0;
     if (p >= 92) return "bg-danger";
@@ -125,11 +129,11 @@ export function ComposerFooter() {
             <span class="text-[11px] font-medium text-fg-muted">Conversation context</span>
             <Show when={pct() !== null}>
               <span class="rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] font-medium text-fg-secondary tabular-nums">
-                {Math.min(100, pct() ?? 0)}% full
+                {pct()}% full
               </span>
             </Show>
           </div>
-          <div class="font-mono text-sm font-medium text-fg tabular-nums tracking-tight">{c.activeContext().label}</div>
+          <div class="font-mono text-sm font-medium text-fg tabular-nums tracking-tight">{contextTokensLabel()}</div>
           <Show when={pct() !== null}>
             <div
               class="h-1.5 rounded-full bg-surface-muted overflow-hidden"

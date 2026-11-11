@@ -19,6 +19,8 @@ export interface DialogProps {
   width?: string;
   /** Phones: inset card that never runs under the status bar (default true). */
   fullOnMobile?: boolean;
+  /** Render children directly as the dialog surface without default header/body/footer chrome. */
+  chromeless?: boolean;
   footer?: JSX.Element;
   children: JSX.Element;
   bodyRef?: (el: HTMLDivElement | undefined) => void;
@@ -96,25 +98,35 @@ export function Dialog(props: DialogProps) {
             onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
           >
-            <div class="ui-dialog-header">
-              <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                  <h3 id={titleId} class="ui-dialog-title">{props.title}</h3>
-                  {props.badge}
+            <Show
+              when={!props.chromeless}
+              fallback={
+                <>
+                  <h3 id={titleId} class="sr-only">{props.title}</h3>
+                  {props.children}
+                </>
+              }
+            >
+              <div class="ui-dialog-header">
+                <div class="min-w-0 flex-1">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <h3 id={titleId} class="ui-dialog-title">{props.title}</h3>
+                    {props.badge}
+                  </div>
+                  <Show when={description()}>
+                    <p id={descriptionId} class="ui-dialog-description">{description()}</p>
+                  </Show>
                 </div>
-                <Show when={description()}>
-                  <p id={descriptionId} class="ui-dialog-description">{description()}</p>
-                </Show>
+                <button type="button" class="ui-dialog-close" aria-label="Close" data-tip="Close" onClick={() => props.onClose()}>
+                  <Glyph icon="lucide:x" size={16} />
+                </button>
               </div>
-              <button type="button" class="ui-dialog-close" aria-label="Close" data-tip="Close" onClick={() => props.onClose()}>
-                <Glyph icon="lucide:x" size={16} />
-              </button>
-            </div>
-            <div ref={(el) => props.bodyRef?.(el)} class="ui-dialog-body min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain">
-              {props.children}
-            </div>
-            <Show when={props.footer}>
-              <div class="ui-dialog-footer">{props.footer}</div>
+              <div ref={(el) => props.bodyRef?.(el)} class="ui-dialog-body min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain">
+                {props.children}
+              </div>
+              <Show when={props.footer}>
+                <div class="ui-dialog-footer">{props.footer}</div>
+              </Show>
             </Show>
           </div>
         </div>

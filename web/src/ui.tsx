@@ -1055,6 +1055,7 @@ export function Modal(props: {
   badge?: JSX.Element;
   width?: string;
   fullOnMobile?: boolean;
+  chromeless?: boolean;
   footer?: JSX.Element;
   children: JSX.Element;
   bodyRef?: (el: HTMLDivElement | undefined) => void;
@@ -1069,6 +1070,7 @@ export function Modal(props: {
       badge={props.badge}
       width={props.width}
       fullOnMobile={props.fullOnMobile}
+      chromeless={props.chromeless}
       footer={props.footer}
       bodyRef={props.bodyRef}
     >

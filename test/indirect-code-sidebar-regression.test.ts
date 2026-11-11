@@ -117,5 +117,21 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
       const modalSrc = read("web/src/indirect-code/modals/NewProjectModal.tsx");
       expect(modalSrc).toMatch(/s\.newProjBtn\?\.focus\(\)/);
     });
+
+    test("NewProjectModal renders as a chromeless directory picker without nested card or duplicate footers", () => {
+      const modalSrc = read("web/src/indirect-code/modals/NewProjectModal.tsx");
+      expect(modalSrc).toContain("chromeless");
+      expect(modalSrc).not.toContain("Browse the host filesystem");
+      expect(modalSrc).not.toContain("rounded-panel border border-border");
+      expect(modalSrc).not.toContain("divide-y");
+    });
+
+    test("ComposerFooter context popover shows percentage once on the badge and token count on headline", () => {
+      const footerSrc = read("web/src/indirect-code/components/composer/ComposerFooter.tsx");
+      expect(footerSrc).toContain("{pct()}% full");
+      expect(footerSrc).toContain("{contextTokensLabel()}");
+      expect(footerSrc).not.toContain('tracking-tight">{c.activeContext().label}</div>');
+      expect(footerSrc).toContain("<span>{c.activeContext().label}</span>");
+    });
   });
 });

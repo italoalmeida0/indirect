@@ -1,5 +1,5 @@
 import { createMemo, For, Show } from "solid-js";
-import { Badge, Btn, Kbd, Modal, ModalNotice } from "../../ui";
+import { Btn, Kbd, Modal } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useSession } from "../ctx";
 import { sameRemotePath } from "../paths";
@@ -7,6 +7,11 @@ import { sameRemotePath } from "../paths";
 export function NewProjectModal() {
   const s = useSession();
   let lastPointerType = "mouse";
+
+  const closeModal = () => {
+    s.setShowNewProjectModal(false);
+    s.newProjBtn?.focus();
+  };
 
   const isCurrentValid = () => {
     if (s.folderLoading()) return false;
@@ -110,254 +115,240 @@ export function NewProjectModal() {
   return (
     <Modal
       open={s.showNewProjectModal()}
-      onClose={() => {
-        s.setShowNewProjectModal(false);
-        s.newProjBtn?.focus();
-      }}
+      onClose={closeModal}
       title="Select project folder"
-      subtitle="Browse the host filesystem to choose or initialize a workspace for your agent sessions."
-      width="max-w-2xl"
-      footer={
-        <>
-          <Btn
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              s.setShowNewProjectModal(false);
-              s.newProjBtn?.focus();
-            }}
-          >
-            Cancel
-          </Btn>
-          <Btn
-            size="sm"
-            disabled={!isCurrentValid()}
-            onClick={s.createProject}
-          >
-            Open Project
-          </Btn>
-        </>
-      }
+      width="max-w-lg"
+      chromeless
     >
-      <div class="space-y-3">
-        <Show when={s.folderError()}>
-          <ModalNotice tone="danger" title="Filesystem error">
-            {s.folderError()}
-          </ModalNotice>
+      {/* Top Navigation, Breadcrumbs & Close */}
+      <div class="flex items-center gap-1.5 border-b border-border-subtle bg-surface-subtle/60 px-3 py-2.5">
+        <button
+          type="button"
+          disabled={!canGoParent()}
+          onClick={() => s.requestFolders(s.folderParent())}
+          data-rc-tip="Parent folder"
+          aria-label="Parent folder"
+          class="inline-grid h-7 w-7 shrink-0 place-items-center rounded-md border border-border bg-surface text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
+        >
+          <Iconify icon="lucide:arrow-up" size={13} />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => s.requestFolders("~")}
+          data-rc-tip="Home directory"
+          aria-label="Home directory"
+          class="inline-grid h-7 w-7 shrink-0 place-items-center rounded-md border border-transparent text-fg-muted hover:border-border hover:bg-surface hover:text-fg transition-colors cursor-pointer"
+        >
+          <Iconify icon="lucide:home" size={13} />
+        </button>
+
+        <span class="mx-0.5 h-3.5 w-px shrink-0 bg-border" aria-hidden="true" />
+
+        <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <For
+            each={breadcrumbs()}
+            fallback={
+              <span class="truncate px-1.5 text-xs font-medium text-fg-secondary">
+                Select project folder
+              </span>
+            }
+          >
+            {(crumb, idx) => {
+              const isLeaf = () => idx() === breadcrumbs().length - 1;
+              return (
+                <>
+                  <Show when={idx() > 0 && crumb.label !== "/"}>
+                    <span class="text-fg-muted/50 text-xs select-none shrink-0" aria-hidden="true">
+                      /
+                    </span>
+                  </Show>
+                  <button
+                    type="button"
+                    data-rc-tip={crumb.path}
+                    onClick={() => s.requestFolders(crumb.path)}
+                    class={`max-w-36 shrink-0 truncate rounded-md border px-1.5 py-0.5 font-mono text-xs transition-colors cursor-pointer ${
+                      isLeaf()
+                        ? "border-border bg-surface text-fg font-medium"
+                        : "border-transparent text-fg-secondary hover:border-border hover:bg-surface hover:text-fg"
+                    }`}
+                  >
+                    {crumb.label}
+                  </button>
+                </>
+              );
+            }}
+          </For>
+        </div>
+
+        <Show when={!s.folderLoading() && s.folderEntries()}>
+          <span class="hidden sm:inline shrink-0 pl-1 font-mono text-[11px] text-fg-muted tabular-nums">
+            {s.folderEntries().length}{" "}
+            {s.folderEntries().length === 1 ? "folder" : "folders"}
+          </span>
         </Show>
 
-        {/* Unified Single-Border Host Directory Browser */}
-        <div class="rounded-panel border border-border bg-surface overflow-hidden">
-          {/* Interactive Path Breadcrumb & Quick-Jump Rail */}
-          <div class="flex items-center justify-between gap-2 border-b border-border bg-surface-subtle px-3 py-2 flex-wrap">
-            <div class="flex items-center gap-1 min-w-0 flex-wrap">
-              <button
-                type="button"
-                disabled={!canGoParent()}
-                onClick={() => s.requestFolders(s.folderParent())}
-                data-rc-tip="Parent folder"
-                aria-label="Parent folder"
-                class="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-surface px-2 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
-              >
-                <Iconify icon="lucide:arrow-up" size={12} />
-                <span>Up</span>
-              </button>
+        <button
+          type="button"
+          aria-label="Close"
+          data-rc-tip="Close"
+          onClick={closeModal}
+          class="ml-0.5 inline-grid h-7 w-7 shrink-0 place-items-center rounded-full text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+        >
+          <Iconify icon="lucide:x" size={15} />
+        </button>
+      </div>
 
-              <button
-                type="button"
-                onClick={() => s.requestFolders("~")}
-                data-rc-tip="Home directory"
-                aria-label="Home directory"
-                class="inline-flex h-6 items-center gap-1 rounded-md border border-transparent px-1.5 font-mono text-[11px] text-fg-muted hover:border-border hover:bg-surface hover:text-fg transition-colors cursor-pointer"
-              >
-                <Iconify icon="lucide:home" size={11} />
-                <span>~</span>
-              </button>
+      {/* Direct Path Input Bar */}
+      <form
+        class="flex items-center gap-2.5 border-b border-border-subtle bg-surface/50 pl-[18px] pr-3.5 py-2 focus-within:bg-surface transition-colors"
+        onSubmit={(e) => {
+          e.preventDefault();
+          s.requestFolders(s.newProjectPath());
+        }}
+      >
+        <Iconify
+          icon="lucide:folder-git-2"
+          size={14}
+          class={`shrink-0 transition-colors ${isCurrentValid() ? "text-accent" : "text-fg-muted"}`}
+        />
+        <input
+          aria-label="Folder path on host"
+          class="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-xs text-fg placeholder:text-fg-muted outline-none"
+          value={s.newProjectPath()}
+          placeholder="/home/user/my-project"
+          onInput={(e) => {
+            s.setNewProjectPath(e.currentTarget.value);
+            if (s.folderError()) s.setFolderError("");
+          }}
+        />
+        <button
+          type="submit"
+          data-rc-tip="Navigate to path"
+          class="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border bg-surface-subtle px-2 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+        >
+          <span>Go</span>
+          <Iconify icon="lucide:corner-down-left" size={11} />
+        </button>
+      </form>
 
-              <span class="text-border-strong select-none text-xs" aria-hidden="true">
-                |
-              </span>
+      <Show when={s.folderError()}>
+        <div
+          role="alert"
+          class="flex items-center gap-2 border-b border-danger/25 bg-danger-subtle px-3.5 py-2 text-xs text-danger"
+        >
+          <Iconify icon="lucide:alert-circle" size={14} class="shrink-0" />
+          <span class="min-w-0 flex-1 break-words">{s.folderError()}</span>
+        </div>
+      </Show>
 
-              <For each={breadcrumbs()}>
-                {(crumb, idx) => {
-                  const isLeaf = () => idx() === breadcrumbs().length - 1;
-                  return (
-                    <>
-                      <Show when={idx() > 0 && crumb.label !== "/"}>
-                        <span class="text-fg-muted/60 text-xs select-none" aria-hidden="true">
-                          /
-                        </span>
-                      </Show>
-                      <button
-                        type="button"
-                        data-rc-tip={crumb.path}
-                        onClick={() => s.requestFolders(crumb.path)}
-                        class={`max-w-32 truncate rounded-md border px-1.5 py-0.5 font-mono text-xs transition-colors cursor-pointer ${
-                          isLeaf()
-                            ? "border-border bg-surface text-fg font-medium"
-                            : "border-transparent text-fg-secondary hover:border-border hover:bg-surface hover:text-fg"
-                        }`}
-                      >
-                        {crumb.label}
-                      </button>
-                    </>
-                  );
-                }}
-              </For>
+      {/* Directory List */}
+      <div
+        role="group"
+        aria-label="Host folders"
+        onKeyDown={handleListKeyDown}
+        class="h-[min(42vh,18rem)] min-h-44 overflow-y-auto p-1.5 space-y-0.5 [scrollbar-gutter:stable]"
+      >
+        <Show
+          when={!s.folderLoading()}
+          fallback={
+            <div class="flex h-full items-center justify-center gap-2 text-xs text-fg-muted">
+              <Iconify icon="lucide:loader-2" size={15} class="animate-spin text-accent" />
+              <span>Reading directory…</span>
             </div>
-
-            <Show when={!s.folderLoading() && s.folderEntries()}>
-              <span class="ml-auto shrink-0 font-mono text-[11px] text-fg-muted tabular-nums">
-                {s.folderEntries().length}{" "}
-                {s.folderEntries().length === 1 ? "folder" : "folders"}
-              </span>
-            </Show>
-          </div>
-
-          {/* Direct Path Input Bar */}
-          <form
-            class="flex items-center gap-2 border-b border-border bg-background/60 px-3 py-1.5 focus-within:bg-surface transition-colors"
-            onSubmit={(e) => {
-              e.preventDefault();
-              s.requestFolders(s.newProjectPath());
-            }}
+          }
+        >
+          <For
+            each={s.folderEntries()}
+            fallback={
+              <div class="flex h-full flex-col items-center justify-center px-4 py-8 text-center text-xs text-fg-muted">
+                <Iconify icon="lucide:folder-open" size={20} class="mb-2 text-fg-muted" />
+                <p class="font-medium text-fg-secondary">No subdirectories here</p>
+                <p class="mt-0.5 text-[11px] text-fg-muted">
+                  Choose "Open Project" to use this folder as your workspace root.
+                </p>
+              </div>
+            }
           >
-            <Iconify icon="lucide:folder-git-2" size={14} class="shrink-0 text-fg-muted" />
-            <input
-              aria-label="Folder path on host"
-              class="min-w-0 flex-1 bg-transparent py-1 font-mono text-xs text-fg placeholder:text-fg-muted outline-none"
-              value={s.newProjectPath()}
-              placeholder="/home/user/my-project"
-              onInput={(e) => {
-                s.setNewProjectPath(e.currentTarget.value);
-                if (s.folderError()) s.setFolderError("");
-              }}
-            />
-            <button
-              type="submit"
-              class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-            >
-              <span>Go</span>
-              <Iconify icon="lucide:corner-down-left" size={12} />
-            </button>
-          </form>
-
-          {/* Directory List */}
-          <div
-            role="group"
-            aria-label="Host folders"
-            onKeyDown={handleListKeyDown}
-            class="h-[38vh] sm:h-60 min-h-44 overflow-y-auto divide-y divide-border/50 bg-surface [scrollbar-gutter:stable]"
-          >
-            <Show
-              when={!s.folderLoading()}
-              fallback={
-                <div class="flex h-full items-center justify-center gap-2 text-xs text-fg-muted">
-                  <Iconify icon="lucide:loader-2" size={15} class="animate-spin text-accent" />
-                  <span>Reading directory…</span>
-                </div>
-              }
-            >
-              <For
-                each={s.folderEntries()}
-                fallback={
-                  <div class="flex h-full flex-col items-center justify-center px-4 py-8 text-center text-xs text-fg-muted">
-                    <Iconify icon="lucide:folder-open" size={20} class="mb-2 text-fg-muted" />
-                    <p class="font-medium text-fg-secondary">No subdirectories here</p>
-                    <p class="mt-0.5 text-[11px] text-fg-muted">
-                      Choose "Open Project" to use this folder as your workspace root.
-                    </p>
-                  </div>
-                }
-              >
-                {(folder) => {
-                  const selected = () =>
-                    Boolean(s.newProjectPath().trim()) &&
-                    sameRemotePath(s.newProjectPath().trim(), folder.path);
-                  return (
-                    <div
-                      class={`flex items-center justify-between gap-1 px-2 py-0.5 transition-colors group ${
-                        selected() ? "bg-accent-subtle/50" : "hover:bg-surface-subtle"
+            {(folder) => {
+              const selected = () =>
+                Boolean(s.newProjectPath().trim()) &&
+                sameRemotePath(s.newProjectPath().trim(), folder.path);
+              return (
+                <div
+                  class={`flex items-center justify-between gap-1 rounded-lg px-1.5 py-0.5 transition-colors group ${
+                    selected() ? "bg-accent-subtle text-fg" : "hover:bg-surface-muted/70"
+                  }`}
+                >
+                  <button
+                    type="button"
+                    data-folder-item=""
+                    data-folder-path={folder.path}
+                    onPointerDown={(e) => {
+                      lastPointerType = e.pointerType || "mouse";
+                    }}
+                    onClick={(e) => {
+                      if (e.detail === 0) {
+                        s.requestFolders(folder.path);
+                        return;
+                      }
+                      if (lastPointerType === "touch" && selected()) {
+                        s.requestFolders(folder.path);
+                        return;
+                      }
+                      s.setNewProjectPath(folder.path);
+                      if (s.folderError()) s.setFolderError("");
+                    }}
+                    onDblClick={() => s.requestFolders(folder.path)}
+                    class="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-fg cursor-pointer"
+                  >
+                    <Iconify
+                      icon={selected() ? "lucide:folder-open" : "lucide:folder"}
+                      size={14}
+                      class={`shrink-0 transition-colors ${
+                        selected() ? "text-accent" : "text-fg-muted group-hover:text-fg-secondary"
+                      }`}
+                    />
+                    <span
+                      class={`truncate font-mono text-xs ${
+                        selected() ? "font-medium text-fg" : "text-fg-secondary group-hover:text-fg"
                       }`}
                     >
-                      <button
-                        type="button"
-                        data-folder-item=""
-                        data-folder-path={folder.path}
-                        onPointerDown={(e) => {
-                          lastPointerType = e.pointerType || "mouse";
-                        }}
-                        onClick={(e) => {
-                          if (e.detail === 0) {
-                            s.requestFolders(folder.path);
-                            return;
-                          }
-                          if (lastPointerType === "touch" && selected()) {
-                            s.requestFolders(folder.path);
-                            return;
-                          }
-                          s.setNewProjectPath(folder.path);
-                          if (s.folderError()) s.setFolderError("");
-                        }}
-                        onDblClick={() => s.requestFolders(folder.path)}
-                        class="flex min-w-0 flex-1 items-center gap-2.5 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-fg cursor-pointer"
-                      >
-                        <Iconify
-                          icon={selected() ? "lucide:folder-open" : "lucide:folder"}
-                          size={14}
-                          class={`shrink-0 transition-colors ${
-                            selected() ? "text-accent" : "text-fg-muted group-hover:text-fg-secondary"
-                          }`}
-                        />
-                        <span
-                          class={`truncate font-mono text-xs ${
-                            selected() ? "font-medium text-fg" : "text-fg-secondary group-hover:text-fg"
-                          }`}
-                        >
-                          {folder.name}
-                        </span>
-                      </button>
+                      {folder.name}
+                    </span>
+                  </button>
 
-                      <button
-                        type="button"
-                        tabIndex={-1}
-                        aria-label={`Open ${folder.name}`}
-                        onClick={() => s.requestFolders(folder.path)}
-                        class="inline-flex h-7 items-center gap-1 rounded-md px-2 text-[11px] font-medium text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer shrink-0"
-                      >
-                        <span class="hidden sm:inline">Open</span>
-                        <Iconify icon="lucide:chevron-right" size={13} />
-                      </button>
-                    </div>
-                  );
-                }}
-              </For>
-            </Show>
-          </div>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    aria-label={`Open ${folder.name}`}
+                    data-rc-tip="Open folder"
+                    onClick={() => s.requestFolders(folder.path)}
+                    class="inline-grid h-6 w-6 shrink-0 place-items-center rounded-md text-fg-muted/70 opacity-75 group-hover:opacity-100 hover:bg-surface hover:text-fg transition-all cursor-pointer"
+                  >
+                    <Iconify icon="lucide:chevron-right" size={14} />
+                  </button>
+                </div>
+              );
+            }}
+          </For>
+        </Show>
+      </div>
 
-          {/* Selection Status & Keyboard Hint Bar */}
-          <div class="flex items-center justify-between gap-2 border-t border-border bg-surface-subtle px-3 py-2 text-xs flex-wrap">
-            <div class="flex items-center gap-2 min-w-0 flex-1">
-              <Iconify
-                icon="lucide:folder-check"
-                size={13}
-                class={isCurrentValid() ? "shrink-0 text-accent" : "shrink-0 text-fg-muted"}
-              />
-              <span class="truncate font-mono text-[11px] text-fg-secondary">
-                {s.newProjectPath().trim() || "No folder selected"}
-              </span>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <span class="hidden sm:inline-flex items-center gap-1 text-[11px] text-fg-muted">
-                <span>Double-click or</span>
-                <Kbd>Enter</Kbd>
-                <span>to browse</span>
-              </span>
-              <Badge tone={isCurrentValid() ? "green" : "zinc"}>
-                {isCurrentValid() ? "Ready" : "Select path"}
-              </Badge>
-            </div>
-          </div>
+      {/* Unified Footer */}
+      <div class="flex items-center justify-between gap-3 border-t border-border-subtle bg-surface-subtle/60 px-3.5 py-2.5">
+        <span class="hidden sm:inline-flex items-center gap-1.5 text-[11px] text-fg-muted select-none">
+          <span>Double-click or</span>
+          <Kbd>Enter</Kbd>
+          <span>to browse</span>
+        </span>
+        <div class="ml-auto flex items-center gap-2">
+          <Btn variant="outline" size="sm" onClick={closeModal}>
+            Cancel
+          </Btn>
+          <Btn size="sm" disabled={!isCurrentValid()} onClick={s.createProject}>
+            Open Project
+          </Btn>
         </div>
       </div>
     </Modal>
