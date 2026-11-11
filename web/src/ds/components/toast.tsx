@@ -113,7 +113,7 @@ function ToastView(props: { item: ToastItem }) {
         <Glyph icon={props.item.kind === "ok" ? "lucide:check" : "lucide:alert-circle"} size={16} />
       </span>
       <span class="ui-toast-text">{props.item.text}</span>
-      <button type="button" class="ui-toast-close" aria-label="Dismiss notification" onClick={() => leave(1)}>
+      <button type="button" class="ui-toast-close" aria-label="Dismiss notification" data-tip="Dismiss" onClick={() => leave(1)}>
         <Glyph icon="lucide:x" size={14} />
       </button>
     </div>

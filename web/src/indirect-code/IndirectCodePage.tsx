@@ -75,7 +75,11 @@ function WorkspaceHeader() {
         <Show when={!ui.sidebarOpen()}><SidebarToggle /></Show>
         <div class="flex min-w-0 flex-1 items-center gap-1.5">
           <Show when={project()?.name}>
-            <span class="hidden sm:inline-flex max-w-44 shrink-0 items-center gap-1.5 truncate text-[12.5px] text-fg-muted select-none">
+            <span
+              data-rc-tip={project()!.path}
+              data-rc-tip-placement="bottom"
+              class="hidden sm:inline-flex max-w-44 shrink-0 items-center gap-1.5 truncate text-[12.5px] text-fg-muted select-none"
+            >
               <Iconify icon="lucide:folder" size={12} class="shrink-0 text-fg-muted/80" />
               <span class="truncate">{project()!.name}</span>
             </span>
@@ -101,6 +105,7 @@ function WorkspaceHeader() {
               onClick={() => ui.setHistoryView?.(!isHistory())}
               class={`flex h-7 w-7 items-center justify-center rounded-md transition-colors cursor-pointer ${isHistory() ? "bg-surface-muted text-fg" : "text-fg-muted hover:bg-surface-muted/75 hover:text-fg"}`}
               data-rc-tip="Conversation history (Ctrl+K)"
+              data-rc-tip-placement="bottom"
               aria-label="Search conversations"
             >
               <Iconify icon="lucide:search" size={14} />
@@ -110,6 +115,7 @@ function WorkspaceHeader() {
               onClick={() => session.startNewConversation?.()}
               class="flex h-7 w-7 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted/75 hover:text-fg transition-colors cursor-pointer"
               data-rc-tip="New conversation"
+              data-rc-tip-placement="bottom"
               aria-label="Start new conversation"
             >
               <Iconify icon="lucide:square-pen" size={14} />

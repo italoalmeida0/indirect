@@ -101,14 +101,14 @@ function FileChangesRow(props: {
           <span class="w-3 shrink-0" aria-hidden="true" />
         </Show>
         <FileIcon path={displayPath()} size={13} />
-        <span class="text-[11.5px] font-mono truncate min-w-0">
+        <span class="text-[11.5px] font-mono truncate min-w-0" data-rc-tip={displayPath()}>
           <Show when={parts().dir}>
             <span class="text-fg-muted">{parts().dir}</span>
           </Show>
           <span class="text-fg font-medium">{parts().base}</span>
         </span>
         <span
-          title={meta().title}
+          data-rc-tip={meta().title}
           class={`inline-flex items-center justify-center rounded px-1 py-px text-[9.5px] leading-tight font-mono font-medium border shrink-0 ${meta().cls}`}
         >
           {meta().label}
@@ -219,6 +219,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                       e.stopPropagation();
                       toggleExpandAll();
                     }}
+                    data-rc-tip={allExpanded() ? "Collapse all file diffs" : "Expand all file diffs"}
                     class="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   >
                     <Iconify icon={allExpanded() ? "lucide:chevrons-down-up" : "lucide:chevrons-up-down"} size={11} />
@@ -232,6 +233,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                       e.stopPropagation();
                       props.onReview!();
                     }}
+                    data-rc-tip="Refresh file changes"
                     class="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   >
                     <Iconify icon="lucide:refresh-cw" size={11} />

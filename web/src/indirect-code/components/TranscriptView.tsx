@@ -170,7 +170,7 @@ export function TranscriptView() {
                 <div class={`flex flex-wrap gap-1.5 mb-1.5 ${isEditing() ? "justify-start" : "justify-end"}`}>
                   <For each={msg.attachments || []}>
                     {(file) => (
-                      <button onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="text-[11px] bg-surface-subtle border border-border hover:border-border-strong px-2.5 py-1 rounded-lg text-fg-secondary hover:text-fg flex items-center gap-1.5 transition-colors cursor-pointer">
+                      <button type="button" data-rc-tip="Open preview" onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="text-[11px] bg-surface-subtle border border-border hover:border-border-strong px-2.5 py-1 rounded-lg text-fg-secondary hover:text-fg flex items-center gap-1.5 transition-colors cursor-pointer">
                         <FileIcon path={file.name} size={13} />
                         {file.name}
                       </button>
@@ -194,13 +194,13 @@ export function TranscriptView() {
                   <div class="flex flex-wrap gap-2 mb-2">
                     <For each={t.editingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-lg border border-border bg-surface-subtle px-2 py-0.5 text-xs text-fg-secondary">
                       <FileIcon path={file.name} size={13} />
-                      <button onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="cursor-pointer hover:underline hover:text-fg">{file.name}</button>
-                      <button disabled={t.savingEdit()} aria-label={`Remove ${file.name}`} onClick={() => t.setEditingAttachments((prev) => prev.filter((a) => a.id !== file.id))} class="cursor-pointer px-0.5 text-fg-muted hover:text-danger">×</button>
+                      <button type="button" data-rc-tip="Open preview" onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="cursor-pointer hover:underline hover:text-fg">{file.name}</button>
+                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.setEditingAttachments((prev) => prev.filter((a) => a.id !== file.id))} class="cursor-pointer px-0.5 text-fg-muted hover:text-danger">×</button>
                     </span>}</For>
                     <For each={t.editAttachments.pendingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-lg border border-border bg-surface-subtle px-2 py-0.5 text-xs text-fg-secondary">
                       <FileIcon path={file.name} size={13} />
-                      <button onClick={() => m.previewPending(file)} class="cursor-pointer hover:underline hover:text-fg">{file.name}</button>
-                      <button disabled={t.savingEdit()} aria-label={`Remove ${file.name}`} onClick={() => t.editAttachments.removePendingAttachment(file.key)} class="cursor-pointer px-0.5 text-fg-muted hover:text-danger">×</button>
+                      <button type="button" data-rc-tip="Open preview" onClick={() => m.previewPending(file)} class="cursor-pointer hover:underline hover:text-fg">{file.name}</button>
+                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.editAttachments.removePendingAttachment(file.key)} class="cursor-pointer px-0.5 text-fg-muted hover:text-danger">×</button>
                     </span>}</For>
                     <Show when={t.editAttachments.preparingAttachments()}><span role="status" class="text-xs text-fg-muted">Preparing files...</span></Show>
                   </div>
@@ -239,7 +239,7 @@ export function TranscriptView() {
                     }}
                   />
                   <div class="flex justify-end items-center gap-2 mt-2 pt-2 border-t border-border/60">
-                    <label class="mr-auto p-1.5 rounded-lg cursor-pointer text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors" aria-label="Attach files">
+                    <label data-rc-tip="Attach files" class="mr-auto p-1.5 rounded-lg cursor-pointer text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors" aria-label="Attach files">
                       <Iconify icon="lucide:paperclip" size={16} />
                       <input type="file" multiple disabled={t.savingEdit()} class="hidden" onChange={(e) => {void t.editAttachments.handleFiles(e.currentTarget.files || []); e.currentTarget.value="";}} />
                     </label>

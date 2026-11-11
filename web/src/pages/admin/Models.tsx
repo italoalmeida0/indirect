@@ -647,7 +647,8 @@ export default function AdminModelsPage() {
                           <button
                             type="button"
                             class="h-9 w-9 rounded-lg flex items-center justify-center text-fg-secondary hover:text-fg hover:bg-card border border-line cursor-pointer transition-colors"
-                            title="Clone model"
+                            aria-label="Clone model"
+                            data-tip="Clone model"
                             onClick={() => cloneModel(m)}
                           >
                             <Icon name={Icons.copy} size={14} />
@@ -655,7 +656,8 @@ export default function AdminModelsPage() {
                           <button
                             type="button"
                             class="h-9 w-9 rounded-lg flex items-center justify-center text-danger hover:bg-danger-subtle border border-danger/30 cursor-pointer transition-colors"
-                            title="Delete model"
+                            aria-label="Delete model"
+                            data-tip="Delete model"
                             onClick={() => setConfirmDelete(m)}
                           >
                             <Icon name={Icons.trash} size={14} />
@@ -840,6 +842,8 @@ export default function AdminModelsPage() {
                           </label>
                           <button
                             type="button"
+                            aria-label="Remove target"
+                            data-tip="Remove target"
                             disabled={fTargets().length <= 1}
                             onClick={() => setFTargets((prev) => prev.filter((_, j) => j !== i()))}
                             class="p-1 rounded text-fg-secondary hover:text-danger disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer shrink-0"
@@ -888,6 +892,8 @@ export default function AdminModelsPage() {
                         </label>
                         <button
                           type="button"
+                          aria-label="Remove target"
+                          data-tip="Remove target"
                           disabled={fTargets().length <= 1}
                           onClick={() => setFTargets((prev) => prev.filter((_, j) => j !== i()))}
                           class="p-1 rounded text-fg-secondary hover:text-danger disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer shrink-0"

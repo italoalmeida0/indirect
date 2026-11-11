@@ -37,6 +37,7 @@ import { createGlide } from "./ds/motion/glide";
 import LoginPage from "./pages/Login";
 import SetPasswordPage from "./pages/SetPassword";
 import { PlanLimits } from "./billing";
+import { RemoteHints } from "./indirect-code/presentation";
 /**
  * Route-level code splitting. The dashboard bundle is dominated by the
  * Indirect Code workspace (transcript rendering, generative UI runtimes) and
@@ -328,7 +329,7 @@ function AppShell(props: { children: JSX.Element }) {
           </Show>
         </nav>
         <div class="flex items-center justify-center lg:justify-start lg:w-60 lg:px-0.5 pt-3">
-          <Tooltip content="Sign out" placement="right" delay={50}>
+          <Tooltip content="Sign out" placement="right">
             <button onClick={logout} class="ui-icon-button ui-icon-button-danger" aria-label="Sign out">
               <Icon name={Icons.logout} size={17} />
             </button>
@@ -515,6 +516,7 @@ function Root() {
           })()}
         </Show>
       </Show>
+      <RemoteHints />
       <Toasts />
     </>
   );

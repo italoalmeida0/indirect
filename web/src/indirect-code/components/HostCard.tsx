@@ -48,6 +48,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
             type="button"
             ref={btn}
             data-menubtn
+            data-rc-tip="Switch host"
             aria-label={`Select host: ${hostName()} ${statusLabel()}`}
             aria-haspopup="menu"
             aria-expanded={h.hostMenuOpen()}
@@ -77,6 +78,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
           type="button"
           ref={btn}
           data-menubtn
+          data-rc-tip="Switch host"
           aria-label={`Select host: ${hostName()} ${statusLabel()}`}
           aria-haspopup="menu"
           aria-expanded={h.hostMenuOpen()}

@@ -446,6 +446,7 @@ export function Calendar(props: CalendarProps) {
             type="button"
             class="ui-calendar-nav-btn"
             aria-label="Previous month"
+            data-tip="Previous month"
             aria-disabled={previousDisabled() || undefined}
             onPointerDown={(e) => {
               if (!previousDisabled()) press(e.currentTarget);
@@ -460,6 +461,7 @@ export function Calendar(props: CalendarProps) {
             type="button"
             class="ui-calendar-nav-btn"
             aria-label="Next month"
+            data-tip="Next month"
             aria-disabled={nextDisabled() || undefined}
             onPointerDown={(e) => {
               if (!nextDisabled()) press(e.currentTarget);
@@ -846,6 +848,7 @@ export function RangeCalendar(props: RangeCalendarProps) {
         <button
           type="button"
           aria-label="Previous month"
+          data-tip="Previous month"
           class="analytics-icon-button"
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => move(-1)}
@@ -871,6 +874,7 @@ export function RangeCalendar(props: RangeCalendarProps) {
           <button
             type="button"
             aria-label="Next month"
+            data-tip="Next month"
             class="analytics-icon-button"
             onPointerDown={(e) => press(e.currentTarget)}
             onClick={() => move(1)}

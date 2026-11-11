@@ -330,6 +330,7 @@ export function EffortPickerBody(props: {
         <button
           type="button"
           data-effort-model-btn
+          data-rc-tip="Switch model"
           aria-label={`Select model: ${props.activeModelName()}`}
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={(e) => {

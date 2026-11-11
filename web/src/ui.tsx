@@ -610,6 +610,7 @@ export function Input(props: {
             <button
               type="button"
               aria-label={revealed() ? "Hide password" : "Show password"}
+              data-tip={revealed() ? "Hide password" : "Show password"}
               aria-pressed={revealed()}
               disabled={props.disabled}
               onClick={() => setRevealed(!revealed())}
@@ -796,7 +797,7 @@ export function Select(props: {
     <div ref={root} class="relative" onKeyDown={onKeyDown}>
       <button ref={button} type="button" role="combobox" aria-label={props.ariaLabel} aria-labelledby={!props.ariaLabel && props.label ? `${id}-label` : undefined}
         aria-haspopup="listbox" aria-expanded={open()} aria-controls={open() ? `${id}-list` : undefined} aria-activedescendant={open() ? `${id}-option-${highlight()}` : undefined} aria-describedby={`${id}-value${props.hint ? ` ${id}-hint` : ""}`}
-        title={current().label} onClick={() => open() ? close() : openMenu()}
+        data-tip={current().label} onClick={() => open() ? close() : openMenu()}
         class={props.variant === "toolbar" ? `analytics-control ui-select-trigger ${open() || props.value ? "is-active" : ""}` : "ui-field text-left flex items-center justify-between gap-2 cursor-pointer"}>
         <Show when={props.icon}><Glyph icon={props.icon!} size={15} /></Show>
         <span class="min-w-0 truncate">{props.triggerLabel ?? current().label}</span>
@@ -1018,6 +1019,7 @@ export function FilterChip(props: {
         <span
           role="button"
           aria-label="Remove filter"
+          data-tip="Remove filter"
           onClick={(e) => {
             e.stopPropagation();
             props.onRemove?.();

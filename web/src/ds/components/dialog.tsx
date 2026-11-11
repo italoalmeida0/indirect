@@ -106,7 +106,7 @@ export function Dialog(props: DialogProps) {
                   <p id={descriptionId} class="ui-dialog-description">{description()}</p>
                 </Show>
               </div>
-              <button type="button" class="ui-dialog-close" aria-label="Close" onClick={() => props.onClose()}>
+              <button type="button" class="ui-dialog-close" aria-label="Close" data-tip="Close" onClick={() => props.onClose()}>
                 <Glyph icon="lucide:x" size={16} />
               </button>
             </div>

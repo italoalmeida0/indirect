@@ -235,6 +235,7 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
 
 /* ===== Tooltip ============================================================= */
 .ui-tooltip {
+  --tip-x: 0px;
   --tip-y: 3px;
   max-width: min(18rem, calc(100vw - 1rem));
   padding: 6px 10px;
@@ -252,11 +253,12 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
   transition: opacity var(--duration-fast) var(--ease-enter), transform var(--duration-fast) var(--ease-enter);
 }
 .ui-tooltip[data-side="bottom"] { --tip-y: -3px; }
+.ui-tooltip[data-side="left"] { --tip-x: 3px; --tip-y: 0px; }
+.ui-tooltip[data-side="right"] { --tip-x: -3px; --tip-y: 0px; }
 @starting-style {
-  .ui-tooltip:not([data-state="closed"]) { opacity: 0; transform: translateY(var(--tip-y)) scale(0.97); }
-  .ui-tooltip[data-instant]:not([data-state="closed"]) { transform: none; }
+  .ui-tooltip:not([data-state="closed"]):not([data-instant]) { opacity: 0; transform: translate(var(--tip-x), var(--tip-y)) scale(0.97); }
 }
-.ui-tooltip[data-instant] { transition: opacity var(--duration-instant) var(--ease-standard); }
+.ui-tooltip[data-instant] { opacity: 1; transform: none; transition: none; }
 .ui-tooltip[data-state="closed"] { opacity: 0; transform: scale(0.98); transition: opacity var(--duration-instant) var(--ease-standard), transform var(--duration-instant) var(--ease-standard); }
 :root[data-theme="high-contrast"] .ui-tooltip { border-color: var(--background); }
 

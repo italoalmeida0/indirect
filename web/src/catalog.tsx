@@ -131,7 +131,7 @@ export function CatalogToolbar(props: { view: CatalogView; right?: JSX.Element }
       <div class="catalog-search">
         <Icon name={Icons.search} size={16} />
         <input ref={searchInput} type="search" maxLength={200} value={view.search()} onInput={(event) => view.setSearch(event.currentTarget.value)} placeholder={`Search ${view.config.label.toLowerCase()}…`} aria-label={`Search ${view.config.label.toLowerCase()}`} />
-        <Show when={view.search()}><button type="button" class="analytics-icon-button" aria-label={`Clear ${view.config.label.toLowerCase()} search`} onClick={() => { view.setSearch(""); searchInput.focus({ preventScroll: true }); }}><Icon name={Icons.x} size={14} /></button></Show>
+        <Show when={view.search()}><button type="button" class="analytics-icon-button" aria-label={`Clear ${view.config.label.toLowerCase()} search`} data-tip="Clear search" onClick={() => { view.setSearch(""); searchInput.focus({ preventScroll: true }); }}><Icon name={Icons.x} size={14} /></button></Show>
       </div>
       {props.right}
     </div>

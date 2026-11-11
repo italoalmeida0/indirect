@@ -100,7 +100,7 @@ export function StatusBanners() {
   <div role={notice().kind === "err" ? "alert" : "status"} class={`mb-2.5 flex items-start gap-2.5 rounded-lg border px-3 py-2 text-xs ${notice().kind === "err" ? "border-danger/35 bg-danger-subtle text-fg" : "border-border bg-surface-raised text-fg-secondary"}`}>
     <Iconify icon={notice().kind === "err" ? "lucide:circle-alert" : "lucide:check-circle-2"} size={14} class={`shrink-0 mt-0.5 ${notice().kind === "err" ? "text-danger" : "text-success"}`} />
     <span class="min-w-0 flex-1 break-words">{notice().message}</span>
-    <button type="button" aria-label="Dismiss notification" onClick={() => ui.setAppNotice(null)} class="p-0.5 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"><Iconify icon="lucide:x" size={13} /></button>
+    <button type="button" aria-label="Dismiss notification" data-rc-tip="Dismiss notification" onClick={() => ui.setAppNotice(null)} class="p-0.5 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"><Iconify icon="lucide:x" size={13} /></button>
   </div>
 }</Show>
 <Show when={h.activeHost() && (h.connectionState() !== "connected" || h.activeHost()?.status !== "online")}>

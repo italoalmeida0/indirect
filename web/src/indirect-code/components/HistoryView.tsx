@@ -180,6 +180,7 @@ export function HistoryView(props: HistoryViewProps) {
                   props.setSearchResults([]);
                 }}
                 class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-surface-muted hover:text-fg cursor-pointer"
+                data-rc-tip="Clear search"
                 aria-label="Clear search"
               >
                 <Iconify icon="lucide:x" size={12} />

@@ -11,6 +11,7 @@ import {
 import { createHosts } from "./hooks/useHosts";
 import { createRelay } from "./hooks/useRelay";
 import { createMirror } from "./hooks/useMirror";
+import { RemoteHints } from "./presentation";
 import { Icon, Icons, toast } from "../ui";
 
 interface DebugTool {
@@ -213,6 +214,9 @@ function JsonHighlightViewer(props: {
             />
             <Show when={search()}>
               <button
+                type="button"
+                aria-label="Clear search"
+                data-rc-tip="Clear search"
                 onClick={() => setSearch("")}
                 class="absolute right-1 text-ink-400 hover:text-ink-200 text-xs cursor-pointer"
               >
@@ -223,18 +227,20 @@ function JsonHighlightViewer(props: {
 
           {/* Pretty / Compact toggle */}
           <button
+            type="button"
             onClick={() => setIsCompact(!isCompact())}
             class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-xs cursor-pointer"
-            title="Toggle compact or pretty JSON"
+            data-rc-tip="Toggle compact or pretty JSON"
           >
             {isCompact() ? "Pretty" : "Compact"}
           </button>
 
           {/* Copy Button */}
           <button
+            type="button"
             onClick={copyJson}
             class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-accent rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
-            title="Copy full JSON"
+            data-rc-tip="Copy full JSON"
           >
             <Icon name={Icons.copy} size={11} />
             Copy
@@ -242,9 +248,10 @@ function JsonHighlightViewer(props: {
 
           {/* Download Button */}
           <button
+            type="button"
             onClick={downloadJson}
             class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
-            title="Download JSON file"
+            data-rc-tip="Download JSON file"
           >
             <Icon name={Icons.save} size={11} />
             Download
@@ -873,6 +880,7 @@ export default function CodeDevPage() {
 
   return (
     <div class="flex flex-col min-h-dvh lg:h-screen w-full max-w-full bg-ink-950 text-ink-100 font-sans select-text overflow-x-hidden lg:overflow-hidden">
+      <RemoteHints />
       {/* ===== TOP BAR / HEADER ===== */}
       <header class="flex flex-wrap items-center justify-between px-4 py-2 bg-ink-900 border-b border-line shrink-0 gap-3 z-20">
         <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
@@ -957,7 +965,8 @@ export default function CodeDevPage() {
           {/* Preserve Log Toggle */}
           <label
             class="flex items-center gap-1 text-xs text-ink-400 hover:text-ink-200 cursor-pointer font-mono mr-2"
-            title="Preserve captured logs across session switches"
+            data-rc-tip="Preserve captured logs across session switches"
+            data-rc-tip-placement="bottom"
           >
             <input
               type="checkbox"
@@ -970,9 +979,11 @@ export default function CodeDevPage() {
 
           {/* Chrome-Style Clear Network Log Button */}
           <button
+            type="button"
             onClick={clearAllNetworkLogs}
             class="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-ink-800 hover:bg-danger-subtle hover:text-danger text-ink-300 rounded border border-line font-mono transition-colors cursor-pointer"
-            title="Clear all recorded network payloads and events (Frontend-only)"
+            data-rc-tip="Clear all recorded network payloads and events (Frontend-only)"
+            data-rc-tip-placement="bottom"
           >
             <Icon name="lucide:ban" size={13} class="text-danger" />
             Clear Log
@@ -993,9 +1004,11 @@ export default function CodeDevPage() {
           </span>
 
           <button
+            type="button"
             onClick={requestSessionDebug}
             class="flex items-center gap-1 px-2.5 py-1 text-xs bg-ink-800 hover:bg-ink-700 text-ink-200 rounded border border-line font-mono transition-colors cursor-pointer"
-            title="Refresh daemon debug state"
+            data-rc-tip="Refresh daemon debug state"
+            data-rc-tip-placement="bottom"
           >
             <Icon name={Icons.refresh} size={13} />
             Refresh
@@ -1098,9 +1111,11 @@ export default function CodeDevPage() {
                   class="bg-ink-950 border border-line rounded px-2.5 py-1 text-xs font-mono text-ink-200 placeholder-ink-600 focus:outline-none focus:border-accent flex-1"
                 />
                 <button
+                  type="button"
                   onClick={clearAllNetworkLogs}
                   class="p-1 hover:bg-danger-subtle rounded text-ink-400 hover:text-danger cursor-pointer"
-                  title="Clear requests log"
+                  aria-label="Clear requests log"
+                  data-rc-tip="Clear requests log"
                 >
                   <Icon name={Icons.trash} size={14} />
                 </button>
@@ -1893,10 +1908,11 @@ export default function CodeDevPage() {
 
         {/* Smoke Simulation Button */}
         <button
+          type="button"
           onClick={runSmokeSimulation}
           disabled={isSimulating()}
           class="px-3.5 py-1.5 bg-warning-subtle hover:bg-warning/20 text-warning font-medium rounded border border-warning/35 text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-2xs"
-          title="Simulate prompt right now without calling LLM (0 tokens billed)"
+          data-rc-tip="Simulate prompt right now without calling LLM (0 tokens billed)"
         >
           <Icon name="lucide:flame" size={13} />
           {isSimulating() ? "Simulating..." : "Smoke Test (Simulate Payload)"}
@@ -1904,10 +1920,11 @@ export default function CodeDevPage() {
 
         {/* Live Send Button */}
         <button
+          type="button"
           onClick={sendQuickPrompt}
           disabled={!promptInput().trim() || !selectedSessionId()}
           class="px-3.5 py-1.5 bg-accent hover:bg-accent-strong disabled:opacity-40 disabled:cursor-not-allowed text-accent-foreground font-medium rounded text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
-          title="Send real turn prompt to the session"
+          data-rc-tip="Send real turn prompt to the session"
         >
           <Icon name={Icons.send} size={13} />
           Send Prompt

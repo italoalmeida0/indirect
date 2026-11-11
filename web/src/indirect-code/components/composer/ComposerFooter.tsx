@@ -1,7 +1,6 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { press } from "../../../ds/motion/press";
-import { Tooltip } from "../../../ui";
 import { compactTokens } from "../../context";
 import { baseNameOf, cacheHitPct, fmtUsd, usageCosts } from "../../transcript";
 import { useComposerCtx, useSession, useTranscriptCtx, useUI } from "../../ctx";
@@ -207,21 +206,21 @@ export function ComposerFooter() {
         </div>
       </div>
     </FloatMenu>
-    <Tooltip content="Conversation context and session usage" disabled={ui.usageOpen()}>
-      <button
-        type="button"
-        ref={ui.contextBtn}
-        data-menubtn
-        aria-label={`Conversation context: ${c.activeContext().label}`}
-        aria-expanded={ui.usageOpen()}
-        onPointerDown={(e) => press(e.currentTarget)}
-        onClick={() => { const next = !ui.usageOpen(); ui.closeMenus(); ui.setUsageOpen(next); }}
-        class="flex items-center gap-1.5 rounded-md px-2 py-0.5 font-mono text-[11px] tabular-nums text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-      >
-        <Iconify icon="lucide:chart-pie" size={11} class="text-accent shrink-0" />
-        <span>{c.activeContext().label}</span>
-      </button>
-    </Tooltip>
+    {/* Tooltip suppressed while usage popover is open via aria-expanded (replaces disabled={ui.usageOpen()}) */}
+    <button
+      type="button"
+      ref={ui.contextBtn}
+      data-menubtn
+      data-rc-tip="Context & token usage"
+      aria-label={`Conversation context: ${c.activeContext().label}`}
+      aria-expanded={ui.usageOpen()}
+      onPointerDown={(e) => press(e.currentTarget)}
+      onClick={() => { const next = !ui.usageOpen(); ui.closeMenus(); ui.setUsageOpen(next); }}
+      class="flex items-center gap-1.5 rounded-md px-2 py-0.5 font-mono text-[11px] tabular-nums text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+    >
+      <Iconify icon="lucide:chart-pie" size={11} class="text-accent shrink-0" />
+      <span>{c.activeContext().label}</span>
+    </button>
   </div>
 </Show>
 </>

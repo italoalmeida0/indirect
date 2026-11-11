@@ -155,6 +155,7 @@ export function NewProjectModal() {
                 type="button"
                 disabled={!canGoParent()}
                 onClick={() => s.requestFolders(s.folderParent())}
+                data-rc-tip="Parent folder"
                 aria-label="Parent folder"
                 class="inline-flex h-6 items-center gap-1 rounded-md border border-border bg-surface px-2 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors disabled:opacity-35 disabled:pointer-events-none cursor-pointer"
               >
@@ -165,6 +166,8 @@ export function NewProjectModal() {
               <button
                 type="button"
                 onClick={() => s.requestFolders("~")}
+                data-rc-tip="Home directory"
+                aria-label="Home directory"
                 class="inline-flex h-6 items-center gap-1 rounded-md border border-transparent px-1.5 font-mono text-[11px] text-fg-muted hover:border-border hover:bg-surface hover:text-fg transition-colors cursor-pointer"
               >
                 <Iconify icon="lucide:home" size={11} />
@@ -187,6 +190,7 @@ export function NewProjectModal() {
                       </Show>
                       <button
                         type="button"
+                        data-rc-tip={crumb.path}
                         onClick={() => s.requestFolders(crumb.path)}
                         class={`max-w-32 truncate rounded-md border px-1.5 py-0.5 font-mono text-xs transition-colors cursor-pointer ${
                           isLeaf()

@@ -566,7 +566,7 @@ export function GenerativeUiWidget(props: {
         <Show when={error()}>
           <div class="flex items-center gap-2 border-t border-line bg-elev/60 px-3 py-2">
             <span class="shrink-0 text-[11px] font-medium text-danger">Widget error</span>
-            <span class="min-w-0 flex-1 truncate text-[11px] text-ink-400" title={error()}>
+            <span class="min-w-0 flex-1 truncate text-[11px] text-ink-400" data-rc-tip={error()}>
               {error()}
             </span>
             <Show when={props.onPrefillPrompt}>
@@ -581,6 +581,7 @@ export function GenerativeUiWidget(props: {
             <button
               type="button"
               aria-label="Dismiss error"
+              data-rc-tip="Dismiss error"
               class="shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[13px] leading-none text-ink-500 hover:bg-ink-800/60 hover:text-ink-200"
               onClick={() => setError("")}
             >

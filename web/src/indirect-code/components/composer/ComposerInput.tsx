@@ -81,7 +81,7 @@ export function ComposerInput() {
             }}
             class="shrink-0 flex h-4 w-4 items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors cursor-pointer"
             disabled={c.sending()}
-            data-rc-tip="Remove" aria-label="Remove"
+            data-rc-tip="Remove attachment" aria-label={`Remove ${att.name}`}
           >
             <Iconify icon="lucide:x" size={11} />
           </button>

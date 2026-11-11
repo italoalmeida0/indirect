@@ -173,7 +173,7 @@ export function CopyButton(props: CopyButtonProps) {
       type="button"
       ref={press}
       aria-label={props.showText ? undefined : (props.label ?? "Copy")}
-      title={undefined}
+      data-tip={props.showText ? undefined : (state() === "copied" ? "Copied" : state() === "failed" ? "Copy failed" : (props.label ?? "Copy"))}
       onClick={() => void run()}
       class={props.showText
         ? `ui-button ui-button-secondary ui-button-${props.size ?? "xs"} ${props.class ?? ""}`

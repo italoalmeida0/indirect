@@ -371,7 +371,8 @@ export default function SettingsPage() {
                             <button
                               type="button"
                               class="text-fg-muted hover:text-fg p-0.5 rounded hover:bg-surface-muted cursor-pointer transition-colors"
-                              title={s.label ? "Rename device" : "Name this device"}
+                              aria-label={s.label ? "Rename device" : "Name this device"}
+                              data-tip={s.label ? "Rename device" : "Name this device"}
                               onClick={() => { setNamingJti(s.jti); setSessionLabel(s.label ?? ""); }}
                             >
                               <Icon name={Icons.edit} size={13} />
@@ -461,7 +462,7 @@ export default function SettingsPage() {
                 <div
                   onClick={() => copyWithToast(totpSetup()?.secret ?? "")}
                   class="rounded-control border border-line bg-surface px-3 py-2 text-center cursor-pointer hover:border-accent transition-colors group"
-                  title="Click to copy secret key"
+                  data-tip="Click to copy secret key"
                 >
                   <code class="text-xs font-mono text-success tracking-wider select-all block break-all">
                     {totpSetup()?.secret?.match(/.{1,4}/g)?.join(" ") ?? totpSetup()?.secret}

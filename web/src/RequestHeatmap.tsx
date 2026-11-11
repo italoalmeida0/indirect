@@ -84,7 +84,7 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
         class="activity-board"
         style={{ "--activity-columns": model().calendar.columns, "--activity-rows": model().calendar.rowLabels.length }}
       >
-        <For each={model().calendar.columnLabels}>{(entry) => <span class="activity-column-label" title={entry.label} style={{ "grid-column": `${entry.column + 2} / span ${model().short || model().monthly ? 1 : Math.min(3, model().calendar.columns - entry.column)}` }}>{entry.label}</span>}</For>
+        <For each={model().calendar.columnLabels}>{(entry) => <span class="activity-column-label" data-tip={entry.label} style={{ "grid-column": `${entry.column + 2} / span ${model().short || model().monthly ? 1 : Math.min(3, model().calendar.columns - entry.column)}` }}>{entry.label}</span>}</For>
         <For each={model().calendar.rowLabels}>{(label, row) => <span class="activity-row-label" style={{ "grid-row": row() + 2 }}>{label}</span>}</For>
         <For each={model().calendar.cells}>{(cell) => <Show
           when={cell.count !== null}
@@ -124,7 +124,7 @@ export function RequestHeatmap(props: { series: DailyPoint[]; scope: ActivitySco
       <div><span>Active {noun()}s</span><strong>{fmtNum(model().active)} <small>/ {fmtNum(model().periods)}</small></strong></div>
       <div><span>{model().monthly ? "Monthly" : "Daily"} average</span><strong>{fmtNum(Math.round(model().average))}<small> requests</small></strong></div>
       <div><span>Busiest {noun()}</span><strong>{model().peak ? fmtNum(model().peak!.count!) : "—"}<small class="activity-peak-date">{model().peak ? model().peak!.label : "No requests in this period"}</small></strong></div>
-      <div class="activity-cache-rate" title="Cached input tokens divided by cached and uncached input tokens"><span>Cache hit rate</span><strong>{props.cacheHitRate === null ? "—" : `${props.cacheHitRate.toLocaleString("en", { maximumFractionDigits: 1 })}%`}<Show when={props.cacheHitRate === null}><small>No input tokens</small></Show></strong></div>
+      <div class="activity-cache-rate" data-tip="Cached input tokens divided by cached and uncached input tokens"><span>Cache hit rate</span><strong>{props.cacheHitRate === null ? "—" : `${props.cacheHitRate.toLocaleString("en", { maximumFractionDigits: 1 })}%`}<Show when={props.cacheHitRate === null}><small>No input tokens</small></Show></strong></div>
     </div>
     <Show when={active()} keyed>{(item) => <Portal><ActivityTooltip cell={item.cell} anchor={item.anchor} id={`${id}-tooltip`} /></Portal>}</Show>
   </div>;

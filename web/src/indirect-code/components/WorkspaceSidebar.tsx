@@ -264,6 +264,7 @@ export function WorkspaceSidebar() {
             type="button"
             ref={(el) => (s.newProjBtn = el)}
             data-menubtn
+            aria-expanded={s.newProjectMenuOpen()}
             onClick={(e) => {
               e.stopPropagation();
               s.setNewProjectMenuOpen(!s.newProjectMenuOpen());
@@ -348,6 +349,7 @@ export function WorkspaceSidebar() {
                         type="button"
                         aria-label="Toggle project"
                         aria-expanded={s.isProjectExpanded(p)}
+                        data-rc-tip="Toggle project"
                         onClick={(e) => {
                           e.stopPropagation();
                           s.toggleProjectExpanded(p.id);
@@ -565,6 +567,7 @@ export function WorkspaceSidebar() {
             type="button"
             onClick={() => ui.daemonUpdate.apply()}
             disabled={busy}
+            data-rc-tip={i.current ? `Update daemon (${i.current} → ${i.available})` : `Update daemon to ${i.available}`}
             class="ui-button ui-button-primary w-full rounded-full h-[1.5rem] min-h-[1.5rem] py-0 text-xs gap-1.5"
           >
             <Iconify icon="lucide:arrow-down-to-line" size={13} />
@@ -580,6 +583,7 @@ export function WorkspaceSidebar() {
       type="button"
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => m.openSettings?.()}
+      data-rc-tip="Host & agent settings"
       aria-label="Host & agent settings: Settings"
       class="rc-nav-row text-left text-fg-secondary hover:text-fg hover:bg-surface-muted/75 cursor-pointer"
     >

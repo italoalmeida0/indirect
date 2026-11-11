@@ -313,6 +313,7 @@ function ThemeStudioPicker() {
                   role="radio"
                   aria-checked={selected()}
                   aria-label={item.label}
+                  data-rc-tip={item.label}
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => setAccent(item.id as AccentName)}
                   class={`relative flex h-6 w-6 items-center justify-center rounded-full transition-transform cursor-pointer ${
@@ -1150,6 +1151,7 @@ export function SettingsGeneralSection() {
                   type="button"
                   onClick={() => m.setDaemonSettings({ ...m.daemonSettings(), httpProxy: "" })}
                   class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-surface-muted hover:text-fg cursor-pointer"
+                  data-rc-tip="Clear proxy"
                   aria-label="Clear upstream proxy"
                 >
                   <Iconify icon="lucide:x" size={12} />

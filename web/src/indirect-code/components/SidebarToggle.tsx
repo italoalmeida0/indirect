@@ -13,6 +13,7 @@ export function SidebarToggle() {
       onClick={() => ui.setSidebarOpen(!ui.sidebarOpen())}
       class="rc-sidebar-toggle flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
       data-rc-tip={label()}
+      data-rc-tip-placement="bottom"
       aria-label={label()}
     >
       <Icon icon={ui.sidebarOpen() ? ui.isMobile() ? "lucide:x" : "lucide:panel-left-close" : "lucide:panel-left-open"} size={16} />

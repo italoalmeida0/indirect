@@ -418,6 +418,7 @@ export function ModelPickerBody(props: {
           <button
             type="button"
             aria-label="Clear model filter"
+            data-rc-tip="Clear search"
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => {
               e.stopPropagation();
@@ -563,6 +564,7 @@ export function ModelPickerBody(props: {
               <button
                 type="button"
                 aria-label="Scroll providers left"
+                data-rc-tip="Scroll providers left"
                 disabled={!canScrollLeft()}
                 tabIndex={canScrollLeft() ? 0 : -1}
                 onMouseDown={(e) => {
@@ -602,6 +604,7 @@ export function ModelPickerBody(props: {
               <button
                 type="button"
                 aria-label="Scroll providers right"
+                data-rc-tip="Scroll providers right"
                 disabled={!canScrollRight()}
                 tabIndex={canScrollRight() ? 0 : -1}
                 onMouseDown={(e) => {

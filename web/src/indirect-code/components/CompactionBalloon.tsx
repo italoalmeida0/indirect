@@ -123,6 +123,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={handleCopy}
                 class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                data-rc-tip={copied() ? "Copied" : "Copy summary"}
                 aria-label="Copy compaction summary"
               >
                 <Iconify icon={copied() ? "lucide:check" : "lucide:copy"} size={12} class={copied() ? "text-success" : ""} />
@@ -139,7 +140,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                   <div class="flex flex-wrap gap-1">
                     <For each={modifiedFiles()}>
                       {(file) => (
-                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-secondary font-mono text-[10px]">
+                        <span data-rc-tip={file} class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-secondary font-mono text-[10px]">
                           <FileIcon path={file} size={11} />
                           <span>{baseNameOf(file)}</span>
                         </span>
@@ -154,7 +155,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                   <div class="flex flex-wrap gap-1">
                     <For each={readFiles()}>
                       {(file) => (
-                        <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-secondary font-mono text-[10px]">
+                        <span data-rc-tip={file} class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-secondary font-mono text-[10px]">
                           <FileIcon path={file} size={11} />
                           <span>{baseNameOf(file)}</span>
                         </span>

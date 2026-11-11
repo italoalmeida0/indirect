@@ -215,17 +215,17 @@ export default function AdminUsersPage() {
     return (
       <div class="flex items-center gap-1.5 whitespace-nowrap">
         <Show when={u.hasPassword}>
-          <span title="Password configured" class="inline-flex text-fg-secondary">
+          <span data-tip="Password configured" aria-label="Password configured" class="inline-flex text-fg-secondary">
             <Icon name={Icons.key} size={13} />
           </span>
         </Show>
         <Show when={u.totpEnabled}>
-          <span title="Two-factor authentication active" class="inline-flex text-success">
+          <span data-tip="Two-factor authentication active" aria-label="Two-factor authentication active" class="inline-flex text-success">
             <Icon name={Icons.shield} size={13} />
           </span>
         </Show>
         <Show when={u.googleLinked}>
-          <span title="Google account linked" class="inline-flex text-accent font-medium text-xs">
+          <span data-tip="Google account linked" aria-label="Google account linked" class="inline-flex text-accent font-medium text-xs">
             G
           </span>
         </Show>

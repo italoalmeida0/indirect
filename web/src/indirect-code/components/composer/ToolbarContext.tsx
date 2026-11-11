@@ -416,6 +416,7 @@ export function ToolbarContext() {
                     type="button"
                     data-handle
                     aria-label={`Reorder ${name}`}
+                    data-rc-tip="Drag to reorder"
                     class={`shrink-0 p-1 rounded text-fg-muted hover:text-fg cursor-grab active:cursor-grabbing transition-opacity ${
                       ui.isMobile() ? "opacity-60" : "opacity-0 group-hover/skill:opacity-70 focus-visible:opacity-100"
                     }`}
@@ -460,6 +461,7 @@ export function ToolbarContext() {
                     <button
                       type="button"
                       aria-label={`Change activation policy for ${name}: ${shownUsable(name)}`}
+                      data-rc-tip={`Activation policy: ${shownUsable(name)} (click to cycle)`}
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }}
                       class={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none transition-colors cursor-pointer ${
@@ -474,10 +476,10 @@ export function ToolbarContext() {
                     </button>
                   </Show>
                   <Show when={originalUsable(skill?.usable) === "yolo"}>
-                    <span class="shrink-0 rounded-md border border-warning/25 bg-warning-subtle/60 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-warning">yolo</span>
+                    <span data-rc-tip="Always usable without asking" class="shrink-0 rounded-md border border-warning/25 bg-warning-subtle/60 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-warning">yolo</span>
                   </Show>
                   <Show when={originalUsable(skill?.usable) === "deny"}>
-                    <span class="shrink-0 rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-fg-muted">hidden</span>
+                    <span data-rc-tip="Hidden from model auto-activation" class="shrink-0 rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-fg-muted">hidden</span>
                   </Show>
                 </li>
               );
@@ -559,8 +561,10 @@ export function ToolbarContext() {
 <>
 <div>
   <button
+    type="button"
     ref={c.addBtn}
     data-menubtn
+    aria-expanded={c.addContextOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={(e) => {
       e.stopPropagation();
@@ -857,7 +861,7 @@ export function ToolbarContext() {
 {/* Desktop only: Mode and Permissions in the toolbar */}
 <Show when={!ui.isMobile()}>
 <div>
-  <button type="button" ref={c.modeBtn} data-menubtn aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`} aria-expanded={c.modeMenuOpen()}
+  <button type="button" ref={c.modeBtn} data-menubtn data-rc-tip="Mode & skills" aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`} aria-expanded={c.modeMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.modeMenuOpen(); ui.closeMenus(); c.setModeMenuOpen(next); }}
     class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer">
@@ -896,7 +900,7 @@ export function ToolbarContext() {
 </div>
 <Show when={!approvalSelectorHidden()}>
 <div>
-  <button type="button" ref={c.accessBtn} data-menubtn aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`} aria-expanded={c.accessMenuOpen()}
+  <button type="button" ref={c.accessBtn} data-menubtn data-rc-tip={c.yoloMode() ? "Permissions: Full access" : "Permissions: Ask for approval"} aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`} aria-expanded={c.accessMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.accessMenuOpen(); ui.closeMenus(); c.setAccessMenuOpen(next); }}
     class={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${c.yoloMode() ? "text-warning" : "text-fg-secondary hover:text-fg"}`}>

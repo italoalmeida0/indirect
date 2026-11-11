@@ -40,6 +40,7 @@ export function QueueCard() {
               type="button"
               onClick={() => q.toggleCollapsed(sid())}
               class="p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+              data-rc-tip={collapsed() ? "Expand queue" : "Collapse queue"}
               aria-label={collapsed() ? "Expand queue" : "Collapse queue"}
             >
               <Iconify icon={collapsed() ? "lucide:chevron-up" : "lucide:chevron-down"} size={13} />
@@ -56,7 +57,10 @@ export function QueueCard() {
                         <div class="flex items-center gap-1.5 min-w-0">
                           <span class="flex-1 truncate text-sm text-fg">{item.text}</span>
                           <Show when={item.attachmentIds.length > 0}>
-                            <span class="inline-flex items-center gap-1 rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 text-[10px] font-mono text-fg-secondary shrink-0">
+                            <span
+                              data-rc-tip={`${item.attachmentIds.length} ${item.attachmentIds.length === 1 ? "attachment" : "attachments"}`}
+                              class="inline-flex items-center gap-1 rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 text-[10px] font-mono text-fg-secondary shrink-0"
+                            >
                               <Iconify icon="lucide:paperclip" size={10} />
                               {item.attachmentIds.length}
                             </span>
@@ -101,12 +105,16 @@ function QueueEditRow(props: { queueId: string }) {
               <span class="flex items-center gap-1 text-[11px] bg-surface-subtle border border-border px-2 py-1 rounded-lg text-fg-secondary">
                 <FileIcon path={a.name} size={13} />
                 <button
+                  type="button"
+                  data-rc-tip="Open preview"
                   onClick={() => a.serverId ? m.openStoredPreview(s.activeSessionId(), a.serverId) : m.previewPending(a)}
                   class="hover:underline truncate max-w-40 cursor-pointer"
                 >
                   {a.name}
                 </button>
                 <button
+                  type="button"
+                  data-rc-tip="Remove attachment"
                   aria-label={`Remove ${a.name}`}
                   onClick={() => q.editDraft.removePendingAttachment(a.key)}
                   class="cursor-pointer px-0.5 text-fg-muted hover:text-danger transition-colors"

@@ -106,7 +106,8 @@ export function CurrencyField(props: {
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => adjust(-5)}
               class="ui-studio-step-btn"
-              title="Decrease by $5"
+              aria-label="Decrease by $5"
+              data-tip="Decrease by $5"
             >
               <Glyph icon="lucide:minus" size={12} />
             </button>
@@ -117,7 +118,8 @@ export function CurrencyField(props: {
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => adjust(5)}
               class="ui-studio-step-btn"
-              title="Increase by $5"
+              aria-label="Increase by $5"
+              data-tip="Increase by $5"
             >
               <Glyph icon="lucide:plus" size={12} />
             </button>
@@ -129,7 +131,8 @@ export function CurrencyField(props: {
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.onInput("")}
                 class="ui-studio-step-btn ui-studio-clear-btn"
-                title="Reset to unlimited"
+                aria-label="Reset to unlimited"
+                data-tip="Reset to unlimited"
               >
                 <Glyph icon="lucide:infinity" size={12} />
               </button>
@@ -240,6 +243,8 @@ export function StepperField(props: {
             type="button"
             tabIndex={-1}
             aria-hidden="true"
+            aria-label="Decrease"
+            data-tip="Decrease"
             disabled={props.disabled}
             onPointerDown={(e) => press(e.currentTarget)}
             onClick={() => adjust(-1)}
@@ -267,6 +272,8 @@ export function StepperField(props: {
             type="button"
             tabIndex={-1}
             aria-hidden="true"
+            aria-label="Increase"
+            data-tip="Increase"
             disabled={props.disabled}
             onPointerDown={(e) => press(e.currentTarget)}
             onClick={() => adjust(1)}
@@ -397,7 +404,8 @@ export function TokenTagField(props: {
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => props.onInput("")}
               class="ui-studio-step-btn ui-studio-clear-btn mr-1"
-              title="Clear all"
+              aria-label="Clear all"
+              data-tip="Clear all"
             >
               <Glyph icon="lucide:x" size={12} />
             </button>
@@ -551,7 +559,8 @@ export function SecretField(props: {
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => setRevealed((v) => !v)}
               class="ui-studio-step-btn"
-              title={revealed() ? "Hide secret" : "Reveal secret"}
+              aria-label={revealed() ? "Hide secret" : "Reveal secret"}
+              data-tip={revealed() ? "Hide secret" : "Reveal secret"}
             >
               <Glyph icon={revealed() ? "lucide:eye-off" : "lucide:eye"} size={13} />
             </button>

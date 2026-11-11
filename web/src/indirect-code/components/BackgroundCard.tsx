@@ -171,6 +171,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
               : "border-border bg-surface-subtle text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
             aria-pressed={showArchived()}
             aria-label={`Archived tasks (${archived().length})`}
+            data-rc-tip={showArchived() ? "Hide archived tasks" : `Archived tasks (${archived().length})`}
             onClick={toggleArchive}
             data-bg-archive-toggle
           >
@@ -197,6 +198,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                     class={`inline-flex shrink-0 ${taskState(job.status).color}`}
                     role="img"
                     aria-label={taskState(job.status).label}
+                    data-rc-tip={taskState(job.status).label}
                     data-bg-status={job.status}
                   >
                     <Iconify icon={taskState(job.status).icon} size={14} class={job.status === "running" ? "animate-spin" : ""} />
@@ -206,7 +208,10 @@ export function BackgroundCard(props: { contextKey?: string }) {
                     size={14}
                     class="shrink-0 text-fg-muted"
                   />
-                  <span class="truncate text-fg min-w-0 flex-1 text-[12.5px]">
+                  <span
+                    class="truncate text-fg min-w-0 flex-1 text-[12.5px]"
+                    data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
+                  >
                     <ShellCmd text={shortLabel(job.label || job.id)} />
                   </span>
                   <Show when={job.status !== "running" && job.exitCode !== undefined}>
@@ -228,6 +233,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                         e.stopPropagation();
                         bg.stop(job.id);
                       }}
+                      data-rc-tip="Stop task"
                       aria-label="Stop task"
                       data-bg-stop={job.id}
                     >
@@ -242,6 +248,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                         e.stopPropagation();
                         dismiss(job.id);
                       }}
+                      data-rc-tip="Dismiss task"
                       aria-label="Dismiss task"
                       data-bg-dismiss={job.id}
                     >
@@ -256,6 +263,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                       toggle(job.id);
                     }}
                     aria-expanded={isOpen(job.id)}
+                    data-rc-tip={isOpen(job.id) ? "Hide logs" : "Show logs"}
                     aria-label={isOpen(job.id) ? "Hide logs" : "Show logs"}
                   >
                     <Iconify icon="lucide:chevron-down" size={14} class={`transition-transform ${isOpen(job.id) ? "rotate-180" : ""}`} />

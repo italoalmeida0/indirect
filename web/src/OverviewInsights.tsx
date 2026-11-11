@@ -17,13 +17,13 @@ export function TopModelsCard(props: { models: TopModelDto[]; requests: number; 
         <For each={props.models}>{(model, index) => <li class="top-model-row" data-model={model.model}>
           <span class="top-model-rank" aria-label={`Rank ${index() + 1}`}>{String(index() + 1).padStart(2, "0")}</span>
           <div class="top-model-identity">
-            <strong class="top-model-name" title={model.model_name}>{model.model_name}</strong>
-            <span class="top-model-route" title={`by ${provider(model)} (${model.upstream_model || model.model})${model.route_count > 1 ? ` · Most used of ${model.route_count} routes` : ""}`}>
+            <strong class="top-model-name" data-tip={model.model_name}>{model.model_name}</strong>
+            <span class="top-model-route" data-tip={`by ${provider(model)} (${model.upstream_model || model.model})${model.route_count > 1 ? ` · Most used of ${model.route_count} routes` : ""}`}>
               by <span>{provider(model)}</span> <span class="top-model-upstream">({model.upstream_model || model.model})</span>
             </span>
             <Show when={model.route_count > 1}><span class="top-model-other-routes">+{model.route_count - 1} {model.route_count === 2 ? "route" : "routes"}</span></Show>
           </div>
-          <div class="top-model-volume" title={`${model.reqs.toLocaleString()} requests · ${percent(share(model))}% of this period`}>
+          <div class="top-model-volume" data-tip={`${model.reqs.toLocaleString()} requests · ${percent(share(model))}% of this period`}>
             <strong>{fmtNum(model.reqs)}</strong><span>{percent(share(model))}%</span>
             <div class="top-model-bar" aria-hidden="true"><i style={{ width: `${share(model)}%` }} /></div>
           </div>

@@ -26,7 +26,7 @@ export function MsgIconBtn(props: {
           ? `rc-msg-action p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer ${props.danger ? "hover:text-danger hover:bg-danger-subtle/60" : ""}`
           : `rc-msg-action p-1.5 rounded-md text-fg-muted hover:text-fg ${props.danger ? "hover:text-danger hover:bg-danger-subtle/60" : "hover:bg-surface-muted"} transition-colors cursor-pointer disabled:opacity-40`
       }
-      data-rc-tip={props.tip}
+      data-rc-tip={props.copied ? "Copied" : props.tip}
       aria-label={props.tip}
     >
       <Iconify icon={props.copied ? "lucide:check" : props.icon} size={props.size ?? (props.compact ? 13 : 14)} class={props.copied ? "text-success" : ""} />
@@ -66,7 +66,7 @@ export function AssistantMsgActions(props: MsgActionState & { onRegenerate: () =
       </Show>
       <MsgIconBtn tip="Regenerate response" icon="lucide:rotate-cw" onClick={props.onRegenerate} />
       <Show when={props.duration}>
-        <span data-turn-duration class="ml-1.5 text-[11px] text-fg-muted tabular-nums" aria-label={`Turn duration: ${props.duration}`}>{props.duration}</span>
+        <span data-turn-duration data-rc-tip={`Turn duration: ${props.duration}`} class="ml-1.5 text-[11px] text-fg-muted tabular-nums" aria-label={`Turn duration: ${props.duration}`}>{props.duration}</span>
       </Show>
     </div>
   );

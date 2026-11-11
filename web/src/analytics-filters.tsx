@@ -197,7 +197,7 @@ function SearchField(props: { value: string; onInput: (value: string) => void; p
   return <div class="analytics-search">
     <Icon name={Icons.search} size={15} />
     <input aria-label={props.placeholder} placeholder={props.placeholder} value={props.value} data-initial-focus={props.initial ? "" : undefined} onInput={(event) => props.onInput(event.currentTarget.value)} autocomplete="off" spellcheck={false} />
-    <Show when={props.value}><button type="button" class="analytics-icon-button" aria-label="Clear search" onClick={() => props.onInput("")}><Icon name={Icons.x} size={13} /></button></Show>
+    <Show when={props.value}><button type="button" class="analytics-icon-button" aria-label="Clear search" data-tip="Clear search" onClick={() => props.onInput("")}><Icon name={Icons.x} size={13} /></button></Show>
   </div>;
 }
 
@@ -313,7 +313,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
       <button ref={filterButton} type="button" class={`analytics-control ${count() || open() === "filters" ? "is-active" : ""}`} aria-label={`Filter ${props.label ?? "usage"}`} aria-busy={props.loading || f.pending()} aria-haspopup="dialog" aria-expanded={open() === "filters"} aria-controls={`${id}-filters`} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { if (open() === "filters") close(); else { f.setField(""); setOpen("filters"); setActive(""); setCategorySearch(""); } }}>
         <Icon name={props.loading || f.pending() ? Icons.refresh : "lucide:list-filter"} size={16} class={props.loading || f.pending() ? "animate-spin motion-reduce:animate-none" : ""} /><span>Filter</span><Show when={count()}><span class="analytics-filter-count">{count()}</span></Show>
       </button>
-      <button ref={periodButton} type="button" class={`analytics-control analytics-period-trigger ${open() === "period" ? "is-active" : ""}`} title={exactRange()} aria-label={`Time range: ${props.dateLabel ? `${props.dateLabel}: ` : ""}${f.label()} ${periodText()}`} aria-haspopup="dialog" aria-expanded={open() === "period"} aria-controls={`${id}-period`} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { if (open() === "period") close(); else { setCustom(false); setOpen("period"); } }}>
+      <button ref={periodButton} type="button" class={`analytics-control analytics-period-trigger ${open() === "period" ? "is-active" : ""}`} data-tip={exactRange()} aria-label={`Time range: ${props.dateLabel ? `${props.dateLabel}: ` : ""}${f.label()} ${periodText()}`} aria-haspopup="dialog" aria-expanded={open() === "period"} aria-controls={`${id}-period`} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { if (open() === "period") close(); else { setCustom(false); setOpen("period"); } }}>
         <Icon name="lucide:calendar-days" size={15} />
         <span class="analytics-range-name">
           <RollingText text={`${props.dateLabel ? `${props.dateLabel}: ` : ""}${f.label()}`} direction={rangeDirection()} />
@@ -328,8 +328,8 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
     <Show when={chips().length}>
       <div class="analytics-chips" aria-live="polite">
         <For each={chips()}>{(chip) => <div class={`analytics-chip ${chip.mode === "exclude" ? "is-exclusion" : ""}`}>
-          <button type="button" class="analytics-chip-label" title={chip.labels.join(", ")} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { setOpen("filters"); chooseCategory(chip.field); setMode(chip.mode); }}><span>{chip.category}</span><span class="analytics-chip-operator">{chip.mode === "include" ? "is" : "is not"}</span><strong><RollingText text={chip.labels.slice(0, 2).join(", ")} /></strong><Show when={chip.labels.length > 2}><span>+{chip.labels.length - 2}</span></Show></button>
-          <button type="button" class="analytics-chip-remove" aria-label={`Remove ${chip.category} ${chip.mode} filter`} onPointerDown={(e) => press(e.currentTarget)} onClick={() => f.clear(chip.field, chip.mode)}><Icon name={Icons.x} size={12} /></button>
+          <button type="button" class="analytics-chip-label" data-tip={chip.labels.join(", ")} onPointerDown={(e) => press(e.currentTarget)} onClick={() => { setOpen("filters"); chooseCategory(chip.field); setMode(chip.mode); }}><span>{chip.category}</span><span class="analytics-chip-operator">{chip.mode === "include" ? "is" : "is not"}</span><strong><RollingText text={chip.labels.slice(0, 2).join(", ")} /></strong><Show when={chip.labels.length > 2}><span>+{chip.labels.length - 2}</span></Show></button>
+          <button type="button" class="analytics-chip-remove" aria-label={`Remove ${chip.category} ${chip.mode} filter`} data-tip="Remove filter" onPointerDown={(e) => press(e.currentTarget)} onClick={() => f.clear(chip.field, chip.mode)}><Icon name={Icons.x} size={12} /></button>
         </div>}</For>
         <button type="button" class="analytics-clear" onPointerDown={(e) => press(e.currentTarget)} onClick={() => f.clear()}>Clear all</button>
       </div>
@@ -354,7 +354,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
             <div class="analytics-menu-footer"><span>Narrow your view</span><kbd>esc</kbd></div>
           </div>
           <Show when={current()}>{(category) => <div ref={optionsPaneEl} class="analytics-options">
-            <div class="analytics-option-heading"><button type="button" class="analytics-icon-button" aria-label="Back to filters" onPointerDown={(e) => press(e.currentTarget)} onClick={() => { setActive(""); f.setField(""); }}><Icon name="lucide:chevron-left" size={15} /></button><span>{category().label}</span><span class="analytics-result-count">{f.pageLoading() ? "Loading…" : `${(f.page()?.total ?? 0).toLocaleString()} available`}</span></div>
+            <div class="analytics-option-heading"><button type="button" class="analytics-icon-button" aria-label="Back to filters" data-tip="Back to filters" onPointerDown={(e) => press(e.currentTarget)} onClick={() => { setActive(""); f.setField(""); }}><Icon name="lucide:chevron-left" size={15} /></button><span>{category().label}</span><span class="analytics-result-count">{f.pageLoading() ? "Loading…" : `${(f.page()?.total ?? 0).toLocaleString()} available`}</span></div>
             <div ref={setModeWrapEl} class="analytics-mode" data-glide="" role="group" aria-label="Filter mode">
               <span ref={setModeIndEl} class="ui-segmented-indicator" aria-hidden="true" />
               <For each={["include", "exclude"] as const}>{(value) => <button ref={(el) => setModeBtnEls((prev) => ({ ...prev, [value]: el }))} type="button" aria-pressed={mode() === value} class={mode() === value ? "is-selected" : ""} onPointerDown={(e) => press(e.currentTarget)} onClick={() => setMode(value)}><Icon name={value === "include" ? "lucide:plus" : "lucide:minus"} size={13} />{value === "include" ? "Include" : "Exclude"}</button>}</For>
@@ -367,7 +367,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
               <For each={visibleOptions()}>{(option) => {
                 const selected = () => f.selection()[category().id]?.[mode()].includes(option.value) ?? false;
                 const other = () => f.selection()[category().id]?.[mode() === "include" ? "exclude" : "include"].includes(option.value) ?? false;
-                return <button type="button" data-nav class={`analytics-menu-row analytics-option ${selected() ? "is-active" : ""}`} aria-pressed={selected()} disabled={!selected() && !other() && count() >= 250} title={option.value || "Unknown"} onPointerEnter={(e) => setOptHover(e.currentTarget)} onFocus={(e) => setOptHover(e.currentTarget)} onPointerDown={(e) => press(e.currentTarget)} onClick={() => f.toggle(category().id, mode(), option.value, option.label)}>
+                return <button type="button" data-nav class={`analytics-menu-row analytics-option ${selected() ? "is-active" : ""}`} aria-pressed={selected()} disabled={!selected() && !other() && count() >= 250} data-tip={option.value || "Unknown"} onPointerEnter={(e) => setOptHover(e.currentTarget)} onFocus={(e) => setOptHover(e.currentTarget)} onPointerDown={(e) => press(e.currentTarget)} onClick={() => f.toggle(category().id, mode(), option.value, option.label)}>
                   <span class={`analytics-checkbox ${selected() ? "is-checked" : ""}`}><Show when={selected()}><Icon name={mode() === "include" ? Icons.check : "lucide:minus"} size={11} strokeWidth={2.5} /></Show></span>
                   <span class="analytics-option-name">{option.label}</span><Show when={other()}><Icon name={mode() === "include" ? "lucide:minus" : "lucide:plus"} size={12} class="text-ink-500" /></Show><span class="analytics-option-count">{option.count.toLocaleString()}</span>
                 </button>;
@@ -392,7 +392,7 @@ export function AnalyticsToolbar(props: { filters: ReturnType<typeof createAnaly
       <FloatingPanel anchor={periodButton} label="Time range" close={close}>
         <div id={`${id}-period`} ref={periodBodyEl}>
           <Show when={!custom()} fallback={<>
-            <div class="analytics-custom-heading"><button type="button" class="analytics-icon-button" aria-label="Back to presets" onPointerDown={(e) => press(e.currentTarget)} onClick={exitCustom}><Icon name="lucide:chevron-left" size={15} /></button><strong>Custom range</strong><span>{timezone}</span></div>
+            <div class="analytics-custom-heading"><button type="button" class="analytics-icon-button" aria-label="Back to presets" data-tip="Back to presets" onPointerDown={(e) => press(e.currentTarget)} onClick={exitCustom}><Icon name="lucide:chevron-left" size={15} /></button><strong>Custom range</strong><span>{timezone}</span></div>
             <Show when={calendarVersion()} keyed>{(_version) => <RangeCalendar from={draftFrom()} to={draftTo()} setFrom={setDraftFrom} setTo={setDraftTo} />}</Show>
             <div class="analytics-date-fields"><label>Start<input type="datetime-local" aria-label="Start date and time" value={draftFrom()} onInput={(e) => setDraftFrom(e.currentTarget.value)} /></label><label>End<input type="datetime-local" aria-label="End date and time" value={draftTo()} onInput={(e) => setDraftTo(e.currentTarget.value)} /></label></div>
             <Show when={!validDraft()}><p class="analytics-date-error" role="alert">End must be on or after the start.</p></Show>
