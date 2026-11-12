@@ -307,7 +307,6 @@ export default function IndirectCodePage() {
       options.resetPendingChoice();
       transcript.clearForkRequest();
       transcript.setForking(false);
-      forkKind = null;
       pendingDiscardReloadSid = null;
       setCreatingSession(false);
       projects.setFolderLoading(false);
@@ -376,9 +375,6 @@ export default function IndirectCodePage() {
     },
     onDiscardResendOrRegenerate: (sid: string) => {
       pendingDiscardReloadSid = sid;
-    },
-    onForkKind: (kind: "resend" | "regenerate" | "fork") => {
-      forkKind = kind;
     },
   });
 
@@ -528,6 +524,8 @@ export default function IndirectCodePage() {
     hosts: () => hosts.hosts(),
     sessions: () => mirror.sessions(),
     toast: notice.toast,
+    activeHostId: () => hosts.activeHostId(),
+    activeSessionId: () => (historyView() ? "" : activeSessionId()),
     onOpenSession: (hostId, sessionId) => {
       try { window.focus(); } catch {}
       if (hostId !== hosts.activeHostId()) hosts.setActiveHostId(hostId);
@@ -679,7 +677,6 @@ export default function IndirectCodePage() {
   let addBtn: HTMLButtonElement | undefined;
   let contextBtn: HTMLButtonElement | undefined;
 
-  let forkKind: "resend" | "regenerate" | "fork" | null = null;
   let pendingDiscardReloadSid: string | null = null;
   // In-flight widget_set/widget_edit calls (tool_call → tool_result
   // pairing): toolId → the widget id they mutate, so a store change
@@ -735,7 +732,6 @@ export default function IndirectCodePage() {
     // the cache so re-entering always re-fetches fresh sources.
     invalidateWidgetSources(id);
     turnChanges.reset();
-    notice.setAppNotice(null);
     transcript.beginLoad(id, messageIdx);
     setActiveSessionId(id);
     try {
@@ -772,7 +768,6 @@ export default function IndirectCodePage() {
       if (hid) localStorage.setItem(`llmgw-rc-session:${hid}`, "new");
     } catch {}
     turnChanges.reset();
-    notice.setAppNotice(null);
     const remembered = options.getLastLocalSelection() || mirror.configDoc()?.lastSelection;
     const catalog = gatewayModels();
     options.setActiveModel(catalog.find((m) => m.id === remembered?.model)?.id || catalog[0]?.id || "");
@@ -801,7 +796,7 @@ export default function IndirectCodePage() {
       return;
     }
     if (!relay.wsOpen()) {
-      notice.toast("Not connected to host yet — wait for online status", "err");
+      notice.toast("Not connected to host yet. Wait for online status", "err");
       return;
     }
     if (creatingSession()) return;
@@ -882,7 +877,6 @@ export default function IndirectCodePage() {
     if (msg.type !== "host_status" && msg.hostId && msg.hostId !== hosts.activeHostId()) return;
     if (msg.type === "error" && transcript.forkAckMatches(msg)) {
       transcript.noteForkAndResendResult({ ...msg, ok: false });
-      forkKind = null;
     }
     if (settings.handleSettingsMessage(msg)) return;
     switch (msg.type) {
@@ -911,15 +905,9 @@ export default function IndirectCodePage() {
         if (msg.session.skills) options.applySessionSkills(msg.session.skills);
         if (msg.resent) {
           transcript.setSessionStatus("running");
-          if (forkKind === "regenerate") {
-            notice.toast("Fork created — regenerating response", "ok");
-          } else {
-            notice.toast("Fork created — resending with edited text", "ok");
-          }
         } else {
-          notice.toast("Conversation fork created", "ok");
+          notice.toast("Switched to forked conversation", "ok");
         }
-        forkKind = null;
         break;
       }
       case "session_created": {
@@ -949,7 +937,6 @@ export default function IndirectCodePage() {
         const p = projects.noteProjectCreated(msg);
         if (!p) break;
         mirror.dataLayer.storeFor(hosts.activeHostId()).syncAll().catch((e) => console.warn("[rc-sync] syncAll:", e));
-        notice.toast(`Project '${p.name || "Project"}' added`, "ok");
         break;
       }
       case "folders": {
@@ -1079,11 +1066,8 @@ export default function IndirectCodePage() {
       case "fork_and_resend_result": {
         if (!transcript.noteForkAndResendResult(msg)) break;
         if (msg.ok && msg.newSessionId) {
-          notice.toast("Fork created — resending with edited text", "ok");
           mirror.dataLayer.storeFor(hosts.activeHostId()).syncAll().catch(() => {});
           selectSession(msg.newSessionId);
-        } else if (msg.ok) {
-          notice.toast("Fork created", "ok");
         }
         break;
       }
@@ -1095,12 +1079,7 @@ export default function IndirectCodePage() {
         // F5 + reconnect + host switch; the daemon stays the source of
         // truth for versions, the hook owns the per-host lifecycle.
         const hid = (msg as any).hostId || hosts.activeHostId();
-        const prev = hid ? daemonUpdate.stateFor(hid)?.available ?? "" : "";
         daemonUpdate.noteUpdate(hid, msg);
-        const now = hid ? daemonUpdate.stateFor(hid)?.available ?? "" : "";
-        if (now && now !== prev) {
-          notice.toast(`Daemon update available: ${now}`, "ok");
-        }
         break;
       }
 
@@ -1151,15 +1130,10 @@ export default function IndirectCodePage() {
       case "session_compacted": {
         const sid = msg.sessionId;
         if (sid !== activeSessionId()) break;
+        transcript.clearCompacting();
         transcript.applySessionContent(sid, msg.messages || [], msg.compaction, (msg as any).history, {...msg, applyMetadata: () => {
         transcript.setSessionContexts((prev) => ({ ...prev, [sid]: msg.context ?? null }));
         if (msg.usage) transcript.applyUsage(sid, msg.usage, null);
-        notice.toast(
-          msg.auto
-            ? "Context auto-compacted — older turns summarized, recent context preserved"
-            : "Transcript compacted successfully",
-          "ok",
-        );
         }});
         break;
       }
@@ -1273,6 +1247,7 @@ export default function IndirectCodePage() {
         // Sync pulls on an offline host are expected background noise.
         if (msg.replyTo === "pull") break;
 
+        transcript.clearCompacting();
         notice.toast(msg.message || "Daemon returned an error", "err");
         if (activeSessionId()) transcript.fetchSession(activeSessionId());
         break;
@@ -1333,7 +1308,6 @@ export default function IndirectCodePage() {
         }}
         onRefresh={async () => {
           await loadGatewayModels();
-          notice.toast("Models refreshed", "ok");
         }}
       />
     );
@@ -1426,7 +1400,6 @@ export default function IndirectCodePage() {
         transcript.resetForSession();
         transcript.resetCaches();
         background.reset();
-        notice.setAppNotice(null);
         setActiveSessionId("");
         projects.setActiveProjectId("");
         composer.clearAttachments();

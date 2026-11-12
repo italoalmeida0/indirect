@@ -215,7 +215,7 @@ export function createDaemonUpdate(opts: {
       localStorage.setItem("llmgw-update-done", version || "done");
     } catch {}
     setTimeout(() => window.location.reload(), 1200);
-    opts.toast(`Daemon updated to ${version} — reloading…`, "ok");
+    opts.toast(`Daemon updated to ${version}, reloading…`, "ok");
   }
 
   /** Boot cleanup: show + clear a pending post-reload update toast. */

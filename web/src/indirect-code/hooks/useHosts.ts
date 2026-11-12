@@ -81,7 +81,6 @@ export function createHosts(opts: {
       await api("DELETE", `/api/indirect-code/hosts/${encodeURIComponent(host.id)}`);
       await loadHosts();
       opts.onHostRemoved?.(host.id);
-      opts.toast("Host removed", "ok");
     } catch (error: any) { opts.toast(error?.message || "Could not remove host", "err"); }
   }
 

@@ -227,7 +227,6 @@ export function createBackground(opts: {
     if (!opts.isOpen()) return;
     // The daemon ownership check refuses session-less and foreign cancels.
     opts.send({ type: "bg_cancel", jobId, sessionId: opts.getSessionId() });
-    opts.toast("Background task stopped", "ok");
   }
 
   function running() {

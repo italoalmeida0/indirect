@@ -47,6 +47,9 @@ export function StatusBanners() {
   });
   const completedTodos = () => t.todos().filter((item) => item.status === "completed").length;
   const todoPercent = () => (t.todos().length ? Math.round((completedTodos() / t.todos().length) * 100) : 0);
+  const compacting = () => Boolean(t.compactingText?.());
+  const hasTurnRow = () => Boolean(t.turnActivity() || compacting());
+  const isBusy = () => t.sessionStatus() === "running" || compacting();
   return (
 <>
 <Show when={s.draftMode()}>
@@ -54,19 +57,19 @@ export function StatusBanners() {
     <IndirectBrand />
   </div>
 </Show>
-<Show when={s.activeSessionId() && t.turnActivity()}>
+<Show when={s.activeSessionId() && hasTurnRow()}>
   <div role="status" data-turn-status class="mb-1.5 flex items-center gap-2 px-1 text-xs text-fg-muted min-w-0">
-    <Iconify icon={t.sessionStatus() === "running" ? "lucide:loader-circle" : "lucide:clock-3"} size={13} class={t.sessionStatus() === "running" ? "animate-spin shrink-0 text-accent" : "shrink-0 text-fg-muted"} />
-    <span class="shrink-0 font-medium text-fg-secondary">{t.turnLabel()}</span>
-    <Show when={t.turnHint()}>{(hint) =>
+    <Iconify icon={isBusy() ? "lucide:loader-circle" : "lucide:clock-3"} size={13} class={isBusy() ? "animate-spin shrink-0 text-accent" : "shrink-0 text-fg-muted"} />
+    <span class="shrink-0 font-medium text-fg-secondary">{t.turnLabel?.() || t.compactingText?.()}</span>
+    <Show when={!compacting() && t.turnHint()}>{(hint) =>
       <span class="min-w-0 flex-1 truncate whitespace-nowrap overflow-hidden font-mono text-[11px] text-fg-muted">· {hint()}</span>
     }</Show>
-    <ComposerCollapseToggle withHint={!t.turnHint()} />
+    <ComposerCollapseToggle withHint={compacting() || !t.turnHint()} />
   </div>
 </Show>
 {/* No turn row (idle conversation): the chevron still needs a home, so it
     rides its own right-aligned row. */}
-<Show when={s.activeSessionId() && !t.turnActivity()}>
+<Show when={s.activeSessionId() && !hasTurnRow()}>
   <div class="mb-1 flex items-center justify-end px-1 text-xs text-fg-muted min-w-0">
     <ComposerCollapseToggle withHint={false} />
   </div>
@@ -96,13 +99,6 @@ export function StatusBanners() {
     </ol></Show>
   </section>
 </Show>
-<Show when={ui.appNotice()}>{(notice) =>
-  <div role={notice().kind === "err" ? "alert" : "status"} class={`mb-2.5 flex items-start gap-2.5 rounded-lg border px-3 py-2 text-xs ${notice().kind === "err" ? "border-danger/35 bg-danger-subtle text-fg" : "border-border bg-surface-raised text-fg-secondary"}`}>
-    <Iconify icon={notice().kind === "err" ? "lucide:circle-alert" : "lucide:check-circle-2"} size={14} class={`shrink-0 mt-0.5 ${notice().kind === "err" ? "text-danger" : "text-success"}`} />
-    <span class="min-w-0 flex-1 break-words">{notice().message}</span>
-    <button type="button" aria-label="Dismiss notification" data-rc-tip="Dismiss notification" onClick={() => ui.setAppNotice(null)} class="p-0.5 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"><Iconify icon="lucide:x" size={13} /></button>
-  </div>
-}</Show>
 <Show when={h.activeHost() && (h.connectionState() !== "connected" || h.activeHost()?.status !== "online")}>
   <div class="rc-delayed-banner">
     <div role="status" class="mb-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-fg flex items-start gap-2.5">

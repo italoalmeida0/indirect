@@ -248,7 +248,6 @@ export function createComposer(opts: {
         }
         opts.o.setActiveModel(arg);
         opts.o.configureSession();
-        opts.toast(`Model set to ${arg}`, "ok");
         return true;
       case "/reasoning": {
         const lvl = normalizeEffort(arg);
@@ -261,7 +260,6 @@ export function createComposer(opts: {
         }
         opts.o.setEffort(lvl);
         opts.o.configureSession();
-        opts.toast(`Reasoning effort set to ${formatEffort(lvl)}`, "ok");
         return true;
       }
       case "/skills":

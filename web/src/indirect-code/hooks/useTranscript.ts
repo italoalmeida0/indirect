@@ -93,6 +93,8 @@ export function createTranscript(opts: {
     }
     setTodosOpen(remote);
   }
+  const [compactingText, setCompactingText] = createSignal("");
+  const clearCompacting = () => setCompactingText("");
   const [turnClock, setTurnClock] = createSignal(Date.now());
   createEffect(() => {
     if (!turnActivity()?.startedAt || sessionStatus() !== "running") return;
@@ -101,7 +103,15 @@ export function createTranscript(opts: {
     onCleanup(() => clearInterval(timer));
   });
   const turnLabel = () => {
+    const compact = compactingText();
     const turn = turnActivity();
+    if (compact) {
+      if (turn?.startedAt && turn.status === "running" && sessionStatus() === "running") {
+        const elapsed = elapsedLabel((turn.endedAt || turnClock()) - turn.startedAt);
+        return `${compact} · ${elapsed}`;
+      }
+      return compact;
+    }
     if (!turn) return "";
     const elapsed = elapsedLabel((turn.endedAt || turnClock()) - turn.startedAt);
     const label = turn.status === "running" && pendingQuestion() ? "Waiting for your answers" : turn.status === "running" && pendingApproval() ? "Waiting for approval" : { running: "Working", cancelling: "Stopping turn", cancelled: "Turn cancelled", completed: "Turn completed", failed: "Turn failed" }[turn.status];
@@ -181,11 +191,13 @@ export function createTranscript(opts: {
     const trimmed = (text || "").trim();
     if (!trimmed) return;
     void copyText(trimmed).then((ok) => {
-      if (ok) opts.toast("Copied", "ok");
-      else opts.toast("Could not copy automatically. Select the text and copy it manually", "err");
+      if (ok) {
+        setCopiedMsgId(id);
+        setTimeout(() => setCopiedMsgId((cur) => (cur === id ? null : cur)), 1500);
+      } else {
+        opts.toast("Could not copy automatically. Select the text and copy it manually", "err");
+      }
     });
-    setCopiedMsgId(id);
-    setTimeout(() => setCopiedMsgId((cur) => (cur === id ? null : cur)), 1500);
   }
 
   // Live thinking timer (chatbot thinkingElapsed). thinkingIndex tracks
@@ -693,7 +705,10 @@ export function createTranscript(opts: {
         setSealedBudget((n) => Math.max(n, sealedBlocks().length));
       } else setMessages((prev) => preserveTransientToolPreviews(prev, tail));
       restoreEditDraft();
-      if (compaction !== undefined) setSessionCompaction(compaction);
+      if (compaction !== undefined) {
+        setSessionCompaction(compaction);
+        setCompactingText("");
+      }
       // A worker snapshot must not overwrite deltas/status received while it
       // was normalizing. Replay only the events after this exact snapshot.
       for (const apply of replay) apply();
@@ -737,6 +752,7 @@ export function createTranscript(opts: {
     if (r.workspace) setWorkspaceSnapshot(r.workspace);
     setSessionStatus(r.status === "running" ? "running" : "idle");
     setSessionCompaction(r.compaction ?? null);
+    setCompactingText("");
     setTurnActivity(previous => normalizeTurnActivity(r.turn, previous));
     setTurnClock(Date.now());
     if (r.history && typeof r.history.oldestTurn === "number") {
@@ -1251,6 +1267,7 @@ export function createTranscript(opts: {
       if (msg.turn) setTurnActivity(previous => normalizeTurnActivity(msg.turn, previous, msg.status));
       if (msg.status === "idle") {
         showQuestion(null);
+        setCompactingText("");
         setTurnActivity((turn) => finishTurn(turn));
         opts.onTurnIdle();
         setPendingApproval(null);
@@ -1280,13 +1297,16 @@ export function createTranscript(opts: {
     } else if (ev.type === "todo_update") {
       setTodos(ev.items || []);
     } else if (ev.type === "assistant_message") {
+      setCompactingText("");
       if (thinkingStart() !== null) stampThinkingDuration(stopThinkingTimer());
       setMessages((prev) => mergeAssistantMessage(prev, ev));
     } else if (ev.type === "assistant_start") {
+      setCompactingText("");
       // Each model step gets its own carrier. Tool loops cannot merge new
       // thinking into the previous assistant response.
       setMessages((prev) => pushAssistantCarrier(prev, ev.index, ev.turnIndex, ev.messageId));
     } else if (ev.type === "text_delta") {
+      setCompactingText("");
       // First content chunk freezes the thinking clock (chatbot-style).
       if (thinkingStart() !== null) {
         const dur = stopThinkingTimer();
@@ -1294,10 +1314,12 @@ export function createTranscript(opts: {
       }
       setMessages(prev=>reduceTextDelta(prev,ev.delta,ev.messageId));
     } else if (ev.type === "reasoning_delta") {
+      setCompactingText("");
       if (thinkingStart() === null) startThinkingTimer();
       setMessages(prev=>reduceReasoningDelta(prev,ev.delta || "",ev.messageId));
       setThinkingIndex(0);
     } else if (ev.type === "tool_use_start") {
+      setCompactingText("");
       if (thinkingStart() !== null) stampThinkingDuration(stopThinkingTimer());
       // Pre-render a live "composing call" card while args stream in.
       setMessages(prev=>reduceToolCall(prev,ev.id,ev.name,"",ev.messageId));
@@ -1311,6 +1333,7 @@ export function createTranscript(opts: {
     } else if (ev.type === "tool_progress") {
       setToolProgress((prev) => ({ ...prev, [ev.id]: ((prev[ev.id] || "") + stripToolEnvelopeDetailed(String(ev.text || "")).body).slice(-65536) }));
     } else if (ev.type === "tool_call") {
+      setCompactingText("");
       if (thinkingStart() !== null) stampThinkingDuration(stopThinkingTimer());
       setMessages(prev=>reduceToolCall(prev,ev.id,ev.name,ev.args,ev.messageId));
     } else if (ev.type === "tool_result") {
@@ -1330,11 +1353,12 @@ export function createTranscript(opts: {
         opts.onUsageContext(uctx);
       }
     } else if (ev.type === "compact_progress") {
-      if (ev.text === "Compacting older context…") opts.toast(ev.text, "ok");
+      setCompactingText(typeof ev.text === "string" ? ev.text.trim() : "");
     } else if (ev.type === "retry") {
       if (thinkingStart() !== null) stampThinkingDuration(stopThinkingTimer());
       setMessages((prev) => prev.filter((m) => ev.index == null ? !m.streaming : m.srcIdx == null || m.srcIdx < ev.index));
     } else if (ev.type === "turn_end") {
+      setCompactingText("");
       setMessages((prev) => prev.map((m) => m.streaming ? { ...m, streaming: false } : m));
       // This ends one model call; tools and subsequent steps may still run.
       if (thinkingStart() !== null) {
@@ -1349,9 +1373,11 @@ export function createTranscript(opts: {
       } else if (ev.error) opts.toast(ev.error, "err");
       // The daemon sends the final snapshot and idle status after the task.
     } else if (ev.type === "done") {
+      setCompactingText("");
       // Compatibility with daemons that predate final session snapshots.
       fetchSession(sessionId);
     } else if (ev.type === "error") {
+      setCompactingText("");
       opts.toast(ev.message || "Agent error", "err");
       fetchSession(sessionId);
     }
@@ -1454,6 +1480,7 @@ export function createTranscript(opts: {
     resetHistory();
     setMessages([]);
     setSessionCompaction(null);
+    setCompactingText("");
     setSessionStatus("idle");
     setPendingApproval(null);
     setEditingMsgIdx(null);
@@ -1498,6 +1525,7 @@ export function createTranscript(opts: {
     // state
     messages, sessionStatus, setSessionStatus, turnActivity,
     todos, todosOpen, toggleTodosOpen, applyTodosOpenFromRemote, turnClock, turnLabel, turnHint,
+    compactingText, clearCompacting,
     sessionCompaction,
     pendingApproval, pendingQuestion,
     questionSubmitting, questionError, showQuestion, answerQuestion,

@@ -6,7 +6,7 @@ import { StreamingMarkdown } from "./StreamingMarkdown";
 import { FileIcon } from "../presentation";
 import { baseNameOf } from "../transcript";
 import { compactTokens } from "../context";
-import { copyWithToast } from "../../ui";
+import { copyToClipboard, toast } from "../../ui";
 import type {
   CompactionState,
   FoldBlockFailedCommand,
@@ -498,9 +498,14 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
     e.stopPropagation();
     const text = copyText();
     if (!text) return;
-    copyWithToast(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    void copyToClipboard(text).then((ok) => {
+      if (ok) {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } else {
+        toast("Could not copy automatically. Select the text and copy it manually", "err");
+      }
+    });
   }
 
   return (

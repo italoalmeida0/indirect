@@ -1,18 +1,14 @@
-import { createSignal, onCleanup } from "solid-js";
+import { pushToast } from "../../ds/components/toast";
 
 export type NoticeKind = "ok" | "err";
 
-/** Ephemeral page toast/notice (extracted from RemoteCodePage without
- * behavioral changes). */
+/** Ephemeral floating toast notifier backed by the portaled DS ToastRegion. */
 export function createNotice() {
-  const [appNotice, setAppNotice] = createSignal<{ message: string; kind: NoticeKind } | null>(null);
-  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  const appNotice = (): { message: string; kind: NoticeKind } | null => null;
+  const setAppNotice = (_next: { message: string; kind: NoticeKind } | null) => {};
   function toast(message: string, kind: NoticeKind = "ok") {
-    clearTimeout(noticeTimer);
-    setAppNotice({ message, kind });
-    if (kind === "ok") noticeTimer = setTimeout(() => setAppNotice(null), 5000);
+    pushToast(message, kind);
   }
-  onCleanup(() => clearTimeout(noticeTimer));
   return { appNotice, setAppNotice, toast };
 }
 

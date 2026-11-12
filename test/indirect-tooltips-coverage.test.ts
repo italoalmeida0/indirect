@@ -161,7 +161,7 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     const banners = readIc("components/composer/StatusBanners.tsx");
     expect(banners).toContain("data-composer-collapse");
     expect(banners).toContain("data-rc-tip={label()}");
-    expect(banners).toContain('data-rc-tip="Dismiss notification"');
+    expect(banners).not.toContain("ui.appNotice");
   });
 
   test("effort picker and model picker controls carry data-rc-tip", () => {

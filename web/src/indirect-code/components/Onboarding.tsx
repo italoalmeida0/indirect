@@ -1,7 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { press } from "../../ds/motion/press";
 import { Icon as Iconify } from "../../components/icon";
-import { Badge, Btn, copyWithToast } from "../../ui";
+import { Badge, Btn, copyToClipboard, toast } from "../../ui";
 import { useHost, useModal } from "../ctx";
 import { indirectInstallCommands } from "../install";
 import { IndirectBrand } from "./IndirectBrand";
@@ -23,9 +23,14 @@ export function Onboarding() {
 
   const copyCmd = (kind: "unix" | "windows", cmd: string) => {
     setOsTab(kind);
-    void copyWithToast(cmd);
-    setCopiedKey(kind);
-    setTimeout(() => setCopiedKey((prev) => (prev === kind ? null : prev)), 1600);
+    void copyToClipboard(cmd).then((ok) => {
+      if (ok) {
+        setCopiedKey(kind);
+        setTimeout(() => setCopiedKey((prev) => (prev === kind ? null : prev)), 1600);
+      } else {
+        toast("Could not copy automatically. Select the text and copy it manually", "err");
+      }
+    });
   };
 
   return (

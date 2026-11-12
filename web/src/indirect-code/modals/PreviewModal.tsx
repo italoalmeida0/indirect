@@ -1,5 +1,5 @@
 import { Show } from "solid-js";
-import { Modal, Badge, Btn, StepperField, copyWithToast } from "../../ui";
+import { Modal, Badge, Btn, StepperField, copyToClipboard, toast } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { languageForPath } from "../utils/lang";
 import { compactTokens } from "../context";
@@ -102,9 +102,17 @@ export function PreviewModal() {
                     <button
                       type="button"
                       onClick={() => {
-                        void copyWithToast(f().text || "");
-                        m.setPreviewCopied(true);
-                        setTimeout(() => m.setPreviewCopied(false), 1500);
+                        void copyToClipboard(f().text || "").then((ok) => {
+                          if (ok) {
+                            m.setPreviewCopied(true);
+                            setTimeout(() => m.setPreviewCopied(false), 1500);
+                          } else {
+                            toast(
+                              "Could not copy automatically. Select the text and copy it manually",
+                              "err",
+                            );
+                          }
+                        });
                       }}
                       class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >

@@ -1,5 +1,4 @@
 import type { DaemonCommand } from "../daemon-protocol";
-import { compactTokens } from "../context";
 import { createEffect, createSignal, onCleanup } from "solid-js";
 import type { PreviewFile } from "../types";
 import type { AttachmentDataEvent } from "../daemon-protocol";
@@ -130,10 +129,6 @@ export function createReview(opts: {
       text: f.text.substring(0, maxChars),
       truncated: true,
     });
-    opts.toast(
-      `Preview limited to ~${compactTokens(limit)} tokens; the attachment is unchanged`,
-      "ok",
-    );
   }
 
   function restorePreviewFile() {
@@ -145,7 +140,6 @@ export function createReview(opts: {
         fullText: undefined,
         truncated: false,
       });
-      opts.toast("Original content restored", "ok");
     }
   }
 
@@ -208,7 +202,6 @@ export function createReview(opts: {
           () => failPreview(requestId, "Attachment preview timed out"),
           20000,
         );
-        opts.toast("Loading attachment...", "ok");
       } else {
         opts.toast("Not connected to host", "err");
       }

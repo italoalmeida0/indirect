@@ -151,11 +151,28 @@ export function notifiesOnTurnEnd(session: NotifySession | undefined): boolean {
   return !SILENT_MODE.has(primarySkillName(session) || "");
 }
 
+function turnToastLabel(disposition: TurnDisposition): string {
+  switch (disposition) {
+    case "error":
+      return "Turn failed";
+    case "cancelled":
+      return "Turn cancelled";
+    case "approval":
+      return "Approval needed";
+    case "question":
+      return "Your answer needed";
+    default:
+      return "Turn finished";
+  }
+}
+
 export function createTurnNotify(opts: {
   hosts: () => RemoteHostDto[];
   sessions: () => NotifySession[];
   toast: (message: string, kind?: "ok" | "err") => void;
   onOpenSession: (hostId: string, sessionId: string) => void;
+  activeHostId?: () => string;
+  activeSessionId?: () => string;
 }) {
   const [notifyOn, setNotifyOn] = createSignal(isTurnNotifyEnabled());
   const [soundOn, setSoundOn] = createSignal(isTurnSoundEnabled());
@@ -252,9 +269,24 @@ export function createTurnNotify(opts: {
     return notifiesOnTurnEnd(session);
   }
 
-  function showNotification(target: TurnNotifyTarget): void {
+  function emitFallbackToast(target: TurnNotifyTarget, isTest: boolean): void {
+    if (!isTest) {
+      const visible =
+        typeof document !== "undefined" && document.visibilityState === "visible";
+      const isForeground =
+        Boolean(opts.activeHostId && opts.activeSessionId) &&
+        opts.activeHostId!() === target.hostId &&
+        opts.activeSessionId!() === target.sessionId;
+      if (visible && isForeground) return;
+    }
+    const prefix = turnToastLabel(target.disposition);
+    const text = target.title ? `${prefix}: ${target.title}` : prefix;
+    opts.toast(text, target.disposition === "error" ? "err" : "ok");
+  }
+
+  function showNotification(target: TurnNotifyTarget, isTest = false): void {
     // Interactive modes (learning/talk) are watched up-close: stay silent.
-    if (!shouldNotify(target.hostId, target.sessionId)) return;
+    if (!isTest && !shouldNotify(target.hostId, target.sessionId)) return;
     const { title, body } = turnNotifyText(target);
     const go = () => opts.onOpenSession(target.hostId, target.sessionId);
     if (typeof Notification !== "undefined" && Notification.permission === "granted") {
@@ -272,10 +304,10 @@ export function createTurnNotify(opts: {
           n.close();
         };
       } catch {
-        opts.toast(`${title} — ${body}`, "ok");
+        emitFallbackToast(target, isTest);
       }
     } else {
-      opts.toast(`${title} — ${body}`, "ok");
+      emitFallbackToast(target, isTest);
     }
     if (soundOn()) playChime();
   }
@@ -407,17 +439,19 @@ export function createTurnNotify(opts: {
       return;
     }
     void ensurePermission().then((granted) => {
-      if (!granted && typeof Notification !== "undefined" && Notification.permission !== "granted") {
-        opts.toast("Browser notifications blocked — enable them in site settings", "err");
+      if (!granted && typeof Notification !== "undefined" && Notification.permission === "denied") {
         return;
       }
-      showNotification({
-        hostId: "test",
-        sessionId: "test",
-        title: "Test conversation",
-        hostName: "Test host",
-        disposition: "done",
-      });
+      showNotification(
+        {
+          hostId: "test",
+          sessionId: "test",
+          title: "Test conversation",
+          hostName: "Test host",
+          disposition: "done",
+        },
+        true,
+      );
     });
   }
 

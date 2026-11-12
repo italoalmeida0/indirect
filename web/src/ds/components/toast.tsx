@@ -1,4 +1,4 @@
-import { createSignal, For, onCleanup, onMount } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 
 import { animate } from "../motion/animate";
@@ -10,59 +10,122 @@ import { Glyph } from "./icon";
  * Toast stack (Arc "Toast stack"): brief confirmation for BACKGROUND
  * results. Foreground actions confirm in place (button label, copy check);
  * a toast is never the only confirmation of something the user just did on
- * screen. Toasts rise in on spring.smooth, pause while hovered or focused,
- * can be swiped away, and the gap closes smoothly when one leaves.
+ * screen. Toasts glide down from top-right on spring.smooth, pause while
+ * hovered or focused, deduplicate in place, and can be swiped away.
  */
 export type ToastKind = "ok" | "err";
 
-interface ToastItem {
-  id: number;
-  kind: ToastKind;
-  text: string;
+export interface ToastItem {
+  readonly id: number;
+  readonly kind: ToastKind;
+  readonly text: string;
+  readonly rev: number;
 }
 
-const [items, setItems] = createSignal<ToastItem[]>([]);
+interface ToastEntry extends ToastItem {
+  bump: () => void;
+  leaving: boolean;
+}
+
+const [items, setItems] = createSignal<ToastEntry[]>([]);
 let nextId = 0;
-const DURATION = 4000;
+
+export function toastDuration(kind: ToastKind): number {
+  return kind === "err" ? 6500 : 3200;
+}
+
+/** Read-only signal accessor of currently active toasts (used in tests). */
+export function activeToasts(): readonly ToastItem[] {
+  return items();
+}
+
+/** Immediately clear the toast stack (used in tests). */
+export function clearToasts(): void {
+  setItems([]);
+}
 
 /** Show a toast. Errors are announced assertively. */
 export function pushToast(text: string, kind: ToastKind = "ok"): void {
+  if (typeof text !== "string" || !text.trim()) return;
+  const current = items();
+  const existing = current.find(
+    (item) => !item.leaving && item.kind === kind && item.text === text,
+  );
+  if (existing) {
+    existing.bump();
+    return;
+  }
+  const [rev, setRev] = createSignal(1);
   const id = ++nextId;
-  setItems((list) => [...list.slice(-3), { id, kind, text }]);
+  const entry: ToastEntry = {
+    id,
+    kind,
+    text,
+    get rev() {
+      return rev();
+    },
+    bump() {
+      setRev((r) => r + 1);
+    },
+    leaving: false,
+  };
+  const visible = current.filter((item) => !item.leaving);
+  const leavingItems = current.filter((item) => item.leaving);
+  setItems([...leavingItems, ...visible.slice(-2), entry]);
 }
 
 function dismiss(id: number) {
   setItems((list) => list.filter((item) => item.id !== id));
 }
 
-function ToastView(props: { item: ToastItem }) {
+function ToastView(props: { item: ToastEntry }) {
   let el!: HTMLDivElement;
-  let timer = 0;
-  let remaining = DURATION;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let remaining = toastDuration(props.item.kind);
   let startedAt = 0;
   let leaving = false;
+  let hovered = false;
+  let focused = false;
+  let mounted = false;
+
+  // Swipe to dismiss (touch and mouse), with a button path for everyone.
+  let dragX = 0;
+  let pointer: number | undefined;
+  const isPaused = () => hovered || focused || pointer !== undefined;
 
   const leave = (direction = 0) => {
     if (leaving) return;
     leaving = true;
-    window.clearTimeout(timer);
+    props.item.leaving = true;
+    clearTimeout(timer);
+    timer = undefined;
     const slide = direction ? `${direction * 120}%` : "0px";
     void animate(el, { opacity: "0", transform: `translateX(${slide}) scale(0.98)` }, tween.exit).finished
       .then(() => collapseHeight(el).finished)
       .then(() => dismiss(props.item.id));
   };
   const start = () => {
+    if (leaving || isPaused()) return;
+    clearTimeout(timer);
     startedAt = Date.now();
-    timer = window.setTimeout(() => leave(), remaining);
+    timer = setTimeout(() => leave(), remaining);
   };
   const pause = () => {
-    window.clearTimeout(timer);
+    if (leaving || timer === undefined) return;
+    clearTimeout(timer);
+    timer = undefined;
     remaining = Math.max(800, remaining - (Date.now() - startedAt));
   };
 
-  // Swipe to dismiss (touch and mouse), with a button path for everyone.
-  let dragX = 0;
-  let pointer: number | undefined;
+  createEffect(() => {
+    const rev = props.item.rev;
+    if (!mounted || rev <= 1 || leaving) return;
+    clearTimeout(timer);
+    timer = undefined;
+    remaining = toastDuration(props.item.kind);
+    if (!isPaused()) start();
+  });
+
   const onDown = (event: PointerEvent) => {
     if ((event.target as HTMLElement).closest("button")) return;
     pointer = event.pointerId;
@@ -88,11 +151,12 @@ function ToastView(props: { item: ToastItem }) {
   };
 
   onMount(() => {
+    mounted = true;
     animate(el, { opacity: "1" }, { duration: motionTokens.duration.fast, ease: motionTokens.ease.enter }, { from: { opacity: "0" } });
-    animate(el, { transform: "none" }, motionTokens.spring.smooth, { from: { transform: "translateY(10px) scale(0.98)" } });
+    animate(el, { transform: "none" }, motionTokens.spring.smooth, { from: { transform: "translateY(-8px) scale(0.985)" } });
     start();
   });
-  onCleanup(() => window.clearTimeout(timer));
+  onCleanup(() => clearTimeout(timer));
 
   return (
     <div
@@ -100,21 +164,21 @@ function ToastView(props: { item: ToastItem }) {
       role={props.item.kind === "err" ? "alert" : "status"}
       aria-live={props.item.kind === "err" ? "assertive" : "polite"}
       class={`ui-toast ui-toast-${props.item.kind}`}
-      onMouseEnter={pause}
-      onMouseLeave={() => { if (!leaving && pointer === undefined) start(); }}
-      onFocusIn={pause}
-      onFocusOut={() => { if (!leaving) start(); }}
+      onMouseEnter={() => { hovered = true; pause(); }}
+      onMouseLeave={() => { hovered = false; start(); }}
+      onFocusIn={() => { focused = true; pause(); }}
+      onFocusOut={() => { focused = false; start(); }}
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={onUp}
     >
       <span class="ui-toast-icon" aria-hidden="true">
-        <Glyph icon={props.item.kind === "ok" ? "lucide:check" : "lucide:alert-circle"} size={16} />
+        <Glyph icon={props.item.kind === "ok" ? "lucide:check" : "lucide:alert-circle"} size={14} />
       </span>
       <span class="ui-toast-text">{props.item.text}</span>
       <button type="button" class="ui-toast-close" aria-label="Dismiss notification" data-tip="Dismiss" onClick={() => leave(1)}>
-        <Glyph icon="lucide:x" size={14} />
+        <Glyph icon="lucide:x" size={13} />
       </button>
     </div>
   );

@@ -446,7 +446,8 @@ describe("SSR <ToolBody> ImageReadCard & <CompactionBalloon> visual digest chip"
             }));
 
             build.onLoad({ filter: /web[\\/]src[\\/]ui\.tsx$/ }, () => ({
-              contents: "export async function copyWithToast() { return false; }",
+              contents:
+                "export async function copyToClipboard() { return false; } export function toast() {} export async function copyWithToast() { return false; }",
               loader: "js",
             }));
 

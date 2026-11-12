@@ -1,6 +1,6 @@
 import { createSignal, For, Show } from "solid-js";
 import { press } from "../../ds/motion/press";
-import { Badge, Btn, Modal, ModalNotice, copyWithToast } from "../../ui";
+import { Badge, Btn, Modal, ModalNotice, copyToClipboard, toast } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useModal } from "../ctx";
 import { indirectInstallCommands } from "../install";
@@ -161,9 +161,14 @@ export function PairModal() {
 
   const copyCmd = (kind: "unix" | "windows", cmd: string) => {
     setOsTab(kind);
-    void copyWithToast(cmd);
-    setCopiedKey(kind);
-    setTimeout(() => setCopiedKey((prev) => (prev === kind ? null : prev)), 1600);
+    void copyToClipboard(cmd).then((ok) => {
+      if (ok) {
+        setCopiedKey(kind);
+        setTimeout(() => setCopiedKey((prev) => (prev === kind ? null : prev)), 1600);
+      } else {
+        toast("Could not copy automatically. Select the text and copy it manually", "err");
+      }
+    });
   };
 
   return (

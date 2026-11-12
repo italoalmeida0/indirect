@@ -762,7 +762,6 @@ export default function CodeDevPage() {
     setSelectedWalSeq(null);
     setLiveThinking("");
     setLiveText("");
-    toast("Network log cleared", "ok");
   }
 
   /**
@@ -800,7 +799,6 @@ export default function CodeDevPage() {
       requestId: `prompt_${Date.now()}`,
     } as any);
     setPromptInput("");
-    toast("Prompt dispatched to session", "ok");
   }
 
   /**

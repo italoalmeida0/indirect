@@ -72,20 +72,25 @@ export function createProjects(opts: {
     requestFolders(activeProject()?.path || "~");
   }
   function createProject() {
+    const reportError = (msg: string) => {
+      if (showNewProjectModal()) setFolderError(msg);
+      else opts.toast(msg, "err");
+    };
     const rawPath = newProjectPath().trim();
     if (!rawPath) {
-      opts.toast("Project folder cannot be empty", "err");
+      reportError("Project folder cannot be empty");
       return;
     }
     if (!opts.getHostId()) {
-      opts.toast("Connect a host first", "err");
+      reportError("Connect a host first");
       return;
     }
     if (!opts.isOpen()) {
       // Frontend holds no state of its own — no offline project shadow copies.
-      opts.toast("Not connected to host yet — wait for online status", "err");
+      reportError("Not connected to host yet. Wait for online status");
       return;
     }
+    setFolderError("");
     // Daemon is the source of truth; ack arrives as project_created.
     projectCreationId = crypto.randomUUID();
     opts.send({ type: "create_project", path: rawPath, requestId: projectCreationId });
@@ -110,7 +115,7 @@ export function createProjects(opts: {
       return;
     }
     if (!opts.isOpen()) {
-      opts.toast("Not connected to host yet — wait for online status", "err");
+      opts.toast("Not connected to host yet. Wait for online status", "err");
       return;
     }
     projectCreationId = crypto.randomUUID();
@@ -347,15 +352,10 @@ export function createProjects(opts: {
     if (ids.length === 0) return;
     const allPinned = ids.every((id) => opts.sessions().find((s) => s.id === id)?.pinned);
     const target = !allPinned;
-    let modifiedCount = 0;
     for (const id of ids) {
       const cur = opts.sessions().find((s) => s.id === id);
       if (!cur || !!cur.pinned === target) continue;
       if (opts.isOpen()) opts.send({ type: "toggle_pin", sessionId: id });
-      modifiedCount++;
-    }
-    if (modifiedCount > 0) {
-      opts.toast(`${modifiedCount} conversation${modifiedCount === 1 ? "" : "s"} ${target ? "pinned" : "unpinned"}`, "ok");
     }
     exitSelectionMode();
   }
@@ -370,7 +370,6 @@ export function createProjects(opts: {
     });
     if (!ok) return;
     for (const id of ids) opts.send({ type: "delete_session", sessionId: id });
-    opts.toast(`${ids.length} conversation${ids.length === 1 ? "" : "s"} deleted`, "ok");
     exitSelectionMode();
   }
   function dropVanishedSession(id: string) {

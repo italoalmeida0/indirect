@@ -1,13 +1,12 @@
 import { For, Show } from "solid-js";
 import { Badge, Btn, Modal } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
-import { useHost, useModal, useUI } from "../ctx";
+import { useHost, useModal } from "../ctx";
 
 import { SettingsGeneralSection } from "./SettingsGeneral";
 
 export function SettingsModal() {
   const m = useModal();
-  const ui = useUI();
   const hosts = useHost();
   const activeTab = m.settingsTab;
   const hostObj = () => hosts.activeHost?.() ?? null;
@@ -75,17 +74,6 @@ export function SettingsModal() {
           disabled={m.savingSettings()}
           class="min-w-0 disabled:opacity-60"
         >
-          <Show when={ui.appNotice()}>
-            {(notice) => (
-              <div
-                role="status"
-                class="mb-4 rounded-control border border-border bg-surface-subtle px-3.5 py-2.5 text-xs text-fg-secondary"
-              >
-                {notice().message}
-              </div>
-            )}
-          </Show>
-
           {/* Host Telemetry & Section Navigation Hairline Strip */}
           <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border">
             <div class="flex items-center gap-2 min-w-0">
