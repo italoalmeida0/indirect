@@ -91,12 +91,11 @@ func (t *FetchURLTool) Execute(ctx context.Context, raw json.RawMessage, progres
 			det["full_output_path"] = spillRes.Path
 			return core.ToolResult{
 				Content: []provider.Content{provider.TextBlock{Text: spillRes.Preview}},
-				Attrs: []core.Attr{
+				Attrs: applySpillAttrs([]core.Attr{
 					{Key: "url", Value: finalURL},
 					{Key: "chars", Value: fmt.Sprintf("%d", totalChars)},
 					{Key: "truncated", Value: "true"},
-					{Key: "spilled", Value: "true"},
-				},
+				}, spillRes),
 				Details: det,
 			}, nil
 		}

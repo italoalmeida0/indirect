@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -74,14 +75,16 @@ func maybeSpillOutput(ctx context.Context, brainDir string, fullText string) (ar
 }
 
 // applySpillAttrs updates envelope attrs for a spilled tool result, preserving
-// command status/exit/duration attrs while marking truncated=true and spilled=true.
+// command status/exit/duration attrs while marking truncated=true, spilled=true,
+// and recording spill_file (basename only), spill_lines, and spill_bytes.
 func applySpillAttrs(attrs []core.Attr, res arrivalSpillResult) []core.Attr {
-	out := make([]core.Attr, 0, len(attrs)+2)
+	out := make([]core.Attr, 0, len(attrs)+5)
 	hasTruncated := false
 	for _, a := range attrs {
 		switch a.Key {
-		case "page", "next", "partial_last_line", "dropped_bytes", "info":
-			// Superseded by the spilled head+diagnostics+tail preview.
+		case "page", "next", "partial_last_line", "dropped_bytes", "info",
+			"spilled", "spill_file", "spill_lines", "spill_bytes":
+			// Superseded by the spilled head+diagnostics+tail preview / rewritten below.
 			continue
 		case "truncated":
 			out = append(out, core.Attr{Key: "truncated", Value: "true"})
@@ -94,6 +97,13 @@ func applySpillAttrs(attrs []core.Attr, res arrivalSpillResult) []core.Attr {
 		out = append([]core.Attr{{Key: "truncated", Value: "true"}}, out...)
 	}
 	out = append(out, core.Attr{Key: "spilled", Value: "true"})
+	if base := filepath.Base(res.Path); res.Path != "" && base != "." && base != string(filepath.Separator) {
+		out = append(out, core.Attr{Key: "spill_file", Value: base})
+	}
+	out = append(out,
+		core.Attr{Key: "spill_lines", Value: strconv.Itoa(res.Lines)},
+		core.Attr{Key: "spill_bytes", Value: strconv.Itoa(res.Bytes)},
+	)
 	return out
 }
 

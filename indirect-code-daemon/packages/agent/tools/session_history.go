@@ -189,14 +189,36 @@ func executeSessionHistorySearch(snap SessionHistorySnapshot, a SessionHistoryAr
 		msgBound = len(snap.Messages)
 	}
 
+	buildSearchAttrs := func(hitCount, indexedCount int) []core.Attr {
+		attrs := []core.Attr{
+			{Key: "action", Value: "search"},
+			{Key: "hits", Value: strconv.Itoa(hitCount)},
+			{Key: "indexed", Value: strconv.Itoa(indexedCount)},
+		}
+		if a.IncludeLiveTail {
+			attrs = append(attrs, core.Attr{Key: "live_tail", Value: "true"})
+		}
+		return attrs
+	}
+	buildSearchDetails := func(indexedCount int, hitItems []map[string]any) map[string]any {
+		if hitItems == nil {
+			hitItems = []map[string]any{}
+		}
+		return map[string]any{
+			"action":            "search",
+			"query":             query,
+			"indexed":           indexedCount,
+			"include_live_tail": a.IncludeLiveTail,
+			"hits":              hitItems,
+		}
+	}
+
 	if msgBound == 0 && len(snap.Blocks) == 0 {
 		body := fmt.Sprintf("No compacted history yet (0 compacted messages, %d live messages). Pass `include_live_tail: true` to search the live transcript.", len(snap.Messages))
 		return core.ToolResult{
 			Content: []provider.Content{provider.TextBlock{Text: body}},
-			Attrs: []core.Attr{
-				{Key: "action", Value: "search"},
-				{Key: "hits", Value: "0"},
-			},
+			Attrs:   buildSearchAttrs(0, 0),
+			Details: buildSearchDetails(0, nil),
 		}, nil
 	}
 
@@ -212,10 +234,8 @@ func executeSessionHistorySearch(snap SessionHistorySnapshot, a SessionHistoryAr
 		sb.WriteString(".")
 		return core.ToolResult{
 			Content: []provider.Content{provider.TextBlock{Text: sb.String()}},
-			Attrs: []core.Attr{
-				{Key: "action", Value: "search"},
-				{Key: "hits", Value: "0"},
-			},
+			Attrs:   buildSearchAttrs(0, len(docs)),
+			Details: buildSearchDetails(len(docs), nil),
 		}, nil
 	}
 
@@ -226,31 +246,45 @@ func executeSessionHistorySearch(snap SessionHistorySnapshot, a SessionHistoryAr
 		}
 	}
 
+	hitItems := make([]map[string]any, 0, len(hits))
 	fmt.Fprintf(&sb, "Found %d match(es) for %q:\n", len(hits), query)
 	for i, h := range hits {
 		d := h.doc
+		snippet := extractMatchSnippet(d.text, highlightTerms, 240)
+		scoreRounded := math.Round(h.score*100) / 100
 		sb.WriteString("\n")
 		if d.kind == docKindBlock {
 			blockLabel := d.blockID
 			if d.retiredBy != "" {
 				blockLabel = fmt.Sprintf("%s (retired->%s)", d.blockID, d.retiredBy)
 			}
-			endInc := d.endIdx - 1
-			if endInc < d.startIdx {
-				endInc = d.startIdx
-			}
+			tier := maxInt(1, d.tier)
+			endInc := maxInt(d.startIdx, d.endIdx-1)
 			topicPart := ""
 			if d.topic != "" {
 				topicPart = " · " + d.topic
 			}
 			fmt.Fprintf(&sb, "%d. [block %s · tier %d · msgs #%d-#%d%s] (score %.2f)\n",
-				i+1, blockLabel, maxInt(1, d.tier), d.startIdx, endInc, topicPart, h.score)
-			fmt.Fprintf(&sb, "   %s\n", extractMatchSnippet(d.text, highlightTerms, 240))
+				i+1, blockLabel, tier, d.startIdx, endInc, topicPart, h.score)
+			fmt.Fprintf(&sb, "   %s\n", snippet)
 			fmt.Fprintf(&sb, "   recall: {\"action\":\"recall\",\"block_id\":%q}\n", d.blockID)
+			hitItems = append(hitItems, map[string]any{
+				"kind":       "block",
+				"msg_idx":    d.msgIdx,
+				"role":       d.role,
+				"block_id":   d.blockID,
+				"retired_by": d.retiredBy,
+				"tier":       tier,
+				"start_idx":  d.startIdx,
+				"end_idx":    endInc,
+				"topic":      d.topic,
+				"score":      scoreRounded,
+				"snippet":    snippet,
+			})
 		} else {
 			fmt.Fprintf(&sb, "%d. [msg #%d · %s · block %s] (score %.2f)\n",
 				i+1, d.msgIdx, d.role, d.blockID, h.score)
-			fmt.Fprintf(&sb, "   %s\n", extractMatchSnippet(d.text, highlightTerms, 240))
+			fmt.Fprintf(&sb, "   %s\n", snippet)
 			if d.blockID != "" && d.blockID != "compacted" && d.blockID != "live" {
 				fmt.Fprintf(&sb, "   recall: {\"action\":\"recall\",\"start_msg\":%d,\"end_msg\":%d} (or {\"action\":\"recall\",\"block_id\":%q})\n",
 					d.msgIdx, d.msgIdx, d.blockID)
@@ -258,15 +292,26 @@ func executeSessionHistorySearch(snap SessionHistorySnapshot, a SessionHistoryAr
 				fmt.Fprintf(&sb, "   recall: {\"action\":\"recall\",\"start_msg\":%d,\"end_msg\":%d}\n",
 					d.msgIdx, d.msgIdx)
 			}
+			hitItems = append(hitItems, map[string]any{
+				"kind":       "message",
+				"msg_idx":    d.msgIdx,
+				"role":       d.role,
+				"block_id":   d.blockID,
+				"retired_by": d.retiredBy,
+				"tier":       d.tier,
+				"start_idx":  d.startIdx,
+				"end_idx":    d.endIdx,
+				"topic":      d.topic,
+				"score":      scoreRounded,
+				"snippet":    snippet,
+			})
 		}
 	}
 
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: strings.TrimRight(sb.String(), "\n")}},
-		Attrs: []core.Attr{
-			{Key: "action", Value: "search"},
-			{Key: "hits", Value: strconv.Itoa(len(hits))},
-		},
+		Attrs:   buildSearchAttrs(len(hits), len(docs)),
+		Details: buildSearchDetails(len(docs), hitItems),
 	}, nil
 }
 
@@ -1027,18 +1072,40 @@ func executeSessionHistoryRecall(snap SessionHistorySnapshot, a SessionHistoryAr
 	fullText := renderVerbatimRange(snap.Messages, snap.Blocks, keepFrom, startIdx, endExclusive, callNames)
 	totalChars := len(fullText)
 
-	if offset >= totalChars {
+	buildRecallResult := func(body string, effOffset int, truncated bool, nextOffset int) core.ToolResult {
+		attrs := []core.Attr{
+			{Key: "action", Value: "recall"},
+			{Key: "start_msg", Value: strconv.Itoa(startIdx)},
+			{Key: "end_msg", Value: strconv.Itoa(endExclusive - 1)},
+			{Key: "offset_chars", Value: strconv.Itoa(effOffset)},
+			{Key: "total_chars", Value: strconv.Itoa(totalChars)},
+			{Key: "truncated", Value: strconv.FormatBool(truncated)},
+		}
+		if blockID != "" {
+			attrs = append(attrs, core.Attr{Key: "block_id", Value: blockID})
+		}
+		if truncated {
+			attrs = append(attrs, core.Attr{Key: "next_offset", Value: strconv.Itoa(nextOffset)})
+		}
 		return core.ToolResult{
-			Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("[offset_chars=%d is at or past end of recalled text (%d chars)]", offset, totalChars)}},
-			Attrs: []core.Attr{
-				{Key: "action", Value: "recall"},
-				{Key: "start_msg", Value: strconv.Itoa(startIdx)},
-				{Key: "end_msg", Value: strconv.Itoa(endExclusive - 1)},
-				{Key: "offset_chars", Value: strconv.Itoa(offset)},
-				{Key: "total_chars", Value: strconv.Itoa(totalChars)},
-				{Key: "truncated", Value: "false"},
+			Content: []provider.Content{provider.TextBlock{Text: body}},
+			Attrs:   attrs,
+			Details: map[string]any{
+				"action":       "recall",
+				"block_id":     blockID,
+				"start_msg":    startIdx,
+				"end_msg":      endExclusive - 1,
+				"offset_chars": effOffset,
+				"total_chars":  totalChars,
+				"truncated":    truncated,
+				"next_offset":  nextOffset,
 			},
-		}, nil
+		}
+	}
+
+	if offset >= totalChars {
+		body := fmt.Sprintf("[offset_chars=%d is at or past end of recalled text (%d chars)]", offset, totalChars)
+		return buildRecallResult(body, offset, false, 0), nil
 	}
 
 	for offset < totalChars && !utf8.RuneStart(fullText[offset]) {
@@ -1070,25 +1137,7 @@ func executeSessionHistoryRecall(snap SessionHistorySnapshot, a SessionHistoryAr
 			offset, nextOffset, totalChars, nextOffset)
 	}
 
-	attrs := []core.Attr{
-		{Key: "action", Value: "recall"},
-		{Key: "start_msg", Value: strconv.Itoa(startIdx)},
-		{Key: "end_msg", Value: strconv.Itoa(endExclusive - 1)},
-		{Key: "offset_chars", Value: strconv.Itoa(offset)},
-		{Key: "total_chars", Value: strconv.Itoa(totalChars)},
-		{Key: "truncated", Value: strconv.FormatBool(truncated)},
-	}
-	if blockID != "" {
-		attrs = append(attrs, core.Attr{Key: "block_id", Value: blockID})
-	}
-	if truncated {
-		attrs = append(attrs, core.Attr{Key: "next_offset", Value: strconv.Itoa(nextOffset)})
-	}
-
-	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: window}},
-		Attrs:   attrs,
-	}, nil
+	return buildRecallResult(window, offset, truncated, nextOffset), nil
 }
 
 func renderVerbatimRange(msgs []provider.Message, blocks []SessionHistoryBlock, keepFrom, startIdx, endExclusive int, callNames map[string]string) string {

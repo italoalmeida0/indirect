@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -199,6 +200,7 @@ func TestBashToolArrivalSpillLosslessAbove50KB(t *testing.T) {
 	if details["full_output_path"] != wantPath {
 		t.Fatalf("UI Details[full_output_path] = %v, want %s", details["full_output_path"], wantPath)
 	}
+	assertSpillEnvelopeAttrs(t, res, "tool-call_bash_spill_1.log", 900, len(fullExpected))
 }
 
 func TestExecScriptToolArrivalSpill(t *testing.T) {
@@ -250,6 +252,7 @@ func TestExecScriptToolArrivalSpill(t *testing.T) {
 	if det["output"] != string(savedBytes) {
 		t.Fatalf("UI Details[output] must retain full lossless output")
 	}
+	assertSpillEnvelopeAttrs(t, res, "tool-call_js_spill_7.log", countLogicalLines(string(savedBytes)), len(savedBytes))
 }
 
 func TestFetchURLToolArrivalSpillAndReadToolExemption(t *testing.T) {
@@ -301,6 +304,7 @@ func TestFetchURLToolArrivalSpillAndReadToolExemption(t *testing.T) {
 	if det["content"] != fullDoc {
 		t.Fatalf("fetch_url UI Details[content] lost full lossless body")
 	}
+	assertSpillEnvelopeAttrs(t, res, "tool-call_fetch_spill_9.log", 420, len(fullDoc))
 
 	// ReadTool MUST NEVER apply arrival spill even on >20KB files with BrainDir set!
 	readBrain := t.TempDir()
@@ -353,5 +357,65 @@ func TestArrivalSpillTimestampedErrorCodeSurvivesSecondPass(t *testing.T) {
 	}
 	if !strings.Contains(preview, "[Full output saved to "+spillPath) {
 		t.Fatalf("preview missing saved-file footer:\n%s", preview)
+	}
+}
+
+func assertSpillEnvelopeAttrs(t *testing.T, res core.ToolResult, wantFile string, wantLines, wantBytes int) {
+	t.Helper()
+	if got := envAttr(res, "truncated"); got != "true" {
+		t.Fatalf("attr truncated = %q, want \"true\"", got)
+	}
+	if got := envAttr(res, "spilled"); got != "true" {
+		t.Fatalf("attr spilled = %q, want \"true\"", got)
+	}
+	gotFile := envAttr(res, "spill_file")
+	if gotFile != wantFile {
+		t.Fatalf("attr spill_file = %q, want %q", gotFile, wantFile)
+	}
+	if strings.ContainsAny(gotFile, `/\`) {
+		t.Fatalf("attr spill_file leaked host path separator: %q", gotFile)
+	}
+	if got := envAttr(res, "spill_lines"); got != strconv.Itoa(wantLines) {
+		t.Fatalf("attr spill_lines = %q, want %d", got, wantLines)
+	}
+	if got := envAttr(res, "spill_bytes"); got != strconv.Itoa(wantBytes) {
+		t.Fatalf("attr spill_bytes = %q, want %d", got, wantBytes)
+	}
+}
+
+func TestApplySpillAttrsContract(t *testing.T) {
+	in := []core.Attr{
+		{Key: "exit", Value: "0"},
+		{Key: "duration", Value: "1.2s"},
+		{Key: "page", Value: "100-500/500"},
+		{Key: "next", Value: "501"},
+		{Key: "partial_last_line", Value: "4KB"},
+		{Key: "dropped_bytes", Value: "1024"},
+		{Key: "info", Value: "no output"},
+		{Key: "spilled", Value: "true"},
+	}
+	out := applySpillAttrs(in, arrivalSpillResult{
+		Path:  filepath.Join(t.TempDir(), "nested", "tool-call_123.log"),
+		Lines: 1420,
+		Bytes: 88320,
+	})
+	res := core.ToolResult{Attrs: out}
+	assertSpillEnvelopeAttrs(t, res, "tool-call_123.log", 1420, 88320)
+	if envAttr(res, "exit") != "0" || envAttr(res, "duration") != "1.2s" {
+		t.Fatalf("applySpillAttrs dropped command attrs: %+v", out)
+	}
+	for _, stripped := range []string{"page", "next", "partial_last_line", "dropped_bytes", "info"} {
+		if envAttr(res, stripped) != "" {
+			t.Fatalf("applySpillAttrs failed to strip superseded attr %q: %+v", stripped, out)
+		}
+	}
+	spilledCount := 0
+	for _, a := range out {
+		if a.Key == "spilled" {
+			spilledCount++
+		}
+	}
+	if spilledCount != 1 {
+		t.Fatalf("expected exactly 1 spilled attr, got %d in %+v", spilledCount, out)
 	}
 }

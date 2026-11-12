@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
@@ -70,6 +72,7 @@ func (t *ExploreTool) Schema() json.RawMessage {
 }
 
 func (t *ExploreTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
+	started := time.Now()
 	if err := ctx.Err(); err != nil {
 		return core.ToolResult{}, err
 	}
@@ -154,7 +157,7 @@ func (t *ExploreTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		case core.EvToolExecutionStart:
 			toolCallsRun++
 			if progress != nil {
-				progress(fmt.Sprintf("explore: %s", e.Name))
+				progress(formatExploreStepProgress(toolCallsRun, e.Name, e.Args))
 			}
 		}
 	})
@@ -162,12 +165,20 @@ func (t *ExploreTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		return core.ToolResult{}, err
 	}
 
+	elapsed := time.Since(started)
 	synthesis := extractExploreSynthesis(sub.History(), turnsUsed, toolCallsRun, stoppedByCap)
 	synthesis = capExploreOutput(synthesis, ExploreMaxOutputBytes)
 
 	attrs := []core.Attr{
 		{Key: "turns", Value: strconv.Itoa(turnsUsed)},
 		{Key: "tool_calls", Value: strconv.Itoa(toolCallsRun)},
+		{Key: "duration", Value: formatExploreDuration(elapsed)},
+	}
+	if totalUsage.InputTokens > 0 {
+		attrs = append(attrs, core.Attr{Key: "in_tokens", Value: strconv.Itoa(totalUsage.InputTokens)})
+	}
+	if totalUsage.OutputTokens > 0 {
+		attrs = append(attrs, core.Attr{Key: "out_tokens", Value: strconv.Itoa(totalUsage.OutputTokens)})
 	}
 	if stoppedByCap {
 		attrs = append(attrs, core.Attr{Key: "turn_cap_reached", Value: "true"})
@@ -177,13 +188,111 @@ func (t *ExploreTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		Content: []provider.Content{provider.TextBlock{Text: synthesis}},
 		Attrs:   attrs,
 		Details: map[string]any{
-			"turns":        turnsUsed,
-			"tool_calls":   toolCallsRun,
-			"focus_paths":  a.FocusPaths,
-			"input_tokens": totalUsage.InputTokens,
-			"output_tokens": totalUsage.OutputTokens,
+			"turns":            turnsUsed,
+			"tool_calls":       toolCallsRun,
+			"focus_paths":      a.FocusPaths,
+			"input_tokens":     totalUsage.InputTokens,
+			"output_tokens":    totalUsage.OutputTokens,
+			"turn_cap_reached": stoppedByCap,
+			"duration_ms":      elapsed.Milliseconds(),
 		},
 	}, nil
+}
+
+const exploreProgressMaxRunes = 72
+
+func formatExploreStepProgress(step int, toolName string, rawArgs json.RawMessage) string {
+	name := strings.Join(strings.Fields(toolName), " ")
+	if name == "" {
+		name = "tool"
+	}
+	hint := strings.Join(strings.Fields(extractExploreStepHint(name, rawArgs)), " ")
+	var line string
+	if hint != "" {
+		line = fmt.Sprintf("step %d · %s %s", step, name, hint)
+	} else {
+		line = fmt.Sprintf("step %d · %s", step, name)
+	}
+	if utf8.RuneCountInString(line) <= exploreProgressMaxRunes {
+		return line
+	}
+	runes := []rune(line)
+	return strings.TrimRight(string(runes[:exploreProgressMaxRunes-1]), " ") + "…"
+}
+
+func extractExploreStepHint(toolName string, rawArgs json.RawMessage) string {
+	if len(rawArgs) == 0 {
+		return ""
+	}
+	var m map[string]any
+	if err := json.Unmarshal(rawArgs, &m); err != nil || len(m) == 0 {
+		return ""
+	}
+	pickStr := func(keys ...string) string {
+		for _, k := range keys {
+			if v, ok := m[k].(string); ok {
+				if trimmed := strings.TrimSpace(v); trimmed != "" {
+					return trimmed
+				}
+			}
+		}
+		return ""
+	}
+	switch toolName {
+	case "glob", "search":
+		return pickStr("pattern", "query", "path")
+	case "session_history":
+		if s := pickStr("query", "block_id"); s != "" {
+			return s
+		}
+		if sm, ok := m["start_msg"].(float64); ok {
+			if em, okEnd := m["end_msg"].(float64); okEnd && int(em) != int(sm) {
+				return fmt.Sprintf("#%d-#%d", int(sm), int(em))
+			}
+			return fmt.Sprintf("#%d", int(sm))
+		}
+		return ""
+	default:
+		return pickStr("path", "pattern", "query", "block_id")
+	}
+}
+
+func formatExploreDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < 10*time.Second {
+		tenths := int((d + 50*time.Millisecond) / (100 * time.Millisecond))
+		if tenths < 100 {
+			return fmt.Sprintf("%d.%ds", tenths/10, tenths%10)
+		}
+	}
+	totalSecs := int(d.Round(time.Second).Seconds())
+	if totalSecs < 60 {
+		return fmt.Sprintf("%ds", totalSecs)
+	}
+	if totalSecs < 3600 {
+		m := totalSecs / 60
+		s := totalSecs % 60
+		if s > 0 {
+			return fmt.Sprintf("%dm %ds", m, s)
+		}
+		return fmt.Sprintf("%dm", m)
+	}
+	h := totalSecs / 3600
+	m := (totalSecs % 3600) / 60
+	s := totalSecs % 60
+	parts := fmt.Sprintf("%dh", h)
+	if m > 0 {
+		parts += fmt.Sprintf(" %dm", m)
+	}
+	if s > 0 {
+		parts += fmt.Sprintf(" %ds", s)
+	}
+	return parts
 }
 
 func (t *ExploreTool) buildReadOnlyRegistry(roSandbox *Sandbox) core.Registry {

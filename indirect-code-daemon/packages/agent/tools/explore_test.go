@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"indirect/indirect-code-daemon/packages/provider"
@@ -151,10 +153,13 @@ func TestExploreToolReadOnlyToolsetUsageForwardingAndSandboxIsolation(t *testing
 		},
 	}
 
+	var progressSteps []string
 	res, err := explore.Execute(context.Background(), mustJSON(t, map[string]any{
 		"task":        "Find RouteRequest implementation and any prior architectural constraints.",
 		"focus_paths": []string{"pkg/router.go"},
-	}), nil)
+	}), func(step string) {
+		progressSteps = append(progressSteps, step)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +200,33 @@ func TestExploreToolReadOnlyToolsetUsageForwardingAndSandboxIsolation(t *testing
 			totalReported, wantInput, wantOutput)
 	}
 
-	// 5. Verify returned synthesis text.
+	// 5. Verify live progress steps, durable Attrs, Details, and returned synthesis text.
+	wantProgress := []string{
+		"step 1 · glob **/*.go",
+		"step 2 · read pkg/router.go",
+		"step 3 · session_history RouteRequest",
+	}
+	if strings.Join(progressSteps, "|") != strings.Join(wantProgress, "|") {
+		t.Fatalf("progressSteps = %v, want %v", progressSteps, wantProgress)
+	}
+	if envAttr(res, "turns") != "4" || envAttr(res, "tool_calls") != "3" ||
+		envAttr(res, "in_tokens") != strconv.Itoa(wantInput) ||
+		envAttr(res, "out_tokens") != strconv.Itoa(wantOutput) ||
+		envAttr(res, "duration") == "" || envAttr(res, "turn_cap_reached") != "" {
+		t.Fatalf("unexpected explore Attrs: %+v", res.Attrs)
+	}
+	det, ok := res.Details.(map[string]any)
+	if !ok {
+		t.Fatalf("expected Details map, got %T", res.Details)
+	}
+	if det["turns"] != 4 || det["tool_calls"] != 3 ||
+		det["input_tokens"] != wantInput || det["output_tokens"] != wantOutput ||
+		det["turn_cap_reached"] != false {
+		t.Fatalf("unexpected explore Details: %#v", det)
+	}
+	if durMs, ok := det["duration_ms"].(int64); !ok || durMs < 0 {
+		t.Fatalf("expected int64 duration_ms >= 0, got %#v (%T)", det["duration_ms"], det["duration_ms"])
+	}
 	got := envBody(t, res)
 	if !strings.Contains(got, "pkg/router.go:3") || !strings.Contains(got, "RouteRequest()") {
 		t.Fatalf("unexpected synthesis: %q", got)
@@ -290,6 +321,10 @@ func TestExploreToolEnforcesMaxTurns12AndOutputCap12KB(t *testing.T) {
 	if envAttr(resCap, "turn_cap_reached") != "true" {
 		t.Fatalf("expected turn_cap_reached=true, got %q", envAttr(resCap, "turn_cap_reached"))
 	}
+	detCap := resCap.Details.(map[string]any)
+	if detCap["turn_cap_reached"] != true || detCap["turns"] != ExploreDefaultMaxTurns || detCap["tool_calls"] != ExploreDefaultMaxTurns {
+		t.Fatalf("expected Details turn_cap_reached=true and turns/tool_calls=%d, got %#v", ExploreDefaultMaxTurns, detCap)
+	}
 
 	// 2. Oversized >25KB multi-byte UTF-8 synthesis is cleanly capped to <= 12KB.
 	var overBuilder strings.Builder
@@ -324,5 +359,70 @@ func TestExploreToolEnforcesMaxTurns12AndOutputCap12KB(t *testing.T) {
 	}
 	if !strings.HasSuffix(gotBody, "[... explore synthesis truncated to 12KB]") {
 		t.Fatalf("expected clean truncation marker at end of capped synthesis")
+	}
+}
+
+func TestExploreProgressHintUTF8BoundsAndDurationFormatting(t *testing.T) {
+	// 1. Progress formatting: target extraction, no-hint fallback, newline/whitespace collapse, and <=72-rune UTF-8 cap.
+	if got := formatExploreStepProgress(1, "inspect", json.RawMessage(`{}`)); got != "step 1 · inspect" {
+		t.Fatalf("no-hint progress = %q, want %q", got, "step 1 · inspect")
+	}
+	if got := formatExploreStepProgress(2, "session_history", json.RawMessage(`{"action":"recall","block_id":"b4"}`)); got != "step 2 · session_history b4" {
+		t.Fatalf("block_id progress = %q, want %q", got, "step 2 · session_history b4")
+	}
+	longUTF8Query := "🔥日本語\n\t  " + strings.Repeat("超長い識別子🚀_", 14)
+	rawArgs, _ := json.Marshal(map[string]any{"pattern": longUTF8Query})
+	capped := formatExploreStepProgress(3, "search", rawArgs)
+	if !utf8.ValidString(capped) {
+		t.Fatalf("capped progress broke UTF-8: %q", capped)
+	}
+	if rc := utf8.RuneCountInString(capped); rc > exploreProgressMaxRunes {
+		t.Fatalf("progress rune count = %d, want <= %d (%q)", rc, exploreProgressMaxRunes, capped)
+	}
+	if strings.ContainsAny(capped, "\n\r\t") || strings.Contains(capped, "  ") {
+		t.Fatalf("progress must be single-line whitespace-collapsed: %q", capped)
+	}
+	if !strings.HasPrefix(capped, "step 3 · search 🔥日本語 ") || !strings.HasSuffix(capped, "…") {
+		t.Fatalf("unexpected capped progress string: %q", capped)
+	}
+
+	// 2. Zero-token usage omits in_tokens / out_tokens attrs cleanly.
+	dir := t.TempDir()
+	zeroUsageClient := &mockExploreClient{
+		handler: func(_ int, _ provider.Request) ([]provider.Event, error) {
+			return streamFinalTextTurn("Done.", provider.Usage{}), nil
+		},
+	}
+	resZero, err := (&ExploreTool{
+		Client:  zeroUsageClient,
+		Model:   "test-model",
+		CWD:     dir,
+		Sandbox: NewSandbox(dir),
+	}).Execute(context.Background(), mustJSON(t, map[string]any{"task": "Quick check"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envAttr(resZero, "in_tokens") != "" || envAttr(resZero, "out_tokens") != "" {
+		t.Fatalf("expected zero-token attrs omitted, got %+v", resZero.Attrs)
+	}
+
+	// 3. Human duration formatting conventions.
+	durCases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{0, "0ms"},
+		{450 * time.Millisecond, "450ms"},
+		{2400 * time.Millisecond, "2.4s"},
+		{9960 * time.Millisecond, "10s"},
+		{14 * time.Second, "14s"},
+		{72 * time.Second, "1m 12s"},
+		{120 * time.Second, "2m"},
+		{3903 * time.Second, "1h 5m 3s"},
+	}
+	for _, tc := range durCases {
+		if got := formatExploreDuration(tc.in); got != tc.want {
+			t.Fatalf("formatExploreDuration(%v) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
