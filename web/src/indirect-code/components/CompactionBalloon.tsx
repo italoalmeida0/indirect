@@ -146,15 +146,19 @@ export function resolveCompactionViewModel(
     if ((b.blockTokens ?? 0) > 0) totalBlockTokens += b.blockTokens!;
   }
 
-  const digestKeys =
-    compaction?.imageDigests && typeof compaction.imageDigests === "object"
-      ? Object.keys(compaction.imageDigests)
-      : [];
+  const digestKeysCount =
+    typeof compaction?.imageDigestCount === "number" && Number.isFinite(compaction.imageDigestCount)
+      ? Math.max(0, Math.trunc(compaction.imageDigestCount))
+      : compaction?.imageDigests && typeof compaction.imageDigests === "object"
+        ? Object.keys(compaction.imageDigests).length
+        : 0;
   const evictedImageCount =
-    compaction?.evictedImages && typeof compaction.evictedImages === "object"
-      ? Object.values(compaction.evictedImages).filter(Boolean).length
-      : 0;
-  const visualDigestCount = digestKeys.length > 0 ? digestKeys.length : evictedImageCount;
+    typeof compaction?.evictedImageCount === "number" && Number.isFinite(compaction.evictedImageCount)
+      ? Math.max(0, Math.trunc(compaction.evictedImageCount))
+      : compaction?.evictedImages && typeof compaction.evictedImages === "object"
+        ? Object.values(compaction.evictedImages).filter(Boolean).length
+        : 0;
+  const visualDigestCount = digestKeysCount > 0 ? digestKeysCount : evictedImageCount;
   const learnedMaxImages =
     typeof compaction?.learnedMaxImages === "number" && Number.isFinite(compaction.learnedMaxImages)
       ? compaction.learnedMaxImages

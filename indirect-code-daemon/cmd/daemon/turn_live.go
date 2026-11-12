@@ -177,19 +177,20 @@ func sanitizeMessagesForFrontend(mode string, msgs []provider.Message, attachmen
 				newBlocks[j] = c
 				continue
 			}
-			innerContent := make([]provider.Content, len(tr.Content))
-			for k, inner := range tr.Content {
+			innerContent := make([]provider.Content, 0, len(tr.Content))
+			for _, inner := range tr.Content {
 				if tb, ok := inner.(provider.TextBlock); ok {
 					cleaned := strings.ReplaceAll(tb.Text, tools.LinePrefixNotice, "")
-					innerContent[k] = provider.TextBlock{
+					innerContent = append(innerContent, provider.TextBlock{
 						Text:             cleaned,
 						ThoughtSignature: tb.ThoughtSignature,
-					}
-				} else {
-					innerContent[k] = inner
+					})
+				} else if _, isImg := inner.(provider.ImageBlock); !isImg {
+					innerContent = append(innerContent, inner)
 				}
 			}
 			tr.Content = innerContent
+			tr.Details = stripTransientToolDetails(tr.Details)
 			newBlocks[j] = tr
 		}
 		mCopy := m
@@ -197,6 +198,149 @@ func sanitizeMessagesForFrontend(mode string, msgs []provider.Message, attachmen
 		out[i] = mCopy
 	}
 	return out
+}
+
+// stripTransientToolDetails removes live-only base64 thumbnails (preview_data_url)
+// from persisted WAL/session records and frontend snapshot payloads while keeping
+// compact structured metadata intact.
+func stripTransientToolDetails(details any) any {
+	switch d := details.(type) {
+	case nil:
+		return nil
+	case map[string]any:
+		if _, has := d["preview_data_url"]; !has {
+			return details
+		}
+		cp := make(map[string]any, len(d)-1)
+		for k, v := range d {
+			if k != "preview_data_url" {
+				cp[k] = v
+			}
+		}
+		if len(cp) == 0 {
+			return nil
+		}
+		return cp
+	case json.RawMessage:
+		if !bytes.Contains(d, []byte("preview_data_url")) {
+			return details
+		}
+		var m map[string]any
+		if err := json.Unmarshal(d, &m); err != nil {
+			return details
+		}
+		delete(m, "preview_data_url")
+		if len(m) == 0 {
+			return nil
+		}
+		out, err := json.Marshal(m)
+		if err != nil {
+			return details
+		}
+		return json.RawMessage(out)
+	default:
+		return details
+	}
+}
+
+// stripTransientMessageDetails returns a shallow copy of m with transient
+// tool-result preview thumbnails removed before disk/WAL serialization.
+// Provider ImageBlocks inside ToolResultBlock.Content remain intact on disk
+// for LLM context and crash recovery.
+func stripTransientMessageDetails(m provider.Message) provider.Message {
+	if m.Role != provider.RoleTool || len(m.Content) == 0 {
+		return m
+	}
+	changed := false
+	for _, c := range m.Content {
+		if tr, ok := c.(provider.ToolResultBlock); ok && tr.Details != nil {
+			if stripped := stripTransientToolDetails(tr.Details); !detailsUnchanged(tr.Details, stripped) {
+				changed = true
+				break
+			}
+		}
+	}
+	if !changed {
+		return m
+	}
+	cp := m
+	blocks := make([]provider.Content, len(m.Content))
+	for i, c := range m.Content {
+		if tr, ok := c.(provider.ToolResultBlock); ok && tr.Details != nil {
+			tr.Details = stripTransientToolDetails(tr.Details)
+			blocks[i] = tr
+		} else {
+			blocks[i] = c
+		}
+	}
+	cp.Content = blocks
+	return cp
+}
+
+func detailsUnchanged(before, after any) bool {
+	if before == nil && after == nil {
+		return true
+	}
+	if (before == nil) != (after == nil) {
+		return false
+	}
+	switch b := before.(type) {
+	case map[string]any:
+		a, ok := after.(map[string]any)
+		return ok && len(a) == len(b)
+	case json.RawMessage:
+		a, ok := after.(json.RawMessage)
+		return ok && bytes.Equal(a, b)
+	default:
+		return true
+	}
+}
+
+// compactionWirePayload projects core.CompactionState for browser WebSocket
+// snapshots, replacing full ImageDigests OCR strings and EvictedImages maps
+// with compact integer counts so session snapshots never ship hundreds of KBs
+// of cached digest text over the relay.
+type compactionWirePayload struct {
+	PreviousSummary   string            `json:"previousSummary,omitempty"`
+	ReadFiles         []string          `json:"readFiles,omitempty"`
+	ModifiedFiles     []string          `json:"modifiedFiles,omitempty"`
+	FirstKeptEntryID  string            `json:"firstKeptEntryId,omitempty"`
+	Count             int               `json:"count,omitempty"`
+	KeepFrom          int               `json:"keepFrom,omitempty"`
+	Usage             *provider.Usage   `json:"usage,omitempty"`
+	Blocks            []core.FoldBlock  `json:"blocks,omitempty"`
+	NextBlockSeq      int               `json:"nextBlockSeq,omitempty"`
+	PrunedBefore      int               `json:"prunedBefore,omitempty"`
+	ImageDigestCount  int               `json:"imageDigestCount,omitempty"`
+	EvictedImageCount int               `json:"evictedImageCount,omitempty"`
+	LearnedMaxImages  *int              `json:"learnedMaxImages,omitempty"`
+}
+
+func compactionPayload(cs *core.CompactionState) any {
+	if cs == nil {
+		return nil
+	}
+	evictedCount := 0
+	for _, v := range cs.EvictedImages {
+		if v {
+			evictedCount++
+		}
+	}
+	return &compactionWirePayload{
+		PreviousSummary:   cs.PreviousSummary,
+		ReadFiles:         cs.ReadFiles,
+		ModifiedFiles:     cs.ModifiedFiles,
+		FirstKeptEntryID:  cs.FirstKeptEntryID,
+		Count:             cs.Count,
+		KeepFrom:          cs.KeepFrom,
+		Usage:             cs.Usage,
+		Blocks:            cs.Blocks,
+		NextBlockSeq:      cs.NextBlockSeq,
+		PrunedBefore:      cs.PrunedBefore,
+		ImageDigestCount:  len(cs.ImageDigests),
+		EvictedImageCount: evictedCount,
+		LearnedMaxImages:  cs.LearnedMaxImages,
+	}
 }
 
 // sessionPayload serializes a full record for the web client.
@@ -209,7 +353,7 @@ func sessionPayload(rec *SessionRecord) map[string]any {
 		"createdAt": rec.CreatedAt, "updatedAt": rec.UpdatedAt, "messages": sanitizeMessagesForFrontend(rec.Options.Mode, rec.Messages, rec.Attachments),
 		"attachments":  rec.Attachments,
 		"queue":        queuePayload(rec.Queue),
-		"compaction":   rec.Compaction,
+		"compaction":   compactionPayload(rec.Compaction),
 		"turnSeq":      rec.TurnSeq,
 		"fileBalloons": fileBalloonPayloads(rec.FileBalloons),
 		"bgTasks":      bgTaskPayloads(rec.BgTasks),

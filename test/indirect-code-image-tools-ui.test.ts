@@ -15,6 +15,12 @@ import {
   parseImageReadDetails,
   toolSummary,
 } from "../web/src/indirect-code/transcript";
+import { parseContentBlocks } from "../web/src/indirect-code/utils/wire";
+import {
+  mergeTranscriptTail,
+  normalizeSessionMessages,
+  preserveTransientToolPreviews,
+} from "../web/src/indirect-code/transcript/updaters";
 
 const SAMPLE_PREVIEW_DATA_URL =
   "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=";
@@ -664,5 +670,94 @@ describe("SSR <ToolBody> ImageReadCard & <CompactionBalloon> visual digest chip"
     const htmlEvicted = renderCompactionBalloonSsr(evictedOnlyState);
     expect(htmlEvicted).toContain("2 visual digests cached");
     expect(htmlEvicted).toContain("text-only");
+
+    // Lightweight daemon WS projection (imageDigestCount / evictedImageCount without raw maps)
+    const wireCountState: CompactionState = {
+      previousSummary: "## Goal\nLightweight WS snapshot.",
+      count: 2,
+      keepFrom: 12,
+      imageDigestCount: 5,
+      evictedImageCount: 3,
+      learnedMaxImages: 2,
+    };
+    const wireVm = resolveCompactionViewModel(wireCountState);
+    expect(wireVm.visualDigestCount).toBe(5);
+    expect(wireVm.evictedImageCount).toBe(3);
+    expect(wireVm.learnedMaxImages).toBe(2);
+    const htmlWireCount = renderCompactionBalloonSsr(wireCountState);
+    expect(htmlWireCount).toContain("5 visual digests cached");
+    expect(htmlWireCount).toContain("wire cap: 2 images");
+  });
+
+  test("preserves live preview_data_url across snapshot reconciliations, drops it on reload, and ignores raw ImageBlock in tool_result", () => {
+    const walEnvelope =
+      `<tool_result type="ok" media="image/jpeg" orig_media="image/png" ` +
+      `width="1568" height="998" orig_width="2200" orig_height="1400" ` +
+      `bytes="84000" orig_bytes="920000">Read image file [image/jpeg]</tool_result>`;
+
+    // 1. parseContentBlocks never appends "[image image/jpeg]" when text blocks exist in tool_result.content
+    const parsedBlocks = parseContentBlocks({
+      role: "tool",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_img_1",
+          content: [
+            { type: "text", text: walEnvelope },
+            { type: "image", mime_type: "image/jpeg", data: "ZmFrZQ==" },
+          ],
+        },
+      ],
+    });
+    expect(parsedBlocks).toHaveLength(1);
+    expect(parsedBlocks[0]?.toolResult).toBe("Read image file [image/jpeg]");
+    expect(parsedBlocks[0]?.toolResult).not.toContain("[image image/jpeg]");
+    expect(parsedBlocks[0]?.toolDetails?.env?.orig_width).toBe("2200");
+
+    // 2. Live tab has preview_data_url in prev; stripped snapshot reconciliation keeps it alive in memory
+    const rawSnapshot = [
+      {
+        id: "m_asst",
+        role: "assistant",
+        turnIndex: 1,
+        content: [{ type: "tool_use", id: "call_img_1", name: "read", input: { path: "hero.png" } }],
+      },
+      {
+        id: "m_tool",
+        role: "tool",
+        turnIndex: 1,
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_img_1",
+            content: [{ type: "text", text: walEnvelope }],
+            details: { path: "hero.png", media: "image/jpeg", width: 1568, height: 998 },
+          },
+        ],
+      },
+    ];
+    const reloaded = normalizeSessionMessages(rawSnapshot, []);
+    const reloadedResult = reloaded[0]?.blocks.find((b) => b.type === "tool_result");
+    expect(reloadedResult?.toolDetails?.preview_data_url).toBeUndefined();
+
+    const livePrev = [
+      {
+        ...reloaded[0]!,
+        blocks: reloaded[0]!.blocks.map((b) =>
+          b.type === "tool_result"
+            ? { ...b, toolDetails: { ...b.toolDetails, preview_data_url: SAMPLE_PREVIEW_DATA_URL } }
+            : b,
+        ),
+      },
+    ];
+    const reconciledFull = normalizeSessionMessages(rawSnapshot, livePrev);
+    expect(reconciledFull[0]?.blocks.find((b) => b.type === "tool_result")?.toolDetails?.preview_data_url).toBe(
+      SAMPLE_PREVIEW_DATA_URL,
+    );
+    const reconciledTail = mergeTranscriptTail(livePrev, reloaded, 0);
+    expect(reconciledTail[0]?.blocks.find((b) => b.type === "tool_result")?.toolDetails?.preview_data_url).toBe(
+      SAMPLE_PREVIEW_DATA_URL,
+    );
+    expect(preserveTransientToolPreviews([], reloaded)).toBe(reloaded);
   });
 });

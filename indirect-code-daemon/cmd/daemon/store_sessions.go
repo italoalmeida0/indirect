@@ -199,7 +199,7 @@ func splitRecord(rec *SessionRecord) ([]turnLine, metaLine) {
 	for _, g := range groups {
 		raw := make([]json.RawMessage, 0, len(g.idx))
 		for _, i := range g.idx {
-			data, err := json.Marshal(rec.Messages[i])
+			data, err := json.Marshal(stripTransientMessageDetails(rec.Messages[i]))
 			if err != nil {
 				continue
 			}

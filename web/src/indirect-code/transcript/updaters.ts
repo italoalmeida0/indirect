@@ -108,7 +108,47 @@ export function normalizeSessionMessages(rawMsgs: any[], previous: ChatMessage[]
     out.push(msg);
     carrier = msg;
   });
-  return out;
+  return previous.length > 0 ? preserveTransientToolPreviews(previous, out) : out;
+}
+
+/** Carries live-only toolDetails.preview_data_url across tail/full snapshot
+ * reconciliations while the page stays open; page reload starts with an empty
+ * previous list so hydrated WAL snapshots render the icon tile cleanly. */
+export function preserveTransientToolPreviews(prev: ChatMessage[], next: ChatMessage[]): ChatMessage[] {
+  const previews = new Map<string, string>();
+  for (const m of prev) {
+    for (const b of m.blocks) {
+      if (b.type !== "tool_result" || !b.toolId) continue;
+      const url = b.toolDetails?.preview_data_url ?? b.toolDetails?.previewDataUrl;
+      if (typeof url === "string" && url.startsWith("data:image/")) {
+        previews.set(b.toolId, url);
+      }
+    }
+  }
+  if (previews.size === 0) return next;
+  let mutated = false;
+  const mapped = next.map((m) => {
+    let msgChanged = false;
+    const blocks = m.blocks.map((b) => {
+      if (b.type !== "tool_result" || !b.toolId) return b;
+      const existing = b.toolDetails?.preview_data_url ?? b.toolDetails?.previewDataUrl;
+      if (typeof existing === "string" && existing.length > 0) return b;
+      const saved = previews.get(b.toolId);
+      if (!saved) return b;
+      msgChanged = true;
+      return {
+        ...b,
+        toolDetails: {
+          ...(b.toolDetails && typeof b.toolDetails === "object" ? b.toolDetails : {}),
+          preview_data_url: saved,
+        },
+      };
+    });
+    if (!msgChanged) return m;
+    mutated = true;
+    return { ...m, blocks };
+  });
+  return mutated ? mapped : next;
 }
 
 /** Accumulates usage (cumulative wins) without losing previous buckets. */
@@ -416,9 +456,13 @@ export function orderedMessages(messages: ChatMessage[]): ChatMessage[] {
  * tail" — a refresh must not wipe them; they are the newest content
  * (orderedMessages sorts them last), so they follow the snapshot tail. */
 export function mergeTranscriptTail(prev: ChatMessage[], tail: ChatMessage[], firstIndex: number): ChatMessage[] {
-  const ids=new Set(tail.map(m=>m.id));
-  return [...prev.filter(m=>m.srcIdx!=null && m.srcIdx<firstIndex && !ids.has(m.id)),...tail,
-    ...prev.filter(m=>m.srcIdx==null && !ids.has(m.id))];
+  const ids = new Set(tail.map((m) => m.id));
+  const merged = [
+    ...prev.filter((m) => m.srcIdx != null && m.srcIdx < firstIndex && !ids.has(m.id)),
+    ...tail,
+    ...prev.filter((m) => m.srcIdx == null && !ids.has(m.id)),
+  ];
+  return prev.length > 0 ? preserveTransientToolPreviews(prev, merged) : merged;
 }
 
 /** Turn transition when becoming idle (turn end without endedAt). */

@@ -897,7 +897,7 @@ func (s *diskStore) removeStaleWAL(id string, rec *SessionRecord) bool {
 // walMsgEvent builds a msg event from a live message, serializing it in
 // the same raw shape disk loads hydrate back.
 func walMsgEvent(m provider.Message) walEvent {
-	data, err := json.Marshal(m)
+	data, err := json.Marshal(stripTransientMessageDetails(m))
 	if err != nil {
 		return walEvent{Type: walTypeMsg}
 	}

@@ -290,3 +290,121 @@ func TestCompactionVisionStatePersistsAcrossDiskStoreWALAndSilentHysteresis(t *t
 		t.Fatalf("expected silent vision hysteresis update (no session_compacted toast), got emitted events: %v", emittedTypes)
 	}
 }
+
+func TestSessionPayloadProjectsLightweightVisionCountsAndStripsFrontendImageBytesAndPreviewURL(t *testing.T) {
+	dir := t.TempDir()
+	store := newDiskStore(dir)
+
+	capVal := 2
+	hugeDigest := strings.Repeat("OCR_LINE_DATA ", 500)
+	previewURL := "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/"
+	rawImgBytes := []byte("fake-jpeg-binary-payload-bytes")
+
+	rec := &SessionRecord{
+		ID:      "sess_wire_projection",
+		CWD:     dir,
+		Title:   "Wire Projection",
+		Model:   "claude-sonnet-4-6",
+		Status:  "idle",
+		Options: SessionOptions{Mode: "build", Access: "full"},
+		TurnSeq: 1,
+		Compaction: &core.CompactionState{
+			PreviousSummary: "## Goal\nCheck screenshot.",
+			Count:           1,
+			KeepFrom:        2,
+			ImageDigests: map[string]string{
+				strings.Repeat("1", 64): hugeDigest,
+				strings.Repeat("2", 64): "second digest",
+			},
+			EvictedImages: map[string]bool{
+				"1:0:" + strings.Repeat("1", 64): true,
+			},
+			LearnedMaxImages: &capVal,
+		},
+		Messages: []provider.Message{
+			{
+				ID:        "m0",
+				Role:      provider.RoleUser,
+				TurnIndex: 1,
+				Content:   []provider.Content{provider.TextBlock{Text: "read hero.png"}},
+			},
+			{
+				ID:        "m1",
+				Role:      provider.RoleAssistant,
+				TurnIndex: 1,
+				Content: []provider.Content{
+					provider.ToolCallBlock{ID: "call_img_1", Name: "read", Arguments: json.RawMessage(`{"path":"hero.png"}`)},
+				},
+			},
+			{
+				ID:        "m2",
+				Role:      provider.RoleTool,
+				TurnIndex: 1,
+				Content: []provider.Content{
+					provider.ToolResultBlock{
+						CallID: "call_img_1",
+						Content: []provider.Content{
+							provider.TextBlock{Text: `<tool_result type="ok" media="image/jpeg" orig_media="image/png" width="1568" height="998" orig_width="2200" orig_height="1400" bytes="84000" orig_bytes="920000">Read image file [image/jpeg]</tool_result>`},
+							provider.ImageBlock{MimeType: "image/jpeg", Data: rawImgBytes, Width: 1568, Height: 998},
+						},
+						Details: map[string]any{
+							"path":             "hero.png",
+							"media":            "image/jpeg",
+							"orig_media":       "image/png",
+							"width":            1568,
+							"height":           998,
+							"preview_data_url": previewURL,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// 1. Verify frontend WS sessionPayload omits raw ImageDigests text, ImageBlock binary bytes, and preview_data_url.
+	wsPayload := sessionPayload(rec)
+	wsJSONBytes, err := json.Marshal(wsPayload)
+	if err != nil {
+		t.Fatalf("marshal sessionPayload: %v", err)
+	}
+	wsJSON := string(wsJSONBytes)
+	if strings.Contains(wsJSON, "OCR_LINE_DATA") {
+		t.Fatalf("expected sessionPayload to omit raw ImageDigests text over WS")
+	}
+	if strings.Contains(wsJSON, base64.StdEncoding.EncodeToString(rawImgBytes)) {
+		t.Fatalf("expected sessionPayload to omit ToolResultBlock ImageBlock binary data over WS")
+	}
+	if strings.Contains(wsJSON, "preview_data_url") {
+		t.Fatalf("expected sessionPayload to omit transient preview_data_url over WS")
+	}
+	if !strings.Contains(wsJSON, `"imageDigestCount":2`) || !strings.Contains(wsJSON, `"evictedImageCount":1`) || !strings.Contains(wsJSON, `"learnedMaxImages":2`) {
+		t.Fatalf("expected compact vision counts on WS compaction payload, got: %s", wsJSON)
+	}
+
+	// 2. Verify disk/WAL persistence strips preview_data_url while preserving ImageBlock for LLM context!
+	walEvJSON, _ := json.Marshal(walMsgEvent(rec.Messages[2]))
+	if bytes.Contains(walEvJSON, []byte("preview_data_url")) {
+		t.Fatalf("expected walMsgEvent to strip preview_data_url")
+	}
+	if err := store.saveSessionSync(rec); err != nil {
+		t.Fatalf("saveSessionSync: %v", err)
+	}
+	walBytes, err := os.ReadFile(filepath.Join(dir, "sessions", rec.ID+".jsonl"))
+	if err != nil {
+		t.Fatalf("read session jsonl: %v", err)
+	}
+	if bytes.Contains(walBytes, []byte("preview_data_url")) {
+		t.Fatalf("expected session WAL on disk to strip preview_data_url")
+	}
+	loaded, err := store.loadSession(rec.ID)
+	if err != nil {
+		t.Fatalf("loadSession: %v", err)
+	}
+	tr, ok := loaded.Messages[2].Content[0].(provider.ToolResultBlock)
+	if !ok || len(tr.Content) != 2 {
+		t.Fatalf("expected ToolResultBlock with TextBlock + ImageBlock preserved on disk reload, got %#v", loaded.Messages[2].Content)
+	}
+	if img, ok := tr.Content[1].(provider.ImageBlock); !ok || !bytes.Equal(img.Data, rawImgBytes) {
+		t.Fatalf("expected ImageBlock bytes preserved on disk reload, got %#v", tr.Content[1])
+	}
+}

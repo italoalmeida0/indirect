@@ -23,6 +23,7 @@ import {
   normalizeTurnActivity,
   mergeTranscriptTail,
   orderedMessages,
+  preserveTransientToolPreviews,
   pushAssistantCarrier,
   stampDuration,
   upsertToolCall as reduceToolCall,
@@ -421,7 +422,8 @@ export function createTranscript(opts: {
     }
     setMessages((prev) => {
       const known = new Set(prev.map((m) => m.id));
-      return orderedMessages([...page.filter((m) => !known.has(m.id)), ...prev]);
+      const merged = orderedMessages([...page.filter((m) => !known.has(m.id)), ...prev]);
+      return preserveTransientToolPreviews(prev, merged);
     });
     // Seal the arriving block (whole turns, newest last) and reveal
     // exactly it: budget +1 exposes this seal; older seals stay hidden
@@ -689,7 +691,7 @@ export function createTranscript(opts: {
         });
         sealBlock(rawMsgs, history);
         setSealedBudget((n) => Math.max(n, sealedBlocks().length));
-      } else setMessages(tail);
+      } else setMessages((prev) => preserveTransientToolPreviews(prev, tail));
       restoreEditDraft();
       if (compaction !== undefined) setSessionCompaction(compaction);
       // A worker snapshot must not overwrite deltas/status received while it

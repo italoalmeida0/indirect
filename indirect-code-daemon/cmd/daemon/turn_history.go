@@ -218,7 +218,7 @@ func tailContentEvent(hostID, sessionID string, typ string, rec *SessionRecord, 
 		"hostId":     hostID,
 		"sessionId":  sessionID,
 		"messages":   sanitizeMessagesForFrontend(rec.Options.Mode, block.Messages, rec.Attachments),
-		"compaction": rec.Compaction,
+		"compaction": compactionPayload(rec.Compaction),
 		"history":    historyCursorMap(block),
 	}
 	for k, v := range extra {

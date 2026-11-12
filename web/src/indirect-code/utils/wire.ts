@@ -32,7 +32,11 @@ function rawToolResultText(c: any): string {
     return prettyArgs(p);
   };
   if (Array.isArray(content)) {
-    return content.map(partText).join("\n");
+    const hasTextPart = content.some((p: any) => typeof p === "string" || typeof p?.text === "string");
+    const filtered = hasTextPart
+      ? content.filter((p: any) => !(p && typeof p.mime_type === "string" && typeof p?.text !== "string"))
+      : content;
+    return filtered.map(partText).join("\n");
   }
   return prettyArgs(content);
 }
