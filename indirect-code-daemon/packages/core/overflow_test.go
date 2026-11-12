@@ -61,7 +61,6 @@ func TestIsRetryableUpstream(t *testing.T) {
 		"gateway-anthropic: http 500: internal error",
 		"gateway-anthropic: http 503: overloaded",
 		"connection reset by peer",
-		"prompt is too long for requested model", // compaction path
 	}
 	for _, msg := range retryable {
 		if !isRetryableUpstream(errors.New(msg)) {
@@ -72,6 +71,8 @@ func TestIsRetryableUpstream(t *testing.T) {
 		"gateway-anthropic: http 400: {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Function tools with reasoning_effort are not supported\"}}",
 		"gateway-anthropic: http 401: unauthorized",
 		"gateway-anthropic: http 403: forbidden",
+		"gateway-anthropic: http 413: Payload Too Large",
+		"prompt is too long for requested model", // handled by finite overflowPasses, never raw infinite backoff
 		"Unsupported value: 'temperature' does not support 0.7 with this model",
 		"Unsupported parameter: 'max_tokens' is not supported with this model",
 		`anthropic: Post "/anthropic/v1/messages": unsupported protocol scheme ""`,

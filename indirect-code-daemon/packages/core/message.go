@@ -39,6 +39,13 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 			Text             string `json:"text"`
 			MimeType         string `json:"mime_type"`
 			Data             []byte `json:"data"`
+			URL              string `json:"url"`
+			SourcePath       string `json:"source_path"`
+			Width            int    `json:"width"`
+			Height           int    `json:"height"`
+			OrigWidth        int    `json:"orig_width"`
+			OrigHeight       int    `json:"orig_height"`
+			SHA256           string `json:"sha256"`
 			ID               string `json:"id"`
 			Name             string `json:"name"`
 			CallID           string `json:"call_id"`
@@ -113,22 +120,51 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 			}
 			for _, c := range tr.Content {
 				var inner struct {
-					Text     string `json:"text"`
-					MimeType string `json:"mime_type"`
-					Data     []byte `json:"data"`
+					Text             string `json:"text"`
+					MimeType         string `json:"mime_type"`
+					Data             []byte `json:"data"`
+					URL              string `json:"url"`
+					SourcePath       string `json:"source_path"`
+					Width            int    `json:"width"`
+					Height           int    `json:"height"`
+					OrigWidth        int    `json:"orig_width"`
+					OrigHeight       int    `json:"orig_height"`
+					SHA256           string `json:"sha256"`
+					ThoughtSignature string `json:"thought_signature"`
 				}
 				_ = json.Unmarshal(c, &inner)
-				if inner.MimeType != "" {
-					block.Content = append(block.Content, provider.ImageBlock{MimeType: inner.MimeType, Data: inner.Data})
+				if inner.MimeType != "" || inner.URL != "" {
+					block.Content = append(block.Content, provider.ImageBlock{
+						MimeType:         inner.MimeType,
+						Data:             inner.Data,
+						URL:              inner.URL,
+						SourcePath:       inner.SourcePath,
+						Width:            inner.Width,
+						Height:           inner.Height,
+						OrigWidth:        inner.OrigWidth,
+						OrigHeight:       inner.OrigHeight,
+						SHA256:           inner.SHA256,
+						ThoughtSignature: inner.ThoughtSignature,
+					})
 				} else {
-					block.Content = append(block.Content, provider.TextBlock{Text: inner.Text})
+					block.Content = append(block.Content, provider.TextBlock{
+						Text:             inner.Text,
+						ThoughtSignature: inner.ThoughtSignature,
+					})
 				}
 			}
 			msg.Content = append(msg.Content, block)
-		case head.MimeType != "":
+		case head.MimeType != "" || head.URL != "":
 			msg.Content = append(msg.Content, provider.ImageBlock{
 				MimeType:         head.MimeType,
 				Data:             head.Data,
+				URL:              head.URL,
+				SourcePath:       head.SourcePath,
+				Width:            head.Width,
+				Height:           head.Height,
+				OrigWidth:        head.OrigWidth,
+				OrigHeight:       head.OrigHeight,
+				SHA256:           head.SHA256,
 				ThoughtSignature: head.ThoughtSignature,
 			})
 		default:

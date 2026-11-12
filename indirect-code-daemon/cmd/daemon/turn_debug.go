@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -253,6 +255,8 @@ func simulateSessionPrompt(dcfg DaemonConfig, rec *SessionRecord, promptText str
 		return nil, fmt.Errorf("failed to build wire request: %w", err)
 	}
 
+	const debugBase64OmitThreshold = 4096
+
 	endpoint := strings.TrimRight(apiBase, "/") + "/messages"
 	return &SessionDebugPayload{
 		TurnIndex:  rec.TurnSeq + 1,
@@ -264,8 +268,173 @@ func simulateSessionPrompt(dcfg DaemonConfig, rec *SessionRecord, promptText str
 		MaxTokens:  maxOutputTokens(modelInfo),
 		SessionID:  rec.ID,
 		Tools:      toolSpecs,
-		Messages:   msgs,
-		RawPayload: json.RawMessage(rawBody),
+		Messages:   scrubDebugMessages(msgs, debugBase64OmitThreshold),
+		RawPayload: scrubDebugJSONBase64(rawBody, debugBase64OmitThreshold),
 		Timestamp:  time.Now().UnixMilli(),
 	}, nil
+}
+
+const defaultDebugBase64Threshold = 4096
+
+// scrubDebugJSONBase64 returns a cloned JSON payload with any `"data":"..."` string
+// value exceeding maxChars replaced by `"[base64 omitted: <N> chars]"`.
+// Preserves exact JSON structure, key order, and whitespace without mutating raw.
+func scrubDebugJSONBase64(raw []byte, maxChars int) json.RawMessage {
+	if maxChars <= 0 {
+		maxChars = defaultDebugBase64Threshold
+	}
+	if len(raw) <= maxChars || !bytes.Contains(raw, []byte(`"data"`)) {
+		return json.RawMessage(bytes.Clone(raw))
+	}
+
+	var out bytes.Buffer
+	out.Grow(min(len(raw), 64*1024))
+
+	for i := 0; i < len(raw); {
+		if raw[i] != '"' {
+			out.WriteByte(raw[i])
+			i++
+			continue
+		}
+		keyEnd, _ := scanJSONStringEnd(raw, i)
+		if keyEnd < 0 {
+			out.Write(raw[i:])
+			break
+		}
+		isDataKey := bytes.Equal(raw[i+1:keyEnd], []byte("data"))
+		if !isDataKey {
+			out.Write(raw[i : keyEnd+1])
+			i = keyEnd + 1
+			continue
+		}
+
+		colon := skipJSONSpace(raw, keyEnd+1)
+		if colon >= len(raw) || raw[colon] != ':' {
+			out.Write(raw[i : keyEnd+1])
+			i = keyEnd + 1
+			continue
+		}
+
+		valStart := skipJSONSpace(raw, colon+1)
+		if valStart >= len(raw) || raw[valStart] != '"' {
+			out.Write(raw[i : colon+1])
+			i = colon + 1
+			continue
+		}
+
+		valEnd, charCount := scanJSONStringEnd(raw, valStart)
+		if valEnd < 0 {
+			out.Write(raw[i:])
+			break
+		}
+		if charCount > maxChars {
+			out.Write(raw[i:valStart])
+			fmt.Fprintf(&out, `"[base64 omitted: %d chars]"`, charCount)
+		} else {
+			out.Write(raw[i : valEnd+1])
+		}
+		i = valEnd + 1
+	}
+
+	return json.RawMessage(out.Bytes())
+}
+
+func skipJSONSpace(b []byte, idx int) int {
+	for idx < len(b) {
+		switch b[idx] {
+		case ' ', '\t', '\r', '\n':
+			idx++
+		default:
+			return idx
+		}
+	}
+	return idx
+}
+
+func scanJSONStringEnd(b []byte, openQuote int) (int, int) {
+	chars := 0
+	for i := openQuote + 1; i < len(b); {
+		if b[i] == '\\' {
+			if i+1 >= len(b) {
+				return -1, chars
+			}
+			if b[i+1] == 'u' && i+5 < len(b) {
+				i += 6
+			} else {
+				i += 2
+			}
+			chars++
+			continue
+		}
+		if b[i] == '"' {
+			return i, chars
+		}
+		i++
+		chars++
+	}
+	return -1, chars
+}
+
+// scrubDebugMessages deep-copies messages that contain large inline ImageBlocks,
+// dropping raw pixel bytes above maxChars base64 while retaining metadata so
+// debug records and WS debug broadcasts do not duplicate multi-MB image buffers.
+func scrubDebugMessages(msgs []provider.Message, maxChars int) []provider.Message {
+	if maxChars <= 0 {
+		maxChars = defaultDebugBase64Threshold
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+	out := make([]provider.Message, len(msgs))
+	for i, m := range msgs {
+		if !messageHasLargeDebugImage(m, maxChars) {
+			out[i] = m
+			continue
+		}
+		cp := m
+		cp.Content = make([]provider.Content, len(m.Content))
+		for j, c := range m.Content {
+			switch v := c.(type) {
+			case provider.ImageBlock:
+				if base64.StdEncoding.EncodedLen(len(v.Data)) > maxChars {
+					v.Data = nil
+				}
+				cp.Content[j] = v
+			case provider.ToolResultBlock:
+				inner := make([]provider.Content, len(v.Content))
+				for k, ic := range v.Content {
+					if ib, ok := ic.(provider.ImageBlock); ok && base64.StdEncoding.EncodedLen(len(ib.Data)) > maxChars {
+						ib.Data = nil
+						inner[k] = ib
+					} else {
+						inner[k] = ic
+					}
+				}
+				v.Content = inner
+				cp.Content[j] = v
+			default:
+				cp.Content[j] = c
+			}
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+func messageHasLargeDebugImage(m provider.Message, maxChars int) bool {
+	for _, c := range m.Content {
+		switch v := c.(type) {
+		case provider.ImageBlock:
+			if base64.StdEncoding.EncodedLen(len(v.Data)) > maxChars {
+				return true
+			}
+		case provider.ToolResultBlock:
+			for _, ic := range v.Content {
+				if ib, ok := ic.(provider.ImageBlock); ok && base64.StdEncoding.EncodedLen(len(ib.Data)) > maxChars {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

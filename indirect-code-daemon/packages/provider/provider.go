@@ -9,6 +9,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"time"
 )
@@ -37,13 +39,38 @@ type TextBlock struct {
 func (TextBlock) isContent() {}
 
 // ImageBlock is an inline image (PNG/JPEG/GIF/WebP).
+// Optional metadata fields persist in session/WAL JSON for token estimation,
+// visual digests, and UI display, and are never sent on the provider wire.
 type ImageBlock struct {
 	MimeType         string `json:"mime_type"`
 	Data             []byte `json:"data"` // raw bytes; encoded to base64 on the wire
+	URL              string `json:"url,omitempty"`
+	SourcePath       string `json:"source_path,omitempty"`
+	Width            int    `json:"width,omitempty"`
+	Height           int    `json:"height,omitempty"`
+	OrigWidth        int    `json:"orig_width,omitempty"`
+	OrigHeight       int    `json:"orig_height,omitempty"`
+	SHA256           string `json:"sha256,omitempty"`
 	ThoughtSignature string `json:"thought_signature,omitempty"`
 }
 
 func (ImageBlock) isContent() {}
+
+// ImageKey returns a deterministic 64-char hex content key for an ImageBlock.
+// Uses b.SHA256 when already populated, otherwise hashes MimeType + Data + URL
+// so WAL-restored or legacy blocks always resolve to the same digest key.
+func ImageKey(b ImageBlock) string {
+	if len(b.SHA256) == 64 {
+		return b.SHA256
+	}
+	h := sha256.New()
+	h.Write([]byte(b.MimeType))
+	h.Write([]byte{':'})
+	h.Write(b.Data)
+	h.Write([]byte{':'})
+	h.Write([]byte(b.URL))
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 // ToolCallBlock is an assistant-issued call to a tool.
 type ToolCallBlock struct {

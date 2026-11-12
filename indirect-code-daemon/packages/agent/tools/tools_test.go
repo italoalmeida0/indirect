@@ -140,7 +140,7 @@ func TestReadLargeImageResizesAndAddsPiHints(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := envBody(t, res)
-	if !strings.Contains(text, "Read image file [image/png]") || !strings.Contains(text, "original 3000x1000, displayed at 2000x667") {
+	if !strings.Contains(text, "Read image file [image/png]") || !strings.Contains(text, "original 3000x1000, displayed at 1568x523") {
 		t.Fatalf("missing resize hint: %q", text)
 	}
 	block, ok := res.Content[1].(provider.ImageBlock)
@@ -151,8 +151,8 @@ func TestReadLargeImageResizesAndAddsPiHints(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if format != "png" || cfg.Width != 2000 || cfg.Height != 667 {
-		t.Fatalf("resized image = %s %dx%d, want png 2000x667", format, cfg.Width, cfg.Height)
+	if format != "png" || cfg.Width != 1568 || cfg.Height != 523 {
+		t.Fatalf("resized image = %s %dx%d, want png 1568x523", format, cfg.Width, cfg.Height)
 	}
 }
 

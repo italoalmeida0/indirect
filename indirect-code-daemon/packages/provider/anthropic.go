@@ -111,14 +111,38 @@ type anthTextBlock struct {
 	CacheControl *anthCacheControl `json:"cache_control,omitempty"`
 }
 
+type anthImageBase64Source struct {
+	Type      string `json:"type"` // "base64"
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
+type anthImageURLSource struct {
+	Type string `json:"type"` // "url"
+	URL  string `json:"url"`
+}
+
 type anthImageBlock struct {
-	Type   string `json:"type"` // "image"
-	Source struct {
-		Type      string `json:"type"` // "base64"
-		MediaType string `json:"media_type"`
-		Data      string `json:"data"`
-	} `json:"source"`
+	Type         string            `json:"type"` // "image"
+	Source       any               `json:"source"`
 	CacheControl *anthCacheControl `json:"cache_control,omitempty"`
+}
+
+func buildAnthImageBlock(v ImageBlock) anthImageBlock {
+	if len(v.Data) == 0 && v.URL != "" {
+		return anthImageBlock{
+			Type:   "image",
+			Source: anthImageURLSource{Type: "url", URL: v.URL},
+		}
+	}
+	return anthImageBlock{
+		Type: "image",
+		Source: anthImageBase64Source{
+			Type:      "base64",
+			MediaType: v.MimeType,
+			Data:      base64.StdEncoding.EncodeToString(v.Data),
+		},
+	}
 }
 
 type anthToolUseBlock struct {
@@ -434,12 +458,7 @@ func buildAnthUserContent(blocks []Content) []interface{} {
 			}
 			out = append(out, anthTextBlock{Type: "text", Text: v.Text})
 		case ImageBlock:
-			var img anthImageBlock
-			img.Type = "image"
-			img.Source.Type = "base64"
-			img.Source.MediaType = v.MimeType
-			img.Source.Data = base64.StdEncoding.EncodeToString(v.Data)
-			out = append(out, img)
+			out = append(out, buildAnthImageBlock(v))
 		}
 	}
 	if len(out) == 0 {
@@ -481,12 +500,7 @@ func buildAnthToolResultContent(blocks []Content) interface{} {
 			}
 			out = append(out, anthTextBlock{Type: "text", Text: v.Text})
 		case ImageBlock:
-			var img anthImageBlock
-			img.Type = "image"
-			img.Source.Type = "base64"
-			img.Source.MediaType = v.MimeType
-			img.Source.Data = base64.StdEncoding.EncodeToString(v.Data)
-			out = append(out, img)
+			out = append(out, buildAnthImageBlock(v))
 		}
 	}
 	if len(out) == 0 {

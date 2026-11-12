@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"indirect/indirect-code-daemon/packages/core"
@@ -72,8 +73,11 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 
 	// Image detection is based on magic bytes, not the file extension. Image
 	// files deliberately bypass the text input cap because they are resized
-	// before being put in the provider request.
+	// before being put in the provider request, subject to the 50MB pre-read cap.
 	if mime := detectImageMIME(path); mime != "" {
+		if info.Size() > MaxRawImageFileBytes {
+			return core.ToolResult{}, fmt.Errorf("%s is %.1f MB (exceeds 50 MB image limit)", shown, float64(info.Size())/(1024*1024))
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return core.ToolResult{}, err
@@ -81,20 +85,60 @@ func (t *ReadTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		if sniffed := sniffImageMIME(data); sniffed != "" {
 			mime = sniffed
 		}
-		processed, processErr := processImage(data, mime)
-		if processErr != nil {
+		norm, normErr := NormalizeImage(data, mime)
+		if normErr != nil {
 			return core.ToolResult{Content: []provider.Content{
-				provider.TextBlock{Text: fmt.Sprintf("Read image file [%s]\n%s", mime, processErr)},
+				provider.TextBlock{Text: fmt.Sprintf("Read image file [%s]\n%s", mime, normErr)},
 			}, Attrs: []core.Attr{{Key: "media", Value: mime}}}, nil
 		}
-		text := fmt.Sprintf("Read image file [%s]", processed.mimeType)
-		if len(processed.hints) > 0 {
-			text += "\n" + strings.Join(processed.hints, "\n")
+		text := fmt.Sprintf("Read image file [%s]", norm.MimeType)
+		if len(norm.Hints) > 0 {
+			text += "\n" + strings.Join(norm.Hints, "\n")
 		}
-		return core.ToolResult{Content: []provider.Content{
-			provider.TextBlock{Text: text},
-			provider.ImageBlock{MimeType: processed.mimeType, Data: processed.data},
-		}, Attrs: []core.Attr{{Key: "media", Value: processed.mimeType}}}, nil
+		shaPrefix := norm.SHA256
+		if len(shaPrefix) > 16 {
+			shaPrefix = shaPrefix[:16]
+		}
+		attrs := []core.Attr{
+			{Key: "media", Value: norm.MimeType},
+			{Key: "orig_media", Value: norm.OrigMime},
+			{Key: "width", Value: strconv.Itoa(norm.Width)},
+			{Key: "height", Value: strconv.Itoa(norm.Height)},
+			{Key: "orig_width", Value: strconv.Itoa(norm.OrigWidth)},
+			{Key: "orig_height", Value: strconv.Itoa(norm.OrigHeight)},
+			{Key: "bytes", Value: strconv.Itoa(len(norm.RawBytes))},
+			{Key: "orig_bytes", Value: strconv.Itoa(norm.OrigBytes)},
+			{Key: "sha256", Value: shaPrefix},
+		}
+		details := map[string]any{
+			"media":            norm.MimeType,
+			"orig_media":       norm.OrigMime,
+			"width":            norm.Width,
+			"height":           norm.Height,
+			"orig_width":       norm.OrigWidth,
+			"orig_height":      norm.OrigHeight,
+			"bytes":            len(norm.RawBytes),
+			"orig_bytes":       norm.OrigBytes,
+			"path":             shown,
+			"preview_data_url": norm.PreviewDataURL,
+		}
+		return core.ToolResult{
+			Content: []provider.Content{
+				provider.TextBlock{Text: text},
+				provider.ImageBlock{
+					MimeType:   norm.MimeType,
+					Data:       norm.RawBytes,
+					SourcePath: shown,
+					SHA256:     norm.SHA256,
+					Width:      norm.Width,
+					Height:     norm.Height,
+					OrigWidth:  norm.OrigWidth,
+					OrigHeight: norm.OrigHeight,
+				},
+			},
+			Attrs:   attrs,
+			Details: details,
+		}, nil
 	}
 
 	// A media file is not currently representable by provider.Content in this

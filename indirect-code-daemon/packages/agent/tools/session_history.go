@@ -50,10 +50,11 @@ type SessionHistoryBlock struct {
 // SessionHistorySnapshot is the point-in-time session history view read by
 // SessionHistoryTool. Messages is the full append-only raw session ledger.
 type SessionHistorySnapshot struct {
-	Messages []provider.Message
-	KeepFrom int
-	Blocks   []SessionHistoryBlock
-	BrainDir string
+	Messages     []provider.Message
+	KeepFrom     int
+	Blocks       []SessionHistoryBlock
+	ImageDigests map[string]string
+	BrainDir     string
 }
 
 // SessionHistorySource returns an immutable snapshot of the session's raw
@@ -325,7 +326,7 @@ func buildHistoryDocs(snap SessionHistorySnapshot, keepFrom, msgBound int) []his
 		if isSyntheticSystemMessage(m) {
 			continue
 		}
-		text := searchableMessageText(m, callNames)
+		text := searchableMessageText(m, callNames, snap.ImageDigests)
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
@@ -818,7 +819,26 @@ func extractRawMessageText(m provider.Message) string {
 	return strings.Join(parts, "\n")
 }
 
-func searchableMessageText(m provider.Message, callNames map[string]string) string {
+func searchableImageText(img provider.ImageBlock, digests map[string]string) string {
+	var parts []string
+	if img.SourcePath != "" {
+		parts = append(parts, img.SourcePath)
+	}
+	if img.MimeType != "" {
+		parts = append(parts, img.MimeType)
+	}
+	if img.Width > 0 && img.Height > 0 {
+		parts = append(parts, fmt.Sprintf("%dx%d", img.Width, img.Height))
+	}
+	if len(digests) > 0 {
+		if d := strings.TrimSpace(digests[provider.ImageKey(img)]); d != "" {
+			parts = append(parts, d)
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func searchableMessageText(m provider.Message, callNames map[string]string, digests map[string]string) string {
 	var parts []string
 	switch m.Role {
 	case provider.RoleUser:
@@ -832,8 +852,12 @@ func searchableMessageText(m provider.Message, callNames map[string]string) stri
 				if strings.TrimSpace(cleaned) != "" {
 					parts = append(parts, cleaned)
 				}
+			case provider.ImageBlock:
+				if txt := searchableImageText(b, digests); txt != "" {
+					parts = append(parts, txt)
+				}
 			case provider.ToolResultBlock:
-				if txt := extractToolResultBodyAndAttrs(b); txt != "" {
+				if txt := extractToolResultBodyAttrsAndDigests(b, digests); txt != "" {
 					parts = append(parts, txt)
 				}
 			}
@@ -851,6 +875,10 @@ func searchableMessageText(m provider.Message, callNames map[string]string) stri
 				}
 			case provider.ToolCallBlock:
 				parts = append(parts, b.Name+" "+string(b.Arguments))
+			case provider.ImageBlock:
+				if txt := searchableImageText(b, digests); txt != "" {
+					parts = append(parts, txt)
+				}
 			}
 		}
 	case provider.RoleTool:
@@ -860,7 +888,7 @@ func searchableMessageText(m provider.Message, callNames map[string]string) stri
 				if toolName := callNames[b.CallID]; toolName != "" {
 					parts = append(parts, toolName)
 				}
-				if txt := extractToolResultBodyAndAttrs(b); txt != "" {
+				if txt := extractToolResultBodyAttrsAndDigests(b, digests); txt != "" {
 					parts = append(parts, txt)
 				}
 			case provider.TextBlock:
@@ -899,23 +927,33 @@ func searchableBlockText(b SessionHistoryBlock) string {
 }
 
 func extractToolResultBodyAndAttrs(tr provider.ToolResultBlock) string {
+	return extractToolResultBodyAttrsAndDigests(tr, nil)
+}
+
+func extractToolResultBodyAttrsAndDigests(tr provider.ToolResultBlock, digests map[string]string) string {
 	var parts []string
 	for _, c := range tr.Content {
-		tb, ok := c.(provider.TextBlock)
-		if !ok || tb.Text == "" {
-			continue
-		}
-		if parsed, ok := core.ParseToolEnvelope(tb.Text); ok {
-			for _, k := range []string{"path", "url", "info", "error", "exit", "status"} {
-				if v := parsed.Attrs[k]; v != "" {
-					parts = append(parts, k+"="+v)
+		switch inner := c.(type) {
+		case provider.TextBlock:
+			if inner.Text == "" {
+				continue
+			}
+			if parsed, ok := core.ParseToolEnvelope(inner.Text); ok {
+				for _, k := range []string{"path", "url", "info", "error", "exit", "status", "media", "orig_media"} {
+					if v := parsed.Attrs[k]; v != "" {
+						parts = append(parts, k+"="+v)
+					}
 				}
+				if parsed.Body != "" {
+					parts = append(parts, parsed.Body)
+				}
+			} else {
+				parts = append(parts, inner.Text)
 			}
-			if parsed.Body != "" {
-				parts = append(parts, parsed.Body)
+		case provider.ImageBlock:
+			if txt := searchableImageText(inner, digests); txt != "" {
+				parts = append(parts, txt)
 			}
-		} else {
-			parts = append(parts, tb.Text)
 		}
 	}
 	return strings.Join(parts, "\n")
@@ -1069,7 +1107,7 @@ func executeSessionHistoryRecall(snap SessionHistorySnapshot, a SessionHistoryAr
 	}
 
 	callNames := collectToolCallNames(snap.Messages)
-	fullText := renderVerbatimRange(snap.Messages, snap.Blocks, keepFrom, startIdx, endExclusive, callNames)
+	fullText := renderVerbatimRange(snap.Messages, snap.Blocks, keepFrom, startIdx, endExclusive, callNames, snap.ImageDigests)
 	totalChars := len(fullText)
 
 	buildRecallResult := func(body string, effOffset int, truncated bool, nextOffset int) core.ToolResult {
@@ -1140,7 +1178,26 @@ func executeSessionHistoryRecall(snap SessionHistorySnapshot, a SessionHistoryAr
 	return buildRecallResult(window, offset, truncated, nextOffset), nil
 }
 
-func renderVerbatimRange(msgs []provider.Message, blocks []SessionHistoryBlock, keepFrom, startIdx, endExclusive int, callNames map[string]string) string {
+func renderVerbatimImage(sb *strings.Builder, img provider.ImageBlock, digests map[string]string) {
+	if len(digests) > 0 {
+		if d := strings.TrimSpace(digests[provider.ImageKey(img)]); d != "" {
+			sb.WriteString(core.FormatVisualDigestBlock(img, d))
+			sb.WriteString("\n")
+			return
+		}
+	}
+	label := img.MimeType
+	if img.SourcePath != "" {
+		label = img.SourcePath + ", " + label
+	}
+	if img.Width > 0 && img.Height > 0 {
+		fmt.Fprintf(sb, "[image: %s, %dx%d, %d bytes]\n", label, img.Width, img.Height, len(img.Data))
+		return
+	}
+	fmt.Fprintf(sb, "[image: %s, %d bytes]\n", label, len(img.Data))
+}
+
+func renderVerbatimRange(msgs []provider.Message, blocks []SessionHistoryBlock, keepFrom, startIdx, endExclusive int, callNames map[string]string, digests map[string]string) string {
 	var sb strings.Builder
 	for idx := startIdx; idx < endExclusive && idx < len(msgs); idx++ {
 		if sb.Len() > 0 {
@@ -1163,9 +1220,9 @@ func renderVerbatimRange(msgs []provider.Message, blocks []SessionHistoryBlock, 
 					sb.WriteString(cleaned)
 					sb.WriteString("\n")
 				case provider.ImageBlock:
-					fmt.Fprintf(&sb, "[image: %s, %d bytes]\n", b.MimeType, len(b.Data))
+					renderVerbatimImage(&sb, b, digests)
 				case provider.ToolResultBlock:
-					renderVerbatimToolResult(&sb, b, callNames)
+					renderVerbatimToolResult(&sb, b, callNames, digests)
 				}
 			}
 		case provider.RoleAssistant:
@@ -1183,16 +1240,16 @@ func renderVerbatimRange(msgs []provider.Message, blocks []SessionHistoryBlock, 
 				case provider.ToolCallBlock:
 					fmt.Fprintf(&sb, "[tool_call id=%s name=%s]\n%s\n", b.ID, b.Name, string(b.Arguments))
 				case provider.ImageBlock:
-					fmt.Fprintf(&sb, "[image: %s, %d bytes]\n", b.MimeType, len(b.Data))
+					renderVerbatimImage(&sb, b, digests)
 				case provider.ToolResultBlock:
-					renderVerbatimToolResult(&sb, b, callNames)
+					renderVerbatimToolResult(&sb, b, callNames, digests)
 				}
 			}
 		case provider.RoleTool:
 			for _, c := range m.Content {
 				switch b := c.(type) {
 				case provider.ToolResultBlock:
-					renderVerbatimToolResult(&sb, b, callNames)
+					renderVerbatimToolResult(&sb, b, callNames, digests)
 				case provider.TextBlock:
 					if parsed, ok := core.ParseToolEnvelope(b.Text); ok {
 						sb.WriteString(parsed.Body)
@@ -1208,7 +1265,7 @@ func renderVerbatimRange(msgs []provider.Message, blocks []SessionHistoryBlock, 
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderVerbatimToolResult(sb *strings.Builder, tr provider.ToolResultBlock, callNames map[string]string) {
+func renderVerbatimToolResult(sb *strings.Builder, tr provider.ToolResultBlock, callNames map[string]string, digests map[string]string) {
 	toolName := callNames[tr.CallID]
 	if toolName != "" {
 		fmt.Fprintf(sb, "[tool_result call_id=%s tool=%s is_error=%t]\n", tr.CallID, toolName, tr.IsError)
@@ -1240,7 +1297,7 @@ func renderVerbatimToolResult(sb *strings.Builder, tr provider.ToolResultBlock, 
 				sb.WriteString("\n")
 			}
 		case provider.ImageBlock:
-			fmt.Fprintf(sb, "[image: %s, %d bytes]\n", inner.MimeType, len(inner.Data))
+			renderVerbatimImage(sb, inner, digests)
 		}
 	}
 }

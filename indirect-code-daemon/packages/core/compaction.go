@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"sort"
 	"strconv"
@@ -98,16 +99,24 @@ func (b FoldBlock) clone() FoldBlock {
 // ReadFiles, ModifiedFiles, and FirstKeptEntryID stay synced as mirror fields
 // for UI/E2E and legacy compatibility.
 type CompactionState struct {
-	PreviousSummary  string          `json:"previousSummary,omitempty"`
-	ReadFiles        []string        `json:"readFiles,omitempty"`
-	ModifiedFiles    []string        `json:"modifiedFiles,omitempty"`
-	FirstKeptEntryID string          `json:"firstKeptEntryId,omitempty"`
-	Count            int             `json:"count,omitempty"`
-	KeepFrom         int             `json:"keepFrom,omitempty"`
-	Usage            *provider.Usage `json:"usage,omitempty"`
-	Blocks           []FoldBlock     `json:"blocks,omitempty"`
-	NextBlockSeq     int             `json:"nextBlockSeq,omitempty"`
-	PrunedBefore     int             `json:"prunedBefore,omitempty"`
+	PreviousSummary  string            `json:"previousSummary,omitempty"`
+	ReadFiles        []string          `json:"readFiles,omitempty"`
+	ModifiedFiles    []string          `json:"modifiedFiles,omitempty"`
+	FirstKeptEntryID string            `json:"firstKeptEntryId,omitempty"`
+	Count            int               `json:"count,omitempty"`
+	KeepFrom         int               `json:"keepFrom,omitempty"`
+	Usage            *provider.Usage   `json:"usage,omitempty"`
+	Blocks           []FoldBlock       `json:"blocks,omitempty"`
+	NextBlockSeq     int               `json:"nextBlockSeq,omitempty"`
+	PrunedBefore     int               `json:"prunedBefore,omitempty"`
+	ImageDigests     map[string]string `json:"imageDigests,omitempty"`
+	EvictedImages    map[string]bool   `json:"evictedImages,omitempty"`
+	LearnedMaxImages *int              `json:"learnedMaxImages,omitempty"`
+}
+
+// CloneCompactionState returns a deep copy of s, or nil when s is nil.
+func CloneCompactionState(s *CompactionState) *CompactionState {
+	return s.Clone()
 }
 
 // Clone returns a deep copy of s, or nil when s is nil.
@@ -128,7 +137,25 @@ func (s *CompactionState) Clone() *CompactionState {
 			cp.Blocks[i] = b.clone()
 		}
 	}
+	if len(s.ImageDigests) > 0 {
+		cp.ImageDigests = maps.Clone(s.ImageDigests)
+	} else {
+		cp.ImageDigests = nil
+	}
+	if len(s.EvictedImages) > 0 {
+		cp.EvictedImages = maps.Clone(s.EvictedImages)
+	} else {
+		cp.EvictedImages = nil
+	}
+	if s.LearnedMaxImages != nil {
+		v := *s.LearnedMaxImages
+		cp.LearnedMaxImages = &v
+	}
 	return &cp
+}
+
+func hasVisionState(s *CompactionState) bool {
+	return s != nil && (len(s.ImageDigests) > 0 || len(s.EvictedImages) > 0 || s.LearnedMaxImages != nil)
 }
 
 // ActiveBlocks returns non-retired FoldBlocks sorted chronologically by StartIdx.
@@ -236,8 +263,21 @@ func TruncateCompaction(state *CompactionState, effectiveCut int) *CompactionSta
 		return nil
 	}
 	cp := state.Clone()
+	cp.EvictedImages = pruneEvictedImagesAbove(cp.EvictedImages, effectiveCut)
 	if len(cp.Blocks) == 0 {
 		if cp.KeepFrom <= 0 || effectiveCut < cp.KeepFrom || strings.TrimSpace(cp.PreviousSummary) == "" {
+			if hasVisionState(cp) {
+				cp.PreviousSummary = ""
+				cp.KeepFrom = 0
+				cp.FirstKeptEntryID = ""
+				cp.Count = 0
+				cp.ReadFiles = nil
+				cp.ModifiedFiles = nil
+				if cp.PrunedBefore > effectiveCut {
+					cp.PrunedBefore = effectiveCut
+				}
+				return cp
+			}
 			return nil
 		}
 		if cp.PrunedBefore > effectiveCut {
@@ -292,6 +332,16 @@ func TruncateCompaction(state *CompactionState, effectiveCut int) *CompactionSta
 	}
 	cp.SyncMirrors()
 	if len(cp.ActiveBlocks()) == 0 {
+		if hasVisionState(cp) {
+			cp.Blocks = nil
+			cp.PreviousSummary = ""
+			cp.KeepFrom = 0
+			cp.FirstKeptEntryID = ""
+			cp.Count = 0
+			cp.ReadFiles = nil
+			cp.ModifiedFiles = nil
+			return cp
+		}
 		return nil
 	}
 	return cp
@@ -303,6 +353,7 @@ func ShiftCompactionOnDrop(state *CompactionState, droppedIdx int) {
 	if state == nil || droppedIdx < 0 {
 		return
 	}
+	state.EvictedImages = shiftEvictedImagesOnDrop(state.EvictedImages, droppedIdx)
 	if droppedIdx < state.KeepFrom {
 		state.KeepFrom--
 	}
@@ -490,13 +541,15 @@ func projectMessages(history []provider.Message, state *CompactionState) []provi
 	}
 	synthetic, keepFrom := projectionAnchor(state, len(history))
 	if !synthetic {
+		tail := history
 		if state.PrunedBefore > 0 {
-			return ApplyViewLatchTail(history, 0, state.PrunedBefore)
+			tail = ApplyViewLatchTail(history, 0, state.PrunedBefore)
 		}
-		return history
+		return projectWireImagesTail(tail, 0, state)
 	}
 
 	latchedTail := ApplyViewLatchTail(history[keepFrom:], keepFrom, state.PrunedBefore)
+	latchedTail = projectWireImagesTail(latchedTail, keepFrom, state)
 
 	if len(state.Blocks) > 0 {
 		active := state.ActiveBlocks()
@@ -599,19 +652,41 @@ func ShouldCompactAt(window int, countedContext int, thresholdPct int) bool {
 // never serialize prior summaries as raw turns. Long tool outputs pass through
 // LogSelect first and then a generous 12KB head+tail UTF-8-safe budget.
 func SerializeConversation(msgs []provider.Message) string {
-	return serializeConversationWithBudget(msgs, serializeBlockBudgetBytes, serializeArgsBudgetBytes)
+	return SerializeConversationWithDigests(msgs, nil)
+}
+
+// SerializeConversationWithDigests renders raw messages into <conversation> XML
+// for standalone summarization, embedding cached visual digests (or deterministic
+// fallback digests) in place of User and Tool ImageBlocks.
+func SerializeConversationWithDigests(msgs []provider.Message, digests map[string]string) string {
+	return serializeConversationWithBudgetAndDigests(msgs, digests, serializeBlockBudgetBytes, serializeArgsBudgetBytes)
 }
 
 func serializeConversationWithBudget(msgs []provider.Message, blockMaxBytes, argsMaxBytes int) string {
+	return serializeConversationWithBudgetAndDigests(msgs, nil, blockMaxBytes, argsMaxBytes)
+}
+
+func serializeConversationWithBudgetAndDigests(msgs []provider.Message, digests map[string]string, blockMaxBytes, argsMaxBytes int) string {
 	if blockMaxBytes <= 0 {
 		blockMaxBytes = serializeBlockBudgetBytes
 	}
 	if argsMaxBytes <= 0 {
 		argsMaxBytes = serializeArgsBudgetBytes
 	}
+	formatSerializedImage := func(msgIdx int, img provider.ImageBlock) string {
+		key := provider.ImageKey(img)
+		digest := ""
+		if digests != nil {
+			digest = strings.TrimSpace(digests[key])
+		}
+		if digest == "" {
+			digest = BuildDeterministicImageDigest(msgs, msgIdx, img)
+		}
+		return FormatVisualDigestBlock(img, digest)
+	}
 	var sb strings.Builder
 	sb.WriteString("<conversation>\n")
-	for _, m := range msgs {
+	for msgIdx, m := range msgs {
 		if m.Meta != nil && m.Meta["compaction"] == "true" {
 			continue
 		}
@@ -636,10 +711,11 @@ func serializeConversationWithBudget(msgs []provider.Message, blockMaxBytes, arg
 					sb.WriteString(truncateHeadTail(b.Text, blockMaxBytes))
 					sb.WriteString("\n")
 				case provider.ImageBlock:
-					sb.WriteString("[image attached]\n")
+					sb.WriteString(truncateHeadTail(formatSerializedImage(msgIdx, b), blockMaxBytes))
+					sb.WriteString("\n")
 				case provider.ToolResultBlock:
 					sb.WriteString("[tool result: ")
-					sb.WriteString(condenseToolOutputForSummary(toolResultText(b), blockMaxBytes))
+					sb.WriteString(condenseToolOutputForSummary(toolResultTextWithDigests(msgs, msgIdx, b, digests), blockMaxBytes))
 					sb.WriteString("]\n")
 				}
 			}
@@ -669,10 +745,11 @@ func serializeConversationWithBudget(msgs []provider.Message, blockMaxBytes, arg
 					sb.WriteString(truncateHeadTail(string(b.Arguments), argBudget))
 					sb.WriteString("]\n")
 				case provider.ImageBlock:
-					sb.WriteString("[image attached]\n")
+					sb.WriteString(truncateHeadTail(formatSerializedImage(msgIdx, b), blockMaxBytes))
+					sb.WriteString("\n")
 				case provider.ToolResultBlock:
 					sb.WriteString("[tool result: ")
-					sb.WriteString(condenseToolOutputForSummary(toolResultText(b), blockMaxBytes))
+					sb.WriteString(condenseToolOutputForSummary(toolResultTextWithDigests(msgs, msgIdx, b, digests), blockMaxBytes))
 					sb.WriteString("]\n")
 				}
 			}
@@ -681,10 +758,13 @@ func serializeConversationWithBudget(msgs []provider.Message, blockMaxBytes, arg
 			sb.WriteString("<tool_result>\n")
 			for _, c := range m.Content {
 				if tr, ok := c.(provider.ToolResultBlock); ok {
-					sb.WriteString(condenseToolOutputForSummary(toolResultText(tr), blockMaxBytes))
+					sb.WriteString(condenseToolOutputForSummary(toolResultTextWithDigests(msgs, msgIdx, tr, digests), blockMaxBytes))
 					sb.WriteString("\n")
 				} else if t, ok := c.(provider.TextBlock); ok {
 					sb.WriteString(condenseToolOutputForSummary(t.Text, blockMaxBytes))
+					sb.WriteString("\n")
+				} else if ib, ok := c.(provider.ImageBlock); ok {
+					sb.WriteString(truncateHeadTail(formatSerializedImage(msgIdx, ib), blockMaxBytes))
 					sb.WriteString("\n")
 				}
 			}
@@ -734,6 +814,30 @@ func toolResultText(b provider.ToolResultBlock) string {
 	for _, c := range b.Content {
 		if t, ok := c.(provider.TextBlock); ok {
 			sb.WriteString(t.Text)
+		}
+	}
+	return sb.String()
+}
+
+func toolResultTextWithDigests(msgs []provider.Message, msgIdx int, b provider.ToolResultBlock, digests map[string]string) string {
+	var sb strings.Builder
+	for _, c := range b.Content {
+		switch inner := c.(type) {
+		case provider.TextBlock:
+			sb.WriteString(inner.Text)
+		case provider.ImageBlock:
+			if sb.Len() > 0 && !strings.HasSuffix(sb.String(), "\n") {
+				sb.WriteString("\n")
+			}
+			key := provider.ImageKey(inner)
+			digest := ""
+			if digests != nil {
+				digest = strings.TrimSpace(digests[key])
+			}
+			if digest == "" {
+				digest = BuildDeterministicImageDigest(msgs, msgIdx, inner)
+			}
+			sb.WriteString(FormatVisualDigestBlock(inner, digest))
 		}
 	}
 	return sb.String()
@@ -1184,12 +1288,36 @@ func unionFailedCommands(existing, added []FailedCommandSummary) []FailedCommand
 // msgs covering [startIdx, endIdx). Used whenever the LLM summarizer errors,
 // attempts a tool call, truncates repeatedly, or exceeds NET_SHRINK_TOLERANCE.
 func MechanicalBlockSummary(msgs []provider.Message, startIdx, endIdx int) string {
+	return MechanicalBlockSummaryWithDigests(msgs, startIdx, endIdx, nil)
+}
+
+func MechanicalBlockSummaryWithDigests(msgs []provider.Message, startIdx, endIdx int, digests map[string]string) string {
 	var userPrompts []string
 	var lastAssistant string
+	var imageSnippets []string
 	toolCounts := map[string]int{}
 	var toolOrder []string
 
-	for _, m := range msgs {
+	addImageSnippet := func(msgIdx int, img provider.ImageBlock) {
+		if len(imageSnippets) >= 6 {
+			return
+		}
+		key := provider.ImageKey(img)
+		d := ""
+		if digests != nil {
+			d = strings.TrimSpace(digests[key])
+		}
+		if d == "" {
+			d = BuildDeterministicImageDigest(msgs, msgIdx, img)
+		}
+		label := strings.TrimSpace(img.SourcePath)
+		if label == "" {
+			label = "attachment"
+		}
+		imageSnippets = append(imageSnippets, fmt.Sprintf("`%s`: %s", label, truncateRunes(strings.Join(strings.Fields(d), " "), 260)))
+	}
+
+	for msgIdx, m := range msgs {
 		if m.Meta != nil && m.Meta["compaction"] == "true" {
 			continue
 		}
@@ -1197,6 +1325,11 @@ func MechanicalBlockSummary(msgs []provider.Message, startIdx, endIdx int) strin
 		case provider.RoleUser:
 			if m.Meta != nil && m.Meta[MetaHidden] == "true" {
 				continue
+			}
+			for _, c := range m.Content {
+				if ib, ok := c.(provider.ImageBlock); ok {
+					addImageSnippet(msgIdx, ib)
+				}
 			}
 			txt := strings.TrimSpace(StripLeadingSystemPrompt(extractText(m)))
 			if txt == "" || strings.HasPrefix(txt, "<system-warn>") {
@@ -1215,6 +1348,16 @@ func MechanicalBlockSummary(msgs []provider.Message, startIdx, endIdx int) strin
 						toolOrder = append(toolOrder, tc.Name)
 					}
 					toolCounts[tc.Name]++
+				}
+			}
+		case provider.RoleTool:
+			for _, c := range m.Content {
+				if tr, ok := c.(provider.ToolResultBlock); ok {
+					for _, ic := range tr.Content {
+						if ib, ok := ic.(provider.ImageBlock); ok {
+							addImageSnippet(msgIdx, ib)
+						}
+					}
 				}
 			}
 		}
@@ -1263,7 +1406,7 @@ func MechanicalBlockSummary(msgs []provider.Message, startIdx, endIdx int) strin
 		sb.WriteString(fmt.Sprintf("- Processed %d conversation turns.\n", len(msgs)))
 	}
 
-	if len(failed) > 0 || lastAssistant != "" {
+	if len(failed) > 0 || lastAssistant != "" || len(imageSnippets) > 0 {
 		sb.WriteString("\n## Critical Context\n")
 		for _, fc := range failed {
 			sb.WriteString(fmt.Sprintf("- Failed command `%s` (exit %s)", fc.Command, fc.ExitCode))
@@ -1271,6 +1414,11 @@ func MechanicalBlockSummary(msgs []provider.Message, startIdx, endIdx int) strin
 				sb.WriteString(": ")
 				sb.WriteString(fc.FirstError)
 			}
+			sb.WriteString("\n")
+		}
+		for _, snippet := range imageSnippets {
+			sb.WriteString("- Visual digest ")
+			sb.WriteString(snippet)
 			sb.WriteString("\n")
 		}
 		if lastAssistant != "" {

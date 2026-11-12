@@ -1,11 +1,81 @@
 package provider
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 
 	"github.com/italoalmeida0/btdby4"
+	"golang.org/x/image/bmp"
+	"golang.org/x/image/webp"
 )
+
+const (
+	minImageTokenFloor     = 1600
+	imageTileMarginTokens  = 1100
+	maxImageByteBumpTokens = 4096
+)
+
+// EstimateImageTokens computes a conservative multi-provider token estimate for
+// a single ImageBlock: max(1600, (w*h)/750 + 1100) plus a capped byte-size
+// safety bump (base64Len/2048). Never returns 0 even on undecodable headers.
+func EstimateImageTokens(b ImageBlock) int {
+	w, h := b.Width, b.Height
+	if (w <= 0 || h <= 0) && len(b.Data) > 0 {
+		w, h = decodeImageDimensions(b.Data)
+	}
+	tile := minImageTokenFloor
+	if w > 0 && h > 0 {
+		if est := (w*h)/750 + imageTileMarginTokens; est > tile {
+			tile = est
+		}
+	}
+	b64Len := base64.StdEncoding.EncodedLen(len(b.Data))
+	byteBump := min(maxImageByteBumpTokens, b64Len/2048)
+	return tile + byteBump
+}
+
+func decodeImageDimensions(data []byte) (int, int) {
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil && cfg.Width > 0 && cfg.Height > 0 {
+		return cfg.Width, cfg.Height
+	}
+	if cfg, err := webp.DecodeConfig(bytes.NewReader(data)); err == nil && cfg.Width > 0 && cfg.Height > 0 {
+		return cfg.Width, cfg.Height
+	}
+	if cfg, err := bmp.DecodeConfig(bytes.NewReader(data)); err == nil && cfg.Width > 0 && cfg.Height > 0 {
+		return cfg.Width, cfg.Height
+	}
+	return 0, 0
+}
+
+func messageWantedImageTokens(msg Message) int {
+	total := 0
+	for _, c := range msg.Content {
+		switch v := c.(type) {
+		case ImageBlock:
+			total += EstimateImageTokens(v)
+		case ToolResultBlock:
+			for _, inner := range v.Content {
+				if ib, ok := inner.(ImageBlock); ok {
+					total += EstimateImageTokens(ib)
+				}
+			}
+		}
+	}
+	return total
+}
+
+func totalWantedImageTokens(messages []Message) int {
+	total := 0
+	for _, m := range messages {
+		total += messageWantedImageTokens(m)
+	}
+	return total
+}
 
 // ContextTokens counts a provider-neutral request (system + tools +
 // messages) as an Anthropic Messages payload with btdby4, the daemon's
@@ -52,7 +122,17 @@ func ContextTokens(system string, tools []Tool, messages []Message) int {
 	}
 	bd, err := btdby4.CountAnthropicRequest(req, btdby4.Options{})
 	if err != nil {
-		return 0
+		return totalWantedImageTokens(messages)
+	}
+	if wantImg := totalWantedImageTokens(messages); wantImg > 0 {
+		if noImg, err := btdby4.CountAnthropicRequest(req, btdby4.Options{IgnoreImages: true}); err == nil {
+			btdImg := max(0, bd.Total-noImg.Total)
+			if wantImg > btdImg {
+				return bd.Total + (wantImg - btdImg)
+			}
+		} else if bd.Total < wantImg {
+			return wantImg
+		}
 	}
 	return bd.Total
 }
@@ -68,9 +148,15 @@ func ContextTokensByMessage(system string, tools []Tool, messages []Message) (in
 		if content == nil {
 			continue
 		}
+		msgWantImg := messageWantedImageTokens(m)
 		bb, err := btdby4.CountAnthropicMessage(btdby4.AnthropicMessage{Role: role, Content: content}, btdby4.Options{})
 		if err != nil {
-			per = append(per, 0)
+			per = append(per, msgWantImg)
+			continue
+		}
+		if msgWantImg > 0 {
+			textPart := max(0, bb.Tokens-bb.Images)
+			per = append(per, textPart+max(bb.Images, msgWantImg))
 			continue
 		}
 		per = append(per, bb.Tokens)
@@ -174,6 +260,16 @@ func anthropicCountMessage(msg Message) (string, any) {
 	}
 }
 
+func anthropicCountImageSource(v ImageBlock) map[string]any {
+	if len(v.Data) == 0 && v.URL != "" {
+		return map[string]any{"type": "url", "url": v.URL}
+	}
+	return map[string]any{
+		"type": "base64", "media_type": v.MimeType,
+		"data": base64.StdEncoding.EncodeToString(v.Data),
+	}
+}
+
 func anthropicCountUserContent(blocks []Content) []any {
 	var out []any
 	for _, b := range blocks {
@@ -182,11 +278,8 @@ func anthropicCountUserContent(blocks []Content) []any {
 			out = append(out, map[string]any{"type": "text", "text": v.Text})
 		case ImageBlock:
 			out = append(out, map[string]any{
-				"type": "image",
-				"source": map[string]any{
-					"type": "base64", "media_type": v.MimeType,
-					"data": base64.StdEncoding.EncodeToString(v.Data),
-				},
+				"type":   "image",
+				"source": anthropicCountImageSource(v),
 			})
 		}
 		// btdby4 auto-detects encrypted thinking payloads anywhere in
@@ -213,11 +306,8 @@ func anthropicCountToolResultContent(blocks []Content) any {
 			out = append(out, map[string]any{"type": "text", "text": v.Text})
 		case ImageBlock:
 			out = append(out, map[string]any{
-				"type": "image",
-				"source": map[string]any{
-					"type": "base64", "media_type": v.MimeType,
-					"data": base64.StdEncoding.EncodeToString(v.Data),
-				},
+				"type":   "image",
+				"source": anthropicCountImageSource(v),
 			})
 		}
 	}

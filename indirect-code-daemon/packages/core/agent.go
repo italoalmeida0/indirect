@@ -263,6 +263,13 @@ type Agent struct {
 	// outside a.mu, so the hook may call any Agent method.
 	AutoCompact func(ctx context.Context, sink func(AgentEvent)) error
 
+	// MaxWireImages, KeepWireImages, and MaxWireImageBytes tune the live-image
+	// hysteresis wire window (zero values select DefaultMaxWireImages=6,
+	// DefaultKeepWireImages=3, DefaultMaxWireImageBytes=8MiB).
+	MaxWireImages     int
+	KeepWireImages    int
+	MaxWireImageBytes int
+
 	// RequestMessages, if set, transforms the request-only message list
 	// right before it goes to the provider. The daemon uses it to inject
 	// the ephemeral <skill></skill> prefix before the current turn's
@@ -674,11 +681,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		}
 
 		var (
-			stop           provider.StopReason
-			assistantMsg   provider.Message
-			discardedChars int
-			err            error
-			overflowPasses int
+			stop             provider.StopReason
+			assistantMsg     provider.Message
+			discardedChars   int
+			err              error
+			overflowPasses   int
+			visionShedPasses int
 		)
 		for attempt := 0; ; attempt++ {
 			stop, assistantMsg, discardedChars, err = a.oneTurn(ctx, sink)
@@ -686,21 +694,99 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			if err == nil {
 				break
 			}
+			if ctx.Err() != nil {
+				break
+			}
+			// Reactive multimodal & payload-cliff shedding (up to 3 passes per step).
+			if visionShedPasses < 3 {
+				if vErr := ClassifyVisionOrPayloadError(err); vErr != nil {
+					currentLive := a.liveWireImageCount()
+					switch vErr.Kind {
+					case KindVisionUnsupported:
+						if currentLive > 0 {
+							zero := 0
+							evicted, _ := a.shedWireImagesReactive(ctx, &zero, 0, true)
+							if evicted > 0 {
+								visionShedPasses++
+								sink(EvToolProgress{Text: "Model does not support inline images; converted live images to visual digests and retrying…"})
+								if !a.PersistentTurns {
+									a.dropLastAssistantMessage()
+								}
+								continue
+							}
+						}
+					case KindImageCountCap:
+						if currentLive > 0 {
+							capVal := currentLive / 2
+							if vErr.HasMax {
+								capVal = vErr.MaxAllowed
+							}
+							if capVal >= currentLive {
+								capVal = currentLive - 1
+							}
+							if capVal < 0 {
+								capVal = 0
+							}
+							evicted, _ := a.shedWireImagesReactive(ctx, &capVal, capVal, capVal == 0)
+							if evicted > 0 {
+								visionShedPasses++
+								sink(EvToolProgress{Text: fmt.Sprintf("Provider image limit reached; dehydrated %d older image(s) to visual digests and retrying…", evicted)})
+								if !a.PersistentTurns {
+									a.dropLastAssistantMessage()
+								}
+								continue
+							}
+						}
+					case KindImagePayloadTooLarge:
+						if currentLive > 0 {
+							nextKeep := currentLive / 2
+							if currentLive <= 1 {
+								nextKeep = 0
+							}
+							evicted, _ := a.shedWireImagesReactive(ctx, nil, nextKeep, nextKeep == 0)
+							if evicted > 0 {
+								visionShedPasses++
+								sink(EvToolProgress{Text: fmt.Sprintf("Payload size limit reached; dehydrated %d wire image(s) to visual digests and retrying…", evicted)})
+								if !a.PersistentTurns {
+									a.dropLastAssistantMessage()
+								}
+								continue
+							}
+						}
+					}
+				}
+			}
 			// Reactive recovery: if the provider rejected due to context overflow,
-			// run up to 2 token-budgeted compaction passes instead of hard-failing.
-			if IsContextOverflow(err) && overflowPasses < 2 {
-				overflowPasses++
-				sink(EvToolProgress{Text: "Context limit reached upstream; automatically compacting older context…"})
-				keepBudget := CompactionKeepRecentTokens / 2
-				if overflowPasses > 1 {
-					keepBudget = CompactionKeepRecentTokens / 8
+			// run up to 2 token-budgeted compaction passes (plus wire image shedding)
+			// instead of hard-failing, then terminate finitely if still overflowing.
+			if IsContextOverflow(err) {
+				if overflowPasses < 2 {
+					overflowPasses++
+					sink(EvToolProgress{Text: "Context limit reached upstream; automatically compacting older context…"})
+					keepBudget := CompactionKeepRecentTokens / 2
+					imgKeep := 2
+					if overflowPasses > 1 {
+						keepBudget = CompactionKeepRecentTokens / 8
+						imgKeep = 0
+					}
+					shedCount, _ := a.shedWireImagesReactive(ctx, nil, imgKeep, false)
+					summary, compactErr := a.CompactToTokenBudget(ctx, keepBudget, nil)
+					compacted := compactErr == nil && summary != ""
+					latched := false
+					if !compacted && overflowPasses > 1 {
+						latched = a.latchOverflowTail(keepBudget)
+					}
+					if compacted || latched || shedCount > 0 {
+						if !a.PersistentTurns {
+							a.dropLastAssistantMessage()
+						}
+						continue
+					}
 				}
-				if summary, compactErr := a.CompactToTokenBudget(ctx, keepBudget, nil); compactErr == nil && summary != "" {
-					continue
-				}
-				if overflowPasses > 1 && a.latchOverflowTail(keepBudget) {
-					continue
-				}
+				break
+			}
+			if ClassifyVisionOrPayloadError(err) != nil {
+				break
 			}
 			if errors.Is(err, ErrRepetitionLoop) && attempt < 3 {
 				sink(EvToolProgress{Text: "Repetition loop detected; retrying response…"})
@@ -928,6 +1014,7 @@ func (a *Agent) dropLastAssistantMessage() {
 	defer a.mu.Unlock()
 	if n := len(a.messages); n > 0 && a.messages[n-1].Role == provider.RoleAssistant {
 		a.messages = a.messages[:n-1]
+		ShiftCompactionOnDrop(a.compactionState, n-1)
 		a.rev++
 	}
 }
@@ -1014,6 +1101,7 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 			return provider.StopError, provider.Message{}, 0, err
 		}
 	}
+	a.prepareWireImages(ctx)
 	var req provider.Request
 	for {
 		if err := a.prepareStart(ctx); err != nil {

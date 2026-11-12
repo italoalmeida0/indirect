@@ -1674,13 +1674,22 @@ func filterBalloonsBelow(balloons []filetrack.TurnChanges, turnID int) []filetra
 
 // truncateSessionCompaction rolls back compaction blocks straddling or above
 // effectiveCut when raw history is cut or edited. Legacy single-summary states
-// (len(Blocks)==0) lack exact span bounds and clear whenever effectiveCut <= KeepFrom.
+// (len(Blocks)==0) lack exact span bounds and clear their summary whenever
+// effectiveCut <= KeepFrom, while preserving cached visual digests and learned
+// vision limits when effectiveCut > 0.
 func truncateSessionCompaction(state *core.CompactionState, effectiveCut int) *core.CompactionState {
 	if state == nil {
 		return nil
 	}
 	if len(state.Blocks) == 0 && effectiveCut <= state.KeepFrom {
-		return nil
+		cp := state.Clone()
+		cp.PreviousSummary = ""
+		cp.KeepFrom = 0
+		cp.FirstKeptEntryID = ""
+		cp.Count = 0
+		cp.ReadFiles = nil
+		cp.ModifiedFiles = nil
+		return core.TruncateCompaction(cp, effectiveCut)
 	}
 	return core.TruncateCompaction(state, effectiveCut)
 }

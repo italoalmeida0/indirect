@@ -37,9 +37,17 @@ func attachmentUploadKey(name, mime string, data []byte, text string) string {
 
 const (
 	maxAttachmentBytes       = 4 << 20
+	maxImageAttachmentBytes  = 20 << 20
 	maxAttachmentTextRunes   = 512 * 1024
 	maxAttachmentsPerMessage = 30
 )
+
+func attachmentSizeLimit(mime string) int {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mime)), "image/") {
+		return maxImageAttachmentBytes
+	}
+	return maxAttachmentBytes
+}
 
 func validateAttachmentIDs(rec *SessionRecord, ids []string) error {
 	if len(ids) > maxAttachmentsPerMessage {
@@ -63,7 +71,7 @@ func validateAttachmentIDs(rec *SessionRecord, ids []string) error {
 			}
 			info, err := f.Stat()
 			f.Close()
-			if err != nil || !info.Mode().IsRegular() || info.Size() > maxAttachmentBytes {
+			if err != nil || !info.Mode().IsRegular() || info.Size() > int64(attachmentSizeLimit(a.Mime)) {
 				return fmt.Errorf("Attachment '%s' is unavailable", a.Name)
 			}
 			break
@@ -117,15 +125,12 @@ func (a *sessionActor) onAttachUpload(m attachUploadMsg) attachUploadResult {
 	if strings.TrimSpace(m.Name) == "" {
 		return fail("Attachment needs a session, name and data")
 	}
-	if len(m.Data) > base64.StdEncoding.EncodedLen(maxAttachmentBytes) {
-		return fail("Attachment too large (max 4MB)")
+	if len(m.Data) > base64.StdEncoding.EncodedLen(maxImageAttachmentBytes) {
+		return fail("Attachment too large (max 20MB for images, 4MB for files)")
 	}
 	data, err := base64.StdEncoding.DecodeString(m.Data)
 	if err != nil {
 		return fail("Attachment data is not valid base64")
-	}
-	if len(data) > maxAttachmentBytes {
-		return fail("Attachment too large (max 4MB)")
 	}
 	mime := strings.ToLower(strings.TrimSpace(m.Mime))
 	detected := http.DetectContentType(data)
@@ -141,9 +146,11 @@ func (a *sessionActor) onAttachUpload(m attachUploadMsg) attachUploadResult {
 		if detected != mime && mime != "image/bmp" {
 			return fail("Image data does not match its format")
 		}
-		if len(data) > 5*1024*1024/2 {
-			return fail("Image too large (max 2.5MB)")
+		if len(data) > maxImageAttachmentBytes {
+			return fail("Image too large (max 20MB)")
 		}
+	} else if len(data) > maxAttachmentBytes {
+		return fail("Attachment too large (max 4MB)")
 	}
 	if mime == "" {
 		mime = detected

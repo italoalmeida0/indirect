@@ -4,11 +4,28 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/provider"
 )
+
+func copyVisionStateInto(dst, src *CompactionState, maxLen int) {
+	if dst == nil || src == nil {
+		return
+	}
+	if len(src.ImageDigests) > 0 {
+		dst.ImageDigests = maps.Clone(src.ImageDigests)
+	}
+	if len(src.EvictedImages) > 0 {
+		dst.EvictedImages = pruneEvictedImagesAbove(src.EvictedImages, maxLen)
+	}
+	if src.LearnedMaxImages != nil {
+		v := *src.LearnedMaxImages
+		dst.LearnedMaxImages = &v
+	}
+}
 
 var errSummarizerToolCall = errors.New("summarizer attempted a tool call")
 
@@ -98,13 +115,16 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 			} else if legacyKeepFrom == 0 && strings.TrimSpace(workingState.PreviousSummary) != "" {
 				carryOverSummary = strings.TrimSpace(workingState.PreviousSummary)
 			} else if !synthetic {
-				// Corrupt legacy anchor: reset before computing fresh folds.
+				// No compacted prefix yet (or corrupt legacy anchor): preserve any
+				// cached visual digests, evicted wire latches, and learned image caps.
 				workingState = &CompactionState{}
+				copyVisionStateInto(workingState, prevState, len(history))
 			}
 		} else if ok, _ := projectionAnchor(workingState, len(history)); !ok {
 			workingState = TruncateCompaction(workingState, len(history))
 			if workingState == nil {
 				workingState = &CompactionState{}
+				copyVisionStateInto(workingState, prevState, len(history))
 			}
 		}
 	}
@@ -164,6 +184,9 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 		return "", fmt.Errorf("nothing to compact")
 	}
 
+	// Ensure visual digests exist for any ImageBlocks being folded into FoldBlocks.
+	a.ensureSpanImageDigests(ctx, history, rawStart, rawCutIdx, workingState)
+
 	var totalUsage provider.Usage
 	for spanIdx, sp := range spans {
 		if err := ctx.Err(); err != nil {
@@ -176,7 +199,7 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 			carry = carryOverSummary
 		}
 
-		blockSummary, spanUsage, err := a.summarizeSpan(ctx, history, cStart, cEnd, rawCutIdx, isFinalSpan, carry, sink)
+		blockSummary, spanUsage, err := a.summarizeSpan(ctx, history, cStart, cEnd, rawCutIdx, isFinalSpan, carry, workingState.ImageDigests, sink)
 		if err != nil {
 			return "", err
 		}
@@ -209,7 +232,7 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 		// Enforce NET_SHRINK_TOLERANCE: if the model regurgitated content past
 		// the allowed token budget, fall back deterministically to MechanicalBlockSummary.
 		if exceedsShrinkBudget(rawToks, blk.BlockTokens) {
-			mech := MechanicalBlockSummary(chunk, cStart, cEnd)
+			mech := MechanicalBlockSummaryWithDigests(chunk, cStart, cEnd, workingState.ImageDigests)
 			if carry != "" && !strings.Contains(mech, carry) {
 				mech = carry + "\n\n---\n\n" + mech
 			}
@@ -386,6 +409,7 @@ func (a *Agent) summarizeSpan(
 	cStart, cEnd, rawCutIdx int,
 	isFinalSpan bool,
 	carryOverSummary string,
+	digests map[string]string,
 	sink func(delta string),
 ) (string, provider.Usage, error) {
 	var totalUsage provider.Usage
@@ -396,14 +420,14 @@ func (a *Agent) summarizeSpan(
 		turnStart := findTurnStartIndex(history, rawCutIdx)
 		if turnStart > cStart && turnStart < cEnd {
 			histChunk := history[cStart:turnStart]
-			histSummary, u1, err := a.summarizeChunkWithFallback(ctx, histChunk, cStart, turnStart, false, carryOverSummary, sink)
+			histSummary, u1, err := a.summarizeChunkWithFallback(ctx, histChunk, cStart, turnStart, false, carryOverSummary, digests, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
 			totalUsage = totalUsage.Add(u1)
 
 			prefixChunk := history[turnStart:cEnd]
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, prefixChunk, turnStart, cEnd, true, "", sink)
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, prefixChunk, turnStart, cEnd, true, "", digests, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -412,7 +436,7 @@ func (a *Agent) summarizeSpan(
 			return combined, totalUsage, nil
 		}
 		if turnStart < cStart && carryOverSummary != "" {
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, true, "", sink)
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, true, "", digests, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -421,7 +445,7 @@ func (a *Agent) summarizeSpan(
 			return combined, totalUsage, nil
 		}
 		if turnStart >= 0 && turnStart < cStart {
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, true, "", sink)
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, true, "", digests, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -430,7 +454,7 @@ func (a *Agent) summarizeSpan(
 		}
 	}
 
-	summary, u, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, false, carryOverSummary, sink)
+	summary, u, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, false, carryOverSummary, digests, sink)
 	totalUsage = totalUsage.Add(u)
 	if err != nil {
 		return "", totalUsage, err
@@ -453,6 +477,7 @@ func (a *Agent) summarizeChunkWithFallback(
 	cStart, cEnd int,
 	isTurnPrefix bool,
 	carryOverSummary string,
+	digests map[string]string,
 	sink func(delta string),
 ) (string, provider.Usage, error) {
 	var totalUsage provider.Usage
@@ -460,20 +485,20 @@ func (a *Agent) summarizeChunkWithFallback(
 		return "", totalUsage, err
 	}
 	if a.Client == nil {
-		return MechanicalBlockSummary(chunk, cStart, cEnd), totalUsage, nil
+		return MechanicalBlockSummaryWithDigests(chunk, cStart, cEnd, digests), totalUsage, nil
 	}
 
 	checkpoints := ExtractSummaryCheckpoints(chunk)
 	tryStandalone := !a.hasLivePrefixState()
 
 	if !tryStandalone {
-		text, stopLen, u, err := a.runForkedSummarizer(ctx, chunk, cStart, cEnd, checkpoints, isTurnPrefix, false, sink)
+		text, stopLen, u, err := a.runForkedSummarizer(ctx, chunk, cStart, cEnd, checkpoints, isTurnPrefix, false, digests, sink)
 		totalUsage = totalUsage.Add(u)
 		if err == nil && stopLen {
 			if ctx.Err() != nil {
 				return "", totalUsage, ctx.Err()
 			}
-			text2, stopLen2, u2, err2 := a.runForkedSummarizer(ctx, chunk, cStart, cEnd, checkpoints, isTurnPrefix, true, sink)
+			text2, stopLen2, u2, err2 := a.runForkedSummarizer(ctx, chunk, cStart, cEnd, checkpoints, isTurnPrefix, true, digests, sink)
 			totalUsage = totalUsage.Add(u2)
 			if err2 == nil && !stopLen2 && strings.TrimSpace(text2) != "" {
 				return strings.TrimSpace(text2), totalUsage, nil
@@ -481,30 +506,30 @@ func (a *Agent) summarizeChunkWithFallback(
 			if ctx.Err() != nil {
 				return "", totalUsage, ctx.Err()
 			}
-			return MechanicalBlockSummary(chunk, cStart, cEnd), totalUsage, nil
-		}
-		if err == nil && strings.TrimSpace(text) != "" {
-			return strings.TrimSpace(text), totalUsage, nil
-		}
-		if ctx.Err() != nil {
-			return "", totalUsage, ctx.Err()
-		}
-		if err != nil && IsContextOverflow(err) {
 			tryStandalone = true
+		} else if err == nil && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text), totalUsage, nil
 		} else {
-			return MechanicalBlockSummary(chunk, cStart, cEnd), totalUsage, nil
+			if ctx.Err() != nil {
+				return "", totalUsage, ctx.Err()
+			}
+			// Always fall back to pixel-free standalone runSummarizer (using
+			// SerializeConversationWithDigests) on ANY warm-prefix failure
+			// (e.g. 400 Too many images, 413, vision unsupported, overflow)
+			// before degrading to MechanicalBlockSummary.
+			tryStandalone = true
 		}
 	}
 
 	if tryStandalone {
-		prompt := buildStandalonePrompt(chunk, checkpoints, isTurnPrefix, carryOverSummary, serializeBlockBudgetBytes, serializeArgsBudgetBytes, false)
+		prompt := buildStandalonePrompt(chunk, checkpoints, isTurnPrefix, carryOverSummary, digests, serializeBlockBudgetBytes, serializeArgsBudgetBytes, false)
 		text, stopLen, u, err := a.runSummarizer(ctx, prompt, sink)
 		totalUsage = totalUsage.Add(u)
 		if err == nil && stopLen {
 			if ctx.Err() != nil {
 				return "", totalUsage, ctx.Err()
 			}
-			concisePrompt := buildStandalonePrompt(chunk, checkpoints, isTurnPrefix, carryOverSummary, serializeBlockBudgetBytes/2, serializeArgsBudgetBytes/2, true)
+			concisePrompt := buildStandalonePrompt(chunk, checkpoints, isTurnPrefix, carryOverSummary, digests, serializeBlockBudgetBytes/2, serializeArgsBudgetBytes/2, true)
 			text2, stopLen2, u2, err2 := a.runSummarizer(ctx, concisePrompt, sink)
 			totalUsage = totalUsage.Add(u2)
 			if err2 == nil && !stopLen2 && strings.TrimSpace(text2) != "" {
@@ -518,7 +543,7 @@ func (a *Agent) summarizeChunkWithFallback(
 		}
 	}
 
-	return MechanicalBlockSummary(chunk, cStart, cEnd), totalUsage, nil
+	return MechanicalBlockSummaryWithDigests(chunk, cStart, cEnd, digests), totalUsage, nil
 }
 
 func buildStandalonePrompt(
@@ -526,10 +551,11 @@ func buildStandalonePrompt(
 	checkpoints []string,
 	isTurnPrefix bool,
 	carryOverSummary string,
+	digests map[string]string,
 	blockBudget, argsBudget int,
 	conciseRetry bool,
 ) string {
-	conv := serializeConversationWithBudget(chunk, blockBudget, argsBudget)
+	conv := serializeConversationWithBudgetAndDigests(chunk, digests, blockBudget, argsBudget)
 	var prompt string
 	if isTurnPrefix {
 		prompt = TurnPrefixSummarizationPrompt(conv)
@@ -678,18 +704,37 @@ func (a *Agent) runForkedSummarizer(
 	checkpoints []string,
 	isTurnPrefix bool,
 	conciseRetry bool,
+	extraDigests map[string]string,
 	sink func(delta string),
 ) (string, bool, provider.Usage, error) {
 	directive := buildForkSummarizerDirective(chunk, cStart, cEnd, checkpoints, isTurnPrefix, conciseRetry)
-	return a.runWarmPrefixDirective(ctx, directive, sink)
+	return a.runWarmPrefixDirective(ctx, directive, extraDigests, sink)
 }
 
-func (a *Agent) runWarmPrefixDirective(ctx context.Context, directive string, sink func(delta string)) (string, bool, provider.Usage, error) {
+func (a *Agent) runWarmPrefixDirective(ctx context.Context, directive string, extraDigests map[string]string, sink func(delta string)) (string, bool, provider.Usage, error) {
 	a.mu.Lock()
 	baseMsgs := a.BuildContextLocked()
 	if a.RequestMessages != nil {
 		baseMsgs = a.RequestMessages(baseMsgs)
 	}
+	curState := a.compactionStateLocked()
+	maxImgs := a.effectiveMaxWireImages(curState)
+	keepImgs := a.effectiveKeepWireImages(curState, maxImgs)
+	maxBytes := a.effectiveMaxWireImageBytes()
+	var mergedDigests map[string]string
+	if curState != nil && len(curState.ImageDigests) > 0 {
+		mergedDigests = maps.Clone(curState.ImageDigests)
+	}
+	if len(extraDigests) > 0 {
+		if mergedDigests == nil {
+			mergedDigests = maps.Clone(extraDigests)
+		} else {
+			for k, v := range extraDigests {
+				mergedDigests[k] = v
+			}
+		}
+	}
+	baseMsgs = capPrefixWireImages(baseMsgs, mergedDigests, keepImgs, maxBytes)
 	reasoning := a.Reasoning
 	maxTokens := a.MaxTokens
 	forkMaxTokens := 4096
@@ -992,16 +1037,13 @@ Preserve durable decisions, file paths, root causes, and unresolved items while 
 %sREMEMBER: DO NOT CALL ANY TOOLS. Output ONLY the consolidated Markdown summary.</system-reminder>`,
 			len(group), group[0].StartIdx, max(group[0].StartIdx, group[len(group)-1].EndIdx-1), eras.String())
 
-		text, stopLen, u, err := a.runWarmPrefixDirective(ctx, directive, sink)
+		text, stopLen, u, err := a.runWarmPrefixDirective(ctx, directive, nil, sink)
 		totalUsage = totalUsage.Add(u)
 		if err == nil && !stopLen && strings.TrimSpace(text) != "" {
 			return strings.TrimSpace(text), totalUsage, nil
 		}
 		if ctx.Err() != nil {
 			return "", totalUsage, ctx.Err()
-		}
-		if err == nil || !IsContextOverflow(err) {
-			return mechanicalTier2Summary(group), totalUsage, nil
 		}
 	}
 

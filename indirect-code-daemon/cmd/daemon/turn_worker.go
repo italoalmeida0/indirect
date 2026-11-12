@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -169,7 +170,7 @@ func runTurnWorker(ctx context.Context, env workerEnv, snap workerSnapshot) {
 		finished(false, "no config")
 		return
 	}
-	w := &turnBridge{env: env, snap: snap, cfg: *cfg, ctx: ctx}
+	w := &turnBridge{env: env, snap: snap, cfg: *cfg, ctx: ctx, lastFoldSig: foldSigOf(snap.compaction)}
 	if err := w.run(); err != nil {
 		if ctx.Err() != nil {
 			finished(true, "")
@@ -227,6 +228,26 @@ type turnBridge struct {
 	tfc             *turnFileChanges
 	live            *liveTracker
 	currentStep     int
+	lastFoldSig     foldCompactionSig
+}
+
+type foldCompactionSig struct {
+	count        int
+	keepFrom     int
+	prunedBefore int
+	nBlocks      int
+}
+
+func foldSigOf(state *core.CompactionState) foldCompactionSig {
+	if state == nil {
+		return foldCompactionSig{}
+	}
+	return foldCompactionSig{
+		count:        state.Count,
+		keepFrom:     state.KeepFrom,
+		prunedBefore: state.PrunedBefore,
+		nBlocks:      len(state.Blocks),
+	}
 }
 
 func (w *turnBridge) run() error {
@@ -658,6 +679,9 @@ func (w *turnBridge) applySandboxSkillPolicy() {
 func (w *turnBridge) wrapClient(c provider.Client) provider.Client {
 	c = provider.WithHTTPClient(c, provider.NewHTTPClientWithProxy(w.cfg.Settings.Insecure, w.cfg.Settings.HTTPProxy))
 	return provider.WithPayloadHook(c, func(endpoint string, reqBody []byte, req provider.Request) {
+		scrubbedRaw := scrubDebugJSONBase64(reqBody, defaultDebugBase64Threshold)
+		scrubbedMsgs := scrubDebugMessages(req.Messages, defaultDebugBase64Threshold)
+		ts := time.Now().UnixMilli()
 		debugReq := SessionDebugPayload{
 			TurnIndex:  w.snap.turnIndex,
 			Step:       w.currentStep,
@@ -668,9 +692,9 @@ func (w *turnBridge) wrapClient(c provider.Client) provider.Client {
 			MaxTokens:  req.MaxTokens,
 			SessionID:  w.env.actorID,
 			Tools:      req.Tools,
-			Messages:   req.Messages,
-			RawPayload: json.RawMessage(reqBody),
-			Timestamp:  time.Now().UnixMilli(),
+			Messages:   scrubbedMsgs,
+			RawPayload: scrubbedRaw,
+			Timestamp:  ts,
 		}
 		recordSessionDebugPayload(w.env.actorID, debugReq)
 
@@ -688,9 +712,9 @@ func (w *turnBridge) wrapClient(c provider.Client) provider.Client {
 				"reasoning":  req.Reasoning,
 				"maxTokens":  req.MaxTokens,
 				"tools":      req.Tools,
-				"messages":   req.Messages,
-				"rawPayload": json.RawMessage(reqBody),
-				"timestamp":  time.Now().UnixMilli(),
+				"messages":   scrubbedMsgs,
+				"rawPayload": scrubbedRaw,
+				"timestamp":  ts,
 			},
 		})
 	})
@@ -1085,6 +1109,9 @@ func (w *turnBridge) onCompactionState(state *core.CompactionState) {
 		return
 	}
 	cp := state.Clone()
+	sig := foldSigOf(cp)
+	foldChanged := sig != w.lastFoldSig || w.snap.compact
+	w.lastFoldSig = sig
 	usage := w.agent.Cost()
 	var ctxCopy *SessionContext
 	func() {
@@ -1094,9 +1121,11 @@ func (w *turnBridge) onCompactionState(state *core.CompactionState) {
 		}
 	}()
 	w.sendInbox(walAppendMsg{ev: walEvent{Type: walTypeCompaction, Compaction: cp, Usage: &usage, Context: ctxCopy}})
-	w.emit(tailContentEvent(w.cfg.HostID, w.env.actorID, "session_compacted", w.compactionView(cp, usage, ctxCopy), 0, map[string]any{
-		"context": ctxCopy, "usage": usage, "auto": !w.snap.compact,
-	}))
+	if foldChanged {
+		w.emit(tailContentEvent(w.cfg.HostID, w.env.actorID, "session_compacted", w.compactionView(cp, usage, ctxCopy), 0, map[string]any{
+			"context": ctxCopy, "usage": usage, "auto": !w.snap.compact,
+		}))
+	}
 }
 
 func (w *turnBridge) compactionView(state *core.CompactionState, usage provider.Usage, ctxCopy *SessionContext) *SessionRecord {
@@ -1359,8 +1388,30 @@ func buildTurnPrompt(attachments []AttachmentRef, promptText string, attachmentI
 				continue
 			}
 			if strings.HasPrefix(strings.ToLower(ref.Mime), "image/") {
-				images = append(images, provider.ImageBlock{MimeType: ref.Mime, Data: data})
-				contextParts = append(contextParts, fmt.Sprintf("[Attached image: %s]", ref.Name))
+				if len(data) > tools.MaxRawImageFileBytes {
+					contextParts = append(contextParts, fmt.Sprintf("[Attached image %q omitted: exceeds 50MB limit]", ref.Name))
+					continue
+				}
+				if norm, normErr := tools.NormalizeImage(data, ref.Mime); normErr == nil {
+					images = append(images, provider.ImageBlock{
+						MimeType:   norm.MimeType,
+						Data:       norm.RawBytes,
+						SourcePath: ref.Name,
+						SHA256:     norm.SHA256,
+						Width:      norm.Width,
+						Height:     norm.Height,
+						OrigWidth:  norm.OrigWidth,
+						OrigHeight: norm.OrigHeight,
+					})
+					note := fmt.Sprintf("[Attached image: %s]", ref.Name)
+					if len(norm.Hints) > 0 {
+						note += "\n" + strings.Join(norm.Hints, "\n")
+					}
+					contextParts = append(contextParts, note)
+				} else {
+					images = append(images, provider.ImageBlock{MimeType: ref.Mime, Data: data, SourcePath: ref.Name})
+					contextParts = append(contextParts, fmt.Sprintf("[Attached image: %s]", ref.Name))
+				}
 				continue
 			}
 			isText := isTextMime(ref.Mime, ref.Name)
@@ -1464,6 +1515,9 @@ func buildSessionHistorySnapshot(msgs []provider.Message, chain *core.Compaction
 		return snap
 	}
 	snap.KeepFrom = chain.KeepFrom
+	if len(chain.ImageDigests) > 0 {
+		snap.ImageDigests = maps.Clone(chain.ImageDigests)
+	}
 	if len(chain.Blocks) > 0 {
 		snap.Blocks = make([]tools.SessionHistoryBlock, 0, len(chain.Blocks))
 		for _, b := range chain.Blocks {
