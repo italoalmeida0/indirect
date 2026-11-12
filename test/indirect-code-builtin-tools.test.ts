@@ -1,6 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "fs";
 import { join } from "path";
+import { readFile } from "fs/promises";
+import { transformAsync } from "@babel/core";
+import tsPreset from "@babel/preset-typescript";
+import solidPreset from "babel-preset-solid";
+import { createRoot } from "solid-js";
 import type { ToolUnit } from "../web/src/indirect-code/types";
 import { groupTitle, specialTitle } from "../web/src/indirect-code/utils/titles";
 import {
@@ -11,7 +16,92 @@ import {
   toolCatOf,
 } from "../web/src/indirect-code/utils/tools";
 import { partitionToolSegs } from "../web/src/indirect-code/utils/toolSegs";
+import { synthesizeEditSectionsFromArgs } from "../web/src/indirect-code/utils/toolEdits";
+import { useToolUnitModel } from "../web/src/indirect-code/components/tool/toolUnitModel";
 import { isHeaderOnlySleep, toolSummary } from "../web/src/indirect-code/transcript";
+
+/** Strip `//` and `/* ... *\/` comments while keeping string/template literals intact. */
+function stripJsComments(source: string): string {
+  let out = "";
+  let i = 0;
+  const n = source.length;
+  while (i < n) {
+    const ch = source[i]!;
+    const next = source[i + 1];
+    if (ch === "/" && next === "/") {
+      i += 2;
+      while (i < n && source[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      i += 2;
+      while (i < n && !(source[i] === "*" && source[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      const quote = ch;
+      out += ch;
+      i++;
+      while (i < n) {
+        const c = source[i]!;
+        out += c;
+        i++;
+        if (c === "\\" && i < n) {
+          out += source[i]!;
+          i++;
+          continue;
+        }
+        if (c === quote) break;
+      }
+      continue;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
+}
+
+/** Extract balanced `{...}` expressions from `<Show when={...}>` tags (handles `=>` and nested braces). */
+function extractShowWhenExpressions(cleanSrc: string): string[] {
+  const results: string[] = [];
+  const tagStartRe = /<Show\b[^>]*?\bwhen=\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagStartRe.exec(cleanSrc)) !== null) {
+    let idx = m.index + m[0].length;
+    let depth = 1;
+    let expr = "";
+    while (idx < cleanSrc.length && depth > 0) {
+      const ch = cleanSrc[idx]!;
+      if (ch === "'" || ch === '"' || ch === "`") {
+        const quote = ch;
+        expr += ch;
+        idx++;
+        while (idx < cleanSrc.length) {
+          const c = cleanSrc[idx]!;
+          expr += c;
+          idx++;
+          if (c === "\\" && idx < cleanSrc.length) {
+            expr += cleanSrc[idx]!;
+            idx++;
+            continue;
+          }
+          if (c === quote) break;
+        }
+        continue;
+      }
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) break;
+      }
+      expr += ch;
+      idx++;
+    }
+    results.push(expr.trim());
+  }
+  return results;
+}
 
 function mkUnit(
   toolName: string,
@@ -69,24 +159,41 @@ describe("Go daemon builtin tool catalog parity", () => {
     expect(isDaemonBuiltinTool("custom_unknown_tool")).toBe(false);
   });
 
-  test("every daemon builtin tool is either header-only or explicitly handled in a mounted Tool*Bodies.tsx", () => {
+  test("every daemon builtin tool is either header-only or explicitly handled in a mounted Tool*Bodies.tsx without state-gated top-level guards or null active fallbacks", () => {
     const toolCompDir = join(process.cwd(), "web", "src", "indirect-code", "components", "tool");
-    const toolBodySrc = readFileSync(join(toolCompDir, "ToolBody.tsx"), "utf8");
+    const toolBodySrc = stripJsComments(readFileSync(join(toolCompDir, "ToolBody.tsx"), "utf8"));
     const bodyFiles = readdirSync(toolCompDir).filter((f) => /^Tool.+Bodies\.tsx$/.test(f));
     expect(bodyFiles.length).toBeGreaterThanOrEqual(5);
 
+    // Sanity-check comment stripping + balanced-brace `<Show when={...}>` extraction
+    const sample = stripJsComments(
+      `// <Show when={props.m.name() === "ghost_comment"}>\n/* <Show when={toolName() === "block_comment"}> */\n<Show when={["a"].some((x) => x === "a") && props.m.name() === "real_tool"}>`,
+    );
+    const sampleExprs = extractShowWhenExpressions(sample);
+    expect(sampleExprs).toEqual([`["a"].some((x) => x === "a") && props.m.name() === "real_tool"`]);
+
     const handledInBodies = new Set<string>();
-    const showWhenRe = /<Show\s+when=\{([\s\S]*?)\}>/g;
     const toolMatchRe = /(?:props\.m\.name\(\)|toolName\(\))\s*===\s*"([a-z0-9_]+)"/g;
+    // Top-level tool dispatch `<Show when={...}>` must not exclude running/pending/result states.
+    const stateRestrictionRe = /\b(?:props\.m\.running\(\)|props\.running|props\.active|props\.u\.result)\b/;
+    // Forbid `{props.active ? "..." : null}` blank fallbacks when a call stops without result.
+    const activeNullFallbackRe = /props\.(?:active|running|m\.running\(\))\s*\?[^:{}]+:\s*null\b/;
 
     for (const file of bodyFiles) {
       const compName = file.replace(/\.tsx$/, "");
       expect(toolBodySrc).toContain(`<${compName}`);
-      const src = readFileSync(join(toolCompDir, file), "utf8");
-      for (const showMatch of src.matchAll(showWhenRe)) {
-        const cond = showMatch[1] || "";
-        for (const tm of cond.matchAll(toolMatchRe)) {
-          handledInBodies.add(tm[1]!);
+      const cleanSrc = stripJsComments(readFileSync(join(toolCompDir, file), "utf8"));
+      expect(activeNullFallbackRe.test(cleanSrc)).toBe(false);
+
+      for (const cond of extractShowWhenExpressions(cleanSrc)) {
+        const matchedTools = [...cond.matchAll(toolMatchRe)].map((m) => m[1]!);
+        if (matchedTools.length > 0) {
+          if (stateRestrictionRe.test(cond)) {
+            throw new Error(
+              `${file}: top-level tool <Show when={${cond}}> restricts lifecycle state; dispatch by tool name only and render all states inside`,
+            );
+          }
+          for (const t of matchedTools) handledInBodies.add(t);
         }
       }
     }
@@ -583,5 +690,404 @@ describe("toolSummary across every daemon builtin tool", () => {
       target: "Map session actor mailbox invariants",
       stat: "4 turns · 11 calls",
     });
+  });
+});
+
+describe("WAL post-reload durability helpers (edit synthesis & fetchDetails)", () => {
+  test("synthesizeEditSectionsFromArgs reconstructs FileEditSection diffs across array, JSON-string, object, and top-level arg shapes", () => {
+    const fromArray = synthesizeEditSectionsFromArgs(
+      {
+        path: "src/service.ts",
+        edits: [{ old_text: "const RETRIES = 2;", new_text: "const RETRIES = 4;" }],
+      },
+      "src/service.ts",
+      "applied",
+    );
+    expect(fromArray).toHaveLength(1);
+    expect(fromArray[0]?.file).toBe("src/service.ts");
+    expect(fromArray[0]?.status).toBe("applied");
+    expect(fromArray[0]?.diff).toContain("-const RETRIES = 2;");
+    expect(fromArray[0]?.diff).toContain("+const RETRIES = 4;");
+
+    const fromJsonString = synthesizeEditSectionsFromArgs(
+      {
+        path: "src/config.ts",
+        edits: JSON.stringify([{ old_string: "timeout: 1000", new_string: "timeout: 5000" }]),
+      },
+      "src/config.ts",
+      "dry_run",
+    );
+    expect(fromJsonString).toHaveLength(1);
+    expect(fromJsonString[0]?.status).toBe("dry_run");
+    expect(fromJsonString[0]?.diff).toContain("-timeout: 1000");
+    expect(fromJsonString[0]?.diff).toContain("+timeout: 5000");
+
+    const fromTopLevel = synthesizeEditSectionsFromArgs(
+      {
+        file_path: "src/index.ts",
+        old_string: "foo()",
+        new_string: "bar()",
+      },
+      "src/index.ts",
+      "applied",
+    );
+    expect(fromTopLevel).toHaveLength(1);
+    expect(fromTopLevel[0]?.diff).toContain("-foo()");
+    expect(fromTopLevel[0]?.diff).toContain("+bar()");
+  });
+
+  test("useToolUnitModel.fetchDetails reconstructs url, host, title, content, and truncated from persisted WAL <tool_result> without transient toolDetails", () => {
+    const walResult = `<tool_result type="ok" info="Fetched https://docs.example.com/architecture (52 chars, truncated)" url="https://docs.example.com/architecture" chars="52" truncated="true"># Architecture Guide\nSingle scroll surface contract.</tool_result>`;
+    const unit = mkUnit("fetch_url", { url: "https://docs.example.com/architecture" }, { text: walResult });
+
+    const details = createRoot((dispose) => {
+      const ctx: any = {
+        toolProgress: () => ({}),
+        toolTick: () => 0,
+        cancelBgJob: () => {},
+        openFile: () => {},
+      };
+      const m = useToolUnitModel(ctx, "msg_wal", unit, 0, () => false, () => false);
+      const fd = m.fetchDetails();
+      dispose();
+      return fd;
+    });
+
+    expect(details).toBeDefined();
+    expect(details?.url).toBe("https://docs.example.com/architecture");
+    expect(details?.host).toBe("docs.example.com");
+    expect(details?.title).toBe("Architecture Guide");
+    expect(details?.truncated).toBe(true);
+    expect(details?.content).toContain("# Architecture Guide");
+    expect(details?.content).toContain("Single scroll surface contract.");
+  });
+});
+
+describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP", () => {
+  const LINE_PREFIX_NOTICE =
+    "[Note: Line numbers (N:) are display prefixes, not file content. Copy text after the colon for edits; never include prefixes in file writes.]";
+
+  let renderToolBodySsr!: (
+    u: ToolUnit,
+    opts: { running: boolean; active: boolean; progress?: Record<string, string> },
+  ) => string;
+
+  beforeAll(async () => {
+    const toolDir = join(process.cwd(), "web", "src", "indirect-code", "components", "tool");
+    const virtualEntryPath = join(toolDir, "__ssr_test_entry__.tsx");
+
+    const buildRes = await Bun.build({
+      entrypoints: [virtualEntryPath],
+      target: "bun",
+      format: "esm",
+      external: ["solid-js", "solid-js/web", "highlight.js", "katex"],
+      plugins: [
+        {
+          name: "tool-body-ssr-test-plugin",
+          setup(build) {
+            build.onResolve({ filter: /__ssr_test_entry__\.tsx$/ }, () => ({
+              path: virtualEntryPath,
+            }));
+            build.onLoad({ filter: /__ssr_test_entry__\.tsx$/ }, async () => {
+              const entryCode = `
+                import { renderToString } from "solid-js/web";
+                import { ToolBody } from "./ToolBody";
+                import { useToolUnitModel } from "./toolUnitModel";
+
+                export function renderToolBodySsr(u, opts) {
+                  const ctx = {
+                    toolProgress: () => opts.progress ?? {},
+                    toolTick: () => 0,
+                    pendingApproval: () => null,
+                    pendingQuestion: () => null,
+                    cancelBgJob: () => {},
+                    openFile: () => {},
+                  };
+                  return renderToString(() => {
+                    const m = useToolUnitModel(ctx, "msg_ssr", u, 0, () => opts.running, () => opts.active);
+                    return <ToolBody ctx={ctx} u={u} m={m} running={opts.running} active={opts.active} />;
+                  });
+                }
+              `;
+              const transformed = await transformAsync(entryCode, {
+                filename: virtualEntryPath,
+                presets: [[solidPreset, { generate: "ssr", hydratable: false }]],
+                babelrc: false,
+                configFile: false,
+              });
+              return { contents: transformed?.code ?? entryCode, loader: "js" };
+            });
+
+            build.onResolve({ filter: /^virtual:icons$/ }, () => ({
+              path: "virtual:icons",
+              namespace: "virtual-icons",
+            }));
+            build.onLoad({ filter: /.*/, namespace: "virtual-icons" }, () => ({
+              contents: "export const registry = {}; export const icons = {};",
+              loader: "js",
+            }));
+
+            build.onLoad({ filter: /\.css$/ }, () => ({
+              contents: "",
+              loader: "js",
+            }));
+
+            build.onLoad({ filter: /TarnavMarkdown\.tsx$/ }, async (args) => {
+              const ssrStub = `
+                export function TarnavMarkdown(props: { children: string; noNestedScroll?: boolean }) {
+                  return (
+                    <div data-ssr-markdown={props.noNestedScroll ? "no-nested-scroll" : "default"}>
+                      {props.children}
+                    </div>
+                  );
+                }
+              `;
+              const out = await transformAsync(ssrStub, {
+                filename: args.path,
+                presets: [
+                  [solidPreset, { generate: "ssr", hydratable: false }],
+                  [tsPreset, { isTSX: true, allExtensions: true }],
+                ],
+                babelrc: false,
+                configFile: false,
+              });
+              return { contents: out?.code ?? ssrStub, loader: "js" };
+            });
+
+            build.onLoad({ filter: /\.(js|ts)x$/ }, async (args) => {
+              if (args.path.endsWith("__ssr_test_entry__.tsx") || args.path.endsWith("TarnavMarkdown.tsx")) {
+                return undefined;
+              }
+              const code = await readFile(args.path, "utf8");
+              const isTs = args.path.endsWith(".tsx") || args.path.endsWith(".ts");
+              const out = await transformAsync(code, {
+                filename: args.path,
+                presets: [
+                  [solidPreset, { generate: "ssr", hydratable: false }],
+                  ...(isTs ? [[tsPreset, { isTSX: true, allExtensions: true }]] : []),
+                ],
+                sourceMaps: false,
+                babelrc: false,
+                configFile: false,
+              });
+              return { contents: out?.code ?? code, loader: "js" };
+            });
+          },
+        },
+      ],
+    });
+
+    if (!buildRes.success || buildRes.outputs.length === 0) {
+      throw new Error(`Failed to bundle SSR ToolBody test harness: ${JSON.stringify(buildRes.logs)}`);
+    }
+    const jsText = await buildRes.outputs[0]!.text();
+    const mod = await import(`data:text/javascript;base64,${Buffer.from(jsText, "utf8").toString("base64")}`);
+    renderToolBodySsr = mod.renderToolBodySsr;
+  });
+
+  function stripHtmlVisibleText(html: string): string {
+    // Strip footer block first so `<ToolFooter>` cannot mask an empty tool body!
+    const withoutFooter = html.replace(/<div[^>]*data-tool-footer[^>]*>[\s\S]*?<\/div>/g, "");
+    return withoutFooter
+      .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function defaultArgsFor(tool: string): Record<string, unknown> {
+    switch (tool) {
+      case "bash":
+        return { command: "true" };
+      case "exec_script":
+      case "python":
+        return { script: "const x = 1;" };
+      case "read":
+        return { path: "empty.txt" };
+      case "write":
+        return { path: "empty.txt", content: "" };
+      case "edit":
+      case "patch":
+        return { path: "src/app.ts", edits: [] };
+      case "glob":
+        return { pattern: "**/*.nonexistent" };
+      case "search":
+        return { pattern: "NONEXISTENT_SYMBOL" };
+      case "inspect":
+        return { path: "empty-dir" };
+      case "search_web":
+        return { query: "obscure query" };
+      case "fetch_url":
+        return { url: "https://docs.example.com/empty" };
+      case "bg_check":
+      case "bg_tail":
+      case "bg_cancel":
+        return { job_id: "1a2b3c4d5e6f7a8b_0000111122223333" };
+      case "question":
+        return { questions: [] };
+      case "summary":
+        return { for_user: "", for_me: "private" };
+      case "finish_entire_request":
+        return { final_message_to_user: "" };
+      case "session_history":
+        return { action: "search", query: "missing_term" };
+      case "explore":
+        return { task: "Check empty module" };
+      case "use_skill":
+        return { name: "generative_ui" };
+      case "widget_set":
+        return { id: "demo-widget", content: "" };
+      case "widget_read":
+      case "widget_lint":
+        return { id: "demo-widget" };
+      case "widget_edit":
+        return { id: "demo-widget", edits: [] };
+      default:
+        return {};
+    }
+  }
+
+  test("renders non-empty visible body content and zero empty <code class=\"tok\"> blocks across all 5 lifecycle states for every expandable builtin + MCP tool", () => {
+    const expandableTools = [
+      ...DAEMON_BUILTIN_TOOLS.filter((t) => !isHeaderOnlySleep(t, true)),
+      "mcp__github__search_issues",
+    ];
+    expect(expandableTools.length).toBeGreaterThanOrEqual(31);
+
+    for (const tool of expandableTools) {
+      const args = defaultArgsFor(tool);
+
+      // 1. Running active with zero output/progress yet
+      const htmlRunning = renderToolBodySsr(mkUnit(tool, args), { running: true, active: true });
+      const textRunning = stripHtmlVisibleText(htmlRunning);
+      if (!textRunning) {
+        throw new Error(`Tool "${tool}" rendered empty <ToolBody> in State A (running active empty): ${htmlRunning}`);
+      }
+      expect(htmlRunning).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
+
+      // 2. Stopped / cancelled without result (`!u.result && !props.active`)
+      const htmlStopped = renderToolBodySsr(mkUnit(tool, args), { running: false, active: false });
+      const textStopped = stripHtmlVisibleText(htmlStopped);
+      if (!textStopped) {
+        throw new Error(`Tool "${tool}" rendered empty <ToolBody> in State B (stopped without result): ${htmlStopped}`);
+      }
+      expect(htmlStopped).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
+
+      // 3. Completed 0-match / 0-byte / empty output LIVE (including LinePrefixNotice-only display for read/write/widget_read)
+      const liveEmptyDetails =
+        tool === "read" || tool === "write" || tool === "widget_read"
+          ? { display: LINE_PREFIX_NOTICE, total_lines: 0 }
+          : {};
+      const htmlLiveEmpty = renderToolBodySsr(
+        mkUnit(tool, args, { text: tool === "read" ? LINE_PREFIX_NOTICE : "", details: liveEmptyDetails }),
+        { running: false, active: false },
+      );
+      const textLiveEmpty = stripHtmlVisibleText(htmlLiveEmpty);
+      if (!textLiveEmpty) {
+        throw new Error(`Tool "${tool}" rendered empty <ToolBody> in State C (completed 0-output live): ${htmlLiveEmpty}`);
+      }
+      expect(htmlLiveEmpty).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
+
+      // 4. Completed 0-match / 0-byte / empty output POST-RELOAD WAL (`<tool_result type="ok"></tool_result>` without toolDetails)
+      const walBody = tool === "read" ? LINE_PREFIX_NOTICE : "";
+      const htmlWalEmpty = renderToolBodySsr(
+        mkUnit(tool, args, { text: `<tool_result type="ok">${walBody}</tool_result>` }),
+        { running: false, active: false },
+      );
+      const textWalEmpty = stripHtmlVisibleText(htmlWalEmpty);
+      if (!textWalEmpty) {
+        throw new Error(`Tool "${tool}" rendered empty <ToolBody> in State D (completed 0-output WAL): ${htmlWalEmpty}`);
+      }
+      expect(htmlWalEmpty).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
+
+      // 5. Error (`isError: true`) with empty body
+      const htmlError = renderToolBodySsr(
+        mkUnit(tool, args, { text: `<tool_result type="error" error="Execution failed"></tool_result>`, isError: true }),
+        { running: false, active: false },
+      );
+      const textError = stripHtmlVisibleText(htmlError);
+      if (!textError) {
+        throw new Error(`Tool "${tool}" rendered empty <ToolBody> in State E (isError empty body): ${htmlError}`);
+      }
+      expect(htmlError).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
+    }
+  });
+
+  test("bg_cancel renders live cancellation status while running, and post-reload edit + fetch_url + markdown tools preserve full fidelity", () => {
+    // bg_cancel while running
+    const bgRunningHtml = renderToolBodySsr(mkUnit("bg_cancel", { job_id: "job_123" }), {
+      running: true,
+      active: true,
+    });
+    expect(stripHtmlVisibleText(bgRunningHtml)).toContain("Canceling background task");
+
+    // Post-reload WAL `edit`: empty `<tool_result>` body + `args.edits` -> renders diff, never "No changes"
+    const editWalHtml = renderToolBodySsr(
+      mkUnit(
+        "edit",
+        {
+          path: "src/service.ts",
+          edits: [{ old_text: "export const MAX_RETRIES = 2;", new_text: "export const MAX_RETRIES = 4;" }],
+        },
+        {
+          text: `<tool_result type="ok" info="Successfully replaced 1 block(s) in src/service.ts." path="src/service.ts" edits="1"></tool_result>`,
+        },
+      ),
+      { running: false, active: false },
+    );
+    expect(editWalHtml).toContain("src/service.ts");
+    expect(editWalHtml).toContain("rc-diff-word-add");
+    expect(editWalHtml.replace(/<[^>]+>/g, "")).toContain("export const MAX_RETRIES = 4;");
+    expect(editWalHtml).not.toContain("No changes");
+
+    // Failed `edit` (`isError: true`) -> renders error message, never "No changes" or false applied diff
+    const editErrHtml = renderToolBodySsr(
+      mkUnit(
+        "edit",
+        {
+          path: "src/service.ts",
+          edits: [{ old_text: "missing", new_text: "replacement" }],
+        },
+        {
+          text: `<tool_result type="error" error="old_text not found in src/service.ts">old_text not found in src/service.ts</tool_result>`,
+          isError: true,
+        },
+      ),
+      { running: false, active: false },
+    );
+    expect(editErrHtml).toContain("old_text not found in src/service.ts");
+    expect(editErrHtml).not.toContain("No changes");
+
+    // Post-reload WAL `fetch_url` -> reconstructs host badge "D", host "docs.example.com", title, and noNestedScroll markdown
+    const fetchWalHtml = renderToolBodySsr(
+      mkUnit(
+        "fetch_url",
+        { url: "https://docs.example.com/guide" },
+        {
+          text: `<tool_result type="ok" info="Fetched https://docs.example.com/guide (44 chars)" url="https://docs.example.com/guide" chars="44"># System Guide\nClean body text</tool_result>`,
+        },
+      ),
+      { running: false, active: false },
+    );
+    expect(fetchWalHtml).toContain("docs.example.com");
+    expect(fetchWalHtml).toContain("System Guide");
+    expect(fetchWalHtml).toContain(">D<");
+    expect(fetchWalHtml).not.toContain(">?<");
+    expect(fetchWalHtml).toContain('data-ssr-markdown="no-nested-scroll"');
+
+    // `explore` also passes `noNestedScroll` to `<StreamingMarkdown>` and uses wrapped inner container
+    const exploreWalHtml = renderToolBodySsr(
+      mkUnit(
+        "explore",
+        { task: "Inspect architecture" },
+        {
+          text: `<tool_result type="ok" turns="2" tool_calls="3" duration="1.4s">### Findings\nAll good.</tool_result>`,
+        },
+      ),
+      { running: false, active: false },
+    );
+    expect(exploreWalHtml).toContain('data-ssr-markdown="no-nested-scroll"');
+    expect(exploreWalHtml).toContain("w-full min-w-0 max-w-full");
   });
 });

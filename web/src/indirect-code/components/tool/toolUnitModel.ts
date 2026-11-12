@@ -96,16 +96,55 @@ const footer = (): FooterFact[] => {
   return facts.filter((fact) => fact.label !== first);
 };
 /** Non-zero exit code for shell rows (drives the failure hint). */
-const exitCode = () => String((u.result?.toolDetails as any)?.env?.exit ?? "");
+const exitCode = () => String(mergedEnv()?.exit ?? "");
 const webDetails = () => {
   const d: any = u.result?.toolDetails;
   if (!d || !Array.isArray(d.results)) return undefined;
   return d as { query?: string; cached?: boolean; results: { title?: string; url?: string; snippet?: string }[] };
 };
 const fetchDetails = () => {
+  if (name() !== "fetch_url") return undefined;
   const d: any = u.result?.toolDetails;
-  if (!d || typeof d.url !== "string") return undefined;
-  return d as { url: string; host?: string; title?: string; content?: string; truncated?: boolean };
+  const env = mergedEnv();
+  const rawUrl =
+    (typeof d?.url === "string" && d.url.trim()) ||
+    (typeof env?.url === "string" && env.url.trim()) ||
+    (typeof args().url === "string" && String(args().url).trim()) ||
+    "";
+  if (!rawUrl && !d) return undefined;
+  let derivedHost = "";
+  if (rawUrl) {
+    try {
+      derivedHost = new URL(rawUrl).hostname;
+    } catch {
+      derivedHost = "";
+    }
+  }
+  const host = (typeof d?.host === "string" && d.host.trim()) || derivedHost || undefined;
+  const content =
+    typeof d?.content === "string"
+      ? d.content
+      : u.result && !u.result.isError
+        ? output()
+        : undefined;
+  let derivedTitle: string | undefined;
+  if (typeof content === "string" && content) {
+    for (const ln of content.split("\n")) {
+      const t = ln.trim();
+      if (t.startsWith("# ")) {
+        derivedTitle = t.slice(2).trim() || undefined;
+        break;
+      }
+    }
+  }
+  const title = (typeof d?.title === "string" && d.title.trim()) || derivedTitle;
+  const truncated =
+    typeof d?.truncated === "boolean"
+      ? d.truncated
+      : env?.truncated === "true"
+        ? true
+        : undefined;
+  return { url: rawUrl, host, title, content, truncated };
 };
 /** Live remaining counter for a running bg_await ("42s left" / "1m 30s left"),
  * computed from the tool start + the turn clock — no progress spam needed. */
@@ -179,7 +218,7 @@ const bgStream = () => {
 const isDetachedBg = () => bgJobId() !== "";
 /** True while this tool unit is currently executing (no result yet and turn is running). */
 const runningTool = () => !u.result && running();
-  return { key, open, openBody, expandable, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg, running: runningTool };
+  return { key, open, openBody, expandable, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, mergedEnv, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg, running: runningTool };
 }
 
 export type ToolModel = ReturnType<typeof useToolUnitModel>;

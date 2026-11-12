@@ -12,7 +12,7 @@ interface CodeRow {
   html?: string;
 }
 
-function cleanNotice(text: string): string {
+export function stripLinePrefixNotice(text: string): string {
   // Tolerate CRLF: daemon hosts on Windows echo file bytes verbatim, so
   // the notice (and every display line) may end with `\r\n`. Without the
   // `\r?`, the notice survives as a stray first line and numbered lines
@@ -55,7 +55,7 @@ export function CodeBlock(props: {
   const [rawHtml, setRawHtml] = createSignal<string | null>(null);
 
   // eslint-disable-next-line no-control-regex -- strip terminal ANSI color sequences
-  const clean = () => cleanNotice(props.text || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+  const clean = () => stripLinePrefixNotice(props.text || "").replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
   // Strip a trailing `\r` per line (CRLF file read on a Windows host):
   // it would otherwise leak into highlight/copy and break gutter parsing.
   const rawLines = () => clean().split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
@@ -142,7 +142,13 @@ export function CodeBlock(props: {
       <Show
         when={hasGutter()}
         fallback={
-          <pre class={props.wrap === false ? "px-3 py-2 whitespace-pre" : "px-3 py-2 whitespace-pre-wrap"}>
+          <pre
+            class={
+              props.wrap === false
+                ? "px-3 py-2 whitespace-pre"
+                : "px-3 py-2 whitespace-pre-wrap [overflow-wrap:anywhere] break-words max-w-full"
+            }
+          >
             <Show
               when={rawHtml() !== null}
               // eslint-disable-next-line solid/no-innerhtml

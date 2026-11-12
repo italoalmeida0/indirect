@@ -26,6 +26,8 @@ export function StreamingMarkdown(props: {
   active?: boolean;
   class?: string;
   basic?: boolean;
+  /** Disable inner code-fence / table scroll containers when mounted inside a scrolling ToolBody. */
+  noNestedScroll?: boolean;
 }) {
   const composer = useContext(ComposerCtx);
   const host = useContext(HostCtx);
@@ -55,7 +57,7 @@ export function StreamingMarkdown(props: {
   // before Generative UI existed. Widgets only live in final answers.
   if (props.basic) {
     return (
-      <TarnavMarkdown embedded mode="basic" streaming={props.streaming} active={props.active} class={props.class}>
+      <TarnavMarkdown embedded mode="basic" streaming={props.streaming} active={props.active} class={props.class} noNestedScroll={props.noNestedScroll}>
         {props.children}
       </TarnavMarkdown>
     );
@@ -65,7 +67,7 @@ export function StreamingMarkdown(props: {
       {(seg) =>
         seg.kind === "md" ? (
           <Show when={seg.text.trim()}>
-            <TarnavMarkdown embedded mode={props.basic ? "basic" : undefined} streaming={props.streaming} active={props.active} class={props.class}>
+            <TarnavMarkdown embedded mode={props.basic ? "basic" : undefined} streaming={props.streaming} active={props.active} class={props.class} noNestedScroll={props.noNestedScroll}>
               {seg.text}
             </TarnavMarkdown>
           </Show>

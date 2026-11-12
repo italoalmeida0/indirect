@@ -82,9 +82,11 @@ describe("Fixer B2-4 Regression Tests", () => {
       });
     });
 
-    test("ToolSearchBodies checks !props.m.running() for bg_cancel", () => {
+    test("ToolSearchBodies checks !props.m.running() for bg_cancel while keeping a non-empty running state", () => {
       const src = readFileSync("web/src/indirect-code/components/tool/ToolSearchBodies.tsx", "utf-8");
-      expect(src).toContain('props.m.name() === "bg_cancel" && !props.m.running()');
+      expect(src).toContain('when={props.m.name() === "bg_cancel"}');
+      expect(src).toContain("when={!props.m.running() && Boolean(props.u.result)}");
+      expect(src).toContain("Canceling background task");
     });
   });
 

@@ -62,7 +62,7 @@ export function ToolContextBodies(props: ToolPartProps) {
     <>
       <Show when={props.m.name() === "explore" && exploreView()}>
         {(view) => (
-          <div data-tool-context="explore" class="overflow-visible">
+          <div data-tool-context="explore" class="overflow-visible min-w-0 max-w-full">
             <div class="bg-surface/50 border-b border-border/60 px-3 py-1.5 flex items-center justify-between gap-2 flex-wrap">
               <div class="flex items-center gap-1.5 min-w-0">
                 <Iconify icon="lucide:compass" size={13} class="shrink-0 text-accent/85" />
@@ -75,7 +75,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                   </span>
                 </Show>
               </div>
-              <div class="flex items-center gap-1.5 font-mono text-[10.5px] text-fg-muted tabular-nums ml-auto">
+              <div class="flex items-center gap-1.5 flex-wrap font-mono text-[10.5px] text-fg-muted tabular-nums ml-auto">
                 <Show when={view().turns !== undefined}>
                   <span class="rounded border border-border/70 bg-surface px-1.5 py-px">
                     {view().turns} {view().turns === 1 ? "turn" : "turns"}
@@ -95,17 +95,17 @@ export function ToolContextBodies(props: ToolPartProps) {
             </div>
 
             <Show when={view().task || view().focusPaths.length > 0}>
-              <div class="border-b border-border/50 bg-surface-subtle/45 px-3 py-2 space-y-1.5">
+              <div class="border-b border-border/50 bg-surface-subtle/45 px-3 py-2 space-y-1.5 min-w-0">
                 <Show when={view().task}>
-                  <p class="text-[12px] text-fg-secondary leading-snug break-words">{view().task}</p>
+                  <p class="text-[12px] text-fg-secondary leading-snug [overflow-wrap:anywhere] break-words">{view().task}</p>
                 </Show>
                 <Show when={view().focusPaths.length > 0}>
-                  <div class="flex flex-wrap items-center gap-1.5">
+                  <div class="flex flex-wrap items-center gap-1.5 min-w-0">
                     <For each={view().focusPaths}>
                       {(p) => (
-                        <span class="inline-flex items-center gap-1 rounded border border-border/70 bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-fg-secondary">
+                        <span class="inline-flex items-center gap-1 min-w-0 max-w-full rounded border border-border/70 bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-fg-secondary">
                           <FileIcon path={p} size={12} />
-                          <span>{p}</span>
+                          <span class="truncate">{p}</span>
                         </span>
                       )}
                     </For>
@@ -117,27 +117,27 @@ export function ToolContextBodies(props: ToolPartProps) {
             <Show
               when={!props.u.result?.isError}
               fallback={
-                <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap">
-                  {props.m.rawOutput() || "Explore subagent failed."}
+                <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  {props.m.rawOutput() || String(props.m.mergedEnv()?.error || "Explore subagent failed.")}
                 </div>
               }
             >
               <Show
                 when={Boolean(props.u.result)}
                 fallback={
-                  <div class="px-3 py-2.5 flex items-center gap-2 text-[11.5px] text-fg-muted">
+                  <div class="px-3 py-2.5 flex items-center gap-2 text-[11.5px] text-fg-muted min-w-0">
                     <Show when={props.active}>
                       <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-accent rounded-full animate-spin shrink-0" />
                     </Show>
                     <span class="font-mono truncate">
                       {latestExploreProgress(props.m.prog()) ||
-                        (props.active ? "Running isolated read-only subagent…" : "Pending investigation…")}
+                        (props.active ? "Running isolated read-only subagent…" : "Investigation did not complete.")}
                     </span>
                   </div>
                 }
               >
-                <div class="px-3.5 py-2.5 text-xs leading-relaxed text-fg rc-markdown">
-                  <StreamingMarkdown basic={false}>
+                <div class="px-3.5 py-2.5 text-xs leading-relaxed text-fg rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words">
+                  <StreamingMarkdown basic={false} noNestedScroll>
                     {view().synthesis || "(empty synthesis)"}
                   </StreamingMarkdown>
                 </div>
@@ -149,7 +149,7 @@ export function ToolContextBodies(props: ToolPartProps) {
 
       <Show when={props.m.name() === "session_history" && historyView()}>
         {(view) => (
-          <div data-tool-context="session-history" class="overflow-visible">
+          <div data-tool-context="session-history" class="overflow-visible min-w-0 max-w-full">
             <Show
               when={view().action === "recall"}
               fallback={(() => {
@@ -161,7 +161,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                         <Iconify icon="lucide:history" size={13} class="shrink-0 text-accent/85" />
                         <span class="text-[11.5px] font-medium text-fg-secondary">BM25 history search</span>
                         <Show when={sv().query}>
-                          <span class="rounded border border-border/75 bg-surface px-1.5 py-px font-mono text-[11px] text-fg truncate max-w-[18rem]">
+                          <span class="rounded border border-border/75 bg-surface px-1.5 py-px font-mono text-[11px] text-fg truncate max-w-full sm:max-w-[18rem]">
                             {sv().query}
                           </span>
                         </Show>
@@ -169,7 +169,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                           {sv().includeLiveTail ? "compacted + live" : "compacted"}
                         </span>
                       </div>
-                      <div class="flex items-center gap-1.5 font-mono text-[10.5px] text-fg-muted tabular-nums ml-auto shrink-0">
+                      <div class="flex items-center gap-1.5 flex-wrap font-mono text-[10.5px] text-fg-muted tabular-nums ml-auto shrink-0">
                         <Show when={props.u.result && !props.u.result.isError && sv().hitCountKnown}>
                           <span>
                             {sv().hitCount} {sv().hitCount === 1 ? "match" : "matches"}
@@ -187,24 +187,28 @@ export function ToolContextBodies(props: ToolPartProps) {
                     <Show
                       when={!props.u.result?.isError}
                       fallback={
-                        <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap">
-                          {props.m.rawOutput() || "History search failed."}
+                        <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                          {props.m.rawOutput() || String(props.m.mergedEnv()?.error || "History search failed.")}
                         </div>
                       }
                     >
                       <Show
                         when={sv().hits.length > 0}
                         fallback={
-                          <div class="px-3 py-2 text-[11.5px] text-fg-muted">
+                          <div class="px-3 py-2 text-[11.5px] text-fg-muted [overflow-wrap:anywhere] break-words">
                             {sv().rawText ||
-                              (props.active ? "Searching compacted history…" : "No matching history entries.")}
+                              (!props.u.result
+                                ? props.active
+                                  ? "Searching compacted history…"
+                                  : "History search did not complete."
+                                : "No matching history entries.")}
                           </div>
                         }
                       >
                         <ul class="divide-y divide-border/50">
                           <For each={sv().hits}>
                             {(hit) => (
-                              <li class="px-3 py-2 hover:bg-surface-muted/40 transition-colors">
+                              <li class="px-3 py-2 hover:bg-surface-muted/40 transition-colors min-w-0">
                                 <div class="flex items-center justify-between gap-2 flex-wrap">
                                   <div class="flex items-center gap-1.5 min-w-0 flex-wrap text-[11px]">
                                     <span class="font-mono text-[10.5px] text-fg-muted tabular-nums">
@@ -253,7 +257,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                                         </span>
                                       </Show>
                                       <Show when={hit.topic}>
-                                        <span class="text-[11px] font-medium text-fg truncate max-w-[18rem]">
+                                        <span class="text-[11px] font-medium text-fg truncate max-w-full sm:max-w-[18rem]">
                                           {hit.topic}
                                         </span>
                                       </Show>
@@ -265,7 +269,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                                 </div>
 
                                 <Show when={hit.snippet}>
-                                  <p class="mt-1 text-[11.5px] leading-relaxed text-fg-secondary font-mono break-words">
+                                  <p class="mt-1 text-[11.5px] leading-relaxed text-fg-secondary font-mono [overflow-wrap:anywhere] break-words">
                                     <For each={splitHighlightSegments(hit.snippet, sv().query)}>
                                       {(seg) =>
                                         seg.match ? (
@@ -311,7 +315,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                           </span>
                         </Show>
                       </div>
-                      <div class="flex items-center gap-1.5 font-mono text-[10.5px] text-fg-muted tabular-nums ml-auto shrink-0">
+                      <div class="flex items-center gap-1.5 flex-wrap font-mono text-[10.5px] text-fg-muted tabular-nums ml-auto shrink-0">
                         <Show when={windowLabel()}>
                           <span>{windowLabel()}</span>
                         </Show>
@@ -326,8 +330,8 @@ export function ToolContextBodies(props: ToolPartProps) {
                     <Show
                       when={!props.u.result?.isError}
                       fallback={
-                        <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap">
-                          {props.m.rawOutput() || "History recall failed."}
+                        <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                          {props.m.rawOutput() || String(props.m.mergedEnv()?.error || "History recall failed.")}
                         </div>
                       }
                     >
@@ -335,7 +339,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                         when={Boolean(props.u.result) || Boolean(rv().cleanText)}
                         fallback={
                           <div class="px-3 py-2 text-[11.5px] text-fg-muted">
-                            {props.active ? "Recalling verbatim transcript…" : "Pending recall…"}
+                            {props.active ? "Recalling verbatim transcript…" : "History recall did not complete."}
                           </div>
                         }
                       >
@@ -346,16 +350,16 @@ export function ToolContextBodies(props: ToolPartProps) {
                               embedded
                               plain
                               wrap={true}
-                              text={rv().cleanText || "(empty recall)"}
+                              text={rv().cleanText.trim() ? rv().cleanText : "(empty recall)"}
                               scrollKey={props.m.key()}
                             />
                           }
                         >
-                          <div class="divide-y divide-border/55">
+                          <div class="divide-y divide-border/55 min-w-0">
                             <For each={rv().messages}>
                               {(m) => (
-                                <div class="overflow-visible">
-                                  <div class="bg-surface/45 px-3 py-1 flex items-center gap-2 text-[11px]">
+                                <div class="overflow-visible min-w-0">
+                                  <div class="bg-surface/45 px-3 py-1 flex items-center gap-2 flex-wrap text-[11px]">
                                     <span class="font-mono text-[10.5px] font-medium text-fg tabular-nums">
                                       msg #{m.msgIdx}
                                     </span>
@@ -374,7 +378,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                                     embedded
                                     plain
                                     wrap={true}
-                                    text={m.content}
+                                    text={m.content.trim() ? m.content : "(empty message)"}
                                     scrollKey={`${props.m.key()}:m${m.msgIdx}`}
                                   />
                                 </div>
@@ -393,25 +397,53 @@ export function ToolContextBodies(props: ToolPartProps) {
       </Show>
 
       <Show when={props.m.name() === "summary"}>
-        <div
-          data-tool-context="summary"
-          class="px-3.5 py-2.5 text-xs leading-relaxed text-fg-secondary rc-markdown"
+        <Show
+          when={!props.u.result?.isError}
+          fallback={
+            <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+              {props.m.rawOutput() || String(props.m.mergedEnv()?.error || "Summary failed.")}
+            </div>
+          }
         >
-          <StreamingMarkdown basic={true}>
-            {String(props.m.args().for_user || props.m.output() || "Progress checkpoint recorded.")}
-          </StreamingMarkdown>
-        </div>
+          <div
+            data-tool-context="summary"
+            class="px-3.5 py-2.5 text-xs leading-relaxed text-fg-secondary rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words"
+          >
+            <StreamingMarkdown basic={true} noNestedScroll>
+              {String(props.m.args().for_user || props.m.output() || "").trim() ||
+                (!props.u.result
+                  ? props.active
+                    ? "Recording progress checkpoint…"
+                    : "Progress checkpoint did not complete."
+                  : "Progress checkpoint recorded.")}
+            </StreamingMarkdown>
+          </div>
+        </Show>
       </Show>
 
       <Show when={props.m.name() === "finish_entire_request"}>
-        <div
-          data-tool-context="finish-entire-request"
-          class="px-3.5 py-2.5 text-xs leading-relaxed text-fg rc-markdown"
+        <Show
+          when={!props.u.result?.isError}
+          fallback={
+            <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+              {props.m.rawOutput() || String(props.m.mergedEnv()?.error || "Failed to finish response.")}
+            </div>
+          }
         >
-          <StreamingMarkdown basic={true}>
-            {String(props.m.args().final_message_to_user || props.m.output() || "Final response delivered.")}
-          </StreamingMarkdown>
-        </div>
+          <div
+            data-tool-context="finish-entire-request"
+            class="px-3.5 py-2.5 text-xs leading-relaxed text-fg rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words"
+          >
+            <StreamingMarkdown basic={true} noNestedScroll>
+              {String(props.m.args().final_message_to_user || props.m.output() || "").trim() ||
+                (!props.u.result
+                  ? props.active
+                    ? "Composing final response…"
+                    : "Final response did not complete."
+                  : "Final response delivered.")}
+            </StreamingMarkdown>
+          </div>
+        </Show>
       </Show>
     </>
   );

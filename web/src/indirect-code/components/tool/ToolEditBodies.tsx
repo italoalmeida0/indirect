@@ -1,9 +1,9 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
-import { CodeBlock, DiffView } from "../CodeBlock";
+import { CodeBlock, DiffView, stripLinePrefixNotice } from "../CodeBlock";
 import { FileIcon } from "../../presentation";
 import { languageForPath } from "../../utils/lang";
-import { parseEditResults } from "../../utils/toolEdits";
+import { parseEditResults, synthesizeEditSectionsFromArgs } from "../../utils/toolEdits";
 import type { FileEditSection } from "../../utils/toolEdits";
 import { diffStat } from "../../transcript";
 import type { ToolPartProps } from "./toolUnitModel";
@@ -60,7 +60,7 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
       </div>
       <Show when={open()}>
         <Show when={props.sec.error}>
-          <div class="px-3 py-2 text-[11.5px] text-danger font-mono bg-danger-subtle border-t border-danger/20">
+          <div class="px-3 py-2 text-[11.5px] text-danger font-mono bg-danger-subtle border-t border-danger/20 whitespace-pre-wrap">
             {props.sec.error}
           </div>
         </Show>
@@ -79,26 +79,93 @@ export function ToolEditBodies(props: ToolPartProps) {
     const a = props.m.args();
     if (a.path) return String(a.path);
     if (a.file) return String(a.file);
+    if (props.m.mergedEnv()?.path) return String(props.m.mergedEnv()!.path);
     if (Array.isArray(a.edits) && a.edits.length === 1) {
       return String(a.edits[0]?.path || a.edits[0]?.file || "");
     }
     return "";
   };
 
-  const sections = createMemo(() => {
-    // The daemon now sends the rich rendering in details.display (the
-    // AI-visible text is a one-line confirmation); fall back to parsing
-    // the result text for sessions recorded before the split.
-    const res = (props.u.result?.toolDetails?.display ?? props.m.output()) || "";
-    return parseEditResults(res, defaultPath());
+  const isDryRun = () =>
+    Boolean(
+      props.u.result?.toolDetails?.dry_run === true ||
+        props.m.args().dry_run === true ||
+        props.m.mergedEnv()?.dry_run === "true",
+    );
+
+  const sections = createMemo<FileEditSection[]>(() => {
+    const n = props.m.name();
+    if (n !== "edit" && n !== "patch") return [];
+    const d: any = props.u.result?.toolDetails;
+    const res = String(d?.display ?? d?.diff ?? props.m.output() ?? "");
+    const parsed = parseEditResults(res, defaultPath());
+    if (parsed.length > 0) {
+      if (props.u.result?.isError) {
+        return parsed.map((sec) =>
+          sec.status === "error"
+            ? sec
+            : {
+                ...sec,
+                status: "error",
+                error: sec.error || sec.diff || "Failed to apply edit.",
+                diff: sec.error ? sec.diff : "",
+              },
+        );
+      }
+      return parsed;
+    }
+    if (props.u.result?.isError) {
+      const errMsg =
+        res.trim() ||
+        String(props.m.mergedEnv()?.error || "").trim() ||
+        "Failed to apply edit.";
+      return [
+        {
+          file: defaultPath() || (n === "patch" ? "patch" : "edit"),
+          status: "error",
+          error: errMsg,
+          diff: "",
+        },
+      ];
+    }
+    // Persisted WAL (`<tool_result type="ok" info="..." path="..." edits="1"></tool_result>`)
+    // omits transient `toolDetails.display` and has an empty body: synthesize the diff
+    // directly from the tool arguments so reload preserves the file edit card + hunks.
+    const synth = synthesizeEditSectionsFromArgs(
+      props.m.args(),
+      defaultPath(),
+      isDryRun() ? "dry_run" : "applied",
+    );
+    if (synth.length > 0 && props.u.result) {
+      const envEdits = Number(props.m.mergedEnv()?.edits);
+      if (synth.length === 1 && Number.isFinite(envEdits) && envEdits > 0 && synth[0].matches === undefined) {
+        synth[0] = { ...synth[0], matches: envEdits };
+      }
+    }
+    return synth;
+  });
+
+  const readText = createMemo(() => {
+    if (props.m.name() !== "read") return "";
+    const raw = String((props.u.result?.toolDetails?.display ?? props.m.output()) || props.m.prog() || "");
+    return stripLinePrefixNotice(raw);
+  });
+
+  const writeText = createMemo(() => {
+    if (props.m.name() !== "write") return "";
+    const raw = String(
+      (props.u.result?.toolDetails?.display ?? props.m.output()) ||
+        props.m.args().content ||
+        props.m.prog() ||
+        "",
+    );
+    return stripLinePrefixNotice(raw);
   });
 
   return (
     <>
-      {/* Context body per tool kind (scrollable, always inline — the
-          collapsible rows already are the "open file/diff" view). */}
-      <Show when={(props.m.name() === "edit" || props.m.name() === "patch") && props.u.result}>
-        <Show when={props.u.result?.toolDetails?.dry_run === true}>
+      <Show when={props.m.name() === "edit" || props.m.name() === "patch"}>
+        <Show when={isDryRun()}>
           <div class="px-3 pt-2 pb-1">
             <span class="inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
               <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
@@ -106,94 +173,178 @@ export function ToolEditBodies(props: ToolPartProps) {
           </div>
         </Show>
         <Show
-          when={sections().length > 0}
+          when={Boolean(props.u.result)}
           fallback={
-            <div class="px-3 py-2 text-[11px] text-fg-muted">
-              No changes
+            <>
+              <div class="px-3 py-2 text-[11px] text-fg-muted">
+                {props.active
+                  ? isDryRun()
+                    ? "Previewing edit…"
+                    : "Applying edit…"
+                  : isDryRun()
+                    ? "Edit preview did not complete."
+                    : "Edit did not complete."}
+              </div>
+              <Show when={sections().length > 0}>
+                <div class="border-t border-border/55">
+                  <For each={sections()}>
+                    {(sec) => <FileEditCard sec={sec} scrollKey={`${props.m.key()}:${sec.file}`} />}
+                  </For>
+                </div>
+              </Show>
+            </>
+          }
+        >
+          <Show
+            when={sections().length > 0}
+            fallback={
+              <div class="px-3 py-2 text-[11px] text-fg-muted">
+                {String(props.m.mergedEnv()?.info || "No changes.")}
+              </div>
+            }
+          >
+            <For each={sections()}>
+              {(sec) => <FileEditCard sec={sec} scrollKey={`${props.m.key()}:${sec.file}`} />}
+            </For>
+          </Show>
+        </Show>
+      </Show>
+
+      <Show when={props.m.name() === "read"}>
+        <Show
+          when={readText().trim().length > 0}
+          fallback={
+            <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger bg-danger-subtle font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
+              {!props.u.result
+                ? props.active
+                  ? "Reading file…"
+                  : "File read did not complete."
+                : props.u.result.isError
+                  ? String(props.m.mergedEnv()?.error || "Failed to read file.")
+                  : "Empty file (0 bytes)."}
             </div>
           }
         >
-          <For each={sections()}>
-            {(sec) => <FileEditCard sec={sec} scrollKey={`${props.m.key()}:${sec.file}`} />}
-          </For>
-        </Show>
-      </Show>
-      <Show when={(props.m.name() === "edit" || props.m.name() === "patch") && !props.u.result}>
-        <Show when={props.u.result?.toolDetails?.dry_run === true}>
-          <div class="px-3 pt-2 pb-1">
-            <span class="inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
-              <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
-            </span>
-          </div>
-        </Show>
-        <div class="px-3 py-2 text-[11px] text-fg-muted">
-          {props.active ? (props.u.result?.toolDetails?.dry_run === true ? "Previewing edit…" : "Applying edit…") : null}
-        </div>
-      </Show>
-      <Show when={props.m.name() === "read"}>
-        <Show
-          when={props.u.result?.toolDetails?.display || props.m.output() || props.m.prog()}
-          fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Reading file…" : null}</div>}
-        >
-          <CodeBlock embedded numbered
+          <CodeBlock
+            embedded
+            numbered
             follow={() => props.m.open() && props.running}
-            text={(props.u.result?.toolDetails?.display ?? props.m.output()) || props.m.prog() || ""}
+            text={readText()}
             language={languageForPath(String(props.m.args().path || ""))}
             wrap={false}
             scrollKey={props.m.key()}
           />
         </Show>
       </Show>
+
       <Show when={props.m.name() === "write"}>
-        <CodeBlock embedded numbered
-          follow={() => props.m.open() && props.running}
-          text={String((props.u.result?.toolDetails?.display ?? props.m.output()) || props.m.args().content || "")}
-          language={languageForPath(String(props.m.args().path || ""))}
-          wrap={false}
-          scrollKey={props.m.key()}
-        />
+        <Show
+          when={writeText().trim().length > 0}
+          fallback={
+            <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger bg-danger-subtle font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
+              {!props.u.result
+                ? props.active
+                  ? "Writing file…"
+                  : "File write did not complete."
+                : props.u.result.isError
+                  ? String(props.m.mergedEnv()?.error || "Failed to write file.")
+                  : String(props.m.mergedEnv()?.info || "Wrote empty file (0 bytes).")}
+            </div>
+          }
+        >
+          <CodeBlock
+            embedded
+            numbered
+            follow={() => props.m.open() && props.running}
+            text={writeText()}
+            language={languageForPath(String(props.m.args().path || ""))}
+            wrap={false}
+            scrollKey={props.m.key()}
+          />
+        </Show>
       </Show>
-        <Show when={props.m.name() === "exec_script" || props.m.name() === "python"}>
-          {(() => {
-            const isLegacyPy = () => {
-              const a = props.m.args();
-              const leg = typeof a.legacy_lang === "string" ? a.legacy_lang.trim().toLowerCase() : "";
-              return props.m.name() === "python" || leg === "python" || leg === "python3" || (!String(a.code || "").trim() && Boolean(String(a.script || "").trim()));
-            };
+
+      <Show when={props.m.name() === "exec_script" || props.m.name() === "python"}>
+        {(() => {
+          const isLegacyPy = () => {
+            const a = props.m.args();
+            const leg = typeof a.legacy_lang === "string" ? a.legacy_lang.trim().toLowerCase() : "";
             return (
-              <>
-                <Show when={props.m.args().code || props.m.args().script}>
-                  <div class="border-b border-border/60 bg-surface/50">
-                    <CodeBlock
-                      embedded
-                      follow={() => props.m.open() && props.running}
-                      text={
-                        String(props.m.args().code || "").trim()
-                          ? String(props.m.args().code)
-                          : [String(props.m.args().script || ""), ...(Array.isArray(props.m.args().args) ? props.m.args().args.map(String) : [])].filter(Boolean).join(" ")
-                      }
-                      language={isLegacyPy() ? "python" : "javascript"}
-                      wrap={false}
-                      maxH="max-h-40"
-                      scrollKey={`${props.m.key()}:code`}
-                    />
+              props.m.name() === "python" ||
+              leg === "python" ||
+              leg === "python3" ||
+              (!String(a.code || "").trim() && Boolean(String(a.script || "").trim()))
+            );
+          };
+          const scriptSource = () => {
+            const code = String(props.m.args().code || "");
+            if (code.trim()) return code;
+            return [
+              String(props.m.args().script || ""),
+              ...(Array.isArray(props.m.args().args) ? props.m.args().args.map(String) : []),
+            ]
+              .filter(Boolean)
+              .join(" ")
+              .trim();
+          };
+          const execError = () =>
+            String(props.m.mergedEnv()?.error || (props.u.result?.toolDetails as any)?.env?.error || "");
+          const execOut = () =>
+            props.m.bgRunning()
+              ? props.m.bgStream() || props.m.prog() || ""
+              : props.m.output() || props.m.prog() || execError();
+          return (
+            <>
+              <Show when={scriptSource().length > 0}>
+                <div class="border-b border-border/60 bg-surface/50">
+                  <CodeBlock
+                    embedded
+                    follow={() => props.m.open() && props.running}
+                    text={scriptSource()}
+                    language={isLegacyPy() ? "python" : "javascript"}
+                    wrap={false}
+                    maxH="max-h-40"
+                    scrollKey={`${props.m.key()}:code`}
+                  />
+                </div>
+              </Show>
+              <Show
+                when={execOut().trim().length > 0}
+                fallback={
+                  <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono" : "text-fg-muted"}`}>
+                    {props.m.bgRunning()
+                      ? "Running in background…"
+                      : !props.u.result
+                        ? props.active
+                          ? isLegacyPy()
+                            ? "Running Python…"
+                            : "Running JavaScript…"
+                          : "Script execution did not complete."
+                        : props.u.result.isError
+                          ? "Script failed with no output."
+                          : "No output."}
+                  </div>
+                }
+              >
+                <Show when={props.u.result?.toolDetails?.truncated || props.m.mergedEnv()?.truncated === "true"}>
+                  <div class="px-3 py-1 bg-surface-muted/65 border-b border-border/55 text-[10.5px] text-fg-muted font-mono">
+                    Output truncated (showing last {String(props.u.result?.toolDetails?.page || props.m.mergedEnv()?.page || "portion")})
                   </div>
                 </Show>
-                <Show
-                  when={props.m.output() || props.m.prog() || props.m.bgRunning() || props.m.bgStream() || (props.u.result?.toolDetails as any)?.env?.error}
-                  fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.m.bgRunning() ? "Running in background…" : props.active ? (isLegacyPy() ? "Running Python…" : "Running JavaScript…") : null}</div>}
-                >
-                  <Show when={props.u.result?.toolDetails?.truncated}>
-                    <div class="px-3 py-1 bg-surface-muted/65 border-b border-border/55 text-[10.5px] text-fg-muted font-mono">
-                      Output truncated (showing last {String(props.u.result?.toolDetails?.page || "portion")})
-                    </div>
-                  </Show>
-                  <CodeBlock embedded follow={() => props.m.open() && props.running} text={props.m.bgRunning() ? (props.m.bgStream() || props.m.prog() || "Running in background…") : props.m.output() || props.m.prog() || String((props.u.result?.toolDetails as any)?.env?.error || "No output")} language={undefined} plain wrap={false} scrollKey={`${props.m.key()}:out`} />
-                </Show>
-              </>
-            );
-          })()}
-        </Show>
-</>
+                <CodeBlock
+                  embedded
+                  follow={() => props.m.open() && props.running}
+                  text={props.m.bgRunning() ? props.m.bgStream() || props.m.prog() || "" : props.m.output() || props.m.prog() || execError()}
+                  language={undefined}
+                  plain
+                  wrap={false}
+                  scrollKey={`${props.m.key()}:out`}
+                />
+              </Show>
+            </>
+          );
+        })()}
+      </Show>
+    </>
   );
 }

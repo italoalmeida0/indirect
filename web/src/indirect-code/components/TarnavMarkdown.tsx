@@ -119,6 +119,7 @@ function tagFor(token: number): { tag: string; sd?: string; cls?: string } | nul
 interface TarnavRendererOptions {
   highlight?: boolean;
   fileIcons?: boolean;
+  noNestedScroll?: boolean;
 }
 
 interface NodeStack {
@@ -272,11 +273,14 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         language.className = "tarnav-code-language";
         language.textContent = "code";
         const container = wrap.appendChild(document.createElement("div"));
-        container.className =
-          "font-mono text-[11px] text-ink-300 overflow-x-auto overflow-y-auto select-text [scrollbar-gutter:stable] max-h-56";
+        container.className = opts.noNestedScroll
+          ? "font-mono text-[11px] text-ink-300 overflow-visible select-text"
+          : "font-mono text-[11px] text-ink-300 overflow-x-auto overflow-y-auto select-text [scrollbar-gutter:stable] max-h-56";
         const pre = container.appendChild(document.createElement("pre"));
         pre.setAttribute("data-streamdown", "code-block");
-        pre.className = "px-3 py-2 whitespace-pre-wrap";
+        pre.className = opts.noNestedScroll
+          ? "px-3 py-2 whitespace-pre-wrap [overflow-wrap:anywhere] break-words max-w-full"
+          : "px-3 py-2 whitespace-pre-wrap";
         const code = pre.appendChild(document.createElement("code"));
         code.className = "tok";
         codeSource.set(code, "");
@@ -294,7 +298,14 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         const inHead = current().closest("thead") != null;
         const cell = document.createElement(inHead ? "th" : "td");
         cell.setAttribute("data-streamdown", inHead ? "table-header-cell" : "table-cell");
-        cell.className = inHead ? CLS["table-header-cell"] : CLS["table-cell"];
+        if (opts.noNestedScroll) {
+          cell.className = inHead
+            ? "px-3 py-2 text-left font-semibold text-sm text-(--ink-100) [overflow-wrap:anywhere] break-words min-w-0"
+            : cn(CLS["table-cell"], "[overflow-wrap:anywhere] break-words min-w-0");
+          cell.style.minWidth = "0";
+        } else {
+          cell.className = inHead ? CLS["table-header-cell"] : CLS["table-cell"];
+        }
         const table = current().closest("table");
         const align = table && tableAlignments.get(table)?.[current().children.length];
         if (align) cell.setAttribute("align", align);
@@ -330,10 +341,12 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         const toolbar = wrap.appendChild(document.createElement("div"));
         toolbar.className = "flex items-center justify-end gap-1 pb-1 text-xs text-(--ink-400)";
         const scroller = wrap.appendChild(document.createElement("div"));
-        scroller.className = "rc-table-scroll overflow-x-auto";
+        scroller.className = opts.noNestedScroll ? "rc-table-scroll overflow-hidden" : "rc-table-scroll overflow-x-auto";
         const table = scroller.appendChild(document.createElement("table"));
         table.setAttribute("data-streamdown", "table");
-        table.className = CLS.table;
+        table.className = opts.noNestedScroll
+          ? cn(CLS.table, "table-fixed [overflow-wrap:anywhere] break-words")
+          : CLS.table;
         toolbar.appendChild(makeCopyButton(() => tableToMarkdown(table), "Copy table", data.cleanup));
         toolbar.appendChild(makeDownloadButton(() => table, "Download CSV", data.cleanup));
         current().appendChild(wrap);
@@ -343,6 +356,10 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
       const el = document.createElement(spec.tag);
       if (spec.sd) el.setAttribute("data-streamdown", spec.sd);
       if (spec.cls) el.className = spec.cls;
+      if (spec.tag === "equation-block" && opts.noNestedScroll) {
+        el.style.overflowX = "visible";
+        el.style.overflowWrap = "anywhere";
+      }
       if (spec.tag === "a") {
         el.setAttribute("target", "_blank");
         el.setAttribute("rel", "noopener noreferrer");
@@ -494,7 +511,7 @@ function hljsLang(fenceLang: string): string | undefined {
  * Put highlighted HTML into the fence <code>, adding the gutter when lines
  * carry `<number>:` prefixes (same split as the app's CodeBlock).
  */
-function applyCodeHtml(code: HTMLElement, text: string, html: string) {
+function applyCodeHtml(code: HTMLElement, text: string, html: string, noNestedScroll?: boolean) {
   const lines = text.split("\n");
   const hasGutter = lines.some((l) => /^\d+:/.test(l));
   if (!hasGutter) {
@@ -502,11 +519,14 @@ function applyCodeHtml(code: HTMLElement, text: string, html: string) {
     return;
   }
   const htmlLines = html.split("\n");
+  const rowCls = noNestedScroll
+    ? "flex items-start px-2 py-0.5 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] break-words hover:bg-surface/30"
+    : "flex items-start px-2 py-0.5 leading-relaxed whitespace-pre hover:bg-surface/30";
   const rows = lines.map((line, i) => {
     const m = line.match(/^(\d+):(.*)$/);
     const num = m ? m[1] : "";
     const cell = htmlLines[i] || escapeHtml(m ? m[2] : line);
-    return `<div class="flex items-start px-2 py-0.5 leading-relaxed whitespace-pre hover:bg-surface/30"><span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">${num}</span><code class="tok flex-1">${cell || " "}</code></div>`;
+    return `<div class="${rowCls}"><span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">${num}</span><code class="tok flex-1 min-w-0">${cell || " "}</code></div>`;
   });
   code.innerHTML = rows.join("");
 }
@@ -543,7 +563,7 @@ function iconOne(code: HTMLElement) {
 }
 
 /** Match the header width once a row closes; never rescan old table rows. */
-function normalizeTableRow(row: Element) {
+function normalizeTableRow(row: Element, noNestedScroll?: boolean) {
   if (row.parentElement?.tagName === "THEAD") return;
   const table = row.closest("table");
   const cols = table?.querySelector("thead tr")?.children.length ?? 0;
@@ -551,7 +571,8 @@ function normalizeTableRow(row: Element) {
   while (row.children.length < cols) {
     const td = document.createElement("td");
     td.setAttribute("data-streamdown", "table-cell");
-    td.className = CLS["table-cell"];
+    td.className = noNestedScroll ? cn(CLS["table-cell"], "[overflow-wrap:anywhere] break-words min-w-0") : CLS["table-cell"];
+    if (noNestedScroll) td.style.minWidth = "0";
     const align = table && tableAlignments.get(table)?.[row.children.length];
     if (align) td.setAttribute("align", align);
     row.appendChild(td);
@@ -649,13 +670,13 @@ function postPassSync(host: HTMLElement, opts: TarnavRendererOptions, data: Node
         data.dirty.add(code); retryIn = Math.min(retryIn, remaining); continue;
       }
       const html = highlightCodeSync(copyCode(code), hljsLang(code.parentElement?.getAttribute("data-language") ?? ""));
-      if (html != null) { applyCodeHtml(code, text, html); highlightedAt.set(code, performance.now()); }
+      if (html != null) { applyCodeHtml(code, text, html, opts.noNestedScroll); highlightedAt.set(code, performance.now()); }
       else data.dirty.add(el); // The initial async language load retries this set.
     } else if (el.matches('code[data-streamdown="inline-code"]')) {
       unwrapBogusInlineCode(el);
       if (opts.fileIcons !== false && host.contains(el)) iconOne(el as HTMLElement);
     } else if (el.tagName === "TR" && closedNodes.has(el)) {
-      normalizeTableRow(el);
+      normalizeTableRow(el, opts.noNestedScroll);
     }
     el.removeAttribute("data-dirty");
   }
@@ -675,6 +696,8 @@ export interface TarnavMarkdownProps {
   mode?: "full" | "mini" | "toolsearch" | "compact" | "basic";
   streaming?: boolean;
   active?: boolean;
+  /** Disable inner code-fence / table scrollbars when rendered inside ToolBody's single scroll container. */
+  noNestedScroll?: boolean;
 }
 
 export function TarnavMarkdown(props: TarnavMarkdownProps) {
@@ -689,12 +712,16 @@ export function TarnavMarkdown(props: TarnavMarkdownProps) {
   let frame = 0;
   let highlightTimer: ReturnType<typeof setTimeout> | undefined;
   let mounted = false;
-  const opts: TarnavRendererOptions = { highlight: true, fileIcons: true };
+  const renderOpts = (): TarnavRendererOptions => ({
+    highlight: true,
+    fileIcons: true,
+    noNestedScroll: props.noNestedScroll,
+  });
   const visible = () => !document.hidden && disclosureActive() && props.active !== false;
   function disposeView() { for (const dispose of view?.data.cleanup ?? []) dispose(); }
   function reset() {
     disposeView(); host.replaceChildren();
-    view = makeRenderer(host, opts); p = parser(view, { basic: props.mode === "basic" }); view.data.parser = p; fed = ""; previousCR = false; sourceLine = ""; ended = false;
+    view = makeRenderer(host, renderOpts()); p = parser(view, { basic: props.mode === "basic" }); view.data.parser = p; fed = ""; previousCR = false; sourceLine = ""; ended = false;
   }
   function update() {
     frame = 0;
@@ -733,7 +760,7 @@ export function TarnavMarkdown(props: TarnavMarkdownProps) {
       }
       ended = true;
     }
-    const retryIn = postPassSync(host, opts, view!.data);
+    const retryIn = postPassSync(host, renderOpts(), view!.data);
     if (end < full.length) schedule();
     else if (Number.isFinite(retryIn)) highlightTimer = setTimeout(schedule, retryIn);
   }

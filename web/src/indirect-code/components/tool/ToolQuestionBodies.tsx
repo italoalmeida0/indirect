@@ -16,9 +16,19 @@ export function ToolQuestionBodies(props: ToolPartProps) {
     <Show when={props.m.name() === "question"}>
       <Show
         when={items().length > 0}
-        fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">Waiting for your answers…</div>}
+        fallback={
+          <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere]" : "text-fg-muted"}`}>
+            {props.u.result?.isError
+              ? props.m.output() || String(props.m.mergedEnv()?.error || "Question canceled or failed.")
+              : !props.u.result
+                ? props.active
+                  ? "Waiting for your answers…"
+                  : "Question did not complete."
+                : props.m.output() || "No answer recorded."}
+          </div>
+        }
       >
-        <div class="px-3 py-2.5 space-y-3">
+        <div class="px-3 py-2.5 space-y-3 min-w-0 [overflow-wrap:anywhere] break-words">
           <For each={items()}>
             {(q, i) => {
               const picked = (label: string) => q.answers.includes(label);

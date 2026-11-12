@@ -373,12 +373,34 @@ const mockUpstream = Bun.serve({
         });
       }
       await Bun.sleep(1550);
+      const unbrokenExploreToken =
+        "UNBROKEN_EXPLORE_TRACE_TOKEN_" + "A1B2C3D4E5F6G7H8J9K0".repeat(7);
+      const fenceLines = [
+        "```ts",
+        "export interface RouterDeadlinePolicy {",
+        "  readonly timeoutMs: number;",
+        "  readonly maxRetries: number;",
+        "  readonly keepAlive: boolean;",
+        "}",
+        ...Array.from(
+          { length: 22 },
+          (_, idx) => `export const HOP_BUDGET_${String(idx + 1).padStart(2, "0")} = ${(idx + 1) * 150};`,
+        ),
+        "```",
+      ];
       const synthesis = [
         "### Architecture Findings",
         "",
-        "- `src/router.ts` defines `ROUTER_TIMEOUT_MS = 4500` for upstream request deadlines.",
+        `- \`src/router.ts\` defines \`ROUTER_TIMEOUT_MS = 4500\` for upstream request deadlines (\`${unbrokenExploreToken}\`).`,
         "- `src/service.ts` composes `createRouterConfig()` inside `dispatchWithRetry` (`MAX_RETRIES = 4`).",
         "- Read-only inspection confirmed deterministic error propagation across router hops.",
+        "",
+        "| Module | Symbol | Value | Responsibility |",
+        "| --- | --- | --- | --- |",
+        "| `src/router.ts` | `ROUTER_TIMEOUT_MS` | `4500` | Upstream deadline cap |",
+        "| `src/service.ts` | `MAX_RETRIES` | `4` | Retry budget ceiling |",
+        "",
+        ...fenceLines,
       ].join("\n");
       return buildOpenAIResponse(model, stream, {
         kind: "text",
@@ -437,8 +459,12 @@ const mockUpstream = Bun.serve({
           name: "edit",
           args: {
             path: "src/service.ts",
-            old_string: "export const MAX_RETRIES = 2;",
-            new_string: "export const MAX_RETRIES = 4;",
+            edits: [
+              {
+                old_text: "export const MAX_RETRIES = 2;",
+                new_text: "export const MAX_RETRIES = 4;",
+              },
+            ],
           },
         });
       }
@@ -470,11 +496,19 @@ const mockUpstream = Bun.serve({
           args: { path: "src/router.ts" },
         });
       }
+      if (turnToolResults === 1) {
+        return buildOpenAIResponse(model, stream, {
+          kind: "tool",
+          id: nextCallId("call_glob_empty"),
+          name: "glob",
+          args: { pattern: "**/*.nonexistent_round2" },
+        });
+      }
       return buildOpenAIResponse(model, stream, {
         kind: "tool",
         id: nextCallId("call_finish_t2"),
         name: "finish_entire_request",
-        args: { final_message_to_user: "Inspected `src/router.ts` timeout configuration." },
+        args: { final_message_to_user: "Inspected `src/router.ts` timeout configuration and verified glob empty state." },
       });
     }
 
@@ -838,9 +872,59 @@ async function ensureToolRowExpanded(page: any, rowText: string) {
   return { header, unit };
 }
 
+async function assertSingleScrollAndBoundedLayout(unit: any, label: string) {
+  const layout = await unit.locator("[data-tool-body]").first().evaluate((el: HTMLElement) => {
+    const nestedScrollers: string[] = [];
+    for (const child of el.querySelectorAll<HTMLElement>("*")) {
+      const cs = getComputedStyle(child);
+      if (
+        cs.overflowY === "auto" ||
+        cs.overflowY === "scroll" ||
+        cs.overflowX === "auto" ||
+        cs.overflowX === "scroll"
+      ) {
+        nestedScrollers.push(
+          `${child.tagName.toLowerCase()}.${(child.className || "").toString().slice(0, 48)}(ox=${cs.overflowX},oy=${cs.overflowY})`,
+        );
+      }
+    }
+    return {
+      clientWidth: el.clientWidth,
+      scrollWidth: el.scrollWidth,
+      nestedScrollers,
+    };
+  });
+  assert(
+    layout.scrollWidth <= layout.clientWidth + 1,
+    `${label}: [data-tool-body] horizontal blowout detected (scrollWidth=${layout.scrollWidth} > clientWidth=${layout.clientWidth})`,
+  );
+  assert.equal(
+    layout.nestedScrollers.length,
+    0,
+    `${label}: [data-tool-body] must be the single scroll surface, found nested scrollers: ${JSON.stringify(layout.nestedScrollers)}`,
+  );
+}
+
 async function verifyAllFourExpandedTools(page: any, phaseLabel: string) {
   await loadAllOlderTurns(page);
   await expandAllTurnDisclosures(page);
+
+  // 0a. Persisted WAL `edit` row (`Edited service.ts`) — must synthesize diff after reload, NEVER "No changes"
+  const editRow = await ensureToolRowExpanded(page, "Edited");
+  const editBodyText = ((await editRow.unit.locator('[data-tool-body="edit"]').textContent()) || "").trim();
+  assert(
+    editBodyText.includes("service.ts") && editBodyText.includes("MAX_RETRIES"),
+    `${phaseLabel}: edit row must render service.ts diff, got "${editBodyText}"`,
+  );
+  assert(!editBodyText.includes("No changes"), `${phaseLabel}: edit row must NOT regress to "No changes"`);
+
+  // 0b. 0-match `glob` row (`**/*.nonexistent_round2`) — must render explicit non-empty 0-match message
+  const globRow = await ensureToolRowExpanded(page, "nonexistent_round2");
+  const globBodyText = ((await globRow.unit.locator('[data-tool-body="glob"]').textContent()) || "").trim();
+  assert(
+    globBodyText.includes("No files matched the pattern"),
+    `${phaseLabel}: 0-match glob row must render explicit empty-state copy, got "${globBodyText}"`,
+  );
 
   // 1. Spilled `bash` row (`sleep 1 && cat pipeline_diag.log`)
   const spillRow = await ensureToolRowExpanded(page, "pipeline_diag.log");
@@ -896,6 +980,7 @@ async function verifyAllFourExpandedTools(page: any, phaseLabel: string) {
     highlightedMarks.some((t: string) => t.toUpperCase().includes("SPILL_DIAG_771")),
     `${phaseLabel}: search body must highlight SPILL_DIAG_771 in <mark>, got ${JSON.stringify(highlightedMarks)}`,
   );
+  await assertSingleScrollAndBoundedLayout(searchRow.unit, `${phaseLabel}:session_history(search)`);
 
   // 3. `session_history` (`action: "recall"`)
   const recallRow = await ensureToolRowExpanded(page, "Recalled history");
@@ -915,8 +1000,13 @@ async function verifyAllFourExpandedTools(page: any, phaseLabel: string) {
   assert(/chars/.test(recallBodyText), `${phaseLabel}: recall body must show char window label, got "${recallBodyText}"`);
   assert(recallBodyText.includes("paginated"), `${phaseLabel}: recall body must show "paginated" badge`);
   assert(/msg\s+#0/.test(recallBodyText), `${phaseLabel}: recall body must render segmented msg # cards, got "${recallBodyText}"`);
+  assert(
+    recallBodyText.includes("UNBROKEN_RECALL_TRACE_ID_"),
+    `${phaseLabel}: recall body must include 155-char unbroken trace token in msg #0`,
+  );
+  await assertSingleScrollAndBoundedLayout(recallRow.unit, `${phaseLabel}:session_history(recall)`);
 
-  // 4. `explore` subagent completed row
+  // 4. `explore` subagent completed row (includes 155-char unbroken token + 4-col table + 28-line ts fence)
   const exploreRow = await ensureToolRowExpanded(page, "Explored");
   const exploreHeaderText = ((await exploreRow.header.textContent()) || "").trim();
   assert(
@@ -940,25 +1030,32 @@ async function verifyAllFourExpandedTools(page: any, phaseLabel: string) {
 
   const h3Texts = await exploreCtx.locator("h3").allTextContents();
   const liCount = await exploreCtx.locator("li").count();
+  const tableCount = await exploreCtx.locator("table").count();
   const codeTexts = await exploreCtx.locator("code").allTextContents();
   assert(
     h3Texts.some((t: string) => t.includes("Architecture Findings")),
     `${phaseLabel}: explore StreamingMarkdown must render <h3> "Architecture Findings", got ${JSON.stringify(h3Texts)}`,
   );
   assert(liCount >= 3, `${phaseLabel}: explore StreamingMarkdown must render bullet <li> items, got ${liCount}`);
+  assert(tableCount >= 1, `${phaseLabel}: explore StreamingMarkdown must render <table>, got ${tableCount}`);
   assert(
     codeTexts.some((t: string) => t.includes("ROUTER_TIMEOUT_MS")),
     `${phaseLabel}: explore StreamingMarkdown must render inline <code>, got ${JSON.stringify(codeTexts)}`,
+  );
+  assert(
+    exploreBodyText.includes("HOP_BUDGET_22"),
+    `${phaseLabel}: explore StreamingMarkdown must render full 28-line fenced code block`,
   );
 
   const exploreFooter = exploreRow.unit.locator("[data-tool-footer]");
   assert(await exploreFooter.isVisible(), `${phaseLabel}: explore [data-tool-footer] must be visible`);
   const exploreFooterText = ((await exploreFooter.textContent()) || "").trim();
   assert(/Took\s+\d/.test(exploreFooterText), `${phaseLabel}: explore footer must show Took duration, got "${exploreFooterText}"`);
+  await assertSingleScrollAndBoundedLayout(exploreRow.unit, `${phaseLabel}:explore`);
 
   log(
     "ui",
-    `${phaseLabel}: verified spilled bash (${spillDuration}), session_history search+recall, and explore (${exploreDuration})`,
+    `${phaseLabel}: verified edit WAL diff, 0-match glob, spilled bash (${spillDuration}), session_history search+recall, and explore (${exploreDuration})`,
   );
   return {
     spillHeaderText,
@@ -987,7 +1084,12 @@ try {
 
   // --- Phase A: Era 1 (>25KB arrival spill + read + edit + exit-2 command) + /compact #1 -> b1 ---
   log("phase", "running Era 1 turns + /compact #1 (b1)");
-  await runTurn(ctx, sessionId, "[TURN_TAG:T1_SPILL_AND_OPS] Run pipeline diagnostics, update service retries, and verify.");
+  const unbrokenRecallTrace = "UNBROKEN_RECALL_TRACE_ID_" + "9F8E7D6C5B4A3210".repeat(8);
+  await runTurn(
+    ctx,
+    sessionId,
+    `[TURN_TAG:T1_SPILL_AND_OPS] Run pipeline diagnostics (${unbrokenRecallTrace}), update service retries, and verify.`,
+  );
   await runTurn(ctx, sessionId, "[TURN_TAG:T2_ERA1_PAD] Inspect router configuration.");
   await runTurn(ctx, sessionId, "[TURN_TAG:T3_ERA1_PAD] Confirm Era 1 checkpoint.");
 
@@ -1221,15 +1323,42 @@ try {
     await assertNoHorizontalOverflow(page, "post-reload-desktop-1280x840");
     assertNoPageErrors(pageErrors, consoleErrors, "post-reload-desktop");
 
-    // --- Phase H: Mobile Viewport Check (390x844) with all 4 bespoke bodies expanded ---
-    log("phase", "verifying 390x844 mobile viewport layout & overflow integrity");
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(450);
-    await verifyAllFourExpandedTools(page, "post-reload-mobile-390x844");
-    await assertNoHorizontalOverflow(page, "mobile-390x844");
-    assertNoPageErrors(pageErrors, consoleErrors, "mobile-390x844");
-
     await context.close();
+
+    // --- Phase H: Mobile Viewport Check (390x844 touch device) with all bespoke bodies expanded ---
+    log("phase", "verifying 390x844 mobile viewport layout & single-scroll overflow integrity");
+    const mobileContext = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      userAgent:
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    });
+    const mobilePage = await mobileContext.newPage();
+    const mobilePageErrors: string[] = [];
+    const mobileConsoleErrors: string[] = [];
+    mobilePage.on("pageerror", (e: Error) => mobilePageErrors.push(String(e).slice(0, 300)));
+    mobilePage.on("console", (m: any) => {
+      if (m.type() === "error") mobileConsoleErrors.push(String(m.text()).slice(0, 300));
+    });
+    await mobilePage.addInitScript(
+      ({ sess, hid, sid }: any) => {
+        localStorage.setItem("cache_code_session", JSON.stringify(sess));
+        localStorage.setItem(`llmgw-rc-session:${hid}`, sid);
+      },
+      {
+        sess: { accessToken: ctx.login.accessToken, refreshToken: ctx.login.refreshToken, user: ctx.login.user },
+        hid: ctx.hostId,
+        sid: sessionId,
+      },
+    );
+    await mobilePage.goto(`${GW}/#/code`, { waitUntil: "networkidle" });
+    await mobilePage.waitForSelector('button:has-text("Context Compacted")', { timeout: 20000 });
+    await mobilePage.waitForTimeout(600);
+    await verifyAllFourExpandedTools(mobilePage, "post-reload-mobile-390x844");
+    await assertNoHorizontalOverflow(mobilePage, "mobile-390x844");
+    assertNoPageErrors(mobilePageErrors, mobileConsoleErrors, "mobile-390x844");
+    await mobileContext.close();
   } finally {
     await browser.close();
   }

@@ -1,9 +1,9 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
-import { CodeBlock, DiffView } from "../CodeBlock";
+import { CodeBlock, DiffView, stripLinePrefixNotice } from "../CodeBlock";
 import { StreamingMarkdown } from "../StreamingMarkdown";
 import { diffStat } from "../../transcript";
-import { parseEditResults, type FileEditSection } from "../../utils/toolEdits";
+import { parseEditResults, synthesizeEditSectionsFromArgs, type FileEditSection } from "../../utils/toolEdits";
 import { extractTodoItems, resolveWidgetId } from "../../utils/tools";
 import type { ToolPartProps } from "./toolUnitModel";
 
@@ -256,41 +256,6 @@ function parseWidgetList(rawText: string, details: any): ParsedWidgetList | null
   };
 }
 
-function synthesizeEditsDiff(edits: unknown[], widgetId: string): FileEditSection[] {
-  const blocks: string[] = [];
-  for (let idx = 0; idx < edits.length; idx++) {
-    const item = edits[idx] as any;
-    if (!item || typeof item !== "object") continue;
-    const oldText = typeof (item.old_text ?? item.old) === "string" ? String(item.old_text ?? item.old) : "";
-    const newText = typeof (item.new_text ?? item.new) === "string" ? String(item.new_text ?? item.new) : "";
-    if (!oldText && !newText) continue;
-    const oldLines = oldText ? oldText.split("\n") : [];
-    const newLines = newText ? newText.split("\n") : [];
-    let prefix = 0;
-    while (prefix < oldLines.length && prefix < newLines.length && oldLines[prefix] === newLines[prefix]) {
-      prefix++;
-    }
-    let suffix = 0;
-    while (
-      suffix < oldLines.length - prefix &&
-      suffix < newLines.length - prefix &&
-      oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
-    ) {
-      suffix++;
-    }
-    const hunkLines: string[] = [`@@ edit ${idx + 1} @@`];
-    const ctxStart = Math.max(0, prefix - 2);
-    for (let i = ctxStart; i < prefix; i++) hunkLines.push(` ${oldLines[i]}`);
-    for (let i = prefix; i < oldLines.length - suffix; i++) hunkLines.push(`-${oldLines[i]}`);
-    for (let i = prefix; i < newLines.length - suffix; i++) hunkLines.push(`+${newLines[i]}`);
-    const ctxEnd = Math.min(oldLines.length, oldLines.length - suffix + 2);
-    for (let i = oldLines.length - suffix; i < ctxEnd; i++) hunkLines.push(` ${oldLines[i]}`);
-    blocks.push(hunkLines.join("\n"));
-  }
-  if (blocks.length === 0) return [];
-  return [{ file: widgetId, status: "applied", diff: blocks.join("\n") }];
-}
-
 function WidgetEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
   const [open, setOpen] = createSignal(true);
   const stat = () => diffStat(props.sec.diff);
@@ -371,11 +336,11 @@ function WidgetLintFindings(props: { lint: ParsedWidgetLint; scrollKey: string }
           </For>
         </ul>
       </Show>
-      <Show when={props.lint.output}>
+      <Show when={(props.lint.output || "").trim().length > 0}>
         <div class="border-b border-border/55 bg-surface/40">
           <CodeBlock
             embedded
-            text={props.lint.output}
+            text={props.lint.output!}
             language={undefined}
             plain
             wrap={false}
@@ -424,14 +389,28 @@ export function ToolWidgetBodies(props: ToolPartProps) {
     if (toolName() !== "widget_set") return "";
     const d = details();
     if (d?.deleted || props.m.args().delete) return "";
-    if (typeof d?.display === "string" && d.display.trim()) return d.display;
+    if (typeof d?.display === "string") {
+      const cleaned = stripLinePrefixNotice(d.display);
+      if (cleaned.trim()) return cleaned;
+    }
     const argContent = props.m.args().content;
-    if (typeof argContent === "string" && argContent.trim()) return argContent;
+    if (typeof argContent === "string") {
+      const cleaned = stripLinePrefixNotice(argContent);
+      if (cleaned.trim()) return cleaned;
+    }
     const prog = props.m.prog();
-    if (prog && prog.trim()) return prog;
-    const out = props.m.output() || "";
+    if (prog) {
+      const cleaned = stripLinePrefixNotice(prog);
+      if (cleaned.trim()) return cleaned;
+    }
+    const out = stripLinePrefixNotice(props.m.output() || "");
     if (out.trim() && !isLintReportText(out)) return out;
     return "";
+  });
+
+  const widgetReadText = createMemo(() => {
+    if (toolName() !== "widget_read") return "";
+    return stripLinePrefixNotice(String((details()?.display ?? props.m.output()) || props.m.prog() || ""));
   });
 
   const widgetEditSections = createMemo<FileEditSection[]>(() => {
@@ -440,11 +419,8 @@ export function ToolWidgetBodies(props: ToolPartProps) {
     const raw = String(d?.display ?? d?.diff ?? props.m.output() ?? "");
     const parsed = raw.trim() ? parseEditResults(raw, widgetId()) : [];
     if (parsed.length > 0) return parsed;
-    const edits = props.m.args().edits;
-    if (Array.isArray(edits) && edits.length > 0) {
-      return synthesizeEditsDiff(edits, widgetId());
-    }
-    return [];
+    if (props.u.result?.isError) return [];
+    return synthesizeEditSectionsFromArgs(props.m.args(), widgetId(), "applied");
   });
 
   const widgetList = createMemo<ParsedWidgetList | null>(() => {
@@ -530,14 +506,21 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           <Show when={parsedLint()}>
             {(lint) => <WidgetLintFindings lint={lint()} scrollKey={props.m.key()} />}
           </Show>
+          <Show when={props.u.result?.isError && !parsedLint()}>
+            <div class="border-b border-danger/20 bg-danger-subtle/35 px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+              {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Widget save failed."}
+            </div>
+          </Show>
           <Show
-            when={widgetSetSource()}
+            when={widgetSetSource().trim().length > 0}
             fallback={
               <div class="px-3 py-2 text-[11.5px] text-fg-muted">
                 {props.m.args().src_file
                   ? `Imported widget source from ${String(props.m.args().src_file)}`
-                  : props.active
-                    ? "Saving widget…"
+                  : !props.u.result
+                    ? props.active
+                      ? "Saving widget…"
+                      : "Widget save did not complete."
                     : "Widget saved."}
               </div>
             }
@@ -572,18 +555,35 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           </Show>
         </div>
         <Show
-          when={details()?.display || props.m.output() || props.m.prog()}
-          fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Reading widget…" : "Empty widget source."}</div>}
+          when={!props.u.result?.isError}
+          fallback={
+            <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+              {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Failed to read widget."}
+            </div>
+          }
         >
-          <CodeBlock
-            embedded
-            numbered
-            follow={() => props.m.open() && props.running}
-            text={String((details()?.display ?? props.m.output()) || props.m.prog() || "")}
-            language="tsx"
-            wrap={false}
-            scrollKey={props.m.key()}
-          />
+          <Show
+            when={widgetReadText().trim().length > 0}
+            fallback={
+              <div class="px-3 py-2 text-[11px] text-fg-muted">
+                {!props.u.result
+                  ? props.active
+                    ? "Reading widget…"
+                    : "Widget read did not complete."
+                  : "Empty widget source."}
+              </div>
+            }
+          >
+            <CodeBlock
+              embedded
+              numbered
+              follow={() => props.m.open() && props.running}
+              text={widgetReadText()}
+              language="tsx"
+              wrap={false}
+              scrollKey={props.m.key()}
+            />
+          </Show>
         </Show>
       </Show>
 
@@ -592,9 +592,22 @@ export function ToolWidgetBodies(props: ToolPartProps) {
         <Show
           when={widgetEditSections().length > 0}
           fallback={
-            <div class="px-3 py-2 text-[11px] text-fg-muted">
-              {props.active ? "Applying widget edit…" : "No changes"}
-            </div>
+            <Show
+              when={!props.u.result?.isError}
+              fallback={
+                <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Widget edit failed."}
+                </div>
+              }
+            >
+              <div class="px-3 py-2 text-[11px] text-fg-muted">
+                {!props.u.result
+                  ? props.active
+                    ? "Applying widget edit…"
+                    : "Widget edit did not complete."
+                  : props.m.mergedEnv()?.info || "No changes"}
+              </div>
+            </Show>
           }
         >
           <For each={widgetEditSections()}>
@@ -609,18 +622,35 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           when={parsedLint()}
           fallback={
             <Show
-              when={details()?.display || props.m.output() || props.m.prog()}
-              fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Linting widget…" : "Waiting for lint result…"}</div>}
+              when={!props.u.result?.isError}
+              fallback={
+                <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Widget lint failed."}
+                </div>
+              }
             >
-              <CodeBlock
-                embedded
-                follow={() => props.m.open() && props.running}
-                text={String(details()?.display || props.m.output() || props.m.prog() || "")}
-                language={undefined}
-                plain
-                wrap={false}
-                scrollKey={props.m.key()}
-              />
+              <Show
+                when={String(details()?.display || props.m.output() || props.m.prog() || "").trim().length > 0}
+                fallback={
+                  <div class="px-3 py-2 text-[11px] text-fg-muted">
+                    {!props.u.result
+                      ? props.active
+                        ? "Linting widget…"
+                        : "Widget lint did not complete."
+                      : props.m.mergedEnv()?.info || "Lint finished with no output."}
+                  </div>
+                }
+              >
+                <CodeBlock
+                  embedded
+                  follow={() => props.m.open() && props.running}
+                  text={String(details()?.display || props.m.output() || props.m.prog() || "")}
+                  language={undefined}
+                  plain
+                  wrap={false}
+                  scrollKey={props.m.key()}
+                />
+              </Show>
             </Show>
           }
         >
@@ -662,7 +692,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                     : "Compiled TSX, passed sandbox import audit, and smoke-rendered cleanly."}
                 </div>
               </Show>
-              <Show when={typeof props.m.args().test === "string" && String(props.m.args().test).trim()}>
+              <Show when={typeof props.m.args().test === "string" && String(props.m.args().test).trim().length > 0}>
                 <div class="border-t border-border/55">
                   <div class="px-3 py-1 bg-surface/40 border-b border-border/45 font-mono text-[10.5px] text-fg-muted">
                     test module
@@ -687,18 +717,35 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           when={widgetList()}
           fallback={
             <Show
-              when={props.m.output() || props.m.prog()}
-              fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">{props.active ? "Listing widgets…" : "No widgets stored in this session."}</div>}
+              when={!props.u.result?.isError}
+              fallback={
+                <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Failed to list widgets."}
+                </div>
+              }
             >
-              <CodeBlock
-                embedded
-                follow={() => props.m.open() && props.running}
-                text={props.m.output() || props.m.prog() || ""}
-                language={undefined}
-                plain
-                wrap={false}
-                scrollKey={props.m.key()}
-              />
+              <Show
+                when={(props.m.output() || props.m.prog() || "").trim().length > 0}
+                fallback={
+                  <div class="px-3 py-2 text-[11px] text-fg-muted">
+                    {!props.u.result
+                      ? props.active
+                        ? "Listing widgets…"
+                        : "Widget list did not complete."
+                      : "No widgets stored in this session."}
+                  </div>
+                }
+              >
+                <CodeBlock
+                  embedded
+                  follow={() => props.m.open() && props.running}
+                  text={props.m.output() || props.m.prog() || ""}
+                  language={undefined}
+                  plain
+                  wrap={false}
+                  scrollKey={props.m.key()}
+                />
+              </Show>
             </Show>
           }
         >
@@ -776,9 +823,22 @@ export function ToolWidgetBodies(props: ToolPartProps) {
               <Show
                 when={todoItems().length > 0}
                 fallback={
-                  <div class="px-3 py-2 text-[11.5px] text-fg-muted">
-                    {props.active && !props.u.result ? "Updating task checklist…" : "No tasks in checklist."}
-                  </div>
+                  <Show
+                    when={!props.u.result?.isError}
+                    fallback={
+                      <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                        {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Task checklist failed."}
+                      </div>
+                    }
+                  >
+                    <div class="px-3 py-2 text-[11.5px] text-fg-muted">
+                      {!props.u.result
+                        ? props.active
+                          ? "Updating task checklist…"
+                          : "Task checklist update did not complete."
+                        : "No tasks in checklist."}
+                    </div>
+                  </Show>
                 }
               >
                 <ul class="px-2 py-1.5 space-y-0.5">
@@ -803,7 +863,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                           }`}
                         />
                         <span
-                          class={`min-w-0 flex-1 ${
+                          class={`min-w-0 flex-1 [overflow-wrap:anywhere] break-words ${
                             item.status === "completed"
                               ? "text-fg-muted line-through"
                               : item.status === "in_progress"
@@ -848,20 +908,31 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                 </span>
               </div>
               <Show
-                when={rawBody() && !isAckPlaceholder()}
+                when={!props.u.result?.isError}
                 fallback={
-                  <div class="px-3 py-2 text-[11.5px] text-fg-secondary">
-                    {!props.u.result
-                      ? props.active
-                        ? "Loading skill instructions…"
-                        : "Pending skill activation."
-                      : "Skill instructions are loaded and active in session context."}
+                  <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                    {rawBody() || props.m.mergedEnv()?.info || "Skill activation failed."}
                   </div>
                 }
               >
-                <div class="px-3 py-2 text-xs leading-relaxed text-fg rc-markdown">
-                  <StreamingMarkdown basic={true}>{rawBody()}</StreamingMarkdown>
-                </div>
+                <Show
+                  when={rawBody() && !isAckPlaceholder()}
+                  fallback={
+                    <div class="px-3 py-2 text-[11.5px] text-fg-secondary">
+                      {!props.u.result
+                        ? props.active
+                          ? "Loading skill instructions…"
+                          : "Skill activation did not complete."
+                        : "Skill instructions are loaded and active in session context."}
+                    </div>
+                  }
+                >
+                  <div class="px-3 py-2 text-xs leading-relaxed text-fg rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words">
+                    <StreamingMarkdown basic={true} noNestedScroll>
+                      {rawBody()}
+                    </StreamingMarkdown>
+                  </div>
+                </Show>
               </Show>
             </>
           );

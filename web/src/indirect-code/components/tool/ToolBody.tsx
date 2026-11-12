@@ -8,6 +8,21 @@ import { ToolQuestionBodies } from "./ToolQuestionBodies";
 import { ToolWidgetBodies } from "./ToolWidgetBodies";
 import type { ToolPartProps } from "./toolUnitModel";
 
+/** Tools whose body is wrapped prose/cards rather than unwrapped horizontal code/terminal output. */
+const WRAPPED_TOOL_BODIES: ReadonlySet<string> = new Set([
+  "explore",
+  "session_history",
+  "summary",
+  "finish_entire_request",
+  "question",
+  "todo",
+  "todowrite",
+  "todoread",
+  "use_skill",
+  "bg_cancel",
+  "fetch_url",
+]);
+
 /**
  * The scrolling container of one tool body. It is the ONLY scroll surface of
  * a tool: the body components render their blocks with overflow-visible, so a
@@ -15,8 +30,10 @@ import type { ToolPartProps } from "./toolUnitModel";
  * recorded here on the tool's row key.
  */
 export function ToolBody(props: ToolPartProps) {
+  const isWrapped = () => WRAPPED_TOOL_BODIES.has(props.m.name());
   return (
     <div
+      data-tool-body={props.m.name()}
       ref={(el) => {
         restoreToolScroll(props.m.key(), el);
         requestAnimationFrame(() => restoreToolScroll(props.m.key(), el));
@@ -25,10 +42,10 @@ export function ToolBody(props: ToolPartProps) {
       onScroll={(e) => recordToolScroll(props.m.key(), e.currentTarget)}
       class="mt-1 mb-2 rounded-lg border border-border/70 bg-surface-subtle max-h-96 overflow-auto overscroll-contain [scrollbar-gutter:stable]"
     >
-      {/* min-w-full w-fit column: block children (and their borders) stretch
-          to the widest sibling, so a horizontal overflow never truncates a
-          separator line at the visible edge. */}
-      <div class="min-w-full w-fit">
+      {/* Code/diff/terminal tools use min-w-full w-fit so separator borders stretch
+          across horizontal scroll; wrapped prose/context tools stay bounded to w-full
+          min-w-0 max-w-full so long tokens wrap cleanly on narrow mobile viewports. */}
+      <div class={isWrapped() ? "w-full min-w-0 max-w-full" : "min-w-full w-fit"}>
         <ToolSearchBodies {...props} />
         <ToolEditBodies {...props} />
         <ToolContextBodies {...props} />
