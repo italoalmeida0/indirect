@@ -3,7 +3,6 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  on,
   onCleanup,
   type Setter,
 } from "solid-js";
@@ -94,69 +93,8 @@ export function createComposer(opts: {
   const { pendingAttachments, uploadOneAttachment } = attachments;
   const [sending, setSending] = createSignal(false);
 
-  // Mid-turn send mode: defaults to host setting (`mid_turn_send`), with a
-  // lightweight per-turn override controlled from the running composer pill.
-  const [midTurnOverride, setMidTurnOverride] = createSignal<{
-    host: string;
-    sid: string;
-    baseDefault: MidTurnDelivery;
-    mode: MidTurnDelivery;
-  } | null>(null);
-  const [midTurnMenuOpen, setMidTurnMenuOpen] = createSignal(false);
   const defaultMidTurnSend = () =>
     normalizeMidTurnSend(opts.getDefaultMidTurnSend?.());
-  const midTurnDelivery = (): MidTurnDelivery => {
-    const def = defaultMidTurnSend();
-    const ov = midTurnOverride();
-    if (!ov) return def;
-    if (
-      !opts.isSessionRunning() ||
-      ov.host !== opts.getHostId() ||
-      ov.sid !== opts.getSessionId() ||
-      ov.baseDefault !== def
-    ) {
-      setMidTurnOverride(null);
-      return def;
-    }
-    return ov.mode;
-  };
-  function setMidTurnDelivery(mode: MidTurnDelivery) {
-    const normalized = normalizeMidTurnSend(mode);
-    const def = defaultMidTurnSend();
-    if (!opts.isSessionRunning() || normalized === def) {
-      setMidTurnOverride(null);
-      return;
-    }
-    setMidTurnOverride({
-      host: opts.getHostId(),
-      sid: opts.getSessionId(),
-      baseDefault: def,
-      mode: normalized,
-    });
-  }
-
-  // Sync cleanly when the host default changes or when a turn finishes.
-  createEffect(
-    on(
-      defaultMidTurnSend,
-      () => {
-        setMidTurnOverride(null);
-      },
-      { defer: true },
-    ),
-  );
-  createEffect(
-    on(
-      opts.isSessionRunning,
-      (running, prevRunning) => {
-        if (!running) {
-          setMidTurnMenuOpen(false);
-          if (prevRunning) setMidTurnOverride(null);
-        }
-      },
-      { defer: true },
-    ),
-  );
 
   let submissionEpoch = 0;
   let promptReply: {
@@ -269,8 +207,6 @@ export function createComposer(opts: {
       currentHost = host;
       currentSid = sid;
       setInputPromptValue(readLocalDraft(host, sid));
-      setMidTurnOverride(null);
-      setMidTurnMenuOpen(false);
     }
   });
 
@@ -445,7 +381,7 @@ export function createComposer(opts: {
       const model = opts.getModel();
       const options = opts.getOptions();
       const cleanText = sanitizeUserText(text);
-      const delivery = midTurnDelivery();
+      const delivery = defaultMidTurnSend();
       // Keep the draft until the daemon acknowledges admission. Session
       // status and the user bubble come exclusively from daemon events.
       // The actor also decides whether to queue: browser status may lag
@@ -464,7 +400,6 @@ export function createComposer(opts: {
         );
       });
       opts.t.transcriptScroll.pin();
-      let res: AcceptedReply = { queued: false };
       try {
         opts.send({
           type: "prompt",
@@ -477,7 +412,7 @@ export function createComposer(opts: {
           attachmentIds,
           midTurnDelivery: delivery,
         });
-        res = await accepted;
+        await accepted;
       } finally {
         clearTimeout(timer);
         if (promptReply?.id === requestId) promptReply = null;
@@ -489,13 +424,6 @@ export function createComposer(opts: {
         opts.getSessionId() !== sid
       )
         return;
-      if (res.interrupting || res.delivery === "interrupt") {
-        opts.toast("Interrupting turn — sending immediately", "ok");
-      } else if (res.delivery === "steer") {
-        opts.toast("Staged — sending on next step", "ok");
-      } else if (res.queued || res.delivery === "queue") {
-        opts.toast("Queued — sends after agent finishes", "ok");
-      }
       if (inputPrompt().trim() === text) setInputPrompt("");
       for (const p of pending) attachments.removePendingAttachment(p.key);
     } catch (error) {
@@ -524,10 +452,6 @@ export function createComposer(opts: {
     mentions,
     addContextOpen,
     setAddContextOpen,
-    midTurnDelivery,
-    setMidTurnDelivery,
-    midTurnMenuOpen,
-    setMidTurnMenuOpen,
     slashIndex,
     setSlashIndex,
     slashMatches,

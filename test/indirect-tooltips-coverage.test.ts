@@ -147,14 +147,12 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     expect(footer).toContain('data-rc-tip="Project"');
 
     const toolbarSend = readIc("components/composer/ToolbarSend.tsx");
-    expect(toolbarSend).toContain('data-rc-tip="Mid-turn send mode"');
     expect(toolbarSend).toContain(
       'data-rc-tip={t.turnActivity()?.status === "cancelling" ? "Stopping…" : "Stop"}',
     );
-    expect(toolbarSend).toContain("data-rc-tip={sendTip()}");
-    expect(toolbarSend).toContain('"Queue message"');
-    expect(toolbarSend).toContain('"Send on next step"');
-    expect(toolbarSend).toContain('"Interrupt & send immediately"');
+    expect(toolbarSend).toContain(
+      'data-rc-tip={c.sending() ? "Uploading attachments..." : isDraft() ? "Start conversation" : "Send"}',
+    );
 
     const composerInput = readIc("components/composer/ComposerInput.tsx");
     expect(composerInput).toContain('data-rc-tip="Remove attachment"');
@@ -220,11 +218,12 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
 
     const queue = readIc("components/QueueCard.tsx");
     expect(queue).toContain('data-rc-tip={collapsed() ? "Expand queue" : "Collapse queue"}');
-    expect(queue).toContain('data-rc-tip="Interrupt current step and send immediately"');
-    expect(queue).toContain('data-rc-tip="Cancel send — return to queue"');
+    expect(queue).toContain('data-rc-tip="Sends automatically when current step finishes"');
+    expect(queue).toContain('data-rc-tip="Interrupt current step and send now"');
+    expect(queue).toContain('data-rc-tip="Return to queue"');
     expect(queue).toContain('data-rc-tip="Clear queued messages"');
     expect(queue).toContain('data-rc-tip="Send on next AI step"');
-    expect(queue).toContain('data-rc-tip="Stop current step and send immediately"');
+    expect(queue).toContain('data-rc-tip="Stop current step and send now"');
     expect(queue).toContain('data-rc-tip="Send message now"');
     expect(queue).toContain('data-rc-tip="Move earlier in queue"');
     expect(queue).toContain('data-rc-tip="Move later in queue"');

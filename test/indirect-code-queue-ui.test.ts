@@ -16,6 +16,16 @@ import {
 } from "../web/src/indirect-code/utils/settingsValidation";
 import type { QueuedMessage } from "../web/src/indirect-code/viewTypes";
 
+function assertWhisperQuietQueueHtml(html: string) {
+  expect(html).not.toContain("bg-accent-subtle");
+  expect(html).not.toContain("bg-warning-subtle");
+  expect(html).not.toContain("border-accent");
+  expect(html).not.toContain("border-warning");
+  expect(html).not.toContain("text-warning");
+  expect(html).not.toContain("hover:bg-danger-subtle");
+  expect(html).not.toContain("—");
+}
+
 describe("createQueue mid-turn staging, × cancel, force interrupt, reorder & clear", () => {
   function setupQueue(initialRunning = true) {
     const sent: DaemonCommand[] = [];
@@ -96,7 +106,7 @@ describe("createQueue mid-turn staging, × cancel, force interrupt, reorder & cl
     });
   });
 
-  test("sendNow, cancelSend (×), and interruptNow emit exact commands and context-aware toasts", () => {
+  test("sendNow, cancelSend (×), and interruptNow emit exact commands without noisy foreground toasts", () => {
     const { q, sent, toasts, setRunning } = setupQueue(true);
     q.noteQueue("sess-1", [
       {
@@ -116,7 +126,6 @@ describe("createQueue mid-turn staging, × cancel, force interrupt, reorder & cl
       sessionId: "sess-1",
       queueId: "q-1",
     });
-    expect(toasts.at(-1)?.msg).toBe("Staged — sending on next step");
 
     q.cancelSend("q-1");
     expect(sent.at(-1)).toEqual({
@@ -124,7 +133,6 @@ describe("createQueue mid-turn staging, × cancel, force interrupt, reorder & cl
       sessionId: "sess-1",
       queueId: "q-1",
     });
-    expect(toasts.at(-1)?.msg).toBe("Returned to queue");
 
     q.interruptNow("q-1");
     expect(sent.at(-1)).toEqual({
@@ -132,14 +140,22 @@ describe("createQueue mid-turn staging, × cancel, force interrupt, reorder & cl
       sessionId: "sess-1",
       queueId: "q-1",
     });
-    expect(toasts.at(-1)?.msg).toBe("Interrupting turn — sending immediately");
 
-    // When idle (e.g. after clicking Stop), sendNow and interruptNow toast immediate launch.
     setRunning(false);
     q.sendNow("q-1");
-    expect(toasts.at(-1)?.msg).toBe("Sending message now");
+    expect(sent.at(-1)).toEqual({
+      type: "queue_send_now",
+      sessionId: "sess-1",
+      queueId: "q-1",
+    });
     q.interruptNow("q-1");
-    expect(toasts.at(-1)?.msg).toBe("Sending message now");
+    expect(sent.at(-1)).toEqual({
+      type: "queue_interrupt_now",
+      sessionId: "sess-1",
+      queueId: "q-1",
+    });
+
+    expect(toasts).toEqual([]);
   });
 
   test("moveQueued preserves staged items ahead of reordered passive items, and clearQueued clears", () => {
@@ -269,9 +285,9 @@ describe("createSettings & createComposer mid_turn_send / midTurnDelivery wire c
     }
   });
 
-  test("createComposer sends midTurnDelivery, supports per-turn override, and toasts delivery accurately", async () => {
+  test("createComposer sends midTurnDelivery from getDefaultMidTurnSend and silences foreground success toasts", async () => {
     const sent: DaemonCommand[] = [];
-    const toasts: string[] = [];
+    const toasts: Array<{ msg: string; kind?: "ok" | "err" }> = [];
     const [running, setRunning] = createSignal(true);
     const [hostDefault, setHostDefault] = createSignal<MidTurnDelivery>("steer");
 
@@ -295,7 +311,7 @@ describe("createSettings & createComposer mid_turn_send / midTurnDelivery wire c
         isWorkspaceBlocked: () => false,
         checkWorkspace: () => {},
         isHostOnline: () => true,
-        toast: (msg) => toasts.push(msg),
+        toast: (msg, kind) => toasts.push({ msg, kind }),
         t: {
           transcriptScroll: { pin: () => {} },
           fetchSession: () => {},
@@ -312,8 +328,7 @@ describe("createSettings & createComposer mid_turn_send / midTurnDelivery wire c
       }),
     );
 
-    // 1. Defaults to host setting ("steer") and toasts "Staged — sending on next step".
-    expect(composer.midTurnDelivery()).toBe("steer");
+    // 1. Defaults to host setting ("steer") without foreground success toast.
     composer.setInputPrompt("check edge cases");
     const p1 = composer.sendPrompt();
     const cmd1 = sent.at(-1) as Extract<DaemonCommand, { type: "prompt" }>;
@@ -323,11 +338,10 @@ describe("createSettings & createComposer mid_turn_send / midTurnDelivery wire c
       delivery: "steer",
     });
     await p1;
-    expect(toasts.at(-1)).toBe("Staged — sending on next step");
+    expect(toasts).toEqual([]);
 
-    // 2. Per-turn override to "interrupt" sends midTurnDelivery: "interrupt" and toasts interrupting.
-    composer.setMidTurnDelivery("interrupt");
-    expect(composer.midTurnDelivery()).toBe("interrupt");
+    // 2. Reactive host default update to "interrupt" sends midTurnDelivery: "interrupt".
+    setHostDefault("interrupt");
     composer.setInputPrompt("stop and pivot");
     const p2 = composer.sendPrompt();
     const cmd2 = sent.at(-1) as Extract<DaemonCommand, { type: "prompt" }>;
@@ -338,14 +352,11 @@ describe("createSettings & createComposer mid_turn_send / midTurnDelivery wire c
       interrupting: true,
     });
     await p2;
-    expect(toasts.at(-1)).toBe("Interrupting turn — sending immediately");
+    expect(toasts).toEqual([]);
 
-    // 3. Ending the turn resets the per-turn override back to host default (and follows host updates).
+    // 3. Reactive host default update to "queue" sends midTurnDelivery: "queue".
     setRunning(false);
     setHostDefault("queue");
-    expect(composer.midTurnDelivery()).toBe("queue");
-
-    // 4. Queued passive reply toasts "Queued — sends after agent finishes".
     setRunning(true);
     composer.setInputPrompt("after turn finishes");
     const p3 = composer.sendPrompt();
@@ -356,18 +367,19 @@ describe("createSettings & createComposer mid_turn_send / midTurnDelivery wire c
       delivery: "queue",
     });
     await p3;
-    expect(toasts.at(-1)).toBe("Queued — sends after agent finishes");
+    expect(toasts).toEqual([]);
 
-    // 5. DEFECT #4 regression: saving a new host default in Settings WHILE a turn is running
-    // and a per-turn override was selected immediately syncs composer.midTurnDelivery().
-    composer.setMidTurnDelivery("interrupt");
-    expect(composer.midTurnDelivery()).toBe("interrupt");
-    setHostDefault("steer");
-    expect(composer.midTurnDelivery()).toBe("steer");
+    // 4. Error replies still surface an "err" toast.
+    composer.setInputPrompt("rejected message");
+    const p4 = composer.sendPrompt();
+    const cmd4 = sent.at(-1) as Extract<DaemonCommand, { type: "prompt" }>;
+    composer.notePromptReply(cmd4.requestId, "Daemon rejected prompt");
+    await p4;
+    expect(toasts).toEqual([{ msg: "Daemon rejected prompt", kind: "err" }]);
   });
 });
 
-describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSection", () => {
+describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
   let renderQueueCardSsr!: (opts: {
     items: QueuedMessage[];
     collapsed?: boolean;
@@ -376,10 +388,9 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
   }) => string;
   let renderToolbarSendSsr!: (opts: {
     sessionStatus: "running" | "idle";
-    midTurnDelivery?: MidTurnDelivery;
+    draftMode?: boolean;
     inputPrompt?: string;
   }) => string;
-  let renderMidTurnMenuSsr!: (mode: MidTurnDelivery) => string;
   let renderSettingsGeneralSsr!: (midTurnSend: MidTurnDelivery) => string;
 
   beforeAll(async () => {
@@ -427,15 +438,15 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
                 import { renderToString } from "solid-js/web";
                 import { RemoteCodeProvider } from "./ctx";
                 import { QueueCard } from "./components/QueueCard";
-                import { ToolbarSend, MidTurnModeMenuBody } from "./components/composer/ToolbarSend";
+                import { ToolbarSend } from "./components/composer/ToolbarSend";
                 import { SettingsGeneralSection } from "./modals/SettingsGeneral";
 
                 function makeProviderProps(overrides = {}) {
                   const items = overrides.items || [];
                   const collapsed = Boolean(overrides.collapsed);
                   const sessionStatus = overrides.sessionStatus || "running";
+                  const draftMode = Boolean(overrides.draftMode);
                   const activeModel = overrides.activeModel || "claude-sonnet";
-                  const midTurnDelivery = overrides.midTurnDelivery || "queue";
                   const midTurnSend = overrides.midTurnSend || "queue";
                   const inputPrompt = overrides.inputPrompt ?? "hello";
 
@@ -449,11 +460,11 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
                       send: () => {},
                     },
                     session: {
-                      activeSessionId: () => "s1",
-                      activeSession: () => ({ id: "s1", model: activeModel, status: sessionStatus }),
+                      activeSessionId: () => (draftMode ? "" : "s1"),
+                      activeSession: () => (draftMode ? null : { id: "s1", model: activeModel, status: sessionStatus }),
                       activeProject: () => ({ id: "p1", name: "proj", path: "/work" }),
                       creatingSession: () => false,
-                      draftMode: () => false,
+                      draftMode: () => draftMode,
                       workspaceBlocked: () => false,
                     },
                     transcript: {
@@ -469,10 +480,6 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
                       inputPrompt: () => inputPrompt,
                       pendingAttachments: () => [],
                       sendPrompt: () => {},
-                      midTurnDelivery: () => midTurnDelivery,
-                      setMidTurnDelivery: () => {},
-                      midTurnMenuOpen: () => false,
-                      setMidTurnMenuOpen: () => {},
                     },
                     queue: {
                       queueOf: () => items,
@@ -560,16 +567,6 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
                   ));
                 }
 
-                export function renderMidTurnMenuSsr(mode) {
-                  return renderToString(() => (
-                    <MidTurnModeMenuBody
-                      selected={() => mode}
-                      onSelect={() => {}}
-                      onOpenSettings={() => {}}
-                    />
-                  ));
-                }
-
                 export function renderSettingsGeneralSsr(midTurnSend) {
                   const p = makeProviderProps({ midTurnSend });
                   return renderToString(() => (
@@ -611,7 +608,7 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
                 export const themeMode = () => "dark";
                 export const setThemeMode = () => {};
                 export const theme = () => "dark";
-                export function Badge(props: any) { return <span>{props.children}</span>; }
+                export function Badge(props: any) { return <span data-ui-badge>{props.children}</span>; }
                 export function Btn(props: any) { return <button type="button">{props.children}</button>; }
                 export async function copyWithToast() { return false; }
               `;
@@ -663,11 +660,10 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
     );
     renderQueueCardSsr = mod.renderQueueCardSsr;
     renderToolbarSendSsr = mod.renderToolbarSendSsr;
-    renderMidTurnMenuSsr = mod.renderMidTurnMenuSsr;
     renderSettingsGeneralSsr = mod.renderSettingsGeneralSsr;
   });
 
-  test("QueueCard renders passive queue rows with #index, Clear, next-step promote, force-interrupt & reorder", () => {
+  test("QueueCard renders whisper-quiet passive queue rows with #index, Clear, next-step promote, force-interrupt & reorder", () => {
     const html = renderQueueCardSsr({
       sessionStatus: "running",
       activeModel: "claude-sonnet",
@@ -693,11 +689,14 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
       ],
     });
 
+    assertWhisperQuietQueueHtml(html);
     expect(html).toContain("data-queue-card");
+    expect(html).toContain("border-t border-border/70 px-3 py-2.5");
     expect(html).toContain("data-queue-passive");
     expect(html).not.toContain("data-queue-staged");
-    expect(html).toContain("Queued (2)");
-    expect(html).toContain("Waits until turn finishes");
+    expect(html).toContain(">Queued<");
+    expect(html).toContain(">2<");
+    expect(html).toContain("After turn finishes");
     expect(html).toContain('data-action="queue-clear"');
     expect(html).toContain(">#1<");
     expect(html).toContain(">#2<");
@@ -708,7 +707,7 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
     expect(html).toContain('data-action="queue-move-down"');
   });
 
-  test("QueueCard renders steer staging banner with × cancel button and Send immediately button", () => {
+  test("QueueCard renders slim single-line neutral steer row matching BackgroundCard with quiet icon buttons", () => {
     const html = renderQueueCardSsr({
       sessionStatus: "running",
       items: [
@@ -724,20 +723,22 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
       ],
     });
 
+    assertWhisperQuietQueueHtml(html);
     expect(html).toContain("data-queue-staged");
     expect(html).toContain('data-queue-item-state="steer"');
-    expect(html).toContain("Sending on next step");
-    expect(html).toContain("Leaves queue as soon as current step finishes");
+    expect(html).toContain("rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden");
+    expect(html).toContain("Next step");
     expect(html).toContain("Focus on mobile viewport overflow");
-    expect(html).toContain("2 files");
+    expect(html).toContain(">2<");
     expect(html).toContain('data-action="queue-interrupt-now"');
-    expect(html).toContain("Send immediately");
+    expect(html).toContain('aria-label="Interrupt current step and send now"');
+    expect(html).not.toContain("Send immediately");
     expect(html).toContain('data-action="queue-cancel-send"');
     expect(html).toContain('aria-label="Cancel next-step send and return to queue"');
     expect(html).not.toContain("data-queue-passive");
   });
 
-  test("QueueCard renders interrupt stopping banner and keeps staged Zone 1 visible when passive Zone 2 is collapsed", () => {
+  test("QueueCard renders slim neutral interrupt row and keeps staged Zone 1 visible when passive Zone 2 is collapsed", () => {
     const interruptHtml = renderQueueCardSsr({
       sessionStatus: "running",
       items: [
@@ -752,8 +753,9 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
         },
       ],
     });
+    assertWhisperQuietQueueHtml(interruptHtml);
     expect(interruptHtml).toContain('data-queue-item-state="interrupt"');
-    expect(interruptHtml).toContain("Interrupting — sending immediately…");
+    expect(interruptHtml).toContain("Sending now…");
     expect(interruptHtml).toContain("Abort tool run and apply hotfix");
     expect(interruptHtml).toContain('data-action="queue-cancel-send"');
     expect(interruptHtml).toContain('aria-label="Cancel interrupt send and return to queue"');
@@ -782,16 +784,17 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
         },
       ],
     });
-    // Zone 1 remains fully visible even when Zone 2 is collapsed!
+    assertWhisperQuietQueueHtml(mixedCollapsedHtml);
     expect(mixedCollapsedHtml).toContain('data-queue-item-state="steer"');
     expect(mixedCollapsedHtml).toContain("Staged item stays visible");
     expect(mixedCollapsedHtml).toContain('data-action="queue-cancel-send"');
-    expect(mixedCollapsedHtml).toContain("Queued (1)");
+    expect(mixedCollapsedHtml).toContain(">Queued<");
+    expect(mixedCollapsedHtml).toContain(">1<");
     expect(mixedCollapsedHtml).toContain('aria-label="Expand queue"');
     expect(mixedCollapsedHtml).not.toContain("Hidden collapsed passive text");
   });
 
-  test("QueueCard in idle session shows Paused subtitle and Send message now action", () => {
+  test("QueueCard in idle session shows Paused, ready to send subtitle without em dash and Send message now action", () => {
     const idleHtml = renderQueueCardSsr({
       sessionStatus: "idle",
       items: [
@@ -806,58 +809,53 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
         },
       ],
     });
-    expect(idleHtml).toContain("Paused — ready to send");
+    assertWhisperQuietQueueHtml(idleHtml);
+    expect(idleHtml).toContain("Paused, ready to send");
     expect(idleHtml).toContain('data-action="queue-send-idle"');
     expect(idleHtml).toContain('aria-label="Send message now"');
     expect(idleHtml).not.toContain('data-action="queue-send-next"');
   });
 
-  test("ToolbarSend & MidTurnModeMenuBody reflect mid-turn modes while running and standard Send when idle", () => {
+  test("ToolbarSend renders clean neutral Send + Stop while running with zero composer mode switcher", () => {
     const idleHtml = renderToolbarSendSsr({ sessionStatus: "idle" });
     expect(idleHtml).not.toContain("data-composer-midturn-mode");
+    expect(idleHtml).not.toContain("data-midturn-menu-body");
+    expect(idleHtml).not.toContain('aria-label="Stop"');
     expect(idleHtml).toContain('aria-label="Send"');
+    expect(idleHtml).toContain("bg-fg text-background");
 
-    const queueRunning = renderToolbarSendSsr({
-      sessionStatus: "running",
-      midTurnDelivery: "queue",
-    });
-    expect(queueRunning).toContain('data-composer-midturn-mode="queue"');
-    expect(queueRunning).toContain(">Queue<");
-    expect(queueRunning).toContain('aria-label="Queue message"');
+    const draftHtml = renderToolbarSendSsr({ sessionStatus: "idle", draftMode: true });
+    expect(draftHtml).toContain('aria-label="Start conversation"');
 
-    const steerRunning = renderToolbarSendSsr({
-      sessionStatus: "running",
-      midTurnDelivery: "steer",
-    });
-    expect(steerRunning).toContain('data-composer-midturn-mode="steer"');
-    expect(steerRunning).toContain(">Next step<");
-    expect(steerRunning).toContain('aria-label="Send on next step"');
-
-    const interruptRunning = renderToolbarSendSsr({
-      sessionStatus: "running",
-      midTurnDelivery: "interrupt",
-    });
-    expect(interruptRunning).toContain('data-composer-midturn-mode="interrupt"');
-    expect(interruptRunning).toContain(">Interrupt<");
-    expect(interruptRunning).toContain('aria-label="Interrupt &amp; send immediately"');
-
-    const menuHtml = renderMidTurnMenuSsr("steer");
-    expect(menuHtml).toContain("data-midturn-menu-body");
-    expect(menuHtml).toContain("Send after turn finishes");
-    expect(menuHtml).toContain("Inject on next AI step");
-    expect(menuHtml).toContain("Stop current step &amp; send immediately");
-    expect(menuHtml).toContain("Change default in Settings…");
+    const runningHtml = renderToolbarSendSsr({ sessionStatus: "running" });
+    expect(runningHtml).not.toContain("data-composer-midturn-mode");
+    expect(runningHtml).not.toContain("data-midturn-menu-body");
+    expect(runningHtml).toContain('aria-label="Stop"');
+    expect(runningHtml).toContain('aria-label="Send"');
+    expect(runningHtml).toContain("bg-fg text-background");
   });
 
-  test("SettingsGeneralSection renders While agent is working 3-card radio selector", () => {
+  test("SettingsGeneralSection renders neutral While agent is working 3-card radio selector without icon tiles or Badge", () => {
     const html = renderSettingsGeneralSsr("steer");
     expect(html).toContain('id="rc-set-mid-turn-send"');
     expect(html).toContain('data-setting="mid-turn-send"');
-    expect(html).toContain("While agent is working");
-    expect(html).toContain("Add to queue");
-    expect(html).toContain("Send on next step");
-    expect(html).toContain("Stage automatically for the next AI step, with × to return to queue.");
-    expect(html).toContain("Interrupt &amp; send");
-    expect(html).toContain('data-midturn-radio="steer" aria-checked="true"');
+
+    const startIdx = html.indexOf('id="rc-set-mid-turn-send"');
+    const gaugeIdx = html.indexOf("Auto-compact threshold", startIdx);
+    const pickerSlice = html.slice(startIdx, gaugeIdx > startIdx ? gaugeIdx : undefined);
+
+    expect(pickerSlice).toContain("While agent is working");
+    expect(pickerSlice).toContain("Add to queue");
+    expect(pickerSlice).toContain("Send on next step");
+    expect(pickerSlice).toContain("Stage automatically for the next AI step, with × to return to queue.");
+    expect(pickerSlice).toContain("Interrupt &amp; send");
+    expect(pickerSlice).toContain('data-midturn-radio="steer" aria-checked="true"');
+    expect(pickerSlice).toContain("border-fg/45 bg-surface text-fg shadow-2xs");
+    expect(pickerSlice).not.toContain("data-ui-badge");
+    expect(pickerSlice).not.toContain("h-6 w-6 rounded-md border");
+    expect(pickerSlice).not.toContain("bg-accent-subtle");
+    expect(pickerSlice).not.toContain("bg-warning-subtle");
+    expect(pickerSlice).not.toContain("border-accent");
+    expect(pickerSlice).not.toContain("border-warning");
   });
 });

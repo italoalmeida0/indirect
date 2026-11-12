@@ -1586,7 +1586,6 @@ export default function IndirectCodePage() {
     hosts.setHostMenuOpen(false);
     projects.setNewProjectMenuOpen(false);
     composer.setAddContextOpen(false);
-    composer.setMidTurnMenuOpen(false);
     setEffortMenuOpen(false);
     setModelMenuOpen(false);
     projects.setProjectMenuOpen(false);

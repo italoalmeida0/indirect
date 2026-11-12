@@ -160,17 +160,12 @@ export function createQueue(opts: {
       setEditingQueueId(null);
       editDraft.clearAttachments();
     }
-    opts.toast(
-      opts.isSessionRunning?.() ? "Staged — sending on next step" : "Sending message now",
-      "ok",
-    );
   }
 
   function cancelSend(queueId: string) {
     const sid = opts.getSessionId();
     if (!sid || !opts.isOpen()) return;
     opts.send({ type: "queue_cancel_send", sessionId: sid, queueId });
-    opts.toast("Returned to queue", "ok");
   }
 
   function interruptNow(queueId: string) {
@@ -181,12 +176,6 @@ export function createQueue(opts: {
       setEditingQueueId(null);
       editDraft.clearAttachments();
     }
-    opts.toast(
-      opts.isSessionRunning?.()
-        ? "Interrupting turn — sending immediately"
-        : "Sending message now",
-      "ok",
-    );
   }
 
   function moveQueued(queueId: string, dir: -1 | 1) {

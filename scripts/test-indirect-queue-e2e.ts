@@ -1,10 +1,10 @@
 /**
  * scripts/test-indirect-queue-e2e.ts — full-stack Chromium + Go Daemon + Bun Gateway
- * E2E suite verifying mid-turn message queuing, intermediate "Sending on next step"
+ * E2E suite verifying mid-turn message queuing, whisper-quiet "Next step"
  * ("steer") staging, cancel-return-to-queue (`×`), passive reorder, same-turn steer
- * wire injection, host `mid_turn_send` settings persistence, force-interrupt
- * ("interrupt") partial thinking/text preservation, plain Stop demotion, mobile
- * `390x844` layout/touch targets/Portal menu bounds, and WAL reload durability.
+ * wire injection, host `mid_turn_send` settings persistence ("queue" / "steer" /
+ * "interrupt"), force-interrupt partial thinking/text preservation, plain Stop
+ * demotion, mobile `390x844` layout/touch targets, and WAL reload durability.
  *
  * Modes:
  *   1. Default deterministic gated mock upstream:
@@ -641,7 +641,7 @@ const upstreamServer = Bun.serve({
       });
     }
 
-    // Scenario 2: Interrupt directly from Composer floating mode menu while streaming thinking + text.
+    // Scenario 2: Interrupt directly from Composer when host mid_turn_send="interrupt" while streaming thinking + text.
     if (turnTag === "S2_INTERRUPT_MENU") {
       return buildGatedMockStream({
         req,
@@ -1006,8 +1006,8 @@ async function sendFromComposer(page: any, text: string) {
 async function getPassiveQueueTexts(page: any): Promise<string[]> {
   return page.locator('[data-queue-passive] [data-queue-item-state="queue"]').evaluateAll((rows: HTMLElement[]) =>
     rows.map((row) => {
-      const spans = row.querySelectorAll("span");
-      return (spans[1]?.textContent || "").trim();
+      const textEl = row.querySelector("[data-queue-item-text]") || row.querySelectorAll("span")[1];
+      return (textEl?.textContent || "").trim();
     }),
   );
 }
@@ -1108,10 +1108,12 @@ try {
     await s1Step0Gate.entered.promise;
     const s1Step1Gate = armGate("S1_TURN1:any");
 
-    const modePill = page.locator("[data-composer-midturn-mode]");
-    await modePill.waitFor({ state: "visible", timeout: 10000 });
-    assert.equal(await modePill.getAttribute("data-composer-midturn-mode"), "queue");
-    assert(((await modePill.textContent()) || "").includes("Queue"), "expected default mode pill to read Queue");
+    assert.equal(
+      await page.locator("[data-composer-midturn-mode]").count(),
+      0,
+      "running composer must not render a mid-turn mode switcher pill",
+    );
+    const appNoticeDismiss = page.locator('button[aria-label="Dismiss notification"]');
 
     const M1 = "Queued alpha M1 — call finish_entire_request immediately acknowledging M1.";
     const M2 = "Steer beta M2 — include M2 in your summary and call finish_entire_request.";
@@ -1122,8 +1124,9 @@ try {
 
     await waitForPassiveQueueTexts(page, [M1, M2, M3]);
     assert.equal(await page.locator("[data-queue-staged]").count(), 0, "Zone 1 should not exist before staging");
+    assert.equal(await appNoticeDismiss.count(), 0, "queuing mid-turn must not stack a foreground appNotice toast");
 
-    // Promote M2 ("queue-send-next") -> Zone 1 "Sending on next step", passive has [M1, M3]
+    // Promote M2 ("queue-send-next") -> Zone 1 slim single-line "Next step", passive has [M1, M3]
     await page
       .locator('[data-queue-passive] [data-queue-item-state="queue"]')
       .nth(1)
@@ -1132,8 +1135,14 @@ try {
 
     const stagedSteer = page.locator('[data-queue-staged] [data-queue-item-state="steer"]');
     await stagedSteer.waitFor({ state: "visible", timeout: 10000 });
+    const steerBox = await stagedSteer.boundingBox();
+    assert(
+      steerBox && steerBox.height > 0 && steerBox.height <= 46,
+      `expected slim single-line [data-queue-item-state="steer"] height <= 46px on 1280x800, got ${steerBox?.height}`,
+    );
+    assert.equal(await appNoticeDismiss.count(), 0, "staging item must not stack a foreground appNotice toast");
     const stagedText = ((await stagedSteer.textContent()) || "").trim();
-    assert(stagedText.includes("Sending on next step"), `expected "Sending on next step", got "${stagedText}"`);
+    assert(stagedText.includes("Next step"), `expected "Next step", got "${stagedText}"`);
     assert(stagedText.includes(M2), `expected staged item to contain "${M2}", got "${stagedText}"`);
     assert(
       await stagedSteer.locator('[data-action="queue-cancel-send"]').isVisible(),
@@ -1141,7 +1150,7 @@ try {
     );
     await waitForPassiveQueueTexts(page, [M1, M3]);
 
-    // Collapse passive queue -> Zone 1 ("Sending on next step") MUST remain visible!
+    // Collapse passive queue -> Zone 1 ("Next step") MUST remain visible!
     await page.locator('[data-queue-passive] button[aria-label="Collapse queue"]').click();
     await page.waitForFunction(
       () => document.querySelectorAll('[data-queue-passive] [data-queue-item-state="queue"]').length === 0,
@@ -1150,7 +1159,7 @@ try {
     );
     assert(
       await stagedSteer.isVisible(),
-      "Zone 1 (Sending on next step) must remain visible when passive queue is collapsed",
+      "Zone 1 (Next step) must remain visible when passive queue is collapsed",
     );
 
     // Re-expand passive queue
@@ -1164,6 +1173,7 @@ try {
       undefined,
       { timeout: 8000 },
     );
+    assert.equal(await appNoticeDismiss.count(), 0, "cancelling staged send must not stack a foreground appNotice toast");
     await waitForPassiveQueueTexts(page, [M1, M2, M3]);
 
     // Reorder passive items: move M1 down -> [M2, M1, M3]; move M3 up -> [M2, M3, M1]
@@ -1249,9 +1259,9 @@ try {
 
     // =========================================================================
     // SCENARIO 2: Desktop 1280x800 — Settings Default Mode (`mid_turn_send`) +
-    //             Composer Mode Pill + Force Interrupt (`interrupt`) + Plain Stop
+    //             Force Interrupt (`interrupt` card & host setting) + Plain Stop
     // =========================================================================
-    log("scenario-2", "Desktop 1280x800: SettingsModal mid_turn_send=steer, force interrupt (card + Portal menu) & plain Stop demotion");
+    log("scenario-2", "Desktop 1280x800: SettingsModal mid_turn_send=steer/interrupt, force interrupt & plain Stop demotion");
     const s2Id = await createTestSession(ctx, "Queue Suite S2", "talk");
     await selectSessionInUI(page, ctx.gwUrl, ctx.hostId, s2Id, "Queue Suite S2", "talk");
 
@@ -1269,6 +1279,9 @@ try {
 
     await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
     await dialog.waitFor({ state: "hidden", timeout: 15000 });
+    if ((await appNoticeDismiss.count()) > 0 && (await appNoticeDismiss.isVisible().catch(() => false))) {
+      await appNoticeDismiss.click();
+    }
 
     // Assert config.json on disk & SignalDB/pull mirror reflect mid_turn_send: "steer" and new revision
     const diskConfig = JSON.parse(readFileSync(path.join(ctx.daemonDir, "config.json"), "utf8"));
@@ -1290,21 +1303,16 @@ try {
       "expected configRevision to advance after saving mid_turn_send",
     );
 
-    // --- 2A: Start gated turn -> mode pill shows "Next step" -> composer stages directly into Zone 1 -> click queue-interrupt-now ---
+    // --- 2A: Start gated turn -> composer stages directly into Zone 1 -> click queue-interrupt-now ---
     const evStart2A = ctx.events.length;
     const s2CardGate = armGate("S2_INTERRUPT_CARD:step0");
     await sendFromComposer(page, "[TURN_TAG:S2_INTERRUPT_CARD] Analyze system architecture in detail.");
     await s2CardGate.entered.promise;
 
-    await modePill.waitFor({ state: "visible", timeout: 10000 });
     assert.equal(
-      await modePill.getAttribute("data-composer-midturn-mode"),
-      "steer",
-      "composer mode pill must default to host setting 'steer'",
-    );
-    assert(
-      ((await modePill.textContent()) || "").includes("Next step"),
-      `expected mode pill label "Next step", got "${await modePill.textContent()}"`,
+      await page.locator("[data-composer-midturn-mode]").count(),
+      0,
+      "composer must not render a mid-turn mode switcher pill while running",
     );
 
     if (!LIVE_OPENROUTER) {
@@ -1318,8 +1326,14 @@ try {
     const M_INT_1 = "Interrupt from staged card M_INT_1 — reply in one short sentence.";
     await sendFromComposer(page, M_INT_1);
 
-    // Assert it landed directly in Zone 1 `[data-queue-item-state="steer"]` with `×` button!
+    // Assert it landed directly in Zone 1 `[data-queue-item-state="steer"]` with `×` button and zero toast!
     await stagedSteer.waitFor({ state: "visible", timeout: 10000 });
+    assert.equal(await appNoticeDismiss.count(), 0, "auto-staging into steer must not stack a foreground appNotice toast");
+    const steerBox2A = await stagedSteer.boundingBox();
+    assert(
+      steerBox2A && steerBox2A.height > 0 && steerBox2A.height <= 46,
+      `expected slim single-line [data-queue-item-state="steer"] height <= 46px in 2A, got ${steerBox2A?.height}`,
+    );
     assert(
       ((await stagedSteer.textContent()) || "").includes(M_INT_1),
       "message sent under host default 'steer' must land directly in Zone 1",
@@ -1331,6 +1345,7 @@ try {
 
     // Click `[data-action="queue-interrupt-now"]` on Zone 1 card!
     await stagedSteer.locator('[data-action="queue-interrupt-now"]').click();
+    assert.equal(await appNoticeDismiss.count(), 0, "interruptNow from staged row must not stack a foreground appNotice toast");
     await s2CardGate.aborted.promise;
     const snapAfter2A = await waitForSessionIdleAndEmptyQueue(ctx, s2Id, TURN_TIMEOUT);
 
@@ -1359,13 +1374,32 @@ try {
       "interrupting message M_INT_1 must execute immediately in a new turn",
     );
 
-    // --- 2B: Second interrupt run using Composer `[data-composer-midturn-mode]` `<Portal>` menu ("Interrupt now") ---
+    // --- 2B: Direct host `mid_turn_send = "interrupt"` via SettingsModal (`[data-midturn-radio="interrupt"]`) ---
+    await page.locator('button[aria-label="Host & agent settings: Settings"]').click();
+    await dialog.waitFor({ state: "visible", timeout: 10000 });
+    const interruptRadioDesk = dialog.locator('[data-midturn-radio="interrupt"]');
+    await interruptRadioDesk.scrollIntoViewIfNeeded();
+    await interruptRadioDesk.click();
+    assert.equal(await interruptRadioDesk.getAttribute("aria-checked"), "true");
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+    await dialog.waitFor({ state: "hidden", timeout: 15000 });
+    if ((await appNoticeDismiss.count()) > 0 && (await appNoticeDismiss.isVisible().catch(() => false))) {
+      await appNoticeDismiss.click();
+    }
+
+    const diskConfigInt = JSON.parse(readFileSync(path.join(ctx.daemonDir, "config.json"), "utf8"));
+    assert.equal(
+      diskConfigInt?.settings?.mid_turn_send,
+      "interrupt",
+      `expected config.json settings.mid_turn_send="interrupt", got ${JSON.stringify(diskConfigInt?.settings)}`,
+    );
+
     const evStart2B = ctx.events.length;
     const s2MenuGate = armGate("S2_INTERRUPT_MENU:step0");
     await sendFromComposer(page, "[TURN_TAG:S2_INTERRUPT_MENU] Stream live reasoning and commentary.");
     await s2MenuGate.entered.promise;
 
-    await modePill.waitFor({ state: "visible", timeout: 10000 });
+    assert.equal(await page.locator("[data-composer-midturn-mode]").count(), 0);
     if (!LIVE_OPENROUTER) {
       await page.waitForFunction(
         () => (document.body.textContent || "").includes("PARTIAL_TEXT_BETA_902"),
@@ -1374,52 +1408,9 @@ try {
       );
     }
 
-    // First verify DEFECT #4 live: select per-turn override "queue" on modePill, then click
-    // "Change default in Settings…" from the running-turn FloatMenu and save "Interrupt & send" —
-    // modePill MUST immediately sync to "interrupt" while the turn is still running!
-    await modePill.click();
-    const floatMenu = page.locator("[data-floatmenu] [data-midturn-menu-body]");
-    await floatMenu.waitFor({ state: "visible", timeout: 8000 });
-    await floatMenu.locator('[data-midturn-option="queue"]').click();
-    assert.equal(await modePill.getAttribute("data-composer-midturn-mode"), "queue");
-
-    await modePill.click();
-    await floatMenu.waitFor({ state: "visible", timeout: 8000 });
-    await floatMenu.getByText("Change default in Settings…").click();
-    await dialog.waitFor({ state: "visible", timeout: 10000 });
-    const interruptRadioDesk = dialog.locator('[data-midturn-radio="interrupt"]');
-    await interruptRadioDesk.scrollIntoViewIfNeeded();
-    await interruptRadioDesk.click();
-    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
-    await dialog.waitFor({ state: "hidden", timeout: 15000 });
-    await page.waitForFunction(
-      () => document.querySelector("[data-composer-midturn-mode]")?.getAttribute("data-composer-midturn-mode") === "interrupt",
-      undefined,
-      { timeout: 8000 },
-    );
-    assert(((await modePill.textContent()) || "").includes("Interrupt"));
-
-    // Restore host default "steer" via SettingsModal, then select per-turn "Interrupt now" from the Portal menu!
-    await page.locator('button[aria-label="Host & agent settings: Settings"]').click();
-    await dialog.waitFor({ state: "visible", timeout: 10000 });
-    await steerRadio.scrollIntoViewIfNeeded();
-    await steerRadio.click();
-    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
-    await dialog.waitFor({ state: "hidden", timeout: 15000 });
-    await page.waitForFunction(
-      () => document.querySelector("[data-composer-midturn-mode]")?.getAttribute("data-composer-midturn-mode") === "steer",
-      undefined,
-      { timeout: 8000 },
-    );
-
-    await modePill.click();
-    await floatMenu.waitFor({ state: "visible", timeout: 8000 });
-    await floatMenu.locator('[data-midturn-option="interrupt"]').click();
-    assert.equal(await modePill.getAttribute("data-composer-midturn-mode"), "interrupt");
-    assert(((await modePill.textContent()) || "").includes("Interrupt"));
-
     const M_INT_2 = "Direct composer interrupt M_INT_2 — reply in one short sentence.";
     await sendFromComposer(page, M_INT_2);
+    assert.equal(await appNoticeDismiss.count(), 0, "direct mid_turn_send=interrupt must not stack a foreground appNotice toast");
 
     await s2MenuGate.aborted.promise;
     const snapAfter2B = await waitForSessionIdleAndEmptyQueue(ctx, s2Id, TURN_TIMEOUT);
@@ -1427,40 +1418,44 @@ try {
     const errEvents2B = ctx.events
       .slice(evStart2B)
       .filter((e) => e?.type === "error" || /previous turn is still stopping/i.test(JSON.stringify(e)));
-    assert.deepEqual(errEvents2B, [], `unexpected error events during menu interrupt 2B: ${JSON.stringify(errEvents2B)}`);
+    assert.deepEqual(errEvents2B, [], `unexpected error events during direct interrupt 2B: ${JSON.stringify(errEvents2B)}`);
 
     if (!LIVE_OPENROUTER) {
       const serializedMsgs2B = JSON.stringify(snapAfter2B?.session?.messages || []);
       assert(
         serializedMsgs2B.includes("PARTIAL_THINKING_BETA_902"),
-        "menu-interrupted turn must preserve partial assistant thinking",
+        "direct-interrupted turn must preserve partial assistant thinking",
       );
       assert(
         serializedMsgs2B.includes("PARTIAL_TEXT_BETA_902"),
-        "menu-interrupted turn must preserve partial assistant text",
+        "direct-interrupted turn must preserve partial assistant text",
       );
       assert(
         await page.evaluate(() => (document.body.textContent || "").includes("PARTIAL_TEXT_BETA_902")),
-        "menu-interrupted partial assistant text must remain visible in Chromium transcript",
+        "direct-interrupted partial assistant text must remain visible in Chromium transcript",
       );
     }
     assert(
       JSON.stringify(snapAfter2B?.session?.messages || []).includes(M_INT_2),
-      "direct menu-interrupt message M_INT_2 must start and complete its new turn immediately",
+      "direct interrupt message M_INT_2 must start and complete its new turn immediately",
     );
 
-    // --- 2C: Plain Stop button while an item is staged in "Sending on next step" ---
+    // Restore `[data-midturn-radio="steer"]` in SettingsModal before Scenario 2C
+    await page.locator('button[aria-label="Host & agent settings: Settings"]').click();
+    await dialog.waitFor({ state: "visible", timeout: 10000 });
+    await steerRadio.scrollIntoViewIfNeeded();
+    await steerRadio.click();
+    assert.equal(await steerRadio.getAttribute("aria-checked"), "true");
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+    await dialog.waitFor({ state: "hidden", timeout: 15000 });
+    if ((await appNoticeDismiss.count()) > 0 && (await appNoticeDismiss.isVisible().catch(() => false))) {
+      await appNoticeDismiss.click();
+    }
+
+    // --- 2C: Plain Stop button while an item is staged in "Next step" ---
     const s2StopGate = armGate("S2_PLAIN_STOP:step0");
     await sendFromComposer(page, "[TURN_TAG:S2_PLAIN_STOP] Hold open for plain Stop demotion check.");
     await s2StopGate.entered.promise;
-
-    await modePill.waitFor({ state: "visible", timeout: 10000 });
-    // Per-turn override from 2B must have reset back to host default "steer"
-    assert.equal(
-      await modePill.getAttribute("data-composer-midturn-mode"),
-      "steer",
-      "per-turn mode override must reset to host default 'steer' on new turn",
-    );
 
     const M_STOP_1 = "Demote on plain stop M_STOP_1 — reply in one short sentence.";
     await sendFromComposer(page, M_STOP_1);
@@ -1496,8 +1491,8 @@ try {
     );
     await waitForPassiveQueueTexts(page, [M_STOP_1]);
     assert(
-      ((await page.locator("[data-queue-passive]").textContent()) || "").includes("Paused — ready to send"),
-      "passive queue while idle must show 'Paused — ready to send'",
+      ((await page.locator("[data-queue-passive]").textContent()) || "").includes("Paused, ready to send"),
+      "passive queue while idle must show 'Paused, ready to send'",
     );
 
     // Clicking `[data-action="queue-send-idle"]` launches M_STOP_1 immediately!
@@ -1520,7 +1515,7 @@ try {
     // =========================================================================
     // SCENARIO 3: Mobile `390x844` Viewport & WAL Reload Durability
     // =========================================================================
-    log("scenario-3", "Mobile 390x844: sidebar -> SettingsModal stacked cards, staged+passive touch boxes, FloatMenu bounds & WAL reload");
+    log("scenario-3", "Mobile 390x844: sidebar -> SettingsModal stacked cards, staged+passive touch boxes & WAL reload");
     await context.close();
 
     const s3Id = await createTestSession(ctx, "Queue Suite S3 Mobile");
@@ -1615,7 +1610,7 @@ try {
     await waitForPassiveQueueTexts(mobilePage, [MOB_1, MOB_2, MOB_3]);
 
     const mobStagedSteer = mobilePage.locator('[data-queue-staged] [data-queue-item-state="steer"]');
-    const mobModePill = mobilePage.locator("[data-composer-midturn-mode]");
+    assert.equal(await mobilePage.locator("[data-composer-midturn-mode]").count(), 0);
 
     // Stage MOB_1 so Zone 1 ("steer") and Zone 2 (2 passive items) are both visible simultaneously
     await mobilePage
@@ -1654,20 +1649,6 @@ try {
       );
     }
 
-    // Open composer `[data-composer-midturn-mode]` floating menu on 390x844 and assert viewport fit
-    await mobModePill.click();
-    const portalFloatContainer = mobilePage.locator("[data-floatmenu]").filter({ has: mobilePage.locator("[data-midturn-menu-body]") });
-    await portalFloatContainer.waitFor({ state: "visible", timeout: 8000 });
-    await mobilePage.waitForTimeout(150);
-    const menuBox = await portalFloatContainer.boundingBox();
-    assert(menuBox && menuBox.width > 0 && menuBox.height > 0, "expected [data-floatmenu] to be visible on 390x844");
-    assert(
-      menuBox.x >= 0 && menuBox.x + menuBox.width <= 390.5,
-      `expected [data-composer-midturn-mode] floating menu [${menuBox.x}, ${menuBox.x + menuBox.width}] to fit within [0, 390]`,
-    );
-    await mobilePage.keyboard.press("Escape");
-    await portalFloatContainer.waitFor({ state: "hidden", timeout: 5000 });
-
     // Stop the active turn so all 3 items ([MOB_1, MOB_2, MOB_3]) rest durably in the WAL queue,
     // then reload the page (`mobilePage.reload()`) and verify WAL queue recovery + zero console/page errors!
     await mobilePage.locator('button[aria-label="Stop"]').click();
@@ -1685,7 +1666,7 @@ try {
     assertNoPageErrors(mobilePageErrors, mobileConsoleErrors, "Scenario 3 (mobile 390x844 post-reload)");
     await mobileContext.close();
 
-    log("scenario-3", "PASSED: 390x844 SettingsModal stack, non-hover touch boxes, FloatMenu bounds & WAL page.reload() durability");
+    log("scenario-3", "PASSED: 390x844 SettingsModal stack, non-hover touch boxes & WAL page.reload() durability");
     log("done", "ALL QUEUE FULL-STACK E2E SCENARIOS PASSED");
   } finally {
     try {

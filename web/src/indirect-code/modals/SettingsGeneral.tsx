@@ -40,28 +40,24 @@ const WIDTH_OPTIONS: Array<{
 const MID_TURN_SEND_OPTIONS: Array<{
   value: MidTurnDelivery;
   label: string;
-  badge: string;
   icon: string;
   description: string;
 }> = [
   {
     value: "queue",
     label: "Add to queue",
-    badge: "Queue",
     icon: "lucide:list-plus",
     description: "Hold in queue until the turn finishes; promote anytime.",
   },
   {
     value: "steer",
     label: "Send on next step",
-    badge: "Next step",
     icon: "lucide:corner-up-right",
     description: "Stage automatically for the next AI step, with × to return to queue.",
   },
   {
     value: "interrupt",
     label: "Interrupt & send",
-    badge: "Interrupt",
     icon: "lucide:zap",
     description: "Cancel active thinking or tool call and send immediately.",
   },
@@ -489,24 +485,11 @@ function MidTurnSendPicker(props: {
       data-setting="mid-turn-send"
       class="rounded-panel border border-border bg-surface-subtle/55 p-3.5 space-y-3"
     >
-      <div class="flex items-start sm:items-center justify-between gap-2.5 flex-wrap">
-        <div class="min-w-0">
-          <div class="text-xs font-medium text-fg">While agent is working</div>
-          <div class="mt-0.5 text-[11px] text-fg-muted">
-            Default action when you send a message during an active turn.
-          </div>
+      <div class="min-w-0">
+        <div class="text-xs font-medium text-fg">While agent is working</div>
+        <div class="mt-0.5 text-[11px] text-fg-muted">
+          Default action when you send a message during an active turn.
         </div>
-        <Badge
-          tone={
-            currentOpt().value === "interrupt"
-              ? "amber"
-              : currentOpt().value === "steer"
-                ? "blue"
-                : "zinc"
-          }
-        >
-          {currentOpt().badge}
-        </Badge>
       </div>
 
       <div
@@ -519,7 +502,6 @@ function MidTurnSendPicker(props: {
         <For each={MID_TURN_SEND_OPTIONS}>
           {(opt) => {
             const active = () => currentOpt().value === opt.value;
-            const isWarn = opt.value === "interrupt";
             return (
               <button
                 type="button"
@@ -529,43 +511,33 @@ function MidTurnSendPicker(props: {
                 tabIndex={active() ? 0 : -1}
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.onChange(opt.value)}
-                class={`flex flex-col gap-2 rounded-control border p-2.5 text-left transition-colors cursor-pointer min-w-0 ${
+                class={`flex flex-col gap-1.5 rounded-control border p-2.5 text-left transition-colors cursor-pointer min-w-0 ${
                   active()
-                    ? isWarn
-                      ? "border-warning bg-warning-subtle/40 text-fg"
-                      : "border-accent bg-accent-subtle/40 text-fg"
-                    : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle text-fg-secondary"
+                    ? "border-fg/45 bg-surface text-fg shadow-2xs"
+                    : "border-border bg-surface/60 hover:border-border-strong hover:bg-surface text-fg-secondary"
                 }`}
               >
-                <div class="flex items-center justify-between gap-2 w-full">
-                  <span
-                    class={`inline-flex h-6 w-6 items-center justify-center rounded-md border shrink-0 transition-colors ${
-                      active()
-                        ? isWarn
-                          ? "border-warning/45 bg-warning-subtle text-warning"
-                          : "border-accent/45 bg-accent-subtle text-accent"
-                        : "border-border bg-surface-subtle text-fg-muted"
-                    }`}
-                  >
-                    <Iconify icon={opt.icon} size={13} />
+                <div class="flex items-center justify-between gap-2 w-full min-w-0">
+                  <span class="inline-flex items-center gap-1.5 min-w-0">
+                    <Iconify
+                      icon={opt.icon}
+                      size={14}
+                      class={`shrink-0 ${active() ? "text-fg" : "text-fg-muted"}`}
+                    />
+                    <span class="text-xs font-medium text-fg truncate">
+                      {opt.label}
+                    </span>
                   </span>
                   <span
                     aria-hidden="true"
                     class={`h-2 w-2 shrink-0 rounded-full transition-colors ${
-                      active()
-                        ? isWarn
-                          ? "bg-warning"
-                          : "bg-accent"
-                        : "border border-border-strong bg-transparent"
+                      active() ? "bg-fg" : "border border-border-strong bg-transparent"
                     }`}
                   />
                 </div>
-                <div class="space-y-0.5 min-w-0">
-                  <div class="text-xs font-medium text-fg">{opt.label}</div>
-                  <p class="text-[11px] text-fg-muted leading-relaxed">
-                    {opt.description}
-                  </p>
-                </div>
+                <p class="text-[11px] text-fg-muted leading-relaxed">
+                  {opt.description}
+                </p>
               </button>
             );
           }}
