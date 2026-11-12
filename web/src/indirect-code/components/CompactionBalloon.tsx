@@ -79,6 +79,9 @@ export interface CompactionViewModel {
   headerReadFiles: string[];
   totalRawTokens: number;
   totalBlockTokens: number;
+  visualDigestCount: number;
+  evictedImageCount: number;
+  learnedMaxImages: number | null;
 }
 
 /** Resolves legacy vs multi-era LSM presentation model without Solid dependencies. */
@@ -143,6 +146,20 @@ export function resolveCompactionViewModel(
     if ((b.blockTokens ?? 0) > 0) totalBlockTokens += b.blockTokens!;
   }
 
+  const digestKeys =
+    compaction?.imageDigests && typeof compaction.imageDigests === "object"
+      ? Object.keys(compaction.imageDigests)
+      : [];
+  const evictedImageCount =
+    compaction?.evictedImages && typeof compaction.evictedImages === "object"
+      ? Object.values(compaction.evictedImages).filter(Boolean).length
+      : 0;
+  const visualDigestCount = digestKeys.length > 0 ? digestKeys.length : evictedImageCount;
+  const learnedMaxImages =
+    typeof compaction?.learnedMaxImages === "number" && Number.isFinite(compaction.learnedMaxImages)
+      ? compaction.learnedMaxImages
+      : null;
+
   return {
     mode,
     activeBlocks,
@@ -155,6 +172,9 @@ export function resolveCompactionViewModel(
     headerReadFiles,
     totalRawTokens,
     totalBlockTokens,
+    visualDigestCount,
+    evictedImageCount,
+    learnedMaxImages,
   };
 }
 
@@ -424,6 +444,19 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
   const hasHeaderFiles = () =>
     headerModifiedFiles().length > 0 || headerReadFiles().length > 0;
 
+  const visualDigestCount = () => viewModel().visualDigestCount;
+  const learnedMaxImages = () => viewModel().learnedMaxImages;
+  const visualDigestTip = () => {
+    const cap = learnedMaxImages();
+    if (cap === 0) {
+      return "Upstream model is text-only · image pixels converted to searchable text digests";
+    }
+    if (cap !== null && cap > 0) {
+      return `Searchable visual digests cached · upstream live wire cap: ${cap} ${cap === 1 ? "image" : "images"}`;
+    }
+    return "Past screenshots preserved as searchable text digests";
+  };
+
   const count = () => props.compaction?.count ?? 0;
 
   const isEraOpen = (id: string, isLatest: boolean): boolean => {
@@ -487,7 +520,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
           aria-expanded={expanded()}
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => setExpanded(!expanded())}
-          class="inline-flex items-center gap-1.5 rounded-full border border-border/80 bg-surface-subtle px-2.5 py-1 text-[11px] text-fg-secondary hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+          class="inline-flex flex-wrap justify-center items-center gap-1.5 max-w-full rounded-full border border-border/80 bg-surface-subtle px-2.5 py-1 text-[11px] text-fg-secondary hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
         >
           <Iconify icon="lucide:archive" size={11} class="text-fg-muted shrink-0" />
           <span class="font-medium">Context Compacted</span>
@@ -501,6 +534,18 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
           </Show>
           <Show when={isSplitTurn()}>
             <span class="text-[10px] text-fg-muted">· Split Turn</span>
+          </Show>
+          <Show when={visualDigestCount() > 0}>
+            <span
+              data-compaction-visual-digests
+              data-rc-tip={visualDigestTip()}
+              class="inline-flex items-center gap-1 rounded-full border border-border/75 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-secondary tabular-nums"
+            >
+              <Iconify icon="lucide:eye" size={11} class="text-accent shrink-0" />
+              <span>
+                {visualDigestCount()} {visualDigestCount() === 1 ? "visual digest" : "visual digests"} cached
+              </span>
+            </span>
           </Show>
           <Show when={hasUsage()}>
             <span class="hidden sm:inline font-mono text-[10px] text-fg-muted tabular-nums">
@@ -541,6 +586,22 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                     ({retiredBlockCount()} merged)
                   </span>
                 </Show>
+              </Show>
+              <Show when={visualDigestCount() > 0}>
+                <span
+                  data-rc-tip={visualDigestTip()}
+                  class="inline-flex items-center gap-1 font-sans text-fg-secondary"
+                >
+                  <Iconify icon="lucide:eye" size={11} class="text-accent shrink-0" />
+                  <span>
+                    {visualDigestCount()} {visualDigestCount() === 1 ? "visual digest" : "visual digests"} cached
+                  </span>
+                  <Show when={learnedMaxImages() !== null}>
+                    <span class="font-mono text-fg-muted">
+                      ({learnedMaxImages() === 0 ? "text-only wire" : `wire cap ${learnedMaxImages()}`})
+                    </span>
+                  </Show>
+                </span>
               </Show>
               <Show when={hasUsage()}>
                 <span>In {compactTokens(inTok())}</span>

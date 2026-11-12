@@ -5,8 +5,169 @@ import { FileIcon } from "../../presentation";
 import { languageForPath } from "../../utils/lang";
 import { parseEditResults, synthesizeEditSectionsFromArgs } from "../../utils/toolEdits";
 import type { FileEditSection } from "../../utils/toolEdits";
-import { diffStat } from "../../transcript";
+import {
+  baseNameOf,
+  diffStat,
+  formatImageBytes,
+  type ImageReadDetails,
+} from "../../transcript";
 import type { ToolPartProps } from "./toolUnitModel";
+
+function ImageReadCard(props: {
+  info: ImageReadDetails;
+  hasResult: boolean;
+  active: boolean;
+}) {
+  const filePath = () => props.info.path || "image";
+  const fileName = () => baseNameOf(props.info.path) || props.info.path || "image";
+  const hasSignificantSavings = () => {
+    const b = props.info.bytes;
+    const ob = props.info.origBytes;
+    return b !== undefined && ob !== undefined && b > 0 && ob > b * 1.15;
+  };
+  const savedPercent = () => {
+    const b = props.info.bytes;
+    const ob = props.info.origBytes;
+    if (!b || !ob || ob <= b) return 0;
+    return Math.min(99, Math.max(1, Math.round((1 - b / ob) * 100)));
+  };
+
+  return (
+    <div data-tool-image-read class="px-3 py-2.5 min-w-0 max-w-full">
+      <Show
+        when={props.hasResult}
+        fallback={
+          <div class="flex items-center gap-2 flex-wrap min-w-0 text-[11.5px]">
+            <Show when={props.active}>
+              <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-accent rounded-full animate-spin shrink-0" />
+            </Show>
+            <FileIcon path={filePath()} size={14} />
+            <span
+              data-rc-tip={props.info.path || undefined}
+              class="font-mono font-medium text-fg truncate min-w-0 max-w-full"
+            >
+              {fileName()}
+            </span>
+            <Show when={props.info.formatLabel}>
+              <span class="rounded border border-border/75 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-secondary shrink-0">
+                {props.info.formatLabel}
+              </span>
+            </Show>
+            <span class="text-fg-muted">
+              {props.active ? "Inspecting image…" : "Image read did not complete."}
+            </span>
+          </div>
+        }
+      >
+        <div
+          class={
+            props.info.previewDataUrl
+              ? "flex flex-col sm:flex-row sm:items-start gap-3 min-w-0 max-w-full"
+              : "flex items-start gap-2.5 min-w-0 max-w-full"
+          }
+        >
+          <Show
+            when={props.info.previewDataUrl}
+            fallback={
+              <div
+                data-image-icon-tile
+                class="w-9 h-9 shrink-0 rounded-lg border border-border/75 bg-surface-muted/55 flex items-center justify-center"
+              >
+                <Iconify icon="lucide:image" size={16} class="text-fg-secondary" />
+              </div>
+            }
+          >
+            {(previewUrl) => (
+              <div
+                data-image-preview
+                class="shrink-0 self-start rounded-lg border border-border/70 bg-surface-muted/45 p-1 max-w-full"
+              >
+                <img
+                  src={previewUrl()}
+                  alt={fileName()}
+                  loading="lazy"
+                  class="max-h-44 max-w-full w-auto object-contain rounded-md border border-border/60 bg-surface-muted/40"
+                />
+              </div>
+            )}
+          </Show>
+
+          <div class="min-w-0 flex-1 space-y-1.5">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <FileIcon path={filePath()} size={14} />
+              <span
+                data-rc-tip={props.info.path || undefined}
+                class="font-mono text-[12px] font-medium text-fg truncate min-w-0"
+              >
+                {fileName()}
+              </span>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+              <span
+                data-image-format-badge
+                class={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10.5px] font-medium shrink-0 ${
+                  props.info.converted
+                    ? "border-accent/25 bg-accent-subtle text-accent"
+                    : "border-border/75 bg-surface text-fg-secondary"
+                }`}
+              >
+                {props.info.converted && props.info.origFormatLabel
+                  ? `${props.info.origFormatLabel} → ${props.info.formatLabel}`
+                  : props.info.formatLabel}
+              </span>
+
+              <Show when={props.info.width && props.info.height}>
+                <span
+                  data-image-dimensions-pill
+                  class="inline-flex items-center rounded border border-border/75 bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-fg-secondary tabular-nums shrink-0"
+                >
+                  {props.info.resized && props.info.origWidth && props.info.origHeight
+                    ? `${props.info.origWidth}×${props.info.origHeight} → ${props.info.width}×${props.info.height} px`
+                    : `${props.info.width}×${props.info.height} px`}
+                </span>
+              </Show>
+
+              <Show when={props.info.bytes && props.info.bytes > 0}>
+                <span
+                  data-image-wire-size-pill
+                  class="inline-flex items-center gap-1 rounded border border-border/75 bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-fg-secondary tabular-nums shrink-0"
+                >
+                  <span>
+                    {hasSignificantSavings()
+                      ? `${formatImageBytes(props.info.origBytes!)} → ${formatImageBytes(props.info.bytes!)}`
+                      : formatImageBytes(props.info.bytes!)}
+                  </span>
+                </span>
+              </Show>
+
+              <Show when={hasSignificantSavings() && savedPercent() > 0}>
+                <span
+                  data-image-savings-badge
+                  class="inline-flex items-center rounded border border-success/25 bg-success-subtle px-1.5 py-0.5 font-mono text-[10px] font-medium text-success tabular-nums shrink-0"
+                >
+                  -{savedPercent()}%
+                </span>
+              </Show>
+            </div>
+
+            <Show when={props.info.hints.length > 0}>
+              <div class="space-y-0.5 pt-0.5">
+                <For each={props.info.hints}>
+                  {(hint) => (
+                    <div class="text-[11px] text-fg-muted leading-snug whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                      {hint}
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </div>
+        </div>
+      </Show>
+    </div>
+  );
+}
 
 function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
   const [open, setOpen] = createSignal(true);
@@ -221,26 +382,39 @@ export function ToolEditBodies(props: ToolPartProps) {
           }
         >
           <Show
-            when={readText().trim().length > 0}
+            when={props.m.imageReadDetails()}
             fallback={
-              <div class="px-3 py-2 text-[11px] text-fg-muted">
-                {!props.u.result
-                  ? props.active
-                    ? "Reading file…"
-                    : "File read did not complete."
-                  : "Empty file (0 bytes)."}
-              </div>
+              <Show
+                when={readText().trim().length > 0}
+                fallback={
+                  <div class="px-3 py-2 text-[11px] text-fg-muted">
+                    {!props.u.result
+                      ? props.active
+                        ? "Reading file…"
+                        : "File read did not complete."
+                      : "Empty file (0 bytes)."}
+                  </div>
+                }
+              >
+                <CodeBlock
+                  embedded
+                  numbered
+                  follow={() => props.m.open() && props.running}
+                  text={readText()}
+                  language={languageForPath(String(props.m.args().path || ""))}
+                  wrap={false}
+                  scrollKey={props.m.key()}
+                />
+              </Show>
             }
           >
-            <CodeBlock
-              embedded
-              numbered
-              follow={() => props.m.open() && props.running}
-              text={readText()}
-              language={languageForPath(String(props.m.args().path || ""))}
-              wrap={false}
-              scrollKey={props.m.key()}
-            />
+            {(info) => (
+              <ImageReadCard
+                info={info()}
+                hasResult={Boolean(props.u.result)}
+                active={props.active}
+              />
+            )}
           </Show>
         </Show>
       </Show>

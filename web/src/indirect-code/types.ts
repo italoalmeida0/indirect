@@ -87,6 +87,9 @@ export interface CompactionState {
   usage?: CompactionUsage;
   blocks?: FoldBlockInfo[];
   prunedBefore?: number;
+  imageDigests?: Record<string, string>;
+  evictedImages?: Record<string, boolean>;
+  learnedMaxImages?: number | null;
 }
 
 export interface TurnChangedFile {

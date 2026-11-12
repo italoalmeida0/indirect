@@ -1,6 +1,12 @@
 import { createEffect, createMemo, createSignal, on } from "solid-js";
 import { tryParseArgs } from "../../utils/tools";
-import { isHeaderOnlySleep, toolSummary, terminalPresentation } from "../../transcript";
+import {
+  isHeaderOnlySleep,
+  parseImageReadDetails,
+  terminalPresentation,
+  toolSummary,
+  type ImageReadDetails,
+} from "../../transcript";
 import { toolRowKey } from "../../utils/titles";
 import { formatDurationSecs } from "../../utils/format";
 import { extractArrivalSpillInfo, parseHumanDurationMs } from "../../utils/contextTools";
@@ -40,12 +46,44 @@ const name = () => u.call?.toolName || "tool";
 /** bg_await rows are header-only (live counter in the label while running,
  * plain summary once finished): no body and no chevron, ever. */
 const expandable = () => !isHeaderOnlySleep(name(), !!u.result);
-/** Anything worth showing: result output, streamed args/progress. Rows
- * with nothing (pre-created card, empty call) stay shut until content
+/** Envelope & output helpers declared strictly ABOVE imageReadDetails and
+ * hasContent so eager Solid createMemo evaluation never hits TDZ. */
+const rawEnvelope = () => stripToolEnvelopeDetailed(u.result?.toolResult || "");
+const mergedEnv = (): Record<string, string> | undefined => {
+  const detailEnv = (u.result?.toolDetails as any)?.env;
+  const envAttrs = rawEnvelope().attrs;
+  if (detailEnv && Object.keys(envAttrs).length > 0) return { ...envAttrs, ...detailEnv };
+  if (detailEnv) return detailEnv;
+  return Object.keys(envAttrs).length > 0 ? envAttrs : undefined;
+};
+// Strip at the model too: ingestion normally removes the envelope, but any
+// path that lands raw text in toolResult (replay, fixture, late snapshot)
+// must never render <tool_result …> XML in a body.
+const rawOutput = () => bodyWithoutFooter(rawEnvelope().body);
+const spill = createMemo(() => extractArrivalSpillInfo(rawOutput(), mergedEnv()));
+/** Tool output with the envelope footer and arrival-spill trailer removed; metadata lives in footer()/spill(). */
+const output = () => (spill().spilled ? spill().cleanBody : rawOutput());
+/** Structured image metadata for `read` on image files (live, WAL-reloaded,
+ * legacy text-only, or pending image path); undefined for text reads/errors. */
+const imageReadDetails = createMemo<ImageReadDetails | undefined>(() => {
+  if (name() !== "read" || u.result?.isError) return undefined;
+  return parseImageReadDetails({
+    args: args() as Record<string, any>,
+    output: output(),
+    details: u.result?.toolDetails,
+    env: mergedEnv(),
+    hasResult: Boolean(u.result),
+    isError: Boolean(u.result?.isError),
+  });
+});
+/** Anything worth showing: result output, image metadata, streamed args/progress.
+ * Rows with nothing (pre-created card, empty call) stay shut until content
  * lands — the chevron still opens them manually. */
 const hasContent = createMemo(() => {
   // bg_await never renders a body, finished or not.
   if (!expandable()) return false;
+  if (imageReadDetails() !== undefined) return true;
+  if (mergedEnv()?.media?.startsWith("image/")) return true;
   if (((u.result?.toolDetails?.display ?? u.result?.toolResult) || "").trim() !== "") return true;
   if ((prog() || "").trim() !== "") return true;
   return Object.keys(args()).length > 0;
@@ -65,21 +103,6 @@ const bashHeaderCmd = () => {
   }
   return String(a.command || sum().target || "");
 };
-const rawEnvelope = () => stripToolEnvelopeDetailed(u.result?.toolResult || "");
-const mergedEnv = (): Record<string, string> | undefined => {
-  const detailEnv = (u.result?.toolDetails as any)?.env;
-  const envAttrs = rawEnvelope().attrs;
-  if (detailEnv && Object.keys(envAttrs).length > 0) return { ...envAttrs, ...detailEnv };
-  if (detailEnv) return detailEnv;
-  return Object.keys(envAttrs).length > 0 ? envAttrs : undefined;
-};
-// Strip at the model too: ingestion normally removes the envelope, but any
-// path that lands raw text in toolResult (replay, fixture, late snapshot)
-// must never render <tool_result …> XML in a body.
-const rawOutput = () => bodyWithoutFooter(rawEnvelope().body);
-const spill = createMemo(() => extractArrivalSpillInfo(rawOutput(), mergedEnv()));
-/** Tool output with the envelope footer and arrival-spill trailer removed; metadata lives in footer()/spill(). */
-const output = () => (spill().spilled ? spill().cleanBody : rawOutput());
 const terminalSource = () => {
   const src = String(u.result?.toolDetails?.display ?? u.result?.toolResult ?? "");
   const stripped = stripToolEnvelopeDetailed(src);
@@ -93,7 +116,12 @@ const footer = (): FooterFact[] => {
   const facts: FooterFact[] = Array.isArray(f) ? f : rawEnvelope().footer;
   // A fact that just repeats the body (e.g. summary's info line) adds nothing.
   const first = rawOutput().split("\n").map((l) => l.trim()).find((l) => l) || "";
-  return facts.filter((fact) => fact.label !== first);
+  const isImg = imageReadDetails() !== undefined;
+  return facts.filter((fact) => {
+    if (fact.label === first) return false;
+    if (isImg && /^Read image file \[image\//i.test(fact.label)) return false;
+    return true;
+  });
 };
 /** Non-zero exit code for shell rows (drives the failure hint). */
 const exitCode = () => String(mergedEnv()?.exit ?? "");
@@ -218,7 +246,7 @@ const bgStream = () => {
 const isDetachedBg = () => bgJobId() !== "";
 /** True while this tool unit is currently executing (no result yet and turn is running). */
 const runningTool = () => !u.result && running();
-  return { key, open, openBody, expandable, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, mergedEnv, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg, running: runningTool };
+  return { key, open, openBody, expandable, hasContent, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, mergedEnv, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, imageReadDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg, running: runningTool };
 }
 
 export type ToolModel = ReturnType<typeof useToolUnitModel>;

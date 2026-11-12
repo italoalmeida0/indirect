@@ -2,7 +2,7 @@ import type { ChatMessage, ContentBlock, RenderBlock, ToolUnit, TurnBalloon, Tur
 import { formatDurationSecs } from "./utils/format";
 import { displayToolArgs, withoutContinueNudges, withoutTodoActivity } from "./live";
 import { parseExploreView, parseSessionHistoryView } from "./utils/contextTools";
-import { stripToolEnvelopeDetailed } from "./utils/envelope";
+import { bodyWithoutFooter, stripToolEnvelopeDetailed } from "./utils/envelope";
 import { extractTodoItems, resolveWidgetId } from "./utils/tools";
 
 /** bg_cancel/bg_check kind: exec_script vs terminal. The daemon includes the
@@ -539,6 +539,258 @@ function compactCharCount(chars: number): string {
   return `${chars} chars`;
 }
 
+export interface ImageReadDetails {
+  path: string;
+  media: string;
+  origMedia?: string;
+  formatLabel: string;
+  origFormatLabel?: string;
+  width?: number;
+  height?: number;
+  origWidth?: number;
+  origHeight?: number;
+  resized: boolean;
+  converted: boolean;
+  bytes?: number;
+  origBytes?: number;
+  sha256?: string;
+  previewDataUrl?: string;
+  hints: string[];
+}
+
+const IMAGE_READ_EXT_RE = /\.(png|jpe?g|gif|webp|bmp)$/i;
+const SAFE_DATA_IMAGE_URL_RE = /^data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+$/i;
+
+export function isImageReadPath(p?: unknown): boolean {
+  if (typeof p !== "string") return false;
+  const clean = p.trim().replace(/[?#].*$/, "");
+  return IMAGE_READ_EXT_RE.test(clean);
+}
+
+function mimeFromImagePath(p?: unknown): string {
+  if (typeof p !== "string") return "";
+  const clean = p.trim().replace(/[?#].*$/, "").toLowerCase();
+  if (clean.endsWith(".png")) return "image/png";
+  if (clean.endsWith(".jpg") || clean.endsWith(".jpeg")) return "image/jpeg";
+  if (clean.endsWith(".gif")) return "image/gif";
+  if (clean.endsWith(".webp")) return "image/webp";
+  if (clean.endsWith(".bmp")) return "image/bmp";
+  return "";
+}
+
+function canonicalImageMime(raw?: unknown): string {
+  if (typeof raw !== "string") return "";
+  const clean = raw.trim().toLowerCase().split(";")[0]?.trim() || "";
+  if (!clean.startsWith("image/")) return "";
+  if (clean === "image/jpg" || clean === "image/pjpeg") return "image/jpeg";
+  if (clean === "image/x-bmp" || clean === "image/x-ms-bmp") return "image/bmp";
+  return clean;
+}
+
+export function formatImageMimeLabel(mime?: string): string {
+  const m = canonicalImageMime(mime);
+  if (!m) return "IMAGE";
+  const sub = m.slice(6);
+  if (sub === "svg+xml") return "SVG";
+  return sub.replace(/^x-/, "").toUpperCase();
+}
+
+export function formatImageBytes(bytes?: number): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes <= 0) return "";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) {
+    const kb = bytes / 1024;
+    return kb < 10 ? `${kb.toFixed(1).replace(/\.0$/, "")} KB` : `${Math.round(kb)} KB`;
+  }
+  const mb = bytes / (1024 * 1024);
+  return `${mb >= 100 ? Math.round(mb) : mb.toFixed(1).replace(/\.0$/, "")} MB`;
+}
+
+export function formatImageSummaryStat(info: ImageReadDetails): string | undefined {
+  if (info.width && info.height && info.bytes) {
+    return `${info.width}×${info.height} · ${formatImageBytes(info.bytes)}`;
+  }
+  if (info.width && info.height) {
+    return info.resized && info.origWidth && info.origHeight
+      ? `${info.origWidth}×${info.origHeight} → ${info.width}×${info.height}`
+      : `${info.width}×${info.height}`;
+  }
+  if (info.bytes) {
+    return formatImageBytes(info.bytes);
+  }
+  return info.formatLabel || undefined;
+}
+
+function posInt(v: unknown): number | undefined {
+  if (typeof v === "number") {
+    return Number.isFinite(v) && v > 0 ? Math.round(v) : undefined;
+  }
+  if (typeof v === "string") {
+    const trimmed = v.trim();
+    if (!trimmed) return undefined;
+    const n = Number(trimmed);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : undefined;
+  }
+  return undefined;
+}
+
+export function parseImageReadDetails(input: {
+  args: Record<string, any>;
+  output: string;
+  details?: any;
+  env?: Record<string, string>;
+  hasResult: boolean;
+  isError: boolean;
+}): ImageReadDetails | undefined {
+  if (input.isError) return undefined;
+  const { args, details, env } = input;
+  const argPath = typeof args?.path === "string" ? args.path.trim() : "";
+  const detailPath = typeof details?.path === "string" ? details.path.trim() : "";
+  const envPath = typeof env?.path === "string" ? env.path.trim() : "";
+  const path = detailPath || envPath || argPath;
+
+  if (!input.hasResult) {
+    if (!isImageReadPath(path)) return undefined;
+    const media = mimeFromImagePath(path) || "image/png";
+    const formatLabel = formatImageMimeLabel(media);
+    return {
+      path,
+      media,
+      origMedia: media,
+      formatLabel,
+      origFormatLabel: formatLabel,
+      resized: false,
+      converted: false,
+      hints: [],
+    };
+  }
+
+  const detailMedia = canonicalImageMime(details?.media);
+  const envMedia = canonicalImageMime(env?.media);
+  const isTextPaginated =
+    typeof details?.start_line === "number" ||
+    typeof details?.total_lines === "number" ||
+    Boolean(env?.page);
+  const body = (input.output || "").trim();
+  const headerMatch = !isTextPaginated ? /^Read image file \[(image\/[^\]]+)\]/i.exec(body) : null;
+  const headerMedia = headerMatch ? canonicalImageMime(headerMatch[1]) : "";
+  let media = detailMedia || envMedia || headerMedia;
+  if (!media) return undefined;
+
+  let hintOrigMedia = "";
+  let hintTargetMedia = "";
+  let hintOrigW: number | undefined;
+  let hintOrigH: number | undefined;
+  let hintW: number | undefined;
+  let hintH: number | undefined;
+  const hints: string[] = [];
+
+  if (body) {
+    const rawLines = body.split(/\r?\n/);
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i]!.trim();
+      if (!line) continue;
+      if (i === 0 && /^Read image file \[image\/[^\]]+\]\s*$/i.test(line)) continue;
+      const inner = line.startsWith("[") && line.endsWith("]") ? line.slice(1, -1).trim() : line;
+      if (!inner) continue;
+
+      const pureResize = /^Image resized from (\d+)\s*[x×]\s*(\d+) to (\d+)\s*[x×]\s*(\d+)\.?$/i.exec(inner);
+      if (pureResize) {
+        hintOrigW = posInt(pureResize[1]);
+        hintOrigH = posInt(pureResize[2]);
+        hintW = posInt(pureResize[3]);
+        hintH = posInt(pureResize[4]);
+        continue;
+      }
+
+      const pureConvert = /^Image converted from (image\/[a-z0-9.+-]+) to (image\/[a-z0-9.+-]+)\.?$/i.exec(inner);
+      if (pureConvert) {
+        hintOrigMedia = canonicalImageMime(pureConvert[1]);
+        hintTargetMedia = canonicalImageMime(pureConvert[2]);
+        continue;
+      }
+
+      const legacyCoord =
+        /^Image:\s*original\s+(\d+)\s*[x×]\s*(\d+),\s*displayed at\s+(\d+)\s*[x×]\s*(\d+)\.?\s*(.*)$/i.exec(inner);
+      if (legacyCoord) {
+        hintOrigW = posInt(legacyCoord[1]);
+        hintOrigH = posInt(legacyCoord[2]);
+        hintW = posInt(legacyCoord[3]);
+        hintH = posInt(legacyCoord[4]);
+        const remainder = (legacyCoord[5] || "").trim();
+        if (remainder) hints.push(remainder);
+        continue;
+      }
+
+      const inlineResize = /resized from (\d+)\s*[x×]\s*(\d+) to (\d+)\s*[x×]\s*(\d+)/i.exec(inner);
+      if (inlineResize) {
+        hintOrigW = hintOrigW ?? posInt(inlineResize[1]);
+        hintOrigH = hintOrigH ?? posInt(inlineResize[2]);
+        hintW = hintW ?? posInt(inlineResize[3]);
+        hintH = hintH ?? posInt(inlineResize[4]);
+      }
+      const inlineConvert = /converted from (image\/[a-z0-9.+-]+) to (image\/[a-z0-9.+-]+)/i.exec(inner);
+      if (inlineConvert) {
+        hintOrigMedia = hintOrigMedia || canonicalImageMime(inlineConvert[1]);
+        hintTargetMedia = hintTargetMedia || canonicalImageMime(inlineConvert[2]);
+      }
+      hints.push(inner);
+    }
+  }
+
+  if (!media && hintTargetMedia) media = hintTargetMedia;
+  const origMedia =
+    canonicalImageMime(details?.orig_media ?? details?.origMedia) ||
+    canonicalImageMime(env?.orig_media) ||
+    hintOrigMedia ||
+    undefined;
+  const width = posInt(details?.width) ?? posInt(env?.width) ?? hintW;
+  const height = posInt(details?.height) ?? posInt(env?.height) ?? hintH;
+  const origWidth =
+    posInt(details?.orig_width ?? details?.origWidth) ?? posInt(env?.orig_width) ?? hintOrigW ?? width;
+  const origHeight =
+    posInt(details?.orig_height ?? details?.origHeight) ?? posInt(env?.orig_height) ?? hintOrigH ?? height;
+  const bytes = posInt(details?.bytes) ?? posInt(env?.bytes);
+  const origBytes = posInt(details?.orig_bytes ?? details?.origBytes) ?? posInt(env?.orig_bytes);
+  const sha256 =
+    (typeof details?.sha256 === "string" && details.sha256.trim()) ||
+    (typeof env?.sha256 === "string" && env.sha256.trim()) ||
+    undefined;
+  const rawPreview =
+    typeof details?.preview_data_url === "string"
+      ? details.preview_data_url.trim()
+      : typeof details?.previewDataUrl === "string"
+        ? details.previewDataUrl.trim()
+        : "";
+  const previewDataUrl = SAFE_DATA_IMAGE_URL_RE.test(rawPreview) ? rawPreview : undefined;
+
+  const resized = Boolean(
+    width && height && origWidth && origHeight && (width !== origWidth || height !== origHeight),
+  );
+  const converted = Boolean(media && origMedia && media !== origMedia);
+  const formatLabel = formatImageMimeLabel(media);
+  const origFormatLabel = origMedia ? formatImageMimeLabel(origMedia) : undefined;
+
+  return {
+    path,
+    media,
+    origMedia,
+    formatLabel,
+    origFormatLabel,
+    width,
+    height,
+    origWidth,
+    origHeight,
+    resized,
+    converted,
+    bytes,
+    origBytes,
+    sha256,
+    previewDataUrl,
+    hints,
+  };
+}
+
 export function toolSummary(u: ToolUnit): ToolSummary {
   const name = u.call?.toolName || "tool";
   const args = displayToolArgs(u.call?.toolArgs);
@@ -564,6 +816,31 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       };
     }
     case "read": {
+      const { cleanRes, mergedDetails } = unwrapToolSummaryInput(res, details);
+      const imageInfo = parseImageReadDetails({
+        args,
+        output: bodyWithoutFooter(cleanRes),
+        details: mergedDetails,
+        env: mergedDetails?.env,
+        hasResult: Boolean(u.result),
+        isError: Boolean(u.result?.isError),
+      });
+      if (imageInfo) {
+        const stat = u.result && !u.result.isError ? formatImageSummaryStat(imageInfo) : undefined;
+        return {
+          icon: "lucide:image",
+          verb: "Analyzed",
+          target: baseNameOf(imageInfo.path || args.path) || imageInfo.path || String(args.path || "") || "image",
+          ...(stat ? { stat } : {}),
+        };
+      }
+      if (u.result?.isError && isImageReadPath(args.path)) {
+        return {
+          icon: "lucide:image",
+          verb: "Analyzed",
+          target: baseNameOf(args.path) || String(args.path || "") || "image",
+        };
+      }
       // Daemon offset is 1-indexed (schema: "Line number to start reading
       // from (1-indexed)"); the display block numbers lines with startLine+i+1,
       // so the label must use off directly, not off+1.
