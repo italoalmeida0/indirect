@@ -8,24 +8,33 @@ import type { ToolPartProps } from "./toolUnitModel";
  * asking happens in QuestionModal; this is the collapsible record. */
 export function ToolQuestionBodies(props: ToolPartProps) {
   const items = createMemo(() =>
-    parseQuestionQA(props.m.args(), props.m.output() || "", props.u.result?.toolDetails),
+    parseQuestionQA(
+      props.m.args(),
+      props.u.result?.isError ? "" : props.m.output() || "",
+      props.u.result?.isError ? undefined : props.u.result?.toolDetails,
+    ),
   );
-  const answered = () => !!props.u.result;
+  const answered = () => Boolean(props.u.result && !props.u.result.isError);
 
   return (
     <Show when={props.m.name() === "question"}>
+      <Show when={props.u.result?.isError}>
+        <div class="border-b border-danger/20 bg-danger-subtle px-3 py-2 text-xs text-danger font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+          {(props.m.output() || "").trim() || String(props.m.mergedEnv()?.error || "Question canceled or failed.")}
+        </div>
+      </Show>
       <Show
         when={items().length > 0}
         fallback={
-          <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere]" : "text-fg-muted"}`}>
-            {props.u.result?.isError
-              ? props.m.output() || String(props.m.mergedEnv()?.error || "Question canceled or failed.")
-              : !props.u.result
+          <Show when={!props.u.result?.isError}>
+            <div class="px-3 py-2 text-[11px] text-fg-muted">
+              {!props.u.result
                 ? props.active
                   ? "Waiting for your answers…"
                   : "Question did not complete."
                 : props.m.output() || "No answer recorded."}
-          </div>
+            </div>
+          </Show>
         }
       >
         <div class="px-3 py-2.5 space-y-3 min-w-0 [overflow-wrap:anywhere] break-words">
@@ -109,8 +118,10 @@ export function ToolQuestionBodies(props: ToolPartProps) {
               );
             }}
           </For>
-          <Show when={!answered()}>
-            <p class="text-[11px] text-fg-muted">Waiting for your answers…</p>
+          <Show when={!props.u.result}>
+            <p class="text-[11px] text-fg-muted">
+              {props.active ? "Waiting for your answers…" : "Question did not complete."}
+            </p>
           </Show>
         </div>
       </Show>

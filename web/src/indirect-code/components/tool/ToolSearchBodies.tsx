@@ -170,15 +170,15 @@ function ArrivalSpillBanner(props: { spill: ArrivalSpillInfo }) {
 
 export function ToolSearchBodies(props: ToolPartProps) {
   const inspectTree = createMemo(() => {
-    if (props.m.name() !== "inspect") return null;
+    if (props.m.name() !== "inspect" || props.u.result?.isError) return null;
     return parseInspectTree(props.m.terminal().output || props.m.output() || "");
   });
   const globList = createMemo(() => {
-    if (props.m.name() !== "glob") return null;
+    if (props.m.name() !== "glob" || props.u.result?.isError) return null;
     return parseGlobList(props.m.output() || "");
   });
   const bgListParsed = createMemo(() => {
-    if (props.m.name() !== "bg_list") return null;
+    if (props.m.name() !== "bg_list" || props.u.result?.isError) return null;
     return parseBgListJobs(props.m.output() || "", props.u.result?.toolDetails);
   });
   return (
@@ -197,20 +197,27 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   {props.m.args().files_only ? <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">files-only</span> : null}
                 </div>
                 <Show
-                  when={searchOut().trim().length > 0}
+                  when={!props.u.result?.isError}
                   fallback={
-                    <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-                      {!props.u.result
-                        ? props.active
-                          ? "Searching…"
-                          : "Search did not complete."
-                        : props.u.result.isError
-                          ? String(props.m.mergedEnv()?.error || "Search failed.")
-                          : "No matches found."}
+                    <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                      {searchOut().trim() || String(props.m.mergedEnv()?.error || "Search failed.")}
                     </div>
                   }
                 >
-                  <CodeBlock embedded follow={() => props.m.open() && props.running} text={searchOut()} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
+                  <Show
+                    when={searchOut().trim().length > 0}
+                    fallback={
+                      <div class="px-3 py-2 text-[11px] text-fg-muted">
+                        {!props.u.result
+                          ? props.active
+                            ? "Searching…"
+                            : "Search did not complete."
+                          : "No matches found."}
+                      </div>
+                    }
+                  >
+                    <CodeBlock embedded follow={() => props.m.open() && props.running} text={searchOut()} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
+                  </Show>
                 </Show>
               </>
             );
@@ -221,71 +228,78 @@ export function ToolSearchBodies(props: ToolPartProps) {
             const inspectOut = () => props.m.terminal().output || props.m.output() || props.m.prog() || "";
             return (
               <Show
-                when={inspectOut().trim().length > 0}
+                when={!props.u.result?.isError}
                 fallback={
-                  <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-                    {!props.u.result
-                      ? props.active
-                        ? "Listing…"
-                        : "Directory listing did not complete."
-                      : props.u.result.isError
-                        ? String(props.m.mergedEnv()?.error || "Failed to inspect directory.")
-                        : "Empty directory."}
+                  <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                    {inspectOut().trim() || String(props.m.mergedEnv()?.error || "Failed to inspect directory.")}
                   </div>
                 }
               >
                 <Show
-                  when={inspectTree()}
+                  when={inspectOut().trim().length > 0}
                   fallback={
-                    <CodeBlock embedded follow={() => props.m.open() && props.running} text={inspectOut()} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
+                    <div class="px-3 py-2 text-[11px] text-fg-muted">
+                      {!props.u.result
+                        ? props.active
+                          ? "Listing…"
+                          : "Directory listing did not complete."
+                        : "Empty directory."}
+                    </div>
                   }
                 >
-                  {(t) => (
-                    <>
-                      <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted">
-                        {t().scope && t().scope !== "./" ? t().scope : "workspace"} · {t().count} {t().count === 1 ? "entry" : "entries"}
-                        {t().capped ? ` (capped at ${t().capped})` : ""}
-                      </div>
-                      <Show
-                        when={t().entries.length > 0}
-                        fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">Empty directory.</div>}
-                      >
-                        <ul class="px-1.5 py-1">
-                          <For each={t().entries}>
-                            {(e) => (
-                              <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-surface-muted/65 text-[12px] transition-colors">
-                                <span style={{ "padding-left": `${e.depth * 14}px` }} class="flex min-w-0 flex-1 items-center gap-1.5">
-                                  <Show
-                                    when={e.isDir}
-                                    fallback={<FileIcon path={e.name} size={13} />}
-                                  >
-                                    <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
-                                  </Show>
-                                  <span class="truncate font-mono text-fg">
-                                    {e.name}
-                                    {e.isDir ? "/" : ""}
-                                  </span>
-                                </span>
-                                {flagBadge(e.flag)}
-                                <Show when={e.flag === "•"}>
-                                  <span class="h-1 w-1 shrink-0 rounded-full bg-fg-muted" />
-                                </Show>
-                                <Show when={e.size}>
-                                  <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
-                                    {e.size}
-                                    {e.lines !== undefined ? ` · ${e.lines} lines` : ""}
-                                    <Show when={e.mtime}>
-                                      <span class="hidden sm:inline">{" · " + e.mtime}</span>
+                  <Show
+                    when={inspectTree()}
+                    fallback={
+                      <CodeBlock embedded follow={() => props.m.open() && props.running} text={inspectOut()} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
+                    }
+                  >
+                    {(t) => (
+                      <>
+                        <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted">
+                          {t().scope && t().scope !== "./" ? t().scope : "workspace"} · {t().count} {t().count === 1 ? "entry" : "entries"}
+                          {t().capped ? ` (capped at ${t().capped})` : ""}
+                        </div>
+                        <Show
+                          when={t().entries.length > 0}
+                          fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">Empty directory.</div>}
+                        >
+                          <ul class="px-1.5 py-1">
+                            <For each={t().entries}>
+                              {(e) => (
+                                <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-surface-muted/65 text-[12px] transition-colors">
+                                  <span style={{ "padding-left": `${e.depth * 14}px` }} class="flex min-w-0 flex-1 items-center gap-1.5">
+                                    <Show
+                                      when={e.isDir}
+                                      fallback={<FileIcon path={e.name} size={13} />}
+                                    >
+                                      <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
                                     </Show>
+                                    <span class="truncate font-mono text-fg">
+                                      {e.name}
+                                      {e.isDir ? "/" : ""}
+                                    </span>
                                   </span>
-                                </Show>
-                              </li>
-                            )}
-                          </For>
-                        </ul>
-                      </Show>
-                    </>
-                  )}
+                                  {flagBadge(e.flag)}
+                                  <Show when={e.flag === "•"}>
+                                    <span class="h-1 w-1 shrink-0 rounded-full bg-fg-muted" />
+                                  </Show>
+                                  <Show when={e.size}>
+                                    <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
+                                      {e.size}
+                                      {e.lines !== undefined ? ` · ${e.lines} lines` : ""}
+                                      <Show when={e.mtime}>
+                                        <span class="hidden sm:inline">{" · " + e.mtime}</span>
+                                      </Show>
+                                    </span>
+                                  </Show>
+                                </li>
+                              )}
+                            </For>
+                          </ul>
+                        </Show>
+                      </>
+                    )}
+                  </Show>
                 </Show>
               </Show>
             );
@@ -296,50 +310,57 @@ export function ToolSearchBodies(props: ToolPartProps) {
             const globOut = () => props.m.output() || props.m.prog() || "";
             return (
               <Show
-                when={globOut().trim().length > 0}
+                when={!props.u.result?.isError}
                 fallback={
-                  <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-                    {!props.u.result
-                      ? props.active
-                        ? "Finding files…"
-                        : "File search did not complete."
-                      : props.u.result.isError
-                        ? String(props.m.mergedEnv()?.error || "Glob search failed.")
-                        : "No files matched the pattern."}
+                  <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                    {globOut().trim() || String(props.m.mergedEnv()?.error || "Glob search failed.")}
                   </div>
                 }
               >
                 <Show
-                  when={globList()}
+                  when={globOut().trim().length > 0}
                   fallback={
-                    <CodeBlock embedded follow={() => props.m.open() && props.running} text={globOut()} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
+                    <div class="px-3 py-2 text-[11px] text-fg-muted">
+                      {!props.u.result
+                        ? props.active
+                          ? "Finding files…"
+                          : "File search did not complete."
+                        : "No files matched the pattern."}
+                    </div>
                   }
                 >
-                  {(g) => (
-                    <Show
-                      when={!g().none}
-                      fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">No files matched the pattern.</div>}
-                    >
-                      <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
-                        {g().files.length} {g().files.length === 1 ? "file" : "files"}
-                      </div>
-                      <ul ref={(el) => onCleanup(followTail(el, () => props.m.open() && props.running))} class="px-1.5 py-1">
-                        <For each={g().files}>
-                          {(f) => (
-                            <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-surface-muted/65 text-[12px] transition-colors">
-                              <Show when={f.endsWith("/")} fallback={<FileIcon path={f} size={13} />}>
-                                <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
-                              </Show>
-                              <span class="truncate font-mono text-fg">{f}</span>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                      <Show when={g().truncated}>
-                        <p class="px-3 pb-2 text-[10px] text-fg-muted">Truncated: showing first {g().files.length} matches — narrow the pattern</p>
+                  <Show
+                    when={globList()}
+                    fallback={
+                      <CodeBlock embedded follow={() => props.m.open() && props.running} text={globOut()} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
+                    }
+                  >
+                    {(g) => (
+                      <Show
+                        when={!g().none}
+                        fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">No files matched the pattern.</div>}
+                      >
+                        <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
+                          {g().files.length} {g().files.length === 1 ? "file" : "files"}
+                        </div>
+                        <ul ref={(el) => onCleanup(followTail(el, () => props.m.open() && props.running))} class="px-1.5 py-1">
+                          <For each={g().files}>
+                            {(f) => (
+                              <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-surface-muted/65 text-[12px] transition-colors">
+                                <Show when={f.endsWith("/")} fallback={<FileIcon path={f} size={13} />}>
+                                  <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
+                                </Show>
+                                <span class="truncate font-mono text-fg">{f}</span>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                        <Show when={g().truncated}>
+                          <p class="px-3 pb-2 text-[10px] text-fg-muted">Truncated: showing first {g().files.length} matches — narrow the pattern</p>
+                        </Show>
                       </Show>
-                    </Show>
-                  )}
+                    )}
+                  </Show>
                 </Show>
               </Show>
             );
@@ -359,41 +380,48 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   </div>
                 </Show>
                 <Show
-                  when={webResults().length > 0}
+                  when={!props.u.result?.isError}
                   fallback={
-                    <Show
-                      when={webOut().trim().length > 0}
-                      fallback={
-                        <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-                          {!props.u.result
-                            ? props.active
-                              ? "Searching the web…"
-                              : "Web search did not complete."
-                            : props.u.result.isError
-                              ? String(props.m.mergedEnv()?.error || "Web search failed.")
-                              : "No results found."}
-                        </div>
-                      }
-                    >
-                      <CodeBlock embedded follow={() => props.m.open() && props.running} text={webOut()} language={undefined} plain wrap={false} scrollKey={`${props.m.key()}:results`} />
-                    </Show>
+                    <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                      {webOut().trim() || String(props.m.mergedEnv()?.error || "Web search failed.")}
+                    </div>
                   }
                 >
-                  <ol class="px-3 pb-2 space-y-1.5">
-                    <For each={webResults().slice(0, 10)}>{(r: any, i: () => number) =>
-                      <li class="group rounded-lg border border-border/80 bg-surface px-2.5 py-1.5 transition-colors hover:border-border-strong">
-                        <a href={String(r.url || "")} target="_blank" rel="noreferrer"
-                           class="flex items-baseline gap-1.5 text-[12px] leading-snug">
-                          <span class="shrink-0 font-mono text-[10px] text-fg-muted">{i() + 1}.</span>
-                          <span class="font-medium text-fg group-hover:text-accent group-hover:underline line-clamp-1">{String(r.title || r.url || "")}</span>
-                        </a>
-                        <div class="mt-0.5 truncate font-mono text-[10px] text-fg-muted">{String(r.url || "")}</div>
-                        <Show when={r.snippet}><p class="mt-0.5 text-[11px] leading-snug text-fg-secondary line-clamp-2">{String(r.snippet)}</p></Show>
-                      </li>
-                    }</For>
-                  </ol>
-                  <Show when={webResults().length > 10}>
-                    <p class="px-3 pb-2 text-[10px] text-fg-muted">+{webResults().length - 10} more matches</p>
+                  <Show
+                    when={webResults().length > 0}
+                    fallback={
+                      <Show
+                        when={webOut().trim().length > 0}
+                        fallback={
+                          <div class="px-3 py-2 text-[11px] text-fg-muted">
+                            {!props.u.result
+                              ? props.active
+                                ? "Searching the web…"
+                                : "Web search did not complete."
+                              : "No results found."}
+                          </div>
+                        }
+                      >
+                        <CodeBlock embedded follow={() => props.m.open() && props.running} text={webOut()} language={undefined} plain wrap={false} scrollKey={`${props.m.key()}:results`} />
+                      </Show>
+                    }
+                  >
+                    <ol class="px-3 pb-2 space-y-1.5">
+                      <For each={webResults().slice(0, 10)}>{(r: any, i: () => number) =>
+                        <li class="group rounded-lg border border-border/80 bg-surface px-2.5 py-1.5 transition-colors hover:border-border-strong">
+                          <a href={String(r.url || "")} target="_blank" rel="noreferrer"
+                             class="flex items-baseline gap-1.5 text-[12px] leading-snug">
+                            <span class="shrink-0 font-mono text-[10px] text-fg-muted">{i() + 1}.</span>
+                            <span class="font-medium text-fg group-hover:text-accent group-hover:underline line-clamp-1">{String(r.title || r.url || "")}</span>
+                          </a>
+                          <div class="mt-0.5 truncate font-mono text-[10px] text-fg-muted">{String(r.url || "")}</div>
+                          <Show when={r.snippet}><p class="mt-0.5 text-[11px] leading-snug text-fg-secondary line-clamp-2">{String(r.snippet)}</p></Show>
+                        </li>
+                      }</For>
+                    </ol>
+                    <Show when={webResults().length > 10}>
+                      <p class="px-3 pb-2 text-[10px] text-fg-muted">+{webResults().length - 10} more matches</p>
+                    </Show>
                   </Show>
                 </Show>
               </>
@@ -519,21 +547,28 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   </div>
                 </Show>
                 <Show
-                  when={bgLog().trim().length > 0}
+                  when={!props.u.result?.isError}
                   fallback={
-                    <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-                      {props.u.result?.isError
-                        ? String(bgEnv()?.error || "Failed to read background task.")
-                        : String(bgEnv()?.info || "") ||
+                    <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                      {bgLog().trim() || String(bgEnv()?.error || "Failed to read background task.")}
+                    </div>
+                  }
+                >
+                  <Show
+                    when={bgLog().trim().length > 0}
+                    fallback={
+                      <div class="px-3 py-2 text-[11px] text-fg-muted">
+                        {String(bgEnv()?.info || "") ||
                           (!props.u.result
                             ? props.active
                               ? "Reading background task…"
                               : "Background check did not complete."
                             : "No log output yet.")}
-                    </div>
-                  }
-                >
-                  <CodeBlock embedded numbered follow={() => props.m.open() && props.running} text={bgLog()} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
+                      </div>
+                    }
+                  >
+                    <CodeBlock embedded numbered follow={() => props.m.open() && props.running} text={bgLog()} language={undefined} plain wrap={false} scrollKey={props.m.key()} />
+                  </Show>
                 </Show>
               </>
             );
@@ -544,34 +579,40 @@ export function ToolSearchBodies(props: ToolPartProps) {
             const bgListRaw = () => props.m.output() || props.m.prog() || "";
             return (
               <Show
-                when={bgListParsed()}
+                when={!props.u.result?.isError}
                 fallback={
-                  <Show
-                    when={bgListRaw().trim().length > 0}
-                    fallback={
-                      <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-                        {!props.u.result
-                          ? props.active
-                            ? "Checking background jobs…"
-                            : "Background job check did not complete."
-                          : props.u.result.isError
-                            ? String(props.m.mergedEnv()?.error || "Failed to list background jobs.")
-                            : "No background jobs in this session."}
-                      </div>
-                    }
-                  >
-                    <CodeBlock
-                      embedded
-                      follow={() => props.m.open() && props.running}
-                      text={bgListRaw()}
-                      language={undefined}
-                      plain
-                      wrap={false}
-                      scrollKey={props.m.key()}
-                    />
-                  </Show>
+                  <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                    {bgListRaw().trim() || String(props.m.mergedEnv()?.error || "Failed to list background jobs.")}
+                  </div>
                 }
               >
+                <Show
+                  when={bgListParsed()}
+                  fallback={
+                    <Show
+                      when={bgListRaw().trim().length > 0}
+                      fallback={
+                        <div class="px-3 py-2 text-[11px] text-fg-muted">
+                          {!props.u.result
+                            ? props.active
+                              ? "Checking background jobs…"
+                              : "Background job check did not complete."
+                            : "No background jobs in this session."}
+                        </div>
+                      }
+                    >
+                      <CodeBlock
+                        embedded
+                        follow={() => props.m.open() && props.running}
+                        text={bgListRaw()}
+                        language={undefined}
+                        plain
+                        wrap={false}
+                        scrollKey={props.m.key()}
+                      />
+                    </Show>
+                  }
+                >
                 {(list) => (
                   <>
                     <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
@@ -632,6 +673,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     </Show>
                   </>
                 )}
+                </Show>
               </Show>
             );
           })()}

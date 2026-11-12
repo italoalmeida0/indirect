@@ -146,13 +146,13 @@ export function ToolEditBodies(props: ToolPartProps) {
   });
 
   const readText = createMemo(() => {
-    if (props.m.name() !== "read") return "";
+    if (props.m.name() !== "read" || props.u.result?.isError) return "";
     const raw = String((props.u.result?.toolDetails?.display ?? props.m.output()) || props.m.prog() || "");
     return stripLinePrefixNotice(raw);
   });
 
   const writeText = createMemo(() => {
-    if (props.m.name() !== "write") return "";
+    if (props.m.name() !== "write" || props.u.result?.isError) return "";
     const raw = String(
       (props.u.result?.toolDetails?.display ?? props.m.output()) ||
         props.m.args().content ||
@@ -212,55 +212,71 @@ export function ToolEditBodies(props: ToolPartProps) {
 
       <Show when={props.m.name() === "read"}>
         <Show
-          when={readText().trim().length > 0}
+          when={!props.u.result?.isError}
           fallback={
-            <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger bg-danger-subtle font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-              {!props.u.result
-                ? props.active
-                  ? "Reading file…"
-                  : "File read did not complete."
-                : props.u.result.isError
-                  ? String(props.m.mergedEnv()?.error || "Failed to read file.")
-                  : "Empty file (0 bytes)."}
+            <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+              {stripLinePrefixNotice(props.m.output() || "").trim() ||
+                String(props.m.mergedEnv()?.error || "Failed to read file.")}
             </div>
           }
         >
-          <CodeBlock
-            embedded
-            numbered
-            follow={() => props.m.open() && props.running}
-            text={readText()}
-            language={languageForPath(String(props.m.args().path || ""))}
-            wrap={false}
-            scrollKey={props.m.key()}
-          />
+          <Show
+            when={readText().trim().length > 0}
+            fallback={
+              <div class="px-3 py-2 text-[11px] text-fg-muted">
+                {!props.u.result
+                  ? props.active
+                    ? "Reading file…"
+                    : "File read did not complete."
+                  : "Empty file (0 bytes)."}
+              </div>
+            }
+          >
+            <CodeBlock
+              embedded
+              numbered
+              follow={() => props.m.open() && props.running}
+              text={readText()}
+              language={languageForPath(String(props.m.args().path || ""))}
+              wrap={false}
+              scrollKey={props.m.key()}
+            />
+          </Show>
         </Show>
       </Show>
 
       <Show when={props.m.name() === "write"}>
         <Show
-          when={writeText().trim().length > 0}
+          when={!props.u.result?.isError}
           fallback={
-            <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger bg-danger-subtle font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-              {!props.u.result
-                ? props.active
-                  ? "Writing file…"
-                  : "File write did not complete."
-                : props.u.result.isError
-                  ? String(props.m.mergedEnv()?.error || "Failed to write file.")
-                  : String(props.m.mergedEnv()?.info || "Wrote empty file (0 bytes).")}
+            <div class="px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+              {stripLinePrefixNotice(props.m.output() || "").trim() ||
+                String(props.m.mergedEnv()?.error || "Failed to write file.")}
             </div>
           }
         >
-          <CodeBlock
-            embedded
-            numbered
-            follow={() => props.m.open() && props.running}
-            text={writeText()}
-            language={languageForPath(String(props.m.args().path || ""))}
-            wrap={false}
-            scrollKey={props.m.key()}
-          />
+          <Show
+            when={writeText().trim().length > 0}
+            fallback={
+              <div class="px-3 py-2 text-[11px] text-fg-muted">
+                {!props.u.result
+                  ? props.active
+                    ? "Writing file…"
+                    : "File write did not complete."
+                  : String(props.m.mergedEnv()?.info || "Wrote empty file (0 bytes).")}
+              </div>
+            }
+          >
+            <CodeBlock
+              embedded
+              numbered
+              follow={() => props.m.open() && props.running}
+              text={writeText()}
+              language={languageForPath(String(props.m.args().path || ""))}
+              wrap={false}
+              scrollKey={props.m.key()}
+            />
+          </Show>
         </Show>
       </Show>
 

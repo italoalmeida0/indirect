@@ -765,12 +765,13 @@ describe("WAL post-reload durability helpers (edit synthesis & fetchDetails)", (
 
 describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP", () => {
   const LINE_PREFIX_NOTICE =
-    "[Note: Line numbers (N:) are display prefixes, not file content. Copy text after the colon for edits; never include prefixes in file writes.]";
+    '[Note: The line prefix "<number>:" is for line identification only and is not part of the file content.]\n';
 
   let renderToolBodySsr!: (
     u: ToolUnit,
     opts: { running: boolean; active: boolean; progress?: Record<string, string> },
   ) => string;
+  let stripLinePrefixNoticeFn!: (text: string) => string;
 
   beforeAll(async () => {
     const toolDir = join(process.cwd(), "web", "src", "indirect-code", "components", "tool");
@@ -793,6 +794,7 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
                 import { renderToString } from "solid-js/web";
                 import { ToolBody } from "./ToolBody";
                 import { useToolUnitModel } from "./toolUnitModel";
+                export { stripLinePrefixNotice } from "../CodeBlock";
 
                 export function renderToolBodySsr(u, opts) {
                   const ctx = {
@@ -883,6 +885,7 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
     const jsText = await buildRes.outputs[0]!.text();
     const mod = await import(`data:text/javascript;base64,${Buffer.from(jsText, "utf8").toString("base64")}`);
     renderToolBodySsr = mod.renderToolBodySsr;
+    stripLinePrefixNoticeFn = mod.stripLinePrefixNotice;
   });
 
   function stripHtmlVisibleText(html: string): string {
@@ -948,7 +951,61 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
     }
   }
 
-  test("renders non-empty visible body content and zero empty <code class=\"tok\"> blocks across all 5 lifecycle states for every expandable builtin + MCP tool", () => {
+  function populatedArgsForError(tool: string): Record<string, unknown> {
+    switch (tool) {
+      case "write":
+        return { path: "src/secret.ts", content: "export const UNWRITTEN_PAYLOAD = 1;" };
+      case "read":
+        return { path: "src/secret.ts" };
+      case "edit":
+      case "patch":
+        return { path: "src/app.ts", edits: [{ old_text: "a = 1", new_text: "UNAPPLIED_EDIT_PAYLOAD" }] };
+      case "question":
+        return {
+          questions: [
+            {
+              header: "Deploy",
+              question: "Confirm production deploy?",
+              options: [{ label: "Approve" }, { label: "Abort" }],
+            },
+          ],
+        };
+      case "todo":
+      case "todowrite":
+      case "todoread":
+        return {
+          items: [{ id: "1", text: "Verify checklist item", status: "completed" }],
+        };
+      case "summary":
+        return { for_user: "UNPUBLISHED_SUMMARY_TEXT", for_me: "private" };
+      case "finish_entire_request":
+        return { final_message_to_user: "UNPUBLISHED_FINAL_TEXT" };
+      case "widget_set":
+        return { id: "demo-widget", content: "export const UNWRITTEN_WIDGET_PAYLOAD = 1;" };
+      case "widget_edit":
+        return { id: "demo-widget", edits: [{ old_text: "oldWidget", new_text: "UNAPPLIED_WIDGET_EDIT" }] };
+      default:
+        return defaultArgsFor(tool);
+    }
+  }
+
+  test("LINE_PREFIX_NOTICE matches Go read.go byte-for-byte and stripLinePrefixNotice strips LF + CRLF cleanly", () => {
+    const goReadSrc = readFileSync(
+      join(process.cwd(), "indirect-code-daemon", "packages", "agent", "tools", "read.go"),
+      "utf8",
+    );
+    const m = goReadSrc.match(/const LinePrefixNotice = ("(?:[^"\\]|\\.)*")/);
+    expect(m).toBeTruthy();
+    const goConstantValue = JSON.parse(m![1]!);
+    expect(LINE_PREFIX_NOTICE).toBe(goConstantValue);
+    expect(stripLinePrefixNoticeFn(LINE_PREFIX_NOTICE)).toBe("");
+    expect(stripLinePrefixNoticeFn(LINE_PREFIX_NOTICE.replace("\n", "\r\n"))).toBe("");
+    expect(stripLinePrefixNoticeFn(`${LINE_PREFIX_NOTICE}1:export const ok = true;`)).toBe(
+      "1:export const ok = true;",
+    );
+  });
+
+  test("renders non-empty visible body content and zero empty <code class=\"tok\"> blocks across all 6 lifecycle states for every expandable builtin + MCP tool", () => {
     const expandableTools = [
       ...DAEMON_BUILTIN_TOOLS.filter((t) => !isHeaderOnlySleep(t, true)),
       "mcp__github__search_issues",
@@ -958,7 +1015,7 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
     for (const tool of expandableTools) {
       const args = defaultArgsFor(tool);
 
-      // 1. Running active with zero output/progress yet
+      // 1. State A: Running active with zero output/progress yet
       const htmlRunning = renderToolBodySsr(mkUnit(tool, args), { running: true, active: true });
       const textRunning = stripHtmlVisibleText(htmlRunning);
       if (!textRunning) {
@@ -966,7 +1023,7 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
       }
       expect(htmlRunning).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
 
-      // 2. Stopped / cancelled without result (`!u.result && !props.active`)
+      // 2. State B: Stopped / cancelled without result (`!u.result && !props.active`)
       const htmlStopped = renderToolBodySsr(mkUnit(tool, args), { running: false, active: false });
       const textStopped = stripHtmlVisibleText(htmlStopped);
       if (!textStopped) {
@@ -974,23 +1031,26 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
       }
       expect(htmlStopped).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
 
-      // 3. Completed 0-match / 0-byte / empty output LIVE (including LinePrefixNotice-only display for read/write/widget_read)
-      const liveEmptyDetails =
-        tool === "read" || tool === "write" || tool === "widget_read"
-          ? { display: LINE_PREFIX_NOTICE, total_lines: 0 }
-          : {};
+      // 3. State C: Completed 0-match / 0-byte / empty output LIVE (including exact Go LinePrefixNotice-only display)
+      const usesPrefixNotice =
+        tool === "read" || tool === "write" || tool === "widget_read" || tool === "widget_set";
+      const liveEmptyDetails = usesPrefixNotice ? { display: LINE_PREFIX_NOTICE, total_lines: 0 } : {};
       const htmlLiveEmpty = renderToolBodySsr(
-        mkUnit(tool, args, { text: tool === "read" ? LINE_PREFIX_NOTICE : "", details: liveEmptyDetails }),
+        mkUnit(tool, args, {
+          text: usesPrefixNotice ? LINE_PREFIX_NOTICE : "",
+          details: liveEmptyDetails,
+        }),
         { running: false, active: false },
       );
       const textLiveEmpty = stripHtmlVisibleText(htmlLiveEmpty);
       if (!textLiveEmpty) {
         throw new Error(`Tool "${tool}" rendered empty <ToolBody> in State C (completed 0-output live): ${htmlLiveEmpty}`);
       }
+      expect(htmlLiveEmpty).not.toContain("for line identification only");
       expect(htmlLiveEmpty).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
 
-      // 4. Completed 0-match / 0-byte / empty output POST-RELOAD WAL (`<tool_result type="ok"></tool_result>` without toolDetails)
-      const walBody = tool === "read" ? LINE_PREFIX_NOTICE : "";
+      // 4. State D: Completed 0-match / 0-byte / empty output POST-RELOAD WAL (`<tool_result type="ok"></tool_result>` without toolDetails)
+      const walBody = usesPrefixNotice ? LINE_PREFIX_NOTICE : "";
       const htmlWalEmpty = renderToolBodySsr(
         mkUnit(tool, args, { text: `<tool_result type="ok">${walBody}</tool_result>` }),
         { running: false, active: false },
@@ -999,9 +1059,10 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
       if (!textWalEmpty) {
         throw new Error(`Tool "${tool}" rendered empty <ToolBody> in State D (completed 0-output WAL): ${htmlWalEmpty}`);
       }
+      expect(htmlWalEmpty).not.toContain("for line identification only");
       expect(htmlWalEmpty).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
 
-      // 5. Error (`isError: true`) with empty body
+      // 5. State E: Error (`isError: true`) with empty body + `error="..."` attr
       const htmlError = renderToolBodySsr(
         mkUnit(tool, args, { text: `<tool_result type="error" error="Execution failed"></tool_result>`, isError: true }),
         { running: false, active: false },
@@ -1011,16 +1072,74 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
         throw new Error(`Tool "${tool}" rendered empty <ToolBody> in State E (isError empty body): ${htmlError}`);
       }
       expect(htmlError).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
+
+      // 6. State F: Go `core.ErrorEnvelope(msg)` (`<tool_result type="error">permission denied (boundary check)</tool_result>`)
+      //    with populated tool args -> error text MUST be visibly rendered and NEVER misparsed as files/entries or swallowed!
+      const errArgs = populatedArgsForError(tool);
+      const htmlErrEnvelope = renderToolBodySsr(
+        mkUnit(tool, errArgs, {
+          text: `<tool_result type="error">permission denied (boundary check)</tool_result>`,
+          isError: true,
+        }),
+        { running: false, active: false },
+      );
+      const textErrEnvelope = stripHtmlVisibleText(htmlErrEnvelope);
+      if (!textErrEnvelope.includes("permission denied (boundary check)")) {
+        throw new Error(
+          `Tool "${tool}" swallowed or hid core.ErrorEnvelope text in State F: visible="${textErrEnvelope}" html=${htmlErrEnvelope}`,
+        );
+      }
+      expect(htmlErrEnvelope).not.toContain("1 file");
+      expect(htmlErrEnvelope).not.toContain("1 entry");
+      expect(htmlErrEnvelope).not.toContain("widgets ·");
+      expect(htmlErrEnvelope).not.toContain("background jobs ·");
+      expect(htmlErrEnvelope).not.toContain("UNWRITTEN_PAYLOAD");
+      expect(htmlErrEnvelope).not.toContain("UNWRITTEN_WIDGET_PAYLOAD");
+      expect(htmlErrEnvelope).not.toContain("UNAPPLIED_EDIT_PAYLOAD");
+      expect(htmlErrEnvelope).not.toContain("UNAPPLIED_WIDGET_EDIT");
+      expect(htmlErrEnvelope).not.toContain("UNPUBLISHED_SUMMARY_TEXT");
+      expect(htmlErrEnvelope).not.toContain("UNPUBLISHED_FINAL_TEXT");
+      expect(htmlErrEnvelope).not.toContain("Waiting for your answers");
+      expect(htmlErrEnvelope).not.toContain("1/1 completed");
+      expect(htmlErrEnvelope).not.toContain("Widget saved.");
+      expect(htmlErrEnvelope).not.toMatch(/<code[^>]*class="tok"[^>]*>\s*<\/code>/);
     }
   });
 
-  test("bg_cancel renders live cancellation status while running, and post-reload edit + fetch_url + markdown tools preserve full fidelity", () => {
+  test("bg_cancel renders live cancellation status while running, error envelopes never masquerade as trees/deletes, and post-reload edit + fetch_url + markdown tools preserve full fidelity", () => {
     // bg_cancel while running
     const bgRunningHtml = renderToolBodySsr(mkUnit("bg_cancel", { job_id: "job_123" }), {
       running: true,
       active: true,
     });
     expect(stripHtmlVisibleText(bgRunningHtml)).toContain("Canceling background task");
+
+    // Single-token inspect error ("aborted") and widget_list error ("failed (timeout)") never parse as 1 entry
+    const inspectSingleErr = renderToolBodySsr(
+      mkUnit("inspect", { path: "secret-dir" }, { text: `<tool_result type="error">aborted</tool_result>`, isError: true }),
+      { running: false, active: false },
+    );
+    expect(stripHtmlVisibleText(inspectSingleErr)).toContain("aborted");
+    expect(inspectSingleErr).not.toContain("1 entry");
+
+    const widgetListErr = renderToolBodySsr(
+      mkUnit("widget_list", {}, { text: `<tool_result type="error">failed (timeout)</tool_result>`, isError: true }),
+      { running: false, active: false },
+    );
+    expect(stripHtmlVisibleText(widgetListErr)).toContain("failed (timeout)");
+    expect(widgetListErr).not.toContain("widgets ·");
+
+    // Failed `widget_set` delete (`args.delete = true`, `isError = true`) renders error instead of "Removed from session widget store"
+    const widgetDeleteErr = renderToolBodySsr(
+      mkUnit(
+        "widget_set",
+        { id: "demo-widget", delete: true },
+        { text: `<tool_result type="error">widget demo-widget does not exist</tool_result>`, isError: true },
+      ),
+      { running: false, active: false },
+    );
+    expect(stripHtmlVisibleText(widgetDeleteErr)).toContain("widget demo-widget does not exist");
+    expect(widgetDeleteErr).not.toContain("Removed from session widget store");
 
     // Post-reload WAL `edit`: empty `<tool_result>` body + `args.edits` -> renders diff, never "No changes"
     const editWalHtml = renderToolBodySsr(

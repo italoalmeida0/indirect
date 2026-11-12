@@ -389,6 +389,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
     if (toolName() !== "widget_set") return "";
     const d = details();
     if (d?.deleted || props.m.args().delete) return "";
+    if (props.u.result?.isError && !parsedLint()) return "";
     if (typeof d?.display === "string") {
       const cleaned = stripLinePrefixNotice(d.display);
       if (cleaned.trim()) return cleaned;
@@ -409,7 +410,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
   });
 
   const widgetReadText = createMemo(() => {
-    if (toolName() !== "widget_read") return "";
+    if (toolName() !== "widget_read" || props.u.result?.isError) return "";
     return stripLinePrefixNotice(String((details()?.display ?? props.m.output()) || props.m.prog() || ""));
   });
 
@@ -418,20 +419,47 @@ export function ToolWidgetBodies(props: ToolPartProps) {
     const d = details();
     const raw = String(d?.display ?? d?.diff ?? props.m.output() ?? "");
     const parsed = raw.trim() ? parseEditResults(raw, widgetId()) : [];
-    if (parsed.length > 0) return parsed;
-    if (props.u.result?.isError) return [];
+    if (parsed.length > 0) {
+      if (props.u.result?.isError) {
+        return parsed.map((sec) =>
+          sec.status === "error"
+            ? sec
+            : {
+                ...sec,
+                status: "error",
+                error: sec.error || sec.diff || "Widget edit failed.",
+                diff: sec.error ? sec.diff : "",
+              },
+        );
+      }
+      return parsed;
+    }
+    if (props.u.result?.isError) {
+      const errMsg =
+        raw.trim() ||
+        String(props.m.mergedEnv()?.error || props.m.mergedEnv()?.info || "").trim() ||
+        "Widget edit failed.";
+      return [
+        {
+          file: widgetId(),
+          status: "error",
+          error: errMsg,
+          diff: "",
+        },
+      ];
+    }
     return synthesizeEditSectionsFromArgs(props.m.args(), widgetId(), "applied");
   });
 
   const widgetList = createMemo<ParsedWidgetList | null>(() => {
-    if (toolName() !== "widget_list") return null;
+    if (toolName() !== "widget_list" || props.u.result?.isError) return null;
     const raw = String(details()?.display ?? props.m.output() ?? "");
     return parseWidgetList(raw, details());
   });
 
   const todoItems = createMemo(() => {
     const n = toolName();
-    if (n !== "todo" && n !== "todowrite" && n !== "todoread") return [];
+    if ((n !== "todo" && n !== "todowrite" && n !== "todoread") || props.u.result?.isError) return [];
     return extractTodoItems(props.m.args(), props.m.output(), details());
   });
 
@@ -440,7 +468,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
       {/* widget_set */}
       <Show when={toolName() === "widget_set"}>
         <Show
-          when={!(props.m.args().delete || details()?.deleted)}
+          when={!(props.m.args().delete || details()?.deleted) || Boolean(props.u.result?.isError)}
           fallback={
             <div class="flex items-center justify-between gap-2 px-3 py-2 text-[12px]">
               <div class="flex items-center gap-2 min-w-0">
@@ -508,21 +536,26 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           </Show>
           <Show when={props.u.result?.isError && !parsedLint()}>
             <div class="border-b border-danger/20 bg-danger-subtle/35 px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
-              {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Widget save failed."}
+              {(props.m.output() || "").trim() ||
+                props.m.mergedEnv()?.error ||
+                props.m.mergedEnv()?.info ||
+                "Widget save failed."}
             </div>
           </Show>
           <Show
             when={widgetSetSource().trim().length > 0}
             fallback={
-              <div class="px-3 py-2 text-[11.5px] text-fg-muted">
-                {props.m.args().src_file
-                  ? `Imported widget source from ${String(props.m.args().src_file)}`
-                  : !props.u.result
-                    ? props.active
-                      ? "Saving widget…"
-                      : "Widget save did not complete."
-                    : "Widget saved."}
-              </div>
+              <Show when={!props.u.result?.isError}>
+                <div class="px-3 py-2 text-[11.5px] text-fg-muted">
+                  {props.m.args().src_file
+                    ? `Imported widget source from ${String(props.m.args().src_file)}`
+                    : !props.u.result
+                      ? props.active
+                        ? "Saving widget…"
+                        : "Widget save did not complete."
+                      : "Widget saved."}
+                </div>
+              </Show>
             }
           >
             <CodeBlock
@@ -557,8 +590,11 @@ export function ToolWidgetBodies(props: ToolPartProps) {
         <Show
           when={!props.u.result?.isError}
           fallback={
-            <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
-              {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Failed to read widget."}
+            <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+              {(props.m.output() || "").trim() ||
+                props.m.mergedEnv()?.error ||
+                props.m.mergedEnv()?.info ||
+                "Failed to read widget."}
             </div>
           }
         >
@@ -595,8 +631,11 @@ export function ToolWidgetBodies(props: ToolPartProps) {
             <Show
               when={!props.u.result?.isError}
               fallback={
-                <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
-                  {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Widget edit failed."}
+                <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  {(props.m.output() || "").trim() ||
+                    props.m.mergedEnv()?.error ||
+                    props.m.mergedEnv()?.info ||
+                    "Widget edit failed."}
                 </div>
               }
             >
@@ -624,8 +663,11 @@ export function ToolWidgetBodies(props: ToolPartProps) {
             <Show
               when={!props.u.result?.isError}
               fallback={
-                <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
-                  {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Widget lint failed."}
+                <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  {(props.m.output() || "").trim() ||
+                    props.m.mergedEnv()?.error ||
+                    props.m.mergedEnv()?.info ||
+                    "Widget lint failed."}
                 </div>
               }
             >
@@ -714,16 +756,19 @@ export function ToolWidgetBodies(props: ToolPartProps) {
       {/* widget_list */}
       <Show when={toolName() === "widget_list"}>
         <Show
-          when={widgetList()}
+          when={!props.u.result?.isError}
           fallback={
-            <Show
-              when={!props.u.result?.isError}
-              fallback={
-                <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
-                  {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Failed to list widgets."}
-                </div>
-              }
-            >
+            <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+              {(props.m.output() || "").trim() ||
+                props.m.mergedEnv()?.error ||
+                props.m.mergedEnv()?.info ||
+                "Failed to list widgets."}
+            </div>
+          }
+        >
+          <Show
+            when={widgetList()}
+            fallback={
               <Show
                 when={(props.m.output() || props.m.prog() || "").trim().length > 0}
                 fallback={
@@ -746,47 +791,47 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                   scrollKey={props.m.key()}
                 />
               </Show>
-            </Show>
-          }
-        >
-          {(wl) => (
-            <>
-              <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
-                widgets · {wl().total} {wl().total === 1 ? "entry" : "entries"}
-              </div>
-              <Show
-                when={wl().entries.length > 0}
-                fallback={<div class="px-3 py-2 text-[11.5px] text-fg-muted">No widgets stored in this session.</div>}
-              >
-                <ul class="px-1.5 py-1">
-                  <For each={wl().entries}>
-                    {(item) => (
-                      <li class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 hover:bg-surface-muted/65 text-[12px] transition-colors">
-                        <div class="flex items-center gap-1.5 min-w-0 flex-1">
-                          <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent/85" />
-                          <span class="font-mono font-medium text-fg shrink-0">{item.id}</span>
-                          <Show when={item.placeholder}>
-                            <span class="truncate text-[11.5px] text-fg-muted">· {item.placeholder}</span>
-                          </Show>
-                        </div>
-                        <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
-                          {[
-                            item.size,
-                            item.lines !== undefined ? `${item.lines} ${item.lines === 1 ? "line" : "lines"}` : undefined,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                          <Show when={item.mtime}>
-                            <span class="hidden sm:inline">{" · " + item.mtime}</span>
-                          </Show>
-                        </span>
-                      </li>
-                    )}
-                  </For>
-                </ul>
-              </Show>
-            </>
-          )}
+            }
+          >
+            {(wl) => (
+              <>
+                <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
+                  widgets · {wl().total} {wl().total === 1 ? "entry" : "entries"}
+                </div>
+                <Show
+                  when={wl().entries.length > 0}
+                  fallback={<div class="px-3 py-2 text-[11.5px] text-fg-muted">No widgets stored in this session.</div>}
+                >
+                  <ul class="px-1.5 py-1">
+                    <For each={wl().entries}>
+                      {(item) => (
+                        <li class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 hover:bg-surface-muted/65 text-[12px] transition-colors">
+                          <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                            <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent/85" />
+                            <span class="font-mono font-medium text-fg shrink-0">{item.id}</span>
+                            <Show when={item.placeholder}>
+                              <span class="truncate text-[11.5px] text-fg-muted">· {item.placeholder}</span>
+                            </Show>
+                          </div>
+                          <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
+                            {[
+                              item.size,
+                              item.lines !== undefined ? `${item.lines} ${item.lines === 1 ? "line" : "lines"}` : undefined,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                            <Show when={item.mtime}>
+                              <span class="hidden sm:inline">{" · " + item.mtime}</span>
+                            </Show>
+                          </span>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </Show>
+              </>
+            )}
+          </Show>
         </Show>
       </Show>
 
@@ -820,17 +865,18 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                   </div>
                 </Show>
               </div>
+              <Show when={props.u.result?.isError}>
+                <div class="border-b border-danger/20 bg-danger-subtle px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  {(props.m.output() || "").trim() ||
+                    props.m.mergedEnv()?.error ||
+                    props.m.mergedEnv()?.info ||
+                    "Task checklist failed."}
+                </div>
+              </Show>
               <Show
                 when={todoItems().length > 0}
                 fallback={
-                  <Show
-                    when={!props.u.result?.isError}
-                    fallback={
-                      <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
-                        {(props.m.output() || "").trim() || props.m.mergedEnv()?.info || "Task checklist failed."}
-                      </div>
-                    }
-                  >
+                  <Show when={!props.u.result?.isError}>
                     <div class="px-3 py-2 text-[11.5px] text-fg-muted">
                       {!props.u.result
                         ? props.active
@@ -903,15 +949,20 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                   <Iconify icon="lucide:sparkles" size={13} class="shrink-0 text-accent" />
                   <span class="font-mono font-medium text-fg truncate">{skillName()}</span>
                 </div>
-                <span class="shrink-0 rounded border border-border/70 bg-surface-muted px-1.5 py-px font-mono text-[10px] text-fg-secondary">
-                  {once() ? "this turn only" : "session active"}
-                </span>
+                <Show when={!props.u.result?.isError}>
+                  <span class="shrink-0 rounded border border-border/70 bg-surface-muted px-1.5 py-px font-mono text-[10px] text-fg-secondary">
+                    {once() ? "this turn only" : "session active"}
+                  </span>
+                </Show>
               </div>
               <Show
                 when={!props.u.result?.isError}
                 fallback={
-                  <div class="px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
-                    {rawBody() || props.m.mergedEnv()?.info || "Skill activation failed."}
+                  <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                    {rawBody() ||
+                      props.m.mergedEnv()?.error ||
+                      props.m.mergedEnv()?.info ||
+                      "Skill activation failed."}
                   </div>
                 }
               >
