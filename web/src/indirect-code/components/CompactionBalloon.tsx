@@ -16,6 +16,7 @@ import type {
 export interface CompactionBalloonProps {
   compaction?: CompactionState | null;
   summary?: string;
+  hasOlderAbove?: boolean;
 }
 
 const MAX_HEADER_FILES = 8;
@@ -467,6 +468,17 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
 
   return (
     <div class="w-full my-3 select-text">
+      <Show when={props.hasOlderAbove}>
+        <div
+          data-compaction-boundary-caption
+          class="mb-1.5 flex items-center justify-center gap-1.5 px-2 text-center text-[10.5px] text-fg-muted border-border/60"
+        >
+          <span>
+            Context boundary · earlier turns above are folded into eras and searchable via{" "}
+            <span class="font-mono text-fg-secondary">session_history</span>
+          </span>
+        </div>
+      </Show>
       {/* Minimal horizontal timeline divider */}
       <div class="flex items-center gap-3">
         <div class="h-px flex-1 bg-border/65" />

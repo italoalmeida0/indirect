@@ -106,7 +106,15 @@ export function resolveWidgetId(args: any, details?: any): string {
 }
 
 export function toolCatOf(name?: string): ToolCat {
-  if (name === "read" || name === "glob" || name === "search" || name === "inspect") return "explore";
+  if (
+    name === "read" ||
+    name === "glob" ||
+    name === "search" ||
+    name === "inspect" ||
+    name === "session_history"
+  ) {
+    return "explore";
+  }
   if (name === "bash" || name === "exec_script" || name === "python") return "command";
   if (name === "edit" || name === "write" || name === "patch") return "edit";
   return "other";

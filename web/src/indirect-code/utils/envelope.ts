@@ -84,9 +84,21 @@ export function footerFromAttrs(a: Record<string, string>): FooterFact[] {
   if (a.exit !== undefined) parts.push({ label: `exit ${a.exit}`, tone: a.exit === "0" ? "muted" : "fail" });
   else if (a.status) parts.push({ label: a.status, tone: a.status === "running" ? "ok" : "muted" });
   if (a.duration) parts.push({ label: `Took ${a.duration}`, tone: "muted" });
-  if (a.truncated === "true" && a.page) parts.push({ label: `${a.page} truncated`, tone: "muted" });
-  else if (a.page) parts.push({ label: a.page, tone: "muted" });
-  if (a.next) parts.push({ label: `more lines: offset ${a.next}`, tone: "muted" });
+  if (a.spilled === "true") {
+    const spillLines = a.spill_lines !== undefined ? Number(a.spill_lines) : NaN;
+    parts.push({
+      label:
+        Number.isFinite(spillLines) && spillLines > 0
+          ? `saved full output (${Math.trunc(spillLines).toLocaleString("en-US")} lines) to brain`
+          : "saved full output to brain",
+      tone: "muted",
+    });
+  } else if (a.truncated === "true" && a.page) {
+    parts.push({ label: `${a.page} truncated`, tone: "muted" });
+  } else if (a.page) {
+    parts.push({ label: a.page, tone: "muted" });
+  }
+  if (a.next && a.spilled !== "true") parts.push({ label: `more lines: offset ${a.next}`, tone: "muted" });
   if (a.info) parts.push({ label: a.info, tone: "muted" });
   return parts;
 }

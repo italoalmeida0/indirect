@@ -1,6 +1,8 @@
 import type { ChatMessage, ContentBlock, RenderBlock, ToolUnit, TurnBalloon, TurnEntry } from "./types";
 import { formatDurationSecs } from "./utils/format";
 import { displayToolArgs, withoutContinueNudges, withoutTodoActivity } from "./live";
+import { parseExploreView, parseSessionHistoryView } from "./utils/contextTools";
+import { stripToolEnvelopeDetailed } from "./utils/envelope";
 import { extractTodoItems, resolveWidgetId } from "./utils/tools";
 
 /** bg_cancel/bg_check kind: exec_script vs terminal. The daemon includes the
@@ -512,6 +514,31 @@ function countBgListJobs(res: string, details: any): number | null {
   return lines.length > 0 ? lines.length : null;
 }
 
+function unwrapToolSummaryInput(res: string, details: any): { cleanRes: string; mergedDetails: any } {
+  if (!res || !res.includes("<tool_result")) {
+    return { cleanRes: res, mergedDetails: details };
+  }
+  const stripped = stripToolEnvelopeDetailed(res);
+  if (Object.keys(stripped.attrs).length === 0) {
+    return { cleanRes: stripped.body, mergedDetails: details };
+  }
+  return {
+    cleanRes: stripped.body,
+    mergedDetails: {
+      ...(details && typeof details === "object" ? details : {}),
+      env: { ...stripped.attrs, ...(details?.env || {}) },
+    },
+  };
+}
+
+function compactCharCount(chars: number): string {
+  if (chars >= 1000) {
+    const rounded = (Math.round(chars / 100) / 10).toFixed(1).replace(/\.0$/, "");
+    return `${rounded}k chars`;
+  }
+  return `${chars} chars`;
+}
+
 export function toolSummary(u: ToolUnit): ToolSummary {
   const name = u.call?.toolName || "tool";
   const args = displayToolArgs(u.call?.toolArgs);
@@ -906,21 +933,63 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       };
     }
     case "session_history": {
-      const q = typeof args.query === "string" ? args.query.replace(/\s+/g, " ").trim() : "";
-      const blockId = typeof args.block_id === "string" ? args.block_id.trim() : "";
-      const rawTarget = q || (blockId ? `era ${blockId}` : "transcript");
+      const { cleanRes, mergedDetails } = unwrapToolSummaryInput(res, details);
+      const view = parseSessionHistoryView(args, cleanRes, mergedDetails);
+      if (view.action === "recall") {
+        const rawTarget = view.blockId
+          ? view.startMsg !== undefined
+            ? `era ${view.blockId} (msgs #${view.startMsg}–#${view.endMsg ?? view.startMsg})`
+            : `era ${view.blockId}`
+          : view.startMsg !== undefined
+            ? view.endMsg !== undefined && view.endMsg !== view.startMsg
+              ? `msgs #${view.startMsg}–#${view.endMsg}`
+              : `msg #${view.startMsg}`
+            : "transcript";
+        const stat =
+          u.result && !u.result.isError
+            ? view.truncated
+              ? "paginated"
+              : view.totalChars && view.totalChars > 0
+                ? compactCharCount(view.totalChars)
+                : undefined
+            : undefined;
+        return {
+          icon: "lucide:history",
+          verb: u.result ? "Recalled history" : "Recalling history",
+          target: rawTarget.length > 90 ? rawTarget.slice(0, 90) + "…" : rawTarget,
+          ...(stat ? { stat } : {}),
+        };
+      }
+      const q = view.query.replace(/\s+/g, " ").trim();
+      const rawTarget = q || "transcript";
+      const stat =
+        u.result && !u.result.isError && view.hitCountKnown
+          ? `${view.hitCount} ${view.hitCount === 1 ? "match" : "matches"}`
+          : undefined;
       return {
         icon: "lucide:history",
         verb: u.result ? "Searched history" : "Searching history",
         target: rawTarget.length > 90 ? rawTarget.slice(0, 90) + "…" : rawTarget,
+        ...(stat ? { stat } : {}),
       };
     }
     case "explore": {
-      const task = typeof args.task === "string" ? args.task.replace(/\s+/g, " ").trim() : "";
+      const { cleanRes, mergedDetails } = unwrapToolSummaryInput(res, details);
+      const view = parseExploreView(args, cleanRes, mergedDetails);
+      const task = view.task.replace(/\s+/g, " ").trim();
+      const turns = view.turns ?? 0;
+      const calls = view.toolCalls ?? 0;
+      const stat =
+        u.result && !u.result.isError && turns > 0
+          ? calls > 0
+            ? `${turns} ${turns === 1 ? "turn" : "turns"} · ${calls} ${calls === 1 ? "call" : "calls"}`
+            : `${turns} ${turns === 1 ? "turn" : "turns"}`
+          : undefined;
       return {
         icon: "lucide:compass",
         verb: u.result ? "Explored" : "Exploring",
         target: task ? (task.length > 90 ? task.slice(0, 90) + "…" : task) : "codebase",
+        ...(stat ? { stat } : {}),
       };
     }
     default: {

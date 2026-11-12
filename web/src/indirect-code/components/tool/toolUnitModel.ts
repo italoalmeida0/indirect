@@ -3,6 +3,7 @@ import { tryParseArgs } from "../../utils/tools";
 import { isHeaderOnlySleep, toolSummary, terminalPresentation } from "../../transcript";
 import { toolRowKey } from "../../utils/titles";
 import { formatDurationSecs } from "../../utils/format";
+import { extractArrivalSpillInfo, parseHumanDurationMs } from "../../utils/contextTools";
 import { bodyWithoutFooter, stripToolEnvelopeDetailed, type FooterFact } from "../../utils/envelope";
 import type { ToolUnit } from "../../types";
 import type { TranscriptRenderCtx } from "../TranscriptBlocks";
@@ -64,18 +65,34 @@ const bashHeaderCmd = () => {
   }
   return String(a.command || sum().target || "");
 };
-const terminal = createMemo(() => terminalPresentation(stripToolEnvelopeDetailed(String(u.result?.toolDetails?.display ?? u.result?.toolResult ?? "")).body));
-/** Tool output with the envelope footer removed; the footer lives in footer(). */
+const rawEnvelope = () => stripToolEnvelopeDetailed(u.result?.toolResult || "");
+const mergedEnv = (): Record<string, string> | undefined => {
+  const detailEnv = (u.result?.toolDetails as any)?.env;
+  const envAttrs = rawEnvelope().attrs;
+  if (detailEnv && Object.keys(envAttrs).length > 0) return { ...envAttrs, ...detailEnv };
+  if (detailEnv) return detailEnv;
+  return Object.keys(envAttrs).length > 0 ? envAttrs : undefined;
+};
 // Strip at the model too: ingestion normally removes the envelope, but any
 // path that lands raw text in toolResult (replay, fixture, late snapshot)
 // must never render <tool_result …> XML in a body.
-const output = () => bodyWithoutFooter(stripToolEnvelopeDetailed(u.result?.toolResult || "").body);
+const rawOutput = () => bodyWithoutFooter(rawEnvelope().body);
+const spill = createMemo(() => extractArrivalSpillInfo(rawOutput(), mergedEnv()));
+/** Tool output with the envelope footer and arrival-spill trailer removed; metadata lives in footer()/spill(). */
+const output = () => (spill().spilled ? spill().cleanBody : rawOutput());
+const terminalSource = () => {
+  const src = String(u.result?.toolDetails?.display ?? u.result?.toolResult ?? "");
+  const stripped = stripToolEnvelopeDetailed(src);
+  const sp = extractArrivalSpillInfo(stripped.body, mergedEnv());
+  return sp.spilled ? sp.cleanBody : stripped.body;
+};
+const terminal = createMemo(() => terminalPresentation(terminalSource()));
 /** Envelope facts as structured chips (exit, page, next...). */
 const footer = (): FooterFact[] => {
   const f = (u.result?.toolDetails as any)?.footer;
-  const facts: FooterFact[] = Array.isArray(f) ? f : [];
+  const facts: FooterFact[] = Array.isArray(f) ? f : rawEnvelope().footer;
   // A fact that just repeats the body (e.g. summary's info line) adds nothing.
-  const first = (u.result?.toolResult || "").split("\n").map((l) => l.trim()).find((l) => l) || "";
+  const first = rawOutput().split("\n").map((l) => l.trim()).find((l) => l) || "";
   return facts.filter((fact) => fact.label !== first);
 };
 /** Non-zero exit code for shell rows (drives the failure hint). */
@@ -111,9 +128,21 @@ const sleepLabel = () => {
   return when ? `${when} · ${summary}` : summary;
 };
 const elapsed = () => {
-  if (name() !== "bash" && name() !== "exec_script" && name() !== "python" && !name().startsWith("mcp__")) return "";
-  const duration = u.result?.toolDurationMs ?? terminal().durationMs;
+  if (name() !== "bash" && name() !== "exec_script" && name() !== "python" && name() !== "explore" && !name().startsWith("mcp__")) return "";
+  const details = u.result?.toolDetails as any;
+  const duration =
+    u.result?.toolDurationMs ??
+    terminal().durationMs ??
+    (typeof details?.duration_ms === "number" && Number.isFinite(details.duration_ms) ? details.duration_ms : undefined);
   if (duration !== undefined) return ctx.elapsedLabel(duration);
+  const envDuration = typeof mergedEnv()?.duration === "string" ? mergedEnv()!.duration.trim() : "";
+  if (envDuration) {
+    const parsedMs = parseHumanDurationMs(envDuration);
+    if (parsedMs !== undefined) {
+      return parsedMs > 0 && parsedMs < 1000 ? envDuration : ctx.elapsedLabel(parsedMs);
+    }
+    return envDuration;
+  }
   // A running background job ticks off the background clock so the row
   // keeps counting after the turn ends (and across reloads).
   if (bgRunning()) {
@@ -150,7 +179,7 @@ const bgStream = () => {
 const isDetachedBg = () => bgJobId() !== "";
 /** True while this tool unit is currently executing (no result yet and turn is running). */
 const runningTool = () => !u.result && running();
-  return { key, open, openBody, expandable, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, terminal, output, footer, exitCode, webDetails, fetchDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg, running: runningTool };
+  return { key, open, openBody, expandable, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg, running: runningTool };
 }
 
 export type ToolModel = ReturnType<typeof useToolUnitModel>;

@@ -1,6 +1,7 @@
 import { onCleanup } from "solid-js";
 import { followTail, recordToolScroll, restoreToolScroll } from "../../utils/scrollMemory";
 import { ToolFooter } from "./ToolFooter";
+import { ToolContextBodies } from "./ToolContextBodies";
 import { ToolEditBodies } from "./ToolEditBodies";
 import { ToolSearchBodies } from "./ToolSearchBodies";
 import { ToolQuestionBodies } from "./ToolQuestionBodies";
@@ -28,8 +29,9 @@ export function ToolBody(props: ToolPartProps) {
           to the widest sibling, so a horizontal overflow never truncates a
           separator line at the visible edge. */}
       <div class="min-w-full w-fit">
-        <ToolEditBodies {...props} />
         <ToolSearchBodies {...props} />
+        <ToolEditBodies {...props} />
+        <ToolContextBodies {...props} />
         <ToolQuestionBodies {...props} />
         <ToolWidgetBodies {...props} />
         <ToolFooter facts={props.m.footer()} />

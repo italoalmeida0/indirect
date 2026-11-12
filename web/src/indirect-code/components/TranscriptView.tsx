@@ -132,7 +132,10 @@ export function TranscriptView() {
   </Show>
   <Show when={t.visibleBlocks().length === 0 && shouldShowCompactionBalloon()}>
     <div class={`w-full ${ui.convWidthClass()} mx-auto`}>
-      <CompactionBalloon compaction={compaction()} />
+      <CompactionBalloon
+        compaction={compaction()}
+        hasOlderAbove={t.historyHasOlder() || t.hiddenSeals() > 0}
+      />
     </div>
   </Show>
   <For each={t.visibleBlocks()}>
@@ -153,7 +156,10 @@ export function TranscriptView() {
         <>
           <Show when={isFirstKeptBlock()}>
             <div class={`w-full ${ui.convWidthClass()} mx-auto`}>
-              <CompactionBalloon compaction={compaction()} />
+              <CompactionBalloon
+                compaction={compaction()}
+                hasOlderAbove={bi() > 0 || t.historyHasOlder() || t.hiddenSeals() > 0}
+              />
             </div>
           </Show>
           <div

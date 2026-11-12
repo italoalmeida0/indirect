@@ -68,6 +68,39 @@ describe("Go daemon builtin tool catalog parity", () => {
     expect(isDaemonBuiltinTool("mcp__github__search")).toBe(false);
     expect(isDaemonBuiltinTool("custom_unknown_tool")).toBe(false);
   });
+
+  test("every daemon builtin tool is either header-only or explicitly handled in a mounted Tool*Bodies.tsx", () => {
+    const toolCompDir = join(process.cwd(), "web", "src", "indirect-code", "components", "tool");
+    const toolBodySrc = readFileSync(join(toolCompDir, "ToolBody.tsx"), "utf8");
+    const bodyFiles = readdirSync(toolCompDir).filter((f) => /^Tool.+Bodies\.tsx$/.test(f));
+    expect(bodyFiles.length).toBeGreaterThanOrEqual(5);
+
+    const handledInBodies = new Set<string>();
+    const showWhenRe = /<Show\s+when=\{([\s\S]*?)\}>/g;
+    const toolMatchRe = /(?:props\.m\.name\(\)|toolName\(\))\s*===\s*"([a-z0-9_]+)"/g;
+
+    for (const file of bodyFiles) {
+      const compName = file.replace(/\.tsx$/, "");
+      expect(toolBodySrc).toContain(`<${compName}`);
+      const src = readFileSync(join(toolCompDir, file), "utf8");
+      for (const showMatch of src.matchAll(showWhenRe)) {
+        const cond = showMatch[1] || "";
+        for (const tm of cond.matchAll(toolMatchRe)) {
+          handledInBodies.add(tm[1]!);
+        }
+      }
+    }
+
+    for (const builtinName of DAEMON_BUILTIN_TOOLS) {
+      const covered = isHeaderOnlySleep(builtinName, true) || handledInBodies.has(builtinName);
+      if (!covered) {
+        throw new Error(
+          `Daemon builtin "${builtinName}" is not header-only and has no <Show when={...}> handler in any Tool*Bodies.tsx`,
+        );
+      }
+      expect(covered).toBe(true);
+    }
+  });
 });
 
 describe("specialTitle and groupTitle across all daemon builtins", () => {
@@ -99,6 +132,12 @@ describe("specialTitle and groupTitle across all daemon builtins", () => {
     expect(groupTitle("explore", [mkUnit("glob"), mkUnit("inspect")])).toBe("Explored 1 search, 1 directory");
     expect(groupTitle("explore", [mkUnit("read"), mkUnit("read"), mkUnit("search"), mkUnit("inspect"), mkUnit("inspect")])).toBe(
       "Explored 2 files, 1 search, 2 directories",
+    );
+    expect(groupTitle("explore", [mkUnit("read"), mkUnit("read"), mkUnit("session_history")])).toBe(
+      "Explored 2 files, 1 history lookup",
+    );
+    expect(groupTitle("explore", [mkUnit("session_history"), mkUnit("session_history")])).toBe(
+      "Explored 2 history lookups",
     );
     expect(groupTitle("explore", [])).toBe("Explored workspace");
     expect(groupTitle("command", [mkUnit("bash")])).toBe("Ran 1 command");
@@ -144,6 +183,8 @@ describe("specialTitle and groupTitle across all daemon builtins", () => {
 
   test("preserves partitionToolSegs grouping contract for explore and command categories", () => {
     expect(toolCatOf("inspect")).toBe("explore");
+    expect(toolCatOf("session_history")).toBe("explore");
+    expect(toolCatOf("explore")).toBe("other");
     expect(toolCatOf("exec_script")).toBe("command");
     expect(toolCatOf("patch")).toBe("edit");
     expect(toolCatOf("widget_set")).toBe("other");
@@ -152,12 +193,14 @@ describe("specialTitle and groupTitle across all daemon builtins", () => {
     const segs = partitionToolSegs([
       mkUnit("inspect"),
       mkUnit("read"),
+      mkUnit("session_history"),
+      mkUnit("explore"),
       mkUnit("use_skill"),
       mkUnit("widget_set"),
       mkUnit("bash"),
       mkUnit("exec_script"),
     ]);
-    expect(segs.map((s) => s.kind)).toEqual(["group", "unit", "unit", "group"]);
+    expect(segs.map((s) => s.kind)).toEqual(["group", "unit", "unit", "unit", "group"]);
     expect(isHeaderOnlySleep("bg_await", false)).toBe(true);
     expect(isHeaderOnlySleep("bg_await", true)).toBe(true);
     expect(isHeaderOnlySleep("bg_tail", true)).toBe(false);
@@ -444,6 +487,101 @@ describe("toolSummary across every daemon builtin tool", () => {
       icon: "lucide:check-circle-2",
       verb: "Completed",
       target: "All checks green.",
+    });
+  });
+
+  test("formats session_history (search & recall) and explore with rich stats across live and reloaded payloads", () => {
+    // Pending search
+    expect(toolSummary(mkUnit("session_history", { action: "search", query: "FoldBlock retire" }))).toEqual({
+      icon: "lucide:history",
+      verb: "Searching history",
+      target: "FoldBlock retire",
+    });
+
+    // Completed search (live details)
+    expect(
+      toolSummary(
+        mkUnit(
+          "session_history",
+          { action: "search", query: "FoldBlock" },
+          {
+            text: 'Found 3 match(es) for "FoldBlock":\n1. [block b1 · tier 1 · msgs #0-#12] (score 4.12)\n   FoldBlock summary',
+            details: { action: "search", query: "FoldBlock", hits: [{}, {}, {}], indexed: 42 },
+          },
+        ),
+      ),
+    ).toEqual({
+      icon: "lucide:history",
+      verb: "Searched history",
+      target: "FoldBlock",
+      stat: "3 matches",
+    });
+
+    // Pending & completed recall
+    expect(toolSummary(mkUnit("session_history", { action: "recall", block_id: "b2", start_msg: 4, end_msg: 9 }))).toEqual({
+      icon: "lucide:history",
+      verb: "Recalling history",
+      target: "era b2 (msgs #4–#9)",
+    });
+
+    expect(
+      toolSummary(
+        mkUnit(
+          "session_history",
+          { action: "recall", block_id: "b2", start_msg: 4, end_msg: 9 },
+          {
+            text: "=== [msg #4 · user · block b2] ===\nhello\n\n[... recall paginated: offset_chars=0, next_offset=4000, total_chars=9800, truncated=true]",
+          },
+        ),
+      ),
+    ).toEqual({
+      icon: "lucide:history",
+      verb: "Recalled history",
+      target: "era b2 (msgs #4–#9)",
+      stat: "paginated",
+    });
+
+    expect(
+      toolSummary(
+        mkUnit(
+          "session_history",
+          { action: "recall", start_msg: 12 },
+          {
+            text: "=== [msg #12 · assistant · block b3] ===\ndone",
+            details: { env: { action: "recall", start_msg: "12", end_msg: "12", total_chars: "1450" } },
+          },
+        ),
+      ),
+    ).toEqual({
+      icon: "lucide:history",
+      verb: "Recalled history",
+      target: "msg #12",
+      stat: "1.5k chars",
+    });
+
+    // Explore pending and completed
+    expect(toolSummary(mkUnit("explore", { task: "Map session actor mailbox invariants" }))).toEqual({
+      icon: "lucide:compass",
+      verb: "Exploring",
+      target: "Map session actor mailbox invariants",
+    });
+
+    expect(
+      toolSummary(
+        mkUnit(
+          "explore",
+          { task: "Map session actor mailbox invariants" },
+          {
+            text: "### Findings\nAll actors isolate state cleanly.",
+            details: { turns: 4, tool_calls: 11 },
+          },
+        ),
+      ),
+    ).toEqual({
+      icon: "lucide:compass",
+      verb: "Explored",
+      target: "Map session actor mailbox invariants",
+      stat: "4 turns · 11 calls",
     });
   });
 });

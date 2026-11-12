@@ -4,6 +4,7 @@ import { StreamingMarkdown } from "../StreamingMarkdown";
 import { Icon as Iconify } from "../../../components/icon";
 import { CodeBlock } from "../CodeBlock";
 import { FileIcon } from "../../presentation";
+import { extractArrivalSpillInfo, formatSpillBytes, type ArrivalSpillInfo } from "../../utils/contextTools";
 import { parseGlobList, parseInspectTree } from "../../utils/toolTrees";
 import { isDaemonBuiltinTool } from "../../utils/tools";
 import type { ToolPartProps } from "./toolUnitModel";
@@ -130,6 +131,40 @@ function flagBadge(flag: string) {
           : "bg-surface-muted text-fg-secondary";
   return (
     <span class={`shrink-0 rounded px-1 py-px font-mono text-[10px] ${color}`}>{flag}</span>
+  );
+}
+
+function ArrivalSpillBanner(props: { spill: ArrivalSpillInfo }) {
+  const sizeBadge = () => {
+    const parts: string[] = [];
+    if (props.spill.lines !== undefined) {
+      parts.push(`${props.spill.lines.toLocaleString()} ${props.spill.lines === 1 ? "line" : "lines"}`);
+    }
+    const bytesLabel = formatSpillBytes(props.spill.bytes);
+    if (bytesLabel) parts.push(bytesLabel);
+    return parts.join(" · ");
+  };
+
+  return (
+    <div
+      data-arrival-spill
+      class="bg-accent-subtle/40 border-b border-border/60 px-3 py-1.5 text-[11.5px] flex items-center justify-between gap-2 flex-wrap"
+    >
+      <div class="flex items-center gap-1.5 min-w-0">
+        <Iconify icon="lucide:hard-drive-download" size={13} class="shrink-0 text-accent" />
+        <span class="text-fg-secondary truncate">
+          Full output preserved in{" "}
+          <span class="font-mono text-fg">
+            {props.spill.fileName ? `brain/${props.spill.fileName}` : "brain/"}
+          </span>
+        </span>
+      </div>
+      <Show when={sizeBadge()}>
+        <span class="ml-auto shrink-0 rounded border border-border/70 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-muted tabular-nums">
+          {sizeBadge()}
+        </span>
+      </Show>
+    </div>
   );
 }
 
@@ -293,9 +328,12 @@ export function ToolSearchBodies(props: ToolPartProps) {
         </Show>
         <Show when={props.m.name() === "fetch_url"}>
           <Show
-            when={props.m.output() || props.m.prog()}
+            when={props.m.output() || props.m.prog() || props.m.spill().spilled}
             fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">Fetching {String(props.m.args().url || "URL")}{props.active ? "…" : ""}</div>}
           >
+            <Show when={props.m.spill().spilled}>
+              <ArrivalSpillBanner spill={props.m.spill()} />
+            </Show>
             <div class="px-3 pt-2">
               <a href={String(props.m.fetchDetails()?.url || props.m.args().url || "")} target="_blank" rel="noreferrer"
                  class="flex items-center gap-2 rounded-lg border border-border/80 bg-surface px-2.5 py-2 transition-colors hover:border-border-strong">
@@ -315,9 +353,9 @@ export function ToolSearchBodies(props: ToolPartProps) {
               </div>
             }>
               <div class="px-3 py-2 text-[12.5px] leading-relaxed text-fg article-body">
-                <StreamingMarkdown basic={true}>{String(props.m.fetchDetails()?.content || "")}</StreamingMarkdown>
+                <StreamingMarkdown basic={true}>{extractArrivalSpillInfo(String(props.m.fetchDetails()?.content || "")).cleanBody}</StreamingMarkdown>
               </div>
-              <Show when={props.m.fetchDetails()?.truncated}>
+              <Show when={props.m.fetchDetails()?.truncated && !props.m.spill().spilled}>
                 <p class="px-3 pb-1 text-[10px] text-fg-muted">Truncated</p>
               </Show>
             </Show>
@@ -494,7 +532,13 @@ export function ToolSearchBodies(props: ToolPartProps) {
             );
           })()}
         </Show>
+        <Show when={(props.m.name() === "exec_script" || props.m.name() === "python") && props.m.spill().spilled && !props.m.bgRunning()}>
+          <ArrivalSpillBanner spill={props.m.spill()} />
+        </Show>
         <Show when={props.m.name() === "bash"}>
+          <Show when={props.m.spill().spilled && !props.m.bgRunning()}>
+            <ArrivalSpillBanner spill={props.m.spill()} />
+          </Show>
           <div class="border-b border-border/60 bg-surface/50">
             <CodeBlock embedded text={props.m.bashHeaderCmd()} language="bash" wrap={false} maxH="max-h-40" scrollKey={`${props.m.key()}:cmd`} />
           </div>
@@ -513,20 +557,6 @@ export function ToolSearchBodies(props: ToolPartProps) {
               scrollKey={`${props.m.key()}:out`}
             />
           </Show>
-        </Show>
-        <Show when={props.m.name() === "summary"}>
-          <div class="px-3 py-2 text-xs leading-relaxed text-fg-secondary rc-markdown">
-            <StreamingMarkdown basic={true}>
-              {String(props.m.args().for_user || props.m.output() || "Progress checkpoint recorded.")}
-            </StreamingMarkdown>
-          </div>
-        </Show>
-        <Show when={props.m.name() === "finish_entire_request"}>
-          <div class="px-3 py-2 text-xs leading-relaxed text-fg rc-markdown">
-            <StreamingMarkdown basic={true}>
-              {String(props.m.args().final_message_to_user || props.m.output() || "Final response delivered.")}
-            </StreamingMarkdown>
-          </div>
         </Show>
         <Show when={!isDaemonBuiltinTool(props.m.name())}>
           <Show

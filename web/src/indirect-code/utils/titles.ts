@@ -7,10 +7,12 @@ export function groupTitle(cat: "explore" | "command", units: ToolUnit[]): strin
   const files = units.filter((u) => u.call?.toolName === "read").length;
   const searches = units.filter((u) => u.call?.toolName === "glob" || u.call?.toolName === "search").length;
   const inspections = units.filter((u) => u.call?.toolName === "inspect").length;
+  const history = units.filter((u) => u.call?.toolName === "session_history").length;
   const parts: string[] = [];
   if (files > 0) parts.push(`${files} file${files === 1 ? "" : "s"}`);
   if (searches > 0) parts.push(`${searches} search${searches === 1 ? "" : "es"}`);
   if (inspections > 0) parts.push(`${inspections} director${inspections === 1 ? "y" : "ies"}`);
+  if (history > 0) parts.push(`${history} history ${history === 1 ? "lookup" : "lookups"}`);
   return parts.length > 0 ? `Explored ${parts.join(", ")}` : "Explored workspace";
 }
 
