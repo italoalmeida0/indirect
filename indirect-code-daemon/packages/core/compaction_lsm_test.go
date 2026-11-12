@@ -349,8 +349,8 @@ func TestPrefixWarmForkedSummarizerWireIdentityAndCheckpoints(t *testing.T) {
 	if len(forkReq.Tools) != len(expectedTools) || forkReq.Tools[0].Name != "read" {
 		t.Fatalf("fork Tools mismatch: got %+v, want %+v", forkReq.Tools, expectedTools)
 	}
-	if forkReq.Reasoning != "minimum" {
-		t.Fatalf("fork Reasoning = %q, want \"minimum\" when agent Reasoning is active", forkReq.Reasoning)
+	if forkReq.Reasoning != "high" {
+		t.Fatalf("fork Reasoning = %q, want %q verbatim so Anthropic thinking/effort KV cache stays intact", forkReq.Reasoning, "high")
 	}
 	if forkReq.SessionID != "sess-warm-42" {
 		t.Fatalf("fork SessionID = %q, want sess-warm-42", forkReq.SessionID)
@@ -738,5 +738,195 @@ func TestLegacyCompactionSeamlessUpgradeAndTwoPassOverflowRecovery(t *testing.T)
 	}
 	if b.CompactionChain() == nil || b.CompactionChain().Count < 2 {
 		t.Fatalf("expected 2 compaction passes recorded, got %+v", b.CompactionChain())
+	}
+}
+
+func TestPrefixWarmForkedSummarizerAnthropicWireByteIdentity(t *testing.T) {
+	type wireEnvelope struct {
+		Model        string            `json:"model"`
+		System       json.RawMessage   `json:"system"`
+		Tools        json.RawMessage   `json:"tools"`
+		Thinking     json.RawMessage   `json:"thinking"`
+		OutputConfig json.RawMessage   `json:"output_config"`
+		MaxTokens    int               `json:"max_tokens"`
+		Messages     []json.RawMessage `json:"messages"`
+	}
+
+	models := []struct {
+		name      string
+		model     provider.Model
+		maxTokens int
+		wantMax   int
+	}{
+		{
+			name:      "adaptive_claude_opus_4_6",
+			model:     provider.Model{ID: "claude-opus-4-6", ContextWindow: 200000, MaxOutput: 64000, Reasoning: true},
+			maxTokens: 64000,
+			wantMax:   20480, // 16384 thinking + 4096 summary cap
+		},
+		{
+			name:      "budget_claude_sonnet_4_5_64k",
+			model:     provider.Model{ID: "claude-sonnet-4-5", ContextWindow: 200000, MaxOutput: 64000, Reasoning: true},
+			maxTokens: 64000,
+			wantMax:   20480,
+		},
+		{
+			name:      "budget_claude_sonnet_4_5_8k_clamped",
+			model:     provider.Model{ID: "claude-sonnet-4-5", ContextWindow: 200000, MaxOutput: 8192, Reasoning: true},
+			maxTokens: 8192,
+			wantMax:   8192, // clamped to agent MaxTokens so BudgetTokens == 8191 matches oneTurn
+		},
+	}
+
+	for _, tc := range models {
+		t.Run(tc.name, func(t *testing.T) {
+			anth := provider.NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", tc.model)
+			rec := &recordingWarmClient{
+				forkReplies: []string{"## Goal\n- Verified byte-identical Anthropic KV prefix.\n\n## Progress\n- Done."},
+			}
+			reg := NewRegistry(stubLSMTool{name: "read"})
+			a := NewAgent(rec, tc.model.ID, "You are Indirect Code.", reg)
+			a.Reasoning = "high"
+			a.MaxTokens = tc.maxTokens
+			a.SessionID = "sess-kv-byte-id"
+
+			// Seed an existing FoldBlock + tool call/result tail so the fork directives
+			// coalesce onto a RoleTool user turn (hardest Anthropic Breakpoint-4 case!).
+			seed := &CompactionState{
+				Count:        1,
+				NextBlockSeq: 1,
+				Blocks: []FoldBlock{
+					{ID: "b1", Tier: 1, StartIdx: 0, EndIdx: 2, Summary: "era 1"},
+				},
+			}
+			seed.SyncMirrors()
+			a.SeedCompactionState(seed)
+			a.SetMessages([]provider.Message{
+				textMsg(provider.RoleUser, "turn 1 u"),
+				textMsg(provider.RoleAssistant, "turn 1 a"),
+				textMsg(provider.RoleUser, "turn 2 u"),
+				textMsg(provider.RoleAssistant, "turn 2 a"),
+				textMsg(provider.RoleUser, "turn 3 u"),
+				{
+					Role: provider.RoleAssistant,
+					Content: []provider.Content{
+						provider.ToolCallBlock{ID: "tc-9", Name: "read", Arguments: mustRaw(`{"path":"main.go"}`)},
+					},
+				},
+				{
+					Role: provider.RoleTool,
+					Content: []provider.Content{
+						provider.ToolResultBlock{CallID: "tc-9", Content: []provider.Content{provider.TextBlock{Text: "package main"}}},
+					},
+				},
+			})
+
+			// Build exact wire request that oneTurn would send on the same agent state.
+			sys, tls, baseMsgs := a.ContextSnapshot()
+			oneTurnReq := provider.Request{
+				Model:     a.Model,
+				System:    sys,
+				Messages:  baseMsgs,
+				Tools:     tls,
+				Reasoning: a.Reasoning,
+				MaxTokens: a.MaxTokens,
+				SessionID: a.SessionID,
+			}
+			_, oneTurnBytes, err := provider.BuildWireRequest(anth, oneTurnReq)
+			if err != nil {
+				t.Fatalf("BuildWireRequest(oneTurn): %v", err)
+			}
+
+			if _, err := a.Compact(context.Background(), 3, nil); err != nil {
+				t.Fatalf("Compact: %v", err)
+			}
+			if len(rec.requests) != 1 {
+				t.Fatalf("expected 1 fork request, got %d", len(rec.requests))
+			}
+			forkReq := rec.requests[0]
+			if forkReq.MaxTokens != tc.wantMax {
+				t.Fatalf("forkReq.MaxTokens = %d, want %d", forkReq.MaxTokens, tc.wantMax)
+			}
+			_, forkBytes, err := provider.BuildWireRequest(anth, forkReq)
+			if err != nil {
+				t.Fatalf("BuildWireRequest(fork): %v", err)
+			}
+
+			var mainWire, forkWire wireEnvelope
+			if err := json.Unmarshal(oneTurnBytes, &mainWire); err != nil {
+				t.Fatalf("unmarshal mainWire: %v", err)
+			}
+			if err := json.Unmarshal(forkBytes, &forkWire); err != nil {
+				t.Fatalf("unmarshal forkWire: %v", err)
+			}
+
+			if string(mainWire.System) != string(forkWire.System) {
+				t.Fatalf("system wire bytes diverged:\nmain=%s\nfork=%s", mainWire.System, forkWire.System)
+			}
+			if string(mainWire.Tools) != string(forkWire.Tools) {
+				t.Fatalf("tools wire bytes diverged:\nmain=%s\nfork=%s", mainWire.Tools, forkWire.Tools)
+			}
+			if string(mainWire.Thinking) != string(forkWire.Thinking) {
+				t.Fatalf("thinking wire bytes diverged (KV cache busted!):\nmain=%s\nfork=%s", mainWire.Thinking, forkWire.Thinking)
+			}
+			if string(mainWire.OutputConfig) != string(forkWire.OutputConfig) {
+				t.Fatalf("output_config wire bytes diverged:\nmain=%s\nfork=%s", mainWire.OutputConfig, forkWire.OutputConfig)
+			}
+
+			// Because baseMsgs ended with RoleTool ("user" on wire), forkReq's trailing RoleUser
+			// coalesced onto the final wire message: messages[0..N-2] must be 100% byte-identical,
+			// and messages[N-1].content[0..K-1] (including cache_control on content[K-1]!) must
+			// be 100% byte-identical to mainWire.Messages[N-1].content!
+			if len(forkWire.Messages) != len(mainWire.Messages) {
+				t.Fatalf("coalesced message count mismatch: main=%d fork=%d", len(mainWire.Messages), len(forkWire.Messages))
+			}
+			for i := 0; i < len(mainWire.Messages)-1; i++ {
+				if string(mainWire.Messages[i]) != string(forkWire.Messages[i]) {
+					t.Fatalf("wire message[%d] diverged:\nmain=%s\nfork=%s", i, mainWire.Messages[i], forkWire.Messages[i])
+				}
+			}
+			var mainTail, forkTail struct {
+				Role    string            `json:"role"`
+				Content []json.RawMessage `json:"content"`
+			}
+			_ = json.Unmarshal(mainWire.Messages[len(mainWire.Messages)-1], &mainTail)
+			_ = json.Unmarshal(forkWire.Messages[len(forkWire.Messages)-1], &forkTail)
+			if len(forkTail.Content) != len(mainTail.Content)+1 {
+				t.Fatalf("expected forkTail blocks = %d, got %d", len(mainTail.Content)+1, len(forkTail.Content))
+			}
+			for i := range mainTail.Content {
+				if string(mainTail.Content[i]) != string(forkTail.Content[i]) {
+					t.Fatalf("tail block[%d] (incl. cache_control) diverged:\nmain=%s\nfork=%s", i, mainTail.Content[i], forkTail.Content[i])
+				}
+			}
+			if strings.Contains(string(forkTail.Content[len(forkTail.Content)-1]), `"cache_control"`) {
+				t.Fatalf("trailing summarizer_fork block must NOT carry cache_control: %s", forkTail.Content[len(forkTail.Content)-1])
+			}
+		})
+	}
+}
+
+func TestAgentAddSubagentUsageConcurrentSafety(t *testing.T) {
+	a := NewAgent(nil, "m", "", nil)
+	a.SeedCost(provider.Usage{InputTokens: 100, OutputTokens: 50})
+	a.SeedLastTurnUsage(provider.Usage{InputTokens: 20, OutputTokens: 10})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a.AddSubagentUsage(provider.Usage{InputTokens: 10, OutputTokens: 5})
+			_ = a.Cost()
+			_ = a.LastTurnUsage()
+		}()
+	}
+	wg.Wait()
+
+	if tot := a.Cost(); tot.InputTokens != 260 || tot.OutputTokens != 130 {
+		t.Fatalf("Cost() = %+v, want InputTokens=260 OutputTokens=130", tot)
+	}
+	if last := a.LastTurnUsage(); last.InputTokens != 180 || last.OutputTokens != 90 {
+		t.Fatalf("LastTurnUsage() = %+v, want InputTokens=180 OutputTokens=90", last)
 	}
 }

@@ -221,3 +221,170 @@ func TestAnthropicCompactionCacheControlDeduplicatesAndNeverExceedsFour(t *testi
 		t.Fatalf("cache_control count exceeded Anthropic max 4: got %d:\n%s", got, bodyMulti)
 	}
 }
+
+func TestAnthropicSummarizerForkPreservesPrevLastUserCacheControl(t *testing.T) {
+	c := NewGatewayAnthropic("gw_key", "http://gw/anthropic/v1", Model{ID: "claude-sonnet-4-5", ContextWindow: 200000, MaxOutput: 8192}).(*anthropicClient)
+	tools := []Tool{{Name: "read", Description: "read file", Schema: json.RawMessage(`{"type":"object"}`)}}
+
+	type wireBlock struct {
+		Type         string            `json:"type"`
+		Text         string            `json:"text"`
+		ToolUseID    string            `json:"tool_use_id"`
+		CacheControl *anthCacheControl `json:"cache_control"`
+	}
+	type wireShape struct {
+		Messages []struct {
+			Role    string      `json:"role"`
+			Content []wireBlock `json:"content"`
+		} `json:"messages"`
+	}
+	parseWire := func(t *testing.T, req Request) (string, wireShape) {
+		t.Helper()
+		_, body, err := c.BuildWireRequest(req)
+		if err != nil {
+			t.Fatalf("BuildWireRequest: %v", err)
+		}
+		var parsed wireShape
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			t.Fatalf("unmarshal wire: %v\n%s", err, body)
+		}
+		return string(body), parsed
+	}
+
+	t.Run("assistant_then_summarizer_fork", func(t *testing.T) {
+		body, parsed := parseWire(t, Request{
+			Model:  "claude-sonnet-4-5",
+			System: "sys",
+			Tools:  tools,
+			Messages: []Message{
+				{
+					Role:    RoleUser,
+					Content: []Content{TextBlock{Text: "block b1"}},
+					Meta:    map[string]string{"compaction": "true", "block_id": "b1", "compaction_last_block": "true"},
+				},
+				{Role: RoleAssistant, Content: []Content{TextBlock{Text: "ack"}}},
+				{Role: RoleUser, Content: []Content{TextBlock{Text: "real last user"}}},
+				{Role: RoleAssistant, Content: []Content{TextBlock{Text: "assistant reply"}}},
+				{
+					Role:    RoleUser,
+					Content: []Content{TextBlock{Text: "<system-reminder>INTERNAL COMPACTION FORK</system-reminder>"}},
+					Meta:    map[string]string{"compaction": "summarizer_fork"},
+				},
+			},
+		})
+		if len(parsed.Messages) != 5 {
+			t.Fatalf("expected 5 wire messages, got %d", len(parsed.Messages))
+		}
+		if cc := parsed.Messages[2].Content[0].CacheControl; cc == nil || cc.Type != "ephemeral" {
+			t.Fatalf("prevLastUser lost cache_control: %+v", parsed.Messages[2].Content[0])
+		}
+		if cc := parsed.Messages[4].Content[0].CacheControl; cc != nil {
+			t.Fatalf("throwaway summarizer_fork must NOT carry cache_control: %+v", parsed.Messages[4].Content[0])
+		}
+		if got := strings.Count(body, `"cache_control"`); got != 4 {
+			t.Fatalf("expected 4 cache_control slots (sys + tools + b1 + prevLastUser), got %d:\n%s", got, body)
+		}
+	})
+
+	t.Run("coalesced_user_then_summarizer_fork", func(t *testing.T) {
+		body, parsed := parseWire(t, Request{
+			Model:  "claude-sonnet-4-5",
+			System: "sys",
+			Tools:  tools,
+			Messages: []Message{
+				{Role: RoleUser, Content: []Content{TextBlock{Text: "prompt before fork"}}},
+				{
+					Role:    RoleUser,
+					Content: []Content{TextBlock{Text: "<system-reminder>INTERNAL COMPACTION FORK</system-reminder>"}},
+					Meta:    map[string]string{"compaction": "summarizer_fork"},
+				},
+			},
+		})
+		if len(parsed.Messages) != 1 || len(parsed.Messages[0].Content) != 2 {
+			t.Fatalf("expected 1 coalesced user message with 2 blocks, got %+v", parsed.Messages)
+		}
+		if cc := parsed.Messages[0].Content[0].CacheControl; cc == nil || cc.Type != "ephemeral" {
+			t.Fatalf("block 0 (prompt before fork) must carry cache_control: %+v", parsed.Messages[0].Content[0])
+		}
+		if cc := parsed.Messages[0].Content[1].CacheControl; cc != nil {
+			t.Fatalf("block 1 (coalesced summarizer_fork) must NOT carry cache_control: %+v", parsed.Messages[0].Content[1])
+		}
+		if got := strings.Count(body, `"cache_control"`); got != 3 {
+			t.Fatalf("expected 3 cache_control slots (sys + tools + prompt), got %d:\n%s", got, body)
+		}
+	})
+
+	t.Run("coalesced_tool_result_then_summarizer_fork", func(t *testing.T) {
+		body, parsed := parseWire(t, Request{
+			Model:  "claude-sonnet-4-5",
+			System: "sys",
+			Tools:  tools,
+			Messages: []Message{
+				{Role: RoleUser, Content: []Content{TextBlock{Text: "read file"}}},
+				{
+					Role: RoleAssistant,
+					Content: []Content{
+						ToolCallBlock{ID: "tc-1", Name: "read", Arguments: json.RawMessage(`{"path":"a.go"}`)},
+					},
+				},
+				{
+					Role: RoleTool,
+					Content: []Content{
+						ToolResultBlock{CallID: "tc-1", Content: []Content{TextBlock{Text: "package a"}}},
+					},
+				},
+				{
+					Role:    RoleUser,
+					Content: []Content{TextBlock{Text: "<system-reminder>INTERNAL COMPACTION FORK</system-reminder>"}},
+					Meta:    map[string]string{"compaction": "summarizer_fork"},
+				},
+			},
+		})
+		if len(parsed.Messages) != 3 {
+			t.Fatalf("expected 3 wire messages (user, assistant, coalesced tool+fork user), got %d", len(parsed.Messages))
+		}
+		tailBlocks := parsed.Messages[2].Content
+		if len(tailBlocks) != 2 || tailBlocks[0].Type != "tool_result" {
+			t.Fatalf("expected [tool_result, text], got %+v", tailBlocks)
+		}
+		if cc := tailBlocks[0].CacheControl; cc == nil || cc.Type != "ephemeral" {
+			t.Fatalf("tool_result block must keep Breakpoint 4 cache_control: %+v", tailBlocks[0])
+		}
+		if cc := tailBlocks[1].CacheControl; cc != nil {
+			t.Fatalf("coalesced summarizer_fork block must NOT carry cache_control: %+v", tailBlocks[1])
+		}
+		if got := strings.Count(body, `"cache_control"`); got != 3 {
+			t.Fatalf("expected 3 cache_control slots, got %d:\n%s", got, body)
+		}
+	})
+
+	t.Run("deduplicated_compaction_last_block_plus_summarizer_fork", func(t *testing.T) {
+		body, parsed := parseWire(t, Request{
+			Model:  "claude-sonnet-4-5",
+			System: "sys",
+			Tools:  tools,
+			Messages: []Message{
+				{
+					Role:    RoleUser,
+					Content: []Content{TextBlock{Text: "b1"}},
+					Meta:    map[string]string{"compaction": "true", "compaction_last_block": "true"},
+				},
+				{Role: RoleAssistant, Content: []Content{TextBlock{Text: "reply"}}},
+				{
+					Role:    RoleUser,
+					Content: []Content{TextBlock{Text: "<system-reminder>INTERNAL COMPACTION FORK</system-reminder>"}},
+					Meta:    map[string]string{"compaction": "summarizer_fork"},
+				},
+			},
+		})
+		if cc := parsed.Messages[0].Content[0].CacheControl; cc == nil || cc.Type != "ephemeral" {
+			t.Fatalf("compaction_last_block missing cache_control: %+v", parsed.Messages[0].Content[0])
+		}
+		if cc := parsed.Messages[2].Content[0].CacheControl; cc != nil {
+			t.Fatalf("summarizer_fork must NOT carry cache_control: %+v", parsed.Messages[2].Content[0])
+		}
+		if got := strings.Count(body, `"cache_control"`); got != 3 {
+			t.Fatalf("deduplicated cache_control count = %d, want 3:\n%s", got, body)
+		}
+	})
+}

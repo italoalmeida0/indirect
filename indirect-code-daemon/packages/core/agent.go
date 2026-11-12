@@ -482,6 +482,21 @@ func (a *Agent) SeedLastTurnUsage(u provider.Usage) {
 	a.cost.LastTurn = u
 }
 
+// AddSubagentUsage atomically folds subagent usage into both the cumulative
+// session total and the active turn's LastTurn usage snapshot.
+func (a *Agent) AddSubagentUsage(delta provider.Usage) (total, last provider.Usage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cost.hasTotal {
+		a.cost.Total = a.cost.Total.Add(delta)
+	} else {
+		a.cost.Total = delta
+		a.cost.hasTotal = true
+	}
+	a.cost.LastTurn = a.cost.LastTurn.Add(delta)
+	return a.cost.Total, a.cost.LastTurn
+}
+
 // stampTurn tags m with the current turn before it joins the transcript.
 // An already-stamped message keeps its id (fork prefixes, repairs).
 func (a *Agent) stampTurn(m *provider.Message) {
@@ -1101,10 +1116,13 @@ func (a *Agent) oneTurn(ctx context.Context, sink func(AgentEvent)) (provider.St
 		case provider.EventToolEnd:
 			sink(EvToolUseEnd{ID: e.ID})
 		case provider.EventUsage:
+			a.mu.Lock()
 			cum := a.cost.Add(e.Usage)
+			onUsage := a.OnUsage
+			a.mu.Unlock()
 			sink(EvUsage{Usage: e.Usage, Cumulative: cum})
-			if a.OnUsage != nil {
-				a.OnUsage(cum)
+			if onUsage != nil {
+				onUsage(cum)
 			}
 		case provider.EventDone:
 			gotDone = true

@@ -252,26 +252,38 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 			compactionCacheIdx = i
 		}
 	}
-	appendMessage := func(role string, blocks []interface{}) {
+	lastCacheableUserMsgIdx := -1
+	lastCacheableUserBlockIdx := -1
+	appendMessage := func(role string, blocks []interface{}, cacheableUser bool) {
 		if len(blocks) == 0 {
 			return
 		}
 		if len(out.Messages) > 0 && out.Messages[len(out.Messages)-1].Role == role {
 			if prevBlocks, ok := out.Messages[len(out.Messages)-1].Content.([]interface{}); ok {
-				out.Messages[len(out.Messages)-1].Content = append(prevBlocks, blocks...)
+				combined := append(prevBlocks, blocks...)
+				out.Messages[len(out.Messages)-1].Content = combined
+				if role == "user" && cacheableUser {
+					lastCacheableUserMsgIdx = len(out.Messages) - 1
+					lastCacheableUserBlockIdx = len(combined) - 1
+				}
 				return
 			}
 		}
 		out.Messages = append(out.Messages, anthMessage{Role: role, Content: blocks})
+		if role == "user" && cacheableUser {
+			lastCacheableUserMsgIdx = len(out.Messages) - 1
+			lastCacheableUserBlockIdx = len(blocks) - 1
+		}
 	}
 	for msgIdx, msg := range req.Messages {
 		switch msg.Role {
 		case RoleUser:
+			isSummarizerFork := msg.Meta != nil && msg.Meta["compaction"] == "summarizer_fork"
 			blocks := buildAnthUserContent(msg.Content)
 			if msgIdx == compactionCacheIdx && len(blocks) > 0 {
 				stampLastBlockCacheControl(blocks)
 			}
-			appendMessage("user", blocks)
+			appendMessage("user", blocks, !isSummarizerFork)
 		case RoleAssistant:
 			var blocks []interface{}
 			var text strings.Builder
@@ -327,7 +339,7 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 			if hadText && len(blocks) == 0 {
 				blocks = append(blocks, anthTextBlock{Type: "text", Text: anthropicEmptyTextPlaceholder})
 			}
-			appendMessage("assistant", blocks)
+			appendMessage("assistant", blocks, false)
 		case RoleTool:
 			// All results of one message share a single user turn, as the
 			// Anthropic format requires.
@@ -342,19 +354,17 @@ func (c *anthropicClient) buildRequest(req Request) (*anthRequest, error) {
 					})
 				}
 			}
-			appendMessage("user", blocks)
+			appendMessage("user", blocks, true)
 		}
 	}
 
-	// Cache the conversation history by setting cache_control on the last block
-	// of the last user turn (including tool results, which are user turns in Anthropic).
-	for i := len(out.Messages) - 1; i >= 0; i-- {
-		if out.Messages[i].Role == "user" {
-			if blocks, ok := out.Messages[i].Content.([]interface{}); ok && len(blocks) > 0 {
-				stampLastBlockCacheControl(blocks)
-				out.Messages[i].Content = blocks
-			}
-			break
+	// Cache the conversation history by setting cache_control on the last
+	// cacheable user block (including tool results, while excluding one-shot
+	// summarizer_fork directives so they never displace Breakpoint 4).
+	if lastCacheableUserMsgIdx >= 0 {
+		if blocks, ok := out.Messages[lastCacheableUserMsgIdx].Content.([]interface{}); ok {
+			stampBlockCacheControl(blocks, lastCacheableUserBlockIdx)
+			out.Messages[lastCacheableUserMsgIdx].Content = blocks
 		}
 	}
 
@@ -438,22 +448,25 @@ func buildAnthUserContent(blocks []Content) []interface{} {
 	return out
 }
 
-func stampLastBlockCacheControl(blocks []interface{}) {
-	if len(blocks) == 0 {
+func stampBlockCacheControl(blocks []interface{}, idx int) {
+	if idx < 0 || idx >= len(blocks) {
 		return
 	}
-	lastIdx := len(blocks) - 1
-	switch b := blocks[lastIdx].(type) {
+	switch b := blocks[idx].(type) {
 	case anthTextBlock:
 		b.CacheControl = &anthCacheControl{Type: "ephemeral"}
-		blocks[lastIdx] = b
+		blocks[idx] = b
 	case anthImageBlock:
 		b.CacheControl = &anthCacheControl{Type: "ephemeral"}
-		blocks[lastIdx] = b
+		blocks[idx] = b
 	case anthToolResultBlock:
 		b.CacheControl = &anthCacheControl{Type: "ephemeral"}
-		blocks[lastIdx] = b
+		blocks[idx] = b
 	}
+}
+
+func stampLastBlockCacheControl(blocks []interface{}) {
+	stampBlockCacheControl(blocks, len(blocks)-1)
 }
 
 func buildAnthToolResultContent(blocks []Content) interface{} {

@@ -220,7 +220,6 @@ type turnBridge struct {
 	sandbox         *tools.Sandbox
 	brainDir        string
 	exploreTool     *tools.ExploreTool
-	usageMu         sync.Mutex
 	agent           *core.Agent
 	client          provider.Client
 	modelInfo       provider.Model
@@ -340,6 +339,7 @@ func (w *turnBridge) run() error {
 	initTools := w.effectiveRegistry()
 
 	w.agent = core.NewAgent(w.client, w.modelToUse, systemPromptWithBrain(cfg, w.sessionCWD, w.snap.options, brainDir), initTools)
+	w.agent.SessionID = w.env.actorID
 	w.agent.TurnIndex = w.snap.turnIndex
 	w.agent.PersistentTurns = true
 	w.agent.CompletionTool = modeCompletionTool(w.skillEff.Mode)
@@ -446,6 +446,9 @@ func (w *turnBridge) stamp(payload any) Envelope {
 }
 
 func (w *turnBridge) sendInbox(payload any) {
+	if w.env.inbox == nil {
+		return
+	}
 	// Stamp the turn generation onto worker-mail payloads that carry
 	// transcript state: the actor's epoch gate cannot see a same-epoch
 	// zombie (quarantine recovery bumps gen, not epoch), so these must
@@ -467,6 +470,9 @@ func (w *turnBridge) sendInbox(payload any) {
 
 // heartbeat sends a non-blocking liveness ping for the current gen.
 func (w *turnBridge) heartbeat() {
+	if w.env.inbox == nil {
+		return
+	}
 	select {
 	case w.env.inbox <- w.stamp(workerHeartbeatMsg{gen: w.snap.gen}):
 	default:
@@ -479,6 +485,9 @@ func (w *turnBridge) heartbeat() {
 // operation's own deadline bounds it. A zero until clears the declaration
 // (operation finished). Stamped with the turn generation.
 func (w *turnBridge) declareWait(op string, until time.Time) {
+	if w.env.inbox == nil {
+		return
+	}
 	var ms int64
 	if !until.IsZero() {
 		ms = until.UnixMilli()
@@ -502,6 +511,17 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 	// retry backoff) is a declared wait with its own deadline — silence
 	// inside it must not be judged as a wedged worker.
 	w.declareWait("provider", time.Now().Add(tuneWaitProvider))
+	return w.refreshFromActor(requestCtx)
+}
+
+func (w *turnBridge) refreshFromActor(requestCtx context.Context) error {
+	if w.env.inbox == nil {
+		return nil
+	}
+	var workerDone <-chan struct{}
+	if w.ctx != nil {
+		workerDone = w.ctx.Done()
+	}
 	// Refresh model/options/system/tools from the actor (round-trip with
 	// timeout). Stale gen or cancelled ctx aborts the request.
 	type refresh struct {
@@ -513,7 +533,7 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 	case w.env.inbox <- w.stamp(workerRefreshMsg{gen: w.snap.gen, Reply: reply}):
 	case <-requestCtx.Done():
 		return requestCtx.Err()
-	case <-w.ctx.Done():
+	case <-workerDone:
 		return context.Canceled
 	}
 	var rf refresh
@@ -545,7 +565,7 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 		}
 	case <-requestCtx.Done():
 		return requestCtx.Err()
-	case <-w.ctx.Done():
+	case <-workerDone:
 		return context.Canceled
 	}
 	if rf.model != "" && rf.model != w.modelInfo.ID {
@@ -555,8 +575,10 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 	if rf.options.Effort != "none" {
 		requestModel.Reasoning = true
 	}
-	apiBase := strings.TrimRight(w.cfg.GatewayURL, "/") + "/anthropic/v1"
-	w.client = w.wrapClient(provider.NewGatewayAnthropic(w.cfg.APIKey, apiBase, requestModel))
+	if strings.TrimSpace(w.cfg.GatewayURL) != "" || w.client == nil {
+		apiBase := strings.TrimRight(w.cfg.GatewayURL, "/") + "/anthropic/v1"
+		w.client = w.wrapClient(provider.NewGatewayAnthropic(w.cfg.APIKey, apiBase, requestModel))
+	}
 	w.modelToUse = w.modelInfo.ID
 	w.agent.Client, w.agent.Model, w.agent.Reasoning = w.client, w.modelToUse, rf.options.Effort
 	w.agent.MaxTokens = maxOutputTokens(w.modelInfo)
@@ -566,14 +588,20 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 		w.exploreTool.Reasoning = rf.options.Effort
 		w.exploreTool.MaxTokens = maxOutputTokens(w.modelInfo)
 	}
-	liveCfg := w.env.cfg.load()
+	var liveCfg *DaemonConfig
+	if w.env.cfg != nil {
+		liveCfg = w.env.cfg.load()
+	}
 	var cfg DaemonConfig
 	if liveCfg != nil {
 		cfg = *liveCfg
 	} else {
 		cfg = w.cfg
 	}
-	brainDir := w.env.brainDir(w.env.actorID)
+	brainDir := w.brainDir
+	if w.env.brainDir != nil {
+		brainDir = w.env.brainDir(w.env.actorID)
+	}
 	system := systemPromptWithBrain(cfg, w.sessionCWD, rf.options, brainDir)
 	w.agent.SetSystem(system)
 	w.agent.SetTools(w.effectiveRegistry())
@@ -1105,6 +1133,12 @@ func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEven
 	if threshold <= 0 {
 		return nil
 	}
+	// Sync model/options/system/tools/pending context from the actor BEFORE
+	// snapshotting or compacting so step k+1's Prefix-Warm Forked Summarizer
+	// shares the exact live prefix that step k+1's oneTurn will send.
+	if err := w.refreshFromActor(cctx); err != nil {
+		return err
+	}
 	window := w.modelInfo.ContextWindow
 	if window <= 0 {
 		return nil
@@ -1120,6 +1154,8 @@ func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEven
 	if !needs {
 		return nil
 	}
+	w.declareWait("provider", time.Now().Add(tuneWaitProvider))
+	defer w.declareWait("", time.Time{})
 	esink(core.EvToolProgress{Text: "Compacting older context…"})
 	_, err := w.agent.MaybeAutoCompactAt(cctx, window, threshold, func(delta string) {
 		esink(core.EvToolProgress{Text: delta})
@@ -1172,6 +1208,9 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 	case core.EvToolUseEnd:
 		payload["event"] = map[string]any{"type": "tool_use_end", "id": e.ID}
 	case core.EvToolProgress:
+		if e.ID == "" && (strings.HasPrefix(e.Text, "Compacting") || strings.HasPrefix(e.Text, "Context limit reached upstream")) {
+			w.declareWait("provider", time.Now().Add(tuneWaitProvider))
+		}
 		if e.ID == "" && strings.HasPrefix(e.Text, "Compacting") {
 			payload["event"] = map[string]any{"type": "compact_progress", "text": e.Text}
 		} else {
@@ -1376,6 +1415,8 @@ func (w *turnBridge) newSubagentClient(model provider.Model) provider.Client {
 }
 
 func (w *turnBridge) runManualCompact(progress func(string)) error {
+	w.declareWait("provider", time.Now().Add(tuneWaitProvider))
+	defer w.declareWait("", time.Time{})
 	history := w.agent.History()
 	chain := w.agent.CompactionChain()
 	rawStart := 0
@@ -1397,11 +1438,8 @@ func (w *turnBridge) onSubagentUsage(delta provider.Usage) {
 	if w.agent == nil {
 		return
 	}
-	w.usageMu.Lock()
-	next := w.agent.Cost().Add(delta)
-	w.agent.SeedCost(next)
-	w.usageMu.Unlock()
-	w.handleEvent(core.EvUsage{Usage: delta, Cumulative: next})
+	total, _ := w.agent.AddSubagentUsage(delta)
+	w.handleEvent(core.EvUsage{Usage: delta, Cumulative: total})
 }
 
 func (w *turnBridge) sessionHistorySnapshot() tools.SessionHistorySnapshot {
@@ -1571,8 +1609,8 @@ func compactedFileAdvisoryFor(cwd string, history []provider.Message, state *cor
 			endDisp := max(b.StartIdx, b.EndIdx-1)
 			ref := fmt.Sprintf("%s (%s, msgs #%d–#%d", b.ID, op, b.StartIdx, endDisp)
 			if topic := strings.TrimSpace(b.Topic); topic != "" {
-				if len(topic) > 48 {
-					topic = strings.TrimSpace(topic[:48]) + "…"
+				if runes := []rune(topic); len(runes) > 48 {
+					topic = strings.TrimSpace(string(runes[:48])) + "…"
 				}
 				ref += " — " + topic
 			}

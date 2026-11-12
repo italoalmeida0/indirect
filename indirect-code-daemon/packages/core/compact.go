@@ -243,7 +243,9 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	}
 	workingState.PrunedBefore = max(prevPrunedBefore, ComputeLatchWatermark(history, rawCutIdx, protectBudget))
 	workingState.SyncMirrors()
-	if totalUsage.InputTokens > 0 || totalUsage.OutputTokens > 0 {
+	hasUsage := totalUsage.InputTokens > 0 || totalUsage.OutputTokens > 0 ||
+		totalUsage.CacheReadTokens > 0 || totalUsage.CacheWriteTokens > 0
+	if hasUsage {
 		workingState.Usage = &totalUsage
 	}
 
@@ -251,13 +253,18 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	a.setCompactionStateLocked(workingState)
 	a.rev++
 	onState := a.OnCompactionState
+	var (
+		cum     provider.Usage
+		onUsage func(provider.Usage)
+	)
+	if hasUsage {
+		cum = a.cost.Add(totalUsage)
+		onUsage = a.OnUsage
+	}
 	a.mu.Unlock()
 
-	if totalUsage.InputTokens > 0 || totalUsage.OutputTokens > 0 {
-		cum := a.cost.Add(totalUsage)
-		if a.OnUsage != nil {
-			a.OnUsage(cum)
-		}
+	if hasUsage && onUsage != nil {
+		onUsage(cum)
 	}
 
 	if onState != nil {
@@ -662,8 +669,8 @@ func previewMessageAnchor(chunk []provider.Message, fromStart bool) string {
 
 // runForkedSummarizer executes a Prefix-Warm Forked Summarizer call that reuses
 // the agent's exact live request prefix (BuildContextLocked + RequestMessages,
-// byte-identical System, Tools, skill_prefix, omitted ToolChoice, and
-// Reasoning: "minimum" when reasoning is active) plus 1 trailing user directive.
+// byte-identical System, Tools, Reasoning, skill_prefix, and omitted ToolChoice)
+// plus 1 trailing uncached user directive.
 func (a *Agent) runForkedSummarizer(
 	ctx context.Context,
 	chunk []provider.Message,
@@ -683,9 +690,14 @@ func (a *Agent) runWarmPrefixDirective(ctx context.Context, directive string, si
 	if a.RequestMessages != nil {
 		baseMsgs = a.RequestMessages(baseMsgs)
 	}
-	reasoning := ""
-	if provider.NormalizeReasoning(a.Reasoning) != "" {
-		reasoning = "minimum"
+	reasoning := a.Reasoning
+	maxTokens := a.MaxTokens
+	forkMaxTokens := 4096
+	if level := provider.NormalizeReasoning(reasoning); level != "" {
+		forkMaxTokens = max(forkMaxTokens, provider.ReasoningBudget(level)+4096)
+	}
+	if maxTokens > 0 && forkMaxTokens > maxTokens {
+		forkMaxTokens = maxTokens
 	}
 	reqMsgs := make([]provider.Message, 0, len(baseMsgs)+1)
 	reqMsgs = append(reqMsgs, baseMsgs...)
@@ -701,7 +713,7 @@ func (a *Agent) runWarmPrefixDirective(ctx context.Context, directive string, si
 		Messages:  reqMsgs,
 		Tools:     a.Tools.Specs(),
 		Reasoning: reasoning,
-		MaxTokens: 4096,
+		MaxTokens: forkMaxTokens,
 		SessionID: a.SessionID,
 	}
 	a.mu.Unlock()

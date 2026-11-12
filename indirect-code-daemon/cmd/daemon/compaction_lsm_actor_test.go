@@ -496,4 +496,253 @@ func TestSubagentUsageAccumulatesIntoAgentCostAndWAL(t *testing.T) {
 	if a.rec.Usage.InputTokens != 1450 || a.rec.Usage.OutputTokens != 320 {
 		t.Fatalf("actor rec.Usage = %+v, want InputTokens=1450 OutputTokens=320", a.rec.Usage)
 	}
+	if last := ag.LastTurnUsage(); last.InputTokens != 450 || last.OutputTokens != 120 {
+		t.Fatalf("agent LastTurnUsage() = %+v, want InputTokens=450 OutputTokens=120", last)
+	}
+}
+
+func TestLegacySingleSummaryOnForkClearsBelowKeepFromAndPreservesAtOrAbove(t *testing.T) {
+	legacyComp := &core.CompactionState{
+		PreviousSummary: "LEGACY_SUMMARY_TURNS_1_AND_2_SECRET_FUTURE",
+		ReadFiles:       []string{"pkg/legacy.go"},
+		KeepFrom:        4, // summarized raw [0, 4): Turn 1 ([0,2)) + Turn 2 ([2,4))
+		Count:           1,
+	}
+	rec := &SessionRecord{
+		ID:         "legacy-fork-src",
+		Title:      "LegacyMain",
+		Messages:   darMsgs(6), // Turn 1=[0,2), Turn 2=[2,4), Turn 3=[4,6)
+		TurnSeq:    3,
+		Compaction: legacyComp,
+	}
+	a, st := darActor(t, rec)
+
+	// 1. Forking at Turn 1 (Keep=1 -> end=2 < KeepFrom=4) MUST clear Compaction
+	// so discarded Turn-2 details never leak into the fork and Turn-1 raw rows stay visible!
+	repBelow := make(chan any, 1)
+	a.onFork(forkReqMsg{NewID: "sess_legacy_fork_below", Keep: 1, Reply: repBelow})
+	frBelow := (<-repBelow).(forkResult)
+	if frBelow.Error != "" {
+		t.Fatalf("onFork below KeepFrom failed: %s", frBelow.Error)
+	}
+	forkBelow, err := st.loadSession(frBelow.NewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forkBelow.Compaction != nil {
+		t.Fatalf("legacy single-summary compaction leaked across end < KeepFrom fork: %+v", forkBelow.Compaction)
+	}
+	agBelow := core.NewAgent(nil, "m", "", nil)
+	agBelow.SetMessages(forkBelow.Messages)
+	agBelow.SeedCompactionState(forkBelow.Compaction)
+	projBelow := agBelow.Messages()
+	if len(projBelow) != 2 {
+		t.Fatalf("expected 2 visible raw Turn-1 messages, got %d", len(projBelow))
+	}
+	for _, m := range projBelow {
+		if strings.Contains(contentText(m), "LEGACY_SUMMARY_TURNS_1_AND_2_SECRET_FUTURE") {
+			t.Fatalf("hallucinated future summary leaked into fork: %+v", m)
+		}
+	}
+
+	// 2. Forking at Turn 2 (Keep=3 -> end=4 == KeepFrom=4) MUST preserve legacy Compaction cleanly!
+	repAt := make(chan any, 1)
+	a.onFork(forkReqMsg{NewID: "sess_legacy_fork_at", Keep: 3, Reply: repAt})
+	frAt := (<-repAt).(forkResult)
+	if frAt.Error != "" {
+		t.Fatalf("onFork at KeepFrom failed: %s", frAt.Error)
+	}
+	forkAt, err := st.loadSession(frAt.NewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forkAt.Compaction == nil || forkAt.Compaction.KeepFrom != 4 || forkAt.Compaction.PreviousSummary != legacyComp.PreviousSummary {
+		t.Fatalf("expected legacy Compaction preserved when end >= KeepFrom, got %+v", forkAt.Compaction)
+	}
+}
+
+func TestCompactedFileAdvisoryMultibyteUTF8TopicTruncation(t *testing.T) {
+	cwd := t.TempDir()
+	// Topic with multibyte UTF-8 arrows (" → "), CJK runes, and emojis exceeding 48 runes
+	// right across the old 48-byte boundary!
+	multibyteTopic := "日本語設定 → キャッシュ最適化 → データベース移行 → セッション履歴検証 → 完了確認テスト 🚀🔥✨"
+	st := &core.CompactionState{
+		Count:        1,
+		NextBlockSeq: 1,
+		Blocks: []core.FoldBlock{
+			{
+				ID:            "b1",
+				Tier:          1,
+				StartIdx:      0,
+				EndIdx:        2,
+				Topic:         multibyteTopic,
+				Summary:       "## Goal\n- UTF-8 safe advisory.",
+				ModifiedFiles: []string{"pkg/utf8.go"},
+			},
+		},
+	}
+	st.SyncMirrors()
+	msgs := darMsgs(4)
+	adv := compactedFileAdvisoryFor(cwd, msgs, st, filepath.Join(cwd, "pkg", "utf8.go"))
+	if adv == "" {
+		t.Fatal("expected non-empty advisory")
+	}
+	if strings.ContainsRune(adv, '\uFFFD') {
+		t.Fatalf("UTF-8 byte-slice corrupted multibyte runes (found replacement char U+FFFD): %q", adv)
+	}
+	wantPrefix := strings.TrimSpace(string([]rune(multibyteTopic)[:48])) + "…"
+	if !strings.Contains(adv, wantPrefix) {
+		t.Fatalf("expected 48-rune truncated topic %q in advisory, got %q", wantPrefix, adv)
+	}
+}
+
+func TestAutoCompactRefreshesFromActorAndCompactionDeclaresProviderWait(t *testing.T) {
+	rec := &SessionRecord{
+		ID:       "sess-refresh-wait",
+		Messages: darMsgs(8),
+		TurnSeq:  4,
+		Options:  SessionOptions{Mode: "agentic", Access: "full", Effort: "low"},
+	}
+	a, st := darActor(t, rec)
+	a.state = stateRunning
+	a.gen = 1
+
+	var cfgCell configCell
+	cfgCell.store(&DaemonConfig{
+		HostID:   "h1",
+		Settings: HarnessSettings{AutoCompactThreshold: 50},
+	})
+	a.supCfg = &cfgCell
+	go a.run()
+	defer func() {
+		a.control <- shutdownMsg{}
+		<-a.done
+	}()
+
+	// Queue mid-turn Effort change + queued sendNow user message on the actor BEFORE autoCompact runs!
+	a.inbox <- Envelope{Payload: configureMsg{Options: SessionOptions{Mode: "agentic", Access: "full", Effort: "high"}}}
+	a.inbox <- Envelope{Payload: bgNoticeMsg{JobID: "bg-sync-1", Text: "QUEUED_BG_NOTICE_BEFORE_AUTOCOMPACT", Finished: true}}
+
+	var capturedForkReqs []provider.Request
+	mockClient := &recordingBridgeClient{
+		onStream: func(req provider.Request) {
+			capturedForkReqs = append(capturedForkReqs, req)
+		},
+	}
+
+	ag := core.NewAgent(mockClient, "claude-opus-4-6", "stale-sys", core.NewRegistry())
+	ag.SessionID = a.id
+	ag.Reasoning = "low"
+	var heavy []provider.Message
+	for i := 0; i < 8; i++ {
+		heavy = append(heavy,
+			provider.Message{ID: "u", Role: provider.RoleUser, TurnIndex: i + 1, Content: []provider.Content{provider.TextBlock{Text: strings.Repeat("heavy user context ", 600)}}},
+			provider.Message{ID: "a", Role: provider.RoleAssistant, TurnIndex: i + 1, Content: []provider.Content{provider.TextBlock{Text: strings.Repeat("heavy assistant reply ", 600)}}},
+		)
+	}
+	ag.SetMessages(heavy)
+
+	// Intercept actor inbox through a spy relay to record workerWaitMsg declarations while forwarding to actor!
+	spyInbox := make(chan Envelope, 64)
+	spyDone := make(chan struct{})
+	var waitOps []workerWaitMsg
+	waitDone := make(chan struct{})
+	go func() {
+		defer close(waitDone)
+		for env := range spyInbox {
+			if wm, ok := env.Payload.(workerWaitMsg); ok {
+				waitOps = append(waitOps, wm)
+			}
+			a.inbox <- env
+		}
+	}()
+
+	w := &turnBridge{
+		ctx: context.Background(),
+		cfg: *cfgCell.load(),
+		snap: workerSnapshot{
+			gen:       1,
+			epoch:     a.epoch,
+			turnIndex: 4,
+			model:     "claude-opus-4-6",
+			options:   SessionOptions{Mode: "agentic", Access: "full", Effort: "low"},
+		},
+		env: workerEnv{
+			cfg:      &cfgCell,
+			store:    st,
+			inbox:    spyInbox,
+			done:     spyDone,
+			actorID:  a.id,
+			brainDir: st.ensureBrainDir,
+			emit:     func(any) {},
+		},
+		modelInfo: provider.Model{ID: "claude-opus-4-6", ContextWindow: 12000, MaxOutput: 4096, Reasoning: true},
+		client:    mockClient,
+		reg:       core.NewRegistry(),
+		agent:     ag,
+	}
+
+	if err := w.autoCompact(context.Background(), func(ev core.AgentEvent) { w.handleEvent(ev) }); err != nil {
+		t.Fatalf("autoCompact: %v", err)
+	}
+	// Also exercise reactive overflow progress event wait declaration.
+	w.handleEvent(core.EvToolProgress{Text: "Context limit reached upstream; automatically compacting older context…"})
+
+	close(spyInbox)
+	<-waitDone
+	close(spyDone)
+
+	if len(capturedForkReqs) == 0 {
+		t.Fatal("expected proactive autoCompact to invoke forked summarizer")
+	}
+	forkReq := capturedForkReqs[0]
+	if forkReq.Reasoning != "high" {
+		t.Fatalf("autoCompact ran with stale Effort %q instead of refreshing \"high\" from actor!", forkReq.Reasoning)
+	}
+	if forkReq.SessionID != a.id {
+		t.Fatalf("forkReq.SessionID = %q, want %q", forkReq.SessionID, a.id)
+	}
+	foundQueuedNotice := false
+	for _, m := range forkReq.Messages {
+		if m.Meta["background_delivery"] == "bg-sync-1" {
+			foundQueuedNotice = true
+		}
+	}
+	if !foundQueuedNotice {
+		t.Fatal("autoCompact failed to pull pending actor context before snapshotting warm prefix!")
+	}
+
+	providerWaits := 0
+	clearedWaits := 0
+	for _, wm := range waitOps {
+		if wm.op == "provider" && wm.until > 0 {
+			providerWaits++
+		}
+		if wm.op == "" && wm.until == 0 {
+			clearedWaits++
+		}
+	}
+	if providerWaits < 2 {
+		t.Fatalf("expected provider declareWait on autoCompact + overflow progress, got waitOps=%+v", waitOps)
+	}
+	if clearedWaits < 1 {
+		t.Fatalf("expected autoCompact defer to clear provider wait, got waitOps=%+v", waitOps)
+	}
+}
+
+type recordingBridgeClient struct {
+	onStream func(req provider.Request)
+}
+
+func (c *recordingBridgeClient) Name() string { return "anthropic" }
+
+func (c *recordingBridgeClient) Stream(_ context.Context, req provider.Request) (<-chan provider.Event, error) {
+	if c.onStream != nil {
+		c.onStream(req)
+	}
+	ch := make(chan provider.Event, 2)
+	msg := provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: "## Goal\n- Compacted.\n\n## Progress\n- Done."}}}
+	ch <- provider.EventDone{Message: msg}
+	close(ch)
+	return ch, nil
 }

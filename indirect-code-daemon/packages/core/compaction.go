@@ -237,7 +237,7 @@ func TruncateCompaction(state *CompactionState, effectiveCut int) *CompactionSta
 	}
 	cp := state.Clone()
 	if len(cp.Blocks) == 0 {
-		if cp.KeepFrom <= 0 || cp.KeepFrom > effectiveCut || cp.PreviousSummary == "" {
+		if cp.KeepFrom <= 0 || effectiveCut < cp.KeepFrom || strings.TrimSpace(cp.PreviousSummary) == "" {
 			return nil
 		}
 		if cp.PrunedBefore > effectiveCut {
