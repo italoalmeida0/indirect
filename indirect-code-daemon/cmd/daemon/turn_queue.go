@@ -148,6 +148,20 @@ func demoteStagedQueueItems(q []QueuedMessage) bool {
 	return changed
 }
 
+// demoteInterruptToSteer converts any existing "interrupt" items in q to
+// "steer" so at most one active interrupt exists at Queue[0] while superseded
+// interrupts remain staged for the next step (and cancellable back to queue).
+func demoteInterruptToSteer(q []QueuedMessage) bool {
+	changed := false
+	for i := range q {
+		if normalizeDelivery(q[i].Delivery) == deliveryInterrupt {
+			q[i].Delivery = deliverySteer
+			changed = true
+		}
+	}
+	return changed
+}
+
 // reorderQueueItems updates passive "queue" ordering according to ids while
 // preserving unnamed items in relative order and keeping "interrupt" and
 // "steer" groups ahead of passive "queue" items.

@@ -428,22 +428,76 @@ async function handleLiveOpenRouterProxy(
   }
 
   const reader = upstreamResp.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  const isTerminalSseBlock = (block: string) =>
+    block.includes("data: [DONE]") ||
+    /"finish_reason"\s*:\s*"(stop|tool_calls|length|content_filter)"/.test(block);
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       let gateTriggered = false;
+      let sseBuf = "";
+      let heldRemainder = "";
+      const waitGate = async () => {
+        if (gateTriggered) return;
+        gateTriggered = true;
+        controller.enqueue(encoder.encode(`: ${"f".repeat(2048)}\n\n`));
+        gate.entered.resolve(callRecord);
+        await Promise.race([gate.release.promise, gate.aborted.promise]);
+      };
       try {
         for (;;) {
           const { value, done } = await reader.read();
-          if (done) break;
-          if (value && value.byteLength > 0) {
-            controller.enqueue(value);
+          if (done) {
             if (!gateTriggered) {
-              gateTriggered = true;
-              gate.entered.resolve(callRecord);
-              await Promise.race([gate.release.promise, gate.aborted.promise]);
+              heldRemainder += sseBuf;
+              sseBuf = "";
+              await waitGate();
+              if (!req.signal.aborted && heldRemainder) {
+                controller.enqueue(encoder.encode(heldRemainder));
+                heldRemainder = "";
+              }
+            } else if (sseBuf && !req.signal.aborted) {
+              controller.enqueue(encoder.encode(sseBuf));
+            }
+            break;
+          }
+          if (!value || value.byteLength === 0) continue;
+          if (gateTriggered) {
+            controller.enqueue(value);
+            continue;
+          }
+          sseBuf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+          let sepIdx: number;
+          while ((sepIdx = sseBuf.indexOf("\n\n")) !== -1) {
+            const block = sseBuf.slice(0, sepIdx + 2);
+            sseBuf = sseBuf.slice(sepIdx + 2);
+            if (!gateTriggered && isTerminalSseBlock(block)) {
+              heldRemainder = block + sseBuf;
+              sseBuf = "";
+              await waitGate();
               if (req.signal.aborted) break;
+              if (heldRemainder) {
+                controller.enqueue(encoder.encode(heldRemainder));
+                heldRemainder = "";
+              }
+              break;
+            }
+            controller.enqueue(encoder.encode(block));
+            if (!gateTriggered && block.includes('"delta"')) {
+              heldRemainder = sseBuf;
+              sseBuf = "";
+              await waitGate();
+              if (req.signal.aborted) break;
+              if (heldRemainder) {
+                controller.enqueue(encoder.encode(heldRemainder));
+                heldRemainder = "";
+              }
+              break;
             }
           }
+          if (req.signal.aborted) break;
         }
       } catch {
         // aborted or closed
@@ -1035,6 +1089,8 @@ try {
       },
     );
 
+    const TURN_TIMEOUT = LIVE_OPENROUTER ? 60000 : 30000;
+
     // =========================================================================
     // SCENARIO 1: Desktop 1280x800 — Intermediate "Sending on next step" Staging
     //             + `×` Cancel Return-to-Queue + Reorder + Same-Turn Steer Wire Injection
@@ -1044,19 +1100,22 @@ try {
     await selectSessionInUI(page, ctx.gwUrl, ctx.hostId, s1Id, "Queue Suite S1");
 
     const s1Step0Gate = armGate("S1_TURN1:step0");
-    const s1Step1Gate = armGate("S1_TURN1:step1");
 
-    await sendFromComposer(page, "[TURN_TAG:S1_TURN1] Read notes.txt and summarize.");
+    await sendFromComposer(
+      page,
+      "[TURN_TAG:S1_TURN1] Use the read tool to read notes.txt first, then call finish_entire_request with a short summary.",
+    );
     await s1Step0Gate.entered.promise;
+    const s1Step1Gate = armGate("S1_TURN1:any");
 
     const modePill = page.locator("[data-composer-midturn-mode]");
     await modePill.waitFor({ state: "visible", timeout: 10000 });
     assert.equal(await modePill.getAttribute("data-composer-midturn-mode"), "queue");
     assert(((await modePill.textContent()) || "").includes("Queue"), "expected default mode pill to read Queue");
 
-    const M1 = "Queued alpha M1";
-    const M2 = "Steer beta M2";
-    const M3 = "Queued gamma M3";
+    const M1 = "Queued alpha M1 — call finish_entire_request immediately acknowledging M1.";
+    const M2 = "Steer beta M2 — include M2 in your summary and call finish_entire_request.";
+    const M3 = "Queued gamma M3 — call finish_entire_request immediately acknowledging M3.";
     await sendFromComposer(page, M1);
     await sendFromComposer(page, M2);
     await sendFromComposer(page, M3);
@@ -1157,19 +1216,32 @@ try {
     // Release Step 2 gate -> Turn 1 finishes, then passive [M3, M1] auto-drains in reordered order!
     const callIdxBeforeDrain = upstreamCalls.length;
     s1Step1Gate.release.resolve();
-    await waitForSessionIdleAndEmptyQueue(ctx, s1Id, 40000);
+    const snapAfterS1 = await waitForSessionIdleAndEmptyQueue(ctx, s1Id, TURN_TIMEOUT);
 
     const drainedCalls = upstreamCalls.slice(callIdxBeforeDrain);
-    assert(drainedCalls.length >= 2, `expected 2 auto-drained turns for [M3, M1], got ${drainedCalls.length}`);
-    const firstDrainLatestUser = drainedCalls[0]!.userTexts.at(-1) || "";
-    const secondDrainLatestUser = drainedCalls[1]!.userTexts.at(-1) || "";
+    const firstM3Idx = drainedCalls.findIndex((c) => c.userTexts.some((u) => u.includes(M3)));
+    const firstM1Idx = drainedCalls.findIndex((c) => c.userTexts.some((u) => u.includes(M1)));
     assert(
-      firstDrainLatestUser.includes(M3),
-      `expected reordered M3 to auto-drain first after Turn 1, got "${firstDrainLatestUser}"`,
+      firstM3Idx >= 0,
+      `expected reordered M3 to auto-drain after Turn 1, got userTexts=${JSON.stringify(drainedCalls.map((c) => c.userTexts.at(-1)))}`,
     );
     assert(
-      secondDrainLatestUser.includes(M1),
-      `expected reordered M1 to auto-drain second, got "${secondDrainLatestUser}"`,
+      firstM1Idx > firstM3Idx,
+      `expected reordered M1 to auto-drain strictly after M3 (firstM3Idx=${firstM3Idx}, firstM1Idx=${firstM1Idx})`,
+    );
+    assert(
+      !drainedCalls.slice(0, firstM3Idx + 1).some((c) => c.userTexts.some((u) => u.includes(M1))),
+      "M1 must not appear in upstream calls before or during M3's first step",
+    );
+    const finalS1UserTexts = (snapAfterS1?.session?.messages || [])
+      .filter((m: any) => m?.role === "user")
+      .map((m: any) => textOfMessage(m));
+    const msgM2Idx = finalS1UserTexts.findIndex((t: string) => t.includes(M2));
+    const msgM3Idx = finalS1UserTexts.findIndex((t: string) => t.includes(M3));
+    const msgM1Idx = finalS1UserTexts.findIndex((t: string) => t.includes(M1));
+    assert(
+      msgM2Idx >= 0 && msgM3Idx > msgM2Idx && msgM1Idx > msgM3Idx,
+      `expected persisted session.messages user order M2 -> M3 -> M1, got indices [${msgM2Idx}, ${msgM3Idx}, ${msgM1Idx}]`,
     );
 
     assertNoPageErrors(pageErrors, consoleErrors, "Scenario 1");
@@ -1243,7 +1315,7 @@ try {
       );
     }
 
-    const M_INT_1 = "Interrupt from staged card M_INT_1";
+    const M_INT_1 = "Interrupt from staged card M_INT_1 — reply in one short sentence.";
     await sendFromComposer(page, M_INT_1);
 
     // Assert it landed directly in Zone 1 `[data-queue-item-state="steer"]` with `×` button!
@@ -1260,7 +1332,7 @@ try {
     // Click `[data-action="queue-interrupt-now"]` on Zone 1 card!
     await stagedSteer.locator('[data-action="queue-interrupt-now"]').click();
     await s2CardGate.aborted.promise;
-    const snapAfter2A = await waitForSessionIdleAndEmptyQueue(ctx, s2Id, 30000);
+    const snapAfter2A = await waitForSessionIdleAndEmptyQueue(ctx, s2Id, TURN_TIMEOUT);
 
     const errEvents2A = ctx.events
       .slice(evStart2A)
@@ -1302,19 +1374,55 @@ try {
       );
     }
 
-    // Open composer mode <Portal> FloatMenu and pick "Interrupt now" (`interrupt`)
+    // First verify DEFECT #4 live: select per-turn override "queue" on modePill, then click
+    // "Change default in Settings…" from the running-turn FloatMenu and save "Interrupt & send" —
+    // modePill MUST immediately sync to "interrupt" while the turn is still running!
     await modePill.click();
     const floatMenu = page.locator("[data-floatmenu] [data-midturn-menu-body]");
+    await floatMenu.waitFor({ state: "visible", timeout: 8000 });
+    await floatMenu.locator('[data-midturn-option="queue"]').click();
+    assert.equal(await modePill.getAttribute("data-composer-midturn-mode"), "queue");
+
+    await modePill.click();
+    await floatMenu.waitFor({ state: "visible", timeout: 8000 });
+    await floatMenu.getByText("Change default in Settings…").click();
+    await dialog.waitFor({ state: "visible", timeout: 10000 });
+    const interruptRadioDesk = dialog.locator('[data-midturn-radio="interrupt"]');
+    await interruptRadioDesk.scrollIntoViewIfNeeded();
+    await interruptRadioDesk.click();
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+    await dialog.waitFor({ state: "hidden", timeout: 15000 });
+    await page.waitForFunction(
+      () => document.querySelector("[data-composer-midturn-mode]")?.getAttribute("data-composer-midturn-mode") === "interrupt",
+      undefined,
+      { timeout: 8000 },
+    );
+    assert(((await modePill.textContent()) || "").includes("Interrupt"));
+
+    // Restore host default "steer" via SettingsModal, then select per-turn "Interrupt now" from the Portal menu!
+    await page.locator('button[aria-label="Host & agent settings: Settings"]').click();
+    await dialog.waitFor({ state: "visible", timeout: 10000 });
+    await steerRadio.scrollIntoViewIfNeeded();
+    await steerRadio.click();
+    await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
+    await dialog.waitFor({ state: "hidden", timeout: 15000 });
+    await page.waitForFunction(
+      () => document.querySelector("[data-composer-midturn-mode]")?.getAttribute("data-composer-midturn-mode") === "steer",
+      undefined,
+      { timeout: 8000 },
+    );
+
+    await modePill.click();
     await floatMenu.waitFor({ state: "visible", timeout: 8000 });
     await floatMenu.locator('[data-midturn-option="interrupt"]').click();
     assert.equal(await modePill.getAttribute("data-composer-midturn-mode"), "interrupt");
     assert(((await modePill.textContent()) || "").includes("Interrupt"));
 
-    const M_INT_2 = "Direct composer interrupt M_INT_2";
+    const M_INT_2 = "Direct composer interrupt M_INT_2 — reply in one short sentence.";
     await sendFromComposer(page, M_INT_2);
 
     await s2MenuGate.aborted.promise;
-    const snapAfter2B = await waitForSessionIdleAndEmptyQueue(ctx, s2Id, 30000);
+    const snapAfter2B = await waitForSessionIdleAndEmptyQueue(ctx, s2Id, TURN_TIMEOUT);
 
     const errEvents2B = ctx.events
       .slice(evStart2B)
@@ -1354,7 +1462,7 @@ try {
       "per-turn mode override must reset to host default 'steer' on new turn",
     );
 
-    const M_STOP_1 = "Demote on plain stop M_STOP_1";
+    const M_STOP_1 = "Demote on plain stop M_STOP_1 — reply in one short sentence.";
     await sendFromComposer(page, M_STOP_1);
     await stagedSteer.waitFor({ state: "visible", timeout: 10000 });
 
@@ -1400,7 +1508,7 @@ try {
     await idleSendBtn.waitFor({ state: "visible", timeout: 8000 });
     await idleSendBtn.click();
 
-    const snapAfterIdleSend = await waitForSessionIdleAndEmptyQueue(ctx, s2Id, 30000);
+    const snapAfterIdleSend = await waitForSessionIdleAndEmptyQueue(ctx, s2Id, TURN_TIMEOUT);
     assert(
       JSON.stringify(snapAfterIdleSend?.session?.messages || []).includes(M_STOP_1),
       "clicking queue-send-idle must launch and complete M_STOP_1",
@@ -1497,8 +1605,9 @@ try {
     await sendFromComposer(mobilePage, "[TURN_TAG:S3_MOBILE_QUEUE] Hold mobile turn open for queue layout verification.");
     await s3Gate.entered.promise;
 
-    const MOB_1 = "Mobile staged steer item #1";
-    const MOB_2 = "Mobile passive queue item #2";
+    const UNBROKEN_200 = "https://indirect.example/queue/" + "x".repeat(175);
+    const MOB_1 = `Mobile staged steer item #1 ${UNBROKEN_200}`;
+    const MOB_2 = `Mobile passive queue item #2 ${UNBROKEN_200}`;
     const MOB_3 = "Mobile passive queue item #3";
     await sendFromComposer(mobilePage, MOB_1);
     await sendFromComposer(mobilePage, MOB_2);

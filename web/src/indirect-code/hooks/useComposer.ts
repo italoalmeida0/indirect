@@ -99,33 +99,38 @@ export function createComposer(opts: {
   const [midTurnOverride, setMidTurnOverride] = createSignal<{
     host: string;
     sid: string;
+    baseDefault: MidTurnDelivery;
     mode: MidTurnDelivery;
   } | null>(null);
   const [midTurnMenuOpen, setMidTurnMenuOpen] = createSignal(false);
   const defaultMidTurnSend = () =>
     normalizeMidTurnSend(opts.getDefaultMidTurnSend?.());
   const midTurnDelivery = (): MidTurnDelivery => {
+    const def = defaultMidTurnSend();
     const ov = midTurnOverride();
-    if (!ov) return defaultMidTurnSend();
+    if (!ov) return def;
     if (
       !opts.isSessionRunning() ||
       ov.host !== opts.getHostId() ||
-      ov.sid !== opts.getSessionId()
+      ov.sid !== opts.getSessionId() ||
+      ov.baseDefault !== def
     ) {
       setMidTurnOverride(null);
-      return defaultMidTurnSend();
+      return def;
     }
     return ov.mode;
   };
   function setMidTurnDelivery(mode: MidTurnDelivery) {
     const normalized = normalizeMidTurnSend(mode);
-    if (!opts.isSessionRunning() || normalized === defaultMidTurnSend()) {
+    const def = defaultMidTurnSend();
+    if (!opts.isSessionRunning() || normalized === def) {
       setMidTurnOverride(null);
       return;
     }
     setMidTurnOverride({
       host: opts.getHostId(),
       sid: opts.getSessionId(),
+      baseDefault: def,
       mode: normalized,
     });
   }
@@ -135,7 +140,7 @@ export function createComposer(opts: {
     on(
       defaultMidTurnSend,
       () => {
-        if (!opts.isSessionRunning()) setMidTurnOverride(null);
+        setMidTurnOverride(null);
       },
       { defer: true },
     ),

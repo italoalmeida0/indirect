@@ -12,8 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/skills"
 )
 
 func waitSentMatch(t *testing.T, h *wsHarness, fromIdx int, pred func(map[string]any) bool) (map[string]any, int) {
@@ -804,6 +806,64 @@ func TestQueueReorderClearIdleOptionsAndCrashRecoveryNormalization(t *testing.T)
 		return items[len(items)-1].(map[string]any)
 	}
 
+	// DEFECT #2 regression: queue_add on an idle session with "steer" or "interrupt"
+	// MUST normalize to passive "queue" so an idle session never holds active Zone 1 items.
+	idleSteer := addWS("idle-steer", "steer", nil)
+	if idleSteer["delivery"] != "queue" {
+		t.Fatalf("expected queue_add(steer) while stateIdle to normalize to queue, got %+v", idleSteer)
+	}
+	idleInterrupt := addWS("idle-interrupt", "interrupt", nil)
+	if idleInterrupt["delivery"] != "queue" {
+		t.Fatalf("expected queue_add(interrupt) while stateIdle to normalize to queue, got %+v", idleInterrupt)
+	}
+	h.mu.Lock()
+	idleClearCursor := len(h.sent)
+	h.mu.Unlock()
+	h.send(map[string]any{"type": "queue_clear", "sessionId": "s-ops"})
+	clearedIdleEv, _ := waitSentMatch(t, h, idleClearCursor, func(m map[string]any) bool {
+		return m["type"] == "session_queue" && m["sessionId"] == "s-ops"
+	})
+	if len(clearedIdleEv["queue"].([]any)) != 0 {
+		t.Fatalf("expected idle queue_clear to empty normalized items, got %+v", clearedIdleEv["queue"])
+	}
+
+	// Hold an active turn open on s-ops so staged "steer" items stay active while testing reorder & clear.
+	holdGate := make(chan struct{})
+	holdStarted := make(chan struct{}, 1)
+	mockGW := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case holdStarted <- struct{}{}:
+		default:
+		}
+		select {
+		case <-holdGate:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"m\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"done\"}}\n\n"))
+		_, _ = w.Write([]byte("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"))
+		_, _ = w.Write([]byte("event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"))
+		_, _ = w.Write([]byte("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer mockGW.Close()
+	defer func() {
+		select {
+		case <-holdGate:
+		default:
+			close(holdGate)
+		}
+	}()
+	h.cfg.store(&DaemonConfig{HostID: "h", GatewayURL: mockGW.URL, DaemonToken: "tok"})
+	h.send(map[string]any{"type": "prompt", "sessionId": "s-ops", "requestId": "hold-1", "text": "hold turn"})
+	select {
+	case <-holdStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for s-ops turn to enter stateRunning")
+	}
+
 	q1 := addWS("P1", "queue", nil)
 	q2 := addWS("P2", "queue", map[string]any{"mode": "agentic", "effort": "high", "access": "ask", "skills": []any{}})
 	q3 := addWS("P3", "queue", nil)
@@ -869,6 +929,13 @@ func TestQueueReorderClearIdleOptionsAndCrashRecoveryNormalization(t *testing.T)
 	if len(emptyEv["queue"].([]any)) != 0 {
 		t.Fatalf("expected empty queue after unstage + queue_clear, got %+v", emptyEv["queue"])
 	}
+	h.mu.Lock()
+	finishCursor := len(h.sent)
+	h.mu.Unlock()
+	close(holdGate)
+	_, _ = waitSentMatch(t, h, finishCursor, func(m map[string]any) bool {
+		return m["type"] == "session_status" && m["sessionId"] == "s-ops" && m["status"] == "idle"
+	})
 
 	// Idle queue_send_now preserves Options, Model, YOLO, and AttachmentIDs when starting a turn!
 	gotSnap := make(chan workerSnapshot, 1)
@@ -988,5 +1055,494 @@ func TestQueueReorderClearIdleOptionsAndCrashRecoveryNormalization(t *testing.T)
 	}
 	if !strings.Contains(string(rawJSON), `"delivery":"queue"`) {
 		t.Fatalf("expected delivery serialized in QueuedMessage JSON: %s", rawJSON)
+	}
+}
+
+// 6. DEFECT #1 & DEFECT #3: Back-to-back interrupts during stateCancel + queue_cancel_send undo on "interrupt".
+func TestBackToBackInterruptsAndCancelSendOnInterrupt(t *testing.T) {
+	cancelUnblock1 := make(chan struct{})
+	turn2Started := make(chan string, 1)
+	turn2Gate := make(chan struct{})
+
+	var mu sync.Mutex
+	var events []map[string]any
+	rec := newTestRecord("b2b-interrupt")
+	store := newDiskStore(t.TempDir())
+	if err := store.saveSessionSync(rec); err != nil {
+		t.Fatal(err)
+	}
+
+	act := newSessionActor(rec.ID, rec, store, func(ev any) {
+		if m, ok := ev.(map[string]any); ok {
+			mu.Lock()
+			events = append(events, m)
+			mu.Unlock()
+		}
+	}, nil, nil)
+
+	var workerCount int
+	var wMu sync.Mutex
+	act.startWorker = func(snap workerSnapshot, env workerEnv, ctx context.Context) {
+		wMu.Lock()
+		workerCount++
+		idx := workerCount
+		wMu.Unlock()
+		if idx == 1 {
+			<-ctx.Done()
+			<-cancelUnblock1
+			env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen, cancelled: true}}
+			return
+		}
+		if idx == 2 {
+			select {
+			case turn2Started <- snap.prompt:
+			default:
+			}
+			<-turn2Gate
+			env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen}}
+			return
+		}
+		env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen}}
+	}
+	go act.run()
+	defer func() {
+		select {
+		case <-cancelUnblock1:
+		default:
+			close(cancelUnblock1)
+		}
+		select {
+		case <-turn2Gate:
+		default:
+			close(turn2Gate)
+		}
+		act.control <- shutdownMsg{}
+		<-act.done
+	}()
+
+	latestQueue := func() []map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i]["type"] == "session_queue" {
+				raw, _ := events[i]["queue"].([]any)
+				out := make([]map[string]any, 0, len(raw))
+				for _, item := range raw {
+					if m, ok := item.(map[string]any); ok {
+						out = append(out, m)
+					}
+				}
+				return out
+			}
+		}
+		return nil
+	}
+
+	// Start Turn 1.
+	r0 := make(chan any, 1)
+	act.inbox <- Envelope{Payload: userPromptMsg{Text: "turn-1", Reply: r0}}
+	if res := (<-r0).(promptResult); !res.Accepted {
+		t.Fatalf("turn-1 rejected: %+v", res)
+	}
+
+	// Send I1 with midTurnDelivery="interrupt" -> enters stateCancel, I1 at Queue[0] ("interrupt").
+	rI1 := make(chan any, 1)
+	act.inbox <- Envelope{Payload: userPromptMsg{Text: "I1", MidTurnDelivery: "interrupt", Reply: rI1}}
+	if res := (<-rI1).(promptResult); !res.Accepted || !res.Interrupting || res.Delivery != "interrupt" {
+		t.Fatalf("I1 unexpected reply: %+v", res)
+	}
+
+	// While still in stateCancel, send I2 with midTurnDelivery="interrupt".
+	// I2 MUST become the sole "interrupt" at Queue[0], demoting I1 to "steer"!
+	rI2 := make(chan any, 1)
+	act.inbox <- Envelope{Payload: userPromptMsg{Text: "I2", MidTurnDelivery: "interrupt", Reply: rI2}}
+	if res := (<-rI2).(promptResult); !res.Accepted || !res.Interrupting || res.Delivery != "interrupt" {
+		t.Fatalf("I2 unexpected reply: %+v", res)
+	}
+	qAfterI2 := latestQueue()
+	if len(qAfterI2) != 2 ||
+		qAfterI2[0]["text"] != "I2" || qAfterI2[0]["delivery"] != "interrupt" ||
+		qAfterI2[1]["text"] != "I1" || qAfterI2[1]["delivery"] != "steer" {
+		t.Fatalf("expected [I2(interrupt), I1(steer)] after second prompt interrupt, got %+v", qAfterI2)
+	}
+
+	// Now click queue_interrupt_now on I1 (which is currently "steer" behind I2)!
+	// I1 MUST reclaim Queue[0] as the sole "interrupt" and demote I2 to "steer".
+	i1ID := qAfterI2[1]["id"].(string)
+	doneHook := make(chan struct{})
+	act.inbox <- Envelope{Payload: queueInterruptNowMsg{QueueID: i1ID}}
+	act.inbox <- Envelope{Payload: hookMsg{fn: func() { close(doneHook) }}}
+	<-doneHook
+	qAfterFlip := latestQueue()
+	if len(qAfterFlip) != 2 ||
+		qAfterFlip[0]["text"] != "I1" || qAfterFlip[0]["delivery"] != "interrupt" ||
+		qAfterFlip[1]["text"] != "I2" || qAfterFlip[1]["delivery"] != "steer" {
+		t.Fatalf("expected [I1(interrupt), I2(steer)] after queue_interrupt_now(I1), got %+v", qAfterFlip)
+	}
+
+	// Release Turn 1's cancelling worker -> I1 starts Turn 2, while I2 remains "steer" (NEVER a stuck "interrupt" ghost!).
+	close(cancelUnblock1)
+	select {
+	case gotPrompt := <-turn2Started:
+		if gotPrompt != "I1" {
+			t.Fatalf("expected I1 to start Turn 2, got %q", gotPrompt)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Turn 2 to start")
+	}
+	qDuringTurn2 := latestQueue()
+	if len(qDuringTurn2) != 1 || qDuringTurn2[0]["text"] != "I2" || qDuringTurn2[0]["delivery"] != "steer" {
+		t.Fatalf("expected [I2(steer)] during Turn 2 (zero ghost interrupts), got %+v", qDuringTurn2)
+	}
+	close(turn2Gate)
+
+	// Subcase B (DEFECT #3): queue_cancel_send ("×") on a deliveryInterrupt item during stateCancel
+	// unstages it back to passive "queue" in Seq order and lets the cancelling turn stop cleanly into stateIdle!
+	cancelUnblockB := make(chan struct{})
+	recB := newTestRecord("cancel-send-interrupt")
+	storeB := newDiskStore(t.TempDir())
+	if err := storeB.saveSessionSync(recB); err != nil {
+		t.Fatal(err)
+	}
+	var eventsB []map[string]any
+	actB := newSessionActor(recB.ID, recB, storeB, func(ev any) {
+		if m, ok := ev.(map[string]any); ok {
+			mu.Lock()
+			eventsB = append(eventsB, m)
+			mu.Unlock()
+		}
+	}, nil, nil)
+	var runsB int
+	actB.startWorker = func(snap workerSnapshot, env workerEnv, ctx context.Context) {
+		wMu.Lock()
+		runsB++
+		n := runsB
+		wMu.Unlock()
+		if n == 1 {
+			<-ctx.Done()
+			<-cancelUnblockB
+			env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen, cancelled: true}}
+			return
+		}
+		env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen}}
+	}
+	go actB.run()
+	defer func() {
+		select {
+		case <-cancelUnblockB:
+		default:
+			close(cancelUnblockB)
+		}
+		actB.control <- shutdownMsg{}
+		<-actB.done
+	}()
+
+	rB0 := make(chan any, 1)
+	actB.inbox <- Envelope{Payload: userPromptMsg{Text: "turn-b1", Reply: rB0}}
+	<-rB0
+
+	// Queue P1, I_MID, P2 while running, then promote I_MID to interrupt -> stateCancel.
+	for _, txt := range []string{"P1", "I_MID", "P2"} {
+		rc := make(chan any, 1)
+		actB.inbox <- Envelope{Payload: userPromptMsg{Text: txt, MidTurnDelivery: "queue", Reply: rc}}
+		<-rc
+	}
+	var midID string
+	syncCh := make(chan struct{})
+	actB.inbox <- Envelope{Payload: hookMsg{fn: func() {
+		midID = actB.rec.Queue[1].ID
+		close(syncCh)
+	}}}
+	<-syncCh
+
+	actB.inbox <- Envelope{Payload: queueInterruptNowMsg{QueueID: midID}}
+	syncCh2 := make(chan struct{})
+	actB.inbox <- Envelope{Payload: hookMsg{fn: func() { close(syncCh2) }}}
+	<-syncCh2
+
+	// User clicks "×" (queue_cancel_send) on I_MID during slow teardown in stateCancel!
+	actB.inbox <- Envelope{Payload: queueCancelSendMsg{QueueID: midID}}
+	var qRestored []QueuedMessage
+	syncCh3 := make(chan struct{})
+	actB.inbox <- Envelope{Payload: hookMsg{fn: func() {
+		qRestored = cloneQueueSlice(actB.rec.Queue)
+		close(syncCh3)
+	}}}
+	<-syncCh3
+	if len(qRestored) != 3 ||
+		qRestored[0].Text != "P1" || qRestored[0].Delivery != "queue" ||
+		qRestored[1].Text != "I_MID" || qRestored[1].Delivery != "queue" ||
+		qRestored[2].Text != "P2" || qRestored[2].Delivery != "queue" {
+		t.Fatalf("queue_cancel_send on interrupt item did not restore passive Seq order: %+v", qRestored)
+	}
+
+	// Now finish cancelling Turn 1 -> session MUST settle in stateIdle with all 3 items still passive (runsB == 1)!
+	close(cancelUnblockB)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		repCh := make(chan any, 1)
+		actB.control <- watchdogPingMsg{Reply: repCh}
+		rep := (<-repCh).(watchdogReport)
+		if rep.State == stateIdle {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for actB to reach stateIdle, got %v", rep.State)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	wMu.Lock()
+	gotRunsB := runsB
+	wMu.Unlock()
+	if gotRunsB != 1 {
+		t.Fatalf("expected cancelled turn with unstaged interrupt NOT to start a second turn, runsB=%d", gotRunsB)
+	}
+}
+
+// 7. DEFECT #3: stateAwaitQ & stateAwaitAppr emit question_resolved / approval_resolved + cancelling session_status on interrupt, while steer preserves await state.
+func TestInterruptAndSteerDuringAwaitQuestionAndAwaitApproval(t *testing.T) {
+	// Part A: stateAwaitQ
+	recQ := newTestRecord("await-q-test")
+	storeQ := newDiskStore(t.TempDir())
+	if err := storeQ.saveSessionSync(recQ); err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	var eventsQ []map[string]any
+	actQ := newSessionActor(recQ.ID, recQ, storeQ, func(ev any) {
+		if m, ok := ev.(map[string]any); ok {
+			mu.Lock()
+			eventsQ = append(eventsQ, m)
+			mu.Unlock()
+		}
+	}, nil, nil)
+
+	qEntered := make(chan struct{})
+	qStaleSeen := make(chan bool, 1)
+	turn2Q := make(chan string, 1)
+	var qWorkerIdx int
+	actQ.startWorker = func(snap workerSnapshot, env workerEnv, ctx context.Context) {
+		mu.Lock()
+		qWorkerIdx++
+		idx := qWorkerIdx
+		mu.Unlock()
+		if idx == 1 {
+			reply := make(chan questionOutcome, 1)
+			env.inbox <- Envelope{Payload: workerQuestionReqMsg{
+				gen: snap.gen,
+				id:  "q-123",
+				req: tools.QuestionRequest{
+					Questions: []tools.Question{{
+						Question: "Pick one",
+						Options:  []tools.QuestionOption{{Label: "A"}, {Label: "B"}},
+					}},
+				},
+				reply: reply,
+			}}
+			close(qEntered)
+			out := <-reply
+			qStaleSeen <- out.stale
+			<-ctx.Done()
+			env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen, cancelled: true}}
+			return
+		}
+		turn2Q <- snap.prompt
+		env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen}}
+	}
+	go actQ.run()
+	defer func() {
+		actQ.control <- shutdownMsg{}
+		<-actQ.done
+	}()
+
+	rQ0 := make(chan any, 1)
+	actQ.inbox <- Envelope{Payload: userPromptMsg{Text: "ask me", Reply: rQ0}}
+	<-rQ0
+	<-qEntered
+
+	// Wait until actor enters stateAwaitQ.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		repCh := make(chan any, 1)
+		actQ.control <- watchdogPingMsg{Reply: repCh}
+		if (<-repCh).(watchdogReport).State == stateAwaitQ {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("actor never entered stateAwaitQ")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Sending a "steer" message during stateAwaitQ MUST keep stateAwaitQ intact and NOT emit question_resolved!
+	rSteer := make(chan any, 1)
+	actQ.inbox <- Envelope{Payload: userPromptMsg{Text: "steer-while-asking", MidTurnDelivery: "steer", Reply: rSteer}}
+	if res := (<-rSteer).(promptResult); !res.Accepted || res.Delivery != "steer" {
+		t.Fatalf("unexpected steer reply during stateAwaitQ: %+v", res)
+	}
+	repCh := make(chan any, 1)
+	actQ.control <- watchdogPingMsg{Reply: repCh}
+	if st := (<-repCh).(watchdogReport).State; st != stateAwaitQ {
+		t.Fatalf("steer during stateAwaitQ changed state to %v", st)
+	}
+
+	// Cancel that steer item via queue_cancel_send -> returns to passive queue cleanly.
+	var steerID string
+	syncQ := make(chan struct{})
+	actQ.inbox <- Envelope{Payload: hookMsg{fn: func() {
+		steerID = actQ.rec.Queue[0].ID
+		close(syncQ)
+	}}}
+	<-syncQ
+	actQ.inbox <- Envelope{Payload: queueCancelSendMsg{QueueID: steerID}}
+
+	// Now send "interrupt" during stateAwaitQ -> wakes question waiter, emits question_resolved + cancelling session_status, and starts Turn 2!
+	rIntQ := make(chan any, 1)
+	actQ.inbox <- Envelope{Payload: userPromptMsg{Text: "interrupt-question", MidTurnDelivery: "interrupt", Reply: rIntQ}}
+	if res := (<-rIntQ).(promptResult); !res.Accepted || !res.Interrupting {
+		t.Fatalf("unexpected interrupt reply during stateAwaitQ: %+v", res)
+	}
+	if stale := <-qStaleSeen; !stale {
+		t.Fatal("expected question waiter to wake with stale=true on interrupt")
+	}
+	select {
+	case got := <-turn2Q:
+		if got != "interrupt-question" {
+			t.Fatalf("expected interrupt-question to start Turn 2, got %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Turn 2 after stateAwaitQ interrupt")
+	}
+
+	mu.Lock()
+	var sawQResolved, sawCancellingQ bool
+	for _, ev := range eventsQ {
+		if ev["type"] == "question_resolved" && ev["questionId"] == "q-123" {
+			sawQResolved = true
+		}
+		if ev["type"] == "session_status" && ev["status"] == "running" {
+			if turnMap, ok := ev["turn"].(map[string]any); ok && turnMap["status"] == "cancelling" {
+				sawCancellingQ = true
+			}
+		}
+	}
+	mu.Unlock()
+	if !sawQResolved {
+		t.Fatalf("missing question_resolved event when cancelling stateAwaitQ: %+v", eventsQ)
+	}
+	if !sawCancellingQ {
+		t.Fatalf("missing session_status turn.status=cancelling event when cancelling stateAwaitQ: %+v", eventsQ)
+	}
+
+	// Part B: stateAwaitAppr
+	st := &skillStore{}
+	st.initFrom(t.TempDir())
+	prevSkills := swapSkillRegistry(st)
+	defer swapSkillRegistry(prevSkills)
+
+	recA := newTestRecord("await-appr-test")
+	recA.Options = SessionOptions{Mode: "agentic", Effort: "medium", Access: "ask"}
+	recA.Skills = map[string]skills.SessionSkill{"build": {Active: true}}
+	storeA := newDiskStore(t.TempDir())
+	if err := storeA.saveSessionSync(recA); err != nil {
+		t.Fatal(err)
+	}
+	var eventsA []map[string]any
+	actA := newSessionActor(recA.ID, recA, storeA, func(ev any) {
+		if m, ok := ev.(map[string]any); ok {
+			mu.Lock()
+			eventsA = append(eventsA, m)
+			mu.Unlock()
+		}
+	}, nil, nil)
+
+	aEntered := make(chan struct{})
+	aStaleSeen := make(chan bool, 1)
+	turn2A := make(chan string, 1)
+	var aWorkerIdx int
+	actA.startWorker = func(snap workerSnapshot, env workerEnv, ctx context.Context) {
+		mu.Lock()
+		aWorkerIdx++
+		idx := aWorkerIdx
+		mu.Unlock()
+		if idx == 1 {
+			reply := make(chan approvalOutcome, 1)
+			env.inbox <- Envelope{Payload: workerApprovalReqMsg{
+				gen:    snap.gen,
+				id:     "call-456",
+				callID: "call-456",
+				tool:   "bash",
+				args:   json.RawMessage(`{"command":"echo hi"}`),
+				reply:  reply,
+			}}
+			close(aEntered)
+			out := <-reply
+			aStaleSeen <- out.stale
+			<-ctx.Done()
+			env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen, cancelled: true}}
+			return
+		}
+		turn2A <- snap.prompt
+		env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen}}
+	}
+	go actA.run()
+	defer func() {
+		actA.control <- shutdownMsg{}
+		<-actA.done
+	}()
+
+	rA0 := make(chan any, 1)
+	actA.inbox <- Envelope{Payload: userPromptMsg{Text: "run bash", Reply: rA0}}
+	<-rA0
+	<-aEntered
+
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		repCh := make(chan any, 1)
+		actA.control <- watchdogPingMsg{Reply: repCh}
+		if (<-repCh).(watchdogReport).State == stateAwaitAppr {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("actor never entered stateAwaitAppr")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	rIntA := make(chan any, 1)
+	actA.inbox <- Envelope{Payload: userPromptMsg{Text: "interrupt-approval", MidTurnDelivery: "interrupt", Reply: rIntA}}
+	if res := (<-rIntA).(promptResult); !res.Accepted || !res.Interrupting {
+		t.Fatalf("unexpected interrupt reply during stateAwaitAppr: %+v", res)
+	}
+	if stale := <-aStaleSeen; !stale {
+		t.Fatal("expected approval waiter to wake with stale=true on interrupt")
+	}
+	select {
+	case got := <-turn2A:
+		if got != "interrupt-approval" {
+			t.Fatalf("expected interrupt-approval to start Turn 2, got %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for Turn 2 after stateAwaitAppr interrupt")
+	}
+
+	mu.Lock()
+	var sawApprResolved, sawCancellingA bool
+	for _, ev := range eventsA {
+		if ev["type"] == "approval_resolved" && ev["callId"] == "call-456" && ev["approved"] == false {
+			sawApprResolved = true
+		}
+		if ev["type"] == "session_status" && ev["status"] == "running" {
+			if turnMap, ok := ev["turn"].(map[string]any); ok && turnMap["status"] == "cancelling" {
+				sawCancellingA = true
+			}
+		}
+	}
+	mu.Unlock()
+	if !sawApprResolved {
+		t.Fatalf("missing approval_resolved event when cancelling stateAwaitAppr: %+v", eventsA)
+	}
+	if !sawCancellingA {
+		t.Fatalf("missing session_status turn.status=cancelling event when cancelling stateAwaitAppr: %+v", eventsA)
 	}
 }

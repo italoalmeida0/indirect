@@ -631,6 +631,9 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 		}
 		delivery := a.resolveMidTurnDelivery(m.MidTurnDelivery)
 		previous := cloneQueueSlice(a.rec.Queue)
+		if delivery == deliveryInterrupt {
+			demoteInterruptToSteer(a.rec.Queue)
+		}
 		seq := nextQueueSeq(a.rec.Queue)
 		a.rec.Queue = append(a.rec.Queue, QueuedMessage{
 			ID:            randomID8(),
@@ -702,6 +705,12 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 			return
 		}
 		delivery := normalizeDelivery(m.Delivery)
+		if a.state != stateRunning && a.state != stateAwaitAppr && a.state != stateAwaitQ && a.state != stateCancel {
+			delivery = deliveryQueue
+		}
+		if delivery == deliveryInterrupt {
+			demoteInterruptToSteer(a.rec.Queue)
+		}
 		seq := nextQueueSeq(a.rec.Queue)
 		a.rec.Queue = append(a.rec.Queue, QueuedMessage{
 			ID:            randomID8(),
@@ -1035,8 +1044,13 @@ func (a *sessionActor) finishTurn(ok bool) {
 	if !a.closing && a.state == stateIdle && len(a.rec.Queue) > 0 && shouldPromote {
 		head := a.rec.Queue[0]
 		a.rec.Queue = a.rec.Queue[1:]
+		if demoteInterruptToSteer(a.rec.Queue) {
+			sortQueueByDelivery(a.rec.Queue)
+		}
 		if err := a.startTurn(head.Text, head.AttachmentIDs, head.Model, head.YOLO, head.Options); err != nil {
+			head.Delivery = deliveryQueue
 			a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
+			demoteStagedQueueItems(a.rec.Queue)
 			sortQueueByDelivery(a.rec.Queue)
 			_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
 		} else {
@@ -1071,16 +1085,23 @@ func (a *sessionActor) doCancel(reason string) {
 	// a fresh worker exit (finishTurn) resets it. Past the limit the worker
 	// is declared stuck: quarantine instead of pinning the session forever.
 	a.cancelRounds++
-	// Wake blocked workers as stale so no worker hangs forever.
+	// Wake blocked workers as stale so no worker hangs forever, and notify
+	// connected clients so open approval/question cards dismiss immediately.
+	emittedAppr := make(map[string]bool, len(a.approvalWaiters))
 	for id, ch := range a.approvalWaiters {
 		delete(a.approvalWaiters, id)
+		emittedAppr[id] = true
+		a.emit(map[string]any{"type": "approval_resolved", "sessionId": a.id, "callId": id, "approved": false})
 		select {
 		case ch <- approvalOutcome{stale: true}:
 		default:
 		}
 	}
+	emittedQ := make(map[string]bool, len(a.questionWaiters))
 	for id, ch := range a.questionWaiters {
 		delete(a.questionWaiters, id)
+		emittedQ[id] = true
+		a.emit(map[string]any{"type": "question_resolved", "sessionId": a.id, "questionId": id})
 		select {
 		case ch <- questionOutcome{stale: true}:
 		default:
@@ -1094,15 +1115,27 @@ func (a *sessionActor) doCancel(reason string) {
 		default:
 		}
 	}
+	if a.pending != nil {
+		switch a.pending.kind {
+		case "approval":
+			if !emittedAppr[a.pending.id] {
+				a.emit(map[string]any{"type": "approval_resolved", "sessionId": a.id, "callId": a.pending.id, "approved": false})
+			}
+		case "question":
+			if !emittedQ[a.pending.id] {
+				a.emit(map[string]any{"type": "question_resolved", "sessionId": a.id, "questionId": a.pending.id})
+			}
+		}
+	}
 	a.clearPending()
 	if reason == "watchdog_quarantine" && a.cancelRounds >= maxCancelRounds {
 		a.quarantine()
 		return
 	}
+	if a.rec.Turn != nil {
+		a.rec.Turn.Status = "cancelling"
+	}
 	if a.wal != nil {
-		if a.rec.Turn != nil {
-			a.rec.Turn.Status = "cancelling"
-		}
 		_ = appendWALEvent(a.wal, walEvent{Type: walTypeTurnState, TurnStatus: "cancelling"})
 	}
 	if a.cancel != nil {
@@ -1115,7 +1148,15 @@ func (a *sessionActor) doCancel(reason string) {
 		a.finishTurn(false)
 		return
 	}
+	wasCancelling := a.state == stateCancel
 	a.setState(stateCancel)
+	if !wasCancelling && a.rec.Turn != nil {
+		a.pingChange()
+		a.emit(map[string]any{
+			"type": "session_status", "hostId": a.hostID(), "sessionId": a.id,
+			"status": "running", "turn": map[string]any{"startedAt": a.rec.Turn.StartedAt, "status": "cancelling"},
+		})
+	}
 	_ = reason
 }
 

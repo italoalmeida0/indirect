@@ -1134,7 +1134,12 @@ export default function IndirectCodePage() {
       }
 
       case "session_status": {
-        if (pendingDiscardReloadSid && pendingDiscardReloadSid === msg.sessionId && msg.status === "running") {
+        if (
+          pendingDiscardReloadSid &&
+          pendingDiscardReloadSid === msg.sessionId &&
+          msg.status === "running" &&
+          msg.turn?.status !== "cancelling"
+        ) {
           const sid = pendingDiscardReloadSid;
           pendingDiscardReloadSid = null;
           reloadSessionFromDaemon(sid);

@@ -111,15 +111,27 @@ export function QueueCard() {
                     data-queue-item-state="interrupt"
                     class="rounded-xl border border-warning/40 bg-warning-subtle/45 px-3 py-2.5"
                   >
-                    <div class="flex flex-wrap items-center gap-2 min-w-0">
-                      <Iconify
-                        icon="lucide:loader-2"
-                        size={13}
-                        class="animate-spin text-warning shrink-0"
-                      />
-                      <span class="text-xs font-medium text-warning">
-                        Interrupting — sending immediately…
-                      </span>
+                    <div class="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                      <div class="flex flex-wrap items-center gap-2 min-w-0">
+                        <Iconify
+                          icon="lucide:loader-2"
+                          size={13}
+                          class="animate-spin text-warning shrink-0"
+                        />
+                        <span class="text-xs font-medium text-warning">
+                          Interrupting — sending immediately…
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        data-action="queue-cancel-send"
+                        data-rc-tip="Cancel send — return to queue"
+                        aria-label="Cancel interrupt send and return to queue"
+                        onClick={() => q.cancelSend(item.id)}
+                        class="inline-flex h-6 w-6 items-center justify-center rounded-md border border-border bg-surface text-fg-secondary hover:border-danger/35 hover:bg-danger-subtle hover:text-danger transition-colors cursor-pointer shrink-0"
+                      >
+                        <Iconify icon="lucide:x" size={14} />
+                      </button>
                     </div>
                     <div class="mt-1.5 flex items-start gap-2 min-w-0">
                       <p class="flex-1 min-w-0 text-sm text-fg line-clamp-2 break-words">

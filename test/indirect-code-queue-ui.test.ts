@@ -357,6 +357,13 @@ describe("createSettings & createComposer mid_turn_send / midTurnDelivery wire c
     });
     await p3;
     expect(toasts.at(-1)).toBe("Queued — sends after agent finishes");
+
+    // 5. DEFECT #4 regression: saving a new host default in Settings WHILE a turn is running
+    // and a per-turn override was selected immediately syncs composer.midTurnDelivery().
+    composer.setMidTurnDelivery("interrupt");
+    expect(composer.midTurnDelivery()).toBe("interrupt");
+    setHostDefault("steer");
+    expect(composer.midTurnDelivery()).toBe("steer");
   });
 });
 
@@ -376,6 +383,30 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
   let renderSettingsGeneralSsr!: (midTurnSend: MidTurnDelivery) => string;
 
   beforeAll(async () => {
+    if (typeof globalThis.localStorage === "undefined") {
+      const mem = new Map<string, string>();
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        writable: true,
+        value: {
+          getItem: (k: string) => (mem.has(k) ? mem.get(k)! : null),
+          setItem: (k: string, v: string) => {
+            mem.set(k, String(v));
+          },
+          removeItem: (k: string) => {
+            mem.delete(k);
+          },
+          clear: () => {
+            mem.clear();
+          },
+          key: (idx: number) => Array.from(mem.keys())[idx] ?? null,
+          get length() {
+            return mem.size;
+          },
+        },
+      });
+    }
+
     const icDir = join(process.cwd(), "web", "src", "indirect-code");
     const virtualEntryPath = join(icDir, "__ssr_queue_ui_entry__.tsx");
 
@@ -724,6 +755,8 @@ describe("SSR QueueCard, ToolbarSend, MidTurnModeMenuBody & SettingsGeneralSecti
     expect(interruptHtml).toContain('data-queue-item-state="interrupt"');
     expect(interruptHtml).toContain("Interrupting — sending immediately…");
     expect(interruptHtml).toContain("Abort tool run and apply hotfix");
+    expect(interruptHtml).toContain('data-action="queue-cancel-send"');
+    expect(interruptHtml).toContain('aria-label="Cancel interrupt send and return to queue"');
 
     const mixedCollapsedHtml = renderQueueCardSsr({
       sessionStatus: "running",

@@ -263,10 +263,12 @@ func (a *sessionActor) onQueueSendNow(m queueSendNowMsg) {
 	a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 }
 
-// onQueueCancelSend unstages a Delivery="steer" item back to passive "queue",
-// restoring its original relative slot via Seq. If the item was already
-// consumed by BeforeRequest or is already passive, it emits session_queue so
-// the client UI reconciles without error.
+// onQueueCancelSend unstages a Delivery="steer" or Delivery="interrupt" item
+// back to passive "queue", restoring its original relative slot via Seq. If an
+// interrupt already placed the active turn into stateCancel, the turn finishes
+// stopping into idle without promoting the unstaged item. If the item was
+// already consumed by BeforeRequest or is already passive, it emits
+// session_queue so the client UI reconciles without error.
 func (a *sessionActor) onQueueCancelSend(m queueCancelSendMsg) {
 	a.touch()
 	idx := -1
@@ -276,15 +278,18 @@ func (a *sessionActor) onQueueCancelSend(m queueCancelSendMsg) {
 			break
 		}
 	}
-	if idx >= 0 && normalizeDelivery(a.rec.Queue[idx].Delivery) == deliverySteer {
-		previous := cloneQueueSlice(a.rec.Queue)
-		a.rec.Queue[idx].Delivery = deliveryQueue
-		sortQueueByDelivery(a.rec.Queue)
-		if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
-			a.rec.Queue = previous
-			return
+	if idx >= 0 {
+		d := normalizeDelivery(a.rec.Queue[idx].Delivery)
+		if d == deliverySteer || d == deliveryInterrupt {
+			previous := cloneQueueSlice(a.rec.Queue)
+			a.rec.Queue[idx].Delivery = deliveryQueue
+			sortQueueByDelivery(a.rec.Queue)
+			if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
+				a.rec.Queue = previous
+				return
+			}
+			a.pingChange()
 		}
-		a.pingChange()
 	}
 	a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 }
@@ -316,8 +321,9 @@ func (a *sessionActor) onQueueInterruptNow(m queueInterruptNowMsg) {
 		rest = append(rest, a.rec.Queue[idx+1:]...)
 		a.rec.Queue = rest
 		if err := a.startTurn(item.Text, item.AttachmentIDs, item.Model, item.YOLO, item.Options); err != nil {
-			item.Delivery = deliveryInterrupt
+			item.Delivery = deliveryQueue
 			a.rec.Queue = append(a.rec.Queue, item)
+			demoteStagedQueueItems(a.rec.Queue)
 			sortQueueByDelivery(a.rec.Queue)
 			_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
 		}
@@ -327,6 +333,7 @@ func (a *sessionActor) onQueueInterruptNow(m queueInterruptNowMsg) {
 	}
 	if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ || a.state == stateCancel {
 		previous := cloneQueueSlice(a.rec.Queue)
+		demoteInterruptToSteer(a.rec.Queue)
 		a.rec.Queue[idx].Delivery = deliveryInterrupt
 		sortQueueByDelivery(a.rec.Queue)
 		if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
