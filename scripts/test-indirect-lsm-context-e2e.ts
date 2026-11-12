@@ -16,9 +16,35 @@ import { copyFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from 
 import { promises as fs } from "fs";
 import { homedir, tmpdir } from "os";
 import path from "path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
+async function loadPlaywright(): Promise<{ chromium: any }> {
+  const candidates: string[] = [];
+  if (process.env.PLAYWRIGHT_MODULE) candidates.push(process.env.PLAYWRIGHT_MODULE);
+  candidates.push("playwright", "playwright-core");
+  if (process.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA || path.join(homedir(), "AppData", "Local");
+    candidates.push(path.join(localAppData, "GG Coder", "sidecar", "node_modules", "playwright", "index.mjs"));
+    const npxRoot = path.join(localAppData, "npm-cache", "_npx");
+    const npxDirs = await fs.readdir(npxRoot).catch(() => [] as string[]);
+    for (const d of npxDirs) {
+      candidates.push(path.join(npxRoot, d, "node_modules", "playwright", "index.mjs"));
+      candidates.push(path.join(npxRoot, d, "node_modules", "playwright-core", "index.mjs"));
+    }
+  }
+  for (const spec of candidates) {
+    try {
+      const target = path.isAbsolute(spec) ? (existsSync(spec) ? pathToFileURL(spec).href : "") : spec;
+      if (!target) continue;
+      const mod = await import(target);
+      if (mod?.chromium) return mod;
+    } catch {}
+  }
+  console.error("Playwright module not found: set PLAYWRIGHT_MODULE");
+  process.exit(2);
+}
+
+const { chromium } = await loadPlaywright();
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const WS = path.join(ROOT, "..");
@@ -298,6 +324,46 @@ async function openSessionPage(ctx: any, sessionId: string) {
   return { browser, page, pageErrors, consoleErrors };
 }
 
+async function expandToolRowAndGetUnit(page: any, rowMatcher: string | RegExp) {
+  for (let guard = 0; guard < 15; guard++) {
+    const olderBtn = page.locator('button:has-text("Load older turns")').first();
+    if ((await olderBtn.count()) === 0 || !(await olderBtn.isVisible().catch(() => false))) break;
+    await olderBtn.scrollIntoViewIfNeeded().catch(() => {});
+    await olderBtn.click();
+    await page.waitForTimeout(450);
+  }
+  const aggs = page.locator('[data-assistant-message] button[class*="group/agg"][aria-expanded="false"]');
+  const aggCount = await aggs.count();
+  for (let i = 0; i < aggCount; i++) {
+    const b = aggs.nth(0);
+    if ((await b.count()) === 0) break;
+    await b.scrollIntoViewIfNeeded().catch(() => {});
+    await b.click();
+    await page.waitForTimeout(120);
+  }
+  const subGroups = page.locator('[data-toolseg^="g:"] > button[aria-expanded="false"]');
+  const grpCount = await subGroups.count();
+  for (let i = 0; i < grpCount; i++) {
+    const b = subGroups.nth(0);
+    if ((await b.count()) === 0) break;
+    await b.scrollIntoViewIfNeeded().catch(() => {});
+    await b.click();
+    await page.waitForTimeout(120);
+  }
+  const header = page.locator('div[class*="group/tool"]', { hasText: rowMatcher }).first();
+  assert((await header.count()) > 0, `expected tool header matching ${String(rowMatcher)}`);
+  await header.scrollIntoViewIfNeeded();
+  const isOpen = await header.evaluate((el: HTMLElement) => {
+    const disc = el.nextElementSibling as HTMLElement | null;
+    return Boolean(disc && disc.style.display !== "none");
+  });
+  if (!isOpen) {
+    await header.click();
+    await page.waitForTimeout(250);
+  }
+  return header.locator("..");
+}
+
 function assistantHasText(messages: any[], expected: string): boolean {
   return (messages || []).some(
     (m: any) => m?.role === "assistant" && JSON.stringify(m.content ?? "").includes(expected),
@@ -514,7 +580,19 @@ async function scenarioErasRecallAndRewind(ctx: any, opts: { runErasAndRecall: b
       assistantHasText(tailMsgs, NEEDLE_LOC) || assistantHasText(tailMsgs, "matrix_v4.go:142"),
       `file:line ${NEEDLE_LOC} missing from recall response`,
     );
-    log("test", "scenario 1 PASS (2 eras UI + session_history verbatim needle recall)");
+
+    const recallUi = await openSessionPage(ctx, sessionId);
+    try {
+      const histUnit = await expandToolRowAndGetUnit(recallUi.page, /(?:Searched|Recalled) history/);
+      const histCtx = histUnit.locator('[data-tool-context="session-history"]');
+      assert(await histCtx.isVisible(), 'expanded session_history row must render visible [data-tool-context="session-history"]');
+      const histText = ((await histCtx.textContent()) || "").trim();
+      assert(histText.length > 0, '[data-tool-context="session-history"] must be non-empty');
+      assertNoPageErrors(recallUi.pageErrors, recallUi.consoleErrors, "eras-recall-ui");
+    } finally {
+      await recallUi.browser.close();
+    }
+    log("test", "scenario 1 PASS (2 eras UI + session_history verbatim needle recall + expanded history UI)");
   }
 
   if (opts.runRewind) {
@@ -618,13 +696,18 @@ async function scenarioArrivalSpill(ctx: any) {
   assert(spillContent.includes(SPILL_ERROR_CODE), "spilled log on disk must contain the middle error line");
   assert(spillContent.includes("worker-001") && spillContent.includes("worker-450"), "spilled log on disk must be 100% lossless from first to last line");
 
-  const { browser, pageErrors, consoleErrors } = await openSessionPage(ctx, sessionId);
+  const { browser, page, pageErrors, consoleErrors } = await openSessionPage(ctx, sessionId);
   try {
+    const spillUnit = await expandToolRowAndGetUnit(page, "pipeline_run.log");
+    const spillBanner = spillUnit.locator("[data-arrival-spill]");
+    assert(await spillBanner.isVisible(), "expanded spilled bash row must render visible [data-arrival-spill]");
+    const spillBannerText = ((await spillBanner.textContent()) || "").trim();
+    assert(spillBannerText.length > 0 && spillBannerText.includes("brain/"), `[data-arrival-spill] must be non-empty, got "${spillBannerText}"`);
     assertNoPageErrors(pageErrors, consoleErrors, "spill-ui");
   } finally {
     await browser.close();
   }
-  log("test", "scenario 2 PASS (foreground >25KB spill to brain/tool-*.log + middle error survival)");
+  log("test", "scenario 2 PASS (foreground >25KB spill to brain/tool-*.log + middle error survival + expanded spill UI)");
 }
 
 // 3. In-Process Read-Only `explore` Subagent
@@ -657,12 +740,17 @@ async function scenarioExploreSubagent(ctx: any) {
 
   const { browser, page, pageErrors, consoleErrors } = await openSessionPage(ctx, sessionId);
   try {
+    const exploreUnit = await expandToolRowAndGetUnit(page, "Explored");
+    const exploreCtx = exploreUnit.locator('[data-tool-context="explore"]');
+    assert(await exploreCtx.isVisible(), 'expanded explore row must render visible [data-tool-context="explore"]');
+    const exploreText = ((await exploreCtx.textContent()) || "").trim();
+    assert(exploreText.length > 0 && exploreText.includes("Read-only investigation"), `[data-tool-context="explore"] must be non-empty, got "${exploreText}"`);
     await page.screenshot({ path: path.join(tmpdir(), "lsm-explore.png"), fullPage: false });
     assertNoPageErrors(pageErrors, consoleErrors, "explore-ui");
   } finally {
     await browser.close();
   }
-  log("test", "scenario 3 PASS (explore subagent multi-file lookup + 0 page errors)");
+  log("test", "scenario 3 PASS (explore subagent multi-file lookup + expanded explore UI + 0 page errors)");
 }
 
 const only = (process.argv[2] || "").toLowerCase();

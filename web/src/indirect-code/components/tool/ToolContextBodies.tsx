@@ -3,6 +3,7 @@ import { Icon as Iconify } from "../../../components/icon";
 import { compactTokens } from "../../context";
 import { FileIcon } from "../../presentation";
 import {
+  latestExploreProgress,
   parseExploreView,
   parseSessionHistoryView,
   splitHighlightSegments,
@@ -129,7 +130,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                       <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-accent rounded-full animate-spin shrink-0" />
                     </Show>
                     <span class="font-mono truncate">
-                      {props.m.prog() ||
+                      {latestExploreProgress(props.m.prog()) ||
                         (props.active ? "Running isolated read-only subagent…" : "Pending investigation…")}
                     </span>
                   </div>

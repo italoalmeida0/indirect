@@ -2,6 +2,7 @@ import { Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { press } from "../../../ds/motion/press";
 import { absoluteRemotePath, collapseCwd } from "../../paths";
+import { latestExploreProgress } from "../../utils/contextTools";
 import { ShellCmd } from "../CodeBlock";
 import { FileIcon } from "../../presentation";
 import type { ToolPartProps } from "./toolUnitModel";
@@ -81,8 +82,8 @@ export function ToolUnitHeader(props: ToolPartProps) {
       <Show when={props.m.sum().stat && props.m.sum().statAdd == null}>
         <span class="text-[11px] text-fg-muted/80 shrink-0 tabular-nums">{props.m.sum().stat}</span>
       </Show>
-      <Show when={props.m.name() === "explore" && props.running && props.active && !props.u.result && props.m.prog()}>
-        <span data-explore-step class="font-mono text-[11px] text-accent truncate max-w-[14rem] shrink-0">{props.m.prog()}</span>
+      <Show when={props.m.name() === "explore" && props.running && props.active && !props.u.result && latestExploreProgress(props.m.prog())}>
+        <span data-explore-step class="font-mono text-[11px] text-accent truncate max-w-[14rem] shrink-0">{latestExploreProgress(props.m.prog())}</span>
       </Show>
       <Show when={props.m.elapsed() && !props.m.isDetachedBg()}><span data-tool-duration class="text-[11px] text-fg-muted/80 tabular-nums shrink-0">{props.m.elapsed()}</span></Show>
       {/* Header-only rows (bg_await) keep the clickable row but hide the

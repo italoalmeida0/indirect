@@ -588,6 +588,27 @@ export function parseExploreView(
   };
 }
 
+/**
+ * Extracts the latest `step N · ...` progress line from a streamed
+ * `tool_progress` buffer. `EvToolProgress` concatenates chunks across steps
+ * (`"step 1 · glob **\/*.gostep 2 · read pkg/router.go"`), so slice from the
+ * final `step <N> · ` marker.
+ */
+export function latestExploreProgress(raw?: string): string {
+  const s = typeof raw === "string" ? raw : "";
+  if (!s.trim()) return "";
+  const matches = Array.from(s.matchAll(/step\s+\d+\s*·\s*/g));
+  if (matches.length > 0) {
+    const last = matches[matches.length - 1]!;
+    return s.slice(last.index ?? 0).trim();
+  }
+  const lines = s
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  return lines.length > 0 ? lines[lines.length - 1]! : "";
+}
+
 const ARRIVAL_SPILL_TRAILER_RE =
   /(?:\r?\n)*\[Full output saved to (.+?) \((\d+) lines, (\d+) bytes\)\s*(?:—|--|-)[^\]]+\]\s*$/;
 

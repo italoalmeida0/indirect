@@ -12,6 +12,7 @@ import type { ToolUnit } from "../web/src/indirect-code/types";
 import {
   extractArrivalSpillInfo,
   formatSpillBytes,
+  latestExploreProgress,
   parseExploreView,
   parseHumanDurationMs,
   parseSessionHistoryView,
@@ -378,6 +379,16 @@ describe("parseExploreView and parseHumanDurationMs", () => {
     expect(reloaded.durationMs).toBe(8400);
     expect(reloaded.turnCapReached).toBe(true);
     expect(reloaded.synthesis).toBe(synthesis);
+  });
+
+  test("latestExploreProgress extracts the newest step from concatenated tool_progress chunks", () => {
+    expect(latestExploreProgress("")).toBe("");
+    expect(latestExploreProgress("step 1 · search SPILL_DIAG")).toBe("step 1 · search SPILL_DIAG");
+    expect(
+      latestExploreProgress(
+        "step 1 · glob **/*.gostep 2 · read pkg/router.gostep 3 · session_history RouteRequest",
+      ),
+    ).toBe("step 3 · session_history RouteRequest");
   });
 });
 
