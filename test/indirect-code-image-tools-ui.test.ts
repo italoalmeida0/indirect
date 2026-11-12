@@ -190,6 +190,58 @@ describe("Image read detection, formatting, and toolSummary", () => {
       verb: "Analyzed",
       target: "read.go#L85-94",
     });
+
+    // 8. First-line byte-cap envelope attrs (env.line / line_size / next_byte / truncated) and attr-less source reads
+    // whose content starts with `Read image file [image/png]...` never misclassify as ImageReadCard
+    expect(
+      parseImageReadDetails({
+        args: { path: "test/indirect-code-image-tools-ui.test.ts", offset: 151, limit: 5 },
+        output: 'Read image file [image/png]" }),\n).toEqual({',
+        env: { line: "151", truncated: "true" },
+        hasResult: true,
+        isError: false,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      parseImageReadDetails({
+        args: { path: "packages/agent/tools/read.go" },
+        output: "Read image file [image/png]",
+        env: { line: "1", line_size: "64KB", shown: "50KB", next_byte: "51201" },
+        hasResult: true,
+        isError: false,
+      }),
+    ).toBeUndefined();
+
+    // Attr-less legacy read on non-image path or with non-bracketed source lines stays undefined
+    expect(
+      parseImageReadDetails({
+        args: { path: "packages/agent/tools/read.go" },
+        output: "Read image file [image/png]\npackage tools",
+        hasResult: true,
+        isError: false,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      parseImageReadDetails({
+        args: { path: "assets/icon.png" },
+        output: "Read image file [image/png]\nconst notAnImageHint = true;",
+        hasResult: true,
+        isError: false,
+      }),
+    ).toBeUndefined();
+
+    expect(
+      toolSummary(
+        mkReadUnit(
+          { path: "test/indirect-code-image-tools-ui.test.ts", offset: 151, limit: 5 },
+          {
+            text: `<tool_result type="ok" line="151" truncated="true">Read image file [image/png]" }),\n).toEqual({</tool_result>`,
+          },
+        ),
+      ).icon,
+    ).toBe("lucide:file-text");
   });
 });
 
@@ -575,6 +627,20 @@ describe("SSR <ToolBody> ImageReadCard & <CompactionBalloon> visual digest chip"
     expect(htmlWithHint).toContain(
       "Image omitted: could not be converted to a supported inline image format.",
     );
+
+    // Source-code read with line-cap envelope or non-image path starting with `Read image file [image/png]`
+    // renders CodeBlock (`<pre ...><code class="tok">`) and NEVER ImageReadCard (`data-tool-image-read`)
+    const htmlSourceFalsePositive = renderToolBodySsr(
+      mkReadUnit(
+        { path: "test/indirect-code-image-tools-ui.test.ts", offset: 151, limit: 5 },
+        {
+          text: `<tool_result type="ok" line="151" truncated="true">Read image file [image/png]" }),\n).toEqual({</tool_result>`,
+        },
+      ),
+      { running: false, active: false },
+    );
+    expect(htmlSourceFalsePositive).not.toContain("data-tool-image-read");
+    expect(htmlSourceFalsePositive).toContain('<code class="tok">Read image file [image/png]');
   });
 
   test("renders running, incomplete, and error states cleanly for image paths", () => {

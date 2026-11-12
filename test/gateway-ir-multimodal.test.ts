@@ -22,6 +22,7 @@ const {
   demoteUnsignedToolCalls,
 } = await import("../server/proxy/gateway-ir");
 import type {
+  GatewayRequest,
   IRImageBlock,
   IRTextBlock,
   IRToolResultBlock,
@@ -611,6 +612,197 @@ describe("Gateway IR multimodal tool_result translation", () => {
       content: [
         { type: "text", text: "[Attached image(s) from tool call s_1]" },
         { type: "image_url", image_url: { url: `data:image/png;base64,${signedB64}` } },
+      ],
+    });
+  });
+
+  test("demoteUnsignedToolCalls never mutates cached IR in place when merging a demoted tool_result into a preceding user message", () => {
+    const b64 = makeBase64Payload(120, "M");
+    const imgUrl = `data:image/png;base64,${b64}`;
+    const ir: GatewayRequest = {
+      model: "claude-sonnet-4-5",
+      system: "",
+      tools: [],
+      toolChoice: { mode: "auto" },
+      params: {},
+      warnings: [],
+      messages: [
+        { role: "user", blocks: [{ type: "text", text: "hi" }] },
+        {
+          role: "user",
+          blocks: [
+            {
+              type: "tool_result",
+              toolUseId: "u1",
+              content: "ok",
+              images: [{ url: imgUrl, mediaType: "image/png" }],
+            },
+          ],
+        },
+      ],
+    };
+    const snapshot = structuredClone(ir);
+
+    const demoted = demoteUnsignedToolCalls(ir);
+    expect(demoted.messages).toHaveLength(1);
+    expect(demoted.messages[0]!.blocks).toEqual([
+      { type: "text", text: "hi" },
+      { type: "text", text: "[tool result u1]: ok" },
+      { type: "image", url: imgUrl, mediaType: "image/png" },
+    ]);
+
+    // Cached caller IR must stay 100% untouched for secondary Anthropic/OpenAI failover targets
+    expect(ir).toEqual(snapshot);
+    expect(ir.messages[0]!.blocks).toEqual([{ type: "text", text: "hi" }]);
+
+    // Also verify full encodeIR("openai", ir, "gemini-2.5-pro") -> failover encodeIR("anthropic", ir, ...)
+    // Before the fix, demoteUnsignedToolCalls polluted ir.messages[0].blocks with `[tool result u1]: ok` + duplicate image!
+    encodeIR("openai", ir, "gemini-2.5-pro");
+    expect(ir).toEqual(snapshot);
+    const failoverAnthropic = encodeIR("anthropic", ir, "claude-sonnet-4-5") as any;
+    expect(failoverAnthropic.messages).toHaveLength(1);
+    expect(failoverAnthropic.messages[0]).toEqual({
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "u1",
+          content: [
+            { type: "text", text: "ok" },
+            {
+              type: "image",
+              source: { type: "base64", media_type: "image/png", data: b64 },
+            },
+          ],
+        },
+        { type: "text", text: "hi" },
+      ],
+    });
+  });
+
+  test("encodeIR('openai') emits all role:'tool' messages contiguously before hoisted images and user text on mixed user turns", () => {
+    const b64A = makeBase64Payload(90, "X");
+    const b64B = makeBase64Payload(90, "Y");
+    const b64User = makeBase64Payload(90, "Z");
+    const urlA = `data:image/png;base64,${b64A}`;
+    const urlB = `data:image/jpeg;base64,${b64B}`;
+    const urlUser = `data:image/webp;base64,${b64User}`;
+
+    // Case 1: [tool_result(c1, img1), text("compare"), tool_result(c2, img2)]
+    const mixedInterleaved: GatewayRequest = {
+      model: "gpt-4o",
+      system: "",
+      tools: [],
+      toolChoice: { mode: "auto" },
+      params: {},
+      warnings: [],
+      messages: [
+        {
+          role: "assistant",
+          blocks: [
+            { type: "tool_use", id: "c1", name: "read", input: { path: "a.png" } },
+            { type: "tool_use", id: "c2", name: "read", input: { path: "b.jpg" } },
+          ],
+        },
+        {
+          role: "user",
+          blocks: [
+            {
+              type: "tool_result",
+              toolUseId: "c1",
+              content: "Read image a",
+              images: [{ url: urlA, mediaType: "image/png" }],
+            },
+            { type: "text", text: "compare" },
+            {
+              type: "tool_result",
+              toolUseId: "c2",
+              content: "Read image b",
+              images: [{ url: urlB, mediaType: "image/jpeg" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const chat1 = encodeIR("openai", mixedInterleaved, "gpt-4o") as any;
+    expect(chat1.messages.map((m: any) => m.role)).toEqual([
+      "assistant",
+      "tool",
+      "tool",
+      "user",
+      "user",
+    ]);
+    expect(chat1.messages[1]).toEqual({
+      role: "tool",
+      tool_call_id: "c1",
+      content: "Read image a",
+    });
+    expect(chat1.messages[2]).toEqual({
+      role: "tool",
+      tool_call_id: "c2",
+      content: "Read image b",
+    });
+    expect(chat1.messages[3]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "[Attached image(s) from tool call c1]" },
+        { type: "image_url", image_url: { url: urlA } },
+        { type: "text", text: "[Attached image(s) from tool call c2]" },
+        { type: "image_url", image_url: { url: urlB } },
+      ],
+    });
+    expect(chat1.messages[4]).toEqual({
+      role: "user",
+      content: "compare",
+    });
+
+    // Case 2: [text("note"), image(userImg), tool_result(c1, img1)]
+    const mixedLeadingText: GatewayRequest = {
+      model: "gpt-4o",
+      system: "",
+      tools: [],
+      toolChoice: { mode: "auto" },
+      params: {},
+      warnings: [],
+      messages: [
+        {
+          role: "assistant",
+          blocks: [{ type: "tool_use", id: "c1", name: "read", input: { path: "a.png" } }],
+        },
+        {
+          role: "user",
+          blocks: [
+            { type: "text", text: "note" },
+            { type: "image", url: urlUser, mediaType: "image/webp" },
+            {
+              type: "tool_result",
+              toolUseId: "c1",
+              content: "Read image a",
+              images: [{ url: urlA, mediaType: "image/png" }],
+            },
+          ],
+        },
+      ],
+    };
+
+    const chat2 = encodeIR("openai", mixedLeadingText, "gpt-4o") as any;
+    expect(chat2.messages.map((m: any) => m.role)).toEqual([
+      "assistant",
+      "tool",
+      "user",
+      "user",
+    ]);
+    expect(chat2.messages[1].tool_call_id).toBe("c1");
+    expect(chat2.messages[2].content[1]).toEqual({
+      type: "image_url",
+      image_url: { url: urlA },
+    });
+    expect(chat2.messages[3]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "note" },
+        { type: "image_url", image_url: { url: urlUser } },
       ],
     });
   });

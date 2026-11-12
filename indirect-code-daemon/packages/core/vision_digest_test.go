@@ -72,6 +72,7 @@ type scriptedVisionClient struct {
 	visionCalls     []string
 	nextReadPath    string
 	failVision      bool
+	onVisionStream  func(ctx context.Context, src string) (string, error)
 	mainHandler     func(callIdx int, req provider.Request) (provider.Message, error)
 	warmForkErr     error
 	standaloneCalls []provider.Request
@@ -89,7 +90,15 @@ func (c *scriptedVisionClient) Stream(ctx context.Context, req provider.Request)
 		}
 		c.visionCalls = append(c.visionCalls, src)
 		fail := c.failVision
+		hook := c.onVisionStream
 		c.mu.Unlock()
+		if hook != nil {
+			reply, err := hook(ctx, src)
+			if err != nil {
+				return nil, err
+			}
+			return singleMessageStream(req.Model, reply, provider.Usage{InputTokens: 250, OutputTokens: 45}), nil
+		}
 		if fail {
 			return nil, errors.New("anthropic http 400: vision unavailable on sub-endpoint")
 		}
@@ -438,4 +447,118 @@ func TestReactiveVisionSheddingAndFiniteOverflowTermination(t *testing.T) {
 			t.Fatalf("expected Overflow Pass 2 to dehydrate live images to 0, got %d", seenLiveCounts[2])
 		}
 	})
+}
+
+func TestCancelledVisionTranscriptionNeverPoisonsDigestsOrEvictsImages(t *testing.T) {
+	var seeded []provider.Message
+	var imgKeys []string
+	for i := 1; i <= 7; i++ {
+		img := provider.ImageBlock{
+			MimeType:   "image/jpeg",
+			Data:       []byte(fmt.Sprintf("cancel-test-bytes-%d", i)),
+			SourcePath: fmt.Sprintf("img-%d.png", i),
+			Width:      1568,
+			Height:     882,
+		}
+		imgKeys = append(imgKeys, provider.ImageKey(img))
+		seeded = append(seeded,
+			provider.Message{Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("Inspect %d", i)}, img}},
+			provider.Message{Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: fmt.Sprintf("Observed %d", i)}}},
+		)
+	}
+
+	turnCtx, cancelTurn := context.WithCancel(context.Background())
+	defer cancelTurn()
+
+	client := &scriptedVisionClient{
+		onVisionStream: func(ctx context.Context, src string) (string, error) {
+			// Simulate user clicking Stop while LLM OCR transcription is in flight.
+			cancelTurn()
+			return "", ctx.Err()
+		},
+	}
+	ag := NewAgent(client, "claude-sonnet-4-6", "sys", NewRegistry())
+	ag.MaxWireImages = 6
+	ag.KeepWireImages = 3
+	ag.SetMessages(seeded)
+
+	var stateMu sync.Mutex
+	onStateCalls := 0
+	ag.OnCompactionState = func(_ *CompactionState) {
+		stateMu.Lock()
+		onStateCalls++
+		stateMu.Unlock()
+	}
+
+	// 1. Cancelled Prompt mid-transcription must NOT persist deterministic fallback digests or evict images.
+	err := ag.Prompt(turnCtx, "Analyze all 7 screenshots", nil, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled from stopped turn, got: %v", err)
+	}
+	if st := ag.CompactionChain(); st != nil && (len(st.ImageDigests) > 0 || len(st.EvictedImages) > 0) {
+		t.Fatalf("expected cancelled turn to leave ImageDigests and EvictedImages completely untouched, got: %+v", st)
+	}
+	stateMu.Lock()
+	gotCallsAfterCancel := onStateCalls
+	stateMu.Unlock()
+	if gotCallsAfterCancel != 0 {
+		t.Fatalf("expected OnCompactionState NOT to fire on cancelled turn, got %d calls", gotCallsAfterCancel)
+	}
+
+	// 2. Direct pre-cancelled context calls into prepareWireImages / shedWireImagesReactive / ensureSpanImageDigests
+	// must also leave CompactionState untouched.
+	preCancelled, cancelNow := context.WithCancel(context.Background())
+	cancelNow()
+
+	ag.prepareWireImages(preCancelled)
+	capTwo := 2
+	shed, _ := ag.shedWireImagesReactive(preCancelled, &capTwo, 2, false)
+	if shed != 0 {
+		t.Fatalf("expected shedWireImagesReactive with cancelled ctx to shed 0 images, got %d", shed)
+	}
+	spanState := &CompactionState{}
+	ag.ensureSpanImageDigests(preCancelled, ag.History(), 0, len(ag.History()), spanState)
+	if len(spanState.ImageDigests) != 0 {
+		t.Fatalf("expected ensureSpanImageDigests with cancelled ctx to write 0 digests, got %v", spanState.ImageDigests)
+	}
+	if st := ag.CompactionChain(); st != nil && (len(st.ImageDigests) > 0 || len(st.EvictedImages) > 0 || st.LearnedMaxImages != nil) {
+		t.Fatalf("expected pre-cancelled helpers to leave CompactionState clean, got: %+v", st)
+	}
+
+	// 3. Follow-up uncancelled turn MUST run real LLM OCR transcription (never stuck on metadata-only fallback!)
+	// and evict 7 -> 3 cleanly.
+	client.mu.Lock()
+	client.onVisionStream = nil
+	client.visionCalls = nil
+	client.mu.Unlock()
+
+	if err := ag.Prompt(context.Background(), "Retry after stop", nil, nil); err != nil {
+		t.Fatalf("expected follow-up Prompt after stop to succeed, got: %v", err)
+	}
+
+	st := ag.CompactionChain()
+	if st == nil || len(st.ImageDigests) != 4 || len(st.EvictedImages) != 4 {
+		t.Fatalf("expected 4 genuine OCR digests and 4 evicted occurrences on follow-up turn, got: %+v", st)
+	}
+	for i := 0; i < 4; i++ {
+		d := st.ImageDigests[imgKeys[i]]
+		wantTag := fmt.Sprintf("ERR_CODE_IMG-%d", i+1)
+		if !strings.Contains(d, wantTag) || strings.Contains(d, "Image metadata:") {
+			t.Fatalf("expected genuine LLM OCR digest (%s) for img-%d.png without metadata-only poisoning, got:\n%s", wantTag, i+1, d)
+		}
+	}
+
+	client.mu.Lock()
+	lastReq := client.mainRequests[len(client.mainRequests)-1]
+	client.mu.Unlock()
+	liveCount, livePaths := countRequestLiveImages(lastReq.Messages)
+	if liveCount != 3 {
+		t.Fatalf("expected 3 live wire images after 7->3 latch, got %d (%v)", liveCount, livePaths)
+	}
+	stateMu.Lock()
+	gotCallsAfterRetry := onStateCalls
+	stateMu.Unlock()
+	if gotCallsAfterRetry != 1 {
+		t.Fatalf("expected OnCompactionState to fire once on uncancelled turn, got %d", gotCallsAfterRetry)
+	}
 }

@@ -670,10 +670,33 @@ export function parseImageReadDetails(input: {
   const isTextPaginated =
     typeof details?.start_line === "number" ||
     typeof details?.total_lines === "number" ||
-    Boolean(env?.page);
+    Boolean(
+      env?.page ||
+        env?.line ||
+        env?.line_size ||
+        env?.shown ||
+        env?.next_byte ||
+        env?.next ||
+        env?.truncated,
+    );
+  if (isTextPaginated) return undefined;
+
   const body = (input.output || "").trim();
-  const headerMatch = !isTextPaginated ? /^Read image file \[(image\/[^\]]+)\]/i.exec(body) : null;
-  const headerMedia = headerMatch ? canonicalImageMime(headerMatch[1]) : "";
+  const hasTextWindowArgs = Boolean(posInt(args?.offset) || posInt(args?.limit));
+  const rawBodyLines = body ? body.split(/\r?\n/) : [];
+  const firstBodyLine = (rawBodyLines[0] || "").trim();
+  const headerMatch =
+    !detailMedia && !envMedia && !hasTextWindowArgs && (!path || isImageReadPath(path))
+      ? /^Read image file \[(image\/[^\]]+)\]\s*$/i.exec(firstBodyLine)
+      : null;
+  const legacyTrailingLinesValid =
+    !headerMatch ||
+    rawBodyLines.slice(1).every((rawLine) => {
+      const t = rawLine.trim();
+      return !t || (t.startsWith("[") && t.endsWith("]"));
+    });
+  const headerMedia =
+    headerMatch && legacyTrailingLinesValid ? canonicalImageMime(headerMatch[1]) : "";
   let media = detailMedia || envMedia || headerMedia;
   if (!media) return undefined;
 

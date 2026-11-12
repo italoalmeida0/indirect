@@ -1021,15 +1021,7 @@ export function encodeIRToChat(ir: GatewayRequest, model: string): Record<string
       };
 
       for (const b of m.blocks) {
-        if (b.type === "text") {
-          flushPendingToolImages();
-          segments.push({ type: "text", text: b.text });
-        } else if (b.type === "image") {
-          flushPendingToolImages();
-          hasMedia = true;
-          segments.push({ type: "image_url", image_url: { url: b.url } });
-        } else if (b.type === "tool_result") {
-          flushUserSegments();
+        if (b.type === "tool_result") {
           const baseContent =
             b.content || (b.images && b.images.length > 0 ? "[Image attached in following user message]" : "");
           messages.push({
@@ -1040,6 +1032,16 @@ export function encodeIRToChat(ir: GatewayRequest, model: string): Record<string
           if (b.images && b.images.length > 0) {
             pendingToolImages.push({ toolUseId: b.toolUseId, images: b.images });
           }
+        }
+      }
+      for (const b of m.blocks) {
+        if (b.type === "text") {
+          flushPendingToolImages();
+          segments.push({ type: "text", text: b.text });
+        } else if (b.type === "image") {
+          flushPendingToolImages();
+          hasMedia = true;
+          segments.push({ type: "image_url", image_url: { url: b.url } });
         }
       }
       flushUserSegments();
@@ -1466,7 +1468,10 @@ export function demoteUnsignedToolCalls(ir: GatewayRequest): GatewayRequest {
       !prev.blocks.some((x) => x.type === "tool_result") &&
       !nextBlocks.some((x) => x.type === "tool_result")
     ) {
-      prev.blocks = [...prev.blocks, ...nextBlocks];
+      outMessages[outMessages.length - 1] = {
+        ...prev,
+        blocks: [...prev.blocks, ...nextBlocks],
+      };
       prevWasDemoted = true;
     } else {
       outMessages.push(msgDemoted ? { role: "user", blocks: nextBlocks } : m);

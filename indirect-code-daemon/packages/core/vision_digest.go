@@ -426,6 +426,9 @@ func (a *Agent) prepareWireImages(ctx context.Context) {
 		learned = state.LearnedMaxImages
 	}
 	synthesized := a.ensureImageDigests(ctx, history, toEvict, existing, learned, forceZero)
+	if ctx.Err() != nil {
+		return
+	}
 
 	a.mu.Lock()
 	cur := a.compactionStateLocked()
@@ -465,6 +468,9 @@ func (a *Agent) shedWireImagesReactive(
 	targetKeep int,
 	forceDeterministic bool,
 ) (int, int) {
+	if ctx.Err() != nil {
+		return 0, 0
+	}
 	a.mu.Lock()
 	history := append([]provider.Message(nil), a.messages...)
 	state := a.compactionStateLocked()
@@ -504,6 +510,9 @@ func (a *Agent) shedWireImagesReactive(
 	var synthesized map[string]string
 	if len(toEvict) > 0 {
 		synthesized = a.ensureImageDigests(ctx, history, toEvict, existing, effectiveLearned, forceDet)
+	}
+	if ctx.Err() != nil {
+		return 0, len(live)
 	}
 
 	a.mu.Lock()
@@ -562,7 +571,7 @@ func (a *Agent) ensureSpanImageDigests(
 	startIdx, endIdx int,
 	workingState *CompactionState,
 ) {
-	if workingState == nil || startIdx < 0 || endIdx <= startIdx || startIdx >= len(history) {
+	if ctx.Err() != nil || workingState == nil || startIdx < 0 || endIdx <= startIdx || startIdx >= len(history) {
 		return
 	}
 	if endIdx > len(history) {
@@ -606,7 +615,7 @@ func (a *Agent) ensureSpanImageDigests(
 	}
 	forceDet := workingState.LearnedMaxImages != nil && *workingState.LearnedMaxImages <= 0
 	synthesized := a.ensureImageDigests(ctx, history, targets, workingState.ImageDigests, workingState.LearnedMaxImages, forceDet)
-	if len(synthesized) == 0 {
+	if ctx.Err() != nil || len(synthesized) == 0 {
 		return
 	}
 	if workingState.ImageDigests == nil {
@@ -641,11 +650,11 @@ func (a *Agent) ensureImageDigests(
 		seenKey[t.imgKey] = true
 		missing = append(missing, t)
 	}
-	if len(missing) == 0 {
+	if len(missing) == 0 || ctx.Err() != nil {
 		return out
 	}
 
-	canVision := a.Client != nil && !forceDeterministic && (learnedMax == nil || *learnedMax > 0) && ctx.Err() == nil
+	canVision := a.Client != nil && !forceDeterministic && (learnedMax == nil || *learnedMax > 0)
 	if !canVision {
 		for _, t := range missing {
 			out[t.imgKey] = BuildDeterministicImageDigest(history, t.msgIdx, t.img)
@@ -668,6 +677,9 @@ func (a *Agent) ensureImageDigests(
 		go func() {
 			defer wg.Done()
 			for item := range ch {
+				if ctx.Err() != nil {
+					return
+				}
 				mu.Lock()
 				skipLLM := visionRejected
 				mu.Unlock()
@@ -675,12 +687,18 @@ func (a *Agent) ensureImageDigests(
 				var digest string
 				if !skipLLM && ctx.Err() == nil {
 					txt, unsupported := a.transcribeImageViaLLM(ctx, item.img)
+					if ctx.Err() != nil {
+						return
+					}
 					if unsupported {
 						mu.Lock()
 						visionRejected = true
 						mu.Unlock()
 					}
 					digest = strings.TrimSpace(txt)
+				}
+				if ctx.Err() != nil {
+					return
 				}
 				if digest == "" {
 					digest = BuildDeterministicImageDigest(history, item.msgIdx, item.img)
@@ -693,6 +711,9 @@ func (a *Agent) ensureImageDigests(
 		}()
 	}
 	wg.Wait()
+	if ctx.Err() != nil {
+		return nil
+	}
 	return out
 }
 
