@@ -348,16 +348,17 @@ func (s *wsServer) handleRaw(raw []byte) {
 
 	case "prompt":
 		var req struct {
-			RequestID     string          `json:"requestId"`
-			Options       *SessionOptions `json:"options"`
-			SessionID     string          `json:"sessionId"`
-			Text          string          `json:"text"`
-			Model         string          `json:"model"`
-			YOLO          bool            `json:"yolo"`
-			AttachmentIDs []string        `json:"attachmentIds"`
+			RequestID       string          `json:"requestId"`
+			Options         *SessionOptions `json:"options"`
+			SessionID       string          `json:"sessionId"`
+			Text            string          `json:"text"`
+			Model           string          `json:"model"`
+			YOLO            bool            `json:"yolo"`
+			AttachmentIDs   []string        `json:"attachmentIds"`
+			MidTurnDelivery string          `json:"midTurnDelivery"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.onPrompt(req.SessionID, req.Text, req.AttachmentIDs, req.Model, req.YOLO, req.Options, req.RequestID)
+		s.onPrompt(req.SessionID, req.Text, req.AttachmentIDs, req.Model, req.YOLO, req.Options, req.MidTurnDelivery, req.RequestID)
 
 	case "cancel":
 		var req struct {
@@ -564,14 +565,16 @@ func (s *wsServer) handleRaw(raw []byte) {
 
 	case "queue_add":
 		var req struct {
-			SessionID     string   `json:"sessionId"`
-			Text          string   `json:"text"`
-			Model         string   `json:"model"`
-			YOLO          bool     `json:"yolo"`
-			AttachmentIDs []string `json:"attachmentIds"`
+			SessionID     string          `json:"sessionId"`
+			Text          string          `json:"text"`
+			Model         string          `json:"model"`
+			YOLO          bool            `json:"yolo"`
+			Options       *SessionOptions `json:"options"`
+			Delivery      string          `json:"delivery"`
+			AttachmentIDs []string        `json:"attachmentIds"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "add", Text: req.Text, Model: req.Model, YOLO: req.YOLO, AttachmentIDs: req.AttachmentIDs})
+		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "add", Text: req.Text, Model: req.Model, YOLO: req.YOLO, Options: req.Options, Delivery: req.Delivery, AttachmentIDs: req.AttachmentIDs})
 	case "queue_remove":
 		var req struct {
 			SessionID string `json:"sessionId"`
@@ -607,6 +610,33 @@ func (s *wsServer) handleRaw(raw []byte) {
 		}
 		_ = json.Unmarshal(raw, &req)
 		s.onQueueSendNow(req.SessionID, req.QueueID)
+	case "queue_cancel_send":
+		var req struct {
+			SessionID string `json:"sessionId"`
+			QueueID   string `json:"queueId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.onQueueCancelSend(req.SessionID, req.QueueID)
+	case "queue_interrupt_now":
+		var req struct {
+			SessionID string `json:"sessionId"`
+			QueueID   string `json:"queueId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.onQueueInterruptNow(req.SessionID, req.QueueID)
+	case "queue_reorder":
+		var req struct {
+			SessionID string   `json:"sessionId"`
+			QueueIDs  []string `json:"queueIds"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "reorder", IDs: req.QueueIDs})
+	case "queue_clear":
+		var req struct {
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.actorQueueOp(req.SessionID, queueOpMsg{Op: "clear"})
 
 	case "fork_session":
 		var req struct {
@@ -973,7 +1003,7 @@ func (s *wsServer) handleRaw(raw []byte) {
 
 // ---- command implementations ----
 
-func (s *wsServer) onPrompt(sessionID, text string, attachmentIDs []string, model string, yolo bool, options *SessionOptions, requestID string) {
+func (s *wsServer) onPrompt(sessionID, text string, attachmentIDs []string, model string, yolo bool, options *SessionOptions, midTurnDelivery, requestID string) {
 	text = core.SanitizeUserText(text)
 	res := s.sessions.route(sessionID, false)
 	if res.Error != "" {
@@ -987,9 +1017,19 @@ func (s *wsServer) onPrompt(sessionID, text string, attachmentIDs []string, mode
 			return
 		}
 	}
+	resolvedDelivery := strings.TrimSpace(midTurnDelivery)
+	if resolvedDelivery == "" && s.cfg != nil {
+		if cfg := s.cfg.load(); cfg != nil {
+			resolvedDelivery = cfg.Settings.MidTurnSend
+		}
+	}
+	resolvedDelivery = normalizeDelivery(resolvedDelivery)
 	reply := make(chan any, 1)
 	select {
-	case res.Inbox <- Envelope{SessionID: sessionID, Payload: userPromptMsg{Text: text, AttachmentIDs: attachmentIDs, Model: model, YOLO: yolo, Options: options, Reply: reply}}:
+	case res.Inbox <- Envelope{SessionID: sessionID, Payload: userPromptMsg{
+		Text: text, AttachmentIDs: attachmentIDs, Model: model, YOLO: yolo,
+		Options: options, MidTurnDelivery: resolvedDelivery, Reply: reply,
+	}}:
 	case <-time.After(replyTimeout):
 		s.error(sessionID, requestID, "Session busy")
 		return
@@ -1000,7 +1040,14 @@ func (s *wsServer) onPrompt(sessionID, text string, attachmentIDs []string, mode
 			if pr.Error != "" {
 				s.error(sessionID, requestID, pr.Error)
 			} else if requestID != "" {
-				s.emit(map[string]any{"type": "prompt_accepted", "hostId": s.host(), "sessionId": sessionID, "requestId": requestID, "queued": pr.Queued})
+				ev := map[string]any{"type": "prompt_accepted", "hostId": s.host(), "sessionId": sessionID, "requestId": requestID, "queued": pr.Queued}
+				if pr.Delivery != "" {
+					ev["delivery"] = pr.Delivery
+				}
+				if pr.Interrupting {
+					ev["interrupting"] = true
+				}
+				s.emit(ev)
 			}
 		}
 	case <-time.After(replyTimeout):
@@ -1041,6 +1088,28 @@ func (s *wsServer) onQueueSendNow(sessionID, queueID string) {
 	}
 	select {
 	case res.Inbox <- Envelope{SessionID: sessionID, Payload: queueSendNowMsg{QueueID: queueID}}:
+	case <-time.After(replyTimeout):
+	}
+}
+
+func (s *wsServer) onQueueCancelSend(sessionID, queueID string) {
+	res := s.sessions.route(sessionID, false)
+	if res.Error != "" {
+		return
+	}
+	select {
+	case res.Inbox <- Envelope{SessionID: sessionID, Payload: queueCancelSendMsg{QueueID: queueID}}:
+	case <-time.After(replyTimeout):
+	}
+}
+
+func (s *wsServer) onQueueInterruptNow(sessionID, queueID string) {
+	res := s.sessions.route(sessionID, false)
+	if res.Error != "" {
+		return
+	}
+	select {
+	case res.Inbox <- Envelope{SessionID: sessionID, Payload: queueInterruptNowMsg{QueueID: queueID}}:
 	case <-time.After(replyTimeout):
 	}
 }

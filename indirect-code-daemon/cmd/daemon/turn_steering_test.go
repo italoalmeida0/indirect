@@ -76,27 +76,29 @@ func TestQueueSendNowSteeringDuringTurn(t *testing.T) {
 	act.inbox <- Envelope{Payload: hookMsg{fn: func() { close(pingProcessed) }}}
 	<-pingProcessed
 
-	// 4. Verify turn is STILL RUNNING (not cancelled!) and sendNow is true
+	// 4. Verify turn is STILL RUNNING (not cancelled!) and item is staged as "steer"
 	act.control <- watchdogPingMsg{Reply: repCh}
 	rep = (<-repCh).(watchdogReport)
 	if rep.State != stateRunning {
 		t.Fatalf("turn must remain running on Send Now, got state=%s", rep.State)
 	}
 
-	var sendNowVal bool
+	var deliveryVal string
 	hookDone := make(chan struct{})
 	act.inbox <- Envelope{Payload: hookMsg{fn: func() {
-		sendNowVal = act.sendNow
+		if len(act.rec.Queue) == 1 {
+			deliveryVal = act.rec.Queue[0].Delivery
+		}
 		close(hookDone)
 	}}}
 	<-hookDone
-	if !sendNowVal {
-		t.Fatal("act.sendNow should be true after onQueueSendNow")
+	if deliveryVal != deliverySteer {
+		t.Fatalf("queued item Delivery should be %q after onQueueSendNow, got %q", deliverySteer, deliveryVal)
 	}
 
-	// 5. Worker simulates BeforeRequest by sending workerRefreshMsg
+	// 5. Worker simulates BeforeRequest by sending workerRefreshMsg with allowSteer=true
 	refreshReply := make(chan any, 1)
-	act.inbox <- Envelope{Payload: workerRefreshMsg{gen: 1, Reply: refreshReply}}
+	act.inbox <- Envelope{Payload: workerRefreshMsg{gen: 1, allowSteer: true, Reply: refreshReply}}
 
 	refResRaw := <-refreshReply
 	refRes, ok := refResRaw.(workerRefreshResult)
@@ -131,14 +133,11 @@ func TestQueueSendNowSteeringDuringTurn(t *testing.T) {
 		t.Fatalf("expected steering=true meta, got %v", steerMsg.Meta)
 	}
 
-	// Verify the queue is now empty and sendNow is false
+	// Verify the queue is now empty after steering consumption
 	hookDone2 := make(chan struct{})
 	act.inbox <- Envelope{Payload: hookMsg{fn: func() {
 		if len(act.rec.Queue) != 0 {
 			t.Errorf("queue should be empty, len=%d", len(act.rec.Queue))
-		}
-		if act.sendNow {
-			t.Errorf("act.sendNow should be false after consumption")
 		}
 		close(hookDone2)
 	}}}

@@ -584,3 +584,85 @@ func TestAnthropicRedactedThinkingNeverReplaced(t *testing.T) {
 		t.Fatalf("redacted thinking must replay verbatim, got %v", blocks[0])
 	}
 }
+
+func TestAnthropicRunStreamCancelMidToolUsePreservesPartialBlocks(t *testing.T) {
+	// Exercise multiple iterations to deterministically cover both select arms
+	// (`case <-ctx.Done():` and `case ev, ok := <-raw: if !ok`) when the SSE
+	// stream closes right as context is cancelled during an unclosed tool_use block.
+	for iter := 0; iter < 10; iter++ {
+		closeStream := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("content-type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			fl, _ := w.(http.Flusher)
+			write := func(s string) {
+				_, _ = w.Write([]byte(s))
+				if fl != nil {
+					fl.Flush()
+				}
+			}
+			write("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"m\",\"usage\":{\"input_tokens\":10}}}\n\n")
+			write("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n")
+			write("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"analyzing request...\"}}\n\n")
+			write("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n")
+			write("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")
+			write("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Partial answer before interrupt\"}}\n\n")
+			write("event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n")
+			write("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_partial\",\"name\":\"bash\"}}\n\n")
+			write("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"sleep 10\"}}\n\n")
+			select {
+			case <-closeStream:
+			case <-r.Context().Done():
+			}
+		}))
+
+		c := NewAnthropic("x", srv.URL)
+		ctx, cancel := context.WithCancel(context.Background())
+		evs, err := c.Stream(ctx, Request{Model: "m"})
+		if err != nil {
+			srv.Close()
+			t.Fatal(err)
+		}
+
+		sawToolArgs := false
+		var doneEv *EventDone
+		for ev := range evs {
+			if _, ok := ev.(EventToolArgs); ok && !sawToolArgs {
+				sawToolArgs = true
+				close(closeStream)
+				cancel()
+			}
+			if d, ok := ev.(EventDone); ok {
+				cp := d
+				doneEv = &cp
+			}
+		}
+		cancel()
+		srv.Close()
+
+		if !sawToolArgs {
+			t.Fatalf("iter %d: expected EventToolArgs before cancellation", iter)
+		}
+		if doneEv == nil {
+			t.Fatalf("iter %d: expected EventDone", iter)
+		}
+		if doneEv.Stop != StopAborted {
+			t.Fatalf("iter %d: expected StopAborted on cancelled stream with unclosed tool_use, got %q (err=%v)", iter, doneEv.Stop, doneEv.Err)
+		}
+		var gotThinking, gotText string
+		for _, blk := range doneEv.Message.Content {
+			switch b := blk.(type) {
+			case ReasoningBlock:
+				gotThinking += b.Summary
+			case TextBlock:
+				gotText += b.Text
+			}
+		}
+		if gotThinking != "analyzing request..." {
+			t.Fatalf("iter %d: expected partial thinking preserved, got %q", iter, gotThinking)
+		}
+		if gotText != "Partial answer before interrupt" {
+			t.Fatalf("iter %d: expected partial text preserved, got %q", iter, gotText)
+		}
+	}
+}

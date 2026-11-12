@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/rand"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
@@ -11,8 +13,10 @@ import (
 
 // Message queue: while a turn is running, new user messages wait here
 // instead of being refused. When a turn completes normally, the queue head
-// is promoted to a new turn automatically. A cancelled turn never drains
-// the queue. Queue items persist in the session file like everything else.
+// is promoted to a new turn automatically. A plain user-cancelled turn never
+// drains the queue; an interrupt-staged item ("interrupt") cancels the active
+// turn and promotes immediately in finishTurn. Queue items persist in the
+// session file like everything else.
 //
 // Editing an item ("update", see queueOpMsg) distinguishes "attachments
 // unchanged" (the wire omits attachmentIds) from "replace with []" — an
@@ -20,7 +24,174 @@ import (
 
 const maxQueueItems = 30
 
-// QueuedMessage is one waiting user message with its turn options.
+const (
+	deliveryQueue     = "queue"
+	deliverySteer     = "steer"
+	deliveryInterrupt = "interrupt"
+)
+
+func normalizeDelivery(d string) string {
+	switch strings.ToLower(strings.TrimSpace(d)) {
+	case deliverySteer:
+		return deliverySteer
+	case deliveryInterrupt:
+		return deliveryInterrupt
+	default:
+		return deliveryQueue
+	}
+}
+
+func deliveryRank(d string) int {
+	switch normalizeDelivery(d) {
+	case deliveryInterrupt:
+		return 0
+	case deliverySteer:
+		return 1
+	default:
+		return 2
+	}
+}
+
+func cloneQueuedOptions(o *SessionOptions) *SessionOptions {
+	if o == nil {
+		return nil
+	}
+	norm := normalizedOptions(*o)
+	if len(o.Skills) > 0 {
+		norm.Skills = append([]SkillChoice(nil), o.Skills...)
+	}
+	return &norm
+}
+
+func cloneQueueSlice(q []QueuedMessage) []QueuedMessage {
+	if len(q) == 0 {
+		return nil
+	}
+	out := make([]QueuedMessage, len(q))
+	for i, item := range q {
+		out[i] = item
+		if len(item.AttachmentIDs) > 0 {
+			out[i].AttachmentIDs = append([]string(nil), item.AttachmentIDs...)
+		}
+		out[i].Options = cloneQueuedOptions(item.Options)
+	}
+	return out
+}
+
+func ensureQueueSeqs(q []QueuedMessage) {
+	var maxSeq int64
+	for _, item := range q {
+		if item.Seq > maxSeq {
+			maxSeq = item.Seq
+		}
+	}
+	for i := range q {
+		if q[i].Seq <= 0 {
+			maxSeq++
+			q[i].Seq = maxSeq
+		}
+	}
+}
+
+func nextQueueSeq(q []QueuedMessage) int64 {
+	ensureQueueSeqs(q)
+	var maxSeq int64
+	for _, item := range q {
+		if item.Seq > maxSeq {
+			maxSeq = item.Seq
+		}
+	}
+	return maxSeq + 1
+}
+
+// sortQueueByDelivery enforces canonical queue ordering:
+//   1. "interrupt" items first (FIFO in staging order)
+//   2. "steer" items second (FIFO in staging order)
+//   3. "queue" items third (ordered by passive Seq / manual reorder)
+func sortQueueByDelivery(q []QueuedMessage) {
+	if len(q) == 0 {
+		return
+	}
+	ensureQueueSeqs(q)
+	for i := range q {
+		q[i].Delivery = normalizeDelivery(q[i].Delivery)
+	}
+	sort.SliceStable(q, func(i, j int) bool {
+		ri, rj := deliveryRank(q[i].Delivery), deliveryRank(q[j].Delivery)
+		if ri != rj {
+			return ri < rj
+		}
+		if ri != 2 {
+			// Preserve FIFO staging order within "interrupt" and "steer".
+			return false
+		}
+		if q[i].Seq != q[j].Seq {
+			return q[i].Seq < q[j].Seq
+		}
+		return q[i].CreatedAt < q[j].CreatedAt
+	})
+}
+
+// demoteStagedQueueItems resets any "steer" or "interrupt" items in q back to
+// passive "queue" delivery, returning true if at least one item changed.
+func demoteStagedQueueItems(q []QueuedMessage) bool {
+	changed := false
+	for i := range q {
+		norm := normalizeDelivery(q[i].Delivery)
+		if norm != deliveryQueue {
+			q[i].Delivery = deliveryQueue
+			changed = true
+		} else if q[i].Delivery != deliveryQueue {
+			q[i].Delivery = deliveryQueue
+		}
+	}
+	return changed
+}
+
+// reorderQueueItems updates passive "queue" ordering according to ids while
+// preserving unnamed items in relative order and keeping "interrupt" and
+// "steer" groups ahead of passive "queue" items.
+func reorderQueueItems(current []QueuedMessage, ids []string) []QueuedMessage {
+	if len(current) == 0 {
+		return nil
+	}
+	cloned := cloneQueueSlice(current)
+	ensureQueueSeqs(cloned)
+	byID := make(map[string]QueuedMessage, len(cloned))
+	for _, q := range cloned {
+		byID[q.ID] = q
+	}
+	seen := make(map[string]bool, len(cloned))
+	ordered := make([]QueuedMessage, 0, len(cloned))
+	for _, id := range ids {
+		if q, ok := byID[id]; ok && !seen[id] {
+			seen[id] = true
+			ordered = append(ordered, q)
+		}
+	}
+	for _, q := range cloned {
+		if !seen[q.ID] {
+			seen[q.ID] = true
+			ordered = append(ordered, q)
+		}
+	}
+	var passiveSeqs []int64
+	for _, q := range ordered {
+		if normalizeDelivery(q.Delivery) == deliveryQueue {
+			passiveSeqs = append(passiveSeqs, q.Seq)
+		}
+	}
+	sort.Slice(passiveSeqs, func(i, j int) bool { return passiveSeqs[i] < passiveSeqs[j] })
+	pi := 0
+	for i := range ordered {
+		if normalizeDelivery(ordered[i].Delivery) == deliveryQueue {
+			ordered[i].Seq = passiveSeqs[pi]
+			pi++
+		}
+	}
+	sortQueueByDelivery(ordered)
+	return ordered
+}
 
 func randomQueueID() string {
 	id := make([]byte, 8)
@@ -33,10 +204,19 @@ func randomQueueID() string {
 func queuePayload(queue []QueuedMessage) []any {
 	out := make([]any, 0, len(queue))
 	for _, q := range queue {
-		out = append(out, map[string]any{
-			"id": q.ID, "text": q.Text, "attachmentIds": q.AttachmentIDs,
-			"model": q.Model, "yolo": q.YOLO, "createdAt": q.CreatedAt,
-		})
+		entry := map[string]any{
+			"id":            q.ID,
+			"text":          q.Text,
+			"attachmentIds": q.AttachmentIDs,
+			"model":         q.Model,
+			"yolo":          q.YOLO,
+			"createdAt":     q.CreatedAt,
+			"delivery":      normalizeDelivery(q.Delivery),
+		}
+		if q.Options != nil {
+			entry["options"] = *cloneQueuedOptions(q.Options)
+		}
+		out = append(out, entry)
 	}
 	return out
 }

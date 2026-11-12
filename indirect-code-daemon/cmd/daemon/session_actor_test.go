@@ -52,7 +52,7 @@ func TestPromptStartsTurn(t *testing.T) {
 	}
 }
 
-func TestPromptDuringCancellationIsExplicitlyRejected(t *testing.T) {
+func TestPromptDuringCancellationQueuesAndPersistRejects(t *testing.T) {
 	a := reviewActor(t)
 	a.state, a.rec.Status = stateRunning, "running"
 	a.workerDone = make(chan struct{}) // keep teardown in flight
@@ -60,11 +60,23 @@ func TestPromptDuringCancellationIsExplicitlyRejected(t *testing.T) {
 	reply := make(chan any, 1)
 	a.onUserPrompt(userPromptMsg{Text: "follow-up after Stop", Reply: reply})
 	result := (<-reply).(promptResult)
-	if result.Accepted || result.Queued || result.Error == "" {
-		t.Fatalf("stopping actor must explicitly reject the send: %+v", result)
+	if !result.Accepted || !result.Queued || result.Delivery != deliveryQueue || result.Error != "" {
+		t.Fatalf("stopping actor must queue follow-up cleanly without error: %+v", result)
 	}
-	if len(a.rec.Queue) != 0 || a.rec.TurnSeq != 0 {
-		t.Fatal("rejected follow-up was silently queued or started")
+	if len(a.rec.Queue) != 1 || a.rec.Queue[0].Text != "follow-up after Stop" || a.rec.TurnSeq != 0 {
+		t.Fatalf("expected 1 queued follow-up without starting a turn yet, got queue=%+v turnSeq=%d", a.rec.Queue, a.rec.TurnSeq)
+	}
+
+	// While stuck in statePersist (WAL commit pending), prompts must still reject explicitly.
+	a.state = statePersist
+	replyPersist := make(chan any, 1)
+	a.onUserPrompt(userPromptMsg{Text: "during persist", Reply: replyPersist})
+	persistRes := (<-replyPersist).(promptResult)
+	if persistRes.Accepted || persistRes.Queued || persistRes.Error == "" {
+		t.Fatalf("persist-wedged actor must explicitly reject the send: %+v", persistRes)
+	}
+	if len(a.rec.Queue) != 1 {
+		t.Fatalf("rejected follow-up during statePersist modified queue: %+v", a.rec.Queue)
 	}
 }
 

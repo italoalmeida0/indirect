@@ -468,6 +468,9 @@ func TestReviewBackgroundWakeMetaPersists(t *testing.T) {
 	go a.run()
 	defer func() { a.control <- shutdownMsg{}; <-a.done }()
 	a.inbox <- Envelope{Payload: bgNoticeMsg{JobID: "bg-review", Text: "background completed", Finished: true}}
+	admitted := make(chan struct{})
+	a.inbox <- Envelope{Payload: hookMsg{fn: func() { close(admitted) }}}
+	reviewRecv(t, admitted)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		r := make(chan any, 1)

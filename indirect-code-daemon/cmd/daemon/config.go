@@ -85,6 +85,11 @@ func validateEditableConfig(cfg *DaemonConfig) error {
 	if cfg.Settings.AutoCompactThreshold < 0 || cfg.Settings.AutoCompactThreshold > 95 {
 		return errors.New("Invalid agent settings")
 	}
+	switch cfg.Settings.MidTurnSend {
+	case "", deliveryQueue, deliverySteer, deliveryInterrupt:
+	default:
+		return errors.New("Invalid agent settings")
+	}
 	return nil
 }
 
@@ -92,6 +97,9 @@ func validateEditableConfig(cfg *DaemonConfig) error {
 func normalizedHarness(s HarnessSettings) HarnessSettings {
 	if s.Reasoning == "" {
 		s.Reasoning = "medium"
+	}
+	if s.MidTurnSend == "" {
+		s.MidTurnSend = deliveryQueue
 	}
 	return s
 }

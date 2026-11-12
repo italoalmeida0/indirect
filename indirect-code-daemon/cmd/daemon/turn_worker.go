@@ -532,10 +532,10 @@ func (w *turnBridge) beforeRequest(requestCtx context.Context) error {
 	// retry backoff) is a declared wait with its own deadline — silence
 	// inside it must not be judged as a wedged worker.
 	w.declareWait("provider", time.Now().Add(tuneWaitProvider))
-	return w.refreshFromActor(requestCtx)
+	return w.refreshFromActor(requestCtx, true)
 }
 
-func (w *turnBridge) refreshFromActor(requestCtx context.Context) error {
+func (w *turnBridge) refreshFromActor(requestCtx context.Context, allowSteer bool) error {
 	if w.env.inbox == nil {
 		return nil
 	}
@@ -551,7 +551,7 @@ func (w *turnBridge) refreshFromActor(requestCtx context.Context) error {
 	}
 	reply := make(chan any, 1)
 	select {
-	case w.env.inbox <- w.stamp(workerRefreshMsg{gen: w.snap.gen, Reply: reply}):
+	case w.env.inbox <- w.stamp(workerRefreshMsg{gen: w.snap.gen, allowSteer: allowSteer, Reply: reply}):
 	case <-requestCtx.Done():
 		return requestCtx.Err()
 	case <-workerDone:
@@ -1164,8 +1164,10 @@ func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEven
 	}
 	// Sync model/options/system/tools/pending context from the actor BEFORE
 	// snapshotting or compacting so step k+1's Prefix-Warm Forked Summarizer
-	// shares the exact live prefix that step k+1's oneTurn will send.
-	if err := w.refreshFromActor(cctx); err != nil {
+	// shares the exact live prefix that step k+1's oneTurn will send. Steer
+	// items remain staged in Queue (allowSteer=false) until BeforeRequest so
+	// they stay visible/cancellable during compaction and land after summary.
+	if err := w.refreshFromActor(cctx, false); err != nil {
 		return err
 	}
 	window := w.modelInfo.ContextWindow

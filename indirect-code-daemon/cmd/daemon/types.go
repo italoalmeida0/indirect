@@ -19,7 +19,8 @@ type HarnessSettings struct {
 	AutoCompactThreshold int    `json:"auto_compact_threshold"` // 0=off, 80, 85, 90, 95
 	NoAutoTitle          bool   `json:"no_auto_title,omitempty"`
 	JailByDefault        bool   `json:"jail_by_default"`
-	ToolRender           string `json:"tool_render,omitempty"` // "box" | "flat"
+	ToolRender           string `json:"tool_render,omitempty"`   // "box" | "flat"
+	MidTurnSend          string `json:"mid_turn_send,omitempty"` // "queue" | "steer" | "interrupt"
 	CompactInput         bool   `json:"compact_input"`
 	CompactMode          bool   `json:"compact_mode"`
 	RecursiveFileSuggest bool   `json:"recursive_file_suggest"`
@@ -124,14 +125,18 @@ type SessionOptions struct {
 	Access string        `json:"access"`
 }
 
-// QueuedMessage is one user message waiting for the running turn to finish.
+// QueuedMessage is one user message waiting for the running turn to finish
+// (or staged for next-step steering / immediate interruption).
 type QueuedMessage struct {
-	ID            string   `json:"id"`
-	Text          string   `json:"text"`
-	AttachmentIDs []string `json:"attachmentIds,omitempty"`
-	Model         string   `json:"model,omitempty"`
-	YOLO          bool     `json:"yolo,omitempty"`
-	CreatedAt     int64    `json:"createdAt"`
+	ID            string          `json:"id"`
+	Text          string          `json:"text"`
+	AttachmentIDs []string        `json:"attachmentIds,omitempty"`
+	Model         string          `json:"model,omitempty"`
+	YOLO          bool            `json:"yolo,omitempty"`
+	Options       *SessionOptions `json:"options,omitempty"`
+	CreatedAt     int64           `json:"createdAt"`
+	Delivery      string          `json:"delivery,omitempty"` // "queue" | "steer" | "interrupt"
+	Seq           int64           `json:"seq,omitempty"`
 }
 
 // SessionRecord is the on-disk format for each local session.

@@ -394,6 +394,11 @@ func replayWALPrefix(base *SessionRecord, data []byte) (*SessionRecord, *walHead
 				return nil, nil, 0, fmt.Errorf("wal: missing header")
 			}
 			header = ev.Header
+			if header.TurnIndex > rec.TurnSeq {
+				rec.TurnSeq = header.TurnIndex
+				rec.Status = "running"
+				rec.Turn = &TurnActivity{StartedAt: header.StartedAt, Status: "running"}
+			}
 			validEnd = offset
 			continue
 		}
@@ -469,7 +474,7 @@ func applyWALEvent(rec *SessionRecord, ev *walEvent, seen *msgDedup) error {
 		// live turnFileChanges; the record itself carries no incoming.
 		return nil
 	case walTypeQueue:
-		rec.Queue = append([]QueuedMessage{}, ev.Queue...)
+		rec.Queue = cloneQueueSlice(ev.Queue)
 		if ev.UpdatedAt > 0 {
 			rec.UpdatedAt = ev.UpdatedAt
 		}
@@ -494,6 +499,8 @@ func applyWALEvent(rec *SessionRecord, ev *walEvent, seen *msgDedup) error {
 	case walTypeTurnState:
 		if rec.Turn != nil {
 			rec.Turn.Status = ev.TurnStatus
+		} else if ev.TurnStatus != "" {
+			rec.Turn = &TurnActivity{Status: ev.TurnStatus}
 		} else {
 			// A turn-state flip without an active turn means the matching
 			// turn_start never made it into the WAL (torn tail / crash).

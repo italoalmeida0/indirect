@@ -92,11 +92,11 @@ func TestQueueSendNowKeepsIntentOnStartFailure(t *testing.T) {
 	id := res.Items[0].ID
 	a.persistErr = errors.New("disk unavailable")
 	a.onQueueSendNow(queueSendNowMsg{QueueID: id})
-	if !a.sendNow {
-		t.Fatal("onQueueSendNow dropped the send-now intent when startTurn failed")
-	}
 	if len(a.rec.Queue) != 1 || a.rec.Queue[0].ID != id {
 		t.Fatalf("the failed item must fall back into the queue, got %+v", a.rec.Queue)
+	}
+	if a.rec.Queue[0].Delivery != deliverySteer {
+		t.Fatalf("onQueueSendNow dropped the send-now (steer) intent when startTurn failed: %+v", a.rec.Queue[0])
 	}
 }
 

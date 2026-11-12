@@ -206,7 +206,7 @@ func (a *sessionActor) onAttachUpload(m attachUploadMsg) attachUploadResult {
 	a.rec.Attachments = append(append([]AttachmentRef{}, previous...), ref)
 	a.rec.UpdatedAt = time.Now().UnixMilli()
 	a.touch()
-	if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ {
+	if a.wal != nil {
 		appendWALEvent(a.wal, walEvent{Type: walTypeAttach, Attachments: append([]AttachmentRef{}, a.rec.Attachments...)})
 	} else if err := a.store.saveSessionSync(a.rec); err != nil {
 		a.rec.Attachments = previous
@@ -217,9 +217,11 @@ func (a *sessionActor) onAttachUpload(m attachUploadMsg) attachUploadResult {
 	return attachUploadResult{Attachment: messageAttachment{ref.ID, ref.Name, ref.Mime, ref.Size}}
 }
 
-// onQueueSendNow moves the item to the head and, if idle, promotes it;
-// if running, flags it for live mid-turn steering on the next model request.
+// onQueueSendNow pops and launches the item when idle (or orphaned); while a
+// turn is active, it stages the item as Delivery="steer" for live injection on
+// the next BeforeRequest (or normal promotion if the turn finishes first).
 func (a *sessionActor) onQueueSendNow(m queueSendNowMsg) {
+	a.touch()
 	idx := -1
 	for i, q := range a.rec.Queue {
 		if q.ID == m.QueueID {
@@ -230,36 +232,113 @@ func (a *sessionActor) onQueueSendNow(m queueSendNowMsg) {
 	if idx < 0 {
 		return
 	}
-	item := a.rec.Queue[idx]
-	rest := append([]QueuedMessage(nil), a.rec.Queue[:idx]...)
-	rest = append(rest, a.rec.Queue[idx+1:]...)
-	a.rec.Queue = append([]QueuedMessage{item}, rest...)
-	if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
-		return
+	if a.state == stateOrphaned {
+		a.rec.Status = "idle"
+		a.setState(stateIdle)
+		a.pingChange()
 	}
 	if a.state == stateIdle {
-		head := a.rec.Queue[0]
-		a.rec.Queue = a.rec.Queue[1:]
-		if err := a.startTurn(head.Text, head.AttachmentIDs, head.Model, head.YOLO, nil); err != nil {
-			// Failed start (e.g. a transient persist error): the item
-			// falls back into the queue — but the send-now INTENT must
-			// survive, like the running branch below. Without the flag a
-			// failed start demotes the item to plain queue order and a
-			// cancelled turn would never promote it.
-			a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
-			a.sendNow = true
+		item := a.rec.Queue[idx]
+		rest := append([]QueuedMessage(nil), a.rec.Queue[:idx]...)
+		rest = append(rest, a.rec.Queue[idx+1:]...)
+		a.rec.Queue = rest
+		if err := a.startTurn(item.Text, item.AttachmentIDs, item.Model, item.YOLO, item.Options); err != nil {
+			item.Delivery = deliverySteer
+			a.rec.Queue = append(a.rec.Queue, item)
+			sortQueueByDelivery(a.rec.Queue)
+			_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
 		}
 		a.pingChange()
 		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 		return
 	}
-	// Running: flag send-now for live mid-turn steering. The next model
-	// request (beforeRequest) consumes and injects this queued message into
-	// the running context without aborting in-flight work. If the turn completes
-	// without another request, finishTurn promotes it as a fresh turn.
-	a.sendNow = true
+	previous := cloneQueueSlice(a.rec.Queue)
+	a.rec.Queue[idx].Delivery = deliverySteer
+	sortQueueByDelivery(a.rec.Queue)
+	if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
+		a.rec.Queue = previous
+		return
+	}
 	a.pingChange()
 	a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
+}
+
+// onQueueCancelSend unstages a Delivery="steer" item back to passive "queue",
+// restoring its original relative slot via Seq. If the item was already
+// consumed by BeforeRequest or is already passive, it emits session_queue so
+// the client UI reconciles without error.
+func (a *sessionActor) onQueueCancelSend(m queueCancelSendMsg) {
+	a.touch()
+	idx := -1
+	for i, q := range a.rec.Queue {
+		if q.ID == m.QueueID {
+			idx = i
+			break
+		}
+	}
+	if idx >= 0 && normalizeDelivery(a.rec.Queue[idx].Delivery) == deliverySteer {
+		previous := cloneQueueSlice(a.rec.Queue)
+		a.rec.Queue[idx].Delivery = deliveryQueue
+		sortQueueByDelivery(a.rec.Queue)
+		if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
+			a.rec.Queue = previous
+			return
+		}
+		a.pingChange()
+	}
+	a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
+}
+
+// onQueueInterruptNow promotes a queued item to Delivery="interrupt": if idle,
+// it pops and starts the turn immediately; if running/awaiting, it aborts the
+// current turn ("interrupt_and_send") so finishTurn promotes it immediately.
+func (a *sessionActor) onQueueInterruptNow(m queueInterruptNowMsg) {
+	a.touch()
+	idx := -1
+	for i, q := range a.rec.Queue {
+		if q.ID == m.QueueID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
+		return
+	}
+	if a.state == stateOrphaned {
+		a.rec.Status = "idle"
+		a.setState(stateIdle)
+		a.pingChange()
+	}
+	if a.state == stateIdle {
+		item := a.rec.Queue[idx]
+		rest := append([]QueuedMessage(nil), a.rec.Queue[:idx]...)
+		rest = append(rest, a.rec.Queue[idx+1:]...)
+		a.rec.Queue = rest
+		if err := a.startTurn(item.Text, item.AttachmentIDs, item.Model, item.YOLO, item.Options); err != nil {
+			item.Delivery = deliveryInterrupt
+			a.rec.Queue = append(a.rec.Queue, item)
+			sortQueueByDelivery(a.rec.Queue)
+			_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
+		}
+		a.pingChange()
+		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
+		return
+	}
+	if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ || a.state == stateCancel {
+		previous := cloneQueueSlice(a.rec.Queue)
+		a.rec.Queue[idx].Delivery = deliveryInterrupt
+		sortQueueByDelivery(a.rec.Queue)
+		if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
+			a.rec.Queue = previous
+			return
+		}
+		a.pingChange()
+		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
+		if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ {
+			a.doCancel("interrupt_and_send")
+		}
+	}
 }
 
 // onEditApply applies a saved (non-regen) edit. Runs on the actor; caller

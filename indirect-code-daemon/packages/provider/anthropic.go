@@ -680,6 +680,10 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 			return
 		case ev, ok := <-raw:
 			if !ok {
+				if ctx.Err() != nil {
+					stop = StopAborted
+					finalErr = ctx.Err()
+				}
 				sendDone()
 				return
 			}

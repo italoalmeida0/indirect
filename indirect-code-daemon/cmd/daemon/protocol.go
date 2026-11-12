@@ -21,12 +21,13 @@ import (
 
 // userPromptMsg starts a turn, or queues behind the running one.
 type userPromptMsg struct {
-	Text          string
-	AttachmentIDs []string
-	Model         string
-	YOLO          bool
-	Options       *SessionOptions // nil = keep current (v1 startPrompt parity)
-	Reply         chan any        // promptResult
+	Text            string
+	AttachmentIDs   []string
+	Model           string
+	YOLO            bool
+	Options         *SessionOptions // nil = keep current (v1 startPrompt parity)
+	MidTurnDelivery string          // "" | "queue" | "steer" | "interrupt"
+	Reply           chan any        // promptResult
 }
 
 // queueOpMsg mutates the waiting queue. Served only when it cannot disturb
@@ -41,12 +42,14 @@ type userPromptMsg struct {
 // A tri-state YOLO for "update" would need the same pointer discipline: a
 // defaulted bool must never clobber the stored flag.
 type queueOpMsg struct {
-	Op            string // "add" | "remove" | "reorder" | "clear"
+	Op            string // "add" | "update" | "remove" | "reorder" | "clear"
 	Text          string
 	AttachmentIDs []string // nil = no change (update); see contract above
 	Model         string
 	YOLO          bool
-	ID            string   // remove
+	Options       *SessionOptions
+	Delivery      string   // "queue" | "steer" | "interrupt" (for "add")
+	ID            string   // remove / update
 	IDs           []string // reorder
 	Reply         chan any // queueOpResult
 }
@@ -232,9 +235,11 @@ type shutdownMsg struct{}
 // ---- replies ----
 
 type promptResult struct {
-	Accepted bool
-	Queued   bool
-	Error    string
+	Accepted     bool
+	Queued       bool
+	Delivery     string
+	Interrupting bool
+	Error        string
 }
 
 type queueOpResult struct {
@@ -295,10 +300,11 @@ type walAppendMsg struct {
 	hasContext    bool
 }
 
-// workerRefreshMsg asks the actor for current model/options (BeforeRequest).
+// workerRefreshMsg asks the actor for current model/options (BeforeRequest / AutoCompact).
 type workerRefreshMsg struct {
-	gen   int
-	Reply chan any
+	gen        int
+	allowSteer bool
+	Reply      chan any
 }
 
 type workerRefreshResult struct {
@@ -412,9 +418,21 @@ type skillsUpdateMsg struct {
 	Order []string
 }
 
-// queueSendNowMsg moves a queued item to the head; the finalizer path
-// promotes it (cancelling the running turn first, v1 semantics).
+// queueSendNowMsg stages a queued item as "steer" while running, or pops and
+// starts it immediately when idle.
 type queueSendNowMsg struct {
+	QueueID string
+}
+
+// queueCancelSendMsg unstages a "steer" item back to passive "queue" at its
+// original relative Seq slot.
+type queueCancelSendMsg struct {
+	QueueID string
+}
+
+// queueInterruptNowMsg promotes a queued item to "interrupt" and aborts the
+// running turn so finishTurn immediately launches the item.
+type queueInterruptNowMsg struct {
 	QueueID string
 }
 

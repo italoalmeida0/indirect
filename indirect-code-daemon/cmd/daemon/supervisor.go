@@ -201,15 +201,31 @@ func (s *sessionSupervisor) boot() error {
 			continue // WAL owns this session; replay on route
 		}
 		meta, err := st.readMetaTail(sid)
-		if err != nil || meta.Status != "running" {
+		if err != nil {
 			continue
 		}
-		meta.Status = "idle"
+		qChanged := demoteStagedQueueItems(meta.Queue)
+		if qChanged {
+			sortQueueByDelivery(meta.Queue)
+		}
+		statusChanged := false
+		if meta.Status == "running" {
+			meta.Status = "idle"
+			statusChanged = true
+			if meta.Turn != nil && (meta.Turn.Status == "running" || meta.Turn.Status == "cancelling") {
+				meta.Turn.Status = "cancelled"
+			}
+		}
+		if !statusChanged && !qChanged {
+			continue
+		}
 		if err := st.rewriteMetaOnly(sid, meta); err != nil {
 			fmt.Printf("[WARN] reset stale running %s: %v\n", sid, err)
 			continue
 		}
-		fmt.Printf("[INFO] Reset stale running session: %s\n", sid)
+		if statusChanged {
+			fmt.Printf("[INFO] Reset stale running session: %s\n", sid)
+		}
 	}
 	return nil
 }
@@ -312,8 +328,17 @@ func (s *sessionSupervisor) routeCold(id string, forRead bool) spawnResult {
 	// same turn index (v1 resumeAgentTurn parity). Abandoned WALs (turn
 	// already completed/cancelled, balloon present, or empty prompt with no
 	// messages) are discarded instead.
+	_, walStatErr := os.Stat(st.walPath(id))
+	hadWAL := walStatErr == nil
 	resumeHeader, resumeWAL := turnResumeCandidate(rec, st, id)
+	qChanged := demoteStagedQueueItems(rec.Queue)
+	if qChanged {
+		sortQueueByDelivery(rec.Queue)
+	}
 	if resumeHeader != nil {
+		if qChanged {
+			_ = appendWALEvent(resumeWAL, walEvent{Type: walTypeQueue, Queue: rec.Queue})
+		}
 		act.wal = resumeWAL
 		act.state = stateRunning
 		if rec.Turn == nil || rec.Turn.Status != "running" {
@@ -329,6 +354,18 @@ func (s *sessionSupervisor) routeCold(id string, forRead bool) spawnResult {
 		act.resumeSnap = newResumeSnapshot(rec, resumeHeader)
 		// enterAwait reuses this deadline, including already-expired waits.
 		// Clearing it here would silently grant a fresh timeout on restart.
+	} else {
+		statusChanged := false
+		if rec.Status == "running" {
+			rec.Status = "idle"
+			statusChanged = true
+			if rec.Turn != nil && (rec.Turn.Status == "running" || rec.Turn.Status == "cancelling") {
+				rec.Turn.Status = "cancelled"
+			}
+		}
+		if qChanged || statusChanged || (hadWAL && len(rec.Queue) > 0) {
+			_ = st.saveSessionSync(rec)
+		}
 	}
 	if act.done == nil {
 		act.done = make(chan struct{})

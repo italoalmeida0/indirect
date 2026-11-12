@@ -199,10 +199,10 @@ func TestFinishTurnAppliesResendStashBeforeQueuePromotion(t *testing.T) {
 	a.rec.Turn = &TurnActivity{StartedAt: time.Now().UnixMilli(), Status: "running"}
 	a.rec.TurnSeq = 2
 	a.workerDone = make(chan struct{})
-	// queue_send_now on the running turn: flags the item for promotion.
+	// queue_send_now on the running turn: stages the item as "steer".
 	a.onQueueSendNow(queueSendNowMsg{QueueID: "q1"})
-	if !a.sendNow || len(a.rec.Queue) != 1 {
-		t.Fatalf("sendNow setup failed: sendNow=%v queue=%d", a.sendNow, len(a.rec.Queue))
+	if len(a.rec.Queue) != 1 || a.rec.Queue[0].Delivery != deliverySteer {
+		t.Fatalf("steer setup failed: queue=%+v", a.rec.Queue)
 	}
 	// discard_and_resend on turn 2 while the turn runs: stash + cancel.
 	reply := make(chan any, 1)

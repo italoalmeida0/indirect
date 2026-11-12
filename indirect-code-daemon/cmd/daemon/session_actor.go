@@ -109,13 +109,10 @@ type sessionActor struct {
 	// jailed locks the sandbox for future turns (v1 jail flag).
 	jailed bool
 
-	// sendNow flags the queue head for live steering on the next model request,
-	// or promotion if the turn completes/cancels without another request.
-	sendNow bool
-	// pendingResend, when non-nil, is a discard&resend/fork&resend/clear
-	// that arrived while a turn was running: flagged like sendNow and
-	// applied by the finalizer (the single running→idle transition), so
-	// it never fights "turn already in flight".
+	// pendingResend, when non-nil, is a discard&resend/fork&resend
+	// that arrived while a turn was running: stashed and applied by the
+	// finalizer (the single running→idle transition), so it never fights
+	// "turn already in flight".
 	pendingResend *pendingResendOp
 	// routeFn reaches another session's actor (fork&resend continuation).
 	routeFn func(id string) (chan Envelope, chan any, bool)
@@ -198,19 +195,36 @@ func (a *sessionActor) run() {
 	flushTick := time.NewTicker(time.Second)
 	defer flushTick.Stop()
 	for {
-		// Process a bounded data batch before checking control. This preserves
-		// burst ordering without starving cancellation under a busy stream.
+		// INV#4: drain priority control first so cancellations and watchdog
+		// pings are never delayed behind queued data messages.
+		for len(a.control) > 0 {
+			if done := a.handleControl(<-a.control); done {
+				return
+			}
+		}
+		// Process a bounded data batch while checking control before each
+		// item so an incoming cancellation preempts a burst immediately.
 		for n := min(len(a.inbox), 64); n > 0; n-- {
+			for len(a.control) > 0 {
+				if done := a.handleControl(<-a.control); done {
+					return
+				}
+			}
 			a.handleData(<-a.inbox)
+		}
+		for len(a.control) > 0 {
+			if done := a.handleControl(<-a.control); done {
+				return
+			}
 		}
 
 		select {
-		case env := <-a.inbox:
-			a.handleData(env)
 		case msg := <-a.control:
 			if done := a.handleControl(msg); done {
 				return
 			}
+		case env := <-a.inbox:
+			a.handleData(env)
 		case <-flushTick.C:
 			if a.state == stateIdle && a.persistErr != nil {
 				if err := a.store.saveSessionSync(a.rec); err == nil {
@@ -280,36 +294,74 @@ func (a *sessionActor) handleData(env Envelope) {
 			a.emit(m.event)
 		}
 	case workerRefreshMsg:
-		if m.gen != a.gen || a.persistErr != nil || a.closing {
+		if m.gen != a.gen || a.persistErr != nil || a.closing || a.state == stateCancel || a.state == stateOrphaned {
 			select {
 			case m.Reply <- workerRefreshResult{stale: true}:
 			default:
 			}
 		} else {
-			if a.sendNow {
-				if len(a.rec.Queue) > 0 {
-					head := a.rec.Queue[0]
-					a.rec.Queue = a.rec.Queue[1:]
-					a.sendNow = false
-					if head.Model != "" {
-						a.rec.Model = head.Model
-					}
-					if head.YOLO && a.rec.Options.Access == "ask" {
-						a.rec.Options.Access = "full"
-					}
-					msg := a.buildQueuedUserMessage(head)
-					a.rec.Messages = append(a.rec.Messages, msg)
-					if err := a.saveOrAppend(walMsgEvent(msg)); err != nil {
-						a.rec.Messages = a.rec.Messages[:len(a.rec.Messages)-1]
-						a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
+			if m.allowSteer && a.state == stateRunning {
+				var steers []QueuedMessage
+				var remaining []QueuedMessage
+				for _, item := range a.rec.Queue {
+					if normalizeDelivery(item.Delivery) == deliverySteer {
+						steers = append(steers, item)
 					} else {
+						remaining = append(remaining, item)
+					}
+				}
+				if len(steers) > 0 {
+					prevModel := a.rec.Model
+					prevOpts := a.rec.Options
+					prevMsgsLen := len(a.rec.Messages)
+					var injected []provider.Message
+					failedAt := -1
+					modelChanged := false
+					optsChanged := false
+					for i, item := range steers {
+						if item.Model != "" && item.Model != a.rec.Model {
+							a.rec.Model = item.Model
+							modelChanged = true
+						}
+						if item.Options != nil {
+							a.rec.Options = normalizedOptions(*item.Options)
+							optsChanged = true
+						}
+						if item.YOLO && a.rec.Options.Access == "ask" {
+							a.rec.Options.Access = "full"
+							optsChanged = true
+						}
+						msg := a.buildQueuedUserMessage(item)
+						a.rec.Messages = append(a.rec.Messages, msg)
+						if err := a.saveOrAppend(walMsgEvent(msg)); err != nil {
+							a.rec.Messages = a.rec.Messages[:len(a.rec.Messages)-1]
+							failedAt = i
+							break
+						}
+						injected = append(injected, msg)
+					}
+					if failedAt == 0 {
+						a.rec.Model = prevModel
+						a.rec.Options = prevOpts
+						a.rec.Messages = a.rec.Messages[:prevMsgsLen]
+					} else {
+						if failedAt > 0 {
+							remaining = append(append([]QueuedMessage(nil), steers[failedAt:]...), remaining...)
+							sortQueueByDelivery(remaining)
+						}
+						a.rec.Queue = remaining
+						if modelChanged {
+							_ = a.saveOrAppend(walEvent{Type: walTypeModel, Model: a.rec.Model})
+						}
+						if optsChanged {
+							opts := a.rec.Options
+							_ = a.saveOrAppend(walEvent{Type: walTypeOptions, Options: &opts})
+						}
 						_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
-						a.pendingContext = append(a.pendingContext, msg)
+						a.pendingContext = append(a.pendingContext, injected...)
 						a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 						a.pingChange()
 					}
-				} else {
-					a.sendNow = false
 				}
 			}
 			select {
@@ -423,6 +475,10 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": pagedHistoryBlock(sessionPayload(a.rec), a.rec)})
 	case queueSendNowMsg:
 		a.onQueueSendNow(m)
+	case queueCancelSendMsg:
+		a.onQueueCancelSend(m)
+	case queueInterruptNowMsg:
+		a.onQueueInterruptNow(m)
 	case editApplyMsg:
 		m.Reply <- a.onEditApply(m)
 	case compactNowMsg:
@@ -493,7 +549,7 @@ func (a *sessionActor) handleControl(msg any) bool {
 		a.residentBytes = estimateResidentBytes(a.rec)
 		m.Reply <- watchdogReport{Alive: true, LastProgress: a.lastProgress, State: a.state, QueueDepth: depth, ResidentBytes: a.residentBytes, WaitOp: a.waitOp, WaitUntil: a.waitUntil}
 	case passivateMsg:
-		ok := a.state == stateIdle && a.persistErr == nil
+		ok := a.state == stateIdle && a.persistErr == nil && len(a.inbox) == 0
 		if ok {
 			a.doPassivate()
 			ok = a.persistErr == nil
@@ -524,6 +580,18 @@ func (a *sessionActor) hostID() string {
 	return ""
 }
 
+func (a *sessionActor) resolveMidTurnDelivery(raw string) string {
+	if strings.TrimSpace(raw) != "" {
+		return normalizeDelivery(raw)
+	}
+	if a != nil && a.supCfg != nil {
+		if cfg := a.supCfg.load(); cfg != nil {
+			return normalizeDelivery(cfg.Settings.MidTurnSend)
+		}
+	}
+	return deliveryQueue
+}
+
 func (a *sessionActor) emit(ev any) {
 	a.prepareTranscriptEvent(ev)
 	if a.wsSend != nil {
@@ -552,8 +620,8 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 		a.setState(stateIdle)
 		a.pingChange()
 	}
-	if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ {
-		if len(a.rec.Queue) >= 30 {
+	if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ || a.state == stateCancel {
+		if len(a.rec.Queue) >= maxQueueItems {
 			m.Reply <- promptResult{Error: "queue_full"}
 			return
 		}
@@ -561,8 +629,21 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 			m.Reply <- promptResult{Error: err.Error()}
 			return
 		}
-		previous := a.rec.Queue
-		a.rec.Queue = append(a.rec.Queue, QueuedMessage{ID: randomID8(), Text: m.Text, AttachmentIDs: m.AttachmentIDs, Model: m.Model, YOLO: m.YOLO, CreatedAt: time.Now().UnixMilli()})
+		delivery := a.resolveMidTurnDelivery(m.MidTurnDelivery)
+		previous := cloneQueueSlice(a.rec.Queue)
+		seq := nextQueueSeq(a.rec.Queue)
+		a.rec.Queue = append(a.rec.Queue, QueuedMessage{
+			ID:            randomID8(),
+			Text:          m.Text,
+			AttachmentIDs: append([]string(nil), m.AttachmentIDs...),
+			Model:         m.Model,
+			YOLO:          m.YOLO,
+			Options:       cloneQueuedOptions(m.Options),
+			CreatedAt:     time.Now().UnixMilli(),
+			Delivery:      delivery,
+			Seq:           seq,
+		})
+		sortQueueByDelivery(a.rec.Queue)
 		if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
 			a.rec.Queue = previous
 			m.Reply <- promptResult{Error: err.Error()}
@@ -570,11 +651,18 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 		}
 		a.pingChange()
 		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
-		m.Reply <- promptResult{Accepted: true, Queued: true}
+		if delivery == deliveryInterrupt {
+			if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ {
+				a.doCancel("interrupt_and_send")
+			}
+			m.Reply <- promptResult{Accepted: true, Queued: true, Delivery: deliveryInterrupt, Interrupting: true}
+			return
+		}
+		m.Reply <- promptResult{Accepted: true, Queued: true, Delivery: delivery}
 		return
 	}
 	if a.state != stateIdle {
-		m.Reply <- promptResult{Error: "The previous turn is still stopping. Your message was not sent; retry when it finishes."}
+		m.Reply <- promptResult{Error: "Session storage is unavailable; retry after recovery"}
 		return
 	}
 	if err := validateAttachmentIDs(a.rec, m.AttachmentIDs); err != nil {
@@ -598,9 +686,11 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 }
 
 func (a *sessionActor) onQueueOp(m queueOpMsg) {
+	previous := cloneQueueSlice(a.rec.Queue)
+	addedInterrupt := false
 	switch m.Op {
 	case "add":
-		if len(a.rec.Queue) >= 30 {
+		if len(a.rec.Queue) >= maxQueueItems {
 			m.Reply <- queueOpResult{Error: "queue_full"}
 			return
 		}
@@ -611,7 +701,21 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 			m.Reply <- queueOpResult{Error: err.Error()}
 			return
 		}
-		a.rec.Queue = append(a.rec.Queue, QueuedMessage{ID: randomID8(), Text: m.Text, AttachmentIDs: m.AttachmentIDs, Model: m.Model, YOLO: m.YOLO, CreatedAt: time.Now().UnixMilli()})
+		delivery := normalizeDelivery(m.Delivery)
+		seq := nextQueueSeq(a.rec.Queue)
+		a.rec.Queue = append(a.rec.Queue, QueuedMessage{
+			ID:            randomID8(),
+			Text:          m.Text,
+			AttachmentIDs: append([]string(nil), m.AttachmentIDs...),
+			Model:         m.Model,
+			YOLO:          m.YOLO,
+			Options:       cloneQueuedOptions(m.Options),
+			CreatedAt:     time.Now().UnixMilli(),
+			Delivery:      delivery,
+			Seq:           seq,
+		})
+		sortQueueByDelivery(a.rec.Queue)
+		addedInterrupt = delivery == deliveryInterrupt
 	case "update":
 		found := false
 		for i, q := range a.rec.Queue {
@@ -623,11 +727,14 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 						m.Reply <- queueOpResult{Error: err.Error()}
 						return
 					}
-					a.rec.Queue[i].AttachmentIDs = m.AttachmentIDs
+					a.rec.Queue[i].AttachmentIDs = append([]string(nil), m.AttachmentIDs...)
 				}
 				a.rec.Queue[i].Text = m.Text
 				if m.Model != "" {
 					a.rec.Queue[i].Model = m.Model
+				}
+				if m.Options != nil {
+					a.rec.Queue[i].Options = cloneQueuedOptions(m.Options)
 				}
 				found = true
 				break
@@ -638,47 +745,51 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 			return
 		}
 	case "remove":
-		kept := a.rec.Queue[:0]
+		kept := make([]QueuedMessage, 0, len(a.rec.Queue))
 		for _, q := range a.rec.Queue {
 			if q.ID != m.ID {
 				kept = append(kept, q)
 			}
 		}
-		a.rec.Queue = kept
-	case "reorder":
-		byID := map[string]QueuedMessage{}
-		for _, q := range a.rec.Queue {
-			byID[q.ID] = q
+		if len(kept) == 0 {
+			a.rec.Queue = nil
+		} else {
+			a.rec.Queue = kept
 		}
-		var out []QueuedMessage
-		for _, id := range m.IDs {
-			if q, ok := byID[id]; ok {
-				out = append(out, q)
+	case "reorder":
+		a.rec.Queue = reorderQueueItems(a.rec.Queue, m.IDs)
+	case "clear":
+		var kept []QueuedMessage
+		for _, q := range a.rec.Queue {
+			if normalizeDelivery(q.Delivery) != deliveryQueue {
+				kept = append(kept, q)
 			}
 		}
-		a.rec.Queue = out
-	case "clear":
-		a.rec.Queue = nil
+		a.rec.Queue = kept
 	default:
 		m.Reply <- queueOpResult{Error: "unknown op"}
 		return
 	}
 	if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
+		a.rec.Queue = previous
 		m.Reply <- queueOpResult{Error: err.Error()}
 		return
 	}
 	a.pingChange()
-	m.Reply <- queueOpResult{Items: a.rec.Queue}
+	if addedInterrupt && (a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ) {
+		a.doCancel("interrupt_and_send")
+	}
+	m.Reply <- queueOpResult{Items: cloneQueueSlice(a.rec.Queue)}
 }
 
 // ---- turn lifecycle ----
 
 func (a *sessionActor) startTurn(prompt string, attachmentIDs []string, model string, yolo bool, options *SessionOptions) error {
-	if yolo && a.rec.Options.Access == "ask" {
-		a.rec.Options.Access = "full"
-	}
 	if options != nil {
 		a.rec.Options = normalizedOptions(*options)
+	}
+	if yolo && a.rec.Options.Access == "ask" {
+		a.rec.Options.Access = "full"
 	}
 	return a.startTurnWithMeta(prompt, attachmentIDs, model, nil)
 }
@@ -873,6 +984,11 @@ func (a *sessionActor) finishTurn(ok bool) {
 	a.rec.Status = "idle"
 	a.rec.ApprovalDeadlineUnix = 0
 	a.finishOK = ok
+	willPromote := !a.closing && a.pendingResend == nil && len(a.rec.Queue) > 0 &&
+		(ok || normalizeDelivery(a.rec.Queue[0].Delivery) == deliveryInterrupt)
+	if !willPromote && demoteStagedQueueItems(a.rec.Queue) {
+		sortQueueByDelivery(a.rec.Queue)
+	}
 	if err := a.store.commitWAL(a.id, a.rec, a.wal); err != nil {
 		a.storageError(err)
 		a.setState(statePersist)
@@ -911,26 +1027,34 @@ func (a *sessionActor) finishTurn(ok bool) {
 			a.applyForkAndResend(op.fork)
 		}
 	}
-	// Promote queue head (only the finalizer promotes): a normally
-	// completed turn promotes the head; a cancelled turn promotes only
-	// when flagged send-now (queue_send_now semantics). Only while the
-	// session is still free: a stash that just started its own turn owns
-	// the session (promoting now would fail busy and lose sendNow).
-	if !a.closing && a.state == stateIdle && len(a.rec.Queue) > 0 && (ok || a.sendNow) {
+	// Promote queue head (only the finalizer promotes): a normally completed
+	// turn promotes the head; a cancelled/aborted turn promotes ONLY when the
+	// head is explicitly staged as "interrupt". Plain user Stop demotes all
+	// staged items to "queue" so it never launches a new turn.
+	shouldPromote := ok || (len(a.rec.Queue) > 0 && normalizeDelivery(a.rec.Queue[0].Delivery) == deliveryInterrupt)
+	if !a.closing && a.state == stateIdle && len(a.rec.Queue) > 0 && shouldPromote {
 		head := a.rec.Queue[0]
 		a.rec.Queue = a.rec.Queue[1:]
-		a.sendNow = false
-		if err := a.startTurn(head.Text, head.AttachmentIDs, head.Model, head.YOLO, nil); err != nil {
+		if err := a.startTurn(head.Text, head.AttachmentIDs, head.Model, head.YOLO, head.Options); err != nil {
 			a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
+			sortQueueByDelivery(a.rec.Queue)
+			_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
+		} else {
+			a.pingChange()
+			a.emit(map[string]any{"type": "session_queue", "hostId": hostID, "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 		}
-	} else {
-		a.sendNow = false
 	}
 }
 
 func (a *sessionActor) doCancel(reason string) {
 	trace("actor.cancel", map[string]any{"sid": a.id, "reason": reason, "state": a.state, "gen": a.gen})
 	a.waitOp, a.waitUntil = "", 0 // cancellation ends any declared wait
+	if reason == "user" && a.state != statePersist && demoteStagedQueueItems(a.rec.Queue) {
+		sortQueueByDelivery(a.rec.Queue)
+		_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
+		a.pingChange()
+		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
+	}
 	if a.state == stateIdle || a.state == statePersist {
 		return
 	}
@@ -974,6 +1098,12 @@ func (a *sessionActor) doCancel(reason string) {
 	if reason == "watchdog_quarantine" && a.cancelRounds >= maxCancelRounds {
 		a.quarantine()
 		return
+	}
+	if a.wal != nil {
+		if a.rec.Turn != nil {
+			a.rec.Turn.Status = "cancelling"
+		}
+		_ = appendWALEvent(a.wal, walEvent{Type: walTypeTurnState, TurnStatus: "cancelling"})
 	}
 	if a.cancel != nil {
 		a.cancel()
@@ -2520,7 +2650,9 @@ func (a *sessionActor) quarantine() {
 	rounds := a.cancelRounds
 	a.gen++ // Fence any subsequent data or emits from the stuck worker.
 	a.cancelRounds = 0
-	a.sendNow = false
+	if demoteStagedQueueItems(a.rec.Queue) {
+		sortQueueByDelivery(a.rec.Queue)
+	}
 	a.clearPending()
 	a.rec.Status = "orphaned"
 	a.rec.UpdatedAt = time.Now().UnixMilli()
