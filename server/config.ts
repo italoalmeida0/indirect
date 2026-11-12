@@ -153,7 +153,7 @@ export const LIMITS = {
   /** body caps */
   authBodyBytes: Number(process.env.LIMIT_AUTH_BODY_BYTES || 16 * 1024),
   apiBodyBytes: Number(process.env.LIMIT_API_BODY_BYTES || 256 * 1024),
-  proxyBodyBytes: Number(process.env.LIMIT_PROXY_BODY_BYTES || 4 * 1024 * 1024),
+  proxyBodyBytes: Number(process.env.LIMIT_PROXY_BODY_BYTES || 32 * 1024 * 1024),
 
   /**
    * Global per-IP token bucket shared by every dashboard and proxy route.

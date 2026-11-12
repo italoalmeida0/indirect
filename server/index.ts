@@ -308,7 +308,7 @@ import type { Server } from "bun";
 const server: Server<WsData> = Bun.serve<WsData>({
   port: PORT,
   hostname: process.env.HOST || "0.0.0.0",
-  maxRequestBodySize: LIMITS.proxyBodyBytes + 64 * 1024,
+  maxRequestBodySize: LIMITS.proxyBodyBytes + 1024 * 1024,
   /**
    * Bun applies idleTimeout to IN-FLIGHT responses too — a paused SSE stream
    * (model thinking, no bytes flowing) counts as idle. With a short timeout

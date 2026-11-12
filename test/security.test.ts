@@ -623,7 +623,7 @@ describe("security audit", () => {
   // ------------------------------------------------------------ 8. body caps
 
   test("proxy: chunked body above the cap is rejected with the protocol envelope", async () => {
-    const size = 4_200_000; // > 4 MiB route cap, < Bun's global maxRequestBodySize
+    const size = 32 * 1024 * 1024 + 256 * 1024; // > 32 MiB route cap, < Bun's global maxRequestBodySize
     const stream = new ReadableStream<Uint8Array>({
       start(c) {
         const chunk = new Uint8Array(64 * 1024).fill(97);

@@ -10,11 +10,11 @@
  * per-egress incremental writers below; async work (image fetch) lives only
  * at the decode edge.
  *
- * Coverage: text, images (base64 data URLs — remote URLs fetched at decode),
- * tool calls + results across multi-turn conversations, tool_choice,
- * system prompts, stop sequences, sampling params, output limits, stream
- * flags. Drops are documented at each site (hosted/server tools, citations,
- * service-tier metadata...).
+ * Coverage: text, images (base64 data URLs and http(s) URLs across user turns
+ * and tool results), tool calls + results across multi-turn conversations,
+ * tool_choice, system prompts, stop sequences, sampling params, output limits,
+ * stream flags. Drops are documented at each site (hosted/server tools,
+ * citations, service-tier metadata...).
  */
 
 import { StreamText } from "./stream-text";
@@ -23,16 +23,53 @@ import { countTextTokens, estimateThinkingTokens } from "../tokens";
 import { dsmlRecoverer, type DsmlToolHint } from "./dsml";
 import type { StreamEmit, StreamRecoverer } from "./recovery";
 
+export interface IRTextBlock {
+  type: "text";
+  text: string;
+}
+
+export interface IRImageBlock {
+  type: "image";
+  url: string;
+  mediaType?: string;
+}
+
+export interface IRToolResultImage {
+  url: string;
+  mediaType?: string;
+}
+
+export interface IRToolUseBlock {
+  type: "tool_use";
+  id: string;
+  name: string;
+  input: unknown;
+}
+
+export interface IRToolResultBlock {
+  type: "tool_result";
+  toolUseId: string;
+  content: string;
+  isError?: boolean;
+  images?: IRToolResultImage[];
+}
+
+/** Opaque reasoning passthrough (thought_signature / encrypted). Kept so a
+ *  Google->Google or Responses->Responses round-trip stays lossless; only
+ *  emitted by encoders that understand it. */
+export interface IRThinkingBlock {
+  type: "thinking";
+  format: "google" | "responses" | "text";
+  data: string;
+}
+
 /** Canonical content block. `text` is shared; media/tool blocks are typed. */
 export type IRBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; dataUrl: string }
-  | { type: "tool_use"; id: string; name: string; input: unknown }
-  | { type: "tool_result"; toolUseId: string; content: string; isError?: boolean }
-  /** Opaque reasoning passthrough (thought_signature / encrypted). Kept so a
-   *  Google->Google or Responses->Responses round-trip stays lossless; only
-   *  emitted by encoders that understand it. */
-  | { type: "thinking"; format: "google" | "responses" | "text"; data: string };
+  | IRTextBlock
+  | IRImageBlock
+  | IRToolUseBlock
+  | IRToolResultBlock
+  | IRThinkingBlock;
 
 export interface IRMessage {
   role: "user" | "assistant";
@@ -150,24 +187,6 @@ function blockText(v: unknown): string {
   return "";
 }
 
-function toolResultToString(content: unknown): string {
-  if (typeof content === "string") return content;
-  return asArr(content)
-    .map((b) => {
-      const t = blockText(b);
-      if (t) return t;
-      const r = asRecord(b);
-      if (typeof (r as any).text === "string") return (r as any).text as string;
-      try {
-        return JSON.stringify(b);
-      } catch {
-        return "";
-      }
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
 function systemToString(system: unknown): string {
   if (typeof system === "string") return system;
   return asArr(system)
@@ -182,11 +201,194 @@ function systemToString(system: unknown): string {
     .join("\n");
 }
 
-/** data: URL passthrough; returns null for anything else (fetched at edge). */
-function imageSourceToDataUrl(source: unknown): string | null {
-  const url = typeof source === "string" ? source : asRecord(asRecord(source).image_url).url;
-  if (typeof url === "string" && url.startsWith("data:")) return url;
+/**
+ * Parse any supported image source shape into a canonical `{ url, mediaType? }`:
+ *  - Anthropic base64: `{ type: "base64", media_type?: string, data: string }`
+ *  - Anthropic URL: `{ type: "url", url: "https://..." }`
+ *  - Direct string URL (`"data:<mime>;base64,..."` or `"http(s)://..."`)
+ *  - OpenAI `{ image_url: { url } }`, `{ image_url: "..." }`, or `{ url }`
+ */
+function parseImageSource(source: unknown): IRToolResultImage | null {
+  if (typeof source === "string") {
+    const trimmed = source.trim();
+    if (!trimmed) return null;
+    const m = /^data:([^;,]*);base64,(.*)$/is.exec(trimmed);
+    if (m) {
+      const mediaType = m[1]!.trim() || "image/png";
+      const cleanData = m[2]!.replace(/\s+/g, "");
+      if (!cleanData) return null;
+      return { url: `data:${mediaType};base64,${cleanData}`, mediaType };
+    }
+    if (trimmed.startsWith("data:")) return null;
+    if (/^https?:\/\/\S+$/i.test(trimmed)) return { url: trimmed };
+    return null;
+  }
+  if (!source || typeof source !== "object" || Array.isArray(source)) return null;
+  const r = source as Record<string, unknown>;
+  const explicitMime =
+    typeof r.media_type === "string" && r.media_type.trim()
+      ? r.media_type.trim()
+      : typeof r.mediaType === "string" && r.mediaType.trim()
+        ? r.mediaType.trim()
+        : undefined;
+
+  if (r.type === "base64" || (r.type === undefined && typeof r.data === "string")) {
+    if (typeof r.data !== "string") return null;
+    const trimmedData = r.data.trim();
+    if (!trimmedData) return null;
+    if (trimmedData.startsWith("data:")) {
+      const parsed = parseImageSource(trimmedData);
+      if (!parsed) return null;
+      const mediaType = explicitMime ?? parsed.mediaType;
+      return { url: parsed.url, ...(mediaType ? { mediaType } : {}) };
+    }
+    const cleanData = trimmedData.replace(/\s+/g, "");
+    if (!cleanData) return null;
+    const mediaType = explicitMime ?? "image/png";
+    return { url: `data:${mediaType};base64,${cleanData}`, mediaType };
+  }
+
+  if (r.type === "url") {
+    if (typeof r.url !== "string") return null;
+    const parsed = parseImageSource(r.url);
+    if (!parsed) return null;
+    const mediaType = explicitMime ?? parsed.mediaType;
+    return { url: parsed.url, ...(mediaType ? { mediaType } : {}) };
+  }
+
+  if (typeof r.image_url === "string") {
+    const parsed = parseImageSource(r.image_url);
+    if (!parsed) return null;
+    const mediaType = explicitMime ?? parsed.mediaType;
+    return { url: parsed.url, ...(mediaType ? { mediaType } : {}) };
+  }
+
+  if (r.image_url && typeof r.image_url === "object" && !Array.isArray(r.image_url)) {
+    const iu = r.image_url as Record<string, unknown>;
+    const iuMime =
+      typeof iu.media_type === "string" && iu.media_type.trim()
+        ? iu.media_type.trim()
+        : explicitMime;
+    const parsed = parseImageSource(iu.url);
+    if (!parsed) return null;
+    const mediaType = iuMime ?? parsed.mediaType;
+    return { url: parsed.url, ...(mediaType ? { mediaType } : {}) };
+  }
+
+  if (r.type === undefined && typeof r.url === "string") {
+    const parsed = parseImageSource(r.url);
+    if (!parsed) return null;
+    const mediaType = explicitMime ?? parsed.mediaType;
+    return { url: parsed.url, ...(mediaType ? { mediaType } : {}) };
+  }
+
   return null;
+}
+
+/** Normalize an image source of any protocol shape into a `data:` or `http(s):` URL. */
+export function imageSourceToDataUrl(source: unknown): string | null {
+  return parseImageSource(source)?.url ?? null;
+}
+
+const BINARY_FIELD_NAMES = new Set(["data", "base64", "b64_json", "bytes", "blob", "raw"]);
+const MAX_INLINE_DATA_CHARS = 1024;
+
+/** Scrub oversized base64/binary fields inside unknown objects before JSON serialization. */
+function scrubOversizedBinaryFields(val: unknown, depth = 0): unknown {
+  if (depth > 8 || !val || typeof val !== "object") return val;
+  if (Array.isArray(val)) return val.map((item) => scrubOversizedBinaryFields(item, depth + 1));
+  const src = val as Record<string, unknown>;
+  let copy: Record<string, unknown> | null = null;
+  for (const [k, v] of Object.entries(src)) {
+    if (typeof v === "string" && v.length > MAX_INLINE_DATA_CHARS) {
+      const lower = k.toLowerCase();
+      if (
+        BINARY_FIELD_NAMES.has(lower) ||
+        v.startsWith("data:") ||
+        /^[A-Za-z0-9+/=\s_-]+$/.test(v)
+      ) {
+        if (!copy) copy = { ...src };
+        copy[k] = `[omitted binary data: ${v.length} chars]`;
+        continue;
+      }
+    } else if (v && typeof v === "object") {
+      const next = scrubOversizedBinaryFields(v, depth + 1);
+      if (next !== v) {
+        if (!copy) copy = { ...src };
+        copy[k] = next;
+      }
+    }
+  }
+  return copy ?? val;
+}
+
+/**
+ * Extract structured `{ text, images }` from a `tool_result` / `function_call_output`
+ * / `role: "tool"` payload without ever `JSON.stringify`ing image blocks or huge
+ * inline base64 blobs into plain text.
+ */
+export function extractToolResultPayload(rawContent: unknown): {
+  text: string;
+  images: IRToolResultImage[];
+} {
+  if (rawContent === null || rawContent === undefined) return { text: "", images: [] };
+  if (typeof rawContent === "string") return { text: rawContent, images: [] };
+  const parts = Array.isArray(rawContent)
+    ? rawContent
+    : typeof rawContent === "object"
+      ? [rawContent]
+      : [String(rawContent)];
+  const textParts: string[] = [];
+  const images: IRToolResultImage[] = [];
+
+  for (const b of parts) {
+    if (typeof b === "string") {
+      if (b) textParts.push(b);
+      continue;
+    }
+    if (!b || typeof b !== "object") continue;
+    if (Array.isArray(b)) {
+      const nested = extractToolResultPayload(b);
+      if (nested.text) textParts.push(nested.text);
+      images.push(...nested.images);
+      continue;
+    }
+    const r = b as Record<string, unknown>;
+    const t = blockText(r);
+    if (r.type === "text" || r.type === "input_text" || r.type === "output_text") {
+      if (t) textParts.push(t);
+      continue;
+    }
+    if (r.type === "image") {
+      const parsed = parseImageSource(r.source !== undefined ? r.source : r);
+      if (parsed) images.push(parsed);
+      else textParts.push("[omitted malformed image]");
+      continue;
+    }
+    if (r.type === "input_image" || r.type === "image_url") {
+      const rawImg = r.image_url !== undefined ? r.image_url : r.url !== undefined ? r.url : r.source;
+      const parsed = parseImageSource(rawImg);
+      if (parsed) images.push(parsed);
+      else textParts.push("[omitted malformed image]");
+      continue;
+    }
+    if (typeof r.text === "string") {
+      if (r.text) textParts.push(r.text);
+      continue;
+    }
+    try {
+      const safe = scrubOversizedBinaryFields(r);
+      const s = JSON.stringify(safe);
+      if (s) textParts.push(s);
+    } catch {
+      /* ignore unserializable object */
+    }
+  }
+
+  return {
+    text: textParts.filter(Boolean).join("\n"),
+    images,
+  };
 }
 
 const REVERSE_IMAGE_TIMEOUT_MS = 15_000;
@@ -204,25 +406,26 @@ async function fetchImageToDataUrl(url: string): Promise<string> {
   try {
     const res = await fetch(url, { signal: ctrl.signal });
     if (!res.ok) throw new Error(`image fetch failed: ${res.status}`);
-    const ct = res.headers.get("content-type") || "image/jpeg";
+    const ct = (res.headers.get("content-type") || "image/jpeg").split(";")[0]!.trim() || "image/jpeg";
     const buf = await res.arrayBuffer();
     if (buf.byteLength > REVERSE_MAX_IMAGE_BYTES) throw new Error("image too large");
     let binary = "";
     const bytes = new Uint8Array(buf);
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
     return `data:${ct};base64,${btoa(binary)}`;
   } finally {
     clearTimeout(t);
   }
 }
 
-/** Resolve an image URL-ish value to a data: URL (data passthrough, http fetch). */
+/** Resolve an image URL-ish value to a `data:` URL (`data:` passthrough, `http(s):` fetch). */
 export async function imageToDataUrl(url: unknown): Promise<string | null> {
-  if (typeof url !== "string" || !url) return null;
-  if (url.startsWith("data:")) return url;
-  if (/^https?:\/\//i.test(url)) {
+  const parsed = parseImageSource(url);
+  if (!parsed) return null;
+  if (parsed.url.startsWith("data:")) return parsed.url;
+  if (/^https?:\/\//i.test(parsed.url)) {
     try {
-      return await fetchImageToDataUrl(url);
+      return await fetchImageToDataUrl(parsed.url);
     } catch {
       return null;
     }
@@ -288,8 +491,13 @@ export async function decodeChatToIR(body: Record<string, unknown>): Promise<Gat
     if (role === "tool") {
       const toolId = m.tool_call_id;
       if (typeof toolId !== "string" || !toolId) throw new Error("tool message is missing tool_call_id");
-      const content = typeof m.content === "string" ? m.content : asArr(m.content).map(openAIPartToText).filter(Boolean).join("\n");
-      pendingResults.push({ type: "tool_result", toolUseId: toolId, content });
+      const payload = extractToolResultPayload(m.content);
+      pendingResults.push({
+        type: "tool_result",
+        toolUseId: toolId,
+        content: payload.text,
+        ...(payload.images.length > 0 ? { images: payload.images } : {}),
+      });
       continue;
     }
     if (role === "assistant") {
@@ -359,10 +567,12 @@ export async function decodeChatToIR(body: Record<string, unknown>): Promise<Gat
     }
     for (const p of asArr(m.content)) {
       const r = asRecord(p);
-      if (r.type === "image_url") {
-        const url = await imageToDataUrl(asRecord(r.image_url).url);
-        if (!url) throw new Error("unsupported image_url (only base64 data: URLs and reachable image http(s) URLs are supported)");
-        media.push({ type: "image", dataUrl: url });
+      if (r.type === "image_url" || r.type === "input_image" || r.type === "image") {
+        const rawImg = r.type === "image" ? (r.source !== undefined ? r.source : r) : (r.image_url !== undefined ? r.image_url : r);
+        const resolvedUrl = await imageToDataUrl(rawImg);
+        if (!resolvedUrl) throw new Error("unsupported image_url (only base64 data: URLs and reachable image http(s) URLs are supported)");
+        const parsed = parseImageSource(resolvedUrl);
+        media.push({ type: "image", url: resolvedUrl, ...(parsed?.mediaType ? { mediaType: parsed.mediaType } : {}) });
       } else {
         const t = openAIPartToText(p);
         if (t) textBuf += (textBuf ? "\n" : "") + t;
@@ -484,19 +694,21 @@ export async function decodeAnthropicToIR(body: Record<string, unknown>): Promis
         if (block.type === "text" && typeof block.text === "string") {
           textBuf += (textBuf ? "\n" : "") + block.text;
         } else if (block.type === "image") {
-          const url = imageSourceToDataUrl(block.source);
-          if (url) media.push({ type: "image", dataUrl: url });
-          else warnings.push("dropped unsupported anthropic image source (only base64 supported)");
+          const parsed = parseImageSource(block.source !== undefined ? block.source : block);
+          if (parsed) media.push({ type: "image", url: parsed.url, ...(parsed.mediaType ? { mediaType: parsed.mediaType } : {}) });
+          else warnings.push("dropped unsupported anthropic image source");
         } else if (block.type === "tool_result") {
           flushUser();
+          const payload = extractToolResultPayload(block.content);
           messages.push({
             role: "user",
             blocks: [
               {
                 type: "tool_result",
                 toolUseId: String(block.tool_use_id ?? ""),
-                content: toolResultToString(block.content),
+                content: payload.text,
                 ...(block.is_error === true ? { isError: true as const } : {}),
+                ...(payload.images.length > 0 ? { images: payload.images } : {}),
               },
             ],
           });
@@ -605,12 +817,14 @@ export async function decodeResponsesToIR(body: Record<string, unknown>): Promis
       }
       for (const p of asArr(item.content)) {
         const r = asRecord(p);
-        if (r.type === "input_text" && typeof r.text === "string") {
+        if ((r.type === "input_text" || r.type === "text") && typeof r.text === "string") {
           textBuf += (textBuf ? "\n" : "") + r.text;
-        } else if (r.type === "input_image" && typeof r.image_url === "string") {
-          const url = await imageToDataUrl(r.image_url);
-          if (!url) throw new Error("unsupported input_image (only base64 data: URLs and reachable image http(s) URLs are supported)");
-          media.push({ type: "image", dataUrl: url });
+        } else if (r.type === "input_image" || r.type === "image_url" || r.type === "image") {
+          const rawImg = r.type === "image" ? (r.source !== undefined ? r.source : r) : (r.image_url !== undefined ? r.image_url : r);
+          const resolvedUrl = await imageToDataUrl(rawImg);
+          if (!resolvedUrl) throw new Error("unsupported input_image (only base64 data: URLs and reachable image http(s) URLs are supported)");
+          const parsed = parseImageSource(resolvedUrl);
+          media.push({ type: "image", url: resolvedUrl, ...(parsed?.mediaType ? { mediaType: parsed.mediaType } : {}) });
         } else if (r.type) {
           warnings.push(`dropped unsupported responses input part: ${String(r.type)}`);
         }
@@ -641,10 +855,12 @@ export async function decodeResponsesToIR(body: Record<string, unknown>): Promis
     }
     if (itype === "function_call_output") {
       flushTurn();
+      const payload = extractToolResultPayload(item.output);
       pendingOutputs.set(typeof item.call_id === "string" ? item.call_id : `out_${pendingOutputs.size}`, {
         type: "tool_result",
         toolUseId: typeof item.call_id === "string" ? item.call_id : "",
-        content: typeof item.output === "string" ? item.output : toolResultToString(item.output),
+        content: payload.text,
+        ...(payload.images.length > 0 ? { images: payload.images } : {}),
       });
       continue;
     }
@@ -741,35 +957,94 @@ export function encodeIRToChat(ir: GatewayRequest, model: string): Record<string
   if (ir.params.maxTokens !== undefined) out.max_tokens = ir.params.maxTokens;
   const messages: Record<string, unknown>[] = [];
   if (ir.system) messages.push({ role: "system", content: ir.system });
+
+  // OpenAI Chat Completions rejects `image_url` inside `role: "tool"` with 400
+  // AND requires all `role: "tool"` responses for an assistant's `tool_calls`
+  // to stay contiguous immediately after that assistant message. Collect tool
+  // images across the contiguous tool_result batch and hoist ONE synthetic
+  // `role: "user"` message immediately after the batch completes.
+  const pendingToolImages: Array<{ toolUseId: string; images: IRToolResultImage[] }> = [];
+  const flushPendingToolImages = () => {
+    if (pendingToolImages.length === 0) return;
+    const parts: Record<string, unknown>[] = [];
+    for (const entry of pendingToolImages) {
+      parts.push({
+        type: "text",
+        text: `[Attached image(s) from tool call ${entry.toolUseId}]`,
+      });
+      for (const img of entry.images) {
+        parts.push({
+          type: "image_url",
+          image_url: { url: img.url },
+        });
+      }
+    }
+    pendingToolImages.length = 0;
+    messages.push({ role: "user", content: parts });
+  };
+
   for (const m of ir.messages) {
     if (m.role === "user") {
-      const texts: string[] = [];
-      const media: Record<string, unknown>[] = [];
-      for (const b of m.blocks) {
-        if (b.type === "text") texts.push(b.text);
-        else if (b.type === "image") media.push({ type: "image_url", image_url: { url: b.dataUrl } });
-        else if (b.type === "tool_result") {
-          // Flush pending user content, then emit one role:tool message.
-          if (texts.length || media.length) {
-            messages.push(
-              media.length
-                ? { role: "user", content: [...(texts.length ? [{ type: "text", text: texts.join("\n") }] : []), ...media] }
-                : { role: "user", content: texts.join("\n") },
-            );
-            texts.length = 0;
-            media.length = 0;
+      type UserSegment =
+        | { type: "text"; text: string }
+        | { type: "image_url"; image_url: { url: string } };
+      const segments: UserSegment[] = [];
+      let hasMedia = false;
+      const flushUserSegments = () => {
+        if (segments.length === 0) return;
+        if (!hasMedia) {
+          messages.push({
+            role: "user",
+            content: segments.map((s) => (s as { type: "text"; text: string }).text).join("\n"),
+          });
+        } else {
+          const content: Record<string, unknown>[] = [];
+          let textRun: string[] = [];
+          const flushTextRun = () => {
+            if (textRun.length > 0) {
+              content.push({ type: "text", text: textRun.join("\n") });
+              textRun = [];
+            }
+          };
+          for (const seg of segments) {
+            if (seg.type === "text") textRun.push(seg.text);
+            else {
+              flushTextRun();
+              content.push(seg);
+            }
           }
-          messages.push({ role: "tool", tool_call_id: b.toolUseId, content: b.content + (b.isError ? " [error]" : "") });
+          flushTextRun();
+          messages.push({ role: "user", content });
+        }
+        segments.length = 0;
+        hasMedia = false;
+      };
+
+      for (const b of m.blocks) {
+        if (b.type === "text") {
+          flushPendingToolImages();
+          segments.push({ type: "text", text: b.text });
+        } else if (b.type === "image") {
+          flushPendingToolImages();
+          hasMedia = true;
+          segments.push({ type: "image_url", image_url: { url: b.url } });
+        } else if (b.type === "tool_result") {
+          flushUserSegments();
+          const baseContent =
+            b.content || (b.images && b.images.length > 0 ? "[Image attached in following user message]" : "");
+          messages.push({
+            role: "tool",
+            tool_call_id: b.toolUseId,
+            content: baseContent + (b.isError ? " [error]" : ""),
+          });
+          if (b.images && b.images.length > 0) {
+            pendingToolImages.push({ toolUseId: b.toolUseId, images: b.images });
+          }
         }
       }
-      if (texts.length || media.length) {
-        messages.push(
-          media.length
-            ? { role: "user", content: [...(texts.length ? [{ type: "text", text: texts.join("\n") }] : []), ...media] }
-            : { role: "user", content: texts.join("\n") },
-        );
-      }
+      flushUserSegments();
     } else {
+      flushPendingToolImages();
       const msg: Record<string, unknown> = { role: "assistant" };
       const texts: string[] = [];
       const toolCalls: Record<string, unknown>[] = [];
@@ -802,9 +1077,8 @@ export function encodeIRToChat(ir: GatewayRequest, model: string): Record<string
       // the IR turn carries one, replay it on EVERY tool call in the turn
       // (message-level extra_content AND each tool_calls[] entry). When the
       // turn has tool_calls but NO signature (fresh client multi-turn being
-      // fanned out to a Gemini egress), the caller (encodeIR) may set
-      // `needsGoogleSignature`; without a signature Gemini 400s, so the
-      // tool_call parts are demoted to plain-text recap instead.
+      // fanned out to a Gemini egress), encodeIR runs demoteUnsignedToolCalls
+      // beforehand so signature-less tool turns become plain-text + image recap.
       const gsig = asRecord(asRecord(msg.extra_content).google).thought_signature;
       if (typeof gsig === "string" && gsig) {
         for (const tc of toolCalls) {
@@ -818,6 +1092,7 @@ export function encodeIRToChat(ir: GatewayRequest, model: string): Record<string
       if (texts.length || toolCalls.length || msg.extra_content || msg.responses_reasoning) messages.push(msg);
     }
   }
+  flushPendingToolImages();
   out.messages = messages;
   if (ir.tools.length) {
     out.tools = ir.tools.map((t) => ({
@@ -861,10 +1136,28 @@ function irToolChoiceToAnthropic(c: IRToolChoice): Record<string, unknown> | und
   return undefined; // default auto — omit
 }
 
-function dataUrlToAnthropicImage(dataUrl: string): Record<string, unknown> | null {
-  const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
-  if (!m) return null;
-  return { type: "image", source: { type: "base64", media_type: m[1], data: m[2] } };
+/** Convert a `data:` or `http(s):` URL into an Anthropic `image.source` object. */
+export function dataUrlToAnthropicSource(url: string, fallbackMediaType?: string): Record<string, unknown> | null {
+  if (typeof url !== "string") return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  const m = /^data:([^;,]*);base64,(.*)$/is.exec(trimmed);
+  if (m) {
+    const mediaType = m[1]!.trim() || fallbackMediaType?.trim() || "image/png";
+    const data = m[2]!.replace(/\s+/g, "");
+    if (!data) return null;
+    return { type: "base64", media_type: mediaType, data };
+  }
+  if (/^https?:\/\/\S+$/i.test(trimmed)) {
+    return { type: "url", url: trimmed };
+  }
+  return null;
+}
+
+function dataUrlToAnthropicImage(url: string, mediaType?: string): Record<string, unknown> | null {
+  const source = dataUrlToAnthropicSource(url, mediaType);
+  if (!source) return null;
+  return { type: "image", source };
 }
 
 /** Encode the gateway IR as an Anthropic messages request body. */
@@ -879,8 +1172,25 @@ export function encodeIRToAnthropic(ir: GatewayRequest, model: string): Record<s
   let media: Record<string, unknown>[] = [];
   const flushUser = () => {
     if (!textBuf && media.length === 0) return;
-    if (media.length === 0) messages.push({ role: "user", content: textBuf });
-    else {
+    const prev = messages[messages.length - 1];
+    if (prev && prev.role === "user") {
+      if (typeof prev.content === "string") {
+        const parts: Record<string, unknown>[] = [];
+        const mergedText = prev.content && textBuf ? `${prev.content}\n${textBuf}` : prev.content || textBuf;
+        if (media.length === 0) {
+          prev.content = mergedText;
+        } else {
+          if (mergedText) parts.push({ type: "text", text: mergedText });
+          parts.push(...media);
+          prev.content = parts;
+        }
+      } else if (Array.isArray(prev.content)) {
+        if (textBuf) (prev.content as Record<string, unknown>[]).push({ type: "text", text: textBuf });
+        (prev.content as Record<string, unknown>[]).push(...media);
+      }
+    } else if (media.length === 0) {
+      messages.push({ role: "user", content: textBuf });
+    } else {
       const parts: Record<string, unknown>[] = [];
       if (textBuf) parts.push({ type: "text", text: textBuf });
       parts.push(...media);
@@ -908,21 +1218,42 @@ export function encodeIRToAnthropic(ir: GatewayRequest, model: string): Record<s
       for (const b of m.blocks) {
         if (b.type === "text") textBuf += (textBuf ? "\n" : "") + b.text;
         else if (b.type === "image") {
-          const img = dataUrlToAnthropicImage(b.dataUrl);
+          const img = dataUrlToAnthropicImage(b.url, b.mediaType);
           if (img) media.push(img);
         } else if (b.type === "tool_result") {
           flushUser();
-          messages.push({
-            role: "user",
-            content: [
-              {
-                type: "tool_result",
-                tool_use_id: b.toolUseId,
-                content: b.content,
-                ...(b.isError ? { is_error: true as const } : {}),
-              },
-            ],
-          });
+          const validImages = (b.images ?? [])
+            .map((img) => dataUrlToAnthropicImage(img.url, img.mediaType))
+            .filter((x): x is Record<string, unknown> => x !== null);
+          const toolContent: string | Record<string, unknown>[] =
+            validImages.length > 0
+              ? [
+                  ...(b.content ? [{ type: "text", text: b.content }] : []),
+                  ...validImages,
+                ]
+              : b.content;
+          const trBlock: Record<string, unknown> = {
+            type: "tool_result",
+            tool_use_id: b.toolUseId,
+            content: toolContent,
+            ...(b.isError ? { is_error: true as const } : {}),
+          };
+          const prev = messages[messages.length - 1];
+          if (prev && prev.role === "user") {
+            if (typeof prev.content === "string") {
+              prev.content = prev.content ? [trBlock, { type: "text", text: prev.content }] : [trBlock];
+            } else if (Array.isArray(prev.content)) {
+              const arr = prev.content as Record<string, unknown>[];
+              // Keep tool_result blocks grouped at the start of the user turn.
+              let insertIdx = 0;
+              while (insertIdx < arr.length && asRecord(arr[insertIdx]).type === "tool_result") {
+                insertIdx++;
+              }
+              arr.splice(insertIdx, 0, trBlock);
+            }
+          } else {
+            messages.push({ role: "user", content: [trBlock] });
+          }
         }
       }
     }
@@ -973,16 +1304,24 @@ export function encodeIRToResponses(ir: GatewayRequest, model: string): Record<s
       const content: Record<string, unknown>[] = [];
       for (const b of m.blocks) {
         if (b.type === "text") content.push({ type: "input_text", text: b.text });
-        else if (b.type === "image") content.push({ type: "input_image", image_url: b.dataUrl });
+        else if (b.type === "image") content.push({ type: "input_image", image_url: b.url });
         else if (b.type === "tool_result") {
           if (content.length) {
             input.push({ type: "message", role: "user", content });
             content.length = 0;
           }
+          const outText = b.content + (b.isError ? " [error]" : "");
+          const output: string | Record<string, unknown>[] =
+            b.images && b.images.length > 0
+              ? [
+                  ...(outText ? [{ type: "input_text", text: outText }] : []),
+                  ...b.images.map((img) => ({ type: "input_image", image_url: img.url })),
+                ]
+              : outText;
           input.push({
             type: "function_call_output",
             call_id: b.toolUseId,
-            output: b.content + (b.isError ? " [error]" : ""),
+            output,
           });
         }
       }
@@ -1040,9 +1379,8 @@ export function encodeIR(proto: Proto, ir: GatewayRequest, model: string): Recor
   const m = model || ir.model;
   if (proto === "anthropic") return encodeIRToAnthropic(ir, m);
   if (proto === "responses") return encodeIRToResponses(ir, m);
-  const body = encodeIRToChat(ir, m);
-  if (isGeminiModel(m)) demoteUnsignedToolCalls(body);
-  return body;
+  const effectiveIR = isGeminiModel(m) ? demoteUnsignedToolCalls(ir) : ir;
+  return encodeIRToChat(effectiveIR, m);
 }
 
 /** Gemini chat models hard-require thought_signature on functionCall parts. */
@@ -1052,68 +1390,92 @@ function isGeminiModel(model: string): boolean {
 }
 
 /**
- * Demote signature-less tool_call parts to plain-text recap so Gemini
- * answers without functionCall parts (no thought_signature needed).
- * Turns that carry a replayable signature are untouched.
+ * Demote signature-less tool_use and tool_result IR blocks to user/assistant
+ * recap blocks so Gemini answers without functionCall parts when no replayable
+ * Google thought_signature is present. Any images attached to a demoted
+ * tool_result are preserved as IRImageBlocks immediately after the
+ * `[tool result <id>]` IRTextBlock. Non-mutating (safe across failover).
  */
-function demoteUnsignedToolCalls(body: Record<string, unknown>): void {
-  const messages = body.messages;
-  if (!Array.isArray(messages)) return;
-  for (const raw of messages) {
-    const msg = asRecord(raw);
-    if (msg.role !== "assistant") continue;
-    const calls = msg.tool_calls;
-    if (!Array.isArray(calls) || calls.length === 0) continue;
-    const msgSig = asRecord(asRecord(msg.extra_content).google).thought_signature;
-    const hasSig =
-      typeof msgSig === "string" &&
-      (calls as unknown[]).every(
-        (c) => typeof asRecord(asRecord(c).extra_content).google === "object" || typeof msgSig === "string",
-      );
-    void hasSig;
-    // A replayable message-level signature covers every call in the turn.
-    if (typeof msgSig === "string" && msgSig) continue;
-    // Check per-call signatures.
-    let allSigned = true;
-    for (const c of calls as unknown[]) {
-      const s = asRecord(asRecord(asRecord(c).extra_content).google).thought_signature;
-      if (typeof s !== "string" || !s) {
-        allSigned = false;
-        break;
+export function demoteUnsignedToolCalls(ir: GatewayRequest): GatewayRequest {
+  const signedToolCallIds = new Set<string>();
+  let changed = false;
+
+  const pass1: IRMessage[] = ir.messages.map((m) => {
+    if (m.role !== "assistant") return m;
+    const hasToolUse = m.blocks.some((b) => b.type === "tool_use");
+    if (!hasToolUse) return m;
+    const hasGoogleSig = m.blocks.some(
+      (b) => b.type === "thinking" && b.format === "google" && typeof b.data === "string" && b.data.length > 0,
+    );
+    if (hasGoogleSig) {
+      for (const b of m.blocks) {
+        if (b.type === "tool_use" && b.id) signedToolCallIds.add(b.id);
+      }
+      return m;
+    }
+    changed = true;
+    const blocks: IRBlock[] = m.blocks.map((b) => {
+      if (b.type === "tool_use") {
+        return {
+          type: "text",
+          text: `[tool call ${b.name || "unknown"}: ${JSON.stringify(b.input ?? {})}]`,
+        };
+      }
+      return b;
+    });
+    return { role: "assistant", blocks };
+  });
+
+  const outMessages: IRMessage[] = [];
+  let prevWasDemoted = false;
+  for (const m of pass1) {
+    if (m.role !== "user") {
+      outMessages.push(m);
+      prevWasDemoted = false;
+      continue;
+    }
+    let msgDemoted = false;
+    const nextBlocks: IRBlock[] = [];
+    for (const b of m.blocks) {
+      if (b.type === "tool_result" && !signedToolCallIds.has(b.toolUseId)) {
+        msgDemoted = true;
+        changed = true;
+        const suffix = b.isError ? " [error]" : "";
+        nextBlocks.push({
+          type: "text",
+          text: `[tool result ${b.toolUseId}]: ${b.content}${suffix}`,
+        });
+        if (b.images && b.images.length > 0) {
+          for (const img of b.images) {
+            nextBlocks.push({
+              type: "image",
+              url: img.url,
+              ...(img.mediaType ? { mediaType: img.mediaType } : {}),
+            });
+          }
+        }
+      } else {
+        nextBlocks.push(b);
       }
     }
-    if (allSigned) continue;
-    const parts: string[] = [];
-    if (typeof msg.content === "string" && msg.content) parts.push(msg.content);
-    for (const c of calls as unknown[]) {
-      const fn = asRecord(asRecord(c).function);
-      parts.push(`[tool call ${String(fn.name ?? "unknown")}: ${String(fn.arguments ?? "{}")}]`);
+    const prev = outMessages[outMessages.length - 1];
+    if (
+      prev &&
+      prev.role === "user" &&
+      (msgDemoted || prevWasDemoted) &&
+      !prev.blocks.some((x) => x.type === "tool_result") &&
+      !nextBlocks.some((x) => x.type === "tool_result")
+    ) {
+      prev.blocks = [...prev.blocks, ...nextBlocks];
+      prevWasDemoted = true;
+    } else {
+      outMessages.push(msgDemoted ? { role: "user", blocks: nextBlocks } : m);
+      prevWasDemoted = msgDemoted;
     }
-    msg.content = parts.join("\n");
-    delete msg.tool_calls;
   }
-  // A role:tool message without a matching functionCall part is an orphan
-  // function_response for Gemini (400 "Name cannot be empty"): fold orphan
-  // tool results into a neighboring user turn as plain text.
-  for (let i = 0; i < messages.length; i++) {
-    const m2 = asRecord(messages[i]);
-    if (m2.role !== "tool") continue;
-    const prev = asRecord(messages[i - 1]);
-    if (Array.isArray((prev as Record<string, unknown>).tool_calls)) continue;
-    const text = `[tool result ${String((m2 as Record<string, unknown>).tool_call_id ?? "")}]: ${String((m2 as Record<string, unknown>).content ?? "")}`;
-    if (i + 1 < messages.length) {
-      const next = asRecord(messages[i + 1]);
-      if (next.role === "user") {
-        next.content = typeof next.content === "string" && next.content ? `${next.content}\n${text}` : text;
-        messages.splice(i, 1);
-        i--;
-        continue;
-      }
-    }
-    // role:tool must not carry tool_call_id into a plain user message.
-    delete (m2 as Record<string, unknown>).tool_call_id;
-    m2.role = "user";
-  }
+
+  if (!changed) return ir;
+  return { ...ir, messages: outMessages };
 }
 
 // ---------------------------------------------------------------------------
