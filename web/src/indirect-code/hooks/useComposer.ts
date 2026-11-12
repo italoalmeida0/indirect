@@ -1,12 +1,29 @@
 import type { DaemonCommand, SkillChoiceWire } from "../daemon-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, type Setter } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onCleanup,
+  type Setter,
+} from "solid-js";
 import { REASONING_LEVELS, SLASH_COMMANDS } from "../constants";
 import { formatEffort, normalizeEffort } from "../utils/format";
 import { sanitizeUserText } from "../live";
 import { createMentions } from "./useMentions";
 import { slashCommand } from "../utils/composerTokens";
+import {
+  normalizeMidTurnSend,
+  type MidTurnDelivery,
+} from "../utils/settingsValidation";
 import { createAttachmentDraft } from "./useAttachmentDraft";
 import type { Transcript } from "./useTranscript";
+
+interface AcceptedReply {
+  queued: boolean;
+  delivery?: MidTurnDelivery;
+  interrupting?: boolean;
+}
 
 /** Composer: prompt, attachments, slash palette, and sending (extracted
  * verbatim from RemoteCodePage — collaborators via params). */
@@ -19,6 +36,7 @@ export function createComposer(opts: {
   getProjectId: () => string;
   getModel: () => string;
   getAvailableModels?: () => string[];
+  getDefaultMidTurnSend?: () => MidTurnDelivery;
   getOptions: () => {
     effort: string;
     mode: string;
@@ -50,8 +68,12 @@ export function createComposer(opts: {
   // Persist at the edit boundary. A session switch and an explicit write can
   // happen in one batch (session_created); a later restore must not erase it.
   const setInputPrompt: Setter<string> = (value) => {
-    const host = opts.getHostId(), sid = opts.getSessionId();
-    const previous = host === currentHost && sid === currentSid ? inputPrompt() : readLocalDraft(host, sid);
+    const host = opts.getHostId(),
+      sid = opts.getSessionId();
+    const previous =
+      host === currentHost && sid === currentSid
+        ? inputPrompt()
+        : readLocalDraft(host, sid);
     const text = typeof value === "function" ? value(previous) : value;
     currentHost = host;
     currentSid = sid;
@@ -71,23 +93,114 @@ export function createComposer(opts: {
   const attachments = createAttachmentDraft(opts);
   const { pendingAttachments, uploadOneAttachment } = attachments;
   const [sending, setSending] = createSignal(false);
+
+  // Mid-turn send mode: defaults to host setting (`mid_turn_send`), with a
+  // lightweight per-turn override controlled from the running composer pill.
+  const [midTurnOverride, setMidTurnOverride] = createSignal<{
+    host: string;
+    sid: string;
+    mode: MidTurnDelivery;
+  } | null>(null);
+  const [midTurnMenuOpen, setMidTurnMenuOpen] = createSignal(false);
+  const defaultMidTurnSend = () =>
+    normalizeMidTurnSend(opts.getDefaultMidTurnSend?.());
+  const midTurnDelivery = (): MidTurnDelivery => {
+    const ov = midTurnOverride();
+    if (!ov) return defaultMidTurnSend();
+    if (
+      !opts.isSessionRunning() ||
+      ov.host !== opts.getHostId() ||
+      ov.sid !== opts.getSessionId()
+    ) {
+      setMidTurnOverride(null);
+      return defaultMidTurnSend();
+    }
+    return ov.mode;
+  };
+  function setMidTurnDelivery(mode: MidTurnDelivery) {
+    const normalized = normalizeMidTurnSend(mode);
+    if (!opts.isSessionRunning() || normalized === defaultMidTurnSend()) {
+      setMidTurnOverride(null);
+      return;
+    }
+    setMidTurnOverride({
+      host: opts.getHostId(),
+      sid: opts.getSessionId(),
+      mode: normalized,
+    });
+  }
+
+  // Sync cleanly when the host default changes or when a turn finishes.
+  createEffect(
+    on(
+      defaultMidTurnSend,
+      () => {
+        if (!opts.isSessionRunning()) setMidTurnOverride(null);
+      },
+      { defer: true },
+    ),
+  );
+  createEffect(
+    on(
+      opts.isSessionRunning,
+      (running, prevRunning) => {
+        if (!running) {
+          setMidTurnMenuOpen(false);
+          if (prevRunning) setMidTurnOverride(null);
+        }
+      },
+      { defer: true },
+    ),
+  );
+
   let submissionEpoch = 0;
-  let promptReply: {id:string; resolve:(queued: boolean)=>void; reject:(error:Error)=>void} | null = null;
-  function notePromptReply(requestId: string | undefined, error?: string, queued = false) {
+  let promptReply: {
+    id: string;
+    resolve: (res: AcceptedReply) => void;
+    reject: (error: Error) => void;
+  } | null = null;
+  function notePromptReply(
+    requestId: string | undefined,
+    error?: string,
+    accepted:
+      | boolean
+      | {
+          queued?: boolean;
+          delivery?: MidTurnDelivery;
+          interrupting?: boolean;
+        } = false,
+  ) {
     if (!promptReply || promptReply.id !== requestId) return false;
     const reply = promptReply;
     promptReply = null;
-    if (error) reply.reject(new Error(error)); else reply.resolve(queued);
+    if (error) {
+      reply.reject(new Error(error));
+    } else if (typeof accepted === "boolean") {
+      reply.resolve({
+        queued: accepted,
+        ...(accepted ? { delivery: "queue" } : {}),
+      });
+    } else {
+      reply.resolve({
+        queued: !!accepted?.queued,
+        delivery: accepted?.delivery,
+        interrupting: accepted?.interrupting,
+      });
+    }
     return true;
   }
   onCleanup(() => {
-    promptReply?.reject(new Error("Conversation closed before prompt confirmation"));
+    promptReply?.reject(
+      new Error("Conversation closed before prompt confirmation"),
+    );
     promptReply = null;
   });
 
   function clearAttachments() {
     submissionEpoch++;
-    promptReply?.reject(new Error("Conversation changed before prompt confirmation"));
+    promptReply?.reject(
+      new Error("Conversation changed before prompt confirmation"),
+    );
     promptReply = null;
     attachments.clearAttachments();
   }
@@ -95,7 +208,11 @@ export function createComposer(opts: {
   createEffect(() => {
     if (!opts.isOpen() || !opts.isHostOnline()) {
       attachments.cancelUploads();
-      promptReply?.reject(new Error("Connection lost before prompt confirmation. Check the conversation before sending again."));
+      promptReply?.reject(
+        new Error(
+          "Connection lost before prompt confirmation. Check the conversation before sending again.",
+        ),
+      );
       promptReply = null;
     }
   });
@@ -147,6 +264,8 @@ export function createComposer(opts: {
       currentHost = host;
       currentSid = sid;
       setInputPromptValue(readLocalDraft(host, sid));
+      setMidTurnOverride(null);
+      setMidTurnMenuOpen(false);
     }
   });
 
@@ -321,36 +440,71 @@ export function createComposer(opts: {
       const model = opts.getModel();
       const options = opts.getOptions();
       const cleanText = sanitizeUserText(text);
+      const delivery = midTurnDelivery();
       // Keep the draft until the daemon acknowledges admission. Session
       // status and the user bubble come exclusively from daemon events.
       // The actor also decides whether to queue: browser status may lag
       // behind Stop or the final session-file commit.
       const requestId = crypto.randomUUID();
       let timer: ReturnType<typeof setTimeout> | undefined;
-      const accepted = new Promise<boolean>((resolve, reject) => {
-        promptReply = {id:requestId, resolve, reject};
-        timer = setTimeout(() => notePromptReply(requestId, "Prompt confirmation timed out. Check the conversation before sending again."), 15000);
+      const accepted = new Promise<AcceptedReply>((resolve, reject) => {
+        promptReply = { id: requestId, resolve, reject };
+        timer = setTimeout(
+          () =>
+            notePromptReply(
+              requestId,
+              "Prompt confirmation timed out. Check the conversation before sending again.",
+            ),
+          15000,
+        );
       });
       opts.t.transcriptScroll.pin();
-      let queued = false;
+      let res: AcceptedReply = { queued: false };
       try {
-        opts.send({type:"prompt",requestId,sessionId:sid,text:cleanText,model,
-          yolo:options.access === "full",options,attachmentIds});
-        queued = await accepted;
+        opts.send({
+          type: "prompt",
+          requestId,
+          sessionId: sid,
+          text: cleanText,
+          model,
+          yolo: options.access === "full",
+          options,
+          attachmentIds,
+          midTurnDelivery: delivery,
+        });
+        res = await accepted;
       } finally {
         clearTimeout(timer);
         if (promptReply?.id === requestId) promptReply = null;
       }
-      if (epoch !== submissionEpoch || opts.isDisposed() || opts.getHostId() !== hostId || opts.getSessionId() !== sid) return;
-      if (queued) opts.toast("Queued — sends after agent finishes", "ok");
+      if (
+        epoch !== submissionEpoch ||
+        opts.isDisposed() ||
+        opts.getHostId() !== hostId ||
+        opts.getSessionId() !== sid
+      )
+        return;
+      if (res.interrupting || res.delivery === "interrupt") {
+        opts.toast("Interrupting turn — sending immediately", "ok");
+      } else if (res.delivery === "steer") {
+        opts.toast("Staged — sending on next step", "ok");
+      } else if (res.queued || res.delivery === "queue") {
+        opts.toast("Queued — sends after agent finishes", "ok");
+      }
       if (inputPrompt().trim() === text) setInputPrompt("");
       for (const p of pending) attachments.removePendingAttachment(p.key);
     } catch (error) {
-      if (!opts.isDisposed() && opts.getHostId() === hostId && opts.getSessionId() === sid) {
-        opts.toast(error instanceof Error ? error.message : "Could not send message", "err");
+      if (
+        !opts.isDisposed() &&
+        opts.getHostId() === hostId &&
+        opts.getSessionId() === sid
+      ) {
+        opts.toast(
+          error instanceof Error ? error.message : "Could not send message",
+          "err",
+        );
         opts.t.fetchSession(sid);
       }
-
     } finally {
       setSending(false);
     }
@@ -365,12 +519,17 @@ export function createComposer(opts: {
     mentions,
     addContextOpen,
     setAddContextOpen,
+    midTurnDelivery,
+    setMidTurnDelivery,
+    midTurnMenuOpen,
+    setMidTurnMenuOpen,
     slashIndex,
     setSlashIndex,
     slashMatches,
     pickSlash,
     dismissSlash: () => setSlashDismissed(inputPrompt()),
-    sendPrompt, notePromptReply,
+    sendPrompt,
+    notePromptReply,
   };
 }
 

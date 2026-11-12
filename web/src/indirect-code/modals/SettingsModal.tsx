@@ -123,6 +123,7 @@ export function SettingsModal() {
                   { id: "rc-set-appearance", label: "Appearance" },
                   { id: "rc-set-notifications", label: "Alerts" },
                   { id: "rc-set-updates", label: "Updates" },
+                  { id: "rc-set-mid-turn-send", label: "Queue" },
                   { id: "rc-set-runtime", label: "Runtime" },
                 ]}
               >

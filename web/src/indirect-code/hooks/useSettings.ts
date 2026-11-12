@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import type { AgentSettings, SkillConfig } from "../types";
 import type { RcConfig } from "../store/sessions";
+import { normalizeMidTurnSend } from "../utils/settingsValidation";
 
 const defaults: AgentSettings = {
   autoCompactPercent: 80,
@@ -16,6 +17,7 @@ const defaults: AgentSettings = {
   jailByDefault: false,
   insecureTls: false,
   httpProxy: "",
+  midTurnSend: "queue",
 };
 
 /** Settings edits are local drafts. Only the daemon mirror feeds the composer. */
@@ -68,21 +70,39 @@ export function createSettings(opts: {
   let saveRequest: { id: string; host: string; revision?: string } | undefined;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
+  function readMirrorSettings(doc: RcConfig | null): AgentSettings {
+    const s = doc?.settings || {};
+    return {
+      autoCompactPercent:
+        s.autoCompactPercent ??
+        s.autoCompactThreshold ??
+        s.auto_compact_threshold ??
+        80,
+      noAutoTitle: s.noAutoTitle ?? s.no_auto_title ?? false,
+      jailByDefault: s.jailByDefault ?? s.jail_by_default ?? false,
+      insecureTls: s.insecureTls ?? s.insecure ?? false,
+      httpProxy: s.httpProxy ?? s.http_proxy ?? "",
+      midTurnSend: normalizeMidTurnSend(s.midTurnSend ?? s.mid_turn_send),
+    };
+  }
+
+  const settingsDirty = () => {
+    const cur = daemonSettings();
+    const base = readMirrorSettings(configDoc());
+    return (
+      cur.autoCompactPercent !== base.autoCompactPercent ||
+      cur.noAutoTitle !== base.noAutoTitle ||
+      cur.jailByDefault !== base.jailByDefault ||
+      cur.insecureTls !== base.insecureTls ||
+      cur.httpProxy !== base.httpProxy ||
+      normalizeMidTurnSend(cur.midTurnSend) !== base.midTurnSend
+    );
+  };
+
   function readMirror() {
     const doc = configDoc();
-    const s = doc?.settings || {};
     batch(() => {
-      setDaemonSettings({
-        autoCompactPercent:
-          s.autoCompactPercent ??
-          s.autoCompactThreshold ??
-          s.auto_compact_threshold ??
-          80,
-        noAutoTitle: s.noAutoTitle ?? s.no_auto_title ?? false,
-        jailByDefault: s.jailByDefault ?? s.jail_by_default ?? false,
-        insecureTls: s.insecureTls ?? s.insecure ?? false,
-        httpProxy: s.httpProxy ?? s.http_proxy ?? "",
-      });
+      setDaemonSettings(readMirrorSettings(doc));
       setBaseRevision(doc?.revision);
     });
   }
@@ -110,7 +130,7 @@ export function createSettings(opts: {
   );
   onCleanup(stopPending);
 
-  function openSettings(_sectionId?: string) {
+  function openSettings(sectionId?: string) {
     if (!configDoc()) {
       opts.toast("Wait for the host settings to load", "err");
       return;
@@ -119,6 +139,14 @@ export function createSettings(opts: {
     setSettingsError("");
     setSettingsTab("general");
     setShowConfigModal(true);
+    if (sectionId && typeof document !== "undefined") {
+      const jump = () =>
+        document
+          .getElementById(sectionId)
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(jump);
+      else jump();
+    }
   }
 
   function cancelSettings() {
@@ -203,6 +231,7 @@ export function createSettings(opts: {
         jail_by_default: s.jailByDefault,
         insecure: s.insecureTls,
         http_proxy: s.httpProxy,
+        mid_turn_send: normalizeMidTurnSend(s.midTurnSend),
       },
     });
     return true;
@@ -265,6 +294,7 @@ export function createSettings(opts: {
     savingSettings,
     settingsError,
     settingsChanged,
+    settingsDirty,
     daemonSettings,
     setDaemonSettings,
     savedSkills,

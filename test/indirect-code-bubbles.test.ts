@@ -334,7 +334,7 @@ describe("Bug 33 — queue_update attachmentIds contract (web side)", () => {
   }
   const item: QueuedMessage = {
     id: "q1", text: "queued text", attachmentIds: ["a", "b"],
-    model: "m", yolo: false, createdAt: 1,
+    model: "m", yolo: false, createdAt: 1, delivery: "queue",
   };
   /** Session metadata only covers "a": "b" is stored on the daemon side. */
   const stored: Pick<StoredAttachment, "id" | "name" | "mime" | "size">[] = [

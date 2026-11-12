@@ -1,3 +1,6 @@
+import type { WireSessionOptions } from "./daemon-protocol";
+import type { MidTurnDelivery } from "./utils/settingsValidation";
+
 /** Local view types for the RemoteCode page (ephemeral state, non-wire). */
 
 export interface TurnActivity {
@@ -52,7 +55,9 @@ export interface QueuedMessage {
   attachmentIds: string[];
   model: string;
   yolo: boolean;
+  options?: WireSessionOptions;
   createdAt: number;
+  delivery: MidTurnDelivery;
 }
 
 export interface WorkspaceStatus {

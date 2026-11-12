@@ -18,6 +18,7 @@ import { HostCard } from "./components/HostCard";
 import { RemoteHints } from "./presentation";
 import { projectForDirectory } from "./paths";
 import { createMobileFlag } from "./utils/mobileFlag";
+import { normalizeMidTurnSend } from "./utils/settingsValidation";
 import { contextDisplay, type GatewayModel } from "./context";
 import { api } from "../api";
 import { Onboarding } from "./components/Onboarding";
@@ -400,6 +401,7 @@ export default function IndirectCodePage() {
     getSessionId: () => activeSessionId(),
     isOpen: () => relay.wsOpen(),
     isHostOnline: () => hosts.activeHost()?.status === "online",
+    isSessionRunning: () => transcript.sessionStatus() === "running",
     toast: notice.toast,
   });
 
@@ -461,6 +463,8 @@ export default function IndirectCodePage() {
     getProjectId: () => projects.activeProject()?.id || "",
     getModel: () => options.activeModel(),
     getAvailableModels: () => gatewayModels().map((m) => m.id),
+    getDefaultMidTurnSend: () =>
+      normalizeMidTurnSend(mirror.configDoc()?.settings?.mid_turn_send),
     getOptions: () => options.sessionOptions(),
     isSessionRunning: () => transcript.sessionStatus() === "running",
     isWorkspaceBlocked: () => workspace.workspaceBlocked(),
@@ -1235,7 +1239,11 @@ export default function IndirectCodePage() {
       }
 
       case "prompt_accepted": {
-        composer.notePromptReply(msg.requestId, undefined, msg.queued);
+        composer.notePromptReply(msg.requestId, undefined, {
+          queued: msg.queued,
+          delivery: msg.delivery,
+          interrupting: msg.interrupting,
+        });
         break;
       }
       case "error": {
@@ -1573,6 +1581,7 @@ export default function IndirectCodePage() {
     hosts.setHostMenuOpen(false);
     projects.setNewProjectMenuOpen(false);
     composer.setAddContextOpen(false);
+    composer.setMidTurnMenuOpen(false);
     setEffortMenuOpen(false);
     setModelMenuOpen(false);
     projects.setProjectMenuOpen(false);

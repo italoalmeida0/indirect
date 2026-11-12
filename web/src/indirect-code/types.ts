@@ -1,4 +1,5 @@
 import type { RcProject, RcSession } from "./store/sessions";
+import type { MidTurnDelivery } from "./utils/settingsValidation";
 
 /**
  * Interfaces
@@ -152,6 +153,7 @@ export interface AgentSettings {
   jailByDefault: boolean;
   insecureTls: boolean;
   httpProxy: string;
+  midTurnSend: MidTurnDelivery;
 }
 
 export interface SkillConfig {

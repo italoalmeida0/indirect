@@ -17,6 +17,7 @@ import solidReactivityAdapter from "@signaldb/solid";
 import createIndexedDBAdapter from "@signaldb/indexeddb";
 import { SyncManager } from "@signaldb/sync";
 import type { DaemonCommand, DaemonMessage, PullCommand, PullWireMessage } from "../daemon-protocol";
+import type { MidTurnDelivery } from "../utils/settingsValidation";
 
 /** One mirrored conversation summary (SessionSummary shape from the daemon). */
 export interface RcSession {
@@ -69,7 +70,10 @@ export interface RcConfig {
   lastSelection?: { model: string; effort: string; mode?: string; access?: string; skills?: { name: string; usable?: string }[] };
   id: string;
   hostId: string;
-  settings?: Record<string, any>;
+  settings?: {
+    mid_turn_send?: MidTurnDelivery;
+    [key: string]: any;
+  };
   mcpServers?: Record<string, any>;
   skills?: Record<string, any>;
   /** Skill files the daemon could not load (one message per file). */

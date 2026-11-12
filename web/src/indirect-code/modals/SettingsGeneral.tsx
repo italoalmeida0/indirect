@@ -14,6 +14,7 @@ import {
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal, useUI } from "../ctx";
 import { pushSupported } from "../hooks/usePushSubscription";
+import { normalizeMidTurnSend, type MidTurnDelivery } from "../utils/settingsValidation";
 
 const THEME_OPTIONS: Array<{ value: ThemeMode; label: string }> = [
   { value: "light", label: "Light" },
@@ -34,6 +35,36 @@ const WIDTH_OPTIONS: Array<{
   { value: "narrow", label: "Narrow", px: "576px", caption: "Focused", colPct: "44%" },
   { value: "default", label: "Default", px: "768px", caption: "Balanced", colPct: "66%" },
   { value: "wide", label: "Wide", px: "1024px", caption: "Studio", colPct: "88%" },
+];
+
+const MID_TURN_SEND_OPTIONS: Array<{
+  value: MidTurnDelivery;
+  label: string;
+  badge: string;
+  icon: string;
+  description: string;
+}> = [
+  {
+    value: "queue",
+    label: "Add to queue",
+    badge: "Queue",
+    icon: "lucide:list-plus",
+    description: "Hold in queue until the turn finishes; promote anytime.",
+  },
+  {
+    value: "steer",
+    label: "Send on next step",
+    badge: "Next step",
+    icon: "lucide:corner-up-right",
+    description: "Stage automatically for the next AI step, with × to return to queue.",
+  },
+  {
+    value: "interrupt",
+    label: "Interrupt & send",
+    badge: "Interrupt",
+    icon: "lucide:zap",
+    description: "Cancel active thinking or tool call and send immediately.",
+  },
 ];
 
 const COMPACT_RULER_STOPS = [50, 65, 80, 95] as const;
@@ -431,6 +462,119 @@ function ColumnWidthPicker(props: {
   );
 }
 
+function MidTurnSendPicker(props: {
+  value: () => MidTurnDelivery;
+  onChange: (v: MidTurnDelivery) => void;
+}) {
+  let groupEl: HTMLDivElement | undefined;
+  const currentOpt = () =>
+    MID_TURN_SEND_OPTIONS.find((o) => o.value === props.value()) ??
+    MID_TURN_SEND_OPTIONS[0]!;
+
+  const onRadioKeyDown = (e: KeyboardEvent) => {
+    if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    const idx = MID_TURN_SEND_OPTIONS.findIndex((o) => o.value === currentOpt().value);
+    const delta = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : -1;
+    const nextIdx =
+      (idx + delta + MID_TURN_SEND_OPTIONS.length) % MID_TURN_SEND_OPTIONS.length;
+    const next = MID_TURN_SEND_OPTIONS[nextIdx]!;
+    props.onChange(next.value);
+    groupEl?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[nextIdx]?.focus();
+  };
+
+  return (
+    <div
+      id="rc-set-mid-turn-send"
+      data-setting="mid-turn-send"
+      class="rounded-panel border border-border bg-surface-subtle/55 p-3.5 space-y-3"
+    >
+      <div class="flex items-start sm:items-center justify-between gap-2.5 flex-wrap">
+        <div class="min-w-0">
+          <div class="text-xs font-medium text-fg">While agent is working</div>
+          <div class="mt-0.5 text-[11px] text-fg-muted">
+            Default action when you send a message during an active turn.
+          </div>
+        </div>
+        <Badge
+          tone={
+            currentOpt().value === "interrupt"
+              ? "amber"
+              : currentOpt().value === "steer"
+                ? "blue"
+                : "zinc"
+          }
+        >
+          {currentOpt().badge}
+        </Badge>
+      </div>
+
+      <div
+        ref={groupEl}
+        role="radiogroup"
+        aria-label="While agent is working"
+        onKeyDown={onRadioKeyDown}
+        class="grid grid-cols-1 sm:grid-cols-3 gap-2.5"
+      >
+        <For each={MID_TURN_SEND_OPTIONS}>
+          {(opt) => {
+            const active = () => currentOpt().value === opt.value;
+            const isWarn = opt.value === "interrupt";
+            return (
+              <button
+                type="button"
+                role="radio"
+                data-midturn-radio={opt.value}
+                aria-checked={active()}
+                tabIndex={active() ? 0 : -1}
+                onPointerDown={(e) => press(e.currentTarget)}
+                onClick={() => props.onChange(opt.value)}
+                class={`flex flex-col gap-2 rounded-control border p-2.5 text-left transition-colors cursor-pointer min-w-0 ${
+                  active()
+                    ? isWarn
+                      ? "border-warning bg-warning-subtle/40 text-fg"
+                      : "border-accent bg-accent-subtle/40 text-fg"
+                    : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle text-fg-secondary"
+                }`}
+              >
+                <div class="flex items-center justify-between gap-2 w-full">
+                  <span
+                    class={`inline-flex h-6 w-6 items-center justify-center rounded-md border shrink-0 transition-colors ${
+                      active()
+                        ? isWarn
+                          ? "border-warning/45 bg-warning-subtle text-warning"
+                          : "border-accent/45 bg-accent-subtle text-accent"
+                        : "border-border bg-surface-subtle text-fg-muted"
+                    }`}
+                  >
+                    <Iconify icon={opt.icon} size={13} />
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    class={`h-2 w-2 shrink-0 rounded-full transition-colors ${
+                      active()
+                        ? isWarn
+                          ? "bg-warning"
+                          : "bg-accent"
+                        : "border border-border-strong bg-transparent"
+                    }`}
+                  />
+                </div>
+                <div class="space-y-0.5 min-w-0">
+                  <div class="text-xs font-medium text-fg">{opt.label}</div>
+                  <p class="text-[11px] text-fg-muted leading-relaxed">
+                    {opt.description}
+                  </p>
+                </div>
+              </button>
+            );
+          }}
+        </For>
+      </div>
+    </div>
+  );
+}
+
 function AutoCompactGauge(props: {
   value: () => number;
   onChange: (pct: number) => void;
@@ -731,6 +875,8 @@ export function SettingsGeneralSection() {
   const hostStatus = () => hosts.activeHost?.()?.status;
   const du = ui.daemonUpdate;
   const compactPct = () => m.daemonSettings().autoCompactPercent ?? 80;
+  const midTurnSend = () =>
+    normalizeMidTurnSend(m.daemonSettings().midTurnSend);
 
   return (
     <div class="divide-y divide-border">
@@ -1030,13 +1176,20 @@ export function SettingsGeneralSection() {
       {/* 4. Advanced Runtime & Context Compaction */}
       <section id="rc-set-runtime" class="py-5 last:pb-1 space-y-4">
         <div>
-          <h3 class="text-sm font-medium text-fg">Advanced</h3>
+          <h3 class="text-sm font-medium text-fg">Runtime & messaging</h3>
           <p class="text-xs text-fg-muted mt-0.5">
-            Context compaction partition, approval defaults, TLS policy, and upstream proxy.
+            Mid-turn message handling, context compaction partition, approval defaults, TLS policy, and upstream proxy.
           </p>
         </div>
 
         <div class="space-y-4 text-xs">
+          <MidTurnSendPicker
+            value={midTurnSend}
+            onChange={(mode) =>
+              m.setDaemonSettings({ ...m.daemonSettings(), midTurnSend: mode })
+            }
+          />
+
           <AutoCompactGauge
             value={compactPct}
             onChange={(pct) =>
