@@ -275,21 +275,33 @@ export function createProjects(opts: {
     return !s.title.toLowerCase().includes(q) && s.cwd.toLowerCase().includes(q);
   }
   const [searchResults, setSearchResults] = createSignal<import("../viewTypes").SearchHit[]>([]);
-  let searchTimer: any = null;
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let searchSeq = 0;
+  let latestSearchReqId = "";
   // Debounced daemon full-text search (transcripts live on the host).
   function queueDaemonSearch(q: string) {
-    clearTimeout(searchTimer);
+    if (searchTimer != null) clearTimeout(searchTimer);
+    searchTimer = null;
     const query = q.trim();
     if (query.length < 2) {
+      latestSearchReqId = "";
       setSearchResults([]);
       return;
     }
+    const requestId = `search_${++searchSeq}`;
+    latestSearchReqId = requestId;
     searchTimer = setTimeout(() => {
-      if (opts.isOpen()) opts.send({ type: "search", query, limit: 30 });
+      searchTimer = null;
+      if (latestSearchReqId !== requestId) return;
+      if (opts.isOpen()) opts.send({ type: "search", query, limit: 30, requestId });
     }, 300);
   }
   function noteSearchResults(msg: SearchResultsEvent) {
-    if (typeof msg.query === "string" && msg.query.trim() !== sessionFilter().trim()) return;
+    if (msg.requestId) {
+      if (!latestSearchReqId || msg.requestId !== latestSearchReqId) return;
+    } else if (typeof msg.query === "string" && msg.query.trim() !== sessionFilter().trim()) {
+      return;
+    }
     const raw = Array.isArray(msg.results) ? msg.results : [];
     setSearchResults(
       raw.map((r: any) => ({
@@ -300,6 +312,7 @@ export function createProjects(opts: {
         snippet: r.snippet || "",
         matchCount: r.matchCount ?? 0,
         messageIdx: typeof r.messageIdx === "number" ? r.messageIdx : (typeof r.index === "number" ? r.index : undefined),
+        field: typeof r.field === "string" && r.field ? r.field : undefined,
       })),
     );
   }

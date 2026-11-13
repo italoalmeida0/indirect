@@ -39,6 +39,7 @@ export interface SearchHit {
   snippet: string;
   matchCount: number;
   messageIdx?: number;
+  field?: string;
 }
 
 export interface StoredAttachment {

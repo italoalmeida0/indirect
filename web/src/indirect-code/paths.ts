@@ -131,26 +131,75 @@ export function sessionTimeLabel(s: {status?: string; lastTurnStartedAt?: number
   return isLiveSession(s) ? sessionLiveKey(s) : sessionFinishedKey(s);
 }
 
+function parentComparableDir(cur: string): string {
+  const lastSlash = cur.lastIndexOf("/");
+  if (lastSlash < 0) return "";
+  if (lastSlash === 0) return cur === "/" ? "" : "/";
+  if (lastSlash === 2 && /^[a-z]:\//i.test(cur)) {
+    return cur.length === 3 ? "" : cur.slice(0, 3);
+  }
+  if (cur.startsWith("//") && lastSlash <= 1) return "";
+  return cur.slice(0, lastSlash);
+}
+
 /** Projects ordered by activity: each project ranks by the newest
- * session order key among its 10 most ordered sessions (live sessions
- * contribute their turn start, finished ones their turn end), falling
- * back to creation date when it has no sessions. */
-export function projectsByActivity<T extends {id:string; path:string; createdAt:number}>(projects:T[], sessions:{cwd:string; status?:string; updatedAt:number; lastTurnStartedAt?:number; lastTurnEndedAt?:number}[]): T[] {
-  const activity = new Map(projects.map((p) => [p.id, p.createdAt]));
-  const byProject = new Map<string, {status?:string; updatedAt:number; lastTurnStartedAt?:number; lastTurnEndedAt?:number}[]>();
+ * session order key among its sessions (live sessions contribute their
+ * turn start, finished ones their turn end), falling back to creation
+ * date when it has no sessions. Pre-normalizes project paths once so
+ * resolving S sessions across P projects runs in O(S + P log P). */
+export function projectsByActivity<
+  T extends { id: string; path: string; createdAt: number; protected?: boolean },
+>(
+  projects: T[],
+  sessions: {
+    cwd: string;
+    status?: string;
+    updatedAt: number;
+    lastTurnStartedAt?: number;
+    lastTurnEndedAt?: number;
+  }[],
+): T[] {
+  if (projects.length === 0) return [];
+  const home = projects.find((p) => p.protected);
+  const byComparablePath = new Map<string, T>();
+  const activity = new Map<string, number>();
+  for (const p of projects) {
+    activity.set(p.id, p.createdAt);
+    const comp = comparable(p.path);
+    if (comp && !byComparablePath.has(comp)) {
+      byComparablePath.set(comp, p);
+    }
+  }
   for (const session of sessions) {
-    const project = projectForDirectory(session.cwd, projects);
+    const cwd = session.cwd;
+    const expanded =
+      cwd === "" || cwd === "~"
+        ? home?.path || ""
+        : home && (cwd.startsWith("~/") || cwd.startsWith("~\\"))
+          ? home.path + cwd.slice(1)
+          : cwd;
+    const directory = comparable(expanded);
+    let matched: T | undefined;
+    if (directory) {
+      let cur = directory;
+      while (cur) {
+        const hit = byComparablePath.get(cur);
+        if (hit) {
+          matched = hit;
+          break;
+        }
+        cur = parentComparableDir(cur);
+      }
+    }
+    const project = matched || home;
     if (!project) continue;
-    const list = byProject.get(project.id) ?? [];
-    list.push(session);
-    byProject.set(project.id, list);
+    const rank = sessionTimeLabel(session);
+    const prev = activity.get(project.id) || 0;
+    if (rank > prev) activity.set(project.id, rank);
   }
-  for (const [id, list] of byProject) {
-    // Only the 10 most ordered sessions of the project count for its rank.
-    list.sort((a, b) => sessionTimeLabel(b) - sessionTimeLabel(a));
-    let rank = 0;
-    for (const s of list.slice(0, 10)) rank = Math.max(rank, sessionTimeLabel(s));
-    activity.set(id, Math.max(activity.get(id) || 0, rank));
-  }
-  return [...projects].sort((a,b) => (activity.get(b.id) || 0) - (activity.get(a.id) || 0) || a.id.localeCompare(b.id));
+  return [...projects].sort(
+    (a, b) =>
+      (activity.get(b.id) || 0) - (activity.get(a.id) || 0) ||
+      a.id.localeCompare(b.id),
+  );
 }

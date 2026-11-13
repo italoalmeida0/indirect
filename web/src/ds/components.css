@@ -1210,6 +1210,11 @@ html.theme-xfade body, html.theme-xfade body * {
   outline-offset: 2px;
 }
 
+/* ===== Composer layout containment ========================================= */
+.rc-composer {
+  contain: layout style;
+}
+
 /* ===== Reduced motion ====================================================== */
 @media (prefers-reduced-motion: reduce) {
   .ui-button, .ui-button-label, .ui-icon-button, .ui-field, .ui-segment, .ui-switch-track, .ui-switch-track::before, .ui-switch-thumb,

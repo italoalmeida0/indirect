@@ -162,6 +162,7 @@ export function HistoryView(props: HistoryViewProps) {
                   e.preventDefault();
                   if (props.sessionFilter()) {
                     props.setSessionFilter("");
+                    props.queueDaemonSearch("");
                     props.setSearchResults([]);
                   } else {
                     props.setHistoryView(false);
@@ -182,6 +183,7 @@ export function HistoryView(props: HistoryViewProps) {
                 type="button"
                 onClick={() => {
                   props.setSessionFilter("");
+                  props.queueDaemonSearch("");
                   props.setSearchResults([]);
                 }}
                 class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-surface-muted hover:text-fg cursor-pointer"
@@ -301,6 +303,11 @@ export function HistoryView(props: HistoryViewProps) {
                                       : "Unread update"
                                   }
                                 />
+                              </Show>
+                              <Show when={r.field}>
+                                <span class="rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] font-normal text-fg-muted">
+                                  {r.field}
+                                </span>
                               </Show>
                               <span class="font-mono text-[11px] text-fg-muted tabular-nums">
                                 {r.matchCount > 1 ? `${r.matchCount} hits · ` : ""}

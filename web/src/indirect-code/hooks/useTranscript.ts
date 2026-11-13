@@ -1,10 +1,16 @@
 import { createTranscriptOrder, type TranscriptCursor } from "../transcript/order";
-import { nextHistoryCursor } from "../transcript/history";
+import {
+  enforceSlidingTurnWindow,
+  MAX_WINDOW_TURNS,
+  nextHistoryCursor,
+  type HistoryCursor,
+} from "../transcript/history";
 import type { DaemonCommand } from "../daemon-protocol";
 import { batch, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { copyText } from "../../ds/primitives/clipboard";
 import { clearToolScrolls } from "../utils/scrollMemory";
+import { sharedBlobUrlCache } from "../utils/blobUrlCache";
 import { createTranscriptScroll } from "../scroll";
 import { createRenderBlockBuilder, latestShortTurnMessage } from "../transcript";
 import { elapsedLabel, messageText } from "../utils/format";
@@ -266,14 +272,86 @@ export function createTranscript(opts: {
   document.addEventListener("visibilitychange", onVisibility);
   onCleanup(() => document.removeEventListener("visibilitychange", onVisibility));
 
-  // Render blocks (reconciled store to preserve DOM identity across deltas)
+  // Render blocks (incrementally reconciled store: unchanged cached turns
+  // keep their exact store proxy without O(total_AST) deep walks).
   const buildRenderBlocks = createRenderBlockBuilder();
   const [renderState, setRenderState] = createStore<{ blocks: (RenderBlock & { id: string })[] }>({ blocks: [] });
+  let prevRawBlocks: (RenderBlock & { id: string })[] = [];
+  let prevRawById = new Map<string, RenderBlock & { id: string }>();
+  let prevProxyById = new Map<string, RenderBlock & { id: string }>();
   createEffect(() => {
     if (!pageVisible()) return;
-    const blocks = buildRenderBlocks(messages()).map((block) => ({ ...block, id: block.msg.id }));
+    const nextRaw = buildRenderBlocks(messages()) as (RenderBlock & { id: string })[];
     transcriptScroll.preserveReadingPosition();
-    setRenderState("blocks", reconcile(blocks, { key: "id", merge: true }));
+
+    let sameIds = nextRaw.length === prevRawBlocks.length;
+    if (sameIds) {
+      for (let i = 0; i < nextRaw.length; i++) {
+        const id = nextRaw[i].id || nextRaw[i].msg.id;
+        const prevId = prevRawBlocks[i].id || prevRawBlocks[i].msg.id;
+        if (id !== prevId) {
+          sameIds = false;
+          break;
+        }
+      }
+    }
+
+    if (sameIds) {
+      batch(() => {
+        for (let i = 0; i < nextRaw.length; i++) {
+          const block = nextRaw[i];
+          if (block === prevRawBlocks[i]) continue;
+          const blockWithId = block.id ? block : { ...block, id: block.msg.id };
+          setRenderState("blocks", i, reconcile(blockWithId, { merge: true }));
+          const id = blockWithId.id;
+          prevRawById.set(id, block);
+          prevProxyById.set(id, untrack(() => renderState.blocks[i]));
+        }
+      });
+      prevRawBlocks = nextRaw;
+      return;
+    }
+
+    const nextStoreList: (RenderBlock & { id: string })[] = new Array(nextRaw.length);
+    const nextRawMap = new Map<string, RenderBlock & { id: string }>();
+    const nextProxyMap = new Map<string, RenderBlock & { id: string }>();
+    const dirtyIndices: number[] = [];
+
+    for (let i = 0; i < nextRaw.length; i++) {
+      const block = nextRaw[i];
+      const id = block.id || block.msg.id;
+      const prevRaw = prevRawById.get(id);
+      const prevProxy = prevProxyById.get(id);
+      if (prevRaw === block && prevProxy) {
+        nextStoreList[i] = prevProxy;
+      } else if (prevProxy) {
+        nextStoreList[i] = prevProxy;
+        dirtyIndices.push(i);
+      } else {
+        nextStoreList[i] = block.id ? block : { ...block, id };
+      }
+      nextRawMap.set(id, block);
+    }
+
+    batch(() => {
+      setRenderState("blocks", nextStoreList);
+      for (let k = 0; k < dirtyIndices.length; k++) {
+        const idx = dirtyIndices[k];
+        const block = nextRaw[idx];
+        const blockWithId = block.id ? block : { ...block, id: block.msg.id };
+        setRenderState("blocks", idx, reconcile(blockWithId, { merge: true }));
+      }
+      untrack(() => {
+        for (let i = 0; i < nextRaw.length; i++) {
+          const id = nextRaw[i].id || nextRaw[i].msg.id;
+          nextProxyMap.set(id, renderState.blocks[i]);
+        }
+      });
+    });
+
+    prevRawBlocks = nextRaw;
+    prevRawById = nextRawMap;
+    prevProxyById = nextProxyMap;
   });
   const renderBlocks = () => renderState.blocks;
 
@@ -306,40 +384,57 @@ export function createTranscript(opts: {
    * Grows by whole blocks only (never +N bubbles mid-block). */
   const [sealedBudget, setSealedBudget] = createSignal(1);
   // Server-driven history pagination (turn blocks): the daemon sends the
-  // tail block plus a cursor; older blocks arrive via get_history.
+  // tail block plus a cursor; older/newer/around blocks arrive via get_history.
   // historyArmed starts FALSE so the initial top-scroll never auto-loads
   // (the button shows first; the first click arms scroll loading).
-  const [historyCursor, setHistoryCursor] = createSignal<{ oldestTurn: number; hasOlder: boolean; totalTurns: number } | null>(null);
+  const [historyCursor, setHistoryCursor] = createSignal<HistoryCursor | null>(null);
   const [historyArmed, setHistoryArmed] = createSignal(false);
   const [loadingOlder, setLoadingOlder] = createSignal(false);
+  const [loadingNewer, setLoadingNewer] = createSignal(false);
+  const [highlightedMsgIdx, setHighlightedMsgIdx] = createSignal<number | null>(null);
+  let highlightClearTimer: ReturnType<typeof setTimeout> | null = null;
+  function flashHighlightedMessage(msgIdx: number) {
+    if (highlightClearTimer != null) clearTimeout(highlightClearTimer);
+    setHighlightedMsgIdx(msgIdx);
+    highlightClearTimer = setTimeout(() => {
+      highlightClearTimer = null;
+      setHighlightedMsgIdx((cur) => (cur === msgIdx ? null : cur));
+    }, 2200);
+  }
   /**
    * Visible seals: the newest `sealedBudget` sealed blocks, by turn.
    * Messages are filtered to the visible turn range — the live tail
    * (anything past the newest seal) always renders. When nothing is
    * sealed yet (small session, pre-pagination), everything renders.
    */
-  const visibleTurnFloor = () => {
+  const visibleTurnFloor = createMemo(() => {
     const seals = sealedBlocks();
     if (seals.length === 0) return 0;
     const show = seals.slice(Math.max(0, seals.length - sealedBudget()));
     if (show.length === 0) return 0;
     return show[0].oldestTurn;
-  };
-  const visibleBlocks = () => {
+  });
+  const visibleBlocks = createMemo(() => {
     const floor = visibleTurnFloor();
     if (floor <= 0) return renderState.blocks;
+    const seals = sealedBlocks();
+    const newestSealTop = seals.length > 0 ? seals[seals.length - 1].newestTurn : 0;
     return renderState.blocks.filter((b) => {
       const t = typeof b.msg.turnIndex === "number" && b.msg.turnIndex > 0 ? b.msg.turnIndex : 0;
       // Unstamped (turn 0) system notices ride with the tail — always show.
       // Stamped blocks below the floor belong to hidden seals.
       // Blocks ABOVE the newest seal (live tail) always show.
       if (t <= 0) return true;
-      const seals = sealedBlocks();
-      const newestSealTop = seals.length > 0 ? seals[seals.length - 1].newestTurn : 0;
       if (newestSealTop > 0 && t > newestSealTop) return true;
       return t >= floor;
     });
-  };
+  });
+  const lastVisibleBlockId = createMemo(() => {
+    const vis = visibleBlocks();
+    if (vis.length === 0) return "";
+    const last = vis[vis.length - 1];
+    return last.id || last.msg.id;
+  });
   /** Sealed blocks not yet revealed (whole blocks, never bubbles). */
   const hiddenSeals = () => Math.max(0, sealedBlocks().length - sealedBudget());
   /** Reveal one more sealed block (whole turns, never mid-block). */
@@ -353,10 +448,17 @@ export function createTranscript(opts: {
     setSealedBudget(1);
   }
   function resetHistory() {
-    historyRequestId="";
+    historyRequestId = "";
+    pendingHistoryRequests.clear();
+    if (highlightClearTimer != null) {
+      clearTimeout(highlightClearTimer);
+      highlightClearTimer = null;
+    }
+    setHighlightedMsgIdx(null);
     setHistoryCursor(null);
     setHistoryArmed(false);
     setLoadingOlder(false);
+    setLoadingNewer(false);
     clearSeals();
   }
   /** Unified "load older": reveal one more sealed block, fetching it
@@ -380,90 +482,303 @@ export function createTranscript(opts: {
     requestOlderHistory();
   }
   const historyHasOlder = () => historyCursor()?.hasOlder ?? false;
+  const historyHasNewer = () => historyCursor()?.hasNewer ?? false;
   /** Oldest turn loaded locally (pagination frontier for balloons).
    * 0 when no cursor (full transcript) — everything renders. */
   const historyOldestTurn = () => historyCursor()?.oldestTurn ?? 0;
+  const historyNewestTurn = () => historyCursor()?.newestTurn ?? 0;
   const historyHiddenTurns = () => {
     const cur = historyCursor();
     if (!cur || !cur.hasOlder) return 0;
     return Math.max(0, cur.oldestTurn - 1);
   };
-  /** Ask the daemon for the next older turn block (cursor = oldest known turn). */
+  /** Ask the daemon for older/newer/around turn blocks. */
   let historyRequestId = "";
+  const pendingHistoryRequests = new Map<string, "older" | "newer" | "around">();
   function requestOlderHistory() {
     const sid = opts.getSessionId();
     const cur = historyCursor();
     if (!sid || !cur || !cur.hasOlder || cur.oldestTurn <= 0 || loadingOlder()) return;
     setLoadingOlder(true);
-    historyRequestId=crypto.randomUUID();
-    opts.send({ type: "get_history", sessionId: sid, beforeTurn: cur.oldestTurn, requestId:historyRequestId });
+    const reqId = crypto.randomUUID();
+    historyRequestId = reqId;
+    pendingHistoryRequests.set(reqId, "older");
+    opts.send({ type: "get_history", sessionId: sid, beforeTurn: cur.oldestTurn, requestId: reqId });
+  }
+  function requestNewerHistory() {
+    const sid = opts.getSessionId();
+    const cur = historyCursor();
+    if (!sid || !cur || !cur.hasNewer || loadingNewer()) return;
+    let afterTurn = typeof cur.newestTurn === "number" && cur.newestTurn > 0 ? cur.newestTurn : 0;
+    if (afterTurn <= 0) {
+      const msgs = untrack(messages);
+      for (let i = 0; i < msgs.length; i++) {
+        const t = msgs[i].turnIndex;
+        if (typeof t === "number" && t > afterTurn) afterTurn = t;
+      }
+    }
+    if (afterTurn <= 0) return;
+    setLoadingNewer(true);
+    const reqId = crypto.randomUUID();
+    pendingHistoryRequests.set(reqId, "newer");
+    opts.send({ type: "get_history", sessionId: sid, afterTurn, requestId: reqId });
+  }
+  function requestAroundHistory(aroundMsgIdx: number) {
+    const sid = opts.getSessionId();
+    if (!sid || aroundMsgIdx < 0) return;
+    pendingHistoryRequests.clear();
+    historyRequestId = "";
+    setLoadingOlder(false);
+    setLoadingNewer(false);
+    const reqId = crypto.randomUUID();
+    pendingHistoryRequests.set(reqId, "around");
+    pendingScrollMsgIdx = aroundMsgIdx;
+    opts.send({ type: "get_history", sessionId: sid, aroundMsgIdx, requestId: reqId });
+  }
+  function buildSealList(prev: SealedBlock[], rawMsgs: any[], history: any): SealedBlock[] {
+    if (!history || typeof history.oldestTurn !== "number") return prev;
+    const oldestTurn = history.oldestTurn;
+    const newestTurn = typeof history.newestTurn === "number" ? history.newestTurn : oldestTurn;
+    const firstIndex = typeof history.firstIndex === "number" ? history.firstIndex : 0;
+    if (prev.some((s) => s.oldestTurn === oldestTurn && s.newestTurn === newestTurn)) return prev;
+    const next = [...prev, {
+      oldestTurn,
+      newestTurn,
+      firstIndex,
+      msgCount: Array.isArray(rawMsgs) ? rawMsgs.length : 0,
+      hasOlderBelow: !!history.hasOlder,
+    }];
+    next.sort((a, b) => a.oldestTurn - b.oldestTurn);
+    return next;
   }
   /** Seal a daemon block: note its turn range + raw base. Duplicate
    * seals (same oldestTurn) are ignored — retries never double-note. */
   function sealBlock(rawMsgs: any[], history: any) {
     if (!history || typeof history.oldestTurn !== "number") return;
-    const oldestTurn = history.oldestTurn;
-    const newestTurn = typeof history.newestTurn === "number" ? history.newestTurn : oldestTurn;
-    const firstIndex = typeof history.firstIndex === "number" ? history.firstIndex : 0;
-    setSealedBlocks((prev) => {
-      if (prev.some((s) => s.oldestTurn === oldestTurn && s.newestTurn === newestTurn)) return prev;
-      const next = [...prev, {
-        oldestTurn, newestTurn, firstIndex,
-        msgCount: Array.isArray(rawMsgs) ? rawMsgs.length : 0,
-        hasOlderBelow: !!history.hasOlder,
-      }];
-      next.sort((a, b) => a.oldestTurn - b.oldestTurn);
-      return next;
-    });
+    setSealedBlocks((prev) => buildSealList(prev, rawMsgs, history));
   }
-  /** Prepend one daemon history page, keeping the viewport anchored. */
-  async function noteHistoryPage(rawMsgs: any[], history: any, requestId?: string, onApplied?:()=>void) {
-    if(requestId && requestId!==historyRequestId) return;
-    const version=contextVersion, sid=opts.getSessionId(), host=opts.getHostId();
+  function captureViewportAnchor(el: HTMLDivElement | null, keepIds: Set<string>): { id: string; top: number } | null {
+    if (!el) return null;
+    const containerTop = el.getBoundingClientRect?.()?.top ?? 0;
+    const nodes = el.querySelectorAll<HTMLElement>("[data-transcript-id]");
+    let fallback: { id: string; top: number } | null = null;
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      const id = node.getAttribute("data-transcript-id") || "";
+      if (!id || !keepIds.has(id)) continue;
+      const rect = node.getBoundingClientRect?.();
+      if (!rect) continue;
+      const relTop = rect.top - containerTop;
+      if (!fallback) fallback = { id, top: relTop };
+      if (rect.bottom >= containerTop) {
+        return { id, top: relTop };
+      }
+    }
+    return fallback;
+  }
+  function restoreViewportAnchor(el: HTMLDivElement | null, anchor: { id: string; top: number } | null): boolean {
+    if (!el || !anchor) return false;
+    const nodes = el.querySelectorAll<HTMLElement>("[data-transcript-id]");
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (node.getAttribute("data-transcript-id") === anchor.id) {
+        const containerTop = el.getBoundingClientRect?.()?.top ?? 0;
+        const rect = node.getBoundingClientRect?.();
+        if (!rect) return false;
+        const delta = (rect.top - containerTop) - anchor.top;
+        if (delta !== 0) {
+          el.scrollTop += delta;
+          return true;
+        }
+        return false;
+      }
+    }
+    return false;
+  }
+  /** Apply a daemon history page (`older`, `newer`, or `around`), anchoring scroll and capping window to 180 turns. */
+  async function noteHistoryPage(
+    rawMsgs: any[],
+    history: any,
+    requestId?: string,
+    onApplied?: () => void,
+    wireDirection?: "older" | "newer" | "around",
+  ) {
+    let direction: "older" | "newer" | "around";
+    if (requestId) {
+      const tracked = pendingHistoryRequests.get(requestId);
+      if (tracked) {
+        pendingHistoryRequests.delete(requestId);
+        direction = wireDirection || tracked;
+      } else if (requestId === historyRequestId) {
+        direction = wireDirection || "older";
+      } else {
+        return;
+      }
+    } else {
+      direction = wireDirection || (history?.targetMsgIdx != null ? "around" : "older");
+    }
+
+    const version = contextVersion;
+    const sid = opts.getSessionId();
+    const host = opts.getHostId();
     const base = typeof history?.firstIndex === "number" ? history.firstIndex : 0;
     const el = chatContainerRef();
-    const prevHeight = el ? el.scrollHeight : 0;
-    const prevTop = el ? el.scrollTop : 0;
-    const page = await normalizeAsync(rawMsgs, base);
-    // Stale guard: the container detached (session switched) while the
-    // worker ran — drop the page instead of splicing it anywhere.
-    if(version!==contextVersion || sid!==opts.getSessionId() || host!==opts.getHostId()) return;
-    if (!el?.isConnected) {
+    const rawPage = await normalizeAsync(rawMsgs, base);
+    const page = sharedBlobUrlCache.internMessages(rawPage, sid);
+    // Stale guard: session switched or attached container disconnected while worker ran.
+    if (version !== contextVersion || sid !== opts.getSessionId() || host !== opts.getHostId()) return;
+    if (el && !el.isConnected) {
       setLoadingOlder(false);
+      setLoadingNewer(false);
       return;
     }
-    setMessages((prev) => {
-      const known = new Set(prev.map((m) => m.id));
-      const merged = orderedMessages([...page.filter((m) => !known.has(m.id)), ...prev]);
-      return preserveTransientToolPreviews(prev, merged);
-    });
-    // Seal the arriving block (whole turns, newest last) and reveal
-    // exactly it: budget +1 exposes this seal; older seals stay hidden
-    // until further clicks. Seams always fall on turn boundaries.
-    sealBlock(rawMsgs, history);
-    setSealedBudget((n) => n + 1);
-    if (history && typeof history.oldestTurn === "number") {
-      setHistoryCursor({
-        oldestTurn: history.oldestTurn,
-        hasOlder: !!history.hasOlder,
-        totalTurns: history.totalTurns ?? 0,
+
+    if (direction === "around") {
+      transcriptScroll.detach();
+      const targetIdx = typeof history?.targetMsgIdx === "number"
+        ? history.targetMsgIdx
+        : pendingScrollMsgIdx;
+      pendingScrollMsgIdx = null;
+      batch(() => {
+        setMessages(orderedMessages(page));
+        setSealedBlocks(buildSealList([], rawMsgs, history));
+        setSealedBudget(1);
+        if (history && typeof history.oldestTurn === "number") {
+          setHistoryCursor({
+            oldestTurn: history.oldestTurn,
+            ...(typeof history.newestTurn === "number" ? { newestTurn: history.newestTurn } : {}),
+            hasOlder: !!history.hasOlder,
+            ...(typeof history.hasNewer === "boolean" ? { hasNewer: history.hasNewer } : {}),
+            totalTurns: history.totalTurns ?? 0,
+            ...(typeof history.firstIndex === "number" ? { firstIndex: history.firstIndex } : {}),
+            ...(typeof history.targetMsgIdx === "number" ? { targetMsgIdx: history.targetMsgIdx } : {}),
+          });
+        }
+        setLoadingOlder(false);
+        setLoadingNewer(false);
+        onApplied?.();
       });
-    } else {
-      setHistoryCursor((c) => (c ? { ...c, hasOlder: false } : c));
+      if (typeof targetIdx === "number") {
+        flashHighlightedMessage(targetIdx);
+        scrollToMessage(targetIdx);
+      }
+      return;
     }
-    setLoadingOlder(false);
-    onApplied?.();
-    // Anchor: the content above grew by (newHeight - prevHeight); shift
-    // scrollTop by the same delta so the reader stays on the same bubble.
+
+    if (direction === "newer") {
+      const prevMsgs = untrack(messages);
+      const prevSeals = untrack(sealedBlocks);
+      const prevCur = untrack(historyCursor);
+      const known = new Set(prevMsgs.map((m) => m.id));
+      const merged = preserveTransientToolPreviews(
+        prevMsgs,
+        orderedMessages([...prevMsgs, ...page.filter((m) => !known.has(m.id))]),
+      );
+      const rawSeals = buildSealList(prevSeals, rawMsgs, history);
+      const baseCursor: HistoryCursor = {
+        oldestTurn: prevCur?.oldestTurn ?? (typeof history?.oldestTurn === "number" ? history.oldestTurn : 1),
+        newestTurn: typeof history?.newestTurn === "number" ? history.newestTurn : prevCur?.newestTurn,
+        hasOlder: prevCur ? prevCur.hasOlder : !!history?.hasOlder,
+        hasNewer: typeof history?.hasNewer === "boolean" ? history.hasNewer : false,
+        totalTurns: typeof history?.totalTurns === "number" ? history.totalTurns : (prevCur?.totalTurns ?? 0),
+        ...(typeof prevCur?.firstIndex === "number" ? { firstIndex: prevCur.firstIndex } : {}),
+      };
+      const canSlide = untrack(sessionStatus) !== "running" || Boolean(baseCursor.hasNewer) || Boolean(prevCur?.hasNewer);
+      const slid = canSlide
+        ? enforceSlidingTurnWindow(merged, rawSeals, baseCursor, "newer", MAX_WINDOW_TURNS)
+        : { messages: merged, seals: rawSeals, cursor: baseCursor, prunedTurns: 0 };
+
+      const keepIds = new Set(slid.messages.map((m) => m.id));
+      const anchor = slid.prunedTurns > 0 ? captureViewportAnchor(el, keepIds) : null;
+      const prevHeight = el ? el.scrollHeight : 0;
+      const prevTop = el ? el.scrollTop : 0;
+
+      batch(() => {
+        setMessages(slid.messages);
+        setSealedBlocks(slid.seals);
+        setSealedBudget((n) => Math.min(Math.max(1, slid.seals.length), n + 1));
+        setHistoryCursor(slid.cursor);
+        setLoadingNewer(false);
+        onApplied?.();
+      });
+
+      if (slid.prunedTurns > 0 && el) {
+        if (!restoreViewportAnchor(el, anchor)) {
+          const shrunk = prevHeight - el.scrollHeight;
+          if (shrunk > 0) el.scrollTop = Math.max(0, prevTop - shrunk);
+        }
+      }
+      return;
+    }
+
+    // direction === "older"
+    const prevMsgs = untrack(messages);
+    const prevSeals = untrack(sealedBlocks);
+    const prevCur = untrack(historyCursor);
+    const known = new Set(prevMsgs.map((m) => m.id));
+    const merged = preserveTransientToolPreviews(
+      prevMsgs,
+      orderedMessages([...page.filter((m) => !known.has(m.id)), ...prevMsgs]),
+    );
+    const rawSeals = buildSealList(prevSeals, rawMsgs, history);
+    const baseCursor: HistoryCursor = history && typeof history.oldestTurn === "number"
+      ? {
+          oldestTurn: history.oldestTurn,
+          ...(typeof prevCur?.newestTurn === "number"
+            ? { newestTurn: prevCur.newestTurn }
+            : typeof history.newestTurn === "number"
+              ? { newestTurn: history.newestTurn }
+              : {}),
+          hasOlder: !!history.hasOlder,
+          ...(prevCur?.hasNewer ? { hasNewer: true } : typeof history.hasNewer === "boolean" ? { hasNewer: history.hasNewer } : {}),
+          totalTurns: history.totalTurns ?? prevCur?.totalTurns ?? 0,
+          ...(typeof history.firstIndex === "number" ? { firstIndex: history.firstIndex } : {}),
+        }
+      : {
+          oldestTurn: prevCur?.oldestTurn ?? 0,
+          ...(typeof prevCur?.newestTurn === "number" ? { newestTurn: prevCur.newestTurn } : {}),
+          hasOlder: false,
+          ...(prevCur?.hasNewer ? { hasNewer: true } : {}),
+          totalTurns: prevCur?.totalTurns ?? 0,
+        };
+
+    const canSlide = untrack(sessionStatus) !== "running" || Boolean(prevCur?.hasNewer);
+    const slid = canSlide
+      ? enforceSlidingTurnWindow(merged, rawSeals, baseCursor, "older", MAX_WINDOW_TURNS)
+      : { messages: merged, seals: rawSeals, cursor: baseCursor, prunedTurns: 0 };
+
+    if (slid.prunedTurns > 0) {
+      transcriptScroll.detach();
+    }
+    const keepIds = new Set(slid.messages.map((m) => m.id));
+    const anchor = captureViewportAnchor(el, keepIds);
+    const prevHeight = el ? el.scrollHeight : 0;
+    const prevTop = el ? el.scrollTop : 0;
+
+    batch(() => {
+      setMessages(slid.messages);
+      setSealedBlocks(slid.seals);
+      setSealedBudget((n) => (slid.prunedTurns > 0 ? Math.max(1, slid.seals.length) : n + 1));
+      setHistoryCursor(slid.cursor);
+      setLoadingOlder(false);
+      onApplied?.();
+    });
+
     if (el) {
-      const grown = el.scrollHeight - prevHeight;
-      if (grown > 0) el.scrollTop = prevTop + grown;
+      if (!restoreViewportAnchor(el, anchor)) {
+        const grown = el.scrollHeight - prevHeight;
+        if (grown > 0) el.scrollTop = prevTop + grown;
+      }
     }
   }
   function onChatScroll() {
     transcriptScroll.measure();
     const el = chatContainerRef();
-    if (!el || el.scrollTop >= 400) return;
+    if (!el) return;
+    if (historyHasNewer() && !loadingNewer() && el.scrollHeight - el.scrollTop - el.clientHeight < 400) {
+      requestNewerHistory();
+    }
+    if (el.scrollTop >= 400) return;
     // Button-first: nothing loads on scroll until the user opts in with
     // one click on the load-older button (arming resets on session
     // switch, like pin-at-bottom re-pinning). Without a click, scroll
@@ -491,8 +806,9 @@ export function createTranscript(opts: {
   }
   /** Raw daemon index of a render block's lead message. */
   function blockRawIdx(block: RenderBlock): number {
+    if (block.msg.srcIdx != null) return block.msg.srcIdx;
     const i = messages().findIndex((msg) => msg.id === block.msg.id);
-    return block.msg.srcIdx ?? (i >= 0 ? i : 0);
+    return i >= 0 ? i : 0;
   }
 
   /** Newest in-flight tool progress line inside a series (spinner sidecar). */
@@ -508,7 +824,27 @@ export function createTranscript(opts: {
   // --- History worker (normalize off the main thread) ---
   // Pages/snapshots above this size go through the worker; small ones
   // stay synchronous (no postMessage round-trip overhead).
-  const WORKER_MIN_MESSAGES = 50;
+  const WORKER_MIN_MESSAGES = 15;
+  const WORKER_MIN_CHARS = 16_384;
+  function shouldUseHistoryWorker(rawMsgs: any[]): boolean {
+    const len = rawMsgs?.length ?? 0;
+    if (len >= WORKER_MIN_MESSAGES) return true;
+    let chars = 0;
+    for (let i = 0; i < len; i++) {
+      const c = rawMsgs[i]?.content;
+      if (typeof c === "string") {
+        chars += c.length;
+        if (chars >= WORKER_MIN_CHARS) return true;
+      } else if (Array.isArray(c)) {
+        for (let j = 0; j < c.length; j++) {
+          const part = c[j];
+          chars += (typeof part?.text === "string" ? part.text.length : 0) + (typeof part?.data === "string" ? part.data.length : 0);
+          if (chars >= WORKER_MIN_CHARS) return true;
+        }
+      }
+    }
+    return false;
+  }
   let historyWorker: Worker | null = null;
   let historyWorkerSeq = 0;
   const historyWorkerWaiters = new Map<number, { resolve: (page: ChatMessage[]) => void; fallback: () => ChatMessage[] }>();
@@ -537,7 +873,7 @@ export function createTranscript(opts: {
   }
   /** Normalize via worker when large, synchronously when small/absent. */
   function normalizeAsync(rawMsgs: any[], indexBase: number): Promise<ChatMessage[]> | ChatMessage[] {
-    const w = (rawMsgs?.length ?? 0) >= WORKER_MIN_MESSAGES ? getHistoryWorker() : null;
+    const w = shouldUseHistoryWorker(rawMsgs) ? getHistoryWorker() : null;
     if (!w) return normalizeSessionMessages(rawMsgs, [], indexBase);
     return new Promise((resolve) => {
       const seq = ++historyWorkerSeq;
@@ -556,10 +892,16 @@ export function createTranscript(opts: {
   const pendingFetchIds = new Set<string>();
   let initialScrollSession = "";
   let pendingScrollMsgIdx: number | null = null;
-  function fetchSession(sessionId: string) {
+  function fetchSession(sessionId: string, fetchOpts?: { aroundMsgIdx?: number; aroundTurn?: number }) {
     const requestId = crypto.randomUUID();
     pendingFetchIds.add(requestId);
-    opts.send({ type: "get_session", sessionId, requestId });
+    opts.send({
+      type: "get_session",
+      sessionId,
+      requestId,
+      ...(typeof fetchOpts?.aroundMsgIdx === "number" ? { aroundMsgIdx: fetchOpts.aroundMsgIdx } : {}),
+      ...(typeof fetchOpts?.aroundTurn === "number" ? { aroundTurn: fetchOpts.aroundTurn } : {}),
+    });
   }
   /** Marks the session whose next full snapshot triggers initial scroll. */
   function beginLoad(sessionId: string, targetMsgIdx?: number) {
@@ -592,6 +934,48 @@ export function createTranscript(opts: {
     if (!tryScroll()) {
       setTimeout(tryScroll, 100);
     }
+  }
+  /** Same-session search/history jump: scroll immediately if loaded, else request centered window. */
+  function jumpToMessage(msgIdx: number) {
+    const msgs = untrack(messages);
+    if (msgs.length > 0) {
+      let minSrc = Infinity;
+      let maxSrc = -Infinity;
+      for (let i = 0; i < msgs.length; i++) {
+        const s = msgs[i].srcIdx;
+        if (typeof s === "number") {
+          if (s < minSrc) minSrc = s;
+          if (s > maxSrc) maxSrc = s;
+        }
+      }
+      if (minSrc <= maxSrc && msgIdx >= minSrc && msgIdx <= maxSrc) {
+        const vis = untrack(visibleBlocks);
+        const firstVisSrc = vis.length > 0 ? untrack(() => blockRawIdx(vis[0])) : minSrc;
+        if (msgIdx < firstVisSrc && hiddenSeals() > 0) {
+          setSealedBudget(Math.max(1, untrack(sealedBlocks).length));
+        }
+        flashHighlightedMessage(msgIdx);
+        scrollToMessage(msgIdx);
+        return;
+      }
+    }
+    requestAroundHistory(msgIdx);
+  }
+  /** Return from detached older history back to the live latest window and pin at bottom. */
+  function reloadLatest() {
+    const sid = opts.getSessionId();
+    if (!sid) return;
+    pendingHistoryRequests.clear();
+    historyRequestId = "";
+    setLoadingOlder(false);
+    setLoadingNewer(false);
+    setHistoryCursor(null);
+    clearSeals();
+    initialScrollSession = sid;
+    pendingScrollMsgIdx = null;
+    transcriptScroll.pin();
+    setIsAtBottom(true);
+    fetchSession(sid);
   }
   const transcriptOrder = createTranscriptOrder(() => { const sid=opts.getSessionId(); if(sid && opts.isOpen()) fetchSession(sid); });
   let contextVersion = 0;
@@ -659,6 +1043,24 @@ export function createTranscript(opts: {
 
   async function applySessionContent(sessionId: string, rawMsgs: any[], compaction?: any, history?: any, overlay?: any) {
     if(sessionId!==opts.getSessionId()) return;
+    // Preserve detached mid-history window against unsolicited background tail updates.
+    if (
+      untrack(historyHasNewer) &&
+      !history?.hasNewer &&
+      history?.targetMsgIdx == null &&
+      !overlay?.requestId &&
+      initialScrollSession !== sessionId &&
+      pendingScrollMsgIdx == null
+    ) {
+      batch(() => {
+        overlay?.applyMetadata?.();
+        if (compaction !== undefined) {
+          setSessionCompaction(compaction);
+          setCompactingText("");
+        }
+      });
+      return;
+    }
     const version = ++snapshotVersion;
     const host = opts.getHostId();
     const rawInput = rawMsgs;
@@ -677,15 +1079,15 @@ export function createTranscript(opts: {
     pendingSnapshot = null;
     const paged = history && typeof history.oldestTurn === "number";
     const base = paged && typeof history.firstIndex === "number" ? history.firstIndex : 0;
-    const normalized = !paged && (rawMsgs?.length ?? 0) < WORKER_MIN_MESSAGES
+    const normalized = !paged && !shouldUseHistoryWorker(rawMsgs)
       ? normalizeSessionMessages(rawMsgs, messages()) : normalizeAsync(rawMsgs, base);
     let tail: ChatMessage[];
     if (Array.isArray(normalized)) {
       // Small snapshots commit synchronously, before the next wire event.
-      tail = normalized;
+      tail = sharedBlobUrlCache.internMessages(normalized, sessionId);
     } else {
       pendingSnapshot = { replay: [] };
-      tail = await normalized;
+      tail = sharedBlobUrlCache.internMessages(await normalized, sessionId);
     }
     if (version !== snapshotVersion || sessionId !== opts.getSessionId() || host !== opts.getHostId()) return;
     const orderedReplay: (() => void)[] | null =
@@ -695,15 +1097,40 @@ export function createTranscript(opts: {
     if (orderedReplay===null) { pendingSnapshot=null; return; }
     const replay = overlay?.transcript ? orderedReplay : pendingSnapshot?.replay || [];
     pendingSnapshot = null;
+    const isAroundSnapshot = Boolean(history?.hasNewer || typeof history?.targetMsgIdx === "number");
+    if (isAroundSnapshot || pendingScrollMsgIdx != null) {
+      transcriptScroll.detach();
+    }
     batch(() => {
       overlay?.applyMetadata?.();
-      if (paged) {
+      if (isAroundSnapshot) {
+        setMessages(orderedMessages(tail));
+        setSealedBlocks(buildSealList([], rawMsgs, history));
+        setSealedBudget(1);
+        setHistoryCursor({
+          oldestTurn: history.oldestTurn,
+          ...(typeof history.newestTurn === "number" ? { newestTurn: history.newestTurn } : {}),
+          hasOlder: !!history.hasOlder,
+          ...(typeof history.hasNewer === "boolean" ? { hasNewer: history.hasNewer } : {}),
+          totalTurns: history.totalTurns ?? 0,
+          ...(typeof history.firstIndex === "number" ? { firstIndex: history.firstIndex } : {}),
+          ...(typeof history.targetMsgIdx === "number" ? { targetMsgIdx: history.targetMsgIdx } : {}),
+        });
+      } else if (paged) {
         setMessages((prev) => {
           return mergeTranscriptTail(prev, tail, base);
         });
         sealBlock(rawMsgs, history);
         setSealedBudget((n) => Math.max(n, sealedBlocks().length));
-      } else setMessages((prev) => preserveTransientToolPreviews(prev, tail));
+        if (!overlay?.applyMetadata) {
+          setHistoryCursor((prev) => nextHistoryCursor(prev, history, sealedBlocks()));
+        }
+      } else {
+        setMessages((prev) => preserveTransientToolPreviews(prev, tail));
+        if (!overlay?.applyMetadata) {
+          setHistoryCursor(null);
+        }
+      }
       restoreEditDraft();
       if (compaction !== undefined) {
         setSessionCompaction(compaction);
@@ -722,21 +1149,32 @@ export function createTranscript(opts: {
     } else {
       lastAppliedTranscriptSig = null;
     }
+    const targetMsg = pendingScrollMsgIdx ?? (typeof history?.targetMsgIdx === "number" ? history.targetMsgIdx : null);
     if (initialScrollSession === sessionId) {
       initialScrollSession = "";
-      if (pendingScrollMsgIdx != null) {
-        const target = pendingScrollMsgIdx;
+      if (targetMsg != null) {
         pendingScrollMsgIdx = null;
-        setTimeout(() => scrollToMessage(target), 50);
+        flashHighlightedMessage(targetMsg);
+        setTimeout(() => scrollToMessage(targetMsg), 50);
       } else {
-        if (transcriptScroll.isPinned()) scrollToBottom(true);
+        if (transcriptScroll.isPinned() && !untrack(historyHasNewer)) scrollToBottom(true);
       }
-    } else scrollToBottom();
+    } else if (targetMsg != null) {
+      pendingScrollMsgIdx = null;
+      flashHighlightedMessage(targetMsg);
+      setTimeout(() => scrollToMessage(targetMsg), 50);
+    } else if (!untrack(historyHasNewer)) {
+      scrollToBottom();
+    }
   }
   onCleanup(() => {
     snapshotVersion++;
     pendingSnapshot = null;
     lastAppliedTranscriptSig = null;
+    if (highlightClearTimer != null) {
+      clearTimeout(highlightClearTimer);
+      highlightClearTimer = null;
+    }
     historyWorker?.terminate();
     for (const waiter of historyWorkerWaiters.values()) waiter.resolve([]);
     historyWorkerWaiters.clear();
@@ -1022,7 +1460,18 @@ export function createTranscript(opts: {
     ]);
   }
 
+  const EDIT_DRAFT_DEBOUNCE_MS = 250;
+  let editDraftTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function cancelEditDraftTimer() {
+    if (editDraftTimer !== null) {
+      clearTimeout(editDraftTimer);
+      editDraftTimer = null;
+    }
+  }
+
   function persistEditDraft() {
+    cancelEditDraftTimer();
     if (!editSource || editSource.host !== opts.getHostId() || editSource.sid !== opts.getSessionId() || editingMsgIdx() !== editSource.idx) return;
     try {
       localStorage.setItem(`${editDraftPrefix()}${editSource.idx}`, JSON.stringify({
@@ -1032,13 +1481,45 @@ export function createTranscript(opts: {
     } catch {}
   }
 
+  function schedulePersistEditDraft() {
+    cancelEditDraftTimer();
+    editDraftTimer = setTimeout(() => {
+      editDraftTimer = null;
+      persistEditDraft();
+    }, EDIT_DRAFT_DEBOUNCE_MS);
+  }
+
+  function flushEditDraft() {
+    if (editDraftTimer !== null) {
+      persistEditDraft();
+    }
+  }
+
+  if (typeof document !== "undefined") {
+    const onVisibilityDraftFlush = () => {
+      if (document.visibilityState === "hidden") flushEditDraft();
+    };
+    document.addEventListener("visibilitychange", onVisibilityDraftFlush);
+    onCleanup(() => document.removeEventListener("visibilitychange", onVisibilityDraftFlush));
+  }
+  if (typeof window !== "undefined") {
+    const onPageHideDraftFlush = () => flushEditDraft();
+    window.addEventListener("pagehide", onPageHideDraftFlush);
+    onCleanup(() => window.removeEventListener("pagehide", onPageHideDraftFlush));
+  }
+  onCleanup(() => flushEditDraft());
+
   function clearEditDraft(idx: number) {
+    cancelEditDraftTimer();
     try {
       localStorage.removeItem(`${editDraftPrefix()}${idx}`);
       localStorage.removeItem(`${editDraftPrefix()}active`);
     } catch {}
   }
-  createEffect(() => { editingAttachments(); persistEditDraft(); });
+  createEffect(() => {
+    editingAttachments();
+    untrack(() => persistEditDraft());
+  });
 
   function restoreEditDraft() {
     if (editingMsgIdx() != null) {
@@ -1120,7 +1601,7 @@ export function createTranscript(opts: {
   }
   function updateEditingMsgText(text: string) {
     setEditingMsgText(text);
-    persistEditDraft();
+    schedulePersistEditDraft();
   }
   function cancelEditMsg() {
     batch(() => {
@@ -1134,6 +1615,7 @@ export function createTranscript(opts: {
     });
   }
   async function saveEditMsg(idx: number, m: ChatMessage, getModel: () => string, getYolo: () => boolean) {
+    flushEditDraft();
     const sid = opts.getSessionId();
     const host = opts.getHostId();
     const source = editSource;
@@ -1288,7 +1770,8 @@ export function createTranscript(opts: {
       setSessionStatus("running");
       setTurnActivity((turn) => !turn || turn.endedAt ? { startedAt: Date.now(), status: "running" } : turn);
     } else if (ev.type === "user_message") {
-      const user = normalizeSessionMessages([ev.message])[0];
+      const normalizedUser = normalizeSessionMessages([ev.message])[0];
+      const user = normalizedUser ? sharedBlobUrlCache.internMessages([normalizedUser], sessionId)[0] : undefined;
       if (user) setMessages((prev) => {
         const i = prev.findIndex((m) => m.id === user.id || (typeof ev.index === "number" && m.srcIdx === ev.index) || (m.role === "user" && m.srcIdx == null));
         const next = { ...user, id: ev.message?.id || (i >= 0 ? prev[i].id : `msg_${ev.index}`), srcIdx: ev.index, turnIndex: ev.turnIndex };
@@ -1454,6 +1937,7 @@ export function createTranscript(opts: {
    * cleaned up by their own domains; the page orchestrates).
    */
   function resetForSession() {
+    flushEditDraft();
     contextVersion++; transcriptOrder.reset();
     pendingFetchIds.clear();
     snapshotVersion++; pendingSnapshot = null;
@@ -1492,9 +1976,15 @@ export function createTranscript(opts: {
     setSessionUsage({});
     setSessionContexts({});
   }
-  /** Cleans up leftovers of sessions removed from the mirror (usage). */
+  /** Cleans up leftovers of sessions removed from the mirror (usage + contexts). */
   function purgeSession(sessionId: string) {
     setSessionUsage((prev) => {
+      if (!(sessionId in prev)) return prev;
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    setSessionContexts((prev) => {
       if (!(sessionId in prev)) return prev;
       const next = { ...prev };
       delete next[sessionId];
@@ -1503,21 +1993,29 @@ export function createTranscript(opts: {
   }
   function pushUserMessage(msg: ChatMessage) {
     lastAppliedTranscriptSig = null;
-    setMessages((prev) => [...prev, msg]);
+    const interned = sharedBlobUrlCache.internMessages([msg], opts.getSessionId())[0] || msg;
+    setMessages((prev) => [...prev, interned]);
   }
   /** Marks turn start in composer (status + activity + tail). */
   function beginTurn() {
     lastAppliedTranscriptSig = null;
+    const wasDetached = untrack(historyHasNewer);
     setSessionStatus("running");
     // Sending a message re-engages the pin: the reader expects to follow
     // their own turn even while reading further up.
     transcriptScroll.reset();
     setIsAtBottom(true);
-    // Collapse to the newest seal (fresh tail): the reader already
-    // reviewed the past before sending (ocultar, not descarregar —
-    // data AND seal notes stay, only the reveal budget shrinks).
-    // Older seals stay one click away on the load-older button.
-    setSealedBudget(1);
+    if (wasDetached) {
+      resetHistory();
+      const sid = opts.getSessionId();
+      if (sid && opts.isOpen()) fetchSession(sid);
+    } else {
+      // Collapse to the newest seal (fresh tail): the reader already
+      // reviewed the past before sending (ocultar, not descarregar —
+      // data AND seal notes stay, only the reveal budget shrinks).
+      // Older seals stay one click away on the load-older button.
+      setSealedBudget(1);
+    }
     setTurnActivity({ startedAt: Date.now(), status: "running" });
   }
 
@@ -1534,13 +2032,14 @@ export function createTranscript(opts: {
     copiedMsgId, copyMsg,
     thinkingStart, thinkingElapsed, thinkingIndex,
     stopThinkingTimer,
-    editingMsgIdx, editingMsgText, updateEditingMsgText,
+    editingMsgIdx, editingMsgText, updateEditingMsgText, flushEditDraft,
     isAtBottom,
     chatContainerRef, setChatContainerRef, chatContentRef, setChatContentRef,
-    transcriptScroll, scrollToBottom, scrollToMessage, pinAtBottom, onChatScroll,
-    renderBlocks, visibleBlocks, hiddenSeals, revealSeal,
-    loadOlder, historyHasOlder, historyHiddenTurns, historyOldestTurn, loadingOlder,
-    noteHistoryPage, requestOlderHistory,
+    transcriptScroll, scrollToBottom, scrollToMessage, jumpToMessage, reloadLatest, pinAtBottom, onChatScroll,
+    renderBlocks, visibleBlocks, lastVisibleBlockId, hiddenSeals, revealSeal,
+    loadOlder, historyCursor, historyHasOlder, historyHasNewer, historyHiddenTurns, historyOldestTurn, historyNewestTurn,
+    loadingOlder, loadingNewer, highlightedMsgIdx,
+    noteHistoryPage, requestOlderHistory, requestNewerHistory, requestAroundHistory,
     rawIdx, blockRawIdx, specialProgress,
     // session
     fetchSession, beginLoad, applySessionContent, applyUsage, applySnapshot,

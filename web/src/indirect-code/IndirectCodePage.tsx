@@ -32,6 +32,7 @@ import {
 } from "./modals/SimpleModals";
 import { PreviewModal } from "./modals/PreviewModal";
 import { noteWidgetData, invalidateWidgetSources } from "./components/generative-ui/widget-source";
+import { sharedBlobUrlCache } from "./utils/blobUrlCache";
 import { SettingsModal } from "./modals/SettingsModal";
 import {
   RemoteCodeProvider,
@@ -769,20 +770,22 @@ export default function IndirectCodePage() {
   function selectSession(id: string, messageIdx?: number) {
     if (creatingSession()) return;
     if (activeSessionId() === id && typeof messageIdx === "number") {
-      transcript.scrollToMessage(messageIdx);
+      transcript.jumpToMessage(messageIdx);
       return;
     }
-    if (activeSessionId() !== id) {
+    const prevSessionId = untrack(activeSessionId);
+    if (prevSessionId !== id) {
       setLiveSessionAttention(null);
     }
     closeMenus();
     options.resetPending();
     setDraftMode(false);
     transcript.resetForSession();
-    // Widget sources are per session and may have changed on disk while this
-    // session was away (widget_set from another client, recovery, …). Drop
-    // the cache so re-entering always re-fetches fresh sources.
-    invalidateWidgetSources(id);
+    // Evict widget sources on the departing session so switching conversations
+    // never leaks cached TSX sources in widget-source.ts.
+    if (prevSessionId && prevSessionId !== id) {
+      invalidateWidgetSources(prevSessionId);
+    }
     turnChanges.reset();
     transcript.beginLoad(id, messageIdx);
     setActiveSessionId(id);
@@ -801,17 +804,21 @@ export default function IndirectCodePage() {
       options.applySessionSkills(s.skills);
       if (typeof s.todosOpen === "boolean") transcript.applyTodosOpenFromRemote(s.todosOpen);
     }
-    transcript.fetchSession(id);
+    transcript.fetchSession(id, typeof messageIdx === "number" ? { aroundMsgIdx: messageIdx } : undefined);
     turnChanges.requestBalloons();
   }
 
   // Open a centered draft without creating a conversation on the host.
   function startNewConversation(projectId?: string) {
     if (creatingSession()) return;
+    const prevSessionId = untrack(activeSessionId);
     closeMenus();
     options.resetPendingChoice();
     options.setEffortPreviewing(false);
     transcript.resetForSession();
+    if (prevSessionId) {
+      invalidateWidgetSources(prevSessionId);
+    }
     setLiveSessionAttention(null);
     setDraftMode(true);
     setHistoryView(false);
@@ -875,6 +882,8 @@ export default function IndirectCodePage() {
     background.purgeSession(id);
     review.purgeSessionFiles(id);
     queue.purgeQueue(id);
+    invalidateWidgetSources(id);
+    sharedBlobUrlCache.evictSession(id);
     // Local drafts (composer + inline edits) live only in this browser:
     // drop them together with the session trace.
     try {
@@ -1107,9 +1116,15 @@ export default function IndirectCodePage() {
       case "session_content": {
         if (msg.sessionId !== activeSessionId()) break;
         if ((msg as any).page) {
-          transcript.noteHistoryPage(msg.messages || [], (msg as any).history, (msg as any).requestId, () => {
-            if ((msg as any).fileBalloons) turnChanges.noteHistoryBalloons((msg as any).fileBalloons);
-          });
+          transcript.noteHistoryPage(
+            msg.messages || [],
+            (msg as any).history,
+            (msg as any).requestId,
+            () => {
+              if ((msg as any).fileBalloons) turnChanges.noteHistoryBalloons((msg as any).fileBalloons);
+            },
+            (msg as any).direction,
+          );
           break;
         }
         // Tail events (end-of-turn tail, edit/slash/truncate tail,
@@ -1117,6 +1132,11 @@ export default function IndirectCodePage() {
         // session_data: replace the authoritative tail and retain older pages.
         if ((msg as any).bgTasks) background.noteSessionTasks((msg as any).bgTasks, msg.sessionId);
         transcript.applySessionContent(msg.sessionId, msg.messages || [], msg.compaction, (msg as any).history, msg);
+        break;
+      }
+
+      case "blob_data": {
+        sharedBlobUrlCache.noteBlobData(msg as any);
         break;
       }
 
@@ -1471,6 +1491,7 @@ export default function IndirectCodePage() {
         transcript.resetForSession();
         transcript.resetCaches();
         background.reset();
+        sharedBlobUrlCache.clear();
         setLiveSessionAttention(null);
         setActiveSessionId("");
         projects.setActiveProjectId("");

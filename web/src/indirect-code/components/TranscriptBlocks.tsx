@@ -14,6 +14,7 @@ import { formatDurationSecs } from "../utils/format";
 import { useToolUnitModel } from "./tool/toolUnitModel";
 import { ToolUnitHeader } from "./tool/ToolUnitHeader";
 import { ToolBody } from "./tool/ToolBody";
+import { sharedBlobUrlCache } from "../utils/blobUrlCache";
 
 
 /** Reactive transcript state shared by aggregate rows. */
@@ -43,6 +44,8 @@ export interface TranscriptRenderCtx {
   bgOutput: () => Record<string, string>;
   /** 1s ticker while any job runs, for elapsed labels. */
   bgClock: () => number;
+  /** Optional daemon command sender for lazy CAS blob resolution (`get_blob`). */
+  send?: (payload: import("../daemon-protocol").DaemonCommand) => void;
 }
 
 /** Thinking as a tool-style row: header (label + timer, no icon) with an
@@ -84,7 +87,7 @@ function renderThinkingRow(
         />
         <span class={`truncate ${live() ? "ui-shimmer font-medium" : "text-fg-muted group-hover/tool:text-fg-secondary"}`}>{label()}</span>
       </button>
-      <DisclosureBody open={open()}>
+      <DisclosureBody open={open()} keepMounted={running()}>
         <div
           ref={(el) => onCleanup(followTail(el, () => open() && streaming()))}
           class="rc-markdown w-full text-xs leading-relaxed break-words overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] max-h-64 pl-4 py-1 text-fg-muted"
@@ -162,7 +165,7 @@ function renderTurnAggregate(
           )}
         </Show>
       </button>
-      <DisclosureBody open={open()}>
+      <DisclosureBody open={open()} keepMounted={running()}>
         <div class="ml-[6px] mt-1 mb-1.5 pl-3.5 border-l border-border/70 space-y-0.5">
           <For each={series.entries}>
             {(entry, ei) => {
@@ -232,16 +235,15 @@ function renderSingleAssistant(ctx: TranscriptRenderCtx, msg: ChatMessage) {
 
 function renderImageBlock(ctx: TranscriptRenderCtx, block: ContentBlock) {
   const src = () =>
-    block.imageData
-      ? `data:${block.imageMime || "image/jpeg"};base64,${block.imageData}`
-      : undefined;
+    sharedBlobUrlCache.resolveImageBlock(block, ctx.send, ctx.activeSession()?.id) ||
+    (block.imageData ? `data:${block.imageMime || "image/jpeg"};base64,${block.imageData}` : undefined);
   return (
     <Show
       when={src()}
       fallback={
         <div class="flex items-center gap-1.5 text-[11px] text-fg-muted border border-border/60 rounded-lg px-2 py-1">
           <Iconify icon="lucide:image" size={12} />
-          <span>[attached {block.text || "image"}]</span>
+          <span>{block.imageSha256 && ctx.send ? "Loading image…" : `[attached ${block.text || "image"}]`}</span>
         </div>
       }
     >
@@ -309,7 +311,7 @@ function renderToolSegs(ctx: TranscriptRenderCtx, msgId: string, units: () => To
                 />
                 <span class="truncate">{groupTitle(seg.cat, seg.units)}</span>
               </button></Show>
-              <DisclosureBody open={seg.units.length === 1 || open()}>
+              <DisclosureBody open={seg.units.length === 1 || open()} keepMounted={running()}>
                 <div class={seg.units.length > 1 ? "ml-[5px] border-l border-border/60 pl-3 space-y-0.5 mt-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
                   <For each={seg.units}>
                     {(u) => {
@@ -334,7 +336,7 @@ function renderToolUnit(ctx: TranscriptRenderCtx, msgId: string, u: ToolUnit, ui
   return (
     <div class="w-full">
       <ToolUnitHeader {...part} />
-      <DisclosureBody open={m.openBody()}>
+      <DisclosureBody open={m.openBody()} keepMounted={running()}>
         <ToolBody {...part} />
       </DisclosureBody>
     </div>

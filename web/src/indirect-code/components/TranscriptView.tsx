@@ -1,5 +1,5 @@
 import { MentionMenu } from "./MentionMenu";
-import { createMemo, For, Show } from "solid-js";
+import { batch, createMemo, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { CompactionBalloon } from "./CompactionBalloon";
 import { FileIcon } from "../presentation";
@@ -37,12 +37,12 @@ export function TranscriptView() {
   const compaction = () => t.sessionCompaction();
   const shouldShowCompactionBalloon = () =>
     Boolean(compaction()?.previousSummary);
-  const firstKeptBlockIdx = () => {
+  const firstKeptBlockIdx = createMemo(() => {
     const cp = compaction();
     if (!cp) return -1;
     const cut = cp.keepFrom ?? 0;
-    return t.visibleBlocks().findIndex((b) => t.blockRawIdx(b) >= cut);
-  };
+    return t.visibleBlocks().findIndex((b) => (b.msg.srcIdx ?? t.blockRawIdx(b)) >= cut);
+  });
   const renderCtx = (): TranscriptRenderCtx => ({
     renderBlocks: t.renderBlocks,
     sessionStatus: t.sessionStatus,
@@ -65,7 +65,9 @@ export function TranscriptView() {
     backgroundJobs: bg.sessionJobs,
     bgOutput: bg.output,
     bgClock: bg.clock,
+    send: h.send,
   });
+  let lastEditInputCaret: number | null = null;
   return (
 <>
 
@@ -145,8 +147,10 @@ export function TranscriptView() {
   <For each={t.visibleBlocks()}>
     {(block, bi) => {
       const msg = block.msg;
-      const isLast = () => bi() === t.visibleBlocks().length - 1;
+      const blockId = block.id || block.msg.id;
+      const isLast = () => blockId === t.lastVisibleBlockId();
       const rawIdx = () => t.blockRawIdx(block);
+      const isHighlighted = () => t.highlightedMsgIdx() === rawIdx();
       const isFirstKeptBlock = () => {
         if (!shouldShowCompactionBalloon()) return false;
         const keptIdx = firstKeptBlockIdx();
@@ -167,9 +171,12 @@ export function TranscriptView() {
             </div>
           </Show>
           <div
-            data-transcript-id={block.id || block.msg.id}
+            data-transcript-id={blockId}
             data-raw-idx={rawIdx()}
-            class={`group/msg flex flex-col w-full ${ui.convWidthClass()} mx-auto ${
+            data-highlighted={isHighlighted() ? "true" : undefined}
+            class={`group/msg flex flex-col w-full ${ui.convWidthClass()} mx-auto transition-colors duration-300 ${
+              isHighlighted() ? "rounded-2xl ring-1 ring-accent/40 bg-accent-subtle/20 p-1.5 -m-1.5" : ""
+            } ${
               msg.role === "user" && !isEditing() ? "items-end" : "items-start"
             }`}
           >
@@ -220,12 +227,28 @@ export function TranscriptView() {
                     onFocus={() => t.editMentions.setFocused(true)}
                     onSelect={(e) => t.editMentions.setCaret(e.currentTarget.selectionStart)}
                     onClick={(e) => t.editMentions.setCaret(e.currentTarget.selectionStart)}
-                    onKeyUp={(e) => t.editMentions.setCaret(e.currentTarget.selectionStart)}
+                    onKeyUp={(e) => {
+                      const pos = e.currentTarget.selectionStart;
+                      if (lastEditInputCaret === pos) {
+                        lastEditInputCaret = null;
+                        return;
+                      }
+                      lastEditInputCaret = null;
+                      t.editMentions.setCaret(pos);
+                    }}
                     onPaste={(e) => { const files = Array.from(e.clipboardData?.files || []); if (files.length) { e.preventDefault(); void t.editAttachments.handleFiles(files); } }}
                     onDragOver={(e) => e.preventDefault()}
                     onDrop={(e) => {e.preventDefault(); void t.editAttachments.handleFiles(Array.from(e.dataTransfer?.files || []));}}
                     value={t.editingMsgText()}
-                    onInput={(e) => {t.updateEditingMsgText(e.currentTarget.value); t.editMentions.setCaret(e.currentTarget.selectionStart);}}
+                    onInput={(e) => {
+                      const value = e.currentTarget.value;
+                      const pos = e.currentTarget.selectionStart;
+                      lastEditInputCaret = pos;
+                      batch(() => {
+                        t.updateEditingMsgText(value);
+                        t.editMentions.setCaret(pos);
+                      });
+                    }}
                     onBlur={() => {t.editMentions.setFocused(false);}}
                     onKeyDown={(e) => {
                       if (e.isComposing || t.editMentions.keyDown(e)) return;

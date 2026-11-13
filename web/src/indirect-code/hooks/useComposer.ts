@@ -64,11 +64,95 @@ export function createComposer(opts: {
   const [inputPrompt, setInputPromptValue] = createSignal("");
   let currentSid: string | null = null;
   let currentHost = "";
+  const DRAFT_DEBOUNCE_MS = 250;
+  let pendingDraft: { host: string; sid: string; text: string } | null = null;
+  let draftTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function draftKey(host: string, sid: string) {
+    return sid ? `llmgw-draft:${host}:${sid}` : `llmgw-draft:${host}:new`;
+  }
+
+  function writeDraftNow(host: string, sid: string, text: string) {
+    try {
+      if (text) localStorage.setItem(draftKey(host, sid), text);
+      else localStorage.removeItem(draftKey(host, sid));
+    } catch {}
+  }
+
+  function flushDraft() {
+    if (draftTimer !== undefined) {
+      clearTimeout(draftTimer);
+      draftTimer = undefined;
+    }
+    if (!pendingDraft) return;
+    const { host, sid, text } = pendingDraft;
+    pendingDraft = null;
+    writeDraftNow(host, sid, text);
+  }
+
+  function scheduleDraftPersist(
+    host: string,
+    sid: string,
+    text: string,
+    immediate = false,
+  ) {
+    if (
+      pendingDraft &&
+      (pendingDraft.host !== host || pendingDraft.sid !== sid)
+    ) {
+      flushDraft();
+    }
+    if (immediate || !text) {
+      if (draftTimer !== undefined) {
+        clearTimeout(draftTimer);
+        draftTimer = undefined;
+      }
+      pendingDraft = null;
+      writeDraftNow(host, sid, text);
+      return;
+    }
+    pendingDraft = { host, sid, text };
+    if (draftTimer !== undefined) clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => {
+      flushDraft();
+    }, DRAFT_DEBOUNCE_MS);
+  }
+
+  function readLocalDraft(host: string, sid: string): string {
+    if (pendingDraft && pendingDraft.host === host && pendingDraft.sid === sid) {
+      return pendingDraft.text;
+    }
+    try {
+      return localStorage.getItem(draftKey(host, sid)) || "";
+    } catch {
+      return "";
+    }
+  }
+
+  if (typeof document !== "undefined") {
+    const onVisibilityChange = () => flushDraft();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    onCleanup(() =>
+      document.removeEventListener("visibilitychange", onVisibilityChange),
+    );
+  }
+  if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", flushDraft);
+    onCleanup(() => window.removeEventListener("pagehide", flushDraft));
+  }
+  onCleanup(() => flushDraft());
+
   // Persist at the edit boundary. A session switch and an explicit write can
   // happen in one batch (session_created); a later restore must not erase it.
   const setInputPrompt: Setter<string> = (value) => {
     const host = opts.getHostId(),
       sid = opts.getSessionId();
+    if (
+      currentSid !== null &&
+      (host !== currentHost || sid !== currentSid)
+    ) {
+      flushDraft();
+    }
     const previous =
       host === currentHost && sid === currentSid
         ? inputPrompt()
@@ -77,10 +161,7 @@ export function createComposer(opts: {
     currentHost = host;
     currentSid = sid;
     setInputPromptValue(() => text);
-    try {
-      if (text) localStorage.setItem(draftKey(host, sid), text);
-      else localStorage.removeItem(draftKey(host, sid));
-    } catch {}
+    scheduleDraftPersist(host, sid, text, text === "");
     return text;
   };
   const mentions = createMentions({
@@ -168,20 +249,40 @@ export function createComposer(opts: {
   const [slashIndex, setSlashIndex] = createSignal(0);
   const [slashDismissed, setSlashDismissed] = createSignal("");
 
+  const NO_SLASH_MATCHES: (typeof SLASH_COMMANDS)[number][] = [];
+
   // Palette visibility rules: open only while the head token is a partial
   // prefix of some command. An exact match hides it (Enter will run the
   // command); typing args (space) or a non-matching token hides it too.
   const slashMatches = createMemo(() => {
-    const raw = inputPrompt().trim().toLowerCase();
-    if (slashDismissed() === inputPrompt() || !mentions.focused()) return [];
-    if (!raw.startsWith("/") || /\s/.test(raw)) return [];
-    if (SLASH_COMMANDS.some((sc) => sc.cmd === raw)) return [];
-    return SLASH_COMMANDS.filter((sc) => sc.cmd.startsWith(raw));
+    const rawInput = inputPrompt();
+    const len = rawInput.length;
+    let start = 0;
+    while (start < len && rawInput.charCodeAt(start) <= 32) start++;
+    if (start >= len || rawInput.charCodeAt(start) !== 47) {
+      return NO_SLASH_MATCHES;
+    }
+    if (!mentions.focused() || slashDismissed() === rawInput) {
+      return NO_SLASH_MATCHES;
+    }
+    let end = len;
+    while (end > start && rawInput.charCodeAt(end - 1) <= 32) end--;
+    for (let i = start + 1; i < end; i++) {
+      if (rawInput.charCodeAt(i) <= 32) return NO_SLASH_MATCHES;
+    }
+    const raw = rawInput.slice(start, end).toLowerCase();
+    if (SLASH_COMMANDS.some((sc) => sc.cmd === raw)) return NO_SLASH_MATCHES;
+    const matches = SLASH_COMMANDS.filter((sc) => sc.cmd.startsWith(raw));
+    return matches.length > 0 ? matches : NO_SLASH_MATCHES;
   });
-  // Selection resets on every keystroke so the focused row never goes stale.
+  // Selection resets only when slash matches are active or closing.
+  let hadSlashMatches = false;
   createEffect(() => {
-    inputPrompt();
-    setSlashIndex(0);
+    const count = slashMatches().length;
+    if (count > 0 || hadSlashMatches) {
+      setSlashIndex(0);
+    }
+    hadSlashMatches = count > 0;
   });
 
   // Accepts a palette pick: fills the composer with the full command and
@@ -204,23 +305,12 @@ export function createComposer(opts: {
     const sid = opts.getSessionId();
     const host = opts.getHostId();
     if (sid !== currentSid || host !== currentHost) {
+      flushDraft();
       currentHost = host;
       currentSid = sid;
       setInputPromptValue(readLocalDraft(host, sid));
     }
   });
-
-  function draftKey(host: string, sid: string) {
-    return sid ? `llmgw-draft:${host}:${sid}` : `llmgw-draft:${host}:new`;
-  }
-
-  function readLocalDraft(host: string, sid: string): string {
-    try {
-      return localStorage.getItem(draftKey(host, sid)) || "";
-    } catch {
-      return "";
-    }
-  }
 
   // Routes /commands: UI-backed ones are handled locally (modals, silent
   // setters); recognized transcript commands go to the daemon. Returns true when fully handled.
@@ -293,6 +383,7 @@ export function createComposer(opts: {
     const text = inputPrompt().trim();
     const sid = opts.getSessionId();
     const hostId = opts.getHostId();
+    flushDraft();
     // Slash fast-path: UI commands resolve locally, transcript ops go down.
     if (slashCommand(text)) {
       if (pendingAttachments().length) {
@@ -444,6 +535,7 @@ export function createComposer(opts: {
   return {
     inputPrompt,
     setInputPrompt,
+    flushDraft,
     ...attachments,
     clearAttachments,
     sending,

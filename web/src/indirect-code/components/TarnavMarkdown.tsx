@@ -700,9 +700,13 @@ export interface TarnavMarkdownProps {
   noNestedScroll?: boolean;
 }
 
-export function TarnavMarkdown(props: TarnavMarkdownProps) {
-  const disclosureActive = useDisclosureActive();
-  let host!: HTMLDivElement;
+/** Imperative/reactive controller for TarnavMarkdown host elements (sync Frame-0 for static historical content). */
+export function mountTarnavMarkdownHost(
+  initialHost: HTMLDivElement | undefined,
+  getProps: () => TarnavMarkdownProps,
+  disclosureActive: () => boolean = () => true,
+) {
+  let host = initialHost!;
   let view: ReturnType<typeof makeRenderer> | undefined;
   let p: Parser | undefined;
   let fed = "";
@@ -711,25 +715,26 @@ export function TarnavMarkdown(props: TarnavMarkdownProps) {
   let ended = false;
   let frame = 0;
   let highlightTimer: ReturnType<typeof setTimeout> | undefined;
-  let mounted = false;
+  let mounted = Boolean(initialHost);
   const renderOpts = (): TarnavRendererOptions => ({
     highlight: true,
     fileIcons: true,
-    noNestedScroll: props.noNestedScroll,
+    noNestedScroll: getProps().noNestedScroll,
   });
-  const visible = () => !document.hidden && disclosureActive() && props.active !== false;
+  const visible = () => !document.hidden && disclosureActive() && getProps().active !== false;
   function disposeView() { for (const dispose of view?.data.cleanup ?? []) dispose(); }
   function reset() {
     disposeView(); host.replaceChildren();
-    view = makeRenderer(host, renderOpts()); p = parser(view, { basic: props.mode === "basic" }); view.data.parser = p; fed = ""; previousCR = false; sourceLine = ""; ended = false;
+    view = makeRenderer(host, renderOpts()); p = parser(view, { basic: getProps().mode === "basic" }); view.data.parser = p; fed = ""; previousCR = false; sourceLine = ""; ended = false;
   }
-  function update() {
+  function update(syncFull = false) {
     frame = 0;
     clearTimeout(highlightTimer); highlightTimer = undefined;
-    if (!mounted || !visible()) return;
+    if (!mounted || !host || !visible()) return;
+    const props = getProps();
     const full = props.children || "";
     if (!p || !full.startsWith(fed) || (ended && full !== fed)) reset();
-    const end = Math.min(full.length, fed.length + 8192);
+    const end = syncFull ? full.length : Math.min(full.length, fed.length + 8192);
     if (end > fed.length) {
       const appended = full.slice(fed.length, end);
       // Normalize only the new slice; a CRLF pair can cross chunk boundaries.
@@ -764,12 +769,37 @@ export function TarnavMarkdown(props: TarnavMarkdownProps) {
     if (end < full.length) schedule();
     else if (Number.isFinite(retryIn)) highlightTimer = setTimeout(schedule, retryIn);
   }
-  function schedule() { if (!frame && visible()) frame = requestAnimationFrame(() => untrack(update)); }
-  createEffect(on(() => [props.children, props.streaming, props.active, disclosureActive()], () => {
-    if (mounted) schedule();
-  }));
+  function schedule() { if (!frame && visible()) frame = requestAnimationFrame(() => untrack(() => update(false))); }
+  function bindHost(el: HTMLDivElement) {
+    host = el;
+    mounted = true;
+    const props = getProps();
+    if (!props.streaming && visible() && (props.children || "").length > 0) {
+      untrack(() => update(true));
+    }
+  }
+  if (initialHost) {
+    bindHost(initialHost);
+  }
+  createEffect(on(() => {
+    const props = getProps();
+    return [props.children, props.streaming, props.active, disclosureActive()];
+  }, () => {
+    if (!mounted) return;
+    const props = getProps();
+    if (!props.streaming && !ended && fed.length === 0 && visible() && (props.children || "").length > 0) {
+      untrack(() => update(true));
+      return;
+    }
+    schedule();
+  }, { defer: true }));
   onMount(() => {
-    mounted = true; schedule();
+    mounted = true;
+    if (!ended) {
+      const props = getProps();
+      if (!props.streaming && visible() && (props.children || "").length > 0) untrack(() => update(true));
+      else schedule();
+    }
     void preloadCodeHighlight().then(() => { if (mounted) schedule(); });
     document.addEventListener("visibilitychange", schedule);
   });
@@ -777,6 +807,12 @@ export function TarnavMarkdown(props: TarnavMarkdownProps) {
     mounted = false; cancelAnimationFrame(frame); clearTimeout(highlightTimer); disposeView();
     document.removeEventListener("visibilitychange", schedule);
   });
-  return <div ref={(el) => (host = el)} class={cn(!props.embedded && "rc-markdown", props.class)}
+  return { bindHost, update, schedule };
+}
+
+export function TarnavMarkdown(props: TarnavMarkdownProps) {
+  const disclosureActive = useDisclosureActive();
+  const ctrl = mountTarnavMarkdownHost(undefined, () => props, disclosureActive);
+  return <div ref={ctrl.bindHost} class={cn(!props.embedded && "rc-markdown", props.class)}
     data-tarnav-markdown={props.mode ?? "full"} data-streaming-markdown />;
 }

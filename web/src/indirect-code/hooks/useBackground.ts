@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { createEffect, createSignal, onCleanup } from "solid-js";
 import type { DaemonCommand } from "../daemon-protocol";
 
 /**
@@ -303,6 +303,26 @@ export function createBackground(opts: {
     return out;
   }
 
+  function evictInactiveSessions(activeSid = opts.getSessionId()) {
+    setLiveBySession((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.length === 0) return prev;
+      if (activeSid && keys.length === 1 && keys[0] === activeSid) return prev;
+      if (!activeSid) return {};
+      const keep = prev[activeSid];
+      return keep ? { [activeSid]: keep } : {};
+    });
+  }
+
+  let trackedSid: string | null = null;
+  createEffect(() => {
+    const sid = opts.getSessionId();
+    if (trackedSid !== null && sid !== trackedSid) {
+      evictInactiveSessions(sid);
+    }
+    trackedSid = sid;
+  });
+
   function purgeSession(sid: string) {
     if (!sid) return;
     setBySession((prev) => {
@@ -327,5 +347,5 @@ export function createBackground(opts: {
     timer = undefined;
   }
 
-  return { sessionJobs, sessionContent, liveTail, running, clock, output, noteOutput, noteSessionTasks, noteSessionTaskEvent, stop, maybeStopClock, purgeSession, reset };
+  return { sessionJobs, sessionContent, liveTail, running, clock, output, noteOutput, noteSessionTasks, noteSessionTaskEvent, stop, maybeStopClock, evictInactiveSessions, purgeSession, reset };
 }

@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { batch, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { DaemonCommand, DaemonEvent } from "../daemon-protocol";
 import { activeMention, insertMention } from "../utils/composerTokens";
 
@@ -24,6 +24,7 @@ export function createMentions(opts: {
   const key = createMemo(() => JSON.stringify(token()));
   const open = () => !!token() && key() !== dismissed();
   let requestId = "";
+  let lastScope = "";
   let timer: ReturnType<typeof setTimeout> | undefined;
   createEffect(() => {
     const current = token(),
@@ -33,13 +34,30 @@ export function createMentions(opts: {
     key();
     clearTimeout(timer);
     requestId = "";
-    setFiles([]);
-    setIndex(0);
+    const scope = `${sid}\0${project}`;
+    if (!current) {
+      lastScope = scope;
+      batch(() => {
+        setFiles([]);
+        setIndex(0);
+        setError("");
+        setLoading(false);
+      });
+      return;
+    }
+    if (scope !== lastScope) {
+      lastScope = scope;
+      setFiles([]);
+      setIndex(0);
+    }
     setError("");
-    setLoading(false);
-    if (!current) return;
     if (!connected) {
-      setError("Reconnect the host to search files");
+      batch(() => {
+        setFiles([]);
+        setIndex(0);
+        setLoading(false);
+        setError("Reconnect the host to search files");
+      });
       return;
     }
     setLoading(true);
@@ -64,9 +82,13 @@ export function createMentions(opts: {
     if (msg.requestId !== requestId || !requestId) return;
     clearTimeout(timer);
     requestId = "";
-    setLoading(false);
-    setFiles(msg.files || []);
-    setError(msg.error || "");
+    const nextFiles = msg.files || [];
+    batch(() => {
+      setLoading(false);
+      setFiles(nextFiles);
+      setIndex(0);
+      setError(msg.error || "");
+    });
   }
   function pick(path: string) {
     const current = token();

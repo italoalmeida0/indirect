@@ -27,6 +27,8 @@ export interface ContentBlock {
   reasoning?: string;
   imageMime?: string;
   imageData?: string;
+  imageSha256?: string;
+  blobKey?: string;
   /** Structured Details forwarded by the daemon (web results, exit codes...). */
   toolDetails?: any;
 }
@@ -237,6 +239,7 @@ export interface PreviewFile {
   text?: string;
   dataUrl?: string;
   dataB64?: string;
+  blob?: Blob;
   size?: number;
   truncated?: boolean;
   fullText?: string;

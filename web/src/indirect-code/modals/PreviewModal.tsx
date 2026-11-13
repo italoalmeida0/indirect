@@ -124,7 +124,13 @@ export function PreviewModal() {
                       <span>{m.previewCopied() ? "Copied!" : "Copy Code"}</span>
                     </button>
                   </Show>
-                  <Show when={f().dataB64 != null}>
+                  <Show
+                    when={
+                      f().blob != null ||
+                      f().dataB64 != null ||
+                      f().dataUrl?.startsWith("blob:")
+                    }
+                  >
                     <button
                       type="button"
                       onClick={m.downloadPreviewFile}

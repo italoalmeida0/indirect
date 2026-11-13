@@ -99,6 +99,12 @@ export function createQueue(opts: {
       delete next[sessionId];
       return next;
     });
+    setQueueCollapsed((prev) => {
+      if (!(sessionId in prev)) return prev;
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
     if (sessionId === opts.getSessionId() && editingQueueId()) {
       setEditingQueueId(null);
       editDraft.clearAttachments();

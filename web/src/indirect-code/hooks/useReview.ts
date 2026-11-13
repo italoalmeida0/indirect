@@ -3,6 +3,18 @@ import { createEffect, createSignal, onCleanup } from "solid-js";
 import type { PreviewFile } from "../types";
 import type { AttachmentDataEvent } from "../daemon-protocol";
 import type { StoredAttachment } from "../viewTypes";
+import { base64ToBytes } from "../utils/blobUrlCache";
+
+export const PREVIEW_CACHE_MAX_BYTES = 8 * 1024 * 1024;
+
+export interface PreviewCacheItem {
+  name: string;
+  mime: string;
+  blob: Blob;
+  objectUrl: string;
+  byteLength: number;
+  text?: string;
+}
 
 /** Review of changes + file preview + session attachments (extracted
  * verbatim from RemoteCodePage — collaborators via params). */
@@ -55,6 +67,37 @@ export function createReview(opts: {
       };
     });
   }
+
+  function revokeEntry(item?: PreviewCacheItem) {
+    if (!item?.objectUrl) return;
+    try {
+      URL.revokeObjectURL(item.objectUrl);
+    } catch {}
+  }
+
+  // Fetched bytes cache for preview (attachmentId -> Blob + ObjectURL, capped at 8 MiB).
+  const [previewCache, setPreviewCache] = createSignal<
+    Record<string, PreviewCacheItem>
+  >({});
+
+  function clearPreviewCache() {
+    setPreviewCache((prev) => {
+      for (const item of Object.values(prev)) revokeEntry(item);
+      return {};
+    });
+  }
+
+  function pruneInactiveSessionFiles(activeSid = opts.getSessionId()) {
+    setSessionFiles((prev) => {
+      const keys = Object.keys(prev);
+      if (keys.length === 0) return prev;
+      if (!activeSid) return {};
+      if (keys.length === 1 && keys[0] === activeSid) return prev;
+      const keep = prev[activeSid];
+      return keep ? { [activeSid]: keep } : {};
+    });
+  }
+
   function purgeSessionFiles(sessionId: string) {
     setSessionFiles((prev) => {
       if (!(sessionId in prev)) return prev;
@@ -62,15 +105,31 @@ export function createReview(opts: {
       delete next[sessionId];
       return next;
     });
+    const prefix = `${sessionId}:`;
+    setPreviewCache((prev) => {
+      let changed = false;
+      const next: Record<string, PreviewCacheItem> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (k.startsWith(prefix)) {
+          changed = true;
+          revokeEntry(v);
+        } else {
+          next[k] = v;
+        }
+      }
+      return changed ? next : prev;
+    });
   }
 
-  // Fetched bytes cache for preview (attachmentId -> data).
-  const [previewCache, setPreviewCache] = createSignal<
-    Record<
-      string,
-      { name: string; mime: string; dataB64: string; text?: string }
-    >
-  >({});
+  let transientPreviewUrl: string | null = null;
+  function revokeTransientPreviewUrl() {
+    if (!transientPreviewUrl) return;
+    try {
+      URL.revokeObjectURL(transientPreviewUrl);
+    } catch {}
+    transientPreviewUrl = null;
+  }
+
   // File preview modal target.
   const [previewFile, setPreviewFileState] = createSignal<PreviewFile | null>(
     null,
@@ -78,6 +137,9 @@ export function createReview(opts: {
   function setPreviewFile(file: PreviewFile | null) {
     clearTimeout(previewTimer);
     pendingPreview = undefined;
+    if (!file || file.dataUrl !== transientPreviewUrl) {
+      revokeTransientPreviewUrl();
+    }
     setPreviewCopied(false);
     setShowTruncateInput(false);
     return setPreviewFileState(file);
@@ -88,24 +150,32 @@ export function createReview(opts: {
 
   function downloadPreviewFile() {
     const f = previewFile();
-    if (f?.dataB64 == null) {
+    if (!f || (!f.blob && f.dataB64 == null && !f.dataUrl?.startsWith("blob:"))) {
       opts.toast("Original bytes unavailable for download", "err");
       return;
     }
     try {
-      const bin = atob(f.dataB64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      const url = URL.createObjectURL(
-        new Blob([bytes as any], { type: f.mime }),
-      );
+      let url = "";
+      let shouldRevoke = false;
+      if (f.blob) {
+        url = URL.createObjectURL(f.blob);
+        shouldRevoke = true;
+      } else if (f.dataUrl?.startsWith("blob:")) {
+        url = f.dataUrl;
+      } else if (f.dataB64 != null) {
+        const bytes = base64ToBytes(f.dataB64);
+        url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: f.mime }));
+        shouldRevoke = true;
+      }
       const a = document.createElement("a");
       a.href = url;
       a.download = f.name;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      if (shouldRevoke) {
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
     } catch {
       opts.toast("Download failed", "err");
     }
@@ -153,13 +223,24 @@ export function createReview(opts: {
   }) {
     clearTimeout(previewTimer);
     pendingPreview = undefined;
-    if (a.objectUrl) {
+    revokeTransientPreviewUrl();
+    const blob =
+      a.dataB64 != null
+        ? new Blob([base64ToBytes(a.dataB64) as BlobPart], {
+            type: a.mime || "application/octet-stream",
+          })
+        : undefined;
+    if (a.objectUrl || (blob && a.mime.startsWith("image/"))) {
+      let dataUrl = a.objectUrl;
+      if (!dataUrl && blob) {
+        dataUrl = URL.createObjectURL(blob);
+        transientPreviewUrl = dataUrl;
+      }
       setPreviewFile({
         name: a.name,
         mime: a.mime,
-        dataUrl:
-          a.dataB64 != null ? b64ToDataUrl(a.mime, a.dataB64) : a.objectUrl,
-        dataB64: a.dataB64,
+        dataUrl,
+        blob,
         size: a.size,
       });
     } else {
@@ -167,15 +248,11 @@ export function createReview(opts: {
         name: a.name,
         mime: a.mime,
         text: a.text ?? "(still extracting...)",
-        dataB64: a.dataB64,
+        blob,
         size: a.size,
       });
     }
     setPreviewCopied(false);
-  }
-
-  function b64ToDataUrl(mime: string, b64: string) {
-    return `data:${mime || "application/octet-stream"};base64,${b64}`;
   }
 
   function openStoredPreview(sessionId: string, attachmentId: string) {
@@ -211,30 +288,19 @@ export function createReview(opts: {
       setPreviewFile({
         name,
         mime,
-        dataUrl: b64ToDataUrl(mime, cached.dataB64),
-        dataB64: cached.dataB64,
-        size: meta?.size,
+        dataUrl: cached.objectUrl,
+        blob: cached.blob,
+        size: meta?.size ?? cached.byteLength,
       });
       setPreviewCopied(false);
       return;
     }
-    let text = cached.text ?? "";
-    if (cached.text == null) {
-      try {
-        const bin = atob(cached.dataB64);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-      } catch {
-        text = "(could not decode file)";
-      }
-    }
     setPreviewFile({
       name,
       mime,
-      text,
-      dataB64: cached.dataB64,
-      size: meta?.size,
+      text: cached.text ?? "(could not decode file)",
+      blob: cached.blob,
+      size: meta?.size ?? cached.byteLength,
     });
     setPreviewCopied(false);
   }
@@ -244,19 +310,30 @@ export function createReview(opts: {
     | undefined;
   let previewTimer: ReturnType<typeof setTimeout> | undefined;
   let currentHost = "";
+  let currentSid: string | null = null;
   createEffect(() => {
     const host = opts.getHostId();
-    opts.getSessionId();
+    const sid = opts.getSessionId();
     clearTimeout(previewTimer);
     pendingPreview = undefined;
     setPreviewFile(null);
     if (host !== currentHost) {
       currentHost = host;
-      setPreviewCache({});
+      currentSid = sid;
+      clearPreviewCache();
       setSessionFiles({});
+    } else if (currentSid !== null && sid !== currentSid) {
+      currentSid = sid;
+      pruneInactiveSessionFiles(sid);
+    } else {
+      currentSid = sid;
     }
   });
-  onCleanup(() => clearTimeout(previewTimer));
+  onCleanup(() => {
+    clearTimeout(previewTimer);
+    revokeTransientPreviewUrl();
+    clearPreviewCache();
+  });
   function failPreview(requestId: string | undefined, message: string) {
     if (!requestId || pendingPreview?.requestId !== requestId) return false;
     clearTimeout(previewTimer);
@@ -279,17 +356,47 @@ export function createReview(opts: {
     clearTimeout(previewTimer);
     pendingPreview = undefined;
     const key = `${msg.sessionId}:${a.id}`;
+    const mime = String(a.mime || "application/octet-stream");
+    const bytes = base64ToBytes(a.data);
+    const byteLength = bytes.byteLength;
+    const blob = new Blob([bytes as BlobPart], { type: mime });
+    const objectUrl = URL.createObjectURL(blob);
+    let text: string | undefined = typeof a.text === "string" ? a.text : undefined;
+    if (text == null && !mime.startsWith("image/")) {
+      try {
+        text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      } catch {
+        text = "(could not decode file)";
+      }
+    }
     setPreviewCache((prev) => {
+      if (prev[key]) revokeEntry(prev[key]);
       const entries = Object.entries(prev).filter(([id]) => id !== key);
-      // Bound retained base64 data across a long browsing session.
-      let size = a.data.length;
-      const next: typeof prev = {};
-      for (const [id, value] of entries.reverse()) {
-        size += value.dataB64.length;
-        if (size > 24 * 1024 * 1024) break;
+      // Bound retained preview bytes to 8 MiB across browsing sessions.
+      let size = byteLength;
+      const kept: [string, PreviewCacheItem][] = [];
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const [id, value] = entries[i]!;
+        if (size + value.byteLength > PREVIEW_CACHE_MAX_BYTES) {
+          revokeEntry(value);
+          continue;
+        }
+        size += value.byteLength;
+        kept.push([id, value]);
+      }
+      const next: Record<string, PreviewCacheItem> = {};
+      for (let i = kept.length - 1; i >= 0; i--) {
+        const [id, value] = kept[i]!;
         next[id] = value;
       }
-      next[key] = { name: a.name, mime: a.mime, dataB64: a.data, text: a.text };
+      next[key] = {
+        name: a.name,
+        mime,
+        blob,
+        objectUrl,
+        byteLength,
+        text,
+      };
       return next;
     });
     openStoredPreview(msg.sessionId, a.id);
@@ -300,6 +407,7 @@ export function createReview(opts: {
     noteSessionFiles,
     addSessionFile,
     purgeSessionFiles,
+    pruneInactiveSessionFiles,
     previewCache,
     previewFile,
     setPreviewFile,

@@ -118,13 +118,29 @@ export function parseContentBlocks(m: any): ContentBlock[] {
       });
       return;
     }
-    // Image (Go ImageBlock {mime_type, data}) — render the real bytes.
-    if (typeof c.mime_type === "string" || c.type === "image") {
+    // Image (Go ImageBlock {mime_type, data, blobSha256/sha256}) — render inline or CAS blob.
+    if (
+      typeof c.mime_type === "string" ||
+      typeof c.mediaType === "string" ||
+      c.type === "image" ||
+      typeof c.blobSha256 === "string" ||
+      typeof c.blob_sha256 === "string"
+    ) {
+      const mime = c.mime_type || c.mediaType;
+      const sha =
+        typeof c.blobSha256 === "string" && c.blobSha256
+          ? c.blobSha256
+          : typeof c.blob_sha256 === "string" && c.blob_sha256
+            ? c.blob_sha256
+            : typeof c.sha256 === "string" && c.sha256
+              ? c.sha256
+              : undefined;
       blocks.push({
         type: "image",
-        text: c.mime_type || "image",
-        imageMime: c.mime_type,
-        imageData: typeof c.data === "string" ? c.data : undefined,
+        text: mime || "image",
+        imageMime: mime,
+        imageData: typeof c.data === "string" && c.data ? c.data : undefined,
+        ...(sha ? { imageSha256: sha } : {}),
       });
       return;
     }

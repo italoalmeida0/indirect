@@ -42,10 +42,20 @@ export interface SessionChoice {
 
 export type WireSessionOptions = Omit<SessionChoice, "model">;
 
+export interface HistoryWire {
+  oldestTurn: number;
+  newestTurn?: number;
+  hasOlder: boolean;
+  hasNewer?: boolean;
+  totalTurns: number;
+  firstIndex?: number;
+  targetMsgIdx?: number;
+}
+
 export type DaemonCommand = CommandBase &
   (
-  | { type: "get_session"; sessionId: string; requestId?: string }
-  | { type: "get_history"; sessionId: string; beforeTurn: number; requestId?: string }
+  | { type: "get_session"; sessionId: string; requestId?: string; aroundMsgIdx?: number; aroundTurn?: number }
+  | { type: "get_history"; sessionId: string; beforeTurn?: number; afterTurn?: number; aroundMsgIdx?: number; requestId?: string }
   | { type: "pull"; collection: string }
   | { type: "configure_session"; sessionId: string; model: string; options: WireSessionOptions }
   /** Granular skill edit: per-skill set/unset of active + usable plus a full
@@ -81,8 +91,9 @@ export type DaemonCommand = CommandBase &
   | { type: "upload_attachment"; requestId: string; sessionId: string; name: string; mime: string; data: string; text?: string }
   | { type: "search_files"; requestId: string; sessionId: string; projectId: string; query: string }
   | { type: "get_attachment"; sessionId: string; attachmentId: string }
+  | { type: "get_blob"; sha256: string; requestId?: string; sessionId?: string }
   | { type: "get_widget"; sessionId: string; requestId: string; widgetId: string }
-  | { type: "search"; query: string; limit: number }
+  | { type: "search"; query: string; limit: number; requestId?: string }
   | { type: "check_workspace"; requestId: string; sessionId: string; projectId?: string }
   | { type: "question_response"; sessionId: string; questionId: string; answers: string[][] }
   | { type: "convert_response"; sessionId: string; requestId: string; text?: string; error?: string }
@@ -151,14 +162,15 @@ export type DaemonEvent = EventBase &
     | { type: "turn_file_changes"; sessionId: string; live?: boolean; balloon?: WireRecord }
     | { type: "turn_changes"; sessionId: string; requestId?: string; balloons?: WireRecord[]; live?: WireRecord }
     | { type: "attachment_uploaded"; requestId?: string; sessionId?: string; attachment?: WireRecord }
-    | { type: "search_results"; query?: string; results?: WireRecord[] }
+    | { type: "search_results"; requestId?: string; query?: string; results?: WireRecord[] }
     | { type: "notice"; message?: string; level?: string }
     | { type: "file_matches"; requestId: string; sessionId?: string; files?: string[]; error?: string; truncated?: boolean }
     | { type: "attachment_data"; requestId?: string; sessionId: string; attachment?: WireRecord }
+    | { type: "blob_data"; requestId?: string; sessionId?: string; sha256?: string; mediaType?: string; mimeType?: string; data?: string; error?: string }
     | { type: "widget_data"; requestId?: string; sessionId?: string; widgetId?: string; widget?: WireRecord }
     | { type: "session_data"; requestId?: string; sessionId?: string; session?: WireRecord }
     | { type: "session_truncated"; sessionId?: string; keepIndex?: number }
-    | { type: "session_content"; sessionId?: string; messages?: unknown[]; compaction?: unknown }
+    | { type: "session_content"; sessionId?: string; requestId?: string; page?: boolean; direction?: "older" | "newer" | "around"; history?: HistoryWire; fileBalloons?: WireRecord[]; messages?: unknown[]; compaction?: unknown }
     | { type: "session_status"; sessionId?: string; status?: string; turn?: WireRecord }
     | { type: "daemon_update"; current?: string; available?: string; staged?: string; checkedAt?: number; autoUpdate?: boolean; mismatchWant?: string; mismatchGot?: string; mismatchAt?: number; error?: string }
     | { type: "update_failed"; reason?: string }

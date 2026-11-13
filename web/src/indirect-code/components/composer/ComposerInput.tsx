@@ -1,8 +1,29 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { batch, createEffect, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { MentionMenu } from "../MentionMenu";
 import { FileIcon } from "../../presentation";
+
+export function syncComposerHeight(el: HTMLTextAreaElement, text: string) {
+  if (!text) {
+    el.style.height = "";
+    el.style.overflowY = "hidden";
+    return;
+  }
+  const h = el.style.height;
+  if (
+    !text.includes("\n") &&
+    (h === "" || h === "36px") &&
+    el.scrollWidth <= el.clientWidth &&
+    (el.clientWidth === 0 || text.length * 7 <= el.clientWidth)
+  ) {
+    return;
+  }
+  el.style.height = "auto";
+  const sh = el.scrollHeight;
+  el.style.height = Math.min(sh, 160) + "px";
+  el.style.overflowY = sh > 160 ? "auto" : "hidden";
+}
 
 export function ComposerInput() {
   const c = useComposerCtx();
@@ -10,27 +31,16 @@ export function ComposerInput() {
   const m = useModal();
   const ui = useUI();
   let textareaRef: HTMLTextAreaElement | undefined;
+  let inputUpdatedCaret = false;
   const [dragActive, setDragActive] = createSignal(false);
-
-  const syncHeight = (el: HTMLTextAreaElement, text: string) => {
-    if (!text) {
-      el.style.height = "";
-      el.style.overflowY = "hidden";
-      return;
-    }
-    el.style.height = "auto";
-    const sh = el.scrollHeight;
-    el.style.height = Math.min(sh, 160) + "px";
-    el.style.overflowY = sh > 160 ? "auto" : "hidden";
-  };
 
   createEffect(() => {
     const text = c.inputPrompt();
     if (!textareaRef) return;
-    if (text && textareaRef.value !== text) {
+    if (textareaRef.value !== text) {
       textareaRef.value = text;
     }
-    syncHeight(textareaRef, text);
+    syncComposerHeight(textareaRef, text);
   });
 
   return (
@@ -120,12 +130,20 @@ export function ComposerInput() {
     onBlur={() => { c.mentions.setFocused(false); }}
     onSelect={(e) => c.mentions.setCaret(e.currentTarget.selectionStart)}
     onClick={(e) => c.mentions.setCaret(e.currentTarget.selectionStart)}
-    onKeyUp={(e) => c.mentions.setCaret(e.currentTarget.selectionStart)}
+    onKeyUp={(e) => {
+      if (inputUpdatedCaret) {
+        inputUpdatedCaret = false;
+        return;
+      }
+      c.mentions.setCaret(e.currentTarget.selectionStart);
+    }}
     onInput={(e) => {
       const el = e.currentTarget;
-      c.setInputPrompt(el.value);
-      c.mentions.setCaret(el.selectionStart);
-      syncHeight(el, el.value);
+      inputUpdatedCaret = true;
+      batch(() => {
+        c.setInputPrompt(el.value);
+        c.mentions.setCaret(el.selectionStart);
+      });
     }}
     onPaste={(e) => {
       const files: File[] = [];
@@ -158,6 +176,7 @@ export function ComposerInput() {
       } catch {}
     }}
     onKeyDown={(e) => {
+      inputUpdatedCaret = false;
       if (e.isComposing) return;
       if (c.mentions.keyDown(e)) return;
       if (c.slashMatches().length > 0) {
@@ -192,7 +211,6 @@ export function ComposerInput() {
         (!ui.isMobile() || e.ctrlKey || e.metaKey)
       ) {
         e.preventDefault();
-        if (textareaRef) syncHeight(textareaRef, "");
         c.sendPrompt();
       }
     }}
@@ -202,7 +220,6 @@ export function ComposerInput() {
       type="button"
       onClick={() => {
         c.setInputPrompt("");
-        if (textareaRef) syncHeight(textareaRef, "");
       }}
       class="shrink-0 mr-2.5 mt-2.5 inline-grid h-6 w-6 place-items-center rounded-full text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
       data-rc-tip="Clear input" aria-label="Clear input"

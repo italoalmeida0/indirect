@@ -95,34 +95,115 @@ export function withoutContinueNudges(messages: ChatMessage[]): ChatMessage[] {
     return !isSyntheticNudge(text);
   });
 }
+interface TodoActivityPassthroughEntry {
+  kind: "passthrough";
+  toolResultIds: string[];
+}
+
+interface TodoActivityTransformedEntry {
+  kind: "transformed";
+  depCallIds: string[];
+  depResults: (ContentBlock | undefined)[];
+  otherResultIds: string[];
+  otherResultInIds: boolean[];
+  out: ChatMessage | null;
+}
+
+type TodoActivityCacheEntry = TodoActivityPassthroughEntry | TodoActivityTransformedEntry;
+
+const todoActivityCache = new WeakMap<ChatMessage, TodoActivityCacheEntry>();
+
 /** Keep canonical messages untouched. Signal calls and results are always
  * internal; only successful summaries/completions become user-facing text. */
 export function withoutTodoActivity(messages: ChatMessage[]): ChatMessage[] {
-  const signalResults = new Map<string, ContentBlock>();
-  for (const message of messages) {
-    for (const block of message.blocks) {
-      if (block.type === "tool_result" && block.toolId) {
-        signalResults.set(block.toolId, block);
+  if (messages.length === 0) return [];
+
+  const ids = new Set<string>();
+  for (let i = 0; i < messages.length; i++) {
+    const blocks = messages[i].blocks;
+    for (let j = 0; j < blocks.length; j++) {
+      const b = blocks[j];
+      if (b.type === "tool_call" && b.toolName && SIGNAL_TOOL_NAMES.has(b.toolName) && b.toolId) {
+        ids.add(b.toolId);
       }
     }
   }
-  const ids = new Set(
-    messages.flatMap((m) =>
-      m.blocks
-        .filter((b) => b.type === "tool_call" && b.toolName && SIGNAL_TOOL_NAMES.has(b.toolName))
-        .map((b) => b.toolId)
-    )
-  );
-  return messages.flatMap((message) => {
+
+  const signalResults = new Map<string, ContentBlock>();
+  if (ids.size > 0) {
+    for (let i = 0; i < messages.length; i++) {
+      const blocks = messages[i].blocks;
+      for (let j = 0; j < blocks.length; j++) {
+        const block = blocks[j];
+        if (block.type === "tool_result" && block.toolId && ids.has(block.toolId)) {
+          signalResults.set(block.toolId, block);
+        }
+      }
+    }
+  }
+
+  const result: ChatMessage[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    const cached = todoActivityCache.get(message);
+    if (cached) {
+      if (cached.kind === "passthrough") {
+        let valid = true;
+        if (ids.size > 0) {
+          for (let k = 0; k < cached.toolResultIds.length; k++) {
+            if (ids.has(cached.toolResultIds[k])) {
+              valid = false;
+              break;
+            }
+          }
+        }
+        if (valid) {
+          result.push(message);
+          continue;
+        }
+      } else {
+        let valid = true;
+        for (let k = 0; k < cached.depCallIds.length; k++) {
+          const id = cached.depCallIds[k];
+          const curRes = id ? signalResults.get(id) : undefined;
+          if (curRes !== cached.depResults[k]) {
+            valid = false;
+            break;
+          }
+        }
+        if (valid) {
+          for (let k = 0; k < cached.otherResultIds.length; k++) {
+            if (ids.has(cached.otherResultIds[k]) !== cached.otherResultInIds[k]) {
+              valid = false;
+              break;
+            }
+          }
+        }
+        if (valid) {
+          if (cached.out) result.push(cached.out);
+          continue;
+        }
+      }
+    }
+
     let hadCompletion = message.hasCompletion || false;
     let hadSummary = message.hasSummary || false;
     let mutated = false;
     const newBlocks: ContentBlock[] = [];
-    for (const b of message.blocks) {
+    const depCallIds: string[] = [];
+    const depResults: (ContentBlock | undefined)[] = [];
+    const otherResultIds: string[] = [];
+    const otherResultInIds: boolean[] = [];
+
+    for (let j = 0; j < message.blocks.length; j++) {
+      const b = message.blocks[j];
       if (b.type === "tool_call" && b.toolName && COMPLETION_TOOL_NAMES.has(b.toolName)) {
         mutated = true;
-        const result = b.toolId ? signalResults.get(b.toolId) : undefined;
-        if (!result || result.isError) continue;
+        const callId = b.toolId || "";
+        const resBlock = callId ? signalResults.get(callId) : undefined;
+        depCallIds.push(callId);
+        depResults.push(resBlock);
+        if (!resBlock || resBlock.isError) continue;
         hadCompletion = true;
         let summaryText = "";
         try {
@@ -131,17 +212,23 @@ export function withoutTodoActivity(messages: ChatMessage[]): ChatMessage[] {
           summaryText = typeof candidate === "string" ? candidate : "";
         } catch {}
         if (summaryText.trim()) {
-          if (!newBlocks.some((existing) => existing.type === "text" && existing.text?.trim() === summaryText.trim()) &&
-            !message.blocks.some((existing) => existing.type === "text" && existing.text?.trim() === summaryText.trim())) {
-            newBlocks.push({ type: "text", text: summaryText.trim() });
+          const trimmed = summaryText.trim();
+          if (
+            !newBlocks.some((existing) => existing.type === "text" && existing.text?.trim() === trimmed) &&
+            !message.blocks.some((existing) => existing.type === "text" && existing.text?.trim() === trimmed)
+          ) {
+            newBlocks.push({ type: "text", text: trimmed });
           }
         }
         continue;
       }
       if (b.type === "tool_call" && b.toolName === "summary") {
         mutated = true;
-        const result = b.toolId ? signalResults.get(b.toolId) : undefined;
-        if (!result || result.isError) continue;
+        const callId = b.toolId || "";
+        const resBlock = callId ? signalResults.get(callId) : undefined;
+        depCallIds.push(callId);
+        depResults.push(resBlock);
+        if (!resBlock || resBlock.isError) continue;
         hadSummary = true;
         let forUser = "";
         try {
@@ -149,25 +236,58 @@ export function withoutTodoActivity(messages: ChatMessage[]): ChatMessage[] {
           forUser = typeof parsed?.for_user === "string" ? parsed.for_user : "";
         } catch {}
         if (forUser.trim()) {
-          if (!newBlocks.some((existing) => existing.type === "text" && existing.text?.trim() === forUser.trim()) &&
-            !message.blocks.some((existing) => existing.type === "text" && existing.text?.trim() === forUser.trim())) {
-            newBlocks.push({ type: "text", text: forUser.trim() });
+          const trimmed = forUser.trim();
+          if (
+            !newBlocks.some((existing) => existing.type === "text" && existing.text?.trim() === trimmed) &&
+            !message.blocks.some((existing) => existing.type === "text" && existing.text?.trim() === trimmed)
+          ) {
+            newBlocks.push({ type: "text", text: trimmed });
           }
         }
         continue;
       }
-      if (
-        (b.type === "tool_call" || b.type === "tool_result") &&
-        ((b.toolName && SIGNAL_TOOL_NAMES.has(b.toolName)) || (b.toolId && ids.has(b.toolId)))
-      ) {
-        mutated = true;
-        continue;
+      if (b.type === "tool_call" || b.type === "tool_result") {
+        const isNamedSignal = Boolean(b.toolName && SIGNAL_TOOL_NAMES.has(b.toolName));
+        if (isNamedSignal) {
+          mutated = true;
+          continue;
+        }
+        if (b.toolId) {
+          const inIds = ids.has(b.toolId);
+          otherResultIds.push(b.toolId);
+          otherResultInIds.push(inIds);
+          if (inIds) {
+            mutated = true;
+            continue;
+          }
+        }
       }
       newBlocks.push(b);
     }
-    if (!mutated) return [message];
-    if (newBlocks.length === 0 && message.blocks.length > 0) return [];
-    if (newBlocks.every((b) => b.type === "text" && !b.text?.trim())) return [];
-    return [{ ...message, blocks: newBlocks, hasCompletion: hadCompletion, hasSummary: hadSummary }];
-  });
+
+    if (!mutated) {
+      todoActivityCache.set(message, {
+        kind: "passthrough",
+        toolResultIds: otherResultIds,
+      });
+      result.push(message);
+      continue;
+    }
+
+    let out: ChatMessage | null = null;
+    if (!(newBlocks.length === 0 && message.blocks.length > 0) && !newBlocks.every((b) => b.type === "text" && !b.text?.trim())) {
+      out = { ...message, blocks: newBlocks, hasCompletion: hadCompletion, hasSummary: hadSummary };
+    }
+    todoActivityCache.set(message, {
+      kind: "transformed",
+      depCallIds,
+      depResults,
+      otherResultIds,
+      otherResultInIds,
+      out,
+    });
+    if (out) result.push(out);
+  }
+
+  return result;
 }

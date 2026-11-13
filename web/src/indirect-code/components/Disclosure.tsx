@@ -5,12 +5,15 @@ export { createDisclosure } from "./tool/toolUnitModel";
 export const DisclosureActive = createContext<() => boolean>(() => true);
 export const useDisclosureActive = () => useContext(DisclosureActive);
 
-/** Mount expensive details on first use, then hide them without losing DOM/scroll. */
-export function DisclosureBody(props: { open: boolean; class?: string; children: JSX.Element }) {
+/** Mount expensive details on first use; optionally release DOM when closed (`keepMounted={false}`). */
+export function DisclosureBody(props: { open: boolean; keepMounted?: boolean; class?: string; children: JSX.Element }) {
   const parentActive = useDisclosureActive();
   const [visited, setVisited] = createSignal(false);
-  createEffect(() => { if (props.open) setVisited(true); });
-  return <Show when={visited() || props.open}>
+  createEffect(() => {
+    if (props.open) setVisited(true);
+    else if (props.keepMounted === false) setVisited(false);
+  });
+  return <Show when={props.open || (props.keepMounted !== false && visited())}>
     <div class={props.class} style={{ display: props.open ? undefined : "none" }}><DisclosureActive.Provider value={() => props.open && parentActive()}>{props.children}</DisclosureActive.Provider></div>
   </Show>;
 }

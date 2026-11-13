@@ -280,7 +280,7 @@ function buildTurnBlocks(turnMsgs: ChatMessage[], turnKey: string): RenderBlock[
       : [...currentGroup];
     const entries = buildTurnEntries(groupMsgs);
     const leadMsg = groupMsgs[0] || textMsg!;
-    const blockId = textMsg ? textMsg.id : leadMsg.id;
+    const blockId = leadMsg.id;
 
     if (entries.length > 0) {
       blocks.push({
@@ -294,7 +294,8 @@ function buildTurnBlocks(turnMsgs: ChatMessage[], turnKey: string): RenderBlock[
         textMsg,
       });
     } else {
-      blocks.push({ kind: "single", turnKey, msg: textMsg || leadMsg });
+      const singleMsg = textMsg || leadMsg;
+      blocks.push({ kind: "single", id: singleMsg.id, turnKey, msg: singleMsg });
     }
     currentGroup = [];
   };
@@ -337,7 +338,18 @@ export function buildRenderBlocks(
     // message id covers legacy messages without a stamped turnIndex. Live
     // state is turn-scoped — consumers match this key, never block position.
     const turnKey = head.turnIndex != null ? `turn:${head.turnIndex}` : `msg:${head.id}`;
-    if (head.role === "user") { result.push({ kind: "single", turnKey, msg: head }); continue; }
+    if (head.role === "user") {
+      const cachedUser = cache?.get(head.id);
+      if (cachedUser && cachedUser.messages.length === 1 && cachedUser.messages[0] === head) {
+        result.push(...cachedUser.blocks);
+        nextCache.set(head.id, cachedUser);
+      } else {
+        const userBlock: RenderBlock = { kind: "single", id: head.id, turnKey, msg: head };
+        result.push(userBlock);
+        nextCache.set(head.id, { messages: [head], blocks: [userBlock] });
+      }
+      continue;
+    }
 
     let turnEnd = i;
     while (turnEnd + 1 < list.length && list[turnEnd + 1].role !== "user" &&

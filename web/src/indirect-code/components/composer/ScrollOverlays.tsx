@@ -11,16 +11,35 @@ export function ScrollOverlays() {
   createEffect(() => {const index = c.slashIndex(); slashList?.querySelectorAll("button")[index]?.scrollIntoView({block:"nearest"});});
   return (
 <>
-{/* Floating pin-at-bottom (unlocks on any scroll gesture) */}
-<Show when={!t.isAtBottom() && t.messages().length > 0}>
+{/* Detached older-history pill or floating pin-at-bottom */}
+<Show
+  when={t.historyHasNewer()}
+  fallback={
+    <Show when={!t.isAtBottom() && t.messages().length > 0}>
+      <div class="flex justify-center pb-2">
+        <button
+          type="button"
+          onPointerDown={(e) => press(e.currentTarget)}
+          onClick={() => t.pinAtBottom()}
+          class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+        >
+          <Iconify icon="lucide:pin" size={13} class="text-accent" />
+          <span>Pin at bottom</span>
+        </button>
+      </div>
+    </Show>
+  }
+>
   <div class="flex justify-center pb-2">
     <button
+      type="button"
+      data-history-jump-latest
       onPointerDown={(e) => press(e.currentTarget)}
-      onClick={() => t.pinAtBottom()}
-      class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+      onClick={() => t.reloadLatest()}
+      class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-normal bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
     >
-      <Iconify icon="lucide:pin" size={13} class="text-accent" />
-      <span>Pin at bottom</span>
+      <Iconify icon="lucide:arrow-down" size={13} class="text-accent" />
+      <span>Viewing older history · <span class="font-medium text-fg">Jump to latest</span></span>
     </button>
   </div>
 </Show>
