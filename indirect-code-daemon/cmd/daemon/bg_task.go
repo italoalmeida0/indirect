@@ -20,6 +20,8 @@ const (
 	bgLiveCap = 100 * 1024
 	// bgFinalCap bounds the persisted tail at terminal.
 	bgFinalCap = 50 * 1024
+	// maxTerminalBgTasks caps retained completed/failed/cancelled tasks in SessionRecord.
+	maxTerminalBgTasks = 64
 )
 
 // bgBuffer is the live RAM deque for one task: a chunk list with a byte
@@ -168,9 +170,11 @@ func upsertBgTask(rec *SessionRecord, task *BgTask) {
 			cp.Status = keep.Status
 		}
 		rec.BgTasks[i] = cp
+		pruneTerminalBgTasks(rec)
 		return
 	}
 	rec.BgTasks = append(rec.BgTasks, cp)
+	pruneTerminalBgTasks(rec)
 }
 
 // applyBgChunk appends output to a task, trimming the tail to capBytes.
@@ -229,6 +233,33 @@ func applyBgFinish(rec *SessionRecord, fin *BgFinish) {
 		t.DroppedLines += dl
 	}
 	rec.UpdatedAt = time.Now().UnixMilli()
+	pruneTerminalBgTasks(rec)
+}
+
+func pruneTerminalBgTasks(rec *SessionRecord) {
+	if rec == nil || len(rec.BgTasks) <= maxTerminalBgTasks {
+		return
+	}
+	termCount := 0
+	for i := range rec.BgTasks {
+		if rec.BgTasks[i].Status != BgStatusRunning && rec.BgTasks[i].Status != "" {
+			termCount++
+		}
+	}
+	if termCount <= maxTerminalBgTasks {
+		return
+	}
+	drop := termCount - maxTerminalBgTasks
+	out := make([]BgTask, 0, len(rec.BgTasks)-drop)
+	for i := range rec.BgTasks {
+		isTerm := rec.BgTasks[i].Status != BgStatusRunning && rec.BgTasks[i].Status != ""
+		if isTerm && drop > 0 {
+			drop--
+			continue
+		}
+		out = append(out, rec.BgTasks[i])
+	}
+	rec.BgTasks = out
 }
 
 func splitContent(s string) []string {

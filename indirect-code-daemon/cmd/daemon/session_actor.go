@@ -8,12 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/filetrack"
 	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/searchindex"
+	"indirect/indirect-code-daemon/packages/sessionstore"
 	"indirect/indirect-code-daemon/packages/skills"
 )
 
@@ -132,10 +135,12 @@ type sessionActor struct {
 	// same turn index (v1 resumeAgentTurn parity).
 	resumeSnap *workerSnapshot
 
-	lastProgress  int64  // unix milli, for watchdog
-	waitOp        string // expected blocking op (V2-001), e.g. "provider", "tool"
-	waitUntil     int64  // unix milli; > now = declared wait in effect
+	lastProgress  int64       // unix milli, for watchdog
+	waitOp        string      // expected blocking op (V2-001), e.g. "provider", "tool"
+	waitUntil     int64       // unix milli; > now = declared wait in effect
 	residentBytes int64
+	activeFlag    atomic.Bool // true when state is non-idle/non-orphaned (lock-free maintenance yield check)
+	search        *searchindex.Engine
 
 	// startWorker runs the turn. Production: defaultStartWorker (agent loop).
 	// Tests use newTestActor (test-only constructor below) to substitute a
@@ -173,6 +178,7 @@ func (a *sessionActor) setState(next string) {
 	}
 	trace("actor.state", map[string]any{"sid": a.id, "from": a.state, "to": next, "gen": a.gen})
 	a.state = next
+	a.activeFlag.Store(next != stateIdle && next != stateOrphaned)
 }
 
 func randomID8() string {
@@ -228,14 +234,14 @@ func (a *sessionActor) run() {
 			a.handleData(env)
 		case <-flushTick.C:
 			if a.state == stateIdle && a.persistErr != nil {
-				if err := a.store.saveSessionSync(a.rec); err == nil {
+				if err := a.persistIdleMetaOrRecord(); err == nil {
 					a.persistErr = nil
 					a.pingChange()
 				}
 			}
 			if a.bgDirty && a.wal == nil {
 				a.bgDirty = false
-				if err := a.store.saveSessionSync(a.rec); err == nil {
+				if err := a.persistIdleMetaOrRecord(); err == nil {
 					a.pingChange()
 				} else {
 					a.storageError(err)
@@ -431,6 +437,9 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.rec.UpdatedAt = time.Now().UnixMilli()
 		err := a.saveOrAppend(walEvent{Type: walTypeTitle, Title: m.Title, TitleSource: "manual"})
 		if err == nil {
+			if a.search != nil {
+				_ = a.search.UpdateSessionMeta(a.id, a.rec.Title, a.rec.CWD, a.rec.UpdatedAt)
+			}
 			a.pingChange()
 		}
 		m.Reply <- err
@@ -473,7 +482,7 @@ func (a *sessionActor) handleData(env Envelope) {
 		// v1 parity: configuring a session acks with the updated snapshot so
 		// the composer reflects the new options immediately. v2 dropped this
 		// and clients saw stale options until the next turn.
-		a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": pagedHistoryBlock(sessionPayload(a.rec), a.rec)})
+		a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": sessionPayloadPaged(a.rec, 0)})
 	case queueSendNowMsg:
 		a.onQueueSendNow(m)
 	case queueCancelSendMsg:
@@ -510,6 +519,9 @@ func (a *sessionActor) handleData(env Envelope) {
 			a.rec.TitleSource = "generated"
 			a.rec.UpdatedAt = time.Now().UnixMilli()
 			a.saveOrAppend(walEvent{Type: walTypeTitle, Title: title, TitleSource: "generated"})
+			if a.search != nil {
+				_ = a.search.UpdateSessionMeta(a.id, a.rec.Title, a.rec.CWD, a.rec.UpdatedAt)
+			}
 			a.pingChange()
 			a.emit(map[string]any{"type": "session_renamed", "sessionId": a.id, "title": title, "auto": true})
 		}
@@ -752,6 +764,9 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 	if t := instantTitle(m.Text); t != "" && (a.rec.Title == "" || a.rec.Title == "New conversation") {
 		a.rec.Title = t
 		a.rec.TitleSource = "pending"
+		if a.search != nil {
+			_ = a.search.UpdateSessionMeta(a.id, a.rec.Title, a.rec.CWD, time.Now().UnixMilli())
+		}
 		a.emit(map[string]any{"type": "session_renamed", "sessionId": a.id, "title": t, "auto": true})
 	}
 	prevSeen, prevKind := a.rec.SeenSeq, a.rec.AttentionKind
@@ -893,14 +908,11 @@ func (a *sessionActor) startTurnWithMeta(prompt string, attachmentIDs []string, 
 	if a.state != stateIdle || a.persistErr != nil || a.closing {
 		return fmt.Errorf("session is busy or cannot persist")
 	}
-	if _, err := os.Stat(a.store.sessionFile(a.id)); os.IsNotExist(err) {
+	if !a.store.v2.HasV2Session(a.id) && !a.store.v2.HasLegacySession(a.id) {
 		if err := a.store.saveSessionSync(a.rec); err != nil {
 			a.storageError(err)
 			return err
 		}
-	} else if err != nil {
-		a.storageError(err)
-		return err
 	}
 	previous := *a.rec
 	a.gen++
@@ -1050,7 +1062,9 @@ func (a *sessionActor) finishTurn(ok bool) {
 	// activation-related is durable).
 	a.endTurnSkills()
 	a.pendingContext = nil // unconsumed notices are turn-scoped: drop them
-	a.rec.Messages = stripSkillArtifactsWithCompaction(a.rec.Messages, a.rec.TurnSeq, a.rec.Compaction)
+	a.rec.Messages = stripSkillArtifactsWithCompactionAt(a.rec.Messages, a.rec.HotBaseMsgIdx, a.rec.TurnSeq, a.rec.Compaction)
+	a.rec.TotalMsgs = a.rec.globalMsgCount()
+	a.rec.TotalTurns = max(a.rec.TotalTurns, a.rec.TurnSeq)
 	if a.rec.Compaction != nil && len(a.rec.Compaction.Blocks) > 0 && len(a.rec.Compaction.ActiveBlocks()) == 0 {
 		a.rec.Compaction = nil
 	}
@@ -1071,7 +1085,7 @@ func (a *sessionActor) finishTurn(ok bool) {
 	}
 	if a.pendingBalloon != nil {
 		b := *a.pendingBalloon
-		b.MessageIndex = len(a.rec.Messages)
+		b.MessageIndex = a.rec.globalMsgCount()
 		a.rec.FileBalloons = append(a.rec.FileBalloons, b)
 		a.pendingBalloon = nil
 	}
@@ -1109,6 +1123,11 @@ func (a *sessionActor) finishTurn(ok bool) {
 		a.setState(statePersist)
 		return
 	}
+	if a.search != nil && a.rec.TurnSeq > 0 {
+		a.indexCommittedTurn(a.rec.TurnSeq)
+		_ = a.search.UpdateSessionMeta(a.id, a.rec.Title, a.rec.CWD, a.rec.UpdatedAt)
+	}
+	a.trimHotWindow()
 	a.cancelReason = ""
 	a.persistErr = nil
 	a.wal = nil
@@ -1355,7 +1374,7 @@ func (a *sessionActor) onApprovalResponse(m approvalResponseMsg) {
 			// complete client overlay) cannot resurrect the approval card.
 			a.clearPending()
 			a.setState(stateRunning)
-			a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": pagedHistoryBlock(sessionPayload(a.rec), a.rec)})
+			a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": sessionPayloadPaged(a.rec, 0)})
 		}
 	}
 	a.resolveMidTurnAttention()
@@ -1456,6 +1475,12 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 		replyResend(m.Reply, discardResendResult{Error: "session storage is failing; try again"})
 		return
 	}
+	if a.rec.HotBaseTurn > 1 && m.TurnID > 0 && m.TurnID < a.rec.HotBaseTurn {
+		if err := a.hydrateFullRecordForCut(); err != nil {
+			replyResend(m.Reply, discardResendResult{Error: "Could not load turn history: " + err.Error()})
+			return
+		}
+	}
 	// Boundary: the first row of the turn (its initiating user row).
 	idx := -1
 	for i, msg := range a.rec.Messages {
@@ -1492,27 +1517,34 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 	}
 	previous := cloneRecord(a.rec)
 	a.markUserSeen()
+	globalCut := a.rec.HotBaseMsgIdx + idx
 	// Cut the boundary turn and everything below it.
 	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:idx]...)
 	a.rec.FileBalloons = filterBalloonsBelow(a.rec.FileBalloons, m.TurnID)
 	// Truncate compaction blocks straddling or above the cut boundary while
 	// preserving earlier completed FoldBlocks strictly below the cut.
-	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, len(a.rec.Messages))
+	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, globalCut)
 	// Attachments are only kept when a surviving row or the new row (ids)
 	// still references them; discarded turns must not leak files.
-	pruneOrphanAttachments(a.rec, ids)
+	a.pruneOrphanAttachments(ids)
 	// Insert the new user row in the boundary's place (same turn number:
 	// a re-run of that turn, like a tool retry — numbering stays stable).
-	row := seededUserMessage(a.rec, text, ids)
+	row := a.externalizeMsg(seededUserMessage(a.rec, text, ids))
 	row.TurnIndex = m.TurnID
 	a.rec.Messages = append(a.rec.Messages, row)
+	a.rec.TotalTurns = m.TurnID
+	a.rec.TotalMsgs = a.rec.globalMsgCount()
 	// ONE durable commit: the cut AND the new row land together.
 	if err := a.store.persistEdited(a.id, m.TurnID, a.rec.Messages[idx:], nil, recordMeta(a.rec)); err != nil {
 		a.rec = previous
 		replyResend(m.Reply, discardResendResult{Error: "Could not save: " + err.Error()})
 		return
 	}
-	a.emit(map[string]any{"type": "session_truncated", "hostId": a.hostID(), "sessionId": a.id, "keepIndex": idx - 1})
+	if a.search != nil {
+		_ = a.search.TruncateSessionFromTurn(a.id, m.TurnID)
+		indexTurnSliceIntoSearch(a.search, a.rec, m.TurnID, globalCut, a.rec.Messages[idx:])
+	}
+	a.emit(map[string]any{"type": "session_truncated", "hostId": a.hostID(), "sessionId": a.id, "keepIndex": globalCut - 1})
 	a.emit(tailContentEvent(a.hostID(), a.id, "session_content", a.rec, 0, nil))
 	a.pingChange()
 	// Start the turn SEEDED (the row exists; the worker runs Continue).
@@ -1547,8 +1579,17 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 	if keep < 0 {
 		keep = 0
 	}
-	if keep > len(a.rec.Messages) {
-		keep = len(a.rec.Messages)
+	if keep > a.rec.globalMsgCount() {
+		keep = a.rec.globalMsgCount()
+	}
+	if a.rec.HotBaseMsgIdx > 0 && keep < a.rec.HotBaseMsgIdx {
+		if err := a.hydrateFullRecordForCut(); err != nil {
+			select {
+			case m.Reply <- truncateRunResult{Error: "Could not load turn history: " + err.Error()}:
+			default:
+			}
+			return
+		}
 	}
 	text := core.SanitizeUserText(m.Text)
 	ids := append([]string(nil), m.AttachmentIDs...)
@@ -1568,28 +1609,36 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 	}
 	previous := cloneRecord(a.rec)
 	a.markUserSeen()
+	localKeep := keep - a.rec.HotBaseMsgIdx
 	// Cut at Keep + the same three repairs onEditApply applies.
-	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:keep]...)
+	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:localKeep]...)
 	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, keep)
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
 	// Truncate compaction blocks straddling or above the cut prefix while
 	// preserving earlier completed FoldBlocks strictly below the cut.
-	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, len(a.rec.Messages))
+	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, a.rec.globalMsgCount())
 	// ids are the new row's attachments (the edited message's or fresh
 	// uploads); without them pruning would delete the files the row inlines.
-	pruneOrphanAttachments(a.rec, ids)
+	a.pruneOrphanAttachments(ids)
 	// Insert the new user row (same turn number: a re-run of that turn).
-	row := seededUserMessage(a.rec, text, ids)
-	row.TurnIndex = dropTurnForPrefix(a.rec.Messages)
+	row := a.externalizeMsg(seededUserMessage(a.rec, text, ids))
+	row.TurnIndex = a.nextTurnAfterPrefix()
+	insertStart := len(a.rec.Messages)
 	a.rec.Messages = append(a.rec.Messages, row)
+	a.rec.TotalTurns = row.TurnIndex
+	a.rec.TotalMsgs = a.rec.globalMsgCount()
 	// ONE durable commit: the cut AND the new row land together.
-	if err := a.store.persistEdited(a.id, row.TurnIndex, a.rec.Messages[keep:], nil, recordMeta(a.rec)); err != nil {
+	if err := a.store.persistEdited(a.id, row.TurnIndex, a.rec.Messages[insertStart:], nil, recordMeta(a.rec)); err != nil {
 		a.rec = previous
 		select {
 		case m.Reply <- truncateRunResult{Error: "Could not save: " + err.Error()}:
 		default:
 		}
 		return
+	}
+	if a.search != nil {
+		_ = a.search.TruncateSessionFromTurn(a.id, row.TurnIndex)
+		indexTurnSliceIntoSearch(a.search, a.rec, row.TurnIndex, a.rec.HotBaseMsgIdx+insertStart, a.rec.Messages[insertStart:])
 	}
 	a.emit(map[string]any{"type": "session_truncated", "hostId": a.hostID(), "sessionId": a.id, "keepIndex": keep - 1})
 	a.emit(tailContentEvent(a.hostID(), a.id, "session_content", a.rec, 0, nil))
@@ -1690,18 +1739,35 @@ func (a *sessionActor) onForkAndResend(m forkAndResendMsg) {
 
 func (a *sessionActor) applyForkAndResend(m forkAndResendMsg) {
 	// Boundary: first row of the turn — the fork EXCLUDES it (above only).
-	idx := -1
-	for i, msg := range a.rec.Messages {
-		if msg.TurnIndex == m.TurnID {
-			idx = i
-			break
+	globalBoundaryIdx := -1
+	var boundary provider.Message
+	if m.TurnID > 0 {
+		if m.TurnID < a.rec.HotBaseTurn && a.store != nil && a.store.v2.HasV2Session(a.id) {
+			if entries, err := a.store.v2.ReadTurnIndex(a.id); err == nil {
+				for _, e := range entries {
+					if e.TurnSeq == m.TurnID && e.MsgCount() > 0 {
+						if msgs, _, rerr := a.store.v2.ReadTurnRange(a.id, m.TurnID, m.TurnID); rerr == nil && len(msgs) > 0 {
+							globalBoundaryIdx = e.FirstMsgIdx
+							boundary = msgs[0]
+						}
+						break
+					}
+				}
+			}
+		} else {
+			for i, msg := range a.rec.Messages {
+				if msg.TurnIndex == m.TurnID {
+					globalBoundaryIdx = a.rec.HotBaseMsgIdx + i
+					boundary = msg
+					break
+				}
+			}
 		}
 	}
-	if idx < 0 || m.TurnID <= 0 {
+	if globalBoundaryIdx < 0 || m.TurnID <= 0 {
 		replyForkResend(m.Reply, forkResendResult{Error: "turn not found (or nothing above it)"})
 		return
 	}
-	boundary := a.rec.Messages[idx]
 	if boundary.Role != provider.RoleUser {
 		replyForkResend(m.Reply, forkResendResult{Error: "the turn does not start with a user message"})
 		return
@@ -1727,17 +1793,17 @@ func (a *sessionActor) applyForkAndResend(m forkAndResendMsg) {
 			a.pingChange()
 		}
 	}
-	// Fork the prefix ABOVE the boundary (Keep = idx-1 includes it + tools).
+	// Fork the prefix ABOVE the boundary (Keep = globalBoundaryIdx-1 includes it + tools).
 	fr := forkResult{}
 	fch := make(chan any, 1)
-	a.onFork(forkReqMsg{Keep: idx - 1, Title: a.rec.Title + " (fork)", Reply: fch})
+	a.onFork(forkReqMsg{Keep: globalBoundaryIdx - 1, Title: a.rec.Title + " (fork)", Reply: fch})
 	fr = (<-fch).(forkResult)
 	if fr.Error != "" {
 		replyForkResend(m.Reply, forkResendResult{Error: fr.Error})
 		return
 	}
-	// Insert the new user row INTO the fork (durable before the turn).
-	forkRec, err := a.store.loadSession(fr.NewID)
+	// Insert the new user row INTO the fork (durable before the turn) without slurping full history.
+	forkRec, _, err := a.store.loadSessionHotFused(fr.NewID, false)
 	if err != nil {
 		a.removeForkSession(fr.NewID)
 		replyForkResend(m.Reply, forkResendResult{Error: "Could not load the fork: " + err.Error()})
@@ -1748,21 +1814,34 @@ func (a *sessionActor) applyForkAndResend(m forkAndResendMsg) {
 		replyForkResend(m.Reply, forkResendResult{Error: "Could not copy attachment: " + err.Error()})
 		return
 	}
-	newTurn := 0
-	for _, msg := range forkRec.Messages {
-		if msg.TurnIndex > newTurn {
-			newTurn = msg.TurnIndex
-		}
-	}
-	newTurn++
-	row := seededUserMessage(forkRec, text, ids)
+	newTurn := max(forkRec.TurnSeq, forkRec.TotalTurns) + 1
+	firstMsgIdx := forkRec.globalMsgCount()
+	row := a.externalizeMsg(seededUserMessage(forkRec, text, ids))
 	row.TurnIndex = newTurn
 	forkRec.Messages = append(forkRec.Messages, row)
 	forkRec.TurnSeq = newTurn
-	if err := a.store.saveSessionSync(forkRec); err != nil {
+	forkRec.TotalTurns = newTurn
+	forkRec.TotalMsgs = forkRec.globalMsgCount()
+	var saveErr error
+	if a.store.v2.HasV2Session(fr.NewID) {
+		_, saveErr = a.store.v2.AppendTurns(fr.NewID, []sessionstore.TurnWrite{{
+			TurnSeq:  newTurn,
+			Messages: []provider.Message{row},
+		}})
+		if saveErr == nil {
+			saveErr = a.store.writeMetaV2(fr.NewID, recordMeta(forkRec))
+		}
+	} else {
+		saveErr = a.store.saveSessionSync(forkRec)
+	}
+	if saveErr != nil {
 		a.removeForkSession(fr.NewID)
-		replyForkResend(m.Reply, forkResendResult{Error: "Could not save the fork: " + err.Error()})
+		replyForkResend(m.Reply, forkResendResult{Error: "Could not save the fork: " + saveErr.Error()})
 		return
+	}
+	if a.search != nil {
+		_ = a.search.UpdateSessionMeta(fr.NewID, forkRec.Title, forkRec.CWD, forkRec.UpdatedAt)
+		indexTurnSliceIntoSearch(a.search, forkRec, newTurn, firstMsgIdx, []provider.Message{row})
 	}
 	// Start the seeded turn in the FORK (its actor spawns on this message)
 	// BEFORE answering: the client must learn whether the turn actually
@@ -2000,39 +2079,56 @@ func (a *sessionActor) onEditRegenerate(m editRegenerateMsg) {
 		return
 	}
 	a.touch()
-	a.gen++
 	keep := m.Keep
 	if keep < 0 {
 		keep = 0
 	}
-	if keep > len(a.rec.Messages) {
-		keep = len(a.rec.Messages)
+	if keep > a.rec.globalMsgCount() {
+		keep = a.rec.globalMsgCount()
 	}
-	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:keep]...)
+	if a.rec.HotBaseMsgIdx > 0 && keep < a.rec.HotBaseMsgIdx {
+		if err := a.hydrateFullRecordForCut(); err != nil {
+			m.Reply <- promptResult{Error: err.Error()}
+			return
+		}
+	}
+	a.gen++
+	localKeep := keep - a.rec.HotBaseMsgIdx
+	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:localKeep]...)
 	// The same three repairs onEditApply applies after its cut (audit bug
 	// 44): balloons describing cut messages must go, orphaned tool_use pairs
 	// must be re-paired and orphaned attachments pruned — otherwise the
 	// persisted record keeps stale balloons and unpaired rows.
 	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, keep)
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
-	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, len(a.rec.Messages))
-	pruneOrphanAttachments(a.rec, nil)
+	a.rec.TotalMsgs = a.rec.globalMsgCount()
+	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, a.rec.globalMsgCount())
+	a.pruneOrphanAttachments(nil)
 	a.markUserSeen()
 	a.rec.Status = "idle"
 	a.rec.UpdatedAt = time.Now().UnixMilli()
-	keepTurn := dropTurnForPrefix(a.rec.Messages)
+	keepTurn := a.nextTurnAfterPrefix()
+	a.rec.TotalTurns = max(0, keepTurn-1)
 	if err := a.store.truncateTail(a.id, keepTurn, recordMeta(a.rec)); err != nil {
 		m.Reply <- promptResult{Error: err.Error()}
 		return
+	}
+	if a.search != nil {
+		_ = a.search.TruncateSessionFromTurn(a.id, keepTurn)
+		_ = a.search.UpdateSessionMeta(a.id, a.rec.Title, a.rec.CWD, a.rec.UpdatedAt)
 	}
 	a.pingChange()
 	m.Reply <- promptResult{Accepted: true}
 }
 
 func (a *sessionActor) onFork(m forkReqMsg) {
-	// Snapshot the prefix (actor-local; never stops the source).
-	if m.Keep < -1 || m.Keep >= len(a.rec.Messages) {
+	totalMsgs := a.rec.globalMsgCount()
+	if m.Keep < -1 || m.Keep >= totalMsgs {
 		m.Reply <- forkResult{Error: "Select a completed message to fork"}
+		return
+	}
+	if a.rec.HotBaseMsgIdx > 0 && a.store != nil && a.store.v2.HasV2Session(a.id) {
+		a.onForkFromV2(m)
 		return
 	}
 	if m.Keep >= 0 {
@@ -2064,30 +2160,7 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 	if m.Title != "" {
 		title = m.Title
 	}
-	rec := &SessionRecord{
-		ID: newID, CWD: resolvePath(a.rec.CWD),
-		Title: title, TitleSource: "manual", Model: a.rec.Model,
-		Options: normalizedOptions(a.rec.Options), Status: "idle", Jailed: a.rec.Jailed,
-		CreatedAt: now, UpdatedAt: now,
-		LastDate: a.rec.LastDate, LastMode: a.rec.LastMode,
-		AttentionSeq: 0, SeenSeq: 0, AttentionKind: "",
-	}
-	if a.rec.Skills != nil {
-		rec.Skills = make(map[string]skills.SessionSkill, len(a.rec.Skills))
-		for k, v := range a.rec.Skills {
-			rec.Skills[k] = v
-		}
-	}
-	if a.rec.Widgets != nil {
-		rec.Widgets = append([]tools.WidgetFile(nil), a.rec.Widgets...)
-	}
-	if a.rec.Todos != nil {
-		rec.Todos = append([]tools.TodoItem(nil), a.rec.Todos...)
-	}
-	if a.rec.TodosOpen != nil {
-		v := *a.rec.TodosOpen
-		rec.TodosOpen = &v
-	}
+	rec := a.newForkSkeleton(newID, title, now)
 	brainDir := a.store.brainDir(a.id)
 	for _, b := range stripBrainBalloonFiles(a.rec.FileBalloons, brainDir) {
 		if b.MessageIndex > 0 && b.MessageIndex <= end {
@@ -2115,17 +2188,9 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 		}
 	}
 	rec.TurnSeq = maxTurn
+	rec.TotalTurns = maxTurn
+	rec.TotalMsgs = len(rec.Messages)
 	rec.Compaction = core.TruncateCompaction(a.rec.Compaction, end)
-	// Bg tasks: the fork inherits the TERMINAL ones (their logs are
-	// history the user can read with bg_check). Running tasks stay with
-	// the owning session — their runner/pids belong to it; the fork card
-	// shows history only.
-	for _, t := range a.rec.BgTasks {
-		if t.Status != BgStatusRunning {
-			cp := t
-			rec.BgTasks = append(rec.BgTasks, cp)
-		}
-	}
 	used := map[string]bool{}
 	for _, msg := range rec.Messages {
 		for _, id := range messageAttachmentIDs(msg, attachments) {
@@ -2136,7 +2201,7 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 	committed := false
 	defer func() {
 		if !committed {
-			_ = os.RemoveAll(filepath.Dir(dir))
+			a.removeForkSession(rec.ID)
 		}
 	}()
 	for _, attachment := range attachments {
@@ -2174,20 +2239,192 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 		m.Reply <- forkResult{Error: "Could not save the fork: " + err.Error()}
 		return
 	}
+	if a.search != nil {
+		indexColdSessionIntoSearch(a.store, a.search, rec.ID)
+	}
+	committed = true
+	m.Reply <- forkResult{NewID: rec.ID}
+}
+
+func (a *sessionActor) newForkSkeleton(newID, title string, now int64) *SessionRecord {
+	rec := &SessionRecord{
+		ID: newID, CWD: resolvePath(a.rec.CWD),
+		Title: title, TitleSource: "manual", Model: a.rec.Model,
+		Options: normalizedOptions(a.rec.Options), Status: "idle", Jailed: a.rec.Jailed,
+		CreatedAt: now, UpdatedAt: now,
+		LastDate: a.rec.LastDate, LastMode: a.rec.LastMode,
+		AttentionSeq: 0, SeenSeq: 0, AttentionKind: "",
+	}
+	if a.rec.Skills != nil {
+		rec.Skills = make(map[string]skills.SessionSkill, len(a.rec.Skills))
+		for k, v := range a.rec.Skills {
+			rec.Skills[k] = v
+		}
+	}
+	if a.rec.Widgets != nil {
+		rec.Widgets = append([]tools.WidgetFile(nil), a.rec.Widgets...)
+	}
+	if a.rec.Todos != nil {
+		rec.Todos = append([]tools.TodoItem(nil), a.rec.Todos...)
+	}
+	if a.rec.TodosOpen != nil {
+		v := *a.rec.TodosOpen
+		rec.TodosOpen = &v
+	}
+	for _, t := range a.rec.BgTasks {
+		if t.Status != BgStatusRunning {
+			cp := t
+			rec.BgTasks = append(rec.BgTasks, cp)
+		}
+	}
+	return rec
+}
+
+func (a *sessionActor) onForkFromV2(m forkReqMsg) {
+	entries, err := a.store.v2.ReadTurnIndex(a.id)
+	if err != nil {
+		m.Reply <- forkResult{Error: "Could not read turn index: " + err.Error()}
+		return
+	}
+	endGlobal := 0
+	maxTurn := 0
+	if m.Keep >= 0 {
+		var boundary provider.Message
+		found := false
+		if m.Keep >= a.rec.HotBaseMsgIdx {
+			localKeep := m.Keep - a.rec.HotBaseMsgIdx
+			if localKeep >= 0 && localKeep < len(a.rec.Messages) {
+				boundary = a.rec.Messages[localKeep]
+				found = true
+				bt := boundary.TurnIndex
+				endLocal := localKeep + 1
+				for endLocal < len(a.rec.Messages) && a.rec.Messages[endLocal].TurnIndex == bt {
+					endLocal++
+				}
+				endGlobal = a.rec.HotBaseMsgIdx + endLocal
+				maxTurn = bt
+			}
+		} else {
+			for _, e := range entries {
+				if m.Keep >= e.FirstMsgIdx && m.Keep <= e.LastMsgIdx {
+					msgs, _, rerr := a.store.v2.ReadTurnRange(a.id, e.TurnSeq, e.TurnSeq)
+					if rerr == nil && m.Keep-e.FirstMsgIdx < len(msgs) {
+						boundary = msgs[m.Keep-e.FirstMsgIdx]
+						found = true
+						endGlobal = e.LastMsgIdx + 1
+						maxTurn = e.TurnSeq
+					}
+					break
+				}
+			}
+		}
+		if !found {
+			m.Reply <- forkResult{Error: "Select a completed message to fork"}
+			return
+		}
+		if boundary.Role != provider.RoleUser && boundary.Role != provider.RoleAssistant && boundary.Role != provider.RoleTool {
+			m.Reply <- forkResult{Error: "Select a user, assistant, or tool message to fork"}
+			return
+		}
+	}
+	now := time.Now().UnixMilli()
+	newID := "sess_" + randomID8() + randomID8()
+	if m.NewID != "" {
+		newID = m.NewID
+	}
+	title := a.rec.Title + " (fork)"
+	if m.Title != "" {
+		title = m.Title
+	}
+	rec := a.newForkSkeleton(newID, title, now)
+	rec.TurnSeq = maxTurn
+	rec.TotalTurns = maxTurn
+	rec.TotalMsgs = endGlobal
+	rec.Compaction = core.TruncateCompaction(a.rec.Compaction, endGlobal)
+
+	committed := false
+	defer func() {
+		if !committed {
+			a.removeForkSession(rec.ID)
+		}
+	}()
+	// Copy attachments available on disk so references remain intact in the fork.
+	dir := filepath.Join(a.store.sessionsDir(), rec.ID, "attachments")
+	for _, attachment := range a.rec.Attachments {
+		attachment.UploadKey = ""
+		for _, pair := range []struct {
+			source string
+			target *string
+		}{{attachment.Path, &attachment.Path}, {attachment.TextPath, &attachment.TextPath}} {
+			if pair.source == "" {
+				continue
+			}
+			target := filepath.Join(dir, filepath.Base(pair.source))
+			if err := copyForkAttachment(pair.source, target); err != nil {
+				m.Reply <- forkResult{Error: "Could not copy attachment " + attachment.Name}
+				return
+			}
+			*pair.target = target
+		}
+		rec.Attachments = append(rec.Attachments, attachment)
+	}
+
+	diskMsgs := 0
+	if len(entries) > 0 {
+		last := entries[len(entries)-1]
+		diskMsgs = last.LastMsgIdx + 1
+	}
+	diskUpTo := min(endGlobal, diskMsgs)
+	if err := a.store.v2.CloneSessionUpTo(a.id, rec.ID, diskUpTo); err != nil {
+		m.Reply <- forkResult{Error: "Could not copy the conversation: " + err.Error()}
+		return
+	}
+	if endGlobal > diskMsgs {
+		liveStart := max(0, diskMsgs-a.rec.HotBaseMsgIdx)
+		liveEnd := min(len(a.rec.Messages), endGlobal-a.rec.HotBaseMsgIdx)
+		if liveEnd > liveStart {
+			tws := buildTurnWritesFromRecord(&SessionRecord{
+				Messages:     a.rec.Messages[liveStart:liveEnd],
+				FileBalloons: a.rec.FileBalloons,
+			}, 0)
+			if _, err := a.store.v2.AppendTurns(rec.ID, tws); err != nil {
+				m.Reply <- forkResult{Error: "Could not copy live turns: " + err.Error()}
+				return
+			}
+		}
+	}
+	if err := a.store.writeMetaV2(rec.ID, recordMeta(rec)); err != nil {
+		m.Reply <- forkResult{Error: "Could not save fork metadata: " + err.Error()}
+		return
+	}
+	if a.search != nil {
+		indexColdSessionIntoSearch(a.store, a.search, rec.ID)
+	}
 	committed = true
 	m.Reply <- forkResult{NewID: rec.ID}
 }
 
 func (a *sessionActor) onRead(m readReqMsg) {
 	ensureTranscriptIDs(a.rec)
-	// Served from actor RAM. Payloads are COPIES: the
+	// Served from actor RAM / sessionstore window. Payloads are COPIES: the
 	// caller reads off-goroutine, so handing out the live *SessionRecord
-	// (or its backing array) is a data race. Copies are cheap next to the
-	// disk/network work around them.
+	// (or its backing array) is a data race.
 	switch m.What {
 	case "summary":
 		meta := recordMeta(a.rec)
 		m.Reply <- readResult{Payload: sessionListItem(summaryFromMeta(meta))}
+	case "sessionData":
+		block := a.queryHistoryBlock(historyQuery{
+			BeforeTurn:   m.BeforeTurn,
+			AfterTurn:    m.AfterTurn,
+			AroundTurn:   m.AroundTurn,
+			AroundMsgIdx: m.AroundMsgIdx,
+		})
+		p := sessionPayloadWithBlock(a.rec, block)
+		for k, v := range a.clientOverlay() {
+			p[k] = v
+		}
+		m.Reply <- readResult{Payload: p}
 	case "session", "data":
 		m.Reply <- readResult{Payload: cloneRecord(a.rec), Extra: a.clientOverlay()}
 	case "history":
@@ -2197,18 +2434,29 @@ func (a *sessionActor) onRead(m readReqMsg) {
 		}
 		m.Reply <- readResult{Payload: cloneMessages(msgs)}
 	case "historyBlock":
-		block := sliceHistoryBlock(a.rec.Messages, a.rec.FileBalloons, m.BeforeTurn)
-		block.Messages = cloneMessages(block.Messages)
-		block.Attachments = append([]AttachmentRef(nil), a.rec.Attachments...)
-		block.Mode = a.rec.Options.Mode
+		block := a.queryHistoryBlock(historyQuery{
+			BeforeTurn:   m.BeforeTurn,
+			AfterTurn:    m.AfterTurn,
+			AroundTurn:   m.AroundTurn,
+			AroundMsgIdx: m.AroundMsgIdx,
+		})
 		m.Reply <- readResult{Payload: block}
 	case "turnChanges":
 		// Committed balloons + the LIVE preview of the running turn. The
 		// live half is what keeps a mid-turn refresh (get_turn_changes)
 		// from replacing the floating balloon with an empty list.
 		brainDir := a.store.brainDir(a.id)
+		balloons := a.rec.FileBalloons
+		if a.rec.HotBaseTurn > 1 && a.store != nil && a.store.v2.HasV2Session(a.id) {
+			if _, prefixBals, err := a.store.v2.ReadTurnRange(a.id, 1, a.rec.HotBaseTurn-1); err == nil && len(prefixBals) > 0 {
+				merged := make([]filetrack.TurnChanges, 0, len(prefixBals)+len(balloons))
+				merged = append(merged, prefixBals...)
+				merged = append(merged, balloons...)
+				balloons = merged
+			}
+		}
 		out := map[string]any{
-			"balloons": fileBalloonPayloads(stripBrainBalloonFiles(a.rec.FileBalloons, brainDir)),
+			"balloons": fileBalloonPayloads(stripBrainBalloonFiles(balloons, brainDir)),
 		}
 		if a.state != stateIdle && a.state != statePersist && len(a.liveIncoming) > 0 {
 			files := filetrack.PreviewChanged(dropBrainTracked(append([]filetrack.TrackedFile(nil), a.liveIncoming...), brainDir), a.rec.CWD)
@@ -2281,7 +2529,12 @@ func (a *sessionActor) onWALAppend(m walAppendMsg) {
 			// Hydrate through core (content blocks are interfaces —
 			// plain Unmarshal yields nil Content and drops the text).
 			if msg, err := core.HydrateMessageObject(ev.Msg); err == nil {
+				msg = a.externalizeMsg(msg)
 				a.rec.Messages = append(a.rec.Messages, msg)
+				a.rec.TotalMsgs = a.rec.globalMsgCount()
+				if msg.TurnIndex > a.rec.TotalTurns {
+					a.rec.TotalTurns = msg.TurnIndex
+				}
 				a.transcriptCommitted(msg)
 			} else {
 				fmt.Printf("[WARN] session %s: bad WAL msg: %v\n", a.id, err)
@@ -2690,11 +2943,13 @@ func (a *sessionActor) onBgNotice(m bgNoticeMsg) {
 	if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ {
 		msg := provider.Message{ID: provider.NewMessageID(), Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: m.Text}}, TurnIndex: a.rec.TurnSeq, Meta: map[string]string{"background_delivery": m.JobID}}
 		a.rec.Messages = append(a.rec.Messages, msg)
+		a.rec.TotalMsgs = a.rec.globalMsgCount()
 		// Publish the identity and worker context only after persistence.
 		// Roll back the tentative RAM fold on failure so redelivery cannot
 		// mistake it for a durable delivery and acknowledge it.
 		if err := a.saveOrAppend(walMsgEvent(msg)); err != nil {
 			a.rec.Messages = a.rec.Messages[:len(a.rec.Messages)-1]
+			a.rec.TotalMsgs = a.rec.globalMsgCount()
 			return
 		}
 		a.pendingContext = append(a.pendingContext, msg)
@@ -2756,6 +3011,16 @@ func (a *sessionActor) storageError(err error) {
 	a.emit(map[string]any{"type": "error", "hostId": a.hostID(), "sessionId": a.id, "message": "Could not save session: " + err.Error()})
 }
 
+func (a *sessionActor) persistIdleMetaOrRecord() error {
+	if a.store == nil {
+		return nil
+	}
+	if a.store.v2.HasV2Session(a.id) || a.store.v2.HasLegacySession(a.id) {
+		return a.store.rewriteMetaOnly(a.id, recordMeta(a.rec))
+	}
+	return a.store.saveSessionSync(a.rec)
+}
+
 func (a *sessionActor) saveOrAppend(ev walEvent) error {
 	a.rec.UpdatedAt = time.Now().UnixMilli()
 	var err error
@@ -2767,8 +3032,10 @@ func (a *sessionActor) saveOrAppend(ev walEvent) error {
 			ev.AttentionSeq, ev.SeenSeq, ev.AttentionKind = &attSeq, &seenSeq, &attKind
 		}
 		err = appendWALEvent(a.wal, ev)
-	} else {
+	} else if ev.Type == walTypeMsg {
 		err = a.store.saveSessionSync(a.rec)
+	} else {
+		err = a.persistIdleMetaOrRecord()
 	}
 	if err != nil {
 		a.storageError(err)
@@ -2864,6 +3131,7 @@ func (a *sessionActor) doPassivate() {
 		return
 	}
 	a.persistErr, a.wal = nil, nil
+	clearSessionDebug(a.id)
 }
 
 func (a *sessionActor) doShutdown() {
@@ -2934,42 +3202,66 @@ func instantTitle(text string) string {
 	return out
 }
 
-// estimateResidentBytes is the LRU-budget heuristic: serialized message
-// bytes + attachment sizes + queue + WAL buffer estimate. Cheap (no JSON
-// marshal — walks content blocks by length), refined with real numbers in
-// load tests.
+// estimateResidentBytes is the LRU-budget heuristic: resident Go heap bytes
+// held by rec (hot-window messages, file-balloon diffs, bg-task tails,
+// compaction summaries, widgets, queue, and attachment ref metadata — NEVER
+// on-disk attachment file sizes or CAS-externalized image blobs).
 func estimateResidentBytes(rec *SessionRecord) int64 {
 	if rec == nil {
 		return 0
 	}
 	var n int64
 	for _, m := range rec.Messages {
-		n += estimateMessageBytes(m)
+		n += estimateMessageBytes(m) + 64
 	}
 	for _, a := range rec.Attachments {
-		n += a.Size
+		n += int64(len(a.ID) + len(a.UploadKey) + len(a.Name) + len(a.Mime) + len(a.Path) + len(a.TextPath) + 64)
 	}
 	for _, q := range rec.Queue {
-		n += int64(len(q.Text))
+		n += int64(len(q.ID) + len(q.Text) + len(q.Model) + len(q.Delivery) + 64)
 	}
 	for _, w := range rec.Widgets {
-		n += int64(len(w.Source))
+		n += int64(len(w.ID) + len(w.Placeholder) + len(w.Source) + 64)
 	}
 	for _, b := range rec.FileBalloons {
-		n += int64(len(b.Files) * 512)
+		n += 64
+		for _, f := range b.Files {
+			n += int64(len(f.Path) + len(f.Diff) + 64)
+		}
 	}
-	// WAL buffer + record overhead slack.
-	n += 256 * 1024
+	for _, t := range rec.BgTasks {
+		n += int64(len(t.ID) + len(t.Kind) + len(t.Label) + len(t.Content) + 80)
+	}
+	if c := rec.Compaction; c != nil {
+		n += int64(len(c.PreviousSummary) + len(c.FirstKeptEntryID) + 128)
+		for _, f := range c.ReadFiles {
+			n += int64(len(f) + 16)
+		}
+		for _, f := range c.ModifiedFiles {
+			n += int64(len(f) + 16)
+		}
+		for _, b := range c.Blocks {
+			n += int64(len(b.ID) + len(b.Topic) + len(b.Summary) + 96)
+			for _, f := range b.ReadFiles {
+				n += int64(len(f) + 16)
+			}
+			for _, f := range b.ModifiedFiles {
+				n += int64(len(f) + 16)
+			}
+		}
+		for k, v := range c.ImageDigests {
+			n += int64(len(k) + len(v) + 32)
+		}
+	}
+	// WAL buffer + actor overhead slack.
+	n += 64 * 1024
 	return n
 }
 
 // estimateMessageBytes sums every content block of a message, recursing
-// into tool results (nested Content + frontend Details). B3: the old
-// top-level TextBlock-only walk ignored tool output and images, which
-// dominate real sessions — a 2 MB tool result counted as ~0, so the LRU
-// budget never tripped and the daemon could blow past its memory cap.
+// into tool results (nested Content + frontend Details).
 func estimateMessageBytes(m provider.Message) int64 {
-	var n int64
+	var n int64 = int64(len(m.ID) + len(m.Role))
 	for _, c := range m.Content {
 		n += estimateContentBytes(c)
 	}
@@ -2984,18 +3276,16 @@ func estimateContentBytes(c provider.Content) int64 {
 	case provider.TextBlock:
 		return int64(len(b.Text))
 	case provider.ImageBlock:
-		return int64(len(b.Data))
+		return int64(len(b.Data) + len(b.MimeType) + len(b.BlobSHA256) + len(b.SHA256) + len(b.SourcePath) + 48)
 	case provider.ReasoningBlock:
 		return int64(len(b.Summary) + len(b.Encrypted))
 	case provider.ToolCallBlock:
-		return int64(len(b.Name) + len(b.Arguments))
+		return int64(len(b.ID) + len(b.Name) + len(b.Arguments))
 	case provider.ToolResultBlock:
-		var n int64
+		var n int64 = int64(len(b.CallID))
 		for _, inner := range b.Content {
 			n += estimateContentBytes(inner)
 		}
-		// Details is frontend-only rendering data (persisted with the
-		// transcript), so it counts against RAM like any other field.
 		if b.Details != nil {
 			if raw, err := json.Marshal(b.Details); err == nil {
 				n += int64(len(raw))
@@ -3004,4 +3294,136 @@ func estimateContentBytes(c provider.Content) int64 {
 		return n
 	}
 	return 0
+}
+
+func (a *sessionActor) externalizeMsg(m provider.Message) provider.Message {
+	m = sessionstore.ScrubMessageDetails(m)
+	if a.store != nil && a.store.cas != nil {
+		if ext, err := a.store.cas.ExternalizeMessageImages([]provider.Message{m}); err == nil && len(ext) == 1 {
+			m = ext[0]
+		}
+	}
+	return m
+}
+
+func (a *sessionActor) trimHotWindow() {
+	if a.rec == nil || a.store == nil || !a.store.v2.HasV2Session(a.id) {
+		return
+	}
+	entries, err := a.store.v2.ReadTurnIndex(a.id)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	last := entries[len(entries)-1]
+	diskTotalMsgs := last.LastMsgIdx + 1
+	if diskTotalMsgs != a.rec.globalMsgCount() {
+		return
+	}
+	a.rec.TotalTurns = max(a.rec.TotalTurns, last.TurnSeq)
+	a.rec.TotalMsgs = diskTotalMsgs
+	startEntry := computeHotWindowStartEntry(entries, a.rec.Compaction)
+	if startEntry <= 0 || startEntry >= len(entries) {
+		return
+	}
+	targetBaseMsg := entries[startEntry].FirstMsgIdx
+	targetBaseTurn := entries[startEntry].TurnSeq
+	if targetBaseMsg <= a.rec.HotBaseMsgIdx {
+		return
+	}
+	cut := targetBaseMsg - a.rec.HotBaseMsgIdx
+	if cut <= 0 || cut > len(a.rec.Messages) {
+		return
+	}
+	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[cut:]...)
+	a.rec.HotBaseMsgIdx = targetBaseMsg
+	a.rec.HotBaseTurn = targetBaseTurn
+	if len(a.rec.FileBalloons) > 0 {
+		kept := make([]filetrack.TurnChanges, 0, len(a.rec.FileBalloons))
+		for _, b := range a.rec.FileBalloons {
+			if b.TurnIndex >= targetBaseTurn {
+				kept = append(kept, b)
+			}
+		}
+		a.rec.FileBalloons = kept
+	}
+	a.residentBytes = estimateResidentBytes(a.rec)
+}
+
+func (a *sessionActor) hydrateFullRecordForCut() error {
+	if a.rec == nil || a.rec.HotBaseMsgIdx == 0 || a.store == nil {
+		return nil
+	}
+	full, err := a.store.loadSession(a.id)
+	if err != nil {
+		return err
+	}
+	a.rec.Messages = full.Messages
+	a.rec.FileBalloons = full.FileBalloons
+	a.rec.HotBaseTurn = 0
+	a.rec.HotBaseMsgIdx = 0
+	a.rec.TotalMsgs = len(a.rec.Messages)
+	ensureTranscriptIDs(a.rec)
+	return nil
+}
+
+func (a *sessionActor) maxTurnInHotOrBase() int {
+	maxTurn := 0
+	if a.rec.HotBaseTurn > 1 {
+		maxTurn = a.rec.HotBaseTurn - 1
+	}
+	for _, m := range a.rec.Messages {
+		if m.TurnIndex > maxTurn {
+			maxTurn = m.TurnIndex
+		}
+	}
+	return maxTurn
+}
+
+func (a *sessionActor) nextTurnAfterPrefix() int {
+	if len(a.rec.Messages) > 0 {
+		return dropTurnForPrefix(a.rec.Messages)
+	}
+	if a.rec.HotBaseTurn > 1 {
+		return a.rec.HotBaseTurn
+	}
+	return 1
+}
+
+func (a *sessionActor) pruneOrphanAttachments(keepExtra []string) {
+	extra := append([]string(nil), keepExtra...)
+	if a.rec.HotBaseTurn > 1 && a.store != nil && a.store.v2.HasV2Session(a.id) && len(a.rec.Attachments) > 0 {
+		if prefixMsgs, _, err := a.store.v2.ReadTurnRange(a.id, 1, a.rec.HotBaseTurn-1); err == nil {
+			for _, m := range prefixMsgs {
+				extra = append(extra, messageAttachmentIDs(m, a.rec.Attachments)...)
+			}
+		}
+	}
+	pruneOrphanAttachments(a.rec, extra)
+}
+
+func (a *sessionActor) indexCommittedTurn(turnSeq int) {
+	if a.search == nil || a.rec == nil || turnSeq <= 0 {
+		return
+	}
+	if _, ok := a.search.HasSession(a.id); !ok {
+		_ = a.search.UpdateSessionMeta(a.id, a.rec.Title, a.rec.CWD, a.rec.UpdatedAt)
+	}
+	startIdx := -1
+	var turnMsgs []provider.Message
+	for i, m := range a.rec.Messages {
+		if m.TurnIndex == turnSeq {
+			if startIdx < 0 {
+				startIdx = i
+			}
+			turnMsgs = append(turnMsgs, m)
+		}
+	}
+	if len(turnMsgs) == 0 {
+		return
+	}
+	firstMsgIdx := a.rec.HotBaseMsgIdx
+	if startIdx >= 0 {
+		firstMsgIdx += startIdx
+	}
+	indexTurnSliceIntoSearch(a.search, a.rec, turnSeq, firstMsgIdx, turnMsgs)
 }

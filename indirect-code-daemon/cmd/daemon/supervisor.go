@@ -6,12 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/filetrack"
+	"indirect/indirect-code-daemon/packages/searchindex"
+	"indirect/indirect-code-daemon/packages/sessionstore"
 )
 
 // Session lifecycle TTLs.
@@ -115,11 +116,14 @@ type sessionSupervisor struct {
 
 	emitFn   func(any)
 	notifyFn func(string)
+	onPurge  func(string)
+	search   *searchindex.Engine
 }
 
 func newSessionSupervisor(dataDir string, cfg *configCell, ws *wsActor, bg *bgSupervisor) *sessionSupervisor {
 	return &sessionSupervisor{
 		dataDir: dataDir, cfg: cfg, ws: ws, bg: bg,
+		search:       getSearchEngine(dataDir),
 		inbox:        make(chan Envelope, inboxCap),
 		control:      make(chan any, controlCap),
 		maxResidents: maxResidentActors, memoryBudget: sessionMemoryBudget,
@@ -127,9 +131,34 @@ func newSessionSupervisor(dataDir string, cfg *configCell, ws *wsActor, bg *bgSu
 	}
 }
 
+func (s *sessionSupervisor) searchRef() *searchindex.Engine {
+	if s == nil {
+		return nil
+	}
+	if s.search != nil {
+		return s.search
+	}
+	return getSearchEngine(s.dataDir)
+}
+
+func (s *sessionSupervisor) hasActiveTurn() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, ent := range s.resident {
+		if ent != nil && ent.active != nil && ent.active.Load() {
+			return true
+		}
+	}
+	return false
+}
+
 type residentEntry struct {
 	closing     chan struct{}
 	handle      *sessionHandle
+	active      *atomic.Bool
 	idleTTL     time.Duration
 	epoch       int
 	staleRounds int
@@ -184,23 +213,11 @@ func (s *sessionSupervisor) disk() *diskStore { return newDiskStore(s.dataDir) }
 // the WAL is replayed on first route (spawn), which resumes the turn.
 func (s *sessionSupervisor) boot() error {
 	st := s.disk()
-	dir := st.sessionsDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") || strings.HasSuffix(e.Name(), ".wal.jsonl") {
-			continue
-		}
-		sid := strings.TrimSuffix(e.Name(), ".jsonl")
-		if _, err := os.Stat(filepath.Join(dir, sid+".wal.jsonl")); err == nil {
+	for _, sid := range st.listSessionIDs() {
+		if _, err := os.Stat(st.walPath(sid)); err == nil {
 			continue // WAL owns this session; replay on route
 		}
-		meta, err := st.readMetaTail(sid)
+		meta, err := st.readMeta(sid)
 		if err != nil {
 			continue
 		}
@@ -294,7 +311,7 @@ func (s *sessionSupervisor) routeCold(id string, forRead bool) spawnResult {
 	// dispatch goroutines, not from run(). Only evict/watchdog run on the
 	// loop, and both now fan-out (see evictIdle/watchdogRound).
 	st := s.disk()
-	rec, _, err := st.loadSessionFused(id)
+	rec, _, err := st.loadSessionHotFused(id, true)
 	if err != nil {
 		return spawnResult{Error: err.Error()}
 	}
@@ -308,6 +325,7 @@ func (s *sessionSupervisor) routeCold(id string, forRead bool) spawnResult {
 	prevEpoch := s.epochs[id] - 1
 	s.mu.Unlock()
 	act := newSessionActor(id, rec, st, s.emit, s.bg, s.onEvent)
+	act.search = s.searchRef()
 	// Fork&resend continuation: the actor reaches OTHER session actors
 	// (the fork's actor spawns transparently on first route).
 	act.routeFn = func(other string) (chan Envelope, chan any, bool) {
@@ -343,6 +361,7 @@ func (s *sessionSupervisor) routeCold(id string, forRead bool) spawnResult {
 		}
 		act.wal = resumeWAL
 		act.state = stateRunning
+		act.activeFlag.Store(true)
 		if rec.Turn == nil || rec.Turn.Status != "running" {
 			rec.Turn = &TurnActivity{StartedAt: resumeHeader.StartedAt, Status: "running"}
 			if rec.Turn.StartedAt <= 0 {
@@ -368,7 +387,11 @@ func (s *sessionSupervisor) routeCold(id string, forRead bool) spawnResult {
 			rec.AttentionKind = "cancelled"
 		}
 		if qChanged || statusChanged || (hadWAL && len(rec.Queue) > 0) {
-			_ = st.saveSessionSync(rec)
+			if !hadWAL {
+				_ = st.rewriteMetaOnly(id, recordMeta(rec))
+			} else {
+				_ = st.saveSessionSync(rec)
+			}
 		}
 	}
 	if act.done == nil {
@@ -429,7 +452,7 @@ func (s *sessionSupervisor) routeCold(id string, forRead bool) spawnResult {
 		return spawnResult{Error: "session unavailable"}
 	}
 	go act.run()
-	s.resident[id] = &residentEntry{handle: h, idleTTL: ttl, epoch: h.epoch}
+	s.resident[id] = &residentEntry{handle: h, active: &act.activeFlag, idleTTL: ttl, epoch: h.epoch}
 	n := len(s.resident)
 	s.mu.Unlock()
 	if n > s.maxResidents {
@@ -573,6 +596,7 @@ func (s *sessionSupervisor) passivate(id string) {
 		delete(s.resident, id)
 	}
 	s.mu.Unlock()
+	clearSessionDebug(id)
 }
 
 // ping asks one resident for its watchdog report (nil = dead).
@@ -764,6 +788,7 @@ func (s *sessionSupervisor) shutdownAll() {
 	case <-time.After(30 * time.Second):
 		fmt.Printf("[WARN] session supervisor shutdown timed out\n")
 	}
+	closeSearchEngine(s.dataDir)
 }
 
 // turnResumeCandidate mirrors v1 turnResumeAbandoned (inverted): returns the
@@ -832,9 +857,13 @@ func newResumeSnapshot(rec *SessionRecord, header *walHeader) *workerSnapshot {
 	}
 	return &workerSnapshot{
 		// gen assigned at spawn (route sets act.gen+1).
-		jailed:      rec.Jailed,
-		turnIndex:   header.TurnIndex,
-		model:       rec.Model,
+		jailed:        rec.Jailed,
+		turnIndex:     header.TurnIndex,
+		hotBaseTurn:   rec.HotBaseTurn,
+		hotBaseMsgIdx: rec.HotBaseMsgIdx,
+		totalTurns:    rec.TotalTurns,
+		totalMsgs:     rec.globalMsgCount(),
+		model:         rec.Model,
 		options:     normalizedOptions(rec.Options),
 		messages:    cloneMessages(rec.Messages),
 		usage:       rec.Usage,
@@ -910,7 +939,7 @@ func (s *sessionSupervisor) mirrorSummaries() ([]map[string]any, error) {
 		if _, live := handles[wid]; live {
 			continue
 		}
-		fused, header, err := st.loadSessionFused(wid)
+		fused, header, err := st.loadSessionHotFused(wid, false)
 		if err != nil || fused == nil || fused.ID != wid {
 			continue
 		}
@@ -998,19 +1027,19 @@ func (s *sessionSupervisor) purge(id string) error {
 		}
 	}
 	st := s.disk()
-	for _, path := range []string{st.sessionFile(id), filepath.Join(st.sessionsDir(), id+".json"), st.walPath(id)} {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
+	if err := sessionstore.PurgeSessionDisk(st.rootDir(), s.dataDir, id); err != nil {
+		return err
 	}
-	for _, path := range []string{filepath.Join(st.sessionsDir(), id), st.brainDir(id), filepath.Join(st.rootDir(), "executions", id)} {
-		if path != "" {
-			if err := os.RemoveAll(path); err != nil {
-				return err
-			}
-		}
+	if err := os.Remove(filepath.Join(st.sessionsDir(), id+".json")); err != nil && !os.IsNotExist(err) {
+		return err
 	}
-	purgeSessionDebugPayloads(id)
+	clearSessionDebug(id)
+	if eng := s.searchRef(); eng != nil {
+		_ = eng.DeleteSession(id)
+	}
+	if s.onPurge != nil {
+		s.onPurge(id)
+	}
 	// The purged session's background bookkeeping dies with it (Bug 20):
 	// bg/<job>.pid.json and bg/<job>.notice.json would otherwise leak as
 	// orphan files and get re-delivered to a session that no longer exists.
@@ -1022,6 +1051,7 @@ func (s *sessionSupervisor) purge(id string) error {
 	markSessionPurged(s.dataDir, id)
 	s.mu.Lock()
 	delete(s.resident, id)
+	delete(s.epochs, id)
 	s.mu.Unlock()
 	return nil
 }

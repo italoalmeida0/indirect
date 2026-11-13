@@ -204,6 +204,21 @@ type SessionRecord struct {
 	AttentionSeq  int64  `json:"attentionSeq,omitempty"`
 	SeenSeq       int64  `json:"seenSeq,omitempty"`
 	AttentionKind string `json:"attentionKind,omitempty"`
+
+	// Hot Resident Window tracking (transient in-memory state, never serialized).
+	// When HotBaseMsgIdx > 0, Messages holds global messages [HotBaseMsgIdx .. TotalMsgs)
+	// and FileBalloons holds turns >= HotBaseTurn.
+	HotBaseTurn   int `json:"-"`
+	HotBaseMsgIdx int `json:"-"`
+	TotalTurns    int `json:"-"`
+	TotalMsgs     int `json:"-"`
+}
+
+func (r *SessionRecord) globalMsgCount() int {
+	if r == nil {
+		return 0
+	}
+	return r.HotBaseMsgIdx + len(r.Messages)
 }
 
 // BgTask is one session-global background task. Content is the retained

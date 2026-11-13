@@ -18,6 +18,7 @@ import (
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/filetrack"
 	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/sessionstore"
 	"indirect/indirect-code-daemon/packages/skills"
 )
 
@@ -220,6 +221,57 @@ func splitRecord(rec *SessionRecord) ([]turnLine, metaLine) {
 	return lines, meta
 }
 
+func messageGroupUnix(msgs []provider.Message, fallbackMs int64) int64 {
+	for _, m := range msgs {
+		if !m.Time.IsZero() && m.Time.Unix() > 0 {
+			return m.Time.Unix()
+		}
+	}
+	if fallbackMs > 1e12 {
+		return fallbackMs / 1000
+	}
+	if fallbackMs > 0 {
+		return fallbackMs
+	}
+	return time.Now().Unix()
+}
+
+// buildTurnWritesFromRecord builds sessionstore.TurnWrite entries for all groups
+// in rec.Messages with Turn > minTurn.
+func buildTurnWritesFromRecord(rec *SessionRecord, minTurn int) []sessionstore.TurnWrite {
+	if rec == nil || len(rec.Messages) == 0 {
+		return nil
+	}
+	groups := turnGroups(rec.Messages)
+	balloonsByTurn := make(map[int]*filetrack.TurnChanges, len(rec.FileBalloons))
+	for i := range rec.FileBalloons {
+		b := rec.FileBalloons[i]
+		cp := b
+		balloonsByTurn[b.TurnIndex] = &cp
+	}
+	writes := make([]sessionstore.TurnWrite, 0, len(groups))
+	for _, g := range groups {
+		if g.turn <= minTurn {
+			continue
+		}
+		msgs := make([]provider.Message, 0, len(g.idx))
+		for _, idx := range g.idx {
+			msgs = append(msgs, stripTransientMessageDetails(rec.Messages[idx]))
+		}
+		if len(msgs) == 0 {
+			continue
+		}
+		writes = append(writes, sessionstore.TurnWrite{
+			TurnSeq:       g.turn,
+			Messages:      msgs,
+			DiffBalloon:   balloonsByTurn[g.turn],
+			TokenEst:      sessionstore.EstimateTurnTokens(msgs),
+			CreatedAtUnix: messageGroupUnix(msgs, rec.UpdatedAt),
+		})
+	}
+	return writes
+}
+
 // recTurnSeqGuard is a tiny indirection so splitRecord stays testable
 // without a record; always returns storeVersion.
 func recTurnSeqGuard() int { return storeVersion }
@@ -316,6 +368,9 @@ func (s *diskStore) readSessionFile(id string) ([]turnLine, metaLine, error) {
 	}
 	data, err := os.ReadFile(s.sessionFile(id))
 	if err != nil {
+		if os.IsNotExist(err) && s.v2.HasV2Session(id) {
+			return s.readV2AsTurnLines(id)
+		}
 		return nil, meta, err
 	}
 	var lines []turnLine
@@ -367,6 +422,53 @@ func (s *diskStore) readSessionFile(id string) ([]turnLine, metaLine, error) {
 		return nil, meta, fmt.Errorf("no meta line")
 	}
 	return lines, *lastValidMeta, nil
+}
+
+func (s *diskStore) readV2AsTurnLines(id string) ([]turnLine, metaLine, error) {
+	meta, err := s.readMeta(id)
+	if err != nil {
+		return nil, metaLine{}, err
+	}
+	entries, err := s.v2.ReadTurnIndex(id)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, metaLine{}, err
+	}
+	if len(entries) == 0 {
+		return nil, meta, nil
+	}
+	msgs, bals, err := s.v2.ReadTurnRange(id, 0, 0)
+	if err != nil {
+		return nil, metaLine{}, err
+	}
+	if hyd, herr := s.cas.HydrateMessageImages(msgs); herr == nil && hyd != nil {
+		msgs = hyd
+	}
+	balByTurn := make(map[int]*filetrack.TurnChanges, len(bals))
+	for i := range bals {
+		cp := bals[i]
+		balByTurn[cp.TurnIndex] = &cp
+	}
+	lines := make([]turnLine, 0, len(entries))
+	for _, e := range entries {
+		lo := e.FirstMsgIdx
+		hi := e.LastMsgIdx + 1
+		if lo < 0 || hi > len(msgs) || lo > hi {
+			continue
+		}
+		raw := make([]json.RawMessage, 0, hi-lo)
+		for _, m := range msgs[lo:hi] {
+			b, merr := json.Marshal(stripTransientMessageDetails(m))
+			if merr == nil {
+				raw = append(raw, b)
+			}
+		}
+		lines = append(lines, turnLine{
+			V: storeVersion, Kind: "turn", Turn: e.TurnSeq,
+			Messages: raw, Balloon: balByTurn[e.TurnSeq],
+			Usage: meta.Usage, Context: meta.Context,
+		})
+	}
+	return lines, meta, nil
 }
 
 // assembleRecord fuses turn lines + meta into a SessionRecord (hydrate
@@ -488,6 +590,9 @@ func (s *diskStore) readMetaTail(id string) (metaLine, error) {
 	}
 	f, err := os.Open(s.sessionFile(id))
 	if err != nil {
+		if os.IsNotExist(err) && s.v2.HasV2Session(id) {
+			return s.readMeta(id)
+		}
 		return meta, err
 	}
 	defer f.Close()
@@ -761,14 +866,17 @@ func (s *diskStore) rewriteTailAppend(path string, tailSize int64, tl turnLine, 
 	return nil
 }
 
-// rewriteMetaOnly rewrites ONLY the meta tail (title/queue/options/pin/
-// status flips): stream-copy + new meta, single tmp+rename.
+// rewriteMetaOnly rewrites ONLY session metadata: O(1) meta.json write in v2,
+// or tail rewrite when an unmigrated legacy .jsonl fixture is still on disk.
 func (s *diskStore) rewriteMetaOnly(id string, meta metaLine) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session id")
 	}
 	if sessionPurged(s.dataDir, id) {
 		return errSessionPurged
+	}
+	if s.v2.HasV2Session(id) {
+		return s.writeMetaV2(id, meta)
 	}
 	path := s.sessionFile(id)
 	ok, tailSize := hasMetaTail(path)
@@ -938,12 +1046,29 @@ func commitTmpFile(tmp *os.File, tmpName, path string) error {
 	return nil
 }
 
-// truncateTail drops turns at/above keepTurn (pure tail cut, e.g.
-// regenerate): clean prefix lines are byte-copied, never re-marshaled.
-// Single tmp+rename.
+// truncateTail drops turns at/above keepTurn (pure tail cut, e.g. regenerate).
 func (s *diskStore) truncateTail(id string, keepTurn int, meta metaLine) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session id")
+	}
+	if sessionPurged(s.dataDir, id) {
+		return errSessionPurged
+	}
+	if s.v2.HasV2Session(id) {
+		entries, err := s.v2.ReadTurnIndex(id)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		keepMsgCount := 0
+		for _, e := range entries {
+			if e.TurnSeq < keepTurn {
+				keepMsgCount = e.LastMsgIdx + 1
+			}
+		}
+		if err := s.v2.TruncateAfterMsg(id, keepMsgCount); err != nil {
+			return err
+		}
+		return s.writeMetaV2(id, meta)
 	}
 	path := s.sessionFile(id)
 	src, err := os.Open(path)
@@ -993,6 +1118,67 @@ func (s *diskStore) truncateTail(id string, keepTurn int, meta metaLine) error {
 func (s *diskStore) persistEdited(id string, firstDirtyTurn int, suffixMsgs []provider.Message, suffixBalloons []filetrack.TurnChanges, meta metaLine) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session id")
+	}
+	if sessionPurged(s.dataDir, id) {
+		return errSessionPurged
+	}
+	if s.v2.HasV2Session(id) {
+		entries, err := s.v2.ReadTurnIndex(id)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		keepMsgCount := 0
+		if firstDirtyTurn > 1 {
+			for _, e := range entries {
+				if e.TurnSeq < firstDirtyTurn {
+					keepMsgCount = e.LastMsgIdx + 1
+				}
+			}
+		}
+		if err := s.v2.TruncateAfterMsg(id, keepMsgCount); err != nil {
+			return err
+		}
+		if len(suffixMsgs) > 0 {
+			ext, eerr := s.cas.ExternalizeMessageImages(suffixMsgs)
+			if eerr != nil {
+				return eerr
+			}
+			suffixMsgs = sessionstore.ScrubMessagesDetails(ext)
+			groups := turnGroups(suffixMsgs)
+			turnShift := 0
+			if firstDirtyTurn > 1 && len(groups) > 0 {
+				turnShift = firstDirtyTurn - groups[0].turn
+			}
+			balByTurn := make(map[int]*filetrack.TurnChanges, len(suffixBalloons))
+			for i := range suffixBalloons {
+				cp := suffixBalloons[i]
+				balByTurn[cp.TurnIndex] = &cp
+			}
+			writes := make([]sessionstore.TurnWrite, 0, len(groups))
+			for _, g := range groups {
+				tSeq := g.turn + turnShift
+				gMsgs := make([]provider.Message, 0, len(g.idx))
+				for _, idx := range g.idx {
+					gMsgs = append(gMsgs, stripTransientMessageDetails(suffixMsgs[idx]))
+				}
+				if len(gMsgs) == 0 {
+					continue
+				}
+				writes = append(writes, sessionstore.TurnWrite{
+					TurnSeq:       tSeq,
+					Messages:      gMsgs,
+					DiffBalloon:   balByTurn[tSeq],
+					TokenEst:      sessionstore.EstimateTurnTokens(gMsgs),
+					CreatedAtUnix: messageGroupUnix(gMsgs, meta.UpdatedAt),
+				})
+			}
+			if len(writes) > 0 {
+				if _, err := s.v2.AppendTurns(id, writes); err != nil {
+					return err
+				}
+			}
+		}
+		return s.writeMetaV2(id, meta)
 	}
 	path := s.sessionFile(id)
 	src, err := os.Open(path)

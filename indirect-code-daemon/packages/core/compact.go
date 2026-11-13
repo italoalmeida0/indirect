@@ -68,6 +68,7 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 
 	a.mu.Lock()
 	history := append([]provider.Message(nil), a.messages...)
+	baseMsgIdx := a.baseMsgIdx
 	prevState := a.compactionStateLocked()
 	window := a.contextWindow
 	system := a.System
@@ -77,8 +78,12 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	if len(history) == 0 {
 		return "", fmt.Errorf("nothing to compact")
 	}
+	if baseMsgIdx < 0 {
+		baseMsgIdx = 0
+	}
+	totalLen := baseMsgIdx + len(history)
 
-	projected := projectMessages(history, prevState)
+	projected := projectMessagesAt(history, baseMsgIdx, prevState)
 	if len(projected) < CompactionMinMessages && !opts.forceCut {
 		return "", fmt.Errorf("nothing to compact: transcript below minimum (%d messages)", CompactionMinMessages)
 	}
@@ -88,16 +93,17 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	if prevState != nil {
 		workingState = prevState.Clone()
 		if len(workingState.Blocks) == 0 {
-			synthetic, legacyKeepFrom := projectionAnchor(workingState, len(history))
-			if synthetic && legacyKeepFrom > 0 {
-				rawSpan := history[:legacyKeepFrom]
+			synthetic, legacyKeepFrom := projectionAnchorAt(workingState, baseMsgIdx, len(history))
+			if synthetic && legacyKeepFrom > baseMsgIdx {
+				localKeep := legacyKeepFrom - baseMsgIdx
+				rawSpan := history[:localKeep]
 				ops := ExtractFileOps(rawSpan)
 				ops.Read = MergeFileOps(workingState.ReadFiles, ops.Read)
 				ops.Modified = MergeFileOps(workingState.ModifiedFiles, ops.Modified)
 				legacyBlock := FoldBlock{
 					ID:             workingState.allocBlockID(),
 					Tier:           1,
-					StartIdx:       0,
+					StartIdx:       baseMsgIdx,
 					EndIdx:         legacyKeepFrom,
 					Topic:          deriveBlockTopic(rawSpan, workingState.PreviousSummary),
 					Summary:        strings.TrimSpace(workingState.PreviousSummary),
@@ -112,35 +118,40 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 				legacyBlock.BlockTokens = estimateFoldBlockTokens(legacyBlock)
 				workingState.Blocks = append(workingState.Blocks, legacyBlock)
 				workingState.SyncMirrors()
-			} else if legacyKeepFrom == 0 && strings.TrimSpace(workingState.PreviousSummary) != "" {
+			} else if legacyKeepFrom == baseMsgIdx && strings.TrimSpace(workingState.PreviousSummary) != "" {
 				carryOverSummary = strings.TrimSpace(workingState.PreviousSummary)
 			} else if !synthetic {
 				// No compacted prefix yet (or corrupt legacy anchor): preserve any
 				// cached visual digests, evicted wire latches, and learned image caps.
 				workingState = &CompactionState{}
-				copyVisionStateInto(workingState, prevState, len(history))
+				copyVisionStateInto(workingState, prevState, totalLen)
 			}
-		} else if ok, _ := projectionAnchor(workingState, len(history)); !ok {
-			workingState = TruncateCompaction(workingState, len(history))
+		} else if ok, _ := projectionAnchorAt(workingState, baseMsgIdx, len(history)); !ok {
+			workingState = TruncateCompaction(workingState, totalLen)
 			if workingState == nil {
 				workingState = &CompactionState{}
-				copyVisionStateInto(workingState, prevState, len(history))
+				copyVisionStateInto(workingState, prevState, totalLen)
 			}
 		}
 	}
 
-	rawStart := 0
+	globalStart := baseMsgIdx
 	if len(workingState.Blocks) > 0 {
-		if ok, kf := projectionAnchor(workingState, len(history)); ok {
-			rawStart = kf
+		if ok, kf := projectionAnchorAt(workingState, baseMsgIdx, len(history)); ok {
+			globalStart = kf
 		}
 	}
-	if rawStart >= len(history) {
+	localStart := globalStart - baseMsgIdx
+	if localStart < 0 {
+		localStart = 0
+		globalStart = baseMsgIdx
+	}
+	if localStart >= len(history) {
 		return "", fmt.Errorf("nothing to compact: keep-tail covers the whole transcript")
 	}
 
-	unfolded := history[rawStart:]
-	latchedUnfolded := ApplyViewLatchTail(unfolded, rawStart, workingState.PrunedBefore)
+	unfolded := history[localStart:]
+	latchedUnfolded := ApplyViewLatchTail(unfolded, globalStart, workingState.PrunedBefore)
 
 	localCut := 0
 	if opts.keepTail > 0 {
@@ -171,41 +182,43 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	if localCut <= 0 {
 		return "", fmt.Errorf("nothing to compact: transcript fits under the keep floor")
 	}
-	rawCutIdx := rawStart + localCut
-	if rawCutIdx > len(history) {
-		rawCutIdx = len(history)
+	localCutIdx := localStart + localCut
+	if localCutIdx > len(history) {
+		localCutIdx = len(history)
 	}
-	if rawCutIdx >= len(history) {
+	if localCutIdx >= len(history) {
 		return "", fmt.Errorf("nothing to compact: keep-tail covers the whole transcript")
 	}
+	globalCutIdx := baseMsgIdx + localCutIdx
 
-	spans := sliceFoldSpans(history, rawStart, rawCutIdx, FoldBlockTargetTokens)
+	spans := sliceFoldSpans(history, localStart, localCutIdx, FoldBlockTargetTokens)
 	if len(spans) == 0 {
 		return "", fmt.Errorf("nothing to compact")
 	}
 
 	// Ensure visual digests exist for any ImageBlocks being folded into FoldBlocks.
-	a.ensureSpanImageDigests(ctx, history, rawStart, rawCutIdx, workingState)
+	a.ensureSpanImageDigestsAt(ctx, history, baseMsgIdx, localStart, localCutIdx, workingState)
 
 	var totalUsage provider.Usage
 	for spanIdx, sp := range spans {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		cStart, cEnd := sp[0], sp[1]
+		localCStart, localCEnd := sp[0], sp[1]
+		globalCStart, globalCEnd := baseMsgIdx+localCStart, baseMsgIdx+localCEnd
 		isFinalSpan := spanIdx == len(spans)-1
 		carry := ""
 		if spanIdx == 0 {
 			carry = carryOverSummary
 		}
 
-		blockSummary, spanUsage, err := a.summarizeSpan(ctx, history, cStart, cEnd, rawCutIdx, isFinalSpan, carry, workingState.ImageDigests, sink)
+		blockSummary, spanUsage, err := a.summarizeSpan(ctx, history, baseMsgIdx, localCStart, localCEnd, localCutIdx, isFinalSpan, carry, workingState.ImageDigests, sink)
 		if err != nil {
 			return "", err
 		}
 		totalUsage = totalUsage.Add(spanUsage)
 
-		chunk := history[cStart:cEnd]
+		chunk := history[localCStart:localCEnd]
 		ops := ExtractFileOps(chunk)
 		if spanIdx == 0 && carry != "" && prevState != nil {
 			ops.Read = MergeFileOps(prevState.ReadFiles, ops.Read)
@@ -215,8 +228,8 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 		blk := FoldBlock{
 			ID:             workingState.allocBlockID(),
 			Tier:           1,
-			StartIdx:       cStart,
-			EndIdx:         cEnd,
+			StartIdx:       globalCStart,
+			EndIdx:         globalCEnd,
 			Topic:          deriveBlockTopic(chunk, blockSummary),
 			Summary:        blockSummary,
 			ReadFiles:      ops.Read,
@@ -232,7 +245,7 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 		// Enforce NET_SHRINK_TOLERANCE: if the model regurgitated content past
 		// the allowed token budget, fall back deterministically to MechanicalBlockSummary.
 		if exceedsShrinkBudget(rawToks, blk.BlockTokens) {
-			mech := MechanicalBlockSummaryWithDigests(chunk, cStart, cEnd, workingState.ImageDigests)
+			mech := MechanicalBlockSummaryWithDigests(chunk, globalCStart, globalCEnd, workingState.ImageDigests)
 			if carry != "" && !strings.Contains(mech, carry) {
 				mech = carry + "\n\n---\n\n" + mech
 			}
@@ -264,7 +277,7 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	if opts.keepRecentTokens > 0 && opts.keepRecentTokens < protectBudget {
 		protectBudget = opts.keepRecentTokens
 	}
-	workingState.PrunedBefore = max(prevPrunedBefore, ComputeLatchWatermark(history, rawCutIdx, protectBudget))
+	workingState.PrunedBefore = max(prevPrunedBefore, ComputeLatchWatermarkAt(history, baseMsgIdx, globalCutIdx, protectBudget))
 	workingState.SyncMirrors()
 	hasUsage := totalUsage.InputTokens > 0 || totalUsage.OutputTokens > 0 ||
 		totalUsage.CacheReadTokens > 0 || totalUsage.CacheWriteTokens > 0
@@ -406,28 +419,32 @@ func sliceFoldSpans(history []provider.Message, rawStart, rawCutIdx, targetToken
 func (a *Agent) summarizeSpan(
 	ctx context.Context,
 	history []provider.Message,
-	cStart, cEnd, rawCutIdx int,
+	baseMsgIdx int,
+	localCStart, localCEnd, localCutIdx int,
 	isFinalSpan bool,
 	carryOverSummary string,
 	digests map[string]string,
 	sink func(delta string),
 ) (string, provider.Usage, error) {
 	var totalUsage provider.Usage
-	chunk := history[cStart:cEnd]
+	chunk := history[localCStart:localCEnd]
+	globalCStart := baseMsgIdx + localCStart
+	globalCEnd := baseMsgIdx + localCEnd
 
-	// Check whether this final span splits an active user turn at rawCutIdx.
-	if isFinalSpan && rawCutIdx < len(history) && !isUserBoundary(history[rawCutIdx]) {
-		turnStart := findTurnStartIndex(history, rawCutIdx)
-		if turnStart > cStart && turnStart < cEnd {
-			histChunk := history[cStart:turnStart]
-			histSummary, u1, err := a.summarizeChunkWithFallback(ctx, histChunk, cStart, turnStart, false, carryOverSummary, digests, sink)
+	// Check whether this final span splits an active user turn at localCutIdx.
+	if isFinalSpan && localCutIdx < len(history) && !isUserBoundary(history[localCutIdx]) {
+		turnStart := findTurnStartIndex(history, localCutIdx)
+		if turnStart > localCStart && turnStart < localCEnd {
+			globalTurnStart := baseMsgIdx + turnStart
+			histChunk := history[localCStart:turnStart]
+			histSummary, u1, err := a.summarizeChunkWithFallback(ctx, histChunk, globalCStart, globalTurnStart, false, carryOverSummary, digests, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
 			totalUsage = totalUsage.Add(u1)
 
-			prefixChunk := history[turnStart:cEnd]
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, prefixChunk, turnStart, cEnd, true, "", digests, sink)
+			prefixChunk := history[turnStart:localCEnd]
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, prefixChunk, globalTurnStart, globalCEnd, true, "", digests, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -435,8 +452,8 @@ func (a *Agent) summarizeSpan(
 			combined := fmt.Sprintf("%s\n\n---\n\n**Turn Context (split turn):**\n\n%s", strings.TrimSpace(histSummary), strings.TrimSpace(prefixSummary))
 			return combined, totalUsage, nil
 		}
-		if turnStart < cStart && carryOverSummary != "" {
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, true, "", digests, sink)
+		if turnStart < localCStart && carryOverSummary != "" {
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, globalCStart, globalCEnd, true, "", digests, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -444,8 +461,8 @@ func (a *Agent) summarizeSpan(
 			combined := fmt.Sprintf("%s\n\n---\n\n**Turn Context (split turn):**\n\n%s", carryOverSummary, strings.TrimSpace(prefixSummary))
 			return combined, totalUsage, nil
 		}
-		if turnStart >= 0 && turnStart < cStart {
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, true, "", digests, sink)
+		if turnStart >= 0 && turnStart < localCStart {
+			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, globalCStart, globalCEnd, true, "", digests, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -454,7 +471,7 @@ func (a *Agent) summarizeSpan(
 		}
 	}
 
-	summary, u, err := a.summarizeChunkWithFallback(ctx, chunk, cStart, cEnd, false, carryOverSummary, digests, sink)
+	summary, u, err := a.summarizeChunkWithFallback(ctx, chunk, globalCStart, globalCEnd, false, carryOverSummary, digests, sink)
 	totalUsage = totalUsage.Add(u)
 	if err != nil {
 		return "", totalUsage, err

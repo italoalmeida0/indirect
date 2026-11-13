@@ -17,6 +17,7 @@ import (
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/filetrack"
 	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/sessionstore"
 	"indirect/indirect-code-daemon/packages/skills"
 )
 
@@ -353,6 +354,27 @@ func (ww *walWriter) close() error {
 	return err
 }
 
+// closeNoSync flushes buffered bytes to the OS cache and closes the handle
+// without an extra hardware fsync when commitWAL is immediately syncing the
+// superseding v2 turn segment + meta.json before removing the WAL file.
+func (ww *walWriter) closeNoSync() error {
+	if ww == nil {
+		return nil
+	}
+	ww.mu.Lock()
+	defer ww.mu.Unlock()
+	if ww.closed {
+		return ww.closeErr
+	}
+	ww.closed = true
+	err := ww.w.Flush()
+	if closeErr := ww.file.Close(); err == nil {
+		err = closeErr
+	}
+	ww.closeErr = err
+	return err
+}
+
 // readWALHeader returns the header (line 1) without replaying the body.
 // Nil when no WAL exists.
 
@@ -595,31 +617,38 @@ func applyWALEvent(rec *SessionRecord, ev *walEvent, seen *msgDedup) error {
 // it on top. This is the read path mirrors and history pulls use during
 // a running turn: always current, never a mid-turn rewrite.
 
-// commitWAL appends the just-finished turn as ONE line + rewrites the meta
-// tail, then deletes the WAL. Callers must hold act.mu; the in-memory
-// record is the complete post-turn state. Old turn lines are never
-// touched (immutability). Idempotent: a re-commit after a crash in the
-// commit window skips turn lines already on disk (same turn number +
-// same message count) and only rewrites meta.
+// commitWAL externalizes any inline images to CAS, scrubs bloated Details,
+// appends only newly finished turn(s) to v2 Warm segments in O(turn_size),
+// updates meta.json in O(1), and removes .wal.jsonl.
 func (s *diskStore) commitWAL(id string, rec *SessionRecord, wal *walWriter) error {
 	if rec == nil {
 		return fmt.Errorf("nil session")
 	}
 	var walErr error
 	if wal != nil {
-		walErr = wal.close()
+		walErr = wal.closeNoSync()
+	}
+	if !validSessionID(id) {
+		return fmt.Errorf("invalid session id")
+	}
+	if sessionPurged(s.dataDir, id) {
+		if p := s.walPath(id); p != "" {
+			_ = os.Remove(p)
+		}
+		return errSessionPurged
 	}
 	rec.UpdatedAt = time.Now().UnixMilli()
-	// Fast path: does the disk already have this turn line?
-	lines, _, rerr := s.readSessionFile(id)
-	if rerr != nil && !os.IsNotExist(rerr) {
-		return rerr
+
+	// Ensure resident messages hold CAS references only (ImageBlock.Data == nil)
+	// and scrubbed Details.
+	if err := s.externalizeRecordMessages(rec); err != nil {
+		return err
+	}
+	if err := s.ensureV2(id); err != nil {
+		return err
 	}
 	if walErr != nil {
-		// The buffered writer retains its first I/O error. Once storage is
-		// writable again, checkpoint the owner's complete record atomically
-		// instead of retrying that permanently failed buffer.
-		if err := s.saveSessionSync(rec); err != nil {
+		if err := s.checkpointRecordV2(rec); err != nil {
 			return err
 		}
 		if err := os.Remove(s.walPath(id)); err != nil && !os.IsNotExist(err) {
@@ -627,88 +656,76 @@ func (s *diskStore) commitWAL(id string, rec *SessionRecord, wal *walWriter) err
 		}
 		return nil
 	}
-	turnIdx := rec.TurnSeq
-	// Messages of the finished turn (in-memory, includes WAL replay).
-	// sliceTurnMessages applies the shared turnGroups rule: zero-index
-	// notices attach to the following turn, trailing notices to the last
-	// turn — one message, one turn line.
-	turnMsgs := sliceTurnMessages(rec.Messages, turnIdx)
-	existingIdx := -1
-	for i, tl := range lines {
-		if tl.Turn == turnIdx {
-			existingIdx = i
-			break
-		}
+
+	lastEntry, _, hasLast, rerr := s.v2.LastTurnEntry(id)
+	if rerr != nil && !os.IsNotExist(rerr) {
+		return rerr
 	}
-	if existingIdx >= 0 && turnLineMatches(lines[existingIdx], turnMsgs) {
-		// Turn line present with matching content (commit-window retry):
-		// just rewrite meta.
-		if err := s.rewriteMetaOnly(id, recordMeta(rec)); err != nil {
-			// Fresh session with no lines yet (turn produced no messages):
-			// full write.
-			if os.IsNotExist(err) {
-				if werr := s.saveSessionSync(rec); werr != nil {
-					return werr
-				}
-			} else {
-				return err
-			}
+	lastDiskTurn := 0
+	if hasLast {
+		lastDiskTurn = lastEntry.TurnSeq
+	}
+
+	turnIdx := rec.TurnSeq
+	minWriteTurn := lastDiskTurn
+	if turnIdx > 0 && turnIdx <= lastDiskTurn {
+		entries, ierr := s.v2.ReadTurnIndex(id)
+		if ierr != nil && !os.IsNotExist(ierr) {
+			return ierr
 		}
-	} else if len(turnMsgs) > 0 {
-		raw := make([]json.RawMessage, 0, len(turnMsgs))
-		for _, m := range turnMsgs {
-			data, err := json.Marshal(m)
-			if err != nil {
-				return err
-			}
-			raw = append(raw, data)
-		}
-		var balloon *filetrack.TurnChanges
-		for i := range rec.FileBalloons {
-			if rec.FileBalloons[i].TurnIndex == turnIdx {
-				cp := rec.FileBalloons[i]
-				balloon = &cp
+		// Check whether turnIdx on disk already matches rec's messages (idempotent
+		// commit-window retry) or needs replacement.
+		existingIdx := -1
+		for i := len(entries) - 1; i >= 0; i-- {
+			if entries[i].TurnSeq == turnIdx {
+				existingIdx = i
 				break
 			}
 		}
-		tl := turnLine{V: storeVersion, Kind: "turn", Turn: turnIdx, Messages: raw, Balloon: balloon, Usage: rec.Usage, Context: rec.Context}
+		turnMsgs := sliceTurnMessages(rec.Messages, turnIdx)
 		if existingIdx >= 0 {
-			// Replace existing turn line on disk instead of appending a duplicate.
-			// Also deduplicate any other duplicate lines for this turn index.
-			cleanLines := make([]turnLine, 0, len(lines))
-			replaced := false
-			for _, l := range lines {
-				if l.Turn == turnIdx {
-					if !replaced {
-						cleanLines = append(cleanLines, tl)
-						replaced = true
-					}
-				} else {
-					cleanLines = append(cleanLines, l)
+			diskMsgs, _, derr := s.v2.ReadTurnRange(id, turnIdx, turnIdx)
+			if derr != nil {
+				return derr
+			}
+			if !messagesEqualJSON(diskMsgs, turnMsgs) {
+				if err := s.v2.TruncateAfterMsg(id, entries[existingIdx].FirstMsgIdx); err != nil {
+					return err
+				}
+				minWriteTurn = turnIdx - 1
+			}
+		} else if len(turnMsgs) > 0 {
+			// Turn number sits below lastDiskTurn with no matching entry:
+			// find insertion point and rewrite tail from there.
+			cutMsg := 0
+			for _, e := range entries {
+				if e.TurnSeq < turnIdx {
+					cutMsg = e.LastMsgIdx + 1
 				}
 			}
-			if !replaced {
-				cleanLines = append(cleanLines, tl)
-			}
-			if err := s.writeSessionFile(id, cleanLines, recordMeta(rec)); err != nil {
+			if err := s.v2.TruncateAfterMsg(id, cutMsg); err != nil {
 				return err
 			}
-		} else {
-			if err := s.appendTurnLine(id, tl, recordMeta(rec)); err != nil {
-				return err
-			}
+			minWriteTurn = turnIdx - 1
 		}
+	}
+
+	writes := buildTurnWritesFromRecord(rec, minWriteTurn)
+	meta := recordMeta(rec)
+	meta.V, meta.Kind = storeVersion, "meta"
+	metaRaw, merr := json.Marshal(&meta)
+	if merr != nil {
+		return merr
+	}
+	_, totalTurns, totalMsgs, err := s.v2.AppendTurnsAndMeta(id, writes, metaRaw)
+	if err != nil {
+		return err
+	}
+	rec.TotalTurns = totalTurns
+	if totalMsgs > 0 {
+		rec.TotalMsgs = totalMsgs
 	} else {
-		// Nothing to append: just rewrite meta.
-		if err := s.rewriteMetaOnly(id, recordMeta(rec)); err != nil {
-			if os.IsNotExist(err) {
-				if werr := s.saveSessionSync(rec); werr != nil {
-					return werr
-				}
-			} else {
-				return err
-			}
-		}
+		rec.TotalMsgs = len(rec.Messages)
 	}
 	if p := s.walPath(id); p != "" {
 		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
@@ -716,6 +733,58 @@ func (s *diskStore) commitWAL(id string, rec *SessionRecord, wal *walWriter) err
 		}
 	}
 	return nil
+}
+
+func (s *diskStore) externalizeRecordMessages(rec *SessionRecord) error {
+	if rec == nil || len(rec.Messages) == 0 {
+		return nil
+	}
+	for i := range rec.Messages {
+		if !messageNeedsCASOrScrub(rec.Messages[i]) {
+			continue
+		}
+		ext, err := s.cas.ExternalizeMessageImages(rec.Messages[i : i+1])
+		if err != nil {
+			return err
+		}
+		rec.Messages[i] = sessionstore.ScrubMessageDetails(ext[0])
+	}
+	return nil
+}
+
+func messageNeedsCASOrScrub(m provider.Message) bool {
+	for _, blk := range m.Content {
+		switch v := blk.(type) {
+		case provider.ImageBlock:
+			if len(v.Data) > 0 || (v.MimeType == "" && v.MediaType != "") || (v.MediaType == "" && v.MimeType != "" && v.BlobSHA256 != "") {
+				return true
+			}
+		case provider.ToolResultBlock:
+			if v.Details != nil {
+				return true
+			}
+			for _, inner := range v.Content {
+				if ib, ok := inner.(provider.ImageBlock); ok && len(ib.Data) > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func messagesEqualJSON(a, b []provider.Message) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		aj, err1 := json.Marshal(stripTransientMessageDetails(a[i]))
+		bj, err2 := json.Marshal(stripTransientMessageDetails(b[i]))
+		if err1 != nil || err2 != nil || !bytes.Equal(aj, bj) {
+			return false
+		}
+	}
+	return true
 }
 
 // msgFingerprint hashes the message content with the ID blanked, so the

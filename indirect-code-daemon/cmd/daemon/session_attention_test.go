@@ -514,6 +514,9 @@ func TestAttentionMarkSessionSeenClampingIdempotencyAndWS(t *testing.T) {
 
 	// 2. Idempotent repeat (seenSeq=2 and seenSeq=1 <= current SeenSeq=2): ZERO disk write, ZERO pingChange!
 	filePath := st.sessionFile("clamp1")
+	if _, err := os.Stat(filePath); os.IsNotExist(err) && st.v2.HasV2Session("clamp1") {
+		filePath = filepath.Join(st.sessionsDir(), "clamp1", "meta.json")
+	}
 	backdated := time.Unix(1700000000, 0)
 	if err := os.Chtimes(filePath, backdated, backdated); err != nil {
 		t.Fatal(err)

@@ -50,10 +50,18 @@ Output ONLY dense structured Markdown bullet points (<= 1200 characters). No pre
 
 type wireImageOccurrence struct {
 	msgIdx   int
+	localIdx int
 	blockIdx int
 	occKey   string
 	imgKey   string
 	img      provider.ImageBlock
+}
+
+func imageRawByteLen(img provider.ImageBlock) int {
+	if len(img.Data) > 0 {
+		return len(img.Data)
+	}
+	return img.ByteLen
 }
 
 // ImageOccurrenceKey formats the message-scoped eviction latch key so re-reading
@@ -202,7 +210,7 @@ func BuildDeterministicImageDigest(history []provider.Message, msgIdx int, img p
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "- Image metadata: `%s` (%s, %s, %d bytes, sha256:%s)",
-		label, mime, formatImageDimsFull(img), len(img.Data), shortHash)
+		label, mime, formatImageDimsFull(img), imageRawByteLen(img), shortHash)
 
 	if obs := extractNearbyAssistantObservations(history, msgIdx, 600); obs != "" {
 		sb.WriteString("\n- Prior assistant observations: ")
@@ -301,10 +309,18 @@ func (a *Agent) effectiveMaxWireImageBytes() int {
 }
 
 func collectLiveWireImages(history []provider.Message, keepFrom int, state *CompactionState) ([]wireImageOccurrence, int) {
-	if keepFrom < 0 {
-		keepFrom = 0
+	return collectLiveWireImagesAt(history, 0, keepFrom, state)
+}
+
+func collectLiveWireImagesAt(history []provider.Message, baseMsgIdx int, globalKeepFrom int, state *CompactionState) ([]wireImageOccurrence, int) {
+	if baseMsgIdx < 0 {
+		baseMsgIdx = 0
 	}
-	if keepFrom >= len(history) {
+	localStart := globalKeepFrom - baseMsgIdx
+	if localStart < 0 {
+		localStart = 0
+	}
+	if localStart >= len(history) {
 		return nil, 0
 	}
 	var evicted map[string]bool
@@ -313,8 +329,9 @@ func collectLiveWireImages(history []provider.Message, keepFrom int, state *Comp
 	}
 	var live []wireImageOccurrence
 	totalBytes := 0
-	for msgIdx := keepFrom; msgIdx < len(history); msgIdx++ {
-		m := history[msgIdx]
+	for localIdx := localStart; localIdx < len(history); localIdx++ {
+		msgIdx := baseMsgIdx + localIdx
+		m := history[localIdx]
 		if m.Meta != nil && (m.Meta[MetaHidden] == "true" || m.Meta["compaction"] == "true") {
 			continue
 		}
@@ -326,12 +343,13 @@ func collectLiveWireImages(history []provider.Message, keepFrom int, state *Comp
 				if !isImageOccurrenceEvicted(evicted, msgIdx, blockOrd, imgKey) {
 					live = append(live, wireImageOccurrence{
 						msgIdx:   msgIdx,
+						localIdx: localIdx,
 						blockIdx: blockOrd,
 						occKey:   ImageOccurrenceKey(msgIdx, blockOrd, imgKey),
 						imgKey:   imgKey,
 						img:      v,
 					})
-					totalBytes += len(v.Data)
+					totalBytes += imageRawByteLen(v)
 				}
 				blockOrd++
 			case provider.ToolResultBlock:
@@ -341,12 +359,13 @@ func collectLiveWireImages(history []provider.Message, keepFrom int, state *Comp
 						if !isImageOccurrenceEvicted(evicted, msgIdx, blockOrd, imgKey) {
 							live = append(live, wireImageOccurrence{
 								msgIdx:   msgIdx,
+								localIdx: localIdx,
 								blockIdx: blockOrd,
 								occKey:   ImageOccurrenceKey(msgIdx, blockOrd, imgKey),
 								imgKey:   imgKey,
 								img:      ib,
 							})
-							totalBytes += len(ib.Data)
+							totalBytes += imageRawByteLen(ib)
 						}
 						blockOrd++
 					}
@@ -360,17 +379,18 @@ func collectLiveWireImages(history []provider.Message, keepFrom int, state *Comp
 func (a *Agent) liveWireImageCount() int {
 	a.mu.Lock()
 	history := append([]provider.Message(nil), a.messages...)
+	baseMsgIdx := a.baseMsgIdx
 	state := a.compactionStateLocked()
 	a.mu.Unlock()
 
-	keepFrom := 0
-	if ok, kf := projectionAnchor(state, len(history)); ok {
+	keepFrom := baseMsgIdx
+	if ok, kf := projectionAnchorAt(state, baseMsgIdx, len(history)); ok {
 		keepFrom = kf
 	}
 	if state != nil && state.LearnedMaxImages != nil && *state.LearnedMaxImages <= 0 {
 		return 0
 	}
-	live, _ := collectLiveWireImages(history, keepFrom, state)
+	live, _ := collectLiveWireImagesAt(history, baseMsgIdx, keepFrom, state)
 	return len(live)
 }
 
@@ -383,14 +403,15 @@ func (a *Agent) prepareWireImages(ctx context.Context) {
 	}
 	a.mu.Lock()
 	history := append([]provider.Message(nil), a.messages...)
+	baseMsgIdx := a.baseMsgIdx
 	state := a.compactionStateLocked()
 	a.mu.Unlock()
 
-	keepFrom := 0
-	if ok, kf := projectionAnchor(state, len(history)); ok {
+	keepFrom := baseMsgIdx
+	if ok, kf := projectionAnchorAt(state, baseMsgIdx, len(history)); ok {
 		keepFrom = kf
 	}
-	live, totalBytes := collectLiveWireImages(history, keepFrom, state)
+	live, totalBytes := collectLiveWireImagesAt(history, baseMsgIdx, keepFrom, state)
 	if len(live) == 0 {
 		return
 	}
@@ -413,7 +434,7 @@ func (a *Agent) prepareWireImages(ctx context.Context) {
 		}
 		toEvict = append(toEvict, occ)
 		remCount--
-		remBytes -= len(occ.img.Data)
+		remBytes -= imageRawByteLen(occ.img)
 	}
 	if len(toEvict) == 0 {
 		return
@@ -441,7 +462,7 @@ func (a *Agent) prepareWireImages(ctx context.Context) {
 	for k, d := range synthesized {
 		cur.ImageDigests[k] = truncateRunes(d, MaxImageDigestChars)
 	}
-	trimImageDigestsMap(cur.ImageDigests, a.messages, cur.KeepFrom)
+	trimImageDigestsMapAt(cur.ImageDigests, a.messages, a.baseMsgIdx, cur.KeepFrom)
 	if cur.EvictedImages == nil {
 		cur.EvictedImages = make(map[string]bool, len(toEvict))
 	}
@@ -473,14 +494,15 @@ func (a *Agent) shedWireImagesReactive(
 	}
 	a.mu.Lock()
 	history := append([]provider.Message(nil), a.messages...)
+	baseMsgIdx := a.baseMsgIdx
 	state := a.compactionStateLocked()
 	a.mu.Unlock()
 
-	keepFrom := 0
-	if ok, kf := projectionAnchor(state, len(history)); ok {
+	keepFrom := baseMsgIdx
+	if ok, kf := projectionAnchorAt(state, baseMsgIdx, len(history)); ok {
 		keepFrom = kf
 	}
-	live, totalBytes := collectLiveWireImages(history, keepFrom, state)
+	live, totalBytes := collectLiveWireImagesAt(history, baseMsgIdx, keepFrom, state)
 
 	if targetKeep < 0 {
 		targetKeep = 0
@@ -495,7 +517,7 @@ func (a *Agent) shedWireImagesReactive(
 		}
 		toEvict = append(toEvict, occ)
 		remCount--
-		remBytes -= len(occ.img.Data)
+		remBytes -= imageRawByteLen(occ.img)
 	}
 
 	var existing map[string]string
@@ -536,7 +558,7 @@ func (a *Agent) shedWireImagesReactive(
 		for k, d := range synthesized {
 			cur.ImageDigests[k] = truncateRunes(d, MaxImageDigestChars)
 		}
-		trimImageDigestsMap(cur.ImageDigests, a.messages, cur.KeepFrom)
+		trimImageDigestsMapAt(cur.ImageDigests, a.messages, a.baseMsgIdx, cur.KeepFrom)
 	}
 	if len(toEvict) > 0 {
 		if cur.EvictedImages == nil {
@@ -571,15 +593,29 @@ func (a *Agent) ensureSpanImageDigests(
 	startIdx, endIdx int,
 	workingState *CompactionState,
 ) {
+	a.ensureSpanImageDigestsAt(ctx, history, 0, startIdx, endIdx, workingState)
+}
+
+func (a *Agent) ensureSpanImageDigestsAt(
+	ctx context.Context,
+	history []provider.Message,
+	baseMsgIdx int,
+	startIdx, endIdx int,
+	workingState *CompactionState,
+) {
 	if ctx.Err() != nil || workingState == nil || startIdx < 0 || endIdx <= startIdx || startIdx >= len(history) {
 		return
+	}
+	if baseMsgIdx < 0 {
+		baseMsgIdx = 0
 	}
 	if endIdx > len(history) {
 		endIdx = len(history)
 	}
 	var targets []wireImageOccurrence
-	for msgIdx := startIdx; msgIdx < endIdx; msgIdx++ {
-		m := history[msgIdx]
+	for localIdx := startIdx; localIdx < endIdx; localIdx++ {
+		msgIdx := baseMsgIdx + localIdx
+		m := history[localIdx]
 		blockOrd := 0
 		for _, c := range m.Content {
 			switch v := c.(type) {
@@ -587,6 +623,7 @@ func (a *Agent) ensureSpanImageDigests(
 				imgKey := provider.ImageKey(v)
 				targets = append(targets, wireImageOccurrence{
 					msgIdx:   msgIdx,
+					localIdx: localIdx,
 					blockIdx: blockOrd,
 					occKey:   ImageOccurrenceKey(msgIdx, blockOrd, imgKey),
 					imgKey:   imgKey,
@@ -599,6 +636,7 @@ func (a *Agent) ensureSpanImageDigests(
 						imgKey := provider.ImageKey(ib)
 						targets = append(targets, wireImageOccurrence{
 							msgIdx:   msgIdx,
+							localIdx: localIdx,
 							blockIdx: blockOrd,
 							occKey:   ImageOccurrenceKey(msgIdx, blockOrd, imgKey),
 							imgKey:   imgKey,
@@ -624,7 +662,7 @@ func (a *Agent) ensureSpanImageDigests(
 	for k, d := range synthesized {
 		workingState.ImageDigests[k] = truncateRunes(d, MaxImageDigestChars)
 	}
-	trimImageDigestsMap(workingState.ImageDigests, history, endIdx)
+	trimImageDigestsMapAt(workingState.ImageDigests, history, baseMsgIdx, baseMsgIdx+endIdx)
 }
 
 func (a *Agent) ensureImageDigests(
@@ -657,7 +695,7 @@ func (a *Agent) ensureImageDigests(
 	canVision := a.Client != nil && !forceDeterministic && (learnedMax == nil || *learnedMax > 0)
 	if !canVision {
 		for _, t := range missing {
-			out[t.imgKey] = BuildDeterministicImageDigest(history, t.msgIdx, t.img)
+			out[t.imgKey] = BuildDeterministicImageDigest(history, t.localIdx, t.img)
 		}
 		return out
 	}
@@ -701,7 +739,7 @@ func (a *Agent) ensureImageDigests(
 					return
 				}
 				if digest == "" {
-					digest = BuildDeterministicImageDigest(history, item.msgIdx, item.img)
+					digest = BuildDeterministicImageDigest(history, item.localIdx, item.img)
 				}
 				digest = truncateRunes(digest, MaxImageDigestChars)
 				mu.Lock()
@@ -725,7 +763,7 @@ func (a *Agent) transcribeImageViaLLM(ctx context.Context, img provider.ImageBlo
 	onUsage := a.OnUsage
 	a.mu.Unlock()
 
-	if client == nil || (len(img.Data) == 0 && img.URL == "") {
+	if client == nil || (len(img.Data) == 0 && img.URL == "" && img.BlobSHA256 == "") {
 		return "", false
 	}
 
@@ -793,14 +831,19 @@ func (a *Agent) transcribeImageViaLLM(ctx context.Context, img provider.ImageBlo
 }
 
 func trimImageDigestsMap(digests map[string]string, history []provider.Message, keepFrom int) {
+	trimImageDigestsMapAt(digests, history, 0, keepFrom)
+}
+
+func trimImageDigestsMapAt(digests map[string]string, history []provider.Message, baseMsgIdx int, globalKeepFrom int) {
 	if len(digests) <= MaxCachedImageDigests {
 		return
 	}
 	activeKeys := map[string]bool{}
-	if keepFrom < 0 {
-		keepFrom = 0
+	localStart := globalKeepFrom - max(0, baseMsgIdx)
+	if localStart < 0 {
+		localStart = 0
 	}
-	for i := keepFrom; i < len(history); i++ {
+	for i := localStart; i < len(history); i++ {
 		for _, c := range history[i].Content {
 			switch v := c.(type) {
 			case provider.ImageBlock:
@@ -964,14 +1007,16 @@ func capPrefixWireImages(msgs []provider.Message, digests map[string]string, kee
 		for _, c := range m.Content {
 			switch v := c.(type) {
 			case provider.ImageBlock:
-				all = append(all, pos{msgIdx: mi, blkOrd: ord, bytes: len(v.Data)})
-				totalBytes += len(v.Data)
+				b := imageRawByteLen(v)
+				all = append(all, pos{msgIdx: mi, blkOrd: ord, bytes: b})
+				totalBytes += b
 				ord++
 			case provider.ToolResultBlock:
 				for _, ic := range v.Content {
 					if ib, ok := ic.(provider.ImageBlock); ok {
-						all = append(all, pos{msgIdx: mi, blkOrd: ord, bytes: len(ib.Data)})
-						totalBytes += len(ib.Data)
+						b := imageRawByteLen(ib)
+						all = append(all, pos{msgIdx: mi, blkOrd: ord, bytes: b})
+						totalBytes += b
 						ord++
 					}
 				}

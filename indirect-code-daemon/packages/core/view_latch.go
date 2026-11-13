@@ -85,6 +85,19 @@ func latchPruneToolMessage(m provider.Message) (provider.Message, bool) {
 	return cp, true
 }
 
+// ComputeLatchWatermarkAt computes the global raw-history watermark when
+// history[0] corresponds to global transcript index baseMsgIdx.
+func ComputeLatchWatermarkAt(history []provider.Message, baseMsgIdx int, globalKeepFrom int, protectTokens int) int {
+	if baseMsgIdx < 0 {
+		baseMsgIdx = 0
+	}
+	localKeep := globalKeepFrom - baseMsgIdx
+	if localKeep < 0 {
+		localKeep = 0
+	}
+	return baseMsgIdx + ComputeLatchWatermark(history, localKeep, protectTokens)
+}
+
 // ComputeLatchWatermark computes the monotonic raw-history index below which
 // oversized tool outputs in the kept tail [keepFrom, len(history)) may be
 // latched at a compaction or overflow boundary.

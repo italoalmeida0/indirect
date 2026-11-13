@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -301,11 +302,40 @@ func (s *Store) ReadTurnIndex(id string) ([]TurnEntry, error) {
 	mu.RLock()
 	defer mu.RUnlock()
 
-	entries, _, err := readTurnIndexFile(s.turnIndexPath(id))
+	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	return entries, nil
+	return slices.Clone(entries), nil
+}
+
+// LastTurnEntry returns the session's final TurnEntry and total turn count in O(1)
+// using the in-memory state cache when clean.
+func (s *Store) LastTurnEntry(id string) (TurnEntry, int, bool, error) {
+	if !ValidSessionID(id) {
+		return TurnEntry{}, 0, false, ErrInvalidSessionID
+	}
+	if err := s.ensureV2ForRead(context.Background(), id); err != nil {
+		return TurnEntry{}, 0, false, err
+	}
+	mu := s.sessionLock(id)
+	mu.RLock()
+	defer mu.RUnlock()
+
+	_, entries, _, err := s.loadStateReadOnlyLocked(id)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return TurnEntry{}, 0, false, nil
+		}
+		return TurnEntry{}, 0, false, err
+	}
+	if len(entries) == 0 {
+		return TurnEntry{}, 0, false, nil
+	}
+	return entries[len(entries)-1], len(entries), true, nil
 }
 
 // ReadManifest returns the session's reconciled segment manifest.
@@ -432,6 +462,18 @@ func (s *Store) loadStateFromDiskLocked(id string) (Manifest, []TurnEntry, int64
 	if err != nil {
 		return Manifest{}, nil, 0, err
 	}
+	for len(entries) > 0 && entries[len(entries)-1].Tier == TierWarm {
+		last := entries[len(entries)-1]
+		turnsPath := filepath.Join(s.sessionDir(id), warmTurnsFilename(last.SegmentID))
+		st, serr := os.Stat(turnsPath)
+		if serr == nil && uint64(st.Size()) >= last.Offset+uint64(last.Length) {
+			break
+		}
+		entries = entries[:len(entries)-1]
+		if validIdxBytes >= turnIndexHeaderBytes+turnIndexEntryBytes {
+			validIdxBytes -= turnIndexEntryBytes
+		}
+	}
 	reconcileManifestWithIndex(&m, entries)
 	return m, entries, validIdxBytes, nil
 }
@@ -487,8 +529,8 @@ func marshalTurnPayload(turnSeq int, createdAt int64, msgs []provider.Message) (
 	rawMsgs := make([]json.RawMessage, len(msgs))
 	for i := range msgs {
 		m := msgs[i]
-		if m.TurnIndex <= 0 {
-			m.TurnIndex = turnSeq
+		if m.TurnIndex < 0 {
+			m.TurnIndex = 0
 		}
 		b, err := json.Marshal(m)
 		if err != nil {
@@ -519,46 +561,100 @@ func unmarshalTurnPayload(raw []byte) (int, []provider.Message, error) {
 		if err != nil {
 			return 0, nil, err
 		}
-		if m.TurnIndex <= 0 && rec.Turn > 0 {
-			m.TurnIndex = rec.Turn
+		if m.TurnIndex < 0 {
+			m.TurnIndex = 0
 		}
 		msgs = append(msgs, m)
 	}
 	return rec.Turn, msgs, nil
 }
 
-func writeAtExactEnd(path string, expectedOffset uint64, payload []byte) error {
+func stageAtExactEnd(path string, expectedOffset uint64, payload []byte) (*os.File, error) {
 	if len(payload) == 0 {
-		return nil
+		return nil, nil
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	st, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
-		return err
+		return nil, err
 	}
 	if uint64(st.Size()) != expectedOffset {
 		if err := f.Truncate(int64(expectedOffset)); err != nil {
 			_ = f.Close()
-			return err
+			return nil, err
 		}
 	}
 	if _, err := f.Seek(int64(expectedOffset), io.SeekStart); err != nil {
 		_ = f.Close()
-		return err
+		return nil, err
 	}
 	if _, err := f.Write(payload); err != nil {
 		_ = f.Close()
-		return err
+		return nil, err
 	}
-	if err := f.Sync(); err != nil {
+	return f, nil
+}
+
+func stageTempPublish(dir string, data []byte) (*os.File, string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, "", err
+	}
+	f, err := os.CreateTemp(dir, ".publish-*")
+	if err != nil {
+		return nil, "", err
+	}
+	name := f.Name()
+	if err := f.Chmod(0o600); err != nil {
 		_ = f.Close()
+		_ = os.Remove(name)
+		return nil, "", err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(name)
+		return nil, "", err
+	}
+	return f, name, nil
+}
+
+func syncAndCloseFiles(files []*os.File) error {
+	var firstErr error
+	for _, fh := range files {
+		if fh == nil {
+			continue
+		}
+		if err := fh.Sync(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		if err := fh.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func cloneManifest(m Manifest) Manifest {
+	cp := m
+	if len(m.Segments) > 0 {
+		cp.Segments = make([]SegmentMeta, len(m.Segments))
+		for i, seg := range m.Segments {
+			seg.BlobRefs = slices.Clone(seg.BlobRefs)
+			cp.Segments[i] = seg
+		}
+	}
+	return cp
+}
+
+func writeAtExactEnd(path string, expectedOffset uint64, payload []byte) error {
+	f, err := stageAtExactEnd(path, expectedOffset, payload)
+	if err != nil || f == nil {
 		return err
 	}
-	return f.Close()
+	return syncAndCloseFiles([]*os.File{f})
 }
 
 // AppendTurn externalizes inline images to CAS, scrubs oversized legacy tool
@@ -576,12 +672,38 @@ func (s *Store) AppendTurn(id string, w TurnWrite) (TurnEntry, error) {
 // AppendTurns appends one or more turns to session id, rotating Warm segments
 // at ~8 MiB or 128 turns while coalescing segment/index fsyncs across the batch.
 func (s *Store) AppendTurns(id string, writes []TurnWrite) ([]TurnEntry, error) {
+	added, _, _, err := s.AppendTurnsAndMeta(id, writes, nil)
+	return added, err
+}
+
+// AppendTurnsAndMeta appends writes (if non-empty) and atomically updates
+// meta.json (if rawMetaJSON is non-empty) under one session lock, coalescing
+// data/temp-file fsyncs so turn commits complete in O(turn_size) with minimal
+// storage flushes.
+func (s *Store) AppendTurnsAndMeta(id string, writes []TurnWrite, rawMetaJSON []byte) ([]TurnEntry, int, int, error) {
 	if !ValidSessionID(id) {
-		return nil, ErrInvalidSessionID
+		return nil, 0, 0, ErrInvalidSessionID
+	}
+	trimmedMeta := bytes.TrimSpace(rawMetaJSON)
+	if len(rawMetaJSON) > 0 && (len(trimmedMeta) == 0 || !json.Valid(trimmedMeta)) {
+		return nil, 0, 0, errors.New("sessionstore: invalid meta json")
 	}
 	if len(writes) == 0 {
-		return nil, nil
+		if len(trimmedMeta) > 0 {
+			if err := s.WriteMeta(id, trimmedMeta); err != nil {
+				return nil, 0, 0, err
+			}
+		}
+		last, count, ok, err := s.LastTurnEntry(id)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if !ok {
+			return nil, 0, 0, nil
+		}
+		return nil, count, last.LastMsgIdx + 1, nil
 	}
+
 	type prepTurn struct {
 		cleanMsgs []provider.Message
 		blobRefs  []string
@@ -592,11 +714,11 @@ func (s *Store) AppendTurns(id string, writes []TurnWrite) ([]TurnEntry, error) 
 	prepped := make([]prepTurn, len(writes))
 	for i, w := range writes {
 		if len(w.Messages) == 0 {
-			return nil, ErrEmptyTurn
+			return nil, 0, 0, ErrEmptyTurn
 		}
 		extMsgs, err := s.cas.ExternalizeMessageImages(w.Messages)
 		if err != nil {
-			return nil, err
+			return nil, 0, 0, err
 		}
 		cleanMsgs := ScrubMessagesDetails(extMsgs)
 		tokEst := w.TokenEst
@@ -621,18 +743,20 @@ func (s *Store) AppendTurns(id string, writes []TurnWrite) ([]TurnEntry, error) 
 	defer mu.Unlock()
 
 	if err := s.ensureV2Locked(context.Background(), id); err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 
 	sessDir := s.sessionDir(id)
 	if err := os.MkdirAll(sessDir, 0o700); err != nil {
-		return nil, err
+		return nil, 0, 0, err
 	}
 
-	m, entries, validIdxBytes, err := s.loadStateLocked(id)
+	cachedM, cachedEntries, validIdxBytes, err := s.loadStateReadOnlyLocked(id)
+	var m Manifest
+	var entries []TurnEntry
 	if err != nil {
 		if !os.IsNotExist(err) {
-			return nil, err
+			return nil, 0, 0, err
 		}
 		m = Manifest{
 			Version:       manifestFormatVersion,
@@ -640,6 +764,9 @@ func (s *Store) AppendTurns(id string, writes []TurnWrite) ([]TurnEntry, error) 
 			NextSegmentID: 1,
 			UpdatedAtUnix: prepped[0].nowUnix,
 		}
+	} else {
+		m = cloneManifest(cachedM)
+		entries = cachedEntries
 	}
 
 	lastTurnSeq := 0
@@ -688,7 +815,7 @@ func (s *Store) AppendTurns(id string, writes []TurnWrite) ([]TurnEntry, error) 
 
 		turnJSON, err := marshalTurnPayload(turnSeq, pt.nowUnix, pt.cleanMsgs)
 		if err != nil {
-			return nil, err
+			return nil, 0, 0, err
 		}
 		turnBytes := append(turnJSON, '\n')
 
@@ -700,7 +827,7 @@ func (s *Store) AppendTurns(id string, writes []TurnWrite) ([]TurnEntry, error) 
 			}
 			dj, err := json.Marshal(bal)
 			if err != nil {
-				return nil, err
+				return nil, 0, 0, err
 			}
 			diffBytes = append(dj, '\n')
 		}
@@ -786,30 +913,167 @@ func (s *Store) AppendTurns(id string, writes []TurnWrite) ([]TurnEntry, error) 
 		})
 	}
 
-	for _, b := range batches {
-		turnsFile := filepath.Join(sessDir, warmTurnsFilename(b.segID))
-		if err := writeAtExactEnd(turnsFile, b.turnsStart, b.turnsBuf.Bytes()); err != nil {
-			return nil, err
+	var stagedFiles []*os.File
+	var tempPaths []string
+	cleanupStaged := func() {
+		for _, f := range stagedFiles {
+			if f != nil {
+				_ = f.Close()
+			}
 		}
-		if b.diffsBuf.Len() > 0 {
-			diffsFile := filepath.Join(sessDir, warmDiffsFilename(b.segID))
-			if err := writeAtExactEnd(diffsFile, b.diffsStart, b.diffsBuf.Bytes()); err != nil {
-				return nil, err
+		for _, p := range tempPaths {
+			if p != "" {
+				_ = os.Remove(p)
 			}
 		}
 	}
 
-	if needManifestWrite {
-		if err := writeManifestFile(s.manifestPath(id), m); err != nil {
-			return nil, err
+	for _, b := range batches {
+		turnsFile := filepath.Join(sessDir, warmTurnsFilename(b.segID))
+		tf, err := stageAtExactEnd(turnsFile, b.turnsStart, b.turnsBuf.Bytes())
+		if err != nil {
+			cleanupStaged()
+			return nil, 0, 0, err
+		}
+		if tf != nil {
+			stagedFiles = append(stagedFiles, tf)
+		}
+		if b.diffsBuf.Len() > 0 {
+			diffsFile := filepath.Join(sessDir, warmDiffsFilename(b.segID))
+			df, err := stageAtExactEnd(diffsFile, b.diffsStart, b.diffsBuf.Bytes())
+			if err != nil {
+				cleanupStaged()
+				return nil, 0, 0, err
+			}
+			if df != nil {
+				stagedFiles = append(stagedFiles, df)
+			}
 		}
 	}
-	if err := appendTurnIndexEntries(s.turnIndexPath(id), validIdxBytes, addedEntries); err != nil {
-		s.invalidateSessionCache(id)
-		return nil, err
+
+	idxPath := s.turnIndexPath(id)
+	idxFile, idxTmpPath, err := stageTurnIndexEntries(sessDir, idxPath, validIdxBytes, addedEntries)
+	if err != nil {
+		cleanupStaged()
+		return nil, 0, 0, err
 	}
-	s.invalidateSessionCache(id)
-	return addedEntries, nil
+	if idxFile != nil {
+		stagedFiles = append(stagedFiles, idxFile)
+	}
+	if idxTmpPath != "" {
+		tempPaths = append(tempPaths, idxTmpPath)
+	}
+
+	var manifestTmpPath string
+	if needManifestWrite {
+		mCopy := m
+		if mCopy.Version == 0 {
+			mCopy.Version = manifestFormatVersion
+		}
+		mRaw, err := json.Marshal(&mCopy)
+		if err != nil {
+			cleanupStaged()
+			return nil, 0, 0, err
+		}
+		mRaw = append(mRaw, '\n')
+		mf, mp, err := stageTempPublish(sessDir, mRaw)
+		if err != nil {
+			cleanupStaged()
+			return nil, 0, 0, err
+		}
+		stagedFiles = append(stagedFiles, mf)
+		tempPaths = append(tempPaths, mp)
+		manifestTmpPath = mp
+	}
+
+	var metaTmpPath string
+	if len(trimmedMeta) > 0 {
+		mf, mp, err := stageTempPublish(sessDir, trimmedMeta)
+		if err != nil {
+			cleanupStaged()
+			return nil, 0, 0, err
+		}
+		stagedFiles = append(stagedFiles, mf)
+		tempPaths = append(tempPaths, mp)
+		metaTmpPath = mp
+	}
+
+	// Single coalesced concurrent fsync across segment data, turn.idx, and staged temp files.
+	if err := syncAndCloseFiles(stagedFiles); err != nil {
+		for _, p := range tempPaths {
+			_ = os.Remove(p)
+		}
+		s.invalidateSessionCache(id)
+		return nil, 0, 0, err
+	}
+	stagedFiles = nil
+
+	// Publish staged renames sequentially to avoid Windows NTFS directory lock contention.
+	var idxErr, manifestErr, metaErr error
+	if idxTmpPath != "" {
+		idxErr = durable.Rename(idxTmpPath, idxPath)
+	}
+	if idxErr == nil && manifestTmpPath != "" {
+		manifestErr = durable.Rename(manifestTmpPath, s.manifestPath(id))
+	}
+	if idxErr == nil && manifestErr == nil && metaTmpPath != "" {
+		metaErr = durable.Rename(metaTmpPath, s.metaPath(id))
+	}
+	if manifestErr != nil || idxErr != nil || metaErr != nil {
+		for _, p := range tempPaths {
+			_ = os.Remove(p)
+		}
+		s.invalidateSessionCache(id)
+		if idxErr != nil {
+			return nil, 0, 0, idxErr
+		}
+		if manifestErr != nil {
+			return nil, 0, 0, manifestErr
+		}
+		return nil, 0, 0, metaErr
+	}
+	if idxTmpPath != "" || manifestTmpPath != "" || metaTmpPath != "" {
+		_ = durable.SyncDir(sessDir)
+	}
+
+	newEntries := make([]TurnEntry, len(entries)+len(addedEntries))
+	copy(newEntries, entries)
+	copy(newEntries[len(entries):], addedEntries)
+	newValidBytes := validIdxBytes
+	if newValidBytes < turnIndexHeaderBytes {
+		newValidBytes = turnIndexHeaderBytes
+	}
+	newValidBytes += int64(len(addedEntries) * turnIndexEntryBytes)
+
+	if st, stErr := os.Stat(idxPath); stErr == nil {
+		s.cacheMu.Lock()
+		var prevFrames map[uint32]cachedFrameIdx
+		if old := s.stateCache[id]; old != nil {
+			prevFrames = old.frameIdx
+		}
+		if prevFrames == nil {
+			prevFrames = make(map[uint32]cachedFrameIdx, 4)
+		}
+		s.stateCache[id] = &cachedSessionState{
+			manifest:      m,
+			entries:       newEntries,
+			validIdxBytes: newValidBytes,
+			idxSize:       st.Size(),
+			idxModUnixNs:  st.ModTime().UnixNano(),
+			hasIdxFile:    true,
+			frameIdx:      prevFrames,
+		}
+		s.cacheMu.Unlock()
+	} else {
+		s.invalidateSessionCache(id)
+	}
+
+	totalTurns := len(newEntries)
+	totalMsgs := 0
+	if totalTurns > 0 {
+		totalMsgs = newEntries[totalTurns-1].LastMsgIdx + 1
+	}
+	return addedEntries, totalTurns, totalMsgs, nil
 }
 
 // SessionStorageStats reports disk and compression metrics for one v2 session.

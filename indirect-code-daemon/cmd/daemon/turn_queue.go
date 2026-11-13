@@ -262,12 +262,12 @@ func (a *sessionActor) buildQueuedUserMessage(q QueuedMessage) provider.Message 
 		meta = make(map[string]string)
 	}
 	meta["steering"] = "true"
-	return provider.Message{
+	return a.externalizeMsg(provider.Message{
 		ID:        provider.NewMessageID(),
 		Role:      provider.RoleUser,
 		Content:   content,
 		Time:      time.Now(),
 		TurnIndex: a.rec.TurnSeq,
 		Meta:      meta,
-	}
+	})
 }

@@ -178,6 +178,26 @@ func (s *CompactionState) ActiveBlocks() []FoldBlock {
 	return out
 }
 
+// CoverageEnd returns the global message index up to which active compaction
+// blocks summarize the prefix (KeepFrom when set, else max EndIdx of active blocks).
+func (s *CompactionState) CoverageEnd() int {
+	if s == nil {
+		return 0
+	}
+	end := s.KeepFrom
+	for _, b := range s.ActiveBlocks() {
+		if b.EndIdx > end {
+			end = b.EndIdx
+		}
+	}
+	return end
+}
+
+// ProjectMessagesAt projects wire messages for a resident window starting at baseMsgIdx.
+func (s *CompactionState) ProjectMessagesAt(history []provider.Message, baseMsgIdx int) []provider.Message {
+	return projectMessagesAt(history, baseMsgIdx, s)
+}
+
 func (s *CompactionState) allocBlockID() string {
 	for _, b := range s.Blocks {
 		if strings.HasPrefix(b.ID, "b") {
@@ -497,9 +517,17 @@ func renderFoldBlockMessage(b FoldBlock, isLast bool, count int, extraTools []st
 // projectionAnchor resolves a legacy/mirrored chain head against a history length.
 // Corrupted/out-of-range anchors fail open to pass-through.
 func projectionAnchor(state *CompactionState, historyLen int) (synthetic bool, keepFrom int) {
+	return projectionAnchorAt(state, 0, historyLen)
+}
+
+func projectionAnchorAt(state *CompactionState, baseMsgIdx int, historyLen int) (synthetic bool, keepFrom int) {
 	if state == nil {
 		return false, 0
 	}
+	if baseMsgIdx < 0 {
+		baseMsgIdx = 0
+	}
+	totalLen := baseMsgIdx + historyLen
 	if len(state.Blocks) > 0 {
 		active := state.ActiveBlocks()
 		if len(active) == 0 {
@@ -509,11 +537,11 @@ func projectionAnchor(state *CompactionState, historyLen int) (synthetic bool, k
 		if kf <= 0 {
 			kf = active[len(active)-1].EndIdx
 		}
-		if kf < 0 || kf > historyLen {
+		if kf < baseMsgIdx || kf > totalLen {
 			return false, 0
 		}
 		for _, b := range active {
-			if b.StartIdx < 0 || b.EndIdx > historyLen || b.EndIdx <= b.StartIdx {
+			if b.StartIdx < 0 || b.EndIdx > totalLen || b.EndIdx <= b.StartIdx {
 				return false, 0
 			}
 		}
@@ -522,7 +550,7 @@ func projectionAnchor(state *CompactionState, historyLen int) (synthetic bool, k
 	if state.PreviousSummary == "" {
 		return false, 0
 	}
-	if state.KeepFrom < 0 || state.KeepFrom > historyLen {
+	if state.KeepFrom < baseMsgIdx || state.KeepFrom > totalLen {
 		return false, 0
 	}
 	return true, state.KeepFrom
@@ -536,19 +564,27 @@ func projectionAnchor(state *CompactionState, historyLen int) (synthetic bool, k
 // Legacy states (len(state.Blocks) == 0 && PreviousSummary != "") continue to
 // emit a single synthetic summary message seamlessly.
 func projectMessages(history []provider.Message, state *CompactionState) []provider.Message {
+	return projectMessagesAt(history, 0, state)
+}
+
+func projectMessagesAt(history []provider.Message, baseMsgIdx int, state *CompactionState) []provider.Message {
 	if state == nil {
 		return history
 	}
-	synthetic, keepFrom := projectionAnchor(state, len(history))
+	if baseMsgIdx < 0 {
+		baseMsgIdx = 0
+	}
+	synthetic, keepFrom := projectionAnchorAt(state, baseMsgIdx, len(history))
 	if !synthetic {
 		tail := history
-		if state.PrunedBefore > 0 {
-			tail = ApplyViewLatchTail(history, 0, state.PrunedBefore)
+		if state.PrunedBefore > baseMsgIdx {
+			tail = ApplyViewLatchTail(history, baseMsgIdx, state.PrunedBefore)
 		}
-		return projectWireImagesTail(tail, 0, state)
+		return projectWireImagesTail(tail, baseMsgIdx, state)
 	}
 
-	latchedTail := ApplyViewLatchTail(history[keepFrom:], keepFrom, state.PrunedBefore)
+	localKeepFrom := keepFrom - baseMsgIdx
+	latchedTail := ApplyViewLatchTail(history[localKeepFrom:], keepFrom, state.PrunedBefore)
 	latchedTail = projectWireImagesTail(latchedTail, keepFrom, state)
 
 	if len(state.Blocks) > 0 {
@@ -560,7 +596,7 @@ func projectMessages(history []provider.Message, state *CompactionState) []provi
 			}
 		}
 		var uncapturedTools []string
-		for _, m := range history[:keepFrom] {
+		for _, m := range history[:localKeepFrom] {
 			for _, name := range m.AddedToolNames {
 				if !coveredTools[name] && !containsString(uncapturedTools, name) {
 					uncapturedTools = append(uncapturedTools, name)

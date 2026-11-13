@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"strings"
@@ -140,6 +142,19 @@ func stripAssistantText(msg provider.Message) provider.Message {
 	return msg
 }
 
+func sanitizeImageBlockForFrontend(ib provider.ImageBlock) provider.ImageBlock {
+	if ib.MimeType == "" && ib.MediaType != "" {
+		ib.MimeType = ib.MediaType
+	}
+	if ib.BlobSHA256 != "" {
+		if ib.ByteLen == 0 && len(ib.Data) > 0 {
+			ib.ByteLen = len(ib.Data)
+		}
+		ib.Data = nil
+	}
+	return ib
+}
+
 // sanitizeMessagesForFrontend strips daemon-internal content (tool result
 // line-prefix notices), resolves legacy user_text meta and — for workspace
 // modes — removes free assistant text (Silent Execution Protocol). Same
@@ -167,6 +182,24 @@ func sanitizeMessagesForFrontend(mode string, msgs []provider.Message, attachmen
 			m.Content = []provider.Content{provider.TextBlock{Text: text}}
 		}
 		if m.Role != provider.RoleTool {
+			needsCopy := false
+			for _, c := range m.Content {
+				if ib, ok := c.(provider.ImageBlock); ok && ((ib.BlobSHA256 != "" && len(ib.Data) > 0) || (ib.MimeType == "" && ib.MediaType != "")) {
+					needsCopy = true
+					break
+				}
+			}
+			if needsCopy {
+				cpBlocks := make([]provider.Content, len(m.Content))
+				for j, c := range m.Content {
+					if ib, ok := c.(provider.ImageBlock); ok {
+						cpBlocks[j] = sanitizeImageBlockForFrontend(ib)
+					} else {
+						cpBlocks[j] = c
+					}
+				}
+				m.Content = cpBlocks
+			}
 			out[i] = m
 			continue
 		}
@@ -185,7 +218,13 @@ func sanitizeMessagesForFrontend(mode string, msgs []provider.Message, attachmen
 						Text:             cleaned,
 						ThoughtSignature: tb.ThoughtSignature,
 					})
-				} else if _, isImg := inner.(provider.ImageBlock); !isImg {
+				} else if ib, isImg := inner.(provider.ImageBlock); isImg {
+					// Emit CAS reference metadata (blobSha256, byteLen, width, height)
+					// while omitting inline binary Data over WS.
+					if ib.BlobSHA256 != "" {
+						innerContent = append(innerContent, sanitizeImageBlockForFrontend(ib))
+					}
+				} else {
 					innerContent = append(innerContent, inner)
 				}
 			}
@@ -343,20 +382,20 @@ func compactionPayload(cs *core.CompactionState) any {
 	}
 }
 
-// sessionPayload serializes a full record for the web client.
-func sessionPayload(rec *SessionRecord) map[string]any {
+// sessionPayloadMeta serializes only session-level metadata for the web client,
+// NEVER cloning or sanitizing full rec.Messages / rec.FileBalloons.
+func sessionPayloadMeta(rec *SessionRecord) map[string]any {
 	return map[string]any{
 		"id": rec.ID, "cwd": rec.CWD, "title": rec.Title, "model": rec.Model, "status": rec.Status,
 		"pinned": rec.Pinned, "usage": rec.Usage, "context": rec.Context, "options": normalizedOptions(rec.Options),
 		"turn": rec.Turn, "todos": rec.Todos, "todosOpen": rec.TodosOpen,
 		"workspace": inspectWorkspace(rec.CWD),
-		"createdAt": rec.CreatedAt, "updatedAt": rec.UpdatedAt, "messages": sanitizeMessagesForFrontend(rec.Options.Mode, rec.Messages, rec.Attachments),
-		"attachments":  rec.Attachments,
-		"queue":        queuePayload(rec.Queue),
-		"compaction":   compactionPayload(rec.Compaction),
-		"turnSeq":      rec.TurnSeq,
-		"fileBalloons": fileBalloonPayloads(rec.FileBalloons),
-		"bgTasks":      bgTaskPayloads(rec.BgTasks),
+		"createdAt": rec.CreatedAt, "updatedAt": rec.UpdatedAt,
+		"attachments": rec.Attachments,
+		"queue":       queuePayload(rec.Queue),
+		"compaction":  compactionPayload(rec.Compaction),
+		"turnSeq":     rec.TurnSeq,
+		"bgTasks":     bgTaskPayloads(rec.BgTasks),
 		// Widget METADATA only: sources are fetched on demand (get_widget).
 		"widgets": widgetPayloads(rec.Widgets),
 		// Skill selection (priority/active/usable per skill name) and the
@@ -368,6 +407,23 @@ func sessionPayload(rec *SessionRecord) map[string]any {
 		"seenSeq":       rec.SeenSeq,
 		"attentionKind": rec.AttentionKind,
 	}
+}
+
+// sessionPayloadWithBlock attaches a single historyBlock window to sessionPayloadMeta.
+func sessionPayloadWithBlock(rec *SessionRecord, block historyBlock) map[string]any {
+	p := sessionPayloadMeta(rec)
+	p["messages"] = sanitizeMessagesForFrontend(rec.Options.Mode, block.Messages, rec.Attachments)
+	p["fileBalloons"] = fileBalloonPayloads(block.Balloons)
+	p["history"] = historyCursorMap(block)
+	return p
+}
+
+// sessionPayload serializes a full record for callers/tests inspecting full state.
+func sessionPayload(rec *SessionRecord) map[string]any {
+	p := sessionPayloadMeta(rec)
+	p["messages"] = sanitizeMessagesForFrontend(rec.Options.Mode, rec.Messages, rec.Attachments)
+	p["fileBalloons"] = fileBalloonPayloads(rec.FileBalloons)
+	return p
 }
 
 // skillsApprovalMode resolves the session's effective approval display for
@@ -444,40 +500,23 @@ func indexByte(s string, c byte) int {
 	return -1
 }
 
-// pagedHistoryBlock swaps a full payload's transcript for the tail history
-// block plus the get_history cursor. Every session_data event goes through
-// here so no path ships a full transcript.
+// pagedHistoryBlock swaps a payload's transcript for the tail history
+// block plus the get_history cursor. Prefer sessionPayloadPaged(rec, 0) so
+// full rec.Messages / rec.FileBalloons are never materialized first.
 func pagedHistoryBlock(p map[string]any, rec *SessionRecord) map[string]any {
-	block := sliceHistoryBlock(rec.Messages, rec.FileBalloons, 0)
+	block := sliceHistoryBlockForRecord(rec, 0)
 	p["messages"] = sanitizeMessagesForFrontend(rec.Options.Mode, block.Messages, rec.Attachments)
 	p["fileBalloons"] = fileBalloonPayloads(block.Balloons)
-	p["history"] = map[string]any{
-		"oldestTurn": block.OldestTurn,
-		"newestTurn": block.NewestTurn,
-		"hasOlder":   block.HasOlder,
-		"totalTurns": block.TotalTurns,
-		"firstIndex": block.FirstIndex,
-	}
+	p["history"] = historyCursorMap(block)
 	return p
 }
 
-// sessionPayloadPaged is the gradual-loading shape.
+// sessionPayloadPaged builds the gradual-loading session payload directly
+// from sessionPayloadMeta + the requested window slice, NEVER cloning or
+// sanitizing full rec.Messages / rec.FileBalloons.
 func sessionPayloadPaged(rec *SessionRecord, beforeTurn int) map[string]any {
-	if beforeTurn > 0 {
-		p := sessionPayload(rec)
-		block := sliceHistoryBlock(rec.Messages, rec.FileBalloons, beforeTurn)
-		p["messages"] = sanitizeMessagesForFrontend(rec.Options.Mode, block.Messages, rec.Attachments)
-		p["fileBalloons"] = fileBalloonPayloads(block.Balloons)
-		p["history"] = map[string]any{
-			"oldestTurn": block.OldestTurn,
-			"newestTurn": block.NewestTurn,
-			"hasOlder":   block.HasOlder,
-			"totalTurns": block.TotalTurns,
-			"firstIndex": block.FirstIndex,
-		}
-		return p
-	}
-	return pagedHistoryBlock(sessionPayload(rec), rec)
+	block := sliceHistoryBlockForRecord(rec, beforeTurn)
+	return sessionPayloadWithBlock(rec, block)
 }
 
 // messageAttachment is the wire shape for attachment references in message meta.
@@ -547,7 +586,23 @@ func messageAttachmentIDs(msg provider.Message, attachments []AttachmentRef) []s
 					}
 				}
 			case provider.ImageBlock:
-				if data, err := os.ReadFile(a.Path); err == nil && bytes.Equal(data, b.Data) {
+				if data, err := os.ReadFile(a.Path); err == nil {
+					if len(b.Data) > 0 && bytes.Equal(data, b.Data) {
+						matched = true
+					} else {
+						ref := b.BlobSHA256
+						if ref == "" {
+							ref = b.SHA256
+						}
+						if ref != "" {
+							sum := sha256.Sum256(data)
+							if hex.EncodeToString(sum[:]) == ref {
+								matched = true
+							}
+						}
+					}
+				}
+				if a.Name != "" && b.SourcePath == a.Name {
 					matched = true
 				}
 			}

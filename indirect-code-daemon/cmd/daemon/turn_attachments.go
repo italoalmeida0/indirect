@@ -14,6 +14,7 @@ import (
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/filetrack"
 	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/sessionstore"
 )
 
 // attachmentUploadKey is a stable identity for one upload request. A name
@@ -208,7 +209,7 @@ func (a *sessionActor) onAttachUpload(m attachUploadMsg) attachUploadResult {
 	a.touch()
 	if a.wal != nil {
 		appendWALEvent(a.wal, walEvent{Type: walTypeAttach, Attachments: append([]AttachmentRef{}, a.rec.Attachments...)})
-	} else if err := a.store.saveSessionSync(a.rec); err != nil {
+	} else if err := a.persistIdleMetaOrRecord(); err != nil {
 		a.rec.Attachments = previous
 		return fail("Could not save attachment")
 	}
@@ -368,11 +369,17 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 	if a.state != stateIdle || a.persistErr != nil {
 		return editApplyResult{Error: "Stop the current turn before editing"}
 	}
+	if a.rec.HotBaseMsgIdx > 0 && m.Index >= 0 && m.Index < a.rec.HotBaseMsgIdx {
+		if err := a.hydrateFullRecordForCut(); err != nil {
+			return editApplyResult{Error: err.Error()}
+		}
+	}
 	previous := cloneRecord(a.rec)
-	if m.Index < 0 || m.Index >= len(a.rec.Messages) {
+	localIdx := m.Index - a.rec.HotBaseMsgIdx
+	if localIdx < 0 || localIdx >= len(a.rec.Messages) {
 		return editApplyResult{Error: "bad index"}
 	}
-	msg := a.rec.Messages[m.Index]
+	msg := a.rec.Messages[localIdx]
 	if msg.Role != provider.RoleUser {
 		return editApplyResult{Error: "only user messages can be edited"}
 	}
@@ -393,22 +400,22 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 		msg.Content = append(msg.Content, img)
 	}
 	msg.Meta = attachmentMessageMeta(text, ids, a.rec.Attachments)
-	before := len(a.rec.Messages)
-	a.rec.Messages[m.Index] = msg
-	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:m.Index+1]...)
+	msg = a.externalizeMsg(msg)
+	a.rec.Messages[localIdx] = msg
+	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:localIdx+1]...)
 	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, m.Index+1)
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
-	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, min(m.Index, len(a.rec.Messages)))
-	pruneOrphanAttachments(a.rec, nil)
+	a.rec.TotalMsgs = a.rec.globalMsgCount()
+	if maxTurn := a.maxTurnInHotOrBase(); maxTurn > 0 && maxTurn < a.rec.TotalTurns {
+		a.rec.TotalTurns = maxTurn
+	}
+	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, min(m.Index, a.rec.globalMsgCount()))
+	a.pruneOrphanAttachments(nil)
 	a.markUserSeen()
 	a.rec.UpdatedAt = time.Now().UnixMilli()
-	removed := before - len(a.rec.Messages)
-	if removed < 0 {
-		removed = 0
-	}
 	// Turn-granular persist (v1 edit_message semantics).
 	firstDirty := 0
-	for _, mm := range a.rec.Messages[m.Index:] {
+	for _, mm := range a.rec.Messages[localIdx:] {
 		if mm.TurnIndex > 0 {
 			firstDirty = mm.TurnIndex
 			break
@@ -416,7 +423,15 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 	}
 	st := a.store
 	var persistErr error
+	var editedMsgs []provider.Message
+	var editedBals []filetrack.TurnChanges
 	if firstDirty <= 0 {
+		if a.rec.HotBaseMsgIdx > 0 {
+			if err := a.hydrateFullRecordForCut(); err != nil {
+				a.rec = previous
+				return editApplyResult{Error: err.Error()}
+			}
+		}
 		lines, _ := splitRecord(a.rec)
 		persistErr = st.writeSessionFile(a.rec.ID, lines, recordMeta(a.rec))
 	} else {
@@ -430,18 +445,33 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 		for start > 0 && a.rec.Messages[start-1].TurnIndex <= 0 {
 			start--
 		}
-		var sbal []filetrack.TurnChanges
+		editedMsgs = append([]provider.Message{}, a.rec.Messages[start:]...)
 		for _, b := range a.rec.FileBalloons {
 			if b.TurnIndex >= firstDirty {
-				sbal = append(sbal, b)
+				editedBals = append(editedBals, b)
 			}
 		}
-		persistErr = st.persistEdited(a.rec.ID, firstDirty, append([]provider.Message{}, a.rec.Messages[start:]...), sbal, recordMeta(a.rec))
+		persistErr = st.persistEdited(a.rec.ID, firstDirty, editedMsgs, editedBals, recordMeta(a.rec))
 	}
 	if persistErr != nil {
 		a.rec = previous
 		return editApplyResult{Error: persistErr.Error()}
 	}
+	if a.search != nil {
+		if _, ok := a.search.HasSession(a.id); !ok {
+			_ = a.search.UpdateSessionMeta(a.id, a.rec.Title, a.rec.CWD, a.rec.UpdatedAt)
+		}
+		if firstDirty > 0 {
+			_ = a.search.TruncateSessionFromTurn(a.id, firstDirty)
+			indexTurnSliceIntoSearch(a.search, a.rec, firstDirty, a.rec.HotBaseMsgIdx+localIdx, editedMsgs)
+		} else {
+			_ = a.search.TruncateSessionFromTurn(a.id, 0)
+			if st != nil {
+				indexColdSessionIntoSearch(st, a.search, a.id)
+			}
+		}
+	}
+	a.trimHotWindow()
 	a.emit(map[string]any{"type": "session_truncated", "sessionId": a.id, "keepIndex": m.Index})
 	a.emit(tailContentEvent("", a.id, "session_content", a.rec, 0, nil))
 	a.pingChange()
@@ -454,7 +484,7 @@ func (a *sessionActor) onCompactNow() {
 		return
 	}
 	a.touch()
-	if len(a.rec.Messages) < 4 {
+	if a.rec.globalMsgCount() < 4 {
 		if a.markUserSeen() {
 			if err := a.store.rewriteMetaOnly(a.id, recordMeta(a.rec)); err == nil {
 				a.pingChange()
@@ -478,9 +508,12 @@ func (a *sessionActor) onSlashReply(m slashReplyMsg) {
 	seenChanged := a.markUserSeen()
 	a.rec.TurnSeq++
 	turn := a.rec.TurnSeq
+	firstMsgIdx := a.rec.globalMsgCount()
 	userMsg := provider.Message{ID: provider.NewMessageID(), Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: m.Command}}, TurnIndex: turn}
 	asstMsg := provider.Message{ID: provider.NewMessageID(), Role: provider.RoleAssistant, Content: []provider.Content{provider.TextBlock{Text: m.Reply}}, TurnIndex: turn}
 	a.rec.Messages = append(a.rec.Messages, userMsg, asstMsg)
+	a.rec.TotalTurns = max(a.rec.TotalTurns, turn)
+	a.rec.TotalMsgs = a.rec.globalMsgCount()
 	a.rec.UpdatedAt = time.Now().UnixMilli()
 	// Mirror saveOrAppend's rule (plus stateCancel, where the worker is
 	// exiting but the WAL is still open): while a WAL is open the messages
@@ -493,8 +526,23 @@ func (a *sessionActor) onSlashReply(m slashReplyMsg) {
 			attSeq, seenSeq, attKind := a.rec.AttentionSeq, a.rec.SeenSeq, a.rec.AttentionKind
 			appendWALEvent(a.wal, walEvent{Type: walTypeMeta, AttentionSeq: &attSeq, SeenSeq: &seenSeq, AttentionKind: &attKind})
 		}
-	} else {
-		_ = a.store.saveSessionSync(a.rec)
+	} else if a.store != nil {
+		if err := a.store.ensureV2(a.id); err == nil {
+			_, _ = a.store.v2.AppendTurns(a.id, []sessionstore.TurnWrite{{
+				TurnSeq:  turn,
+				Messages: []provider.Message{userMsg, asstMsg},
+			}})
+			_ = a.store.writeMetaV2(a.id, recordMeta(a.rec))
+		} else {
+			_ = a.store.saveSessionSync(a.rec)
+		}
+		if a.search != nil {
+			if _, ok := a.search.HasSession(a.id); !ok {
+				_ = a.search.UpdateSessionMeta(a.id, a.rec.Title, a.rec.CWD, a.rec.UpdatedAt)
+			}
+			indexTurnSliceIntoSearch(a.search, a.rec, turn, firstMsgIdx, []provider.Message{userMsg, asstMsg})
+		}
+		a.trimHotWindow()
 	}
 	a.pingChange()
 	a.emit(tailContentEvent("", a.id, "session_content", a.rec, 0, nil))

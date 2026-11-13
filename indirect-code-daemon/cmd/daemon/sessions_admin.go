@@ -8,26 +8,22 @@ import (
 	"strings"
 	"time"
 
+	"indirect/indirect-code-daemon/packages/searchindex"
 	"indirect/indirect-code-daemon/packages/skills"
 )
 
 // sessionsAdmin implements create/delete/rename/pin + summaries + purge.
-// All disk scans are cheap (meta-tail only, no message hydration).
+// All disk scans are cheap (O(1) v2 meta.json or legacy meta-tail only, no message hydration).
 
 func listSessionSummaries(dataDir string) []SessionSummary {
 	st := newDiskStore(dataDir)
-	dir := st.sessionsDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+	ids := st.listSessionIDs()
+	if len(ids) == 0 {
 		return nil
 	}
-	var out []SessionSummary
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") || strings.HasSuffix(e.Name(), ".wal.jsonl") {
-			continue
-		}
-		id := strings.TrimSuffix(e.Name(), ".jsonl")
-		meta, err := st.readMetaTail(id)
+	out := make([]SessionSummary, 0, len(ids))
+	for _, id := range ids {
+		meta, err := st.readMeta(id)
 		if err != nil || meta.ID == "" || meta.ID != id {
 			continue
 		}
@@ -85,6 +81,7 @@ type sessionAdmin struct {
 	cfg     *configCell
 	emit    func(any)
 	onEvent func(string)
+	search  *searchindex.Engine
 }
 
 func (a *sessionAdmin) host() string {
@@ -243,9 +240,14 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 		Skills: recSkills,
 	}
 	st := newDiskStore(a.dataDir)
-	if err := st.saveSessionSync(rec); err != nil {
+	if err := st.writeMetaV2(rec.ID, recordMeta(rec)); err != nil {
 		a.emit(map[string]any{"type": "error", "hostId": a.host(), "requestId": requestID, "message": "Failed to create session: " + err.Error()})
 		return false
+	}
+	if eng := a.search; eng != nil {
+		_ = eng.UpdateSessionMeta(rec.ID, rec.Title, rec.CWD, rec.UpdatedAt)
+	} else if eng := getSearchEngine(a.dataDir); eng != nil {
+		_ = eng.UpdateSessionMeta(rec.ID, rec.Title, rec.CWD, rec.UpdatedAt)
 	}
 	a.emit(map[string]any{"type": "session_created", "requestId": requestID, "hostId": a.host(), "session": sessionPayloadPaged(rec, 0)})
 	if a.onEvent != nil {

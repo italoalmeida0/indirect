@@ -48,13 +48,52 @@ type SessionHistoryBlock struct {
 }
 
 // SessionHistorySnapshot is the point-in-time session history view read by
-// SessionHistoryTool. Messages is the full append-only raw session ledger.
+// SessionHistoryTool. Messages holds resident raw messages starting at
+// BaseMsgIdx (0 when the full session is resident); optional LoadRange and
+// StreamRange supply trimmed historical prefixes from disk without retaining
+// the full session in RAM.
 type SessionHistorySnapshot struct {
-	Messages     []provider.Message
-	KeepFrom     int
-	Blocks       []SessionHistoryBlock
-	ImageDigests map[string]string
-	BrainDir     string
+	Messages      []provider.Message
+	BaseMsgIdx    int
+	TotalMessages int
+	LoadRange     func(startIdx, endExclusive int) ([]provider.Message, error)
+	StreamRange   func(startIdx, endExclusive int, fn func(globalIdx int, msg provider.Message) bool) error
+	KeepFrom      int
+	Blocks        []SessionHistoryBlock
+	ImageDigests  map[string]string
+	BrainDir      string
+}
+
+func (s SessionHistorySnapshot) totalMessages() int {
+	base := maxInt(0, s.BaseMsgIdx)
+	if s.TotalMessages > base+len(s.Messages) {
+		return s.TotalMessages
+	}
+	return base + len(s.Messages)
+}
+
+func (s SessionHistorySnapshot) sliceOrLoad(startIdx, endExclusive int) ([]provider.Message, error) {
+	if endExclusive <= startIdx {
+		return nil, nil
+	}
+	base := maxInt(0, s.BaseMsgIdx)
+	resEnd := base + len(s.Messages)
+	if startIdx >= base && endExclusive <= resEnd {
+		return s.Messages[startIdx-base : endExclusive-base], nil
+	}
+	if s.LoadRange != nil {
+		return s.LoadRange(startIdx, endExclusive)
+	}
+	if startIdx < base {
+		startIdx = base
+	}
+	if endExclusive > resEnd {
+		endExclusive = resEnd
+	}
+	if endExclusive <= startIdx {
+		return nil, nil
+	}
+	return s.Messages[startIdx-base : endExclusive-base], nil
 }
 
 // SessionHistorySource returns an immutable snapshot of the session's raw
@@ -177,17 +216,18 @@ func executeSessionHistorySearch(snap SessionHistorySnapshot, a SessionHistoryAr
 		limit = sessionHistoryMaxSearchLimit
 	}
 
+	totalMsgs := snap.totalMessages()
 	keepFrom := snap.KeepFrom
 	if keepFrom < 0 {
 		keepFrom = 0
 	}
-	if keepFrom > len(snap.Messages) {
-		keepFrom = len(snap.Messages)
+	if keepFrom > totalMsgs {
+		keepFrom = totalMsgs
 	}
 
 	msgBound := keepFrom
 	if a.IncludeLiveTail {
-		msgBound = len(snap.Messages)
+		msgBound = totalMsgs
 	}
 
 	buildSearchAttrs := func(hitCount, indexedCount int) []core.Attr {
@@ -215,7 +255,7 @@ func executeSessionHistorySearch(snap SessionHistorySnapshot, a SessionHistoryAr
 	}
 
 	if msgBound == 0 && len(snap.Blocks) == 0 {
-		body := fmt.Sprintf("No compacted history yet (0 compacted messages, %d live messages). Pass `include_live_tail: true` to search the live transcript.", len(snap.Messages))
+		body := fmt.Sprintf("No compacted history yet (0 compacted messages, %d live messages). Pass `include_live_tail: true` to search the live transcript.", totalMsgs)
 		return core.ToolResult{
 			Content: []provider.Content{provider.TextBlock{Text: body}},
 			Attrs:   buildSearchAttrs(0, 0),
@@ -229,8 +269,8 @@ func executeSessionHistorySearch(snap SessionHistorySnapshot, a SessionHistoryAr
 	var sb strings.Builder
 	if len(hits) == 0 {
 		fmt.Fprintf(&sb, "No matches for %q across %d indexed history entries", query, len(docs))
-		if !a.IncludeLiveTail && len(snap.Messages) > keepFrom {
-			fmt.Fprintf(&sb, " (%d live-tail messages excluded; set include_live_tail=true to include them)", len(snap.Messages)-keepFrom)
+		if !a.IncludeLiveTail && totalMsgs > keepFrom {
+			fmt.Fprintf(&sb, " (%d live-tail messages excluded; set include_live_tail=true to include them)", totalMsgs-keepFrom)
 		}
 		sb.WriteString(".")
 		return core.ToolResult{
@@ -317,22 +357,25 @@ func executeSessionHistorySearch(snap SessionHistorySnapshot, a SessionHistoryAr
 }
 
 func buildHistoryDocs(snap SessionHistorySnapshot, keepFrom, msgBound int) []historyDoc {
-	callNames := collectToolCallNames(snap.Messages)
-	docs := make([]historyDoc, 0, msgBound+len(snap.Blocks))
+	callNames := map[string]string{}
+	docs := make([]historyDoc, 0, min(msgBound, 512)+len(snap.Blocks))
 
-	// 1. Index raw messages in [0, msgBound).
-	for idx := 0; idx < msgBound && idx < len(snap.Messages); idx++ {
-		m := snap.Messages[idx]
+	visitMsg := func(idx int, m provider.Message) bool {
+		for _, c := range m.Content {
+			if tc, ok := c.(provider.ToolCallBlock); ok && tc.ID != "" && tc.Name != "" {
+				callNames[tc.ID] = tc.Name
+			}
+		}
 		if isSyntheticSystemMessage(m) {
-			continue
+			return true
 		}
 		text := searchableMessageText(m, callNames, snap.ImageDigests)
 		if strings.TrimSpace(text) == "" {
-			continue
+			return true
 		}
 		tf, docLen := indexDocumentTerms(text)
 		if len(tf) == 0 {
-			continue
+			return true
 		}
 		role, weight := messageRoleAndWeight(m.Role)
 		blockID := owningBlockID(snap.Blocks, idx, keepFrom)
@@ -346,6 +389,25 @@ func buildHistoryDocs(snap SessionHistorySnapshot, keepFrom, msgBound int) []his
 			tf:         tf,
 			docLen:     docLen,
 		})
+		return true
+	}
+
+	// 1. Index raw messages in [0, msgBound).
+	base := maxInt(0, snap.BaseMsgIdx)
+	if base == 0 && msgBound <= len(snap.Messages) {
+		for idx := 0; idx < msgBound; idx++ {
+			visitMsg(idx, snap.Messages[idx])
+		}
+	} else if snap.StreamRange != nil {
+		_ = snap.StreamRange(0, msgBound, visitMsg)
+	} else if loaded, err := snap.sliceOrLoad(0, msgBound); err == nil {
+		offset := 0
+		if snap.LoadRange == nil {
+			offset = base
+		}
+		for i, m := range loaded {
+			visitMsg(offset+i, m)
+		}
 	}
 
 	// 2. Index active block summaries AND retired Tier-1 blocks.
@@ -1010,7 +1072,8 @@ func extractMatchSnippet(text string, terms []string, maxChars int) string {
 // ---------------------------------------------------------------------------
 
 func executeSessionHistoryRecall(snap SessionHistorySnapshot, a SessionHistoryArgs) (core.ToolResult, error) {
-	if len(snap.Messages) == 0 {
+	totalMsgs := snap.totalMessages()
+	if totalMsgs == 0 {
 		return core.ToolResult{}, fmt.Errorf("session_history: session has no messages to recall")
 	}
 
@@ -1050,8 +1113,8 @@ func executeSessionHistoryRecall(snap SessionHistorySnapshot, a SessionHistoryAr
 		if startIdx < 0 {
 			startIdx = 0
 		}
-		if endExclusive > len(snap.Messages) {
-			endExclusive = len(snap.Messages)
+		if endExclusive > totalMsgs {
+			endExclusive = totalMsgs
 		}
 		if endExclusive <= startIdx {
 			return core.ToolResult{}, fmt.Errorf("session_history: block %q covers an empty message span [%d, %d)", matched.ID, matched.StartIdx, matched.EndIdx)
@@ -1076,11 +1139,11 @@ func executeSessionHistoryRecall(snap SessionHistorySnapshot, a SessionHistoryAr
 		if e < s {
 			return core.ToolResult{}, fmt.Errorf("session_history: end_msg (%d) must be >= start_msg (%d)", e, s)
 		}
-		if s >= len(snap.Messages) {
-			return core.ToolResult{}, fmt.Errorf("session_history: start_msg (%d) out of range (session has %d messages, valid indices 0..%d)", s, len(snap.Messages), len(snap.Messages)-1)
+		if s >= totalMsgs {
+			return core.ToolResult{}, fmt.Errorf("session_history: start_msg (%d) out of range (session has %d messages, valid indices 0..%d)", s, totalMsgs, totalMsgs-1)
 		}
-		if e >= len(snap.Messages) {
-			e = len(snap.Messages) - 1
+		if e >= totalMsgs {
+			e = totalMsgs - 1
 		}
 		startIdx = s
 		endExclusive = e + 1
@@ -1102,12 +1165,24 @@ func executeSessionHistoryRecall(snap SessionHistorySnapshot, a SessionHistoryAr
 	if keepFrom < 0 {
 		keepFrom = 0
 	}
-	if keepFrom > len(snap.Messages) {
-		keepFrom = len(snap.Messages)
+	if keepFrom > totalMsgs {
+		keepFrom = totalMsgs
 	}
 
-	callNames := collectToolCallNames(snap.Messages)
-	fullText := renderVerbatimRange(snap.Messages, snap.Blocks, keepFrom, startIdx, endExclusive, callNames, snap.ImageDigests)
+	ctxStart := maxInt(0, startIdx-4)
+	spanMsgs, err := snap.sliceOrLoad(ctxStart, endExclusive)
+	if err != nil {
+		return core.ToolResult{}, fmt.Errorf("session_history: load messages [%d, %d): %w", startIdx, endExclusive, err)
+	}
+	callNames := collectToolCallNames(spanMsgs)
+	relStart := startIdx - ctxStart
+	if relStart < 0 {
+		relStart = 0
+	}
+	if relStart > len(spanMsgs) {
+		relStart = len(spanMsgs)
+	}
+	fullText := renderVerbatimRangeAt(spanMsgs[relStart:], startIdx, snap.Blocks, keepFrom, callNames, snap.ImageDigests)
 	totalChars := len(fullText)
 
 	buildRecallResult := func(body string, effOffset int, truncated bool, nextOffset int) core.ToolResult {
@@ -1190,20 +1265,37 @@ func renderVerbatimImage(sb *strings.Builder, img provider.ImageBlock, digests m
 	if img.SourcePath != "" {
 		label = img.SourcePath + ", " + label
 	}
+	byteLen := len(img.Data)
+	if byteLen == 0 && img.ByteLen > 0 {
+		byteLen = img.ByteLen
+	}
 	if img.Width > 0 && img.Height > 0 {
-		fmt.Fprintf(sb, "[image: %s, %dx%d, %d bytes]\n", label, img.Width, img.Height, len(img.Data))
+		fmt.Fprintf(sb, "[image: %s, %dx%d, %d bytes]\n", label, img.Width, img.Height, byteLen)
 		return
 	}
-	fmt.Fprintf(sb, "[image: %s, %d bytes]\n", label, len(img.Data))
+	fmt.Fprintf(sb, "[image: %s, %d bytes]\n", label, byteLen)
 }
 
 func renderVerbatimRange(msgs []provider.Message, blocks []SessionHistoryBlock, keepFrom, startIdx, endExclusive int, callNames map[string]string, digests map[string]string) string {
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endExclusive > len(msgs) {
+		endExclusive = len(msgs)
+	}
+	if endExclusive <= startIdx {
+		return ""
+	}
+	return renderVerbatimRangeAt(msgs[startIdx:endExclusive], startIdx, blocks, keepFrom, callNames, digests)
+}
+
+func renderVerbatimRangeAt(msgs []provider.Message, globalStartIdx int, blocks []SessionHistoryBlock, keepFrom int, callNames map[string]string, digests map[string]string) string {
 	var sb strings.Builder
-	for idx := startIdx; idx < endExclusive && idx < len(msgs); idx++ {
+	for i, m := range msgs {
+		idx := globalStartIdx + i
 		if sb.Len() > 0 {
 			sb.WriteString("\n\n")
 		}
-		m := msgs[idx]
 		role, _ := messageRoleAndWeight(m.Role)
 		blk := owningBlockID(blocks, idx, keepFrom)
 		fmt.Fprintf(&sb, "=== [msg #%d · %s · block %s] ===\n", idx, role, blk)

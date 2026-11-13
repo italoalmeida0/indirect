@@ -33,16 +33,20 @@ import (
 
 // workerSnapshot is the actor state a turn needs, copied at start.
 type workerSnapshot struct {
-	gen         int
-	epoch       int
-	jailed      bool
-	promptMeta  map[string]string
-	lastDate    string
-	lastMode    string
-	turnIndex   int
-	model       string
-	options     SessionOptions
-	messages    []provider.Message
+	gen           int
+	epoch         int
+	jailed        bool
+	promptMeta    map[string]string
+	lastDate      string
+	lastMode      string
+	turnIndex     int
+	hotBaseTurn   int
+	hotBaseMsgIdx int
+	totalTurns    int
+	totalMsgs     int
+	model         string
+	options       SessionOptions
+	messages      []provider.Message
 	usage       provider.Usage
 	compaction  *core.CompactionState
 	context     *SessionContext
@@ -94,8 +98,12 @@ type workerEnv struct {
 func snapshotTurn(act *sessionActor, gen int, prompt string, meta map[string]string) (workerSnapshot, workerEnv) {
 	snap := workerSnapshot{
 		gen: gen, epoch: act.epoch, turnIndex: act.rec.TurnSeq, jailed: act.jailed,
-		model: act.rec.Model, options: normalizedOptions(act.recordOptions()),
-		messages:    cloneMessages(act.rec.Messages),
+		hotBaseTurn:   act.rec.HotBaseTurn,
+		hotBaseMsgIdx: act.rec.HotBaseMsgIdx,
+		totalTurns:    max(act.rec.TotalTurns, act.rec.TurnSeq),
+		totalMsgs:     act.rec.globalMsgCount(),
+		model:         act.rec.Model, options: normalizedOptions(act.recordOptions()),
+		messages: cloneMessages(act.rec.Messages),
 		usage:       act.rec.Usage,
 		compaction:  cloneJSON(act.rec.Compaction),
 		context:     cloneJSON(act.rec.Context),
@@ -254,7 +262,7 @@ func (w *turnBridge) run() error {
 	cfg := w.cfg
 	w.sessionCWD = w.snap.cwd
 	if w.sessionCWD != "" && inspectWorkspace(w.sessionCWD).Status != "available" {
-		w.emit(map[string]any{"type": "session_data", "hostId": cfg.HostID, "session": pagedHistoryBlock(sessionPayload(w.recordView()), w.recordView())})
+		w.emit(map[string]any{"type": "session_data", "hostId": cfg.HostID, "session": sessionPayloadPaged(w.recordView(), 0)})
 		return fmt.Errorf("workspace unavailable")
 	}
 	apiBase := strings.TrimRight(cfg.GatewayURL, "/") + "/anthropic/v1"
@@ -367,6 +375,7 @@ func (w *turnBridge) run() error {
 	w.agent.Reasoning = w.snap.options.Effort
 	w.agent.BeforeRequest = w.beforeRequest
 	w.agent.MaxTokens = maxOutputTokens(w.modelInfo)
+	w.agent.SetBaseMsgIdx(w.snap.hotBaseMsgIdx)
 	if len(w.snap.messages) > 0 {
 		w.agent.SetMessages(w.snap.messages)
 	}
@@ -522,7 +531,13 @@ func (w *turnBridge) declareWait(op string, until time.Time) {
 // recordView builds a minimal record for payload helpers (workspace-gated
 // error path only).
 func (w *turnBridge) recordView() *SessionRecord {
-	return &SessionRecord{ID: w.env.actorID, CWD: w.snap.cwd, Title: "", Model: w.modelToUse, Status: "running", Messages: w.snap.messages, Attachments: w.snap.attachments, Options: w.snap.options, Usage: w.snap.usage, Context: w.snap.context}
+	return &SessionRecord{
+		ID: w.env.actorID, CWD: w.snap.cwd, Title: "", Model: w.modelToUse, Status: "running",
+		Messages: w.snap.messages, Attachments: w.snap.attachments, Options: w.snap.options,
+		Usage: w.snap.usage, Context: w.snap.context,
+		HotBaseTurn: w.snap.hotBaseTurn, HotBaseMsgIdx: w.snap.hotBaseMsgIdx,
+		TotalTurns: max(w.snap.totalTurns, w.snap.turnIndex), TotalMsgs: w.snap.hotBaseMsgIdx + len(w.snap.messages),
+	}
 }
 
 // ---- agent hooks (all run on the worker goroutine) ----
@@ -676,9 +691,25 @@ func (w *turnBridge) applySandboxSkillPolicy() {
 	}
 }
 
+type casHydratingClient struct {
+	inner provider.Client
+	store *diskStore
+}
+
+func (c casHydratingClient) Name() string { return c.inner.Name() }
+
+func (c casHydratingClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	if c.store != nil && c.store.cas != nil && len(req.Messages) > 0 {
+		if hyd, err := c.store.cas.HydrateMessageImages(req.Messages); err == nil {
+			req.Messages = hyd
+		}
+	}
+	return c.inner.Stream(ctx, req)
+}
+
 func (w *turnBridge) wrapClient(c provider.Client) provider.Client {
 	c = provider.WithHTTPClient(c, provider.NewHTTPClientWithProxy(w.cfg.Settings.Insecure, w.cfg.Settings.HTTPProxy))
-	return provider.WithPayloadHook(c, func(endpoint string, reqBody []byte, req provider.Request) {
+	hooked := provider.WithPayloadHook(c, func(endpoint string, reqBody []byte, req provider.Request) {
 		scrubbedRaw := scrubDebugJSONBase64(reqBody, defaultDebugBase64Threshold)
 		scrubbedMsgs := scrubDebugMessages(req.Messages, defaultDebugBase64Threshold)
 		ts := time.Now().UnixMilli()
@@ -718,6 +749,7 @@ func (w *turnBridge) wrapClient(c provider.Client) provider.Client {
 			},
 		})
 	})
+	return casHydratingClient{inner: hooked, store: w.env.store}
 }
 
 // approveTool blocks the worker until the human answers (or timeout/cancel).
@@ -1129,7 +1161,14 @@ func (w *turnBridge) onCompactionState(state *core.CompactionState) {
 }
 
 func (w *turnBridge) compactionView(state *core.CompactionState, usage provider.Usage, ctxCopy *SessionContext) *SessionRecord {
-	return &SessionRecord{ID: w.env.actorID, Model: w.modelToUse, Options: w.snap.options, Status: "running", Messages: w.agent.History(), Compaction: state, Usage: usage, Context: ctxCopy, Attachments: w.snap.attachments}
+	hist := w.agent.History()
+	baseIdx := w.agent.BaseMsgIdx()
+	return &SessionRecord{
+		ID: w.env.actorID, Model: w.modelToUse, Options: w.snap.options, Status: "running",
+		Messages: hist, Compaction: state, Usage: usage, Context: ctxCopy, Attachments: w.snap.attachments,
+		HotBaseTurn: w.snap.hotBaseTurn, HotBaseMsgIdx: baseIdx,
+		TotalTurns: max(w.snap.totalTurns, w.snap.turnIndex), TotalMsgs: baseIdx + len(hist),
+	}
 }
 
 func (w *turnBridge) onUsage(cumulative provider.Usage) {
@@ -1461,10 +1500,11 @@ func (w *turnBridge) newSubagentClient(model provider.Model) provider.Client {
 		return w.client
 	}
 	apiBase := strings.TrimRight(w.cfg.GatewayURL, "/") + "/anthropic/v1"
-	return provider.WithHTTPClient(
+	c := provider.WithHTTPClient(
 		provider.NewGatewayAnthropic(w.cfg.APIKey, apiBase, model),
 		provider.NewHTTPClientWithProxy(w.cfg.Settings.Insecure, w.cfg.Settings.HTTPProxy),
 	)
+	return casHydratingClient{inner: c, store: w.env.store}
 }
 
 func (w *turnBridge) runManualCompact(progress func(string)) error {
@@ -1472,9 +1512,12 @@ func (w *turnBridge) runManualCompact(progress func(string)) error {
 	defer w.declareWait("", time.Time{})
 	history := w.agent.History()
 	chain := w.agent.CompactionChain()
+	baseIdx := w.agent.BaseMsgIdx()
 	rawStart := 0
-	if chain != nil && chain.KeepFrom > 0 && chain.KeepFrom <= len(history) {
-		rawStart = chain.KeepFrom
+	if chain != nil && chain.KeepFrom > baseIdx {
+		if local := chain.KeepFrom - baseIdx; local <= len(history) {
+			rawStart = local
+		}
 	}
 	unfolded := history[rawStart:]
 	unfoldedTokens := provider.ContextTokens("", nil, unfolded)
@@ -1498,14 +1541,132 @@ func (w *turnBridge) onSubagentUsage(delta provider.Usage) {
 func (w *turnBridge) sessionHistorySnapshot() tools.SessionHistorySnapshot {
 	var msgs []provider.Message
 	var chain *core.CompactionState
+	baseIdx := w.snap.hotBaseMsgIdx
 	if w.agent != nil {
 		msgs = w.agent.History()
 		chain = w.agent.CompactionChain()
+		baseIdx = w.agent.BaseMsgIdx()
 	} else {
 		msgs = cloneMessages(w.snap.messages)
 		chain = w.snap.compaction.Clone()
 	}
-	return buildSessionHistorySnapshot(msgs, chain, w.brainDir)
+	snap := buildSessionHistorySnapshot(msgs, chain, w.brainDir)
+	snap.BaseMsgIdx = baseIdx
+	total := baseIdx + len(msgs)
+	snap.TotalMessages = total
+	if baseIdx > 0 && w.env.store != nil && w.env.store.v2.HasV2Session(w.env.actorID) {
+		sid := w.env.actorID
+		st := w.env.store
+		snap.LoadRange = func(start, end int) ([]provider.Message, error) {
+			if start < 0 {
+				start = 0
+			}
+			if end > total {
+				end = total
+			}
+			if start >= end {
+				return nil, nil
+			}
+			if start >= baseIdx {
+				return append([]provider.Message(nil), msgs[start-baseIdx:end-baseIdx]...), nil
+			}
+			diskEnd := min(end, baseIdx)
+			entries, err := st.v2.ReadTurnIndex(sid)
+			if err != nil {
+				return nil, err
+			}
+			firstTurn, lastTurn := 0, 0
+			firstTurnBase := 0
+			for _, e := range entries {
+				if e.MsgCount() == 0 {
+					continue
+				}
+				eEnd := e.LastMsgIdx + 1
+				if eEnd <= start {
+					continue
+				}
+				if e.FirstMsgIdx >= diskEnd {
+					break
+				}
+				if firstTurn == 0 {
+					firstTurn = e.TurnSeq
+					firstTurnBase = e.FirstMsgIdx
+				}
+				lastTurn = e.TurnSeq
+			}
+			var out []provider.Message
+			if firstTurn > 0 {
+				tMsgs, _, rerr := st.v2.ReadTurnRange(sid, firstTurn, lastTurn)
+				if rerr != nil {
+					return nil, rerr
+				}
+				sOff := max(0, start-firstTurnBase)
+				eOff := min(len(tMsgs), diskEnd-firstTurnBase)
+				if eOff > sOff {
+					out = append(out, tMsgs[sOff:eOff]...)
+				}
+			}
+			if end > baseIdx {
+				out = append(out, msgs[:end-baseIdx]...)
+			}
+			return out, nil
+		}
+		snap.StreamRange = func(start, end int, visit func(idx int, m provider.Message) bool) error {
+			if start < 0 {
+				start = 0
+			}
+			if end > total {
+				end = total
+			}
+			if start >= end {
+				return nil
+			}
+			if start < baseIdx {
+				diskEnd := min(end, baseIdx)
+				if entries, err := st.v2.ReadTurnIndex(sid); err == nil {
+					for _, e := range entries {
+						if e.MsgCount() == 0 {
+							continue
+						}
+						eEnd := e.LastMsgIdx + 1
+						if eEnd <= start {
+							continue
+						}
+						if e.FirstMsgIdx >= diskEnd {
+							break
+						}
+						tMsgs, _, rerr := st.v2.ReadTurnRange(sid, e.TurnSeq, e.TurnSeq)
+						if rerr != nil {
+							return rerr
+						}
+						for j, m := range tMsgs {
+							gIdx := e.FirstMsgIdx + j
+							if gIdx < start {
+								continue
+							}
+							if gIdx >= diskEnd {
+								break
+							}
+							if !visit(gIdx, m) {
+								return nil
+							}
+						}
+					}
+				}
+			}
+			if end > baseIdx {
+				hStart := max(0, start-baseIdx)
+				hEnd := min(len(msgs), end-baseIdx)
+				for i := hStart; i < hEnd; i++ {
+					if !visit(baseIdx+i, msgs[i]) {
+						return nil
+					}
+				}
+			}
+			return nil
+		}
+	}
+	return snap
 }
 
 func buildSessionHistorySnapshot(msgs []provider.Message, chain *core.CompactionState, brainDir string) tools.SessionHistorySnapshot {
@@ -1567,14 +1728,16 @@ func buildSessionHistorySnapshot(msgs []provider.Message, chain *core.Compaction
 func (w *turnBridge) compactedFileAdvisory(absPath string) string {
 	var msgs []provider.Message
 	var chain *core.CompactionState
+	baseIdx := w.snap.hotBaseMsgIdx
 	if w.agent != nil {
 		msgs = w.agent.History()
 		chain = w.agent.CompactionChain()
+		baseIdx = w.agent.BaseMsgIdx()
 	} else {
 		msgs = w.snap.messages
 		chain = w.snap.compaction
 	}
-	return compactedFileAdvisoryFor(w.sessionCWD, msgs, chain, absPath)
+	return compactedFileAdvisoryForAt(w.sessionCWD, msgs, baseIdx, chain, absPath)
 }
 
 func canonicalAdvisoryPath(cwd, raw string) string {
@@ -1621,6 +1784,10 @@ func wasFileReadInLiveTail(cwd string, tail []provider.Message, target string) b
 }
 
 func compactedFileAdvisoryFor(cwd string, history []provider.Message, state *core.CompactionState, absPath string) string {
+	return compactedFileAdvisoryForAt(cwd, history, 0, state, absPath)
+}
+
+func compactedFileAdvisoryForAt(cwd string, history []provider.Message, baseMsgIdx int, state *core.CompactionState, absPath string) string {
 	if state == nil {
 		return ""
 	}
@@ -1628,6 +1795,7 @@ func compactedFileAdvisoryFor(cwd string, history []provider.Message, state *cor
 	if target == "" {
 		return ""
 	}
+	totalLen := baseMsgIdx + len(history)
 
 	active := state.ActiveBlocks()
 	keepFrom := state.KeepFrom
@@ -1635,10 +1803,11 @@ func compactedFileAdvisoryFor(cwd string, history []provider.Message, state *cor
 		if keepFrom <= 0 {
 			keepFrom = active[len(active)-1].EndIdx
 		}
-		if keepFrom < 0 || keepFrom > len(history) {
+		if keepFrom < 0 || keepFrom > totalLen {
 			return ""
 		}
-		if wasFileReadInLiveTail(cwd, history[keepFrom:], target) {
+		localKeep := max(0, keepFrom-baseMsgIdx)
+		if wasFileReadInLiveTail(cwd, history[localKeep:], target) {
 			return ""
 		}
 		var refs []string
@@ -1680,8 +1849,9 @@ func compactedFileAdvisoryFor(cwd string, history []provider.Message, state *cor
 		return fmt.Sprintf("Touched in compacted era %s and unread in live tail; run read or session_history (block_id=%q) before relying on stale assumptions.", strings.Join(refs, ", "), lastID)
 	}
 
-	if len(state.Blocks) == 0 && state.KeepFrom > 0 && state.KeepFrom <= len(history) && strings.TrimSpace(state.PreviousSummary) != "" {
-		if wasFileReadInLiveTail(cwd, history[state.KeepFrom:], target) {
+	if len(state.Blocks) == 0 && state.KeepFrom > 0 && state.KeepFrom <= totalLen && strings.TrimSpace(state.PreviousSummary) != "" {
+		localKeep := max(0, state.KeepFrom-baseMsgIdx)
+		if wasFileReadInLiveTail(cwd, history[localKeep:], target) {
 			return ""
 		}
 		op := ""

@@ -286,6 +286,10 @@ type Agent struct {
 
 	mu       sync.Mutex
 	messages []provider.Message
+	// baseMsgIdx is the global raw transcript index corresponding to messages[0]
+	// when a host trims older compacted prefix turns out of resident RAM.
+	// Zero means messages starts at global index 0.
+	baseMsgIdx int
 	// compactionState is the incremental chain head. Seeded from the session file on resume
 	// (SeedCompactionState) and advanced by every Compact call.
 	compactionState *CompactionState
@@ -332,8 +336,27 @@ func NewAgent(client provider.Client, model, system string, tools Registry) *Age
 func (a *Agent) Messages() []provider.Message {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	out := projectMessages(append([]provider.Message(nil), a.messages...), a.compactionStateLocked())
+	out := projectMessagesAt(append([]provider.Message(nil), a.messages...), a.baseMsgIdx, a.compactionStateLocked())
 	return append([]provider.Message(nil), out...)
+}
+
+// SetBaseMsgIdx sets the global raw transcript offset corresponding to
+// Messages/History index 0 when older compacted turns have been trimmed from RAM.
+func (a *Agent) SetBaseMsgIdx(n int) {
+	if n < 0 {
+		n = 0
+	}
+	a.mu.Lock()
+	a.baseMsgIdx = n
+	a.rev++
+	a.mu.Unlock()
+}
+
+// BaseMsgIdx returns the global raw transcript offset of History()[0].
+func (a *Agent) BaseMsgIdx() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.baseMsgIdx
 }
 
 // History returns a copy of the full append-only transcript — every
@@ -1013,8 +1036,9 @@ func (a *Agent) dropLastAssistantMessage() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if n := len(a.messages); n > 0 && a.messages[n-1].Role == provider.RoleAssistant {
+		globalDropped := a.baseMsgIdx + n - 1
 		a.messages = a.messages[:n-1]
-		ShiftCompactionOnDrop(a.compactionState, n-1)
+		ShiftCompactionOnDrop(a.compactionState, globalDropped)
 		a.rev++
 	}
 }
@@ -1031,7 +1055,7 @@ func (a *Agent) dropLastAssistantMessage() {
 // copy.
 func (a *Agent) BuildContext() []provider.Message {
 	a.mu.Lock()
-	msgs := projectMessages(append([]provider.Message(nil), a.messages...), a.compactionStateLocked())
+	msgs := projectMessagesAt(append([]provider.Message(nil), a.messages...), a.baseMsgIdx, a.compactionStateLocked())
 	clientName := ""
 	if a.Client != nil {
 		clientName = a.Client.Name()
@@ -1060,11 +1084,12 @@ func (a *Agent) buildContextFromLocked(msgs []provider.Message, clientName strin
 func (a *Agent) latchOverflowTail(protectTokens int) bool {
 	a.mu.Lock()
 	history := append([]provider.Message(nil), a.messages...)
+	baseMsgIdx := a.baseMsgIdx
 	state := a.compactionStateLocked()
 	if state == nil {
 		state = &CompactionState{}
 	}
-	wm := ComputeLatchWatermark(history, state.KeepFrom, protectTokens)
+	wm := ComputeLatchWatermarkAt(history, baseMsgIdx, state.KeepFrom, protectTokens)
 	if wm <= state.PrunedBefore {
 		a.mu.Unlock()
 		return false
@@ -1085,7 +1110,7 @@ func (a *Agent) latchOverflowTail(protectTokens int) bool {
 // snapshot stay under the same lock; external callers use
 // BuildContext.
 func (a *Agent) BuildContextLocked() []provider.Message {
-	msgs := projectMessages(append([]provider.Message(nil), a.messages...), a.compactionStateLocked())
+	msgs := projectMessagesAt(append([]provider.Message(nil), a.messages...), a.baseMsgIdx, a.compactionStateLocked())
 	clientName := ""
 	if a.Client != nil {
 		clientName = a.Client.Name()

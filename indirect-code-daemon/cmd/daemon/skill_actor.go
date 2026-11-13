@@ -151,7 +151,7 @@ func (a *sessionActor) onSkillsUpdate(m skillsUpdateMsg) {
 	}
 	a.saveSkills()
 	// Complete snapshot back to the client (same shape as the mirror pull).
-	a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": pagedHistoryBlock(sessionPayload(a.rec), a.rec)})
+	a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": sessionPayloadPaged(a.rec, 0)})
 }
 
 // noticeSkillDeactivation queues the ephemeral system notice for the AI:
@@ -223,19 +223,27 @@ func (a *sessionActor) endTurnSkills() bool {
 // kept tail left, so the returned anchor subtracts those removals and is
 // clamped to the new transcript length.
 func stripSkillArtifacts(msgs []provider.Message, turnIdx int, anchor int) ([]provider.Message, int) {
-	return stripSkillArtifactsOn(msgs, turnIdx, anchor, nil)
+	return stripSkillArtifactsOnAt(msgs, 0, turnIdx, anchor, nil)
 }
 
 func stripSkillArtifactsWithCompaction(msgs []provider.Message, turnIdx int, comp *core.CompactionState) []provider.Message {
+	return stripSkillArtifactsWithCompactionAt(msgs, 0, turnIdx, comp)
+}
+
+func stripSkillArtifactsWithCompactionAt(msgs []provider.Message, baseMsgIdx int, turnIdx int, comp *core.CompactionState) []provider.Message {
 	anchor := -1
 	if comp != nil {
 		anchor = comp.KeepFrom
 	}
-	out, _ := stripSkillArtifactsOn(msgs, turnIdx, anchor, comp)
+	out, _ := stripSkillArtifactsOnAt(msgs, baseMsgIdx, turnIdx, anchor, comp)
 	return out
 }
 
 func stripSkillArtifactsOn(msgs []provider.Message, turnIdx int, anchor int, comp *core.CompactionState) ([]provider.Message, int) {
+	return stripSkillArtifactsOnAt(msgs, 0, turnIdx, anchor, comp)
+}
+
+func stripSkillArtifactsOnAt(msgs []provider.Message, baseMsgIdx int, turnIdx int, anchor int, comp *core.CompactionState) ([]provider.Message, int) {
 	callIDs := map[string]bool{}
 	for _, msg := range msgs {
 		if msg.TurnIndex != turnIdx {
@@ -286,28 +294,29 @@ func stripSkillArtifactsOn(msgs []provider.Message, turnIdx int, anchor int, com
 		}
 		if dropped {
 			if comp != nil {
-				// len(out) is the dropped message's index in the progressively
-				// shifted array after all earlier drops have already shifted comp.
-				core.ShiftCompactionOnDrop(comp, len(out))
+				// baseMsgIdx+len(out) is the dropped message's global index in the
+				// progressively shifted transcript after all earlier drops.
+				core.ShiftCompactionOnDrop(comp, baseMsgIdx+len(out))
 			}
-			if i < anchor {
+			if baseMsgIdx+i < anchor {
 				adjusted--
 			}
 		}
 	}
-	if adjusted >= 0 && adjusted > len(out) {
-		adjusted = len(out)
+	globalLen := baseMsgIdx + len(out)
+	if adjusted >= 0 && adjusted > globalLen {
+		adjusted = globalLen
 	}
 	if comp != nil {
-		if comp.KeepFrom > len(out) {
-			comp.KeepFrom = len(out)
+		if comp.KeepFrom > globalLen {
+			comp.KeepFrom = globalLen
 		}
-		if comp.PrunedBefore > len(out) {
-			comp.PrunedBefore = len(out)
+		if comp.PrunedBefore > globalLen {
+			comp.PrunedBefore = globalLen
 		}
 		for i := range comp.Blocks {
-			if comp.Blocks[i].EndIdx > len(out) {
-				comp.Blocks[i].EndIdx = len(out)
+			if comp.Blocks[i].EndIdx > globalLen {
+				comp.Blocks[i].EndIdx = globalLen
 			}
 		}
 		comp.SyncMirrors()

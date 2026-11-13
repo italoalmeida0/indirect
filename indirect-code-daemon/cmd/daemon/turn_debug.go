@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/core"
@@ -47,45 +48,230 @@ var (
 )
 
 const (
-	maxSessionDebugRecords  = 30
-	maxSessionDebugSessions = 64
+	maxSessionDebugRecords     = 3
+	maxSessionDebugSessions    = 64
+	maxSessionDebugTotalBytes  = 16 << 20 // 16 MiB global cap across all sessions
+	maxSessionDebugStringBytes = 16 << 10 // 16 KiB per-string cap
 )
 
 func recordSessionDebugPayload(sessionID string, p SessionDebugPayload) {
 	if sessionID == "" {
 		return
 	}
+	p = scrubLargeDebugStrings(p, maxSessionDebugStringBytes)
+
 	sessionDebugMu.Lock()
 	defer sessionDebugMu.Unlock()
 
 	records := sessionDebugRecords[sessionID]
 	records = append(records, p)
 	if len(records) > maxSessionDebugRecords {
-		records = records[len(records)-maxSessionDebugRecords:]
+		records = append([]SessionDebugPayload(nil), records[len(records)-maxSessionDebugRecords:]...)
 	}
 	sessionDebugRecords[sessionID] = records
 
 	for len(sessionDebugRecords) > maxSessionDebugSessions {
-		var oldestSID string
-		var oldestTS int64
-		for sid, recs := range sessionDebugRecords {
-			if sid == sessionID {
-				continue
+		evictOldestDebugSessionLocked(sessionID)
+	}
+	for totalSessionDebugBytesLocked() > maxSessionDebugTotalBytes {
+		if evictOldestDebugSessionLocked(sessionID) {
+			continue
+		}
+		cur := sessionDebugRecords[sessionID]
+		if len(cur) > 1 {
+			sessionDebugRecords[sessionID] = append([]SessionDebugPayload(nil), cur[1:]...)
+			continue
+		}
+		delete(sessionDebugRecords, sessionID)
+		break
+	}
+}
+
+func evictOldestDebugSessionLocked(preserveSID string) bool {
+	var oldestSID string
+	var oldestTS int64
+	for sid, recs := range sessionDebugRecords {
+		if sid == preserveSID {
+			continue
+		}
+		var ts int64
+		if len(recs) > 0 {
+			ts = recs[len(recs)-1].Timestamp
+		}
+		if oldestSID == "" || ts < oldestTS {
+			oldestSID = sid
+			oldestTS = ts
+		}
+	}
+	if oldestSID == "" {
+		return false
+	}
+	delete(sessionDebugRecords, oldestSID)
+	return true
+}
+
+func totalSessionDebugBytesLocked() int64 {
+	var total int64
+	for sid, recs := range sessionDebugRecords {
+		total += int64(len(sid)) + 64
+		for i := range recs {
+			total += estimateDebugPayloadBytes(&recs[i])
+		}
+	}
+	return total
+}
+
+func estimateDebugPayloadBytes(p *SessionDebugPayload) int64 {
+	var n int64 = 128
+	n += int64(len(p.Endpoint) + len(p.Model) + len(p.System) + len(p.Reasoning) + len(p.SessionID) + len(p.RawPayload))
+	for i := range p.Tools {
+		n += int64(len(p.Tools[i].Name) + len(p.Tools[i].Description) + len(p.Tools[i].Schema) + 32)
+	}
+	for i := range p.Messages {
+		n += estimateMessageBytes(p.Messages[i])
+	}
+	return n
+}
+
+func scrubLargeString(s string, maxBytes int) string {
+	if maxBytes <= 0 || len(s) <= maxBytes {
+		return s
+	}
+	omitted := len(s) - maxBytes
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	// Clone into a fresh string so the original backing array is released.
+	return strings.Clone(s[:cut]) + fmt.Sprintf("...[truncated %d bytes]", omitted)
+}
+
+func scrubLargeDebugStrings(p SessionDebugPayload, maxBytes int) SessionDebugPayload {
+	if maxBytes <= 0 {
+		maxBytes = maxSessionDebugStringBytes
+	}
+	p.System = scrubLargeString(p.System, maxBytes)
+	if len(p.Tools) > 0 {
+		toolsCp := make([]provider.Tool, len(p.Tools))
+		for i, t := range p.Tools {
+			t.Description = scrubLargeString(t.Description, maxBytes)
+			if len(t.Schema) > maxBytes {
+				t.Schema = scrubLargeDebugJSONStrings(t.Schema, maxBytes)
 			}
-			var ts int64
-			if len(recs) > 0 {
-				ts = recs[len(recs)-1].Timestamp
-			}
-			if oldestSID == "" || ts < oldestTS {
-				oldestSID = sid
-				oldestTS = ts
+			toolsCp[i] = t
+		}
+		p.Tools = toolsCp
+	}
+	if len(p.Messages) > 0 {
+		msgsCp := make([]provider.Message, len(p.Messages))
+		for i, m := range p.Messages {
+			msgsCp[i] = scrubLargeDebugMessage(m, maxBytes)
+		}
+		p.Messages = msgsCp
+	}
+	if len(p.RawPayload) > maxBytes {
+		p.RawPayload = scrubLargeDebugJSONStrings(p.RawPayload, maxBytes)
+	} else if len(p.RawPayload) > 0 {
+		p.RawPayload = json.RawMessage(bytes.Clone(p.RawPayload))
+	}
+	return p
+}
+
+func scrubLargeDebugMessage(m provider.Message, maxBytes int) provider.Message {
+	if len(m.Content) == 0 {
+		return m
+	}
+	cp := m
+	cp.Content = make([]provider.Content, len(m.Content))
+	for i, c := range m.Content {
+		cp.Content[i] = scrubLargeDebugContent(c, maxBytes)
+	}
+	return cp
+}
+
+func scrubLargeDebugContent(c provider.Content, maxBytes int) provider.Content {
+	switch v := c.(type) {
+	case provider.TextBlock:
+		v.Text = scrubLargeString(v.Text, maxBytes)
+		v.ThoughtSignature = scrubLargeString(v.ThoughtSignature, maxBytes)
+		return v
+	case provider.ReasoningBlock:
+		v.Summary = scrubLargeString(v.Summary, maxBytes)
+		v.Encrypted = scrubLargeString(v.Encrypted, maxBytes)
+		return v
+	case provider.ImageBlock:
+		if len(v.Data) > maxBytes {
+			v.Data = nil
+		}
+		return v
+	case provider.ToolCallBlock:
+		if len(v.Arguments) > maxBytes {
+			v.Arguments = scrubLargeDebugJSONStrings(v.Arguments, maxBytes)
+			if len(v.Arguments) > 2*maxBytes {
+				b, _ := json.Marshal(scrubLargeString(string(v.Arguments), maxBytes))
+				v.Arguments = json.RawMessage(b)
 			}
 		}
-		if oldestSID == "" {
+		return v
+	case provider.ToolResultBlock:
+		if len(v.Content) > 0 {
+			inner := make([]provider.Content, len(v.Content))
+			for i, ic := range v.Content {
+				inner[i] = scrubLargeDebugContent(ic, maxBytes)
+			}
+			v.Content = inner
+		}
+		if v.Details != nil {
+			if raw, err := json.Marshal(v.Details); err == nil && len(raw) > maxBytes {
+				v.Details = nil
+			}
+		}
+		return v
+	default:
+		return c
+	}
+}
+
+func scrubLargeDebugJSONStrings(raw []byte, maxBytes int) json.RawMessage {
+	if len(raw) <= maxBytes {
+		return json.RawMessage(bytes.Clone(raw))
+	}
+	var out bytes.Buffer
+	out.Grow(min(len(raw), 64*1024))
+	for i := 0; i < len(raw); {
+		if raw[i] != '"' {
+			out.WriteByte(raw[i])
+			i++
+			continue
+		}
+		strEnd, _ := scanJSONStringEnd(raw, i)
+		if strEnd < 0 {
+			out.Write(raw[i:])
 			break
 		}
-		delete(sessionDebugRecords, oldestSID)
+		next := skipJSONSpace(raw, strEnd+1)
+		isKey := next < len(raw) && raw[next] == ':'
+		strByteLen := strEnd - i - 1
+		if !isKey && strByteLen > maxBytes {
+			var decoded string
+			if err := json.Unmarshal(raw[i:strEnd+1], &decoded); err == nil && len(decoded) > maxBytes {
+				repl, _ := json.Marshal(scrubLargeString(decoded, maxBytes))
+				out.Write(repl)
+			} else if err != nil {
+				fmt.Fprintf(&out, `"[string truncated: %d bytes]"`, strByteLen)
+			} else {
+				out.Write(raw[i : strEnd+1])
+			}
+		} else {
+			out.Write(raw[i : strEnd+1])
+		}
+		i = strEnd + 1
 	}
+	return json.RawMessage(bytes.Clone(out.Bytes()))
+}
+
+func clearSessionDebug(sessionID string) {
+	purgeSessionDebugPayloads(sessionID)
 }
 
 func purgeSessionDebugPayloads(sessionID string) {
@@ -227,6 +413,9 @@ func simulateSessionPrompt(dcfg DaemonConfig, rec *SessionRecord, promptText str
 	toolSpecs := effReg.Specs()
 
 	msgs := cloneMessages(rec.Messages)
+	if rec.Compaction != nil && len(rec.Compaction.Blocks) > 0 {
+		msgs = rec.Compaction.ProjectMessagesAt(msgs, rec.HotBaseMsgIdx)
+	}
 	if promptText != "" {
 		meta := map[string]string{}
 		markTurnPrompt(meta)

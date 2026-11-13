@@ -696,6 +696,7 @@ func (r *root) removePidFile() {
 func (r *root) shutdown(reason string) {
 	fmt.Println("[SHUTDOWN]", reason)
 	r.stopSkillWatcher()
+	r.stopMaintenance()
 	// Ordered, awaited shutdown: session commits (commitWAL per resident)
 	// complete BEFORE the process exits. Each stage has a deadline; a
 	// wedged actor delays exit but never skips the commit attempt.

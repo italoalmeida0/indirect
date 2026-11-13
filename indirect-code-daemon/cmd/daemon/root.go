@@ -27,6 +27,7 @@ type root struct {
 	projects   *projectsActor
 	server     *wsServer
 	admin      *sessionAdmin
+	maint      *maintenanceWorker
 	wg         sync.WaitGroup
 
 	// skillsStop ends the skill-directory watcher (closed once by
@@ -60,6 +61,12 @@ func (r *root) stopSkillWatcher() {
 			close(r.skillsStop)
 		}
 	})
+}
+
+func (r *root) stopMaintenance() {
+	if r != nil && r.maint != nil {
+		r.maint.stop()
+	}
 }
 
 // bootActors starts the four actors (called by main after pairing/config).
@@ -106,6 +113,7 @@ func (r *root) bootActors() {
 		emit:    emitTo,
 		onEvent: notifyTo,
 		bg:      r.bgSup,
+		search:  r.sessionSup.searchRef(),
 	}
 	r.admin.purge = r.sessionSup.purge
 	r.projects.emit = emitTo
@@ -118,6 +126,7 @@ func (r *root) bootActors() {
 	r.server.root = r
 	r.server.configDir = r.configPathDir()
 	r.server.onRemoteKill = r.shutdown
+	r.sessionSup.onPurge = r.server.deleteLane
 
 	// Root watchdog: ping infra actors, remember the round.
 	go r.watchdogLoop()
@@ -128,6 +137,8 @@ func (r *root) bootActors() {
 		r.wg.Add(1)
 		go child.run(&r.wg)
 	}
+
+	r.maint = startMaintenanceWorker(r.rootDir(), r.dataDir, r.sessionSup, r.sessionSup.searchRef())
 }
 
 func defaultConfig() *DaemonConfig {

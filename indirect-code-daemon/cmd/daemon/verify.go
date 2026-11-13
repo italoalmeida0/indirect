@@ -37,7 +37,23 @@ func verifySessions(dataDir string) error {
 	)
 	for _, e := range entries {
 		name := e.Name()
-		if e.IsDir() || (!strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, ".json")) {
+		if e.IsDir() {
+			metaPath := filepath.Join(dir, name, "meta.json")
+			if raw, merr := os.ReadFile(metaPath); merr == nil {
+				checked++
+				var probe struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal(raw, &probe) != nil || probe.ID == "" {
+					failed++
+					if firstErr == nil {
+						firstErr = fmt.Errorf("%s/meta.json: invalid meta", name)
+					}
+				}
+			}
+			continue
+		}
+		if !strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, ".json") {
 			continue
 		}
 		if strings.HasSuffix(name, ".wal.jsonl") || strings.HasSuffix(name, ".turn.json") {

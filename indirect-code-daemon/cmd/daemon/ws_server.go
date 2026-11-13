@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +15,7 @@ import (
 
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/searchindex"
 	"indirect/indirect-code-daemon/packages/skills"
 )
 
@@ -48,6 +51,13 @@ type wsServer struct {
 
 	debounceMu sync.Mutex
 	debounce   map[string]*time.Timer
+
+	searchEngine *searchindex.Engine
+	searchOnce   sync.Once
+	searchSem    chan struct{}
+	searchMu     sync.Mutex
+	searchCancel context.CancelFunc
+	bgWg         sync.WaitGroup
 }
 
 type convertOutcome struct {
@@ -60,9 +70,14 @@ func newWSServer(dataDir string, cfg *configCell, sessions *sessionSupervisor, b
 	s := &wsServer{
 		dataDir: dataDir, configDir: dataDir, cfg: cfg, sessions: sessions, bg: bg,
 		projects: projects, admin: admin, ws: ws,
-		debounce: map[string]*time.Timer{},
-		lanes:    map[string]*dispatchLane{},
-		hostLane: &dispatchLane{},
+		debounce:     map[string]*time.Timer{},
+		lanes:        map[string]*dispatchLane{},
+		hostLane:     &dispatchLane{},
+		searchEngine: getSearchEngine(dataDir),
+		searchSem:    make(chan struct{}, 4),
+	}
+	if sessions != nil && sessions.onPurge == nil {
+		sessions.onPurge = s.deleteLane
 	}
 	// V2-002: when outbox room appears (the writer caught up), flush any
 	// sessions whose event stream had gaps so the client gets an explicit
@@ -71,20 +86,52 @@ func newWSServer(dataDir string, cfg *configCell, sessions *sessionSupervisor, b
 	return s
 }
 
+func (s *wsServer) sem() chan struct{} {
+	s.searchOnce.Do(func() {
+		if s.searchSem == nil {
+			s.searchSem = make(chan struct{}, 4)
+		}
+	})
+	return s.searchSem
+}
+
+func (s *wsServer) deleteLane(sid string) {
+	if s == nil || sid == "" {
+		return
+	}
+	s.lanesMu.Lock()
+	delete(s.lanes, sid)
+	s.lanesMu.Unlock()
+}
+
 // waitForLanes blocks until every dispatch lane is idle and no resync
 // flusher is running (V2-006). Admitted commands must finish before their
 // sessions' storage goes away (shutdown, test cleanup).
 func (s *wsServer) waitForLanes() {
 	deadline := time.Now().Add(30 * time.Second)
+	bgDone := make(chan struct{})
+	go func() {
+		s.bgWg.Wait()
+		close(bgDone)
+	}()
 	for {
 		s.lanesMu.Lock()
 		lanes := make([]*dispatchLane, 0, len(s.lanes)+1)
 		for _, l := range s.lanes {
-			lanes = append(lanes, l)
+			if l != nil {
+				lanes = append(lanes, l)
+			}
 		}
-		lanes = append(lanes, s.hostLane)
+		if s.hostLane != nil {
+			lanes = append(lanes, s.hostLane)
+		}
 		s.lanesMu.Unlock()
 		busy := s.resyncFlush.Load()
+		select {
+		case <-bgDone:
+		default:
+			busy = true
+		}
 		for _, l := range lanes {
 			l.mu.Lock()
 			if l.running || len(l.queue) > 0 {
@@ -145,27 +192,37 @@ func (s *wsServer) emit(ev any) { s.ws.emit(ev) }
 // get_session and the V2-002 resync flushes (one snapshot contract).
 // Returns (nil, errMsg) when the session cannot be read right now.
 func (s *wsServer) buildSessionData(sid, requestID string) (map[string]any, string) {
+	return s.buildSessionDataOpts(sid, requestID, historyQuery{})
+}
+
+func (s *wsServer) buildSessionDataOpts(sid, requestID string, q historyQuery) (map[string]any, string) {
 	res := s.sessions.route(sid, true)
 	if res.Error != "" {
 		if !validSessionID(sid) || res.Error == "session unavailable" || res.Error == "deleted" {
 			return nil, "Session not found"
 		}
-		if _, err := os.Stat(newDiskStore(s.dataDir).sessionFile(sid)); os.IsNotExist(err) {
+		st := newDiskStore(s.dataDir)
+		if !st.v2.HasV2Session(sid) && !st.v2.HasLegacySession(sid) {
 			return nil, "Session not found"
 		}
 		return nil, "Session busy"
 	}
 	rr := make(chan any, 1)
 	select {
-	case res.Inbox <- Envelope{Payload: readReqMsg{What: "session", Reply: rr}}:
+	case res.Inbox <- Envelope{Payload: readReqMsg{
+		What:         "sessionData",
+		BeforeTurn:   q.BeforeTurn,
+		AroundTurn:   q.AroundTurn,
+		AroundMsgIdx: q.AroundMsgIdx,
+		Reply:        rr,
+	}}:
 	case <-time.After(replyTimeout):
 		return nil, "Session busy"
 	}
 	select {
 	case r := <-rr:
 		if rd, ok := r.(readResult); ok && rd.Error == "" {
-			if rec, ok := rd.Payload.(*SessionRecord); ok {
-				p := sessionPayloadPaged(rec, 0)
+			if p, ok := rd.Payload.(map[string]any); ok {
 				for k, v := range rd.Extra {
 					p[k] = v
 				}
@@ -217,6 +274,57 @@ func (s *wsServer) dispatch(raw []byte) {
 	if err := json.Unmarshal(raw, &base); err != nil {
 		return
 	}
+	// Off-hostLane cancellable BM25F search: supersedes any previous in-flight
+	// search immediately and runs on a bounded worker pool so search never
+	// stalls or queues behind hostLane/session lanes.
+	if base.Type == "search" {
+		var req struct {
+			Query     string `json:"query"`
+			Limit     int    `json:"limit"`
+			RequestID string `json:"requestId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.searchMu.Lock()
+		if s.searchCancel != nil {
+			s.searchCancel()
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		s.searchCancel = cancel
+		s.searchMu.Unlock()
+		sem := s.sem()
+		s.bgWg.Add(1)
+		go func() {
+			defer s.bgWg.Done()
+			defer cancel()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				return
+			}
+			s.onSearchWithContext(ctx, req.Query, req.Limit, req.RequestID)
+		}()
+		return
+	}
+	// Off-hostLane CAS blob hydration: serves externalized image bytes directly
+	// from CAS without blocking hostLane or spawning a sessionActor.
+	if base.Type == "get_blob" {
+		var req struct {
+			SHA256    string `json:"sha256"`
+			RequestID string `json:"requestId"`
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		sem := s.sem()
+		s.bgWg.Add(1)
+		go func() {
+			defer s.bgWg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			s.onGetBlob(req.SHA256, req.RequestID, req.SessionID)
+		}()
+		return
+	}
 	// A draft configure_session has no session actor. It still updates the
 	// host's remembered selection, and must be admitted to the host lane so a
 	// subsequent config pull observes the write. (The session lane below is
@@ -247,13 +355,6 @@ func (s *wsServer) dispatch(raw []byte) {
 		return
 	}
 	sid := base.SessionID
-	s.lanesMu.Lock()
-	l := s.lanes[sid]
-	if l == nil {
-		l = &dispatchLane{}
-		s.lanes[sid] = l
-	}
-	s.lanesMu.Unlock()
 	// configure_session has a host-state half (rememberSelection, read
 	// back by `pull config`): enqueue that half on the host lane AT
 	// ADMISSION so later host reads are ordered after it (read-after-write
@@ -272,9 +373,38 @@ func (s *wsServer) dispatch(raw []byte) {
 			s.emit(map[string]any{"type": "error", "hostId": s.host(), "message": "Host busy"})
 		})
 	}
-	l.push(raw, s.handleRaw, func() {
+	s.pushSessionLane(sid, raw, func() {
 		s.error(sid, base.RequestID, "Session busy")
 	})
+}
+
+func (s *wsServer) pushSessionLane(sid string, raw []byte, onBusy func()) {
+	s.lanesMu.Lock()
+	if s.lanes == nil {
+		s.lanes = map[string]*dispatchLane{}
+	}
+	l := s.lanes[sid]
+	if l == nil {
+		var lane *dispatchLane
+		lane = &dispatchLane{
+			onIdle: func() {
+				s.lanesMu.Lock()
+				if s.lanes[sid] == lane {
+					lane.mu.Lock()
+					idle := !lane.running && len(lane.queue) == 0
+					lane.mu.Unlock()
+					if idle {
+						delete(s.lanes, sid)
+					}
+				}
+				s.lanesMu.Unlock()
+			},
+		}
+		l = lane
+		s.lanes[sid] = l
+	}
+	l.push(raw, s.handleRaw, onBusy)
+	s.lanesMu.Unlock()
 }
 
 // dispatchLane is one in-order command lane (V2-006). A single worker
@@ -286,6 +416,7 @@ type dispatchLane struct {
 	mu      sync.Mutex
 	queue   []func()
 	running bool
+	onIdle  func()
 }
 
 func (l *dispatchLane) push(raw []byte, run func([]byte), onBusy func()) {
@@ -314,7 +445,11 @@ func (l *dispatchLane) drain() {
 		l.mu.Lock()
 		if len(l.queue) == 0 {
 			l.running = false
+			onIdle := l.onIdle
 			l.mu.Unlock()
+			if onIdle != nil {
+				onIdle()
+			}
 			return
 		}
 		fn := l.queue[0]
@@ -402,11 +537,18 @@ func (s *wsServer) handleRaw(raw []byte) {
 
 	case "get_session":
 		var req struct {
-			SessionID string `json:"sessionId"`
-			RequestID string `json:"requestId"`
+			SessionID    string `json:"sessionId"`
+			RequestID    string `json:"requestId"`
+			BeforeTurn   int    `json:"beforeTurn"`
+			AroundTurn   int    `json:"aroundTurn"`
+			AroundMsgIdx *int   `json:"aroundMsgIdx"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		ev, errMsg := s.buildSessionData(req.SessionID, req.RequestID)
+		ev, errMsg := s.buildSessionDataOpts(req.SessionID, req.RequestID, historyQuery{
+			BeforeTurn:   req.BeforeTurn,
+			AroundTurn:   req.AroundTurn,
+			AroundMsgIdx: req.AroundMsgIdx,
+		})
 		if ev == nil {
 			s.error(req.SessionID, req.RequestID, errMsg)
 			return
@@ -415,22 +557,32 @@ func (s *wsServer) handleRaw(raw []byte) {
 
 	case "get_history":
 		var req struct {
-			SessionID  string `json:"sessionId"`
-			BeforeTurn int    `json:"beforeTurn"`
-			RequestID  string `json:"requestId"`
+			SessionID    string `json:"sessionId"`
+			BeforeTurn   int    `json:"beforeTurn"`
+			AfterTurn    int    `json:"afterTurn"`
+			AroundTurn   int    `json:"aroundTurn"`
+			AroundMsgIdx *int   `json:"aroundMsgIdx"`
+			RequestID    string `json:"requestId"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		if req.SessionID == "" || req.BeforeTurn <= 0 {
+		if req.SessionID == "" || (req.BeforeTurn <= 0 && req.AfterTurn <= 0 && req.AroundTurn <= 0 && req.AroundMsgIdx == nil) {
 			return
 		}
 		res := s.sessions.route(req.SessionID, true)
 		if res.Error != "" {
-			s.error(req.SessionID, "", "Session not found")
+			s.error(req.SessionID, req.RequestID, "Session not found")
 			return
 		}
 		rr := make(chan any, 1)
 		select {
-		case res.Inbox <- Envelope{Payload: readReqMsg{What: "historyBlock", BeforeTurn: req.BeforeTurn, Reply: rr}}:
+		case res.Inbox <- Envelope{Payload: readReqMsg{
+			What:         "historyBlock",
+			BeforeTurn:   req.BeforeTurn,
+			AfterTurn:    req.AfterTurn,
+			AroundTurn:   req.AroundTurn,
+			AroundMsgIdx: req.AroundMsgIdx,
+			Reply:        rr,
+		}}:
 		case <-time.After(replyTimeout):
 			return
 		}
@@ -439,15 +591,16 @@ func (s *wsServer) handleRaw(raw []byte) {
 			if rd, ok := r.(readResult); ok && rd.Error == "" {
 				if block, ok := rd.Payload.(historyBlock); ok {
 					atts := block.Attachments
-					s.emit(map[string]any{
+					ev := map[string]any{
 						"type": "session_content", "hostId": s.host(), "sessionId": req.SessionID, "page": true, "requestId": req.RequestID,
 						"messages":     sanitizeMessagesForFrontend(block.Mode, block.Messages, atts),
 						"fileBalloons": fileBalloonPayloads(block.Balloons),
-						"history": map[string]any{
-							"oldestTurn": block.OldestTurn, "newestTurn": block.NewestTurn,
-							"hasOlder": block.HasOlder, "totalTurns": block.TotalTurns, "firstIndex": block.FirstIndex,
-						},
-					})
+						"history":      historyCursorMap(block),
+					}
+					if block.Direction != "" {
+						ev["direction"] = block.Direction
+					}
+					s.emit(ev)
 				}
 			}
 		case <-time.After(replyTimeout):
@@ -678,7 +831,7 @@ func (s *wsServer) handleRaw(raw []byte) {
 			// primitive (the row is durable in the fork before its turn).
 			// Compat: `index` is a raw row index -> resolve its turn id.
 			turnID := req.Index
-			if rec := s.readRecord(req.SessionID); rec != nil && req.Index >= 0 && req.Index < len(rec.Messages) {
+			if rec := s.readFullRecord(req.SessionID); rec != nil && req.Index >= 0 && req.Index < len(rec.Messages) {
 				turnID = rec.Messages[req.Index].TurnIndex
 			}
 			s.onForkAndResend(req.SessionID, req.RequestID, forkAndResendMsg{
@@ -934,11 +1087,21 @@ func (s *wsServer) handleRaw(raw []byte) {
 
 	case "search":
 		var req struct {
-			Query string `json:"query"`
-			Limit int    `json:"limit"`
+			Query     string `json:"query"`
+			Limit     int    `json:"limit"`
+			RequestID string `json:"requestId"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.onSearch(req.Query, req.Limit)
+		s.onSearchWithContext(context.Background(), req.Query, req.Limit, req.RequestID)
+
+	case "get_blob":
+		var req struct {
+			SHA256    string `json:"sha256"`
+			RequestID string `json:"requestId"`
+			SessionID string `json:"sessionId"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		s.onGetBlob(req.SHA256, req.RequestID, req.SessionID)
 
 	case "browse_folders":
 		var req struct {
@@ -1240,7 +1403,7 @@ func (s *wsServer) onFork(sessionID string, index int, requestID, editText, edit
 		}
 		nr := make(chan any, 1)
 		select {
-		case nres.Inbox <- Envelope{Payload: readReqMsg{What: "session", Reply: nr}}:
+		case nres.Inbox <- Envelope{Payload: readReqMsg{What: "sessionData", Reply: nr}}:
 		case <-time.After(replyTimeout):
 			s.error(sessionID, requestID, "Fork failed")
 			return
@@ -1248,11 +1411,15 @@ func (s *wsServer) onFork(sessionID string, index int, requestID, editText, edit
 		select {
 		case r2 := <-nr:
 			if rd, ok := r2.(readResult); ok && rd.Error == "" {
-				if rec, ok := rd.Payload.(*SessionRecord); ok {
-					s.emit(map[string]any{"type": "session_forked", "requestId": requestID, "hostId": s.host(), "session": sessionPayloadPaged(rec, 0)})
+				if p, ok := rd.Payload.(map[string]any); ok {
+					s.emit(map[string]any{"type": "session_forked", "requestId": requestID, "hostId": s.host(), "session": p})
 					s.notifyChange("sessions")
 					if strings.TrimSpace(editText) != "" || attachmentIDs != nil {
-						s.truncateAndRun(fr.NewID, len(rec.Messages), editText, editModel, yolo, attachmentIDs)
+						keepIdx := 0
+						if forkRec := s.readRecord(fr.NewID); forkRec != nil {
+							keepIdx = forkRec.globalMsgCount()
+						}
+						s.truncateAndRun(fr.NewID, keepIdx, editText, editModel, yolo, attachmentIDs)
 					}
 					return
 				}
@@ -1268,7 +1435,7 @@ func (s *wsServer) onFork(sessionID string, index int, requestID, editText, edit
 
 func (s *wsServer) onRegenerate(sessionID string, index int, text, model string, yolo bool) {
 	// Last user message at/before index, drop it + tail, re-run with its text.
-	rec := s.readRecord(sessionID)
+	rec := s.readFullRecord(sessionID)
 	if rec == nil {
 		return
 	}
@@ -1315,7 +1482,7 @@ func (s *wsServer) onEditMessage(sessionID, requestID string, index int, text, m
 	fail := func(err string) {
 		s.emit(map[string]any{"type": "edit_message_result", "hostId": s.host(), "sessionId": sessionID, "requestId": requestID, "ok": false, "error": err})
 	}
-	rec := s.readRecord(sessionID)
+	rec := s.readFullRecord(sessionID)
 	if rec == nil {
 		fail("session not found")
 		return
@@ -1448,7 +1615,7 @@ func (s *wsServer) onForkAndResend(sessionID, requestID string, msg forkAndResen
 
 func (s *wsServer) readRecord(sessionID string) *SessionRecord {
 	if s.sessions == nil {
-		if rec, _, err := newDiskStore(s.dataDir).loadSessionFused(sessionID); err == nil {
+		if rec, _, err := newDiskStore(s.dataDir).loadSessionHotFused(sessionID, false); err == nil {
 			return rec
 		}
 		return nil
@@ -1462,7 +1629,7 @@ func (s *wsServer) readRecord(sessionID string) *SessionRecord {
 	case res.Inbox <- Envelope{Payload: readReqMsg{What: "data", Reply: rr}}:
 	case <-time.After(replyTimeout):
 		// Fall back to disk (passivated or busy).
-		if rec, _, err := newDiskStore(s.dataDir).loadSessionFused(sessionID); err == nil {
+		if rec, _, err := newDiskStore(s.dataDir).loadSessionHotFused(sessionID, false); err == nil {
 			return rec
 		}
 		return nil
@@ -1476,10 +1643,36 @@ func (s *wsServer) readRecord(sessionID string) *SessionRecord {
 		}
 	case <-time.After(replyTimeout):
 	}
-	if rec, _, err := newDiskStore(s.dataDir).loadSessionFused(sessionID); err == nil {
+	if rec, _, err := newDiskStore(s.dataDir).loadSessionHotFused(sessionID, false); err == nil {
 		return rec
 	}
 	return nil
+}
+
+// readFullRecord returns a 0-based full SessionRecord when raw global message
+// index lookup is required (regenerate, edit_message, fork_session with editText).
+func (s *wsServer) readFullRecord(sessionID string) *SessionRecord {
+	rec := s.readRecord(sessionID)
+	if rec == nil {
+		return nil
+	}
+	if rec.HotBaseMsgIdx == 0 {
+		return rec
+	}
+	full, err := newDiskStore(s.dataDir).loadSession(sessionID)
+	if err != nil || full == nil {
+		return rec
+	}
+	if rec.HotBaseMsgIdx <= len(full.Messages) {
+		merged := make([]provider.Message, 0, rec.HotBaseMsgIdx+len(rec.Messages))
+		merged = append(merged, full.Messages[:rec.HotBaseMsgIdx]...)
+		merged = append(merged, rec.Messages...)
+		full.Messages = merged
+		full.TotalMsgs = len(merged)
+	}
+	full.Attachments = rec.Attachments
+	full.Compaction = rec.Compaction
+	return full
 }
 
 // truncateAndRun is the ATOMIC edit-and-run (audit bug 43): one actor
@@ -1666,109 +1859,151 @@ func (s *wsServer) onSearchFiles(requestID, sessionID, projectID, query string) 
 }
 
 func (s *wsServer) onSearch(query string, limit int) {
-	if limit <= 0 || limit > 100 {
+	s.onSearchWithContext(context.Background(), query, limit, "")
+}
+
+func (s *wsServer) onSearchWithContext(ctx context.Context, query string, limit int, requestID string) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if limit <= 0 || limit > 200 {
 		limit = 30
 	}
+	emitResults := func(results []any) {
+		if ctx.Err() != nil {
+			return
+		}
+		if results == nil {
+			results = []any{}
+		}
+		ev := map[string]any{
+			"type":    "search_results",
+			"hostId":  s.host(),
+			"query":   query,
+			"results": results,
+		}
+		if requestID != "" {
+			ev["requestId"] = requestID
+		}
+		s.emit(ev)
+	}
+
 	trimmed := strings.TrimSpace(query)
-	if len(trimmed) < 2 {
-		s.emit(map[string]any{"type": "search_results", "hostId": s.host(), "query": query, "results": []any{}})
+	if len([]rune(trimmed)) < 2 {
+		emitResults([]any{})
 		return
 	}
-	lQuery := strings.ToLower(trimmed)
-	summaries := listSessionSummaries(s.dataDir)
+	if ctx.Err() != nil {
+		return
+	}
+
+	eng := s.searchEngine
+	if eng == nil && s.sessions != nil {
+		eng = s.sessions.searchRef()
+	}
+	tempOpen := false
+	if eng == nil && s.dataDir != "" {
+		var err error
+		eng, err = searchindex.Open(filepath.Join(s.dataDir, "search"))
+		if err != nil {
+			emitResults([]any{})
+			return
+		}
+		tempOpen = true
+	}
+	if tempOpen {
+		defer func() { _ = eng.Close() }()
+	}
+	if eng == nil {
+		emitResults([]any{})
+		return
+	}
+
+	// Synchronous catch-up for any cold/seeded sessions not yet indexed in BM25F.
 	st := newDiskStore(s.dataDir)
-
-	var results []any
-
-	for _, sum := range summaries {
-		matchCount := 0
-		firstSnippet := ""
-		firstMsgIdx := -1
-
-		// Check session title
-		lTitle := strings.ToLower(sum.Title)
-		if strings.Contains(lTitle, lQuery) {
-			matchCount++
-			firstSnippet = sum.Title
+	for _, sid := range st.listSessionIDs() {
+		if ctx.Err() != nil {
+			return
 		}
-
-		// Check transcript message texts
-		rec := s.readRecord(sum.ID)
-		if rec == nil {
-			if r, _, err := st.loadSessionFused(sum.ID); err == nil {
-				rec = r
-			}
+		maxTurn, ok := eng.HasSession(sid)
+		if !ok {
+			indexColdSessionIntoSearch(st, eng, sid)
+			continue
 		}
-		if rec != nil {
-			for msgIdx, msg := range rec.Messages {
-				for _, c := range msg.Content {
-					if tb, ok := c.(provider.TextBlock); ok && tb.Text != "" {
-						lText := strings.ToLower(tb.Text)
-						curr := 0
-						for {
-							idx := strings.Index(lText[curr:], lQuery)
-							if idx < 0 {
-								break
-							}
-							matchCount++
-							actualIdx := curr + idx
-							if firstSnippet == "" {
-								start := actualIdx - 40
-								if start < 0 {
-									start = 0
-								}
-								end := actualIdx + len(lQuery) + 40
-								if end > len(tb.Text) {
-									end = len(tb.Text)
-								}
-								snip := strings.TrimSpace(tb.Text[start:end])
-								if start > 0 {
-									snip = "…" + snip
-								}
-								if end < len(tb.Text) {
-									snip = snip + "…"
-								}
-								firstSnippet = snip
-								firstMsgIdx = msgIdx
-							} else if firstMsgIdx < 0 {
-								firstMsgIdx = msgIdx
-							}
-							curr += idx + len(lQuery)
-						}
-					}
+		if maxTurn < 0 {
+			hasTurns := st.v2.HasLegacySession(sid)
+			if !hasTurns && st.v2.HasV2Session(sid) {
+				if entries, err := st.v2.ReadTurnIndex(sid); err == nil && len(entries) > 0 {
+					hasTurns = true
 				}
 			}
-		}
-
-		if matchCount > 0 {
-			res := map[string]any{
-				"sessionId":  sum.ID,
-				"title":      sum.Title,
-				"cwd":        sum.CWD,
-				"updatedAt":  sum.UpdatedAt,
-				"snippet":    firstSnippet,
-				"matchCount": matchCount,
-			}
-			if firstMsgIdx >= 0 {
-				res["messageIdx"] = firstMsgIdx
-			}
-			results = append(results, res)
-			if len(results) >= limit {
-				break
+			if hasTurns {
+				indexColdSessionIntoSearch(st, eng, sid)
 			}
 		}
 	}
 
-	if results == nil {
-		results = []any{}
-	}
-
-	s.emit(map[string]any{
-		"type":    "search_results",
-		"hostId":  s.host(),
-		"query":   query,
-		"results": results,
+	hits, err := eng.Search(ctx, searchindex.Query{
+		Text:  trimmed,
+		Limit: limit,
 	})
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+		return
+	}
+	if err != nil {
+		emitResults([]any{})
+		return
+	}
+
+	results := make([]any, 0, len(hits))
+	for _, h := range hits {
+		item := map[string]any{
+			"sessionId":  h.SessionID,
+			"title":      h.Title,
+			"cwd":        h.CWD,
+			"updatedAt":  h.UpdatedAt,
+			"snippet":    h.Snippet,
+			"matchCount": h.MatchCount,
+			"score":      h.Score,
+			"field":      h.Field,
+		}
+		if h.MessageIdx >= 0 {
+			item["messageIdx"] = h.MessageIdx
+		}
+		if h.TurnIndex >= 0 {
+			item["turnIndex"] = h.TurnIndex
+		}
+		results = append(results, item)
+	}
+	emitResults(results)
+}
+
+func (s *wsServer) onGetBlob(sha256Hex, requestID, sessionID string) {
+	ev := map[string]any{
+		"type":   "blob_data",
+		"hostId": s.host(),
+		"sha256": sha256Hex,
+	}
+	if requestID != "" {
+		ev["requestId"] = requestID
+	}
+	if sessionID != "" {
+		ev["sessionId"] = sessionID
+	}
+	if strings.TrimSpace(sha256Hex) == "" || s.dataDir == "" {
+		ev["error"] = "invalid blob sha256"
+		s.emit(ev)
+		return
+	}
+	data, mediaType, err := newDiskStore(s.dataDir).cas.GetBlob(sha256Hex)
+	if err != nil {
+		ev["error"] = err.Error()
+		s.emit(ev)
+		return
+	}
+	ev["mediaType"] = mediaType
+	ev["data"] = base64.StdEncoding.EncodeToString(data)
+	s.emit(ev)
 }
 
 func (s *wsServer) onCheckWorkspace(requestID, sessionID, projectID string) {

@@ -368,7 +368,7 @@ func (d *DaemonServer) copyToSlot(sl slotLayout, inactiveDir string) error {
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	for _, name := range []string{"projects.json", "config.json", "storage_version.json"} {
+	for _, name := range []string{"blobs", "projects.json", "config.json", "storage_version.json"} {
 		s, err := os.Stat(filepath.Join(src, name))
 		if err != nil {
 			if os.IsNotExist(err) {

@@ -77,8 +77,17 @@ func TestSeededResendCarriesSelectedImageIntoModelRow(t *testing.T) {
 		t.Fatal(r.Error)
 	}
 	last := a.rec.Messages[len(a.rec.Messages)-1]
-	found := false
 	for _, block := range last.Content {
+		if image, ok := block.(provider.ImageBlock); ok && len(image.Data) != 0 {
+			t.Fatal("resident seeded row retained inline image bytes instead of CAS blob ref")
+		}
+	}
+	hydrated, herr := st.cas.HydrateMessageImages([]provider.Message{last})
+	if herr != nil {
+		t.Fatal(herr)
+	}
+	found := false
+	for _, block := range hydrated[0].Content {
 		if image, ok := block.(provider.ImageBlock); ok && string(image.Data) == "image-bytes" {
 			found = true
 		}

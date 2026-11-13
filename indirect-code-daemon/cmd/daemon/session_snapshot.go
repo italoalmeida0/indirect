@@ -54,9 +54,16 @@ func cloneJSON[T any](value T) T {
 }
 
 func cloneRecord(rec *SessionRecord) *SessionRecord {
+	if rec == nil {
+		return nil
+	}
 	cp := *rec
 	cp.Messages = nil
 	out := cloneJSON(cp)
 	out.Messages = cloneMessages(rec.Messages)
+	out.HotBaseTurn = rec.HotBaseTurn
+	out.HotBaseMsgIdx = rec.HotBaseMsgIdx
+	out.TotalTurns = rec.TotalTurns
+	out.TotalMsgs = rec.TotalMsgs
 	return &out
 }

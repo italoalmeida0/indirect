@@ -203,10 +203,13 @@ type forkReqMsg struct {
 // readReqMsg serves history_page/session_data from actor RAM. If the session
 // is passivated the supervisor loads it from disk first (see supervisor.go).
 type readReqMsg struct {
-	What       string // "session" | "data" | "history" | "historyBlock"
-	Limit      int
-	BeforeTurn int      // historyBlock cursor
-	Reply      chan any // readResult
+	What         string // "summary" | "session" | "data" | "sessionData" | "history" | "historyBlock" | "turnChanges"
+	Limit        int
+	BeforeTurn   int      // historyBlock cursor (older)
+	AfterTurn    int      // historyBlock cursor (newer)
+	AroundTurn   int      // jump around turn
+	AroundMsgIdx *int     // jump around global raw message index (0 is valid)
+	Reply        chan any // readResult
 }
 
 // tickFlushMsg flushes the WAL buffer (periodic self-timer).

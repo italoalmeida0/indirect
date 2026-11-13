@@ -43,7 +43,8 @@ func ensureTranscriptIDs(rec *SessionRecord) {
 			continue
 		}
 		raw, _ := json.Marshal(rec.Messages[i])
-		sum := sha256.Sum256(append([]byte(fmt.Sprintf("%s:%d:", rec.ID, i)), raw...))
+		globalIdx := rec.HotBaseMsgIdx + i
+		sum := sha256.Sum256(append([]byte(fmt.Sprintf("%s:%d:", rec.ID, globalIdx)), raw...))
 		rec.Messages[i].ID = "legacy_" + hex.EncodeToString(sum[:16])
 	}
 }
@@ -99,7 +100,7 @@ func (t *transcriptState) track(ev map[string]any, rec *SessionRecord) {
 		if id == "" {
 			id = provider.NewMessageID()
 		}
-		t.activeID, t.activeIndex = id, len(rec.Messages)
+		t.activeID, t.activeIndex = id, rec.globalMsgCount()
 		t.live = &liveAssistant{ID: id, Role: "assistant", TurnIndex: rec.TurnSeq, Streaming: true, Content: []liveBlock{}}
 	}
 	if typ == "assistant_message" || typ == "user_message" {
@@ -112,7 +113,7 @@ func (t *transcriptState) track(ev map[string]any, rec *SessionRecord) {
 		}
 		for i := len(rec.Messages) - 1; i >= 0; i-- {
 			if rec.Messages[i].ID == id {
-				ev["index"] = i
+				ev["index"] = rec.HotBaseMsgIdx + i
 				break
 			}
 		}
@@ -121,7 +122,7 @@ func (t *transcriptState) track(ev map[string]any, rec *SessionRecord) {
 		ev["messageId"], ev["index"] = t.activeID, t.activeIndex
 	}
 	if typ == "retry" {
-		ev["index"] = len(rec.Messages)
+		ev["index"] = rec.globalMsgCount()
 		delete(ev, "messageId")
 	}
 	id, _ := ev["id"].(string)
