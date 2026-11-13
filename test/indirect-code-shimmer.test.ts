@@ -6,8 +6,10 @@ import { setReducedMotionOverride } from "../web/src/ds/motion/reduced";
 import {
   SHIMMER_DURATION_MS,
   createShimmerStyle,
+  shimmerAlignedStartTimeMs,
   shimmerPhaseDelayMs,
   shimmerPhaseStyle,
+  syncShimmerAnimation,
 } from "../web/src/ds/motion/shimmer";
 import { createQueue } from "../web/src/indirect-code/hooks/useQueue";
 
@@ -165,5 +167,53 @@ describe("shimmer wall-clock phase synchronization & reactive DOM stability", ()
     );
     expect(statusSrc).toContain("<Index each={t.todos()}>");
     expect(statusSrc).not.toContain("<For each={t.todos()}>");
+  });
+
+  test("shimmerAlignedStartTimeMs and syncShimmerAnimation never place startTime in the future across cycle boundaries", () => {
+    // 1. Cycle-boundary race: --ui-shimmer-delay computed 5ms before 2200ms boundary (-2195ms),
+    //    animationstart fires 8ms after boundary (now = 2208ms -> now % 2200 = 8 < 2195).
+    const boundaryStart = shimmerAlignedStartTimeMs(2208, -2195);
+    expect(boundaryStart).toBe(2195);
+    expect(boundaryStart).toBeLessThanOrEqual(2208);
+    expect(2208 - boundaryStart).toBe(13); // localTime >= 0 (active phase, never before phase)
+    expect((2208 - boundaryStart - -2195) % SHIMMER_DURATION_MS).toBe(2208 % SHIMMER_DURATION_MS);
+
+    // 2. DisclosureBody display:none re-expand with cached delay (-1904.1ms) when now % 2200 = 80ms
+    for (const now of [80, 2280, 4480]) {
+      const start = shimmerAlignedStartTimeMs(now, -1904.1);
+      const localTime = now - start;
+      const activeTime = localTime - -1904.1;
+      expect(start).toBeLessThanOrEqual(now);
+      expect(localTime).toBeGreaterThanOrEqual(0);
+      expect(localTime).toBeLessThan(SHIMMER_DURATION_MS);
+      expect(activeTime % SHIMMER_DURATION_MS).toBeCloseTo(now % SHIMMER_DURATION_MS, 6);
+    }
+
+    // 3. Exhaustive sweep across delays in (-2200, 2200) and timestamps in [0, 7000]
+    for (const delay of [-2199.9, -1904.1, -1100, -1, 0, 150]) {
+      for (let now = 0; now <= 6600; now += 73) {
+        const start = shimmerAlignedStartTimeMs(now, delay);
+        const localTime = now - start;
+        const beforeActiveBoundary = Math.max(0, delay);
+        expect(localTime).toBeGreaterThanOrEqual(beforeActiveBoundary - 1e-9);
+        expect(localTime - beforeActiveBoundary).toBeLessThan(SHIMMER_DURATION_MS + 1e-9);
+        const activeTime = localTime - delay;
+        const posMod = ((activeTime % SHIMMER_DURATION_MS) + SHIMMER_DURATION_MS) % SHIMMER_DURATION_MS;
+        expect(posMod).toBeCloseTo(now % SHIMMER_DURATION_MS, 6);
+      }
+    }
+
+    // 4. syncShimmerAnimation mutates mock CSSAnimation.startTime into active phase (<= now)
+    const mockAnim: any = {
+      animationName: "ui-shimmer",
+      startTime: 4395, // buggy future startTime that would freeze in before-phase
+      effect: { getTiming: () => ({ delay: -2195 }) },
+    };
+    const mockEl = {
+      getAnimations: () => [mockAnim],
+    } as unknown as Element;
+    syncShimmerAnimation(mockEl, 2208);
+    expect(mockAnim.startTime).toBe(2195);
+    expect(mockAnim.startTime).toBeLessThanOrEqual(2208);
   });
 });

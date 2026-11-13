@@ -60,19 +60,38 @@ export function createShimmerStyle(active: () => boolean): () => JSX.CSSProperti
 }
 
 /**
- * Locks a running `ui-shimmer` `CSSAnimation` directly onto `document.timeline`
- * (`startTime + delay = floor(now / P) * P`) so every `.ui-shimmer` node on the
- * page shares identical sub-millisecond phase even without inline style props.
+ * Computes the Web Animations `startTime` on `document.timeline` for an infinite
+ * `ui-shimmer` animation with timing delay `delayMs` at `nowMs`.
+ *
+ * Guarantees both invariants required by Web Animations 1 §3.6.3:
+ * 1. Immediate active phase (`localTime = nowMs - startTime >= max(0, delayMs)`),
+ *    preventing a negative `--ui-shimmer-delay` (`beforeActiveBoundary = 0`) from
+ *    landing in `localTime < 0` (`before` phase, frozen at `200%`) when `(nowMs % P) < -delayMs`.
+ * 2. Exact global phase lock (`activeTime = localTime - delayMs ≡ nowMs (mod P)`).
  */
-export function syncShimmerAnimation(target: Element): void {
+export function shimmerAlignedStartTimeMs(nowMs: number, delayMs = 0): number {
+  const safeNow = Number.isFinite(nowMs) ? nowMs : 0;
+  const safeDelay = Number.isFinite(delayMs) ? delayMs : 0;
+  const anchor =
+    Math.floor((safeNow + Math.min(0, safeDelay)) / SHIMMER_DURATION_MS) * SHIMMER_DURATION_MS;
+  return anchor - safeDelay;
+}
+
+/**
+ * Locks a running `ui-shimmer` `CSSAnimation` directly onto `document.timeline`
+ * so every `.ui-shimmer` node on the page shares identical sub-millisecond phase
+ * without ever placing `startTime` in the future (`before` phase).
+ */
+export function syncShimmerAnimation(
+  target: Element,
+  nowMs: number = currentShimmerClockMs(),
+): void {
   if (typeof target.getAnimations !== "function") return;
-  const now = currentShimmerClockMs();
-  const cycleStart = Math.floor(now / SHIMMER_DURATION_MS) * SHIMMER_DURATION_MS;
   for (const anim of target.getAnimations()) {
     if ((anim as CSSAnimation).animationName !== "ui-shimmer") continue;
     const rawDelay = anim.effect?.getTiming().delay;
     const delay = typeof rawDelay === "number" && Number.isFinite(rawDelay) ? rawDelay : 0;
-    const desiredStart = cycleStart - delay;
+    const desiredStart = shimmerAlignedStartTimeMs(nowMs, delay);
     if (typeof anim.startTime !== "number" || Math.abs(anim.startTime - desiredStart) > 0.5) {
       try {
         anim.startTime = desiredStart;

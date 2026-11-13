@@ -610,17 +610,146 @@ try {
     // Resume and re-lock CSSAnimations on persistent DOM nodes before next theme pass
     await page.evaluate(() => {
       const now = Number(document.timeline?.currentTime ?? performance.now());
-      const cycleStart = Math.floor(now / 2200) * 2200;
       for (const el of document.querySelectorAll(".ui-shimmer")) {
         for (const anim of el.getAnimations()) {
           if ((anim as CSSAnimation).animationName !== "ui-shimmer") continue;
           const delay = Number(anim.effect?.getTiming().delay || 0);
+          const anchor = Math.floor((now + Math.min(0, delay)) / 2200) * 2200;
           anim.play();
-          anim.startTime = cycleStart - delay;
+          anim.startTime = anchor - delay;
         }
       }
     });
   }
+
+  // -------------------------------------------------------------------------
+  // 3b. Adversarial Web Animations `before`-Phase Freeze Regressions:
+  //     (a) Boundary-crossing negative delay mount when `(now % 2200) < -delay`
+  //     (b) `DisclosureBody` (`display: none`) collapse -> re-expand when `(now % 2200) < -delay`
+  // -------------------------------------------------------------------------
+  const boundaryAndDisclosureAudit = await page.evaluate(async () => {
+    document.documentElement.dataset.theme = "dark";
+    delete document.documentElement.dataset.reducedMotion;
+    const ui = (window as any).shimmerUI;
+    ui.seedActiveWorkspace();
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+
+    const parsePct = (el: Element) => parseFloat(getComputedStyle(el).backgroundPositionX);
+    const circularDiff200 = (a: number, b: number) => {
+      const d = Math.abs(a - b) % 200;
+      return d > 100 ? 200 - d : d;
+    };
+    const waitForEarlyCycleWindow = async () => {
+      for (let guard = 0; guard < 300; guard++) {
+        const now = Number(document.timeline?.currentTime ?? performance.now());
+        const mod = now % 2200;
+        if (mod >= 25 && mod <= 450) return now;
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
+      throw new Error("Timed out waiting for early (now % 2200) window");
+    };
+
+    const workEl = document.querySelector("[data-turn-status] .ui-shimmer") as HTMLElement;
+    const railBtn = document.querySelector("[data-step-rail-header]") as HTMLButtonElement;
+    const toolVerbEl = document.querySelector(".group\\/tool .ui-shimmer") as HTMLElement;
+    if (!workEl || !railBtn || !toolVerbEl) {
+      throw new Error("Missing work/rail/toolVerb elements for boundary & disclosure audit");
+    }
+
+    // (a) Mount an element with --ui-shimmer-delay: -2195ms right after a 2200ms boundary
+    //     so (now % 2200) << -delay (2195ms). Old code set startTime > now (frozen at 200%).
+    await waitForEarlyCycleWindow();
+    const probe = document.createElement("span");
+    probe.className = "ui-shimmer font-medium";
+    probe.style.setProperty("--ui-shimmer-delay", "-2195ms");
+    probe.textContent = "Boundary crossing probe";
+    document.getElementById("ds-shimmer-card")!.appendChild(probe);
+
+    const probeSamples: number[] = [];
+    const workSamplesA: number[] = [];
+    let probeStartMinusNow = Infinity;
+    let maxDiffA = 0;
+
+    for (let f = 0; f < 20; f++) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      if (f === 0) {
+        const now = Number(document.timeline?.currentTime ?? performance.now());
+        const anim = probe
+          .getAnimations()
+          .find((a) => (a as CSSAnimation).animationName === "ui-shimmer");
+        probeStartMinusNow = Number(anim?.startTime ?? Infinity) - now;
+      }
+      const pPct = parsePct(probe);
+      const wPct = parsePct(workEl);
+      probeSamples.push(pPct);
+      workSamplesA.push(wPct);
+      maxDiffA = Math.max(maxDiffA, circularDiff200(pPct, wPct));
+    }
+    probe.remove();
+
+    // (b) Collapse [data-step-rail-header] (DisclosureBody sets display: none),
+    //     pin a steep negative --ui-shimmer-delay (-2050ms) on the active tool verb,
+    //     wait until (now % 2200) is in [25, 450]ms (< 2050ms), and re-expand!
+    toolVerbEl.style.setProperty("--ui-shimmer-delay", "-2050ms");
+    if (railBtn.getAttribute("aria-expanded") === "true") {
+      railBtn.click();
+    }
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+    await waitForEarlyCycleWindow();
+    railBtn.click(); // display: none -> block triggers fresh CSSAnimation + animationstart!
+
+    const verbSamples: number[] = [];
+    const workSamplesB: number[] = [];
+    let verbStartMinusNow = Infinity;
+    let maxDiffB = 0;
+
+    for (let f = 0; f < 20; f++) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      if (f === 0) {
+        const now = Number(document.timeline?.currentTime ?? performance.now());
+        const anim = toolVerbEl
+          .getAnimations()
+          .find((a) => (a as CSSAnimation).animationName === "ui-shimmer");
+        verbStartMinusNow = Number(anim?.startTime ?? Infinity) - now;
+      }
+      const vPct = parsePct(toolVerbEl);
+      const wPct = parsePct(workEl);
+      verbSamples.push(vPct);
+      workSamplesB.push(wPct);
+      maxDiffB = Math.max(maxDiffB, circularDiff200(vPct, wPct));
+    }
+
+    return {
+      probeStartMinusNow,
+      probeSamples,
+      workSamplesA,
+      maxDiffA,
+      verbStartMinusNow,
+      verbSamples,
+      workSamplesB,
+      maxDiffB,
+    };
+  });
+
+  assert(
+    boundaryAndDisclosureAudit.probeStartMinusNow <= 0,
+    `Boundary-crossing .ui-shimmer startTime must never exceed timeline.currentTime (startTime - now = ${boundaryAndDisclosureAudit.probeStartMinusNow.toFixed(2)}ms)`,
+  );
+  assert(
+    new Set(boundaryAndDisclosureAudit.probeSamples.map((v: number) => v.toFixed(2))).size >= 10 &&
+      boundaryAndDisclosureAudit.maxDiffA < 3,
+    `Boundary-crossing .ui-shimmer must advance immediately without freezing at 200% (maxDiff=${boundaryAndDisclosureAudit.maxDiffA.toFixed(2)}%, samples=${boundaryAndDisclosureAudit.probeSamples.slice(0, 6).map((n: number) => n.toFixed(1)).join(",")})`,
+  );
+  assert(
+    boundaryAndDisclosureAudit.verbStartMinusNow <= 0,
+    `Re-expanded DisclosureBody .ui-shimmer startTime must never exceed timeline.currentTime (startTime - now = ${boundaryAndDisclosureAudit.verbStartMinusNow.toFixed(2)}ms)`,
+  );
+  assert(
+    new Set(boundaryAndDisclosureAudit.verbSamples.map((v: number) => v.toFixed(2))).size >= 10 &&
+      boundaryAndDisclosureAudit.maxDiffB < 3,
+    `Re-expanded DisclosureBody .ui-shimmer must advance immediately in phase with Working (maxDiff=${boundaryAndDisclosureAudit.maxDiffB.toFixed(2)}%, samples=${boundaryAndDisclosureAudit.verbSamples.slice(0, 6).map((n: number) => n.toFixed(1)).join(",")})`,
+  );
 
   // -------------------------------------------------------------------------
   // 4. Reduced Motion Verification (`data-reduced-motion="reduce"`)
