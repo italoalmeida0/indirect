@@ -543,15 +543,37 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
 .ui-skeleton::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%); background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--foreground) 5%, transparent), transparent); animation: skeleton-sweep 1.4s var(--ease-in-out) infinite; }
 @keyframes skeleton-sweep { to { transform: translateX(100%); } }
 .ui-shimmer {
+  --shimmer-base: color-mix(in oklab, var(--text-muted) 84%, var(--surface));
+  --shimmer-peak: var(--foreground);
   color: transparent;
   -webkit-text-fill-color: transparent;
-  background: linear-gradient(90deg, var(--text-muted) 0%, var(--text-muted) 32%, var(--foreground) 50%, var(--text-muted) 68%, var(--text-muted) 100%);
-  background-size: 220% 100%;
+  background-image: linear-gradient(
+    90deg,
+    var(--shimmer-base) 0%,
+    var(--shimmer-base) 50%,
+    color-mix(in oklab, var(--shimmer-peak) 14%, var(--shimmer-base)) 56%,
+    color-mix(in oklab, var(--shimmer-peak) 47%, var(--shimmer-base)) 62%,
+    color-mix(in oklab, var(--shimmer-peak) 82%, var(--shimmer-base)) 68%,
+    var(--shimmer-peak) 75%,
+    color-mix(in oklab, var(--shimmer-peak) 82%, var(--shimmer-base)) 82%,
+    color-mix(in oklab, var(--shimmer-peak) 47%, var(--shimmer-base)) 88%,
+    color-mix(in oklab, var(--shimmer-peak) 14%, var(--shimmer-base)) 94%,
+    var(--shimmer-base) 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: repeat;
+  background-position: 200% 0;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: ui-shimmer 2.1s linear -0.38s infinite;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  animation: ui-shimmer 2.2s linear var(--ui-shimmer-delay, 0ms) infinite;
 }
-@keyframes ui-shimmer { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+.ui-shimmer-accent {
+  --shimmer-base: color-mix(in oklab, var(--accent) 74%, var(--surface));
+  --shimmer-peak: color-mix(in oklab, var(--accent-strong) 62%, var(--foreground));
+}
+@keyframes ui-shimmer { from { background-position: 200% 0; } to { background-position: 0% 0; } }
 
 /* ===== Empty state ========================================================= */
 .ui-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-12) var(--space-6); text-align: center; }
@@ -1222,7 +1244,9 @@ html.theme-xfade body, html.theme-xfade body * {
   .ui-spinner { animation-duration: 1.6s; }
   .ui-skeleton::after, .ui-shimmer, .ui-progress-indeterminate .ui-progress-fill { animation: none; }
   .ui-shimmer { color: var(--text-secondary); -webkit-text-fill-color: currentColor; background: none; }
+  .ui-shimmer-accent { color: var(--accent); }
 }
 :root[data-reduced-motion="reduce"] :is(.ui-button, .ui-segment, .ui-switch-thumb, .ui-popover, .ui-popover *, .ui-tooltip, .ui-progress-fill) { transition: none !important; }
 :root[data-reduced-motion="reduce"] .ui-skeleton::after, :root[data-reduced-motion="reduce"] .ui-shimmer { animation: none; }
 :root[data-reduced-motion="reduce"] .ui-shimmer { color: var(--text-secondary); -webkit-text-fill-color: currentColor; background: none; }
+:root[data-reduced-motion="reduce"] .ui-shimmer-accent { color: var(--accent); }

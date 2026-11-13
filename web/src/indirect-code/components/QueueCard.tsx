@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
+import { shimmerPhaseStyle } from "../../ds/motion/shimmer";
 import { FileIcon } from "../presentation";
 import { MsgIconBtn } from "./MsgActions";
 import { Btn } from "../../ui";
@@ -19,7 +20,7 @@ export function QueueCard() {
   const ui = useUI();
 
   const sid = () => s.activeSessionId();
-  const staged = () => q.stagedItems(sid());
+  const staged = () => q.stagedItems?.(sid()) ?? [];
 
   return (
     <Show when={staged().length > 0}>
@@ -49,7 +50,7 @@ export function QueueCard() {
                 >
                   <span class="inline-flex items-center gap-1 rounded-full bg-accent-subtle/75 px-2 py-0.5 text-[10px] font-medium text-accent shrink-0">
                     <Iconify icon="lucide:zap" size={10} />
-                    <span class="ui-shimmer font-medium">Sending now…</span>
+                    <span class="ui-shimmer ui-shimmer-accent font-medium" style={shimmerPhaseStyle(true)}>Sending now…</span>
                   </span>
                 </Show>
                 <span
@@ -117,8 +118,8 @@ export function ComposerQueueShelf() {
   const c = useComposerCtx();
 
   const sid = () => s.activeSessionId();
-  const passive = () => q.passiveItems(sid());
-  const collapsed = () => q.queueCollapsed()[sid()] ?? false;
+  const passive = () => q.passiveItems?.(sid()) ?? [];
+  const collapsed = () => q.queueCollapsed?.()[sid()] ?? false;
   const isRunning = () => t.sessionStatus() === "running";
   const currentModel = () => c.activeModel?.() || s.activeSession?.()?.model || "";
   const hasShelf = () => Boolean(sid() && !s.draftMode() && passive().length > 0);

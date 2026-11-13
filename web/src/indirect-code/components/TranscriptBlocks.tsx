@@ -1,6 +1,7 @@
 import { createEffect, createMemo, For, Show, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { press } from "../../ds/motion/press";
+import { createShimmerStyle } from "../../ds/motion/shimmer";
 import { createDisclosure, DisclosureBody } from "./Disclosure";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { followTail } from "../utils/scrollMemory";
@@ -63,6 +64,7 @@ function renderThinkingRow(
 ) {
   const key = `${entry.msg.id}:think:${entry.nth}`;
   const { open, toggle } = createDisclosure(() => `${running()}:${live()}`, openByDefault, ctx.isPinned);
+  const shimmerStyle = createShimmerStyle(live);
   const label = () =>
     live()
       ? `Thinking ${formatDurationSecs(ctx.thinkingElapsed())}`
@@ -86,7 +88,7 @@ function renderThinkingRow(
           size={12}
           class={`shrink-0 text-fg-muted/80 transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
         />
-        <span class={`truncate ${live() ? "ui-shimmer font-medium" : "text-fg-muted group-hover/tool:text-fg-secondary"}`}>{label()}</span>
+        <span class={`truncate tabular-nums ${live() ? "ui-shimmer font-medium" : "text-fg-muted group-hover/tool:text-fg-secondary"}`} style={shimmerStyle()}>{label()}</span>
       </button>
       <DisclosureBody open={open()} keepMounted={running()}>
         <div
@@ -115,6 +117,7 @@ function renderTurnAggregate(
   // tail; the <For> in TranscriptView slices by seal); the running turn
   // is always the newest block, which always renders.
   const running = createMemo(() => isBlockRunning(ctx.renderBlocks(), series, ctx.sessionStatus()));
+  const shimmerStyle = createShimmerStyle(running);
   const summary = createMemo(() => specialTitle(series.units, {
     thoughts: series.entries.filter((e) => e.kind === "thinking").length,
   }));
@@ -155,7 +158,7 @@ function renderTurnAggregate(
           size={13}
           class={`shrink-0 text-fg-muted/80 group-hover/agg:text-fg transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
         />
-        <span class={`truncate min-w-0 ${running() ? "ui-shimmer font-medium text-fg-secondary" : ""}`}>
+        <span class={`truncate min-w-0 tabular-nums ${running() ? "ui-shimmer font-medium text-fg-secondary" : ""}`} style={shimmerStyle()}>
           {summary()}
         </span>
         <Show when={ctx.specialProgress(series.units)}>

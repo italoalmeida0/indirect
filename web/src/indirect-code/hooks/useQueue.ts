@@ -23,6 +23,35 @@ function normalizeQueuedOptions(raw: unknown): WireSessionOptions | undefined {
   };
 }
 
+function sameQueuedOptions(a?: WireSessionOptions, b?: WireSessionOptions): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  if (a.effort !== b.effort || a.mode !== b.mode || a.access !== b.access) return false;
+  if (a.skills.length !== b.skills.length) return false;
+  for (let i = 0; i < a.skills.length; i++) {
+    if (a.skills[i]?.name !== b.skills[i]?.name || a.skills[i]?.usable !== b.skills[i]?.usable) return false;
+  }
+  return true;
+}
+
+function sameQueuedMessage(a: QueuedMessage, b: QueuedMessage): boolean {
+  if (
+    a.id !== b.id ||
+    a.text !== b.text ||
+    a.model !== b.model ||
+    a.yolo !== b.yolo ||
+    a.createdAt !== b.createdAt ||
+    a.delivery !== b.delivery ||
+    a.attachmentIds.length !== b.attachmentIds.length
+  ) {
+    return false;
+  }
+  for (let i = 0; i < a.attachmentIds.length; i++) {
+    if (a.attachmentIds[i] !== b.attachmentIds[i]) return false;
+  }
+  return sameQueuedOptions(a.options, b.options);
+}
+
 /**
  * Message queue (per session).
  *
@@ -81,7 +110,23 @@ export function createQueue(opts: {
         delivery: normalizeMidTurnSend(q?.delivery),
       };
     });
-    setQueues((prev) => ({ ...prev, [sessionId]: list }));
+    setQueues((prev) => {
+      const existing = prev[sessionId];
+      if (!existing || existing.length === 0) return { ...prev, [sessionId]: list };
+      const byId = new Map(existing.map((item) => [item.id, item]));
+      let allSame = existing.length === list.length;
+      const merged = list.map((item, idx) => {
+        const old = item.id ? byId.get(item.id) : undefined;
+        if (old && sameQueuedMessage(old, item)) {
+          if (existing[idx] !== old) allSame = false;
+          return old;
+        }
+        allSame = false;
+        return item;
+      });
+      if (allSame) return prev;
+      return { ...prev, [sessionId]: merged };
+    });
     const editId = editingQueueId();
     if (editId && sessionId === opts.getSessionId()) {
       const stillPassive = list.some((item) => item.id === editId && item.delivery === "queue");

@@ -1,5 +1,6 @@
 import { Show, splitProps, type JSX } from "solid-js";
 
+import { shimmerPhaseStyle } from "../motion/shimmer";
 import { Glyph } from "./icon";
 
 /* ---------------------------------------------------------------- Switch */
@@ -229,7 +230,8 @@ export function EmptyState(props: EmptyStateProps) {
 
 /** Ongoing work, shown with a calm light across the words (Arc "Text shimmer"). */
 export function Shimmer(props: { children: JSX.Element; class?: string }) {
-  return <span class={`ui-shimmer ${props.class ?? ""}`}>{props.children}</span>;
+  const phaseStyle = shimmerPhaseStyle(true);
+  return <span class={`ui-shimmer ${props.class ?? ""}`} style={phaseStyle}>{props.children}</span>;
 }
 
 /** Keyboard key cap. */

@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
+import { createShimmerStyle } from "../../ds/motion/shimmer";
 import { DisclosureBody } from "./Disclosure";
 import { Icon as Iconify } from "../../components/icon";
 import { DiffView } from "./CodeBlock";
@@ -141,6 +142,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
   const files = () => props.balloon.files || [];
   const totalAdds = () => files().reduce((n, f) => n + (f.additions || 0), 0);
   const totalDels = () => files().reduce((n, f) => n + (f.deletions || 0), 0);
+  const liveShimmerStyle = createShimmerStyle(() => Boolean(props.live));
 
   const statCells = createMemo(() => diffStatBlocks(totalAdds(), totalDels()));
   const expandableKeys = createMemo(() =>
@@ -188,7 +190,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
               <Show when={props.live}>
                 <Iconify icon="lucide:file-diff" size={13} class="text-fg-muted shrink-0" />
               </Show>
-              <span class={`text-xs font-medium ${props.live ? "ui-shimmer text-fg-secondary" : "text-fg"}`}>
+              <span class={`text-xs font-medium tabular-nums ${props.live ? "ui-shimmer text-fg-secondary" : "text-fg"}`} style={liveShimmerStyle()}>
                 {files().length} {files().length === 1 ? "file" : "files"} changed
               </span>
               <Show when={totalAdds() > 0 || totalDels() > 0}>

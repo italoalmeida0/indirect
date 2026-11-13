@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { press } from "../../../ds/motion/press";
+import { createShimmerStyle } from "../../../ds/motion/shimmer";
 import { absoluteRemotePath, collapseCwd } from "../../paths";
 import { latestExploreProgress } from "../../utils/contextTools";
 import { ShellCmd } from "../CodeBlock";
@@ -33,6 +34,9 @@ export function ToolUnitHeader(props: ToolPartProps) {
     );
   };
 
+  const verbActive = () => Boolean(props.running && props.active && !props.u.result);
+  const verbShimmerStyle = createShimmerStyle(verbActive);
+
   return (
     <div
       onPointerDown={(e) => {
@@ -48,7 +52,7 @@ export function ToolUnitHeader(props: ToolPartProps) {
         size={13}
         class="shrink-0 text-fg-muted/80 group-hover/tool:text-fg-secondary transition-colors"
       />
-      <span class={`shrink-0 ${props.running && props.active && !props.u.result ? "ui-shimmer font-medium text-fg-secondary" : "text-fg-muted"}`}>{props.m.sum().verb}</span>
+      <span class={`shrink-0 ${verbActive() ? "ui-shimmer font-medium text-fg-secondary" : "text-fg-muted"}`} style={verbShimmerStyle()}>{props.m.sum().verb}</span>
       <span class="flex items-center gap-1.5 min-w-0 flex-1">
         <span class="inline-flex items-center gap-1.5 min-w-0 flex-1" data-rc-tip={targetPath() ? absoluteRemotePath(targetPath(), props.ctx.activeSession()?.cwd || "", props.ctx.projects().find((p: { protected?: boolean }) => p.protected)?.path) : undefined}>
           <Show when={targetPath()}><FileIcon path={targetPath()} size={13} /></Show>
