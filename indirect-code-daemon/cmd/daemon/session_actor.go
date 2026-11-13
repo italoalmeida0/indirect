@@ -122,6 +122,7 @@ type sessionActor struct {
 	// cancelRounds counts consecutive watchdog cancels without worker exit
 	// (F3 escalation → quarantine).
 	cancelRounds int
+	cancelReason string
 
 	// epoch is this incarnation's spawn number (supervisor assigns;
 	// worker mail carrying another epoch is dropped — see handleData).
@@ -485,6 +486,8 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.onCompactNow()
 	case slashReplyMsg:
 		a.onSlashReply(m)
+	case markSeenMsg:
+		a.onMarkSeen(m)
 	case jailMsg:
 		a.touch()
 		a.jailed = m.Jail
@@ -605,6 +608,70 @@ func (a *sessionActor) pingChange() {
 	}
 }
 
+func isUserCancelReason(reason string) bool {
+	switch reason {
+	case "user", "interrupt_and_send", "discard_and_resend", "fork_and_resend":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *sessionActor) markUserSeen() bool {
+	if a.rec == nil || (a.rec.SeenSeq >= a.rec.AttentionSeq && a.rec.AttentionKind == "") {
+		return false
+	}
+	a.rec.SeenSeq = a.rec.AttentionSeq
+	a.rec.AttentionKind = ""
+	return true
+}
+
+func (a *sessionActor) resolveMidTurnAttention() {
+	if a.rec == nil {
+		return
+	}
+	if a.rec.AttentionSeq > a.rec.SeenSeq && (a.rec.AttentionKind == "approval" || a.rec.AttentionKind == "question") {
+		a.rec.SeenSeq = a.rec.AttentionSeq
+		a.rec.AttentionKind = ""
+		_ = a.saveOrAppend(walEvent{Type: walTypeMeta})
+		a.pingChange()
+	}
+}
+
+func (a *sessionActor) onMarkSeen(m markSeenMsg) {
+	if a.closing || a.persistErr != nil || a.rec == nil {
+		return
+	}
+	target := a.rec.AttentionSeq
+	if m.Seq > 0 && m.Seq < target {
+		target = m.Seq
+	}
+	if target <= a.rec.SeenSeq {
+		return
+	}
+	prevSeen, prevKind := a.rec.SeenSeq, a.rec.AttentionKind
+	a.rec.SeenSeq = target
+	if a.rec.SeenSeq >= a.rec.AttentionSeq {
+		a.rec.AttentionKind = ""
+	}
+	var err error
+	if a.wal != nil {
+		attSeq, seen, kind := a.rec.AttentionSeq, a.rec.SeenSeq, a.rec.AttentionKind
+		err = appendWALEvent(a.wal, walEvent{
+			Type: walTypeMeta, AttentionSeq: &attSeq, SeenSeq: &seen, AttentionKind: &kind, noTouchUpdatedAt: true,
+		})
+	} else {
+		err = a.store.rewriteMetaOnly(a.id, recordMeta(a.rec))
+	}
+	if err != nil {
+		a.rec.SeenSeq, a.rec.AttentionKind = prevSeen, prevKind
+		a.storageError(err)
+		return
+	}
+	trace("actor.attention", map[string]any{"sid": a.id, "op": "mark_seen", "attentionSeq": a.rec.AttentionSeq, "seenSeq": a.rec.SeenSeq, "attentionKind": a.rec.AttentionKind})
+	a.pingChange()
+}
+
 // ---- prompts & queue ----
 
 func (a *sessionActor) onUserPrompt(m userPromptMsg) {
@@ -631,6 +698,8 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 		}
 		delivery := a.resolveMidTurnDelivery(m.MidTurnDelivery)
 		previous := cloneQueueSlice(a.rec.Queue)
+		prevSeen, prevKind := a.rec.SeenSeq, a.rec.AttentionKind
+		seenChanged := a.markUserSeen()
 		if delivery == deliveryInterrupt {
 			demoteInterruptToSteer(a.rec.Queue)
 		}
@@ -649,8 +718,12 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 		sortQueueByDelivery(a.rec.Queue)
 		if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
 			a.rec.Queue = previous
+			a.rec.SeenSeq, a.rec.AttentionKind = prevSeen, prevKind
 			m.Reply <- promptResult{Error: err.Error()}
 			return
+		}
+		if seenChanged && a.wal != nil {
+			_ = a.saveOrAppend(walEvent{Type: walTypeMeta})
 		}
 		a.pingChange()
 		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
@@ -681,7 +754,10 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 		a.rec.TitleSource = "pending"
 		a.emit(map[string]any{"type": "session_renamed", "sessionId": a.id, "title": t, "auto": true})
 	}
+	prevSeen, prevKind := a.rec.SeenSeq, a.rec.AttentionKind
+	a.markUserSeen()
 	if err := a.startTurn(m.Text, m.AttachmentIDs, m.Model, m.YOLO, m.Options); err != nil {
+		a.rec.SeenSeq, a.rec.AttentionKind = prevSeen, prevKind
 		m.Reply <- promptResult{Error: err.Error()}
 		return
 	}
@@ -690,6 +766,8 @@ func (a *sessionActor) onUserPrompt(m userPromptMsg) {
 
 func (a *sessionActor) onQueueOp(m queueOpMsg) {
 	previous := cloneQueueSlice(a.rec.Queue)
+	prevSeen, prevKind := a.rec.SeenSeq, a.rec.AttentionKind
+	seenChanged := false
 	addedInterrupt := false
 	switch m.Op {
 	case "add":
@@ -704,6 +782,7 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 			m.Reply <- queueOpResult{Error: err.Error()}
 			return
 		}
+		seenChanged = a.markUserSeen()
 		delivery := normalizeDelivery(m.Delivery)
 		if a.state != stateRunning && a.state != stateAwaitAppr && a.state != stateAwaitQ && a.state != stateCancel {
 			delivery = deliveryQueue
@@ -781,8 +860,12 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 	}
 	if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
 		a.rec.Queue = previous
+		a.rec.SeenSeq, a.rec.AttentionKind = prevSeen, prevKind
 		m.Reply <- queueOpResult{Error: err.Error()}
 		return
+	}
+	if seenChanged && a.wal != nil {
+		_ = a.saveOrAppend(walEvent{Type: walTypeMeta})
 	}
 	a.pingChange()
 	if addedInterrupt && (a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ) {
@@ -836,12 +919,15 @@ func (a *sessionActor) startTurnWithMeta(prompt string, attachmentIDs []string, 
 		return err
 	}
 	a.wal = wal
+	a.cancelReason = ""
 	// Persist turn configuration and queue consumption with the header. A
 	// crash before the opening message must retain enough to resume once.
+	attSeq, seenSeq, attKind := a.rec.AttentionSeq, a.rec.SeenSeq, a.rec.AttentionKind
 	for _, ev := range []walEvent{
 		{Type: walTypeOptions, Options: &a.rec.Options},
 		{Type: walTypeQueue, Queue: a.rec.Queue},
 		{Type: walTypeTitle, Title: a.rec.Title, TitleSource: a.rec.TitleSource},
+		{Type: walTypeMeta, AttentionSeq: &attSeq, SeenSeq: &seenSeq, AttentionKind: &attKind},
 	} {
 		if err := appendWALEvent(a.wal, ev); err != nil {
 			a.storageError(err)
@@ -998,11 +1084,32 @@ func (a *sessionActor) finishTurn(ok bool) {
 	if !willPromote && demoteStagedQueueItems(a.rec.Queue) {
 		sortQueueByDelivery(a.rec.Queue)
 	}
+	if a.state != statePersist {
+		if willPromote {
+			if a.cancelReason == "interrupt_and_send" {
+				a.rec.SeenSeq = a.rec.AttentionSeq
+				a.rec.AttentionKind = ""
+			}
+		} else if ok {
+			a.rec.AttentionSeq++
+			a.rec.AttentionKind = "completed"
+		} else if isUserCancelReason(a.cancelReason) {
+			a.rec.SeenSeq = a.rec.AttentionSeq
+			a.rec.AttentionKind = ""
+		} else if a.rec.Turn != nil && a.rec.Turn.Status == "failed" {
+			a.rec.AttentionSeq++
+			a.rec.AttentionKind = "error"
+		} else {
+			a.rec.AttentionSeq++
+			a.rec.AttentionKind = "cancelled"
+		}
+	}
 	if err := a.store.commitWAL(a.id, a.rec, a.wal); err != nil {
 		a.storageError(err)
 		a.setState(statePersist)
 		return
 	}
+	a.cancelReason = ""
 	a.persistErr = nil
 	a.wal = nil
 	a.setState(stateIdle)
@@ -1071,6 +1178,9 @@ func (a *sessionActor) doCancel(reason string) {
 	}
 	if a.state == stateIdle || a.state == statePersist {
 		return
+	}
+	if a.cancelReason == "" || isUserCancelReason(reason) {
+		a.cancelReason = reason
 	}
 	if a.state == stateOrphaned {
 		// Quarantined: the stuck worker is fenced (gen bump) and its
@@ -1173,7 +1283,12 @@ func (a *sessionActor) enterAwait(kind, id string, recommended [][]string) {
 		deadline = a.rec.ApprovalDeadlineUnix
 	}
 	a.rec.ApprovalDeadlineUnix = deadline
+	if !(a.rec.AttentionSeq > a.rec.SeenSeq && a.rec.AttentionKind == kind) {
+		a.rec.AttentionSeq++
+		a.rec.AttentionKind = kind
+	}
 	a.saveOrAppend(walEvent{Type: walTypeMeta, UpdatedAt: now, ApprovalDeadlineUnix: deadline})
+	a.pingChange()
 	myID := id
 	if myID == "" {
 		myID = randomID8()
@@ -1233,6 +1348,7 @@ func (a *sessionActor) onApprovalResponse(m approvalResponseMsg) {
 			a.rec.Options.Access = previous
 			approved = false
 		} else {
+			a.resolveMidTurnAttention()
 			a.pingChange()
 			// The human just resolved the approval: clear the pending overlay
 			// BEFORE the snapshot so session_data (which now carries the
@@ -1242,6 +1358,7 @@ func (a *sessionActor) onApprovalResponse(m approvalResponseMsg) {
 			a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": pagedHistoryBlock(sessionPayload(a.rec), a.rec)})
 		}
 	}
+	a.resolveMidTurnAttention()
 	trace("actor.approval", map[string]any{"sid": a.id, "id": m.ID, "approved": approved})
 	a.clearPending()
 	a.setState(stateRunning)
@@ -1269,6 +1386,7 @@ func (a *sessionActor) onQuestionResponse(m questionResponseMsg) {
 		}
 	}
 	a.touch()
+	a.resolveMidTurnAttention()
 	trace("actor.question", map[string]any{"sid": a.id, "id": m.ID, "nAnswers": len(m.Answers)})
 	a.clearPending()
 	a.setState(stateRunning)
@@ -1285,6 +1403,7 @@ func (a *sessionActor) onStateTimeout(m stateTimeoutMsg) {
 	case "question":
 		id := a.pending.id
 		rec := append([][]string{}, a.pending.recommended...)
+		a.resolveMidTurnAttention()
 		a.clearPending()
 		a.setState(stateRunning)
 		a.emit(map[string]any{"type": "system_notice", "sessionId": a.id, "text": "User didn't respond in 15min — proceeding with recommended."})
@@ -1372,6 +1491,7 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 		return
 	}
 	previous := cloneRecord(a.rec)
+	a.markUserSeen()
 	// Cut the boundary turn and everything below it.
 	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:idx]...)
 	a.rec.FileBalloons = filterBalloonsBelow(a.rec.FileBalloons, m.TurnID)
@@ -1447,6 +1567,7 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 		return
 	}
 	previous := cloneRecord(a.rec)
+	a.markUserSeen()
 	// Cut at Keep + the same three repairs onEditApply applies.
 	a.rec.Messages = append([]provider.Message(nil), a.rec.Messages[:keep]...)
 	a.rec.FileBalloons = dropBalloonsAbove(a.rec.FileBalloons, keep)
@@ -1514,10 +1635,13 @@ func (a *sessionActor) startSeededTurn(turnSeq int, model string, yolo bool, att
 		return err
 	}
 	a.wal = wal
+	a.cancelReason = ""
+	attSeq, seenSeq, attKind := a.rec.AttentionSeq, a.rec.SeenSeq, a.rec.AttentionKind
 	for _, ev := range []walEvent{
 		{Type: walTypeOptions, Options: &a.rec.Options},
 		{Type: walTypeQueue, Queue: a.rec.Queue},
 		{Type: walTypeTitle, Title: a.rec.Title, TitleSource: a.rec.TitleSource},
+		{Type: walTypeMeta, AttentionSeq: &attSeq, SeenSeq: &seenSeq, AttentionKind: &attKind},
 	} {
 		if err := appendWALEvent(a.wal, ev); err != nil {
 			a.storageError(err)
@@ -1597,6 +1721,11 @@ func (a *sessionActor) applyForkAndResend(m forkAndResendMsg) {
 	if err := validateAttachmentIDs(a.rec, ids); err != nil {
 		replyForkResend(m.Reply, forkResendResult{Error: err.Error()})
 		return
+	}
+	if a.state == stateIdle && a.markUserSeen() {
+		if err := a.store.rewriteMetaOnly(a.id, recordMeta(a.rec)); err == nil {
+			a.pingChange()
+		}
 	}
 	// Fork the prefix ABOVE the boundary (Keep = idx-1 includes it + tools).
 	fr := forkResult{}
@@ -1888,6 +2017,7 @@ func (a *sessionActor) onEditRegenerate(m editRegenerateMsg) {
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
 	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, len(a.rec.Messages))
 	pruneOrphanAttachments(a.rec, nil)
+	a.markUserSeen()
 	a.rec.Status = "idle"
 	a.rec.UpdatedAt = time.Now().UnixMilli()
 	keepTurn := dropTurnForPrefix(a.rec.Messages)
@@ -1940,6 +2070,7 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 		Options: normalizedOptions(a.rec.Options), Status: "idle", Jailed: a.rec.Jailed,
 		CreatedAt: now, UpdatedAt: now,
 		LastDate: a.rec.LastDate, LastMode: a.rec.LastMode,
+		AttentionSeq: 0, SeenSeq: 0, AttentionKind: "",
 	}
 	if a.rec.Skills != nil {
 		rec.Skills = make(map[string]skills.SessionSkill, len(a.rec.Skills))
@@ -2235,6 +2366,15 @@ func (a *sessionActor) applyControlWAL(ev walEvent) {
 		}
 		if ev.LastMode != "" {
 			a.rec.LastMode = ev.LastMode
+		}
+		if ev.AttentionSeq != nil {
+			a.rec.AttentionSeq = *ev.AttentionSeq
+		}
+		if ev.SeenSeq != nil {
+			a.rec.SeenSeq = *ev.SeenSeq
+		}
+		if ev.AttentionKind != nil {
+			a.rec.AttentionKind = *ev.AttentionKind
 		}
 	}
 }
@@ -2623,6 +2763,8 @@ func (a *sessionActor) saveOrAppend(ev walEvent) error {
 		if ev.Type == walTypeMeta {
 			pinned, jailed := a.rec.Pinned, a.rec.Jailed
 			ev.Pinned, ev.Jailed, ev.TodosOpen = &pinned, &jailed, a.rec.TodosOpen
+			attSeq, seenSeq, attKind := a.rec.AttentionSeq, a.rec.SeenSeq, a.rec.AttentionKind
+			ev.AttentionSeq, ev.SeenSeq, ev.AttentionKind = &attSeq, &seenSeq, &attKind
 		}
 		err = appendWALEvent(a.wal, ev)
 	} else {
@@ -2695,6 +2837,10 @@ func (a *sessionActor) quarantine() {
 		sortQueueByDelivery(a.rec.Queue)
 	}
 	a.clearPending()
+	if a.state != statePersist {
+		a.rec.AttentionSeq++
+		a.rec.AttentionKind = "error"
+	}
 	a.rec.Status = "orphaned"
 	a.rec.UpdatedAt = time.Now().UnixMilli()
 	if err := a.store.commitWAL(a.id, a.rec, a.wal); err != nil {
@@ -2703,6 +2849,7 @@ func (a *sessionActor) quarantine() {
 		a.setState(statePersist)
 		return
 	}
+	a.cancelReason = ""
 	a.wal = nil
 	trace("actor.quarantine", map[string]any{"sid": a.id, "gen": a.gen, "rounds": rounds})
 	a.setState(stateOrphaned)

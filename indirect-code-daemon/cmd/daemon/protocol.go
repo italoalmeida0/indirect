@@ -212,6 +212,12 @@ type readReqMsg struct {
 // tickFlushMsg flushes the WAL buffer (periodic self-timer).
 type tickFlushMsg struct{}
 
+// markSeenMsg advances SeenSeq up to Seq (or AttentionSeq when Seq <= 0)
+// without touching UpdatedAt.
+type markSeenMsg struct {
+	Seq int64
+}
+
 // ---- control lane (control, priority: senders wait or answer busy,
 // cancellations are never silently dropped) ----
 

@@ -199,6 +199,11 @@ type SessionRecord struct {
 	// after the head was discarded. Never GCed — a bg task is part of the
 	// session transcript forever, like a tool call.
 	BgTasks []BgTask `json:"bgTasks,omitempty"`
+	// AttentionSeq / SeenSeq / AttentionKind form the cross-device unread
+	// watermark (unread iff AttentionSeq > SeenSeq).
+	AttentionSeq  int64  `json:"attentionSeq,omitempty"`
+	SeenSeq       int64  `json:"seenSeq,omitempty"`
+	AttentionKind string `json:"attentionKind,omitempty"`
 }
 
 // BgTask is one session-global background task. Content is the retained
@@ -254,5 +259,8 @@ type SessionSummary struct {
 	// ApprovalMode is the resolved display mode ("ask" | "yolo") derived
 	// from the primary skill. The mirror carries it so selecting a session
 	// or refreshing the list never resets the permissions UI.
-	ApprovalMode string `json:"approvalMode,omitempty"`
+	ApprovalMode  string `json:"approvalMode,omitempty"`
+	AttentionSeq  int64  `json:"attentionSeq,omitempty"`
+	SeenSeq       int64  `json:"seenSeq,omitempty"`
+	AttentionKind string `json:"attentionKind,omitempty"`
 }

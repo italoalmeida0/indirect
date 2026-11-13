@@ -215,6 +215,8 @@ func (s *sessionSupervisor) boot() error {
 			if meta.Turn != nil && (meta.Turn.Status == "running" || meta.Turn.Status == "cancelling") {
 				meta.Turn.Status = "cancelled"
 			}
+			meta.AttentionSeq++
+			meta.AttentionKind = "cancelled"
 		}
 		if !statusChanged && !qChanged {
 			continue
@@ -362,6 +364,8 @@ func (s *sessionSupervisor) routeCold(id string, forRead bool) spawnResult {
 			if rec.Turn != nil && (rec.Turn.Status == "running" || rec.Turn.Status == "cancelling") {
 				rec.Turn.Status = "cancelled"
 			}
+			rec.AttentionSeq++
+			rec.AttentionKind = "cancelled"
 		}
 		if qChanged || statusChanged || (hadWAL && len(rec.Queue) > 0) {
 			_ = st.saveSessionSync(rec)
@@ -848,6 +852,35 @@ func newResumeSnapshot(rec *SessionRecord, header *walHeader) *workerSnapshot {
 	}
 }
 
+func walIsResumable(rec *SessionRecord, header *walHeader) bool {
+	if rec == nil || header == nil || header.TurnIndex <= 0 {
+		return false
+	}
+	if rec.TurnSeq > header.TurnIndex {
+		return false
+	}
+	if rec.TurnSeq == header.TurnIndex && rec.Turn != nil &&
+		(rec.Turn.Status == "completed" || rec.Turn.Status == "cancelled" || rec.Turn.Status == "cancelling") {
+		return false
+	}
+	for _, b := range rec.FileBalloons {
+		if b.TurnIndex == header.TurnIndex {
+			return false
+		}
+	}
+	hasMessages := false
+	for _, m := range rec.Messages {
+		if m.TurnIndex == header.TurnIndex {
+			hasMessages = true
+			break
+		}
+	}
+	if !hasMessages && header.Prompt == "" && len(header.AttachmentIDs) == 0 && header.PromptMeta["operation"] != "compact" {
+		return false
+	}
+	return true
+}
+
 // Merge cold metadata with owner-provided summaries. Do not read stale disk
 // projections for residents whose current turn is still in the WAL.
 func (s *sessionSupervisor) mirrorSummaries() ([]map[string]any, error) {
@@ -860,7 +893,42 @@ func (s *sessionSupervisor) mirrorSummaries() ([]map[string]any, error) {
 	for id, ent := range s.resident {
 		handles[id] = ent.handle
 	}
+	deleted := map[string]bool{}
+	for id := range s.deleted {
+		deleted[id] = true
+	}
 	s.mu.Unlock()
+	// Cold sessions with an uncommitted WAL on disk (e.g. right after crash
+	// boot before their first route) have post-WAL state not yet folded into
+	// the .jsonl meta tail; project the fused record without touching the WAL.
+	st := s.disk()
+	for _, wid := range st.scanWALs() {
+		if deleted[wid] {
+			delete(byID, wid)
+			continue
+		}
+		if _, live := handles[wid]; live {
+			continue
+		}
+		fused, header, err := st.loadSessionFused(wid)
+		if err != nil || fused == nil || fused.ID != wid {
+			continue
+		}
+		if walIsResumable(fused, header) {
+			if fused.Turn == nil || fused.Turn.Status != "running" {
+				fused.Turn = &TurnActivity{StartedAt: header.StartedAt, Status: "running"}
+			}
+			fused.Status = "running"
+		} else if fused.Status == "running" {
+			fused.Status = "idle"
+			if fused.Turn != nil && (fused.Turn.Status == "running" || fused.Turn.Status == "cancelling") {
+				fused.Turn.Status = "cancelled"
+			}
+			fused.AttentionSeq++
+			fused.AttentionKind = "cancelled"
+		}
+		byID[wid] = sessionListItem(summaryFromMeta(recordMeta(fused)))
+	}
 	type result struct {
 		id   string
 		item map[string]any

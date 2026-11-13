@@ -238,6 +238,7 @@ func (a *sessionActor) onQueueSendNow(m queueSendNowMsg) {
 		a.pingChange()
 	}
 	if a.state == stateIdle {
+		a.markUserSeen()
 		item := a.rec.Queue[idx]
 		rest := append([]QueuedMessage(nil), a.rec.Queue[:idx]...)
 		rest = append(rest, a.rec.Queue[idx+1:]...)
@@ -253,11 +254,17 @@ func (a *sessionActor) onQueueSendNow(m queueSendNowMsg) {
 		return
 	}
 	previous := cloneQueueSlice(a.rec.Queue)
+	prevSeen, prevKind := a.rec.SeenSeq, a.rec.AttentionKind
+	seenChanged := a.markUserSeen()
 	a.rec.Queue[idx].Delivery = deliverySteer
 	sortQueueByDelivery(a.rec.Queue)
 	if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
 		a.rec.Queue = previous
+		a.rec.SeenSeq, a.rec.AttentionKind = prevSeen, prevKind
 		return
+	}
+	if seenChanged && a.wal != nil {
+		_ = a.saveOrAppend(walEvent{Type: walTypeMeta})
 	}
 	a.pingChange()
 	a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
@@ -316,6 +323,7 @@ func (a *sessionActor) onQueueInterruptNow(m queueInterruptNowMsg) {
 		a.pingChange()
 	}
 	if a.state == stateIdle {
+		a.markUserSeen()
 		item := a.rec.Queue[idx]
 		rest := append([]QueuedMessage(nil), a.rec.Queue[:idx]...)
 		rest = append(rest, a.rec.Queue[idx+1:]...)
@@ -333,12 +341,18 @@ func (a *sessionActor) onQueueInterruptNow(m queueInterruptNowMsg) {
 	}
 	if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ || a.state == stateCancel {
 		previous := cloneQueueSlice(a.rec.Queue)
+		prevSeen, prevKind := a.rec.SeenSeq, a.rec.AttentionKind
+		seenChanged := a.markUserSeen()
 		demoteInterruptToSteer(a.rec.Queue)
 		a.rec.Queue[idx].Delivery = deliveryInterrupt
 		sortQueueByDelivery(a.rec.Queue)
 		if err := a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue}); err != nil {
 			a.rec.Queue = previous
+			a.rec.SeenSeq, a.rec.AttentionKind = prevSeen, prevKind
 			return
+		}
+		if seenChanged && a.wal != nil {
+			_ = a.saveOrAppend(walEvent{Type: walTypeMeta})
 		}
 		a.pingChange()
 		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
@@ -386,6 +400,7 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 	a.rec.Messages = provider.RepairOrphanedToolResults(a.rec.Messages)
 	a.rec.Compaction = truncateSessionCompaction(a.rec.Compaction, min(m.Index, len(a.rec.Messages)))
 	pruneOrphanAttachments(a.rec, nil)
+	a.markUserSeen()
 	a.rec.UpdatedAt = time.Now().UnixMilli()
 	removed := before - len(a.rec.Messages)
 	if removed < 0 {
@@ -440,10 +455,19 @@ func (a *sessionActor) onCompactNow() {
 	}
 	a.touch()
 	if len(a.rec.Messages) < 4 {
+		if a.markUserSeen() {
+			if err := a.store.rewriteMetaOnly(a.id, recordMeta(a.rec)); err == nil {
+				a.pingChange()
+			}
+		}
 		a.emit(map[string]any{"type": "notice", "sessionId": a.id, "message": "Not enough history to compact", "level": "warn"})
 		return
 	}
-	_ = a.startTurnWithMeta("", nil, "", map[string]string{"operation": "compact"})
+	prevSeen, prevKind := a.rec.SeenSeq, a.rec.AttentionKind
+	a.markUserSeen()
+	if err := a.startTurnWithMeta("", nil, "", map[string]string{"operation": "compact"}); err != nil {
+		a.rec.SeenSeq, a.rec.AttentionKind = prevSeen, prevKind
+	}
 }
 
 // onSlashReply appends a deterministic user/assistant pair (a slash command
@@ -451,6 +475,7 @@ func (a *sessionActor) onCompactNow() {
 // stays single-writer: only the actor touches a.rec.
 func (a *sessionActor) onSlashReply(m slashReplyMsg) {
 	a.touch()
+	seenChanged := a.markUserSeen()
 	a.rec.TurnSeq++
 	turn := a.rec.TurnSeq
 	userMsg := provider.Message{ID: provider.NewMessageID(), Role: provider.RoleUser, Content: []provider.Content{provider.TextBlock{Text: m.Command}}, TurnIndex: turn}
@@ -464,6 +489,10 @@ func (a *sessionActor) onSlashReply(m slashReplyMsg) {
 	if a.wal != nil {
 		appendWALEvent(a.wal, walMsgEvent(userMsg))
 		appendWALEvent(a.wal, walMsgEvent(asstMsg))
+		if seenChanged {
+			attSeq, seenSeq, attKind := a.rec.AttentionSeq, a.rec.SeenSeq, a.rec.AttentionKind
+			appendWALEvent(a.wal, walEvent{Type: walTypeMeta, AttentionSeq: &attSeq, SeenSeq: &seenSeq, AttentionKind: &attKind})
+		}
 	} else {
 		_ = a.store.saveSessionSync(a.rec)
 	}

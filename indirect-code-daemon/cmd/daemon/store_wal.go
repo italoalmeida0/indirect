@@ -127,11 +127,15 @@ type walEvent struct {
 	// restarting the timer.
 	ApprovalDeadlineUnix  int64  `json:"approvalDeadlineUnix,omitempty"`
 	ClearApprovalDeadline bool   `json:"clearApprovalDeadline,omitempty"`
-	Pinned                *bool  `json:"pinned,omitempty"`
-	Jailed                *bool  `json:"jailed,omitempty"`
-	TodosOpen             *bool  `json:"todosOpen,omitempty"`
-	LastDate              string `json:"lastDate,omitempty"`
-	LastMode              string `json:"lastMode,omitempty"`
+	Pinned                *bool   `json:"pinned,omitempty"`
+	Jailed                *bool   `json:"jailed,omitempty"`
+	TodosOpen             *bool   `json:"todosOpen,omitempty"`
+	LastDate              string  `json:"lastDate,omitempty"`
+	LastMode              string  `json:"lastMode,omitempty"`
+	AttentionSeq          *int64  `json:"attentionSeq,omitempty"`
+	SeenSeq               *int64  `json:"seenSeq,omitempty"`
+	AttentionKind         *string `json:"attentionKind,omitempty"`
+	noTouchUpdatedAt      bool
 }
 
 // walWriter is the buffered append handle for one running turn.
@@ -572,6 +576,15 @@ func applyWALEvent(rec *SessionRecord, ev *walEvent, seen *msgDedup) error {
 		if ev.LastMode != "" {
 			rec.LastMode = ev.LastMode
 		}
+		if ev.AttentionSeq != nil {
+			rec.AttentionSeq = *ev.AttentionSeq
+		}
+		if ev.SeenSeq != nil {
+			rec.SeenSeq = *ev.SeenSeq
+		}
+		if ev.AttentionKind != nil {
+			rec.AttentionKind = *ev.AttentionKind
+		}
 	default:
 		return fmt.Errorf("unknown wal event %q", ev.Type)
 	}
@@ -840,7 +853,10 @@ func recordMeta(rec *SessionRecord) metaLine {
 		Widgets: rec.Widgets,
 		// Skills selection survives every meta rewrite like Widgets: the
 		// meta line is the durable copy once the WAL commits.
-		Skills: rec.Skills,
+		Skills:        rec.Skills,
+		AttentionSeq:  rec.AttentionSeq,
+		SeenSeq:       rec.SeenSeq,
+		AttentionKind: rec.AttentionKind,
 	}
 }
 
@@ -920,7 +936,7 @@ func appendWALEvent(wal *walWriter, ev walEvent) error {
 	if wal == nil {
 		return nil
 	}
-	if ev.UpdatedAt == 0 {
+	if ev.UpdatedAt == 0 && !ev.noTouchUpdatedAt {
 		switch ev.Type {
 		case walTypeMsg, walTypeUsage, walTypeCompaction, walTypeTodos,
 			walTypeQueue, walTypeTitle, walTypeModel, walTypeOptions,

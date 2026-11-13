@@ -362,8 +362,11 @@ func sessionPayload(rec *SessionRecord) map[string]any {
 		// Skill selection (priority/active/usable per skill name) and the
 		// resolved approval mode: "yolo" hides the YOLO/ASK selector in the
 		// UI (always yolo), "ask" shows it (spec 4.2).
-		"skills":       skillsPayload(rec.Skills),
-		"approvalMode": skillsApprovalMode(rec),
+		"skills":        skillsPayload(rec.Skills),
+		"approvalMode":  skillsApprovalMode(rec),
+		"attentionSeq":  rec.AttentionSeq,
+		"seenSeq":       rec.SeenSeq,
+		"attentionKind": rec.AttentionKind,
 	}
 }
 

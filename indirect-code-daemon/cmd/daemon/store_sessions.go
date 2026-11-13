@@ -97,7 +97,10 @@ type metaLine struct {
 	// priority order + active + usable override per skill name. Persisted
 	// on every meta rewrite like Widgets — the meta line is the durable
 	// copy once the WAL commits.
-	Skills map[string]skills.SessionSkill `json:"skills,omitempty"`
+	Skills        map[string]skills.SessionSkill `json:"skills,omitempty"`
+	AttentionSeq  int64                          `json:"attentionSeq,omitempty"`
+	SeenSeq       int64                          `json:"seenSeq,omitempty"`
+	AttentionKind string                         `json:"attentionKind,omitempty"`
 }
 
 // validSessionID refuses traversal.
@@ -184,6 +187,9 @@ func splitRecord(rec *SessionRecord) ([]turnLine, metaLine) {
 		BgTasks:              rec.BgTasks,
 		Widgets:              rec.Widgets,
 		Skills:               rec.Skills,
+		AttentionSeq:         rec.AttentionSeq,
+		SeenSeq:              rec.SeenSeq,
+		AttentionKind:        rec.AttentionKind,
 	}
 	// Group message indices by turn with the shared rule (turnGroups):
 	// zero-index messages attach to the FOLLOWING turn, trailing zeros to
@@ -380,6 +386,9 @@ func assembleRecord(lines []turnLine, meta metaLine) *SessionRecord {
 		ApprovalDeadlineUnix: meta.ApprovalDeadlineUnix,
 		BgTasks:              meta.BgTasks,
 		Widgets:              meta.Widgets,
+		AttentionSeq:         meta.AttentionSeq,
+		SeenSeq:              meta.SeenSeq,
+		AttentionKind:        meta.AttentionKind,
 	}
 	// Merge turn lines by message identity instead of "last line wins":
 	// lines sharing a Turn merge in order, deduped by message ID (the
@@ -757,6 +766,9 @@ func (s *diskStore) rewriteTailAppend(path string, tailSize int64, tl turnLine, 
 func (s *diskStore) rewriteMetaOnly(id string, meta metaLine) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session id")
+	}
+	if sessionPurged(s.dataDir, id) {
+		return errSessionPurged
 	}
 	path := s.sessionFile(id)
 	ok, tailSize := hasMetaTail(path)

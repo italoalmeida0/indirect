@@ -376,6 +376,30 @@ func (s *wsServer) handleRaw(raw []byte) {
 			}
 		}
 
+	case "mark_session_seen":
+		var req struct {
+			SessionID string `json:"sessionId"`
+			SeenSeq   int64  `json:"seenSeq"`
+			Seq       int64  `json:"seq"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		seq := req.SeenSeq
+		if seq == 0 {
+			seq = req.Seq
+		}
+		if req.SessionID != "" {
+			res := s.sessions.route(req.SessionID, false)
+			if strings.HasPrefix(res.Error, "session quarantined:") {
+				res = s.sessions.route(req.SessionID, true)
+			}
+			if res.Error == "" {
+				select {
+				case res.Inbox <- Envelope{SessionID: req.SessionID, Payload: markSeenMsg{Seq: seq}}:
+				case <-time.After(replyTimeout):
+				}
+			}
+		}
+
 	case "get_session":
 		var req struct {
 			SessionID string `json:"sessionId"`
