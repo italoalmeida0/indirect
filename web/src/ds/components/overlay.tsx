@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 
 import { animate, type Controls } from "../motion/animate";
@@ -42,13 +42,22 @@ export function Drawer(props: DrawerProps) {
     },
   });
 
-  const setup = (panel: HTMLDivElement) => {
-    presence.ref(panel);
+  const [panelEl, setPanelEl] = createSignal<HTMLDivElement>();
+
+  createEffect(() => {
+    const panel = panelEl();
+    if (!props.open || !panel) return;
     const layer: Layer = { kind: "drawer", contains: (node) => panel.contains(node), onEscape: () => props.onClose() };
     const removeLayer = pushLayer(layer);
     const unlock = lockScroll();
     const release = trapFocus(panel, () => isTopLayer(layer) && props.open);
     onCleanup(() => { removeLayer(); unlock(); release(); });
+  });
+
+  const setup = (panel: HTMLDivElement) => {
+    setPanelEl(panel);
+    presence.ref(panel);
+    onCleanup(() => setPanelEl(undefined));
 
     // Drag toward the edge to dismiss (touch and pen; mouse uses the scrim).
     let start = 0;
@@ -89,8 +98,8 @@ export function Drawer(props: DrawerProps) {
   return (
     <Show when={presence.present()}>
       <Portal>
-        <div class="fixed inset-0" style={{ "z-index": "var(--z-drawer)" }} data-state={presence.state()}>
-          <div ref={scrim} class="ui-dialog-scrim" aria-hidden="true" onClick={() => props.onClose()} />
+        <div class={`fixed inset-0 ${props.open ? "" : "pointer-events-none"}`} style={{ "z-index": "var(--z-drawer)" }} data-state={presence.state()}>
+          <div ref={scrim} class="ui-dialog-scrim" aria-hidden="true" onClick={() => { if (props.open) props.onClose(); }} />
           <div
             ref={setup}
             role="dialog"
@@ -180,6 +189,7 @@ export function ConfirmButton(props: ConfirmButtonProps) {
   return (
     <span
       ref={root}
+      data-confirm-phase={phase()}
       class={`inline-flex items-center gap-1.5 overflow-hidden whitespace-nowrap ${props.class ?? ""}`}
       onKeyDown={(event) => { if (event.key === "Escape" && phase() === "confirm") { event.stopPropagation(); go("idle"); } }}
       onFocusOut={(event) => { if (phase() === "confirm" && !root?.contains(event.relatedTarget as Node)) go("idle"); }}

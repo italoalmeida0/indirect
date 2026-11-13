@@ -27,7 +27,10 @@ export function ToolbarContext() {
   const ui = useUI();
 
   // Mobile submenu navigation inside the "+" menu
-  const [subView, setSubView] = createSignal<"main" | "effort" | "model" | "mode" | "access">("main");
+  const [localSubView, setLocalSubView] = createSignal<"main" | "effort" | "model" | "mode" | "access">("main");
+  const subView = () => (c.addContextSubView ? c.addContextSubView() : localSubView());
+  const setSubView = (next: "main" | "effort" | "model" | "mode" | "access") =>
+    c.setAddContextSubView ? c.setAddContextSubView(next) : setLocalSubView(next);
   let subViewDir = 1;
   const switchSubView = (next: "main" | "effort" | "model" | "mode" | "access") => {
     const cur = subView();
@@ -584,6 +587,26 @@ export function ToolbarContext() {
     anchor={() => c.addBtn}
     open={c.addContextOpen()}
     onClose={() => c.setAddContextOpen(false)}
+    onEscape={() => {
+      if (ui.isMobile()) {
+        const cur = subView();
+        if (cur === "model") {
+          if (c.modelFilter?.()) {
+            c.setModelFilter?.("");
+            return;
+          }
+          switchSubView("effort");
+          return;
+        }
+        if (cur === "effort" || cur === "mode" || cur === "access") {
+          if (cur === "mode") applyDraft();
+          switchSubView("main");
+          return;
+        }
+      }
+      c.setAddContextOpen(false);
+      c.addBtn?.focus();
+    }}
     role="dialog"
     aria-label={ui.isMobile() ? "Add & Settings" : "Add context"}
     placement="top-start"
@@ -741,7 +764,10 @@ export function ToolbarContext() {
             <button
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => switchSubView("main")}
+              onClick={() => {
+                applyDraft();
+                switchSubView("main");
+              }}
               class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
@@ -793,7 +819,10 @@ export function ToolbarContext() {
             <button
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => switchSubView("main")}
+              onClick={() => {
+                applyDraft();
+                switchSubView("main");
+              }}
               class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
@@ -833,7 +862,10 @@ export function ToolbarContext() {
             <button
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => switchSubView("main")}
+              onClick={() => {
+                applyDraft();
+                switchSubView("main");
+              }}
               class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />

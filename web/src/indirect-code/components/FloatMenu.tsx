@@ -1,7 +1,8 @@
-import { onCleanup, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { Placement } from "@floating-ui/dom";
 import { anchorFloat } from "../../floating";
+import { pushLayer } from "../../ds/primitives/layers";
 
 /** Local popover menu on the shared floating-ui layer (Portal + flip/shift, default `role="menu"`).
  *
@@ -17,19 +18,45 @@ export function FloatMenu(props: {
   width?: string;
   role?: JSX.HTMLAttributes<HTMLDivElement>["role"];
   "aria-label"?: string;
+  containAnchor?: boolean;
   onClose?: () => void;
+  onEscape?: () => boolean | void;
   children: JSX.Element;
 }) {
+  const [panelEl, setPanelEl] = createSignal<HTMLDivElement>();
+
+  createEffect(() => {
+    const el = panelEl();
+    if (!props.open || !el) return;
+    const remove = pushLayer({
+      kind: "menu",
+      contains: (node) =>
+        el.contains(node) || (props.containAnchor !== false && !!props.anchor()?.contains(node)),
+      onEscape: () => {
+        if (props.onEscape) return props.onEscape();
+        props.onClose?.();
+        props.anchor()?.focus();
+      },
+      onOutside: () => {
+        props.onClose?.();
+      },
+    });
+    onCleanup(remove);
+  });
+
   return (
     <Show when={props.open}>
       <Portal>
         <div
           ref={(el) => {
+            setPanelEl(el);
+            onCleanup(() => setPanelEl(undefined));
             const a = props.anchor();
             if (!a) return;
             onCleanup(anchorFloat(a, el, { placement: props.placement ?? "bottom-start", maxHeight: 520 }));
           }}
           data-floatmenu
+          data-layer-managed
           data-density="compact"
           role={props.role ?? "menu"}
           aria-label={props["aria-label"]}

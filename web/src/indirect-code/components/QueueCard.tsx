@@ -345,6 +345,14 @@ function QueueEditRow(props: { queueId: string }) {
       <textarea
         value={q.editingQueueText()}
         onInput={(e) => q.setEditingQueueText(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            q.setEditingQueueId(null);
+            q.editDraft.clearAttachments();
+          }
+        }}
         rows={2}
         class="w-full rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[13px] text-fg resize-y outline-none focus:border-accent placeholder:text-fg-muted transition-colors"
       />

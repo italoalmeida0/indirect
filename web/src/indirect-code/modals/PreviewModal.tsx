@@ -15,6 +15,13 @@ export function PreviewModal() {
     <Modal
       open={!!file()}
       onClose={() => m.setPreviewFile(null)}
+      onEscape={() => {
+        if (m.showTruncateInput() && !file()?.dataUrl) {
+          m.setShowTruncateInput(false);
+          return;
+        }
+        m.setPreviewFile(null);
+      }}
       title={file()?.name || "File preview"}
       subtitle="Inspect or download the attachment. Preview limits do not change the content sent to the agent."
       width="max-w-3xl"

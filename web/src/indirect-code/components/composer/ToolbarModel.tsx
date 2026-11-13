@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { batch, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { press } from "../../../ds/motion/press";
 import { formatEffort, normalizeEffort } from "../../utils/format";
@@ -26,8 +26,10 @@ export function ToolbarModel() {
       if (anyMenuOpen()) {
         ui.setEffortMenuOpen(false);
         ui.setModelMenuOpen(false);
+        ui.setModelFromEffort?.(false);
       } else {
         ui.closeMenus();
+        ui.setModelFromEffort?.(false);
         ui.setEffortMenuOpen(true);
         ui.setModelMenuOpen(false);
       }
@@ -65,6 +67,21 @@ export function ToolbarModel() {
     anchor={() => c.modelBtn}
     open={ui.modelMenuOpen()}
     onClose={() => ui.setModelMenuOpen(false)}
+    onEscape={() => {
+      if (c.modelFilter?.()) {
+        c.setModelFilter?.("");
+        return;
+      }
+      if (ui.modelFromEffort?.()) {
+        batch(() => {
+          ui.setModelMenuOpen(false);
+          ui.setEffortMenuOpen(true);
+        });
+        return;
+      }
+      ui.setModelMenuOpen(false);
+      c.modelBtn?.focus();
+    }}
     role="dialog"
     aria-label="Select model"
     placement="top-start"

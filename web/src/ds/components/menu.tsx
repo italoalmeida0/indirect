@@ -59,6 +59,18 @@ export function Menu(props: MenuProps) {
     if (!props.open) setTarget(null);
   });
 
+  createEffect(() => {
+    const el = panel();
+    if (!props.open || !el) return;
+    const remove = pushLayer({
+      kind: "menu",
+      contains: (node) => el.contains(node) || !!props.anchor()?.contains(node),
+      onEscape: close,
+      onOutside: () => props.onClose(),
+    });
+    onCleanup(remove);
+  });
+
   const onKeyDown = (event: KeyboardEvent) => {
     const list = items();
     const current = list.indexOf(document.activeElement as HTMLElement);
@@ -82,13 +94,7 @@ export function Menu(props: MenuProps) {
               presence.ref(el);
               const anchor = props.anchor();
               if (anchor) onCleanup(anchorFloat(anchor, el, { placement: props.placement ?? "bottom-start", gap: 6, padding: 10, matchWidth: props.matchWidth, maxHeight: 420 }));
-              const remove = pushLayer({
-                kind: "menu",
-                contains: (node) => el.contains(node) || !!props.anchor()?.contains(node),
-                onEscape: close,
-                onOutside: () => props.onClose(),
-              });
-              onCleanup(remove);
+              onCleanup(() => setPanel(undefined));
               // Keyboard users land on the first item.
               requestAnimationFrame(() => {
                 if (props.open && document.activeElement === props.anchor()) {
@@ -101,8 +107,10 @@ export function Menu(props: MenuProps) {
             aria-label={props.label}
             data-glide=""
             data-floatmenu=""
+            data-layer-managed=""
+            data-state={presence.state()}
             tabIndex={-1}
-            class={`ui-popover ui-menu ${props.class ?? ""}`}
+            class={`ui-popover ui-menu ${props.open ? "" : "pointer-events-none"} ${props.class ?? ""}`}
             onKeyDown={onKeyDown}
             onPointerLeave={() => setTarget(null)}
           >

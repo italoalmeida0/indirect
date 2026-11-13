@@ -63,7 +63,7 @@ export function createModals(opts: { toast: (message: string, kind?: "ok" | "err
     choiceState, showChoice,
     confirmState, setConfirmState, showConfirm,
     showPairModal, setShowPairModal,
-    pairingData, pairingLoading, generatePairingToken,
+    pairingData, setPairingData, pairingLoading, generatePairingToken,
   };
 }
 

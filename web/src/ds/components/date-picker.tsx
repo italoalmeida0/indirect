@@ -459,6 +459,7 @@ export function TimePicker(props: TimePickerProps) {
                 onCleanup(() => setMenuEl(undefined));
               }}
               role="listbox"
+              data-layer-managed=""
               aria-label={`${props.label ?? props.ariaLabel ?? "Time"} options`}
               class="ui-popover ui-time-picker-menu"
               onKeyDown={onKeyDown}

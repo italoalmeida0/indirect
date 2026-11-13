@@ -820,7 +820,7 @@ export function Select(props: {
           maxHeight,
         }));
         onCleanup(() => setListEl(undefined));
-      }} role="listbox" aria-label={props.ariaLabel ?? props.label ?? "Options"} onKeyDown={onKeyDown}
+      }} role="listbox" data-layer-managed="" aria-label={props.ariaLabel ?? props.label ?? "Options"} onKeyDown={onKeyDown}
         data-density={button?.closest?.("[data-density]")?.getAttribute("data-density") ?? undefined}
         class={`ui-popover ui-menu ui-select-menu ${props.variant === "toolbar" ? "ui-select-toolbar-menu" : ""}`}>
         <span ref={setIndicator} class="ui-menu-highlight" aria-hidden="true" />
@@ -1050,6 +1050,7 @@ export function ModalNotice(props: {
 export function Modal(props: {
   open: boolean;
   onClose: () => void;
+  onEscape?: () => boolean | void;
   title: string;
   description?: string;
   subtitle?: string;
@@ -1065,6 +1066,7 @@ export function Modal(props: {
     <Dialog
       open={props.open}
       onClose={props.onClose}
+      onEscape={props.onEscape}
       title={props.title}
       description={props.description}
       subtitle={props.subtitle}

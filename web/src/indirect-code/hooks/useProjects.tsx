@@ -1,6 +1,6 @@
 import type { DaemonCommand } from "../daemon-protocol";
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
-import { projectForDirectory, compareSessions } from "../paths";
+import { projectForDirectory, compareSessions, sameRemotePath } from "../paths";
 import type { Project, SessionSummary } from "../types";
 import type { FoldersEvent, ProjectCreatedEvent, SearchResultsEvent } from "../daemon-protocol";
 
@@ -22,6 +22,16 @@ export function createProjects(opts: {
   const [newProjectPath, setNewProjectPath] = createSignal("");
   const [projectMenuOpen, setProjectMenuOpen] = createSignal(false);
   const [newProjectMenuOpen, setNewProjectMenuOpen] = createSignal(false);
+  const [sessionMenu, setSessionMenu] = createSignal<{
+    sessionId: string;
+    anchor: HTMLElement;
+    fallback: SessionSummary;
+  } | null>(null);
+  const [projectMenu, setProjectMenu] = createSignal<{
+    projectId: string;
+    anchor: HTMLElement;
+    fallback: Project;
+  } | null>(null);
 
   const activeProject = createMemo(() => {
     const list = opts.projects();
@@ -54,20 +64,81 @@ export function createProjects(opts: {
   const [folderCurrent, setFolderCurrent] = createSignal("");
   const [folderLoading, setFolderLoading] = createSignal(false);
   const [folderError, setFolderError] = createSignal("");
+  const [folderNavStack, setFolderNavStack] = createSignal<string[]>([]);
+  let pendingFolderPrev: string | null = null;
   let folderRequestId = "";
   let requestedPath = "";
   let projectCreationId = "";
   const [pendingProjectId, setPendingProjectId] = createSignal("");
 
-  function requestFolders(path: string) {
+  createEffect(() => {
+    if (!showNewProjectModal()) {
+      setFolderNavStack([]);
+      pendingFolderPrev = null;
+    }
+  });
+
+  function revertPendingFolderNav() {
+    if (pendingFolderPrev !== null) {
+      const expected = pendingFolderPrev;
+      pendingFolderPrev = null;
+      setFolderNavStack((stack) =>
+        stack.length > 0 && stack[stack.length - 1] === expected
+          ? stack.slice(0, -1)
+          : stack,
+      );
+    }
+  }
+
+  function requestFolders(path: string): boolean {
     requestedPath = path;
     setNewProjectPath(path);
-    if (!opts.isOpen() || !opts.isHostOnline()) { setFolderError("Connect this host to browse its folders."); return; }
-    setFolderLoading(true); setFolderError("");
+    if (!opts.isOpen() || !opts.isHostOnline()) {
+      setFolderError("Connect this host to browse its folders.");
+      return false;
+    }
+    setFolderLoading(true);
+    setFolderError("");
     folderRequestId = crypto.randomUUID();
     opts.send({ type: "browse_folders", path: path || "~", requestId: folderRequestId });
+    return true;
+  }
+  function navigateFolder(path: string) {
+    const target = path.trim() || "~";
+    const prev = folderCurrent();
+    if (prev && sameRemotePath(prev, target)) {
+      requestFolders(target);
+      return;
+    }
+    const ok = requestFolders(target);
+    if (ok && prev && pendingFolderPrev === null) {
+      pendingFolderPrev = prev;
+      setFolderNavStack((stack) => [...stack, prev]);
+    }
+  }
+  function stepBackFolder(): boolean {
+    const stack = folderNavStack();
+    if (stack.length === 0) return false;
+    const prev = stack[stack.length - 1]!;
+    pendingFolderPrev = null;
+    setFolderNavStack(stack.slice(0, -1));
+    requestFolders(prev);
+    return true;
+  }
+  function goParentFolder() {
+    const parent = folderParent();
+    if (!parent) return;
+    const stack = folderNavStack();
+    if (stack.length > 0 && sameRemotePath(stack[stack.length - 1]!, parent)) {
+      stepBackFolder();
+      return;
+    }
+    pendingFolderPrev = null;
+    requestFolders(parent);
   }
   function openNewProjectModal() {
+    setFolderNavStack([]);
+    pendingFolderPrev = null;
     setShowNewProjectModal(true);
     requestFolders(activeProject()?.path || "~");
   }
@@ -125,13 +196,26 @@ export function createProjects(opts: {
   function noteFolders(msg: FoldersEvent) {
     if (msg.requestId !== folderRequestId) return;
     setFolderLoading(false);
-    if (msg.error) { setFolderError(msg.error); return; }
+    if (msg.error) {
+      revertPendingFolderNav();
+      setFolderError(msg.error);
+      return;
+    }
+    const resolvedPath = msg.path || "";
+    if (pendingFolderPrev !== null) {
+      pendingFolderPrev = null;
+      setFolderNavStack((stack) =>
+        stack.length > 0 && sameRemotePath(stack[stack.length - 1]!, resolvedPath)
+          ? stack.slice(0, -1)
+          : stack,
+      );
+    }
     setFolderEntries(msg.folders || []);
     setFolderParent(msg.parent || "");
-    setFolderCurrent(msg.path || "");
+    setFolderCurrent(resolvedPath);
     const cur = newProjectPath().trim();
     if (!cur || cur === requestedPath.trim()) {
-      setNewProjectPath(msg.path || "");
+      setNewProjectPath(resolvedPath);
     }
   }
   /** requestId guard for the folder browser (page dispatcher). */
@@ -405,10 +489,12 @@ export function createProjects(opts: {
     activeProjectId, setActiveProjectId, activeProject, newestSessionProjectId,
     showNewProjectModal, setShowNewProjectModal, newProjectPath, setNewProjectPath,
     projectMenuOpen, setProjectMenuOpen, newProjectMenuOpen, setNewProjectMenuOpen,
+    sessionMenu, setSessionMenu, projectMenu, setProjectMenu,
     pickProject, openNewProjectModal,
-    folderEntries, folderParent, folderCurrent, folderLoading, folderError,
-    setFolderLoading, setFolderError,
-    requestFolders, createProject, deleteProject, quickStartProject,
+    folderEntries, folderParent, folderCurrent, folderLoading, folderError, folderNavStack,
+    setFolderLoading, setFolderError, noteFolderRequestFailed: revertPendingFolderNav,
+    requestFolders, navigateFolder, stepBackFolder, goParentFolder,
+    createProject, deleteProject, quickStartProject,
     pendingProjectId, setPendingProjectId,
     noteFolders, noteProjectCreated,
     isFolderRequest, isProjectCreation,

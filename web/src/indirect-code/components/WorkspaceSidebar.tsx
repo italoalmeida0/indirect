@@ -1,4 +1,5 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { handleBackToGatewayClick } from "../../route-nav";
 import { Icon as Iconify } from "../../components/icon";
 import { SegmentedControl } from "../../ds/components/segmented";
 import { press } from "../../ds/motion/press";
@@ -47,8 +48,16 @@ export function WorkspaceSidebar() {
   });
   const overlaySidebar = () => ui.isMobile() || narrowViewport();
 
-  const [sessionMenu, setSessionMenu] = createSignal<SessionMenuState | null>(null);
-  const [projectMenu, setProjectMenu] = createSignal<ProjectMenuState | null>(null);
+  const [localSessionMenu, setLocalSessionMenu] = createSignal<SessionMenuState | null>(null);
+  const [localProjectMenu, setLocalProjectMenu] = createSignal<ProjectMenuState | null>(null);
+  const sessionMenu = () => (s.sessionMenu ? s.sessionMenu() : localSessionMenu());
+  const setSessionMenu = (
+    v: SessionMenuState | null | ((prev: SessionMenuState | null) => SessionMenuState | null),
+  ) => (s.setSessionMenu ? s.setSessionMenu(v as any) : setLocalSessionMenu(v as any));
+  const projectMenu = () => (s.projectMenu ? s.projectMenu() : localProjectMenu());
+  const setProjectMenu = (
+    v: ProjectMenuState | null | ((prev: ProjectMenuState | null) => ProjectMenuState | null),
+  ) => (s.setProjectMenu ? s.setProjectMenu(v as any) : setLocalProjectMenu(v as any));
   let activeLongPressCancel: (() => void) | null = null;
   const cancelActiveLongPress = () => {
     activeLongPressCancel?.();
@@ -71,33 +80,10 @@ export function WorkspaceSidebar() {
       cancelActiveLongPress();
       setSessionMenu(null);
       setProjectMenu(null);
-    }
-  });
-
-  createEffect(() => {
-    const menu = sessionMenu();
-    const pMenu = projectMenu();
-    if (!menu && !pMenu) return;
-    const onDocPointerDown = (e: PointerEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target?.closest("[data-floatmenu]") || target?.closest("[data-project-menubtn]")) return;
-      setSessionMenu(null);
-      setProjectMenu(null);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSessionMenu(null);
-        setProjectMenu(null);
+      if (overlaySidebar() && s.renamingId()) {
+        s.setRenamingId(null);
       }
-    };
-    document.addEventListener("pointerdown", onDocPointerDown);
-    window.addEventListener("keydown", onKeyDown, true);
-    onCleanup(() => {
-      document.removeEventListener("pointerdown", onDocPointerDown);
-      window.removeEventListener("keydown", onKeyDown, true);
-    });
+    }
   });
 
   const rowCtx = (): SessionRowCtx => ({
@@ -191,6 +177,7 @@ export function WorkspaceSidebar() {
   <nav aria-label="Workspace navigation" class="px-2.5 pt-2 pb-1.5 space-y-0.5 shrink-0">
     <a
       href="#/"
+      onClick={handleBackToGatewayClick}
       onPointerDown={(e) => press(e.currentTarget)}
       class="rc-nav-row text-fg-muted hover:text-fg hover:bg-surface-muted/75"
     >
@@ -323,14 +310,22 @@ export function WorkspaceSidebar() {
                 aria-expanded={s.newProjectMenuOpen()}
                 onClick={(e) => {
                   e.stopPropagation();
-                  s.setNewProjectMenuOpen(!s.newProjectMenuOpen());
+                  const next = !s.newProjectMenuOpen();
+                  ui.closeMenus?.();
+                  s.setNewProjectMenuOpen(next);
                 }}
                 class="ui-icon-button h-6.5 w-6.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted"
                 data-rc-tip="Create new project" aria-label="Create new project"
               >
                 <Iconify icon="lucide:folder-plus" size={14} />
               </button>
-              <FloatMenu anchor={() => s.newProjBtn} open={s.newProjectMenuOpen()} placement="bottom-end" width="11.5rem">
+              <FloatMenu
+                anchor={() => s.newProjBtn}
+                open={s.newProjectMenuOpen()}
+                onClose={() => s.setNewProjectMenuOpen(false)}
+                placement="bottom-end"
+                width="11.5rem"
+              >
                 <button
                   type="button"
                   onClick={() => {
@@ -616,6 +611,7 @@ export function WorkspaceSidebar() {
       return (
         <FloatMenu
           anchor={() => (menu.anchor.isConnected ? menu.anchor : undefined)}
+          containAnchor={false}
           open={true}
           placement="bottom-start"
           width="13.5rem"
@@ -757,7 +753,6 @@ export function WorkspaceSidebar() {
       type="button"
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => {
-        ui.closeSidebarOnMobile?.();
         m.openSettings?.();
       }}
       data-rc-tip="Host & agent settings"

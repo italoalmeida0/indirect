@@ -10,6 +10,7 @@ import { Glyph } from "./icon";
 export interface DialogProps {
   open: boolean;
   onClose: () => void;
+  onEscape?: () => boolean | void;
   title: string;
   description?: string;
   /** Legacy alias of `description`. */
@@ -59,19 +60,25 @@ export function Dialog(props: DialogProps) {
     },
   });
 
+  const [panelEl, setPanelEl] = createSignal<HTMLDivElement>();
+
   createEffect(() => {
     if (presence.present()) setInheritedDensity(readDensity());
   });
 
-  const setup = (panel: HTMLDivElement) => {
-    presence.ref(panel);
+  createEffect(() => {
+    const panel = panelEl();
+    if (!props.open || !panel) return;
     const layer: Layer = {
       kind: "modal",
       contains: (node) => panel.contains(node),
       onEscape: () => {
-        // Unmigrated floating menus own Escape before the dialog beneath them.
-        if (hasLegacyFloating()) return;
-        if (props.open) props.onClose();
+        // Unmigrated floating menus or inline confirm morphs own Escape first.
+        if (hasLegacyFloating()) return false;
+        if (panel.querySelector('[data-confirm-phase="confirm"]')) return false;
+        if (!props.open) return false;
+        if (props.onEscape) return props.onEscape();
+        props.onClose();
       },
     };
     const removeLayer = pushLayer(layer);
@@ -82,6 +89,12 @@ export function Dialog(props: DialogProps) {
       unlock();
       release();
     });
+  });
+
+  const setup = (panel: HTMLDivElement) => {
+    setPanelEl(panel);
+    presence.ref(panel);
+    onCleanup(() => setPanelEl(undefined));
   };
 
   return (
@@ -94,7 +107,10 @@ export function Dialog(props: DialogProps) {
             data-density={inheritedDensity() ?? readDensity()}
             data-state={presence.state()}
             style={{ "z-index": "var(--z-modal)" }}
-            onMouseDown={(event) => { if (event.target === event.currentTarget || event.target === scrim) props.onClose(); }}
+            onMouseDown={(event) => {
+              if (!props.open) return;
+              if (event.target === event.currentTarget || event.target === scrim) props.onClose();
+            }}
           >
           <div ref={scrim} class="ui-dialog-scrim" aria-hidden="true" />
           <div

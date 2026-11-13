@@ -155,6 +155,9 @@ export function createMentions(opts: {
       input?.setSelectionRange(caret(), caret());
     });
   }
+  function dismiss() {
+    if (open()) setDismissed(key());
+  }
   return {
     open,
     files,
@@ -163,6 +166,7 @@ export function createMentions(opts: {
     index,
     pick,
     keyDown,
+    dismiss,
     begin,
     noteMatches,
     setCaret,

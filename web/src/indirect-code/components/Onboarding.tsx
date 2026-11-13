@@ -1,4 +1,5 @@
 import { createSignal, For, Show } from "solid-js";
+import { handleBackToGatewayClick } from "../../route-nav";
 import { press } from "../../ds/motion/press";
 import { Icon as Iconify } from "../../components/icon";
 import { Badge, Btn, copyToClipboard, toast } from "../../ui";
@@ -35,6 +36,17 @@ export function Onboarding() {
 
   return (
     <div class="flex-1 min-h-0 flex flex-col items-center p-4 sm:p-6 bg-background text-center overflow-y-auto">
+      <div class="w-full max-w-xl mx-auto flex items-center justify-start shrink-0">
+        <a
+          href="#/"
+          onPointerDown={(e) => press(e.currentTarget)}
+          onClick={handleBackToGatewayClick}
+          class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-surface-muted/75 transition-colors"
+        >
+          <Iconify icon="lucide:arrow-left" size={14} />
+          <span>Back to gateway</span>
+        </a>
+      </div>
       <div class="max-w-xl w-full mx-auto space-y-6 my-auto py-8">
         {/* Workstation Pairing Hero */}
         <div>

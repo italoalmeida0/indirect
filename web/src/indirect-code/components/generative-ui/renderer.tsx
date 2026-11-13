@@ -1,7 +1,9 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { lockScroll, pushLayer } from "../../../ds/primitives/layers";
 import { MsgIconBtn } from "../MsgActions";
 import { useModal } from "../../ctx";
 import { claimLiveWidget, releaseLiveWidget } from "./widget-live";
+import { registerFullscreenWidget } from "./fullscreen-state";
 import { CodeBlock } from "../CodeBlock";
 
 import {
@@ -120,14 +122,25 @@ export function GenerativeUiWidget(props: {
     void finalize();
   };
 
-  // Escape exits the fullscreen overlay; auto-exit when the widget unloads.
+  // Escape and Browser Back exit the fullscreen overlay via the shared layer
+  // and navigation stacks; auto-exit when the widget unloads.
+  let hostRootEl: HTMLDivElement | undefined;
   createEffect(() => {
     if (!expanded()) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setExpanded(false);
-    };
-    window.addEventListener("keydown", onKey);
-    onCleanup(() => window.removeEventListener("keydown", onKey));
+    const unregisterNav = registerFullscreenWidget(() => setExpanded(false));
+    const removeLayer = pushLayer({
+      kind: "popover",
+      contains: (node) => Boolean(hostRootEl?.contains(node)),
+      onEscape: () => {
+        setExpanded(false);
+      },
+    });
+    const unlock = lockScroll();
+    onCleanup(() => {
+      unregisterNav();
+      removeLayer();
+      unlock();
+    });
   });
   createEffect(() => {
     if (frozen() && expanded()) setExpanded(false);
@@ -391,7 +404,12 @@ export function GenerativeUiWidget(props: {
           `card` token, so the frame seam is invisible. While the widget is
           not ready, a centered loading pill (placeholder text) floats over
           the streaming preview; runtime errors land in the footer below. */}
-      <div class={expanded() ? "group/guhost fixed inset-0 z-40 flex flex-col overflow-hidden bg-background/95" : "group/guhost"}>
+      <div
+        ref={(el) => {
+          hostRootEl = el;
+        }}
+        class={expanded() ? "group/guhost fixed inset-0 z-40 flex flex-col overflow-hidden bg-background/95" : "group/guhost"}
+      >
         <Show when={!streaming()}>
           <div
             class={

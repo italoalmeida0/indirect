@@ -16,7 +16,7 @@ export interface Layer {
   kind: LayerKind;
   /** Elements that belong to the layer (panel + trigger): clicks inside are not "outside". */
   contains: (node: Node) => boolean;
-  onEscape?: () => void;
+  onEscape?: () => boolean | void;
   onOutside?: (event: PointerEvent) => void;
 }
 
@@ -29,9 +29,10 @@ function onKeyDown(event: KeyboardEvent) {
     const layer = stack[i]!;
     if (layer.kind === "tooltip" && !layer.onEscape) continue;
     if (layer.onEscape) {
+      const handled = layer.onEscape();
+      if (handled === false) return;
       event.preventDefault();
       event.stopPropagation();
-      layer.onEscape();
     }
     return;
   }
@@ -81,7 +82,14 @@ export function isTopLayer(layer: Layer): boolean {
 
 /** Legacy floating surfaces that are not on the stack yet. */
 export function hasLegacyFloating(): boolean {
-  return typeof document !== "undefined" && !!document.querySelector("[data-floatmenu], [role=listbox]");
+  if (typeof document === "undefined") return false;
+  const candidates = document.querySelectorAll("[data-floatmenu], [role=listbox]");
+  for (let i = 0; i < candidates.length; i++) {
+    const el = candidates[i]!;
+    if (el.closest('[data-layer-managed], [data-state="closing"]')) continue;
+    return true;
+  }
+  return false;
 }
 
 // ---- Background inertness -------------------------------------------------

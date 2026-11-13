@@ -90,6 +90,8 @@ export interface ComposerCtxValue extends Composer {
   configureSession: SessionOptions["configureSession"];
   effortPickerBody: (onOpenModelPicker?: () => void) => JSX.Element;
   modelPickerBody: (withBackToEffort?: boolean) => JSX.Element;
+  modelFilter?: () => string;
+  setModelFilter?: (v: string) => void;
   activeContext: () => ReturnType<typeof contextDisplay>;
   addBtn: HTMLButtonElement | undefined;
   modelBtn: HTMLButtonElement | undefined;
@@ -124,6 +126,8 @@ export interface UICtxValue extends Notice {
   setEffortMenuOpen: (v: boolean | ((p: boolean) => boolean)) => void;
   modelMenuOpen: () => boolean;
   setModelMenuOpen: (v: boolean | ((p: boolean) => boolean)) => void;
+  modelFromEffort?: () => boolean;
+  setModelFromEffort?: (v: boolean) => void;
   usageOpen: () => boolean;
   setUsageOpen: (v: boolean | ((p: boolean) => boolean)) => void;
   contextBtn: HTMLButtonElement | undefined;

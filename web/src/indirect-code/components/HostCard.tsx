@@ -117,7 +117,13 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
           </span>
         </button>
       </Show>
-      <FloatMenu anchor={() => (btn?.isConnected ? btn : undefined)} open={mine()} placement="top-start" width="17.5rem">
+      <FloatMenu
+        anchor={() => (btn?.isConnected ? btn : undefined)}
+        open={mine()}
+        onClose={() => h.setHostMenuOpen(false)}
+        placement="top-start"
+        width="17.5rem"
+      >
         <div class="px-2.5 py-1 text-2xs font-medium text-fg-muted flex items-center justify-between select-none">
           <span>Your hosts</span>
           <span class="font-mono text-2xs tabular-nums">{h.hosts().length}</span>

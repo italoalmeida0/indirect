@@ -244,6 +244,12 @@ export function createComposer(opts: {
   // Composer menus (addBtn anchor lives on the page, as before —
   // ref={ctx.x} copies the value, always undefined; semantics preserved).
   const [addContextOpen, setAddContextOpen] = createSignal(false);
+  const [addContextSubView, setAddContextSubView] = createSignal<
+    "main" | "effort" | "model" | "mode" | "access"
+  >("main");
+  createEffect(() => {
+    if (!addContextOpen()) setAddContextSubView("main");
+  });
 
   // Autocomplete Palette
   const [slashIndex, setSlashIndex] = createSignal(0);
@@ -542,6 +548,8 @@ export function createComposer(opts: {
     mentions,
     addContextOpen,
     setAddContextOpen,
+    addContextSubView,
+    setAddContextSubView,
     slashIndex,
     setSlashIndex,
     slashMatches,

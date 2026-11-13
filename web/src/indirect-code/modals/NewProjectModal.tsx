@@ -65,7 +65,7 @@ export function NewProjectModal() {
     if (e.key === "Backspace" || e.key === "ArrowLeft") {
       if (canGoParent()) {
         e.preventDefault();
-        s.requestFolders(s.folderParent());
+        s.goParentFolder();
       }
       return;
     }
@@ -78,7 +78,7 @@ export function NewProjectModal() {
       const path = focused?.dataset.folderPath;
       if (path) {
         e.preventDefault();
-        s.requestFolders(path);
+        s.navigateFolder(path);
       }
       return;
     }
@@ -120,7 +120,7 @@ export function NewProjectModal() {
           type="button"
           disabled={!canGoParent()}
           onPointerDown={(e) => press(e.currentTarget)}
-          onClick={() => s.requestFolders(s.folderParent())}
+          onClick={() => s.goParentFolder()}
           data-rc-tip="Parent folder"
           aria-label="Parent folder"
           class="ui-icon-button h-7 w-7 shrink-0 rounded-lg"
@@ -131,7 +131,7 @@ export function NewProjectModal() {
         <button
           type="button"
           onPointerDown={(e) => press(e.currentTarget)}
-          onClick={() => s.requestFolders("~")}
+          onClick={() => s.navigateFolder("~")}
           data-rc-tip="Home directory"
           aria-label="Home directory"
           class="ui-icon-button h-7 w-7 shrink-0 rounded-lg"
@@ -163,7 +163,7 @@ export function NewProjectModal() {
                     type="button"
                     data-rc-tip={crumb.path}
                     onPointerDown={(e) => press(e.currentTarget)}
-                    onClick={() => s.requestFolders(crumb.path)}
+                    onClick={() => s.navigateFolder(crumb.path)}
                     class={`max-w-44 shrink-0 truncate rounded-md px-2 py-1 font-mono text-xs transition-colors cursor-pointer ${
                       isLeaf()
                         ? "bg-surface-muted text-fg font-medium"
@@ -202,7 +202,7 @@ export function NewProjectModal() {
         class="flex items-center gap-2.5 border-b border-border-subtle bg-surface/50 px-4 py-2 focus-within:bg-surface transition-colors"
         onSubmit={(e) => {
           e.preventDefault();
-          s.requestFolders(s.newProjectPath());
+          s.navigateFolder(s.newProjectPath());
         }}
       >
         <Iconify
@@ -286,7 +286,7 @@ export function NewProjectModal() {
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => {
                     if (s.folderError()) s.setFolderError("");
-                    s.requestFolders(folder.path);
+                    s.navigateFolder(folder.path);
                   }}
                   class={`flex w-full items-center justify-between gap-2.5 rounded-lg px-2 py-1 text-left transition-colors cursor-pointer group ${
                     selected()

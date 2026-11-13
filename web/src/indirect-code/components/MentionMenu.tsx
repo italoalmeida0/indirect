@@ -24,7 +24,7 @@ export function MentionMenu(props: {
     <FloatMenu
       anchor={() => document.getElementById(props.inputId)}
       open={props.mentions.open()}
-      onClose={() => props.mentions.keyDown(new KeyboardEvent("keydown", { key: "Escape" }))}
+      onClose={() => props.mentions.dismiss()}
       placement="top-start"
       width="min(28rem, calc(100vw - 1.5rem))"
     >

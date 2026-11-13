@@ -109,8 +109,15 @@ function parseHash(): { path: string; query: URLSearchParams } {
 
 export { navigate, LogoMark, PageTitle } from "./chrome";
 import { navigate } from "./chrome";
+import { noteRouteTransition, routeKind } from "./route-nav";
 
-window.addEventListener("hashchange", () => setRoute(parseHash()));
+let lastRoutePath = route().path;
+window.addEventListener("hashchange", () => {
+  const next = parseHash();
+  noteRouteTransition(lastRoutePath, next.path);
+  lastRoutePath = next.path;
+  setRoute(next);
+});
 
 interface NavItem {
   path: string;
@@ -459,6 +466,7 @@ function Root() {
     void tick();
     return { r: route(), s: currentSession() };
   };
+  const activeRouteKind = createMemo(() => routeKind(route().path));
 
   return (
     <>
@@ -479,16 +487,17 @@ function Root() {
           }
         >
           {(() => {
-            const p = route().path;
-            if (p === "/code-dev" || p.startsWith("/code-dev") || p === "/codedev" || p.startsWith("/codedev")) {
+            const kind = activeRouteKind();
+            if (kind === "code-dev") {
               return <RouteChunk><CodeDevPage /></RouteChunk>;
             }
-            if (p.startsWith("/code")) {
+            if (kind === "code") {
               return <RouteChunk><IndirectCodePage /></RouteChunk>;
             }
             return (
               <AppShell>
                 <RouteChunk>{(() => {
+                  const p = route().path;
                   const isAdmin = currentSession()?.user.role === "admin";
                   if (p === "/") return <DashboardPage />;
                   if (p === "/keys") return <KeysPage />;

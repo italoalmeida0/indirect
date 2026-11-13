@@ -32,6 +32,8 @@ import {
 } from "./modals/SimpleModals";
 import { PreviewModal } from "./modals/PreviewModal";
 import { noteWidgetData, invalidateWidgetSources } from "./components/generative-ui/widget-source";
+import { closeTopFullscreenWidget, hasFullscreenWidget } from "./components/generative-ui/fullscreen-state";
+import { createBackNavigation } from "./hooks/useBackNavigation";
 import { sharedBlobUrlCache } from "./utils/blobUrlCache";
 import { SettingsModal } from "./modals/SettingsModal";
 import {
@@ -734,6 +736,10 @@ export default function IndirectCodePage() {
 
   const [effortMenuOpen, setEffortMenuOpen] = createSignal(false);
   const [modelMenuOpen, setModelMenuOpen] = createSignal(false);
+  const [modelFromEffort, setModelFromEffort] = createSignal(false);
+  createEffect(() => {
+    if (!effortMenuOpen() && !modelMenuOpen()) setModelFromEffort(false);
+  });
   const [usageOpen, setUsageOpen] = createSignal(false);
   const [modelFilter, setModelFilter] = createSignal("");
   /** Fresh snapshot on every open: stale scroll position/filter never linger. */
@@ -873,7 +879,7 @@ export default function IndirectCodePage() {
     options.resetDraftSkills(remembered);
     composer.clearAttachments();
     if (projectId) projects.setActiveProjectId(projectId);
-    if (isMobile()) setSidebarOpen(false);
+    if (overlaySidebar()) setSidebarOpen(false);
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>("#rc-composer")?.focus());
   }
 
@@ -1352,7 +1358,7 @@ export default function IndirectCodePage() {
       case "error": {
         if (composer.notePromptReply(msg.requestId, msg.message || "Could not send message")) break;
         if (msg.requestId === creationRequestId) { setCreatingSession(false); }
-        if (projects.isFolderRequest(msg.requestId)) { projects.setFolderLoading(false); projects.setFolderError(msg.message || "Could not browse folders"); break; }
+        if (projects.isFolderRequest(msg.requestId)) { projects.noteFolderRequestFailed(); projects.setFolderLoading(false); projects.setFolderError(msg.message || "Could not browse folders"); break; }
         if (projects.isProjectCreation(msg.requestId) && projects.showNewProjectModal()) { projects.setFolderError(msg.message || "Could not create project"); break; }
         if (msg.sessionId && msg.sessionId !== activeSessionId()) break;
         if (transcript.editAttachments.failUpload(msg.requestId, msg.message || "Upload failed")) break;
@@ -1365,7 +1371,7 @@ export default function IndirectCodePage() {
         if (msg.replyTo === "create_session") setCreatingSession(false);
         if (msg.message === "Remote host is offline") {
           hosts.markActiveHostOffline();
-          if (msg.replyTo === "browse_folders") { projects.setFolderLoading(false); projects.setFolderError("The host went offline. Reconnect to browse its folders."); }
+          if (msg.replyTo === "browse_folders") { projects.noteFolderRequestFailed(); projects.setFolderLoading(false); projects.setFolderError("The host went offline. Reconnect to browse its folders."); }
           break;
         }
         // Sync pulls on an offline host are expected background noise.
@@ -1399,8 +1405,11 @@ export default function IndirectCodePage() {
         onOpenModelPicker={
           onOpenModelPicker ??
           (() => {
-            setEffortMenuOpen(false);
-            setModelMenuOpen(true);
+            batch(() => {
+              setModelFromEffort(true);
+              setEffortMenuOpen(false);
+              setModelMenuOpen(true);
+            });
           })
         }
       />
@@ -1417,10 +1426,12 @@ export default function IndirectCodePage() {
         setFilter={setModelFilter}
         activeModelId={options.activeModel}
         onBackToEffort={
-          withBackToEffort
+          withBackToEffort && modelFromEffort()
             ? () => {
-                setModelMenuOpen(false);
-                setEffortMenuOpen(true);
+                batch(() => {
+                  setModelMenuOpen(false);
+                  setEffortMenuOpen(true);
+                });
               }
             : undefined
         }
@@ -1456,7 +1467,7 @@ export default function IndirectCodePage() {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "k") {
-        if (document.querySelector('[role="dialog"]') || modals.confirmState()) return;
+        if (document.querySelector('[role="dialog"]:not([data-state="closing"]):not([data-floatmenu])') || modals.confirmState()) return;
         e.preventDefault();
         setHistoryView((prev) => !prev);
         return;
@@ -1468,9 +1479,19 @@ export default function IndirectCodePage() {
       }
       if (e.key === "Escape") {
         if (e.defaultPrevented) return;
-        if (document.querySelector("[role=dialog]:not([data-floatmenu])")) return;
+        if (document.querySelector('[role="dialog"]:not([data-state="closing"]):not([data-floatmenu])')) return;
         if (document.querySelector("[data-floatmenu]")) {
           closeMenus();
+          return;
+        }
+        if (sidebarOpen() && projects.renamingId() !== null) {
+          e.preventDefault();
+          projects.setRenamingId(null);
+          return;
+        }
+        if (sidebarOpen() && projects.selectionMode()) {
+          e.preventDefault();
+          projects.exitSelectionMode();
           return;
         }
         if (overlaySidebar() && sidebarOpen()) {
@@ -1484,7 +1505,14 @@ export default function IndirectCodePage() {
           return;
         }
         if (transcript.editingMsgIdx() != null) {
+          e.preventDefault();
           transcript.cancelEditMsg();
+          return;
+        }
+        if (queue.editingQueueId() != null) {
+          e.preventDefault();
+          queue.setEditingQueueId(null);
+          queue.editDraft.clearAttachments();
           return;
         }
         if (review.previewFile()) {
@@ -1492,6 +1520,7 @@ export default function IndirectCodePage() {
           return;
         }
         if (historyView()) {
+          e.preventDefault();
           setHistoryView(false);
           return;
         }
@@ -1500,15 +1529,6 @@ export default function IndirectCodePage() {
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
-    // Floating menus live in a Portal (outside the root div), so outside
-    // clicks never reach the root closer — handle them at document level.
-    const onDocDown = (e: PointerEvent) => {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.closest("[data-floatmenu]") || t.closest("[data-menubtn]"))) return;
-      closeMenus();
-    };
-    document.addEventListener("pointerdown", onDocDown);
-    onCleanup(() => document.removeEventListener("pointerdown", onDocDown));
   });
 
   createEffect(() => {
@@ -1707,7 +1727,127 @@ export default function IndirectCodePage() {
     setModelMenuOpen(false);
     projects.setProjectMenuOpen(false);
     setUsageOpen(false);
+    projects.setSessionMenu(null);
+    projects.setProjectMenu(null);
+    composer.mentions.dismiss();
+    transcript.editMentions.dismiss();
+    if (composer.slashMatches().length > 0) {
+      composer.dismissSlash();
+    }
   }
+
+  createBackNavigation({
+    readState: () => ({
+      hostsCount: hosts.hosts().length,
+      hasPairingData: modals.pairingData() !== null,
+      overlaySidebar: overlaySidebar(),
+      updating: isActiveHostUpdating(),
+      sidebarOpen: sidebarOpen(),
+      historyView: historyView(),
+      selectionMode: projects.selectionMode(),
+      renamingId: projects.renamingId(),
+      editingMsgIdx: transcript.editingMsgIdx(),
+      editingQueueId: queue.editingQueueId(),
+      fullscreenWidget: hasFullscreenWidget(),
+      showConfigModal: settings.showConfigModal(),
+      showNewProjectModal: projects.showNewProjectModal(),
+      folderNavDepth: projects.folderNavStack().length,
+      showPairModal: modals.showPairModal(),
+      hasPreviewFile: review.previewFile() !== null,
+      showPreviewSlicer:
+        review.previewFile() !== null &&
+        !review.previewFile()?.dataUrl &&
+        review.showTruncateInput(),
+      hasChoiceModal: modals.choiceState() !== null,
+      hasConfirmModal: modals.confirmState() !== null,
+      modeMenuOpen: options.modeMenuOpen(),
+      accessMenuOpen: options.accessMenuOpen(),
+      hostMenuOpen: hosts.hostMenuOpen(),
+      newProjectMenuOpen: projects.newProjectMenuOpen(),
+      addContextOpen: composer.addContextOpen(),
+      isMobile: isMobile(),
+      addContextSubView: composer.addContextSubView(),
+      effortMenuOpen: effortMenuOpen(),
+      modelMenuOpen: modelMenuOpen(),
+      modelFromEffort: modelFromEffort(),
+      projectMenuOpen: projects.projectMenuOpen(),
+      usageOpen: usageOpen(),
+      hasSessionMenu: projects.sessionMenu() !== null,
+      hasProjectMenu: projects.projectMenu() !== null,
+      mentionsOpen: composer.mentions.open(),
+      editMentionsOpen: transcript.editMentions.open(),
+      slashOpen: composer.slashMatches().length > 0,
+    }),
+    actions: {
+      clearPairingData: () => modals.setPairingData(null),
+      openSidebar: () => setSidebarOpen(true),
+      closeSidebar: () => setSidebarOpen(false),
+      closeHistoryView: () => setHistoryView(false),
+      openHistoryView: () => setHistoryView(true),
+      exitSelectionMode: () => projects.exitSelectionMode(),
+      cancelRename: () => projects.setRenamingId(null),
+      cancelEditMsg: () => transcript.cancelEditMsg(),
+      cancelEditQueue: () => {
+        queue.setEditingQueueId(null);
+        queue.editDraft.clearAttachments();
+      },
+      closeFullscreenWidget: () => {
+        closeTopFullscreenWidget();
+      },
+      closeSettingsModal: () => {
+        if (settings.savingSettings()) return false;
+        settings.cancelSettings();
+        return !settings.showConfigModal();
+      },
+      openSettingsModal: () => {
+        batch(() => {
+          settings.openSettings();
+          if (settings.showConfigModal() && overlaySidebar()) setSidebarOpen(false);
+        });
+        return settings.showConfigModal();
+      },
+      closeNewProjectModal: () => projects.setShowNewProjectModal(false),
+      stepBackNewProjectFolder: () => {
+        projects.stepBackFolder();
+      },
+      closePairModal: () => modals.setShowPairModal(false),
+      closePreviewModal: () => review.setPreviewFile(null),
+      closePreviewSlicer: () => review.setShowTruncateInput(false),
+      cancelChoiceModal: () => modals.choiceState()?.resolve(null),
+      cancelConfirmModal: () => {
+        modals.confirmState()?.resolve(false);
+        modals.setConfirmState(null);
+      },
+      closeModeMenu: () => options.setModeMenuOpen(false),
+      closeAccessMenu: () => options.setAccessMenuOpen(false),
+      closeHostMenu: () => hosts.setHostMenuOpen(false),
+      closeNewProjectMenu: () => projects.setNewProjectMenuOpen(false),
+      closeAddContextMenu: () => composer.setAddContextOpen(false),
+      setAddContextSubView: (view) => composer.setAddContextSubView(view),
+      closeEffortMenu: () => setEffortMenuOpen(false),
+      closeModelMenu: () => setModelMenuOpen(false),
+      closeModelAndEffortMenus: () => {
+        batch(() => {
+          setModelFromEffort(false);
+          setModelMenuOpen(false);
+          setEffortMenuOpen(false);
+        });
+      },
+      stepBackModelToEffort: () => {
+        batch(() => {
+          setModelMenuOpen(false);
+          setEffortMenuOpen(true);
+        });
+      },
+      closeProjectPickerMenu: () => projects.setProjectMenuOpen(false),
+      closeUsageMenu: () => setUsageOpen(false),
+      closeSessionContextMenu: () => projects.setSessionMenu(null),
+      closeProjectActionsMenu: () => projects.setProjectMenu(null),
+      dismissMentions: () => composer.mentions.dismiss(),
+      dismissEditMentions: () => transcript.editMentions.dismiss(),
+      dismissSlash: () => composer.dismissSlash(),
+    },
+  });
 
   // --- Contexts (the page assembles from hooks; components
   // consume per slice — without prop-drilling) ---
@@ -1773,6 +1913,8 @@ export default function IndirectCodePage() {
     configureSession: options.configureSession,
     effortPickerBody,
     modelPickerBody,
+    modelFilter,
+    setModelFilter,
     activeContext,
     addBtn,
     modelBtn,
@@ -1782,8 +1924,10 @@ export default function IndirectCodePage() {
     ...review,
     ...settings,
     openSettings: (sectionId) => {
-      if (overlaySidebar()) setSidebarOpen(false);
-      settings.openSettings(sectionId);
+      batch(() => {
+        settings.openSettings(sectionId);
+        if (settings.showConfigModal() && overlaySidebar()) setSidebarOpen(false);
+      });
     },
   };
   const uiValue: UICtxValue = {
@@ -1813,6 +1957,8 @@ export default function IndirectCodePage() {
     setEffortMenuOpen,
     modelMenuOpen,
     setModelMenuOpen,
+    modelFromEffort,
+    setModelFromEffort,
     usageOpen,
     setUsageOpen,
     contextBtn,
