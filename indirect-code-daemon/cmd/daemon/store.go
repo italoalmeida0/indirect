@@ -49,13 +49,17 @@ func defaultSessionAgePolicy() sessionstore.AgePolicy {
 	}
 }
 
-func purgeKey(dataDir, id string) string { return dataDir + "\x00" + id }
+func purgeKey(dataDir, id string) string { return filepath.Clean(dataDir) + "\x00" + id }
 
-// markSessionPurged records that id was deleted from dataDir.
+// markSessionPurged records that id was deleted from dataDir and fences the
+// shared v2 sessionstore against concurrent or late writers/migrators/agers.
 func markSessionPurged(dataDir, id string) {
 	purgedMu.Lock()
 	purgedSession[purgeKey(dataDir, id)] = struct{}{}
 	purgedMu.Unlock()
+	if dataDir != "" && validSessionID(id) {
+		sharedV2Store(dataDir).MarkPurged(id)
+	}
 }
 
 // sessionPurged reports whether id was deleted from dataDir.
@@ -67,7 +71,7 @@ func sessionPurged(dataDir, id string) bool {
 }
 
 // errSessionPurged is returned by every store write for a purged session.
-var errSessionPurged = fmt.Errorf("session was deleted")
+var errSessionPurged = sessionstore.ErrSessionPurged
 
 // diskStore is the v2 segmented session/WAL/CAS disk layer.
 type diskStore struct {
@@ -132,7 +136,7 @@ func (s *diskStore) listSessionIDs() []string {
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() {
-			if validSessionID(name) && s.v2.HasV2Session(name) {
+			if validSessionID(name) && !sessionPurged(s.dataDir, name) && s.v2.HasV2Session(name) {
 				if _, ok := seen[name]; !ok {
 					seen[name] = struct{}{}
 					ids = append(ids, name)
@@ -144,7 +148,7 @@ func (s *diskStore) listSessionIDs() []string {
 			continue
 		}
 		id := strings.TrimSuffix(name, ".jsonl")
-		if validSessionID(id) {
+		if validSessionID(id) && !sessionPurged(s.dataDir, id) {
 			if _, ok := seen[id]; !ok {
 				seen[id] = struct{}{}
 				ids = append(ids, id)

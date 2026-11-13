@@ -12,7 +12,6 @@ import (
 
 	"indirect/indirect-code-daemon/packages/filetrack"
 	"indirect/indirect-code-daemon/packages/searchindex"
-	"indirect/indirect-code-daemon/packages/sessionstore"
 )
 
 // Session lifecycle TTLs.
@@ -990,6 +989,19 @@ func (s *sessionSupervisor) mirrorSummaries() ([]map[string]any, error) {
 	return out, nil
 }
 
+func (s *sessionSupervisor) isDeleted(id string) bool {
+	if s == nil {
+		return false
+	}
+	if sessionPurged(s.dataDir, id) {
+		return true
+	}
+	s.mu.Lock()
+	del := s.deleted[id]
+	s.mu.Unlock()
+	return del
+}
+
 // purge fences cold loads before stopping the owner. No recovery worker is
 // started merely to delete a cold session, and no late writer can resurrect it.
 func (s *sessionSupervisor) purge(id string) error {
@@ -1027,16 +1039,15 @@ func (s *sessionSupervisor) purge(id string) error {
 		}
 	}
 	st := s.disk()
-	if err := sessionstore.PurgeSessionDisk(st.rootDir(), s.dataDir, id); err != nil {
-		return err
-	}
-	if err := os.Remove(filepath.Join(st.sessionsDir(), id+".json")); err != nil && !os.IsNotExist(err) {
+	// Tombstone (audit bug 77): set BEFORE removing disk files and search
+	// index entries so concurrent migrators, agers, writers, and off-lane
+	// cold search indexers are fenced and cannot resurrect the deleted session.
+	markSessionPurged(s.dataDir, id)
+	if err := st.v2.PurgeSession(st.rootDir(), id); err != nil {
 		return err
 	}
 	clearSessionDebug(id)
-	if eng := s.searchRef(); eng != nil {
-		_ = eng.DeleteSession(id)
-	}
+	purgeSessionFromSearch(s.dataDir, s.searchRef(), id)
 	if s.onPurge != nil {
 		s.onPurge(id)
 	}
@@ -1046,9 +1057,6 @@ func (s *sessionSupervisor) purge(id string) error {
 	if s.bg != nil {
 		s.bg.PurgeSessionBookkeeping(id)
 	}
-	// Tombstone (audit bug 77): files are gone — block any late writer
-	// (racing finalizer, admin fork path) from re-creating them.
-	markSessionPurged(s.dataDir, id)
 	s.mu.Lock()
 	delete(s.resident, id)
 	delete(s.epochs, id)

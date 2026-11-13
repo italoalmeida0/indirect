@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
 	"sync"
@@ -14,9 +15,39 @@ import (
 )
 
 var (
-	searchEnginesMu sync.Mutex
-	searchEngines   = map[string]*searchindex.Engine{}
+	searchEnginesMu    sync.Mutex
+	searchEngines      = map[string]*searchindex.Engine{}
+	searchSessionLocks [64]sync.Mutex
 )
+
+func searchSessionMutex(dataDir, id string) *sync.Mutex {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(filepath.Clean(dataDir)))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(id))
+	return &searchSessionLocks[h.Sum64()%uint64(len(searchSessionLocks))]
+}
+
+func purgeSessionFromSearch(dataDir string, eng *searchindex.Engine, id string) {
+	if eng == nil || !validSessionID(id) {
+		return
+	}
+	mu := searchSessionMutex(dataDir, id)
+	mu.Lock()
+	defer mu.Unlock()
+	_ = eng.DeleteSession(id)
+}
+
+func indexSessionTurnsIfAlive(dataDir string, eng *searchindex.Engine, id string, meta searchindex.SessionMeta, docs []searchindex.TurnDoc, isDeleted func(string) bool) bool {
+	mu := searchSessionMutex(dataDir, id)
+	mu.Lock()
+	defer mu.Unlock()
+	if sessionPurged(dataDir, id) || (isDeleted != nil && isDeleted(id)) {
+		return false
+	}
+	_ = eng.IndexSessionTurns(id, meta, docs)
+	return true
+}
 
 func getSearchEngine(dataDir string) *searchindex.Engine {
 	if dataDir == "" {
@@ -120,7 +151,14 @@ func indexTurnSliceIntoSearch(eng *searchindex.Engine, rec *SessionRecord, turnI
 // indexColdSessionIntoSearch streams turns from disk into eng without spawning
 // a sessionActor or retaining full multi-thousand-turn sessions in RAM.
 func indexColdSessionIntoSearch(st *diskStore, eng *searchindex.Engine, id string) {
+	indexColdSessionIntoSearchFenced(st, eng, id, nil)
+}
+
+func indexColdSessionIntoSearchFenced(st *diskStore, eng *searchindex.Engine, id string, isDeleted func(string) bool) {
 	if st == nil || eng == nil || !validSessionID(id) {
+		return
+	}
+	if sessionPurged(st.dataDir, id) || (isDeleted != nil && isDeleted(id)) {
 		return
 	}
 	if st.v2.HasV2Session(id) {
@@ -144,7 +182,7 @@ func indexColdSessionIntoSearch(st *diskStore, eng *searchindex.Engine, id strin
 			if fullOpts != nil && (len(fullOpts.Widgets) > 0 || len(fullOpts.CompactionBlocks) > 0) {
 				docs = searchindex.ExtractSessionTurns(id, nil, fullOpts)
 			}
-			_ = eng.IndexSessionTurns(id, sMeta, docs)
+			indexSessionTurnsIfAlive(st.dataDir, eng, id, sMeta, docs, isDeleted)
 			return
 		}
 
@@ -157,6 +195,9 @@ func indexColdSessionIntoSearch(st *diskStore, eng *searchindex.Engine, id strin
 		const batchTurns = 64
 		registeredMeta := false
 		for start := 0; start < len(entries); start += batchTurns {
+			if sessionPurged(st.dataDir, id) || (isDeleted != nil && isDeleted(id)) {
+				return
+			}
 			end := min(start+batchTurns, len(entries))
 			firstSeq := entries[start].TurnSeq
 			lastSeq := entries[end-1].TurnSeq
@@ -184,12 +225,14 @@ func indexColdSessionIntoSearch(st *diskStore, eng *searchindex.Engine, id strin
 				}
 			}
 			if !registeredMeta || len(batchDocs) > 0 {
-				_ = eng.IndexSessionTurns(id, sMeta, batchDocs)
+				if !indexSessionTurnsIfAlive(st.dataDir, eng, id, sMeta, batchDocs, isDeleted) {
+					return
+				}
 				registeredMeta = true
 			}
 		}
 		if !registeredMeta {
-			_ = eng.IndexSessionTurns(id, sMeta, nil)
+			indexSessionTurnsIfAlive(st.dataDir, eng, id, sMeta, nil, isDeleted)
 		}
 		return
 	}
@@ -201,11 +244,11 @@ func indexColdSessionIntoSearch(st *diskStore, eng *searchindex.Engine, id strin
 		}
 		rec := assembleRecord(lines, meta)
 		docs := searchindex.ExtractSessionTurns(id, rec.Messages, buildSearchExtractOpts(rec))
-		_ = eng.IndexSessionTurns(id, searchindex.SessionMeta{
+		indexSessionTurnsIfAlive(st.dataDir, eng, id, searchindex.SessionMeta{
 			Title:     meta.Title,
 			CWD:       meta.CWD,
 			UpdatedAt: meta.UpdatedAt,
-		}, docs)
+		}, docs, isDeleted)
 	}
 }
 
@@ -300,13 +343,19 @@ func (m *maintenanceWorker) backfillSearch(ctx context.Context) {
 		return
 	}
 	st := newDiskStore(m.dataDir)
+	isDeleted := func(id string) bool {
+		return sessionPurged(m.dataDir, id) || (m.sup != nil && m.sup.isDeleted(id))
+	}
 	indexedAny := false
 	for _, sid := range st.listSessionIDs() {
 		if !m.yieldWhileBusy(ctx) {
 			return
 		}
+		if isDeleted(sid) {
+			continue
+		}
 		if _, ok := eng.HasSession(sid); !ok {
-			indexColdSessionIntoSearch(st, eng, sid)
+			indexColdSessionIntoSearchFenced(st, eng, sid, isDeleted)
 			indexedAny = true
 		}
 	}

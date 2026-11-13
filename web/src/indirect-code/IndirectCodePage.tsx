@@ -251,6 +251,10 @@ export default function IndirectCodePage() {
   const [activeSessionId, setActiveSessionId] = createSignal<string>("");
   let restoredHostId = "";
   let restoreTimeout: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => {
+    clearTimeout(restoreTimeout);
+    restoreTimeout = undefined;
+  });
 
   const hosts = createHosts({
     toast: notice.toast,
@@ -1567,10 +1571,17 @@ export default function IndirectCodePage() {
       return;
     }
 
+    let cancelled = false;
+    onCleanup(() => {
+      cancelled = true;
+      clearTimeout(restoreTimeout);
+      restoreTimeout = undefined;
+    });
+
     const st = mirror.store();
     if (st) {
       void st.sessions.isReady().then(() => {
-        if (restoredHostId === hid) return;
+        if (cancelled || restoredHostId === hid) return;
         const fresh = mirror.sessions();
         if (fresh.some((s) => s.id === saved)) {
           restoredHostId = hid;
@@ -1587,7 +1598,7 @@ export default function IndirectCodePage() {
 
     clearTimeout(restoreTimeout);
     restoreTimeout = setTimeout(() => {
-      if (restoredHostId === hid) return;
+      if (cancelled || restoredHostId === hid) return;
       const fresh = mirror.sessions();
       if (fresh.some((s) => s.id === saved)) {
         selectSession(saved);

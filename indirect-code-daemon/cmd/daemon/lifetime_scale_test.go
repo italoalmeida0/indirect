@@ -25,6 +25,7 @@ import (
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/filetrack"
 	"indirect/indirect-code-daemon/packages/provider"
+	"indirect/indirect-code-daemon/packages/searchindex"
 	"indirect/indirect-code-daemon/packages/sessionstore"
 )
 
@@ -874,4 +875,300 @@ func TestPurgeAndDebugMemoryBounds(t *testing.T) {
 	if gcStats.DeletedBlobs < 1 || getErr == nil {
 		t.Fatalf("expected orphaned CAS blob %s deleted by GC, stats=%+v getErr=%v", blobHash, gcStats, getErr)
 	}
+}
+
+func TestConcurrentPurgeVsSearchBackfillAndWSSearchNeverResurrects(t *testing.T) {
+	h := newWSHarness(t)
+	st := newDiskStore(h.dir)
+	eng := h.sup.searchRef()
+	mw := &maintenanceWorker{
+		rootDir: st.rootDir(),
+		dataDir: h.dir,
+		sup:     h.sup,
+		search:  eng,
+	}
+
+	const sessionsCount = 6
+	sids := make([]string, sessionsCount)
+	for i := 0; i < sessionsCount; i++ {
+		sid := fmt.Sprintf("sess_purge_search_race_%d", i)
+		sids[i] = sid
+		turns := make([]sessionstore.TurnWrite, 140)
+		for turn := 1; turn <= 140; turn++ {
+			turns[turn-1] = sessionstore.TurnWrite{
+				TurnSeq:       turn,
+				CreatedAtUnix: time.Now().Add(-10 * 24 * time.Hour).Unix(),
+				Messages: []provider.Message{
+					{
+						ID:        fmt.Sprintf("u-%d-%d", i, turn),
+						Role:      provider.RoleUser,
+						TurnIndex: turn,
+						Content:   []provider.Content{provider.TextBlock{Text: fmt.Sprintf("resurrection_audit_sentinel_xyz session %d turn %d", i, turn)}},
+					},
+					{
+						ID:        fmt.Sprintf("a-%d-%d", i, turn),
+						Role:      provider.RoleAssistant,
+						TurnIndex: turn,
+						Content:   []provider.Content{provider.TextBlock{Text: "ok"}},
+					},
+				},
+			}
+		}
+		if _, err := st.v2.AppendTurns(sid, turns); err != nil {
+			t.Fatalf("AppendTurns %s: %v", sid, err)
+		}
+		if err := st.writeMetaV2(sid, recordMeta(&SessionRecord{
+			ID: sid, CWD: h.dir, Title: "Purge Race Session", UpdatedAt: 1000, TurnSeq: 140,
+		})); err != nil {
+			t.Fatalf("writeMetaV2 %s: %v", sid, err)
+		}
+	}
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(3 + sessionsCount)
+	go func() {
+		defer wg.Done()
+		<-start
+		mw.backfillSearch(context.Background())
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for r := 0; r < 6; r++ {
+			h.server.onSearchWithContext(context.Background(), "resurrection_audit_sentinel_xyz", 30, fmt.Sprintf("race-s-%d", r))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for _, sid := range sids {
+			_, _, _ = st.v2.ReadTurnRange(sid, 1, 140)
+		}
+	}()
+	purgeErrs := make([]error, sessionsCount)
+	for i, sid := range sids {
+		go func(idx int, id string) {
+			defer wg.Done()
+			<-start
+			time.Sleep(time.Duration(idx*250) * time.Microsecond)
+			purgeErrs[idx] = h.sup.purge(id)
+		}(i, sid)
+	}
+	close(start)
+	wg.Wait()
+	h.server.waitForLanes()
+
+	for i, err := range purgeErrs {
+		if err != nil {
+			t.Fatalf("sup.purge(%s) failed: %v", sids[i], err)
+		}
+		if _, ok := eng.HasSession(sids[i]); ok {
+			t.Fatalf("deleted session %s resurrected in BM25F catalog!", sids[i])
+		}
+		if _, statErr := os.Stat(filepath.Join(st.sessionsDir(), sids[i])); !os.IsNotExist(statErr) {
+			t.Fatalf("deleted session %s resurrected on disk: %v", sids[i], statErr)
+		}
+	}
+	if err := eng.Flush(); err != nil {
+		t.Fatalf("eng.Flush: %v", err)
+	}
+	hits, err := eng.Search(context.Background(), searchindex.Query{Text: "resurrection_audit_sentinel_xyz", Limit: 30})
+	if err != nil || len(hits) != 0 {
+		t.Fatalf("expected 0 BM25 hits after concurrent purge+backfill+search, got %d (err=%v): %+v", len(hits), err, hits)
+	}
+
+	// Reopen search engine from disk to verify catalog + .sidx segments contain zero resurrected docs.
+	closeSearchEngine(h.dir)
+	reopened := getSearchEngine(h.dir)
+	if reopened == nil {
+		t.Fatal("failed to reopen search engine")
+	}
+	reHits, err := reopened.Search(context.Background(), searchindex.Query{Text: "resurrection_audit_sentinel_xyz", Limit: 30})
+	if err != nil || len(reHits) != 0 {
+		t.Fatalf("expected 0 persisted BM25 hits after reopen, got %d (err=%v)", len(reHits), err)
+	}
+}
+
+func TestEditMidTurnSteeredMessagePreservesBM25MsgIdx(t *testing.T) {
+	h := newWSHarness(t)
+	st := newDiskStore(h.dir)
+	sid := "sess_edit_steered_bm25"
+
+	// Turn 1: messages [0, 1].
+	// Turn 2: initial user [2], assistant tool_call [3], tool_result [4], steered user [5], assistant reply [6].
+	turns := []sessionstore.TurnWrite{
+		{
+			TurnSeq: 1,
+			Messages: []provider.Message{
+				{ID: "t1-u", Role: provider.RoleUser, TurnIndex: 1, Content: []provider.Content{provider.TextBlock{Text: "Initial setup turn"}}},
+				{ID: "t1-a", Role: provider.RoleAssistant, TurnIndex: 1, Content: []provider.Content{provider.TextBlock{Text: "Setup complete"}}},
+			},
+		},
+		{
+			TurnSeq: 2,
+			Messages: []provider.Message{
+				{ID: "t2-u0", Role: provider.RoleUser, TurnIndex: 2, Content: []provider.Content{provider.TextBlock{Text: "Run diagnostic tool"}}},
+				{
+					ID: "t2-a0", Role: provider.RoleAssistant, TurnIndex: 2,
+					Content: []provider.Content{provider.ToolCallBlock{ID: "call-diag", Name: "bash", Arguments: json.RawMessage(`{"command":"echo ok"}`)}},
+				},
+				{
+					ID: "t2-tr", Role: provider.RoleTool, TurnIndex: 2,
+					Content: []provider.Content{provider.ToolResultBlock{CallID: "call-diag", Content: []provider.Content{provider.TextBlock{Text: "unique_diag_tool_output_marker\n"}}}},
+				},
+				{ID: "t2-steer", Role: provider.RoleUser, TurnIndex: 2, Content: []provider.Content{provider.TextBlock{Text: "original steered follow-up"}}},
+				{ID: "t2-a1", Role: provider.RoleAssistant, TurnIndex: 2, Content: []provider.Content{provider.TextBlock{Text: "Handled follow-up"}}},
+			},
+		},
+	}
+	if _, err := st.v2.AppendTurns(sid, turns); err != nil {
+		t.Fatalf("AppendTurns: %v", err)
+	}
+	if err := st.writeMetaV2(sid, recordMeta(&SessionRecord{
+		ID: sid, CWD: h.dir, Title: "Steered Edit Session", UpdatedAt: 2000, TurnSeq: 2,
+	})); err != nil {
+		t.Fatalf("writeMetaV2: %v", err)
+	}
+	indexColdSessionIntoSearch(st, h.sup.searchRef(), sid)
+
+	routeRes := h.sup.route(sid, true)
+	if routeRes.Error != "" {
+		t.Fatalf("route(%s): %s", sid, routeRes.Error)
+	}
+	// Edit the mid-turn steered user message at global/local index 5 (where Turn 2 starts at index 2!).
+	// Before the fix, firstMsgIdx was passed as HotBaseMsgIdx+localIdx (5) instead of HotBaseMsgIdx+start (2),
+	// shifting UserMsgIdx from 2 -> 5 and ToolMsgIdx from 4 -> 7 (past TotalMsgs=6!).
+	reply := make(chan any, 1)
+	routeRes.Inbox <- Envelope{
+		Payload: editApplyMsg{
+			Index: 5,
+			Text:  "steered_edit_bm25_exact_idx_token",
+			Reply: reply,
+		},
+		Reply: reply,
+	}
+	res := (<-reply).(editApplyResult)
+	if res.Error != "" {
+		t.Fatalf("editApplyMsg(5) failed: %s", res.Error)
+	}
+
+	asInt := func(v any) int {
+		switch x := v.(type) {
+		case int:
+			return x
+		case *int:
+			if x != nil {
+				return *x
+			}
+		case float64:
+			return int(x)
+		}
+		return -1
+	}
+
+	h.send(map[string]any{"type": "search", "query": "steered_edit_bm25_exact_idx_token", "requestId": "search-steered-edit"})
+	searchEv := waitForWSResponse(t, h, "search_results", "search-steered-edit", 5*time.Second)
+	results := searchEv["results"].([]any)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 search hit for edited steered message, got %+v", searchEv)
+	}
+	hit := results[0].(map[string]any)
+	gotMsgIdx := asInt(hit["messageIdx"])
+	if gotMsgIdx != 2 {
+		t.Fatalf("Turn 2 UserMsgIdx = %d, want 2 (start of Turn 2, not shifted by localIdx-start=+3; hit=%+v)", gotMsgIdx, hit)
+	}
+
+	h.send(map[string]any{"type": "search", "query": "unique_diag_tool_output_marker", "requestId": "search-steered-tool"})
+	toolSearchEv := waitForWSResponse(t, h, "search_results", "search-steered-tool", 5*time.Second)
+	toolResults := toolSearchEv["results"].([]any)
+	if len(toolResults) != 1 {
+		t.Fatalf("expected 1 search hit for Turn 2 tool output, got %+v", toolSearchEv)
+	}
+	toolHit := toolResults[0].(map[string]any)
+	gotToolIdx := asInt(toolHit["messageIdx"])
+	if gotToolIdx != 3 {
+		t.Fatalf("Turn 2 ToolMsgIdx = %d, want exact carrier index 3 (was shifted to 6 >= TotalMsgs=6 before fix; hit=%+v)", gotToolIdx, toolHit)
+	}
+
+	// Verify aroundMsgIdx=3 jumps cleanly to the exact tool carrier in Turn 2!
+	h.send(map[string]any{"type": "get_history", "sessionId": sid, "aroundMsgIdx": gotToolIdx, "requestId": "hist-steered-3"})
+	histEv := waitForWSResponse(t, h, "session_content", "hist-steered-3", 5*time.Second)
+	histMeta := histEv["history"].(map[string]any)
+	if asInt(histMeta["targetMsgIdx"]) != 3 {
+		t.Fatalf("expected targetMsgIdx=3 after steered edit, got %+v", histMeta)
+	}
+}
+
+func TestGetBlobBoundedQueueRejectsExcessWithHostBusy(t *testing.T) {
+	h := newWSHarness(t)
+	st := newDiskStore(h.dir)
+	rawPNG := makeDeterministicPNG(77, 16, 16)
+	extMsgs, err := st.cas.ExternalizeMessageImages([]provider.Message{{
+		ID:        "img-m",
+		Role:      provider.RoleUser,
+		TurnIndex: 1,
+		Content:   []provider.Content{provider.ImageBlock{MimeType: "image/png", Data: rawPNG}},
+	}})
+	if err != nil {
+		t.Fatalf("ExternalizeMessageImages: %v", err)
+	}
+	blobHash := extMsgs[0].Content[0].(provider.ImageBlock).BlobSHA256
+
+	// Saturate all worker tokens on s.sem() so queued get_blob items accumulate in blobQueue.
+	sem := h.server.sem()
+	held := cap(sem)
+	for i := 0; i < held; i++ {
+		sem <- struct{}{}
+	}
+	released := false
+	defer func() {
+		if !released {
+			for i := 0; i < held; i++ {
+				<-sem
+			}
+		}
+	}()
+
+	baselineGoroutines := runtime.NumGoroutine()
+	const overflow = 8
+	totalSent := tuneDispatchQueue + overflow
+	for i := 0; i < totalSent; i++ {
+		h.send(map[string]any{
+			"type":      "get_blob",
+			"sha256":    blobHash,
+			"sessionId": "sess_blob_burst",
+			"requestId": fmt.Sprintf("blob-burst-%d", i),
+		})
+	}
+
+	// Excess frames beyond tuneDispatchQueue must be rejected immediately with "Host busy"
+	// while sem is still saturated, without spawning unbounded goroutines!
+	for i := tuneDispatchQueue; i < totalSent; i++ {
+		reqID := fmt.Sprintf("blob-burst-%d", i)
+		ev := waitForWSResponse(t, h, "blob_data", reqID, 5*time.Second)
+		if ev["error"] != "Host busy" || ev["sha256"] != blobHash || ev["sessionId"] != "sess_blob_burst" {
+			t.Fatalf("expected Host busy blob_data for %s, got %+v", reqID, ev)
+		}
+	}
+	if gotBusy := h.server.blobBusy.Load(); gotBusy != overflow {
+		t.Fatalf("blobBusy counter = %d, want %d", gotBusy, overflow)
+	}
+	if gDelta := runtime.NumGoroutine() - baselineGoroutines; gDelta > 16 {
+		t.Fatalf("unbounded goroutine growth during get_blob burst: delta=%d (want <= 16)", gDelta)
+	}
+
+	// Release sem tokens and verify all tuneDispatchQueue admitted requests succeed!
+	released = true
+	for i := 0; i < held; i++ {
+		<-sem
+	}
+	for i := 0; i < tuneDispatchQueue; i++ {
+		reqID := fmt.Sprintf("blob-burst-%d", i)
+		ev := waitForWSResponse(t, h, "blob_data", reqID, 5*time.Second)
+		if ev["error"] != nil || ev["mediaType"] != "image/png" {
+			t.Fatalf("admitted request %s failed: %+v", reqID, ev)
+		}
+	}
+	h.server.waitForLanes()
 }

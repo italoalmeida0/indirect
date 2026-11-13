@@ -347,6 +347,11 @@ func (s *diskStore) writeSessionFile(id string, lines []turnLine, meta metaLine)
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	unlock := s.v2.LockSession(id)
+	defer unlock()
+	if sessionPurged(s.dataDir, id) || s.v2.IsPurged(id) {
+		return errSessionPurged
+	}
 	if err := durable.Rename(tmpName, s.sessionFile(id)); err != nil {
 		return err
 	}
@@ -366,7 +371,12 @@ func (s *diskStore) readSessionFile(id string) ([]turnLine, metaLine, error) {
 	if !validSessionID(id) {
 		return nil, meta, fmt.Errorf("invalid session id")
 	}
+	if sessionPurged(s.dataDir, id) {
+		return nil, meta, os.ErrNotExist
+	}
+	unlock := s.v2.RLockSession(id)
 	data, err := os.ReadFile(s.sessionFile(id))
+	unlock()
 	if err != nil {
 		if os.IsNotExist(err) && s.v2.HasV2Session(id) {
 			return s.readV2AsTurnLines(id)
@@ -588,22 +598,30 @@ func (s *diskStore) readMetaTail(id string) (metaLine, error) {
 	if !validSessionID(id) {
 		return meta, fmt.Errorf("invalid session id")
 	}
+	if sessionPurged(s.dataDir, id) {
+		return meta, os.ErrNotExist
+	}
+	unlock := s.v2.RLockSession(id)
 	f, err := os.Open(s.sessionFile(id))
 	if err != nil {
+		unlock()
 		if os.IsNotExist(err) && s.v2.HasV2Session(id) {
 			return s.readMeta(id)
 		}
 		return meta, err
 	}
-	defer f.Close()
 	line, err := readLastLine(f)
 	if err != nil {
+		_ = f.Close()
+		unlock()
 		return meta, err
 	}
 	// Torn tail (crash mid-append of a turn line): step one line back —
 	// the meta is the last VALID line.
 	if err := json.Unmarshal(line, &meta); err != nil || meta.Kind != "meta" {
 		prev, perr := readSecondToLastLine(f)
+		_ = f.Close()
+		unlock()
 		if perr == nil {
 			var m2 metaLine
 			if jerr := json.Unmarshal(prev, &m2); jerr == nil && m2.Kind == "meta" {
@@ -618,6 +636,8 @@ func (s *diskStore) readMetaTail(id string) (metaLine, error) {
 		}
 		return full, nil
 	}
+	_ = f.Close()
+	unlock()
 	return meta, nil
 }
 
@@ -725,9 +745,12 @@ func (s *diskStore) appendTurnLine(id string, tl turnLine, meta metaLine) error 
 	path := s.sessionFile(id)
 	// Fast path: plain append when the file ends with a valid meta line.
 	// (Common case: exactly one writer — the owning turn finalizer.)
-	if ok, tailSize := hasMetaTail(path); ok {
+	rUnlock := s.v2.RLockSession(id)
+	ok, tailSize := hasMetaTail(path)
+	rUnlock()
+	if ok {
 		// Rewrite: copy all but the meta tail, append turn + new meta.
-		return s.rewriteTailAppend(path, tailSize, tl, meta)
+		return s.rewriteTailAppend(id, path, tailSize, tl, meta)
 	}
 	// Slow path: full read + write (missing/corrupt tail — reconcile).
 	lines, oldMeta, err := s.readSessionFile(id)
@@ -804,7 +827,12 @@ func hasMetaTail(path string) (bool, int64) {
 
 // rewriteTailAppend replaces the meta tail with turn+meta in one
 // tmp+rename: stream-copy everything before the tail, then append.
-func (s *diskStore) rewriteTailAppend(path string, tailSize int64, tl turnLine, meta metaLine) error {
+func (s *diskStore) rewriteTailAppend(id, path string, tailSize int64, tl turnLine, meta metaLine) error {
+	unlock := s.v2.LockSession(id)
+	defer unlock()
+	if sessionPurged(s.dataDir, id) || s.v2.IsPurged(id) {
+		return errSessionPurged
+	}
 	src, err := os.Open(path)
 	if err != nil {
 		return err
@@ -879,7 +907,9 @@ func (s *diskStore) rewriteMetaOnly(id string, meta metaLine) error {
 		return s.writeMetaV2(id, meta)
 	}
 	path := s.sessionFile(id)
+	rUnlock := s.v2.RLockSession(id)
 	ok, tailSize := hasMetaTail(path)
+	rUnlock()
 	if !ok {
 		// No valid tail: full read + write (reconciles torn state).
 		lines, _, err := s.readSessionFile(id)
@@ -887,6 +917,11 @@ func (s *diskStore) rewriteMetaOnly(id string, meta metaLine) error {
 			return err
 		}
 		return s.writeSessionFile(id, lines, meta)
+	}
+	unlock := s.v2.LockSession(id)
+	defer unlock()
+	if sessionPurged(s.dataDir, id) || s.v2.IsPurged(id) {
+		return errSessionPurged
 	}
 	src, err := os.Open(path)
 	if err != nil {
@@ -1070,6 +1105,11 @@ func (s *diskStore) truncateTail(id string, keepTurn int, meta metaLine) error {
 		}
 		return s.writeMetaV2(id, meta)
 	}
+	unlock := s.v2.LockSession(id)
+	defer unlock()
+	if sessionPurged(s.dataDir, id) || s.v2.IsPurged(id) {
+		return errSessionPurged
+	}
 	path := s.sessionFile(id)
 	src, err := os.Open(path)
 	if err != nil {
@@ -1179,6 +1219,11 @@ func (s *diskStore) persistEdited(id string, firstDirtyTurn int, suffixMsgs []pr
 			}
 		}
 		return s.writeMetaV2(id, meta)
+	}
+	unlock := s.v2.LockSession(id)
+	defer unlock()
+	if sessionPurged(s.dataDir, id) || s.v2.IsPurged(id) {
+		return errSessionPurged
 	}
 	path := s.sessionFile(id)
 	src, err := os.Open(path)

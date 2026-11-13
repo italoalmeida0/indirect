@@ -60,6 +60,7 @@ export function TranscriptView() {
     turnClock: t.turnClock,
     toolStarts: t.toolStarts,
     activeSession: s.activeSession,
+    activeSessionId: s.activeSessionId,
     pendingApproval: t.pendingApproval,
     projects: s.projects,
     backgroundJobs: bg.sessionJobs,

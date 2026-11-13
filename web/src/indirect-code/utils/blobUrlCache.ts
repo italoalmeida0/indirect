@@ -40,6 +40,8 @@ interface CacheEntry {
 interface InFlightBlob {
   requestId: string;
   timer: ReturnType<typeof setTimeout>;
+  sessions: Set<string>;
+  hadSession: boolean;
 }
 
 export interface BlobUrlCacheOptions {
@@ -60,11 +62,26 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
   const entries = new Map<string, CacheEntry>();
   const inFlight = new Map<string, InFlightBlob>();
   const failedShas = new Set<string>();
+  const evictedSessions = new Set<string>();
   let currentBytes = 0;
   let reqSeq = 0;
 
   const [version, setVersion] = createSignal(0);
   const bump = () => setVersion((v) => v + 1);
+
+  function noteActiveSession(sessionId?: string) {
+    if (sessionId) evictedSessions.delete(sessionId);
+  }
+
+  function rememberEvictedSession(sessionId: string) {
+    evictedSessions.delete(sessionId);
+    evictedSessions.add(sessionId);
+    while (evictedSessions.size > 256) {
+      const oldest = evictedSessions.values().next().value;
+      if (oldest === undefined) break;
+      evictedSessions.delete(oldest);
+    }
+  }
 
   function touch(key: string, entry: CacheEntry) {
     entries.delete(key);
@@ -86,10 +103,15 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
     }
   }
 
-  function get(key: string): string | undefined {
+  function get(key: string, sessionId?: string): string | undefined {
     version();
     const entry = entries.get(key);
     if (!entry) return undefined;
+    if (sessionId) {
+      noteActiveSession(sessionId);
+      if (!entry.sessions) entry.sessions = new Set();
+      entry.sessions.add(sessionId);
+    }
     touch(key, entry);
     return entry.url;
   }
@@ -104,6 +126,7 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
     mediaType = "application/octet-stream",
     sessionId?: string,
   ): string {
+    noteActiveSession(sessionId);
     const existing = entries.get(key);
     if (existing) {
       if (sessionId) {
@@ -132,6 +155,7 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
     mediaType = "image/jpeg",
     sessionId?: string,
   ): string {
+    noteActiveSession(sessionId);
     const existing = entries.get(key);
     if (existing) {
       if (sessionId) {
@@ -158,7 +182,22 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
   }
 
   function evictSession(sessionId: string): number {
-    if (!sessionId || entries.size === 0) return 0;
+    if (!sessionId) return 0;
+    rememberEvictedSession(sessionId);
+    let cancelledFlight = false;
+    for (const [sha, pending] of [...inFlight.entries()]) {
+      if (!pending.sessions.has(sessionId)) continue;
+      pending.sessions.delete(sessionId);
+      if (pending.hadSession && pending.sessions.size === 0) {
+        clearTimeout(pending.timer);
+        inFlight.delete(sha);
+        cancelledFlight = true;
+      }
+    }
+    if (entries.size === 0) {
+      if (cancelledFlight) bump();
+      return 0;
+    }
     let removed = 0;
     for (const [key, entry] of [...entries.entries()]) {
       if (!entry.sessions?.has(sessionId)) continue;
@@ -172,7 +211,7 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
         removed++;
       }
     }
-    if (removed > 0) bump();
+    if (removed > 0 || cancelledFlight) bump();
     return removed;
   }
 
@@ -182,6 +221,7 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
     }
     inFlight.clear();
     failedShas.clear();
+    evictedSessions.clear();
     if (entries.size === 0) return;
     for (const entry of entries.values()) {
       try {
@@ -199,10 +239,19 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
     sessionId?: string,
   ): string | undefined {
     if (!sha256) return undefined;
+    noteActiveSession(sessionId);
     const key = `sha256:${sha256}`;
-    const cached = get(key);
+    const cached = get(key, sessionId);
     if (cached) return cached;
-    if (!send || inFlight.has(sha256) || failedShas.has(sha256)) {
+    const existingFlight = inFlight.get(sha256);
+    if (existingFlight) {
+      if (sessionId) {
+        existingFlight.sessions.add(sessionId);
+        existingFlight.hadSession = true;
+      }
+      return undefined;
+    }
+    if (!send || failedShas.has(sha256)) {
       return undefined;
     }
     const requestId = `blob_${++reqSeq}`;
@@ -213,7 +262,12 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
         bump();
       }
     }, requestTimeoutMs);
-    inFlight.set(sha256, { requestId, timer });
+    inFlight.set(sha256, {
+      requestId,
+      timer,
+      sessions: sessionId ? new Set([sessionId]) : new Set(),
+      hadSession: Boolean(sessionId),
+    });
     send({
       type: "get_blob",
       sha256,
@@ -226,6 +280,7 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
   function noteBlobData(msg: {
     sha256?: string;
     requestId?: string;
+    sessionId?: string;
     mediaType?: string;
     mimeType?: string;
     data?: string;
@@ -247,13 +302,41 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
       inFlight.delete(sha);
     }
     if (msg.error || typeof msg.data !== "string" || !msg.data) {
-      if (msg.error) failedShas.add(sha);
+      if (msg.error && msg.error !== "Host busy") {
+        failedShas.add(sha);
+      }
       bump();
+      return undefined;
+    }
+    const sessionsToAttach = new Set<string>();
+    if (pending) {
+      for (const sid of pending.sessions) {
+        if (!evictedSessions.has(sid)) sessionsToAttach.add(sid);
+      }
+    }
+    if (typeof msg.sessionId === "string" && msg.sessionId) {
+      if (!evictedSessions.has(msg.sessionId)) {
+        sessionsToAttach.add(msg.sessionId);
+      } else if (!pending) {
+        return undefined;
+      }
+    }
+    if (pending?.hadSession && sessionsToAttach.size === 0) {
       return undefined;
     }
     failedShas.delete(sha);
     const mediaType = msg.mediaType || msg.mimeType || "image/png";
-    return putBase64(`sha256:${sha}`, msg.data, mediaType);
+    const key = `sha256:${sha}`;
+    const firstSid = sessionsToAttach.values().next().value;
+    const url = putBase64(key, msg.data, mediaType, firstSid);
+    if (sessionsToAttach.size > 1) {
+      const entry = entries.get(key);
+      if (entry) {
+        if (!entry.sessions) entry.sessions = new Set();
+        for (const sid of sessionsToAttach) entry.sessions.add(sid);
+      }
+    }
+    return url;
   }
 
   function internContentBlock(block: ContentBlock, sessionId?: string): ContentBlock {
@@ -302,11 +385,11 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
   ): string | undefined {
     version();
     if (block.blobKey) {
-      const hit = get(block.blobKey);
+      const hit = get(block.blobKey, sessionId);
       if (hit) return hit;
     }
     if (block.imageSha256) {
-      const hit = get(`sha256:${block.imageSha256}`);
+      const hit = get(`sha256:${block.imageSha256}`, sessionId);
       if (hit) return hit;
     }
     if (block.imageData) {

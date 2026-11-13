@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -1040,6 +1042,151 @@ func BenchmarkColdSeekableZstdRandomAccess(b *testing.B) {
 		ws, err := store.ReadAroundMsg(sessID, targetMsg, 1, 4)
 		if err != nil || len(ws.Messages) == 0 {
 			b.Fatalf("ReadAroundMsg(%d): %v", targetMsg, err)
+		}
+	}
+}
+
+func TestPurgeSessionFencesConcurrentMigrateAgeReadAndWrite(t *testing.T) {
+	rootDir := t.TempDir()
+	slotDir := filepath.Join(rootDir, "slots", "a")
+	store := New(slotDir)
+
+	// Part 1: Concurrent MigrateLegacyFile vs Store.PurgeSession must never fail
+	// with ERROR_SHARING_VIOLATION on Windows or resurrect the deleted session on POSIX.
+	for iter := 0; iter < 8; iter++ {
+		sid := fmt.Sprintf("sess_race_mig_%d", iter)
+		jsonlPath := filepath.Join(slotDir, "sessions", sid+".jsonl")
+		if err := os.MkdirAll(filepath.Dir(jsonlPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		for turn := 1; turn <= 180; turn++ {
+			tw := buildRealisticTurn(turn)
+			rawMsgs := make([]json.RawMessage, 0, len(tw.Messages))
+			for _, m := range tw.Messages {
+				b, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rawMsgs = append(rawMsgs, b)
+			}
+			line, err := json.Marshal(map[string]any{
+				"v":        1,
+				"kind":     "turn",
+				"turn":     turn,
+				"messages": rawMsgs,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			buf.Write(line)
+			buf.WriteByte('\n')
+		}
+		fmt.Fprintf(&buf, `{"v":1,"kind":"meta","id":%q,"title":"Race Migrate","turnSeq":180,"updatedAt":1740999999}`+"\n", sid)
+		if err := os.WriteFile(jsonlPath, buf.Bytes(), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var purgeErr error
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_ = store.MigrateLegacyFile(context.Background(), jsonlPath, AgePolicy{
+				HotKeepTurns: 40,
+				WarmMaxAge:   time.Second,
+				Now:          time.Unix(1741999999, 0),
+			})
+		}()
+		go func(delay time.Duration) {
+			defer wg.Done()
+			<-start
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			purgeErr = store.PurgeSession(rootDir, sid)
+		}(time.Duration(iter*150) * time.Microsecond)
+		close(start)
+		wg.Wait()
+
+		if purgeErr != nil {
+			t.Fatalf("iter %d: PurgeSession racing MigrateLegacyFile failed: %v", iter, purgeErr)
+		}
+		for _, gone := range []string{
+			filepath.Join(slotDir, "sessions", sid),
+			jsonlPath,
+		} {
+			if _, err := os.Stat(gone); !os.IsNotExist(err) {
+				t.Fatalf("iter %d: deleted session resurrected at %s (err=%v)", iter, gone, err)
+			}
+		}
+		if _, err := store.AppendTurn(sid, buildRealisticTurn(1)); !errors.Is(err, ErrSessionPurged) {
+			t.Fatalf("iter %d: AppendTurn after PurgeSession got %v, want ErrSessionPurged", iter, err)
+		}
+		if err := store.WriteMeta(sid, []byte(`{"id":"x"}`)); !errors.Is(err, ErrSessionPurged) {
+			t.Fatalf("iter %d: WriteMeta after PurgeSession got %v, want ErrSessionPurged", iter, err)
+		}
+		if err := store.TruncateAfterMsg(sid, 0); !errors.Is(err, ErrSessionPurged) {
+			t.Fatalf("iter %d: TruncateAfterMsg after PurgeSession got %v, want ErrSessionPurged", iter, err)
+		}
+		if _, err := store.AgeSession(context.Background(), sid, DefaultAgePolicy()); !errors.Is(err, ErrSessionPurged) {
+			t.Fatalf("iter %d: AgeSession after PurgeSession got %v, want ErrSessionPurged", iter, err)
+		}
+	}
+
+	// Part 2: Concurrent AgeSession + ReadTurnRange vs Store.PurgeSession must
+	// close open segment handles cleanly under sessionLock and never resurrect files.
+	for iter := 0; iter < 8; iter++ {
+		sid := fmt.Sprintf("sess_race_age_%d", iter)
+		turns := make([]TurnWrite, 220)
+		for i := 1; i <= 220; i++ {
+			turns[i-1] = buildRealisticTurn(i)
+		}
+		if _, err := store.AppendTurns(sid, turns); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.WriteMeta(sid, []byte(fmt.Sprintf(`{"id":%q}`, sid))); err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		var purgeErr error
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = store.AgeSession(context.Background(), sid, AgePolicy{
+				HotKeepTurns: 20,
+				WarmMaxAge:   time.Second,
+				Now:          time.Now().Add(48 * time.Hour),
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			for r := 0; r < 8; r++ {
+				_, _, _ = store.ReadTurnRange(sid, 1, 50)
+			}
+		}()
+		go func(delay time.Duration) {
+			defer wg.Done()
+			<-start
+			if delay > 0 {
+				time.Sleep(delay)
+			}
+			purgeErr = store.PurgeSession(rootDir, sid)
+		}(time.Duration(iter*200) * time.Microsecond)
+		close(start)
+		wg.Wait()
+
+		if purgeErr != nil {
+			t.Fatalf("iter %d: PurgeSession racing AgeSession+ReadTurnRange failed: %v", iter, purgeErr)
+		}
+		if _, err := os.Stat(filepath.Join(slotDir, "sessions", sid)); !os.IsNotExist(err) {
+			t.Fatalf("iter %d: v2 session dir resurrected after PurgeSession: %v", iter, err)
 		}
 	}
 }

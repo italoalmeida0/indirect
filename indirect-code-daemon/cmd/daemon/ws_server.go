@@ -58,6 +58,17 @@ type wsServer struct {
 	searchMu     sync.Mutex
 	searchCancel context.CancelFunc
 	bgWg         sync.WaitGroup
+
+	blobMu          sync.Mutex
+	blobQueue       []blobReq
+	blobDispatching bool
+	blobBusy        atomic.Uint64
+}
+
+type blobReq struct {
+	sha256    string
+	requestID string
+	sessionID string
 }
 
 type convertOutcome struct {
@@ -307,7 +318,8 @@ func (s *wsServer) dispatch(raw []byte) {
 		return
 	}
 	// Off-hostLane CAS blob hydration: serves externalized image bytes directly
-	// from CAS without blocking hostLane or spawning a sessionActor.
+	// from CAS without blocking hostLane or spawning a sessionActor, bounded at
+	// tuneDispatchQueue queued requests (Actor Invariant #3).
 	if base.Type == "get_blob" {
 		var req struct {
 			SHA256    string `json:"sha256"`
@@ -315,14 +327,40 @@ func (s *wsServer) dispatch(raw []byte) {
 			SessionID string `json:"sessionId"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		sem := s.sem()
-		s.bgWg.Add(1)
-		go func() {
-			defer s.bgWg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			s.onGetBlob(req.SHA256, req.RequestID, req.SessionID)
-		}()
+		item := blobReq{
+			sha256:    req.SHA256,
+			requestID: req.RequestID,
+			sessionID: req.SessionID,
+		}
+		s.blobMu.Lock()
+		if len(s.blobQueue) >= tuneDispatchQueue {
+			s.blobMu.Unlock()
+			s.blobBusy.Add(1)
+			ev := map[string]any{
+				"type":   "blob_data",
+				"hostId": s.host(),
+				"sha256": req.SHA256,
+				"error":  "Host busy",
+			}
+			if req.RequestID != "" {
+				ev["requestId"] = req.RequestID
+			}
+			if req.SessionID != "" {
+				ev["sessionId"] = req.SessionID
+			}
+			s.emit(ev)
+			return
+		}
+		s.blobQueue = append(s.blobQueue, item)
+		start := !s.blobDispatching
+		if start {
+			s.blobDispatching = true
+			s.bgWg.Add(1)
+		}
+		s.blobMu.Unlock()
+		if start {
+			go s.drainBlobQueue()
+		}
 		return
 	}
 	// A draft configure_session has no session actor. It still updates the
@@ -1919,15 +1957,22 @@ func (s *wsServer) onSearchWithContext(ctx context.Context, query string, limit 
 		return
 	}
 
+	isDeleted := func(id string) bool {
+		return sessionPurged(s.dataDir, id) || (s.sessions != nil && s.sessions.isDeleted(id))
+	}
+
 	// Synchronous catch-up for any cold/seeded sessions not yet indexed in BM25F.
 	st := newDiskStore(s.dataDir)
 	for _, sid := range st.listSessionIDs() {
 		if ctx.Err() != nil {
 			return
 		}
+		if isDeleted(sid) {
+			continue
+		}
 		maxTurn, ok := eng.HasSession(sid)
 		if !ok {
-			indexColdSessionIntoSearch(st, eng, sid)
+			indexColdSessionIntoSearchFenced(st, eng, sid, isDeleted)
 			continue
 		}
 		if maxTurn < 0 {
@@ -1937,8 +1982,8 @@ func (s *wsServer) onSearchWithContext(ctx context.Context, query string, limit 
 					hasTurns = true
 				}
 			}
-			if hasTurns {
-				indexColdSessionIntoSearch(st, eng, sid)
+			if hasTurns && !isDeleted(sid) {
+				indexColdSessionIntoSearchFenced(st, eng, sid, isDeleted)
 			}
 		}
 	}
@@ -1957,6 +2002,9 @@ func (s *wsServer) onSearchWithContext(ctx context.Context, query string, limit 
 
 	results := make([]any, 0, len(hits))
 	for _, h := range hits {
+		if isDeleted(h.SessionID) {
+			continue
+		}
 		item := map[string]any{
 			"sessionId":  h.SessionID,
 			"title":      h.Title,
@@ -1978,6 +2026,41 @@ func (s *wsServer) onSearchWithContext(ctx context.Context, query string, limit 
 	emitResults(results)
 }
 
+func (s *wsServer) drainBlobQueue() {
+	defer s.bgWg.Done()
+	sem := s.sem()
+	for {
+		sem <- struct{}{}
+		s.blobMu.Lock()
+		if len(s.blobQueue) == 0 {
+			s.blobDispatching = false
+			s.blobMu.Unlock()
+			<-sem
+			return
+		}
+		item := s.blobQueue[0]
+		s.blobQueue[0] = blobReq{}
+		s.blobQueue = s.blobQueue[1:]
+		empty := len(s.blobQueue) == 0
+		if empty {
+			s.blobQueue = nil
+			s.blobDispatching = false
+		}
+		s.bgWg.Add(1)
+		s.blobMu.Unlock()
+
+		go func(r blobReq) {
+			defer s.bgWg.Done()
+			defer func() { <-sem }()
+			s.onGetBlob(r.sha256, r.requestID, r.sessionID)
+		}(item)
+
+		if empty {
+			return
+		}
+	}
+}
+
 func (s *wsServer) onGetBlob(sha256Hex, requestID, sessionID string) {
 	ev := map[string]any{
 		"type":   "blob_data",
@@ -1989,6 +2072,11 @@ func (s *wsServer) onGetBlob(sha256Hex, requestID, sessionID string) {
 	}
 	if sessionID != "" {
 		ev["sessionId"] = sessionID
+	}
+	if sessionID != "" && (sessionPurged(s.dataDir, sessionID) || (s.sessions != nil && s.sessions.isDeleted(sessionID))) {
+		ev["error"] = "session was deleted"
+		s.emit(ev)
+		return
 	}
 	if strings.TrimSpace(sha256Hex) == "" || s.dataDir == "" {
 		ev["error"] = "invalid blob sha256"

@@ -35,6 +35,7 @@ export interface TranscriptRenderCtx {
   turnClock: () => number;
   toolStarts: () => Record<string, number>;
   activeSession: () => import("../types").SessionSummary | null;
+  activeSessionId?: () => string;
   pendingApproval: () => import("../types").PendingApproval | null;
   projects: () => import("../types").Project[];
   /** Live background job registry — lets bash/exec_script rows keep spinning
@@ -235,7 +236,11 @@ function renderSingleAssistant(ctx: TranscriptRenderCtx, msg: ChatMessage) {
 
 function renderImageBlock(ctx: TranscriptRenderCtx, block: ContentBlock) {
   const src = () =>
-    sharedBlobUrlCache.resolveImageBlock(block, ctx.send, ctx.activeSession()?.id) ||
+    sharedBlobUrlCache.resolveImageBlock(
+      block,
+      ctx.send,
+      ctx.activeSessionId?.() || ctx.activeSession()?.id,
+    ) ||
     (block.imageData ? `data:${block.imageMime || "image/jpeg"};base64,${block.imageData}` : undefined);
   return (
     <Show

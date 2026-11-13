@@ -115,6 +115,9 @@ func (s *Store) ReadTailWindow(id string, tokenBudget, maxMsgs int) (WindowSlice
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return WindowSlice{}, os.ErrNotExist
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -169,6 +172,9 @@ func (s *Store) ReadBeforeTurn(id string, beforeTurn, tokenBudget, maxMsgs int) 
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return WindowSlice{}, os.ErrNotExist
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -209,6 +215,9 @@ func (s *Store) ReadAfterTurn(id string, afterTurn, tokenBudget, maxMsgs int) (W
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return WindowSlice{}, os.ErrNotExist
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -266,6 +275,9 @@ func (s *Store) ReadAroundMsg(id string, targetMsgIdx, tokenBudget, maxMsgs int)
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return WindowSlice{}, os.ErrNotExist
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -301,6 +313,9 @@ func (s *Store) ReadAroundTurn(id string, targetTurn, tokenBudget, maxMsgs int) 
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return WindowSlice{}, os.ErrNotExist
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -364,6 +379,9 @@ func (s *Store) ReadLastNTurns(id string, count int) (WindowSlice, error) {
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return WindowSlice{}, os.ErrNotExist
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -392,6 +410,9 @@ func (s *Store) ReadTurnRange(id string, startTurn, endTurn int) ([]provider.Mes
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return nil, nil, os.ErrNotExist
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -435,6 +456,9 @@ func (s *Store) ReadFromMsgIdx(id string, startMsgIdx int) ([]provider.Message, 
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return nil, nil, os.ErrNotExist
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -589,11 +613,17 @@ func (s *Store) TruncateAfterMsg(id string, keepMsgCount int) error {
 	if !ValidSessionID(id) {
 		return ErrInvalidSessionID
 	}
+	if s.IsPurged(id) {
+		return ErrSessionPurged
+	}
 	mu := s.sessionLock(id)
 	mu.Lock()
 	defer mu.Unlock()
 	defer s.invalidateSessionCache(id)
 
+	if s.IsPurged(id) {
+		return ErrSessionPurged
+	}
 	if err := s.ensureV2Locked(context.Background(), id); err != nil {
 		return err
 	}
@@ -886,6 +916,9 @@ func (s *Store) CloneSessionUpTo(srcID, dstID string, keepMsgCount int) error {
 		defer dstMu.Unlock()
 		srcMu.RLock()
 		defer srcMu.RUnlock()
+	}
+	if s.IsPurged(srcID) || s.IsPurged(dstID) {
+		return ErrSessionPurged
 	}
 
 	srcDir := s.sessionDir(srcID)

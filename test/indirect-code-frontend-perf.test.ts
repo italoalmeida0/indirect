@@ -1286,4 +1286,116 @@ describe("Layer 3 — Frontend Zero-Jank, Bi-Directional History Window & Heap L
       ctx.dispose();
     }
   });
+
+  test("9. CAS get_blob session eviction, multi-session shared refcount, Host busy retry, and unmount searchTimer cleanup", () => {
+    vi.useFakeTimers();
+    try {
+      const created: string[] = [];
+      const revoked: string[] = [];
+      let urlSeq = 0;
+      const cache = createBlobUrlCache({
+        createObjectURL: () => {
+          const u = `blob:test-cas-${++urlSeq}`;
+          created.push(u);
+          return u;
+        },
+        revokeObjectURL: (u) => {
+          revoked.push(u);
+        },
+      });
+
+      const sent: DaemonCommand[] = [];
+      const send = (cmd: DaemonCommand) => sent.push(cmd);
+      const b64 = Buffer.from("hello-cas-image-bytes").toString("base64");
+
+      // 1) Single-session CAS get_blob -> evictSession revokes ObjectURL!
+      const sha1 = "1".repeat(64);
+      expect(cache.requestBlob(sha1, send, "sess-1")).toBeUndefined();
+      expect(sent).toHaveLength(1);
+      const url1 = cache.noteBlobData({
+        sha256: sha1,
+        sessionId: "sess-1",
+        mediaType: "image/png",
+        data: b64,
+      });
+      expect(url1).toBe("blob:test-cas-1");
+      expect(cache.resolveImageBlock({ type: "image", imageSha256: sha1 }, send, "sess-1")).toBe(url1);
+      expect(cache.evictSession("sess-1")).toBe(1);
+      expect(revoked).toEqual(["blob:test-cas-1"]);
+      expect(cache.size()).toBe(0);
+
+      // 2) Duplicate in-flight across sess-A and sess-B -> shared refcount prevents premature revoke!
+      revoked.length = 0;
+      sent.length = 0;
+      const sha2 = "2".repeat(64);
+      expect(cache.requestBlob(sha2, send, "sess-A")).toBeUndefined();
+      expect(cache.requestBlob(sha2, send, "sess-B")).toBeUndefined();
+      expect(sent).toHaveLength(1);
+      const url2 = cache.noteBlobData({
+        sha256: sha2,
+        sessionId: "sess-A",
+        mediaType: "image/png",
+        data: b64,
+      });
+      expect(url2).toBe("blob:test-cas-2");
+      expect(cache.evictSession("sess-A")).toBe(0);
+      expect(revoked).toEqual([]);
+      expect(cache.resolveImageBlock({ type: "image", imageSha256: sha2 }, send, "sess-B")).toBe(url2);
+      expect(cache.evictSession("sess-B")).toBe(1);
+      expect(revoked).toEqual(["blob:test-cas-2"]);
+
+      // 3) Cache hit via resolveImageBlock across sess-C and sess-D attaches sess-D!
+      revoked.length = 0;
+      const sha3 = "3".repeat(64);
+      cache.requestBlob(sha3, send, "sess-C");
+      const url3 = cache.noteBlobData({ sha256: sha3, sessionId: "sess-C", data: b64 });
+      expect(url3).toBe("blob:test-cas-3");
+      expect(cache.resolveImageBlock({ type: "image", imageSha256: sha3 }, send, "sess-D")).toBe(url3);
+      expect(cache.evictSession("sess-C")).toBe(0);
+      expect(revoked).toEqual([]);
+      expect(cache.evictSession("sess-D")).toBe(1);
+      expect(revoked).toEqual(["blob:test-cas-3"]);
+
+      // 4) Session evicted while get_blob is still in-flight drops late blob_data without leaking ObjectURL!
+      const beforeCreated = created.length;
+      const sha4 = "4".repeat(64);
+      cache.requestBlob(sha4, send, "sess-early-del");
+      expect(cache.evictSession("sess-early-del")).toBe(0);
+      expect(
+        cache.noteBlobData({ sha256: sha4, sessionId: "sess-early-del", data: b64 }),
+      ).toBeUndefined();
+      expect(created.length).toBe(beforeCreated);
+      expect(cache.size()).toBe(0);
+
+      // 5) Transient "Host busy" backpressure does NOT permanently poison failedShas!
+      sent.length = 0;
+      const sha5 = "5".repeat(64);
+      cache.requestBlob(sha5, send, "sess-busy");
+      expect(sent).toHaveLength(1);
+      cache.noteBlobData({ sha256: sha5, sessionId: "sess-busy", error: "Host busy" });
+      cache.requestBlob(sha5, send, "sess-busy");
+      expect(sent).toHaveLength(2);
+
+      // 6) createProjects unmount cancels pending 300ms searchTimer!
+      sent.length = 0;
+      createRoot((dispose) => {
+        const proj = createProjects({
+          send,
+          isOpen: () => true,
+          getHostId: () => "h1",
+          sessions: () => [],
+          projects: () => [],
+          toast: () => {},
+          showConfirm: async () => true,
+          isHostOnline: () => true,
+        });
+        proj.queueDaemonSearch("unmount cleanup query");
+        dispose();
+      });
+      vi.advanceTimersByTime(500);
+      expect(sent).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

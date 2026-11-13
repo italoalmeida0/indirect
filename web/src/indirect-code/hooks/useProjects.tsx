@@ -1,5 +1,5 @@
 import type { DaemonCommand } from "../daemon-protocol";
-import { createEffect, createMemo, createSignal } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import { projectForDirectory, compareSessions } from "../paths";
 import type { Project, SessionSummary } from "../types";
 import type { FoldersEvent, ProjectCreatedEvent, SearchResultsEvent } from "../daemon-protocol";
@@ -296,6 +296,13 @@ export function createProjects(opts: {
       if (opts.isOpen()) opts.send({ type: "search", query, limit: 30, requestId });
     }, 300);
   }
+  onCleanup(() => {
+    if (searchTimer != null) {
+      clearTimeout(searchTimer);
+      searchTimer = null;
+    }
+    latestSearchReqId = "";
+  });
   function noteSearchResults(msg: SearchResultsEvent) {
     if (msg.requestId) {
       if (!latestSearchReqId || msg.requestId !== latestSearchReqId) return;

@@ -191,6 +191,9 @@ func (s *Store) AgeSession(ctx context.Context, id string, policy AgePolicy) (in
 	if !ValidSessionID(id) {
 		return 0, ErrInvalidSessionID
 	}
+	if s.IsPurged(id) {
+		return 0, ErrSessionPurged
+	}
 	policy = normalizeAgePolicy(policy)
 
 	mu := s.sessionLock(id)
@@ -198,6 +201,9 @@ func (s *Store) AgeSession(ctx context.Context, id string, policy AgePolicy) (in
 	defer mu.Unlock()
 	defer s.invalidateSessionCache(id)
 
+	if s.IsPurged(id) {
+		return 0, ErrSessionPurged
+	}
 	if err := s.ensureV2Locked(ctx, id); err != nil {
 		return 0, err
 	}
@@ -238,6 +244,14 @@ func (s *Store) AgeSession(ctx context.Context, id string, policy AgePolicy) (in
 	newEntries := append([]TurnEntry(nil), entries...)
 
 	for si := range m.Segments {
+		if s.IsPurged(id) {
+			for _, cid := range convertedSegIDs {
+				_ = os.Remove(filepath.Join(sessDir, coldTurnsFilename(cid)))
+				_ = os.Remove(filepath.Join(sessDir, coldDiffsFilename(cid)))
+				_ = os.Remove(filepath.Join(sessDir, coldFrameIndexFilename(cid)))
+			}
+			return 0, ErrSessionPurged
+		}
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
@@ -356,6 +370,14 @@ func (s *Store) AgeSession(ctx context.Context, id string, policy AgePolicy) (in
 
 	if len(convertedSegIDs) == 0 {
 		return 0, nil
+	}
+	if s.IsPurged(id) {
+		for _, cid := range convertedSegIDs {
+			_ = os.Remove(filepath.Join(sessDir, coldTurnsFilename(cid)))
+			_ = os.Remove(filepath.Join(sessDir, coldDiffsFilename(cid)))
+			_ = os.Remove(filepath.Join(sessDir, coldFrameIndexFilename(cid)))
+		}
+		return 0, ErrSessionPurged
 	}
 
 	m.UpdatedAtUnix = policy.Now.Unix()

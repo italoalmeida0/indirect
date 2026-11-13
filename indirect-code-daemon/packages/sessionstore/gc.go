@@ -101,6 +101,7 @@ func PurgeSessionDisk(rootDir, slotDir, sessionID string) error {
 		recordErr(os.RemoveAll(filepath.Join(sessRoot, sessionID)))
 		recordErr(os.Remove(filepath.Join(sessRoot, sessionID+".jsonl")))
 		recordErr(os.Remove(filepath.Join(sessRoot, sessionID+".wal.jsonl")))
+		recordErr(os.Remove(filepath.Join(sessRoot, sessionID+".json")))
 	}
 
 	if rootDir != "" {
@@ -110,6 +111,7 @@ func PurgeSessionDisk(rootDir, slotDir, sessionID string) error {
 			recordErr(os.RemoveAll(filepath.Join(sessRoot, sessionID)))
 			recordErr(os.Remove(filepath.Join(sessRoot, sessionID+".jsonl")))
 			recordErr(os.Remove(filepath.Join(sessRoot, sessionID+".wal.jsonl")))
+			recordErr(os.Remove(filepath.Join(sessRoot, sessionID+".json")))
 		}
 		recordErr(os.RemoveAll(filepath.Join(rootDir, "brain", sessionID)))
 		recordErr(os.RemoveAll(filepath.Join(rootDir, "executions", sessionID)))

@@ -41,6 +41,9 @@ var (
 
 	// ErrEmptyTurn refuses appending a turn with zero messages.
 	ErrEmptyTurn = errors.New("sessionstore: turn must contain at least one message")
+
+	// ErrSessionPurged refuses mutations or migrations on a deleted session.
+	ErrSessionPurged = errors.New("session was deleted")
 )
 
 // Option configures a Store instance.
@@ -95,6 +98,9 @@ type Store struct {
 	locksMu sync.Mutex
 	locks   map[string]*sync.RWMutex
 
+	purgedMu sync.RWMutex
+	purged   map[string]struct{}
+
 	cacheMu    sync.RWMutex
 	stateCache map[string]*cachedSessionState
 }
@@ -109,6 +115,7 @@ func New(slotDir string, opts ...Option) *Store {
 		warmMaxTurns:   DefaultWarmSegmentMaxTurns,
 		coldFrameBytes: ColdFrameTargetBytes,
 		locks:          make(map[string]*sync.RWMutex),
+		purged:         make(map[string]struct{}),
 		stateCache:     make(map[string]*cachedSessionState, 8),
 	}
 	for _, opt := range opts {
@@ -155,6 +162,63 @@ func (s *Store) sessionLock(id string) *sync.RWMutex {
 	return mu
 }
 
+// RLockSession acquires a shared read lock for session id and returns an unlock
+// function. Used by legacy .jsonl readers so PurgeSession never races open handles.
+func (s *Store) RLockSession(id string) func() {
+	if !ValidSessionID(id) {
+		return func() {}
+	}
+	mu := s.sessionLock(id)
+	mu.RLock()
+	return mu.RUnlock
+}
+
+// LockSession acquires the exclusive lock for session id and returns an unlock
+// function. Used by legacy .jsonl writers so PurgeSession never races open handles
+// or allows late renames to resurrect a deleted session.
+func (s *Store) LockSession(id string) func() {
+	if !ValidSessionID(id) {
+		return func() {}
+	}
+	mu := s.sessionLock(id)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// IsPurged reports whether session id has been permanently purged on this Store.
+func (s *Store) IsPurged(id string) bool {
+	s.purgedMu.RLock()
+	_, ok := s.purged[id]
+	s.purgedMu.RUnlock()
+	return ok
+}
+
+// MarkPurged records a tombstone for session id on this Store so concurrent or
+// late writers/migrators/agers abort instead of resurrecting deleted files.
+func (s *Store) MarkPurged(id string) {
+	if !ValidSessionID(id) {
+		return
+	}
+	s.purgedMu.Lock()
+	s.purged[id] = struct{}{}
+	s.purgedMu.Unlock()
+}
+
+// PurgeSession marks session id as purged, acquires the exclusive per-session
+// lock (waiting for any in-flight migration, aging, or Cold/Warm read to close
+// its file handles), evicts cached state, and removes all on-disk session files.
+func (s *Store) PurgeSession(rootDir, id string) error {
+	if !ValidSessionID(id) {
+		return ErrInvalidSessionID
+	}
+	s.MarkPurged(id)
+	mu := s.sessionLock(id)
+	mu.Lock()
+	defer mu.Unlock()
+	s.invalidateSessionCache(id)
+	return PurgeSessionDisk(rootDir, s.slotDir, id)
+}
+
 func (s *Store) sessionDir(id string) string {
 	return filepath.Join(s.sessionsDir, id)
 }
@@ -177,7 +241,7 @@ func (s *Store) turnIndexPath(id string) string {
 
 // HasV2Session reports whether id has a v2 segmented directory (manifest.json or meta.json).
 func (s *Store) HasV2Session(id string) bool {
-	if !ValidSessionID(id) {
+	if !ValidSessionID(id) || s.IsPurged(id) {
 		return false
 	}
 	if st, err := os.Stat(s.manifestPath(id)); err == nil && st.Mode().IsRegular() {
@@ -191,7 +255,7 @@ func (s *Store) HasV2Session(id string) bool {
 
 // HasLegacySession reports whether a v1 <id>.jsonl file still exists on disk.
 func (s *Store) HasLegacySession(id string) bool {
-	if !ValidSessionID(id) {
+	if !ValidSessionID(id) || s.IsPurged(id) {
 		return false
 	}
 	st, err := os.Stat(s.legacyFile(id))
@@ -201,6 +265,9 @@ func (s *Store) HasLegacySession(id string) bool {
 // ensureV2Locked transparently migrates <id>.jsonl if present and not yet migrated.
 // Caller must hold sessionLock(id).Lock().
 func (s *Store) ensureV2Locked(ctx context.Context, id string) error {
+	if s.IsPurged(id) {
+		return ErrSessionPurged
+	}
 	if _, err := os.Stat(s.manifestPath(id)); err == nil {
 		return nil
 	}
@@ -217,12 +284,18 @@ func (s *Store) ensureV2Locked(ctx context.Context, id string) error {
 // ensureV2ForRead ensures a legacy <id>.jsonl session is migrated before running
 // a v2 indexed read, upgrading from no lock to write lock only if needed.
 func (s *Store) ensureV2ForRead(ctx context.Context, id string) error {
+	if s.IsPurged(id) {
+		return os.ErrNotExist
+	}
 	if s.HasV2Session(id) || !s.HasLegacySession(id) {
 		return nil
 	}
 	mu := s.sessionLock(id)
 	mu.Lock()
 	defer mu.Unlock()
+	if s.IsPurged(id) {
+		return os.ErrNotExist
+	}
 	return s.ensureV2Locked(ctx, id)
 }
 
@@ -235,6 +308,10 @@ func (s *Store) ReadMeta(id string) ([]byte, error) {
 	}
 	mu := s.sessionLock(id)
 	mu.RLock()
+	if s.IsPurged(id) {
+		mu.RUnlock()
+		return nil, os.ErrNotExist
+	}
 	data, err := os.ReadFile(s.metaPath(id))
 	if err == nil {
 		mu.RUnlock()
@@ -259,6 +336,9 @@ func (s *Store) WriteMeta(id string, rawMetaJSON []byte) error {
 	if !ValidSessionID(id) {
 		return ErrInvalidSessionID
 	}
+	if s.IsPurged(id) {
+		return ErrSessionPurged
+	}
 	trimmed := bytes.TrimSpace(rawMetaJSON)
 	if len(trimmed) == 0 || !json.Valid(trimmed) {
 		return errors.New("sessionstore: invalid meta json")
@@ -267,6 +347,9 @@ func (s *Store) WriteMeta(id string, rawMetaJSON []byte) error {
 	mu.Lock()
 	defer mu.Unlock()
 
+	if s.IsPurged(id) {
+		return ErrSessionPurged
+	}
 	if err := s.ensureV2Locked(context.Background(), id); err != nil {
 		return err
 	}
@@ -296,11 +379,17 @@ func (s *Store) ReadTurnIndex(id string) ([]TurnEntry, error) {
 		return nil, ErrInvalidSessionID
 	}
 	if err := s.ensureV2ForRead(context.Background(), id); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return nil, nil
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -319,11 +408,17 @@ func (s *Store) LastTurnEntry(id string) (TurnEntry, int, bool, error) {
 		return TurnEntry{}, 0, false, ErrInvalidSessionID
 	}
 	if err := s.ensureV2ForRead(context.Background(), id); err != nil {
+		if os.IsNotExist(err) {
+			return TurnEntry{}, 0, false, nil
+		}
 		return TurnEntry{}, 0, false, err
 	}
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return TurnEntry{}, 0, false, nil
+	}
 
 	_, entries, _, err := s.loadStateReadOnlyLocked(id)
 	if err != nil {
@@ -349,6 +444,9 @@ func (s *Store) ReadManifest(id string) (Manifest, error) {
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return Manifest{}, os.ErrNotExist
+	}
 
 	m, entries, _, err := s.loadStateLocked(id)
 	if err != nil {
@@ -684,6 +782,9 @@ func (s *Store) AppendTurnsAndMeta(id string, writes []TurnWrite, rawMetaJSON []
 	if !ValidSessionID(id) {
 		return nil, 0, 0, ErrInvalidSessionID
 	}
+	if s.IsPurged(id) {
+		return nil, 0, 0, ErrSessionPurged
+	}
 	trimmedMeta := bytes.TrimSpace(rawMetaJSON)
 	if len(rawMetaJSON) > 0 && (len(trimmedMeta) == 0 || !json.Valid(trimmedMeta)) {
 		return nil, 0, 0, errors.New("sessionstore: invalid meta json")
@@ -742,6 +843,9 @@ func (s *Store) AppendTurnsAndMeta(id string, writes []TurnWrite, rawMetaJSON []
 	mu.Lock()
 	defer mu.Unlock()
 
+	if s.IsPurged(id) {
+		return nil, 0, 0, ErrSessionPurged
+	}
 	if err := s.ensureV2Locked(context.Background(), id); err != nil {
 		return nil, 0, 0, err
 	}
@@ -1100,6 +1204,9 @@ func (s *Store) SessionStats(id string) (SessionStorageStats, error) {
 	mu := s.sessionLock(id)
 	mu.RLock()
 	defer mu.RUnlock()
+	if s.IsPurged(id) {
+		return SessionStorageStats{}, os.ErrNotExist
+	}
 
 	m, entries, _, err := s.loadStateLocked(id)
 	if err != nil {

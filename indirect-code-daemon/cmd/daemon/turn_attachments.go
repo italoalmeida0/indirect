@@ -423,6 +423,7 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 	}
 	st := a.store
 	var persistErr error
+	var start int
 	var editedMsgs []provider.Message
 	var editedBals []filetrack.TurnChanges
 	if firstDirty <= 0 {
@@ -435,7 +436,7 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 		lines, _ := splitRecord(a.rec)
 		persistErr = st.writeSessionFile(a.rec.ID, lines, recordMeta(a.rec))
 	} else {
-		start := len(a.rec.Messages)
+		start = len(a.rec.Messages)
 		for i, mm := range a.rec.Messages {
 			if mm.TurnIndex >= firstDirty {
 				start = i
@@ -463,7 +464,7 @@ func (a *sessionActor) onEditApply(m editApplyMsg) editApplyResult {
 		}
 		if firstDirty > 0 {
 			_ = a.search.TruncateSessionFromTurn(a.id, firstDirty)
-			indexTurnSliceIntoSearch(a.search, a.rec, firstDirty, a.rec.HotBaseMsgIdx+localIdx, editedMsgs)
+			indexTurnSliceIntoSearch(a.search, a.rec, firstDirty, a.rec.HotBaseMsgIdx+start, editedMsgs)
 		} else {
 			_ = a.search.TruncateSessionFromTurn(a.id, 0)
 			if st != nil {

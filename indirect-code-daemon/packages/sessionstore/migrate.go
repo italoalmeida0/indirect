@@ -71,11 +71,17 @@ func (s *Store) MigrateLegacyFile(ctx context.Context, jsonlPath string, policy 
 	if !ValidSessionID(id) {
 		return ErrInvalidSessionID
 	}
+	if s.IsPurged(id) {
+		return ErrSessionPurged
+	}
 
 	mu := s.sessionLock(id)
 	mu.Lock()
 	defer mu.Unlock()
 
+	if s.IsPurged(id) {
+		return ErrSessionPurged
+	}
 	return s.migrateLegacyLocked(ctx, id, cleanPath, policy)
 }
 
@@ -100,6 +106,9 @@ func messageEarliestUnix(msgs []provider.Message, fallback int64) int64 {
 }
 
 func (s *Store) migrateLegacyLocked(ctx context.Context, id, jsonlPath string, policy AgePolicy) error {
+	if s.IsPurged(id) {
+		return ErrSessionPurged
+	}
 	defer s.invalidateSessionCache(id)
 	policy = normalizeAgePolicy(policy)
 	keepWarmTurns := policy.HotKeepTurns
@@ -215,6 +224,11 @@ func (s *Store) migrateLegacyLocked(ctx context.Context, id, jsonlPath string, p
 	var lastErr *pendingCorrupt
 
 	for lr.Scan() {
+		if s.IsPurged(id) {
+			cleanupPartial()
+			_ = os.RemoveAll(sessDir)
+			return ErrSessionPurged
+		}
 		if err := ctx.Err(); err != nil {
 			cleanupPartial()
 			return err
@@ -462,6 +476,11 @@ func (s *Store) migrateLegacyLocked(ctx context.Context, id, jsonlPath string, p
 		window = window[n:]
 	}
 
+	if s.IsPurged(id) {
+		cleanupPartial()
+		_ = os.RemoveAll(sessDir)
+		return ErrSessionPurged
+	}
 	// Write meta.json, turn.idx, and manifest.json atomically.
 	if err := durable.Write(s.metaPath(id), lastValidMeta); err != nil {
 		cleanupPartial()
