@@ -2,7 +2,7 @@ import { createEffect, createMemo, For, Show, onCleanup } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { press } from "../../ds/motion/press";
 import { createShimmerStyle } from "../../ds/motion/shimmer";
-import { createDisclosure, DisclosureBody } from "./Disclosure";
+import { createDisclosure, DisclosureBody, DisclosureTrigger } from "./Disclosure";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { followTail } from "../utils/scrollMemory";
 import { Icon as Iconify } from "../../components/icon";
@@ -61,10 +61,12 @@ function renderThinkingRow(
   live: () => boolean,
   streaming: () => boolean,
   running: () => boolean,
+  suppressHeader: () => boolean = () => false,
 ) {
   const key = `${entry.msg.id}:think:${entry.nth}`;
   const { open, toggle } = createDisclosure(() => `${running()}:${live()}`, openByDefault, ctx.isPinned);
   const shimmerStyle = createShimmerStyle(live);
+  const effectiveOpen = () => (suppressHeader() ? true : open());
   const label = () =>
     live()
       ? `Thinking ${formatDurationSecs(ctx.thinkingElapsed())}`
@@ -74,28 +76,24 @@ function renderThinkingRow(
           ? "Hide thinking"
           : "Thought";
   return (
-    <div style={hidden() ? { display: "none" } : undefined} data-thinking-row={key}>
-      <button
-        type="button"
-        onPointerDown={(e) => press(e.currentTarget)}
-        onClick={toggle}
-        aria-expanded={open()}
-        aria-label={label()}
-        class="group/tool inline-flex max-w-full items-center gap-1.5 py-0.5 px-1.5 -ml-1.5 rounded-md cursor-pointer hover:bg-surface-muted/55 text-[12.5px] text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-accent transition-colors"
-      >
-        <Iconify
-          icon="lucide:chevron-right"
-          size={12}
-          class={`shrink-0 text-fg-muted/80 transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
-        />
-        <span class={`truncate tabular-nums ${live() ? "ui-shimmer font-medium" : "text-fg-muted group-hover/tool:text-fg-secondary"}`} style={shimmerStyle()}>{label()}</span>
-      </button>
-      <DisclosureBody open={open()} keepMounted={running()}>
-        <div
-          ref={(el) => onCleanup(followTail(el, () => open() && streaming()))}
-          class="rc-markdown w-full text-xs leading-relaxed break-words overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] max-h-64 pl-4 py-1 text-fg-muted"
+    <div class="w-full flex flex-col" style={hidden() ? { display: "none" } : undefined} data-thinking-row={key}>
+      <Show when={!suppressHeader()}>
+        <DisclosureTrigger
+          open={open()}
+          aria-expanded={open()}
+          aria-label={label()}
+          onClick={toggle}
+          class="text-xs"
         >
-          <StreamingMarkdown basic streaming={streaming()} active={open() && !hidden()}>
+          <span class={`truncate min-w-0 tabular-nums ${live() ? "ui-shimmer font-medium text-fg-secondary" : "text-fg-muted group-hover/disc:text-fg-secondary"}`} style={shimmerStyle()}>{label()}</span>
+        </DisclosureTrigger>
+      </Show>
+      <DisclosureBody open={effectiveOpen()} keepMounted={running()}>
+        <div
+          ref={(el) => onCleanup(followTail(el, () => effectiveOpen() && streaming()))}
+          class={`rc-markdown w-full text-xs leading-relaxed break-words overflow-x-auto overflow-y-auto max-h-64 ${suppressHeader() ? "pl-0" : "pl-5"} py-1 text-fg-muted`}
+        >
+          <StreamingMarkdown basic streaming={streaming()} active={effectiveOpen() && !hidden()}>
             {entry.block.reasoning || "(thinking…)"}
           </StreamingMarkdown>
         </div>
@@ -117,7 +115,6 @@ function renderTurnAggregate(
   // tail; the <For> in TranscriptView slices by seal); the running turn
   // is always the newest block, which always renders.
   const running = createMemo(() => isBlockRunning(ctx.renderBlocks(), series, ctx.sessionStatus()));
-  const shimmerStyle = createShimmerStyle(running);
   const summary = createMemo(() => specialTitle(series.units, {
     thoughts: series.entries.filter((e) => e.kind === "thinking").length,
   }));
@@ -143,34 +140,50 @@ function renderTurnAggregate(
   const thinkingHidden = () => !ctx.verboseChat();
   const visibleRuns = createMemo(() => groupToolRuns(series.entries));
   const onlyThinking = createMemo(() => series.entries.every((e) => e.kind === "thinking") && series.units.length === 0);
+  const singleThinking = createMemo(() => onlyThinking() && series.entries.length === 1);
+  const singleThinkingEntry = () => {
+    const first = series.entries[0];
+    return singleThinking() && first?.kind === "thinking" ? first : undefined;
+  };
+  const singleThinkingLive = () => {
+    const e = singleThinkingEntry();
+    return Boolean(e && tailIsThinking() && running() && e.isNewest && e.msg.id === lastTurnId() && ctx.thinkingStart() !== null);
+  };
+  const headerShimmerActive = createMemo(() => (singleThinking() ? singleThinkingLive() : running()));
+  const shimmerStyle = createShimmerStyle(headerShimmerActive);
+  const headerLabel = () => {
+    const e = singleThinkingEntry();
+    if (e) {
+      if (singleThinkingLive()) return `Thinking ${formatDurationSecs(ctx.thinkingElapsed())}`;
+      return e.msg.thinkingDuration !== undefined
+        ? `Thought ${formatDurationSecs(e.msg.thinkingDuration)}`
+        : "Thought";
+    }
+    return summary();
+  };
   return (
-    <div class="w-full border-t border-transparent my-0.5">
-      <button
-        type="button"
-        onPointerDown={(e) => press(e.currentTarget)}
-        onClick={toggle}
+    <div class="w-full flex flex-col my-0.5" style={onlyThinking() && thinkingHidden() ? { display: "none" } : undefined}>
+      <DisclosureTrigger
+        open={open()}
         aria-expanded={open()}
-        data-step-rail-header
-        class="group/agg inline-flex max-w-full items-center gap-1.5 py-0.5 text-[13px] text-fg-muted hover:text-fg transition-colors cursor-pointer text-left"
+        onClick={toggle}
+        data-step-rail-header=""
+        chevronSize={13}
+        class="text-xs text-fg-muted hover:text-fg"
       >
-        <Iconify
-          icon="lucide:chevron-right"
-          size={13}
-          class={`shrink-0 text-fg-muted/80 group-hover/agg:text-fg transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
-        />
-        <span class={`truncate min-w-0 tabular-nums ${running() ? "ui-shimmer font-medium text-fg-secondary" : ""}`} style={shimmerStyle()}>
-          {summary()}
+        <span class={`truncate min-w-0 tabular-nums ${headerShimmerActive() ? "ui-shimmer font-medium text-fg-secondary" : ""}`} style={shimmerStyle()}>
+          {headerLabel()}
         </span>
         <Show when={ctx.specialProgress(series.units)}>
           {(t) => (
-            <span class="font-mono text-[11px] text-fg-muted/80 truncate max-w-[16rem] shrink-0">
+            <span class="font-mono text-2xs text-fg-muted truncate max-w-[40%] sm:max-w-[14rem]">
               {t()}
             </span>
           )}
         </Show>
-      </button>
-      <DisclosureBody open={open()} keepMounted={running()}>
-        <div class="ml-[6px] mt-1 mb-1.5 pl-3.5 border-l border-border/70 space-y-0.5">
+      </DisclosureTrigger>
+      <DisclosureBody open={open() && !(onlyThinking() && thinkingHidden())} keepMounted={running()}>
+        <div class="ml-[6.5px] mt-1 mb-1.5 pl-[12.5px] border-l border-border space-y-0.5">
           <For each={series.entries}>
             {(entry, ei) => {
               const tail = () => ei() === lastEntryIdx();
@@ -183,7 +196,7 @@ function renderTurnAggregate(
                 const live = () => tail() && tailIsThinking() && running() && entry.isNewest &&
                   entry.msg.id === lastTurnId() && ctx.thinkingStart() !== null;
                 const content = () => (entry.block.reasoning || "").trim() !== "";
-                return renderThinkingRow(ctx, entry, () => (live() && content()) || (open() && onlyThinking()), thinkingHidden, live, live, running);
+                return renderThinkingRow(ctx, entry, () => (live() && content()) || (open() && onlyThinking()), thinkingHidden, live, live, running, singleThinking);
               }
               return renderImageBlock(ctx, entry.block);
             }}
@@ -249,7 +262,7 @@ function renderImageBlock(ctx: TranscriptRenderCtx, block: ContentBlock) {
     <Show
       when={src()}
       fallback={
-        <div class="flex items-center gap-1.5 text-[11px] text-fg-muted border border-border/60 rounded-lg px-2 py-1">
+        <div class="flex items-center gap-1.5 text-2xs text-fg-muted border border-border rounded-control px-2.5 py-1.5">
           <Iconify icon="lucide:image" size={12} />
           <span>{block.imageSha256 && ctx.send ? "Loading image…" : `[attached ${block.text || "image"}]`}</span>
         </div>
@@ -257,6 +270,7 @@ function renderImageBlock(ctx: TranscriptRenderCtx, block: ContentBlock) {
     >
       <button
         type="button"
+        onPointerDown={(e) => press(e.currentTarget)}
         onClick={() =>
           ctx.setPreviewFile({
             name: "attached image",
@@ -264,7 +278,7 @@ function renderImageBlock(ctx: TranscriptRenderCtx, block: ContentBlock) {
             dataUrl: src(),
           })
         }
-        class="block rounded-lg overflow-hidden border border-border/70 hover:border-border-strong transition-colors cursor-pointer"
+        class="block rounded-control overflow-hidden border border-border hover:border-border-strong transition-colors cursor-pointer"
         data-rc-tip="Open preview" aria-label="Open preview"
       >
         <img src={src()} class="max-h-64 max-w-full object-contain" />
@@ -305,22 +319,19 @@ function renderToolSegs(ctx: TranscriptRenderCtx, msgId: string, units: () => To
           // (and its rows) falls back to closed on its own.
           const { open, toggle } = createDisclosure(() => `${running()}:${active()}`, active, ctx.isPinned);
           return (
-            <div class="w-full" data-toolseg={segKey(seg)} style={{ "overflow-anchor": "none" }}>
-              <Show when={seg.units.length > 1}><button
-                type="button"
-                onClick={toggle}
-                aria-expanded={open()}
-                class="inline-flex max-w-full items-center gap-1.5 py-0.5 px-1.5 -ml-1.5 rounded-md hover:bg-surface-muted/55 text-[12.5px] text-fg-muted hover:text-fg transition-colors cursor-pointer"
-              >
-                <Iconify
-                  icon="lucide:chevron-right"
-                  size={12}
-                  class={`shrink-0 text-fg-muted/80 transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
-                />
-                <span class="truncate">{groupTitle(seg.cat, seg.units)}</span>
-              </button></Show>
+            <div class="w-full flex flex-col" data-toolseg={segKey(seg)} style={{ "overflow-anchor": "none" }}>
+              <Show when={seg.units.length > 1}>
+                <DisclosureTrigger
+                  open={open()}
+                  aria-expanded={open()}
+                  onClick={toggle}
+                  class="text-xs text-fg-muted hover:text-fg"
+                >
+                  <span class="truncate min-w-0">{groupTitle(seg.cat, seg.units)}</span>
+                </DisclosureTrigger>
+              </Show>
               <DisclosureBody open={seg.units.length === 1 || open()} keepMounted={running()}>
-                <div class={seg.units.length > 1 ? "ml-[5px] border-l border-border/60 pl-3 space-y-0.5 mt-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
+                <div class={seg.units.length > 1 ? "ml-[6.5px] border-l border-border-subtle pl-[12.5px] space-y-0.5 mt-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
                   <For each={seg.units}>
                     {(u) => {
                       // Keep fallback keys relative to the complete tool run.
@@ -342,7 +353,7 @@ function renderToolUnit(ctx: TranscriptRenderCtx, msgId: string, u: ToolUnit, ui
   const m = useToolUnitModel(ctx, msgId, u, ui, running, active);
   const part = { ctx, msgId, u, m, get running() { return running(); }, get active() { return active(); } };
   return (
-    <div class="w-full">
+    <div class="w-full flex flex-col">
       <ToolUnitHeader {...part} />
       <DisclosureBody open={m.openBody()} keepMounted={running()}>
         <ToolBody {...part} />

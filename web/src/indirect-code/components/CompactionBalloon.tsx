@@ -114,7 +114,7 @@ export function resolveCompactionViewModel(
       ? activeBlocks
           .map((b, idx) => {
             const body = blockBodies[idx] || "";
-            const title = `### ${b.id}${b.topic ? ` — ${b.topic}` : ""} (msgs #${b.startIdx}–#${b.endIdx})`;
+            const title = `### ${b.id}${b.topic ? ` · ${b.topic}` : ""} (msgs #${b.startIdx}–#${b.endIdx})`;
             return body ? `${title}\n\n${body}` : title;
           })
           .join("\n\n") || cleanedSummary
@@ -216,7 +216,7 @@ function FileChipGroup(props: {
             {(file) => (
               <span
                 data-rc-tip={file}
-                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-secondary font-mono text-[10px]"
+                class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs bg-surface border border-border text-fg-secondary font-mono text-2xs"
               >
                 <FileIcon path={file} size={11} />
                 <span>{baseNameOf(file)}</span>
@@ -226,7 +226,7 @@ function FileChipGroup(props: {
           <Show when={hiddenFiles().length > 0}>
             <span
               data-rc-tip={hiddenFiles().join(", ")}
-              class="inline-flex items-center px-1.5 py-0.5 rounded bg-surface-subtle border border-border/70 text-fg-muted font-mono text-[10px] tabular-nums"
+              class="inline-flex items-center px-1.5 py-0.5 rounded-xs bg-surface-subtle border border-border text-fg-muted font-mono text-2xs tabular-nums"
             >
               +{hiddenFiles().length} more
             </span>
@@ -261,20 +261,20 @@ function EraTimelineSection(props: {
     failedCmds().length > 0;
 
   return (
-    <div class="rounded-lg border border-border/75 bg-surface/75 overflow-hidden transition-colors">
+    <div class="rounded-inner border border-border bg-surface overflow-hidden transition-colors">
       <button
         type="button"
         aria-expanded={props.open}
         onPointerDown={(e) => press(e.currentTarget)}
         onClick={() => props.onToggle()}
-        class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-muted/50 transition-colors cursor-pointer min-w-0"
+        class="w-full flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 min-h-9 [@media(pointer:coarse)]:min-h-11 px-3 py-2 text-left hover:bg-surface-muted/60 transition-colors cursor-pointer min-w-0"
       >
         <Iconify
           icon="lucide:chevron-right"
           size={12}
           class={`shrink-0 text-fg-muted transition-transform duration-150 ${props.open ? "rotate-90" : ""}`}
         />
-        <span class="inline-flex items-center rounded px-1.5 py-px font-mono text-[10px] font-medium bg-surface-muted text-fg border border-border/80 shrink-0">
+        <span class="inline-flex items-center rounded-xs px-1.5 py-px font-mono text-2xs font-medium bg-surface-muted text-fg border border-border shrink-0">
           {props.block.id}
         </span>
         <Show when={isMergedTier()}>
@@ -284,28 +284,28 @@ function EraTimelineSection(props: {
                 ? `Tier ${props.block.tier} rollup merged from ${sourceIds().join(", ")}`
                 : `Tier ${props.block.tier} merged rollup`
             }
-            class="inline-flex items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-medium bg-accent-subtle text-accent border border-accent/25 shrink-0"
+            class="inline-flex items-center gap-1 rounded-pill px-1.5 py-px text-2xs font-medium bg-accent-subtle text-accent border border-border-subtle shrink-0"
           >
             Tier {props.block.tier} · Merged
           </span>
         </Show>
-        <span class="font-mono text-[10px] text-fg-muted tabular-nums shrink-0">
-          msgs #{props.block.startIdx}–#{props.block.endIdx}
-        </span>
         <Show when={props.block.topic?.trim()}>
           <span
             data-rc-tip={props.block.topic}
-            class="text-[11px] font-medium text-fg truncate min-w-0"
+            class="text-xs font-medium text-fg truncate min-w-[6rem] flex-1"
           >
             {props.block.topic}
           </span>
         </Show>
 
         <span class="ml-auto flex items-center gap-1.5 shrink-0">
+          <span class="font-mono text-2xs text-fg-muted tabular-nums shrink-0">
+            msgs #{props.block.startIdx}–#{props.block.endIdx}
+          </span>
           <Show when={failedCmds().length > 0}>
             <span
               data-rc-tip={`${failedCmds().length} failed ${failedCmds().length === 1 ? "command" : "commands"} in era ${props.block.id}`}
-              class="inline-flex items-center gap-1 rounded-full px-1.5 py-px font-mono text-[10px] bg-warning-subtle text-warning border border-warning/25 tabular-nums"
+              class="inline-flex items-center gap-1 rounded-pill px-1.5 py-px font-mono text-2xs bg-warning-subtle text-warning border border-border-subtle tabular-nums"
             >
               <Iconify icon="lucide:alert-circle" size={10} class="shrink-0" />
               <span>{failedCmds().length}</span>
@@ -314,13 +314,13 @@ function EraTimelineSection(props: {
           <Show when={hasTokenPair()}>
             <span
               data-rc-tip={`Compressed ${props.block.rawTokens!.toLocaleString()} raw tokens into ${props.block.blockTokens!.toLocaleString()} summary tokens`}
-              class="inline-flex items-center gap-1 rounded-full bg-surface-subtle border border-border/75 px-1.5 py-px font-mono text-[10px] text-fg-muted tabular-nums"
+              class="inline-flex items-center gap-1 rounded-pill bg-surface-subtle border border-border px-1.5 py-px font-mono text-2xs text-fg-muted tabular-nums"
             >
               {compactTokens(props.block.rawTokens!)} → {compactTokens(props.block.blockTokens!)}
             </span>
           </Show>
           <Show when={hasSingleBlockTok()}>
-            <span class="inline-flex items-center rounded-full bg-surface-subtle border border-border/75 px-1.5 py-px font-mono text-[10px] text-fg-muted tabular-nums">
+            <span class="inline-flex items-center rounded-pill bg-surface-subtle border border-border px-1.5 py-px font-mono text-2xs text-fg-muted tabular-nums">
               {compactTokens(props.block.blockTokens!)}
             </span>
           </Show>
@@ -328,16 +328,16 @@ function EraTimelineSection(props: {
       </button>
 
       <DisclosureBody open={props.open}>
-        <div class="border-t border-border/55 bg-surface-subtle/35 px-3 py-2.5 space-y-2">
+        <div class="border-t border-border-subtle bg-surface-subtle px-3 py-2.5 space-y-2">
           <Show when={hasMetaRows()}>
-            <div class="space-y-1.5 text-[11px]">
+            <div class="space-y-1.5 text-2xs">
               <Show when={sourceIds().length > 0}>
                 <div class="flex items-start gap-2">
                   <span class="text-fg-muted shrink-0 pt-0.5">Merged</span>
                   <div class="flex flex-wrap gap-1">
                     <For each={sourceIds()}>
                       {(srcId) => (
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-muted font-mono text-[10px]">
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded-xs bg-surface border border-border text-fg-muted font-mono text-2xs">
                           {srcId}
                         </span>
                       )}
@@ -355,7 +355,7 @@ function EraTimelineSection(props: {
                   <div class="flex flex-wrap gap-1">
                     <For each={activatedTools()}>
                       {(tool) => (
-                        <span class="inline-flex items-center px-1.5 py-0.5 rounded bg-surface border border-border/70 text-fg-secondary font-mono text-[10px]">
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded-xs bg-surface border border-border text-fg-secondary font-mono text-2xs">
                           {tool}
                         </span>
                       )}
@@ -372,7 +372,7 @@ function EraTimelineSection(props: {
                       {(cmd) => (
                         <span
                           data-rc-tip={formatFailedCommandTip(cmd)}
-                          class="inline-flex items-center gap-1.5 max-w-full px-1.5 py-0.5 rounded bg-warning-subtle border border-warning/25 text-fg font-mono text-[10px]"
+                          class="inline-flex items-center gap-1.5 max-w-full px-1.5 py-0.5 rounded-xs bg-warning-subtle border border-border-subtle text-fg font-mono text-2xs"
                         >
                           <Iconify icon="lucide:alert-circle" size={11} class="text-warning shrink-0" />
                           <span class="truncate max-w-[200px]">{cmd.command}</span>
@@ -401,7 +401,7 @@ function EraTimelineSection(props: {
           >
             <div
               class={`rc-markdown text-xs max-h-80 overflow-y-auto ${
-                hasMetaRows() ? "border-t border-border/50 pt-2" : ""
+                hasMetaRows() ? "border-t border-border-subtle pt-2" : ""
               }`}
             >
               <StreamingMarkdown class="text-xs">{eraSummary()}</StreamingMarkdown>
@@ -509,46 +509,45 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
   }
 
   return (
-    <div class="w-full my-3 select-text">
+    <div class="w-full select-text">
       <Show when={props.hasOlderAbove}>
         <div
           data-compaction-boundary-caption
-          class="mb-1.5 flex items-center justify-center gap-1.5 px-2 text-center text-[10.5px] text-fg-muted border-border/60"
+          class="mb-1.5 flex items-center justify-center gap-1.5 px-2 text-center text-2xs text-fg-muted"
         >
           <span>
-            Context boundary · earlier turns above are folded into eras and searchable via{" "}
-            <span class="font-mono text-fg-secondary">session_history</span>
+            Context boundary · earlier turns above are folded into eras and searchable via conversation history
           </span>
         </div>
       </Show>
       {/* Minimal horizontal timeline divider */}
       <div class="flex items-center gap-3">
-        <div class="h-px flex-1 bg-border/65" />
+        <div class="h-px flex-1 bg-border" />
         <button
           type="button"
           aria-expanded={expanded()}
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => setExpanded(!expanded())}
-          class="inline-flex flex-wrap justify-center items-center gap-1.5 max-w-full rounded-full border border-border/80 bg-surface-subtle px-2.5 py-1 text-[11px] text-fg-secondary hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+          class="inline-flex flex-wrap justify-center items-center gap-1.5 max-w-full min-h-7 [@media(pointer:coarse)]:min-h-11 rounded-pill border border-border bg-surface-subtle px-3 py-1.5 text-2xs text-fg-secondary hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
         >
           <Iconify icon="lucide:archive" size={11} class="text-fg-muted shrink-0" />
           <span class="font-medium">Context Compacted</span>
           <Show when={activeBlocks().length > 1}>
-            <span class="rounded-full bg-accent-subtle px-1.5 py-px font-mono text-[10px] text-accent tabular-nums">
+            <span class="rounded-pill bg-accent-subtle px-1.5 py-px font-mono text-2xs text-accent tabular-nums">
               {activeBlocks().length} eras
             </span>
           </Show>
           <Show when={count() > 0}>
-            <span class="font-mono text-[10px] text-fg-muted">#{count()}</span>
+            <span class="font-mono text-2xs text-fg-muted">#{count()}</span>
           </Show>
           <Show when={isSplitTurn()}>
-            <span class="text-[10px] text-fg-muted">· Split Turn</span>
+            <span class="text-2xs text-fg-muted">· Split Turn</span>
           </Show>
           <Show when={visualDigestCount() > 0}>
             <span
               data-compaction-visual-digests
               data-rc-tip={visualDigestTip()}
-              class="inline-flex items-center gap-1 rounded-full border border-border/75 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-secondary tabular-nums"
+              class="inline-flex items-center gap-1 rounded-pill border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-secondary tabular-nums"
             >
               <Iconify icon="lucide:eye" size={11} class="text-accent shrink-0" />
               <span>
@@ -557,12 +556,12 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
             </span>
           </Show>
           <Show when={hasUsage()}>
-            <span class="hidden sm:inline font-mono text-[10px] text-fg-muted tabular-nums">
+            <span class="hidden sm:inline font-mono text-2xs text-fg-muted tabular-nums">
               · {compactTokens(inTok())}→{compactTokens(outTok())}
             </span>
           </Show>
           <Show when={!hasUsage() && hasBlockTokRatio()}>
-            <span class="hidden sm:inline font-mono text-[10px] text-fg-muted tabular-nums">
+            <span class="hidden sm:inline font-mono text-2xs text-fg-muted tabular-nums">
               · {compactTokens(totalRawTok())}→{compactTokens(totalBlockTok())}
             </span>
           </Show>
@@ -575,15 +574,18 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
             class={`text-fg-muted transition-transform duration-150 ${expanded() ? "rotate-90" : ""}`}
           />
         </button>
-        <div class="h-px flex-1 bg-border/65" />
+        <div class="h-px flex-1 bg-border" />
       </div>
 
       {/* Expanded Summary Sheet */}
       <DisclosureBody open={expanded()}>
-        <div class="mt-2.5 rounded-xl border border-border/75 bg-surface-subtle/60 p-3.5 space-y-3">
-          <div class="flex items-center justify-between gap-2 text-[11px] text-fg-muted flex-wrap">
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono tabular-nums">
-              <Show when={isEraMode()}>
+        <div class="mt-2.5 rounded-panel border border-border bg-surface-subtle p-2 sm:p-3 space-y-2.5">
+          <div class="flex items-center justify-between gap-2 text-2xs text-fg-muted flex-wrap">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono tabular-nums min-w-0">
+              <Show
+                when={isEraMode()}
+                fallback={<span class="font-sans font-medium text-fg-secondary">Compacted context summary</span>}
+              >
                 <span class="font-sans font-medium text-fg-secondary">
                   {activeBlocks().length} {activeBlocks().length === 1 ? "era" : "eras"}
                 </span>
@@ -639,7 +641,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={toggleAllEras}
                   data-rc-tip={allErasExpanded() ? "Collapse all eras" : "Expand all eras"}
-                  class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                  class="inline-flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-9 rounded-inner px-2 py-1 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                 >
                   <Iconify
                     icon={allErasExpanded() ? "lucide:chevrons-down-up" : "lucide:chevrons-up-down"}
@@ -653,7 +655,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                   type="button"
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={handleCopy}
-                  class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                  class="inline-flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-9 rounded-inner px-2 py-1 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   data-rc-tip={copied() ? "Copied" : "Copy summary"}
                   aria-label="Copy compaction summary"
                 >
@@ -665,7 +667,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
           </div>
 
           <Show when={hasHeaderFiles()}>
-            <div class="space-y-1.5 text-[11px] border-t border-border/55 pt-2.5">
+            <div class="space-y-1.5 text-2xs border-t border-border-subtle pt-2.5">
               <FileChipGroup
                 label="Modified"
                 files={headerModifiedFiles()}
@@ -688,13 +690,13 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                   <div class="text-xs text-fg-muted italic">No summary text available.</div>
                 }
               >
-                <div class="rc-markdown text-xs max-h-96 overflow-y-auto border-t border-border/55 pt-2.5">
+                <div class="rc-markdown text-xs max-h-96 overflow-y-auto border-t border-border-subtle pt-2.5">
                   <StreamingMarkdown class="text-xs">{cleanedSummary()}</StreamingMarkdown>
                 </div>
               </Show>
             }
           >
-            <div class="space-y-2 border-t border-border/55 pt-2.5">
+            <div class="space-y-2 border-t border-border-subtle pt-2.5">
               <For each={activeBlocks()}>
                 {(block, idx) => {
                   const isLatest = () => idx() === activeBlocks().length - 1;

@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
+import { press } from "../../../ds/motion/press";
 import { CodeBlock, DiffView, stripLinePrefixNotice } from "../CodeBlock";
 import { StreamingMarkdown } from "../StreamingMarkdown";
 import { diffStat } from "../../transcript";
@@ -256,56 +257,62 @@ function parseWidgetList(rawText: string, details: any): ParsedWidgetList | null
   };
 }
 
-function WidgetEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
+function WidgetEditCard(props: { sec: FileEditSection; scrollKey?: string; hideHeader?: boolean }) {
   const [open, setOpen] = createSignal(true);
   const stat = () => diffStat(props.sec.diff);
   const highlightName = () => (props.sec.file.includes(".") ? props.sec.file : `${props.sec.file || "widget"}.tsx`);
+  const effectiveOpen = () => (props.hideHeader ? true : open());
 
   return (
-    <div class="border-b border-border/60 last:border-b-0">
-      <div
-        onClick={() => setOpen(!open())}
-        class="group/file flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle/70 hover:bg-surface-muted/70 text-[12px] cursor-pointer transition-colors select-none"
-      >
-        <div class="flex items-center gap-2 min-w-0 flex-1">
-          <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent/85" />
-          <span class="font-mono font-medium text-fg truncate">{props.sec.file || "widget"}</span>
-          <span class="shrink-0 rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px font-mono text-[10px] text-fg-secondary">
-            tsx
-          </span>
-          <Show when={props.sec.status === "error"}>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-danger-subtle text-danger font-mono">
-              failed
+    <div data-edit-widget={props.sec.file || undefined} class="border-b border-border-subtle last:border-b-0">
+      <Show when={!props.hideHeader}>
+        <button
+          type="button"
+          aria-expanded={open()}
+          onPointerDown={(e) => press(e.currentTarget)}
+          onClick={() => setOpen(!open())}
+          class="group/file flex w-full min-h-8 [@media(pointer:coarse)]:min-h-11 items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted/60 text-xs text-left cursor-pointer transition-colors select-none"
+        >
+          <div class="flex items-center gap-2 min-w-0 flex-1">
+            <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent" />
+            <span class="font-mono font-medium text-fg truncate">{props.sec.file || "widget"}</span>
+            <span class="shrink-0 rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-secondary">
+              tsx
             </span>
-          </Show>
-          <Show when={stat().add > 0 || stat().del > 0}>
-            <span class="font-mono text-[10.5px] shrink-0 tabular-nums">
-              <Show when={stat().add > 0}>
-                <span class="text-success">+{stat().add}</span>
-              </Show>
-              <Show when={stat().add > 0 && stat().del > 0}>
-                <span class="text-fg-muted"> </span>
-              </Show>
-              <Show when={stat().del > 0}>
-                <span class="text-danger">-{stat().del}</span>
-              </Show>
-            </span>
-          </Show>
-        </div>
-        <Iconify
-          icon="lucide:chevron-down"
-          size={12}
-          class={`shrink-0 text-fg-muted transition-transform ${open() ? "rotate-180" : ""}`}
-        />
-      </div>
-      <Show when={open()}>
+            <Show when={props.sec.status === "error"}>
+              <span class="text-2xs px-1.5 py-0.5 rounded-xs bg-danger-subtle text-danger font-mono">
+                failed
+              </span>
+            </Show>
+            <Show when={stat().add > 0 || stat().del > 0}>
+              <span class="font-mono text-2xs shrink-0 tabular-nums">
+                <Show when={stat().add > 0}>
+                  <span class="text-success">+{stat().add}</span>
+                </Show>
+                <Show when={stat().add > 0 && stat().del > 0}>
+                  <span class="text-fg-muted"> </span>
+                </Show>
+                <Show when={stat().del > 0}>
+                  <span class="text-danger">-{stat().del}</span>
+                </Show>
+              </span>
+            </Show>
+          </div>
+          <Iconify
+            icon="lucide:chevron-right"
+            size={12}
+            class={`shrink-0 text-fg-muted transition-transform duration-150 ease-out ${open() ? "rotate-90" : ""}`}
+          />
+        </button>
+      </Show>
+      <Show when={effectiveOpen()}>
         <Show when={props.sec.error}>
-          <div class="px-3 py-2 text-[11.5px] text-danger font-mono bg-danger-subtle border-t border-danger/20">
+          <div class={`px-3 py-2 text-xs text-danger font-mono bg-danger-subtle ${props.hideHeader ? "" : "border-t border-border-subtle"}`}>
             {props.sec.error}
           </div>
         </Show>
         <Show when={props.sec.diff}>
-          <div class="border-t border-border/50">
+          <div class={props.hideHeader ? "" : "border-t border-border-subtle"}>
             <DiffView text={props.sec.diff} max={60} name={highlightName()} scrollKey={props.scrollKey} embedded />
           </div>
         </Show>
@@ -318,15 +325,15 @@ function WidgetLintFindings(props: { lint: ParsedWidgetLint; scrollKey: string }
   return (
     <>
       <Show when={props.lint.errors.length > 0}>
-        <ul class="border-b border-border/55 bg-danger-subtle/35 px-3 py-2 space-y-1.5">
+        <ul class="border-b border-border-subtle last:border-b-0 bg-danger-subtle px-3 py-2 space-y-1.5">
           <For each={props.lint.errors}>
             {(err) => (
-              <li class="flex items-start gap-2 text-[11.5px] leading-snug">
-                <span class="shrink-0 rounded border border-danger/35 bg-danger-subtle px-1.5 py-px font-mono text-[10px] text-danger">
+              <li class="flex items-start gap-2 text-xs leading-snug">
+                <span class="shrink-0 rounded-xs border border-border-subtle bg-surface px-1.5 py-px font-mono text-2xs text-danger">
                   {err.phase}
                 </span>
                 <Show when={err.line && err.line > 0}>
-                  <span class="shrink-0 rounded border border-border/70 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-secondary tabular-nums">
+                  <span class="shrink-0 rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-secondary tabular-nums">
                     L{err.line}
                   </span>
                 </Show>
@@ -337,7 +344,7 @@ function WidgetLintFindings(props: { lint: ParsedWidgetLint; scrollKey: string }
         </ul>
       </Show>
       <Show when={(props.lint.output || "").trim().length > 0}>
-        <div class="border-b border-border/55 bg-surface/40">
+        <div class="border-b border-border-subtle last:border-b-0 bg-surface">
           <CodeBlock
             embedded
             text={props.lint.output!}
@@ -349,10 +356,10 @@ function WidgetLintFindings(props: { lint: ParsedWidgetLint; scrollKey: string }
         </div>
       </Show>
       <Show when={props.lint.notes.length > 0}>
-        <ul class="border-b border-border/55 bg-surface/35 px-3 py-1.5 space-y-1">
+        <ul class="border-b border-border-subtle last:border-b-0 bg-surface-subtle px-3 py-1.5 space-y-1">
           <For each={props.lint.notes}>
             {(note) => (
-              <li class="flex items-start gap-1.5 text-[11px] leading-snug text-fg-secondary">
+              <li class="flex items-start gap-1.5 text-xs leading-snug text-fg-secondary">
                 <Iconify icon="lucide:info" size={12} class="mt-0.5 shrink-0 text-fg-muted" />
                 <span class="min-w-0 flex-1">{note}</span>
               </li>
@@ -470,27 +477,27 @@ export function ToolWidgetBodies(props: ToolPartProps) {
         <Show
           when={!(props.m.args().delete || details()?.deleted) || Boolean(props.u.result?.isError)}
           fallback={
-            <div class="flex items-center justify-between gap-2 px-3 py-2 text-[12px]">
+            <div class="flex items-center justify-between gap-2 px-3 py-2 text-xs">
               <div class="flex items-center gap-2 min-w-0">
                 <Iconify icon="lucide:trash-2" size={13} class="shrink-0 text-fg-muted" />
                 <span class="font-mono font-medium text-fg truncate">{widgetId()}</span>
                 <span class="text-fg-muted truncate">Removed from session widget store</span>
               </div>
-              <span class="shrink-0 rounded border border-border/70 bg-surface-muted px-1.5 py-px font-mono text-[10px] text-fg-secondary">
+              <span class="shrink-0 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
                 deleted
               </span>
             </div>
           }
         >
-          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-surface/50 px-3 py-1.5 text-[11.5px]">
+          <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
             <div class="flex items-center gap-1.5 min-w-0">
-              <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent/85" />
+              <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent" />
               <span class="font-mono font-medium text-fg truncate">{widgetId()}</span>
-              <span class="shrink-0 rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px font-mono text-[10px] text-fg-secondary">
+              <span class="shrink-0 rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-secondary">
                 tsx
               </span>
               <Show when={props.m.args().src_file}>
-                <span class="inline-flex items-center gap-1 truncate font-mono text-[10.5px] text-fg-muted">
+                <span class="inline-flex items-center gap-1 truncate font-mono text-2xs text-fg-muted">
                   <Iconify icon="lucide:arrow-left" size={10} class="shrink-0" />
                   {String(props.m.args().src_file)}
                 </span>
@@ -498,7 +505,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
             </div>
             <div class="flex items-center gap-2 shrink-0">
               <Show when={Number(details()?.total_lines || 0) > 0}>
-                <span class="font-mono text-[10.5px] text-fg-muted tabular-nums">
+                <span class="font-mono text-2xs text-fg-muted tabular-nums">
                   {Number(details()?.total_lines)} {Number(details()?.total_lines) === 1 ? "line" : "lines"}
                 </span>
               </Show>
@@ -507,7 +514,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                   <Show
                     when={!lint().skipped}
                     fallback={
-                      <span class="inline-flex items-center gap-1 rounded border border-border/70 bg-surface-muted px-1.5 py-px font-mono text-[10px] text-fg-muted">
+                      <span class="inline-flex items-center gap-1 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-muted">
                         lint skipped
                       </span>
                     }
@@ -515,13 +522,13 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                     <Show
                       when={lint().ok}
                       fallback={
-                        <span class="inline-flex items-center gap-1 rounded border border-danger/35 bg-danger-subtle px-1.5 py-px font-mono text-[10px] text-danger">
+                        <span class="inline-flex items-center gap-1 rounded-xs border border-border-subtle bg-danger-subtle px-1.5 py-px font-mono text-2xs text-danger">
                           <Iconify icon="lucide:shield-alert" size={11} />
                           lint failed{lint().errors.length > 0 ? ` · ${lint().errors.length}` : ""}
                         </span>
                       }
                     >
-                      <span class="inline-flex items-center gap-1 rounded border border-success/35 bg-success-subtle px-1.5 py-px font-mono text-[10px] text-success">
+                      <span class="inline-flex items-center gap-1 rounded-xs border border-border-subtle bg-success-subtle px-1.5 py-px font-mono text-2xs text-success">
                         <Iconify icon="lucide:shield-check" size={11} />
                         lint ok{lint().durationMs !== undefined ? ` · ${lint().durationMs}ms` : ""}
                       </span>
@@ -535,7 +542,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
             {(lint) => <WidgetLintFindings lint={lint()} scrollKey={props.m.key()} />}
           </Show>
           <Show when={props.u.result?.isError && !parsedLint()}>
-            <div class="border-b border-danger/20 bg-danger-subtle/35 px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+            <div class="border-b border-border-subtle last:border-b-0 bg-danger-subtle px-3 py-2 text-xs font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
               {(props.m.output() || "").trim() ||
                 props.m.mergedEnv()?.error ||
                 props.m.mergedEnv()?.info ||
@@ -546,7 +553,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
             when={widgetSetSource().trim().length > 0}
             fallback={
               <Show when={!props.u.result?.isError}>
-                <div class="px-3 py-2 text-[11.5px] text-fg-muted">
+                <div class="px-3 py-2 text-xs text-fg-muted">
                   {props.m.args().src_file
                     ? `Imported widget source from ${String(props.m.args().src_file)}`
                     : !props.u.result
@@ -573,16 +580,16 @@ export function ToolWidgetBodies(props: ToolPartProps) {
 
       {/* widget_read */}
       <Show when={toolName() === "widget_read"}>
-        <div class="flex items-center justify-between gap-2 border-b border-border/55 bg-surface/45 px-3 py-1.5 text-[11.5px]">
+        <div class="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
           <div class="flex items-center gap-1.5 min-w-0">
             <Iconify icon="lucide:code-2" size={13} class="shrink-0 text-fg-muted" />
             <span class="font-mono font-medium text-fg truncate">{widgetId()}</span>
-            <span class="shrink-0 rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px font-mono text-[10px] text-fg-secondary">
+            <span class="shrink-0 rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-secondary">
               tsx
             </span>
           </div>
           <Show when={Number(details()?.total_lines || 0) > 0}>
-            <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
+            <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">
               {Number(details()?.total_lines)} {Number(details()?.total_lines) === 1 ? "line" : "lines"}
             </span>
           </Show>
@@ -590,7 +597,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
         <Show
           when={!props.u.result?.isError}
           fallback={
-            <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+            <div class="px-3 py-2 text-xs font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
               {(props.m.output() || "").trim() ||
                 props.m.mergedEnv()?.error ||
                 props.m.mergedEnv()?.info ||
@@ -601,7 +608,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           <Show
             when={widgetReadText().trim().length > 0}
             fallback={
-              <div class="px-3 py-2 text-[11px] text-fg-muted">
+              <div class="px-3 py-2 text-xs text-fg-muted">
                 {!props.u.result
                   ? props.active
                     ? "Reading widget…"
@@ -631,7 +638,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
             <Show
               when={!props.u.result?.isError}
               fallback={
-                <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                <div class="px-3 py-2 text-xs font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
                   {(props.m.output() || "").trim() ||
                     props.m.mergedEnv()?.error ||
                     props.m.mergedEnv()?.info ||
@@ -639,7 +646,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                 </div>
               }
             >
-              <div class="px-3 py-2 text-[11px] text-fg-muted">
+              <div class="px-3 py-2 text-xs text-fg-muted">
                 {!props.u.result
                   ? props.active
                     ? "Applying widget edit…"
@@ -650,7 +657,13 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           }
         >
           <For each={widgetEditSections()}>
-            {(sec) => <WidgetEditCard sec={sec} scrollKey={`${props.m.key()}:${sec.file}`} />}
+            {(sec) => (
+              <WidgetEditCard
+                sec={sec}
+                scrollKey={`${props.m.key()}:${sec.file}`}
+                hideHeader={widgetEditSections().length === 1 && Boolean(sec.diff || sec.error)}
+              />
+            )}
           </For>
         </Show>
       </Show>
@@ -663,7 +676,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
             <Show
               when={!props.u.result?.isError}
               fallback={
-                <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                <div class="px-3 py-2 text-xs font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
                   {(props.m.output() || "").trim() ||
                     props.m.mergedEnv()?.error ||
                     props.m.mergedEnv()?.info ||
@@ -674,7 +687,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
               <Show
                 when={String(details()?.display || props.m.output() || props.m.prog() || "").trim().length > 0}
                 fallback={
-                  <div class="px-3 py-2 text-[11px] text-fg-muted">
+                  <div class="px-3 py-2 text-xs text-fg-muted">
                     {!props.u.result
                       ? props.active
                         ? "Linting widget…"
@@ -698,7 +711,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
         >
           {(lint) => (
             <>
-              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-surface/50 px-3 py-2 text-[12px]">
+              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
                 <div class="flex items-center gap-2 min-w-0">
                   <Show
                     when={!lint().skipped}
@@ -717,26 +730,26 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
                   <Show when={!lint().ok && lint().errors.length > 0}>
-                    <span class="rounded border border-danger/35 bg-danger-subtle px-1.5 py-px font-mono text-[10px] text-danger tabular-nums">
+                    <span class="rounded-xs border border-border-subtle bg-danger-subtle px-1.5 py-px font-mono text-2xs text-danger tabular-nums">
                       {lint().errors.length} {lint().errors.length === 1 ? "error" : "errors"}
                     </span>
                   </Show>
                   <Show when={lint().durationMs !== undefined}>
-                    <span class="font-mono text-[10.5px] text-fg-muted tabular-nums">{lint().durationMs}ms</span>
+                    <span class="font-mono text-2xs text-fg-muted tabular-nums">{lint().durationMs}ms</span>
                   </Show>
                 </div>
               </div>
               <WidgetLintFindings lint={lint()} scrollKey={props.m.key()} />
               <Show when={lint().errors.length === 0 && !lint().output && lint().notes.length === 0}>
-                <div class="px-3 py-2 text-[11.5px] text-fg-secondary">
+                <div class="px-3 py-2 text-xs text-fg-secondary">
                   {lint().skipped
-                    ? "Gateway linter unavailable — widget stored without smoke-render validation."
+                    ? "Gateway linter unavailable · widget stored without smoke-render validation."
                     : "Compiled TSX, passed sandbox import audit, and smoke-rendered cleanly."}
                 </div>
               </Show>
               <Show when={typeof props.m.args().test === "string" && String(props.m.args().test).trim().length > 0}>
-                <div class="border-t border-border/55">
-                  <div class="px-3 py-1 bg-surface/40 border-b border-border/45 font-mono text-[10.5px] text-fg-muted">
+                <div class="border-t border-border-subtle">
+                  <div class="px-3 py-1.5 bg-surface-subtle border-b border-border-subtle font-mono text-2xs text-fg-muted">
                     test module
                   </div>
                   <CodeBlock
@@ -758,7 +771,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
         <Show
           when={!props.u.result?.isError}
           fallback={
-            <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+            <div class="px-3 py-2 text-xs font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
               {(props.m.output() || "").trim() ||
                 props.m.mergedEnv()?.error ||
                 props.m.mergedEnv()?.info ||
@@ -772,7 +785,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
               <Show
                 when={(props.m.output() || props.m.prog() || "").trim().length > 0}
                 fallback={
-                  <div class="px-3 py-2 text-[11px] text-fg-muted">
+                  <div class="px-3 py-2 text-xs text-fg-muted">
                     {!props.u.result
                       ? props.active
                         ? "Listing widgets…"
@@ -795,25 +808,25 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           >
             {(wl) => (
               <>
-                <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
+                <div class="px-3 py-1.5 border-b border-border-subtle bg-surface-subtle font-mono text-xs text-fg-muted tabular-nums">
                   widgets · {wl().total} {wl().total === 1 ? "entry" : "entries"}
                 </div>
                 <Show
                   when={wl().entries.length > 0}
-                  fallback={<div class="px-3 py-2 text-[11.5px] text-fg-muted">No widgets stored in this session.</div>}
+                  fallback={<div class="px-3 py-2 text-xs text-fg-muted">No widgets stored in this session.</div>}
                 >
                   <ul class="px-1.5 py-1">
                     <For each={wl().entries}>
                       {(item) => (
-                        <li class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 hover:bg-surface-muted/65 text-[12px] transition-colors">
+                        <li class="flex items-center justify-between gap-2 rounded-inner px-1.5 py-1 hover:bg-surface-muted/60 text-xs transition-colors">
                           <div class="flex items-center gap-1.5 min-w-0 flex-1">
-                            <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent/85" />
+                            <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent" />
                             <span class="font-mono font-medium text-fg shrink-0">{item.id}</span>
                             <Show when={item.placeholder}>
-                              <span class="truncate text-[11.5px] text-fg-muted">· {item.placeholder}</span>
+                              <span class="truncate text-xs text-fg-muted">· {item.placeholder}</span>
                             </Show>
                           </div>
-                          <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
+                          <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">
                             {[
                               item.size,
                               item.lines !== undefined ? `${item.lines} ${item.lines === 1 ? "line" : "lines"}` : undefined,
@@ -843,30 +856,30 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           const pct = () => (total() > 0 ? Math.round((done() * 100) / total()) : 0);
           return (
             <>
-              <div class="flex items-center justify-between gap-3 border-b border-border/55 bg-surface/45 px-3 py-1.5 text-[11.5px]">
+              <div class="flex items-center justify-between gap-3 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
                 <div class="flex items-center gap-2 min-w-0">
                   <Iconify icon="lucide:list-checks" size={13} class="shrink-0 text-fg-muted" />
                   <span class="font-medium text-fg-secondary">Task checklist</span>
                   <Show when={total() > 0}>
-                    <span class="font-mono text-[10.5px] text-fg-muted tabular-nums">
+                    <span class="font-mono text-2xs text-fg-muted tabular-nums">
                       {done()}/{total()} completed
                     </span>
                   </Show>
                 </div>
                 <Show when={total() > 0}>
                   <div class="flex items-center gap-2 shrink-0">
-                    <div class="h-1.5 w-16 overflow-hidden rounded-full bg-surface-muted">
+                    <div class="h-1.5 w-16 overflow-hidden rounded-pill bg-surface-muted">
                       <div
-                        class="h-full rounded-full bg-success transition-all"
+                        class="h-full rounded-pill bg-success transition-all"
                         style={{ width: `${pct()}%` }}
                       />
                     </div>
-                    <span class="font-mono text-[10.5px] text-fg-muted tabular-nums">{pct()}%</span>
+                    <span class="font-mono text-2xs text-fg-muted tabular-nums">{pct()}%</span>
                   </div>
                 </Show>
               </div>
               <Show when={props.u.result?.isError}>
-                <div class="border-b border-danger/20 bg-danger-subtle px-3 py-2 text-[11.5px] font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                <div class="border-b border-border-subtle last:border-b-0 bg-danger-subtle px-3 py-2 text-xs font-mono text-danger whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
                   {(props.m.output() || "").trim() ||
                     props.m.mergedEnv()?.error ||
                     props.m.mergedEnv()?.info ||
@@ -877,7 +890,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                 when={todoItems().length > 0}
                 fallback={
                   <Show when={!props.u.result?.isError}>
-                    <div class="px-3 py-2 text-[11.5px] text-fg-muted">
+                    <div class="px-3 py-2 text-xs text-fg-muted">
                       {!props.u.result
                         ? props.active
                           ? "Updating task checklist…"
@@ -887,10 +900,10 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                   </Show>
                 }
               >
-                <ul class="px-2 py-1.5 space-y-0.5">
+                <ul class="px-1.5 py-1.5 space-y-0.5">
                   <For each={todoItems()}>
                     {(item) => (
-                      <li class="flex items-start gap-2 rounded-md px-1.5 py-1 text-[12px] leading-snug">
+                      <li class="flex items-start gap-2 rounded-inner px-1.5 py-1 text-xs leading-snug">
                         <Iconify
                           icon={
                             item.status === "completed"
@@ -905,7 +918,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                               ? "text-success"
                               : item.status === "in_progress"
                                 ? "text-accent"
-                                : "text-fg-muted/70"
+                                : "text-fg-muted"
                           }`}
                         />
                         <span
@@ -920,7 +933,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                           {item.text}
                         </span>
                         <Show when={item.status === "in_progress"}>
-                          <span class="shrink-0 rounded border border-accent/30 bg-accent-subtle px-1.5 py-px font-mono text-[10px] text-accent">
+                          <span class="shrink-0 rounded-xs border border-border-subtle bg-accent-subtle px-1.5 py-px font-mono text-2xs text-accent">
                             active
                           </span>
                         </Show>
@@ -944,13 +957,13 @@ export function ToolWidgetBodies(props: ToolPartProps) {
           const isAckPlaceholder = () => /^<skill\b[^>]*>$/i.test(rawBody());
           return (
             <>
-              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border/55 bg-surface/45 px-3 py-1.5 text-[11.5px]">
+              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
                 <div class="flex items-center gap-1.5 min-w-0">
                   <Iconify icon="lucide:sparkles" size={13} class="shrink-0 text-accent" />
                   <span class="font-mono font-medium text-fg truncate">{skillName()}</span>
                 </div>
                 <Show when={!props.u.result?.isError}>
-                  <span class="shrink-0 rounded border border-border/70 bg-surface-muted px-1.5 py-px font-mono text-[10px] text-fg-secondary">
+                  <span class="shrink-0 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
                     {once() ? "this turn only" : "session active"}
                   </span>
                 </Show>
@@ -958,7 +971,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
               <Show
                 when={!props.u.result?.isError}
                 fallback={
-                  <div class="px-3 py-2 text-[11.5px] font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  <div class="px-3 py-2 text-xs font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
                     {rawBody() ||
                       props.m.mergedEnv()?.error ||
                       props.m.mergedEnv()?.info ||
@@ -969,7 +982,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
                 <Show
                   when={rawBody() && !isAckPlaceholder()}
                   fallback={
-                    <div class="px-3 py-2 text-[11.5px] text-fg-secondary">
+                    <div class="px-3 py-2 text-xs text-fg-secondary">
                       {!props.u.result
                         ? props.active
                           ? "Loading skill instructions…"

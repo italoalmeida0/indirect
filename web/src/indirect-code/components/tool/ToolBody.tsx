@@ -40,7 +40,7 @@ export function ToolBody(props: ToolPartProps) {
         onCleanup(followTail(el, () => props.m.open() && props.running));
       }}
       onScroll={(e) => recordToolScroll(props.m.key(), e.currentTarget)}
-      class="mt-1 mb-2 rounded-lg border border-border/70 bg-surface-subtle max-h-96 overflow-auto overscroll-contain [scrollbar-gutter:stable]"
+      class="mt-1 mb-2 rounded-control border border-border bg-surface-subtle max-h-96 overflow-auto overscroll-contain"
     >
       {/* Code/diff/terminal tools use min-w-full w-fit so separator borders stretch
           across horizontal scroll; wrapped prose/context tools stay bounded to w-full

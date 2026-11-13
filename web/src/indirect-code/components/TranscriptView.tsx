@@ -1,6 +1,7 @@
 import { MentionMenu } from "./MentionMenu";
-import { batch, createMemo, For, Show } from "solid-js";
+import { batch, createMemo, For, Show, type JSX } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
+import { press } from "../../ds/motion/press";
 import { CompactionBalloon } from "./CompactionBalloon";
 import { FileIcon } from "../presentation";
 import { elapsedLabel, messageText } from "../utils/format";
@@ -16,6 +17,31 @@ import { useComposerCtx, useHost, useSession, useTranscriptCtx, useModal, useUI,
 import { Btn } from "../../ui";
 import { TurnChangesBalloon } from "./TurnChangesBalloon";
 import { blockTurnDuration, mapBalloonsToBlocks } from "../transcript";
+
+const INLINE_USER_CODE_RE = /(?<!`)`([^`\n]+)`(?!`)/g;
+
+/** Style inline single-backtick code spans in user messages while keeping whitespace/plain text intact. */
+function renderUserText(text: string): JSX.Element {
+  if (!text.includes("`")) return text;
+  const parts: JSX.Element[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  INLINE_USER_CODE_RE.lastIndex = 0;
+  while ((match = INLINE_USER_CODE_RE.exec(text)) !== null) {
+    if (match.index > last) {
+      parts.push(text.slice(last, match.index));
+    }
+    parts.push(
+      <code class="rounded-xs bg-surface px-1.5 py-0.5 font-mono text-xs text-fg border border-border-subtle">
+        {match[1]}
+      </code>,
+    );
+    last = match.index + match[0].length;
+  }
+  if (parts.length === 0) return text;
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
+}
 
 export function TranscriptView() {
   const t = useTranscriptCtx();
@@ -107,9 +133,9 @@ export function TranscriptView() {
   onKeyDown={(e) => { if (["ArrowUp", "PageUp", "Home"].includes(e.key)) t.transcriptScroll.detach(); }}
   tabindex="0"
   aria-label="Conversation"
-  class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 md:px-8 select-text [overflow-anchor:none] [scrollbar-gutter:stable]"
+  class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 sm:px-6 lg:px-8 select-text [overflow-anchor:none]"
 >
-<div ref={t.setChatContentRef} class="pt-6 pb-10 space-y-5"
+<div ref={t.setChatContentRef} class="pt-6 pb-8 space-y-5"
 >
   {/* Conversation Messages.
       buildRenderBlocks fuses consecutive assistant messages that
@@ -122,9 +148,12 @@ export function TranscriptView() {
     <div class="flex justify-center">
       <button
         type="button"
+        onPointerDown={(e) => {
+          if (!t.loadingOlder()) press(e.currentTarget);
+        }}
         onClick={() => t.loadOlder()}
         disabled={t.loadingOlder()}
-        class="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs text-fg-secondary border border-border/80 bg-surface-subtle hover:text-fg hover:border-border-strong transition-colors cursor-pointer disabled:opacity-60"
+        class="flex items-center gap-1.5 min-h-7 [@media(pointer:coarse)]:min-h-11 px-3.5 py-1.5 rounded-pill text-xs text-fg-secondary border border-border bg-surface-subtle hover:text-fg hover:border-border-strong transition-colors cursor-pointer disabled:opacity-60"
       >
         <Iconify icon="lucide:chevron-up" size={13} class="text-fg-muted" />
         {/* Whole sealed blocks only: while older turns exist on the
@@ -195,7 +224,7 @@ export function TranscriptView() {
             data-raw-idx={rawIdx()}
             data-highlighted={isHighlighted() ? "true" : undefined}
             class={`group/msg flex flex-col w-full ${ui.convWidthClass()} mx-auto transition-colors duration-300 ${
-              isHighlighted() ? "rounded-2xl ring-1 ring-accent/40 bg-accent-subtle/20 p-1.5 -m-1.5" : ""
+              isHighlighted() ? "rounded-surface ring-1 ring-accent bg-accent-subtle p-1 -m-1" : ""
             } ${
               msg.role === "user" && !isEditing() ? "items-end" : "items-start"
             }`}
@@ -207,9 +236,9 @@ export function TranscriptView() {
                 <div class={`flex flex-wrap gap-1.5 mb-1.5 ${isEditing() ? "justify-start" : "justify-end"}`}>
                   <For each={msg.attachments || []}>
                     {(file) => (
-                      <button type="button" data-rc-tip="Open preview" onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="text-[11px] bg-surface-subtle border border-border hover:border-border-strong px-2.5 py-1 rounded-lg text-fg-secondary hover:text-fg flex items-center gap-1.5 transition-colors cursor-pointer">
+                      <button type="button" data-rc-tip="Open preview" onPointerDown={(e) => press(e.currentTarget)} onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="min-h-7 [@media(pointer:coarse)]:min-h-11 text-2xs bg-surface-subtle border border-border hover:border-border-strong px-2.5 py-1 rounded-control text-fg-secondary hover:text-fg flex items-center gap-1.5 transition-colors cursor-pointer">
                         <FileIcon path={file.name} size={13} />
-                        {file.name}
+                        <span class="truncate max-w-[14rem]">{file.name}</span>
                       </button>
                     )}
                   </For>
@@ -220,24 +249,24 @@ export function TranscriptView() {
                 when={isEditing()}
                 fallback={
                   <Show when={textOf().trim()}>
-                    <div class="rc-user-bubble bg-surface-muted/85 text-fg px-4 py-2.5 rounded-2xl">
-                      <p class="whitespace-pre-line text-sm leading-relaxed">{textOf()}</p>
+                    <div class="rc-user-bubble bg-surface-muted border border-border text-fg px-4 py-2.5 rounded-panel">
+                      <p class="whitespace-pre-line break-words text-sm leading-relaxed">{renderUserText(textOf())}</p>
                     </div>
                   </Show>
                 }
               >
-                <div class="w-full p-3.5 rounded-2xl border border-border-strong bg-surface">
+                <div class="w-full p-2.5 rounded-panel border border-border-strong bg-surface">
                   <MentionMenu mentions={t.editMentions} inputId="rc-editing-msg" />
-                  <div class="flex flex-wrap gap-2 mb-2">
-                    <For each={t.editingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-lg border border-border bg-surface-subtle px-2 py-0.5 text-xs text-fg-secondary">
+                  <div class="flex flex-wrap gap-1.5 mb-2">
+                    <For each={t.editingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-inner border border-border bg-surface-subtle pl-2 pr-1 py-0.5 text-xs text-fg-secondary">
                       <FileIcon path={file.name} size={13} />
-                      <button type="button" data-rc-tip="Open preview" onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="cursor-pointer hover:underline hover:text-fg">{file.name}</button>
-                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.setEditingAttachments((prev) => prev.filter((a) => a.id !== file.id))} class="cursor-pointer px-0.5 text-fg-muted hover:text-danger">×</button>
+                      <button type="button" data-rc-tip="Open preview" onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="cursor-pointer hover:underline hover:text-fg truncate max-w-[12rem]">{file.name}</button>
+                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.setEditingAttachments((prev) => prev.filter((a) => a.id !== file.id))} class="inline-flex items-center justify-center min-w-6 min-h-6 [@media(pointer:coarse)]:min-w-9 [@media(pointer:coarse)]:min-h-9 rounded-inner cursor-pointer text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors disabled:opacity-40">×</button>
                     </span>}</For>
-                    <For each={t.editAttachments.pendingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-lg border border-border bg-surface-subtle px-2 py-0.5 text-xs text-fg-secondary">
+                    <For each={t.editAttachments.pendingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-inner border border-border bg-surface-subtle pl-2 pr-1 py-0.5 text-xs text-fg-secondary">
                       <FileIcon path={file.name} size={13} />
-                      <button type="button" data-rc-tip="Open preview" onClick={() => m.previewPending(file)} class="cursor-pointer hover:underline hover:text-fg">{file.name}</button>
-                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.editAttachments.removePendingAttachment(file.key)} class="cursor-pointer px-0.5 text-fg-muted hover:text-danger">×</button>
+                      <button type="button" data-rc-tip="Open preview" onClick={() => m.previewPending(file)} class="cursor-pointer hover:underline hover:text-fg truncate max-w-[12rem]">{file.name}</button>
+                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.editAttachments.removePendingAttachment(file.key)} class="inline-flex items-center justify-center min-w-6 min-h-6 [@media(pointer:coarse)]:min-w-9 [@media(pointer:coarse)]:min-h-9 rounded-inner cursor-pointer text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors disabled:opacity-40">×</button>
                     </span>}</For>
                     <Show when={t.editAttachments.preparingAttachments()}><span role="status" class="text-xs text-fg-muted">Preparing files...</span></Show>
                   </div>
@@ -282,7 +311,7 @@ export function TranscriptView() {
                         t.cancelEditMsg();
                       }
                     }}
-                    class="w-full bg-transparent text-fg text-sm outline-none resize-y min-h-[96px] leading-relaxed"
+                    class="w-full bg-transparent text-fg text-sm max-sm:text-base outline-none resize-y min-h-[96px] leading-relaxed"
                     rows={4}
                     ref={(el) => {
                       const active = document.activeElement;
@@ -291,10 +320,10 @@ export function TranscriptView() {
                       }
                     }}
                   />
-                  <div class="flex justify-end items-center gap-2 mt-2 pt-2 border-t border-border/60">
-                    <label data-rc-tip="Attach files" class="mr-auto p-1.5 rounded-lg cursor-pointer text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors" aria-label="Attach files">
+                  <div class="flex justify-end items-center gap-2 mt-2 pt-2 border-t border-border-subtle">
+                    <label data-rc-tip="Attach files" class="mr-auto relative inline-flex items-center justify-center min-w-8 min-h-8 [@media(pointer:coarse)]:min-w-11 [@media(pointer:coarse)]:min-h-11 rounded-control cursor-pointer text-fg-muted hover:text-fg hover:bg-surface-muted has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring transition-colors" aria-label="Attach files">
                       <Iconify icon="lucide:paperclip" size={16} />
-                      <input type="file" multiple disabled={t.savingEdit()} class="hidden" onChange={(e) => {void t.editAttachments.handleFiles(e.currentTarget.files || []); e.currentTarget.value="";}} />
+                      <input type="file" multiple disabled={t.savingEdit()} class="sr-only" onChange={(e) => {void t.editAttachments.handleFiles(e.currentTarget.files || []); e.currentTarget.value="";}} />
                     </label>
                     <Btn
                       variant="outline"
@@ -329,7 +358,7 @@ export function TranscriptView() {
 
           {/* ===== ASSISTANT ===== */}
           <Show when={msg.role !== "user"}>
-            <div class="w-full flex flex-col items-start overflow-hidden">
+            <div class="w-full min-w-0 flex flex-col items-start">
               {/* Loading dots while the first tokens arrive */}
               <Show
                 when={
@@ -367,7 +396,7 @@ export function TranscriptView() {
         {/* Persistent per-turn file-changes balloon (never deleted) */}
         <For each={balloonsForBlock(block).filter((b) => (b.files?.length || 0) > 0)}>
           {(b) => (
-            <div class={`w-full ${ui.convWidthClass()} mx-auto ${isLast() ? "pb-28" : ""}`}>
+            <div class={`w-full ${ui.convWidthClass()} mx-auto`}>
               <TurnChangesBalloon
                 balloon={b}
                 expanded={tc.isExpanded(`turn-${b.turnIndex}`)}
@@ -384,7 +413,7 @@ export function TranscriptView() {
   </For>
 
   <Show when={s.activeSessionId() && t.pendingQuestion()?.id} keyed>{(id) =>
-    <div class={`${ui.convWidthClass()} mx-auto`}>
+    <div class={`w-full ${ui.convWidthClass()} mx-auto`}>
       <QuestionPanel
         request={{ ...t.pendingQuestion()!, id }}
         connected={h.connectionState() === "connected" && h.activeHost()?.status === "online"}

@@ -148,7 +148,7 @@ function ArrivalSpillBanner(props: { spill: ArrivalSpillInfo }) {
   return (
     <div
       data-arrival-spill
-      class="bg-accent-subtle/40 border-b border-border/60 px-3 py-1.5 text-[11.5px] flex items-center justify-between gap-2 flex-wrap"
+      class="bg-accent-subtle border-b border-border-subtle px-3 py-1.5 text-xs flex items-center justify-between gap-2 flex-wrap"
     >
       <div class="flex items-center gap-1.5 min-w-0">
         <Iconify icon="lucide:hard-drive-download" size={13} class="shrink-0 text-accent" />
@@ -160,7 +160,7 @@ function ArrivalSpillBanner(props: { spill: ArrivalSpillInfo }) {
         </span>
       </div>
       <Show when={sizeBadge()}>
-        <span class="ml-auto shrink-0 rounded border border-border/70 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-muted tabular-nums">
+        <span class="ml-auto shrink-0 rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-muted tabular-nums">
           {sizeBadge()}
         </span>
       </Show>
@@ -188,13 +188,13 @@ export function ToolSearchBodies(props: ToolPartProps) {
             const searchOut = () => props.m.terminal().output || props.m.output() || props.m.prog() || "";
             return (
               <>
-                <div class="px-3 py-1.5 border-b border-border/55 bg-surface/45 text-[11px] text-fg-muted font-mono flex flex-wrap items-center gap-1.5">
+                <div class="px-3 py-1.5 border-b border-border-subtle bg-surface-subtle text-xs text-fg-muted font-mono flex flex-wrap items-center gap-1.5">
                   <span class="text-fg">/{String(props.m.args().pattern || "")}/</span>
-                  <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">regex</span>
+                  <span class="rounded-xs border border-border bg-surface px-1.5 py-px text-2xs text-fg-secondary">regex</span>
                   {props.m.args().path && String(props.m.args().path) !== "." ? <span>in {String(props.m.args().path)}</span> : null}
-                  {props.m.args().only_matching ? <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">only-matching</span> : null}
-                  {props.m.args().count ? <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">count</span> : null}
-                  {props.m.args().files_only ? <span class="rounded border border-border/70 bg-surface-muted/80 px-1.5 py-px text-[10px] text-fg-secondary">files-only</span> : null}
+                  {props.m.args().only_matching ? <span class="rounded-xs border border-border bg-surface px-1.5 py-px text-2xs text-fg-secondary">only-matching</span> : null}
+                  {props.m.args().count ? <span class="rounded-xs border border-border bg-surface px-1.5 py-px text-2xs text-fg-secondary">count</span> : null}
+                  {props.m.args().files_only ? <span class="rounded-xs border border-border bg-surface px-1.5 py-px text-2xs text-fg-secondary">files-only</span> : null}
                 </div>
                 <Show
                   when={!props.u.result?.isError}
@@ -207,7 +207,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   <Show
                     when={searchOut().trim().length > 0}
                     fallback={
-                      <div class="px-3 py-2 text-[11px] text-fg-muted">
+                      <div class="px-3 py-2 text-xs text-fg-muted">
                         {!props.u.result
                           ? props.active
                             ? "Searching…"
@@ -238,7 +238,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 <Show
                   when={inspectOut().trim().length > 0}
                   fallback={
-                    <div class="px-3 py-2 text-[11px] text-fg-muted">
+                    <div class="px-3 py-2 text-xs text-fg-muted">
                       {!props.u.result
                         ? props.active
                           ? "Listing…"
@@ -255,18 +255,18 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   >
                     {(t) => (
                       <>
-                        <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted">
+                        <div class="px-3 py-1.5 border-b border-border-subtle bg-surface-subtle font-mono text-xs text-fg-muted tabular-nums">
                           {t().scope && t().scope !== "./" ? t().scope : "workspace"} · {t().count} {t().count === 1 ? "entry" : "entries"}
                           {t().capped ? ` (capped at ${t().capped})` : ""}
                         </div>
                         <Show
                           when={t().entries.length > 0}
-                          fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">Empty directory.</div>}
+                          fallback={<div class="px-3 py-2 text-xs text-fg-muted">Empty directory.</div>}
                         >
                           <ul class="px-1.5 py-1">
                             <For each={t().entries}>
                               {(e) => (
-                                <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-surface-muted/65 text-[12px] transition-colors">
+                                <li class="flex items-center gap-1.5 rounded-inner px-1.5 py-[3px] hover:bg-surface-muted/60 text-xs transition-colors">
                                   <span style={{ "padding-left": `${e.depth * 14}px` }} class="flex min-w-0 flex-1 items-center gap-1.5">
                                     <Show
                                       when={e.isDir}
@@ -284,7 +284,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                                     <span class="h-1 w-1 shrink-0 rounded-full bg-fg-muted" />
                                   </Show>
                                   <Show when={e.size}>
-                                    <span class="shrink-0 font-mono text-[10.5px] text-fg-muted tabular-nums">
+                                    <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">
                                       {e.size}
                                       {e.lines !== undefined ? ` · ${e.lines} lines` : ""}
                                       <Show when={e.mtime}>
@@ -320,7 +320,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 <Show
                   when={globOut().trim().length > 0}
                   fallback={
-                    <div class="px-3 py-2 text-[11px] text-fg-muted">
+                    <div class="px-3 py-2 text-xs text-fg-muted">
                       {!props.u.result
                         ? props.active
                           ? "Finding files…"
@@ -338,15 +338,15 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     {(g) => (
                       <Show
                         when={!g().none}
-                        fallback={<div class="px-3 py-2 text-[11px] text-fg-muted">No files matched the pattern.</div>}
+                        fallback={<div class="px-3 py-2 text-xs text-fg-muted">No files matched the pattern.</div>}
                       >
-                        <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
+                        <div class="px-3 py-1.5 border-b border-border-subtle bg-surface-subtle font-mono text-xs text-fg-muted tabular-nums">
                           {g().files.length} {g().files.length === 1 ? "file" : "files"}
                         </div>
                         <ul ref={(el) => onCleanup(followTail(el, () => props.m.open() && props.running))} class="px-1.5 py-1">
                           <For each={g().files}>
                             {(f) => (
-                              <li class="flex items-center gap-1.5 rounded-md px-1.5 py-[3px] hover:bg-surface-muted/65 text-[12px] transition-colors">
+                              <li class="flex items-center gap-1.5 rounded-inner px-1.5 py-[3px] hover:bg-surface-muted/60 text-xs transition-colors">
                                 <Show when={f.endsWith("/")} fallback={<FileIcon path={f} size={13} />}>
                                   <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
                                 </Show>
@@ -356,7 +356,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                           </For>
                         </ul>
                         <Show when={g().truncated}>
-                          <p class="px-3 pb-2 text-[10px] text-fg-muted">Truncated: showing first {g().files.length} matches — narrow the pattern</p>
+                          <p class="px-3 pb-2 text-2xs text-fg-muted">Truncated: showing first {g().files.length} matches · narrow the pattern</p>
                         </Show>
                       </Show>
                     )}
@@ -374,9 +374,9 @@ export function ToolSearchBodies(props: ToolPartProps) {
             return (
               <>
                 <Show when={queryStr().length > 0}>
-                  <div class="px-3 pt-2 pb-1.5 text-[11px] text-fg-muted">
+                  <div class="px-3 pt-2 pb-1.5 text-xs text-fg-muted">
                     <span class="font-mono text-fg">“{queryStr()}”</span>
-                    <Show when={props.m.webDetails()?.cached}><span class="ml-1.5 rounded border border-border/70 bg-surface-muted px-1.5 py-px text-[10px] text-fg-secondary">cached</span></Show>
+                    <Show when={props.m.webDetails()?.cached}><span class="ml-1.5 rounded-xs border border-border bg-surface-muted px-1.5 py-px text-2xs text-fg-secondary">cached</span></Show>
                   </div>
                 </Show>
                 <Show
@@ -393,7 +393,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                       <Show
                         when={webOut().trim().length > 0}
                         fallback={
-                          <div class="px-3 py-2 text-[11px] text-fg-muted">
+                          <div class="px-3 py-2 text-xs text-fg-muted">
                             {!props.u.result
                               ? props.active
                                 ? "Searching the web…"
@@ -408,19 +408,19 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   >
                     <ol class="px-3 pb-2 space-y-1.5">
                       <For each={webResults().slice(0, 10)}>{(r: any, i: () => number) =>
-                        <li class="group rounded-lg border border-border/80 bg-surface px-2.5 py-1.5 transition-colors hover:border-border-strong">
+                        <li class="group rounded-inner border border-border bg-surface px-2.5 py-1.5 transition-colors hover:border-border-strong">
                           <a href={String(r.url || "")} target="_blank" rel="noreferrer"
-                             class="flex items-baseline gap-1.5 text-[12px] leading-snug">
-                            <span class="shrink-0 font-mono text-[10px] text-fg-muted">{i() + 1}.</span>
+                             class="flex items-baseline gap-1.5 text-xs leading-snug">
+                            <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">{i() + 1}.</span>
                             <span class="font-medium text-fg group-hover:text-accent group-hover:underline line-clamp-1">{String(r.title || r.url || "")}</span>
                           </a>
-                          <div class="mt-0.5 truncate font-mono text-[10px] text-fg-muted">{String(r.url || "")}</div>
-                          <Show when={r.snippet}><p class="mt-0.5 text-[11px] leading-snug text-fg-secondary line-clamp-2">{String(r.snippet)}</p></Show>
+                          <div class="mt-0.5 truncate font-mono text-2xs text-fg-muted">{String(r.url || "")}</div>
+                          <Show when={r.snippet}><p class="mt-0.5 text-xs leading-snug text-fg-secondary line-clamp-2">{String(r.snippet)}</p></Show>
                         </li>
                       }</For>
                     </ol>
                     <Show when={webResults().length > 10}>
-                      <p class="px-3 pb-2 text-[10px] text-fg-muted">+{webResults().length - 10} more matches</p>
+                      <p class="px-3 pb-2 text-2xs text-fg-muted">+{webResults().length - 10} more matches</p>
                     </Show>
                   </Show>
                 </Show>
@@ -448,7 +448,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
               <Show
                 when={Boolean(props.u.result) || rawFetchText().length > 0 || props.m.spill().spilled}
                 fallback={
-                  <div class="px-3 py-2 text-[11px] text-fg-muted">
+                  <div class="px-3 py-2 text-xs text-fg-muted">
                     {props.active
                       ? `Fetching ${String(props.m.args().url || "URL")}…`
                       : `Fetch did not complete${props.m.args().url ? ` (${String(props.m.args().url)})` : "."}`}
@@ -460,14 +460,14 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 </Show>
                 <div class="px-3 pt-2">
                   <a href={targetUrl()} target="_blank" rel="noreferrer"
-                     class="flex items-center gap-2 rounded-lg border border-border/80 bg-surface px-2.5 py-2 transition-colors hover:border-border-strong">
-                    <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-accent/25 bg-accent-subtle font-mono text-[11px] font-medium text-accent">
+                     class="flex items-center gap-2 rounded-inner border border-border bg-surface px-2.5 py-2 transition-colors hover:border-border-strong">
+                    <span class="inline-flex shrink-0 items-center justify-center rounded-xs border border-border-subtle bg-accent-subtle px-1.5 py-0.5 font-mono text-2xs font-medium text-accent">
                       {badgeChar()}
                     </span>
                     <span class="min-w-0">
-                      <span class="block truncate text-[12px] font-medium text-fg">{titleLabel()}</span>
+                      <span class="block truncate text-xs font-medium text-fg">{titleLabel()}</span>
                       <Show when={hostLabel()}>
-                        <span class="block truncate font-mono text-[10px] text-fg-muted">{hostLabel()}</span>
+                        <span class="block truncate font-mono text-2xs text-fg-muted">{hostLabel()}</span>
                       </Show>
                     </span>
                     <Iconify icon="lucide:external-link" size={12} class="ml-auto shrink-0 text-fg-muted" />
@@ -476,7 +476,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 <Show
                   when={!props.u.result?.isError}
                   fallback={
-                    <div class="border-t border-border/60 mt-2 px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
+                    <div class="border-t border-border-subtle mt-2 px-3 py-2 text-xs text-danger bg-danger-subtle font-mono whitespace-pre-wrap [overflow-wrap:anywhere]">
                       {rawFetchText() || String(props.m.mergedEnv()?.error || "Failed to fetch URL.")}
                     </div>
                   }
@@ -487,22 +487,22 @@ export function ToolSearchBodies(props: ToolPartProps) {
                       <Show
                         when={rawFetchText().length > 0}
                         fallback={
-                          <div class="border-t border-border/60 mt-2 px-3 py-2 text-[11px] text-fg-muted">
+                          <div class="border-t border-border-subtle mt-2 px-3 py-2 text-xs text-fg-muted">
                             Empty response body.
                           </div>
                         }
                       >
-                        <div class="border-t border-border/60 mt-2">
+                        <div class="border-t border-border-subtle mt-2">
                           <CodeBlock embedded follow={() => props.m.open() && props.running} text={rawFetchText()} language="markdown" plain wrap={false} scrollKey={`${props.m.key()}:content`} />
                         </div>
                       </Show>
                     }
                   >
-                    <div class="px-3 py-2 text-[12.5px] leading-relaxed text-fg article-body rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words">
+                    <div class="px-3 py-2 text-xs leading-relaxed text-fg article-body rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words">
                       <StreamingMarkdown basic={true} noNestedScroll>{articleMd()}</StreamingMarkdown>
                     </div>
                     <Show when={fd()?.truncated && !props.m.spill().spilled}>
-                      <p class="px-3 pb-1 text-[10px] text-fg-muted">Truncated</p>
+                      <p class="px-3 pb-1 text-2xs text-fg-muted">Truncated</p>
                     </Show>
                   </Show>
                 </Show>
@@ -523,12 +523,12 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   when={bgCmd().length > 0}
                   fallback={
                     <Show when={props.m.args().job_id || bgStatus()}>
-                      <div class="flex items-center justify-between gap-2 border-b border-border/55 bg-surface/45 px-3 py-1.5 text-[11px]">
+                      <div class="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
                         <span class="font-mono text-fg-secondary truncate">
                           {String(props.m.args().job_id || "background task")}
                         </span>
                         <Show when={bgStatus()}>
-                          <span class="shrink-0 rounded border border-border/70 bg-surface-muted px-1.5 py-px font-mono text-[10px] text-fg-secondary">
+                          <span class="shrink-0 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
                             {bgStatus()}
                           </span>
                         </Show>
@@ -536,7 +536,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     </Show>
                   }
                 >
-                  <div class="border-b border-border/60 bg-surface/50">
+                  <div class="border-b border-border-subtle bg-surface">
                     <CodeBlock
                       embedded
                       text={bgCmd()}
@@ -557,7 +557,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   <Show
                     when={bgLog().trim().length > 0}
                     fallback={
-                      <div class="px-3 py-2 text-[11px] text-fg-muted">
+                      <div class="px-3 py-2 text-xs text-fg-muted">
                         {String(bgEnv()?.info || "") ||
                           (!props.u.result
                             ? props.active
@@ -592,7 +592,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     <Show
                       when={bgListRaw().trim().length > 0}
                       fallback={
-                        <div class="px-3 py-2 text-[11px] text-fg-muted">
+                        <div class="px-3 py-2 text-xs text-fg-muted">
                           {!props.u.result
                             ? props.active
                               ? "Checking background jobs…"
@@ -615,12 +615,12 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 >
                 {(list) => (
                   <>
-                    <div class="px-3 py-1.5 border-b border-border/50 bg-surface/40 font-mono text-[11px] text-fg-muted tabular-nums">
+                    <div class="px-3 py-1.5 border-b border-border-subtle bg-surface-subtle font-mono text-xs text-fg-muted tabular-nums">
                       background jobs · {list().jobs.length} {list().jobs.length === 1 ? "job" : "jobs"}
                     </div>
                     <Show
                       when={list().jobs.length > 0}
-                      fallback={<div class="px-3 py-2 text-[11.5px] text-fg-muted">No background jobs in this session.</div>}
+                      fallback={<div class="px-3 py-2 text-xs text-fg-muted">No background jobs in this session.</div>}
                     >
                       <ul class="px-1.5 py-1">
                         <For each={list().jobs}>
@@ -632,7 +632,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                             const isDone = () =>
                               job.status === "completed" || job.status === "done" || (job.status === "exited" && !isFailed());
                             return (
-                              <li class="flex items-center justify-between gap-2 rounded-md px-1.5 py-1 hover:bg-surface-muted/65 text-[12px] transition-colors">
+                              <li class="flex items-center justify-between gap-2 rounded-inner px-1.5 py-1 hover:bg-surface-muted/60 text-xs transition-colors">
                                 <div class="flex items-center gap-1.5 min-w-0 flex-1">
                                   <Iconify
                                     icon={
@@ -649,17 +649,17 @@ export function ToolSearchBodies(props: ToolPartProps) {
                                 </div>
                                 <div class="flex items-center gap-1.5 shrink-0">
                                   <Show when={typeof job.exitCode === "number" && !isRunning()}>
-                                    <span class="font-mono text-[10px] text-fg-muted tabular-nums">exit {job.exitCode}</span>
+                                    <span class="font-mono text-2xs text-fg-muted tabular-nums">exit {job.exitCode}</span>
                                   </Show>
                                   <span
-                                    class={`rounded border px-1.5 py-px font-mono text-[10px] ${
+                                    class={`rounded-xs border px-1.5 py-px font-mono text-2xs ${
                                       isRunning()
-                                        ? "border-accent/35 bg-accent-subtle text-accent"
+                                        ? "border-border-subtle bg-accent-subtle text-accent"
                                         : isFailed()
-                                          ? "border-danger/35 bg-danger-subtle text-danger"
+                                          ? "border-border-subtle bg-danger-subtle text-danger"
                                           : isDone()
-                                            ? "border-success/35 bg-success-subtle text-success"
-                                            : "border-border/70 bg-surface-muted text-fg-secondary"
+                                            ? "border-border-subtle bg-success-subtle text-success"
+                                            : "border-border bg-surface-muted text-fg-secondary"
                                     }`}
                                   >
                                     {job.status}
@@ -682,13 +682,13 @@ export function ToolSearchBodies(props: ToolPartProps) {
           <Show
             when={!props.m.running() && Boolean(props.u.result)}
             fallback={
-              <div class="flex items-center justify-between gap-2 px-3 py-2 text-[11.5px]">
+              <div class="flex items-center justify-between gap-2 px-3 py-2 text-xs">
                 <div class="flex items-center gap-2 min-w-0">
                   <Show
                     when={props.active}
                     fallback={<Iconify icon="lucide:square" size={13} class="shrink-0 text-fg-muted" />}
                   >
-                    <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-accent rounded-full animate-spin shrink-0" />
+                    <span class="w-3.5 h-3.5 ui-spinner text-accent shrink-0" />
                   </Show>
                   <span class="truncate text-fg-secondary">
                     {props.active
@@ -696,7 +696,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                       : `Background cancellation did not complete${props.m.args().job_id ? ` (${String(props.m.args().job_id)})` : ""}.`}
                   </span>
                 </div>
-                <span class="shrink-0 rounded border border-border/70 bg-surface-muted px-1.5 py-px font-mono text-[10px] text-fg-secondary">
+                <span class="shrink-0 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
                   {props.active ? "canceling" : "incomplete"}
                 </span>
               </div>
@@ -711,7 +711,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     props.m.mergedEnv()?.cancelled === "false",
                 );
               return (
-                <div class="flex items-center justify-between gap-2 px-3 py-2 text-[11.5px]">
+                <div class="flex items-center justify-between gap-2 px-3 py-2 text-xs">
                   <div class="flex items-center gap-2 min-w-0">
                     <Iconify
                       icon={isErr() ? "lucide:alert-circle" : alreadyDone() ? "lucide:info" : "lucide:square"}
@@ -727,10 +727,10 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     </span>
                   </div>
                   <span
-                    class={`shrink-0 rounded border px-1.5 py-px font-mono text-[10px] ${
+                    class={`shrink-0 rounded-xs border px-1.5 py-px font-mono text-2xs ${
                       isErr()
-                        ? "border-danger/35 bg-danger-subtle text-danger"
-                        : "border-border/70 bg-surface-muted text-fg-secondary"
+                        ? "border-border-subtle bg-danger-subtle text-danger"
+                        : "border-border bg-surface-muted text-fg-secondary"
                     }`}
                   >
                     {isErr() ? "failed" : alreadyDone() ? "finished" : "canceled"}
@@ -756,7 +756,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   <ArrivalSpillBanner spill={props.m.spill()} />
                 </Show>
                 <Show when={cmdHeader().length > 0}>
-                  <div class="border-b border-border/60 bg-surface/50">
+                  <div class="border-b border-border-subtle bg-surface">
                     <CodeBlock embedded text={cmdHeader()} language="bash" wrap={false} maxH="max-h-40" scrollKey={`${props.m.key()}:cmd`} />
                   </div>
                 </Show>

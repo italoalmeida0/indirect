@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, Show, onCleanup } from "solid-js";
+import { press } from "../../../ds/motion/press";
 import {
   isCodeHighlightReady,
   languageForPath,
@@ -98,10 +99,10 @@ export function DiffView(props: {
         requestAnimationFrame(() => restoreToolScroll(props.scrollKey, el));
       }}
       onScroll={props.embedded ? undefined : (e) => recordToolScroll(props.scrollKey, e.currentTarget)}
-      class={`font-mono text-[11.5px] leading-relaxed select-text ${
+      class={`font-mono text-xs leading-relaxed select-text ${
         props.embedded
           ? "overflow-visible"
-          : "overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] max-h-96"
+          : "overflow-x-auto overflow-y-auto max-h-96"
       }`}
     >
       <div class="min-w-full w-fit">
@@ -151,7 +152,7 @@ export function DiffView(props: {
                         : r.kind === "header"
                           ? "rc-diff-row-ctx text-fg-muted text-[10px]"
                           : r.kind === "ellipsis"
-                            ? "rc-diff-row-ctx text-fg-muted/70"
+                            ? "rc-diff-row-ctx text-fg-muted"
                             : "rc-diff-row-ctx text-fg-secondary"
                 }`}
               >
@@ -206,13 +207,14 @@ export function DiffView(props: {
       <Show when={hidden() > 0}>
         <button
           type="button"
+          onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => {
             setExpanded(true);
             requestAnimationFrame(() => {
               containerRef?.scrollIntoView({ behavior: "smooth", block: "nearest" });
             });
           }}
-          class="w-full text-left px-3 py-1.5 border-t border-border/50 bg-surface-subtle text-[11px] font-mono text-fg-muted hover:text-fg hover:bg-surface-muted/60 transition-colors cursor-pointer"
+          class="flex items-center w-full min-h-8 [@media(pointer:coarse)]:min-h-11 text-left px-3 py-1.5 border-t border-border-subtle bg-surface-subtle text-2xs font-mono text-fg-muted hover:text-fg hover:bg-surface-muted/60 transition-colors cursor-pointer"
         >
           +{hidden()} more lines
         </button>

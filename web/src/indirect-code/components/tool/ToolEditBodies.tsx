@@ -1,5 +1,6 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
+import { press } from "../../../ds/motion/press";
 import { CodeBlock, DiffView, stripLinePrefixNotice } from "../CodeBlock";
 import { FileIcon } from "../../presentation";
 import { languageForPath } from "../../utils/lang";
@@ -37,9 +38,9 @@ function ImageReadCard(props: {
       <Show
         when={props.hasResult}
         fallback={
-          <div class="flex items-center gap-2 flex-wrap min-w-0 text-[11.5px]">
+          <div class="flex items-center gap-2 flex-wrap min-w-0 text-xs">
             <Show when={props.active}>
-              <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-accent rounded-full animate-spin shrink-0" />
+              <span class="ui-spinner text-accent shrink-0" />
             </Show>
             <FileIcon path={filePath()} size={14} />
             <span
@@ -49,7 +50,7 @@ function ImageReadCard(props: {
               {fileName()}
             </span>
             <Show when={props.info.formatLabel}>
-              <span class="rounded border border-border/75 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-secondary shrink-0">
+              <span class="rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-secondary shrink-0">
                 {props.info.formatLabel}
               </span>
             </Show>
@@ -71,22 +72,22 @@ function ImageReadCard(props: {
             fallback={
               <div
                 data-image-icon-tile
-                class="w-9 h-9 shrink-0 rounded-lg border border-border/75 bg-surface-muted/55 flex items-center justify-center"
+                class="pt-0.5 shrink-0 flex items-center justify-center"
               >
-                <Iconify icon="lucide:image" size={16} class="text-fg-secondary" />
+                <Iconify icon="lucide:image" size={16} class="text-fg-muted" />
               </div>
             }
           >
             {(previewUrl) => (
               <div
                 data-image-preview
-                class="shrink-0 self-start rounded-lg border border-border/70 bg-surface-muted/45 p-1 max-w-full"
+                class="shrink-0 self-start rounded-inner border border-border bg-surface overflow-hidden max-w-full"
               >
                 <img
                   src={previewUrl()}
                   alt={fileName()}
                   loading="lazy"
-                  class="max-h-44 max-w-full w-auto object-contain rounded-md border border-border/60 bg-surface-muted/40"
+                  class="max-h-44 max-w-full w-auto object-contain block"
                 />
               </div>
             )}
@@ -97,7 +98,7 @@ function ImageReadCard(props: {
               <FileIcon path={filePath()} size={14} />
               <span
                 data-rc-tip={props.info.path || undefined}
-                class="font-mono text-[12px] font-medium text-fg truncate min-w-0"
+                class="font-mono text-xs font-medium text-fg truncate min-w-0"
               >
                 {fileName()}
               </span>
@@ -106,10 +107,10 @@ function ImageReadCard(props: {
             <div class="flex flex-wrap items-center gap-1.5 min-w-0">
               <span
                 data-image-format-badge
-                class={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10.5px] font-medium shrink-0 ${
+                class={`inline-flex items-center rounded-xs border px-1.5 py-0.5 font-mono text-2xs font-medium shrink-0 ${
                   props.info.converted
-                    ? "border-accent/25 bg-accent-subtle text-accent"
-                    : "border-border/75 bg-surface text-fg-secondary"
+                    ? "border-border-subtle bg-accent-subtle text-accent"
+                    : "border-border bg-surface text-fg-secondary"
                 }`}
               >
                 {props.info.converted && props.info.origFormatLabel
@@ -120,7 +121,7 @@ function ImageReadCard(props: {
               <Show when={props.info.width && props.info.height}>
                 <span
                   data-image-dimensions-pill
-                  class="inline-flex items-center rounded border border-border/75 bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-fg-secondary tabular-nums shrink-0"
+                  class="inline-flex items-center rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs text-fg-secondary tabular-nums shrink-0"
                 >
                   {props.info.resized && props.info.origWidth && props.info.origHeight
                     ? `${props.info.origWidth}×${props.info.origHeight} → ${props.info.width}×${props.info.height} px`
@@ -131,7 +132,7 @@ function ImageReadCard(props: {
               <Show when={props.info.bytes && props.info.bytes > 0}>
                 <span
                   data-image-wire-size-pill
-                  class="inline-flex items-center gap-1 rounded border border-border/75 bg-surface px-1.5 py-0.5 font-mono text-[10.5px] text-fg-secondary tabular-nums shrink-0"
+                  class="inline-flex items-center gap-1 rounded-xs border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs text-fg-secondary tabular-nums shrink-0"
                 >
                   <span>
                     {hasSignificantSavings()
@@ -144,7 +145,7 @@ function ImageReadCard(props: {
               <Show when={hasSignificantSavings() && savedPercent() > 0}>
                 <span
                   data-image-savings-badge
-                  class="inline-flex items-center rounded border border-success/25 bg-success-subtle px-1.5 py-0.5 font-mono text-[10px] font-medium text-success tabular-nums shrink-0"
+                  class="inline-flex items-center rounded-xs border border-border-subtle bg-success-subtle px-1.5 py-0.5 font-mono text-2xs font-medium text-success tabular-nums shrink-0"
                 >
                   -{savedPercent()}%
                 </span>
@@ -155,7 +156,7 @@ function ImageReadCard(props: {
               <div class="space-y-0.5 pt-0.5">
                 <For each={props.info.hints}>
                   {(hint) => (
-                    <div class="text-[11px] text-fg-muted leading-snug whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                    <div class="text-2xs text-fg-muted leading-snug whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
                       {hint}
                     </div>
                   )}
@@ -169,64 +170,68 @@ function ImageReadCard(props: {
   );
 }
 
-function FileEditCard(props: { sec: FileEditSection; scrollKey?: string }) {
+function FileEditCard(props: { sec: FileEditSection; scrollKey?: string; hideHeader?: boolean }) {
   const [open, setOpen] = createSignal(true);
   const stat = () => diffStat(props.sec.diff);
+  const effectiveOpen = () => (props.hideHeader ? true : open());
 
   return (
-    <div class="border-b border-border/60 last:border-b-0">
-      <div
-        onClick={() => setOpen(!open())}
-        class="group/file flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle/70 hover:bg-surface-muted/70 text-[12px] cursor-pointer transition-colors select-none"
-      >
-        <div class="flex items-center gap-2 min-w-0 flex-1">
-          <FileIcon path={props.sec.file} size={14} />
-          <span class="font-mono font-medium text-fg truncate">{props.sec.file || "edit"}</span>
-          <Show when={props.sec.status === "error"}>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-danger-subtle text-danger font-mono">
-              failed
-            </span>
-          </Show>
-          <Show when={props.sec.status === "dry_run"}>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-warning-subtle text-warning font-mono">
-              preview
-            </span>
-          </Show>
-          <Show when={stat().add > 0 || stat().del > 0}>
-            <span class="font-mono text-[10.5px] shrink-0 tabular-nums">
-              <Show when={stat().add > 0}>
-                <span class="text-success">+{stat().add}</span>
-              </Show>
-              <Show when={stat().add > 0 && stat().del > 0}>
-                <span class="text-fg-muted"> </span>
-              </Show>
-              <Show when={stat().del > 0}>
-                <span class="text-danger">-{stat().del}</span>
-              </Show>
-            </span>
-          </Show>
-          <Show when={props.sec.matches !== undefined && stat().add === 0 && stat().del === 0}>
-            <span class="text-[10px] px-1.5 py-0.5 rounded bg-surface-muted text-fg-secondary font-mono">
-              {props.sec.matches} {props.sec.matches === 1 ? "match" : "matches"}
-            </span>
-          </Show>
-        </div>
-        <div class="flex items-center gap-2 shrink-0">
-          <Iconify
-            icon="lucide:chevron-down"
-            size={12}
-            class={`text-fg-muted transition-transform ${open() ? "rotate-180" : ""}`}
-          />
-        </div>
-      </div>
-      <Show when={open()}>
+    <div data-edit-file={props.sec.file || undefined} class="border-b border-border-subtle last:border-b-0">
+      <Show when={!props.hideHeader}>
+        <button
+          type="button"
+          aria-expanded={open()}
+          onPointerDown={(e) => press(e.currentTarget)}
+          onClick={() => setOpen(!open())}
+          class="group/file w-full flex items-center justify-between gap-2 min-h-8 [@media(pointer:coarse)]:min-h-11 px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted/60 text-xs text-left cursor-pointer transition-colors"
+        >
+          <div class="flex items-center gap-2 min-w-0 flex-1">
+            <Iconify
+              icon="lucide:chevron-right"
+              size={12}
+              class={`shrink-0 text-fg-muted transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
+            />
+            <FileIcon path={props.sec.file} size={14} />
+            <span class="font-mono font-medium text-fg truncate">{props.sec.file || "edit"}</span>
+            <Show when={props.sec.status === "error"}>
+              <span class="text-2xs px-1.5 py-0.5 rounded-xs bg-danger-subtle text-danger font-mono shrink-0">
+                failed
+              </span>
+            </Show>
+            <Show when={props.sec.status === "dry_run"}>
+              <span class="text-2xs px-1.5 py-0.5 rounded-xs bg-warning-subtle text-warning font-mono shrink-0">
+                preview
+              </span>
+            </Show>
+            <Show when={stat().add > 0 || stat().del > 0}>
+              <span class="font-mono text-2xs shrink-0 tabular-nums ml-auto">
+                <Show when={stat().add > 0}>
+                  <span class="text-success">+{stat().add}</span>
+                </Show>
+                <Show when={stat().add > 0 && stat().del > 0}>
+                  <span class="text-fg-muted"> </span>
+                </Show>
+                <Show when={stat().del > 0}>
+                  <span class="text-danger">-{stat().del}</span>
+                </Show>
+              </span>
+            </Show>
+            <Show when={props.sec.matches !== undefined && stat().add === 0 && stat().del === 0}>
+              <span class="text-2xs px-1.5 py-0.5 rounded-xs bg-surface-muted text-fg-secondary font-mono shrink-0 ml-auto">
+                {props.sec.matches} {props.sec.matches === 1 ? "match" : "matches"}
+              </span>
+            </Show>
+          </div>
+        </button>
+      </Show>
+      <Show when={effectiveOpen()}>
         <Show when={props.sec.error}>
-          <div class="px-3 py-2 text-[11.5px] text-danger font-mono bg-danger-subtle border-t border-danger/20 whitespace-pre-wrap">
+          <div class={`px-3 py-2 text-xs text-danger font-mono bg-danger-subtle whitespace-pre-wrap ${props.hideHeader ? "" : "border-t border-border-subtle"}`}>
             {props.sec.error}
           </div>
         </Show>
         <Show when={props.sec.diff}>
-          <div class="border-t border-border/50">
+          <div class={props.hideHeader && !props.sec.error ? "" : "border-t border-border-subtle"}>
             <DiffView text={props.sec.diff} max={60} name={props.sec.file} scrollKey={props.scrollKey} embedded />
           </div>
         </Show>
@@ -327,8 +332,8 @@ export function ToolEditBodies(props: ToolPartProps) {
     <>
       <Show when={props.m.name() === "edit" || props.m.name() === "patch"}>
         <Show when={isDryRun()}>
-          <div class="px-3 pt-2 pb-1">
-            <span class="inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2 py-1 text-[11px] text-warning">
+          <div class="px-3 py-1.5 bg-surface-subtle border-b border-border-subtle">
+            <span class="inline-flex items-center gap-1.5 rounded-inner border border-border-subtle bg-warning-subtle px-2 py-0.5 text-2xs text-warning">
               <Iconify icon="lucide:eye" size={12} /> Dry run · no files written
             </span>
           </div>
@@ -337,7 +342,7 @@ export function ToolEditBodies(props: ToolPartProps) {
           when={Boolean(props.u.result)}
           fallback={
             <>
-              <div class="px-3 py-2 text-[11px] text-fg-muted">
+              <div class="px-3 py-2 text-2xs text-fg-muted">
                 {props.active
                   ? isDryRun()
                     ? "Previewing edit…"
@@ -347,9 +352,15 @@ export function ToolEditBodies(props: ToolPartProps) {
                     : "Edit did not complete."}
               </div>
               <Show when={sections().length > 0}>
-                <div class="border-t border-border/55">
+                <div class="border-t border-border-subtle">
                   <For each={sections()}>
-                    {(sec) => <FileEditCard sec={sec} scrollKey={`${props.m.key()}:${sec.file}`} />}
+                    {(sec) => (
+                      <FileEditCard
+                        sec={sec}
+                        scrollKey={`${props.m.key()}:${sec.file}`}
+                        hideHeader={sections().length === 1 && Boolean(sec.diff || sec.error)}
+                      />
+                    )}
                   </For>
                 </div>
               </Show>
@@ -359,13 +370,19 @@ export function ToolEditBodies(props: ToolPartProps) {
           <Show
             when={sections().length > 0}
             fallback={
-              <div class="px-3 py-2 text-[11px] text-fg-muted">
+              <div class="px-3 py-2 text-2xs text-fg-muted">
                 {String(props.m.mergedEnv()?.info || "No changes.")}
               </div>
             }
           >
             <For each={sections()}>
-              {(sec) => <FileEditCard sec={sec} scrollKey={`${props.m.key()}:${sec.file}`} />}
+              {(sec) => (
+                <FileEditCard
+                  sec={sec}
+                  scrollKey={`${props.m.key()}:${sec.file}`}
+                  hideHeader={sections().length === 1 && Boolean(sec.diff || sec.error)}
+                />
+              )}
             </For>
           </Show>
         </Show>
@@ -486,7 +503,7 @@ export function ToolEditBodies(props: ToolPartProps) {
           return (
             <>
               <Show when={scriptSource().length > 0}>
-                <div class="border-b border-border/60 bg-surface/50">
+                <div class="border-b border-border-subtle bg-surface">
                   <CodeBlock
                     embedded
                     follow={() => props.m.open() && props.running}
@@ -501,7 +518,7 @@ export function ToolEditBodies(props: ToolPartProps) {
               <Show
                 when={execOut().trim().length > 0}
                 fallback={
-                  <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono" : "text-fg-muted"}`}>
+                  <div class={`px-3 py-2 text-2xs ${props.u.result?.isError ? "text-danger font-mono" : "text-fg-muted"}`}>
                     {props.m.bgRunning()
                       ? "Running in background…"
                       : !props.u.result
@@ -517,7 +534,7 @@ export function ToolEditBodies(props: ToolPartProps) {
                 }
               >
                 <Show when={props.u.result?.toolDetails?.truncated || props.m.mergedEnv()?.truncated === "true"}>
-                  <div class="px-3 py-1 bg-surface-muted/65 border-b border-border/55 text-[10.5px] text-fg-muted font-mono">
+                  <div class="px-3 py-1.5 bg-surface-subtle border-b border-border-subtle text-2xs text-fg-muted font-mono">
                     Output truncated (showing last {String(props.u.result?.toolDetails?.page || props.m.mergedEnv()?.page || "portion")})
                   </div>
                 </Show>

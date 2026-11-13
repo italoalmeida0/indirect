@@ -133,10 +133,10 @@ export function CodeBlock(props: {
       }}
       onScroll={props.embedded ? undefined : (e) => recordToolScroll(props.scrollKey, e.currentTarget)}
       data-code-gutter={hasGutter() ? "true" : undefined}
-      class={`font-mono text-[11.5px] leading-relaxed text-fg-secondary select-text ${
+      class={`font-mono text-xs leading-relaxed text-fg-secondary select-text ${
         props.embedded
           ? "overflow-visible"
-          : `overflow-x-auto overflow-y-auto [scrollbar-gutter:stable] ${props.maxH || "max-h-56"}`
+          : `overflow-x-auto overflow-y-auto ${props.maxH || "max-h-56"}`
       }`}
     >
       <Show
@@ -170,8 +170,8 @@ export function CodeBlock(props: {
                   const num = m ? m[1] : "";
                   const content = m ? m[2] : line;
                   return (
-                    <div class="flex items-start px-2.5 py-0.5 leading-relaxed whitespace-pre hover:bg-surface-muted/45">
-                      <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2.5 mr-2.5">
+                    <div class="flex items-start px-2.5 py-0.5 leading-relaxed whitespace-pre hover:bg-surface-muted/60">
+                      <span class="rc-code-gutter select-none text-right font-mono text-2xs tabular-nums min-w-[2.5rem] shrink-0 pr-2.5 mr-2.5">
                         {num}
                       </span>
                       {/* eslint-disable-next-line solid/no-innerhtml */}
@@ -184,8 +184,8 @@ export function CodeBlock(props: {
           >
             <For each={rows()}>
               {(r) => (
-                <div class="flex items-start px-2.5 py-0.5 leading-relaxed whitespace-pre hover:bg-surface-muted/45">
-                  <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2.5 mr-2.5">
+                <div class="flex items-start px-2.5 py-0.5 leading-relaxed whitespace-pre hover:bg-surface-muted/60">
+                  <span class="rc-code-gutter select-none text-right font-mono text-2xs tabular-nums min-w-[2.5rem] shrink-0 pr-2.5 mr-2.5">
                     {r.lineNum}
                   </span>
                   {/* eslint-disable-next-line solid/no-innerhtml */}

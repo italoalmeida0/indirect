@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, on, Show } from "solid-js";
+import { press } from "../../ds/motion/press";
 import { createShimmerStyle } from "../../ds/motion/shimmer";
 import { DisclosureBody } from "./Disclosure";
 import { Icon as Iconify } from "../../components/icon";
@@ -18,11 +19,11 @@ export interface TurnChangesBalloonProps {
 function statusMeta(status: TurnChangedFile["status"]) {
   switch (status) {
     case "new":
-      return { label: "A", title: "Added", cls: "text-success bg-success-subtle border-success/25" };
+      return { label: "A", title: "Added", cls: "text-success bg-success-subtle border-border-subtle" };
     case "modified":
-      return { label: "M", title: "Modified", cls: "text-warning bg-warning-subtle border-warning/25" };
+      return { label: "M", title: "Modified", cls: "text-warning bg-warning-subtle border-border-subtle" };
     case "deleted":
-      return { label: "D", title: "Deleted", cls: "text-danger bg-danger-subtle border-danger/25" };
+      return { label: "D", title: "Deleted", cls: "text-danger bg-danger-subtle border-border-subtle" };
     case "binary":
       return { label: "BIN", title: "Binary file", cls: "text-fg-muted bg-surface-muted border-border" };
     default:
@@ -71,64 +72,66 @@ function FileChangesRow(props: {
     ),
   );
 
-  return (
-    <div ref={rowRef} class="overflow-hidden border-t border-border/55 first:border-t-0">
-      <div
-        role={isExpandable() ? "button" : undefined}
-        tabIndex={isExpandable() ? 0 : undefined}
-        aria-expanded={isExpandable() ? props.open : undefined}
-        onClick={() => {
-          if (isExpandable()) props.onToggle();
-        }}
-        onKeyDown={(e) => {
-          if (!isExpandable()) return;
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            props.onToggle();
-          }
-        }}
-        class={`flex items-center gap-2 px-3 py-1.5 transition-colors select-none ${
-          isExpandable() ? "cursor-pointer hover:bg-surface-muted/55" : ""
-        }`}
+  const rowInner = () => (
+    <>
+      <Show when={isExpandable()}>
+        <Iconify
+          icon="lucide:chevron-right"
+          size={12}
+          class={`shrink-0 text-fg-muted transition-transform duration-150 ${props.open ? "rotate-90" : ""}`}
+        />
+      </Show>
+      <Show when={!isExpandable()}>
+        <span class="w-3 shrink-0" aria-hidden="true" />
+      </Show>
+      <FileIcon path={displayPath()} size={13} />
+      <span class="text-xs font-mono flex items-baseline min-w-0 flex-1" data-rc-tip={displayPath()}>
+        <Show when={parts().dir}>
+          <span class="text-fg-muted min-w-0 shrink truncate">{parts().dir}</span>
+        </Show>
+        <span class="text-fg font-medium shrink-0 truncate max-w-[70%]">{parts().base}</span>
+      </span>
+      <span
+        data-rc-tip={meta().title}
+        class={`inline-flex items-center justify-center rounded-xs px-1 py-px text-2xs leading-tight font-mono font-medium border shrink-0 ${meta().cls}`}
       >
-        <Show when={isExpandable()}>
-          <Iconify
-            icon="lucide:chevron-right"
-            size={12}
-            class={`shrink-0 text-fg-muted transition-transform duration-150 ${props.open ? "rotate-90" : ""}`}
-          />
-        </Show>
-        <Show when={!isExpandable()}>
-          <span class="w-3 shrink-0" aria-hidden="true" />
-        </Show>
-        <FileIcon path={displayPath()} size={13} />
-        <span class="text-[11.5px] font-mono truncate min-w-0" data-rc-tip={displayPath()}>
-          <Show when={parts().dir}>
-            <span class="text-fg-muted">{parts().dir}</span>
-          </Show>
-          <span class="text-fg font-medium">{parts().base}</span>
+        {meta().label}
+      </span>
+      <Show when={(props.f.additions || 0) > 0 || (props.f.deletions || 0) > 0}>
+        <span class="text-2xs font-mono ml-auto shrink-0 tabular-nums flex items-center gap-1.5">
+          <span class="text-success">+{props.f.additions || 0}</span>
+          <span class="text-danger">-{props.f.deletions || 0}</span>
         </span>
-        <span
-          data-rc-tip={meta().title}
-          class={`inline-flex items-center justify-center rounded px-1 py-px text-[9.5px] leading-tight font-mono font-medium border shrink-0 ${meta().cls}`}
+      </Show>
+    </>
+  );
+
+  return (
+    <div ref={rowRef} class="overflow-hidden border-t border-border-subtle first:border-t-0">
+      <Show when={isExpandable()}>
+        <button
+          type="button"
+          aria-expanded={props.open}
+          onPointerDown={(e) => press(e.currentTarget)}
+          onClick={() => props.onToggle()}
+          class="w-full flex items-center gap-2 min-h-8 [@media(pointer:coarse)]:min-h-11 px-3.5 py-1.5 text-left transition-colors cursor-pointer hover:bg-surface-muted/60"
         >
-          {meta().label}
-        </span>
-        <Show when={(props.f.additions || 0) > 0 || (props.f.deletions || 0) > 0}>
-          <span class="text-[11px] font-mono ml-auto shrink-0 tabular-nums flex items-center gap-1.5">
-            <span class="text-success">+{props.f.additions || 0}</span>
-            <span class="text-danger">-{props.f.deletions || 0}</span>
-          </span>
-        </Show>
-      </div>
+          {rowInner()}
+        </button>
+      </Show>
+      <Show when={!isExpandable()}>
+        <div class="w-full flex items-center gap-2 min-h-8 px-3.5 py-1.5 select-none">
+          {rowInner()}
+        </div>
+      </Show>
       <DisclosureBody open={props.open && hasDiff()}>
-        <div class="border-t border-border/50 bg-surface">
+        <div class="border-t border-border-subtle bg-surface">
           <DiffView text={props.f.diff || ""} name={displayPath()} scrollKey={props.scrollKey} />
         </div>
       </DisclosureBody>
       <DisclosureBody open={props.open && !hasDiff()}>
-        <div class="px-3 py-1.5 text-[11px] text-fg-muted border-t border-border/50 bg-surface-subtle/50">
-          {props.f.status === "binary" ? "Binary file — no textual diff." : "File too large for a textual diff."}
+        <div class="px-3.5 py-2 text-2xs text-fg-muted border-t border-border-subtle bg-surface-subtle">
+          {props.f.status === "binary" ? "Binary file · no textual diff." : "File too large for a textual diff."}
         </div>
       </DisclosureBody>
     </div>
@@ -173,14 +176,15 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
 
   return (
     <Show when={files().length > 0}>
-      <div class="w-full my-2 select-text">
-        <div class="w-full rounded-xl border border-border/80 bg-surface-subtle/65 overflow-hidden transition-colors">
-          <div class="flex items-center justify-between gap-2 px-3 py-2 flex-wrap">
+      <div class="w-full select-text">
+        <div class="w-full rounded-panel border border-border bg-surface-subtle overflow-hidden transition-colors">
+          <div class="flex items-stretch justify-between">
             <button
               type="button"
               aria-expanded={props.expanded}
+              onPointerDown={(e) => press(e.currentTarget)}
               onClick={props.onToggle}
-              class="flex items-center gap-2 cursor-pointer text-left group focus:outline-none min-w-0"
+              class="group flex flex-1 items-center gap-2 min-h-9 [@media(pointer:coarse)]:min-h-11 px-3.5 py-2 cursor-pointer text-left hover:bg-surface-muted/60 transition-colors min-w-0"
             >
               <Iconify
                 icon="lucide:chevron-right"
@@ -190,15 +194,15 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
               <Show when={props.live}>
                 <Iconify icon="lucide:file-diff" size={13} class="text-fg-muted shrink-0" />
               </Show>
-              <span class={`text-xs font-medium tabular-nums ${props.live ? "ui-shimmer text-fg-secondary" : "text-fg"}`} style={liveShimmerStyle()}>
+              <span class={`text-xs font-medium tabular-nums truncate ${props.live ? "ui-shimmer text-fg-secondary" : "text-fg"}`} style={liveShimmerStyle()}>
                 {files().length} {files().length === 1 ? "file" : "files"} changed
               </span>
               <Show when={totalAdds() > 0 || totalDels() > 0}>
-                <span class="text-[11px] font-mono tabular-nums flex items-center gap-1.5">
+                <span class="text-2xs font-mono tabular-nums flex items-center gap-1.5 shrink-0">
                   <span class="text-success">+{totalAdds()}</span>
                   <span class="text-danger">-{totalDels()}</span>
                 </span>
-                <span class="inline-flex items-center gap-[2px] ml-0.5 shrink-0" aria-hidden="true">
+                <span class="hidden min-[380px]:inline-flex items-center gap-[2px] ml-0.5 shrink-0" aria-hidden="true">
                   <For each={statCells()}>
                     {(cell) => (
                       <span
@@ -213,33 +217,35 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
             </button>
 
             <Show when={(props.expanded && files().length > 1 && expandableKeys().length > 0) || (props.live && props.onReview)}>
-              <div class="flex items-center gap-1 ml-auto shrink-0">
+              <div class="flex items-center gap-1 pr-2.5 shrink-0">
                 <Show when={props.expanded && files().length > 1 && expandableKeys().length > 0}>
                   <button
                     type="button"
+                    onPointerDown={(e) => press(e.currentTarget)}
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleExpandAll();
                     }}
                     data-rc-tip={allExpanded() ? "Collapse all file diffs" : "Expand all file diffs"}
-                    class="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                    class="flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-11 text-2xs px-2 py-1 rounded-inner text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   >
                     <Iconify icon={allExpanded() ? "lucide:chevrons-down-up" : "lucide:chevrons-up-down"} size={11} />
-                    {allExpanded() ? "Collapse all" : "Expand all"}
+                    <span>{allExpanded() ? "Collapse all" : "Expand all"}</span>
                   </button>
                 </Show>
                 <Show when={props.live && props.onReview}>
                   <button
                     type="button"
+                    onPointerDown={(e) => press(e.currentTarget)}
                     onClick={(e) => {
                       e.stopPropagation();
                       props.onReview!();
                     }}
                     data-rc-tip="Refresh file changes"
-                    class="flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                    class="flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-11 text-2xs px-2 py-1 rounded-inner text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   >
                     <Iconify icon="lucide:refresh-cw" size={11} />
-                    Refresh
+                    <span>Refresh</span>
                   </button>
                 </Show>
               </div>
@@ -247,7 +253,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
           </div>
 
           <DisclosureBody open={props.expanded}>
-            <div class="border-t border-border/60 bg-surface/50 flex flex-col">
+            <div class="border-t border-border bg-surface flex flex-col">
               <For each={files()}>
                 {(f) => {
                   const key = () => fileRowKey(f);

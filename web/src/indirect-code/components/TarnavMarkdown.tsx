@@ -54,26 +54,26 @@ const CLS: Record<string, string> = {
   "ordered-list": "ml-4 list-outside list-decimal whitespace-normal",
   "unordered-list": "ml-4 list-outside list-disc whitespace-normal",
   "list-item": "py-1",
-  "horizontal-rule": "my-6 border-(--line)",
-  strong: "font-semibold",
+  "horizontal-rule": "my-6 border-border",
+  strong: "font-medium",
   link: "wrap-anywhere font-medium text-accent underline underline-offset-2",
-  "heading-1": "mt-6 mb-2 font-semibold text-3xl",
-  "heading-2": "mt-6 mb-2 font-semibold text-2xl",
-  "heading-3": "mt-6 mb-2 font-semibold text-xl",
-  "heading-4": "mt-6 mb-2 font-semibold text-lg",
-  "heading-5": "mt-6 mb-2 font-semibold text-base",
-  "heading-6": "mt-6 mb-2 font-semibold text-sm",
-  table: "w-full border-collapse border border-(--line)",
-  "table-header": "bg-(--ink-900)",
-  "table-body": "divide-y divide-(--line) bg-(--card)/40",
-  "table-row": "border-(--line) border-b",
-  "table-header-cell": "whitespace-nowrap px-4 py-2 text-left font-semibold text-sm text-(--ink-100)",
-  "table-cell": "px-4 py-2 text-sm text-(--ink-200)",
-  blockquote: "my-4 border-l-4 border-(--line) pl-4 text-ink-400 italic",
+  "heading-1": "mt-6 mb-2 font-medium text-3xl",
+  "heading-2": "mt-6 mb-2 font-medium text-2xl",
+  "heading-3": "mt-6 mb-2 font-medium text-xl",
+  "heading-4": "mt-6 mb-2 font-medium text-lg",
+  "heading-5": "mt-6 mb-2 font-medium text-base",
+  "heading-6": "mt-6 mb-2 font-medium text-sm",
+  table: "w-full border-collapse border border-border",
+  "table-header": "bg-surface-subtle",
+  "table-body": "divide-y divide-border-subtle bg-surface",
+  "table-row": "border-border-subtle border-b",
+  "table-header-cell": "whitespace-nowrap px-4 py-2 text-left font-medium text-sm text-fg",
+  "table-cell": "px-4 py-2 text-sm text-fg-secondary",
+  blockquote: "my-4 border-l-2 border-border pl-4 text-fg-secondary italic",
   superscript: "text-sm",
   subscript: "text-sm",
-  "inline-code": "rounded bg-(--ink-800) px-1.5 py-0.5 font-mono text-sm text-(--ink-100)",
-  image: "max-w-full rounded-lg",
+  "inline-code": "rounded-xs bg-surface-muted px-1.5 py-0.5 font-mono text-sm text-fg",
+  image: "max-w-full rounded-control",
 };
 
 /** Token -> { tag, sd (data-streamdown value), cls (extra classes) }. */
@@ -274,8 +274,8 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         language.textContent = "code";
         const container = wrap.appendChild(document.createElement("div"));
         container.className = opts.noNestedScroll
-          ? "font-mono text-[11px] text-ink-300 overflow-visible select-text"
-          : "font-mono text-[11px] text-ink-300 overflow-x-auto overflow-y-auto select-text [scrollbar-gutter:stable] max-h-56";
+          ? "font-mono text-xs text-fg overflow-visible select-text"
+          : "font-mono text-xs text-fg overflow-x-auto overflow-y-auto select-text max-h-56";
         const pre = container.appendChild(document.createElement("pre"));
         pre.setAttribute("data-streamdown", "code-block");
         pre.className = opts.noNestedScroll
@@ -300,7 +300,7 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         cell.setAttribute("data-streamdown", inHead ? "table-header-cell" : "table-cell");
         if (opts.noNestedScroll) {
           cell.className = inHead
-            ? "px-3 py-2 text-left font-semibold text-sm text-(--ink-100) [overflow-wrap:anywhere] break-words min-w-0"
+            ? "px-3 py-2 text-left font-medium text-sm text-fg [overflow-wrap:anywhere] break-words min-w-0"
             : cn(CLS["table-cell"], "[overflow-wrap:anywhere] break-words min-w-0");
           cell.style.minWidth = "0";
         } else {
@@ -339,7 +339,7 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         wrap.className = "rc-table-wrap";
         wrap.setAttribute("data-streamdown", "table-wrapper");
         const toolbar = wrap.appendChild(document.createElement("div"));
-        toolbar.className = "flex items-center justify-end gap-1 pb-1 text-xs text-(--ink-400)";
+        toolbar.className = "flex items-center justify-end gap-1 [@media(pointer:coarse)]:gap-2 pb-1 text-xs text-fg-muted";
         const scroller = wrap.appendChild(document.createElement("div"));
         scroller.className = opts.noNestedScroll ? "rc-table-scroll overflow-hidden" : "rc-table-scroll overflow-x-auto";
         const table = scroller.appendChild(document.createElement("table"));
@@ -520,13 +520,13 @@ function applyCodeHtml(code: HTMLElement, text: string, html: string, noNestedSc
   }
   const htmlLines = html.split("\n");
   const rowCls = noNestedScroll
-    ? "flex items-start px-2 py-0.5 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] break-words hover:bg-surface/30"
-    : "flex items-start px-2 py-0.5 leading-relaxed whitespace-pre hover:bg-surface/30";
+    ? "flex items-start py-0.5 leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] break-words hover:bg-surface-muted/40"
+    : "flex items-start py-0.5 leading-relaxed whitespace-pre hover:bg-surface-muted/40";
   const rows = lines.map((line, i) => {
     const m = line.match(/^(\d+):(.*)$/);
     const num = m ? m[1] : "";
     const cell = htmlLines[i] || escapeHtml(m ? m[2] : line);
-    return `<div class="${rowCls}"><span class="select-none text-right font-mono text-[10px] text-ink-600/50 min-w-[2.25rem] shrink-0 pr-2 border-r border-line/25 mr-2">${num}</span><code class="tok flex-1 min-w-0">${cell || " "}</code></div>`;
+    return `<div class="${rowCls}"><span class="select-none text-right font-mono text-2xs text-fg-muted tabular-nums min-w-[2.25rem] shrink-0 pr-2 border-r border-border-subtle mr-2">${num}</span><code class="tok flex-1 min-w-0">${cell || " "}</code></div>`;
   });
   code.innerHTML = rows.join("");
 }
@@ -646,7 +646,7 @@ function decorateCallout(paragraph: Element) {
   quote.dataset.callout = marker[1].toLowerCase();
   const label = document.createElement("div");
   label.className = "rc-callout-label";
-  label.textContent = marker[1];
+  label.textContent = marker[1].charAt(0) + marker[1].slice(1).toLowerCase();
   quote.prepend(label);
 }
 

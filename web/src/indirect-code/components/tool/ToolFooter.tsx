@@ -5,11 +5,11 @@ import type { FooterFact } from "../../utils/envelope";
 export function ToolFooter(props: { facts: FooterFact[] }) {
   return (
     <Show when={props.facts.length}>
-      <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-t border-border/50 px-3 py-1.5" data-tool-footer>
+      <div class="flex flex-wrap items-center gap-x-2.5 gap-y-1 border-t border-border-subtle px-3 py-1.5" data-tool-footer>
         <For each={props.facts}>
           {(f) => (
             <span
-              class={`font-mono text-[10.5px] leading-tight tabular-nums ${
+              class={`font-mono text-2xs leading-tight tabular-nums ${
                 f.tone === "fail"
                   ? "text-danger"
                   : f.tone === "ok"

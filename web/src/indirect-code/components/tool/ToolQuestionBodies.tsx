@@ -19,7 +19,7 @@ export function ToolQuestionBodies(props: ToolPartProps) {
   return (
     <Show when={props.m.name() === "question"}>
       <Show when={props.u.result?.isError}>
-        <div class="border-b border-danger/20 bg-danger-subtle px-3 py-2 text-xs text-danger font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+        <div class="border-b border-border-subtle last:border-b-0 bg-danger-subtle px-3 py-2 text-xs text-danger font-mono whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
           {(props.m.output() || "").trim() || String(props.m.mergedEnv()?.error || "Question canceled or failed.")}
         </div>
       </Show>
@@ -27,7 +27,7 @@ export function ToolQuestionBodies(props: ToolPartProps) {
         when={items().length > 0}
         fallback={
           <Show when={!props.u.result?.isError}>
-            <div class="px-3 py-2 text-[11px] text-fg-muted">
+            <div class="px-3 py-2 text-2xs text-fg-muted">
               {!props.u.result
                 ? props.active
                   ? "Waiting for your answers…"
@@ -46,41 +46,41 @@ export function ToolQuestionBodies(props: ToolPartProps) {
               return (
                 <div>
                   <div class="flex items-center gap-1.5">
-                    <span class="shrink-0 rounded border border-border/70 bg-surface px-1.5 py-px font-mono text-[10px] text-fg-muted tabular-nums">
+                    <span class="shrink-0 rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-muted tabular-nums">
                       Q{i() + 1}
                     </span>
                     <Show when={q.header}>
-                      <span class="truncate text-[12px] font-medium text-fg">{q.header}</span>
+                      <span class="truncate text-xs font-medium text-fg">{q.header}</span>
                     </Show>
                     <Show when={q.multiple}>
-                      <span class="shrink-0 rounded border border-border/70 bg-surface px-1.5 py-px text-[10px] text-fg-muted">
+                      <span class="shrink-0 rounded-xs border border-border bg-surface px-1.5 py-px text-2xs text-fg-muted">
                         multi-select
                       </span>
                     </Show>
                   </div>
                   <Show when={q.question}>
-                    <p class="mt-1 text-[12.5px] leading-snug text-fg-secondary">{q.question}</p>
+                    <p class="mt-1 text-xs leading-snug text-fg-secondary">{q.question}</p>
                   </Show>
                   <Show when={q.options.length > 0 || custom().length > 0 || !answered()}>
                     <ul class="mt-1.5 space-y-1">
                       <For each={q.options}>
                         {(o) => (
                           <li
-                            class={`flex items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] leading-snug ${
+                            class={`flex items-start gap-2 rounded-inner border px-2.5 py-1.5 text-xs leading-snug ${
                               answered() && picked(o.label)
-                                ? "border-success/40 bg-success-subtle text-fg"
-                                : "border-border/70 bg-surface/50 text-fg-secondary"
+                                ? "border-border bg-success-subtle text-fg"
+                                : "border-border bg-surface text-fg-secondary"
                             }`}
                           >
                             <Iconify
                               icon={answered() && picked(o.label) ? "lucide:check-circle-2" : "lucide:circle"}
                               size={13}
-                              class={`mt-0.5 shrink-0 ${answered() && picked(o.label) ? "text-success" : "text-fg-muted/70"}`}
+                              class={`mt-0.5 shrink-0 ${answered() && picked(o.label) ? "text-success" : "text-fg-muted"}`}
                             />
                             <span class="min-w-0">
                               <span class="block font-medium">{o.label}</span>
                               <Show when={o.description}>
-                                <span class="block text-[11px] text-fg-muted">{o.description}</span>
+                                <span class="block text-2xs text-fg-muted">{o.description}</span>
                               </Show>
                             </span>
                           </li>
@@ -91,10 +91,10 @@ export function ToolQuestionBodies(props: ToolPartProps) {
                           const isDecideLater = c.startsWith("Decide later");
                           return (
                             <li
-                              class={`flex items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] leading-snug ${
+                              class={`flex items-start gap-2 rounded-inner border px-2.5 py-1.5 text-xs leading-snug ${
                                 isDecideLater
-                                  ? "border-accent/40 bg-accent-subtle text-fg"
-                                  : "border-success/40 bg-success-subtle text-fg"
+                                  ? "border-border bg-accent-subtle text-fg"
+                                  : "border-border bg-success-subtle text-fg"
                               }`}
                             >
                               <Iconify
@@ -104,7 +104,7 @@ export function ToolQuestionBodies(props: ToolPartProps) {
                               />
                               <span class="min-w-0">
                                 <span class="block font-medium">{c}</span>
-                                <span class="block text-[11px] text-fg-muted">
+                                <span class="block text-2xs text-fg-muted">
                                   {isDecideLater ? "Delegated to assistant" : "Custom answer"}
                                 </span>
                               </span>
@@ -119,7 +119,7 @@ export function ToolQuestionBodies(props: ToolPartProps) {
             }}
           </For>
           <Show when={!props.u.result}>
-            <p class="text-[11px] text-fg-muted">
+            <p class="text-2xs text-fg-muted">
               {props.active ? "Waiting for your answers…" : "Question did not complete."}
             </p>
           </Show>

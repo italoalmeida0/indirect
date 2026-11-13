@@ -391,18 +391,18 @@ export function GenerativeUiWidget(props: {
           `card` token, so the frame seam is invisible. While the widget is
           not ready, a centered loading pill (placeholder text) floats over
           the streaming preview; runtime errors land in the footer below. */}
-      <div class={expanded() ? "group/guhost fixed inset-0 z-40 flex flex-col overflow-hidden bg-ink-950/95" : "group/guhost"}>
+      <div class={expanded() ? "group/guhost fixed inset-0 z-40 flex flex-col overflow-hidden bg-background/95" : "group/guhost"}>
         <Show when={!streaming()}>
           <div
             class={
               expanded()
-                ? "pointer-events-none flex items-center justify-end gap-1 p-2"
+                ? "pointer-events-none flex items-center justify-end gap-1 [@media(pointer:coarse)]:gap-2 p-2"
                 /* max-md: opacity-100 — no hover on touch screens, so the
                    reload/fullscreen/unload controls must always show there. */
-                : "pointer-events-none mb-2 flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100 max-md:opacity-100"
+                : "pointer-events-none mb-2 flex items-center justify-end gap-0.5 [@media(pointer:coarse)]:gap-2 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100 max-md:opacity-100"
             }
           >
-            <div class="pointer-events-auto flex items-center gap-0.5">
+            <div class="pointer-events-auto flex items-center gap-0.5 [@media(pointer:coarse)]:gap-2">
               <Show
                 when={!frozen()}
                 fallback={<MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />}
@@ -447,17 +447,17 @@ export function GenerativeUiWidget(props: {
           class={
             expanded()
               ? "relative min-h-0 flex-1 overflow-hidden"
-              : "gu-card-host relative mb-3 overflow-hidden rounded-[14px] border border-line bg-card shadow-[0_1px_3px_rgb(0_0_0/4%)]"
+              : "gu-card-host relative mb-3 overflow-hidden rounded-panel border border-border bg-surface"
           }
         >
         <Show when={showSource() && !!source()}>
-          <div class="border-b border-line bg-elev/95 backdrop-blur p-3 text-ink-100">
-            <div class="mb-2 flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <span class="text-[12px] font-medium text-ink-200">Source code</span>
-                <span class="rounded bg-ink-800 px-1.5 py-0.5 text-[11px] text-ink-400 gu-mono">{data().id}.tsx</span>
+          <div class="border-b border-border-subtle bg-surface-subtle p-3 text-fg">
+            <div class="mb-2 flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="text-xs font-medium text-fg-secondary">Source code</span>
+                <span class="rounded-xs bg-surface-muted px-1.5 py-0.5 font-mono tabular-nums text-2xs text-fg-muted truncate">{data().id}.tsx</span>
               </div>
-              <div class="flex items-center gap-1">
+              <div class="flex items-center gap-1 [@media(pointer:coarse)]:gap-2 shrink-0">
                 <MsgIconBtn
                   tip={copiedSource() ? "Copied" : "Copy source code"}
                   icon="lucide:copy"
@@ -477,14 +477,14 @@ export function GenerativeUiWidget(props: {
                 />
               </div>
             </div>
-            <div class="max-h-80 overflow-auto rounded-lg border border-line bg-card p-2 text-[12px]">
+            <div class="max-h-80 overflow-auto rounded-control border border-border bg-surface p-2 text-xs">
               <CodeBlock text={source()} language="tsx" wrap={false} maxH="max-h-72" />
             </div>
           </div>
         </Show>
         <Show when={frozen() && !streaming()}>
-          <div class="ui-card-mode flex items-center justify-center gap-2 px-3 py-1.5">
-            <span class="truncate text-[11px] text-ink-500 gu-mono">{data().id || "widget"}</span>
+          <div class="flex items-center justify-center gap-2 px-3 py-2">
+            <span class="truncate font-mono tabular-nums text-xs text-fg-muted">{data().id || "widget"}</span>
             <button
               type="button"
               class="ui-button ui-button-sm ui-button-outline cursor-pointer"
@@ -496,18 +496,18 @@ export function GenerativeUiWidget(props: {
         </Show>
         <Show when={!frozen() && (streaming() || (!finalUrl() && !isStatic() && !missing())) && !error()}>
           <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center p-4">
-            <div class="flex max-w-full items-center gap-2 rounded-full border border-line bg-elev/90 py-1.5 pr-3.5 pl-3 shadow-sm backdrop-blur">
-              <span class="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-ink-500 border-t-transparent" />
-              <span class="truncate text-[11px] font-medium text-ink-400">
+            <div class="flex max-w-full items-center gap-2 rounded-pill border border-border bg-surface-elevated py-1.5 pr-3.5 pl-3">
+              <span class="h-3.5 w-3.5 shrink-0 ui-spinner text-fg-muted" />
+              <span class="truncate text-xs font-medium text-fg-secondary">
                 {data().placeholder || "Building your widget"}
               </span>
             </div>
           </div>
         </Show>
         <Show when={missing()}>
-          <div class="ui-card-mode flex items-center gap-2 px-3 py-1.5">
-            <span class="shrink-0 text-[11px] font-medium text-danger">Widget not found</span>
-            <span class="min-w-0 flex-1 truncate text-[11px] text-ink-500 gu-mono">{data().id}</span>
+          <div class="flex items-center gap-2 px-3 py-2">
+            <span class="shrink-0 text-xs font-medium text-danger">Widget not found</span>
+            <span class="min-w-0 flex-1 truncate font-mono tabular-nums text-xs text-fg-muted">{data().id}</span>
             <Show when={props.onPrefillPrompt}>
               <button
                 type="button"
@@ -520,14 +520,14 @@ export function GenerativeUiWidget(props: {
           </div>
         </Show>
         <Show when={isStatic() && !streaming() && !missing()}>
-          <div class="ui-card-mode p-4">
-            <div class="text-[11px] font-medium text-ink-300">{data().placeholder || "Interactive widget"}</div>
+          <div class="p-4">
+            <div class="text-xs font-medium text-fg-secondary">{data().placeholder || "Interactive widget"}</div>
             <Show when={Object.keys(data().state ?? {}).length}>
-              <pre class="mt-2 max-h-40 overflow-auto rounded-lg border border-line bg-elev/40 p-2 text-[11px] text-ink-400">
+              <pre class="mt-2 max-h-40 overflow-auto rounded-control border border-border-subtle bg-surface-subtle p-2 font-mono text-xs text-fg-secondary">
                 {JSON.stringify(data().state ?? {}, null, 2)}
               </pre>
             </Show>
-            <div class="mt-2 text-[11px] text-ink-500">
+            <div class="mt-2 text-xs text-fg-muted">
               Static preview · this fence has no <code>widget_id:</code> link to a stored widget source.
             </div>
           </div>
@@ -541,7 +541,7 @@ export function GenerativeUiWidget(props: {
                the widget is unloaded (frozen), missing or static — those
                states render their own compact card. */
             <Show when={!frozen() && !missing() && !isStatic() && !error()}>
-              <div class="block w-full border-0 bg-card" style={{ height: `${MIN_START_HEIGHT}px` }} />
+              <div class="block w-full border-0 bg-surface" style={{ height: `${MIN_START_HEIGHT}px` }} />
             </Show>
           }
         >
@@ -553,8 +553,8 @@ export function GenerativeUiWidget(props: {
             src={finalUrl()}
             class={
               expanded()
-                ? "block h-full w-full border-0 bg-card"
-                : "block w-full border-0 bg-card transition-[height] duration-200 ease-out motion-reduce:transition-none"
+                ? "block h-full w-full border-0 bg-surface"
+                : "block w-full border-0 bg-surface transition-[height] duration-200 ease-out motion-reduce:transition-none"
             }
             style={
               expanded()
@@ -564,9 +564,9 @@ export function GenerativeUiWidget(props: {
           />
         </Show>
         <Show when={error()}>
-          <div class="flex items-center gap-2 border-t border-line bg-elev/60 px-3 py-2">
-            <span class="shrink-0 text-[11px] font-medium text-danger">Widget error</span>
-            <span class="min-w-0 flex-1 truncate text-[11px] text-ink-400" data-rc-tip={error()}>
+          <div class="flex items-center gap-2 border-t border-border-subtle bg-surface-subtle px-3 py-2">
+            <span class="shrink-0 text-xs font-medium text-danger">Widget error</span>
+            <span class="min-w-0 flex-1 truncate text-xs text-fg-secondary" data-rc-tip={error()}>
               {error()}
             </span>
             <Show when={props.onPrefillPrompt}>
@@ -582,7 +582,7 @@ export function GenerativeUiWidget(props: {
               type="button"
               aria-label="Dismiss error"
               data-rc-tip="Dismiss error"
-              class="shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[13px] leading-none text-ink-500 hover:bg-ink-800/60 hover:text-ink-200"
+              class="inline-flex min-h-7 min-w-7 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-inner text-sm leading-none text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors"
               onClick={() => setError("")}
             >
               ×

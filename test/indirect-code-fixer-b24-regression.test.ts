@@ -151,10 +151,11 @@ describe("Fixer B2-4 Regression Tests", () => {
     });
   });
 
-  describe("BUG-R3-T2-07: TurnChangesBalloon autoscroll bottom clearance", () => {
-    test("TranscriptView applies pb-28 when balloon is on the last block", () => {
+  describe("BUG-R3-T2-07: TurnChangesBalloon bottom spacing without phantom pb-28 gap", () => {
+    test("TranscriptView keeps shared pb-8 scroll padding without phantom pb-28 on last balloon", () => {
       const src = readFileSync("web/src/indirect-code/components/TranscriptView.tsx", "utf-8");
-      expect(src).toContain('isLast() ? "pb-28" : ""');
+      expect(src).toContain("pt-6 pb-8 space-y-5");
+      expect(src).not.toContain("pb-28");
     });
   });
 });
