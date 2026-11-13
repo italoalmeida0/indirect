@@ -431,6 +431,9 @@ export function TranscriptView() {
   />
   <BackgroundCard contextKey={`${h.activeHostId()}:${s.activeSessionId()}`} />
   <QueueCard />
+  <Show when={t.historyHasNewer()}>
+    <div aria-hidden="true" class="h-1 shrink-0" />
+  </Show>
 </div>
 </div>
 </Show>

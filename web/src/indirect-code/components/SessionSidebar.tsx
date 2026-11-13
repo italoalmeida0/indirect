@@ -280,22 +280,29 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                 <UnreadDot label={ctx.sessionAttentionLabel?.(s) ?? "Unread update"} />
               </span>
             </Show>
-            <div class="flex items-center justify-end shrink-0">
+            {/* Desktop row actions fade in OVER a fixed trailing slot instead of
+                reflowing the row: the title, unread dot and stop spinner never
+                shift under the pointer when the row is hovered. */}
+            <div
+              class={`relative flex items-center justify-end shrink-0 ${
+                !ctx.isMobile() && !ctx.selectionMode() ? "min-w-[3.5rem]" : ""
+              }`}
+            >
               <span
-                class={`rc-row-time text-2xs text-fg-muted tabular-nums ${
+                class={`rc-row-time text-2xs text-fg-muted tabular-nums transition-opacity ${
                   !ctx.isMobile() && !ctx.selectionMode()
-                    ? "group-hover:hidden group-focus-within:hidden"
+                    ? "group-hover:opacity-0 group-focus-within:opacity-0"
                     : ""
                 }`}
               >
                 {timeAgo(sessionTimeLabel(s))}
               </span>
               <Show when={!ctx.isMobile() && !ctx.selectionMode()}>
-                <div class="rc-row-actions hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
+                <div class="rc-row-actions absolute inset-y-0 right-0 flex items-center opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
                   <button
                     type="button"
                     onClick={(e) => ctx.togglePin(s.id, e)}
-                    class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                    class="rc-row-action flex h-[18px] w-[18px] items-center justify-center rounded text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip={s.pinned ? "Unpin" : "Pin"} aria-label={s.pinned ? "Unpin" : "Pin"}
                   >
                     <Iconify icon={s.pinned ? "lucide:pin-off" : "lucide:pin"} size={12} />
@@ -307,7 +314,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                       ctx.setRenameText(s.title);
                       ctx.setRenamingId(s.id);
                     }}
-                    class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                    class="rc-row-action flex h-[18px] w-[18px] items-center justify-center rounded text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip="Rename" aria-label="Rename"
                   >
                     <Iconify icon="lucide:pencil" size={12} />
@@ -315,7 +322,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                   <button
                     type="button"
                     onClick={(e) => ctx.deleteSession(s.id, e)}
-                    class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer"
+                    class="rc-row-action flex h-[18px] w-[18px] items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer"
                     data-rc-tip="Delete" aria-label="Delete"
                   >
                     <Iconify icon="lucide:trash-2" size={12} />

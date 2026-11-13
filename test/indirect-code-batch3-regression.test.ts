@@ -8,9 +8,10 @@ describe("Batch 3 Bug Fixes & Regression Suite", () => {
   test("BUG-T2-02 & BUG-T5-R3-04: Markdown Table styles and Copy/Download controls in TarnavMarkdown", () => {
     const src = readFileSync(join(root, "web/src/indirect-code/components/TarnavMarkdown.tsx"), "utf-8");
     // Table semantic tokens
-    expect(src).toContain('table: "w-full border-collapse border border-(--line)"');
-    expect(src).toContain('"table-header": "bg-(--ink-900)"');
-    expect(src).not.toContain("border-border");
+    expect(src).toContain('table: "w-full border-collapse border border-border"');
+    expect(src).toContain('"table-header": "bg-surface-subtle"');
+    expect(src).not.toContain("border-(--line)");
+    expect(src).not.toContain("bg-(--ink-900)");
     expect(src).not.toContain("bg-muted/80");
 
     // Copy table and download CSV controls

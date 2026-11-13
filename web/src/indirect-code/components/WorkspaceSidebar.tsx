@@ -439,10 +439,12 @@ export function WorkspaceSidebar() {
                       </button>
                       <div class="flex items-center justify-end gap-0.5 shrink-0">
                         <Show when={folderHasUnread() || folderHasRunning()}>
+                          {/* The roll-up stays visible while the row is hovered or focused:
+                              desktop row actions slide in to its left so the glyph never moves. */}
                           <span
                             data-project-collapsed-status={folderHasUnread() ? "unread" : "running"}
                             class={`pointer-events-none flex h-6 w-6 items-center justify-center ${
-                              !overlaySidebar() ? "group-hover:hidden group-focus-within:hidden" : ""
+                              !overlaySidebar() ? "order-last" : ""
                             }`}
                           >
                             <Show

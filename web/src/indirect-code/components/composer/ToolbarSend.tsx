@@ -28,7 +28,7 @@ export function ToolbarSend() {
           }}
           onClick={t.cancelCurrentTurn}
           disabled={t.turnActivity()?.status === "cancelling"}
-          class="rc-composer-send relative h-8 w-8 shrink-0 rounded-full inline-flex items-center justify-center border border-[color-mix(in_oklab,var(--danger)_32%,var(--border))] bg-danger-subtle text-danger hover:bg-[color-mix(in_oklab,var(--danger)_18%,var(--surface))] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-1/2 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:w-11 [@media(pointer:coarse)]:after:-translate-1/2"
+          class="rc-composer-stop relative h-8 w-8 shrink-0 rounded-full inline-flex items-center justify-center border border-[color-mix(in_oklab,var(--danger)_32%,var(--border))] bg-danger-subtle text-danger hover:bg-[color-mix(in_oklab,var(--danger)_18%,var(--surface))] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-1/2 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:w-11 [@media(pointer:coarse)]:after:-translate-1/2"
           data-rc-tip={t.turnActivity()?.status === "cancelling" ? "Stopping…" : "Stop"}
           aria-label={t.turnActivity()?.status === "cancelling" ? "Stopping turn" : "Stop"}
         >

@@ -171,7 +171,7 @@ function renderTurnAggregate(
         chevronSize={13}
         class="text-xs text-fg-muted hover:text-fg"
       >
-        <span class={`truncate min-w-0 tabular-nums ${headerShimmerActive() ? "ui-shimmer font-medium text-fg-secondary" : ""}`} style={shimmerStyle()}>
+        <span data-thinking-label={singleThinking() ? "" : undefined} class={`truncate min-w-0 tabular-nums ${headerShimmerActive() ? "ui-shimmer font-medium text-fg-secondary" : ""}`} style={shimmerStyle()}>
           {headerLabel()}
         </span>
         <Show when={ctx.specialProgress(series.units)}>

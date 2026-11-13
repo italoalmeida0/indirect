@@ -408,11 +408,11 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
   box-shadow: var(--shadow-floating);
 }
 .ui-dialog[data-state="closing"], .ui-dialog-backdrop[data-state="closing"] { pointer-events: none; }
-.ui-dialog-header { display: flex; flex-shrink: 0; align-items: flex-start; justify-content: space-between; gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-4); border-bottom: 1px solid var(--border-subtle); }
+.ui-dialog-header { display: flex; flex-shrink: 0; align-items: flex-start; justify-content: space-between; gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-4); border-bottom: 1px solid var(--border); }
 .ui-dialog-title { color: var(--foreground); font-size: var(--text-lg); font-weight: 500; line-height: var(--leading-body); overflow-wrap: anywhere; }
 .ui-dialog-description { margin-top: var(--space-1); color: var(--text-secondary); font-size: var(--text-sm); line-height: var(--leading-body); }
 .ui-dialog-body { padding: var(--space-5) var(--space-6); font-size: var(--text-sm); line-height: var(--leading-body); }
-.ui-dialog-footer { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); padding: var(--space-4) var(--space-6); border-top: 1px solid var(--border-subtle); }
+.ui-dialog-footer { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); padding: var(--space-4) var(--space-6); border-top: 1px solid var(--border); background: var(--surface-subtle); border-bottom-left-radius: calc(var(--radius-surface) - 1px); border-bottom-right-radius: calc(var(--radius-surface) - 1px); }
 .ui-dialog-close { position: relative; flex: 0 0 auto; display: grid; width: var(--space-8); height: var(--space-8); place-items: center; border: 1px solid var(--border); border-radius: var(--radius-pill); background: color-mix(in oklab, var(--surface-muted) 50%, transparent); color: var(--text-secondary); cursor: pointer; transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
 @media (hover: hover) and (pointer: fine) { .ui-dialog-close:hover { background: var(--surface-muted); color: var(--foreground); } }
 /* Phones show the dialog as a card inset from every edge (status bar and

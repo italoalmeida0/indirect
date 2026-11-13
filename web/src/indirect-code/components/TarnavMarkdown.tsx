@@ -339,7 +339,8 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         wrap.className = "rc-table-wrap";
         wrap.setAttribute("data-streamdown", "table-wrapper");
         const toolbar = wrap.appendChild(document.createElement("div"));
-        toolbar.className = "flex items-center justify-end gap-1 [@media(pointer:coarse)]:gap-2 pb-1 text-xs text-fg-muted";
+        // Coarse-pointer 44px hit areas stay inside the message width.
+        toolbar.className = "flex items-center justify-end gap-1 [@media(pointer:coarse)]:gap-2 [@media(pointer:coarse)]:overflow-x-clip pb-1 text-xs text-fg-muted";
         const scroller = wrap.appendChild(document.createElement("div"));
         scroller.className = opts.noNestedScroll ? "rc-table-scroll overflow-hidden" : "rc-table-scroll overflow-x-auto";
         const table = scroller.appendChild(document.createElement("table"));

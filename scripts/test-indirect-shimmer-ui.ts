@@ -160,7 +160,7 @@ try {
     ui.seedThinkingPhase();
     await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
-    const thinkEl = document.querySelector('[data-thinking-row] .ui-shimmer') as HTMLElement | null;
+    const thinkEl = document.querySelector('[data-thinking-row] .ui-shimmer, .ui-shimmer[data-thinking-label]') as HTMLElement | null;
     const workEl = document.querySelector('[data-turn-status] .ui-shimmer') as HTMLElement | null;
     if (!thinkEl || !workEl) {
       throw new Error(`Missing thinking/working shimmer elements: think=${!!thinkEl} work=${!!workEl}`);
@@ -193,7 +193,7 @@ try {
       labelsSeen.add(thinkEl.textContent || "");
     }
 
-    const currentThinkEl = document.querySelector('[data-thinking-row] .ui-shimmer');
+    const currentThinkEl = document.querySelector('[data-thinking-row] .ui-shimmer, .ui-shimmer[data-thinking-label]');
     const currentWorkEl = document.querySelector('[data-turn-status] .ui-shimmer');
     const finalElapsedLabel = document.querySelector("[data-turn-status]")?.textContent || "";
 
@@ -464,6 +464,7 @@ try {
       }
 
       return {
+        finalPcts,
         frames: frame,
         elapsedMs: performance.now() - startWall,
         identity: {
@@ -504,7 +505,7 @@ try {
     );
     assert(
       streamAudit.maxPhaseSpreadPct < 3,
-      `[${theme}] All simultaneously active .ui-shimmer nodes must stay phase-locked within 3% (got ${streamAudit.maxPhaseSpreadPct.toFixed(2)}%)`,
+      `[${theme}] All simultaneously active .ui-shimmer nodes must stay phase-locked within 3% (got ${streamAudit.maxPhaseSpreadPct.toFixed(2)}%; ds/rail/changes/queue/work/todo=${streamAudit.finalPcts.map((p: number) => p.toFixed(1)).join("/")})`,
     );
 
     for (const key of ["ds", "rail", "changes", "queue", "work", "todo"] as const) {

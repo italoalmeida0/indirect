@@ -866,7 +866,7 @@ export function ToolbarContext() {
     onClick={() => { const next = !c.modeMenuOpen(); ui.closeMenus(); c.setModeMenuOpen(next); }}
     class="h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer">
     <Iconify icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")} size={13} class="text-accent shrink-0" />
-    <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}<Show when={additionalCount() > 0}><span class="font-mono text-2xs text-accent">{` +${additionalCount()}`}</span></Show></span>
+    <span class="capitalize whitespace-nowrap">{currentModeSpec()?.label ?? c.agentMode()}<Show when={additionalCount() > 0}><span class="font-mono text-2xs text-accent">{` +${additionalCount()}`}</span></Show></span>
     <Iconify icon="lucide:chevron-down" size={11} class={`text-fg-muted transition-transform duration-150 ${c.modeMenuOpen() ? "rotate-180" : ""}`} />
   </button>
   <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} onClose={() => c.setModeMenuOpen(false)} role="dialog" aria-label="Mode & Skills" placement="top-start" width="min(24.5rem, calc(100vw - 1.5rem))">

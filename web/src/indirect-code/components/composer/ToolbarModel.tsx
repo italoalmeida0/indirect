@@ -36,7 +36,7 @@ export function ToolbarModel() {
     data-rc-tip="Effort & model" aria-label={`Switch model: ${c.activeModelName()}${formatEffort(c.effort()) ? ` ${formatEffort(c.effort())}` : ""}`}
   >
     <Iconify icon="lucide:cpu" size={13} class="shrink-0 text-fg-muted" />
-    <span class="max-w-[92px] @[380px]:max-w-[130px] @[480px]:max-w-[190px] truncate text-fg">{c.activeModelName()}</span>
+    <span class="max-w-[92px] @[380px]:max-w-[100px] @[500px]:max-w-[190px] truncate text-fg">{c.activeModelName()}</span>
     <Show when={formatEffort(c.effort())}>
       <span
         class={`hidden @[340px]:inline-flex items-center rounded border px-1 py-0.5 font-mono text-2xs font-medium shrink-0 leading-none transition-colors ${

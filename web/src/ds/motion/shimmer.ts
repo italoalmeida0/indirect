@@ -40,20 +40,28 @@ export function shimmerPhaseStyle(active = true): JSX.CSSProperties | undefined 
  * Reactive phase-locked style for conditional `.ui-shimmer` elements:
  * computes `--ui-shimmer-delay` once when `active()` turns true and keeps the
  * style object reference identical across subsequent text, counter, and timer updates.
+ *
+ * An off→on flicker inside one frame (e.g. a snapshot that clears and refills a
+ * transcript synchronously) keeps the previous delay: the class never leaves the
+ * computed style, so the CSS animation does not restart, `animationstart` never
+ * re-syncs it, and a freshly minted delay would knock the node out of phase.
  */
 export function createShimmerStyle(active: () => boolean): () => JSX.CSSProperties | undefined {
   let wasActive = false;
   let cached: JSX.CSSProperties | undefined;
+  let offAt: number | null = null;
   return () => {
     const on = Boolean(active()) && !reducedMotion();
     if (!on) {
+      if (wasActive) offAt = currentShimmerClockMs();
       wasActive = false;
-      cached = undefined;
       return undefined;
     }
     if (!wasActive || !cached) {
+      const sameFrame = cached !== undefined && offAt !== null && currentShimmerClockMs() === offAt;
+      if (!sameFrame) cached = shimmerPhaseStyle(true);
       wasActive = true;
-      cached = shimmerPhaseStyle(true);
+      offAt = null;
     }
     return cached;
   };

@@ -128,7 +128,7 @@ export function ComposerInput() {
     disabled={s.creatingSession() || c.sending()}
     rows={1}
     class="flex-1 min-w-0 bg-transparent text-sm max-sm:text-base leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-1 max-h-[160px] min-h-9 overflow-y-hidden"
-    placeholder="Ask anything, @ to mention, / for actions"
+    placeholder={ui.isMobile() ? "Ask anything · @ files · / actions" : "Ask anything, @ to mention, / for actions"}
     value={c.inputPrompt()}
     onFocus={() => c.mentions.setFocused(true)}
     onBlur={() => { c.mentions.setFocused(false); }}

@@ -856,12 +856,10 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
     expect(pickerSlice).toContain("Stage automatically for the next AI step, with × to return to queue.");
     expect(pickerSlice).toContain("Interrupt &amp; send");
     expect(pickerSlice).toContain('data-midturn-radio="steer" aria-checked="true"');
-    expect(pickerSlice).toContain("border-fg/45 bg-surface text-fg shadow-2xs");
+    expect(pickerSlice).toContain("border-accent bg-accent-subtle/40 text-fg");
     expect(pickerSlice).not.toContain("data-ui-badge");
     expect(pickerSlice).not.toContain("h-6 w-6 rounded-md border");
-    expect(pickerSlice).not.toContain("bg-accent-subtle");
     expect(pickerSlice).not.toContain("bg-warning-subtle");
-    expect(pickerSlice).not.toContain("border-accent");
     expect(pickerSlice).not.toContain("border-warning");
   });
 });

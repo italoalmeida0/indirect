@@ -177,7 +177,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
   return (
     <Show when={files().length > 0}>
       <div class="w-full select-text">
-        <div class="w-full rounded-panel border border-border bg-surface-subtle overflow-hidden transition-colors">
+        <div data-turn-changes class="w-full rounded-panel border border-border bg-surface-subtle overflow-hidden transition-colors">
           <div class="flex items-stretch justify-between">
             <button
               type="button"

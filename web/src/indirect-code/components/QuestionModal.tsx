@@ -91,7 +91,7 @@ export function QuestionPanel(props: {
       if (step() < questions().length-1) move(step()+1);
       else if (props.connected && drafts.every((_, i) => ready(i))) props.onSubmit(drafts.map((_, i) => answers(i)));
     }}>
-      <fieldset ref={fieldsetRef} disabled={props.submitting} class="px-3.5 py-3.5 max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain min-w-0">
+      <fieldset ref={fieldsetRef} disabled={props.submitting} class="px-3.5 py-3 min-w-0">
         <legend ref={heading} tabIndex={-1} class="float-left w-full mb-3 outline-none">
           <Show when={question().header}>
             <span class="block text-2xs font-medium text-accent mb-1">{question().header}</span>
@@ -150,7 +150,7 @@ export function QuestionPanel(props: {
                   <span class="flex items-center gap-1.5 flex-wrap text-xs font-medium text-fg break-words">
                     <span>{option.label}</span>
                     <Show when={isRec()}>
-                      <span class="rounded-full border border-[color-mix(in_oklab,var(--accent)_28%,var(--border))] bg-accent-subtle px-2 py-0.5 text-2xs font-medium text-accent">
+                      <span class="rounded-full border border-[color-mix(in_oklab,var(--accent)_28%,var(--border))] bg-accent-subtle px-1.5 py-px leading-tight shrink-0 text-2xs font-medium text-accent">
                         Recommended
                       </span>
                     </Show>

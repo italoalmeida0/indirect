@@ -277,7 +277,7 @@ function PassiveQueueLine(props: {
                   data-rc-tip="Stop current step and send now"
                   aria-label="Stop current step and send now"
                   onClick={props.onInterruptNow}
-                  class="hidden @[440px]:inline-flex ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted"
+                  class="inline-flex ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted"
                 >
                   <Iconify icon="lucide:zap" size={11.5} />
                 </button>
@@ -290,7 +290,7 @@ function PassiveQueueLine(props: {
                   aria-label="Move earlier in queue"
                   disabled={props.idx === 0}
                   onClick={props.onMoveUp}
-                  class="hidden @[440px]:inline-flex ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted disabled:opacity-35 disabled:pointer-events-none"
+                  class="inline-flex ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted disabled:opacity-35 disabled:pointer-events-none"
                 >
                   <Iconify icon="lucide:chevron-up" size={11.5} />
                 </button>
@@ -301,7 +301,7 @@ function PassiveQueueLine(props: {
                   aria-label="Move later in queue"
                   disabled={props.idx === props.total - 1}
                   onClick={props.onMoveDown}
-                  class="hidden @[440px]:inline-flex ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted disabled:opacity-35 disabled:pointer-events-none"
+                  class="inline-flex ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted disabled:opacity-35 disabled:pointer-events-none"
                 >
                   <Iconify icon="lucide:chevron-down" size={11.5} />
                 </button>

@@ -510,7 +510,7 @@ function MidTurnSendPicker(props: {
     <div
       id="rc-set-mid-turn-send"
       data-setting="mid-turn-send"
-      class="scroll-mt-14 rounded-panel border border-border bg-surface p-3.5 space-y-3"
+      class="scroll-mt-24 sm:scroll-mt-16 rounded-panel border border-border bg-surface p-3.5 space-y-3"
     >
       <div class="min-w-0">
         <div class="text-xs font-medium text-fg">While agent is working</div>
@@ -885,7 +885,7 @@ export function SettingsGeneralSection() {
   return (
     <div class="space-y-6">
       {/* 1. Appearance & Layout */}
-      <section id="rc-set-appearance" class="scroll-mt-14 space-y-3.5">
+      <section id="rc-set-appearance" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5">
         <div>
           <h3 class="text-sm font-medium text-fg">Appearance</h3>
           <p class="text-xs text-fg-muted mt-0.5">
@@ -940,7 +940,7 @@ export function SettingsGeneralSection() {
       </section>
 
       {/* 2. Turn Notifications & Push */}
-      <section id="rc-set-notifications" class="scroll-mt-14 space-y-3.5">
+      <section id="rc-set-notifications" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5">
         <div class="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h3 class="text-sm font-medium text-fg">Turn notifications</h3>
@@ -1035,7 +1035,7 @@ export function SettingsGeneralSection() {
       </section>
 
       {/* 3. Updates */}
-      <section id="rc-set-updates" class="scroll-mt-14 space-y-3.5">
+      <section id="rc-set-updates" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5">
         <div class="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h3 class="text-sm font-medium text-fg">Updates</h3>
@@ -1143,7 +1143,7 @@ export function SettingsGeneralSection() {
       </section>
 
       {/* 4. Advanced Runtime & Context Compaction */}
-      <section id="rc-set-runtime" class="scroll-mt-14 space-y-3.5 pb-1">
+      <section id="rc-set-runtime" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5 pb-3">
         <div>
           <h3 class="text-sm font-medium text-fg">Runtime & messaging</h3>
           <p class="text-xs text-fg-muted mt-0.5">

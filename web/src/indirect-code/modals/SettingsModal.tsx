@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { press } from "../../ds/motion/press";
+import { reducedMotion } from "../../ds/motion/reduced";
 import { Badge, Btn, Modal } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal } from "../ctx";
@@ -16,7 +17,10 @@ export function SettingsModal() {
   const jumpTo = (id: string) => {
     m.setSettingsTab("general");
     requestAnimationFrame(() => {
-      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById(id)?.scrollIntoView({
+        behavior: reducedMotion() ? "auto" : "smooth",
+        block: "start",
+      });
     });
   };
 
@@ -49,7 +53,7 @@ export function SettingsModal() {
     >
       <div class="w-full min-w-0">
         {/* Sticky Host Telemetry & Section Jump Bar (flush with dialog header & scroll padding) */}
-        <div class="sticky -top-4 sm:-top-5 z-10 -mx-4 sm:-mx-6 -mt-4 sm:-mt-5 mb-4 px-4 sm:px-6 py-2.5 bg-surface-raised border-b border-border-subtle flex flex-wrap items-center justify-between gap-2">
+        <div class="sticky -top-4 sm:-top-5 z-10 -mx-4 sm:-mx-6 -mt-4 sm:-mt-5 mb-4 px-4 sm:px-6 py-2 sm:py-2.5 bg-surface-raised border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-x-3 gap-y-1.5">
           <div class="flex items-center gap-2 min-w-0">
             <span
               class={`h-2 w-2 shrink-0 rounded-full ${
@@ -79,7 +83,7 @@ export function SettingsModal() {
                   : "Offline"}
             </Badge>
           </div>
-          <nav aria-label="Settings sections" class="flex items-center gap-0.5 flex-wrap">
+          <nav aria-label="Settings sections" class="flex w-full sm:w-auto items-center justify-between sm:justify-start gap-0 sm:gap-0.5 overflow-x-auto no-scrollbar max-w-full">
             <For
               each={[
                 { id: "rc-set-appearance", label: "Appearance" },
@@ -95,7 +99,7 @@ export function SettingsModal() {
                   disabled={m.savingSettings()}
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => jumpTo(sec.id)}
-                  class="inline-flex min-h-7 [@media(pointer:coarse)]:min-h-11 items-center rounded-lg px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-50"
+                  class="inline-flex min-h-7 [@media(pointer:coarse)]:min-h-11 shrink-0 whitespace-nowrap items-center rounded-lg px-1.5 sm:px-2.5 py-1 text-2xs sm:text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-50"
                 >
                   {sec.label}
                 </button>
@@ -121,6 +125,7 @@ export function SettingsModal() {
               class="ui-button ui-button-outline ui-button-xs shrink-0 rounded-lg"
               disabled={m.savingSettings()}
               onClick={m.reloadSettings}
+              aria-label="Reload latest settings (discard local edits)"
             >
               Reload latest settings
             </button>

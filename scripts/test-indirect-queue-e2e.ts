@@ -1289,8 +1289,11 @@ try {
 
     await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
     await dialog.waitFor({ state: "hidden", timeout: 15000 });
-    if ((await appNoticeDismiss.count()) > 0 && (await appNoticeDismiss.isVisible().catch(() => false))) {
-      await appNoticeDismiss.click();
+    // The "Settings saved on the host" notice lands on the daemon ack, which can
+    // trail the dialog exit: wait for it briefly, dismiss it, and let it leave.
+    if (await appNoticeDismiss.first().waitFor({ state: "visible", timeout: 3000 }).then(() => true, () => false)) {
+      await appNoticeDismiss.first().click();
+      await appNoticeDismiss.first().waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
     }
 
     // Assert config.json on disk & SignalDB/pull mirror reflect mid_turn_send: "steer" and new revision
@@ -1338,7 +1341,7 @@ try {
 
     // Assert it landed directly in Zone 1 `[data-queue-item-state="steer"]` with `×` button and zero toast!
     await stagedSteer.waitFor({ state: "visible", timeout: 10000 });
-    assert.equal(await appNoticeDismiss.count(), 0, "auto-staging into steer must not stack a foreground appNotice toast");
+    assert.equal(await appNoticeDismiss.count(), 0, `auto-staging into steer must not stack a foreground appNotice toast (found: ${await page.locator(".ui-toast-region").textContent().catch(() => "")})`);
     const steerBox2A = await stagedSteer.boundingBox();
     assert(
       steerBox2A && steerBox2A.height > 0 && steerBox2A.height <= 46,
@@ -1393,8 +1396,11 @@ try {
     assert.equal(await interruptRadioDesk.getAttribute("aria-checked"), "true");
     await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
     await dialog.waitFor({ state: "hidden", timeout: 15000 });
-    if ((await appNoticeDismiss.count()) > 0 && (await appNoticeDismiss.isVisible().catch(() => false))) {
-      await appNoticeDismiss.click();
+    // The "Settings saved on the host" notice lands on the daemon ack, which can
+    // trail the dialog exit: wait for it briefly, dismiss it, and let it leave.
+    if (await appNoticeDismiss.first().waitFor({ state: "visible", timeout: 3000 }).then(() => true, () => false)) {
+      await appNoticeDismiss.first().click();
+      await appNoticeDismiss.first().waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
     }
 
     const diskConfigInt = JSON.parse(readFileSync(path.join(ctx.daemonDir, "config.json"), "utf8"));
@@ -1458,8 +1464,11 @@ try {
     assert.equal(await steerRadio.getAttribute("aria-checked"), "true");
     await dialog.getByRole("button", { name: "Save changes", exact: true }).click();
     await dialog.waitFor({ state: "hidden", timeout: 15000 });
-    if ((await appNoticeDismiss.count()) > 0 && (await appNoticeDismiss.isVisible().catch(() => false))) {
-      await appNoticeDismiss.click();
+    // The "Settings saved on the host" notice lands on the daemon ack, which can
+    // trail the dialog exit: wait for it briefly, dismiss it, and let it leave.
+    if (await appNoticeDismiss.first().waitFor({ state: "visible", timeout: 3000 }).then(() => true, () => false)) {
+      await appNoticeDismiss.first().click();
+      await appNoticeDismiss.first().waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
     }
 
     // --- 2C: Plain Stop button while an item is staged in "Next step" ---
