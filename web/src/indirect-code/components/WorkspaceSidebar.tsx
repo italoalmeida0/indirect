@@ -8,6 +8,7 @@ import { SessionRow, type SessionRowCtx } from "./SessionSidebar";
 import { FloatMenu } from "./FloatMenu";
 import { HostCard } from "./HostCard";
 import { SidebarToggle } from "./SidebarToggle";
+import { RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
 import type { SessionSummary } from "../types";
 
 interface SessionMenuState {
@@ -83,6 +84,8 @@ export function WorkspaceSidebar() {
     sessionStatus: t.sessionStatus,
     turnActivity: t.turnActivity,
     cancelTurnForSession: t.cancelTurnForSession,
+    isSessionUnread: (sess) => Boolean(s.isSessionUnread?.(sess)),
+    sessionAttentionLabel: (sess) => s.sessionAttentionLabel?.(sess) ?? "Unread update",
     openContextMenu: openSessionMenu,
     contextMenuSessionId: () => sessionMenu()?.sessionId ?? null,
     registerLongPressCancel: (cancel) => {
@@ -90,6 +93,31 @@ export function WorkspaceSidebar() {
     },
   });
   const renderRow = (sess: SessionSummary) => SessionRow(rowCtx(), sess);
+  const renderListToggle = (key: string, count: number) => (
+    <Show when={count > 10}>
+      <button
+        type="button"
+        data-session-list-toggle={key}
+        class="inline-flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-fg-muted hover:text-fg transition-colors cursor-pointer"
+        aria-expanded={Boolean(s.isSessionListExpanded?.(key))}
+        onClick={() => s.toggleSessionListExpanded?.(key)}
+      >
+        <span>{s.isSessionListExpanded?.(key) ? "Show less" : `See all (${count})`}</span>
+        <Show when={Boolean(s.hasHiddenUnreadSessions?.(key))}>
+          <UnreadDot size="sm" label="Unread conversations hidden" />
+        </Show>
+      </button>
+    </Show>
+  );
+  const currentView = () => s.sidebarView?.() ?? "projects";
+  const projectsTabUnread = () =>
+    currentView() === "talk" &&
+    (s.sessions?.() ?? []).some(
+      (item) => !(s.isTalkSession?.(item) ?? false) && Boolean(s.isSessionUnread?.(item)),
+    );
+  const talkTabUnread = () =>
+    currentView() === "projects" &&
+    (s.talkSessions?.() ?? []).some((item) => Boolean(s.isSessionUnread?.(item)));
   const [viewSwitchEl, setViewSwitchEl] = createSignal<HTMLDivElement>();
   const [viewSwitchInd, setViewSwitchInd] = createSignal<HTMLSpanElement>();
   createGlide({
@@ -216,19 +244,25 @@ export function WorkspaceSidebar() {
                 type="button"
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => s.setSidebarView?.("projects")}
-                aria-pressed={(s.sidebarView?.() ?? "projects") === "projects"}
-                class="ui-segment px-2.5 text-[11px] cursor-pointer"
+                aria-pressed={currentView() === "projects"}
+                class="ui-segment inline-flex items-center gap-1.5 px-2.5 text-[11px] cursor-pointer"
               >
-                Projects
+                <span>Projects</span>
+                <Show when={projectsTabUnread()}>
+                  <UnreadDot size="sm" label="Unread project conversations" />
+                </Show>
               </button>
               <button
                 type="button"
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => s.setSidebarView?.("talk")}
-                aria-pressed={(s.sidebarView?.() ?? "projects") === "talk"}
-                class="ui-segment px-2.5 text-[11px] cursor-pointer"
+                aria-pressed={currentView() === "talk"}
+                class="ui-segment inline-flex items-center gap-1.5 px-2.5 text-[11px] cursor-pointer"
               >
-                Talk
+                <span>Talk</span>
+                <Show when={talkTabUnread()}>
+                  <UnreadDot size="sm" label="Unread talk conversations" />
+                </Show>
               </button>
             </div>
           }
@@ -311,7 +345,7 @@ export function WorkspaceSidebar() {
           >
             {(sess) => renderRow(sess)}
           </For>
-          {s.sessionListToggle?.("talk", (s.talkSessions?.() ?? []).length)}
+          {renderListToggle("talk", (s.talkSessions?.() ?? []).length)}
         </div>
       </Show>
       <Show when={(s.sidebarView?.() ?? "projects") === "projects"}>
@@ -332,8 +366,17 @@ export function WorkspaceSidebar() {
               {(p) => {
                 const list = () => s.projectSessions(p.id);
                 const activeProj = () => s.activeProjectId() === p.id || p.id === (s.activeProject()?.id || "");
+                const folderHasUnread = () =>
+                  !s.isProjectExpanded(p) && list().some((sess) => Boolean(s.isSessionUnread?.(sess)));
+                const folderHasRunning = () =>
+                  !s.isProjectExpanded(p) &&
+                  list().some(
+                    (sess) =>
+                      sess.status === "running" ||
+                      (sess.id === s.activeSessionId() && t.sessionStatus() === "running"),
+                  );
                 return (
-                  <div>
+                  <div data-project-id={p.id}>
                     <div
                       onClick={() => {
                         s.pickProject(p.id);
@@ -374,44 +417,59 @@ export function WorkspaceSidebar() {
                         <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
                         <span class="truncate flex-1 font-medium">{p.name}</span>
                       </button>
-                      <button
-                        type="button"
-                        aria-label={`Copy path for ${p.name}`}
-                        data-rc-tip="Copy project path"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void copyWithToast(p.path);
-                        }}
-                        class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
-                      >
-                        <Iconify icon="lucide:copy" size={11} />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`New conversation in ${p.name}`}
-                        data-rc-tip="New conversation in this project"
-                        onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
-                        class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
-                      >
-                        <Iconify icon="lucide:plus" size={13} />
-                      </button>
-                      <Show when={!p.protected}>
+                      <div class="relative flex items-center justify-end gap-0.5 shrink-0">
+                        <Show when={folderHasUnread() || folderHasRunning()}>
+                          <span
+                            data-project-collapsed-status={folderHasUnread() ? "unread" : "running"}
+                            class="pointer-events-none absolute right-0.5 flex items-center justify-center transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+                          >
+                            <Show
+                              when={folderHasUnread()}
+                              fallback={<RadialSpokeSpinner size={12} class="text-fg-muted" />}
+                            >
+                              <UnreadDot label="Unread conversation in project" />
+                            </Show>
+                          </span>
+                        </Show>
                         <button
                           type="button"
-                          onClick={(e) => s.deleteProject(p.id, e)}
-                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded p-0.5 text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer shrink-0"
-                          data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
+                          aria-label={`Copy path for ${p.name}`}
+                          data-rc-tip="Copy project path"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void copyWithToast(p.path);
+                          }}
+                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                         >
-                          <Iconify icon="lucide:x" size={12} />
+                          <Iconify icon="lucide:copy" size={11} />
                         </button>
-                      </Show>
+                        <button
+                          type="button"
+                          aria-label={`New conversation in ${p.name}`}
+                          data-rc-tip="New conversation in this project"
+                          onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
+                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                        >
+                          <Iconify icon="lucide:plus" size={13} />
+                        </button>
+                        <Show when={!p.protected}>
+                          <button
+                            type="button"
+                            onClick={(e) => s.deleteProject(p.id, e)}
+                            class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded p-0.5 text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer shrink-0"
+                            data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
+                          >
+                            <Iconify icon="lucide:x" size={12} />
+                          </button>
+                        </Show>
+                      </div>
                     </div>
                     <Show when={s.isProjectExpanded(p)}>
                       <div class="ml-[15px] mt-0.5 space-y-0.5 border-l border-border/60 pl-2">
                         <For each={s.visibleSessions(p.id, list())}>
                           {(sess) => renderRow(sess)}
                         </For>
-                        {s.sessionListToggle(p.id, list().length)}
+                        {renderListToggle(p.id, list().length)}
                       </div>
                     </Show>
                   </div>
@@ -427,7 +485,7 @@ export function WorkspaceSidebar() {
                   <For each={s.visibleSessions("loose", s.looseSessions())}>
                     {(sess) => renderRow(sess)}
                   </For>
-                  {s.sessionListToggle("loose", s.looseSessions().length)}
+                  {renderListToggle("loose", s.looseSessions().length)}
                 </div>
               </div>
             </Show>

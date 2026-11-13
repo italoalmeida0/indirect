@@ -3,6 +3,7 @@ import { Icon as Iconify } from "../../components/icon";
 import { timeAgo } from "../utils/format";
 import { sessionTimeLabel } from "../paths";
 import type { SessionSummary } from "../types";
+import { RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
 
 export function SessionStopButton(props: {
   sessionId: string;
@@ -32,10 +33,10 @@ export function SessionStopButton(props: {
       <Show
         when={!props.isCancelling && hovered()}
         fallback={
-          <Iconify
-            icon="lucide:loader-2"
-            size={12}
-            class={`animate-spin ${props.isCancelling ? "text-fg-muted" : "text-accent"}`}
+          <RadialSpokeSpinner
+            size={13}
+            paused={props.isCancelling}
+            class={props.isCancelling ? "text-fg-muted" : "text-fg-secondary"}
           />
         }
       >
@@ -69,6 +70,8 @@ export interface SessionRowCtx {
   sessionStatus: () => string;
   turnActivity: () => { status: string } | null;
   cancelTurnForSession: (id: string, e: MouseEvent | KeyboardEvent) => void;
+  isSessionUnread?: (session: SessionSummary) => boolean;
+  sessionAttentionLabel?: (session: SessionSummary) => string;
   openContextMenu?: (session: SessionSummary, anchor: HTMLElement) => void;
   contextMenuSessionId?: () => string | null;
   registerLongPressCancel?: (cancel: () => void) => void;
@@ -82,6 +85,9 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
   const selected = () => ctx.selectedSessions().has(s.id);
   const menuOpen = () => ctx.contextMenuSessionId?.() === s.id;
   const isRenaming = () => ctx.renamingId() === s.id;
+  const isUnread = () => Boolean(ctx.isSessionUnread?.(s));
+  const isRunning = () =>
+    s.status === "running" || (s.id === ctx.activeSessionId() && ctx.sessionStatus() === "running");
 
   let longPressTimer: ReturnType<typeof setTimeout> | undefined;
   let startX = 0;
@@ -203,7 +209,9 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
             ? "bg-surface-muted text-fg ring-1 ring-border-strong"
             : menuOpen()
               ? "bg-surface-muted/80 text-fg"
-              : "text-fg-secondary hover:bg-surface-muted/65 hover:text-fg"
+              : isUnread()
+                ? "text-fg hover:bg-surface-muted/65"
+                : "text-fg-secondary hover:bg-surface-muted/65 hover:text-fg"
       }`}
       data-rc-tip={isRenaming() || menuOpen() ? undefined : `${s.title}\n${s.cwd}`}
     >
@@ -231,13 +239,27 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
         when={isRenaming()}
         fallback={
           <>
-            <span class="truncate flex-1 min-w-0 select-none">{s.title}</span>
-            <Show when={s.status === "running" || (s.id === ctx.activeSessionId() && ctx.sessionStatus() === "running")}>
-              <SessionStopButton
-                sessionId={s.id}
-                isCancelling={s.id === ctx.activeSessionId() && ctx.turnActivity()?.status === "cancelling"}
-                onCancel={(e) => ctx.cancelTurnForSession(s.id, e)}
-              />
+            <span class={`truncate flex-1 min-w-0 select-none ${isUnread() ? "font-medium text-fg" : ""}`}>
+              {s.title}
+            </span>
+            <Show
+              when={isUnread()}
+              fallback={
+                <Show when={isRunning()}>
+                  <SessionStopButton
+                    sessionId={s.id}
+                    isCancelling={s.id === ctx.activeSessionId() && ctx.turnActivity()?.status === "cancelling"}
+                    onCancel={(e) => ctx.cancelTurnForSession(s.id, e)}
+                  />
+                </Show>
+              }
+            >
+              <span
+                data-session-unread={s.id}
+                class="w-4.5 h-4.5 flex items-center justify-center shrink-0"
+              >
+                <UnreadDot label={ctx.sessionAttentionLabel?.(s) ?? "Unread update"} />
+              </span>
             </Show>
             <div class={`relative flex items-center justify-end shrink-0 ${!ctx.isMobile() ? "min-w-[44px]" : ""}`}>
               <span

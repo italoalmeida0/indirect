@@ -58,6 +58,8 @@ import { createProjects } from "./hooks/useProjects";
 import { createWorkspace } from "./hooks/useWorkspace";
 import { createHosts } from "./hooks/useHosts";
 import { createSettings } from "./hooks/useSettings";
+import { createSessionAttention, type LiveSessionAttentionOverlay } from "./hooks/useSessionAttention";
+import { normalizeAttentionKind } from "./store/sessions";
 import { baseMode, effectiveModeSkills } from "./utils/modeSkills";
 
 /** The workspace header becomes the native titlebar when WCO is enabled. */
@@ -94,7 +96,7 @@ function WorkspaceHeader() {
           </span>
           <Show when={running()}>
             <span class="inline-flex shrink-0 items-center gap-1.5 pl-1 text-[11px] text-fg-muted select-none">
-              <span class="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+              <span class="text-fg-muted/60" aria-hidden="true">·</span>
               <span>Running</span>
             </span>
           </Show>
@@ -262,6 +264,7 @@ export default function IndirectCodePage() {
     number,
     { hostId: string; collection: "sessions" | "config"; clockAtSend: number }
   >();
+  const syncedOnlineHosts = new Set<string>();
 
   const relay = createRelay({
     getHostId: () => hosts.activeHostId(),
@@ -280,6 +283,7 @@ export default function IndirectCodePage() {
       // reports a just-promoted version even if WS was down at boot.
       // Without this, F5 during an update shows a stale idle card.
       daemonUpdate.checkNow(hostId);
+      syncedOnlineHosts.add(hostId);
       mirror.dataLayer.storeFor(hostId).syncAll().then(() => {
         const hid = hosts.activeHostId();
         if (hid === hostId && restoredHostId !== hid) {
@@ -300,10 +304,17 @@ export default function IndirectCodePage() {
           }
         }
       }).catch((e) => console.warn("[rc-sync] syncAll:", e));
+      for (const h of hosts.hosts()) {
+        if (h.id && h.id !== hostId && h.status === "online") {
+          syncedOnlineHosts.add(h.id);
+          mirror.dataLayer.storeFor(h.id).syncAll().catch((e) => console.warn("[rc-sync] syncAll:", e));
+        }
+      }
       if (activeSessionId()) { transcript.fetchSession(activeSessionId()); turnChanges.requestBalloons(); }
     },
     onClose: () => {
       inFlightPullClocks.clear();
+      syncedOnlineHosts.clear();
       options.resetPendingChoice();
       transcript.clearForkRequest();
       transcript.setForking(false);
@@ -479,6 +490,78 @@ export default function IndirectCodePage() {
     isCreatingSession: () => creatingSession(),
   });
 
+  const activeSession = createMemo(() => {
+    return mirror.sessions().find((s) => s.id === activeSessionId()) ?? null;
+  });
+
+  const [historyView, setHistoryViewSignal] = createSignal(false);
+  let previousActiveElement: HTMLElement | null = null;
+  function setHistoryView(v: boolean | ((p: boolean) => boolean)) {
+    const next = typeof v === "function" ? v(historyView()) : v;
+    if (next && !historyView()) {
+      if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
+        previousActiveElement = document.activeElement;
+      }
+    } else if (!next && historyView()) {
+      const el = previousActiveElement;
+      previousActiveElement = null;
+      queueMicrotask(() => {
+        if (el && document.contains(el)) {
+          el.focus();
+        } else {
+          const composerEl = document.querySelector<HTMLElement>('textarea[aria-label="Prompt"], textarea, input[type="text"]');
+          composerEl?.focus();
+        }
+      });
+    }
+    setHistoryViewSignal(next);
+  }
+
+  // Mobile = the pre-paint html.mobile flag (web/index.html script): the
+  // single source of truth (viewport heuristics mislabel touch laptops and
+  // small desktop windows). The script keeps the class in sync on
+  // resize/orientationchange — this signal just follows it.
+  const isMobile = createMobileFlag();
+  const [sidebarOpen, setSidebarOpen] = createSignal(!isMobile());
+  createEffect(() => {
+    setSidebarOpen(!isMobile());
+  });
+
+  const [liveSessionAttention, setLiveSessionAttention] = createSignal<LiveSessionAttentionOverlay | null>(null);
+  const isActiveHostUpdating = () => {
+    const aid = hosts.activeHostId();
+    return Boolean(aid && hosts.hosts().find((h) => h.id === aid)?.status === "updating");
+  };
+
+  const sessionAttention = createSessionAttention({
+    send: (payload) => relay.send(payload),
+    wsOpen,
+    isHostOnline,
+    activeHostId: () => hosts.activeHostId(),
+    activeSessionId,
+    activeSession,
+    draftMode,
+    historyView,
+    updating: isActiveHostUpdating,
+    isMobile,
+    sidebarOpen,
+    hosts: () => hosts.hosts(),
+    sessions: () => mirror.sessions(),
+    sessionsForHost: (hid) => mirror.sessionsForHost(hid),
+    liveSessionAttention,
+  });
+
+  // Sync newly discovered online background hosts so cross-host unread badges stay current.
+  createEffect(() => {
+    if (!wsOpen()) return;
+    for (const h of hosts.hosts()) {
+      if (h.id && h.status === "online" && !syncedOnlineHosts.has(h.id)) {
+        syncedOnlineHosts.add(h.id);
+        mirror.dataLayer.storeFor(h.id).syncAll().catch((e) => console.warn("[rc-sync] syncAll:", e));
+      }
+    }
+  });
+
   const projects = createProjects({
     send: (payload) => relay.send(payload),
     isOpen: () => relay.wsOpen(),
@@ -488,11 +571,9 @@ export default function IndirectCodePage() {
     toast: notice.toast,
     showConfirm: modals.showConfirm,
     isHostOnline,
+    isSessionUnread: (s) => sessionAttention.isSessionUnread(s),
   });
 
-  const activeSession = createMemo(() => {
-    return mirror.sessions().find((s) => s.id === activeSessionId()) ?? null;
-  });
   const currentProject = createMemo(() => activeSessionId() ? projectForDirectory(activeSession()?.cwd || "", mirror.projects()) : projects.activeProject());
 
   const workspace = createWorkspace({
@@ -514,8 +595,8 @@ export default function IndirectCodePage() {
     isHostOnline,
     toast: notice.toast,
     getConfigDoc: () => mirror.configDoc(),
- getHostId: () => hosts.activeHostId(),
- refreshConfig: () => mirror.dataLayer.storeFor(hosts.activeHostId()).syncAll(),
+    getHostId: () => hosts.activeHostId(),
+    refreshConfig: () => mirror.dataLayer.storeFor(hosts.activeHostId()).syncAll(),
   });
 
   // Turn-end notifications (Camada A: tab open). Fed BEFORE the
@@ -526,6 +607,7 @@ export default function IndirectCodePage() {
     toast: notice.toast,
     activeHostId: () => hosts.activeHostId(),
     activeSessionId: () => (historyView() ? "" : activeSessionId()),
+    isViewportActive: sessionAttention.isViewportActive,
     onOpenSession: (hostId, sessionId) => {
       try { window.focus(); } catch {}
       if (hostId !== hosts.activeHostId()) hosts.setActiveHostId(hostId);
@@ -616,28 +698,6 @@ export default function IndirectCodePage() {
     } catch {}
   };
 
-  const [historyView, setHistoryViewSignal] = createSignal(false);
-  let previousActiveElement: HTMLElement | null = null;
-  function setHistoryView(v: boolean | ((p: boolean) => boolean)) {
-    const next = typeof v === "function" ? v(historyView()) : v;
-    if (next && !historyView()) {
-      if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
-        previousActiveElement = document.activeElement;
-      }
-    } else if (!next && historyView()) {
-      const el = previousActiveElement;
-      previousActiveElement = null;
-      queueMicrotask(() => {
-        if (el && document.contains(el)) {
-          el.focus();
-        } else {
-          const composer = document.querySelector<HTMLElement>('textarea[aria-label="Prompt"], textarea, input[type="text"]');
-          composer?.focus();
-        }
-      });
-    }
-    setHistoryViewSignal(next);
-  }
   const [effortMenuOpen, setEffortMenuOpen] = createSignal(false);
   const [modelMenuOpen, setModelMenuOpen] = createSignal(false);
   const [usageOpen, setUsageOpen] = createSignal(false);
@@ -657,17 +717,6 @@ export default function IndirectCodePage() {
         (m.provider || "").toLowerCase().includes(q) ||
         (m.upstreamModel || "").toLowerCase().includes(q),
     );
-  });
-
-  // UI state
-  // Mobile = the pre-paint html.mobile flag (web/index.html script): the
-  // single source of truth (viewport heuristics mislabel touch laptops and
-  // small desktop windows). The script keeps the class in sync on
-  // resize/orientationchange — this signal just follows it.
-  const isMobile = createMobileFlag();
-  const [sidebarOpen, setSidebarOpen] = createSignal(!isMobile());
-  createEffect(() => {
-    setSidebarOpen(!isMobile());
   });
 
   // Anchor refs for floating menus (floating-ui positions them in a Portal).
@@ -723,6 +772,9 @@ export default function IndirectCodePage() {
       transcript.scrollToMessage(messageIdx);
       return;
     }
+    if (activeSessionId() !== id) {
+      setLiveSessionAttention(null);
+    }
     closeMenus();
     options.resetPending();
     setDraftMode(false);
@@ -760,6 +812,7 @@ export default function IndirectCodePage() {
     options.resetPendingChoice();
     options.setEffortPreviewing(false);
     transcript.resetForSession();
+    setLiveSessionAttention(null);
     setDraftMode(true);
     setHistoryView(false);
     setActiveSessionId("");
@@ -883,9 +936,16 @@ export default function IndirectCodePage() {
       case "relay_connected":
         break;
       case "host_status": {
-        if (msg.hostId === hosts.activeHostId() && msg.status === "online") {
-          mirror.dataLayer.storeFor(msg.hostId).syncAll().catch((e) => console.warn("[rc-sync] syncAll:", e));
-          if (activeSessionId()) transcript.fetchSession(activeSessionId());
+        if (msg.hostId) {
+          if (msg.status === "online") {
+            syncedOnlineHosts.add(msg.hostId);
+            mirror.dataLayer.storeFor(msg.hostId).syncAll().catch((e) => console.warn("[rc-sync] syncAll:", e));
+            if (msg.hostId === hosts.activeHostId() && activeSessionId()) {
+              transcript.fetchSession(activeSessionId());
+            }
+          } else {
+            syncedOnlineHosts.delete(msg.hostId);
+          }
         }
         // The overlay reads host status directly (updating = naive
         // updater owns the host). No per-host frozen flag needed.
@@ -918,6 +978,7 @@ export default function IndirectCodePage() {
         options.setEffortPreviewing(false);
         setCreatingSession(false);
         setDraftMode(false);
+        setLiveSessionAttention(null);
         const firstDraft = composer.inputPrompt();
         setActiveSessionId(r.id);
         try {
@@ -1010,6 +1071,16 @@ export default function IndirectCodePage() {
           if (r.bgTasks) background.noteSessionTasks(r.bgTasks, sid);
         }
         if (sid && sid === activeSessionId()) {
+          const rawAttSeq = (r as any).attentionSeq ?? (r as any).attention_seq;
+          const rawSeenSeq = (r as any).seenSeq ?? (r as any).seen_seq;
+          const rawAttKind = (r as any).attentionKind ?? (r as any).attention_kind;
+          setLiveSessionAttention({
+            hostId: msg.hostId || hosts.activeHostId(),
+            sessionId: sid,
+            attentionSeq: typeof rawAttSeq === "number" && Number.isFinite(rawAttSeq) && rawAttSeq > 0 ? Math.floor(rawAttSeq) : undefined,
+            seenSeq: typeof rawSeenSeq === "number" && Number.isFinite(rawSeenSeq) && rawSeenSeq > 0 ? Math.floor(rawSeenSeq) : undefined,
+            attentionKind: normalizeAttentionKind(rawAttKind),
+          });
           const catalog = gatewayModels();
           const modelIds = catalog.map((m) => m.id);
           const fallbackModelId = catalog[0]?.id || "";
@@ -1400,6 +1471,7 @@ export default function IndirectCodePage() {
         transcript.resetForSession();
         transcript.resetCaches();
         background.reset();
+        setLiveSessionAttention(null);
         setActiveSessionId("");
         projects.setActiveProjectId("");
         composer.clearAttachments();
@@ -1572,6 +1644,8 @@ export default function IndirectCodePage() {
     connectionState: relay.connectionState,
     wsOpen,
     send: (payload) => relay.send(payload),
+    hostHasUnread: (hostId) => sessionAttention.hostHasUnread(hostId),
+    anyOtherHostHasUnread: sessionAttention.anyOtherHostHasUnread,
   };
   const sessionValue: SessionCtxValue = {
     ...projects,
@@ -1585,6 +1659,8 @@ export default function IndirectCodePage() {
     selectSession,
     startNewConversation,
     deleteSession,
+    isSessionUnread: (s) => sessionAttention.isSessionUnread(s),
+    sessionAttentionLabel: (s) => sessionAttention.labelForSession(s),
     pendingProjectId: projects.pendingProjectId,
     setPendingProjectId: projects.setPendingProjectId,
     newestSessionProjectId: projects.newestSessionProjectId,
@@ -1639,6 +1715,7 @@ export default function IndirectCodePage() {
     daemonUpdate,
     turnNotify,
     pushSub,
+    anyOnlineHostHasUnread: sessionAttention.anyOnlineHostHasUnread,
     sidebarOpen,
     setSidebarOpen,
     isMobile,

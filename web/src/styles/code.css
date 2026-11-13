@@ -487,3 +487,80 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
 .hljs-addition { color: var(--success); background: var(--success-subtle); }
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 500; }
+
+/* ===== Bespoke geometric & kinetic workspace status indicators ============= */
+@keyframes rc-spoke-chase {
+  0% { opacity: 1; }
+  12.5% { opacity: 0.78; }
+  25% { opacity: 0.58; }
+  37.5% { opacity: 0.42; }
+  50% { opacity: 0.3; }
+  62.5% { opacity: 0.22; }
+  75% { opacity: 0.17; }
+  87.5%, 100% { opacity: 0.14; }
+}
+.rc-spoke {
+  animation: rc-spoke-chase 0.88s linear infinite;
+}
+.rc-spoke-0 { animation-delay: -0.88s; }
+.rc-spoke-1 { animation-delay: -0.77s; }
+.rc-spoke-2 { animation-delay: -0.66s; }
+.rc-spoke-3 { animation-delay: -0.55s; }
+.rc-spoke-4 { animation-delay: -0.44s; }
+.rc-spoke-5 { animation-delay: -0.33s; }
+.rc-spoke-6 { animation-delay: -0.22s; }
+.rc-spoke-7 { animation-delay: -0.11s; }
+
+@keyframes rc-proc-meter {
+  0%, 100% { transform: scaleY(0.3); opacity: 0.82; }
+  25% { transform: scaleY(1); opacity: 1; }
+  52% { transform: scaleY(0.48); opacity: 0.88; }
+  76% { transform: scaleY(0.84); opacity: 0.96; }
+}
+.rc-proc-bar {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: rc-proc-meter 1.24s var(--ease-in-out) infinite;
+}
+.rc-proc-bar-0 { animation-delay: 0s; }
+.rc-proc-bar-1 { animation-delay: -0.31s; }
+.rc-proc-bar-2 { animation-delay: -0.62s; }
+.rc-proc-bar-3 { animation-delay: -0.93s; }
+
+@keyframes rc-matrix-wave {
+  0%, 100% { opacity: 0.18; }
+  32% { opacity: 1; }
+  58% { opacity: 0.42; }
+}
+.rc-matrix-cell {
+  animation: rc-matrix-wave 1.36s var(--ease-in-out) infinite;
+}
+
+.rc-indicator-paused .rc-spoke {
+  animation: none !important;
+  opacity: 0.45;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rc-spoke,
+  .rc-proc-bar,
+  .rc-matrix-cell {
+    animation: none !important;
+  }
+  .rc-spoke-0 { opacity: 1; }
+  .rc-spoke-1 { opacity: 0.8; }
+  .rc-spoke-2 { opacity: 0.62; }
+  .rc-spoke-3 { opacity: 0.46; }
+  .rc-spoke-4 { opacity: 0.34; }
+  .rc-spoke-5 { opacity: 0.25; }
+  .rc-spoke-6 { opacity: 0.19; }
+  .rc-spoke-7 { opacity: 0.15; }
+  .rc-proc-bar-0 { transform: scaleY(0.42); }
+  .rc-proc-bar-1 { transform: scaleY(0.95); }
+  .rc-proc-bar-2 { transform: scaleY(0.58); }
+  .rc-proc-bar-3 { transform: scaleY(0.78); }
+  .rc-matrix-cell { opacity: 0.45; }
+}
+:root[data-reduced-motion="reduce"] :is(.rc-spoke, .rc-proc-bar, .rc-matrix-cell) {
+  animation: none !important;
+}

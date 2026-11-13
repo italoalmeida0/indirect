@@ -87,6 +87,10 @@ export function TranscriptView() {
       matchedByCwd={s.matchedByCwd}
       sortedSessions={s.sortedSessions}
       isMobile={ui.isMobile}
+      isSessionUnread={s.isSessionUnread}
+      sessionAttentionLabel={s.sessionAttentionLabel}
+      activeSessionId={s.activeSessionId}
+      sessionStatus={t.sessionStatus}
     />
   }
 >

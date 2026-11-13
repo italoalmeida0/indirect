@@ -43,19 +43,12 @@ export function ToolUnitHeader(props: ToolPartProps) {
         props.m.expandable() ? "cursor-pointer hover:bg-surface-muted/55" : ""
       }`}
     >
-      <Show
-        when={!(props.running && props.active && !props.u.result)}
-        fallback={
-          <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-fg rounded-full animate-spin shrink-0" />
-        }
-      >
-        <Iconify
-          icon={props.m.sum().icon}
-          size={13}
-          class="shrink-0 text-fg-muted/80 group-hover/tool:text-fg-secondary transition-colors"
-        />
-      </Show>
-      <span class="text-fg-muted shrink-0">{props.m.sum().verb}</span>
+      <Iconify
+        icon={props.m.sum().icon}
+        size={13}
+        class="shrink-0 text-fg-muted/80 group-hover/tool:text-fg-secondary transition-colors"
+      />
+      <span class={`shrink-0 ${props.running && props.active && !props.u.result ? "ui-shimmer font-medium text-fg-secondary" : "text-fg-muted"}`}>{props.m.sum().verb}</span>
       <span class="flex items-center gap-1.5 min-w-0 flex-1">
         <span class="inline-flex items-center gap-1.5 min-w-0 flex-1" data-rc-tip={targetPath() ? absoluteRemotePath(targetPath(), props.ctx.activeSession()?.cwd || "", props.ctx.projects().find((p: { protected?: boolean }) => p.protected)?.path) : undefined}>
           <Show when={targetPath()}><FileIcon path={targetPath()} size={13} /></Show>

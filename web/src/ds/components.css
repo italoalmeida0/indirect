@@ -544,13 +544,14 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
 @keyframes skeleton-sweep { to { transform: translateX(100%); } }
 .ui-shimmer {
   color: transparent;
-  background: linear-gradient(90deg, var(--text-muted) 0%, var(--text-muted) 40%, var(--foreground) 50%, var(--text-muted) 60%, var(--text-muted) 100%);
-  background-size: 250% 100%;
+  -webkit-text-fill-color: transparent;
+  background: linear-gradient(90deg, var(--text-muted) 0%, var(--text-muted) 32%, var(--foreground) 50%, var(--text-muted) 68%, var(--text-muted) 100%);
+  background-size: 220% 100%;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: ui-shimmer 2.2s linear infinite;
+  animation: ui-shimmer 2.1s linear -0.38s infinite;
 }
-@keyframes ui-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes ui-shimmer { from { background-position: 100% 0; } to { background-position: -120% 0; } }
 
 /* ===== Empty state ========================================================= */
 .ui-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-12) var(--space-6); text-align: center; }
@@ -1215,7 +1216,8 @@ html.theme-xfade body, html.theme-xfade body * {
   .ui-check, .ui-check svg, .ui-radio::after, .ui-popover, .ui-popover *, .ui-tooltip, .ui-progress-fill, .ui-select-chevron, .gateway-nav { transition: none !important; }
   .ui-spinner { animation-duration: 1.6s; }
   .ui-skeleton::after, .ui-shimmer, .ui-progress-indeterminate .ui-progress-fill { animation: none; }
-  .ui-shimmer { color: var(--text-secondary); background: none; }
+  .ui-shimmer { color: var(--text-secondary); -webkit-text-fill-color: currentColor; background: none; }
 }
 :root[data-reduced-motion="reduce"] :is(.ui-button, .ui-segment, .ui-switch-thumb, .ui-popover, .ui-popover *, .ui-tooltip, .ui-progress-fill) { transition: none !important; }
 :root[data-reduced-motion="reduce"] .ui-skeleton::after, :root[data-reduced-motion="reduce"] .ui-shimmer { animation: none; }
+:root[data-reduced-motion="reduce"] .ui-shimmer { color: var(--text-secondary); -webkit-text-fill-color: currentColor; background: none; }

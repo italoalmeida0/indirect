@@ -186,9 +186,9 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                 class={`text-fg-muted group-hover:text-fg transition-transform duration-150 shrink-0 ${props.expanded ? "rotate-90" : ""}`}
               />
               <Show when={props.live}>
-                <Iconify icon="lucide:loader-circle" size={13} class="text-fg-muted animate-spin shrink-0" />
+                <Iconify icon="lucide:file-diff" size={13} class="text-fg-muted shrink-0" />
               </Show>
-              <span class="text-xs font-medium text-fg">
+              <span class={`text-xs font-medium ${props.live ? "ui-shimmer text-fg-secondary" : "text-fg"}`}>
                 {files().length} {files().length === 1 ? "file" : "files"} changed
               </span>
               <Show when={totalAdds() > 0 || totalDels() > 0}>

@@ -82,7 +82,7 @@ function renderThinkingRow(
           size={12}
           class={`shrink-0 text-fg-muted/80 transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
         />
-        <span class={`truncate ${live() ? "ui-shimmer font-medium text-fg-secondary" : "text-fg-muted group-hover/tool:text-fg-secondary"}`}>{label()}</span>
+        <span class={`truncate ${live() ? "ui-shimmer font-medium" : "text-fg-muted group-hover/tool:text-fg-secondary"}`}>{label()}</span>
       </button>
       <DisclosureBody open={open()}>
         <div
@@ -143,20 +143,14 @@ function renderTurnAggregate(
         onPointerDown={(e) => press(e.currentTarget)}
         onClick={toggle}
         aria-expanded={open()}
+        data-step-rail-header
         class="group/agg inline-flex max-w-full items-center gap-1.5 py-0.5 text-[13px] text-fg-muted hover:text-fg transition-colors cursor-pointer text-left"
       >
-        <Show
-          when={!running()}
-          fallback={
-            <span class="w-3 h-3 border-[1.5px] border-fg-muted/70 border-t-fg rounded-full animate-spin shrink-0" />
-          }
-        >
-          <Iconify
-            icon="lucide:chevron-right"
-            size={13}
-            class={`shrink-0 text-fg-muted/80 group-hover/agg:text-fg transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
-          />
-        </Show>
+        <Iconify
+          icon="lucide:chevron-right"
+          size={13}
+          class={`shrink-0 text-fg-muted/80 group-hover/agg:text-fg transition-transform duration-150 ${open() ? "rotate-90" : ""}`}
+        />
         <span class={`truncate min-w-0 ${running() ? "ui-shimmer font-medium text-fg-secondary" : ""}`}>
           {summary()}
         </span>

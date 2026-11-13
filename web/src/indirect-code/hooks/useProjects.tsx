@@ -1,6 +1,5 @@
 import type { DaemonCommand } from "../daemon-protocol";
-import { createEffect, createMemo, createSignal, Show, type JSX } from "solid-js";
-import h from "solid-js/h";
+import { createEffect, createMemo, createSignal } from "solid-js";
 import { projectForDirectory, compareSessions } from "../paths";
 import type { Project, SessionSummary } from "../types";
 import type { FoldersEvent, ProjectCreatedEvent, SearchResultsEvent } from "../daemon-protocol";
@@ -16,6 +15,7 @@ export function createProjects(opts: {
   toast: (message: string, kind?: "ok" | "err") => void;
   showConfirm: (o: { title?: string; message?: string; confirmText?: string; cancelText?: string; danger?: boolean }) => Promise<boolean>;
   isHostOnline: () => boolean;
+  isSessionUnread?: (s: SessionSummary) => boolean;
 }) {
   const [activeProjectId, setActiveProjectId] = createSignal<string>("");
   const [showNewProjectModal, setShowNewProjectModal] = createSignal(false);
@@ -211,22 +211,21 @@ export function createProjects(opts: {
     if (expandedSessionLists()[key]) return list;
     return sortedSessions(list).slice(0, 10);
   }
-  function sessionListToggle(key: string, count: number): JSX.Element {
-    return h(
-      Show,
-      { when: () => count > 10 },
-      () =>
-        h(
-          "button",
-          {
-            type: "button",
-            class: "px-2 py-1 text-[11.5px] text-fg-muted hover:text-fg transition-colors cursor-pointer",
-            "aria-expanded": () => !!expandedSessionLists()[key],
-            onClick: () => setExpandedSessionLists((prev) => ({ ...prev, [key]: !prev[key] })),
-          },
-          () => (expandedSessionLists()[key] ? "Show less" : `See all (${count})`),
-        ),
-    ) as unknown as JSX.Element;
+  function isSessionListExpanded(key: string): boolean {
+    return !!expandedSessionLists()[key];
+  }
+  function toggleSessionListExpanded(key: string) {
+    setExpandedSessionLists((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+  function hasHiddenUnreadSessions(key: string): boolean {
+    if (expandedSessionLists()[key] || !opts.isSessionUnread) return false;
+    const source =
+      key === "talk"
+        ? talkSessions()
+        : key === "loose"
+          ? looseSessions()
+          : projectSessions(key);
+    return sortedSessions(source).slice(10).some((item) => opts.isSessionUnread!(item));
   }
   function sessionsOfProject(projectId: string) {
     return opts.sessions().filter((s) => projectForDirectory(s.cwd, opts.projects())?.id === projectId);
@@ -394,7 +393,8 @@ export function createProjects(opts: {
     noteFolders, noteProjectCreated,
     isFolderRequest, isProjectCreation,
     isProjectExpanded, toggleProjectExpanded,
-    sortedSessions, visibleSessions, sessionListToggle,
+    sortedSessions, visibleSessions,
+    isSessionListExpanded, toggleSessionListExpanded, hasHiddenUnreadSessions,
     sessionsOfProject, projectSessions, looseSessions, talkSessions, isTalkSession,
     sidebarView, setSidebarView,
     sessionFilter, setSessionFilter, matchQuery, matchedByCwd,

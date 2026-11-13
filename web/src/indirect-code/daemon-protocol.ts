@@ -74,6 +74,7 @@ export type DaemonCommand = CommandBase &
   | { type: "delete_session"; sessionId: string }
   | { type: "rename_session"; sessionId: string; title: string }
   | { type: "toggle_pin"; sessionId: string }
+  | { type: "mark_session_seen"; sessionId: string; seenSeq?: number }
   | { type: "create_project"; path: string; requestId: string }
   | { type: "delete_project"; projectId: string }
   | { type: "browse_folders"; path: string; requestId: string }

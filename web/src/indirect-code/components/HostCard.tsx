@@ -2,6 +2,7 @@ import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal, useUI } from "../ctx";
 import { FloatMenu } from "./FloatMenu";
+import { UnreadDot } from "./LiveIndicators";
 
 /** Host selector card + floating menu, shared by the sidebar bottom and
  * the full-screen update overlay (UpdateFreezeOverlay).
@@ -70,7 +71,14 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
                 <span class="truncate">{statusLabel()}</span>
               </span>
             </span>
-            <Iconify icon="lucide:chevrons-up-down" size={13} class="text-fg-muted shrink-0" />
+            <span aria-hidden="true" class="inline-flex shrink-0 items-center gap-1.5">
+              <Show when={Boolean(h.anyOtherHostHasUnread?.())}>
+                <span data-other-host-unread class="inline-flex items-center">
+                  <UnreadDot size="sm" />
+                </span>
+              </Show>
+              <Iconify icon="lucide:chevrons-up-down" size={13} class="text-fg-muted shrink-0" />
+            </span>
           </button>
         }
       >
@@ -102,6 +110,11 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
           </span>
           <span aria-hidden="true" class="inline-flex shrink-0 items-center gap-1.5 text-[11px] text-fg-muted">
             <span class={`h-1.5 w-1.5 rounded-full shrink-0 ${statusDot()}`} />
+            <Show when={Boolean(h.anyOtherHostHasUnread?.())}>
+              <span data-other-host-unread class="inline-flex items-center">
+                <UnreadDot size="sm" />
+              </span>
+            </Show>
             <Iconify icon="lucide:chevrons-up-down" size={12} class="text-fg-muted/80" />
           </span>
         </button>
@@ -141,6 +154,11 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
                     {host.os ? ` · ${host.os}` : ""}
                   </span>
                 </span>
+                <Show when={Boolean(h.hostHasUnread?.(host.id))}>
+                  <span data-host-unread={host.id} class="inline-flex items-center shrink-0">
+                    <UnreadDot size="sm" label="Unread updates on this host" />
+                  </span>
+                </Show>
                 <Show when={active()}>
                   <Iconify icon="lucide:check" size={13} class="text-fg shrink-0" />
                 </Show>

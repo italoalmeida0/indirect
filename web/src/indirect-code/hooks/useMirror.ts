@@ -36,12 +36,17 @@ export function createMirror(opts: {
     return st.config.find({ hostId: opts.getHostId() }).fetch()[0] ?? null;
   });
 
+  function sessionsForHost(hostId: string): SessionSummary[] {
+    if (!hostId) return [];
+    return dataLayer.storeFor(hostId).sessions.find({ hostId }).fetch();
+  }
+
   onCleanup(() => {
     dataLayer.disconnect();
     void dataLayer.disposeAll();
   });
 
-  return { dataLayer, store, sessions, projects, configDoc };
+  return { dataLayer, store, sessions, sessionsForHost, projects, configDoc };
 }
 
 export type Mirror = ReturnType<typeof createMirror>;

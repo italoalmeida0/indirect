@@ -173,6 +173,7 @@ export function createTurnNotify(opts: {
   onOpenSession: (hostId: string, sessionId: string) => void;
   activeHostId?: () => string;
   activeSessionId?: () => string;
+  isViewportActive?: () => boolean;
 }) {
   const [notifyOn, setNotifyOn] = createSignal(isTurnNotifyEnabled());
   const [soundOn, setSoundOn] = createSignal(isTurnSoundEnabled());
@@ -271,13 +272,16 @@ export function createTurnNotify(opts: {
 
   function emitFallbackToast(target: TurnNotifyTarget, isTest: boolean): void {
     if (!isTest) {
-      const visible =
-        typeof document !== "undefined" && document.visibilityState === "visible";
+      const visibleAndFocused = opts.isViewportActive
+        ? opts.isViewportActive()
+        : typeof document !== "undefined" &&
+          document.visibilityState === "visible" &&
+          (typeof document.hasFocus !== "function" || document.hasFocus());
       const isForeground =
         Boolean(opts.activeHostId && opts.activeSessionId) &&
         opts.activeHostId!() === target.hostId &&
         opts.activeSessionId!() === target.sessionId;
-      if (visible && isForeground) return;
+      if (visibleAndFocused && isForeground) return;
     }
     const prefix = turnToastLabel(target.disposition);
     const text = target.title ? `${prefix}: ${target.title}` : prefix;

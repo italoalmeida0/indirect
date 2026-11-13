@@ -19,6 +19,8 @@ import { SyncManager } from "@signaldb/sync";
 import type { DaemonCommand, DaemonMessage, PullCommand, PullWireMessage } from "../daemon-protocol";
 import type { MidTurnDelivery } from "../utils/settingsValidation";
 
+export type SessionAttentionKind = "approval" | "question" | "completed" | "error" | "cancelled" | "";
+
 /** One mirrored conversation summary (SessionSummary shape from the daemon). */
 export interface RcSession {
   id: string;
@@ -37,6 +39,13 @@ export interface RcSession {
    * ordering); 0/absent on running sessions — callers fall back to
    * updatedAt. */
   lastTurnEndedAt?: number;
+  /** Monotonic watermark incremented when the session needs user attention
+   * (turn completed/errored/cancelled or mid-turn approval/question await). */
+  attentionSeq?: number;
+  /** Monotonic watermark acknowledged by the user across devices. */
+  seenSeq?: number;
+  /** Semantic reason for the latest attention event when attentionSeq > seenSeq. */
+  attentionKind?: SessionAttentionKind;
   todosOpen?: boolean;
   options?: { effort: string; mode: string; skills: { name: string; usable?: string }[]; access: string };
   /** Session skill selection (daemon SessionRecord.Skills, complete
@@ -144,10 +153,26 @@ interface RawSessionRow {
   updatedAt?: number;
   lastTurnStartedAt?: number;
   lastTurnEndedAt?: number;
+  attentionSeq?: number;
+  seenSeq?: number;
+  attentionKind?: string;
   todosOpen?: boolean;
   options?: { effort?: string; mode?: string; skills?: { name: string; usable?: string }[]; access?: string };
   skills?: Record<string, { priority?: number; active?: boolean; usable?: string }>;
   approvalMode?: string;
+}
+
+export function normalizeAttentionKind(k: unknown): Exclude<SessionAttentionKind, ""> | undefined {
+  if (
+    k === "approval" ||
+    k === "question" ||
+    k === "completed" ||
+    k === "error" ||
+    k === "cancelled"
+  ) {
+    return k;
+  }
+  return undefined;
 }
 
 /** One pulled session row mapped to the mirror schema. Exported as a test
@@ -165,6 +190,9 @@ export function normalizeSession(r: RawSessionRow, hostId: string): RcSession {
     updatedAt: typeof r.updatedAt === "number" && r.updatedAt > 0 ? r.updatedAt : CORRUPT_TIMESTAMP,
     lastTurnStartedAt: typeof r.lastTurnStartedAt === "number" && r.lastTurnStartedAt > 0 ? r.lastTurnStartedAt : undefined,
     lastTurnEndedAt: typeof r.lastTurnEndedAt === "number" && r.lastTurnEndedAt > 0 ? r.lastTurnEndedAt : undefined,
+    attentionSeq: typeof r.attentionSeq === "number" && Number.isFinite(r.attentionSeq) && r.attentionSeq > 0 ? Math.floor(r.attentionSeq) : undefined,
+    seenSeq: typeof r.seenSeq === "number" && Number.isFinite(r.seenSeq) && r.seenSeq > 0 ? Math.floor(r.seenSeq) : undefined,
+    attentionKind: normalizeAttentionKind(r.attentionKind),
     todosOpen: typeof r.todosOpen === "boolean" ? r.todosOpen : undefined,
     options: r.options ? {
       effort: r.options.effort || "medium",

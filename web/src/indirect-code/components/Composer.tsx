@@ -9,6 +9,7 @@ import { ToolbarContext } from "./composer/ToolbarContext";
 import { ToolbarModel } from "./composer/ToolbarModel";
 import { ToolbarSend } from "./composer/ToolbarSend";
 import { ComposerFooter } from "./composer/ComposerFooter";
+import { ComposerQueueShelf } from "./QueueCard";
 
 export function Composer() {
   const c = useComposerCtx();
@@ -54,7 +55,8 @@ export function Composer() {
         </div>
       </div>
     }>
-    <div class="rc-composer relative flex flex-col">
+    <ComposerQueueShelf />
+    <div class="rc-composer relative z-10 flex flex-col">
     <ComposerInput />
     <div class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 py-1.5">
       <div class="flex flex-1 min-w-0 flex-wrap items-center gap-1 text-xs text-fg-secondary">

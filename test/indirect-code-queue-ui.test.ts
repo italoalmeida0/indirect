@@ -16,8 +16,10 @@ import {
 } from "../web/src/indirect-code/utils/settingsValidation";
 import type { QueuedMessage } from "../web/src/indirect-code/viewTypes";
 
-function assertWhisperQuietQueueHtml(html: string) {
-  expect(html).not.toContain("bg-accent-subtle");
+function assertWhisperQuietQueueHtml(html: string, opts?: { allowStagedPill?: boolean }) {
+  if (!opts?.allowStagedPill) {
+    expect(html).not.toContain("bg-accent-subtle");
+  }
   expect(html).not.toContain("bg-warning-subtle");
   expect(html).not.toContain("border-accent");
   expect(html).not.toContain("border-warning");
@@ -437,7 +439,7 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
               const entryCode = `
                 import { renderToString } from "solid-js/web";
                 import { RemoteCodeProvider } from "./ctx";
-                import { QueueCard } from "./components/QueueCard";
+                import { ComposerQueueShelf, QueueCard } from "./components/QueueCard";
                 import { ToolbarSend } from "./components/composer/ToolbarSend";
                 import { SettingsGeneralSection } from "./modals/SettingsGeneral";
 
@@ -554,6 +556,7 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
                   return renderToString(() => (
                     <RemoteCodeProvider {...p}>
                       <QueueCard />
+                      <ComposerQueueShelf />
                     </RemoteCodeProvider>
                   ));
                 }
@@ -663,7 +666,7 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
     renderSettingsGeneralSsr = mod.renderSettingsGeneralSsr;
   });
 
-  test("QueueCard renders whisper-quiet passive queue rows with #index, Clear, next-step promote, force-interrupt & reorder", () => {
+  test("ComposerQueueShelf renders recessed passive queue shelf with 01/02 indices, Clear, next-step promote, force-interrupt & reorder", () => {
     const html = renderQueueCardSsr({
       sessionStatus: "running",
       activeModel: "claude-sonnet",
@@ -690,16 +693,16 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
     });
 
     assertWhisperQuietQueueHtml(html);
-    expect(html).toContain("data-queue-card");
-    expect(html).toContain("border-t border-border/70 px-3 py-2.5");
+    expect(html).toContain("data-composer-queue-shelf");
+    expect(html).toContain("rounded-t-xl border border-b-0 border-border/80 bg-surface-subtle");
     expect(html).toContain("data-queue-passive");
     expect(html).not.toContain("data-queue-staged");
     expect(html).toContain(">Queued<");
     expect(html).toContain(">2<");
     expect(html).toContain("After turn finishes");
     expect(html).toContain('data-action="queue-clear"');
-    expect(html).toContain(">#1<");
-    expect(html).toContain(">#2<");
+    expect(html).toContain(">01<");
+    expect(html).toContain(">02<");
     expect(html).toContain("claude-opus");
     expect(html).toContain('data-action="queue-send-next"');
     expect(html).toContain('data-action="queue-interrupt-now"');
@@ -707,7 +710,7 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
     expect(html).toContain('data-action="queue-move-down"');
   });
 
-  test("QueueCard renders slim single-line neutral steer row matching BackgroundCard with quiet icon buttons", () => {
+  test("QueueCard renders right-aligned dashed pending user bubble for steer row with quiet icon buttons", () => {
     const html = renderQueueCardSsr({
       sessionStatus: "running",
       items: [
@@ -723,10 +726,11 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
       ],
     });
 
-    assertWhisperQuietQueueHtml(html);
+    assertWhisperQuietQueueHtml(html, { allowStagedPill: true });
+    expect(html).toContain("data-queue-card");
     expect(html).toContain("data-queue-staged");
     expect(html).toContain('data-queue-item-state="steer"');
-    expect(html).toContain("rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden");
+    expect(html).toContain("rounded-2xl rounded-br-sm border border-dashed border-border-strong bg-surface/80");
     expect(html).toContain("Next step");
     expect(html).toContain("Focus on mobile viewport overflow");
     expect(html).toContain(">2<");
@@ -738,7 +742,7 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
     expect(html).not.toContain("data-queue-passive");
   });
 
-  test("QueueCard renders slim neutral interrupt row and keeps staged Zone 1 visible when passive Zone 2 is collapsed", () => {
+  test("QueueCard renders shimmer interrupt bubble and keeps staged Zone 1 visible when passive Zone 2 shelf is collapsed", () => {
     const interruptHtml = renderQueueCardSsr({
       sessionStatus: "running",
       items: [
@@ -753,8 +757,9 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
         },
       ],
     });
-    assertWhisperQuietQueueHtml(interruptHtml);
+    assertWhisperQuietQueueHtml(interruptHtml, { allowStagedPill: true });
     expect(interruptHtml).toContain('data-queue-item-state="interrupt"');
+    expect(interruptHtml).toContain("ui-shimmer");
     expect(interruptHtml).toContain("Sending now…");
     expect(interruptHtml).toContain("Abort tool run and apply hotfix");
     expect(interruptHtml).toContain('data-action="queue-cancel-send"');
@@ -784,17 +789,18 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
         },
       ],
     });
-    assertWhisperQuietQueueHtml(mixedCollapsedHtml);
+    assertWhisperQuietQueueHtml(mixedCollapsedHtml, { allowStagedPill: true });
     expect(mixedCollapsedHtml).toContain('data-queue-item-state="steer"');
     expect(mixedCollapsedHtml).toContain("Staged item stays visible");
     expect(mixedCollapsedHtml).toContain('data-action="queue-cancel-send"');
+    expect(mixedCollapsedHtml).toContain("data-composer-queue-shelf");
     expect(mixedCollapsedHtml).toContain(">Queued<");
     expect(mixedCollapsedHtml).toContain(">1<");
     expect(mixedCollapsedHtml).toContain('aria-label="Expand queue"');
     expect(mixedCollapsedHtml).not.toContain("Hidden collapsed passive text");
   });
 
-  test("QueueCard in idle session shows Paused, ready to send subtitle without em dash and Send message now action", () => {
+  test("ComposerQueueShelf in idle session shows Paused, ready to send subtitle without em dash and Send message now action", () => {
     const idleHtml = renderQueueCardSsr({
       sessionStatus: "idle",
       items: [

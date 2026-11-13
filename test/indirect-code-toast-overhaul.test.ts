@@ -364,7 +364,9 @@ describe("StatusBanners & useTranscript compaction status without inline appNoti
     });
     expect(manualHtml).toContain("data-turn-status");
     expect(manualHtml).toContain("Compacting older context…");
-    expect(manualHtml).toContain("animate-spin");
+    expect(manualHtml).toContain('data-indicator="neural-matrix"');
+    expect(manualHtml).toContain("ui-shimmer");
+    expect(manualHtml).not.toContain("animate-spin");
     expect(manualHtml).not.toContain("Floating only, never inline");
     expect(manualHtml).not.toContain('aria-label="Dismiss notification"');
 

@@ -5,6 +5,7 @@ import { timeAgo } from "../utils/format";
 import { sessionTimeLabel } from "../paths";
 import type { SessionSummary } from "../types";
 import type { SearchHit } from "../viewTypes";
+import { RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
 
 export type HistoryTab = "all" | "pinned" | "recent" | "talk";
 
@@ -52,6 +53,10 @@ export interface HistoryViewProps {
   sortedSessions: (list: SessionSummary[]) => SessionSummary[];
   isMobile: () => boolean;
   matchedByCwd?: (s: SessionSummary) => boolean;
+  isSessionUnread?: (s: SessionSummary) => boolean;
+  sessionAttentionLabel?: (s: SessionSummary) => string;
+  activeSessionId?: () => string;
+  sessionStatus?: () => string;
 }
 
 export function HistoryView(props: HistoryViewProps) {
@@ -238,37 +243,77 @@ export function HistoryView(props: HistoryViewProps) {
                 </div>
                 <div class="divide-y divide-border/70 border-y border-border/70">
                   <For each={filteredSearchResults()}>
-                    {(r) => (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          props.setHistoryView(false);
-                          props.setSearchResults([]);
-                          props.selectSession(r.sessionId, r.messageIdx);
-                        }}
-                        class="w-full px-2.5 py-2.5 text-left hover:bg-surface-subtle transition-colors cursor-pointer group"
-                      >
-                        <div class="flex items-center justify-between gap-3">
-                          <div class="flex items-center gap-2 min-w-0">
-                            <Iconify
-                              icon="lucide:message-square-text"
-                              size={13}
-                              class="shrink-0 text-fg-muted group-hover:text-accent transition-colors"
-                            />
-                            <span class="truncate text-[13px] font-medium text-fg group-hover:text-accent transition-colors">
-                              {highlightMatch(r.title, props.sessionFilter())}
-                            </span>
+                    {(r) => {
+                      const hitSession = () => sessionMap().get(r.sessionId);
+                      const unread = () => {
+                        const s = hitSession();
+                        return s ? Boolean(props.isSessionUnread?.(s)) : false;
+                      };
+                      const running = () => {
+                        const s = hitSession();
+                        return Boolean(
+                          s &&
+                            (s.status === "running" ||
+                              (Boolean(props.activeSessionId?.()) &&
+                                props.activeSessionId?.() === s.id &&
+                                props.sessionStatus?.() === "running")),
+                        );
+                      };
+                      return (
+                        <button
+                          type="button"
+                          data-history-hit-id={r.sessionId}
+                          onClick={() => {
+                            props.setHistoryView(false);
+                            props.setSearchResults([]);
+                            props.selectSession(r.sessionId, r.messageIdx);
+                          }}
+                          class="w-full px-2.5 py-2.5 text-left hover:bg-surface-subtle transition-colors cursor-pointer group"
+                        >
+                          <div class="flex items-center justify-between gap-3">
+                            <div class="flex items-center gap-2 min-w-0">
+                              <Iconify
+                                icon="lucide:message-square-text"
+                                size={13}
+                                class="shrink-0 text-fg-muted group-hover:text-accent transition-colors"
+                              />
+                              <span
+                                class={`truncate text-[13px] ${
+                                  unread() ? "font-medium text-fg" : "text-fg-secondary"
+                                } group-hover:text-accent transition-colors`}
+                              >
+                                {highlightMatch(r.title, props.sessionFilter())}
+                              </span>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                              <Show
+                                when={unread()}
+                                fallback={
+                                  <Show when={running()}>
+                                    <RadialSpokeSpinner size={13} class="text-fg-secondary" />
+                                  </Show>
+                                }
+                              >
+                                <UnreadDot
+                                  label={
+                                    hitSession() && props.sessionAttentionLabel
+                                      ? props.sessionAttentionLabel(hitSession()!)
+                                      : "Unread update"
+                                  }
+                                />
+                              </Show>
+                              <span class="font-mono text-[11px] text-fg-muted tabular-nums">
+                                {r.matchCount > 1 ? `${r.matchCount} hits · ` : ""}
+                                {timeAgo(r.updatedAt)}
+                              </span>
+                            </div>
                           </div>
-                          <span class="shrink-0 font-mono text-[11px] text-fg-muted tabular-nums">
-                            {r.matchCount > 1 ? `${r.matchCount} hits · ` : ""}
-                            {timeAgo(r.updatedAt)}
-                          </span>
-                        </div>
-                        <p class="mt-1 pl-5 text-xs text-fg-secondary line-clamp-2 leading-relaxed">
-                          {highlightMatch(r.snippet, props.sessionFilter())}
-                        </p>
-                      </button>
-                    )}
+                          <p class="mt-1 pl-5 text-xs text-fg-secondary line-clamp-2 leading-relaxed">
+                            {highlightMatch(r.snippet, props.sessionFilter())}
+                          </p>
+                        </button>
+                      );
+                    }}
                   </For>
                 </div>
               </div>
@@ -283,37 +328,61 @@ export function HistoryView(props: HistoryViewProps) {
                 </div>
                 <div class="divide-y divide-border/70 border-y border-border/70">
                   <For each={filteredSessions()}>
-                    {(s) => (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          props.setHistoryView(false);
-                          props.selectSession(s.id);
-                        }}
-                        class="w-full px-2.5 py-2.5 text-left hover:bg-surface-subtle transition-colors group cursor-pointer"
-                      >
-                        <div class="flex items-center justify-between gap-3">
-                          <div class="flex items-center gap-2 min-w-0">
-                            <Show
-                              when={s.pinned}
-                              fallback={
-                                <Iconify
-                                  icon="lucide:message-square"
-                                  size={13}
-                                  class="shrink-0 text-fg-muted group-hover:text-fg-secondary transition-colors"
-                                />
-                              }
-                            >
-                              <Iconify icon="lucide:pin" size={12} class="shrink-0 text-accent" />
-                            </Show>
-                            <span class="truncate text-[13px] font-medium text-fg">
-                              {highlightMatch(s.title, props.sessionFilter())}
-                            </span>
+                    {(s) => {
+                      const unread = () => Boolean(props.isSessionUnread?.(s));
+                      const running = () =>
+                        s.status === "running" ||
+                        (Boolean(props.activeSessionId?.()) &&
+                          props.activeSessionId?.() === s.id &&
+                          props.sessionStatus?.() === "running");
+                      return (
+                        <button
+                          type="button"
+                          data-history-session-id={s.id}
+                          onClick={() => {
+                            props.setHistoryView(false);
+                            props.selectSession(s.id);
+                          }}
+                          class="w-full px-2.5 py-2.5 text-left hover:bg-surface-subtle transition-colors group cursor-pointer"
+                        >
+                          <div class="flex items-center justify-between gap-3">
+                            <div class="flex items-center gap-2 min-w-0">
+                              <Show
+                                when={s.pinned}
+                                fallback={
+                                  <Iconify
+                                    icon="lucide:message-square"
+                                    size={13}
+                                    class="shrink-0 text-fg-muted group-hover:text-fg-secondary transition-colors"
+                                  />
+                                }
+                              >
+                                <Iconify icon="lucide:pin" size={12} class="shrink-0 text-accent" />
+                              </Show>
+                              <span
+                                class={`truncate text-[13px] ${
+                                  unread() ? "font-medium text-fg" : "text-fg-secondary group-hover:text-fg"
+                                } transition-colors`}
+                              >
+                                {highlightMatch(s.title, props.sessionFilter())}
+                              </span>
+                            </div>
+                            <div class="flex items-center gap-2 shrink-0">
+                              <Show
+                                when={unread()}
+                                fallback={
+                                  <Show when={running()}>
+                                    <RadialSpokeSpinner size={13} class="text-fg-secondary" />
+                                  </Show>
+                                }
+                              >
+                                <UnreadDot label={props.sessionAttentionLabel?.(s) ?? "Unread update"} />
+                              </Show>
+                              <span class="font-mono text-[11px] text-fg-muted tabular-nums">
+                                {timeAgo(sessionTimeLabel(s))}
+                              </span>
+                            </div>
                           </div>
-                          <span class="shrink-0 font-mono text-[11px] text-fg-muted tabular-nums">
-                            {timeAgo(sessionTimeLabel(s))}
-                          </span>
-                        </div>
                         <Show
                           when={s.cwd}
                           fallback={
@@ -340,8 +409,9 @@ export function HistoryView(props: HistoryViewProps) {
                             </span>
                           </div>
                         </Show>
-                      </button>
-                    )}
+                        </button>
+                      );
+                    }}
                   </For>
                 </div>
               </div>

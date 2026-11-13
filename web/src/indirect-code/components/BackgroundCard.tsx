@@ -4,6 +4,7 @@ import type { SessionBgTask } from "../hooks/useBackground";
 import { elapsedLabel } from "../utils/format";
 import { Icon as Iconify } from "../../components/icon";
 import { CodeBlock, ShellCmd } from "./CodeBlock";
+import { ProcessEqualizer } from "./LiveIndicators";
 import { followTail, recordToolScroll, restoreToolScroll } from "../utils/scrollMemory";
 
 /** Middle-truncated one-line command for the card row. */
@@ -17,7 +18,7 @@ function shortLabel(cmd: string, max = 64) {
 
 function taskState(status: string) {
   switch (status) {
-    case "running": return { label: "Running", icon: "lucide:loader-circle", color: "text-accent" };
+    case "running": return { label: "Running", icon: "lucide:terminal", color: "text-accent" };
     case "done": return { label: "Completed", icon: "lucide:circle-check", color: "text-success" };
     case "error": return { label: "Failed", icon: "lucide:circle-x", color: "text-danger" };
     case "cancelled": return { label: "Cancelled", icon: "lucide:circle-slash", color: "text-fg-muted" };
@@ -178,10 +179,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
             <Iconify icon="lucide:archive" size={12} />
             <span class="tabular-nums">{archived().length}</span>
           </button>
-          <span class="ml-auto inline-flex items-center gap-1.5 text-[11px] text-fg-muted tabular-nums whitespace-nowrap" data-bg-running-count>
-            <Show when={running().length > 0}>
-              <span class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-            </Show>
+          <span class="ml-auto inline-flex items-center text-[11px] text-fg-muted tabular-nums whitespace-nowrap" data-bg-running-count>
             {running().length} running
           </span>
         </div>
@@ -189,30 +187,36 @@ export function BackgroundCard(props: { contextKey?: string }) {
         <div class="flex flex-col gap-1.5">
           <For each={visible()}>
             {(job) => (
-              <div class="rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden" data-bg-row={job.id}>
+              <div
+                class="rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden"
+                data-bg-row={job.id}
+              >
                 <div
                   class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-muted/60 transition-colors"
                   onClick={() => toggle(job.id)}
                 >
                   <span
-                    class={`inline-flex shrink-0 ${taskState(job.status).color}`}
+                    class={`inline-flex items-center justify-center shrink-0 ${taskState(job.status).color}`}
                     role="img"
                     aria-label={taskState(job.status).label}
                     data-rc-tip={taskState(job.status).label}
                     data-bg-status={job.status}
                   >
-                    <Iconify icon={taskState(job.status).icon} size={14} class={job.status === "running" ? "animate-spin" : ""} />
+                    <Show
+                      when={job.status === "running"}
+                      fallback={<Iconify icon={taskState(job.status).icon} size={14} />}
+                    >
+                      <ProcessEqualizer size={13} class="text-accent" />
+                    </Show>
                   </span>
-                  <Iconify
-                    icon={job.kind === "exec_script" ? "mdi:language-javascript" : job.kind === "python" ? "mdi:language-python" : "lucide:terminal"}
-                    size={14}
-                    class="shrink-0 text-fg-muted"
-                  />
                   <span
                     class="truncate text-fg min-w-0 flex-1 text-[12.5px]"
                     data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
                   >
-                    <ShellCmd text={shortLabel(job.label || job.id)} />
+                    <ShellCmd
+                      prompt={job.kind === "exec_script" || job.kind === "python" ? "> " : "$ "}
+                      text={shortLabel(job.label || job.id)}
+                    />
                   </span>
                   <Show when={job.status !== "running" && job.exitCode !== undefined}>
                     <span

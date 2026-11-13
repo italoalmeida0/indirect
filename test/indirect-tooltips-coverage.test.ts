@@ -227,9 +227,12 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     expect(queue).toContain('data-rc-tip="Send message now"');
     expect(queue).toContain('data-rc-tip="Move earlier in queue"');
     expect(queue).toContain('data-rc-tip="Move later in queue"');
-    expect(queue).toContain('tip="Edit queued message"');
-    expect(queue).toContain('tip="Remove from queue"');
+    expect(queue).toContain('data-rc-tip="Edit queued message"');
+    expect(queue).toContain('data-rc-tip="Remove from queue"');
     expect(queue).toContain('data-rc-tip="Remove attachment"');
+
+    const liveIndicators = readIc("components/LiveIndicators.tsx");
+    expect(liveIndicators).toContain("data-rc-tip={props.label}");
 
     const bg = readIc("components/BackgroundCard.tsx");
     expect(bg).toContain('data-rc-tip="Stop task"');

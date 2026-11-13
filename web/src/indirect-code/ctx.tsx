@@ -28,6 +28,8 @@ export interface HostCtxValue extends Hosts {
   wsOpen: () => boolean;
   /** Relay WS send (daemon commands), stamped with the active hostId. */
   send: Relay["send"];
+  hostHasUnread?: (hostId: string) => boolean;
+  anyOtherHostHasUnread?: () => boolean;
 }
 
 export interface SessionCtxValue extends Projects {
@@ -42,6 +44,8 @@ export interface SessionCtxValue extends Projects {
   startNewConversation: (projectId?: string) => void;
   deleteSession: (id: string, e?: MouseEvent) => void;
   newestSessionProjectId: () => string;
+  isSessionUnread?: (s: SessionSummary) => boolean;
+  sessionAttentionLabel?: (s: SessionSummary) => string;
   workspace: Workspace["workspace"];
   workspaceBlocked: Workspace["workspaceBlocked"];
   workspacePath: Workspace["workspacePath"];
@@ -99,6 +103,7 @@ export interface UICtxValue extends Notice {
   pushSub: PushSubscription;
   sidebarOpen: () => boolean;
   setSidebarOpen: (v: boolean | ((p: boolean) => boolean)) => void;
+  anyOnlineHostHasUnread?: () => boolean;
   isMobile: () => boolean;
   historyView: () => boolean;
   setHistoryView: (v: boolean | ((p: boolean) => boolean)) => void;

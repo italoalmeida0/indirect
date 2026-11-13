@@ -4,162 +4,138 @@ import { FileIcon } from "../presentation";
 import { MsgIconBtn } from "./MsgActions";
 import { Btn } from "../../ui";
 import { useComposerCtx, useModal, useQueue, useSession, useTranscriptCtx, useUI } from "../ctx";
+import type { QueuedMessage } from "../viewTypes";
 
 /**
- * Two-zone queued messages card.
- *
- * Lives at the bottom of the transcript (below BackgroundCard), never
- * inside the composer:
- * - Zone 1 (Active Intermediate Staging): always visible when items are staged
- *   for the next AI step ("steer") or actively interrupting ("interrupt"),
- *   even if the passive queue below is collapsed.
- * - Zone 2 (Passive Queue): holds messages waiting for the turn to finish
- *   (or paused when idle), with promote, force-interrupt, reorder, inline edit,
- *   remove, and clear actions.
+ * Transcript staging zone:
+ * Renders armed `Next step` ("steer") / `Sending now…` ("interrupt") items
+ * as a right-aligned pending user chat bubble matching the user's own sent
+ * bubbles at top-right. Passive `Queued` items dock onto `.rc-composer` via
+ * `ComposerQueueShelf` below.
  */
 export function QueueCard() {
+  const q = useQueue();
+  const s = useSession();
+  const ui = useUI();
+
+  const sid = () => s.activeSessionId();
+  const staged = () => q.stagedItems(sid());
+
+  return (
+    <Show when={staged().length > 0}>
+      <div
+        class={`w-full ${ui.convWidthClass()} mx-auto pt-1 flex flex-col items-end gap-1.5`}
+        data-queue-card
+        data-queue-staged
+      >
+        <For each={staged()}>
+          {(item) => (
+            <div
+              data-queue-item-state={item.delivery === "interrupt" ? "interrupt" : "steer"}
+              class="ml-auto w-fit max-w-[94%] sm:max-w-[86%] overflow-hidden rounded-2xl rounded-br-sm border border-dashed border-border-strong bg-surface/80 px-3 sm:px-3.5 py-1.5 sm:py-2"
+            >
+              <div class="flex items-center gap-2 min-w-0">
+                <Show
+                  when={item.delivery === "interrupt"}
+                  fallback={
+                    <span
+                      class="inline-flex items-center gap-1 rounded-full bg-accent-subtle/75 px-2 py-0.5 text-[10px] font-medium text-accent shrink-0"
+                      data-rc-tip="Sends automatically when current step finishes"
+                    >
+                      <Iconify icon="lucide:corner-down-right" size={10} />
+                      Next step
+                    </span>
+                  }
+                >
+                  <span class="inline-flex items-center gap-1 rounded-full bg-accent-subtle/75 px-2 py-0.5 text-[10px] font-medium text-accent shrink-0">
+                    <Iconify icon="lucide:zap" size={10} />
+                    <span class="ui-shimmer font-medium">Sending now…</span>
+                  </span>
+                </Show>
+                <span
+                  class="text-[13px] text-fg truncate min-w-0"
+                  data-rc-tip={item.text && item.text.length > 60 ? item.text : undefined}
+                >
+                  {item.text || "(Attachment message)"}
+                </span>
+                <Show when={item.attachmentIds.length > 0}>
+                  <span
+                    data-rc-tip={`${item.attachmentIds.length} ${item.attachmentIds.length === 1 ? "attachment" : "attachments"}`}
+                    class="shrink-0 inline-flex items-center gap-1 rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted tabular-nums"
+                  >
+                    <Iconify icon="lucide:paperclip" size={10} />
+                    {item.attachmentIds.length}
+                  </span>
+                </Show>
+                <span class="h-3.5 w-px bg-border/80 shrink-0 mx-0.5" aria-hidden="true" />
+                <div class="flex items-center gap-0.5 shrink-0 -mr-1">
+                  <Show when={item.delivery !== "interrupt"}>
+                    <button
+                      type="button"
+                      data-action="queue-interrupt-now"
+                      data-rc-tip="Interrupt current step and send now"
+                      aria-label="Interrupt current step and send now"
+                      onClick={() => q.interruptNow(item.id)}
+                      class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                    >
+                      <Iconify icon="lucide:zap" size={12} />
+                    </button>
+                  </Show>
+                  <button
+                    type="button"
+                    data-action="queue-cancel-send"
+                    data-rc-tip="Return to queue"
+                    aria-label={
+                      item.delivery === "interrupt"
+                        ? "Cancel interrupt send and return to queue"
+                        : "Cancel next-step send and return to queue"
+                    }
+                    onClick={() => q.cancelSend(item.id)}
+                    class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                  >
+                    <Iconify icon="lucide:x" size={12} />
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </For>
+      </div>
+    </Show>
+  );
+}
+
+/**
+ * Recessed composer shelf docked seamlessly onto the top lip of `.rc-composer`
+ * for passive `Queued` items (`01`, `02`).
+ */
+export function ComposerQueueShelf() {
   const q = useQueue();
   const m = useModal();
   const s = useSession();
   const t = useTranscriptCtx();
   const c = useComposerCtx();
-  const ui = useUI();
 
   const sid = () => s.activeSessionId();
-  const items = () => q.queueOf(sid());
-  const staged = () => q.stagedItems(sid());
   const passive = () => q.passiveItems(sid());
   const collapsed = () => q.queueCollapsed()[sid()] ?? false;
   const isRunning = () => t.sessionStatus() === "running";
   const currentModel = () => c.activeModel?.() || s.activeSession?.()?.model || "";
+  const hasShelf = () => Boolean(sid() && !s.draftMode() && passive().length > 0);
 
   return (
-    <Show when={items().length > 0}>
+    <Show when={hasShelf()}>
       <div
-        class={`${ui.convWidthClass()} mx-auto border-t border-border/70 px-3 py-2.5 space-y-2`}
-        data-queue-card
+        data-composer-queue-shelf
+        class="mx-3 rounded-t-xl border border-b-0 border-border/80 bg-surface-subtle overflow-hidden -mb-2 pb-2 relative z-0"
       >
-        {/* Zone 1: Active Intermediate Staging Zone (always visible even when passive queue is collapsed) */}
-        <Show when={staged().length > 0}>
-          <div class="flex flex-col gap-1.5" data-queue-staged>
-            <For each={staged()}>
-              {(item) => (
-                <Show
-                  when={item.delivery === "interrupt"}
-                  fallback={
-                    <div
-                      data-queue-item-state="steer"
-                      class="rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden"
-                    >
-                      <div class="flex items-center gap-2 px-3 py-2 min-w-0">
-                        <span
-                          class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse shrink-0"
-                          aria-hidden="true"
-                        />
-                        <Iconify
-                          icon="lucide:corner-down-right"
-                          size={13}
-                          class="shrink-0 text-fg-muted"
-                        />
-                        <span
-                          class="truncate text-fg min-w-0 flex-1 text-[12.5px]"
-                          data-rc-tip={item.text && item.text.length > 60 ? item.text : undefined}
-                        >
-                          {item.text || "(Attachment message)"}
-                        </span>
-                        <Show when={item.attachmentIds.length > 0}>
-                          <span
-                            data-rc-tip={`${item.attachmentIds.length} ${item.attachmentIds.length === 1 ? "attachment" : "attachments"}`}
-                            class="shrink-0 inline-flex items-center gap-1 rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted tabular-nums"
-                          >
-                            <Iconify icon="lucide:paperclip" size={10} />
-                            {item.attachmentIds.length}
-                          </span>
-                        </Show>
-                        <span
-                          class="text-[11px] text-fg-muted whitespace-nowrap shrink-0"
-                          data-rc-tip="Sends automatically when current step finishes"
-                        >
-                          Next step
-                        </span>
-                        <button
-                          type="button"
-                          data-action="queue-interrupt-now"
-                          data-rc-tip="Interrupt current step and send now"
-                          aria-label="Interrupt current step and send now"
-                          onClick={() => q.interruptNow(item.id)}
-                          class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-                        >
-                          <Iconify icon="lucide:zap" size={13} />
-                        </button>
-                        <button
-                          type="button"
-                          data-action="queue-cancel-send"
-                          data-rc-tip="Return to queue"
-                          aria-label="Cancel next-step send and return to queue"
-                          onClick={() => q.cancelSend(item.id)}
-                          class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-                        >
-                          <Iconify icon="lucide:x" size={13} />
-                        </button>
-                      </div>
-                    </div>
-                  }
-                >
-                  <div
-                    data-queue-item-state="interrupt"
-                    class="rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden"
-                  >
-                    <div class="flex items-center gap-2 px-3 py-2 min-w-0">
-                      <Iconify
-                        icon="lucide:loader-2"
-                        size={13}
-                        class="animate-spin text-accent shrink-0"
-                      />
-                      <span
-                        class="truncate text-fg min-w-0 flex-1 text-[12.5px]"
-                        data-rc-tip={item.text && item.text.length > 60 ? item.text : undefined}
-                      >
-                        {item.text || "(Attachment message)"}
-                      </span>
-                      <Show when={item.attachmentIds.length > 0}>
-                        <span
-                          data-rc-tip={`${item.attachmentIds.length} ${item.attachmentIds.length === 1 ? "attachment" : "attachments"}`}
-                          class="shrink-0 inline-flex items-center gap-1 rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted tabular-nums"
-                        >
-                          <Iconify icon="lucide:paperclip" size={10} />
-                          {item.attachmentIds.length}
-                        </span>
-                      </Show>
-                      <span class="text-[11px] text-fg-muted whitespace-nowrap shrink-0">
-                        Sending now…
-                      </span>
-                      <button
-                        type="button"
-                        data-action="queue-cancel-send"
-                        data-rc-tip="Return to queue"
-                        aria-label="Cancel interrupt send and return to queue"
-                        onClick={() => q.cancelSend(item.id)}
-                        class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-                      >
-                        <Iconify icon="lucide:x" size={13} />
-                      </button>
-                    </div>
-                  </div>
-                </Show>
-              )}
-            </For>
-          </div>
-        </Show>
-
-        {/* Zone 2: Passive Queue Zone */}
-        <Show when={passive().length > 0}>
-          <div data-queue-passive class="space-y-1.5">
+        {/* Passive Queue Shelf */}
+        <div data-queue-passive class="px-3 pt-1.5 pb-1">
             <div class="flex items-center gap-2 min-w-0">
               <span class="text-[11px] font-medium text-fg-secondary shrink-0">
                 Queued
               </span>
-              <span class="shrink-0 inline-flex items-center rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted tabular-nums">
+              <span class="shrink-0 inline-flex items-center justify-center rounded bg-surface-muted/85 px-1.5 py-0.5 font-mono text-[10px] leading-none text-fg-secondary tabular-nums">
                 {passive().length}
               </span>
               <span class="text-[11px] text-fg-muted truncate min-w-0">
@@ -173,7 +149,7 @@ export function QueueCard() {
                   data-rc-tip="Clear queued messages"
                   aria-label="Clear queued messages"
                   onClick={() => q.clearQueued()}
-                  class="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-medium text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                  class="shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                 >
                   Clear
                 </button>
@@ -181,141 +157,178 @@ export function QueueCard() {
               <button
                 type="button"
                 onClick={() => q.toggleCollapsed(sid())}
-                class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                class="shrink-0 inline-flex items-center justify-center rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                 data-rc-tip={collapsed() ? "Expand queue" : "Collapse queue"}
                 aria-label={collapsed() ? "Expand queue" : "Collapse queue"}
               >
                 <Iconify
                   icon="lucide:chevron-down"
-                  size={14}
+                  size={13}
                   class={`transition-transform ${collapsed() ? "" : "rotate-180"}`}
                 />
               </button>
             </div>
             <Show when={!collapsed()}>
-              <div class="rounded-xl border border-border/80 bg-surface shadow-2xs divide-y divide-border/60 overflow-hidden">
+              <div class="mt-1 pt-1 border-t border-border/55 space-y-0.5">
                 <For each={passive()}>
                   {(item, idx) => (
-                    <div class="px-3 py-2" data-queue-item-state="queue">
-                      <Show
-                        when={q.editingQueueId() === item.id}
-                        fallback={
-                          <div class="flex items-center gap-2 min-w-0">
-                            <span class="shrink-0 rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted tabular-nums">
-                              {`#${idx() + 1}`}
-                            </span>
-                            <span
-                              data-queue-item-text
-                              class="truncate text-fg min-w-0 flex-1 text-[12.5px]"
-                              data-rc-tip={item.text && item.text.length > 60 ? item.text : undefined}
-                            >
-                              {item.text || "(Attachment message)"}
-                            </span>
-                            <Show when={item.attachmentIds.length > 0}>
-                              <span
-                                data-rc-tip={`${item.attachmentIds.length} ${item.attachmentIds.length === 1 ? "attachment" : "attachments"}`}
-                                class="shrink-0 inline-flex items-center gap-1 rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted tabular-nums"
-                              >
-                                <Iconify icon="lucide:paperclip" size={10} />
-                                {item.attachmentIds.length}
-                              </span>
-                            </Show>
-                            <Show when={Boolean(item.model && currentModel() && item.model !== currentModel())}>
-                              <span
-                                data-rc-tip={`Model override: ${item.model}`}
-                                class="shrink-0 inline-flex items-center rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted max-w-20 sm:max-w-28 truncate"
-                              >
-                                {item.model.split("/").pop() || item.model}
-                              </span>
-                            </Show>
-                            <div class="flex items-center gap-0.5 shrink-0">
-                              <Show
-                                when={isRunning()}
-                                fallback={
-                                  <button
-                                    type="button"
-                                    data-action="queue-send-idle"
-                                    data-rc-tip="Send message now"
-                                    aria-label="Send message now"
-                                    onClick={() => q.sendNow(item.id)}
-                                    class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-                                  >
-                                    <Iconify icon="lucide:play" size={13} />
-                                  </button>
-                                }
-                              >
-                                <button
-                                  type="button"
-                                  data-action="queue-send-next"
-                                  data-rc-tip="Send on next AI step"
-                                  aria-label="Send on next AI step"
-                                  onClick={() => q.sendNow(item.id)}
-                                  class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-                                >
-                                  <Iconify icon="lucide:corner-up-right" size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  data-action="queue-interrupt-now"
-                                  data-rc-tip="Stop current step and send now"
-                                  aria-label="Stop current step and send now"
-                                  onClick={() => q.interruptNow(item.id)}
-                                  class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-                                >
-                                  <Iconify icon="lucide:zap" size={13} />
-                                </button>
-                              </Show>
-                              <Show when={passive().length >= 2}>
-                                <button
-                                  type="button"
-                                  data-action="queue-move-up"
-                                  data-rc-tip="Move earlier in queue"
-                                  aria-label="Move earlier in queue"
-                                  disabled={idx() === 0}
-                                  onClick={() => q.moveQueued(item.id, -1)}
-                                  class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
-                                >
-                                  <Iconify icon="lucide:chevron-up" size={13} />
-                                </button>
-                                <button
-                                  type="button"
-                                  data-action="queue-move-down"
-                                  data-rc-tip="Move later in queue"
-                                  aria-label="Move later in queue"
-                                  disabled={idx() === passive().length - 1}
-                                  onClick={() => q.moveQueued(item.id, 1)}
-                                  class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
-                                >
-                                  <Iconify icon="lucide:chevron-down" size={13} />
-                                </button>
-                              </Show>
-                              <MsgIconBtn
-                                tip="Edit queued message"
-                                icon="lucide:pencil"
-                                compact
-                                onClick={() => q.beginEdit(item, m.sessionFiles?.()[sid()] || [])}
-                              />
-                              <MsgIconBtn
-                                tip="Remove from queue"
-                                icon="lucide:trash-2"
-                                compact
-                                onClick={() => q.removeQueued(item.id)}
-                              />
-                            </div>
-                          </div>
-                        }
-                      >
-                        <QueueEditRow queueId={item.id} />
-                      </Show>
-                    </div>
+                    <PassiveQueueLine
+                      item={item}
+                      idx={idx()}
+                      total={passive().length}
+                      isRunning={isRunning()}
+                      currentModel={currentModel()}
+                      isEditing={q.editingQueueId() === item.id}
+                      onSendNow={() => q.sendNow(item.id)}
+                      onInterruptNow={() => q.interruptNow(item.id)}
+                      onMoveUp={() => q.moveQueued(item.id, -1)}
+                      onMoveDown={() => q.moveQueued(item.id, 1)}
+                      onEdit={() => q.beginEdit(item, m.sessionFiles?.()[sid()] || [])}
+                      onRemove={() => q.removeQueued(item.id)}
+                    />
                   )}
                 </For>
               </div>
             </Show>
           </div>
-        </Show>
       </div>
     </Show>
+  );
+}
+
+function PassiveQueueLine(props: {
+  item: QueuedMessage;
+  idx: number;
+  total: number;
+  isRunning: boolean;
+  currentModel: string;
+  isEditing: boolean;
+  onSendNow: () => void;
+  onInterruptNow: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onEdit: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div data-queue-item-state="queue">
+      <Show
+        when={props.isEditing}
+        fallback={
+          <div class="group/qrow flex items-center gap-2 py-0.5 px-1.5 -mx-1.5 rounded-md hover:bg-surface-muted/45 transition-colors min-w-0">
+            <span class="shrink-0 font-mono text-[10px] text-fg-muted tabular-nums select-none w-4">
+              {String(props.idx + 1).padStart(2, "0")}
+            </span>
+            <span
+              data-queue-item-text
+              class="truncate text-fg/90 min-w-0 flex-1 text-xs"
+              data-rc-tip={props.item.text && props.item.text.length > 60 ? props.item.text : undefined}
+            >
+              {props.item.text || "(Attachment message)"}
+            </span>
+            <Show when={props.item.attachmentIds.length > 0}>
+              <span
+                data-rc-tip={`${props.item.attachmentIds.length} ${props.item.attachmentIds.length === 1 ? "attachment" : "attachments"}`}
+                class="shrink-0 inline-flex items-center gap-1 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted tabular-nums"
+              >
+                <Iconify icon="lucide:paperclip" size={10} />
+                {props.item.attachmentIds.length}
+              </span>
+            </Show>
+            <Show when={Boolean(props.item.model && props.currentModel && props.item.model !== props.currentModel)}>
+              <span
+                data-rc-tip={`Model override: ${props.item.model}`}
+                class="shrink-0 inline-flex items-center rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] leading-tight text-fg-muted max-w-20 sm:max-w-28 truncate"
+              >
+                {props.item.model.split("/").pop() || props.item.model}
+              </span>
+            </Show>
+            <div class="flex items-center gap-0.5 shrink-0 text-fg-muted/70 group-hover/qrow:text-fg-muted transition-colors">
+              <Show
+                when={props.isRunning}
+                fallback={
+                  <button
+                    type="button"
+                    data-action="queue-send-idle"
+                    data-rc-tip="Send message now"
+                    aria-label="Send message now"
+                    onClick={props.onSendNow}
+                    class="shrink-0 inline-flex items-center justify-center p-1 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                  >
+                    <Iconify icon="lucide:play" size={11.5} />
+                  </button>
+                }
+              >
+                <button
+                  type="button"
+                  data-action="queue-send-next"
+                  data-rc-tip="Send on next AI step"
+                  aria-label="Send on next AI step"
+                  onClick={props.onSendNow}
+                  class="shrink-0 inline-flex items-center justify-center p-1 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                >
+                  <Iconify icon="lucide:corner-up-right" size={11.5} />
+                </button>
+                <button
+                  type="button"
+                  data-action="queue-interrupt-now"
+                  data-rc-tip="Stop current step and send now"
+                  aria-label="Stop current step and send now"
+                  onClick={props.onInterruptNow}
+                  class="inline-flex shrink-0 items-center justify-center p-0.5 sm:p-1 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                >
+                  <Iconify icon="lucide:zap" size={11.5} />
+                </button>
+              </Show>
+              <Show when={props.total >= 2}>
+                <button
+                  type="button"
+                  data-action="queue-move-up"
+                  data-rc-tip="Move earlier in queue"
+                  aria-label="Move earlier in queue"
+                  disabled={props.idx === 0}
+                  onClick={props.onMoveUp}
+                  class="inline-flex shrink-0 items-center justify-center p-0.5 sm:p-1 rounded text-fg-muted hover:text-fg hover:bg-surface-muted disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
+                >
+                  <Iconify icon="lucide:chevron-up" size={11.5} />
+                </button>
+                <button
+                  type="button"
+                  data-action="queue-move-down"
+                  data-rc-tip="Move later in queue"
+                  aria-label="Move later in queue"
+                  disabled={props.idx === props.total - 1}
+                  onClick={props.onMoveDown}
+                  class="inline-flex shrink-0 items-center justify-center p-0.5 sm:p-1 rounded text-fg-muted hover:text-fg hover:bg-surface-muted disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
+                >
+                  <Iconify icon="lucide:chevron-down" size={11.5} />
+                </button>
+              </Show>
+              <button
+                type="button"
+                data-rc-tip="Edit queued message"
+                aria-label="Edit queued message"
+                onClick={props.onEdit}
+                class="shrink-0 inline-flex items-center justify-center p-0.5 sm:p-1 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+              >
+                <Iconify icon="lucide:pencil" size={11.5} />
+              </button>
+              <button
+                type="button"
+                data-rc-tip="Remove from queue"
+                aria-label="Remove from queue"
+                onClick={props.onRemove}
+                class="shrink-0 inline-flex items-center justify-center p-0.5 sm:p-1 rounded text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+              >
+                <Iconify icon="lucide:x" size={12} />
+              </button>
+            </div>
+          </div>
+        }
+      >
+        <QueueEditRow queueId={props.item.id} />
+      </Show>
+    </div>
   );
 }
 
@@ -326,7 +339,7 @@ function QueueEditRow(props: { queueId: string }) {
   let fileRef: HTMLInputElement | undefined;
 
   return (
-    <div class="flex flex-col gap-2 py-0.5">
+    <div class="flex flex-col gap-2 py-1">
       <textarea
         value={q.editingQueueText()}
         onInput={(e) => q.setEditingQueueText(e.currentTarget.value)}
@@ -337,7 +350,7 @@ function QueueEditRow(props: { queueId: string }) {
         <div class="flex flex-wrap gap-1.5">
           <For each={q.editDraft.pendingAttachments()}>
             {(a) => (
-              <span class="flex items-center gap-1 text-[11px] bg-surface-subtle border border-border px-2 py-1 rounded-lg text-fg-secondary">
+              <span class="flex items-center gap-1 text-[11px] bg-surface border border-border px-2 py-1 rounded-lg text-fg-secondary">
                 <FileIcon path={a.name} size={13} />
                 <button
                   type="button"

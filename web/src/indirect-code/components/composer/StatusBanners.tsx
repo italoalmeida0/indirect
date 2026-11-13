@@ -4,6 +4,7 @@ import { press } from "../../../ds/motion/press";
 import { useHost, useSession, useTranscriptCtx, useUI } from "../../ctx";
 import { composerIsCollapsed } from "../../utils/composerState";
 import { IndirectBrand } from "../IndirectBrand";
+import { NeuralMatrixLoader } from "../LiveIndicators";
 
 /** Minimize/restore the composer (input, toolbar, footer) and the whole
  *  task plan (short viewports). Lives in the turn-status row, so it is only
@@ -50,6 +51,17 @@ export function StatusBanners() {
   const compacting = () => Boolean(t.compactingText?.());
   const hasTurnRow = () => Boolean(t.turnActivity() || compacting());
   const isBusy = () => t.sessionStatus() === "running" || compacting();
+  const rawTurnLabel = () => t.turnLabel?.() || t.compactingText?.() || "";
+  const turnPrimary = () => {
+    const raw = rawTurnLabel();
+    const sep = raw.indexOf(" · ");
+    return sep >= 0 ? raw.slice(0, sep) : raw;
+  };
+  const turnElapsed = () => {
+    const raw = rawTurnLabel();
+    const sep = raw.indexOf(" · ");
+    return sep >= 0 ? raw.slice(sep + 3) : "";
+  };
   return (
 <>
 <Show when={s.draftMode()}>
@@ -59,8 +71,16 @@ export function StatusBanners() {
 </Show>
 <Show when={s.activeSessionId() && hasTurnRow()}>
   <div role="status" data-turn-status class="mb-1.5 flex items-center gap-2 px-1 text-xs text-fg-muted min-w-0">
-    <Iconify icon={isBusy() ? "lucide:loader-circle" : "lucide:clock-3"} size={13} class={isBusy() ? "animate-spin shrink-0 text-accent" : "shrink-0 text-fg-muted"} />
-    <span class="shrink-0 font-medium text-fg-secondary">{t.turnLabel?.() || t.compactingText?.()}</span>
+    <Show
+      when={isBusy()}
+      fallback={<Iconify icon="lucide:clock-3" size={13} class="shrink-0 text-fg-muted" />}
+    >
+      <NeuralMatrixLoader size={12} class="text-accent" />
+    </Show>
+    <span class={`shrink-0 font-medium ${isBusy() ? "ui-shimmer" : "text-fg-secondary"}`}>{turnPrimary()}</span>
+    <Show when={turnElapsed()}>
+      <span class="shrink-0 text-fg-muted tabular-nums -ml-0.5">· {turnElapsed()}</span>
+    </Show>
     <Show when={!compacting() && t.turnHint()}>{(hint) =>
       <span class="min-w-0 flex-1 truncate whitespace-nowrap overflow-hidden font-mono text-[11px] text-fg-muted">· {hint()}</span>
     }</Show>
@@ -93,8 +113,8 @@ export function StatusBanners() {
     </button>
     <Show when={t.todosOpen()}><ol class="px-3 pb-2 pt-1.5 border-t border-border-subtle space-y-1.5 max-h-44 overflow-y-auto">
       <For each={t.todos()}>{(item) => <li class="flex items-start gap-2" data-todo-status={item.status}>
-        <Iconify icon={item.status === "completed" ? "lucide:circle-check" : item.status === "in_progress" ? t.sessionStatus() === "running" ? "lucide:loader-circle" : "lucide:circle-dot" : "lucide:circle"} size={13} class={`mt-0.5 shrink-0 ${item.status === "completed" ? "text-success" : item.status === "in_progress" ? (t.sessionStatus() === "running" ? "animate-spin text-accent" : "text-accent") : "text-fg-muted"}`} />
-        <span class={item.status === "completed" ? "text-fg-muted line-through" : "text-fg"}>{item.text}</span>
+        <Iconify icon={item.status === "completed" ? "lucide:circle-check" : item.status === "in_progress" ? "lucide:circle-dot" : "lucide:circle"} size={13} class={`mt-0.5 shrink-0 ${item.status === "completed" ? "text-success" : item.status === "in_progress" ? "text-accent" : "text-fg-muted"}`} />
+        <span class={item.status === "completed" ? "text-fg-muted line-through" : item.status === "in_progress" && t.sessionStatus() === "running" ? "ui-shimmer font-medium text-fg-secondary" : "text-fg"}>{item.text}</span>
       </li>}</For>
     </ol></Show>
   </section>
