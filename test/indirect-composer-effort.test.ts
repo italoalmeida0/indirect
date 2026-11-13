@@ -175,4 +175,25 @@ describe("Separated Effort & Model picker contracts", () => {
     expect(inputSrc).not.toContain("min-h-[56px]");
     expect(inputSrc).toContain("Math.min(sh, 160)");
   });
+
+  test("Composer and .rc-composer-toolbar form a unified borderless surface", () => {
+    const dsCss = readFileSync(
+      path.join(import.meta.dir, "../web/src/ds/components.css"),
+      "utf8",
+    );
+    const codeCss = readFileSync(
+      path.join(import.meta.dir, "../web/src/styles/code.css"),
+      "utf8",
+    );
+    const composerSrc = readFileSync(
+      path.join(import.meta.dir, "../web/src/indirect-code/components/Composer.tsx"),
+      "utf8",
+    );
+    const toolbarMatch = dsCss.match(/\.rc-composer-toolbar\s*\{([^}]*)\}/);
+    expect(toolbarMatch).not.toBeNull();
+    expect(toolbarMatch![1]).not.toContain("border-top");
+    expect(toolbarMatch![1]).toContain("background: transparent");
+    expect(codeCss).not.toMatch(/\.rc-composer-toolbar\s*\{[^}]*border-top/);
+    expect(composerSrc).toContain('class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 pt-1 pb-2"');
+  });
 });

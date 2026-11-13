@@ -58,7 +58,7 @@ export function Composer() {
     <ComposerQueueShelf />
     <div class="rc-composer relative z-10 flex flex-col">
     <ComposerInput />
-    <div class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 py-1.5">
+    <div class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 pt-1 pb-2">
       <div class="flex flex-1 min-w-0 flex-wrap items-center gap-1 text-xs text-fg-secondary">
       <ToolbarContext />
       <ToolbarModel />

@@ -766,7 +766,7 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
   border-color: color-mix(in oklab, var(--accent) 45%, var(--border-strong));
   box-shadow: var(--shadow-raised), 0 0 0 3px color-mix(in oklab, var(--accent) 11%, transparent);
 }
-.rc-composer-toolbar { border-top: 1px solid var(--border-subtle); background: transparent; border-radius: 0 0 var(--radius-surface) var(--radius-surface); }
+.rc-composer-toolbar { background: transparent; border-radius: 0 0 var(--radius-surface) var(--radius-surface); }
 .rc-brand-image { height: 15rem; }
 .rc-brand-name { margin-top: -1rem; font-family: var(--font-display); font-size: 2.5rem; font-weight: 500; letter-spacing: var(--tracking-display); line-height: 1.2; }
 @media (max-height: 700px) {

@@ -37,20 +37,20 @@ export function ComposerInput() {
 <>
 <MentionMenu mentions={c.mentions} inputId="rc-composer" />
 <Show when={dragActive()}>
-  <div class="mx-3 mt-2.5 flex items-center justify-center gap-2 rounded-lg border border-dashed border-accent bg-accent-subtle px-3 py-2 text-xs font-medium text-accent pointer-events-none">
+  <div class="mx-3 mt-3 flex items-center justify-center gap-2 rounded-lg border border-dashed border-accent bg-accent-subtle px-3 py-2 text-xs font-medium text-accent pointer-events-none">
     <Iconify icon="lucide:upload-cloud" size={14} />
     <span>Drop files to attach to prompt</span>
   </div>
 </Show>
 <Show when={c.preparingAttachments() > 0}>
-  <p role="status" class="px-3.5 pt-2.5 flex items-center gap-1.5 text-xs text-fg-muted">
+  <p role="status" class="px-3.5 pt-3 flex items-center gap-1.5 text-xs text-fg-muted">
     <Iconify icon="lucide:loader-2" size={12} class="animate-spin text-accent" />
     <span>Preparing {c.preparingAttachments()} file(s)...</span>
   </p>
 </Show>
 {/* Attachment chips */}
 <Show when={c.pendingAttachments().length > 0}>
-  <div class="flex flex-wrap gap-1.5 px-3.5 pt-2.5">
+  <div class="flex flex-wrap gap-1.5 px-3.5 pt-3">
     <For each={c.pendingAttachments()}>
       {(att) => (
         <div
@@ -113,7 +113,7 @@ export function ComposerInput() {
     ref={textareaRef}
     disabled={s.creatingSession() || c.sending()}
     rows={1}
-    class="flex-1 min-w-0 bg-transparent text-[13px] leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-2.5 pb-1.5 max-h-[160px] min-h-9 overflow-y-hidden"
+    class="flex-1 min-w-0 bg-transparent text-[13px] leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-1 max-h-[160px] min-h-9 overflow-y-hidden"
     placeholder="Ask anything, @ to mention, / for actions"
     value={c.inputPrompt()}
     onFocus={() => c.mentions.setFocused(true)}
@@ -204,7 +204,7 @@ export function ComposerInput() {
         c.setInputPrompt("");
         if (textareaRef) syncHeight(textareaRef, "");
       }}
-      class="shrink-0 mr-2.5 mt-1.5 inline-grid h-6 w-6 place-items-center rounded-full text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+      class="shrink-0 mr-2.5 mt-2.5 inline-grid h-6 w-6 place-items-center rounded-full text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
       data-rc-tip="Clear input" aria-label="Clear input"
     >
       <Iconify icon="lucide:x" size={13} />
