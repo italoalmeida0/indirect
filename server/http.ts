@@ -55,7 +55,7 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
         // (/api/indirect-code/gen-ui/widgets/:id, CSP-sandboxed themselves).
         "frame-src 'self' https://accounts.google.com/gsi/",
         "connect-src 'self' https://accounts.google.com/gsi/ https://api.iconify.design",
-        "img-src 'self' data:",
+        "img-src 'self' data: blob:",
         "style-src 'self' 'unsafe-inline'",
         "font-src 'self' data:",
         "base-uri 'none'",

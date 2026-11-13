@@ -90,6 +90,11 @@ export function createTranscriptScroll(opts: {
       if (pending) cancelFrame(pending);
       pending = 0;
     },
+    /** Cancel a queued preserveReadingPosition frame when caller anchored synchronously. */
+    cancelAnchor() {
+      if (anchorFrame) cancelFrame(anchorFrame);
+      anchorFrame = 0;
+    },
     dispose() { if (anchorFrame) cancelFrame(anchorFrame); anchorFrame = 0; if (pending) cancelFrame(pending); pending = 0; },
   };
 }

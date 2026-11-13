@@ -658,6 +658,7 @@ export function createTranscript(opts: {
         setLoadingNewer(false);
         onApplied?.();
       });
+      transcriptScroll.cancelAnchor();
       if (typeof targetIdx === "number") {
         flashHighlightedMessage(targetIdx);
         scrollToMessage(targetIdx);
@@ -703,6 +704,7 @@ export function createTranscript(opts: {
       });
 
       if (slid.prunedTurns > 0 && el) {
+        transcriptScroll.cancelAnchor();
         if (!restoreViewportAnchor(el, anchor)) {
           const shrunk = prevHeight - el.scrollHeight;
           if (shrunk > 0) el.scrollTop = Math.max(0, prevTop - shrunk);
@@ -765,6 +767,7 @@ export function createTranscript(opts: {
     });
 
     if (el) {
+      transcriptScroll.cancelAnchor();
       if (!restoreViewportAnchor(el, anchor)) {
         const grown = el.scrollHeight - prevHeight;
         if (grown > 0) el.scrollTop = prevTop + grown;
@@ -892,6 +895,7 @@ export function createTranscript(opts: {
   const pendingFetchIds = new Set<string>();
   let initialScrollSession = "";
   let pendingScrollMsgIdx: number | null = null;
+  let replaceNextSnapshot = false;
   function fetchSession(sessionId: string, fetchOpts?: { aroundMsgIdx?: number; aroundTurn?: number }) {
     const requestId = crypto.randomUUID();
     pendingFetchIds.add(requestId);
@@ -941,22 +945,37 @@ export function createTranscript(opts: {
     if (msgs.length > 0) {
       let minSrc = Infinity;
       let maxSrc = -Infinity;
+      let candIdx = -1;
+      let candSrc = -Infinity;
       for (let i = 0; i < msgs.length; i++) {
         const s = msgs[i].srcIdx;
         if (typeof s === "number") {
           if (s < minSrc) minSrc = s;
           if (s > maxSrc) maxSrc = s;
+          if (s <= msgIdx && s >= candSrc) {
+            candSrc = s;
+            candIdx = i;
+          }
         }
       }
-      if (minSrc <= maxSrc && msgIdx >= minSrc && msgIdx <= maxSrc) {
-        const vis = untrack(visibleBlocks);
-        const firstVisSrc = vis.length > 0 ? untrack(() => blockRawIdx(vis[0])) : minSrc;
-        if (msgIdx < firstVisSrc && hiddenSeals() > 0) {
-          setSealedBudget(Math.max(1, untrack(sealedBlocks).length));
+      if (minSrc <= maxSrc && msgIdx >= minSrc && msgIdx <= maxSrc && candIdx >= 0) {
+        const cand = msgs[candIdx]!;
+        const nextMsg = candIdx + 1 < msgs.length ? msgs[candIdx + 1] : null;
+        const candTurn = typeof cand.turnIndex === "number" ? cand.turnIndex : 0;
+        const nextTurn = nextMsg && typeof nextMsg.turnIndex === "number" ? nextMsg.turnIndex : candTurn;
+        const contiguous = candSrc === msgIdx || nextTurn <= candTurn + 1;
+        const seals = untrack(sealedBlocks);
+        const withinSeals = seals.length === 0 || candTurn <= 0 || candTurn >= seals[0].oldestTurn;
+        if (contiguous && withinSeals) {
+          const vis = untrack(visibleBlocks);
+          const firstVisSrc = vis.length > 0 ? untrack(() => blockRawIdx(vis[0])) : minSrc;
+          if (msgIdx < firstVisSrc && hiddenSeals() > 0) {
+            setSealedBudget(Math.max(1, untrack(sealedBlocks).length));
+          }
+          flashHighlightedMessage(msgIdx);
+          scrollToMessage(msgIdx);
+          return;
         }
-        flashHighlightedMessage(msgIdx);
-        scrollToMessage(msgIdx);
-        return;
       }
     }
     requestAroundHistory(msgIdx);
@@ -971,6 +990,7 @@ export function createTranscript(opts: {
     setLoadingNewer(false);
     setHistoryCursor(null);
     clearSeals();
+    replaceNextSnapshot = true;
     initialScrollSession = sid;
     pendingScrollMsgIdx = null;
     transcriptScroll.pin();
@@ -1101,6 +1121,8 @@ export function createTranscript(opts: {
     if (isAroundSnapshot || pendingScrollMsgIdx != null) {
       transcriptScroll.detach();
     }
+    const shouldReplaceTail = replaceNextSnapshot;
+    replaceNextSnapshot = false;
     batch(() => {
       overlay?.applyMetadata?.();
       if (isAroundSnapshot) {
@@ -1117,13 +1139,19 @@ export function createTranscript(opts: {
           ...(typeof history.targetMsgIdx === "number" ? { targetMsgIdx: history.targetMsgIdx } : {}),
         });
       } else if (paged) {
-        setMessages((prev) => {
-          return mergeTranscriptTail(prev, tail, base);
-        });
-        sealBlock(rawMsgs, history);
-        setSealedBudget((n) => Math.max(n, sealedBlocks().length));
+        if (shouldReplaceTail) {
+          setMessages(orderedMessages(tail));
+          setSealedBlocks(buildSealList([], rawMsgs, history));
+          setSealedBudget(1);
+        } else {
+          setMessages((prev) => {
+            return mergeTranscriptTail(prev, tail, base);
+          });
+          sealBlock(rawMsgs, history);
+          setSealedBudget((n) => Math.max(n, sealedBlocks().length));
+        }
         if (!overlay?.applyMetadata) {
-          setHistoryCursor((prev) => nextHistoryCursor(prev, history, sealedBlocks()));
+          setHistoryCursor((prev) => nextHistoryCursor(shouldReplaceTail ? null : prev, history, sealedBlocks()));
         }
       } else {
         setMessages((prev) => preserveTransientToolPreviews(prev, tail));
@@ -1140,6 +1168,9 @@ export function createTranscript(opts: {
       // was normalizing. Replay only the events after this exact snapshot.
       for (const apply of replay) apply();
     });
+    if (isAroundSnapshot) {
+      transcriptScroll.cancelAnchor();
+    }
     if (!isLiveOverlay && replay.length === 0) {
       lastAppliedTranscriptSig = {
         sid: sessionId,
@@ -1940,6 +1971,7 @@ export function createTranscript(opts: {
     flushEditDraft();
     contextVersion++; transcriptOrder.reset();
     pendingFetchIds.clear();
+    replaceNextSnapshot = false;
     snapshotVersion++; pendingSnapshot = null;
     lastAppliedTranscriptSig = null;
     forkRequestId = "";

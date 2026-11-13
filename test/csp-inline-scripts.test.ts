@@ -33,9 +33,16 @@ describe("CSP inline script hashes", () => {
   const headers = baseHeaders(undefined, true);
   const csp = headers.get("Content-Security-Policy") || "";
   const scriptSrc = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith("script-src ")) || "";
+  const imgSrc = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith("img-src ")) || "";
 
   test("script-src never falls back to unsafe-inline", () => {
     expect(scriptSrc).not.toContain("'unsafe-inline'");
+  });
+
+  test("img-src allows blob: ObjectURLs for CAS transcript images", () => {
+    expect(imgSrc).toContain("'self'");
+    expect(imgSrc).toContain("data:");
+    expect(imgSrc).toContain("blob:");
   });
 
   test("every inline script in web/index.html is allowlisted by hash", () => {

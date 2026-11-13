@@ -150,7 +150,26 @@ export function TranscriptView() {
       const blockId = block.id || block.msg.id;
       const isLast = () => blockId === t.lastVisibleBlockId();
       const rawIdx = () => t.blockRawIdx(block);
-      const isHighlighted = () => t.highlightedMsgIdx() === rawIdx();
+      const isHighlighted = () => {
+        const h = t.highlightedMsgIdx();
+        if (h === null) return false;
+        const r = rawIdx();
+        if (h === r) return true;
+        if (h < r) return false;
+        const vis = t.visibleBlocks();
+        const next = vis[bi() + 1];
+        if (next) return h < t.blockRawIdx(next);
+        if (block.kind === "series") {
+          const lastExtra = block.extras.at(-1);
+          const maxSrc = Math.max(
+            r,
+            block.textMsg?.srcIdx ?? r,
+            lastExtra?.srcIdx ?? r,
+          );
+          return h <= maxSrc + 2;
+        }
+        return h <= r + 1;
+      };
       const isFirstKeptBlock = () => {
         if (!shouldShowCompactionBalloon()) return false;
         const keptIdx = firstKeptBlockIdx();
