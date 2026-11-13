@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { press } from "../../ds/motion/press";
 import { Badge, Btn, Modal } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal } from "../ctx";
@@ -38,7 +39,7 @@ export function SettingsModal() {
           </Btn>
           <Btn
             size="sm"
-            disabled={m.savingSettings() || m.settingsChanged()}
+            disabled={m.savingSettings() || m.settingsChanged() || !m.settingsDirty()}
             onClick={m.saveDaemonConfig}
           >
             {m.savingSettings() ? "Saving…" : "Save changes"}
@@ -46,11 +47,67 @@ export function SettingsModal() {
         </>
       }
     >
-      <div class="w-full min-w-0 space-y-4">
+      <div class="w-full min-w-0">
+        {/* Sticky Host Telemetry & Section Jump Bar (flush with dialog header & scroll padding) */}
+        <div class="sticky -top-4 sm:-top-5 z-10 -mx-4 sm:-mx-6 -mt-4 sm:-mt-5 mb-4 px-4 sm:px-6 py-2.5 bg-surface-raised border-b border-border-subtle flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <span
+              class={`h-2 w-2 shrink-0 rounded-full ${
+                hostStatus() === "online"
+                  ? "bg-success"
+                  : hostStatus() === "updating"
+                    ? "bg-warning animate-pulse"
+                    : "bg-fg-muted"
+              }`}
+            />
+            <span class="truncate text-xs font-medium text-fg">
+              {hostObj()?.name || hostObj()?.hostname || "Connected host"}
+            </span>
+            <Badge
+              tone={
+                hostStatus() === "online"
+                  ? "green"
+                  : hostStatus() === "updating"
+                    ? "amber"
+                    : "zinc"
+              }
+            >
+              {hostStatus() === "online"
+                ? "Online"
+                : hostStatus() === "updating"
+                  ? "Updating"
+                  : "Offline"}
+            </Badge>
+          </div>
+          <nav aria-label="Settings sections" class="flex items-center gap-0.5 flex-wrap">
+            <For
+              each={[
+                { id: "rc-set-appearance", label: "Appearance" },
+                { id: "rc-set-notifications", label: "Alerts" },
+                { id: "rc-set-updates", label: "Updates" },
+                { id: "rc-set-mid-turn-send", label: "Queue" },
+                { id: "rc-set-runtime", label: "Runtime" },
+              ]}
+            >
+              {(sec) => (
+                <button
+                  type="button"
+                  disabled={m.savingSettings()}
+                  onPointerDown={(e) => press(e.currentTarget)}
+                  onClick={() => jumpTo(sec.id)}
+                  class="inline-flex min-h-7 [@media(pointer:coarse)]:min-h-11 items-center rounded-lg px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {sec.label}
+                </button>
+              )}
+            </For>
+          </nav>
+        </div>
+
         <Show when={m.settingsError() || m.settingsChanged()}>
           <div
             role="alert"
-            class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-control border border-danger/35 bg-danger-subtle px-3.5 py-2.5 text-xs text-fg"
+            class="mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 rounded-panel border border-danger/35 bg-danger-subtle px-3.5 py-2.5 text-xs text-fg"
           >
             <div class="flex items-start gap-2 min-w-0">
               <Iconify icon="lucide:alert-circle" size={15} class="mt-0.5 shrink-0 text-danger" />
@@ -61,11 +118,11 @@ export function SettingsModal() {
             </div>
             <button
               type="button"
-              class="shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer disabled:opacity-50"
+              class="ui-button ui-button-outline ui-button-xs shrink-0 rounded-lg"
               disabled={m.savingSettings()}
               onClick={m.reloadSettings}
             >
-              Reload latest settings (discard local edits)
+              Reload latest settings
             </button>
           </div>
         </Show>
@@ -74,60 +131,6 @@ export function SettingsModal() {
           disabled={m.savingSettings()}
           class="min-w-0 disabled:opacity-60"
         >
-          {/* Host Telemetry & Section Navigation Hairline Strip */}
-          <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border">
-            <div class="flex items-center gap-2 min-w-0">
-              <span
-                class={`h-2 w-2 shrink-0 rounded-full ${
-                  hostStatus() === "online"
-                    ? "bg-success"
-                    : hostStatus() === "updating"
-                      ? "bg-warning animate-pulse"
-                      : "bg-fg-muted"
-                }`}
-              />
-              <span class="truncate text-xs font-medium text-fg">
-                {hostObj()?.name || hostObj()?.hostname || "Connected host"}
-              </span>
-              <Badge
-                tone={
-                  hostStatus() === "online"
-                    ? "green"
-                    : hostStatus() === "updating"
-                      ? "amber"
-                      : "zinc"
-                }
-              >
-                {hostStatus() === "online"
-                  ? "Online"
-                  : hostStatus() === "updating"
-                    ? "Updating"
-                    : "Offline"}
-              </Badge>
-            </div>
-            <nav aria-label="Settings sections" class="flex items-center gap-0.5 flex-wrap">
-              <For
-                each={[
-                  { id: "rc-set-appearance", label: "Appearance" },
-                  { id: "rc-set-notifications", label: "Alerts" },
-                  { id: "rc-set-updates", label: "Updates" },
-                  { id: "rc-set-mid-turn-send", label: "Queue" },
-                  { id: "rc-set-runtime", label: "Runtime" },
-                ]}
-              >
-                {(sec) => (
-                  <button
-                    type="button"
-                    onClick={() => jumpTo(sec.id)}
-                    class="inline-flex items-center rounded-md px-2 py-1 text-[11px] font-medium text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-                  >
-                    {sec.label}
-                  </button>
-                )}
-              </For>
-            </nav>
-          </div>
-
           <Show when={activeTab() === "general" || !activeTab()}>
             <SettingsGeneralSection />
           </Show>

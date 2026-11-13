@@ -1,4 +1,4 @@
-import { createUniqueId, onCleanup, Show, type JSX } from "solid-js";
+import { createEffect, createSignal, createUniqueId, onCleanup, Show, type JSX } from "solid-js";
 import { Portal } from "solid-js/web";
 
 import { animate } from "../motion/animate";
@@ -40,6 +40,12 @@ export function Dialog(props: DialogProps) {
   const descriptionId = createUniqueId();
   const description = () => props.subtitle ?? props.description;
   let scrim: HTMLDivElement | undefined;
+  let anchorEl: HTMLSpanElement | undefined;
+  const readDensity = () =>
+    anchorEl?.closest?.("[data-density]")?.getAttribute("data-density") ??
+    (typeof document !== "undefined" ? document.querySelector(".rc-app-shell[data-density]")?.getAttribute("data-density") : null) ??
+    undefined;
+  const [inheritedDensity, setInheritedDensity] = createSignal<string | undefined>(undefined);
 
   const presence = createPresence(() => props.open, {
     enter: (panel) => {
@@ -51,6 +57,10 @@ export function Dialog(props: DialogProps) {
       if (scrim) animate(scrim, { opacity: "0" }, tween.exit);
       return animate(panel, { opacity: "0", transform: "translateY(4px) scale(0.98)" }, tween.exit);
     },
+  });
+
+  createEffect(() => {
+    if (presence.present()) setInheritedDensity(readDensity());
   });
 
   const setup = (panel: HTMLDivElement) => {
@@ -75,14 +85,17 @@ export function Dialog(props: DialogProps) {
   };
 
   return (
-    <Show when={presence.present()}>
-      <Portal>
-        <div
-          class="ui-dialog-backdrop"
-          data-state={presence.state()}
-          style={{ "z-index": "var(--z-modal)" }}
-          onMouseDown={(event) => { if (event.target === event.currentTarget || event.target === scrim) props.onClose(); }}
-        >
+    <>
+      <span ref={(el) => { anchorEl = el; }} class="hidden" aria-hidden="true" />
+      <Show when={presence.present()}>
+        <Portal>
+          <div
+            class="ui-dialog-backdrop"
+            data-density={inheritedDensity() ?? readDensity()}
+            data-state={presence.state()}
+            style={{ "z-index": "var(--z-modal)" }}
+            onMouseDown={(event) => { if (event.target === event.currentTarget || event.target === scrim) props.onClose(); }}
+          >
           <div ref={scrim} class="ui-dialog-scrim" aria-hidden="true" />
           <div
             ref={setup}
@@ -130,7 +143,8 @@ export function Dialog(props: DialogProps) {
             </Show>
           </div>
         </div>
-      </Portal>
-    </Show>
+        </Portal>
+      </Show>
+    </>
   );
 }

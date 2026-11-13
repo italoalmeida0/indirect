@@ -82,7 +82,7 @@ describe("Batch 3 Bug Fixes & Regression Suite", () => {
 
   test("BUG-R3-T4-09: Session timestamp contrast WCAG AA in SessionSidebar", () => {
     const sidebarSrc = readFileSync(join(root, "web/src/indirect-code/components/SessionSidebar.tsx"), "utf-8");
-    expect(sidebarSrc).toContain('text-[10px] text-ink-500 transition-opacity');
+    expect(sidebarSrc).toContain("text-2xs text-fg-muted tabular-nums");
     expect(sidebarSrc).not.toContain('text-[10px] text-ink-600 transition-opacity');
   });
 
@@ -120,11 +120,11 @@ describe("Batch 3 Bug Fixes & Regression Suite", () => {
   test("BUG-T5-05 & BUG-R3-T4-07: High Contrast theme and settings label for/id bindings", () => {
     const settingsSrc = readFileSync(join(root, "web/src/indirect-code/modals/SettingsGeneral.tsx"), "utf-8");
     expect(settingsSrc).toContain('{ value: "high-contrast", label: "Contrast" }');
-    expect(settingsSrc).toContain('for="settings-auto-update"');
+    expect(settingsSrc).toContain("for={props.id}");
+    expect(settingsSrc).toContain("id={props.id}");
     expect(settingsSrc).toContain('id="settings-auto-update"');
     expect(settingsSrc).toContain('for="settings-upstream-proxy"');
     expect(settingsSrc).toContain('id="settings-upstream-proxy"');
-    expect(settingsSrc).toContain('for="settings-auto-title"');
     expect(settingsSrc).toContain('id="settings-auto-title"');
 
     const uiSrc = readFileSync(join(root, "web/src/ui.tsx"), "utf-8");

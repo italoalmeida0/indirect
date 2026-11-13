@@ -42,23 +42,15 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
   });
 
   describe("BUG-T3-03, BUG-T3-04 & BUG-R3-T4-06: Project row, chevron, visual highlight, and accessibility", () => {
-    test("chevron toggle is an accessible button with aria-expanded", () => {
+    test("project row unifies chevron, folder icon, and name into a single accessible toggle button", () => {
       const src = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
       expect(src).toMatch(/<button[^>]*aria-label="Toggle project"[^>]*aria-expanded=\{s\.isProjectExpanded\(p\)\}/);
-      expect(src).toMatch(/toggleProjectExpanded\(p\.id\)/);
+      expect(src).toMatch(/onClick=\{\(\)\s*=>\s*\{\s*s\.pickProject\(p\.id\);\s*s\.toggleProjectExpanded\(p\.id\);\s*\}\}/);
     });
 
-    test("project row activates project on click without inverting collapse", () => {
+    test("active project has crisp visual background highlight", () => {
       const src = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
-      // Project row onClick should call pickProject only
-      expect(src).toMatch(/onClick=\{[^}]*s\.pickProject\(p\.id\);?\s*\}/);
-      // It should NOT call toggleProjectExpanded directly in the row's main onClick
-      expect(src).not.toMatch(/onClick=\{[^}]*s\.pickProject\(p\.id\);?\s*s\.toggleProjectExpanded/);
-    });
-
-    test("active project has visual background highlight", () => {
-      const src = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
-      expect(src).toContain("bg-surface-muted/55 font-medium text-fg");
+      expect(src).toContain("bg-surface-strong/70 font-medium text-fg");
     });
   });
 

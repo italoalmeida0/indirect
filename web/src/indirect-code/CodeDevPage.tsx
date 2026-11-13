@@ -86,7 +86,7 @@ function highlightJsonLine(line: string, searchMatch?: string): string {
           const colonIdx = match.lastIndexOf(":");
           const keyPart = match.slice(0, colonIdx);
           const colonPart = match.slice(colonIdx);
-          return `<span class="text-tone-sky font-medium">${keyPart}</span><span class="text-ink-400">${colonPart}</span>`;
+          return `<span class="text-tone-sky font-medium">${keyPart}</span><span class="text-fg-secondary">${colonPart}</span>`;
         }
         return `<span class="text-success">${match}</span>`;
       }
@@ -188,29 +188,29 @@ function JsonHighlightViewer(props: {
   }
 
   return (
-    <div class={`flex flex-col border border-line rounded-lg bg-ink-900/90 overflow-hidden font-mono text-xs ${props.class || ""}`}>
+    <div class={`flex flex-col border border-border rounded-panel bg-surface overflow-hidden font-mono text-xs ${props.class || ""}`}>
       {/* Viewer toolbar */}
-      <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex flex-wrap items-center justify-between shrink-0 gap-2 text-[11px]">
+      <div class="px-3 py-1.5 bg-surface-subtle border-b border-border-subtle flex flex-wrap items-center justify-between shrink-0 gap-2 text-2xs">
         <div class="flex flex-wrap items-center gap-2 min-w-0">
           <Show when={props.title}>
-            <span class="font-medium text-ink-300 text-xs">
+            <span class="font-medium text-fg text-xs">
               {props.title}
             </span>
           </Show>
-          <span class="text-ink-500 text-xs">
-            {lines().length} lines • {new Blob([formattedStr()]).size} bytes
+          <span class="text-fg-muted text-2xs tabular-nums">
+            {lines().length} lines · {new Blob([formattedStr()]).size} bytes
           </span>
         </div>
 
-        <div class="flex flex-wrap items-center gap-2">
+        <div class="flex flex-wrap items-center gap-1.5">
           {/* Quick search input */}
           <div class="relative flex items-center">
             <input
               type="text"
-              placeholder="Find in JSON..."
+              placeholder="Find in JSON…"
               value={search()}
               onInput={(e) => setSearch(e.currentTarget.value)}
-              class="bg-ink-950 border border-line rounded px-2 py-0.5 text-xs text-ink-200 placeholder-ink-600 focus:outline-none focus:border-accent w-36"
+              class="bg-background border border-border rounded-md px-2 py-0.5 pr-5 max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent w-32 sm:w-36"
             />
             <Show when={search()}>
               <button
@@ -218,7 +218,7 @@ function JsonHighlightViewer(props: {
                 aria-label="Clear search"
                 data-rc-tip="Clear search"
                 onClick={() => setSearch("")}
-                class="absolute right-1 text-ink-400 hover:text-ink-200 text-xs cursor-pointer"
+                class="absolute right-1 text-fg-muted hover:text-fg text-xs cursor-pointer"
               >
                 ×
               </button>
@@ -229,7 +229,7 @@ function JsonHighlightViewer(props: {
           <button
             type="button"
             onClick={() => setIsCompact(!isCompact())}
-            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-xs cursor-pointer"
+            class="ui-button ui-button-outline ui-button-xs rounded-md"
             data-rc-tip="Toggle compact or pretty JSON"
           >
             {isCompact() ? "Pretty" : "Compact"}
@@ -239,7 +239,7 @@ function JsonHighlightViewer(props: {
           <button
             type="button"
             onClick={copyJson}
-            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-accent rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
+            class="ui-button ui-button-outline ui-button-xs rounded-md gap-1 text-accent"
             data-rc-tip="Copy full JSON"
           >
             <Icon name={Icons.copy} size={11} />
@@ -250,7 +250,7 @@ function JsonHighlightViewer(props: {
           <button
             type="button"
             onClick={downloadJson}
-            class="px-2 py-0.5 bg-ink-800 hover:bg-ink-700 text-ink-300 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
+            class="ui-button ui-button-outline ui-button-xs rounded-md gap-1"
             data-rc-tip="Download JSON file"
           >
             <Icon name={Icons.save} size={11} />
@@ -261,19 +261,19 @@ function JsonHighlightViewer(props: {
 
       {/* Code body with line numbers */}
       <div
-        class="overflow-auto bg-ink-950 p-2 text-[12px] leading-relaxed select-text"
+        class="overflow-auto bg-background/60 p-2 text-xs leading-relaxed select-text"
         style={{ "max-height": props.maxHeight || "none" }}
       >
         <table class="border-collapse w-full">
           <tbody>
             <For each={lines()}>
               {(line, idx) => (
-                <tr class="hover:bg-ink-900/60 transition-colors">
-                  <td class="select-none text-right pr-3 text-ink-600 font-mono text-[11px] w-12 align-top tabular-nums border-r border-line/30">
+                <tr class="hover:bg-surface-subtle/80 transition-colors">
+                  <td class="select-none text-right pr-3 text-fg-muted font-mono text-2xs w-12 align-top tabular-nums border-r border-border-subtle">
                     {idx() + 1}
                   </td>
                   <td
-                    class="pl-3 whitespace-pre font-mono text-ink-200 align-top"
+                    class="pl-3 whitespace-pre font-mono text-fg align-top"
                     // eslint-disable-next-line solid/no-innerhtml
                     innerHTML={highlightJsonLine(line, search())}
                   />
@@ -877,37 +877,40 @@ export default function CodeDevPage() {
   });
 
   return (
-    <div class="flex flex-col min-h-dvh lg:h-screen w-full max-w-full bg-ink-950 text-ink-100 font-sans select-text overflow-x-hidden lg:overflow-hidden">
+    <div
+      data-density="compact"
+      class="flex flex-col min-h-dvh lg:h-screen w-full max-w-full bg-background text-fg font-sans select-text overflow-x-hidden lg:overflow-hidden"
+    >
       <RemoteHints />
       {/* ===== TOP BAR / HEADER ===== */}
-      <header class="flex flex-wrap items-center justify-between px-4 py-2 bg-ink-900 border-b border-line shrink-0 gap-3 z-20">
+      <header class="flex flex-wrap items-center justify-between px-4 py-2 bg-surface-subtle border-b border-border shrink-0 gap-3 z-20">
         <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
           <div class="flex items-center gap-2 min-w-0">
-            <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-accent-subtle text-accent font-mono font-medium text-xs border border-accent/35 shadow-2xs shrink-0">
-              DEV
+            <span class="inline-flex items-center justify-center rounded-md bg-accent-subtle px-2 py-0.5 text-accent font-mono font-medium text-2xs border border-accent/35 shrink-0">
+              Dev
             </span>
             <div class="flex flex-col min-w-0">
-              <span class="font-medium text-sm tracking-tight flex flex-wrap items-center gap-1.5 font-mono">
-                Indirect Code // Network Inspector
-                <span class="text-xs px-1.5 py-0.5 rounded bg-success-subtle text-success font-mono font-normal">
-                  DevTools style
+              <span class="font-medium text-sm tracking-tight flex flex-wrap items-center gap-1.5">
+                Indirect Code · Network Inspector
+                <span class="text-2xs px-1.5 py-0.5 rounded-md bg-success-subtle text-success font-mono font-normal">
+                  DevTools
                 </span>
               </span>
-              <span class="text-xs text-ink-400 font-mono hidden sm:inline">
-                Exact AI Wire Payloads, Full System Prompt & Native Tools
+              <span class="text-2xs text-fg-muted hidden sm:inline">
+                Exact AI wire payloads, full system prompt & native tools
               </span>
             </div>
           </div>
 
-          <div class="h-5 w-px bg-line mx-1 hidden md:block" />
+          <div class="h-5 w-px bg-border mx-1 hidden md:block" />
 
           {/* Host Selector */}
           <div class="flex items-center gap-1.5 min-w-0 max-w-full">
-            <span class="text-xs text-ink-400 font-mono shrink-0">Host:</span>
+            <span class="text-xs text-fg-secondary shrink-0">Host:</span>
             <select
               value={hosts.activeHostId()}
               onChange={(e) => hosts.setActiveHostId(e.currentTarget.value)}
-              class="min-w-0 max-w-[14rem] bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-accent truncate"
+              class="min-w-0 max-w-56 bg-surface border border-border rounded-control px-2 py-1 max-sm:text-base sm:text-xs font-mono text-fg focus:outline-none focus:border-accent truncate"
             >
               <For each={hosts.hosts()}>
                 {(h) => (
@@ -921,17 +924,17 @@ export default function CodeDevPage() {
 
           {/* Session Selector */}
           <div class="flex items-center gap-1.5 min-w-0 max-w-full sm:max-w-xs">
-            <span class="text-xs text-ink-400 font-mono shrink-0">Session:</span>
+            <span class="text-xs text-fg-secondary shrink-0">Session:</span>
             <select
               value={selectedSessionId()}
               onChange={(e) => setSelectedSessionId(e.currentTarget.value)}
-              class="min-w-0 flex-1 max-w-[14rem] sm:max-w-[16rem] bg-ink-800 border border-line rounded px-2 py-1 text-xs font-mono text-ink-200 focus:outline-none focus:border-accent truncate"
+              class="min-w-0 flex-1 max-w-56 sm:max-w-64 bg-surface border border-border rounded-control px-2 py-1 max-sm:text-base sm:text-xs font-mono text-fg focus:outline-none focus:border-accent truncate"
             >
-              <option value="">-- No session (Default) --</option>
+              <option value="">No session (default)</option>
               <For each={sessions()}>
                 {(s) => (
                   <option value={s.id}>
-                    {s.status === "running" ? "▶ [RUNNING] " : "[IDLE] "}
+                    {s.status === "running" ? "▶ [Running] " : "[Idle] "}
                     {s.title ? (s.title.length > 25 ? s.title.slice(0, 25) + "…" : s.title) : s.id.slice(0, 8)} ({s.model || "default"})
                   </option>
                 )}
@@ -942,15 +945,15 @@ export default function CodeDevPage() {
           {/* Status Badge */}
           <Show when={activeSession()}>
             <span
-              class={`text-xs px-2 py-0.5 rounded font-mono font-medium flex items-center gap-1.5 ${
+              class={`text-2xs px-2 py-0.5 rounded-pill font-mono font-medium flex items-center gap-1.5 ${
                 activeSession()?.status === "running"
                   ? "bg-success-subtle text-success border border-success/35 animate-pulse"
-                  : "bg-ink-800 text-ink-400 border border-line"
+                  : "bg-surface border border-border text-fg-muted"
               }`}
             >
               <span
                 class={`w-1.5 h-1.5 rounded-full ${
-                  activeSession()?.status === "running" ? "bg-success" : "bg-ink-500"
+                  activeSession()?.status === "running" ? "bg-success" : "bg-fg-muted"
                 }`}
               />
               {activeSession()?.status}
@@ -962,7 +965,7 @@ export default function CodeDevPage() {
         <div class="flex flex-wrap items-center gap-2">
           {/* Preserve Log Toggle */}
           <label
-            class="flex items-center gap-1 text-xs text-ink-400 hover:text-ink-200 cursor-pointer font-mono mr-2"
+            class="flex items-center gap-1.5 text-xs text-fg-secondary hover:text-fg cursor-pointer mr-1"
             data-rc-tip="Preserve captured logs across session switches"
             data-rc-tip-placement="bottom"
           >
@@ -970,7 +973,7 @@ export default function CodeDevPage() {
               type="checkbox"
               checked={preserveLog()}
               onChange={(e) => setPreserveLog(e.currentTarget.checked)}
-              class="rounded bg-ink-800 border-line"
+              class="rounded bg-surface border-border"
             />
             Preserve log
           </label>
@@ -979,17 +982,17 @@ export default function CodeDevPage() {
           <button
             type="button"
             onClick={clearAllNetworkLogs}
-            class="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-ink-800 hover:bg-danger-subtle hover:text-danger text-ink-300 rounded border border-line font-mono transition-colors cursor-pointer"
+            class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5 hover:bg-danger-subtle hover:text-danger"
             data-rc-tip="Clear all recorded network payloads and events (Frontend-only)"
             data-rc-tip-placement="bottom"
           >
             <Icon name="lucide:ban" size={13} class="text-danger" />
-            Clear Log
+            Clear log
           </button>
 
           {/* WS Connection Indicator */}
           <span
-            class={`text-xs font-mono px-2 py-0.5 rounded flex items-center gap-1 ${
+            class={`text-2xs font-mono px-2 py-0.5 rounded-pill flex items-center gap-1.5 ${
               relay.wsOpen()
                 ? "bg-success-subtle text-success border border-success/35"
                 : "bg-danger-subtle text-danger border border-danger/35"
@@ -1004,7 +1007,7 @@ export default function CodeDevPage() {
           <button
             type="button"
             onClick={requestSessionDebug}
-            class="flex items-center gap-1 px-2.5 py-1 text-xs bg-ink-800 hover:bg-ink-700 text-ink-200 rounded border border-line font-mono transition-colors cursor-pointer"
+            class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
             data-rc-tip="Refresh daemon debug state"
             data-rc-tip-placement="bottom"
           >
@@ -1015,31 +1018,31 @@ export default function CodeDevPage() {
       </header>
 
       {/* ===== MAIN NAV TABS ===== */}
-      <div class="flex items-center px-4 bg-ink-900 border-b border-line shrink-0 gap-1 text-xs font-mono overflow-x-auto whitespace-nowrap">
+      <div class="flex items-center px-4 bg-surface-subtle border-b border-border shrink-0 gap-1 text-xs overflow-x-auto whitespace-nowrap">
         <button
           onClick={() => setActiveTab("payloads")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "payloads"
-              ? "border-accent text-accent bg-accent-subtle"
-              : "border-transparent text-ink-400 hover:text-ink-200"
+              ? "border-accent text-fg"
+              : "border-transparent text-fg-muted hover:text-fg"
           }`}
         >
           <Icon name={Icons.bolt} size={14} />
-          Network Payloads ({capturedPayloads().length})
+          Network payloads ({capturedPayloads().length})
         </button>
 
         <button
           onClick={() => setActiveTab("stream")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "stream"
-              ? "border-accent text-accent bg-accent-subtle"
-              : "border-transparent text-ink-400 hover:text-ink-200"
+              ? "border-accent text-fg"
+              : "border-transparent text-fg-muted hover:text-fg"
           }`}
         >
           <Icon name={Icons.play} size={14} />
-          Live Event Stream ({liveEvents().length})
+          Live event stream ({liveEvents().length})
           <Show when={activeSession()?.status === "running"}>
-            <span class="w-2 h-2 rounded-full bg-success animate-ping" />
+            <span class="w-2 h-2 rounded-full bg-success animate-pulse" />
           </Show>
         </button>
 
@@ -1047,48 +1050,48 @@ export default function CodeDevPage() {
           onClick={() => setActiveTab("system")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "system"
-              ? "border-accent text-accent bg-accent-subtle"
-              : "border-transparent text-ink-400 hover:text-ink-200"
+              ? "border-accent text-fg"
+              : "border-transparent text-fg-muted hover:text-fg"
           }`}
         >
           <Icon name={Icons.file} size={14} />
-          System Prompt (Full)
+          System prompt
         </button>
 
         <button
           onClick={() => setActiveTab("tools")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "tools"
-              ? "border-accent text-accent bg-accent-subtle"
-              : "border-transparent text-ink-400 hover:text-ink-200"
+              ? "border-accent text-fg"
+              : "border-transparent text-fg-muted hover:text-fg"
           }`}
         >
           <Icon name={Icons.terminal} size={14} />
-          Native Tools ({nativeTools().length})
+          Native tools ({nativeTools().length})
         </button>
 
         <button
           onClick={() => setActiveTab("wal")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "wal"
-              ? "border-accent text-accent bg-accent-subtle"
-              : "border-transparent text-ink-400 hover:text-ink-200"
+              ? "border-accent text-fg"
+              : "border-transparent text-fg-muted hover:text-fg"
           }`}
         >
           <Icon name="lucide:database" size={14} />
-          WAL State ({derivedWalEvents().length})
+          WAL state ({derivedWalEvents().length})
         </button>
 
         <button
           onClick={() => setActiveTab("frames")}
           class={`px-3 py-2 font-medium border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
             activeTab() === "frames"
-              ? "border-accent text-accent bg-accent-subtle"
-              : "border-transparent text-ink-400 hover:text-ink-200"
+              ? "border-accent text-fg"
+              : "border-transparent text-fg-muted hover:text-fg"
           }`}
         >
           <Icon name={Icons.layers} size={14} />
-          WS Frames ({rawFrames().length})
+          WS frames ({rawFrames().length})
         </button>
       </div>
 
@@ -1098,20 +1101,20 @@ export default function CodeDevPage() {
         <Show when={activeTab() === "payloads"}>
           <div class="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden">
             {/* Left Pane: Requests Network Table / List */}
-            <div class="w-full max-h-56 lg:max-h-none lg:w-88 border-b lg:border-b-0 lg:border-r border-line bg-ink-900/60 flex flex-col shrink-0">
+            <div class="w-full max-h-56 lg:max-h-none lg:w-88 border-b lg:border-b-0 lg:border-r border-border bg-surface-subtle flex flex-col shrink-0">
               {/* Table search & counter */}
-              <div class="p-2 border-b border-line flex items-center gap-2">
+              <div class="p-2 border-b border-border-subtle flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder="Filter requests..."
+                  placeholder="Filter requests…"
                   value={requestFilter()}
                   onInput={(e) => setRequestFilter(e.currentTarget.value)}
-                  class="bg-ink-950 border border-line rounded px-2.5 py-1 text-xs font-mono text-ink-200 placeholder-ink-600 focus:outline-none focus:border-accent flex-1"
+                  class="min-w-0 flex-1 bg-surface border border-border rounded-control px-2.5 py-1 max-sm:text-base sm:text-xs font-mono text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent"
                 />
                 <button
                   type="button"
                   onClick={clearAllNetworkLogs}
-                  class="p-1 hover:bg-danger-subtle rounded text-ink-400 hover:text-danger cursor-pointer"
+                  class="ui-icon-button ui-icon-button-xs rounded-lg hover:bg-danger-subtle hover:text-danger"
                   aria-label="Clear requests log"
                   data-rc-tip="Clear requests log"
                 >
@@ -1120,14 +1123,14 @@ export default function CodeDevPage() {
               </div>
 
               {/* Request rows */}
-              <div class="flex-1 overflow-y-auto divide-y divide-line/30 font-mono text-xs">
+              <div class="flex-1 overflow-y-auto divide-y divide-border-subtle font-mono text-xs">
                 <Show
                   when={filteredCapturedPayloads().length > 0}
                   fallback={
-                    <div class="p-8 text-center text-xs text-ink-500 flex flex-col items-center gap-2">
-                      <span>No requests captured yet.</span>
-                      <span class="text-xs text-ink-600">
-                        Recordings stay in your browser until you clear them. Dispatch a real prompt or click "Smoke Test" below!
+                    <div class="p-8 text-center text-xs text-fg-muted flex flex-col items-center gap-2 font-sans">
+                      <span class="font-medium text-fg-secondary">No requests captured yet</span>
+                      <span class="text-2xs text-fg-muted">
+                        Recordings stay in your browser until cleared. Dispatch a real prompt or run Smoke test below.
                       </span>
                     </div>
                   }
@@ -1136,14 +1139,14 @@ export default function CodeDevPage() {
                     {(req) => (
                       <button
                         onClick={() => setSelectedPayloadId(req.id)}
-                        class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-[3px] ${
+                        class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-2 ${
                           selectedPayload()?.id === req.id
                             ? req.isSimulated
-                              ? "bg-warning-subtle border-warning text-ink-100"
-                              : "bg-accent-subtle border-accent text-ink-100"
+                              ? "bg-warning-subtle border-warning text-fg"
+                              : "bg-accent-subtle border-accent text-fg"
                             : req.isSimulated
-                              ? "border-warning/35 hover:bg-ink-800/40 text-ink-300"
-                              : "border-transparent hover:bg-ink-800/40 text-ink-300"
+                              ? "border-warning/35 hover:bg-surface-muted/70 text-fg-secondary"
+                              : "border-transparent hover:bg-surface-muted/70 text-fg-secondary"
                         }`}
                       >
                         <div class="flex items-center justify-between text-xs">
@@ -1157,34 +1160,34 @@ export default function CodeDevPage() {
                                     : "bg-success"
                               }`}
                             />
-                            <span class="font-medium text-ink-200">
+                            <span class="font-medium text-fg">
                               POST /messages
                             </span>
                           </div>
-                          <span class="text-xs text-ink-500 tabular-nums">
+                          <span class="text-2xs text-fg-muted tabular-nums">
                             {new Date(req.timestamp).toLocaleTimeString()}
                           </span>
                         </div>
 
-                        <div class="flex items-center justify-between text-xs">
-                          <span class="truncate text-ink-400">
+                        <div class="flex items-center justify-between text-xs gap-2">
+                          <span class="truncate text-fg-secondary">
                             {req.model || "default"}
                           </span>
                           <Show when={req.isSimulated}>
-                            <span class="text-2xs px-1 py-0.5 rounded bg-warning-subtle text-warning font-medium border border-warning/35 flex items-center gap-1">
+                            <span class="text-2xs px-1.5 py-0.5 rounded-md bg-warning-subtle text-warning font-medium border border-warning/35 flex items-center gap-1 shrink-0">
                               <Icon name="lucide:flame" size={10} /> Smoke
                             </span>
                           </Show>
                         </div>
 
-                        <div class="flex items-center gap-1.5 text-xs text-ink-500 mt-0.5">
+                        <div class="flex items-center gap-1.5 text-2xs text-fg-muted mt-0.5 tabular-nums">
                           <span>T#{req.turnIndex} S#{req.step}</span>
-                          <span>•</span>
+                          <span>·</span>
                           <span>{req.tools?.length || 0} tools</span>
-                          <span>•</span>
+                          <span>·</span>
                           <span>{req.messages?.length || 0} msgs</span>
                           <Show when={req.usage?.outputTokens}>
-                            <span>•</span>
+                            <span>·</span>
                             <span class="text-success font-medium">
                               {req.usage.outputTokens} tok
                             </span>
@@ -1198,79 +1201,79 @@ export default function CodeDevPage() {
             </div>
 
             {/* Right Pane: Inspector / Chrome DevTools Network Style */}
-            <div class="flex-1 min-h-[26rem] lg:min-h-0 flex flex-col bg-ink-950 overflow-hidden">
+            <div class="flex-1 min-h-[26rem] lg:min-h-0 flex flex-col bg-background overflow-hidden">
               <Show
                 when={selectedPayload()}
                 fallback={
-                  <div class="flex-1 flex flex-col items-center justify-center text-xs font-mono text-ink-500 gap-2">
-                    <Icon name={Icons.bolt} size={28} />
-                    <span>Select a captured request or run a Smoke Simulation below</span>
+                  <div class="flex-1 flex flex-col items-center justify-center p-6 text-center text-xs text-fg-muted gap-2">
+                    <Icon name={Icons.bolt} size={24} class="text-fg-muted" />
+                    <span>Select a captured request or run a smoke simulation below.</span>
                   </div>
                 }
               >
                 {(req) => (
                   <div class="flex-1 flex flex-col min-h-0">
                     {/* Header banner info */}
-                    <div class="px-4 py-2 bg-ink-900 border-b border-line flex flex-wrap items-center justify-between gap-2 shrink-0 font-mono text-xs">
-                      <div class="flex flex-wrap items-center gap-3">
+                    <div class="px-4 py-2 bg-surface-subtle border-b border-border flex flex-wrap items-center justify-between gap-2 shrink-0 font-mono text-xs">
+                      <div class="flex flex-wrap items-center gap-3 min-w-0">
                         <Show when={req().isSimulated}>
-                          <span class="px-2 py-0.5 rounded bg-warning-subtle text-warning font-medium border border-warning/35 text-xs flex items-center gap-1">
+                          <span class="px-2 py-0.5 rounded-md bg-warning-subtle text-warning font-medium border border-warning/35 text-2xs flex items-center gap-1">
                             <Icon name="lucide:flame" size={12} /> Smoke simulation (0 tokens)
                           </span>
                         </Show>
                         <span class="font-medium text-accent break-all">
                           {req().endpoint || "POST /messages"}
                         </span>
-                        <span class="text-ink-400">
-                          Model: <strong class="text-ink-200">{req().model}</strong>
+                        <span class="text-fg-secondary">
+                          Model: <span class="font-medium text-fg">{req().model}</span>
                         </span>
                         <Show when={req().reasoning}>
-                          <span class="text-ink-400">
-                            Effort: <strong class="text-warning">{req().reasoning}</strong>
+                          <span class="text-fg-secondary">
+                            Effort: <span class="font-medium text-warning">{req().reasoning}</span>
                           </span>
                         </Show>
-                        <span class="text-ink-400">
-                          MaxTokens: <strong class="text-ink-200">{req().maxTokens}</strong>
+                        <span class="text-fg-secondary">
+                          Max tokens: <span class="font-medium text-fg tabular-nums">{req().maxTokens}</span>
                         </span>
                       </div>
 
                       <div class="flex items-center gap-2">
-                        <span class="text-ink-500 text-xs">
+                        <span class="text-fg-muted text-2xs tabular-nums">
                           {new Date(req().timestamp).toLocaleTimeString()}
                         </span>
                       </div>
                     </div>
 
                     {/* Inspector Sub-Tabs (Chrome Network style) */}
-                    <div class="flex items-center px-4 bg-ink-900/60 border-b border-line shrink-0 gap-1 text-xs font-mono overflow-x-auto whitespace-nowrap">
+                    <div class="flex items-center px-4 bg-surface border-b border-border shrink-0 gap-1 text-xs overflow-x-auto whitespace-nowrap">
                       <button
                         onClick={() => setPayloadSubTab("raw")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "raw"
-                            ? "border-accent text-accent"
-                            : "border-transparent text-ink-400 hover:text-ink-200"
+                            ? "border-accent text-fg"
+                            : "border-transparent text-fg-muted hover:text-fg"
                         }`}
                       >
-                        Wire Payload (Raw HTTP Body)
+                        Wire payload
                       </button>
 
                       <button
                         onClick={() => setPayloadSubTab("system")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "system"
-                            ? "border-accent text-accent"
-                            : "border-transparent text-ink-400 hover:text-ink-200"
+                            ? "border-accent text-fg"
+                            : "border-transparent text-fg-muted hover:text-fg"
                         }`}
                       >
-                        System Prompt in Request
+                        System prompt
                       </button>
 
                       <button
                         onClick={() => setPayloadSubTab("messages")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "messages"
-                            ? "border-accent text-accent"
-                            : "border-transparent text-ink-400 hover:text-ink-200"
+                            ? "border-accent text-fg"
+                            : "border-transparent text-fg-muted hover:text-fg"
                         }`}
                       >
                         Messages ({req().messages?.length || 0})
@@ -1280,22 +1283,22 @@ export default function CodeDevPage() {
                         onClick={() => setPayloadSubTab("tools")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "tools"
-                            ? "border-accent text-accent"
-                            : "border-transparent text-ink-400 hover:text-ink-200"
+                            ? "border-accent text-fg"
+                            : "border-transparent text-fg-muted hover:text-fg"
                         }`}
                       >
-                        Tools in Request ({req().tools?.length || 0})
+                        Tools ({req().tools?.length || 0})
                       </button>
 
                       <button
                         onClick={() => setPayloadSubTab("headers")}
                         class={`px-3 py-1.5 font-medium border-b-2 transition-colors cursor-pointer ${
                           payloadSubTab() === "headers"
-                            ? "border-accent text-accent"
-                            : "border-transparent text-ink-400 hover:text-ink-200"
+                            ? "border-accent text-fg"
+                            : "border-transparent text-fg-muted hover:text-fg"
                         }`}
                       >
-                        Headers & Summary
+                        Headers & summary
                       </button>
                     </div>
 
@@ -1305,7 +1308,7 @@ export default function CodeDevPage() {
                       <Show when={payloadSubTab() === "raw"}>
                         <JsonHighlightViewer
                           data={req().rawPayload}
-                          title="Exact HTTP POST Request Body"
+                          title="Exact HTTP POST request body"
                           class="h-full"
                         />
                       </Show>
@@ -1313,23 +1316,23 @@ export default function CodeDevPage() {
                       {/* Sub-tab 2: System Prompt */}
                       <Show when={payloadSubTab() === "system"}>
                         <div class="flex flex-col gap-3 h-full">
-                          <div class="flex items-center justify-between text-xs text-ink-400 bg-ink-900/60 p-2.5 rounded border border-line">
-                            <div class="flex items-center gap-3">
-                              <span>Chars: <strong class="text-ink-200">{req().system?.length || 0}</strong></span>
-                              <span>•</span>
-                              <span>Words: <strong class="text-ink-200">{req().system?.split(/\s+/).length || 0}</strong></span>
-                              <span>•</span>
-                              <span>Est. Tokens: <strong class="text-warning">~{Math.round((req().system?.length || 0) / 4)}</strong></span>
+                          <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-fg-secondary bg-surface p-2.5 rounded-panel border border-border">
+                            <div class="flex flex-wrap items-center gap-3 tabular-nums">
+                              <span>Chars: <span class="font-medium text-fg">{req().system?.length || 0}</span></span>
+                              <span>·</span>
+                              <span>Words: <span class="font-medium text-fg">{req().system?.split(/\s+/).length || 0}</span></span>
+                              <span>·</span>
+                              <span>Est. tokens: <span class="font-medium text-warning">~{Math.round((req().system?.length || 0) / 4)}</span></span>
                             </div>
                             <button
                               onClick={() => copyText(req().system, "System prompt")}
-                              class="px-2.5 py-1 bg-ink-800 hover:bg-ink-700 text-accent rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
+                              class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
                             >
                               <Icon name={Icons.copy} size={12} />
-                              Copy Prompt
+                              Copy prompt
                             </button>
                           </div>
-                          <pre class="bg-ink-950 p-4 rounded-lg border border-line text-ink-200 overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-relaxed flex-1 select-text">
+                          <pre class="bg-surface p-4 rounded-panel border border-border text-fg overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-relaxed flex-1 select-text">
                             {req().system || "(No system prompt in this request)"}
                           </pre>
                         </div>
@@ -1340,12 +1343,12 @@ export default function CodeDevPage() {
                         <div class="flex flex-col gap-3">
                           <For each={req().messages}>
                             {(m: any, idx) => (
-                              <div class="border border-line rounded-lg bg-ink-900/50 overflow-hidden">
-                                <div class="px-3 py-1.5 bg-ink-900 border-b border-line flex items-center justify-between text-xs">
+                              <div class="border border-border rounded-panel bg-surface overflow-hidden">
+                                <div class="px-3 py-1.5 bg-surface-subtle border-b border-border-subtle flex items-center justify-between text-xs">
                                   <span class="font-medium flex items-center gap-2">
-                                    <span class="text-ink-500 font-mono">#{idx()}</span>
+                                    <span class="text-fg-muted font-mono tabular-nums">#{idx()}</span>
                                     <span
-                                      class={`px-2 py-0.5 rounded text-xs font-mono font-medium ${
+                                      class={`px-2 py-0.5 rounded-md text-2xs font-mono font-medium ${
                                         m.role === "user"
                                           ? "bg-info-subtle text-tone-sky border border-tone-sky/30"
                                           : m.role === "assistant"
@@ -1356,7 +1359,7 @@ export default function CodeDevPage() {
                                       {m.role}
                                     </span>
                                   </span>
-                                  <span class="text-ink-500 text-xs">
+                                  <span class="text-fg-muted text-2xs">
                                     {Array.isArray(m.content) ? `${m.content.length} blocks` : "raw text"}
                                   </span>
                                 </div>
@@ -1364,21 +1367,21 @@ export default function CodeDevPage() {
                                   <Show
                                     when={Array.isArray(m.content)}
                                     fallback={
-                                      <pre class="whitespace-pre-wrap text-ink-200">{String(m.content)}</pre>
+                                      <pre class="whitespace-pre-wrap text-fg">{String(m.content)}</pre>
                                     }
                                   >
                                     <div class="flex flex-col gap-2">
                                       <For each={m.content}>
                                         {(block: any) => (
-                                          <div class="bg-ink-950 p-3 rounded border border-line/60">
-                                            <div class="text-xs text-ink-400 mb-1 font-medium">
+                                          <div class="bg-background/60 p-3 rounded-lg border border-border-subtle">
+                                            <div class="text-2xs text-fg-secondary mb-1 font-medium">
                                               Block: {block.type || (block.Text ? "text" : "data")}
                                             </div>
                                             <Show
                                               when={block.type === "text" || block.Text}
                                               fallback={<JsonHighlightViewer data={block} maxHeight="200px" />}
                                             >
-                                              <pre class="whitespace-pre-wrap text-ink-200 text-xs leading-relaxed">
+                                              <pre class="whitespace-pre-wrap text-fg text-xs leading-relaxed">
                                                 {block.text || block.Text}
                                               </pre>
                                             </Show>
@@ -1399,17 +1402,17 @@ export default function CodeDevPage() {
                         <div class="flex flex-col gap-3">
                           <For each={req().tools}>
                             {(t: any) => (
-                              <div class="border border-line rounded-lg bg-ink-900/50 p-3">
-                                <div class="flex items-center justify-between mb-1.5">
-                                  <span class="font-medium text-accent text-xs font-mono">{t.name || t.Name}</span>
-                                  <span class="text-xs px-1.5 py-0.5 rounded bg-ink-800 text-ink-400 font-mono">
+                              <div class="border border-border rounded-panel bg-surface p-3">
+                                <div class="flex items-center justify-between mb-1.5 gap-2">
+                                  <span class="font-medium text-accent text-xs font-mono truncate">{t.name || t.Name}</span>
+                                  <span class="text-2xs px-1.5 py-0.5 rounded-md bg-surface-subtle border border-border text-fg-muted font-mono shrink-0">
                                     {t.deferred || t.Deferred ? "Deferred" : "Active"}
                                   </span>
                                 </div>
-                                <p class="text-xs text-ink-300 mb-2">{t.description || t.Description}</p>
+                                <p class="text-xs text-fg-secondary mb-2 font-sans">{t.description || t.Description}</p>
                                 <JsonHighlightViewer
                                   data={t.schema || t.Schema || t.input_schema}
-                                  title="Parameter JSON Schema"
+                                  title="Parameter JSON schema"
                                   maxHeight="250px"
                                 />
                               </div>
@@ -1421,33 +1424,33 @@ export default function CodeDevPage() {
                       {/* Sub-tab 5: Headers & Summary */}
                       <Show when={payloadSubTab() === "headers"}>
                         <div class="flex flex-col gap-3">
-                          <div class="bg-ink-900/60 p-4 rounded-lg border border-line flex flex-col gap-2">
-                            <span class="font-medium text-ink-200 text-xs border-b border-line pb-1 mb-1">
-                              General Request Details
+                          <div class="bg-surface p-4 rounded-panel border border-border flex flex-col gap-2">
+                            <span class="font-medium text-fg text-xs border-b border-border-subtle pb-1.5 mb-1">
+                              General request details
                             </span>
-                            <div class="grid grid-cols-2 gap-2 text-xs">
-                              <div><span class="text-ink-400">Request URL:</span> {req().endpoint}</div>
-                              <div><span class="text-ink-400">Request Method:</span> POST</div>
-                              <div><span class="text-ink-400">Model ID:</span> {req().model}</div>
-                              <div><span class="text-ink-400">Reasoning Tier:</span> {req().reasoning || "default"}</div>
-                              <div><span class="text-ink-400">Max Tokens:</span> {req().maxTokens}</div>
-                              <div><span class="text-ink-400">Session ID:</span> {req().sessionId}</div>
-                              <div><span class="text-ink-400">Turn Index:</span> #{req().turnIndex}</div>
-                              <div><span class="text-ink-400">Step Index:</span> #{req().step}</div>
-                              <div><span class="text-ink-400">Simulated:</span> {req().isSimulated ? "Yes (Smoke Test)" : "No (Live Wire)"}</div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                              <div class="min-w-0 break-all"><span class="text-fg-muted">Request URL:</span> {req().endpoint}</div>
+                              <div><span class="text-fg-muted">Request method:</span> POST</div>
+                              <div class="min-w-0 break-all"><span class="text-fg-muted">Model ID:</span> {req().model}</div>
+                              <div><span class="text-fg-muted">Reasoning tier:</span> {req().reasoning || "default"}</div>
+                              <div><span class="text-fg-muted">Max tokens:</span> {req().maxTokens}</div>
+                              <div class="min-w-0 break-all"><span class="text-fg-muted">Session ID:</span> {req().sessionId}</div>
+                              <div><span class="text-fg-muted">Turn index:</span> #{req().turnIndex}</div>
+                              <div><span class="text-fg-muted">Step index:</span> #{req().step}</div>
+                              <div><span class="text-fg-muted">Simulated:</span> {req().isSimulated ? "Yes (smoke test)" : "No (live wire)"}</div>
                             </div>
                           </div>
 
                           <Show when={req().usage}>
-                            <div class="bg-ink-900/60 p-4 rounded-lg border border-line flex flex-col gap-2">
-                              <span class="font-medium text-ink-200 text-xs border-b border-line pb-1 mb-1">
-                                Token Usage & Costs
+                            <div class="bg-surface p-4 rounded-panel border border-border flex flex-col gap-2">
+                              <span class="font-medium text-fg text-xs border-b border-border-subtle pb-1.5 mb-1">
+                                Token usage
                               </span>
-                              <div class="grid grid-cols-2 gap-2 text-xs">
-                                <div><span class="text-ink-400">Input Tokens:</span> {req().usage.inputTokens ?? req().usage.input ?? 0}</div>
-                                <div><span class="text-ink-400">Output Tokens:</span> {req().usage.outputTokens ?? req().usage.output ?? 0}</div>
-                                <div><span class="text-ink-400">Cache Read:</span> {req().usage.cacheReadTokens ?? 0}</div>
-                                <div><span class="text-ink-400">Cache Write:</span> {req().usage.cacheWriteTokens ?? 0}</div>
+                              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs tabular-nums">
+                                <div><span class="text-fg-muted">Input tokens:</span> {req().usage.inputTokens ?? req().usage.input ?? 0}</div>
+                                <div><span class="text-fg-muted">Output tokens:</span> {req().usage.outputTokens ?? req().usage.output ?? 0}</div>
+                                <div><span class="text-fg-muted">Cache read:</span> {req().usage.cacheReadTokens ?? 0}</div>
+                                <div><span class="text-fg-muted">Cache write:</span> {req().usage.cacheWriteTokens ?? 0}</div>
                               </div>
                             </div>
                           </Show>
@@ -1463,29 +1466,29 @@ export default function CodeDevPage() {
 
         {/* 2. LIVE EVENT STREAM TAB */}
         <Show when={activeTab() === "stream"}>
-          <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-ink-950 font-mono">
+          <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-background font-mono">
             {/* Stream toolbar */}
-            <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
-              <div class="flex items-center gap-3">
-                <span class="font-medium text-ink-200">Event filter:</span>
+            <div class="px-4 py-2 bg-surface-subtle border-b border-border flex flex-wrap items-center justify-between gap-2 shrink-0 text-xs">
+              <div class="flex flex-wrap items-center gap-3 min-w-0">
+                <span class="font-medium text-fg">Event filter:</span>
                 <select
                   value={eventFilter()}
                   onChange={(e) => setEventFilter(e.currentTarget.value)}
-                  class="bg-ink-800 border border-line rounded px-2 py-1 text-xs text-ink-200 focus:outline-none"
+                  class="bg-surface border border-border rounded-control px-2 py-1 max-sm:text-base sm:text-xs text-fg focus:outline-none focus:border-accent"
                 >
-                  <option value="all">All Events ({liveEvents().length})</option>
-                  <option value="llm">LLM Requests/Responses</option>
-                  <option value="tool">Tool Calls & Results</option>
-                  <option value="text">Text & Reasoning Deltas</option>
-                  <option value="turns">Turn Lifecycle</option>
+                  <option value="all">All events ({liveEvents().length})</option>
+                  <option value="llm">LLM requests / responses</option>
+                  <option value="tool">Tool calls & results</option>
+                  <option value="text">Text & reasoning deltas</option>
+                  <option value="turns">Turn lifecycle</option>
                 </select>
 
-                <label class="flex items-center gap-1.5 text-ink-400 cursor-pointer">
+                <label class="flex items-center gap-1.5 text-fg-secondary cursor-pointer">
                   <input
                     type="checkbox"
                     checked={autoScroll()}
                     onChange={(e) => setAutoScroll(e.currentTarget.checked)}
-                    class="rounded bg-ink-800 border-line"
+                    class="rounded bg-surface border-border"
                   />
                   Auto-scroll
                 </label>
@@ -1498,20 +1501,20 @@ export default function CodeDevPage() {
                     setLiveThinking("");
                     setLiveText("");
                   }}
-                  class="px-2.5 py-1 bg-ink-800 hover:bg-danger-subtle hover:text-danger text-ink-300 rounded border border-line text-xs flex items-center gap-1 cursor-pointer"
+                  class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1 hover:bg-danger-subtle hover:text-danger"
                 >
                   <Icon name={Icons.trash} size={12} />
-                  Clear Stream
+                  Clear stream
                 </button>
               </div>
             </div>
 
             {/* Live Streaming Chains */}
             <Show when={liveThinking() || liveText()}>
-              <div class="p-3 bg-ink-900/80 border-b border-line shrink-0 flex flex-col gap-2 max-h-48 overflow-y-auto">
+              <div class="p-3 bg-surface-subtle border-b border-border shrink-0 flex flex-col gap-2 max-h-48 overflow-y-auto">
                 <Show when={liveThinking()}>
-                  <div class="bg-warning-subtle border border-warning/35 p-2.5 rounded text-xs text-ink-200">
-                    <div class="text-xs text-warning font-medium mb-1 flex items-center gap-1">
+                  <div class="bg-warning-subtle border border-warning/35 p-2.5 rounded-panel text-xs text-fg">
+                    <div class="text-xs text-warning font-medium mb-1 flex items-center gap-1.5">
                       <span class="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
                       Live chain-of-thought (streaming)
                     </div>
@@ -1522,8 +1525,8 @@ export default function CodeDevPage() {
                 </Show>
 
                 <Show when={liveText()}>
-                  <div class="bg-info-subtle border border-tone-sky/30 p-2.5 rounded text-xs text-ink-200">
-                    <div class="text-xs text-tone-sky font-medium mb-1 flex items-center gap-1">
+                  <div class="bg-info-subtle border border-tone-sky/30 p-2.5 rounded-panel text-xs text-fg">
+                    <div class="text-xs text-tone-sky font-medium mb-1 flex items-center gap-1.5">
                       <span class="w-1.5 h-1.5 rounded-full bg-tone-sky animate-pulse" />
                       Live assistant text (streaming)
                     </div>
@@ -1540,7 +1543,7 @@ export default function CodeDevPage() {
               <Show
                 when={filteredEvents().length > 0}
                 fallback={
-                  <div class="p-8 text-center text-ink-500">
+                  <div class="p-8 text-center text-fg-muted font-sans">
                     No events captured in this session yet. Events appear here in real time while a turn is running.
                   </div>
                 }
@@ -1552,30 +1555,30 @@ export default function CodeDevPage() {
                       setExpandedEvents((prev) => ({ ...prev, [ev.id]: !prev[ev.id] }));
 
                     return (
-                      <div class="border border-line rounded-lg bg-ink-900/40 overflow-hidden">
+                      <div class="border border-border rounded-panel bg-surface overflow-hidden">
                         <div
                           onClick={toggle}
-                          class="px-3 py-2 bg-ink-900/80 hover:bg-ink-800/80 flex items-center justify-between cursor-pointer select-none"
+                          class="px-3 py-2 bg-surface hover:bg-surface-subtle flex flex-wrap items-center justify-between gap-2 cursor-pointer select-none"
                         >
-                          <div class="flex items-center gap-2">
-                            <span class="text-xs text-ink-500 tabular-nums">
+                          <div class="flex flex-wrap items-center gap-2 min-w-0">
+                            <span class="text-2xs text-fg-muted tabular-nums">
                               {new Date(ev.timestamp).toLocaleTimeString()}
                             </span>
                             <span
-                              class={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                              class={`px-1.5 py-0.5 rounded-md text-2xs font-medium ${
                                 ev.type === "debug_llm_request"
                                   ? "bg-accent-subtle text-tone-violet border border-tone-violet/30"
                                   : ev.type.startsWith("tool")
                                     ? "bg-warning-subtle text-warning border border-warning/35"
                                     : ev.type.startsWith("turn")
                                       ? "bg-info-subtle text-tone-sky border border-tone-sky/30"
-                                      : "bg-ink-800 text-ink-300 border border-line"
+                                      : "bg-surface-subtle text-fg-secondary border border-border"
                               }`}
                             >
                               {ev.type}
                             </span>
                             <Show when={ev.turnIndex != null}>
-                              <span class="text-xs text-ink-400 font-mono">
+                              <span class="text-2xs text-fg-secondary font-mono tabular-nums">
                                 Turn #{ev.turnIndex}
                               </span>
                             </Show>
@@ -1585,13 +1588,13 @@ export default function CodeDevPage() {
                               </span>
                             </Show>
                           </div>
-                          <span class="text-xs text-ink-500">
-                            {isExpanded() ? "▲ collapse" : "▼ expand"}
+                          <span class="text-2xs text-fg-muted">
+                            {isExpanded() ? "Collapse" : "Expand"}
                           </span>
                         </div>
 
                         <Show when={isExpanded()}>
-                          <div class="p-3 bg-ink-950 border-t border-line">
+                          <div class="p-3 bg-background/60 border-t border-border-subtle">
                             <JsonHighlightViewer data={ev.data} maxHeight="300px" />
                           </div>
                         </Show>
@@ -1606,51 +1609,51 @@ export default function CodeDevPage() {
 
         {/* 3. SYSTEM PROMPT TAB */}
         <Show when={activeTab() === "system"}>
-          <div class="flex-1 min-h-0 overflow-y-auto p-4 bg-ink-950 flex flex-col gap-3 font-mono">
-            <div class="flex items-center justify-between pb-2 border-b border-line shrink-0">
-              <div class="flex flex-col">
-                <span class="text-sm font-medium text-accent">
-                  Full Session System Prompt
+          <div class="flex-1 min-h-0 overflow-y-auto p-4 bg-background flex flex-col gap-3 font-mono">
+            <div class="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-border shrink-0">
+              <div class="flex flex-col min-w-0">
+                <span class="text-sm font-medium text-fg font-sans">
+                  Full session system prompt
                 </span>
-                <span class="text-xs text-ink-400">
-                  Computed by daemon for session: {selectedSessionId() || "(default)"} • Mode: {sessionMeta()?.mode || "agentic"}
+                <span class="text-2xs text-fg-muted">
+                  Computed by daemon for session: {selectedSessionId() || "(default)"} · Mode: {sessionMeta()?.mode || "agentic"}
                 </span>
               </div>
-              <div class="flex items-center gap-3">
-                <span class="text-xs text-ink-400">
-                  Chars: {systemPrompt().length} • Words: {systemPrompt().split(/\s+/).length} • Est. Tokens: ~{Math.round(systemPrompt().length / 4)}
+              <div class="flex flex-wrap items-center gap-3">
+                <span class="text-2xs text-fg-secondary tabular-nums">
+                  Chars: {systemPrompt().length} · Words: {systemPrompt().split(/\s+/).length} · Est. tokens: ~{Math.round(systemPrompt().length / 4)}
                 </span>
                 <button
-                  onClick={() => copyText(systemPrompt(), "System Prompt")}
-                  class="px-3 py-1.5 bg-accent-subtle text-accent hover:bg-accent/20 rounded border border-accent/35 text-xs font-mono flex items-center gap-1.5 cursor-pointer"
+                  onClick={() => copyText(systemPrompt(), "System prompt")}
+                  class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
                 >
                   <Icon name={Icons.copy} size={13} />
-                  Copy System Prompt
+                  Copy system prompt
                 </button>
               </div>
             </div>
 
-            <pre class="bg-ink-900 p-4 rounded-lg border border-line text-ink-200 overflow-x-auto whitespace-pre-wrap text-xs leading-relaxed select-text flex-1">
-              {systemPrompt() || "Loading system prompt from daemon..."}
+            <pre class="bg-surface p-4 rounded-panel border border-border text-fg overflow-x-auto whitespace-pre-wrap text-xs leading-relaxed select-text flex-1">
+              {systemPrompt() || "Loading system prompt from daemon…"}
             </pre>
           </div>
         </Show>
 
         {/* 4. NATIVE TOOLS CATALOG TAB */}
         <Show when={activeTab() === "tools"}>
-          <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-ink-950 font-mono">
-            <div class="px-4 py-2.5 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
-              <div class="flex items-center gap-3">
-                <span class="font-medium text-accent">Native tool catalog ({filteredTools().length})</span>
+          <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-background font-mono">
+            <div class="px-4 py-2.5 bg-surface-subtle border-b border-border flex flex-wrap items-center justify-between gap-2 shrink-0 text-xs">
+              <div class="flex flex-wrap items-center gap-3 flex-1 min-w-0">
+                <span class="font-medium text-fg font-sans shrink-0">Native tool catalog ({filteredTools().length})</span>
                 <input
                   type="text"
-                  placeholder="Search tools by name..."
+                  placeholder="Search tools by name…"
                   value={toolSearch()}
                   onInput={(e) => setToolSearch(e.currentTarget.value)}
-                  class="bg-ink-800 border border-line rounded px-2.5 py-1 text-xs text-ink-200 focus:outline-none w-64"
+                  class="bg-surface border border-border rounded-control px-2.5 py-1 max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent w-full sm:w-64 min-w-0"
                 />
               </div>
-              <span class="text-ink-400 text-xs">
+              <span class="text-fg-muted text-2xs font-sans">
                 Registered tools available in Indirect Code Go daemon
               </span>
             </div>
@@ -1663,43 +1666,43 @@ export default function CodeDevPage() {
                     setExpandedTools((prev) => ({ ...prev, [t.name]: !prev[t.name] }));
 
                   return (
-                    <div class="border border-line rounded-lg bg-ink-900/60 overflow-hidden">
+                    <div class="border border-border rounded-panel bg-surface overflow-hidden">
                       <div
                         onClick={toggle}
-                        class="p-3 bg-ink-900 hover:bg-ink-800/80 flex items-center justify-between cursor-pointer select-none"
+                        class="p-3 bg-surface hover:bg-surface-subtle flex flex-wrap items-center justify-between gap-2 cursor-pointer select-none"
                       >
-                        <div class="flex items-center gap-2.5">
-                          <span class="font-medium text-sm text-accent">{t.name}</span>
+                        <div class="flex flex-wrap items-center gap-2 min-w-0">
+                          <span class="font-medium text-xs text-accent">{t.name}</span>
                           <Show when={t.isAuto}>
-                            <span class="px-1.5 py-0.5 rounded bg-accent-subtle text-tone-violet text-xs font-medium">
+                            <span class="px-1.5 py-0.5 rounded-md bg-accent-subtle text-tone-violet text-2xs font-medium">
                               Auto tool
                             </span>
                           </Show>
                           <Show when={t.deferred}>
-                            <span class="px-1.5 py-0.5 rounded bg-warning-subtle text-warning text-xs">
+                            <span class="px-1.5 py-0.5 rounded-md bg-warning-subtle text-warning text-2xs">
                               Deferred
                             </span>
                           </Show>
                           <Show when={t.allowedModes && t.allowedModes.length > 0}>
-                            <span class="text-xs text-ink-500">
+                            <span class="text-2xs text-fg-muted">
                               Modes: {t.allowedModes?.join(", ")}
                             </span>
                           </Show>
                         </div>
-                        <span class="text-xs text-ink-400">
-                          {isExp() ? "Hide Schema ▲" : "View Schema ▼"}
+                        <span class="text-2xs text-fg-muted">
+                          {isExp() ? "Hide schema" : "View schema"}
                         </span>
                       </div>
 
-                      <div class="px-3 py-2 text-xs text-ink-300 border-t border-line/40">
+                      <div class="px-3 py-2 text-xs text-fg-secondary border-t border-border-subtle font-sans">
                         {t.description}
                       </div>
 
                       <Show when={isExp()}>
-                        <div class="p-3 bg-ink-950 border-t border-line">
+                        <div class="p-3 bg-background/60 border-t border-border-subtle">
                           <JsonHighlightViewer
                             data={t.schema}
-                            title={`${t.name} Input Schema`}
+                            title={`${t.name} input schema`}
                             maxHeight="300px"
                           />
                         </div>
@@ -1714,30 +1717,30 @@ export default function CodeDevPage() {
 
         {/* 5. RAW WS FRAMES TAB */}
         <Show when={activeTab() === "frames"}>
-          <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-ink-950 font-mono">
-            <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
-              <span class="font-medium text-ink-200">
+          <div class="flex-1 min-h-0 flex flex-col overflow-hidden bg-background font-mono">
+            <div class="px-4 py-2 bg-surface-subtle border-b border-border flex items-center justify-between gap-2 shrink-0 text-xs">
+              <span class="font-medium text-fg font-sans">
                 Raw relay WebSocket frames ({rawFrames().length})
               </span>
               <button
                 onClick={() => setRawFrames([])}
-                class="px-2 py-0.5 bg-ink-800 hover:bg-danger-subtle hover:text-danger text-ink-300 rounded border border-line text-xs cursor-pointer"
+                class="ui-button ui-button-outline ui-button-xs rounded-lg hover:bg-danger-subtle hover:text-danger"
               >
-                Clear Frames
+                Clear frames
               </button>
             </div>
 
             <div class="flex-1 overflow-y-auto p-3 space-y-2">
               <For each={rawFrames()}>
                 {(f) => (
-                  <div class="border border-line rounded-lg bg-ink-900/40 p-2.5 text-xs">
-                    <div class="flex items-center justify-between mb-1 text-xs">
-                      <div class="flex items-center gap-2">
-                        <span class="text-ink-500 tabular-nums">
+                  <div class="border border-border rounded-panel bg-surface p-2.5 text-xs">
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-1.5 text-xs">
+                      <div class="flex flex-wrap items-center gap-2 min-w-0">
+                        <span class="text-2xs text-fg-muted tabular-nums">
                           {new Date(f.timestamp).toLocaleTimeString()}
                         </span>
                         <span
-                          class={`px-1.5 py-0.5 rounded text-xs font-medium ${
+                          class={`px-1.5 py-0.5 rounded-md text-2xs font-medium ${
                             f.direction === "out"
                               ? "bg-warning-subtle text-warning border border-warning/35"
                               : "bg-info-subtle text-tone-sky border border-tone-sky/30"
@@ -1747,12 +1750,12 @@ export default function CodeDevPage() {
                         </span>
                         <span class="font-medium text-accent">{f.type}</span>
                         <Show when={f.sessionId}>
-                          <span class="text-ink-400 text-xs">
+                          <span class="text-fg-muted text-2xs">
                             sid: {f.sessionId ? f.sessionId.slice(0, 8) : ""}
                           </span>
                         </Show>
                       </div>
-                      <span class="text-xs text-ink-500">{f.size} bytes</span>
+                      <span class="text-2xs text-fg-muted tabular-nums">{f.size} bytes</span>
                     </div>
                     <JsonHighlightViewer data={f.payload} maxHeight="180px" />
                   </div>
@@ -1766,23 +1769,23 @@ export default function CodeDevPage() {
         <Show when={activeTab() === "wal"}>
           <div class="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden font-mono text-xs">
             {/* Left list: WAL event sequence */}
-            <div class="w-full max-h-56 lg:max-h-none lg:w-80 border-b lg:border-b-0 lg:border-r border-line bg-ink-900/60 flex flex-col shrink-0">
-              <div class="px-3 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0">
-                <span class="font-medium text-ink-200 text-xs">WAL event log ({filteredWalEvents().length})</span>
+            <div class="w-full max-h-56 lg:max-h-none lg:w-80 border-b lg:border-b-0 lg:border-r border-border bg-surface-subtle flex flex-col shrink-0">
+              <div class="px-3 py-2 bg-surface-subtle border-b border-border-subtle flex items-center justify-between gap-2 shrink-0">
+                <span class="font-medium text-fg text-xs font-sans shrink-0">WAL events ({filteredWalEvents().length})</span>
                 <input
                   type="text"
-                  placeholder="Filter events..."
+                  placeholder="Filter events…"
                   value={walFilter()}
                   onInput={(e) => setWalFilter(e.currentTarget.value)}
-                  class="bg-ink-800 border border-line rounded px-2 py-0.5 text-xs text-ink-200 focus:outline-none w-32"
+                  class="bg-surface border border-border rounded-control px-2 py-0.5 max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent min-w-0 w-36"
                 />
               </div>
 
-              <div class="flex-1 overflow-y-auto divide-y divide-line/30">
+              <div class="flex-1 overflow-y-auto divide-y divide-border-subtle">
                 <Show
                   when={filteredWalEvents().length > 0}
                   fallback={
-                    <div class="p-8 text-center text-xs text-ink-500">
+                    <div class="p-8 text-center text-xs text-fg-muted font-sans">
                       No WAL events available for this session.
                     </div>
                   }
@@ -1799,7 +1802,7 @@ export default function CodeDevPage() {
                           case "usage": return "bg-success-subtle text-tone-teal border-tone-teal/30";
                           case "todos": return "bg-info-subtle text-tone-sky border-tone-sky/30";
                           case "widgets": return "bg-danger-subtle text-tone-rose border-tone-rose/30";
-                          default: return "bg-ink-700/40 text-ink-300 border-line";
+                          default: return "bg-surface text-fg-secondary border-border";
                         }
                       };
 
@@ -1807,28 +1810,28 @@ export default function CodeDevPage() {
                         <button
                           type="button"
                           onClick={() => setSelectedWalSeq(ev.seq)}
-                          class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-[3px] ${
+                          class={`w-full text-left p-2.5 transition-colors cursor-pointer flex flex-col gap-1 border-l-2 ${
                             isSel()
-                              ? "bg-accent-subtle border-accent text-ink-100"
-                              : "border-transparent hover:bg-ink-800/40 text-ink-300"
+                              ? "bg-accent-subtle border-accent text-fg"
+                              : "border-transparent hover:bg-surface-muted/70 text-fg-secondary"
                           }`}
                         >
                           <div class="flex items-center justify-between text-xs">
                             <div class="flex items-center gap-1.5">
-                              <span class="text-ink-500 font-medium">#{ev.seq}</span>
-                              <span class={`px-1.5 py-0.5 rounded text-xs font-medium border ${typeBadgeColor(ev.type)}`}>
+                              <span class="text-fg-muted font-medium tabular-nums">#{ev.seq}</span>
+                              <span class={`px-1.5 py-0.5 rounded-md text-2xs font-medium border ${typeBadgeColor(ev.type)}`}>
                                 {ev.type}
                               </span>
                             </div>
                             <Show when={ev.timestamp}>
-                              <span class="text-xs text-ink-500 tabular-nums">
+                              <span class="text-2xs text-fg-muted tabular-nums">
                                 {new Date(ev.timestamp!).toLocaleTimeString()}
                               </span>
                             </Show>
                           </div>
-                          <div class="text-xs text-ink-400 truncate">
+                          <div class="text-2xs text-fg-muted truncate">
                             {ev.type === "msg" ? (ev.payload?.model || ev.payload?.endpoint || "turn message") :
-                             ev.type === "header" ? `turnSeq ${ev.payload?.turnIndex || 1} • ${ev.payload?.model || ""}` :
+                             ev.type === "header" ? `turnSeq ${ev.payload?.turnIndex || 1} · ${ev.payload?.model || ""}` :
                              ev.type === "options" ? `mode ${ev.payload?.mode || "agentic"}` :
                              ev.type === "title" ? (ev.payload?.title || "") :
                              JSON.stringify(ev.payload || {}).slice(0, 40)}
@@ -1842,35 +1845,35 @@ export default function CodeDevPage() {
             </div>
 
             {/* Right Pane: Structured Payload Inspector */}
-            <div class="flex-1 min-h-0 flex flex-col bg-ink-950 overflow-hidden">
+            <div class="flex-1 min-h-0 flex flex-col bg-background overflow-hidden">
               <Show
                 when={selectedWalEvent()}
                 fallback={
-                  <div class="flex-1 flex flex-col items-center justify-center text-xs text-ink-500 gap-2">
-                    <Icon name="lucide:database" size={28} />
-                    <span>Select a WAL event on the left to inspect its state</span>
+                  <div class="flex-1 flex flex-col items-center justify-center p-6 text-center text-xs text-fg-muted font-sans gap-2">
+                    <Icon name="lucide:database" size={24} />
+                    <span>Select a WAL event on the left to inspect its state.</span>
                   </div>
                 }
               >
                 {(ev) => (
                   <div class="flex-1 flex flex-col min-h-0">
-                    <div class="px-4 py-2 bg-ink-900 border-b border-line flex items-center justify-between shrink-0 text-xs">
-                      <div class="flex items-center gap-3">
-                        <span class="font-medium text-ink-400">Event #{ev().seq}</span>
+                    <div class="px-4 py-2 bg-surface-subtle border-b border-border flex flex-wrap items-center justify-between gap-2 shrink-0 text-xs">
+                      <div class="flex flex-wrap items-center gap-3 min-w-0">
+                        <span class="font-medium text-fg-secondary tabular-nums">Event #{ev().seq}</span>
                         <span class="font-medium text-accent">{ev().type}</span>
                         <Show when={ev().timestamp}>
-                          <span class="text-ink-500 text-xs">
+                          <span class="text-fg-muted text-2xs tabular-nums">
                             {new Date(ev().timestamp!).toLocaleTimeString()} ({new Date(ev().timestamp!).toISOString()})
                           </span>
                         </Show>
                       </div>
-                      <span class="text-xs text-ink-400">WAL Append-Only State</span>
+                      <span class="text-2xs text-fg-muted font-sans">WAL append-only state</span>
                     </div>
 
                     <div class="flex-1 overflow-hidden p-4">
                       <JsonHighlightViewer
                         data={ev().payload}
-                        title={`WAL Event #${ev().seq} (${ev().type}) Payload`}
+                        title={`WAL event #${ev().seq} (${ev().type}) payload`}
                         maxHeight="calc(100vh - 230px)"
                         class="h-full"
                       />
@@ -1884,11 +1887,11 @@ export default function CodeDevPage() {
       </div>
 
       {/* ===== BOTTOM BAR: SMOKE SIMULATOR & PROMPT SENDER ===== */}
-      <footer class="px-4 py-2.5 bg-ink-900 border-t border-line shrink-0 flex flex-wrap items-center gap-2.5 font-mono text-xs z-20">
-        <span class="text-ink-400 shrink-0 font-medium">Prompt action:</span>
+      <footer class="px-4 py-2.5 bg-surface-subtle border-t border-border shrink-0 flex flex-wrap items-center gap-2 text-xs z-20">
+        <span class="text-fg-secondary shrink-0 font-medium">Prompt action:</span>
         <input
           type="text"
-          placeholder="Type a prompt to send or simulate (Smoke Test)..."
+          placeholder="Type a prompt to send or simulate (smoke test)…"
           value={promptInput()}
           onInput={(e) => setPromptInput(e.currentTarget.value)}
           onKeyDown={(e) => {
@@ -1901,7 +1904,7 @@ export default function CodeDevPage() {
               }
             }
           }}
-          class="flex-1 min-w-[200px] bg-ink-950 border border-line rounded px-3 py-1.5 text-xs text-ink-100 placeholder-ink-600 focus:outline-none focus:border-accent"
+          class="min-w-0 flex-1 basis-48 bg-surface border border-border-strong rounded-control px-3 py-1.5 max-sm:text-base sm:text-xs font-mono text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent"
         />
 
         {/* Smoke Simulation Button */}
@@ -1909,11 +1912,11 @@ export default function CodeDevPage() {
           type="button"
           onClick={runSmokeSimulation}
           disabled={isSimulating()}
-          class="px-3.5 py-1.5 bg-warning-subtle hover:bg-warning/20 text-warning font-medium rounded border border-warning/35 text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-2xs"
+          class="ui-button ui-button-outline ui-button-sm rounded-lg gap-1.5 border-warning/35 bg-warning-subtle text-warning hover:bg-warning/15 shrink-0"
           data-rc-tip="Simulate prompt right now without calling LLM (0 tokens billed)"
         >
           <Icon name="lucide:flame" size={13} />
-          {isSimulating() ? "Simulating..." : "Smoke Test (Simulate Payload)"}
+          {isSimulating() ? "Simulating…" : "Smoke test"}
         </button>
 
         {/* Live Send Button */}
@@ -1921,11 +1924,11 @@ export default function CodeDevPage() {
           type="button"
           onClick={sendQuickPrompt}
           disabled={!promptInput().trim() || !selectedSessionId()}
-          class="px-3.5 py-1.5 bg-accent hover:bg-accent-strong disabled:opacity-40 disabled:cursor-not-allowed text-accent-foreground font-medium rounded text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1"
+          class="ui-button ui-button-primary ui-button-sm rounded-lg gap-1.5 shrink-0"
           data-rc-tip="Send real turn prompt to the session"
         >
           <Icon name={Icons.send} size={13} />
-          Send Prompt
+          Send prompt
         </button>
       </footer>
     </div>

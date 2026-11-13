@@ -63,6 +63,26 @@ import { createSessionAttention, type LiveSessionAttentionOverlay } from "./hook
 import { normalizeAttentionKind } from "./store/sessions";
 import { baseMode, effectiveModeSkills } from "./utils/modeSkills";
 
+function createNarrowViewportFlag(): () => boolean {
+  const read = () =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? Boolean(window.matchMedia("(max-width: 767.98px)")?.matches)
+      : false;
+  const [narrow, setNarrow] = createSignal(read());
+  onMount(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mql = window.matchMedia("(max-width: 767.98px)");
+    if (!mql) return;
+    setNarrow(Boolean(mql.matches));
+    const onChange = () => setNarrow(Boolean(mql.matches));
+    if (typeof mql.addEventListener === "function") {
+      mql.addEventListener("change", onChange);
+      onCleanup(() => mql.removeEventListener("change", onChange));
+    }
+  });
+  return narrow;
+}
+
 /** The workspace header becomes the native titlebar when WCO is enabled. */
 function WorkspaceHeader() {
   const ui = useUI();
@@ -74,29 +94,29 @@ function WorkspaceHeader() {
   const project = () => (!isHistory() ? session.currentProject?.() : null);
   const running = () => !isHistory() && !session.draftMode() && transcript?.sessionStatus?.() === "running";
   return (
-    <header class="rc-workspace-header rc-window-header shrink-0 border-b border-border/60 bg-background/90 backdrop-blur-sm">
-      <div class="rc-window-content flex h-full min-w-0 items-center gap-2.5">
+    <header class="rc-workspace-header rc-window-header shrink-0 border-b border-border bg-background">
+      <div class="rc-window-content flex h-full min-w-0 items-center gap-2">
         <Show when={!ui.sidebarOpen()}><SidebarToggle /></Show>
         <div class="flex min-w-0 flex-1 items-center gap-1.5">
           <Show when={project()?.name}>
             <span
               data-rc-tip={project()!.path}
               data-rc-tip-placement="bottom"
-              class="hidden sm:inline-flex max-w-44 shrink-0 items-center gap-1.5 truncate text-[12.5px] text-fg-muted select-none"
+              class="inline-flex max-w-28 sm:max-w-44 shrink-0 items-center gap-1.5 truncate text-xs text-fg-muted select-none"
             >
-              <Iconify icon="lucide:folder" size={12} class="shrink-0 text-fg-muted/80" />
+              <Iconify icon="lucide:folder" size={12} class="shrink-0 text-fg-muted" />
               <span class="truncate">{project()!.name}</span>
             </span>
-            <span class="hidden sm:inline text-xs text-fg-muted/40 select-none">/</span>
+            <span class="inline text-xs text-fg-muted/50 select-none" aria-hidden="true">/</span>
           </Show>
           <Show when={isHistory()}>
             <Iconify icon="lucide:history" size={13} class="shrink-0 text-fg-muted" />
           </Show>
-          <span class={`min-w-0 truncate text-[12.5px] select-none ${session.draftMode() && !isHistory() ? "text-fg-muted" : "font-medium text-fg"}`}>
+          <span class={`min-w-0 truncate text-xs select-none ${session.draftMode() && !isHistory() ? "text-fg-muted" : "font-medium text-fg"}`}>
             {title()}
           </span>
           <Show when={running()}>
-            <span class="inline-flex shrink-0 items-center gap-1.5 pl-1 text-[11px] text-fg-muted select-none">
+            <span class="inline-flex shrink-0 items-center gap-1.5 pl-1 text-2xs text-fg-muted select-none">
               <span class="text-fg-muted/60" aria-hidden="true">·</span>
               <span>Running</span>
             </span>
@@ -107,7 +127,7 @@ function WorkspaceHeader() {
             <button
               type="button"
               onClick={() => ui.setHistoryView?.(!isHistory())}
-              class={`flex h-7 w-7 items-center justify-center rounded-md transition-colors cursor-pointer ${isHistory() ? "bg-surface-muted text-fg" : "text-fg-muted hover:bg-surface-muted/75 hover:text-fg"}`}
+              class={`ui-icon-button ui-icon-button-xs ${isHistory() ? "bg-surface-muted text-fg" : "text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
               data-rc-tip="Conversation history (Ctrl+K)"
               data-rc-tip-placement="bottom"
               aria-label="Search conversations"
@@ -117,7 +137,7 @@ function WorkspaceHeader() {
             <button
               type="button"
               onClick={() => session.startNewConversation?.()}
-              class="flex h-7 w-7 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted/75 hover:text-fg transition-colors cursor-pointer"
+              class="ui-icon-button ui-icon-button-xs text-fg-muted hover:bg-surface-muted hover:text-fg"
               data-rc-tip="New conversation"
               data-rc-tip-placement="bottom"
               aria-label="Start new conversation"
@@ -143,11 +163,16 @@ export function WorkspaceShell(props: { children: JSX.Element }) {
 /** One layout in browser and installed modes; WCO only changes header insets. */
 export function WorkspaceLayout(props: { sidebar: JSX.Element; children: JSX.Element }) {
   const ui = useUI();
+  const narrowViewport = createNarrowViewportFlag();
+  const overlaySidebar = () => ui.isMobile() || narrowViewport();
   return (
     <div class="rc-wco-layout flex-1 flex min-h-0 overflow-hidden relative"
-      style={{ "--rc-sidebar-width": ui.sidebarOpen() && !ui.isMobile() ? "16rem" : "0px" }}>
+      style={{ "--rc-sidebar-width": ui.sidebarOpen() && !overlaySidebar() ? "16rem" : "0px" }}>
       {props.sidebar}
-      <main class="rc-wco-main flex-1 flex flex-col min-w-0 min-h-0 bg-background relative">
+      <main
+        inert={(overlaySidebar() && ui.sidebarOpen()) || undefined}
+        class="rc-wco-main flex-1 flex flex-col min-w-0 min-h-0 bg-background relative"
+      >
         <WorkspaceHeader />
         {props.children}
       </main>
@@ -198,25 +223,23 @@ export function UpdateFreezeOverlay() {
             <h2 class="mt-5 text-lg font-medium text-fg">
               Updating {updatingHost()?.name || updatingHost()?.hostname || "daemon"}…
             </h2>
-            <p class="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-fg-secondary">
+            <p class="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-fg-secondary">
               {upd()?.target ? `Installing ${upd()?.target}. ` : ""}Sessions are safe, nothing is lost.
             </p>
           </div>
-          <div class="mx-auto max-w-sm space-y-3 rounded-xl border border-border bg-surface-subtle/70 p-4 text-left">
+          <div class="mx-auto max-w-sm space-y-3 rounded-panel border border-border bg-surface p-4 text-left">
             <div class="flex items-center gap-3">
-              <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border bg-surface text-fg-secondary">
-                <Iconify icon="lucide:refresh-cw" size={14} class="animate-spin" />
-              </div>
+              <span aria-hidden="true" class="ui-spinner text-fg-secondary text-sm shrink-0" />
               <div class="min-w-0 flex-1 text-xs">
                 <div class="flex items-center justify-between gap-2">
                   <p class="font-medium text-fg">Updating…</p>
                   <Show when={upd()?.current && upd()?.target}>
-                    <span class="font-mono text-[10.5px] text-fg-muted">
+                    <span class="font-mono text-2xs text-fg-muted tabular-nums">
                       {upd()?.current} → {upd()?.target}
                     </span>
                   </Show>
                 </div>
-                <p class="mt-0.5 truncate text-[11px] text-fg-muted">
+                <p class="mt-0.5 truncate text-2xs text-fg-muted">
                   {updatingHost()?.name || updatingHost()?.hostname || updatingHostId()} · {upd()?.current ? `from ${upd()?.current}` : "working"}…
                 </p>
               </div>
@@ -228,7 +251,7 @@ export function UpdateFreezeOverlay() {
           {/* Shared HostCard (same component as the update overlay):
               per-instance anchor ref + opener gating, so the menu can
               never jump to the hidden card. */}
-          <div class="mx-auto w-full max-w-sm rounded-xl border border-border bg-surface p-1.5 text-left">
+          <div class="mx-auto w-full max-w-sm rounded-panel border border-border bg-surface p-1.5 text-left">
             <HostCard id="overlay" />
           </div>
         </div>
@@ -499,10 +522,26 @@ export default function IndirectCodePage() {
     return mirror.sessions().find((s) => s.id === activeSessionId()) ?? null;
   });
 
+  // Mobile = the pre-paint html.mobile flag (web/index.html script): the
+  // single source of truth (viewport heuristics mislabel touch laptops and
+  // small desktop windows). The script keeps the class in sync on
+  // resize/orientationchange — this signal just follows it.
+  const isMobile = createMobileFlag();
+  const isNarrowViewport = createNarrowViewportFlag();
+  const overlaySidebar = () => isMobile() || isNarrowViewport();
+  const [sidebarOpen, setSidebarOpen] = createSignal(!overlaySidebar());
+  createEffect(() => {
+    if (overlaySidebar()) setSidebarOpen(false);
+    else setSidebarOpen(!isMobile());
+  });
+
   const [historyView, setHistoryViewSignal] = createSignal(false);
   let previousActiveElement: HTMLElement | null = null;
   function setHistoryView(v: boolean | ((p: boolean) => boolean)) {
     const next = typeof v === "function" ? v(historyView()) : v;
+    if (next) {
+      if (overlaySidebar()) setSidebarOpen(false);
+    }
     if (next && !historyView()) {
       if (document.activeElement instanceof HTMLElement && document.activeElement !== document.body) {
         previousActiveElement = document.activeElement;
@@ -521,16 +560,6 @@ export default function IndirectCodePage() {
     }
     setHistoryViewSignal(next);
   }
-
-  // Mobile = the pre-paint html.mobile flag (web/index.html script): the
-  // single source of truth (viewport heuristics mislabel touch laptops and
-  // small desktop windows). The script keeps the class in sync on
-  // resize/orientationchange — this signal just follows it.
-  const isMobile = createMobileFlag();
-  const [sidebarOpen, setSidebarOpen] = createSignal(!isMobile());
-  createEffect(() => {
-    setSidebarOpen(!isMobile());
-  });
 
   const [liveSessionAttention, setLiveSessionAttention] = createSignal<LiveSessionAttentionOverlay | null>(null);
   const isActiveHostUpdating = () => {
@@ -767,7 +796,7 @@ export default function IndirectCodePage() {
   }
 
   function closeSidebarOnMobile() {
-    if (isMobile()) setSidebarOpen(false);
+    if (overlaySidebar()) setSidebarOpen(false);
   }
 
   // --- Session orchestration (composes the domains) ---
@@ -1400,6 +1429,7 @@ export default function IndirectCodePage() {
           options.setActiveModel(id);
           if (changed) options.configureSession();
           setModelMenuOpen(false);
+          composer.setAddContextOpen(false);
         }}
         onRefresh={async () => {
           await loadGatewayModels();
@@ -1416,13 +1446,13 @@ export default function IndirectCodePage() {
     void Promise.allSettled([loadGatewayModels(), hosts.loadHosts()]).then(() => {
       if (!relay.isDisposed() && hosts.hosts().length === 0) modals.generatePairingToken({ silent: true });
     });
-    // Sidebar starts closed on mobile (chatbot useMobile).
-    if (isMobile()) setSidebarOpen(false);
+    // Sidebar starts closed on mobile or narrow (<768px) viewports.
+    if (overlaySidebar()) setSidebarOpen(false);
     // The html.mobile flag (web/index.html) tracks resize/orientationchange
     // itself; isMobile follows it via the MutationObserver in
     // createMobileFlag — no window resize handler needed here.
     // Shortcuts: Ctrl/Cmd+K search, Ctrl/Cmd+N new conversation (chatbot).
-    // Esc cascades: menus -> history -> editor -> preview -> confirm.
+    // Esc cascades: menus -> overlay drawer -> history -> editor -> preview -> confirm.
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "k") {
@@ -1437,7 +1467,17 @@ export default function IndirectCodePage() {
         return;
       }
       if (e.key === "Escape") {
+        if (e.defaultPrevented) return;
         if (document.querySelector("[role=dialog]:not([data-floatmenu])")) return;
+        if (document.querySelector("[data-floatmenu]")) {
+          closeMenus();
+          return;
+        }
+        if (overlaySidebar() && sidebarOpen()) {
+          e.preventDefault();
+          setSidebarOpen(false);
+          return;
+        }
         if (modals.confirmState()) {
           modals.confirmState()?.resolve(false);
           modals.setConfirmState(null);
@@ -1741,6 +1781,10 @@ export default function IndirectCodePage() {
     ...modals,
     ...review,
     ...settings,
+    openSettings: (sectionId) => {
+      if (overlaySidebar()) setSidebarOpen(false);
+      settings.openSettings(sectionId);
+    },
   };
   const uiValue: UICtxValue = {
     ...notice,

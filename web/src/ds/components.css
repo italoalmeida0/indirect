@@ -413,15 +413,15 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
 .ui-dialog-description { margin-top: var(--space-1); color: var(--text-secondary); font-size: var(--text-sm); line-height: var(--leading-body); }
 .ui-dialog-body { padding: var(--space-5) var(--space-6); font-size: var(--text-sm); line-height: var(--leading-body); }
 .ui-dialog-footer { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); padding: var(--space-4) var(--space-6); border-top: 1px solid var(--border-subtle); }
-.ui-dialog-close { flex: 0 0 auto; display: grid; width: var(--space-8); height: var(--space-8); place-items: center; border: 1px solid var(--border); border-radius: var(--radius-pill); background: color-mix(in oklab, var(--surface-muted) 50%, transparent); color: var(--text-secondary); cursor: pointer; transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
+.ui-dialog-close { position: relative; flex: 0 0 auto; display: grid; width: var(--space-8); height: var(--space-8); place-items: center; border: 1px solid var(--border); border-radius: var(--radius-pill); background: color-mix(in oklab, var(--surface-muted) 50%, transparent); color: var(--text-secondary); cursor: pointer; transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
 @media (hover: hover) and (pointer: fine) { .ui-dialog-close:hover { background: var(--surface-muted); color: var(--foreground); } }
 /* Phones show the dialog as a card inset from every edge (status bar and
  * home indicator stay clear). */
 @media (max-width: 639px) {
   .ui-dialog-full { height: auto; max-height: calc(100dvh - var(--sat) - var(--sab) - 2 * var(--dialog-gap)); }
-  .ui-dialog-header { padding: var(--space-4) var(--space-5) var(--space-3); }
-  .ui-dialog-body { padding: var(--space-4) var(--space-5); }
-  .ui-dialog-footer { padding: var(--space-3) var(--space-5); }
+  .ui-dialog-header { padding: var(--space-4) var(--space-4) var(--space-3); }
+  .ui-dialog-body { padding: var(--space-4); }
+  .ui-dialog-footer { padding: var(--space-3) var(--space-4); }
 }
 
 /* ===== Toasts ============================================================== */
@@ -470,8 +470,19 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
 .ui-toast-ok .ui-toast-icon { color: var(--success); }
 .ui-toast-err .ui-toast-icon { color: var(--danger); }
 .ui-toast-text { flex: 1; min-width: 0; padding: 0; font-size: 0.8125rem; line-height: 1.25rem; font-weight: 400; overflow-wrap: anywhere; }
-.ui-toast-close { display: inline-flex; width: 1.375rem; height: 1.25rem; flex: none; align-items: center; justify-content: center; border: 0; border-radius: 0.375rem; background: transparent; color: var(--text-muted); cursor: pointer; }
+.ui-toast-close { position: relative; display: inline-flex; width: 1.375rem; height: 1.25rem; flex: none; align-items: center; justify-content: center; border: 0; border-radius: 0.375rem; background: transparent; color: var(--text-muted); cursor: pointer; }
 @media (hover: hover) and (pointer: fine) { .ui-toast-close:hover { background: var(--surface-muted); color: var(--foreground); } }
+@media (pointer: coarse) {
+  .ui-dialog-close::after,
+  .ui-toast-close::after {
+    content: "";
+    position: absolute;
+    inset: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+}
 
 /* ===== Badge =============================================================== */
 .ui-badge {
@@ -781,12 +792,22 @@ select.ui-field { appearance: none; padding-right: var(--space-8); background-im
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-surface);
   background: var(--surface);
-  box-shadow: var(--shadow-raised);
+  box-shadow: none;
+  contain: layout style;
   transition: border-color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
 }
+@media (hover: hover) and (pointer: fine) {
+  .rc-composer:hover:not(:focus-within) {
+    border-color: color-mix(in oklab, var(--foreground) 22%, var(--border-strong));
+  }
+}
 .rc-composer:focus-within {
-  border-color: color-mix(in oklab, var(--accent) 45%, var(--border-strong));
-  box-shadow: var(--shadow-raised), 0 0 0 3px color-mix(in oklab, var(--accent) 11%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 55%, var(--border-strong));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 12%, transparent);
+}
+.rc-composer[data-queue-docked="true"] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 .rc-composer-toolbar { background: transparent; border-radius: 0 0 var(--radius-surface) var(--radius-surface); }
 .rc-brand-image { height: 15rem; }
@@ -837,7 +858,7 @@ html.theme-xfade body, html.theme-xfade body * {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background: var(--surface);
-  box-shadow: var(--shadow-resting);
+  box-shadow: none;
   overflow: hidden;
   transition: border-color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
 }
@@ -927,10 +948,10 @@ html.theme-xfade body, html.theme-xfade body * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 23px;
+  min-height: 24px;
   padding: 2px 8px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+  border-radius: max(5px, calc(var(--radius-control) - 4px));
   background: var(--surface);
   color: var(--text-secondary);
   font-family: var(--font-code);
@@ -939,6 +960,16 @@ html.theme-xfade body, html.theme-xfade body * {
   font-variant-numeric: tabular-nums;
   cursor: pointer;
   transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard);
+}
+@media (pointer: coarse) {
+  .ui-studio-step-btn {
+    min-width: 36px;
+    min-height: 36px;
+  }
+  .ui-studio-preset-pill {
+    min-height: 32px;
+    padding: 4px 10px;
+  }
 }
 .ui-studio-preset-pill:hover:not(:disabled) {
   background: var(--surface-muted);
@@ -1230,11 +1261,6 @@ html.theme-xfade body, html.theme-xfade body * {
 .ui-studio-check-tile:focus-within {
   outline: 2px solid var(--accent-strong);
   outline-offset: 2px;
-}
-
-/* ===== Composer layout containment ========================================= */
-.rc-composer {
-  contain: layout style;
 }
 
 /* ===== Reduced motion ====================================================== */

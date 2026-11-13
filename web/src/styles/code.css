@@ -133,17 +133,26 @@ html[data-theme="light"] [data-streamdown="inline-code"] {
   overflow: visible; padding: 0.75rem 0.9rem;
 }
 .rc-markdown-control, .rc-msg-action {
+  position: relative;
   display: inline-flex; align-items: center; justify-content: center;
   flex-shrink: 0; min-width: 24px; min-height: 24px;
 }
 .rc-markdown-control {
-  width: 24px; height: 24px; padding: 4px; border: 0; border-radius: 5px;
+  width: 24px; height: 24px; padding: 4px; border: 0; border-radius: 6px;
   color: var(--text-muted); background: transparent; cursor: pointer;
   transition: color var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard);
 }
 html:not(.mobile) .rc-markdown-control:hover, html.mobile .rc-markdown-control:active { color: var(--foreground); background: var(--surface-muted); }
-.rc-markdown-control:focus-visible, .rc-msg-action:focus-visible {
-  outline: 1px solid var(--accent); outline-offset: 1px;
+@media (pointer: coarse) {
+  .rc-markdown-control::after,
+  .rc-msg-action::after {
+    content: "";
+    position: absolute;
+    inset: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
 }
 .rc-markdown-control[data-copy-state="copied"] { color: var(--success); }
 .rc-markdown-control[data-copy-state="error"] { color: var(--danger); }
@@ -155,17 +164,19 @@ html.mobile .rc-message-actions { opacity: 1; }
 
 /* Search match highlight inside workspace & history cards. */
 .rc-app-shell mark {
-  background-color: color-mix(in oklab, var(--accent) 20%, transparent);
+  background-color: var(--accent-subtle);
   color: var(--foreground);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 32%, transparent);
+  border-radius: 0.125rem;
+  padding-inline: 0.125rem;
+  box-shadow: none;
 }
 
-/* Indirect Code workspace surfaces: sidebar rail, composer & floating menus. */
+/* Indirect Code workspace surfaces: sidebar rail & floating menus. */
 .rc-nav-row {
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 0.625rem;
+  gap: 0.5rem;
   width: 100%;
   height: 2rem;
   min-height: 2rem;
@@ -173,8 +184,8 @@ html.mobile .rc-message-actions { opacity: 1; }
   padding-inline: 0.625rem;
   border: 0;
   border-radius: 0.5rem;
-  font-size: 0.8125rem;
-  line-height: 1.25rem;
+  font-size: var(--text-xs);
+  line-height: 1.125rem;
   text-decoration: none;
   transition:
     color var(--duration-fast) var(--ease-standard),
@@ -282,35 +293,35 @@ html.mobile .rc-message-actions { opacity: 1; }
   border-top-color: var(--border-subtle);
   border-bottom-color: var(--border-subtle);
 }
-.rc-composer {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-surface);
-  box-shadow: var(--shadow-resting);
-  transition:
-    border-color var(--duration-fast) var(--ease-standard),
-    box-shadow var(--duration-fast) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard);
-}
-@media (hover: hover) and (pointer: fine) {
-  .rc-composer:hover:not(:focus-within) {
-    border-color: color-mix(in oklab, var(--border-strong) 75%, var(--border));
-  }
-}
-.rc-composer:focus-within {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-raised);
-}
 .rc-float-menu {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-floating);
 }
 
-/* Minimum comfortable touch targets for the composer/workspace chrome. */
-html.mobile .rc-sidebar-toggle,
-html.mobile .rc-composer-add,
-html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
+/* Touch chrome targets live in @layer base so @layer components/utilities win cleanly. */
+@layer base {
+  html.mobile .rc-sidebar-toggle,
+  html.mobile .rc-composer-add,
+  html.mobile .rc-composer-send {
+    position: relative;
+  }
+}
+@media (pointer: coarse) {
+  .rc-composer-add,
+  .rc-composer-send {
+    position: relative;
+  }
+  .rc-composer-add::after,
+  .rc-composer-send::after {
+    content: "";
+    position: absolute;
+    inset: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+}
 .rc-markdown blockquote {
   margin: 0 0 0.65rem; padding: 0.25rem 0.75rem;
   border-left: 2.5px solid var(--border-strong);
@@ -328,8 +339,11 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
 .rc-markdown td { vertical-align: top; min-width: 5rem; overflow-wrap: anywhere; }
 .rc-table-wrap { margin: 0.85rem 0; min-width: 0; max-width: 100%; }
 .rc-table-scroll {
-  border: 1px solid var(--border); border-radius: 0.65rem;
-  background: var(--surface); box-shadow: var(--shadow-resting);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-panel);
+  background: var(--surface);
+  box-shadow: none;
+  overflow-x: auto;
 }
 .rc-markdown .rc-table-scroll table { margin: 0; border: 0; border-spacing: 0; border-collapse: separate; }
 .rc-markdown .rc-table-scroll th, .rc-markdown .rc-table-scroll td {
@@ -544,8 +558,15 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
 @media (prefers-reduced-motion: reduce) {
   .rc-spoke,
   .rc-proc-bar,
-  .rc-matrix-cell {
+  .rc-matrix-cell,
+  .dot-typing span,
+  .thinking-indicator span {
     animation: none !important;
+  }
+  .dot-typing span,
+  .thinking-indicator span {
+    opacity: 0.6;
+    transform: none;
   }
   .rc-spoke-0 { opacity: 1; }
   .rc-spoke-1 { opacity: 0.8; }
@@ -561,6 +582,6 @@ html.mobile .rc-composer-send { min-width: 2.25rem; min-height: 2.25rem; }
   .rc-proc-bar-3 { transform: scaleY(0.78); }
   .rc-matrix-cell { opacity: 0.45; }
 }
-:root[data-reduced-motion="reduce"] :is(.rc-spoke, .rc-proc-bar, .rc-matrix-cell) {
+:root[data-reduced-motion="reduce"] :is(.rc-spoke, .rc-proc-bar, .rc-matrix-cell, .dot-typing span, .thinking-indicator span) {
   animation: none !important;
 }

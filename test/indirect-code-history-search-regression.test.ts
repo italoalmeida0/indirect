@@ -31,7 +31,7 @@ describe("Conversation History & Global Search Regression (B2-2)", () => {
     test("HistoryView defines highlightMatch and wraps matches in mark element", () => {
       const src = read("web/src/indirect-code/components/HistoryView.tsx");
       expect(src).toMatch(/function highlightMatch/);
-      expect(src).toMatch(/<mark class="bg-accent-500\/30 text-ink-100 rounded px-0\.5 font-medium">/);
+      expect(src).toMatch(/<mark class="bg-accent-subtle text-fg rounded-xs px-0\.5 font-medium">/);
     });
 
     test("HistoryView applies highlightMatch to title, snippet, and cwd", () => {

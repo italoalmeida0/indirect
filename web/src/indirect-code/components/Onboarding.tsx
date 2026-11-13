@@ -39,7 +39,7 @@ export function Onboarding() {
         {/* Workstation Pairing Hero */}
         <div>
           <IndirectBrand />
-          <p class="text-[13px] text-fg-secondary mt-5 max-w-md mx-auto leading-relaxed">
+          <p class="text-sm text-fg-secondary mt-4 max-w-md mx-auto leading-relaxed">
             Pair a workstation or server to run your coding agent from anywhere. Source files, git state, and sessions stay local on that machine.
           </p>
         </div>
@@ -56,7 +56,7 @@ export function Onboarding() {
                 >
                   <Show
                     when={!m.pairingLoading()}
-                    fallback={<Iconify icon="lucide:refresh-cw" size={15} class="animate-spin" />}
+                    fallback={<span class="ui-spinner ui-spinner-sm" aria-hidden="true" />}
                   >
                     <Iconify icon="lucide:plus" size={15} />
                   </Show>
@@ -65,7 +65,7 @@ export function Onboarding() {
               </div>
 
               {/* Minimal Hairline Architecture Rail */}
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-0 sm:divide-x divide-border border-t border-border pt-5 text-left max-w-lg mx-auto">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-0 sm:divide-x divide-border-subtle border-t border-border-subtle pt-5 text-left max-w-lg mx-auto">
                 <For
                   each={[
                     {
@@ -91,7 +91,7 @@ export function Onboarding() {
                         <Iconify icon={f.icon} size={13} class="shrink-0 text-fg-muted" />
                         <span>{f.title}</span>
                       </div>
-                      <p class="text-[11px] text-fg-muted leading-relaxed">{f.desc}</p>
+                      <p class="text-2xs text-fg-muted leading-relaxed">{f.desc}</p>
                     </div>
                   )}
                 </For>
@@ -105,7 +105,7 @@ export function Onboarding() {
             return (
               <div class="rounded-panel border border-border bg-surface p-4 sm:p-5 text-left space-y-4">
                 {/* Token Header */}
-                <div class="flex items-center justify-between gap-3 pb-3 border-b border-border flex-wrap">
+                <div class="flex items-center justify-between gap-3 pb-3 border-b border-border-subtle flex-wrap">
                   <div class="flex items-center gap-2">
                     <span class="h-2 w-2 rounded-full bg-success animate-pulse" />
                     <span class="text-xs font-medium text-fg">Ready to pair workstation</span>
@@ -113,9 +113,9 @@ export function Onboarding() {
                   <Badge tone="green">Valid ~15m</Badge>
                 </div>
 
-                {/* Unified Terminal Command Block */}
-                <div class="rounded-control border border-border bg-background/60 overflow-hidden">
-                  <div class="flex items-center justify-between gap-2 border-b border-border bg-surface-subtle px-2.5 py-1.5 flex-wrap">
+                {/* Unified Terminal Command Block (concentric rounded-lg inside rounded-panel p-4/p-5) */}
+                <div class="rounded-lg border border-border bg-background/60 overflow-hidden">
+                  <div class="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-2.5 py-2 flex-wrap">
                     <div
                       role="tablist"
                       aria-label="Target operating system"
@@ -127,7 +127,7 @@ export function Onboarding() {
                         aria-selected={osTab() === "unix"}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => setOsTab("unix")}
-                        class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                        class={`inline-flex min-h-7 [@media(pointer:coarse)]:min-h-10 items-center gap-1.5 rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "unix"
                             ? "border-border bg-surface text-fg"
                             : "border-transparent text-fg-muted hover:text-fg"
@@ -142,7 +142,7 @@ export function Onboarding() {
                         aria-selected={osTab() === "windows"}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => setOsTab("windows")}
-                        class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                        class={`inline-flex min-h-7 [@media(pointer:coarse)]:min-h-10 items-center gap-1.5 rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "windows"
                             ? "border-border bg-surface text-fg"
                             : "border-transparent text-fg-muted hover:text-fg"
@@ -157,7 +157,7 @@ export function Onboarding() {
                       type="button"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => copyCmd(osTab(), activeCmd())}
-                      class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                      class="ui-button ui-button-outline ui-button-xs rounded-md gap-1.5 ml-auto"
                     >
                       <Iconify
                         icon={copiedKey() === osTab() ? "lucide:check" : "lucide:copy"}
@@ -168,7 +168,7 @@ export function Onboarding() {
                     </button>
                   </div>
 
-                  <div class="overflow-x-auto p-3.5 font-mono text-[11px] leading-relaxed text-fg select-all">
+                  <div class="overflow-x-auto p-3.5 font-mono text-2xs leading-relaxed text-fg select-all">
                     <span class="mr-2 select-none text-accent">
                       {osTab() === "windows" ? "PS>" : "$"}
                     </span>
@@ -177,7 +177,7 @@ export function Onboarding() {
                 </div>
 
                 {/* Minimal 3-Step Rail */}
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-0 sm:divide-x divide-border border-y border-border py-3.5">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-0 sm:divide-x divide-border-subtle border-y border-border-subtle py-3.5">
                   <For
                     each={[
                       {
@@ -200,12 +200,12 @@ export function Onboarding() {
                     {(item, idx) => (
                       <div class={idx() > 0 ? "sm:pl-3.5 pr-2 space-y-0.5" : "pr-2 space-y-0.5"}>
                         <div class="flex items-center gap-1.5">
-                          <span class="font-mono text-[10px] font-medium text-accent">
+                          <span class="font-mono text-2xs font-medium text-accent tabular-nums">
                             {item.step}
                           </span>
-                          <span class="text-[11px] font-medium text-fg">{item.title}</span>
+                          <span class="text-xs font-medium text-fg">{item.title}</span>
                         </div>
-                        <p class="text-[11px] text-fg-muted leading-relaxed">{item.desc}</p>
+                        <p class="text-2xs text-fg-muted leading-relaxed">{item.desc}</p>
                       </div>
                     )}
                   </For>
@@ -214,25 +214,21 @@ export function Onboarding() {
                 {/* Live Listening Status + Actions */}
                 <div class="flex items-center justify-between gap-3 flex-wrap text-xs">
                   <div class="flex items-center gap-2 text-fg-secondary min-w-0">
-                    <Iconify icon="lucide:refresh-cw" size={13} class="shrink-0 animate-spin text-accent" />
+                    <span class="ui-spinner ui-spinner-sm text-accent shrink-0" aria-hidden="true" />
                     <span class="truncate">Waiting for your host…</span>
                   </div>
 
                   <div class="flex items-center gap-2 ml-auto flex-wrap">
-                    <button
-                      type="button"
-                      onClick={h.loadHosts}
-                      class="rounded-control border border-border bg-surface px-3 py-1.5 font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-                    >
-                      Check Connection
-                    </button>
-                    <button
-                      type="button"
+                    <Btn variant="outline" size="sm" onClick={h.loadHosts}>
+                      Check connection
+                    </Btn>
+                    <Btn
+                      variant="outline"
+                      size="sm"
                       onClick={() => m.generatePairingToken({ silent: true })}
-                      class="rounded-control border border-border bg-surface-subtle px-3 py-1.5 font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                     >
-                      Regenerate Token
-                    </button>
+                      Regenerate token
+                    </Btn>
                   </div>
                 </div>
               </div>

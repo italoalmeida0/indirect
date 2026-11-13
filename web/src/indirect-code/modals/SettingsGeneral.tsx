@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show, type JSX } from "solid-js";
 import { press } from "../../ds/motion/press";
 import {
   ACCENTS,
@@ -71,23 +71,51 @@ function snapCompactPct(raw: number): number {
   return Math.round(clamped / 5) * 5;
 }
 
-function Toggle(props: {
-  on: () => boolean;
-  onToggle: () => void;
-  label: string;
+function SettingSwitchRow(props: {
+  id: string;
+  checked: () => boolean;
+  onChange: (checked: boolean) => void;
+  title: JSX.Element;
+  description: JSX.Element;
+  nested?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onPointerDown={(e) => press(e.currentTarget)}
-      onClick={props.onToggle}
-      class="ui-switch-track shrink-0 cursor-pointer"
-      role="switch"
-      aria-checked={props.on()}
-      aria-label={props.label}
+    <label
+      for={props.id}
+      onPointerDown={(e) => {
+        const track = e.currentTarget.querySelector<HTMLElement>(".ui-switch-track");
+        if (track) press(track);
+      }}
+      class={`flex min-h-11 items-center justify-between gap-4 px-3.5 py-2.5 cursor-pointer select-none hover:bg-surface-subtle/60 transition-colors ${
+        props.nested ? "pl-5 bg-surface-subtle/35" : ""
+      }`}
     >
-      <span class="ui-switch-thumb" />
-    </button>
+      <span class={`min-w-0 ${props.nested ? "border-l-2 border-border-strong pl-3" : ""}`}>
+        <span class="flex items-center gap-2 font-medium text-fg flex-wrap">
+          {props.title}
+        </span>
+        <span class="mt-0.5 block text-2xs text-fg-muted font-normal leading-relaxed">
+          {props.description}
+        </span>
+      </span>
+      <span class="relative inline-flex items-center shrink-0">
+        <input
+          id={props.id}
+          type="checkbox"
+          role="switch"
+          checked={props.checked()}
+          onChange={(e) => props.onChange(e.currentTarget.checked)}
+          class="sr-only peer"
+        />
+        <span
+          class="ui-switch-track shrink-0"
+          aria-hidden="true"
+          aria-checked={props.checked()}
+        >
+          <span class="ui-switch-thumb" />
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -96,38 +124,38 @@ function ThemePreviewChrome(props: { mode: ThemeMode }) {
     return (
       <div
         aria-hidden="true"
-        class="relative h-11 w-full rounded-md overflow-hidden border border-border/80 grid grid-cols-2"
+        class="relative h-11 w-full rounded-md overflow-hidden border border-border grid grid-cols-2"
       >
         {/* Day half */}
         <div
           class="flex h-full overflow-hidden"
-          style={{ background: "oklch(0.985 0 0)" }}
+          style={{ background: "var(--neutral-1)" }}
         >
           <div
             class="w-3 h-full shrink-0 flex flex-col gap-1 p-1"
             style={{
-              background: "oklch(0.95 0 0)",
-              "border-right": "1px solid oklch(0.89 0 0)",
+              background: "var(--neutral-3)",
+              "border-right": "1px solid var(--neutral-4)",
             }}
           >
-            <span class="h-1 w-full rounded-full" style={{ background: "oklch(0.76 0 0)" }} />
-            <span class="h-1 w-2/3 rounded-full" style={{ background: "oklch(0.84 0 0)" }} />
+            <span class="h-1 w-full rounded-full" style={{ background: "var(--neutral-6)" }} />
+            <span class="h-1 w-2/3 rounded-full" style={{ background: "var(--neutral-5)" }} />
           </div>
           <div class="flex-1 p-1.5 flex flex-col gap-1">
             <span
               class="ml-auto h-1.5 w-3/5 rounded-full"
               style={{ background: "var(--accent)" }}
             />
-            <span class="h-1 w-4/5 rounded-full" style={{ background: "oklch(0.28 0 0)" }} />
-            <span class="mt-auto h-1.5 w-full rounded-xs" style={{ background: "oklch(0.93 0 0)" }} />
+            <span class="h-1 w-4/5 rounded-full" style={{ background: "var(--neutral-10)" }} />
+            <span class="mt-auto h-1.5 w-full rounded-xs" style={{ background: "var(--neutral-4)" }} />
           </div>
         </div>
         {/* Night half */}
         <div
           class="flex h-full overflow-hidden"
           style={{
-            background: "oklch(0.19 0 0)",
-            "border-left": "1px solid oklch(0.5 0 0 / 0.35)",
+            background: "var(--neutral-11)",
+            "border-left": "1px solid var(--neutral-8)",
           }}
         >
           <div class="flex-1 p-1.5 flex flex-col gap-1">
@@ -135,8 +163,8 @@ function ThemePreviewChrome(props: { mode: ThemeMode }) {
               class="ml-auto h-1.5 w-3/5 rounded-full"
               style={{ background: "var(--accent)" }}
             />
-            <span class="h-1 w-4/5 rounded-full" style={{ background: "oklch(0.86 0 0)" }} />
-            <span class="mt-auto h-1.5 w-full rounded-xs" style={{ background: "oklch(0.26 0 0)" }} />
+            <span class="h-1 w-4/5 rounded-full" style={{ background: "var(--neutral-4)" }} />
+            <span class="mt-auto h-1.5 w-full rounded-xs" style={{ background: "var(--neutral-10)" }} />
           </div>
         </div>
       </div>
@@ -152,50 +180,50 @@ function ThemePreviewChrome(props: { mode: ThemeMode }) {
       class="h-11 w-full rounded-md overflow-hidden flex"
       style={{
         background: isContrast()
-          ? "oklch(0 0 0)"
+          ? "color-mix(in oklab, var(--neutral-11) 45%, black)"
           : isLight()
-            ? "oklch(0.985 0 0)"
-            : "oklch(0.19 0 0)",
+            ? "var(--neutral-1)"
+            : "var(--neutral-11)",
         border: isContrast()
-          ? "1px solid oklch(1 0 0)"
+          ? "1px solid var(--neutral-0)"
           : isLight()
-            ? "1px solid oklch(0.88 0 0)"
-            : "1px solid oklch(0.31 0 0)",
+            ? "1px solid var(--neutral-4)"
+            : "1px solid var(--neutral-9)",
       }}
     >
       <div
         class="w-4 h-full shrink-0 flex flex-col gap-1 p-1"
         style={{
           background: isContrast()
-            ? "oklch(0.06 0 0)"
+            ? "var(--neutral-11)"
             : isLight()
-              ? "oklch(0.95 0 0)"
-              : "oklch(0.225 0 0)",
+              ? "var(--neutral-3)"
+              : "var(--neutral-10)",
           "border-right": isContrast()
-            ? "1px solid oklch(1 0 0)"
+            ? "1px solid var(--neutral-0)"
             : isLight()
-              ? "1px solid oklch(0.89 0 0)"
-              : "1px solid oklch(0.29 0 0)",
+              ? "1px solid var(--neutral-4)"
+              : "1px solid var(--neutral-9)",
         }}
       >
         <span
           class="h-1 w-full rounded-full"
           style={{
             background: isContrast()
-              ? "oklch(1 0 0)"
+              ? "var(--neutral-0)"
               : isLight()
-                ? "oklch(0.72 0 0)"
-                : "oklch(0.46 0 0)",
+                ? "var(--neutral-6)"
+                : "var(--neutral-7)",
           }}
         />
         <span
           class="h-1 w-3/4 rounded-full"
           style={{
             background: isContrast()
-              ? "oklch(0.82 0 0)"
+              ? "var(--neutral-4)"
               : isLight()
-                ? "oklch(0.83 0 0)"
-                : "oklch(0.35 0 0)",
+                ? "var(--neutral-5)"
+                : "var(--neutral-8)",
           }}
         />
       </div>
@@ -203,38 +231,38 @@ function ThemePreviewChrome(props: { mode: ThemeMode }) {
         <span
           class="ml-auto h-1.5 w-2/5 rounded-full"
           style={{
-            background: isContrast() ? "oklch(0.90 0.15 192)" : "var(--accent)",
+            background: isContrast() ? "var(--tone-teal)" : "var(--accent)",
           }}
         />
         <span
           class="h-1 w-4/5 rounded-full"
           style={{
             background: isContrast()
-              ? "oklch(1 0 0)"
+              ? "var(--neutral-0)"
               : isLight()
-                ? "oklch(0.26 0 0)"
-                : "oklch(0.88 0 0)",
+                ? "var(--neutral-10)"
+                : "var(--neutral-3)",
           }}
         />
         <span
           class="h-1 w-3/5 rounded-full"
           style={{
             background: isContrast()
-              ? "oklch(0.82 0 0)"
+              ? "var(--neutral-4)"
               : isLight()
-                ? "oklch(0.66 0 0)"
-                : "oklch(0.52 0 0)",
+                ? "var(--neutral-6)"
+                : "var(--neutral-7)",
           }}
         />
         <span
           class="mt-auto h-1.5 w-full rounded-xs"
           style={{
             background: isContrast()
-              ? "oklch(0.18 0 0)"
+              ? "var(--neutral-10)"
               : isLight()
-                ? "oklch(0.93 0 0)"
-                : "oklch(0.26 0 0)",
-            border: isContrast() ? "1px solid oklch(1 0 0)" : "none",
+                ? "var(--neutral-3)"
+                : "var(--neutral-10)",
+            border: isContrast() ? "1px solid var(--neutral-0)" : "none",
           }}
         />
       </div>
@@ -259,11 +287,11 @@ function ThemeStudioPicker() {
   };
 
   return (
-    <div class="space-y-3">
+    <div class="rounded-panel border border-border bg-surface p-3.5 space-y-3.5">
       <div>
         <div class="flex items-center justify-between gap-2 mb-2">
           <span class="text-xs font-medium text-fg">Theme</span>
-          <span class="text-[11px] text-fg-muted">
+          <span class="text-2xs text-fg-muted">
             {themeMode() === "system"
               ? "Follows OS appearance"
               : themeMode() === "high-contrast"
@@ -295,7 +323,7 @@ function ThemeStudioPicker() {
                       y: rect.top + rect.height / 2,
                     });
                   }}
-                  class={`flex flex-col gap-2 rounded-control border p-2 text-left transition-colors cursor-pointer ${
+                  class={`flex flex-col gap-2 rounded-lg border p-2 text-left transition-colors cursor-pointer ${
                     active()
                       ? "border-accent bg-accent-subtle/40 text-fg"
                       : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle text-fg-secondary"
@@ -319,17 +347,17 @@ function ThemeStudioPicker() {
       </div>
 
       {/* Accent Swatches */}
-      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-border-subtle pt-3">
         <div class="flex items-center gap-2">
           <span class="text-xs font-medium text-fg">Accent</span>
-          <span class="font-mono text-[11px] text-fg-muted">
+          <span class="text-2xs text-fg-muted">
             {theme() === "high-contrast" ? `${activeAccentLabel()} (Contrast override)` : activeAccentLabel()}
           </span>
         </div>
         <div
           role="radiogroup"
           aria-label="Accent color"
-          class="flex flex-wrap items-center gap-1.5"
+          class="flex flex-wrap items-center gap-2 [@media(pointer:coarse)]:gap-3"
         >
           <For each={ACCENTS}>
             {(item) => {
@@ -343,7 +371,7 @@ function ThemeStudioPicker() {
                   data-rc-tip={item.label}
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => setAccent(item.id as AccentName)}
-                  class={`relative flex h-6 w-6 items-center justify-center rounded-full transition-transform cursor-pointer ${
+                  class={`relative flex h-6 w-6 items-center justify-center rounded-full transition-transform cursor-pointer [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-2 [@media(pointer:coarse)]:after:content-[''] ${
                     selected()
                       ? "ring-2 ring-fg ring-offset-2 ring-offset-surface scale-105"
                       : "opacity-80 hover:opacity-100 hover:scale-105"
@@ -354,7 +382,7 @@ function ThemeStudioPicker() {
                     <Iconify
                       icon="lucide:check"
                       size={12}
-                      style={{ color: "oklch(1 0 0)" }}
+                      style={{ color: "var(--neutral-0)" }}
                     />
                   </Show>
                 </button>
@@ -387,10 +415,10 @@ function ColumnWidthPicker(props: {
   };
 
   return (
-    <div>
+    <div class="rounded-panel border border-border bg-surface p-3.5">
       <div class="flex items-center justify-between gap-2 mb-2">
         <span class="text-xs font-medium text-fg">Conversation width</span>
-        <span class="font-mono text-[11px] text-fg-muted tabular-nums">
+        <span class="text-2xs text-fg-muted tabular-nums">
           {currentOpt().px} · {currentOpt().caption}
         </span>
       </div>
@@ -399,7 +427,7 @@ function ColumnWidthPicker(props: {
         role="radiogroup"
         aria-label="Conversation width"
         onKeyDown={onRadioKeyDown}
-        class="grid grid-cols-3 gap-2"
+        class="grid grid-cols-1 min-[440px]:grid-cols-3 gap-2"
       >
         <For each={WIDTH_OPTIONS}>
           {(opt) => {
@@ -412,7 +440,7 @@ function ColumnWidthPicker(props: {
                 tabIndex={active() ? 0 : -1}
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.onChange(opt.value)}
-                class={`flex flex-col gap-2 rounded-control border p-2 text-left transition-colors cursor-pointer group ${
+                class={`flex flex-col gap-2 rounded-lg border p-2 text-left transition-colors cursor-pointer group ${
                   active()
                     ? "border-accent bg-accent-subtle/40 text-fg"
                     : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle text-fg-secondary"
@@ -421,7 +449,7 @@ function ColumnWidthPicker(props: {
                 {/* Miniature Viewport Column Schematic */}
                 <div
                   aria-hidden="true"
-                  class="h-11 w-full rounded-md border border-border/80 bg-background/80 px-1.5 py-1.5 flex justify-center overflow-hidden"
+                  class="h-11 w-full rounded-md border border-border bg-background/80 px-1.5 py-1.5 flex justify-center overflow-hidden"
                 >
                   <div
                     class={`h-full flex flex-col gap-1 rounded-xs border px-1.5 py-1 transition-colors ${
@@ -441,19 +469,18 @@ function ColumnWidthPicker(props: {
                     <span class="mt-auto h-1 w-full rounded-full bg-border-strong/60" />
                   </div>
                 </div>
-                <div class="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-0.5 px-0.5 w-full min-w-0">
+                <div class="flex items-center justify-between gap-1.5 px-0.5 w-full min-w-0">
                   <span class="text-xs font-medium text-fg truncate">{opt.label}</span>
-                  <span class="font-mono text-[10px] text-fg-muted tabular-nums">
-                    <span class="hidden sm:inline">· </span>
-                    <span class="sm:hidden sr-only"> · </span>
-                    {opt.px}
-                  </span>
+                  <span class="text-2xs text-fg-muted tabular-nums shrink-0">{opt.px}</span>
                 </div>
               </button>
             );
           }}
         </For>
       </div>
+      <p class="mt-2 text-2xs text-fg-muted sm:hidden">
+        Applies on desktop screens.
+      </p>
     </div>
   );
 }
@@ -483,11 +510,11 @@ function MidTurnSendPicker(props: {
     <div
       id="rc-set-mid-turn-send"
       data-setting="mid-turn-send"
-      class="rounded-panel border border-border bg-surface-subtle/55 p-3.5 space-y-3"
+      class="scroll-mt-14 rounded-panel border border-border bg-surface p-3.5 space-y-3"
     >
       <div class="min-w-0">
         <div class="text-xs font-medium text-fg">While agent is working</div>
-        <div class="mt-0.5 text-[11px] text-fg-muted">
+        <div class="mt-0.5 text-2xs text-fg-muted">
           Default action when you send a message during an active turn.
         </div>
       </div>
@@ -497,7 +524,7 @@ function MidTurnSendPicker(props: {
         role="radiogroup"
         aria-label="While agent is working"
         onKeyDown={onRadioKeyDown}
-        class="grid grid-cols-1 sm:grid-cols-3 gap-2.5"
+        class="grid grid-cols-1 sm:grid-cols-3 gap-2"
       >
         <For each={MID_TURN_SEND_OPTIONS}>
           {(opt) => {
@@ -511,10 +538,10 @@ function MidTurnSendPicker(props: {
                 tabIndex={active() ? 0 : -1}
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.onChange(opt.value)}
-                class={`flex flex-col gap-1.5 rounded-control border p-2.5 text-left transition-colors cursor-pointer min-w-0 ${
+                class={`flex flex-col gap-1.5 rounded-lg border p-2.5 text-left transition-colors cursor-pointer min-w-0 ${
                   active()
-                    ? "border-fg/45 bg-surface text-fg shadow-2xs"
-                    : "border-border bg-surface/60 hover:border-border-strong hover:bg-surface text-fg-secondary"
+                    ? "border-accent bg-accent-subtle/40 text-fg"
+                    : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle text-fg-secondary"
                 }`}
               >
                 <div class="flex items-center justify-between gap-2 w-full min-w-0">
@@ -522,7 +549,7 @@ function MidTurnSendPicker(props: {
                     <Iconify
                       icon={opt.icon}
                       size={14}
-                      class={`shrink-0 ${active() ? "text-fg" : "text-fg-muted"}`}
+                      class={`shrink-0 ${active() ? "text-accent" : "text-fg-muted"}`}
                     />
                     <span class="text-xs font-medium text-fg truncate">
                       {opt.label}
@@ -531,11 +558,11 @@ function MidTurnSendPicker(props: {
                   <span
                     aria-hidden="true"
                     class={`h-2 w-2 shrink-0 rounded-full transition-colors ${
-                      active() ? "bg-fg" : "border border-border-strong bg-transparent"
+                      active() ? "bg-accent" : "border border-border-strong bg-transparent"
                     }`}
                   />
                 </div>
-                <p class="text-[11px] text-fg-muted leading-relaxed">
+                <p class="text-2xs text-fg-muted leading-relaxed">
                   {opt.description}
                 </p>
               </button>
@@ -624,12 +651,12 @@ function AutoCompactGauge(props: {
   };
 
   return (
-    <div class="rounded-panel border border-border bg-surface-subtle/55 p-3.5 space-y-3">
+    <div class="rounded-panel border border-border bg-surface p-3.5 space-y-3">
       {/* Gauge Header: Title + Live Partition Readout + Off / Auto Toggle */}
       <div class="flex items-start sm:items-center justify-between gap-2.5 flex-wrap">
         <div class="min-w-0">
           <div class="text-xs font-medium text-fg">Auto-compact threshold</div>
-          <div class="mt-0.5 font-mono text-[11px] tabular-nums">
+          <div class="mt-0.5 text-2xs tabular-nums">
             <Show
               when={!isOff()}
               fallback={<span class="text-fg-muted">Manual /compact only</span>}
@@ -644,15 +671,16 @@ function AutoCompactGauge(props: {
         <div
           role="group"
           aria-label="Auto-compaction mode"
-          class="inline-flex items-center rounded-pill border border-border bg-surface p-0.5 shrink-0"
+          class="inline-flex items-center rounded-lg border border-border bg-surface-subtle p-0.5 shrink-0"
         >
           <button
             type="button"
             aria-pressed={isOff()}
+            onPointerDown={(e) => press(e.currentTarget)}
             onClick={() => props.onChange(0)}
-            class={`rounded-pill px-2.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+            class={`min-h-6 [@media(pointer:coarse)]:min-h-9 rounded-md px-2.5 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${
               isOff()
-                ? "bg-fg text-background"
+                ? "bg-surface-strong text-fg"
                 : "text-fg-muted hover:text-fg"
             }`}
           >
@@ -661,10 +689,11 @@ function AutoCompactGauge(props: {
           <button
             type="button"
             aria-pressed={!isOff()}
+            onPointerDown={(e) => press(e.currentTarget)}
             onClick={() => {
               if (isOff()) props.onChange(lastAutoPct());
             }}
-            class={`rounded-pill px-2.5 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+            class={`min-h-6 [@media(pointer:coarse)]:min-h-9 rounded-md px-2.5 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${
               !isOff()
                 ? "bg-accent text-accent-foreground"
                 : "text-fg-muted hover:text-fg"
@@ -676,7 +705,7 @@ function AutoCompactGauge(props: {
       </div>
 
       {/* Zone Legend */}
-      <div class="flex items-center justify-between gap-2 text-[11px]" aria-hidden="true">
+      <div class="flex items-center justify-between gap-2 text-2xs" aria-hidden="true">
         <span class="inline-flex items-center gap-1.5 text-fg-secondary">
           <span
             class={`h-2 w-2 rounded-xs ${
@@ -717,14 +746,14 @@ function AutoCompactGauge(props: {
           onKeyDown={onSliderKeyDown}
           class={`relative h-9 w-full rounded-lg border select-none touch-none ${
             isOff()
-              ? "border-border bg-surface cursor-pointer"
-              : "border-border-strong/80 bg-surface cursor-ew-resize"
+              ? "border-border bg-surface-subtle cursor-pointer"
+              : "border-border-strong bg-surface-subtle cursor-ew-resize"
           }`}
         >
           {/* Clipped inner two-zone fill */}
           <div class="absolute inset-0 rounded-[7px] overflow-hidden flex pointer-events-none">
             <div
-              class={`h-full flex items-center pl-2.5 ${
+              class={`h-full flex items-center pl-2.5 min-w-0 ${
                 dragging() ? "transition-none" : "transition-[width] duration-150 ease-out"
               } ${
                 isOff()
@@ -733,14 +762,14 @@ function AutoCompactGauge(props: {
               }`}
               style={{ width: `${isOff() ? 100 : activePct()}%` }}
             >
-              <span class="font-mono text-[10px] text-fg-secondary tabular-nums">
+              <span class="truncate text-2xs text-fg-secondary tabular-nums">
                 {isOff() ? "0% → 100% unreserved" : `0% → ${activePct()}%`}
               </span>
             </div>
             <Show when={!isOff()}>
               <div class="h-full flex-1 bg-warning-subtle flex items-center justify-end pr-2 overflow-hidden">
                 <Show when={headroomPct() >= 15}>
-                  <span class="font-mono text-[10px] text-warning tabular-nums">
+                  <span class="text-2xs text-warning tabular-nums">
                     {headroomPct()}%
                   </span>
                 </Show>
@@ -769,9 +798,9 @@ function AutoCompactGauge(props: {
           {/* Tactile Partition Handle */}
           <div
             aria-hidden="true"
-            class={`absolute -top-1 -bottom-1 w-4 -translate-x-1/2 rounded-md border flex items-center justify-center gap-0.5 pointer-events-none shadow-resting ${
+            class={`absolute -top-1 -bottom-1 w-4 -translate-x-1/2 rounded-md border flex items-center justify-center gap-0.5 pointer-events-none ${
               dragging()
-                ? "transition-none scale-105 border-accent bg-surface-raised"
+                ? "transition-none scale-105 border-accent bg-surface-raised shadow-raised"
                 : "transition-[left,transform,opacity] duration-150 ease-out bg-surface-raised"
             } ${
               isOff()
@@ -789,17 +818,18 @@ function AutoCompactGauge(props: {
         <div
           role="group"
           aria-label="Auto-compact threshold presets"
-          class="relative h-5 w-full mt-1 select-none"
+          class="relative h-6 [@media(pointer:coarse)]:h-8 w-full mt-1 select-none"
         >
           <span
             aria-hidden="true"
-            class="absolute left-0 top-1.5 font-mono text-[10px] text-fg-muted/70 tabular-nums leading-none pointer-events-none"
+            class="absolute left-0 top-1.5 text-2xs text-fg-muted/70 tabular-nums leading-none pointer-events-none"
           >
             0%
           </span>
           <For each={COMPACT_RULER_STOPS}>
             {(mark) => {
               const selected = () => !isOff() && activePct() === mark;
+              const edgeRight = mark === 95;
               return (
                 <button
                   type="button"
@@ -807,7 +837,9 @@ function AutoCompactGauge(props: {
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => commitPct(mark)}
                   style={{ left: `${mark}%` }}
-                  class="absolute top-0 -translate-x-1/2 flex flex-col items-center gap-0.5 border-0 bg-transparent px-1 py-0 cursor-pointer group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-fg rounded-xs"
+                  class={`absolute top-0 flex min-h-6 [@media(pointer:coarse)]:min-h-9 flex-col items-center gap-0.5 border-0 bg-transparent px-1 py-0 cursor-pointer group rounded-xs ${
+                    edgeRight ? "-translate-x-3/4 sm:-translate-x-1/2" : "-translate-x-1/2"
+                  }`}
                 >
                   <span
                     aria-hidden="true"
@@ -818,7 +850,7 @@ function AutoCompactGauge(props: {
                     }`}
                   />
                   <span
-                    class={`font-mono text-[10px] tabular-nums leading-none transition-colors ${
+                    class={`text-2xs tabular-nums leading-none transition-colors ${
                       selected()
                         ? "text-fg font-medium"
                         : "text-fg-muted group-hover:text-fg"
@@ -833,7 +865,7 @@ function AutoCompactGauge(props: {
         </div>
       </div>
 
-      <p class="text-[11px] text-fg-muted leading-relaxed">
+      <p class="text-2xs text-fg-muted leading-relaxed">
         Drag the partition or pick a stop to summarize older turns automatically once context usage crosses the trigger.
       </p>
     </div>
@@ -851,9 +883,9 @@ export function SettingsGeneralSection() {
     normalizeMidTurnSend(m.daemonSettings().midTurnSend);
 
   return (
-    <div class="divide-y divide-border">
+    <div class="space-y-6">
       {/* 1. Appearance & Layout */}
-      <section id="rc-set-appearance" class="py-5 first:pt-4 space-y-4">
+      <section id="rc-set-appearance" class="scroll-mt-14 space-y-3.5">
         <div>
           <h3 class="text-sm font-medium text-fg">Appearance</h3>
           <p class="text-xs text-fg-muted mt-0.5">
@@ -861,7 +893,7 @@ export function SettingsGeneralSection() {
           </p>
         </div>
 
-        <div class="space-y-4 text-xs">
+        <div class="space-y-3 text-xs">
           <ThemeStudioPicker />
 
           <ColumnWidthPicker
@@ -874,54 +906,41 @@ export function SettingsGeneralSection() {
             }}
           />
 
-          <div class="divide-y divide-border/70 border-t border-border/70 pt-1">
-            <div class="flex items-center justify-between gap-4 py-2.5">
-              <div class="min-w-0">
-                <div class="font-medium text-fg">Verbose Agent Chat</div>
-                <div class="mt-0.5 text-[11px] text-fg-muted">
-                  Display intermediate thinking steps and tool trace segments.
-                </div>
-              </div>
-              <Toggle
-                on={() => ui.verboseChat()}
-                label="Verbose agent chat"
-                onToggle={() => {
-                  const v = !ui.verboseChat();
-                  ui.setVerboseChat(v);
-                  try {
-                    localStorage.setItem("llmgw-rc-verbose", v ? "1" : "0");
-                  } catch {}
-                }}
-              />
-            </div>
+          <div class="rounded-panel border border-border bg-surface divide-y divide-border-subtle overflow-hidden">
+            <SettingSwitchRow
+              id="settings-verbose-chat"
+              checked={ui.verboseChat}
+              onChange={(v) => {
+                ui.setVerboseChat(v);
+                try {
+                  localStorage.setItem("llmgw-rc-verbose", v ? "1" : "0");
+                } catch {}
+              }}
+              title="Verbose agent chat"
+              description="Display intermediate thinking steps and tool trace segments."
+            />
 
             <Show when={ui.verboseChat()}>
-              <div class="flex items-center justify-between gap-4 py-2.5 pl-3.5">
-                <div class="min-w-0 border-l border-border-strong pl-3">
-                  <div class="font-medium text-fg">Hide Tool Call Messages</div>
-                  <div class="mt-0.5 text-[11px] text-fg-muted leading-relaxed">
-                    Group short intermediate commentary into tool trace blocks. Messages with 50+ tokens always stay visible.
-                  </div>
-                </div>
-                <Toggle
-                  on={() => ui.hideToolMessages()}
-                  label="Hide tool call messages"
-                  onToggle={() => {
-                    const v = !ui.hideToolMessages();
-                    ui.setHideToolMessages(v);
-                    try {
-                      localStorage.setItem("llmgw-rc-hide-tool-messages", v ? "1" : "0");
-                    } catch {}
-                  }}
-                />
-              </div>
+              <SettingSwitchRow
+                id="settings-hide-tool-messages"
+                nested
+                checked={ui.hideToolMessages}
+                onChange={(v) => {
+                  ui.setHideToolMessages(v);
+                  try {
+                    localStorage.setItem("llmgw-rc-hide-tool-messages", v ? "1" : "0");
+                  } catch {}
+                }}
+                title="Hide tool call messages"
+                description="Group short intermediate commentary into tool trace blocks. Messages with 50+ tokens always stay visible."
+              />
             </Show>
           </div>
         </div>
       </section>
 
       {/* 2. Turn Notifications & Push */}
-      <section id="rc-set-notifications" class="py-5 space-y-3.5">
+      <section id="rc-set-notifications" class="scroll-mt-14 space-y-3.5">
         <div class="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h3 class="text-sm font-medium text-fg">Turn notifications</h3>
@@ -951,70 +970,63 @@ export function SettingsGeneralSection() {
         </div>
 
         <div class="space-y-3 text-xs">
-          <div class="divide-y divide-border/70 border-y border-border/70">
-            <div class="flex items-center justify-between gap-4 py-2.5">
-              <div class="min-w-0">
-                <div class="font-medium text-fg">Notify when a turn finishes</div>
-                <div class="mt-0.5 text-[11px] text-fg-muted leading-relaxed">
-                  Browser notification for turns on any host or conversation — even ones you are not watching.
+          <div class="rounded-panel border border-border bg-surface divide-y divide-border-subtle overflow-hidden">
+            <SettingSwitchRow
+              id="settings-turn-notify"
+              checked={() => ui.turnNotify.notifyOn()}
+              onChange={(v) => {
+                ui.turnNotify.setEnabled(v);
+                void ui.pushSub.sync();
+              }}
+              title="Notify when a turn finishes"
+              description={
+                <>
+                  Browser notification for turns on any host or conversation, even ones you are not watching.
                   <Show when={pushSupported()}>
                     <span> With this on and permission granted, closed tabs still notify via push.</span>
                   </Show>
-                </div>
-              </div>
-              <Toggle
-                on={() => ui.turnNotify.notifyOn()}
-                label="Notify when a turn finishes"
-                onToggle={() => {
-                  const v = !ui.turnNotify.notifyOn();
-                  ui.turnNotify.setEnabled(v);
-                  void ui.pushSub.sync();
-                }}
-              />
-            </div>
+                </>
+              }
+            />
 
             <Show when={ui.turnNotify.notifyOn()}>
-              <div class="flex items-center justify-between gap-4 py-2.5 pl-3.5">
-                <div class="min-w-0 border-l border-border-strong pl-3">
-                  <div class="font-medium text-fg">Play a sound</div>
-                  <div class="mt-0.5 text-[11px] text-fg-muted">
-                    Short chime with the notification (only while a tab is open).
-                  </div>
-                </div>
-                <Toggle
-                  on={() => ui.turnNotify.soundOn()}
-                  label="Play a sound"
-                  onToggle={() => ui.turnNotify.setSound(!ui.turnNotify.soundOn())}
-                />
-              </div>
+              <SettingSwitchRow
+                id="settings-turn-sound"
+                nested
+                checked={() => ui.turnNotify.soundOn()}
+                onChange={(v) => ui.turnNotify.setSound(v)}
+                title="Play a sound"
+                description="Short chime with the notification (only while a tab is open)."
+              />
             </Show>
           </div>
 
           <Show when={ui.turnNotify.notifyOn() && ui.turnNotify.permission() === "denied"}>
-            <p class="rounded-control border border-danger/30 bg-danger-subtle px-3 py-2 text-[11px] text-danger">
-              Browser notifications are blocked for this site — allow them in the browser site settings, then use Test below.
+            <p class="rounded-panel border border-danger/30 bg-danger-subtle px-3.5 py-2.5 text-2xs text-danger">
+              Browser notifications are blocked for this site. Allow them in your browser site settings, then use Test notification below.
             </p>
           </Show>
 
           <div class="flex items-center justify-between gap-3 flex-wrap">
             <button
               type="button"
+              onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => ui.turnNotify.testNotify()}
-              class="inline-flex items-center gap-1.5 rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+              class="ui-button ui-button-outline ui-button-sm rounded-lg"
             >
               <Iconify icon="lucide:bell-ring" size={13} class="text-fg-secondary" />
               <span>Test notification</span>
             </button>
             <Show when={ui.pushSub.supported()}>
-              <span class="text-[11px] text-fg-muted">
+              <span class="text-2xs text-fg-muted">
                 {ui.pushSub.state() === "active"
-                  ? "Push active on this device — closed tabs still notify."
+                  ? "Push active on this device: closed tabs still notify."
                   : ui.pushSub.state() === "blocked"
-                    ? "Push blocked — allow notifications in site settings."
+                    ? "Push blocked: allow notifications in site settings."
                     : ui.pushSub.state() === "off"
-                      ? "Push off — turn notifications on to enable."
+                      ? "Push off: turn notifications on to enable."
                       : ui.pushSub.state() === "error"
-                        ? "Push setup failed — retry with Test below."
+                        ? "Push setup failed: retry with Test notification."
                         : "Checking push status…"}
               </span>
             </Show>
@@ -1023,7 +1035,7 @@ export function SettingsGeneralSection() {
       </section>
 
       {/* 3. Updates */}
-      <section id="rc-set-updates" class="py-5 space-y-3.5">
+      <section id="rc-set-updates" class="scroll-mt-14 space-y-3.5">
         <div class="flex items-center justify-between gap-3 flex-wrap">
           <div>
             <h3 class="text-sm font-medium text-fg">Updates</h3>
@@ -1032,94 +1044,79 @@ export function SettingsGeneralSection() {
             </p>
           </div>
           <Show when={du.info()?.current}>
-            <span class="rounded-pill border border-border bg-surface-subtle px-2.5 py-0.5 font-mono text-[11px] text-fg-secondary">
+            <span class="rounded-pill border border-border bg-surface-subtle px-2.5 py-0.5 font-mono text-2xs text-fg-secondary">
               {du.info()?.current}
             </span>
           </Show>
         </div>
 
         <div class="space-y-3 text-xs">
-          <label
-            for="settings-auto-update"
-            class="flex items-center justify-between gap-4 border-y border-border/70 py-2.5 cursor-pointer select-none"
-          >
-            <span class="min-w-0">
-              <span class="text-fg font-medium block">Auto-update daemon</span>
-              <span class="block text-[11px] text-fg-muted font-normal mt-0.5 leading-relaxed">
-                Preference saved for when automatic updates become available. For now, check on start, reconnect and every 10 minutes; use Update now to apply.
-              </span>
-            </span>
-            <span class="relative inline-flex items-center shrink-0">
-              <input
-                id="settings-auto-update"
-                type="checkbox"
-                checked={du.info()?.autoUpdate ?? true}
-                onChange={(e) => du.toggle(e.currentTarget.checked)}
-                class="sr-only peer"
-              />
-              <span
-                class="ui-switch-track shrink-0 cursor-pointer"
-                aria-checked={du.info()?.autoUpdate ?? true}
-              >
-                <span class="ui-switch-thumb" />
-              </span>
-            </span>
-          </label>
+          <div class="rounded-panel border border-border bg-surface divide-y divide-border-subtle overflow-hidden">
+            <SettingSwitchRow
+              id="settings-auto-update"
+              checked={() => du.info()?.autoUpdate ?? true}
+              onChange={(checked) => du.toggle(checked)}
+              title="Auto-update daemon"
+              description="Preference saved for when automatic updates become available. For now, check on start, reconnect and every 10 minutes; use Update now to apply."
+            />
 
-          <div class="flex items-center justify-between gap-3 flex-wrap">
-            <div class="flex items-center gap-2 min-w-0 text-fg-secondary">
-              <Iconify icon="lucide:package-check" size={14} class="shrink-0 text-fg-muted" />
-              <span class="min-w-0 leading-relaxed">
-                {(() => {
-                  const i = du.info();
-                  if (!i?.current) return "Version unknown (daemon never reported).";
-                  if (i.current === "dev") return "Running dev build (self-update disabled).";
-                  let s = `Running ${i.current}`;
-                  if (i.available && i.available !== i.current) s += ` — ${i.available} available`;
-                  else if (i.checkedAt) s += " — up to date";
-                  if (hostStatus() === "updating") s += " (updating)";
-                  else if ((i as any).mismatchWant) {
-                    const left = Math.max(
-                      0,
-                      1 - Math.floor((Date.now() - ((i as any).mismatchAt || 0)) / 60000),
-                    );
-                    s += ` (mirror stale: wanted ${(i as any).mismatchWant}, got ${(i as any).mismatchGot || "?"}${left > 0 ? ` — retry in ~${left}min` : ""})`;
-                  }
-                  return s + ".";
-                })()}
-              </span>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                class="rounded-control border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-                onClick={() => du.checkNow()}
-              >
-                Check now
-              </button>
-              <Show
-                when={(() => {
-                  const i = du.info();
-                  return (
-                    !!i &&
-                    !!i.available &&
-                    i.available !== i.current &&
-                    hostStatus() !== "updating"
-                  );
-                })()}
-              >
+            <div class="flex items-center justify-between gap-3 px-3.5 py-2.5 flex-wrap">
+              <div class="flex items-center gap-2 min-w-0 text-fg-secondary">
+                <Iconify icon="lucide:package-check" size={14} class="shrink-0 text-fg-muted" />
+                <span class="min-w-0 leading-relaxed">
+                  {(() => {
+                    const i = du.info();
+                    if (!i?.current) return "Version unknown (daemon never reported).";
+                    if (i.current === "dev") return "Running dev build (self-update disabled).";
+                    let s = `Running ${i.current}`;
+                    if (i.available && i.available !== i.current) s += ` · ${i.available} available`;
+                    else if (i.checkedAt) s += " · up to date";
+                    if (hostStatus() === "updating") s += " (updating)";
+                    else if ((i as any).mismatchWant) {
+                      const left = Math.max(
+                        0,
+                        1 - Math.floor((Date.now() - ((i as any).mismatchAt || 0)) / 60000),
+                      );
+                      s += ` (mirror stale: wanted ${(i as any).mismatchWant}, got ${(i as any).mismatchGot || "?"}${left > 0 ? `, retry in ~${left}m` : ""})`;
+                    }
+                    return s + ".";
+                  })()}
+                </span>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  class="rounded-control bg-accent px-2.5 py-1 text-xs font-medium text-accent-foreground hover:bg-accent-strong transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                  disabled={du.applying()}
-                  onClick={() => {
-                    du.apply();
-                    m.cancelSettings();
-                  }}
+                  onPointerDown={(e) => press(e.currentTarget)}
+                  class="ui-button ui-button-outline ui-button-xs rounded-lg"
+                  onClick={() => du.checkNow()}
                 >
-                  {du.applying() ? "Updating…" : "Update now"}
+                  Check now
                 </button>
-              </Show>
+                <Show
+                  when={(() => {
+                    const i = du.info();
+                    return (
+                      !!i &&
+                      !!i.available &&
+                      i.available !== i.current &&
+                      hostStatus() !== "updating"
+                    );
+                  })()}
+                >
+                  <button
+                    type="button"
+                    onPointerDown={(e) => press(e.currentTarget)}
+                    class="ui-button ui-button-primary ui-button-xs rounded-lg"
+                    disabled={du.applying()}
+                    onClick={() => {
+                      du.apply();
+                      m.cancelSettings();
+                    }}
+                  >
+                    {du.applying() ? "Updating…" : "Update now"}
+                  </button>
+                </Show>
+              </div>
             </div>
           </div>
 
@@ -1129,7 +1126,7 @@ export function SettingsGeneralSection() {
               return !!i && (i.lifecycle === "failed" || i.lifecycle === "done");
             })()}
           >
-            <p class="text-[11px] text-fg-muted">
+            <p class="text-2xs text-fg-muted">
               {(() => {
                 const i = du.info();
                 if (i?.lifecycle === "failed") {
@@ -1140,13 +1137,13 @@ export function SettingsGeneralSection() {
             </p>
           </Show>
           <Show when={du.info()?.error}>
-            <p class="text-[11px] text-danger">{du.info()?.error}</p>
+            <p class="text-2xs text-danger">{du.info()?.error}</p>
           </Show>
         </div>
       </section>
 
       {/* 4. Advanced Runtime & Context Compaction */}
-      <section id="rc-set-runtime" class="py-5 last:pb-1 space-y-4">
+      <section id="rc-set-runtime" class="scroll-mt-14 space-y-3.5 pb-1">
         <div>
           <h3 class="text-sm font-medium text-fg">Runtime & messaging</h3>
           <p class="text-xs text-fg-muted mt-0.5">
@@ -1154,7 +1151,7 @@ export function SettingsGeneralSection() {
           </p>
         </div>
 
-        <div class="space-y-4 text-xs">
+        <div class="space-y-3 text-xs">
           <MidTurnSendPicker
             value={midTurnSend}
             onChange={(mode) =>
@@ -1169,85 +1166,56 @@ export function SettingsGeneralSection() {
             }
           />
 
-          <div class="divide-y divide-border/70 border-y border-border/70">
-            <div class="flex items-center justify-between gap-4 py-2.5">
-              <div class="min-w-0">
-                <div class="font-medium text-fg">Jail new conversations</div>
-                <div class="mt-0.5 text-[11px] text-fg-muted">
-                  Start every session jailed: file writes and shell commands need approval first.
-                </div>
-              </div>
-              <Toggle
-                on={() => m.daemonSettings().jailByDefault ?? false}
-                onToggle={() =>
-                  m.setDaemonSettings({
-                    ...m.daemonSettings(),
-                    jailByDefault: !(m.daemonSettings().jailByDefault ?? false),
-                  })
-                }
-                label="Jail new conversations"
-              />
-            </div>
+          <div class="rounded-panel border border-border bg-surface divide-y divide-border-subtle overflow-hidden">
+            <SettingSwitchRow
+              id="settings-jail-default"
+              checked={() => m.daemonSettings().jailByDefault ?? false}
+              onChange={(checked) =>
+                m.setDaemonSettings({
+                  ...m.daemonSettings(),
+                  jailByDefault: checked,
+                })
+              }
+              title="Jail new conversations"
+              description="Start every session jailed: file writes and shell commands need approval first."
+            />
 
-            <div class="flex items-center justify-between gap-4 py-2.5">
-              <div class="min-w-0">
-                <div class="flex items-center gap-2 font-medium text-fg flex-wrap">
+            <SettingSwitchRow
+              id="settings-insecure-tls"
+              checked={() => m.daemonSettings().insecureTls ?? false}
+              onChange={(checked) =>
+                m.setDaemonSettings({
+                  ...m.daemonSettings(),
+                  insecureTls: checked,
+                })
+              }
+              title={
+                <>
                   <span>Skip TLS verification</span>
                   <Show when={m.daemonSettings().insecureTls}>
                     <Badge tone="amber">Insecure</Badge>
                   </Show>
-                </div>
-                <div class="mt-0.5 text-[11px] text-fg-muted">
-                  Provider requests accept self-signed certificates. Only the provider client is affected.
-                </div>
-              </div>
-              <Toggle
-                on={() => m.daemonSettings().insecureTls ?? false}
-                onToggle={() =>
-                  m.setDaemonSettings({
-                    ...m.daemonSettings(),
-                    insecureTls: !(m.daemonSettings().insecureTls ?? false),
-                  })
-                }
-                label="Skip TLS verification"
-              />
-            </div>
+                </>
+              }
+              description="Provider requests accept self-signed certificates. Only the provider client is affected."
+            />
 
-            <label
-              for="settings-auto-title"
-              class="flex items-center justify-between gap-4 py-2.5 cursor-pointer select-none"
-            >
-              <span class="min-w-0">
-                <span class="text-fg font-medium block">Auto-generate conversation titles</span>
-                <span class="block text-[11px] text-fg-muted font-normal mt-0.5">
-                  The host asks the model for a short title after the first exchange. Off leaves "New conversation".
-                </span>
-              </span>
-              <span class="relative inline-flex items-center shrink-0">
-                <input
-                  id="settings-auto-title"
-                  type="checkbox"
-                  checked={!(m.daemonSettings().noAutoTitle ?? false)}
-                  onChange={(e) =>
-                    m.setDaemonSettings({
-                      ...m.daemonSettings(),
-                      noAutoTitle: !e.currentTarget.checked,
-                    })
-                  }
-                  class="sr-only peer"
-                />
-                <span
-                  class="ui-switch-track shrink-0 cursor-pointer"
-                  aria-checked={!(m.daemonSettings().noAutoTitle ?? false)}
-                >
-                  <span class="ui-switch-thumb" />
-                </span>
-              </span>
-            </label>
+            <SettingSwitchRow
+              id="settings-auto-title"
+              checked={() => !(m.daemonSettings().noAutoTitle ?? false)}
+              onChange={(checked) =>
+                m.setDaemonSettings({
+                  ...m.daemonSettings(),
+                  noAutoTitle: !checked,
+                })
+              }
+              title="Auto-generate conversation titles"
+              description='The host asks the model for a short title after the first exchange. Off leaves "New conversation".'
+            />
           </div>
 
-          <div>
-            <div class="flex items-center justify-between gap-2 mb-1.5">
+          <div class="rounded-panel border border-border bg-surface p-3.5">
+            <div class="flex items-center justify-between gap-2 mb-2">
               <label for="settings-upstream-proxy" class="font-medium text-fg">
                 Upstream proxy
               </label>
@@ -1255,7 +1223,7 @@ export function SettingsGeneralSection() {
                 {(m.daemonSettings().httpProxy ?? "").trim() ? "Explicit proxy" : "Env default"}
               </Badge>
             </div>
-            <div class="flex items-center gap-2 rounded-control border border-border-strong/80 bg-surface px-3 py-1.5 focus-within:border-fg transition-colors">
+            <div class="flex min-h-9 items-center gap-2 rounded-control border border-border-strong bg-surface px-3 py-1 focus-within:border-accent transition-colors">
               <Iconify icon="lucide:globe" size={14} class="shrink-0 text-fg-muted" />
               <input
                 id="settings-upstream-proxy"
@@ -1268,22 +1236,22 @@ export function SettingsGeneralSection() {
                   })
                 }
                 placeholder="http://host:port (empty = environment default)"
-                class="min-w-0 flex-1 bg-transparent font-mono text-xs text-fg placeholder:text-fg-muted outline-none"
+                class="min-w-0 flex-1 bg-transparent font-mono max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted outline-none"
                 aria-label="Upstream proxy URL"
               />
               <Show when={(m.daemonSettings().httpProxy ?? "").length > 0}>
                 <button
                   type="button"
                   onClick={() => m.setDaemonSettings({ ...m.daemonSettings(), httpProxy: "" })}
-                  class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-surface-muted hover:text-fg cursor-pointer"
+                  class="ui-icon-button ui-icon-button-xs shrink-0 rounded-lg"
                   data-rc-tip="Clear proxy"
                   aria-label="Clear upstream proxy"
                 >
-                  <Iconify icon="lucide:x" size={12} />
+                  <Iconify icon="lucide:x" size={13} />
                 </button>
               </Show>
             </div>
-            <p class="text-[11px] text-fg-muted mt-1.5">
+            <p class="text-2xs text-fg-muted mt-1.5">
               Explicit proxy for provider requests. Empty keeps HTTP(S)_PROXY environment handling.
             </p>
           </div>

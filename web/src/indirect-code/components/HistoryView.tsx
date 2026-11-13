@@ -1,6 +1,7 @@
-import { createMemo, createSignal, For, Show, type JSX } from "solid-js";
+import { createMemo, createSignal, For, Show, useContext, type JSX } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { Icon, Kbd, Segmented } from "../../ui";
+import { SessionCtx, UICtx } from "../ctx";
 import { timeAgo } from "../utils/format";
 import { sessionTimeLabel } from "../paths";
 import type { SessionSummary } from "../types";
@@ -29,7 +30,7 @@ export function highlightMatch(text: string, query: string): JSX.Element {
     <For each={parts}>
       {(part) =>
         part.toLowerCase() === q.toLowerCase() ? (
-          <mark class="bg-accent-500/30 text-ink-100 rounded px-0.5 font-medium">{part}</mark>
+          <mark class="bg-accent-subtle text-fg rounded-xs px-0.5 font-medium">{part}</mark>
         ) : (
           part
         )
@@ -38,8 +39,7 @@ export function highlightMatch(text: string, query: string): JSX.Element {
   );
 }
 
-/** Conversation history view (extracted from TranscriptView without
- * visual changes — narrow props instead of the god-ctx). */
+/** Conversation history view (narrow props so standalone tests can mount without provider). */
 export interface HistoryViewProps {
   sessionFilter: () => string;
   setSessionFilter: (v: string) => void;
@@ -60,14 +60,13 @@ export interface HistoryViewProps {
 }
 
 export function HistoryView(props: HistoryViewProps) {
+  const ui = useContext(UICtx);
+  const sessionCtx = useContext(SessionCtx);
   const [activeTab, setActiveTab] = createSignal<HistoryTab>("all");
 
   const isTalk = (s: SessionSummary) => {
-    return (
-      (s.options?.mode || "").toLowerCase() === "talk" ||
-      !s.cwd ||
-      s.cwd.toLowerCase().includes("/talk")
-    );
+    if (sessionCtx?.isTalkSession) return sessionCtx.isTalkSession(s);
+    return (s.options?.mode || "").toLowerCase() === "talk";
   };
 
   const isCwdMatch = (s: SessionSummary) => {
@@ -113,45 +112,44 @@ export function HistoryView(props: HistoryViewProps) {
   });
 
   const hasAnyResults = () => filteredSearchResults().length > 0 || filteredSessions().length > 0;
+  const widthClass = () => ui?.convWidthClass?.() ?? "max-w-3xl";
 
   return (
-    <div class="flex-1 overflow-y-auto px-4 md:px-8 py-6 sm:py-8">
-      <div class="max-w-2xl mx-auto space-y-5">
-        {/* Command-Palette Header */}
+    <div class="flex-1 overflow-y-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-7">
+      <div class={`${widthClass()} w-full mx-auto space-y-4`}>
+        {/* Compact utility bar (title lives in WorkspaceHeader above) */}
         <div class="flex items-center justify-between gap-3">
-          <div class="min-w-0">
-            <h2 class="text-sm sm:text-base font-medium text-fg truncate">
-              Conversation History
-            </h2>
-            <p class="mt-0.5 text-xs text-fg-muted">
-              {props.sessions().length} stored{" "}
-              {props.sessions().length === 1 ? "conversation" : "conversations"} · instant host search
-            </p>
-          </div>
+          <p class="min-w-0 truncate text-xs text-fg-muted tabular-nums">
+            {props.sessions().length} stored{" "}
+            {props.sessions().length === 1 ? "conversation" : "conversations"}
+          </p>
           <button
             type="button"
             onClick={() => props.setHistoryView(false)}
-            class="inline-flex items-center gap-1.5 rounded-control border border-border bg-surface px-2.5 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer shrink-0"
+            class="ui-button ui-button-outline ui-button-sm shrink-0 rounded-lg"
             data-rc-tip="Back to chat"
             aria-label="Back to chat"
           >
-            <span>Close</span>
-            <Kbd>Esc</Kbd>
+            <span>Back to chat</span>
+            <Show when={!props.isMobile()}>
+              <Kbd>Esc</Kbd>
+            </Show>
           </button>
         </div>
 
-        {/* Unified Command-Palette Search & Filter Frame */}
-        <div class="rounded-panel border border-border-strong/80 bg-surface overflow-hidden focus-within:border-fg transition-colors">
+        {/* Unified search & filter card */}
+        <div class="rounded-panel border border-border-strong bg-surface overflow-hidden focus-within:border-accent transition-colors">
           <div class="flex items-center gap-2.5 px-3.5 py-2.5">
             <Iconify icon="lucide:search" size={15} class="shrink-0 text-fg-muted" />
             <input
               type="text"
+              aria-label="Search conversation history"
               placeholder={
                 props.isMobile()
                   ? "Search conversations, folders, or messages…"
                   : "Search conversations, folders, or messages… (Ctrl+K)"
               }
-              class="min-w-0 flex-1 bg-transparent text-[13px] text-fg placeholder:text-fg-muted focus:outline-none"
+              class="min-w-0 flex-1 bg-transparent max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted focus:outline-none"
               value={props.sessionFilter()}
               onInput={(e) => {
                 props.setSessionFilter(e.currentTarget.value);
@@ -169,16 +167,13 @@ export function HistoryView(props: HistoryViewProps) {
                   }
                 }
               }}
-              ref={(el) => setTimeout(() => el?.focus(), 50)}
+              ref={(el) => {
+                if (!props.isMobile()) {
+                  setTimeout(() => el?.focus(), 50);
+                }
+              }}
             />
-            <Show
-              when={props.sessionFilter().length > 0}
-              fallback={
-                <Show when={!props.isMobile()}>
-                  <Kbd>Esc</Kbd>
-                </Show>
-              }
-            >
+            <Show when={props.sessionFilter().length > 0}>
               <button
                 type="button"
                 onClick={() => {
@@ -186,22 +181,24 @@ export function HistoryView(props: HistoryViewProps) {
                   props.queueDaemonSearch("");
                   props.setSearchResults([]);
                 }}
-                class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-surface-muted hover:text-fg cursor-pointer"
+                class="ui-icon-button ui-icon-button-xs shrink-0 rounded-lg"
                 data-rc-tip="Clear search"
                 aria-label="Clear search"
               >
-                <Iconify icon="lucide:x" size={12} />
+                <Iconify icon="lucide:x" size={13} />
               </button>
             </Show>
           </div>
 
-          <div class="flex items-center justify-between gap-2 border-t border-border bg-surface-subtle/70 px-2.5 py-1.5 flex-wrap">
+          <div class="flex items-center justify-between gap-2 border-t border-border-subtle bg-surface-subtle px-3.5 py-2 flex-wrap">
             <Segmented
               value={activeTab()}
               onChange={setActiveTab}
               options={FILTER_OPTIONS}
+              class="ui-segmented-sm rounded-lg"
+              ariaLabel="Filter conversations"
             />
-            <span class="px-1.5 font-mono text-[11px] text-fg-muted tabular-nums">
+            <span class="text-2xs text-fg-muted tabular-nums">
               {filteredSessions().length}{" "}
               {filteredSessions().length === 1 ? "session" : "sessions"}
               <Show when={filteredSearchResults().length > 0}>
@@ -214,10 +211,8 @@ export function HistoryView(props: HistoryViewProps) {
         <Show
           when={hasAnyResults()}
           fallback={
-            <div class="flex flex-col items-center justify-center border-y border-border/70 py-14 px-4 text-center">
-              <div class="mb-2.5 flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface text-fg-muted">
-                <Icon name="lucide:search-x" size={18} class="text-fg-muted" />
-              </div>
+            <div class="flex flex-col items-center justify-center rounded-panel border border-border bg-surface py-12 px-4 text-center">
+              <Icon name="lucide:search-x" size={20} class="mb-2.5 text-fg-muted" />
               <p class="text-sm font-medium text-fg">
                 {props.sessionFilter().trim()
                   ? `No conversations or messages match '${props.sessionFilter().trim()}'`
@@ -235,15 +230,15 @@ export function HistoryView(props: HistoryViewProps) {
             </div>
           }
         >
-          <div class="space-y-5">
+          <div class="space-y-4">
             {/* Daemon full-text hits (message content, host-local) */}
             <Show when={filteredSearchResults().length > 0}>
               <div>
-                <div class="flex items-center justify-between pb-1.5 px-1 text-[11px] font-medium text-fg-muted">
+                <div class="flex items-center justify-between pb-1.5 px-1 text-2xs font-medium text-fg-muted">
                   <span>Message matches</span>
-                  <span class="font-mono tabular-nums">{filteredSearchResults().length}</span>
+                  <span class="tabular-nums">{filteredSearchResults().length}</span>
                 </div>
-                <div class="divide-y divide-border/70 border-y border-border/70">
+                <div class="rounded-panel border border-border bg-surface overflow-hidden divide-y divide-border-subtle">
                   <For each={filteredSearchResults()}>
                     {(r) => {
                       const hitSession = () => sessionMap().get(r.sessionId);
@@ -270,19 +265,21 @@ export function HistoryView(props: HistoryViewProps) {
                             props.setSearchResults([]);
                             props.selectSession(r.sessionId, r.messageIdx);
                           }}
-                          class="w-full px-2.5 py-2.5 text-left hover:bg-surface-subtle transition-colors cursor-pointer group"
+                          class="w-full px-3.5 py-2.5 text-left hover:bg-surface-subtle transition-colors cursor-pointer group"
                         >
                           <div class="flex items-center justify-between gap-3">
                             <div class="flex items-center gap-2 min-w-0">
-                              <Iconify
-                                icon="lucide:message-square-text"
-                                size={13}
-                                class="shrink-0 text-fg-muted group-hover:text-accent transition-colors"
-                              />
+                              <span class="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+                                <Iconify
+                                  icon="lucide:message-square-text"
+                                  size={13}
+                                  class="text-fg-muted group-hover:text-accent transition-colors"
+                                />
+                              </span>
                               <span
-                                class={`truncate text-[13px] ${
+                                class={`truncate text-xs ${
                                   unread() ? "font-medium text-fg" : "text-fg-secondary"
-                                } group-hover:text-accent transition-colors`}
+                                } group-hover:text-fg transition-colors`}
                               >
                                 {highlightMatch(r.title, props.sessionFilter())}
                               </span>
@@ -305,17 +302,17 @@ export function HistoryView(props: HistoryViewProps) {
                                 />
                               </Show>
                               <Show when={r.field}>
-                                <span class="rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] font-normal text-fg-muted">
+                                <span class="rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs font-normal text-fg-muted">
                                   {r.field}
                                 </span>
                               </Show>
-                              <span class="font-mono text-[11px] text-fg-muted tabular-nums">
+                              <span class="text-2xs text-fg-muted tabular-nums">
                                 {r.matchCount > 1 ? `${r.matchCount} hits · ` : ""}
                                 {timeAgo(r.updatedAt)}
                               </span>
                             </div>
                           </div>
-                          <p class="mt-1 pl-5 text-xs text-fg-secondary line-clamp-2 leading-relaxed">
+                          <p class="mt-1 pl-6 text-xs text-fg-secondary line-clamp-2 leading-relaxed">
                             {highlightMatch(r.snippet, props.sessionFilter())}
                           </p>
                         </button>
@@ -329,11 +326,13 @@ export function HistoryView(props: HistoryViewProps) {
             {/* Session Rows */}
             <Show when={filteredSessions().length > 0}>
               <div>
-                <div class="flex items-center justify-between pb-1.5 px-1 text-[11px] font-medium text-fg-muted">
-                  <span>Conversations</span>
-                  <span class="font-mono tabular-nums">{filteredSessions().length}</span>
+                <div class="flex items-center justify-between pb-1.5 px-1 text-2xs font-medium text-fg-muted">
+                  <span>
+                    {props.sessionFilter().trim() ? "Matching conversations" : "Conversations"}
+                  </span>
+                  <span class="tabular-nums">{filteredSessions().length}</span>
                 </div>
-                <div class="divide-y divide-border/70 border-y border-border/70">
+                <div class="rounded-panel border border-border bg-surface overflow-hidden divide-y divide-border-subtle">
                   <For each={filteredSessions()}>
                     {(s) => {
                       const unread = () => Boolean(props.isSessionUnread?.(s));
@@ -350,24 +349,26 @@ export function HistoryView(props: HistoryViewProps) {
                             props.setHistoryView(false);
                             props.selectSession(s.id);
                           }}
-                          class="w-full px-2.5 py-2.5 text-left hover:bg-surface-subtle transition-colors group cursor-pointer"
+                          class="w-full px-3.5 py-2.5 text-left hover:bg-surface-subtle transition-colors group cursor-pointer"
                         >
                           <div class="flex items-center justify-between gap-3">
                             <div class="flex items-center gap-2 min-w-0">
-                              <Show
-                                when={s.pinned}
-                                fallback={
-                                  <Iconify
-                                    icon="lucide:message-square"
-                                    size={13}
-                                    class="shrink-0 text-fg-muted group-hover:text-fg-secondary transition-colors"
-                                  />
-                                }
-                              >
-                                <Iconify icon="lucide:pin" size={12} class="shrink-0 text-accent" />
-                              </Show>
+                              <span class="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+                                <Show
+                                  when={s.pinned}
+                                  fallback={
+                                    <Iconify
+                                      icon="lucide:message-square"
+                                      size={13}
+                                      class="text-fg-muted group-hover:text-fg-secondary transition-colors"
+                                    />
+                                  }
+                                >
+                                  <Iconify icon="lucide:pin" size={12} class="text-accent" />
+                                </Show>
+                              </span>
                               <span
-                                class={`truncate text-[13px] ${
+                                class={`truncate text-xs ${
                                   unread() ? "font-medium text-fg" : "text-fg-secondary group-hover:text-fg"
                                 } transition-colors`}
                               >
@@ -385,37 +386,37 @@ export function HistoryView(props: HistoryViewProps) {
                               >
                                 <UnreadDot label={props.sessionAttentionLabel?.(s) ?? "Unread update"} />
                               </Show>
-                              <span class="font-mono text-[11px] text-fg-muted tabular-nums">
+                              <span class="text-2xs text-fg-muted tabular-nums">
                                 {timeAgo(sessionTimeLabel(s))}
                               </span>
                             </div>
                           </div>
-                        <Show
-                          when={s.cwd}
-                          fallback={
-                            <div class="mt-1 flex items-center gap-1.5 pl-5 text-[11px] text-fg-muted">
-                              <Iconify icon="lucide:messages-square" size={11} class="shrink-0" />
-                              <span>Talk</span>
-                            </div>
-                          }
-                        >
-                          <div class="mt-1 flex items-center gap-1.5 pl-5 text-[11px] text-fg-muted">
-                            <Iconify icon="lucide:folder" size={11} class="shrink-0" />
-                            <span class="truncate font-mono">
-                              {highlightMatch(s.cwd, props.sessionFilter())}
-                            </span>
-                          </div>
-                        </Show>
-                        <Show when={isCwdMatch(s)}>
-                          <div class="mt-1.5 pl-5">
-                            <span class="inline-flex items-center gap-1 rounded border border-accent/25 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-fg">
-                              Matched project folder:{" "}
-                              <span class="font-mono text-fg-secondary">
+                          <Show
+                            when={s.cwd && !isTalk(s)}
+                            fallback={
+                              <div class="mt-1 flex items-center gap-1.5 pl-6 text-2xs text-fg-muted">
+                                <Iconify icon="lucide:messages-square" size={11} class="shrink-0" />
+                                <span>Talk</span>
+                              </div>
+                            }
+                          >
+                            <div class="mt-1 flex items-center gap-1.5 pl-6 text-2xs text-fg-muted min-w-0">
+                              <Iconify icon="lucide:folder" size={11} class="shrink-0" />
+                              <span class="truncate font-mono">
                                 {highlightMatch(s.cwd, props.sessionFilter())}
                               </span>
-                            </span>
-                          </div>
-                        </Show>
+                            </div>
+                          </Show>
+                          <Show when={isCwdMatch(s)}>
+                            <div class="mt-1.5 pl-6">
+                              <span class="inline-flex max-w-full min-w-0 items-center gap-1 rounded-md border border-accent/30 bg-accent-subtle px-2 py-0.5 text-2xs font-medium text-fg">
+                                <span class="shrink-0">Matched project folder:</span>
+                                <span class="min-w-0 truncate font-mono text-fg-secondary">
+                                  {highlightMatch(s.cwd, props.sessionFilter())}
+                                </span>
+                              </span>
+                            </div>
+                          </Show>
                         </button>
                       );
                     }}

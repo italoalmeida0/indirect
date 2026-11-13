@@ -1,20 +1,26 @@
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
-import { createGlide } from "../../ds/motion/glide";
+import { SegmentedControl } from "../../ds/components/segmented";
 import { press } from "../../ds/motion/press";
-import { copyWithToast } from "../../ui";
+import { copyWithToast, Kbd } from "../../ui";
 import { useHost, useModal, useSession, useTranscriptCtx, useUI } from "../ctx";
 import { SessionRow, type SessionRowCtx } from "./SessionSidebar";
 import { FloatMenu } from "./FloatMenu";
 import { HostCard } from "./HostCard";
 import { SidebarToggle } from "./SidebarToggle";
 import { RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
-import type { SessionSummary } from "../types";
+import type { Project, SessionSummary } from "../types";
 
 interface SessionMenuState {
   sessionId: string;
   anchor: HTMLElement;
   fallback: SessionSummary;
+}
+
+interface ProjectMenuState {
+  projectId: string;
+  anchor: HTMLElement;
+  fallback: Project;
 }
 
 export function WorkspaceSidebar() {
@@ -23,45 +29,74 @@ export function WorkspaceSidebar() {
   const t = useTranscriptCtx();
   const m = useModal();
   const ui = useUI();
+  const [narrowViewport, setNarrowViewport] = createSignal(
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? Boolean(window.matchMedia("(max-width: 767.98px)")?.matches)
+      : false,
+  );
+  onMount(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return;
+    const mql = window.matchMedia("(max-width: 767.98px)");
+    if (!mql) return;
+    setNarrowViewport(Boolean(mql.matches));
+    const onChange = () => setNarrowViewport(Boolean(mql.matches));
+    if (typeof mql.addEventListener === "function") {
+      mql.addEventListener("change", onChange);
+      onCleanup(() => mql.removeEventListener("change", onChange));
+    }
+  });
+  const overlaySidebar = () => ui.isMobile() || narrowViewport();
+
   const [sessionMenu, setSessionMenu] = createSignal<SessionMenuState | null>(null);
+  const [projectMenu, setProjectMenu] = createSignal<ProjectMenuState | null>(null);
   let activeLongPressCancel: (() => void) | null = null;
   const cancelActiveLongPress = () => {
     activeLongPressCancel?.();
     activeLongPressCancel = null;
   };
   const closeSessionMenu = () => setSessionMenu(null);
+  const closeProjectMenu = () => setProjectMenu(null);
   const openSessionMenu = (sess: SessionSummary, anchor: HTMLElement) => {
     ui.closeMenus?.();
+    setProjectMenu(null);
     setSessionMenu({ sessionId: sess.id, anchor, fallback: sess });
   };
   const resolveMenuSession = (menu: SessionMenuState): SessionSummary =>
     s.sessions?.().find((item) => item.id === menu.sessionId) ?? menu.fallback;
+  const resolveMenuProject = (menu: ProjectMenuState): Project =>
+    s.projects?.().find((item) => item.id === menu.projectId) ?? menu.fallback;
 
   createEffect(() => {
     if (!ui.sidebarOpen()) {
       cancelActiveLongPress();
       setSessionMenu(null);
+      setProjectMenu(null);
     }
   });
 
   createEffect(() => {
     const menu = sessionMenu();
-    if (!menu) return;
+    const pMenu = projectMenu();
+    if (!menu && !pMenu) return;
     const onDocPointerDown = (e: PointerEvent) => {
       const target = e.target as HTMLElement | null;
-      if (target?.closest("[data-floatmenu]")) return;
+      if (target?.closest("[data-floatmenu]") || target?.closest("[data-project-menubtn]")) return;
       setSessionMenu(null);
+      setProjectMenu(null);
     };
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
         setSessionMenu(null);
+        setProjectMenu(null);
       }
     };
     document.addEventListener("pointerdown", onDocPointerDown);
-    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
     onCleanup(() => {
       document.removeEventListener("pointerdown", onDocPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keydown", onKeyDown, true);
     });
   });
 
@@ -98,7 +133,7 @@ export function WorkspaceSidebar() {
       <button
         type="button"
         data-session-list-toggle={key}
-        class="inline-flex items-center gap-1.5 px-2 py-1 text-[11.5px] text-fg-muted hover:text-fg transition-colors cursor-pointer"
+        class="inline-flex items-center gap-1.5 px-2.5 py-1 text-2xs text-fg-muted hover:text-fg transition-colors cursor-pointer rounded-md"
         aria-expanded={Boolean(s.isSessionListExpanded?.(key))}
         onClick={() => s.toggleSessionListExpanded?.(key)}
       >
@@ -118,21 +153,11 @@ export function WorkspaceSidebar() {
   const talkTabUnread = () =>
     currentView() === "projects" &&
     (s.talkSessions?.() ?? []).some((item) => Boolean(s.isSessionUnread?.(item)));
-  const [viewSwitchEl, setViewSwitchEl] = createSignal<HTMLDivElement>();
-  const [viewSwitchInd, setViewSwitchInd] = createSignal<HTMLSpanElement>();
-  createGlide({
-    container: viewSwitchEl,
-    indicator: viewSwitchInd,
-    target: () => {
-      void (s.sidebarView?.() ?? "projects");
-      return viewSwitchEl()?.querySelector<HTMLElement>('[aria-pressed="true"]') ?? null;
-    },
-  });
   return (
 <>
-<Show when={ui.isMobile() && ui.sidebarOpen()}>
+<Show when={overlaySidebar() && ui.sidebarOpen()}>
   <div
-    class="fixed inset-0 z-30 bg-black/55 backdrop-blur-sm md:hidden"
+    class="fixed inset-0 z-30 bg-(--overlay-scrim) transition-opacity"
     onClick={() => ui.setSidebarOpen(false)}
   />
 </Show>
@@ -141,21 +166,21 @@ export function WorkspaceSidebar() {
   aria-hidden={!ui.sidebarOpen() || undefined}
   class={`rc-sidebar bg-surface-subtle border-r border-border flex flex-col shrink-0 transition-all duration-200 ${
     ui.sidebarOpen()
-      ? ui.isMobile()
+      ? overlaySidebar()
         ? "fixed inset-y-0 left-0 z-40 w-[85vw] max-w-xs shadow-floating"
         : "w-64"
       : "w-0 overflow-hidden border-r-0 pointer-events-none"
   }`}
 >
   {/* Brand Header */}
-  <div class="rc-workspace-header rc-sidebar-header flex items-center justify-between gap-2 px-3.5 shrink-0 border-b border-border/60 select-none">
-    <div class="flex items-center gap-2.5 min-w-0">
+  <div class="rc-workspace-header rc-sidebar-header flex items-center justify-between gap-2 px-3 shrink-0 border-b border-border select-none">
+    <div class="flex items-center gap-2 min-w-0">
       <img
         src="/indirect-icon.svg"
         alt="Indirect"
-        class="w-4.5 h-4.5 shrink-0 object-contain rounded"
+        class="w-4 h-4 shrink-0 object-contain rounded-xs"
       />
-      <span class="text-[13px] font-medium tracking-tight text-fg truncate">
+      <span class="text-xs font-medium text-fg truncate">
         Indirect Code
       </span>
     </div>
@@ -163,7 +188,7 @@ export function WorkspaceSidebar() {
   </div>
 
   {/* Primary Navigation — single strict optical grid */}
-  <nav aria-label="Workspace navigation" class="px-2 pt-2 pb-1.5 space-y-0.5 shrink-0">
+  <nav aria-label="Workspace navigation" class="px-2.5 pt-2 pb-1.5 space-y-0.5 shrink-0">
     <a
       href="#/"
       onPointerDown={(e) => press(e.currentTarget)}
@@ -172,7 +197,7 @@ export function WorkspaceSidebar() {
       <span aria-hidden="true" class="rc-nav-icon">
         <Iconify icon="lucide:arrow-left" size={14} />
       </span>
-      <span class="truncate">Back to Gateway</span>
+      <span class="truncate">Back to gateway</span>
     </a>
     <button
       type="button"
@@ -183,14 +208,14 @@ export function WorkspaceSidebar() {
       }}
       class={`rc-nav-row text-left cursor-pointer ${
         s.draftMode?.() && !ui.historyView?.()
-          ? "bg-surface-muted font-medium text-fg"
+          ? "bg-surface-strong/70 font-medium text-fg"
           : "text-fg-secondary hover:text-fg hover:bg-surface-muted/75"
       }`}
     >
       <span aria-hidden="true" class="rc-nav-icon text-fg-muted">
         <Iconify icon="lucide:square-pen" size={14} />
       </span>
-      <span class="truncate">New Conversation</span>
+      <span class="truncate">New conversation</span>
     </button>
     <button
       type="button"
@@ -201,86 +226,81 @@ export function WorkspaceSidebar() {
       }}
       class={`rc-nav-row text-left cursor-pointer ${
         ui.historyView?.()
-          ? "bg-surface-muted font-medium text-fg"
+          ? "bg-surface-strong/70 font-medium text-fg"
           : "text-fg-secondary hover:text-fg hover:bg-surface-muted/75"
       }`}
     >
       <span aria-hidden="true" class="rc-nav-icon text-fg-muted">
         <Iconify icon="lucide:history" size={14} />
       </span>
-      <span class="min-w-0 flex-1 truncate">Conversation History</span>
-      <Show when={!ui.isMobile()}>
-        <span aria-hidden="true" class="shrink-0 font-mono text-[10.5px] text-fg-muted/75">
-          Ctrl K
-        </span>
+      <span class="min-w-0 flex-1 truncate">Conversation history</span>
+      <Show when={!overlaySidebar()}>
+        <Kbd class="shrink-0">Ctrl K</Kbd>
       </Show>
     </button>
   </nav>
 
-  <div class="mx-2.5 border-t border-border/60 shrink-0" />
+  <div class="mx-2.5 border-t border-border-subtle shrink-0" />
 
   {/* Projects & Sessions */}
   <div
     onScroll={() => {
       cancelActiveLongPress();
       if (sessionMenu()) setSessionMenu(null);
+      if (projectMenu()) setProjectMenu(null);
     }}
-    class="flex-1 overflow-y-auto px-2 pt-2 pb-2 space-y-2 min-h-0 [scrollbar-gutter:stable]"
+    class="flex-1 overflow-y-auto px-2.5 pt-2 pb-2 space-y-2 min-h-0"
   >
-      <div class="flex items-center justify-between px-1 pb-0.5">
+      <div class="flex items-center justify-between gap-1.5 pb-0.5">
         <Show
           when={s.selectionMode()}
           fallback={
-            /* Projects | Talk view switch (persisted across reloads) */
-            <div
-              ref={setViewSwitchEl}
-              data-glide=""
-              class="ui-segmented ui-segmented-sm"
-              role="group"
-              aria-label="Sidebar list view"
-            >
-              <span ref={setViewSwitchInd} class="ui-segmented-indicator" aria-hidden="true" />
-              <button
-                type="button"
-                onPointerDown={(e) => press(e.currentTarget)}
-                onClick={() => s.setSidebarView?.("projects")}
-                aria-pressed={currentView() === "projects"}
-                class="ui-segment inline-flex items-center gap-1.5 px-2.5 text-[11px] cursor-pointer"
-              >
-                <span>Projects</span>
-                <Show when={projectsTabUnread()}>
-                  <UnreadDot size="sm" label="Unread project conversations" />
-                </Show>
-              </button>
-              <button
-                type="button"
-                onPointerDown={(e) => press(e.currentTarget)}
-                onClick={() => s.setSidebarView?.("talk")}
-                aria-pressed={currentView() === "talk"}
-                class="ui-segment inline-flex items-center gap-1.5 px-2.5 text-[11px] cursor-pointer"
-              >
-                <span>Talk</span>
-                <Show when={talkTabUnread()}>
-                  <UnreadDot size="sm" label="Unread talk conversations" />
-                </Show>
-              </button>
-            </div>
+            <SegmentedControl
+              size="sm"
+              label="Sidebar list view"
+              value={currentView()}
+              onChange={(next) => s.setSidebarView?.(next)}
+              options={[
+                {
+                  value: "projects" as const,
+                  label: (
+                    <>
+                      <span>Projects</span>
+                      <Show when={projectsTabUnread()}>
+                        <UnreadDot size="sm" label="Unread project conversations" />
+                      </Show>
+                    </>
+                  ),
+                },
+                {
+                  value: "talk" as const,
+                  label: (
+                    <>
+                      <span>Talk</span>
+                      <Show when={talkTabUnread()}>
+                        <UnreadDot size="sm" label="Unread talk conversations" />
+                      </Show>
+                    </>
+                  ),
+                },
+              ]}
+            />
           }
         >
           <div class="flex items-center gap-2">
-            <span class="text-[11px] font-medium text-fg-secondary tabular-nums">
+            <span class="text-2xs font-medium text-fg-secondary tabular-nums">
               {s.selectedSessions().size} selected
             </span>
             <button
               type="button"
               onClick={() => s.selectAllSessions()}
-              class="px-1.5 py-0.5 rounded text-[11px] font-medium text-fg-muted hover:text-fg hover:bg-surface-muted cursor-pointer transition-colors"
+              class="px-2 py-0.5 rounded-md text-2xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted cursor-pointer transition-colors"
             >
               {s.sessions().length > 0 && s.selectedSessions().size === s.sessions().length ? "Deselect All" : "Select All"}
             </button>
           </div>
         </Show>
-        <div class="flex items-center gap-0.5">
+        <div class="flex items-center gap-0.5 shrink-0">
           {/* Selection mode toggle */}
           <button
             type="button"
@@ -288,53 +308,55 @@ export function WorkspaceSidebar() {
               if (s.selectionMode()) s.exitSelectionMode();
               else s.setSelectionMode(true);
             }}
-            class={`flex h-6.5 w-6.5 items-center justify-center rounded-md transition-colors cursor-pointer ${s.selectionMode() ? "bg-surface-muted text-fg" : "text-fg-muted hover:text-fg hover:bg-surface-muted/75"}`}
+            class={`ui-icon-button ui-icon-button-xs ${s.selectionMode() ? "bg-surface-muted text-fg" : "text-fg-muted hover:text-fg hover:bg-surface-muted"}`}
             data-rc-tip={s.selectionMode() ? "Exit selection mode" : "Select conversations"} aria-label={s.selectionMode() ? "Exit selection mode" : "Select conversations"}
           >
-            <Iconify icon={s.selectionMode() ? "lucide:x" : "lucide:list-checks"} size={13} />
+            <Iconify icon={s.selectionMode() ? "lucide:x" : "lucide:list-checks"} size={14} />
           </button>
-        <div>
-          <button
-            type="button"
-            ref={(el) => (s.newProjBtn = el)}
-            data-menubtn
-            aria-expanded={s.newProjectMenuOpen()}
-            onClick={(e) => {
-              e.stopPropagation();
-              s.setNewProjectMenuOpen(!s.newProjectMenuOpen());
-            }}
-            class="flex h-6.5 w-6.5 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted/75 transition-colors cursor-pointer"
-            data-rc-tip="Create new project" aria-label="Create new project"
-          >
-            <Iconify icon="lucide:folder-plus" size={13} />
-          </button>
-          <FloatMenu anchor={() => s.newProjBtn} open={s.newProjectMenuOpen()} placement="bottom-start" width="11.5rem">
+          <Show when={currentView() === "projects"}>
+            <div>
               <button
                 type="button"
-                onClick={() => {
-                  s.newProjBtn?.focus();
-                  s.setNewProjectMenuOpen(false);
-                  s.openNewProjectModal();
+                ref={(el) => (s.newProjBtn = el)}
+                data-menubtn
+                aria-expanded={s.newProjectMenuOpen()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  s.setNewProjectMenuOpen(!s.newProjectMenuOpen());
                 }}
-                class="w-full text-left px-2 py-1.5 rounded-md text-fg hover:bg-surface-muted flex items-center gap-2 cursor-pointer transition-colors"
+                class="ui-icon-button ui-icon-button-xs text-fg-muted hover:text-fg hover:bg-surface-muted"
+                data-rc-tip="Create new project" aria-label="Create new project"
               >
-                <Iconify icon="lucide:folder-plus" size={13} class="text-fg-muted" />
-                <span>New Project</span>
+                <Iconify icon="lucide:folder-plus" size={14} />
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  s.newProjBtn?.focus();
-                  s.setNewProjectMenuOpen(false);
-                  s.quickStartProject();
-                }}
-                class="w-full text-left px-2 py-1.5 rounded-md text-fg-secondary hover:text-fg hover:bg-surface-muted flex items-center gap-2 cursor-pointer transition-colors"
-              >
-                <Iconify icon="lucide:zap" size={13} class="text-warning" />
-                <span>Quick Start</span>
-              </button>
-          </FloatMenu>
-          </div>
+              <FloatMenu anchor={() => s.newProjBtn} open={s.newProjectMenuOpen()} placement="bottom-end" width="11.5rem">
+                <button
+                  type="button"
+                  onClick={() => {
+                    s.newProjBtn?.focus();
+                    s.setNewProjectMenuOpen(false);
+                    s.openNewProjectModal();
+                  }}
+                  class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+                >
+                  <Iconify icon="lucide:folder-plus" size={13} class="text-fg-muted shrink-0" />
+                  <span>New project</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    s.newProjBtn?.focus();
+                    s.setNewProjectMenuOpen(false);
+                    s.quickStartProject();
+                  }}
+                  class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted"
+                >
+                  <Iconify icon="lucide:zap" size={13} class="text-warning shrink-0" />
+                  <span>Quick start</span>
+                </button>
+              </FloatMenu>
+            </div>
+          </Show>
         </div>
       </div>
       <Show when={(s.sidebarView?.() ?? "projects") === "talk"}>
@@ -361,11 +383,17 @@ export function WorkspaceSidebar() {
           </button>
         }
       >
-       <div class="space-y-1.5">
+       <div class="space-y-1">
             <For each={s.projects()}>
               {(p) => {
                 const list = () => s.projectSessions(p.id);
-                const activeProj = () => s.activeProjectId() === p.id || p.id === (s.activeProject()?.id || "");
+                const activeProj = () => {
+                  if (s.draftMode?.()) {
+                    const draftProjId = s.currentProject?.()?.id || s.activeProjectId() || s.activeProject()?.id || "";
+                    return draftProjId === p.id;
+                  }
+                  return (s.currentProject?.()?.id || "") === p.id;
+                };
                 const folderHasUnread = () =>
                   !s.isProjectExpanded(p) && list().some((sess) => Boolean(s.isSessionUnread?.(sess)));
                 const folderHasRunning = () =>
@@ -378,13 +406,12 @@ export function WorkspaceSidebar() {
                 return (
                   <div data-project-id={p.id}>
                     <div
-                      onClick={() => {
-                        s.pickProject(p.id);
-                      }}
-                      class={`group flex h-7.5 items-center gap-1.5 px-2 rounded-md cursor-pointer text-[12.5px] transition-colors ${
+                      class={`group flex min-h-8 items-center gap-1 pr-1 rounded-lg text-xs transition-colors ${
                         activeProj()
-                          ? "bg-surface-muted/55 font-medium text-fg hover:bg-surface-muted/80"
-                          : "text-fg-secondary hover:bg-surface-muted/65 hover:text-fg"
+                          ? "bg-surface-strong/70 font-medium text-fg"
+                          : folderHasUnread()
+                            ? "font-medium text-fg hover:bg-surface-muted/75"
+                            : "font-normal text-fg-secondary hover:bg-surface-muted/75 hover:text-fg"
                       }`}
                       data-rc-tip={p.path}
                     >
@@ -393,35 +420,30 @@ export function WorkspaceSidebar() {
                         aria-label="Toggle project"
                         aria-expanded={s.isProjectExpanded(p)}
                         data-rc-tip="Toggle project"
-                        onClick={(e) => {
-                          e.stopPropagation();
+                        onPointerDown={(e) => press(e.currentTarget)}
+                        onClick={() => {
+                          s.pickProject(p.id);
                           s.toggleProjectExpanded(p.id);
                         }}
-                        class="p-0.5 -ml-0.5 rounded text-fg-muted hover:text-fg hover:bg-surface-muted cursor-pointer shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+                        class="flex items-center gap-1.5 min-w-0 flex-1 min-h-8 pl-2.5 pr-1 text-left cursor-pointer rounded-lg"
                       >
-                        <Iconify
-                          icon="lucide:chevron-right"
-                          size={12}
-                          class={`shrink-0 transition-transform ${s.isProjectExpanded(p) ? "rotate-90" : ""}`}
-                        />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={p.name}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          s.pickProject(p.id);
-                        }}
-                        class="flex items-center gap-1.5 min-w-0 flex-1 text-left cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-accent rounded"
-                      >
+                        <span aria-hidden="true" class="inline-flex h-4 w-4 shrink-0 items-center justify-center text-fg-muted">
+                          <Iconify
+                            icon="lucide:chevron-right"
+                            size={12}
+                            class={`shrink-0 transition-transform ${s.isProjectExpanded(p) ? "rotate-90" : ""}`}
+                          />
+                        </span>
                         <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
-                        <span class="truncate flex-1 font-medium">{p.name}</span>
+                        <span class={`truncate flex-1 ${activeProj() || folderHasUnread() ? "font-medium text-fg" : "font-normal"}`}>{p.name}</span>
                       </button>
-                      <div class="relative flex items-center justify-end gap-0.5 shrink-0">
+                      <div class="flex items-center justify-end gap-0.5 shrink-0">
                         <Show when={folderHasUnread() || folderHasRunning()}>
                           <span
                             data-project-collapsed-status={folderHasUnread() ? "unread" : "running"}
-                            class="pointer-events-none absolute right-0.5 flex items-center justify-center transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+                            class={`pointer-events-none flex h-6 w-6 items-center justify-center ${
+                              !overlaySidebar() ? "group-hover:hidden group-focus-within:hidden" : ""
+                            }`}
                           >
                             <Show
                               when={folderHasUnread()}
@@ -431,41 +453,69 @@ export function WorkspaceSidebar() {
                             </Show>
                           </span>
                         </Show>
-                        <button
-                          type="button"
-                          aria-label={`Copy path for ${p.name}`}
-                          data-rc-tip="Copy project path"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void copyWithToast(p.path);
-                          }}
-                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                        <Show
+                          when={!overlaySidebar()}
+                          fallback={
+                            <button
+                              type="button"
+                              data-project-menubtn
+                              aria-label={`Project actions for ${p.name}`}
+                              aria-haspopup="menu"
+                              aria-expanded={projectMenu()?.projectId === p.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                ui.closeMenus?.();
+                                setSessionMenu(null);
+                                setProjectMenu((prev) =>
+                                  prev?.projectId === p.id
+                                    ? null
+                                    : { projectId: p.id, anchor: e.currentTarget, fallback: p },
+                                );
+                              }}
+                              class="ui-icon-button ui-icon-button-xs text-fg-muted hover:text-fg hover:bg-surface-subtle"
+                            >
+                              <Iconify icon="lucide:ellipsis" size={14} />
+                            </button>
+                          }
                         >
-                          <Iconify icon="lucide:copy" size={11} />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label={`New conversation in ${p.name}`}
-                          data-rc-tip="New conversation in this project"
-                          onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
-                          class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus:opacity-100 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
-                        >
-                          <Iconify icon="lucide:plus" size={13} />
-                        </button>
-                        <Show when={!p.protected}>
-                          <button
-                            type="button"
-                            onClick={(e) => s.deleteProject(p.id, e)}
-                            class="rc-row-actions opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 rounded p-0.5 text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer shrink-0"
-                            data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
-                          >
-                            <Iconify icon="lucide:x" size={12} />
-                          </button>
+                          <div class="rc-row-actions hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              aria-label={`Copy path for ${p.name}`}
+                              data-rc-tip="Copy project path"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                void copyWithToast(p.path);
+                              }}
+                              class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                            >
+                              <Iconify icon="lucide:copy" size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`New conversation in ${p.name}`}
+                              data-rc-tip="New conversation in this project"
+                              onClick={(e) => { e.stopPropagation(); s.startNewConversation(p.id); }}
+                              class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                            >
+                              <Iconify icon="lucide:plus" size={13} />
+                            </button>
+                            <Show when={!p.protected}>
+                              <button
+                                type="button"
+                                onClick={(e) => s.deleteProject(p.id, e)}
+                                class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer shrink-0"
+                                data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
+                              >
+                                <Iconify icon="lucide:x" size={12} />
+                              </button>
+                            </Show>
+                          </div>
                         </Show>
                       </div>
                     </div>
                     <Show when={s.isProjectExpanded(p)}>
-                      <div class="ml-[15px] mt-0.5 space-y-0.5 border-l border-border/60 pl-2">
+                      <div class="ml-[17.5px] mt-0.5 space-y-0.5 border-l border-border pl-2">
                         <For each={s.visibleSessions(p.id, list())}>
                           {(sess) => renderRow(sess)}
                         </For>
@@ -477,9 +527,9 @@ export function WorkspaceSidebar() {
               }}
             </For>
             <Show when={s.looseSessions().length > 0}>
-              <div>
-                <div class="px-2 py-1 text-[11px] font-medium text-fg-muted">
-                  Not in Project
+              <div class="pt-2 mt-1.5 border-t border-border-subtle">
+                <div class="px-2.5 pb-1 text-2xs font-medium text-fg-muted select-none">
+                  Other
                 </div>
                 <div class="space-y-0.5">
                   <For each={s.visibleSessions("loose", s.looseSessions())}>
@@ -493,6 +543,69 @@ export function WorkspaceSidebar() {
       </Show>
       </Show>
     </div>
+  {/* Mobile project actions FloatMenu */}
+  <Show when={projectMenu()} keyed>
+    {(menu) => {
+      const proj = () => resolveMenuProject(menu);
+      return (
+        <FloatMenu
+          anchor={() => (menu.anchor.isConnected ? menu.anchor : undefined)}
+          open={true}
+          placement="bottom-end"
+          width="13rem"
+          aria-label="Project actions"
+          onClose={closeProjectMenu}
+        >
+          <div class="px-2.5 py-1.5 mb-0.5 border-b border-border-subtle text-2xs font-medium text-fg-muted truncate select-none">
+            {proj().name}
+          </div>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const target = proj();
+              closeProjectMenu();
+              s.startNewConversation(target.id);
+              ui.closeSidebarOnMobile();
+            }}
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+          >
+            <Iconify icon="lucide:plus" size={13} class="text-fg-muted shrink-0" />
+            <span>New conversation</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const target = proj();
+              closeProjectMenu();
+              void copyWithToast(target.path);
+            }}
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+          >
+            <Iconify icon="lucide:copy" size={13} class="text-fg-muted shrink-0" />
+            <span>Copy project path</span>
+          </button>
+          <Show when={!proj().protected}>
+            <div role="separator" class="my-1 border-t border-border-subtle" />
+            <button
+              type="button"
+              role="menuitem"
+              onClick={(e) => {
+                const target = proj();
+                closeProjectMenu();
+                s.deleteProject(target.id, e);
+              }}
+              class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 min-h-8 text-xs hover:bg-danger-subtle"
+            >
+              <Iconify icon="lucide:trash-2" size={13} class="shrink-0" />
+              <span>Remove project</span>
+            </button>
+          </Show>
+        </FloatMenu>
+      );
+    }}
+  </Show>
   {/* Session long-press / right-click context menu */}
   <Show when={sessionMenu()} keyed>
     {(menu) => {
@@ -508,7 +621,7 @@ export function WorkspaceSidebar() {
         >
           <div
             data-session-menu-header
-            class="px-2.5 py-1.5 mb-0.5 border-b border-border/60 text-[11px] font-medium text-fg-muted truncate select-none"
+            class="px-2.5 py-1.5 mb-0.5 border-b border-border-subtle text-2xs font-medium text-fg-muted truncate select-none"
           >
             {target().title}
           </div>
@@ -520,7 +633,7 @@ export function WorkspaceSidebar() {
               closeSessionMenu();
               s.togglePin(sess.id, e);
             }}
-            class="w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 min-h-8 text-left text-xs text-fg hover:bg-surface-muted transition-colors cursor-pointer select-none"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
           >
             <Iconify
               icon={target().pinned ? "lucide:pin-off" : "lucide:pin"}
@@ -538,7 +651,7 @@ export function WorkspaceSidebar() {
               s.setRenameText(sess.title);
               s.setRenamingId(sess.id);
             }}
-            class="w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 min-h-8 text-left text-xs text-fg hover:bg-surface-muted transition-colors cursor-pointer select-none"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
           >
             <Iconify icon="lucide:pencil" size={13} class="text-fg-muted shrink-0" />
             <span>Rename</span>
@@ -552,12 +665,12 @@ export function WorkspaceSidebar() {
               if (!s.selectionMode()) s.setSelectionMode?.(true);
               s.toggleSessionSelect(sess.id);
             }}
-            class="w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 min-h-8 text-left text-xs text-fg hover:bg-surface-muted transition-colors cursor-pointer select-none"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
           >
             <Iconify icon="lucide:check-square" size={13} class="text-fg-muted shrink-0" />
             <span>Select</span>
           </button>
-          <div role="separator" class="my-1 border-t border-border/70" />
+          <div role="separator" class="my-1 border-t border-border-subtle" />
           <button
             type="button"
             role="menuitem"
@@ -566,7 +679,7 @@ export function WorkspaceSidebar() {
               closeSessionMenu();
               void s.deleteSession(sess.id, e);
             }}
-            class="w-full flex items-center gap-2.5 rounded-md px-2.5 py-1.5 min-h-8 text-left text-xs text-danger hover:bg-danger-subtle transition-colors cursor-pointer select-none"
+            class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 min-h-8 text-xs hover:bg-danger-subtle"
           >
             <Iconify icon="lucide:trash-2" size={13} class="shrink-0" />
             <span>Delete</span>
@@ -577,9 +690,9 @@ export function WorkspaceSidebar() {
   </Show>
   {/* Batch bar (selection mode) */}
   <Show when={s.selectionMode()}>
-    <div class="p-2 border-t border-border/70 bg-surface">
+    <div class="px-2.5 py-2 border-t border-border bg-surface">
       <div class="flex items-center justify-between gap-2">
-        <span class="text-[11px] text-fg-muted pl-1 truncate tabular-nums">
+        <span class="text-2xs text-fg-muted truncate tabular-nums">
           {s.selectedSessions().size > 0
             ? `${s.selectedSessions().size} selected`
             : "Select conversations to delete"}
@@ -589,19 +702,19 @@ export function WorkspaceSidebar() {
             type="button"
             onClick={s.pinSelected}
             disabled={s.selectedSessions().size === 0}
-            class={`px-2 py-1 rounded-md text-[11px] font-medium border border-border transition-colors ${
+            class={`px-2 py-1 rounded-lg text-2xs font-medium border border-border transition-colors ${
               s.selectedSessions().size > 0
                 ? "bg-surface-subtle text-fg-secondary hover:text-fg hover:bg-surface-muted cursor-pointer"
                 : "opacity-50 cursor-not-allowed bg-surface-subtle text-fg-muted"
             }`}
           >
-            Pin / Unpin
+            Pin / unpin
           </button>
           <button
             type="button"
             onClick={s.deleteSelected}
             disabled={s.selectedSessions().size === 0}
-            class={`px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${
+            class={`px-2 py-1 rounded-lg text-2xs font-medium border transition-colors ${
               s.selectedSessions().size > 0
                 ? "bg-danger-subtle border-danger/35 text-danger hover:opacity-90 cursor-pointer"
                 : "opacity-50 cursor-not-allowed bg-surface-subtle border-border text-fg-muted"
@@ -614,19 +727,19 @@ export function WorkspaceSidebar() {
     </div>
   </Show>
 
-  <div class="px-2 py-2 border-t border-border/60 space-y-0.5 bg-surface-subtle shrink-0">
-    {/* Daemon update: primary rounded-full button above host selector */}
+  <div class="px-2.5 py-2 border-t border-border space-y-0.5 bg-surface-subtle shrink-0">
+    {/* Daemon update: primary concentric rounded-lg button above host selector */}
     <Show when={(() => { const i = ui.daemonUpdate.info(); return !!i && !!i.available && i.available !== i.current; })()}>{(() => {
       const i = ui.daemonUpdate.info()!;
       const busy = ui.daemonUpdate.applying() || hosts.activeHost()?.status === "updating";
       return (
-        <div class="px-0.5 pb-1">
+        <div class="pb-1.5">
           <button
             type="button"
             onClick={() => ui.daemonUpdate.apply()}
             disabled={busy}
             data-rc-tip={i.current ? `Update daemon (${i.current} → ${i.available})` : `Update daemon to ${i.available}`}
-            class="ui-button ui-button-primary w-full rounded-full h-[1.5rem] min-h-[1.5rem] py-0 text-xs gap-1.5"
+            class="ui-button ui-button-primary ui-button-xs w-full rounded-lg gap-1.5"
           >
             <Iconify icon="lucide:arrow-down-to-line" size={13} />
             <span>{busy ? "Updating…" : `Update to ${i.available}`}</span>
@@ -640,7 +753,10 @@ export function WorkspaceSidebar() {
     <button
       type="button"
       onPointerDown={(e) => press(e.currentTarget)}
-      onClick={() => m.openSettings?.()}
+      onClick={() => {
+        ui.closeSidebarOnMobile?.();
+        m.openSettings?.();
+      }}
       data-rc-tip="Host & agent settings"
       aria-label="Host & agent settings: Settings"
       class="rc-nav-row text-left text-fg-secondary hover:text-fg hover:bg-surface-muted/75 cursor-pointer"

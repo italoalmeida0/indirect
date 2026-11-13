@@ -2,7 +2,7 @@ interface FileIconSpec { icon: string; class: string }
 const tones: Record<string, string> = {
   builtin: "text-[var(--code-builtin)]", type: "text-[var(--code-type)]",
   num: "text-[var(--code-num)]", meta: "text-[var(--code-meta)]",
-  kw: "text-[var(--code-kw)]", str: "text-[var(--code-str)]", comment: "text-ink-400",
+  kw: "text-[var(--code-kw)]", str: "text-[var(--code-str)]", comment: "text-fg-secondary",
 };
 const groups: Array<{ extensions: string; icon: string; tone: string }> = [
   { extensions: "py pyi pyw ipynb", icon: "mdi:language-python", tone: "builtin" },

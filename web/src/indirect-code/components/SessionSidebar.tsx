@@ -14,19 +14,22 @@ export function SessionStopButton(props: {
   return (
     <button
       type="button"
-      onClick={(e) => props.onCancel(e)}
+      onClick={(e) => {
+        e.stopPropagation();
+        props.onCancel(e);
+      }}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onFocus={() => setHovered(true)}
       onBlur={() => setHovered(false)}
       disabled={props.isCancelling}
-      class={`w-4.5 h-4.5 rounded flex items-center justify-center shrink-0 border border-transparent transition-colors ${
+      class={`rc-msg-action w-6 h-6 rounded-md flex items-center justify-center shrink-0 border border-transparent transition-colors ${
         props.isCancelling
           ? "text-fg-muted opacity-60 cursor-default"
           : hovered()
             ? "text-danger bg-danger-subtle border-danger/35 cursor-pointer"
             : "text-fg-muted cursor-pointer"
-      } focus-visible:ring-1 focus-visible:ring-danger focus:outline-none`}
+      }`}
       data-rc-tip={props.isCancelling ? "Stopping…" : "Stop"}
       aria-label={props.isCancelling ? "Stopping turn" : "Stop turn"}
     >
@@ -197,32 +200,48 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
         ctx.selectSession(s.id);
         ctx.closeSidebarOnMobile();
       }}
+      role="button"
+      tabIndex={isRenaming() ? -1 : 0}
+      onKeyDown={(e) => {
+        if (isRenaming() || e.target !== e.currentTarget) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (ctx.selectionMode()) {
+            ctx.toggleSessionSelect(s.id);
+            return;
+          }
+          ctx.setHistoryView(false);
+          ctx.selectSession(s.id);
+          ctx.closeSidebarOnMobile();
+        }
+      }}
       onDblClick={() => {
         if (ctx.selectionMode() || ctx.isMobile()) return;
         ctx.setRenameText(s.title);
         ctx.setRenamingId(s.id);
       }}
-      class={`group flex ${ctx.isMobile() ? "min-h-8.5 py-0.5" : "h-7.5"} items-center gap-1.5 px-2 rounded-md cursor-pointer text-[12.5px] transition-colors touch-manipulation select-none [-webkit-touch-callout:none] ${
+      class={`group flex ${ctx.isMobile() ? "min-h-9 py-1" : "min-h-8"} items-center gap-2 px-2.5 rounded-lg cursor-pointer text-xs transition-colors touch-manipulation select-none [-webkit-touch-callout:none] ${
         isActive() && !ctx.selectionMode()
-          ? "bg-surface-muted font-medium text-fg"
+          ? "bg-surface-strong/70 font-medium text-fg"
           : selected()
-            ? "bg-surface-muted text-fg ring-1 ring-border-strong"
+            ? "bg-surface-muted text-fg ring-1 ring-inset ring-border-strong"
             : menuOpen()
-              ? "bg-surface-muted/80 text-fg"
+              ? "bg-surface-muted text-fg"
               : isUnread()
-                ? "text-fg hover:bg-surface-muted/65"
-                : "text-fg-secondary hover:bg-surface-muted/65 hover:text-fg"
+                ? "font-medium text-fg hover:bg-surface-muted/75"
+                : "text-fg-secondary hover:bg-surface-muted/75 hover:text-fg"
       }`}
       data-rc-tip={isRenaming() || menuOpen() ? undefined : `${s.title}\n${s.cwd}`}
     >
       <Show when={ctx.selectionMode()}>
         <button
           type="button"
+          tabIndex={-1}
           onClick={(e) => {
             e.stopPropagation();
             ctx.toggleSessionSelect(s.id);
           }}
-          class={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors ${
+          class={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
             selected() ? "bg-fg border-fg" : "border-border-strong bg-surface"
           }`}
           data-rc-tip="Select" aria-label="Select"
@@ -256,30 +275,30 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
             >
               <span
                 data-session-unread={s.id}
-                class="w-4.5 h-4.5 flex items-center justify-center shrink-0"
+                class="w-5 h-5 flex items-center justify-center shrink-0"
               >
                 <UnreadDot label={ctx.sessionAttentionLabel?.(s) ?? "Unread update"} />
               </span>
             </Show>
-            <div class={`relative flex items-center justify-end shrink-0 ${!ctx.isMobile() ? "min-w-[44px]" : ""}`}>
+            <div class="flex items-center justify-end shrink-0">
               <span
-                class={`rc-row-time text-[10px] text-ink-500 transition-opacity tabular-nums ${
+                class={`rc-row-time text-2xs text-fg-muted tabular-nums ${
                   !ctx.isMobile() && !ctx.selectionMode()
-                    ? "group-hover:opacity-0 group-hover:pointer-events-none"
+                    ? "group-hover:hidden group-focus-within:hidden"
                     : ""
                 }`}
               >
                 {timeAgo(sessionTimeLabel(s))}
               </span>
               <Show when={!ctx.isMobile() && !ctx.selectionMode()}>
-                <div class="rc-row-actions absolute right-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div class="rc-row-actions hidden group-hover:flex group-focus-within:flex items-center gap-0.5">
                   <button
                     type="button"
                     onClick={(e) => ctx.togglePin(s.id, e)}
-                    class="rc-row-action rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                    class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip={s.pinned ? "Unpin" : "Pin"} aria-label={s.pinned ? "Unpin" : "Pin"}
                   >
-                    <Iconify icon={s.pinned ? "lucide:pin-off" : "lucide:pin"} size={11} />
+                    <Iconify icon={s.pinned ? "lucide:pin-off" : "lucide:pin"} size={12} />
                   </button>
                   <button
                     type="button"
@@ -288,18 +307,18 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                       ctx.setRenameText(s.title);
                       ctx.setRenamingId(s.id);
                     }}
-                    class="rc-row-action rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                    class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip="Rename" aria-label="Rename"
                   >
-                    <Iconify icon="lucide:pencil" size={11} />
+                    <Iconify icon="lucide:pencil" size={12} />
                   </button>
                   <button
                     type="button"
                     onClick={(e) => ctx.deleteSession(s.id, e)}
-                    class="rc-row-action rounded p-0.5 text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer"
+                    class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer"
                     data-rc-tip="Delete" aria-label="Delete"
                   >
-                    <Iconify icon="lucide:trash-2" size={11} />
+                    <Iconify icon="lucide:trash-2" size={12} />
                   </button>
                 </div>
               </Show>
@@ -316,7 +335,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
           <input
             type="text"
             aria-label="Rename conversation"
-            class="flex-1 min-w-0 h-6 bg-surface border border-border-strong rounded px-1.5 py-0.5 text-[12.5px] text-fg select-text focus:outline-none focus:border-accent"
+            class="flex-1 min-w-0 h-7 bg-surface border border-border-strong rounded-md px-2 py-0.5 max-sm:text-base sm:text-xs text-fg select-text focus:outline-none focus:border-accent"
             value={ctx.renameText()}
             onInput={(e) => ctx.setRenameText(e.currentTarget.value)}
             onKeyDown={(e) => {
@@ -355,7 +374,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
               e.stopPropagation();
               commitRename();
             }}
-            class="h-6 w-6 shrink-0 rounded flex items-center justify-center text-accent hover:bg-surface-subtle transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-accent"
+            class="ui-icon-button ui-icon-button-xs shrink-0 text-accent hover:bg-surface-subtle"
           >
             <Iconify icon="lucide:check" size={13} />
           </button>
@@ -375,7 +394,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
               e.stopPropagation();
               cancelRename();
             }}
-            class="h-6 w-6 shrink-0 rounded flex items-center justify-center text-fg-muted hover:text-fg hover:bg-surface-subtle transition-colors cursor-pointer focus:outline-none focus-visible:ring-1 focus-visible:ring-border-strong"
+            class="ui-icon-button ui-icon-button-xs shrink-0 text-fg-muted hover:text-fg hover:bg-surface-subtle"
           >
             <Iconify icon="lucide:x" size={13} />
           </button>

@@ -321,6 +321,7 @@ export function RemoteHints() {
           <div
             id={id}
             role="tooltip"
+            data-density={el.closest?.("[data-density]")?.getAttribute("data-density") ?? undefined}
             data-instant={instant() ? "" : undefined}
             ref={(node) => onCleanup(anchorFloat(el, node, { placement: placement(), gap: 8 }))}
             class="ui-tooltip pointer-events-none w-max max-w-[min(18rem,calc(100vw-1rem))] whitespace-pre-wrap break-words"

@@ -1,4 +1,5 @@
 import { Show } from "solid-js";
+import { press } from "../../ds/motion/press";
 import { Modal, Badge, Btn, StepperField, copyToClipboard, toast } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { languageForPath } from "../utils/lang";
@@ -14,12 +15,12 @@ export function PreviewModal() {
     <Modal
       open={!!file()}
       onClose={() => m.setPreviewFile(null)}
-      title={file()?.name || "File Preview"}
+      title={file()?.name || "File preview"}
       subtitle="Inspect or download the attachment. Preview limits do not change the content sent to the agent."
       width="max-w-3xl"
       badge={
         <Show when={file()?.truncated}>
-          <Badge tone="amber">truncated</Badge>
+          <Badge tone="amber">Truncated</Badge>
         </Show>
       }
       footer={
@@ -49,14 +50,14 @@ export function PreviewModal() {
           return (
             <div class="rounded-panel border border-border bg-surface overflow-hidden">
               {/* IDE File Preview Header Bar */}
-              <div class="flex items-center justify-between gap-2 border-b border-border bg-surface-subtle px-3 py-2 flex-wrap">
-                <div class="flex items-center gap-2 min-w-0 font-mono text-[11px] text-fg-muted tabular-nums">
+              <div class="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-3.5 py-2 flex-wrap">
+                <div class="flex items-center gap-2 min-w-0 text-2xs text-fg-muted tabular-nums">
                   <Iconify
-                    icon={f().dataUrl ? "lucide:image" : "lucide:file-code-2"}
+                    icon={f().dataUrl ? "lucide:image" : "lucide:file-code"}
                     size={13}
                     class="shrink-0 text-fg-secondary"
                   />
-                  <span class="rounded border border-border bg-surface px-1.5 py-0.5 text-fg-secondary">
+                  <span class="rounded-md border border-border bg-surface px-1.5 py-0.5 font-mono text-fg-secondary">
                     {f().dataUrl ? "image" : lang()}
                   </span>
                   <Show when={f().text}>
@@ -75,21 +76,23 @@ export function PreviewModal() {
                   <Show when={f().truncated && f().fullText}>
                     <button
                       type="button"
+                      onPointerDown={(e) => press(e.currentTarget)}
                       onClick={m.restorePreviewFile}
-                      class="inline-flex items-center gap-1.5 rounded-md border border-warning/35 bg-warning-subtle px-2.5 py-1 text-xs font-medium text-warning hover:bg-warning/15 transition-colors cursor-pointer"
+                      class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5 border-warning/35 bg-warning-subtle text-warning hover:bg-warning/15"
                     >
                       <Iconify icon="lucide:rotate-ccw" size={12} />
-                      <span>Restore Full</span>
+                      <span>Restore full</span>
                     </button>
                   </Show>
                   <Show when={!f().dataUrl}>
                     <button
                       type="button"
+                      onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => m.setShowTruncateInput(!m.showTruncateInput())}
-                      class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
+                      class={`ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5 ${
                         m.showTruncateInput()
                           ? "border-accent bg-accent-subtle text-fg"
-                          : "border-border bg-surface text-fg-secondary hover:bg-surface-muted hover:text-fg"
+                          : ""
                       }`}
                       data-rc-tip="Limit preview length"
                       aria-label="Limit preview length"
@@ -101,6 +104,7 @@ export function PreviewModal() {
                   <Show when={f().text}>
                     <button
                       type="button"
+                      onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => {
                         void copyToClipboard(f().text || "").then((ok) => {
                           if (ok) {
@@ -114,14 +118,14 @@ export function PreviewModal() {
                           }
                         });
                       }}
-                      class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                      class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
                     >
                       <Iconify
                         icon={m.previewCopied() ? "lucide:check" : "lucide:copy"}
                         size={12}
                         class={m.previewCopied() ? "text-success" : ""}
                       />
-                      <span>{m.previewCopied() ? "Copied!" : "Copy Code"}</span>
+                      <span>{m.previewCopied() ? "Copied" : "Copy code"}</span>
                     </button>
                   </Show>
                   <Show
@@ -133,8 +137,9 @@ export function PreviewModal() {
                   >
                     <button
                       type="button"
+                      onPointerDown={(e) => press(e.currentTarget)}
                       onClick={m.downloadPreviewFile}
-                      class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                      class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
                     >
                       <Iconify icon="lucide:download" size={12} />
                       <span>Download</span>
@@ -145,11 +150,11 @@ export function PreviewModal() {
 
               {/* Inline Preview Slicer Drawer */}
               <Show when={m.showTruncateInput() && !f().dataUrl}>
-                <div class="border-b border-border bg-surface px-3.5 py-3 space-y-3">
+                <div class="border-b border-border-subtle bg-surface px-3.5 py-3 space-y-3">
                   <div class="space-y-1.5" aria-hidden="true">
-                    <div class="flex items-center justify-between text-[11px]">
+                    <div class="flex items-center justify-between text-2xs">
                       <span class="font-medium text-fg-secondary">128K context window share</span>
-                      <span class="font-mono text-fg-muted tabular-nums">
+                      <span class="text-fg-muted tabular-nums">
                         {footprintPct().toFixed(1)}% of 128K
                       </span>
                     </div>
@@ -179,13 +184,13 @@ export function PreviewModal() {
                     ]}
                   />
                   <div class="flex items-center justify-end gap-2">
-                    <button
-                      type="button"
+                    <Btn
+                      variant="outline"
+                      size="sm"
                       onClick={() => m.setShowTruncateInput(false)}
-                      class="rounded-md px-2.5 py-1 text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       Cancel
-                    </button>
+                    </Btn>
                     <Btn
                       size="sm"
                       onClick={() => {
@@ -200,7 +205,7 @@ export function PreviewModal() {
               </Show>
 
               {/* Code / Media Frame */}
-              <div class="max-h-[56vh] overflow-auto bg-background/50 p-4">
+              <div class="max-h-[56vh] overflow-auto bg-background/50 p-4 pb-5">
                 <Show
                   when={f().dataUrl}
                   fallback={

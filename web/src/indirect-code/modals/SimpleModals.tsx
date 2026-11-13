@@ -22,7 +22,7 @@ export function ChoiceModal() {
   return (
     <Modal
       open={!!state()}
-      title={state()?.title || "Choose Option"}
+      title={state()?.title || "Choose option"}
       subtitle="Select one of the choices below to continue."
       onClose={() => state()?.resolve(null)}
       footer={
@@ -48,7 +48,7 @@ export function ChoiceModal() {
                 type="button"
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => state()?.resolve(opt.id)}
-                class={`flex items-center justify-between gap-3 rounded-panel border px-3.5 py-3 text-left transition-colors cursor-pointer group ${
+                class={`flex min-h-11 items-center justify-between gap-3 rounded-panel border px-3.5 py-3 text-left transition-colors cursor-pointer group ${
                   opt.primary
                     ? "border-accent bg-accent-subtle/40 hover:bg-accent-subtle"
                     : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle"
@@ -56,7 +56,7 @@ export function ChoiceModal() {
               >
                 <div class="flex items-start gap-3 min-w-0 flex-1">
                   <span
-                    class={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md font-mono text-[11px] font-medium ${
+                    class={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-2xs font-medium tabular-nums ${
                       opt.primary
                         ? "bg-accent text-accent-foreground"
                         : "border border-border bg-surface-subtle text-fg-muted group-hover:text-fg"
@@ -145,7 +145,7 @@ export function ConfirmModal() {
       <div class="space-y-4">
         <ModalNotice
           tone={state()?.danger ? "danger" : "info"}
-          title={state()?.danger ? "Destructive Action" : "Confirmation"}
+          title={state()?.danger ? "Destructive action" : "Confirmation"}
         >
           <span class="whitespace-pre-line leading-relaxed">{state()?.message}</span>
         </ModalNotice>
@@ -174,7 +174,7 @@ export function PairModal() {
   return (
     <Modal
       open={m.showPairModal()}
-      title="Pair Indirect Code Host"
+      title="Pair Indirect Code host"
       subtitle="Run a one-time bootstrap command on your workstation or server to pair its local daemon."
       width="max-w-xl"
       onClose={() => m.setShowPairModal(false)}
@@ -202,7 +202,7 @@ export function PairModal() {
 
                 {/* Unified Workstation Terminal Command Block */}
                 <div class="rounded-panel border border-border bg-surface overflow-hidden">
-                  <div class="flex items-center justify-between gap-2 border-b border-border bg-surface-subtle px-2.5 py-1.5 flex-wrap">
+                  <div class="flex items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-2.5 py-2 flex-wrap">
                     <div
                       role="tablist"
                       aria-label="Target operating system"
@@ -214,7 +214,7 @@ export function PairModal() {
                         aria-selected={osTab() === "unix"}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => setOsTab("unix")}
-                        class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                        class={`inline-flex min-h-7 [@media(pointer:coarse)]:min-h-10 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "unix"
                             ? "border-border bg-surface text-fg"
                             : "border-transparent text-fg-muted hover:text-fg"
@@ -229,7 +229,7 @@ export function PairModal() {
                         aria-selected={osTab() === "windows"}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => setOsTab("windows")}
-                        class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors cursor-pointer ${
+                        class={`inline-flex min-h-7 [@media(pointer:coarse)]:min-h-10 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "windows"
                             ? "border-border bg-surface text-fg"
                             : "border-transparent text-fg-muted hover:text-fg"
@@ -244,7 +244,7 @@ export function PairModal() {
                       type="button"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => copyCmd(osTab(), activeCmd())}
-                      class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                      class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5 ml-auto"
                     >
                       <Iconify
                         icon={copiedKey() === osTab() ? "lucide:check" : "lucide:copy"}
@@ -255,7 +255,7 @@ export function PairModal() {
                     </button>
                   </div>
 
-                  <div class="overflow-x-auto bg-background/60 p-3.5 font-mono text-[11px] leading-relaxed text-fg select-all">
+                  <div class="overflow-x-auto bg-background/60 p-3.5 font-mono text-2xs leading-relaxed text-fg select-all">
                     <span class="mr-2 select-none text-accent">
                       {osTab() === "windows" ? "PS>" : "$"}
                     </span>
@@ -264,7 +264,7 @@ export function PairModal() {
                 </div>
 
                 {/* Minimal 3-Step Hairline Rail */}
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-0 sm:divide-x divide-border border-t border-border pt-3.5">
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-0 sm:divide-x divide-border-subtle border-t border-border-subtle pt-3.5">
                   <For
                     each={[
                       {
@@ -287,12 +287,12 @@ export function PairModal() {
                     {(item, idx) => (
                       <div class={idx() > 0 ? "sm:pl-3.5 space-y-0.5 pr-2" : "space-y-0.5 pr-2"}>
                         <div class="flex items-center gap-1.5">
-                          <span class="font-mono text-[10px] font-medium text-accent">
+                          <span class="font-mono text-2xs font-medium text-accent tabular-nums">
                             {item.step}
                           </span>
-                          <span class="text-[11px] font-medium text-fg">{item.title}</span>
+                          <span class="text-xs font-medium text-fg">{item.title}</span>
                         </div>
-                        <p class="text-[11px] text-fg-muted leading-relaxed">{item.desc}</p>
+                        <p class="text-2xs text-fg-muted leading-relaxed">{item.desc}</p>
                       </div>
                     )}
                   </For>

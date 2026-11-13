@@ -12,7 +12,7 @@
 /* The same two-column workspace is used in every display mode. Its brand
  * row and conversation header become the titlebar in an installed window. */
 .rc-workspace-header { height: 3rem; }
-.rc-window-header { padding-inline: 1rem; }
+.rc-window-header { padding-inline: 0.75rem; }
 
 @media (display-mode: standalone), (display-mode: fullscreen) {
   /* The shell keeps its edge-to-edge background while its contents fit
@@ -33,7 +33,7 @@
     position: fixed;
     inset: 0 0 auto;
     height: var(--sat);
-    background: var(--ink-950);
+    background: var(--background);
     z-index: 40;
     pointer-events: none;
   }
@@ -54,14 +54,14 @@
   }
   .rc-workspace-header { height: var(--wco-header-height); }
   .rc-sidebar-header {
-    padding-left: max(0.875rem, calc(var(--wco-left) + 0.5rem));
-    padding-right: max(0.875rem, calc(100% - 100vw + var(--wco-right) + 0.5rem));
+    padding-left: max(0.75rem, calc(var(--wco-left) + 0.5rem));
+    padding-right: max(0.75rem, calc(100% - 100vw + var(--wco-right) + 0.5rem));
     -webkit-app-region: drag;
     app-region: drag;
   }
   .rc-window-header {
-    padding-left: max(1rem, calc(var(--wco-left) - var(--rc-sidebar-width) + 0.5rem));
-    padding-right: calc(var(--wco-right) + 1rem);
+    padding-left: max(0.75rem, calc(var(--wco-left) - var(--rc-sidebar-width) + 0.5rem));
+    padding-right: calc(var(--wco-right) + 0.75rem);
   }
   .rc-window-content {
     -webkit-app-region: drag;
@@ -76,7 +76,7 @@
    * page controls. One opaque sticky surface keeps scrolled content out. */
   .gw-shell { --gw-rail-width: 0px; }
   .gw-shell .gw-header {
-    background: var(--ink-950);
+    background: var(--background);
     backdrop-filter: none;
     -webkit-app-region: drag;
     app-region: drag;
@@ -121,13 +121,13 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--ink-700);
+  background: var(--border-strong);
   border-radius: 8px;
-  border: 2px solid var(--ink-950);
+  border: 2px solid var(--background);
 }
 /* Touch devices never show hover affordances — keep the thumb subtle. */
 html:not(.mobile) ::-webkit-scrollbar-thumb:hover {
-  background: var(--ink-600);
+  background: var(--text-muted);
 }
 ::-webkit-scrollbar-corner {
   background: transparent;
@@ -139,7 +139,7 @@ html:not(.mobile) ::-webkit-scrollbar-thumb:hover {
 @-moz-document url-prefix() {
   html:not(.mobile) * {
     scrollbar-width: thin;
-    scrollbar-color: var(--ink-700) transparent;
+    scrollbar-color: var(--border-strong) transparent;
   }
 }
 /* Mobile (html.mobile, set before first paint in web/index.html): hide
@@ -231,7 +231,7 @@ html.mobile * {
 
 /* Route chunk placeholder. Each route loads its own bundle, so a cold cache
  * shows this for a single round trip instead of a blank content area. */
-.route-loading { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 240px; color: var(--ink-500); }
+.route-loading { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 240px; color: var(--text-muted); }
 .route-loading-dot { width: 6px; height: 6px; border-radius: 9999px; background: currentColor; opacity: .35; animation: route-loading-pulse 1s ease-in-out infinite; }
 .route-loading-dot:nth-child(2) { animation-delay: .15s; }
 .route-loading-dot:nth-child(3) { animation-delay: .3s; }
