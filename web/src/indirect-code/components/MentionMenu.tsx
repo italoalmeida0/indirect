@@ -53,7 +53,7 @@ export function MentionMenu(props: {
                 onMouseDown={(e) => e.preventDefault()}
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.mentions.pick(path)}
-                class={`ui-menu-item w-full flex items-center gap-2 text-left px-2.5 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg text-xs font-mono cursor-pointer transition-colors ${
+                class={`ui-menu-item w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors ${
                   active()
                     ? "bg-accent-subtle text-fg"
                     : "hover:bg-surface-muted text-fg-secondary hover:text-fg"

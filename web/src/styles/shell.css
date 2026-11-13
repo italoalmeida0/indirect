@@ -12,7 +12,7 @@
 /* The same two-column workspace is used in every display mode. Its brand
  * row and conversation header become the titlebar in an installed window. */
 .rc-workspace-header { height: 3rem; }
-.rc-window-header { padding-inline: 0.75rem; }
+.rc-window-header { padding-inline: 1rem; }
 
 @media (display-mode: standalone), (display-mode: fullscreen) {
   /* The shell keeps its edge-to-edge background while its contents fit
@@ -54,14 +54,14 @@
   }
   .rc-workspace-header { height: var(--wco-header-height); }
   .rc-sidebar-header {
-    padding-left: max(0.75rem, calc(var(--wco-left) + 0.5rem));
-    padding-right: max(0.75rem, calc(100% - 100vw + var(--wco-right) + 0.5rem));
+    padding-left: max(0.875rem, calc(var(--wco-left) + 0.5rem));
+    padding-right: max(0.875rem, calc(100% - 100vw + var(--wco-right) + 0.5rem));
     -webkit-app-region: drag;
     app-region: drag;
   }
   .rc-window-header {
-    padding-left: max(0.75rem, calc(var(--wco-left) - var(--rc-sidebar-width) + 0.5rem));
-    padding-right: calc(var(--wco-right) + 0.75rem);
+    padding-left: max(1rem, calc(var(--wco-left) - var(--rc-sidebar-width) + 0.5rem));
+    padding-right: calc(var(--wco-right) + 1rem);
   }
   .rc-window-content {
     -webkit-app-region: drag;

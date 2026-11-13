@@ -267,7 +267,7 @@ function EraTimelineSection(props: {
         aria-expanded={props.open}
         onPointerDown={(e) => press(e.currentTarget)}
         onClick={() => props.onToggle()}
-        class="w-full flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 min-h-9 [@media(pointer:coarse)]:min-h-11 px-3 py-2 text-left hover:bg-surface-muted/60 transition-colors cursor-pointer min-w-0"
+        class="w-full flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 px-3 py-2 text-left hover:bg-surface-muted/60 transition-colors cursor-pointer min-w-0"
       >
         <Iconify
           icon="lucide:chevron-right"
@@ -292,7 +292,7 @@ function EraTimelineSection(props: {
         <Show when={props.block.topic?.trim()}>
           <span
             data-rc-tip={props.block.topic}
-            class="text-xs font-medium text-fg truncate min-w-[6rem] flex-1"
+            class="text-[11px] font-medium text-fg truncate min-w-[6rem] flex-1"
           >
             {props.block.topic}
           </span>
@@ -528,7 +528,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
           aria-expanded={expanded()}
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => setExpanded(!expanded())}
-          class="inline-flex flex-wrap justify-center items-center gap-1.5 max-w-full min-h-7 [@media(pointer:coarse)]:min-h-11 rounded-pill border border-border bg-surface-subtle px-3 py-1.5 text-2xs text-fg-secondary hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+          class="inline-flex flex-wrap justify-center items-center gap-1.5 max-w-full rounded-pill border border-border bg-surface-subtle px-2.5 py-1 text-2xs text-fg-secondary hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
         >
           <Iconify icon="lucide:archive" size={11} class="text-fg-muted shrink-0" />
           <span class="font-medium">Context Compacted</span>
@@ -641,7 +641,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={toggleAllEras}
                   data-rc-tip={allErasExpanded() ? "Collapse all eras" : "Expand all eras"}
-                  class="inline-flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-9 rounded-inner px-2 py-1 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                  class="inline-flex items-center gap-1 rounded-inner px-1.5 py-0.5 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                 >
                   <Iconify
                     icon={allErasExpanded() ? "lucide:chevrons-down-up" : "lucide:chevrons-up-down"}
@@ -655,7 +655,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                   type="button"
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={handleCopy}
-                  class="inline-flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-9 rounded-inner px-2 py-1 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                  class="inline-flex items-center gap-1 rounded-inner px-1.5 py-0.5 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   data-rc-tip={copied() ? "Copied" : "Copy summary"}
                   aria-label="Copy compaction summary"
                 >

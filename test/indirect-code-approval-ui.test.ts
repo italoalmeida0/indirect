@@ -177,7 +177,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(html).toContain('aria-label="Always allow (enable Full access)"');
     expect(html).toContain('data-action="approval-once"');
     expect(html).toContain("bg-fg text-background");
-    expect(html).toContain("min-h-8 [@media(pointer:coarse)]:min-h-11");
+    expect(html).toContain("min-h-7");
 
     // Verify Always allow button itself carries zero warning classes
     const alwaysBtnMatch = html.match(/<button[^>]*data-action="approval-always"[^>]*>/);

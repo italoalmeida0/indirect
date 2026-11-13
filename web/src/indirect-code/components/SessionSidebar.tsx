@@ -23,7 +23,7 @@ export function SessionStopButton(props: {
       onFocus={() => setHovered(true)}
       onBlur={() => setHovered(false)}
       disabled={props.isCancelling}
-      class={`rc-msg-action w-6 h-6 rounded-md flex items-center justify-center shrink-0 border border-transparent transition-colors ${
+      class={`rc-msg-action w-5 h-5 rounded-md flex items-center justify-center shrink-0 border border-transparent transition-colors ${
         props.isCancelling
           ? "text-fg-muted opacity-60 cursor-default"
           : hovered()
@@ -220,7 +220,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
         ctx.setRenameText(s.title);
         ctx.setRenamingId(s.id);
       }}
-      class={`group flex ${ctx.isMobile() ? "min-h-9 py-1" : "min-h-8"} items-center gap-2 px-2.5 rounded-lg cursor-pointer text-xs transition-colors touch-manipulation select-none [-webkit-touch-callout:none] ${
+      class={`group flex ${ctx.isMobile() ? "min-h-8 py-0.5" : "h-7.5"} items-center gap-1.5 px-2 rounded-lg cursor-pointer text-[12.5px] transition-colors touch-manipulation select-none [-webkit-touch-callout:none] ${
         isActive() && !ctx.selectionMode()
           ? "bg-surface-strong/70 font-medium text-fg"
           : selected()
@@ -342,7 +342,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
           <input
             type="text"
             aria-label="Rename conversation"
-            class="flex-1 min-w-0 h-7 bg-surface border border-border-strong rounded-md px-2 py-0.5 max-sm:text-base sm:text-xs text-fg select-text focus:outline-none focus:border-accent"
+            class="flex-1 min-w-0 h-6 bg-surface border border-border-strong rounded-md px-1.5 py-0.5 text-[12.5px] text-fg select-text focus:outline-none focus:border-accent"
             value={ctx.renameText()}
             onInput={(e) => ctx.setRenameText(e.currentTarget.value)}
             onKeyDown={(e) => {
@@ -381,7 +381,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
               e.stopPropagation();
               commitRename();
             }}
-            class="ui-icon-button ui-icon-button-xs shrink-0 text-accent hover:bg-surface-subtle"
+            class="inline-flex h-6 w-6 items-center justify-center rounded-md shrink-0 text-accent hover:bg-surface-subtle cursor-pointer"
           >
             <Iconify icon="lucide:check" size={13} />
           </button>
@@ -401,7 +401,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
               e.stopPropagation();
               cancelRename();
             }}
-            class="ui-icon-button ui-icon-button-xs shrink-0 text-fg-muted hover:text-fg hover:bg-surface-subtle"
+            class="inline-flex h-6 w-6 items-center justify-center rounded-md shrink-0 text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
           >
             <Iconify icon="lucide:x" size={13} />
           </button>

@@ -24,7 +24,7 @@ export function MenuItem(props: {
       aria-label={props.tip}
       class={
         props.class ??
-        "ui-menu-item w-full text-left px-2.5 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors flex items-center gap-2 cursor-pointer"
+        "ui-menu-item w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors flex items-center gap-2 cursor-pointer"
       }
     >
       {props.icon ? <Iconify icon={props.icon} size={props.iconSize ?? 13} class={props.iconClass} /> : null}

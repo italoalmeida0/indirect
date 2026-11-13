@@ -133,7 +133,7 @@ export function CodeBlock(props: {
       }}
       onScroll={props.embedded ? undefined : (e) => recordToolScroll(props.scrollKey, e.currentTarget)}
       data-code-gutter={hasGutter() ? "true" : undefined}
-      class={`font-mono text-xs leading-relaxed text-fg-secondary select-text ${
+      class={`font-mono text-[11.5px] leading-relaxed text-fg-secondary select-text ${
         props.embedded
           ? "overflow-visible"
           : `overflow-x-auto overflow-y-auto ${props.maxH || "max-h-56"}`

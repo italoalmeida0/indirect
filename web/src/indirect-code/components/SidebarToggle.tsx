@@ -12,7 +12,7 @@ export function SidebarToggle() {
     <button
       type="button"
       onClick={() => ui.setSidebarOpen(!ui.sidebarOpen())}
-      class="rc-sidebar-toggle ui-icon-button ui-icon-button-xs relative shrink-0 text-fg-muted hover:bg-surface-muted hover:text-fg"
+      class="rc-sidebar-toggle relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
       data-rc-tip={label()}
       data-rc-tip-placement="bottom"
       aria-label={label()}

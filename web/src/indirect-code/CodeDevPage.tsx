@@ -210,7 +210,7 @@ function JsonHighlightViewer(props: {
               placeholder="Find in JSON…"
               value={search()}
               onInput={(e) => setSearch(e.currentTarget.value)}
-              class="bg-background border border-border rounded-md px-2 py-0.5 pr-5 max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent w-32 sm:w-36"
+              class="bg-background border border-border rounded-md px-2 py-0.5 pr-5 text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent w-32 sm:w-36"
             />
             <Show when={search()}>
               <button
@@ -229,7 +229,7 @@ function JsonHighlightViewer(props: {
           <button
             type="button"
             onClick={() => setIsCompact(!isCompact())}
-            class="ui-button ui-button-outline ui-button-xs rounded-md"
+            class="px-2 py-0.5 bg-surface hover:bg-surface-muted text-fg-secondary hover:text-fg rounded-md border border-border text-xs transition-colors cursor-pointer"
             data-rc-tip="Toggle compact or pretty JSON"
           >
             {isCompact() ? "Pretty" : "Compact"}
@@ -239,7 +239,7 @@ function JsonHighlightViewer(props: {
           <button
             type="button"
             onClick={copyJson}
-            class="ui-button ui-button-outline ui-button-xs rounded-md gap-1 text-accent"
+            class="px-2 py-0.5 bg-surface hover:bg-surface-muted text-accent rounded-md border border-border text-xs flex items-center gap-1 transition-colors cursor-pointer"
             data-rc-tip="Copy full JSON"
           >
             <Icon name={Icons.copy} size={11} />
@@ -250,7 +250,7 @@ function JsonHighlightViewer(props: {
           <button
             type="button"
             onClick={downloadJson}
-            class="ui-button ui-button-outline ui-button-xs rounded-md gap-1"
+            class="px-2 py-0.5 bg-surface hover:bg-surface-muted text-fg-secondary hover:text-fg rounded-md border border-border text-xs flex items-center gap-1 transition-colors cursor-pointer"
             data-rc-tip="Download JSON file"
           >
             <Icon name={Icons.save} size={11} />
@@ -886,18 +886,18 @@ export default function CodeDevPage() {
       <header class="flex flex-wrap items-center justify-between px-4 py-2 bg-surface-subtle border-b border-border shrink-0 gap-3 z-20">
         <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
           <div class="flex items-center gap-2 min-w-0">
-            <span class="inline-flex items-center justify-center rounded-md bg-accent-subtle px-2 py-0.5 text-accent font-mono font-medium text-2xs border border-accent/35 shrink-0">
-              Dev
+            <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-accent-subtle text-accent font-mono font-medium text-xs border border-accent/35 shadow-2xs shrink-0">
+              DEV
             </span>
             <div class="flex flex-col min-w-0">
-              <span class="font-medium text-sm tracking-tight flex flex-wrap items-center gap-1.5">
-                Indirect Code · Network Inspector
-                <span class="text-2xs px-1.5 py-0.5 rounded-md bg-success-subtle text-success font-mono font-normal">
-                  DevTools
+              <span class="font-medium text-sm tracking-tight flex flex-wrap items-center gap-1.5 font-mono">
+                Indirect Code // Network Inspector
+                <span class="text-xs px-1.5 py-0.5 rounded bg-success-subtle text-success font-mono font-normal">
+                  DevTools style
                 </span>
               </span>
-              <span class="text-2xs text-fg-muted hidden sm:inline">
-                Exact AI wire payloads, full system prompt & native tools
+              <span class="text-xs text-fg-muted font-mono hidden sm:inline">
+                Exact AI Wire Payloads, Full System Prompt & Native Tools
               </span>
             </div>
           </div>
@@ -910,7 +910,7 @@ export default function CodeDevPage() {
             <select
               value={hosts.activeHostId()}
               onChange={(e) => hosts.setActiveHostId(e.currentTarget.value)}
-              class="min-w-0 max-w-56 bg-surface border border-border rounded-control px-2 py-1 max-sm:text-base sm:text-xs font-mono text-fg focus:outline-none focus:border-accent truncate"
+              class="min-w-0 max-w-56 bg-surface border border-border rounded-control px-2 py-1 text-xs font-mono text-fg focus:outline-none focus:border-accent truncate"
             >
               <For each={hosts.hosts()}>
                 {(h) => (
@@ -928,7 +928,7 @@ export default function CodeDevPage() {
             <select
               value={selectedSessionId()}
               onChange={(e) => setSelectedSessionId(e.currentTarget.value)}
-              class="min-w-0 flex-1 max-w-56 sm:max-w-64 bg-surface border border-border rounded-control px-2 py-1 max-sm:text-base sm:text-xs font-mono text-fg focus:outline-none focus:border-accent truncate"
+              class="min-w-0 flex-1 max-w-56 sm:max-w-64 bg-surface border border-border rounded-control px-2 py-1 text-xs font-mono text-fg focus:outline-none focus:border-accent truncate"
             >
               <option value="">No session (default)</option>
               <For each={sessions()}>
@@ -982,7 +982,7 @@ export default function CodeDevPage() {
           <button
             type="button"
             onClick={clearAllNetworkLogs}
-            class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5 hover:bg-danger-subtle hover:text-danger"
+            class="px-2.5 py-1 bg-surface hover:bg-danger-subtle text-fg-secondary hover:text-danger rounded-lg border border-border text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             data-rc-tip="Clear all recorded network payloads and events (Frontend-only)"
             data-rc-tip-placement="bottom"
           >
@@ -1007,7 +1007,7 @@ export default function CodeDevPage() {
           <button
             type="button"
             onClick={requestSessionDebug}
-            class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
+            class="px-2.5 py-1 bg-surface hover:bg-surface-muted text-fg-secondary hover:text-fg rounded-lg border border-border text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
             data-rc-tip="Refresh daemon debug state"
             data-rc-tip-placement="bottom"
           >
@@ -1109,7 +1109,7 @@ export default function CodeDevPage() {
                   placeholder="Filter requests…"
                   value={requestFilter()}
                   onInput={(e) => setRequestFilter(e.currentTarget.value)}
-                  class="min-w-0 flex-1 bg-surface border border-border rounded-control px-2.5 py-1 max-sm:text-base sm:text-xs font-mono text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent"
+                  class="min-w-0 flex-1 bg-surface border border-border rounded-control px-2.5 py-1 text-xs font-mono text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent"
                 />
                 <button
                   type="button"
@@ -1326,7 +1326,7 @@ export default function CodeDevPage() {
                             </div>
                             <button
                               onClick={() => copyText(req().system, "System prompt")}
-                              class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
+                              class="px-2.5 py-1 bg-surface hover:bg-surface-muted text-fg-secondary hover:text-fg rounded-lg border border-border text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                             >
                               <Icon name={Icons.copy} size={12} />
                               Copy prompt
@@ -1474,7 +1474,7 @@ export default function CodeDevPage() {
                 <select
                   value={eventFilter()}
                   onChange={(e) => setEventFilter(e.currentTarget.value)}
-                  class="bg-surface border border-border rounded-control px-2 py-1 max-sm:text-base sm:text-xs text-fg focus:outline-none focus:border-accent"
+                  class="bg-surface border border-border rounded-control px-2 py-1 text-xs text-fg focus:outline-none focus:border-accent"
                 >
                   <option value="all">All events ({liveEvents().length})</option>
                   <option value="llm">LLM requests / responses</option>
@@ -1501,7 +1501,7 @@ export default function CodeDevPage() {
                     setLiveThinking("");
                     setLiveText("");
                   }}
-                  class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1 hover:bg-danger-subtle hover:text-danger"
+                  class="px-2.5 py-1 bg-surface hover:bg-danger-subtle text-fg-secondary hover:text-danger rounded-lg border border-border text-xs flex items-center gap-1 transition-colors cursor-pointer"
                 >
                   <Icon name={Icons.trash} size={12} />
                   Clear stream
@@ -1625,7 +1625,7 @@ export default function CodeDevPage() {
                 </span>
                 <button
                   onClick={() => copyText(systemPrompt(), "System prompt")}
-                  class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
+                  class="px-2.5 py-1 bg-surface hover:bg-surface-muted text-fg-secondary hover:text-fg rounded-lg border border-border text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <Icon name={Icons.copy} size={13} />
                   Copy system prompt
@@ -1650,7 +1650,7 @@ export default function CodeDevPage() {
                   placeholder="Search tools by name…"
                   value={toolSearch()}
                   onInput={(e) => setToolSearch(e.currentTarget.value)}
-                  class="bg-surface border border-border rounded-control px-2.5 py-1 max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent w-full sm:w-64 min-w-0"
+                  class="bg-surface border border-border rounded-control px-2.5 py-1 text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent w-full sm:w-64 min-w-0"
                 />
               </div>
               <span class="text-fg-muted text-2xs font-sans">
@@ -1724,7 +1724,7 @@ export default function CodeDevPage() {
               </span>
               <button
                 onClick={() => setRawFrames([])}
-                class="ui-button ui-button-outline ui-button-xs rounded-lg hover:bg-danger-subtle hover:text-danger"
+                class="px-2.5 py-1 bg-surface hover:bg-danger-subtle text-fg-secondary hover:text-danger rounded-lg border border-border text-xs transition-colors cursor-pointer"
               >
                 Clear frames
               </button>
@@ -1777,7 +1777,7 @@ export default function CodeDevPage() {
                   placeholder="Filter events…"
                   value={walFilter()}
                   onInput={(e) => setWalFilter(e.currentTarget.value)}
-                  class="bg-surface border border-border rounded-control px-2 py-0.5 max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent min-w-0 w-36"
+                  class="bg-surface border border-border rounded-control px-2 py-0.5 text-xs text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent min-w-0 w-36"
                 />
               </div>
 
@@ -1904,7 +1904,7 @@ export default function CodeDevPage() {
               }
             }
           }}
-          class="min-w-0 flex-1 basis-48 bg-surface border border-border-strong rounded-control px-3 py-1.5 max-sm:text-base sm:text-xs font-mono text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent"
+          class="min-w-0 flex-1 basis-48 bg-surface border border-border-strong rounded-control px-3 py-1.5 text-xs font-mono text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent"
         />
 
         {/* Smoke Simulation Button */}
@@ -1912,7 +1912,7 @@ export default function CodeDevPage() {
           type="button"
           onClick={runSmokeSimulation}
           disabled={isSimulating()}
-          class="ui-button ui-button-outline ui-button-sm rounded-lg gap-1.5 border-warning/35 bg-warning-subtle text-warning hover:bg-warning/15 shrink-0"
+          class="px-3.5 py-1.5 bg-warning-subtle hover:bg-warning/15 text-warning font-medium rounded-control border border-warning/35 text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5 shadow-2xs"
           data-rc-tip="Simulate prompt right now without calling LLM (0 tokens billed)"
         >
           <Icon name="lucide:flame" size={13} />
@@ -1924,7 +1924,7 @@ export default function CodeDevPage() {
           type="button"
           onClick={sendQuickPrompt}
           disabled={!promptInput().trim() || !selectedSessionId()}
-          class="ui-button ui-button-primary ui-button-sm rounded-lg gap-1.5 shrink-0"
+          class="px-3.5 py-1.5 bg-accent hover:bg-accent-strong disabled:opacity-40 disabled:cursor-not-allowed text-accent-foreground font-medium rounded-control text-xs transition-colors cursor-pointer shrink-0 flex items-center gap-1.5"
           data-rc-tip="Send real turn prompt to the session"
         >
           <Icon name={Icons.send} size={13} />

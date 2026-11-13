@@ -173,14 +173,14 @@ export function WorkspaceSidebar() {
   }`}
 >
   {/* Brand Header */}
-  <div class="rc-workspace-header rc-sidebar-header flex items-center justify-between gap-2 px-3 shrink-0 border-b border-border select-none">
-    <div class="flex items-center gap-2 min-w-0">
+  <div class="rc-workspace-header rc-sidebar-header flex items-center justify-between gap-2 px-3.5 shrink-0 border-b border-border/60 select-none">
+    <div class="flex items-center gap-2.5 min-w-0">
       <img
         src="/indirect-icon.svg"
         alt="Indirect"
-        class="w-4 h-4 shrink-0 object-contain rounded-xs"
+        class="w-4.5 h-4.5 shrink-0 object-contain rounded"
       />
-      <span class="text-xs font-medium text-fg truncate">
+      <span class="text-[13px] font-medium tracking-tight text-fg truncate">
         Indirect Code
       </span>
     </div>
@@ -258,6 +258,7 @@ export function WorkspaceSidebar() {
             <SegmentedControl
               size="sm"
               label="Sidebar list view"
+              class="[&_.ui-segment]:px-2.5 [&_.ui-segment]:text-[11px] [&_.ui-segment]:gap-1.5"
               value={currentView()}
               onChange={(next) => s.setSidebarView?.(next)}
               options={[
@@ -308,7 +309,7 @@ export function WorkspaceSidebar() {
               if (s.selectionMode()) s.exitSelectionMode();
               else s.setSelectionMode(true);
             }}
-            class={`ui-icon-button ui-icon-button-xs ${s.selectionMode() ? "bg-surface-muted text-fg" : "text-fg-muted hover:text-fg hover:bg-surface-muted"}`}
+            class={`ui-icon-button h-6.5 w-6.5 rounded-md ${s.selectionMode() ? "bg-surface-muted text-fg" : "text-fg-muted hover:text-fg hover:bg-surface-muted"}`}
             data-rc-tip={s.selectionMode() ? "Exit selection mode" : "Select conversations"} aria-label={s.selectionMode() ? "Exit selection mode" : "Select conversations"}
           >
             <Iconify icon={s.selectionMode() ? "lucide:x" : "lucide:list-checks"} size={14} />
@@ -324,7 +325,7 @@ export function WorkspaceSidebar() {
                   e.stopPropagation();
                   s.setNewProjectMenuOpen(!s.newProjectMenuOpen());
                 }}
-                class="ui-icon-button ui-icon-button-xs text-fg-muted hover:text-fg hover:bg-surface-muted"
+                class="ui-icon-button h-6.5 w-6.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted"
                 data-rc-tip="Create new project" aria-label="Create new project"
               >
                 <Iconify icon="lucide:folder-plus" size={14} />
@@ -337,7 +338,7 @@ export function WorkspaceSidebar() {
                     s.setNewProjectMenuOpen(false);
                     s.openNewProjectModal();
                   }}
-                  class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+                  class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg hover:bg-surface-muted"
                 >
                   <Iconify icon="lucide:folder-plus" size={13} class="text-fg-muted shrink-0" />
                   <span>New project</span>
@@ -349,7 +350,7 @@ export function WorkspaceSidebar() {
                     s.setNewProjectMenuOpen(false);
                     s.quickStartProject();
                   }}
-                  class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted"
+                  class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted"
                 >
                   <Iconify icon="lucide:zap" size={13} class="text-warning shrink-0" />
                   <span>Quick start</span>
@@ -406,7 +407,7 @@ export function WorkspaceSidebar() {
                 return (
                   <div data-project-id={p.id}>
                     <div
-                      class={`group flex min-h-8 items-center gap-1 pr-1 rounded-lg text-xs transition-colors ${
+                      class={`group flex h-7.5 items-center gap-1 pr-1 rounded-lg text-[12.5px] transition-colors ${
                         activeProj()
                           ? "bg-surface-strong/70 font-medium text-fg"
                           : folderHasUnread()
@@ -425,7 +426,7 @@ export function WorkspaceSidebar() {
                           s.pickProject(p.id);
                           s.toggleProjectExpanded(p.id);
                         }}
-                        class="flex items-center gap-1.5 min-w-0 flex-1 min-h-8 pl-2.5 pr-1 text-left cursor-pointer rounded-lg"
+                        class="flex items-center gap-1.5 min-w-0 flex-1 h-7.5 pl-2 pr-1 text-left cursor-pointer rounded-lg"
                       >
                         <span aria-hidden="true" class="inline-flex h-4 w-4 shrink-0 items-center justify-center text-fg-muted">
                           <Iconify
@@ -570,7 +571,7 @@ export function WorkspaceSidebar() {
               s.startNewConversation(target.id);
               ui.closeSidebarOnMobile();
             }}
-            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg hover:bg-surface-muted"
           >
             <Iconify icon="lucide:plus" size={13} class="text-fg-muted shrink-0" />
             <span>New conversation</span>
@@ -583,7 +584,7 @@ export function WorkspaceSidebar() {
               closeProjectMenu();
               void copyWithToast(target.path);
             }}
-            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg hover:bg-surface-muted"
           >
             <Iconify icon="lucide:copy" size={13} class="text-fg-muted shrink-0" />
             <span>Copy project path</span>
@@ -598,7 +599,7 @@ export function WorkspaceSidebar() {
                 closeProjectMenu();
                 s.deleteProject(target.id, e);
               }}
-              class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 min-h-8 text-xs hover:bg-danger-subtle"
+              class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 text-xs hover:bg-danger-subtle"
             >
               <Iconify icon="lucide:trash-2" size={13} class="shrink-0" />
               <span>Remove project</span>
@@ -635,7 +636,7 @@ export function WorkspaceSidebar() {
               closeSessionMenu();
               s.togglePin(sess.id, e);
             }}
-            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg hover:bg-surface-muted"
           >
             <Iconify
               icon={target().pinned ? "lucide:pin-off" : "lucide:pin"}
@@ -653,7 +654,7 @@ export function WorkspaceSidebar() {
               s.setRenameText(sess.title);
               s.setRenamingId(sess.id);
             }}
-            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg hover:bg-surface-muted"
           >
             <Iconify icon="lucide:pencil" size={13} class="text-fg-muted shrink-0" />
             <span>Rename</span>
@@ -667,7 +668,7 @@ export function WorkspaceSidebar() {
               if (!s.selectionMode()) s.setSelectionMode?.(true);
               s.toggleSessionSelect(sess.id);
             }}
-            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg hover:bg-surface-muted"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg hover:bg-surface-muted"
           >
             <Iconify icon="lucide:check-square" size={13} class="text-fg-muted shrink-0" />
             <span>Select</span>
@@ -681,7 +682,7 @@ export function WorkspaceSidebar() {
               closeSessionMenu();
               void s.deleteSession(sess.id, e);
             }}
-            class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 min-h-8 text-xs hover:bg-danger-subtle"
+            class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 text-xs hover:bg-danger-subtle"
           >
             <Iconify icon="lucide:trash-2" size={13} class="shrink-0" />
             <span>Delete</span>
@@ -741,7 +742,7 @@ export function WorkspaceSidebar() {
             onClick={() => ui.daemonUpdate.apply()}
             disabled={busy}
             data-rc-tip={i.current ? `Update daemon (${i.current} → ${i.available})` : `Update daemon to ${i.available}`}
-            class="ui-button ui-button-primary ui-button-xs w-full rounded-lg gap-1.5"
+            class="ui-button ui-button-primary w-full rounded-full h-6 min-h-6 py-0 px-3 text-xs gap-1.5"
           >
             <Iconify icon="lucide:arrow-down-to-line" size={13} />
             <span>{busy ? "Updating…" : `Update to ${i.available}`}</span>

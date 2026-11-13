@@ -742,7 +742,7 @@ async function clickFarRightAndAssertAria(page: any, selector: string, label: st
   const before = await loc.getAttribute("aria-expanded");
   assert(before === "true" || before === "false", `${label}: expected aria-expanded boolean string, got ${before}`);
   const box = await loc.boundingBox();
-  assert(box && box.width > 40 && box.height >= 24, `${label}: unexpected bounding box ${JSON.stringify(box)}`);
+  assert(box && box.width > 40 && box.height >= 18, `${label}: unexpected bounding box ${JSON.stringify(box)}`);
   await page.mouse.click(box.x + box.width - 16, box.y + box.height / 2);
   await page.waitForTimeout(120);
   const after = await loc.getAttribute("aria-expanded");
@@ -778,6 +778,9 @@ async function measureOpenPopoverSymmetry(page: any, contextLabel: string) {
       leftInset,
       rightInset,
       diff: round2(Math.abs(leftInset - rightInset)),
+      isMenuItem: item.classList.contains("ui-menu-item"),
+      minHeightPx: parseFloat(getComputedStyle(item).minHeight) || 0,
+      itemHeight: round2(ir.height),
     };
   });
   assert(m, `${contextLabel}: expected visible [data-floatmenu] item`);
@@ -785,6 +788,12 @@ async function measureOpenPopoverSymmetry(page: any, contextLabel: string) {
     m.diff <= 1,
     `${contextLabel}: asymmetric FloatMenu insets left=${m.leftInset}px right=${m.rightInset}px (diff=${m.diff}px > 1px)`,
   );
+  if (m.isMenuItem) {
+    assert(
+      m.minHeightPx <= 32 && m.itemHeight <= 36,
+      `${contextLabel}: compact .ui-menu-item must not bloat to 44px (minHeight=${m.minHeightPx}px, height=${m.itemHeight}px)`,
+    );
+  }
   return m;
 }
 
@@ -1036,6 +1045,7 @@ try {
         const toolbarYs = toolbarBtns.map((b) => Math.round(b.getBoundingClientRect().top));
         const toolbarRowSpread = toolbarYs.length > 1 ? Math.max(...toolbarYs) - Math.min(...toolbarYs) : 0;
 
+        const compInput = document.querySelector<HTMLElement>("#rc-composer")!;
         return {
           overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
           scrollWidth: document.documentElement.scrollWidth,
@@ -1046,6 +1056,7 @@ try {
           taskPlan: rect('[aria-label="Task checklist"]'),
           shelf: rect("[data-composer-queue-shelf]"),
           composer: rect(".rc-composer"),
+          composerFontSize: getComputedStyle(compInput).fontSize,
           shelfRadius: shelfCs.borderRadius,
           composerRadius: compCs.borderRadius,
           composerShadow: compCs.boxShadow,
@@ -1079,6 +1090,7 @@ try {
         Math.abs(runningGeom.shelf.bottom - runningGeom.composer.top) <= 0.5,
         `${tag}: ComposerQueueShelf must dock flush onto .rc-composer (shelf.bottom=${runningGeom.shelf.bottom}, composer.top=${runningGeom.composer.top})`,
       );
+      assert.equal(runningGeom.composerFontSize, "13px", `${tag}: #rc-composer font-size must stay 13px`);
       assert.equal(runningGeom.shelfRadius, "18px 18px 0px 0px", `${tag}: ComposerQueueShelf top capsule radius`);
       assert.equal(runningGeom.composerRadius, "0px 0px 18px 18px", `${tag}: docked .rc-composer bottom capsule radius`);
       const shadowGeometryTokens = runningGeom.composerShadow.replace(/rgba?\([^)]*\)/g, "");
@@ -1192,7 +1204,7 @@ try {
         await page.keyboard.press("Escape");
         await page.waitForTimeout(100);
       } else {
-        // Mobile: + menu FloatMenu symmetry + >= 44px coarse hit target check (including ::after touch expansion)
+        // Mobile: + menu FloatMenu symmetry + sleek 28px visual circle + >= 44px coarse ::after hit target
         const addHit = await page.evaluate(() => {
           const el = document.querySelector<HTMLElement>(".rc-composer-add");
           if (!el) return null;
@@ -1200,11 +1212,16 @@ try {
           const after = getComputedStyle(el, "::after");
           const aw = parseFloat(after.width) || 0;
           const ah = parseFloat(after.height) || 0;
-          return { width: Math.max(r.width, aw), height: Math.max(r.height, ah) };
+          return {
+            visualWidth: r.width,
+            visualHeight: r.height,
+            width: Math.max(r.width, aw),
+            height: Math.max(r.height, ah),
+          };
         });
         assert(
-          addHit && addHit.height >= 44 && addHit.width >= 44,
-          `${tag}: .rc-composer-add coarse hit target < 44px (${JSON.stringify(addHit)})`,
+          addHit && addHit.visualWidth <= 30 && addHit.visualHeight <= 30 && addHit.height >= 44 && addHit.width >= 44,
+          `${tag}: .rc-composer-add expected <=30px visual & >=44px coarse hit target (${JSON.stringify(addHit)})`,
         );
         await page.locator(".rc-composer-add").first().click();
         await page.waitForTimeout(180);

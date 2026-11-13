@@ -335,7 +335,7 @@ export function ToolbarContext() {
                         aria-checked={active()}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => chooseModeSkill(mode.name)}
-                        class="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface-subtle px-2.5 py-2 min-h-9 [@media(pointer:coarse)]:min-h-11 text-left transition-colors cursor-pointer"
+                        class="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface-subtle px-2.5 py-1.5 text-left transition-colors cursor-pointer"
                       >
                         <Iconify icon={mode.icon} size={14} class="text-accent shrink-0" />
                         <span class="flex-1 min-w-0">
@@ -377,7 +377,7 @@ export function ToolbarContext() {
                       onBlur={() => setHoveredMode((cur) => (cur === mode.name ? null : cur))}
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => chooseModeSkill(mode.name)}
-                      class={`ui-segment flex-auto px-2 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-10 text-xs font-medium flex items-center justify-center gap-1.5 rounded-inner cursor-pointer transition-colors ${
+                      class={`ui-segment flex-auto px-2 py-1 text-xs font-medium flex items-center justify-center gap-1.5 rounded-inner cursor-pointer transition-colors ${
                         active() ? "text-fg" : "text-fg-muted hover:text-fg-secondary"
                       }`}
                     >
@@ -411,7 +411,7 @@ export function ToolbarContext() {
             {([name, skill]) => {
               const selected = () => effectiveSelectedSkills().includes(name);
               return (
-                <li data-id={name} class="group/skill flex items-center gap-1 rounded-lg px-1.5 py-1 min-h-9 [@media(pointer:coarse)]:min-h-11 hover:bg-surface-muted transition-colors">
+                <li data-id={name} class="group/skill flex items-center gap-1 rounded-lg px-1 py-0.5 hover:bg-surface-muted transition-colors">
                   <button
                     type="button"
                     data-handle
@@ -464,7 +464,7 @@ export function ToolbarContext() {
                       data-rc-tip={`Activation policy: ${shownUsable(name)} (click to cycle)`}
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }}
-                      class={`relative shrink-0 rounded-inner border px-1.5 py-1 font-mono text-2xs font-medium leading-none transition-colors cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-1/2 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:w-11 [@media(pointer:coarse)]:after:-translate-1/2 ${
+                      class={`shrink-0 rounded-inner border px-1.5 py-0.5 font-mono text-2xs font-medium leading-none transition-colors cursor-pointer ${
                         shownUsable(name) === "yolo"
                           ? "border-[color-mix(in_oklab,var(--warning)_32%,var(--border))] bg-warning-subtle text-warning hover:opacity-90"
                           : shownUsable(name) === "deny"
@@ -476,10 +476,10 @@ export function ToolbarContext() {
                     </button>
                   </Show>
                   <Show when={originalUsable(skill?.usable) === "yolo"}>
-                    <span data-rc-tip="Always usable without asking" class="shrink-0 rounded-inner border border-[color-mix(in_oklab,var(--warning)_26%,var(--border))] bg-warning-subtle px-1.5 py-1 font-mono text-2xs font-medium leading-none text-warning">yolo</span>
+                    <span data-rc-tip="Always usable without asking" class="shrink-0 rounded-inner border border-[color-mix(in_oklab,var(--warning)_26%,var(--border))] bg-warning-subtle px-1.5 py-0.5 font-mono text-2xs font-medium leading-none text-warning">yolo</span>
                   </Show>
                   <Show when={originalUsable(skill?.usable) === "deny"}>
-                    <span data-rc-tip="Hidden from model auto-activation" class="shrink-0 rounded-inner border border-border bg-surface-subtle px-1.5 py-1 font-mono text-2xs font-medium leading-none text-fg-muted">hidden</span>
+                    <span data-rc-tip="Hidden from model auto-activation" class="shrink-0 rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs font-medium leading-none text-fg-muted">hidden</span>
                   </Show>
                 </li>
               );
@@ -524,7 +524,7 @@ export function ToolbarContext() {
                 }
                 if (closeOnPick) c.setAccessMenuOpen(false);
               }}
-              class={`w-full flex items-start gap-2.5 px-2.5 py-2 min-h-10 [@media(pointer:coarse)]:min-h-11 text-left rounded-lg border transition-colors cursor-pointer ${
+              class={`w-full flex items-start gap-2.5 px-2.5 py-2 text-left rounded-lg border transition-colors cursor-pointer ${
                 active()
                   ? access.full
                     ? "border-[color-mix(in_oklab,var(--warning)_30%,var(--border))] bg-warning-subtle text-warning"
@@ -574,7 +574,7 @@ export function ToolbarContext() {
       ui.setModelMenuOpen(false);
       c.setAddContextOpen(next);
     }}
-    class="rc-composer-add ui-icon-button ui-icon-button-xs rounded-full text-fg-secondary"
+    class="rc-composer-add relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
     data-rc-tip={ui.isMobile() ? "Add & Settings" : "Add context"}
     aria-label={ui.isMobile() ? "Add & Settings" : "Add context"}
   >
@@ -742,7 +742,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
-              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
@@ -752,7 +752,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
-              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -768,7 +768,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("effort")}
-              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
@@ -778,7 +778,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
-              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -794,7 +794,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
-              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
@@ -807,7 +807,7 @@ export function ToolbarContext() {
                 applyDraft();
                 c.setAddContextOpen(false);
               }}
-              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -834,7 +834,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
-              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
@@ -844,7 +844,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
-              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
+              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -879,7 +879,7 @@ export function ToolbarContext() {
           applyDraft();
           c.setModeMenuOpen(false);
         }}
-        class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
+        class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
       >
         Done
       </button>

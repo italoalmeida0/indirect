@@ -99,7 +99,7 @@ export function DiffView(props: {
         requestAnimationFrame(() => restoreToolScroll(props.scrollKey, el));
       }}
       onScroll={props.embedded ? undefined : (e) => recordToolScroll(props.scrollKey, e.currentTarget)}
-      class={`font-mono text-xs leading-relaxed select-text ${
+      class={`font-mono text-[11.5px] leading-relaxed select-text ${
         props.embedded
           ? "overflow-visible"
           : "overflow-x-auto overflow-y-auto max-h-96"
@@ -214,7 +214,7 @@ export function DiffView(props: {
               containerRef?.scrollIntoView({ behavior: "smooth", block: "nearest" });
             });
           }}
-          class="flex items-center w-full min-h-8 [@media(pointer:coarse)]:min-h-11 text-left px-3 py-1.5 border-t border-border-subtle bg-surface-subtle text-2xs font-mono text-fg-muted hover:text-fg hover:bg-surface-muted/60 transition-colors cursor-pointer"
+          class="flex items-center w-full text-left px-3 py-1.5 border-t border-border-subtle bg-surface-subtle text-2xs font-mono text-fg-muted hover:text-fg hover:bg-surface-muted/60 transition-colors cursor-pointer"
         >
           +{hidden()} more lines
         </button>

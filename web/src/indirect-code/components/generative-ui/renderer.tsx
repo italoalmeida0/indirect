@@ -396,13 +396,13 @@ export function GenerativeUiWidget(props: {
           <div
             class={
               expanded()
-                ? "pointer-events-none flex items-center justify-end gap-1 [@media(pointer:coarse)]:gap-2 p-2"
+                ? "pointer-events-none flex items-center justify-end gap-1 p-2"
                 /* max-md: opacity-100 — no hover on touch screens, so the
                    reload/fullscreen/unload controls must always show there. */
-                : "pointer-events-none mb-2 flex items-center justify-end gap-0.5 [@media(pointer:coarse)]:gap-2 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100 max-md:opacity-100"
+                : "pointer-events-none mb-2 flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100 max-md:opacity-100"
             }
           >
-            <div class="pointer-events-auto flex items-center gap-0.5 [@media(pointer:coarse)]:gap-2">
+            <div class="pointer-events-auto flex items-center gap-0.5">
               <Show
                 when={!frozen()}
                 fallback={<MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />}
@@ -457,7 +457,7 @@ export function GenerativeUiWidget(props: {
                 <span class="text-xs font-medium text-fg-secondary">Source code</span>
                 <span class="rounded-xs bg-surface-muted px-1.5 py-0.5 font-mono tabular-nums text-2xs text-fg-muted truncate">{data().id}.tsx</span>
               </div>
-              <div class="flex items-center gap-1 [@media(pointer:coarse)]:gap-2 shrink-0">
+              <div class="flex items-center gap-1 shrink-0">
                 <MsgIconBtn
                   tip={copiedSource() ? "Copied" : "Copy source code"}
                   icon="lucide:copy"
@@ -483,8 +483,8 @@ export function GenerativeUiWidget(props: {
           </div>
         </Show>
         <Show when={frozen() && !streaming()}>
-          <div class="flex items-center justify-center gap-2 px-3 py-2">
-            <span class="truncate font-mono tabular-nums text-xs text-fg-muted">{data().id || "widget"}</span>
+          <div class="flex items-center justify-center gap-2 px-3 py-1.5">
+            <span class="truncate font-mono tabular-nums text-[11px] text-fg-muted">{data().id || "widget"}</span>
             <button
               type="button"
               class="ui-button ui-button-sm ui-button-outline cursor-pointer"
@@ -498,16 +498,16 @@ export function GenerativeUiWidget(props: {
           <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center p-4">
             <div class="flex max-w-full items-center gap-2 rounded-pill border border-border bg-surface-elevated py-1.5 pr-3.5 pl-3">
               <span class="h-3.5 w-3.5 shrink-0 ui-spinner text-fg-muted" />
-              <span class="truncate text-xs font-medium text-fg-secondary">
+              <span class="truncate text-[11px] font-medium text-fg-secondary">
                 {data().placeholder || "Building your widget"}
               </span>
             </div>
           </div>
         </Show>
         <Show when={missing()}>
-          <div class="flex items-center gap-2 px-3 py-2">
-            <span class="shrink-0 text-xs font-medium text-danger">Widget not found</span>
-            <span class="min-w-0 flex-1 truncate font-mono tabular-nums text-xs text-fg-muted">{data().id}</span>
+          <div class="flex items-center gap-2 px-3 py-1.5">
+            <span class="shrink-0 text-[11px] font-medium text-danger">Widget not found</span>
+            <span class="min-w-0 flex-1 truncate font-mono tabular-nums text-[11px] text-fg-muted">{data().id}</span>
             <Show when={props.onPrefillPrompt}>
               <button
                 type="button"
@@ -521,13 +521,13 @@ export function GenerativeUiWidget(props: {
         </Show>
         <Show when={isStatic() && !streaming() && !missing()}>
           <div class="p-4">
-            <div class="text-xs font-medium text-fg-secondary">{data().placeholder || "Interactive widget"}</div>
+            <div class="text-[11px] font-medium text-fg-secondary">{data().placeholder || "Interactive widget"}</div>
             <Show when={Object.keys(data().state ?? {}).length}>
-              <pre class="mt-2 max-h-40 overflow-auto rounded-control border border-border-subtle bg-surface-subtle p-2 font-mono text-xs text-fg-secondary">
+              <pre class="mt-2 max-h-40 overflow-auto rounded-control border border-border-subtle bg-surface-subtle p-2 font-mono text-[11px] text-fg-secondary">
                 {JSON.stringify(data().state ?? {}, null, 2)}
               </pre>
             </Show>
-            <div class="mt-2 text-xs text-fg-muted">
+            <div class="mt-2 text-[11px] text-fg-muted">
               Static preview · this fence has no <code>widget_id:</code> link to a stored widget source.
             </div>
           </div>
@@ -565,8 +565,8 @@ export function GenerativeUiWidget(props: {
         </Show>
         <Show when={error()}>
           <div class="flex items-center gap-2 border-t border-border-subtle bg-surface-subtle px-3 py-2">
-            <span class="shrink-0 text-xs font-medium text-danger">Widget error</span>
-            <span class="min-w-0 flex-1 truncate text-xs text-fg-secondary" data-rc-tip={error()}>
+            <span class="shrink-0 text-[11px] font-medium text-danger">Widget error</span>
+            <span class="min-w-0 flex-1 truncate text-[11px] text-fg-secondary" data-rc-tip={error()}>
               {error()}
             </span>
             <Show when={props.onPrefillPrompt}>
@@ -582,7 +582,7 @@ export function GenerativeUiWidget(props: {
               type="button"
               aria-label="Dismiss error"
               data-rc-tip="Dismiss error"
-              class="inline-flex min-h-7 min-w-7 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11 shrink-0 cursor-pointer items-center justify-center rounded-inner text-sm leading-none text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors"
+              class="shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[13px] leading-none text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors"
               onClick={() => setError("")}
             >
               ×

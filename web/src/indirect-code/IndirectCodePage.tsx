@@ -102,7 +102,7 @@ function WorkspaceHeader() {
             <span
               data-rc-tip={project()!.path}
               data-rc-tip-placement="bottom"
-              class="inline-flex max-w-28 sm:max-w-44 shrink-0 items-center gap-1.5 truncate text-xs text-fg-muted select-none"
+              class="inline-flex max-w-28 sm:max-w-44 shrink-0 items-center gap-1.5 truncate text-[12.5px] text-fg-muted select-none"
             >
               <Iconify icon="lucide:folder" size={12} class="shrink-0 text-fg-muted" />
               <span class="truncate">{project()!.name}</span>
@@ -112,7 +112,7 @@ function WorkspaceHeader() {
           <Show when={isHistory()}>
             <Iconify icon="lucide:history" size={13} class="shrink-0 text-fg-muted" />
           </Show>
-          <span class={`min-w-0 truncate text-xs select-none ${session.draftMode() && !isHistory() ? "text-fg-muted" : "font-medium text-fg"}`}>
+          <span class={`min-w-0 truncate text-[12.5px] select-none ${session.draftMode() && !isHistory() ? "text-fg-muted" : "font-medium text-fg"}`}>
             {title()}
           </span>
           <Show when={running()}>
@@ -127,7 +127,7 @@ function WorkspaceHeader() {
             <button
               type="button"
               onClick={() => ui.setHistoryView?.(!isHistory())}
-              class={`ui-icon-button ui-icon-button-xs ${isHistory() ? "bg-surface-muted text-fg" : "text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
+              class={`ui-icon-button h-7 w-7 rounded-lg ${isHistory() ? "bg-surface-muted text-fg" : "text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
               data-rc-tip="Conversation history (Ctrl+K)"
               data-rc-tip-placement="bottom"
               aria-label="Search conversations"
@@ -137,7 +137,7 @@ function WorkspaceHeader() {
             <button
               type="button"
               onClick={() => session.startNewConversation?.()}
-              class="ui-icon-button ui-icon-button-xs text-fg-muted hover:bg-surface-muted hover:text-fg"
+              class="ui-icon-button h-7 w-7 rounded-lg text-fg-muted hover:bg-surface-muted hover:text-fg"
               data-rc-tip="New conversation"
               data-rc-tip-placement="bottom"
               aria-label="Start new conversation"
@@ -223,7 +223,7 @@ export function UpdateFreezeOverlay() {
             <h2 class="mt-5 text-lg font-medium text-fg">
               Updating {updatingHost()?.name || updatingHost()?.hostname || "daemon"}…
             </h2>
-            <p class="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-fg-secondary">
+            <p class="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-fg-secondary">
               {upd()?.target ? `Installing ${upd()?.target}. ` : ""}Sessions are safe, nothing is lost.
             </p>
           </div>

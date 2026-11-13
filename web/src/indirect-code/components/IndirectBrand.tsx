@@ -3,7 +3,7 @@ export function IndirectBrand() {
   return (
     <div class="rc-brand flex flex-col items-center justify-center min-w-0" aria-label="Indirect Code">
       <img src="/indirect-big-icon.svg" alt="" class="rc-brand-image w-auto shrink-0 object-contain" />
-      <h1 class="rc-brand-name text-fg">Indirect</h1>
+      <h1 class="rc-brand-name font-mono font-medium tracking-wider text-fg">INDIRECT</h1>
     </div>
   );
 }

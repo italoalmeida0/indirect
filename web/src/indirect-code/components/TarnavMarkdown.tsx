@@ -274,8 +274,8 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         language.textContent = "code";
         const container = wrap.appendChild(document.createElement("div"));
         container.className = opts.noNestedScroll
-          ? "font-mono text-xs text-fg overflow-visible select-text"
-          : "font-mono text-xs text-fg overflow-x-auto overflow-y-auto select-text max-h-56";
+          ? "font-mono text-[11px] text-fg-secondary overflow-visible select-text"
+          : "font-mono text-[11px] text-fg-secondary overflow-x-auto overflow-y-auto select-text [scrollbar-gutter:stable] max-h-56";
         const pre = container.appendChild(document.createElement("pre"));
         pre.setAttribute("data-streamdown", "code-block");
         pre.className = opts.noNestedScroll
@@ -340,7 +340,7 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         wrap.setAttribute("data-streamdown", "table-wrapper");
         const toolbar = wrap.appendChild(document.createElement("div"));
         // Coarse-pointer 44px hit areas stay inside the message width.
-        toolbar.className = "flex items-center justify-end gap-1 [@media(pointer:coarse)]:gap-2 [@media(pointer:coarse)]:overflow-x-clip pb-1 text-xs text-fg-muted";
+        toolbar.className = "flex items-center justify-end gap-1 overflow-x-clip pb-1 text-xs text-fg-muted";
         const scroller = wrap.appendChild(document.createElement("div"));
         scroller.className = opts.noNestedScroll ? "rc-table-scroll overflow-hidden" : "rc-table-scroll overflow-x-auto";
         const table = scroller.appendChild(document.createElement("table"));

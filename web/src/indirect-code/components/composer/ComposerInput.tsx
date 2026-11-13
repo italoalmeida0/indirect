@@ -100,7 +100,7 @@ export function ComposerInput() {
             onClick={() => {
               c.removePendingAttachment(att.key);
             }}
-            class="relative shrink-0 mr-1 flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-1/2 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:w-11 [@media(pointer:coarse)]:after:-translate-1/2"
+            class="shrink-0 mr-1 flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors cursor-pointer"
             disabled={c.sending()}
             data-rc-tip="Remove attachment" aria-label={`Remove ${att.name}`}
           >
@@ -127,7 +127,7 @@ export function ComposerInput() {
     ref={textareaRef}
     disabled={s.creatingSession() || c.sending()}
     rows={1}
-    class="flex-1 min-w-0 bg-transparent text-sm max-sm:text-base leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-1 max-h-[160px] min-h-9 overflow-y-hidden"
+    class="flex-1 min-w-0 bg-transparent text-[13px] leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-1 max-h-[160px] min-h-9 overflow-y-hidden"
     placeholder={ui.isMobile() ? "Ask anything · @ files · / actions" : "Ask anything, @ to mention, / for actions"}
     value={c.inputPrompt()}
     onFocus={() => c.mentions.setFocused(true)}
@@ -225,7 +225,7 @@ export function ComposerInput() {
       onClick={() => {
         c.setInputPrompt("");
       }}
-      class="ui-icon-button ui-icon-button-xs shrink-0 mr-2.5 mt-2 rounded-full text-fg-muted"
+      class="inline-flex h-6 w-6 shrink-0 mr-2.5 mt-2 items-center justify-center rounded-full text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
       data-rc-tip="Clear input" aria-label="Clear input"
     >
       <Iconify icon="lucide:x" size={13} />

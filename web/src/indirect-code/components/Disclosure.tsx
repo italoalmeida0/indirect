@@ -20,7 +20,7 @@ export interface DisclosureTriggerProps {
   children: JSX.Element;
 }
 
-/** Shared full-row disclosure button with >=44px coarse-pointer touch height and 20px icon+gap axis. */
+/** Shared full-row disclosure button with 20px icon+gap axis. */
 export function DisclosureTrigger(props: DisclosureTriggerProps) {
   return (
     <button
@@ -30,7 +30,7 @@ export function DisclosureTrigger(props: DisclosureTriggerProps) {
       data-step-rail-header={props["data-step-rail-header"]}
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={props.onClick}
-      class={`group/disc flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 items-center gap-1.5 rounded-lg min-h-7 [@media(pointer:coarse)]:min-h-11 text-left cursor-pointer hover:bg-surface-muted/60 transition-colors ${props.class ?? ""}`}
+      class={`group/disc flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 py-0.5 items-center gap-1.5 rounded-md text-left cursor-pointer hover:bg-surface-muted/60 transition-colors ${props.class ?? ""}`}
     >
       <Show when={!props.hideChevron}>
         <span class="inline-flex w-3.5 shrink-0 items-center justify-center">

@@ -821,6 +821,7 @@ export function Select(props: {
         }));
         onCleanup(() => setListEl(undefined));
       }} role="listbox" aria-label={props.ariaLabel ?? props.label ?? "Options"} onKeyDown={onKeyDown}
+        data-density={button?.closest?.("[data-density]")?.getAttribute("data-density") ?? undefined}
         class={`ui-popover ui-menu ui-select-menu ${props.variant === "toolbar" ? "ui-select-toolbar-menu" : ""}`}>
         <span ref={setIndicator} class="ui-menu-highlight" aria-hidden="true" />
         <Show when={props.menuTitle}><div class="ui-select-menu-title" role="presentation">{props.menuTitle}</div></Show>

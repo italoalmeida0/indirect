@@ -123,7 +123,7 @@ export function NewProjectModal() {
           onClick={() => s.requestFolders(s.folderParent())}
           data-rc-tip="Parent folder"
           aria-label="Parent folder"
-          class="ui-icon-button ui-icon-button-xs shrink-0 rounded-lg"
+          class="ui-icon-button h-7 w-7 shrink-0 rounded-lg"
         >
           <Iconify icon="lucide:arrow-up" size={14} />
         </button>
@@ -134,7 +134,7 @@ export function NewProjectModal() {
           onClick={() => s.requestFolders("~")}
           data-rc-tip="Home directory"
           aria-label="Home directory"
-          class="ui-icon-button ui-icon-button-xs shrink-0 rounded-lg"
+          class="ui-icon-button h-7 w-7 shrink-0 rounded-lg"
         >
           <Iconify icon="lucide:home" size={14} />
         </button>
@@ -191,7 +191,7 @@ export function NewProjectModal() {
           data-rc-tip="Close"
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={closeModal}
-          class="ui-icon-button ui-icon-button-xs shrink-0 rounded-lg"
+          class="ui-icon-button h-7 w-7 shrink-0 rounded-lg"
         >
           <Iconify icon="lucide:x" size={15} />
         </button>
@@ -212,7 +212,7 @@ export function NewProjectModal() {
         />
         <input
           aria-label="Folder path on host"
-          class="min-w-0 flex-1 bg-transparent py-0.5 font-mono max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted outline-none"
+          class="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-xs text-fg placeholder:text-fg-muted outline-none"
           value={s.newProjectPath()}
           placeholder="/home/user/my-project"
           ref={(el) => {
@@ -229,7 +229,7 @@ export function NewProjectModal() {
           type="submit"
           data-rc-tip="Navigate to path"
           onPointerDown={(e) => press(e.currentTarget)}
-          class="ui-button ui-button-outline ui-button-xs shrink-0 rounded-lg gap-1"
+          class="inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
         >
           <span>Go</span>
           <Iconify icon="lucide:corner-down-left" size={11} />
@@ -288,7 +288,7 @@ export function NewProjectModal() {
                     if (s.folderError()) s.setFolderError("");
                     s.requestFolders(folder.path);
                   }}
-                  class={`flex w-full min-h-9 [@media(pointer:coarse)]:min-h-11 items-center justify-between gap-2.5 rounded-lg px-2.5 py-1.5 text-left transition-colors cursor-pointer group ${
+                  class={`flex w-full items-center justify-between gap-2.5 rounded-lg px-2 py-1 text-left transition-colors cursor-pointer group ${
                     selected()
                       ? "bg-accent-subtle text-fg"
                       : "text-fg-secondary hover:bg-surface-muted/75 hover:text-fg"

@@ -130,7 +130,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
                 type="button"
                 role="menuitemradio"
                 aria-checked={active()}
-                class={`ui-menu-item rounded-lg px-2.5 py-1.5 min-h-9 text-xs ${
+                class={`ui-menu-item rounded-lg px-2.5 py-1.5 text-xs ${
                   active()
                     ? "bg-surface-muted text-fg"
                     : "text-fg-secondary hover:bg-surface-muted hover:text-fg"
@@ -167,7 +167,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
         <div class="mt-1 border-t border-border-subtle pt-1 space-y-0.5">
           <button
             type="button"
-            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted"
             onClick={() => { h.setHostMenuOpen(false); void h.loadHosts(); }}
           >
             <Iconify icon="lucide:refresh-cw" size={13} class="text-fg-muted shrink-0" />
@@ -175,7 +175,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
           </button>
           <button
             type="button"
-            class="ui-menu-item rounded-lg px-2.5 py-1.5 min-h-8 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted"
+            class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted"
             onClick={() => { h.setHostMenuOpen(false); void m.generatePairingToken(); }}
           >
             <Iconify icon="lucide:plus" size={13} class="text-fg-muted shrink-0" />
@@ -183,7 +183,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
           </button>
           <button
             type="button"
-            class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 min-h-8 text-xs hover:bg-danger-subtle"
+            class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 text-xs hover:bg-danger-subtle"
             onClick={() => { h.setHostMenuOpen(false); void h.removeHost(); }}
           >
             <Iconify icon="lucide:trash-2" size={13} class="shrink-0" />

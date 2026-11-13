@@ -271,7 +271,7 @@ function WidgetEditCard(props: { sec: FileEditSection; scrollKey?: string; hideH
           aria-expanded={open()}
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => setOpen(!open())}
-          class="group/file flex w-full min-h-8 [@media(pointer:coarse)]:min-h-11 items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted/60 text-xs text-left cursor-pointer transition-colors select-none"
+          class="group/file flex w-full items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted/60 text-xs text-left cursor-pointer transition-colors select-none"
         >
           <div class="flex items-center gap-2 min-w-0 flex-1">
             <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent" />

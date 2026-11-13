@@ -46,12 +46,12 @@ export interface MsgActionState {
 /** Hover actions for user bubbles (fork/copy/edit). */
 export function UserMsgActions(props: MsgActionState & { onEdit: () => void }) {
   return (
-    <div class="rc-message-actions flex items-center gap-0.5 [@media(pointer:coarse)]:gap-2 -mr-1.5 mt-1 transition-opacity">
+    <div class="rc-message-actions flex items-center gap-0.5 -mr-1.5 mt-1 transition-opacity">
       <MsgIconBtn tip="Fork conversation from here" icon="lucide:git-branch" disabled={props.forking || !props.canFork} onClick={props.onFork} />
       <Show when={props.showCopy}>
-        <MsgIconBtn tip="Copy" icon="lucide:copy" copied={props.copied} onClick={props.onCopy} />
+        <MsgIconBtn tip="Copy" icon="lucide:copy" compact copied={props.copied} onClick={props.onCopy} />
       </Show>
-      <MsgIconBtn tip="Edit and resend" icon="lucide:pencil" onClick={props.onEdit} />
+      <MsgIconBtn tip="Edit and resend" icon="lucide:pencil" compact onClick={props.onEdit} />
     </div>
   );
 }
@@ -59,7 +59,7 @@ export function UserMsgActions(props: MsgActionState & { onEdit: () => void }) {
 /** Hover actions for assistant bubbles (fork/copy/regenerate). */
 export function AssistantMsgActions(props: MsgActionState & { onRegenerate: () => void; duration?: string }) {
   return (
-    <div class="rc-message-actions flex items-center gap-0.5 [@media(pointer:coarse)]:gap-2 -ml-1.5 mt-1 transition-opacity">
+    <div class="rc-message-actions flex items-center gap-0.5 -ml-1.5 mt-1 transition-opacity">
       <MsgIconBtn tip="Fork conversation from here" icon="lucide:git-branch" disabled={props.forking || !props.canFork} onClick={props.onFork} />
       <Show when={props.showCopy}>
         <MsgIconBtn tip="Copy" icon="lucide:copy" copied={props.copied} onClick={props.onCopy} />

@@ -126,7 +126,7 @@ export function HistoryView(props: HistoryViewProps) {
           <button
             type="button"
             onClick={() => props.setHistoryView(false)}
-            class="ui-button ui-button-outline ui-button-sm shrink-0 rounded-lg"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer shrink-0"
             data-rc-tip="Back to chat"
             aria-label="Back to chat"
           >
@@ -149,7 +149,7 @@ export function HistoryView(props: HistoryViewProps) {
                   ? "Search conversations, folders, or messages…"
                   : "Search conversations, folders, or messages… (Ctrl+K)"
               }
-              class="min-w-0 flex-1 bg-transparent max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted focus:outline-none"
+              class="min-w-0 flex-1 bg-transparent text-[13px] text-fg placeholder:text-fg-muted focus:outline-none"
               value={props.sessionFilter()}
               onInput={(e) => {
                 props.setSessionFilter(e.currentTarget.value);
@@ -277,7 +277,7 @@ export function HistoryView(props: HistoryViewProps) {
                                 />
                               </span>
                               <span
-                                class={`truncate text-xs ${
+                                class={`truncate text-[13px] ${
                                   unread() ? "font-medium text-fg" : "text-fg-secondary"
                                 } group-hover:text-fg transition-colors`}
                               >
@@ -368,7 +368,7 @@ export function HistoryView(props: HistoryViewProps) {
                                 </Show>
                               </span>
                               <span
-                                class={`truncate text-xs ${
+                                class={`truncate text-[13px] ${
                                   unread() ? "font-medium text-fg" : "text-fg-secondary group-hover:text-fg"
                                 } transition-colors`}
                               >

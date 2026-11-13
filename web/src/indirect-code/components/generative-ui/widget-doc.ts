@@ -152,11 +152,11 @@ body {
 .gu-header .gu-title, .gu-header .gu-subtitle { margin-bottom: 2px; }
 .gu-header .gu-caption, .gu-header .gu-body { margin: 0; }
 /* Type scale: one clear hierarchy (title > subtitle > body > caption). */
-.gu-title { font-size: 17px; font-weight: 500; line-height: 1.3; letter-spacing: -0.02em; text-wrap: balance; margin: 0 0 3px; color: var(--gu-text); }
-.gu-subtitle { font-size: 13.5px; font-weight: 500; line-height: 1.4; letter-spacing: -0.01em; margin: 0 0 3px; color: var(--gu-text); }
+.gu-title { font-size: 17px; font-weight: 600; line-height: 1.3; letter-spacing: -0.02em; text-wrap: balance; margin: 0 0 3px; color: var(--gu-text); }
+.gu-subtitle { font-size: 13.5px; font-weight: 600; line-height: 1.4; letter-spacing: -0.01em; margin: 0 0 3px; color: var(--gu-text); }
 .gu-body { margin: 0 0 10px; color: var(--gu-text); text-wrap: pretty; }
 .gu-caption { font-size: 12px; line-height: 1.5; color: var(--gu-text-faint); margin: 0 0 12px; text-wrap: pretty; }
-.gu-strong { font-weight: 500; }
+.gu-strong { font-weight: 600; }
 .gu-dim { color: var(--gu-text-dim); }
 .gu-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
 .gu-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gu-gap); }
@@ -191,7 +191,7 @@ body {
   appearance: none; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: 32px; padding: 0 14px;
-  font: inherit; font-size: 13px; font-weight: 500; line-height: 1.2; white-space: nowrap;
+  font: inherit; font-size: 13px; font-weight: 550; line-height: 1.2; white-space: nowrap;
   color: var(--gu-text);
   background: var(--gu-elev);
   border: 1px solid var(--gu-line);
@@ -224,7 +224,7 @@ body {
 }
 .gu-segmented .gu-btn, .gu-segmented button {
   min-height: 28px; padding: 0 12px; min-width: 0;
-  font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; font-weight: 550; cursor: pointer;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: transparent; border: 0; border-radius: 8px; box-shadow: none; color: var(--gu-text-dim);
 }
@@ -237,7 +237,7 @@ body {
 .gu-choice {
   appearance: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
   min-height: 40px; padding: 8px 10px;
-  font: inherit; font-size: 13px; font-weight: 500; color: var(--gu-text);
+  font: inherit; font-size: 13px; font-weight: 550; color: var(--gu-text);
   background: var(--gu-elev); border: 1px solid var(--gu-line); border-radius: 10px;
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
@@ -296,13 +296,13 @@ body {
   width: 17px; height: 17px; margin: 0; flex: none; accent-color: var(--gu-accent); cursor: pointer;
 }
 .gu-field { display: flex; flex-direction: column; gap: 6px; }
-.gu-field > span { font-size: 12px; font-weight: 500; color: var(--gu-text-dim); display: flex; justify-content: space-between; gap: 8px; }
-.gu-field > span output, .gu-field > span .gu-field-value { font-weight: 500; color: var(--gu-text); font-variant-numeric: tabular-nums; }
+.gu-field > span { font-size: 12px; font-weight: 550; color: var(--gu-text-dim); display: flex; justify-content: space-between; gap: 8px; }
+.gu-field > span output, .gu-field > span .gu-field-value { font-weight: 600; color: var(--gu-text); font-variant-numeric: tabular-nums; }
 .gu-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; min-height: 28px; }
 .gu-chip {
   display: inline-flex; align-items: center; gap: 5px;
   min-height: 24px; padding: 2px 10px; border-radius: 999px;
-  font-size: 12px; font-weight: 500;
+  font-size: 12px; font-weight: 550;
   color: var(--gu-text-dim);
   background: var(--gu-fill);
   border: 0;
@@ -316,7 +316,7 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
 .gu-badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 500; line-height: 1.4; white-space: nowrap;
+  font-size: 11px; font-weight: 600; line-height: 1.4; white-space: nowrap;
   color: var(--gu-text-dim);
   background: var(--gu-fill);
 }
@@ -341,14 +341,14 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
   box-shadow: var(--gu-shadow);
   padding: 12px;
 }
-.gu-kpi-value { display: block; font-size: 21px; font-weight: 500; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.gu-kpi-value { display: block; font-size: 21px; font-weight: 650; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .gu-kpi-label { display: block; font-size: 12px; font-weight: 500; color: var(--gu-text-faint); margin-top: 2px; }
 /* Tables: hairlines only, no zebra, always inside .gu-table-wrap. */
 .gu-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: var(--gu-radius); }
 .gu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .gu-table th {
-  text-align: left; font-size: 12px; font-weight: 500;
-  color: var(--gu-text-faint); white-space: nowrap;
+  text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--gu-text-faint); white-space: nowrap;
   padding: 8px 10px; border-bottom: 1px solid var(--gu-line);
 }
 .gu-table td {
@@ -371,7 +371,7 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
   background: var(--gu-chart-1);
   transition: width 260ms ease;
 }
-.gu-bar-value { flex: 0 0 auto; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.gu-bar-value { flex: 0 0 auto; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .gu-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--gu-text-dim); }
 .gu-swatch {
   display: inline-block; width: 9px; height: 9px; border-radius: 3px;

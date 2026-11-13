@@ -39,7 +39,7 @@ export function Onboarding() {
         {/* Workstation Pairing Hero */}
         <div>
           <IndirectBrand />
-          <p class="text-sm text-fg-secondary mt-4 max-w-md mx-auto leading-relaxed">
+          <p class="text-[13px] text-fg-secondary mt-5 max-w-md mx-auto leading-relaxed">
             Pair a workstation or server to run your coding agent from anywhere. Source files, git state, and sessions stay local on that machine.
           </p>
         </div>
@@ -127,7 +127,7 @@ export function Onboarding() {
                         aria-selected={osTab() === "unix"}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => setOsTab("unix")}
-                        class={`inline-flex min-h-7 [@media(pointer:coarse)]:min-h-10 items-center gap-1.5 rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
+                        class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "unix"
                             ? "border-border bg-surface text-fg"
                             : "border-transparent text-fg-muted hover:text-fg"
@@ -142,7 +142,7 @@ export function Onboarding() {
                         aria-selected={osTab() === "windows"}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => setOsTab("windows")}
-                        class={`inline-flex min-h-7 [@media(pointer:coarse)]:min-h-10 items-center gap-1.5 rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
+                        class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "windows"
                             ? "border-border bg-surface text-fg"
                             : "border-transparent text-fg-muted hover:text-fg"
@@ -157,7 +157,7 @@ export function Onboarding() {
                       type="button"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => copyCmd(osTab(), activeCmd())}
-                      class="ui-button ui-button-outline ui-button-xs rounded-md gap-1.5 ml-auto"
+                      class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer ml-auto"
                     >
                       <Iconify
                         icon={copiedKey() === osTab() ? "lucide:check" : "lucide:copy"}
@@ -200,10 +200,10 @@ export function Onboarding() {
                     {(item, idx) => (
                       <div class={idx() > 0 ? "sm:pl-3.5 pr-2 space-y-0.5" : "pr-2 space-y-0.5"}>
                         <div class="flex items-center gap-1.5">
-                          <span class="font-mono text-2xs font-medium text-accent tabular-nums">
+                          <span class="font-mono text-[10px] font-medium text-accent tabular-nums">
                             {item.step}
                           </span>
-                          <span class="text-xs font-medium text-fg">{item.title}</span>
+                          <span class="text-[11px] font-medium text-fg">{item.title}</span>
                         </div>
                         <p class="text-2xs text-fg-muted leading-relaxed">{item.desc}</p>
                       </div>
@@ -219,16 +219,20 @@ export function Onboarding() {
                   </div>
 
                   <div class="flex items-center gap-2 ml-auto flex-wrap">
-                    <Btn variant="outline" size="sm" onClick={h.loadHosts}>
+                    <button
+                      type="button"
+                      onClick={h.loadHosts}
+                      class="inline-flex items-center justify-center rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                    >
                       Check connection
-                    </Btn>
-                    <Btn
-                      variant="outline"
-                      size="sm"
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => m.generatePairingToken({ silent: true })}
+                      class="inline-flex items-center justify-center rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       Regenerate token
-                    </Btn>
+                    </button>
                   </div>
                 </div>
               </div>

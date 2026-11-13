@@ -183,7 +183,7 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string; hideHea
           aria-expanded={open()}
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => setOpen(!open())}
-          class="group/file w-full flex items-center justify-between gap-2 min-h-8 [@media(pointer:coarse)]:min-h-11 px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted/60 text-xs text-left cursor-pointer transition-colors"
+          class="group/file w-full flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted/60 text-xs text-left cursor-pointer transition-colors"
         >
           <div class="flex items-center gap-2 min-w-0 flex-1">
             <Iconify

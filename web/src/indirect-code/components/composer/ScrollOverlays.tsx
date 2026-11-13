@@ -21,7 +21,7 @@ export function ScrollOverlays() {
           type="button"
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => t.pinAtBottom()}
-          class="pointer-events-auto inline-flex items-center gap-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 px-3.5 py-1.5 rounded-full text-xs font-medium bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+          class="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
         >
           <Iconify icon="lucide:pin" size={13} class="text-accent shrink-0" />
           <span>Pin at bottom</span>
@@ -36,7 +36,7 @@ export function ScrollOverlays() {
       data-history-jump-latest
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => t.reloadLatest()}
-      class="pointer-events-auto inline-flex items-center gap-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 px-3.5 py-1.5 rounded-full text-xs font-medium bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+      class="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
     >
       <Iconify icon="lucide:arrow-down" size={13} class="text-accent shrink-0" />
       <span>Viewing older history · <span class="text-fg">Jump to latest</span></span>
@@ -65,7 +65,7 @@ export function ScrollOverlays() {
             onMouseDown={(e) => e.preventDefault()}
             onPointerDown={(e) => press(e.currentTarget)}
             onClick={() => c.pickSlash(sc.cmd)}
-            class={`ui-menu-item w-full text-left px-2.5 py-1.5 min-h-9 [@media(pointer:coarse)]:min-h-11 rounded-lg text-xs flex items-center justify-between gap-3 transition-colors cursor-pointer ${
+            class={`ui-menu-item w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-3 transition-colors cursor-pointer ${
               active()
                 ? "bg-accent-subtle text-fg"
                 : "text-fg-secondary hover:bg-surface-muted hover:text-fg"

@@ -25,7 +25,7 @@ function ComposerCollapseToggle(props: { withHint: boolean }) {
         aria-label={label()}
         data-rc-tip={label()}
         data-composer-collapse
-        class={`ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted ${props.withHint ? "ml-auto" : ""}`}
+        class={`inline-flex h-6 w-6 items-center justify-center shrink-0 rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer ${props.withHint ? "ml-auto" : ""}`}
       >
         <Iconify icon={collapsed() ? "lucide:chevron-up" : "lucide:chevron-down"} size={14} />
       </button>
@@ -82,7 +82,7 @@ export function StatusBanners() {
     data-rc-tip={restoreLabel()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={ui.toggleComposerCollapsed}
-    class="w-full flex items-center gap-2 rounded-panel border border-border bg-surface-subtle hover:bg-surface-muted px-3.5 py-2 min-h-9 [@media(pointer:coarse)]:min-h-11 text-xs text-fg-muted text-left transition-colors cursor-pointer min-w-0"
+    class="w-full flex items-center gap-2 rounded-panel border border-border bg-surface-subtle hover:bg-surface-muted px-3 py-1.5 text-xs text-fg-muted text-left transition-colors cursor-pointer min-w-0"
   >
     <Show
       when={hasTurnRow()}
@@ -137,7 +137,7 @@ export function StatusBanners() {
 </Show>
 <Show when={s.activeSessionId() && t.todos().length && !collapsed()}>
   <section aria-label="Task checklist" class="mb-2 rounded-panel border border-border bg-surface-subtle text-xs overflow-hidden">
-    <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={() => t.toggleTodosOpen()} aria-expanded={t.todosOpen()} class="w-full px-3.5 py-2 min-h-9 [@media(pointer:coarse)]:min-h-11 flex items-center gap-2 text-fg-secondary hover:bg-surface-muted transition-colors cursor-pointer">
+    <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={() => t.toggleTodosOpen()} aria-expanded={t.todosOpen()} class="w-full px-3 py-1.5 flex items-center gap-2 text-fg-secondary hover:bg-surface-muted transition-colors cursor-pointer">
       <Iconify icon="lucide:list-checks" size={13} class={completedTodos() === t.todos().length ? "text-success shrink-0" : "text-accent shrink-0"} />
       <span class="font-medium text-fg">Task plan</span>
       <span class="inline-flex items-center gap-1.5 rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs font-medium tabular-nums text-fg-secondary">
@@ -152,7 +152,7 @@ export function StatusBanners() {
       <span class="flex-1 truncate text-left text-fg-muted">{!t.todosOpen() ? (t.todos().find((item) => item.status === "in_progress")?.text || "").replace(/`+/g, "") : ""}</span>
       <Iconify icon="lucide:chevron-down" size={13} class={`shrink-0 text-fg-muted transition-transform duration-150 ${t.todosOpen() ? "rotate-180" : ""}`} />
     </button>
-    <Show when={t.todosOpen()}><ol class="px-3.5 pb-2.5 pt-2 border-t border-border-subtle space-y-1.5 max-h-44 overflow-y-auto overscroll-contain">
+    <Show when={t.todosOpen()}><ol class="px-3 pb-2 pt-1.5 border-t border-border-subtle space-y-1.5 max-h-44 overflow-y-auto overscroll-contain">
       <Index each={t.todos()}>{(item) => {
         const todoBusy = () => item().status === "in_progress" && t.sessionStatus() === "running";
         const todoShimmerStyle = createShimmerStyle(todoBusy);
@@ -174,7 +174,7 @@ export function StatusBanners() {
         <p class="font-medium text-fg">{typeof navigator !== "undefined" && !navigator.onLine ? "Network offline" : h.connectionState() !== "connected" ? "Reconnecting to the gateway…" : `${h.activeHost()?.name || "Host"} is offline`}</p>
         <p class="mt-0.5 text-fg-secondary">{typeof navigator !== "undefined" && !navigator.onLine ? "Check your internet connection to continue." : h.connectionState() !== "connected" ? "Restoring connection to gateway…" : "Start the daemon on this host to continue."}</p>
       </div>
-      <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={h.reconnect || h.loadHosts} class="shrink-0 inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Retry</button>
+      <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={h.reconnect || h.loadHosts} class="shrink-0 inline-flex items-center justify-center rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Retry</button>
     </div>
   </div>
 </Show>

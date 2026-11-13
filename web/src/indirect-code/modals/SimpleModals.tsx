@@ -48,7 +48,7 @@ export function ChoiceModal() {
                 type="button"
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => state()?.resolve(opt.id)}
-                class={`flex min-h-11 items-center justify-between gap-3 rounded-panel border px-3.5 py-3 text-left transition-colors cursor-pointer group ${
+                class={`flex items-center justify-between gap-3 rounded-panel border px-3.5 py-2.5 text-left transition-colors cursor-pointer group ${
                   opt.primary
                     ? "border-accent bg-accent-subtle/40 hover:bg-accent-subtle"
                     : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle"
@@ -56,7 +56,7 @@ export function ChoiceModal() {
               >
                 <div class="flex items-start gap-3 min-w-0 flex-1">
                   <span
-                    class={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg text-2xs font-medium tabular-nums ${
+                    class={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-2xs font-medium tabular-nums ${
                       opt.primary
                         ? "bg-accent text-accent-foreground"
                         : "border border-border bg-surface-subtle text-fg-muted group-hover:text-fg"
@@ -214,7 +214,7 @@ export function PairModal() {
                         aria-selected={osTab() === "unix"}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => setOsTab("unix")}
-                        class={`inline-flex min-h-7 [@media(pointer:coarse)]:min-h-10 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
+                        class={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "unix"
                             ? "border-border bg-surface text-fg"
                             : "border-transparent text-fg-muted hover:text-fg"
@@ -229,7 +229,7 @@ export function PairModal() {
                         aria-selected={osTab() === "windows"}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => setOsTab("windows")}
-                        class={`inline-flex min-h-7 [@media(pointer:coarse)]:min-h-10 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
+                        class={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "windows"
                             ? "border-border bg-surface text-fg"
                             : "border-transparent text-fg-muted hover:text-fg"
@@ -244,7 +244,7 @@ export function PairModal() {
                       type="button"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => copyCmd(osTab(), activeCmd())}
-                      class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5 ml-auto"
+                      class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer ml-auto"
                     >
                       <Iconify
                         icon={copiedKey() === osTab() ? "lucide:check" : "lucide:copy"}
@@ -287,10 +287,10 @@ export function PairModal() {
                     {(item, idx) => (
                       <div class={idx() > 0 ? "sm:pl-3.5 space-y-0.5 pr-2" : "space-y-0.5 pr-2"}>
                         <div class="flex items-center gap-1.5">
-                          <span class="font-mono text-2xs font-medium text-accent tabular-nums">
+                          <span class="font-mono text-[10px] font-medium text-accent tabular-nums">
                             {item.step}
                           </span>
-                          <span class="text-xs font-medium text-fg">{item.title}</span>
+                          <span class="text-[11px] font-medium text-fg">{item.title}</span>
                         </div>
                         <p class="text-2xs text-fg-muted leading-relaxed">{item.desc}</p>
                       </div>

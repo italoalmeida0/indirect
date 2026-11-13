@@ -321,7 +321,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                         data-action="approval-expand-write"
                         aria-expanded={writeExpanded()}
                         onClick={() => setWriteExpanded((v) => !v)}
-                        class="inline-flex items-center gap-1 rounded-inner px-2 py-1 -ml-2 min-h-8 [@media(pointer:coarse)]:min-h-11 text-2xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted tabular-nums transition-colors cursor-pointer"
+                        class="inline-flex items-center gap-1 rounded-inner px-2 py-0.5 -ml-2 text-2xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted tabular-nums transition-colors cursor-pointer"
                       >
                         {writeExpanded() ? "Show fewer lines" : `+${writeLines.length - 12} more lines`}
                       </button>
@@ -403,7 +403,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                           data-action="approval-expand-edits"
                           aria-expanded={editsExpanded()}
                           onClick={() => setEditsExpanded((v) => !v)}
-                          class="w-full text-left px-3 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 bg-surface-subtle hover:bg-surface-muted font-sans text-2xs font-medium text-fg-muted hover:text-fg tabular-nums transition-colors cursor-pointer"
+                          class="w-full text-left px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted font-sans text-2xs font-medium text-fg-muted hover:text-fg tabular-nums transition-colors cursor-pointer"
                         >
                           {editsExpanded() ? "Show fewer changes" : `+${editList.length - 2} more changes`}
                         </button>
@@ -519,7 +519,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
 
               <Show when={hasRawArgs}>
                 <details class="group border-t border-border-subtle">
-                  <summary class="list-none [&::-webkit-details-marker]:hidden px-3.5 py-2 min-h-8 [@media(pointer:coarse)]:min-h-11 flex items-center gap-1.5 text-2xs text-fg-muted hover:text-fg-secondary cursor-pointer select-none transition-colors">
+                  <summary class="list-none [&::-webkit-details-marker]:hidden px-3.5 py-1.5 flex items-center gap-1.5 text-2xs text-fg-muted hover:text-fg-secondary cursor-pointer select-none transition-colors">
                     <Iconify
                       icon="lucide:chevron-right"
                       size={12}
@@ -533,13 +533,13 @@ export function ApprovalCard(props: ApprovalCardProps) {
                 </details>
               </Show>
 
-              <div class="px-3.5 py-2.5 border-t border-border-subtle bg-surface-subtle flex items-center justify-between gap-2 flex-wrap">
+              <div class="px-3.5 py-2 border-t border-border-subtle bg-surface-subtle flex items-center justify-between gap-2 flex-wrap">
                 <button
                   type="button"
                   data-action="approval-reject"
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => props.respondApproval(false)}
-                  class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                  class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                 >
                   Reject
                 </button>
@@ -555,7 +555,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                         props.setYoloMode(true);
                         props.respondApproval(true, true);
                       }}
-                      class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg-secondary hover:border-border-strong hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                      class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg-secondary hover:border-border-strong hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       Always allow
                     </button>
@@ -564,7 +564,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       data-action="approval-once"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => props.respondApproval(true)}
-                      class="inline-flex items-center justify-center rounded-lg bg-fg text-background hover:opacity-90 px-3.5 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium transition-opacity cursor-pointer"
+                      class="inline-flex items-center justify-center rounded-lg bg-fg text-background hover:opacity-90 px-3.5 py-1 min-h-7 text-xs font-medium transition-opacity cursor-pointer"
                     >
                       Allow once
                     </button>

@@ -99,7 +99,7 @@ export function SettingsModal() {
                   disabled={m.savingSettings()}
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => jumpTo(sec.id)}
-                  class="inline-flex min-h-7 [@media(pointer:coarse)]:min-h-11 shrink-0 whitespace-nowrap items-center rounded-lg px-1.5 sm:px-2.5 py-1 text-2xs sm:text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-50"
+                  class="inline-flex shrink-0 whitespace-nowrap items-center rounded-lg px-2 py-1 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-50"
                 >
                   {sec.label}
                 </button>
@@ -122,7 +122,7 @@ export function SettingsModal() {
             </div>
             <button
               type="button"
-              class="ui-button ui-button-outline ui-button-xs shrink-0 rounded-lg"
+              class="inline-flex shrink-0 items-center justify-center rounded-lg border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer disabled:opacity-50"
               disabled={m.savingSettings()}
               onClick={m.reloadSettings}
               aria-label="Reload latest settings (discard local edits)"

@@ -91,7 +91,7 @@ export function ToolUnitHeader(props: ToolPartProps) {
     <Show
       when={props.m.expandable()}
       fallback={
-        <div class="group/tool flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 items-center gap-1.5 rounded-lg min-h-7 text-xs">
+        <div class="group/tool flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 py-0.5 items-center gap-1.5 rounded-md text-xs">
           {rowChildren()}
         </div>
       }
@@ -101,7 +101,7 @@ export function ToolUnitHeader(props: ToolPartProps) {
         aria-expanded={props.m.open()}
         onPointerDown={(e) => press(e.currentTarget)}
         onClick={props.m.toggle}
-        class="group/tool flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 items-center gap-1.5 rounded-lg min-h-7 [@media(pointer:coarse)]:min-h-11 text-left text-xs cursor-pointer hover:bg-surface-muted/60 transition-colors"
+        class="group/tool flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 py-0.5 items-center gap-1.5 rounded-md text-left text-xs cursor-pointer hover:bg-surface-muted/60 transition-colors"
       >
         {rowChildren()}
       </button>

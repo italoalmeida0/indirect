@@ -317,10 +317,10 @@ export function EffortPickerBody(props: {
     >
       <div class="flex items-center justify-between gap-2.5">
         <span class="inline-flex items-baseline gap-1.5 shrink-0">
-          <span class="text-sm font-normal text-fg-muted">Effort</span>
+          <span class="text-[13px] font-normal text-fg-muted">Effort</span>
           <span
             data-effort-title
-            class={`text-sm font-medium transition-colors duration-150 ${
+            class={`text-[13px] font-medium transition-colors duration-150 ${
               isMax() ? "text-accent" : "text-fg"
             }`}
           >
@@ -337,7 +337,7 @@ export function EffortPickerBody(props: {
             e.stopPropagation();
             props.onOpenModelPicker();
           }}
-          class="group inline-flex items-center gap-1 max-w-[11.5rem] min-w-0 rounded-lg px-2 py-1 -mr-1 min-h-7 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+          class="group inline-flex items-center gap-1 max-w-[11.5rem] min-w-0 rounded-md px-1.5 py-0.5 -mr-1 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
         >
           <span class="truncate">{props.activeModelName()}</span>
           <Iconify
@@ -348,7 +348,7 @@ export function EffortPickerBody(props: {
         </button>
       </div>
 
-      <div class="mt-3 mb-1.5 flex items-center justify-between text-2xs text-fg-muted select-none">
+      <div class="mt-3 mb-1.5 flex items-center justify-between text-[11px] text-fg-muted select-none">
         <span>Faster</span>
         <span>Smarter</span>
       </div>

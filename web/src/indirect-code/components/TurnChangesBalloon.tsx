@@ -85,7 +85,7 @@ function FileChangesRow(props: {
         <span class="w-3 shrink-0" aria-hidden="true" />
       </Show>
       <FileIcon path={displayPath()} size={13} />
-      <span class="text-xs font-mono flex items-baseline min-w-0 flex-1" data-rc-tip={displayPath()}>
+      <span class="text-[11.5px] font-mono flex items-baseline min-w-0 flex-1" data-rc-tip={displayPath()}>
         <Show when={parts().dir}>
           <span class="text-fg-muted min-w-0 shrink truncate">{parts().dir}</span>
         </Show>
@@ -114,13 +114,13 @@ function FileChangesRow(props: {
           aria-expanded={props.open}
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => props.onToggle()}
-          class="w-full flex items-center gap-2 min-h-8 [@media(pointer:coarse)]:min-h-11 px-3.5 py-1.5 text-left transition-colors cursor-pointer hover:bg-surface-muted/60"
+          class="w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors cursor-pointer hover:bg-surface-muted/60"
         >
           {rowInner()}
         </button>
       </Show>
       <Show when={!isExpandable()}>
-        <div class="w-full flex items-center gap-2 min-h-8 px-3.5 py-1.5 select-none">
+        <div class="w-full flex items-center gap-2 px-3 py-1.5 select-none">
           {rowInner()}
         </div>
       </Show>
@@ -130,7 +130,7 @@ function FileChangesRow(props: {
         </div>
       </DisclosureBody>
       <DisclosureBody open={props.open && !hasDiff()}>
-        <div class="px-3.5 py-2 text-2xs text-fg-muted border-t border-border-subtle bg-surface-subtle">
+        <div class="px-3 py-2 text-2xs text-fg-muted border-t border-border-subtle bg-surface-subtle">
           {props.f.status === "binary" ? "Binary file · no textual diff." : "File too large for a textual diff."}
         </div>
       </DisclosureBody>
@@ -184,7 +184,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
               aria-expanded={props.expanded}
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={props.onToggle}
-              class="group flex flex-1 items-center gap-2 min-h-9 [@media(pointer:coarse)]:min-h-11 px-3.5 py-2 cursor-pointer text-left hover:bg-surface-muted/60 transition-colors min-w-0"
+              class="group flex flex-1 items-center gap-2 px-3 py-2 cursor-pointer text-left hover:bg-surface-muted/60 transition-colors min-w-0"
             >
               <Iconify
                 icon="lucide:chevron-right"
@@ -227,7 +227,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                       toggleExpandAll();
                     }}
                     data-rc-tip={allExpanded() ? "Collapse all file diffs" : "Expand all file diffs"}
-                    class="flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-11 text-2xs px-2 py-1 rounded-inner text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                    class="flex items-center gap-1 text-2xs px-2 py-0.5 rounded-inner text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   >
                     <Iconify icon={allExpanded() ? "lucide:chevrons-down-up" : "lucide:chevrons-up-down"} size={11} />
                     <span>{allExpanded() ? "Collapse all" : "Expand all"}</span>
@@ -242,7 +242,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                       props.onReview!();
                     }}
                     data-rc-tip="Refresh file changes"
-                    class="flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-11 text-2xs px-2 py-1 rounded-inner text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+                    class="flex items-center gap-1 text-2xs px-2 py-0.5 rounded-inner text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   >
                     <Iconify icon="lucide:refresh-cw" size={11} />
                     <span>Refresh</span>

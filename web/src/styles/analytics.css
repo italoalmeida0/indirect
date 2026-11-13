@@ -46,7 +46,7 @@
   .catalog-mobile button, .catalog-model-select, .catalog-selection button { min-height: 44px; }
   .catalog-mobile button { min-width: 44px; }
   .catalog-mobile .flex.items-center.justify-between, .catalog-mobile .flex.items-center.justify-end { flex-wrap: wrap; gap: 8px; }
-  .catalog-search, .catalog-toolbar .analytics-control, .ui-select-menu .ui-select-option { min-height: 44px; }
+  .catalog-search, .catalog-toolbar .analytics-control, .ui-select-menu:not([data-density="compact"]) .ui-select-option { min-height: 44px; }
   .catalog-search .analytics-icon-button { min-height: 44px; min-width: 44px; }
 }
 .analytics-control { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 7px 13px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); color: var(--text-secondary); font-size: var(--text-xs); font-weight: 500; cursor: pointer; box-shadow: var(--shadow-resting); transition: border-color var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard); }

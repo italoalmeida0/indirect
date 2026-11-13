@@ -138,11 +138,15 @@ describe("mobile touch affordances (drawer, row actions, hit targets)", () => {
     expect(ws).toContain("Unpin conversation");
   });
 
-  test("sidebar toggle, composer add and send meet the 36px touch target", () => {
+  test("sidebar toggle, composer add and send stay sleek visually while meeting 44px coarse ::after hit targets", () => {
+    const codeCss = read("web/src/styles/code.css");
     expect(read("web/src/indirect-code/components/SidebarToggle.tsx")).toContain("rc-sidebar-toggle");
     expect(read("web/src/indirect-code/components/composer/ToolbarContext.tsx")).toContain("rc-composer-add");
     expect(read("web/src/indirect-code/components/composer/ToolbarSend.tsx")).toContain("rc-composer-send");
-    expect(css).toMatch(/html\.mobile \.rc-sidebar-toggle,[\s\S]*?min-width: 2\.25rem;[\s\S]*?min-height: 2\.25rem;/);
+    expect(css).not.toContain("min-width: 2.25rem;");
+    expect(codeCss).toMatch(
+      /\.rc-sidebar-toggle::after,[\s\S]*?\.rc-composer-add::after,[\s\S]*?\.rc-composer-send::after,[\s\S]*?\.rc-composer-stop::after[\s\S]*?width: 44px;[\s\S]*?height: 44px;/,
+    );
   });
 
   test("composer keeps Enter = newline on touch, Ctrl/Cmd+Enter sends", () => {

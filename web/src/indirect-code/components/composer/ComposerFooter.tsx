@@ -48,7 +48,7 @@ export function ComposerFooter() {
           c.setAccessMenuOpen(false);
           ui.setUsageOpen(false);
         }}
-        class="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg-secondary hover:text-fg hover:border-border-strong hover:bg-surface-subtle transition-colors cursor-pointer"
+        class="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:text-fg hover:border-border-strong hover:bg-surface-subtle transition-colors cursor-pointer"
         data-rc-tip="Project" aria-label={`Project: ${s.activeProject()?.name || "Select project"}`}
       >
         <Iconify icon="lucide:folder" size={13} class="text-accent shrink-0" />
@@ -80,7 +80,7 @@ export function ComposerFooter() {
                       s.pickProject(p.id);
                       s.setProjectMenuOpen(false);
                     }}
-                    class={`ui-menu-item w-full text-left px-2.5 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer transition-colors ${
+                    class={`ui-menu-item w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer transition-colors ${
                       active()
                         ? "bg-accent-subtle text-fg font-medium"
                         : "text-fg-secondary hover:text-fg hover:bg-surface-muted"
@@ -106,7 +106,7 @@ export function ComposerFooter() {
                 s.setProjectMenuOpen(false);
                 s.openNewProjectModal();
               }}
-              class="ui-menu-item w-full text-left px-2.5 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg flex items-center gap-2 cursor-pointer transition-colors"
+              class="ui-menu-item w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg flex items-center gap-2 cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:folder-plus" size={13} class="text-accent shrink-0" />
               <span>New project…</span>
@@ -220,7 +220,7 @@ export function ComposerFooter() {
       aria-expanded={ui.usageOpen()}
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => { const next = !ui.usageOpen(); ui.closeMenus(); ui.setUsageOpen(next); }}
-      class="relative flex items-center gap-1.5 rounded-lg px-2 py-0.5 -mr-2 min-h-7 font-mono text-2xs tabular-nums text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-y-1/2 [@media(pointer:coarse)]:after:inset-x-0 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:-translate-y-1/2"
+      class="flex items-center gap-1.5 rounded-lg px-2 py-0.5 -mr-2 font-mono text-2xs tabular-nums text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
     >
       <Iconify icon="lucide:chart-pie" size={11} class="text-accent shrink-0" />
       <span>{c.activeContext().label}</span>

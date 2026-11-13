@@ -167,7 +167,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
           <span class="text-2xs font-medium text-fg-secondary">Background tasks</span>
           <button
             type="button"
-            class={`inline-flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-9 rounded-lg border px-2 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${showArchived()
+            class={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${showArchived()
               ? "border-[color-mix(in_oklab,var(--accent)_35%,var(--border))] bg-accent-subtle text-accent"
               : "border-border bg-surface-subtle text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
             aria-pressed={showArchived()}
@@ -197,7 +197,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
                     aria-expanded={isOpen(job.id)}
                     data-rc-tip={isOpen(job.id) ? "Hide logs" : "Show logs"}
                     aria-label={isOpen(job.id) ? "Hide logs" : "Show logs"}
-                    class="flex-1 min-w-0 flex items-center gap-2 px-3.5 py-2 min-h-9 [@media(pointer:coarse)]:min-h-11 text-left cursor-pointer hover:bg-surface-muted/60 transition-colors"
+                    class="flex-1 min-w-0 flex items-center gap-2 px-3 py-1.5 text-left cursor-pointer hover:bg-surface-muted/60 transition-colors"
                     onClick={() => toggle(job.id)}
                   >
                     <span
@@ -301,7 +301,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
           <Show when={selected().length > 3}>
             <button
               type="button"
-              class="self-start min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+              class="self-start rounded-lg px-2.5 py-1 text-xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
               aria-expanded={expanded()}
               onClick={() => setExpanded((value) => !value)}
               data-bg-list-toggle

@@ -216,17 +216,6 @@ html[data-theme="high-contrast"] {
   --chart-soft: #888;
 }
 
-/* Mobile touch affordances: primary chrome controls meet the 36px (2.25rem)
- * visual floor while @layer components expands coarse hit areas to 44px. */
-@layer base {
-  html.mobile .rc-sidebar-toggle,
-  html.mobile .rc-composer-add,
-  html.mobile .rc-composer-send {
-    min-width: 2.25rem;
-    min-height: 2.25rem;
-  }
-}
-
 /* Code token palette: highlight.js output is remapped to structural tok-*
  * classes (utils/lang.ts); values are tuned per theme. Syntax colors are a
  * legitimate raw palette: they are data, not UI chrome. */

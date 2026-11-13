@@ -86,7 +86,7 @@ function SettingSwitchRow(props: {
         const track = e.currentTarget.querySelector<HTMLElement>(".ui-switch-track");
         if (track) press(track);
       }}
-      class={`flex min-h-11 items-center justify-between gap-4 px-3.5 py-2.5 cursor-pointer select-none hover:bg-surface-subtle/60 transition-colors ${
+      class={`flex items-center justify-between gap-4 px-3.5 py-2.5 cursor-pointer select-none hover:bg-surface-subtle/60 transition-colors ${
         props.nested ? "pl-5 bg-surface-subtle/35" : ""
       }`}
     >
@@ -357,7 +357,7 @@ function ThemeStudioPicker() {
         <div
           role="radiogroup"
           aria-label="Accent color"
-          class="flex flex-wrap items-center gap-2 [@media(pointer:coarse)]:gap-3"
+          class="flex flex-wrap items-center gap-2"
         >
           <For each={ACCENTS}>
             {(item) => {
@@ -678,7 +678,7 @@ function AutoCompactGauge(props: {
             aria-pressed={isOff()}
             onPointerDown={(e) => press(e.currentTarget)}
             onClick={() => props.onChange(0)}
-            class={`min-h-6 [@media(pointer:coarse)]:min-h-9 rounded-md px-2.5 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${
+            class={`rounded-md px-2.5 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${
               isOff()
                 ? "bg-surface-strong text-fg"
                 : "text-fg-muted hover:text-fg"
@@ -693,7 +693,7 @@ function AutoCompactGauge(props: {
             onClick={() => {
               if (isOff()) props.onChange(lastAutoPct());
             }}
-            class={`min-h-6 [@media(pointer:coarse)]:min-h-9 rounded-md px-2.5 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${
+            class={`rounded-md px-2.5 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${
               !isOff()
                 ? "bg-accent text-accent-foreground"
                 : "text-fg-muted hover:text-fg"
@@ -818,7 +818,7 @@ function AutoCompactGauge(props: {
         <div
           role="group"
           aria-label="Auto-compact threshold presets"
-          class="relative h-6 [@media(pointer:coarse)]:h-8 w-full mt-1 select-none"
+          class="relative h-6 w-full mt-1 select-none"
         >
           <span
             aria-hidden="true"
@@ -837,7 +837,7 @@ function AutoCompactGauge(props: {
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => commitPct(mark)}
                   style={{ left: `${mark}%` }}
-                  class={`absolute top-0 flex min-h-6 [@media(pointer:coarse)]:min-h-9 flex-col items-center gap-0.5 border-0 bg-transparent px-1 py-0 cursor-pointer group rounded-xs ${
+                  class={`absolute top-0 flex flex-col items-center gap-0.5 border-0 bg-transparent px-1 py-0 cursor-pointer group rounded-xs ${
                     edgeRight ? "-translate-x-3/4 sm:-translate-x-1/2" : "-translate-x-1/2"
                   }`}
                 >
@@ -1012,7 +1012,7 @@ export function SettingsGeneralSection() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => ui.turnNotify.testNotify()}
-              class="ui-button ui-button-outline ui-button-sm rounded-lg"
+              class="inline-flex items-center gap-1.5 rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
             >
               <Iconify icon="lucide:bell-ring" size={13} class="text-fg-secondary" />
               <span>Test notification</span>
@@ -1087,7 +1087,7 @@ export function SettingsGeneralSection() {
                 <button
                   type="button"
                   onPointerDown={(e) => press(e.currentTarget)}
-                  class="ui-button ui-button-outline ui-button-xs rounded-lg"
+                  class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                   onClick={() => du.checkNow()}
                 >
                   Check now
@@ -1106,7 +1106,7 @@ export function SettingsGeneralSection() {
                   <button
                     type="button"
                     onPointerDown={(e) => press(e.currentTarget)}
-                    class="ui-button ui-button-primary ui-button-xs rounded-lg"
+                    class="inline-flex items-center justify-center rounded-lg bg-accent hover:bg-accent-strong text-accent-foreground px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
                     disabled={du.applying()}
                     onClick={() => {
                       du.apply();
@@ -1223,7 +1223,7 @@ export function SettingsGeneralSection() {
                 {(m.daemonSettings().httpProxy ?? "").trim() ? "Explicit proxy" : "Env default"}
               </Badge>
             </div>
-            <div class="flex min-h-9 items-center gap-2 rounded-control border border-border-strong bg-surface px-3 py-1 focus-within:border-accent transition-colors">
+            <div class="flex items-center gap-2 rounded-control border border-border-strong bg-surface px-3 py-1.5 focus-within:border-accent transition-colors">
               <Iconify icon="lucide:globe" size={14} class="shrink-0 text-fg-muted" />
               <input
                 id="settings-upstream-proxy"
@@ -1236,14 +1236,14 @@ export function SettingsGeneralSection() {
                   })
                 }
                 placeholder="http://host:port (empty = environment default)"
-                class="min-w-0 flex-1 bg-transparent font-mono max-sm:text-base sm:text-xs text-fg placeholder:text-fg-muted outline-none"
+                class="min-w-0 flex-1 bg-transparent font-mono text-xs text-fg placeholder:text-fg-muted outline-none"
                 aria-label="Upstream proxy URL"
               />
               <Show when={(m.daemonSettings().httpProxy ?? "").length > 0}>
                 <button
                   type="button"
                   onClick={() => m.setDaemonSettings({ ...m.daemonSettings(), httpProxy: "" })}
-                  class="ui-icon-button ui-icon-button-xs shrink-0 rounded-lg"
+                  class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                   data-rc-tip="Clear proxy"
                   aria-label="Clear upstream proxy"
                 >

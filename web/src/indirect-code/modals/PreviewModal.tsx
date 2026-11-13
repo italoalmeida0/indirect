@@ -78,7 +78,7 @@ export function PreviewModal() {
                       type="button"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={m.restorePreviewFile}
-                      class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5 border-warning/35 bg-warning-subtle text-warning hover:bg-warning/15"
+                      class="inline-flex items-center gap-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2.5 py-1 text-xs font-medium text-warning hover:bg-warning/15 transition-colors cursor-pointer"
                     >
                       <Iconify icon="lucide:rotate-ccw" size={12} />
                       <span>Restore full</span>
@@ -89,10 +89,10 @@ export function PreviewModal() {
                       type="button"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => m.setShowTruncateInput(!m.showTruncateInput())}
-                      class={`ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5 ${
+                      class={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${
                         m.showTruncateInput()
                           ? "border-accent bg-accent-subtle text-fg"
-                          : ""
+                          : "border-border bg-surface text-fg-secondary hover:bg-surface-muted hover:text-fg"
                       }`}
                       data-rc-tip="Limit preview length"
                       aria-label="Limit preview length"
@@ -118,7 +118,7 @@ export function PreviewModal() {
                           }
                         });
                       }}
-                      class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
+                      class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       <Iconify
                         icon={m.previewCopied() ? "lucide:check" : "lucide:copy"}
@@ -139,7 +139,7 @@ export function PreviewModal() {
                       type="button"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={m.downloadPreviewFile}
-                      class="ui-button ui-button-outline ui-button-xs rounded-lg gap-1.5"
+                      class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       <Iconify icon="lucide:download" size={12} />
                       <span>Download</span>
@@ -184,13 +184,13 @@ export function PreviewModal() {
                     ]}
                   />
                   <div class="flex items-center justify-end gap-2">
-                    <Btn
-                      variant="outline"
-                      size="sm"
+                    <button
+                      type="button"
                       onClick={() => m.setShowTruncateInput(false)}
+                      class="px-2.5 py-1 rounded-lg text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       Cancel
-                    </Btn>
+                    </button>
                     <Btn
                       size="sm"
                       onClick={() => {
