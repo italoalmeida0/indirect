@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
@@ -228,11 +229,13 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			res.Content = []provider.Content{provider.TextBlock{Text: spillRes.Preview}}
 			res.Attrs = applySpillAttrs(res.Attrs, spillRes)
 			if det, ok := res.Details.(map[string]any); ok {
-				det["output"] = fullText
+				cappedOut, _ := capToolDetailPreview(fullText, maxInlineToolDetailBytes)
+				det["output"] = cappedOut
 				if stderrHead.Len() == 0 {
-					det["stdout"] = fullText
+					det["stdout"] = cappedOut
 				}
 				det["full_output_path"] = spillRes.Path
+				det["spill_path"] = spillRes.Path
 				det["truncated"] = true
 			}
 		}
@@ -439,26 +442,74 @@ func finishBashCommand(a bashArgs, cwd string, start time.Time, output *outputAc
 	}
 	display := renderBashDisplay(a.Command, displayHead, exitCode, elapsed)
 
+	stdoutDetail, stdoutCapped := capToolDetailPreview(head.String(), maxInlineToolDetailBytes)
+	stderrDetail, stderrCapped := capToolDetailPreview(stderrText, maxInlineToolDetailBytes)
+
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: outputText}},
 		Attrs:   attrs,
 		Details: map[string]any{
 			"display":   display,
 			"exit_code": exitCode,
-			"stdout":    head.String(),
-			"stderr":    stderrText,
-			"truncated": snapshot.truncated,
+			"stdout":    stdoutDetail,
+			"stderr":    stderrDetail,
+			"truncated": snapshot.truncated || stdoutCapped || stderrCapped,
 			// UI-only (Details never reach the LLM): the full output file
 			// for the frontend's copy/inspect affordances. The model-visible
 			// Content above is deliberately path-free.
 			"full_output_path": snapshot.fullOutputPath,
 			"lines_truncated":  snapshot.truncated && snapshot.truncatedBy == "lines",
-			"bytes_truncated":  snapshot.truncated && snapshot.truncatedBy == "bytes",
+			"bytes_truncated":  (snapshot.truncated && snapshot.truncatedBy == "bytes") || stdoutCapped || stderrCapped,
 			"duration_ms":      elapsed.Milliseconds(),
 			"work_dir":         cwd,
 			"steps":            1,
 		},
 	}, nil
+}
+
+const maxInlineToolDetailBytes = 32 * 1024
+
+// capToolDetailPreview bounds inline UI-only Details strings to maxBytes
+// using a UTF-8 rune-safe head+tail slice so multi-MB tool outputs never
+// bloat session JSON or Go heap when spilled to disk.
+func capToolDetailPreview(text string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 || len(text) <= maxBytes {
+		if !utf8.ValidString(text) {
+			valid := strings.ToValidUTF8(text, "\uFFFD")
+			if len(valid) <= maxBytes {
+				return valid, false
+			}
+			text = valid
+		} else {
+			return text, false
+		}
+	}
+	if !utf8.ValidString(text) {
+		text = strings.ToValidUTF8(text, "\uFFFD")
+	}
+	const markerOverhead = 64
+	if maxBytes <= markerOverhead+32 {
+		return snapUTF8Prefix(text, maxBytes), true
+	}
+	headBudget := (maxBytes - markerOverhead) / 2
+	tailBudget := maxBytes - markerOverhead - headBudget
+	headPart := snapUTF8Prefix(text, headBudget)
+	tailPart := snapUTF8Suffix(text, tailBudget)
+	omitted := len(text) - len(headPart) - len(tailPart)
+	if omitted < 0 {
+		omitted = 0
+	}
+	marker := fmt.Sprintf("\n... [%d bytes omitted] ...\n", omitted)
+	for len(headPart)+len(marker)+len(tailPart) > maxBytes && tailBudget > 16 {
+		tailBudget -= 32
+		tailPart = snapUTF8Suffix(text, tailBudget)
+		omitted = len(text) - len(headPart) - len(tailPart)
+		if omitted < 0 {
+			omitted = 0
+		}
+		marker = fmt.Sprintf("\n... [%d bytes omitted] ...\n", omitted)
+	}
+	return headPart + marker + tailPart, true
 }
 
 // renderBashDisplay builds the terminal-log presentation for the UI:

@@ -253,8 +253,10 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 			if !ok || det == nil {
 				det = make(map[string]any)
 			}
-			det["output"] = fullText
+			cappedOut, _ := capToolDetailPreview(fullText, maxInlineToolDetailBytes)
+			det["output"] = cappedOut
 			det["full_output_path"] = spillRes.Path
+			det["spill_path"] = spillRes.Path
 			det["truncated"] = true
 			res.Details = det
 		}

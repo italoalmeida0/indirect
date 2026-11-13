@@ -38,7 +38,10 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 		var head struct {
 			Text             string `json:"text"`
 			MimeType         string `json:"mime_type"`
+			MediaType        string `json:"mediaType"`
 			Data             []byte `json:"data"`
+			BlobSHA256       string `json:"blobSha256"`
+			ByteLen          int    `json:"byteLen"`
 			URL              string `json:"url"`
 			SourcePath       string `json:"source_path"`
 			Width            int    `json:"width"`
@@ -122,7 +125,10 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 				var inner struct {
 					Text             string `json:"text"`
 					MimeType         string `json:"mime_type"`
+					MediaType        string `json:"mediaType"`
 					Data             []byte `json:"data"`
+					BlobSHA256       string `json:"blobSha256"`
+					ByteLen          int    `json:"byteLen"`
 					URL              string `json:"url"`
 					SourcePath       string `json:"source_path"`
 					Width            int    `json:"width"`
@@ -133,10 +139,17 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 					ThoughtSignature string `json:"thought_signature"`
 				}
 				_ = json.Unmarshal(c, &inner)
-				if inner.MimeType != "" || inner.URL != "" {
+				if inner.MimeType != "" || inner.MediaType != "" || inner.URL != "" || inner.BlobSHA256 != "" || len(inner.Data) > 0 {
+					mime := inner.MimeType
+					if mime == "" {
+						mime = inner.MediaType
+					}
 					block.Content = append(block.Content, provider.ImageBlock{
-						MimeType:         inner.MimeType,
+						MimeType:         mime,
+						MediaType:        inner.MediaType,
 						Data:             inner.Data,
+						BlobSHA256:       inner.BlobSHA256,
+						ByteLen:          inner.ByteLen,
 						URL:              inner.URL,
 						SourcePath:       inner.SourcePath,
 						Width:            inner.Width,
@@ -154,10 +167,17 @@ func HydrateMessageObject(rawMessage []byte) (provider.Message, error) {
 				}
 			}
 			msg.Content = append(msg.Content, block)
-		case head.MimeType != "" || head.URL != "":
+		case head.MimeType != "" || head.MediaType != "" || head.URL != "" || head.BlobSHA256 != "" || len(head.Data) > 0:
+			mime := head.MimeType
+			if mime == "" {
+				mime = head.MediaType
+			}
 			msg.Content = append(msg.Content, provider.ImageBlock{
-				MimeType:         head.MimeType,
+				MimeType:         mime,
+				MediaType:        head.MediaType,
 				Data:             head.Data,
+				BlobSHA256:       head.BlobSHA256,
+				ByteLen:          head.ByteLen,
 				URL:              head.URL,
 				SourcePath:       head.SourcePath,
 				Width:            head.Width,

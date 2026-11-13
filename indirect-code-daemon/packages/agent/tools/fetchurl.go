@@ -87,8 +87,9 @@ func (t *FetchURLTool) Execute(ctx context.Context, raw json.RawMessage, progres
 	if strings.TrimSpace(t.BrainDir) != "" && (a.MaxChars <= 0 || a.MaxChars > ArrivalSpillThresholdBytes) && len(fullText) > ArrivalSpillThresholdBytes {
 		if spillRes, ok := maybeSpillOutput(ctx, t.BrainDir, fullText); ok {
 			det := fetchDetail(finalURL, fullText, true)
-			det["output"] = fullText
+			det["output"] = det["content"]
 			det["full_output_path"] = spillRes.Path
+			det["spill_path"] = spillRes.Path
 			return core.ToolResult{
 				Content: []provider.Content{provider.TextBlock{Text: spillRes.Preview}},
 				Attrs: applySpillAttrs([]core.Attr{
@@ -540,7 +541,9 @@ func fetchDetail(finalURL, text string, truncated bool) map[string]any {
 	if u, err := url.Parse(finalURL); err == nil {
 		host = u.Hostname()
 	}
-	return map[string]any{"url": finalURL, "host": host, "title": articleTitle(text), "content": text, "truncated": truncated}
+	title := articleTitle(text)
+	capped, wasCapped := capToolDetailPreview(text, maxInlineToolDetailBytes)
+	return map[string]any{"url": finalURL, "host": host, "title": title, "content": capped, "truncated": truncated || wasCapped}
 }
 
 func articleTitle(text string) string {

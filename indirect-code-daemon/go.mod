@@ -13,3 +13,5 @@ require github.com/italoalmeida0/btdby4 v0.0.0-20260916133140-b9fc87cf9fe9
 require github.com/gorilla/websocket v1.5.3
 
 require golang.org/x/sys v0.49.0
+
+require github.com/klauspost/compress v1.20.4

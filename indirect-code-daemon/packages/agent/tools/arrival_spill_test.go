@@ -194,11 +194,18 @@ func TestBashToolArrivalSpillLosslessAbove50KB(t *testing.T) {
 	}
 
 	details := res.Details.(map[string]any)
-	if details["output"] != fullExpected {
-		t.Fatalf("UI Details[output] lost full lossless text")
+	detOut, _ := details["output"].(string)
+	if len(detOut) == 0 || len(detOut) > maxInlineToolDetailBytes || !utf8.ValidString(detOut) {
+		t.Fatalf("UI Details[output] invalid cap: len=%d max=%d utf8=%v", len(detOut), maxInlineToolDetailBytes, utf8.ValidString(detOut))
 	}
-	if details["full_output_path"] != wantPath {
-		t.Fatalf("UI Details[full_output_path] = %v, want %s", details["full_output_path"], wantPath)
+	if !strings.Contains(detOut, "bash-row-0001:") || !strings.Contains(detOut, "bash-row-0900:") {
+		t.Fatalf("UI Details[output] missing head/tail preview")
+	}
+	if details["full_output_path"] != wantPath || details["spill_path"] != wantPath {
+		t.Fatalf("UI Details[full_output_path/spill_path] = %v / %v, want %s", details["full_output_path"], details["spill_path"], wantPath)
+	}
+	if details["truncated"] != true {
+		t.Fatalf("UI Details[truncated] = %v, want true", details["truncated"])
 	}
 	assertSpillEnvelopeAttrs(t, res, "tool-call_bash_spill_1.log", 900, len(fullExpected))
 }
@@ -417,5 +424,84 @@ func TestApplySpillAttrsContract(t *testing.T) {
 	}
 	if spilledCount != 1 {
 		t.Fatalf("expected exactly 1 spilled attr, got %d in %+v", spilledCount, out)
+	}
+}
+
+func TestMultiKBAndMultiMBDetailsCappedForExecScriptAndFetchURL(t *testing.T) {
+	dir := t.TempDir()
+	brainDir := t.TempDir()
+
+	// 1. exec_script producing ~200 KiB with multi-byte UTF-8 characters.
+	jsTool := &ExecScriptTool{
+		CWD:      dir,
+		Sandbox:  NewSandbox(dir),
+		BrainDir: brainDir,
+	}
+	jsCode := `
+		const row = "λ-metric-🔥-value-" + "x".repeat(160);
+		console.log("JS_HEAD_SENTINEL");
+		for (let i = 0; i < 1100; i++) {
+			console.log(i + ":" + row);
+		}
+		console.log("JS_TAIL_SENTINEL");
+	`
+	jsRes, err := jsTool.Execute(core.WithToolCallID(context.Background(), "call_js_big_det"), mustJSON(t, map[string]any{"code": jsCode}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsDet := jsRes.Details.(map[string]any)
+	jsOut, _ := jsDet["output"].(string)
+	if len(jsOut) == 0 || len(jsOut) > maxInlineToolDetailBytes || !utf8.ValidString(jsOut) {
+		t.Fatalf("exec_script Details[output] invalid cap: len=%d max=%d utf8=%v", len(jsOut), maxInlineToolDetailBytes, utf8.ValidString(jsOut))
+	}
+	if !strings.Contains(jsOut, "JS_HEAD_SENTINEL") || !strings.Contains(jsOut, "JS_TAIL_SENTINEL") {
+		t.Fatalf("exec_script Details[output] missing head/tail sentinels")
+	}
+	if jsDet["truncated"] != true || jsDet["spill_path"] == "" {
+		t.Fatalf("exec_script Details missing truncated/spill_path: %+v", jsDet)
+	}
+
+	// 2. fetch_url returning ~1.2 MiB payload (previously duplicated into both output and content = 2.4 MiB!).
+	var bigDoc strings.Builder
+	bigDoc.WriteString("# Large Architecture Spec\nFETCH_HEAD_SENTINEL\n")
+	chunk := "§-utf8-🚀-" + strings.Repeat("k", 240) + "\n"
+	for bigDoc.Len() < 1200*1024 {
+		bigDoc.WriteString(chunk)
+	}
+	bigDoc.WriteString("FETCH_TAIL_SENTINEL\n")
+	docStr := strings.TrimSpace(bigDoc.String())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		_, _ = w.Write([]byte(docStr))
+	}))
+	defer srv.Close()
+
+	fetchTool := &FetchURLTool{
+		CWD:               dir,
+		Sandbox:           NewSandbox(dir),
+		Client:            srv.Client(),
+		TestAllowLoopback: true,
+		BrainDir:          brainDir,
+	}
+	fRes, err := fetchTool.Execute(core.WithToolCallID(context.Background(), "call_fetch_big_det"), mustJSON(t, map[string]any{"url": srv.URL + "/arch.md"}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fDet := fRes.Details.(map[string]any)
+	for _, key := range []string{"output", "content"} {
+		val, _ := fDet[key].(string)
+		if len(val) == 0 || len(val) > maxInlineToolDetailBytes || !utf8.ValidString(val) {
+			t.Fatalf("fetch_url Details[%s] invalid cap: len=%d max=%d utf8=%v", key, len(val), maxInlineToolDetailBytes, utf8.ValidString(val))
+		}
+		if !strings.Contains(val, "FETCH_HEAD_SENTINEL") || !strings.Contains(val, "FETCH_TAIL_SENTINEL") {
+			t.Fatalf("fetch_url Details[%s] missing head/tail sentinels", key)
+		}
+	}
+	if fDet["title"] != "Large Architecture Spec" {
+		t.Fatalf("fetch_url Details[title] = %v, want Large Architecture Spec", fDet["title"])
+	}
+	if fDet["truncated"] != true || fDet["spill_path"] == "" {
+		t.Fatalf("fetch_url Details missing truncated/spill_path: %+v", fDet)
 	}
 }

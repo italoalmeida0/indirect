@@ -38,12 +38,15 @@ type TextBlock struct {
 
 func (TextBlock) isContent() {}
 
-// ImageBlock is an inline image (PNG/JPEG/GIF/WebP).
+// ImageBlock is an inline or CAS-externalized image (PNG/JPEG/GIF/WebP).
 // Optional metadata fields persist in session/WAL JSON for token estimation,
 // visual digests, and UI display, and are never sent on the provider wire.
 type ImageBlock struct {
 	MimeType         string `json:"mime_type"`
-	Data             []byte `json:"data"` // raw bytes; encoded to base64 on the wire
+	MediaType        string `json:"mediaType,omitempty"`
+	Data             []byte `json:"data,omitempty"` // raw bytes; encoded to base64 on the wire; nil when in CAS
+	BlobSHA256       string `json:"blobSha256,omitempty"`
+	ByteLen          int    `json:"byteLen,omitempty"`
 	URL              string `json:"url,omitempty"`
 	SourcePath       string `json:"source_path,omitempty"`
 	Width            int    `json:"width,omitempty"`
@@ -57,14 +60,22 @@ type ImageBlock struct {
 func (ImageBlock) isContent() {}
 
 // ImageKey returns a deterministic 64-char hex content key for an ImageBlock.
-// Uses b.SHA256 when already populated, otherwise hashes MimeType + Data + URL
-// so WAL-restored or legacy blocks always resolve to the same digest key.
+// Uses b.SHA256 or b.BlobSHA256 when already populated, otherwise hashes
+// MimeType + Data + URL so WAL-restored or legacy blocks always resolve to the
+// same digest key.
 func ImageKey(b ImageBlock) string {
 	if len(b.SHA256) == 64 {
 		return b.SHA256
 	}
+	if len(b.BlobSHA256) == 64 {
+		return b.BlobSHA256
+	}
+	mime := b.MimeType
+	if mime == "" {
+		mime = b.MediaType
+	}
 	h := sha256.New()
-	h.Write([]byte(b.MimeType))
+	h.Write([]byte(mime))
 	h.Write([]byte{':'})
 	h.Write(b.Data)
 	h.Write([]byte{':'})
