@@ -1123,6 +1123,11 @@ try {
     await sendFromComposer(page, M3);
 
     await waitForPassiveQueueTexts(page, [M1, M2, M3]);
+    assert.equal(
+      await page.locator("[data-composer-queue-shelf]").count(),
+      1,
+      "passive queue items must dock onto ComposerQueueShelf ([data-composer-queue-shelf])",
+    );
     assert.equal(await page.locator("[data-queue-staged]").count(), 0, "Zone 1 should not exist before staging");
     assert.equal(await appNoticeDismiss.count(), 0, "queuing mid-turn must not stack a foreground appNotice toast");
 
@@ -1136,9 +1141,14 @@ try {
     const stagedSteer = page.locator('[data-queue-staged] [data-queue-item-state="steer"]');
     await stagedSteer.waitFor({ state: "visible", timeout: 10000 });
     const steerBox = await stagedSteer.boundingBox();
+    const stagedWrapBox = await page.locator("[data-queue-staged]").boundingBox();
     assert(
       steerBox && steerBox.height > 0 && steerBox.height <= 46,
       `expected slim single-line [data-queue-item-state="steer"] height <= 46px on 1280x800, got ${steerBox?.height}`,
+    );
+    assert(
+      stagedWrapBox && Math.abs(steerBox.x + steerBox.width - (stagedWrapBox.x + stagedWrapBox.width)) <= 2,
+      `expected right-aligned Next step bubble at right edge of [data-queue-staged], got bubbleRight=${steerBox.x + steerBox.width} vs wrapRight=${stagedWrapBox ? stagedWrapBox.x + stagedWrapBox.width : "null"}`,
     );
     assert.equal(await appNoticeDismiss.count(), 0, "staging item must not stack a foreground appNotice toast");
     const stagedText = ((await stagedSteer.textContent()) || "").trim();
