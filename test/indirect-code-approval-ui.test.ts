@@ -157,8 +157,8 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
 
     assertWhisperQuietApprovalHtml(html);
     expect(html).toContain('<section aria-label="Tool approval request" data-approval-card');
-    expect(html).toContain('class="max-w-3xl mx-auto border-t border-border/70 px-3 py-2.5"');
-    expect(html).toContain('class="rounded-xl border border-border/80 bg-surface overflow-hidden"');
+    expect(html).toContain('class="w-full max-w-3xl mx-auto py-1"');
+    expect(html).toContain('class="rounded-panel border border-border bg-surface overflow-hidden"');
     expect(html).toContain('data-glyph="lucide:shield-alert"');
     expect(html).toContain(">Review tool call<");
     expect(html).toContain(">bash<");
@@ -177,7 +177,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(html).toContain('aria-label="Always allow (enable Full access)"');
     expect(html).toContain('data-action="approval-once"');
     expect(html).toContain("bg-fg text-background");
-    expect(html).toContain("min-h-7 [@media(pointer:coarse)]:min-h-10");
+    expect(html).toContain("min-h-8 [@media(pointer:coarse)]:min-h-11");
 
     // Verify Always allow button itself carries zero warning classes
     const alwaysBtnMatch = html.match(/<button[^>]*data-action="approval-always"[^>]*>/);
@@ -310,6 +310,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     // Preview surface stops at line 12 (before the <details> raw Arguments block)
     const beforeDetails = html.split("<details")[0]!;
     expect(beforeDetails).not.toContain("const line13 = 13;");
+    expect(beforeDetails).toContain('data-action="approval-expand-write"');
     expect(beforeDetails).toContain("+3 more lines");
   });
 
@@ -332,7 +333,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     assertWhisperQuietApprovalHtml(html);
     expect(html).toContain(">Edit<");
     expect(html).toContain(">3 changes<");
-    expect(html).toContain("divide-y divide-border/60");
+    expect(html).toContain("divide-y divide-border-subtle");
 
     const beforeDetails = html.split("<details")[0]!;
     const hunkMatches = beforeDetails.match(/data-edit-hunk/g) ?? [];
@@ -346,6 +347,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(beforeDetails).toContain("const legacy = true;");
     expect(beforeDetails).toContain("const legacy = false;");
     expect(beforeDetails).not.toContain("third_old");
+    expect(beforeDetails).toContain('data-action="approval-expand-edits"');
     expect(beforeDetails).toContain("+1 more changes");
 
     const singleHunkHtml = renderApprovalCardSsr({

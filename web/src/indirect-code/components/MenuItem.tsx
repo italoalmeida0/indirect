@@ -3,7 +3,7 @@ import { Icon as Iconify } from "../../components/icon";
 import { press } from "../../ds/motion/press";
 
 /** Shared menu item for FloatMenu popovers (same class across all
- * context/file/sidebar menus — extracted to a single place). */
+ * context/file/sidebar menus, extracted to a single place). */
 export function MenuItem(props: {
   icon?: string;
   iconSize?: number;
@@ -16,6 +16,7 @@ export function MenuItem(props: {
 }) {
   return (
     <button
+      type="button"
       role={props.role}
       onPointerDown={(e) => press(e.currentTarget)}
       onClick={props.onClick}
@@ -23,7 +24,7 @@ export function MenuItem(props: {
       aria-label={props.tip}
       class={
         props.class ??
-        "w-full text-left px-2.5 py-1.5 rounded-lg text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors flex items-center gap-2 cursor-pointer"
+        "ui-menu-item w-full text-left px-2.5 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg text-xs text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors flex items-center gap-2 cursor-pointer"
       }
     >
       {props.icon ? <Iconify icon={props.icon} size={props.iconSize ?? 13} class={props.iconClass} /> : null}

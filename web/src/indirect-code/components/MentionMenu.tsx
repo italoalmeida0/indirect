@@ -28,17 +28,17 @@ export function MentionMenu(props: {
       placement="top-start"
       width="min(28rem, calc(100vw - 1.5rem))"
     >
-      <div class="px-2.5 py-1 border-b border-border-subtle mb-0.5 text-[11px] font-medium text-fg-muted flex items-center justify-between">
+      <div class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 border-b border-border-subtle text-2xs font-medium text-fg-muted flex items-center justify-between">
         <span>Workspace files</span>
         <Show when={props.mentions.files().length > 0}>
-          <span class="font-mono tabular-nums text-[10px] text-fg-muted">{props.mentions.files().length}</span>
+          <span class="font-mono tabular-nums text-2xs text-fg-muted">{props.mentions.files().length}</span>
         </Show>
       </div>
       <div
         ref={list}
         role="listbox"
         aria-label="File mentions"
-        class="max-h-60 overflow-y-auto px-0.5 py-0.5 space-y-0.5 [scrollbar-gutter:stable]"
+        class="max-h-60 overflow-y-auto overscroll-contain space-y-0.5"
       >
         <For each={props.mentions.files()}>
           {(path, i) => {
@@ -53,7 +53,7 @@ export function MentionMenu(props: {
                 onMouseDown={(e) => e.preventDefault()}
                 onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.mentions.pick(path)}
-                class={`w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors ${
+                class={`ui-menu-item w-full flex items-center gap-2 text-left px-2.5 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg text-xs font-mono cursor-pointer transition-colors ${
                   active()
                     ? "bg-accent-subtle text-fg"
                     : "hover:bg-surface-muted text-fg-secondary hover:text-fg"
@@ -73,7 +73,7 @@ export function MentionMenu(props: {
         <Show when={!props.mentions.files().length}>
           <p class="px-2.5 py-2.5 text-xs text-fg-muted">
             {props.mentions.loading()
-              ? "Searching files..."
+              ? "Searching files…"
               : props.mentions.error() || "No matching files"}
           </p>
         </Show>

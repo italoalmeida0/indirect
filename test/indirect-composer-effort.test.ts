@@ -194,6 +194,6 @@ describe("Separated Effort & Model picker contracts", () => {
     expect(toolbarMatch![1]).not.toContain("border-top");
     expect(toolbarMatch![1]).toContain("background: transparent");
     expect(codeCss).not.toMatch(/\.rc-composer-toolbar\s*\{[^}]*border-top/);
-    expect(composerSrc).toContain('class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 pt-1 pb-2"');
+    expect(composerSrc).toContain('class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 pt-1 pb-2.5"');
   });
 });

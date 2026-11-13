@@ -312,15 +312,15 @@ export function EffortPickerBody(props: {
       onKeyDown={(e) => {
         if (e.target === e.currentTarget) handleStepKey(e, true);
       }}
-      class="px-2.5 py-2 focus:outline-none"
+      class="px-1.5 py-1.5 focus:outline-none"
       data-effort-picker
     >
       <div class="flex items-center justify-between gap-2.5">
         <span class="inline-flex items-baseline gap-1.5 shrink-0">
-          <span class="text-[13px] font-normal text-fg-muted">Effort</span>
+          <span class="text-sm font-normal text-fg-muted">Effort</span>
           <span
             data-effort-title
-            class={`text-[13px] font-medium transition-colors duration-150 ${
+            class={`text-sm font-medium transition-colors duration-150 ${
               isMax() ? "text-accent" : "text-fg"
             }`}
           >
@@ -337,7 +337,7 @@ export function EffortPickerBody(props: {
             e.stopPropagation();
             props.onOpenModelPicker();
           }}
-          class="group inline-flex items-center gap-1 max-w-[11.5rem] min-w-0 rounded-md px-1.5 py-0.5 -mr-1 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+          class="group inline-flex items-center gap-1 max-w-[11.5rem] min-w-0 rounded-lg px-2 py-1 -mr-1 min-h-7 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
         >
           <span class="truncate">{props.activeModelName()}</span>
           <Iconify
@@ -348,7 +348,7 @@ export function EffortPickerBody(props: {
         </button>
       </div>
 
-      <div class="mt-3 mb-1.5 flex items-center justify-between text-[11px] text-fg-muted select-none">
+      <div class="mt-3 mb-1.5 flex items-center justify-between text-2xs text-fg-muted select-none">
         <span>Faster</span>
         <span>Smarter</span>
       </div>
@@ -363,7 +363,7 @@ export function EffortPickerBody(props: {
         aria-valuemin={0}
         aria-valuemax={EFFORT_SPECS.length - 1}
         aria-valuenow={stepIdx()}
-        aria-valuetext={`${activeSpec().title} — ${activeSpec().desc}`}
+        aria-valuetext={`${activeSpec().title}: ${activeSpec().desc}`}
         onPointerDown={(e) => {
           if (e.button !== 0 && e.pointerType === "mouse") return;
           e.stopPropagation();
@@ -462,7 +462,7 @@ export function EffortPickerBody(props: {
           ref={setThumbEl}
           aria-hidden="true"
           data-effort-thumb
-          class={`absolute top-1 w-[20px] h-[28px] rounded-[6px] pointer-events-none bg-[var(--control-thumb)] [box-shadow:var(--control-thumb-shadow)] ${
+          class={`absolute top-1 w-[20px] h-[28px] rounded-inner pointer-events-none bg-[var(--control-thumb)] [box-shadow:var(--control-thumb-shadow)] ${
             dragging() ? "transition-none" : "transition-[left] duration-100 ease-out"
           }`}
           style={{

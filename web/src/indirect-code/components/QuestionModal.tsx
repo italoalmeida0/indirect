@@ -34,6 +34,7 @@ export function QuestionPanel(props: {
   const ready = (i: number) => answers(i).length > 0 && (!drafts[i]?.custom || !!drafts[i]?.text.trim());
   let heading: HTMLLegendElement | undefined;
   let fieldsetRef: HTMLFieldSetElement | undefined;
+  let customTextareaRef: HTMLTextAreaElement | undefined;
   function move(next: number) {
     const dir = next >= step() ? 1 : -1;
     setStep(next);
@@ -59,8 +60,8 @@ export function QuestionPanel(props: {
     if (q.multiple) setDrafts(step(), "selected", checked ? [...d.selected, label] : d.selected.filter((v) => v !== label));
     else setDrafts(step(), {selected:[label], custom:false});
   }
-  return <section aria-label="Questions from assistant" class="mb-3 overflow-hidden rounded-xl border border-border bg-surface shadow-resting">
-    <div class="flex items-center gap-2 px-3.5 py-2.5 border-b border-border/65 bg-surface-subtle/60 text-xs text-fg-secondary">
+  return <section aria-label="Questions from assistant" class="mb-3 overflow-hidden rounded-panel border border-border bg-surface">
+    <div class="flex items-center gap-2 px-3.5 py-2.5 border-b border-border-subtle bg-surface-subtle text-xs text-fg-secondary">
       <Icon icon="lucide:message-circle-question" size={14} class="text-fg-muted shrink-0" />
       <span class="font-medium text-fg">Your input is needed</span>
       <Show when={questions().length > 1}>
@@ -80,7 +81,7 @@ export function QuestionPanel(props: {
           </For>
         </div>
       </Show>
-      <span class="ml-auto font-mono text-[11px] tabular-nums text-fg-muted" aria-live="polite">
+      <span class="ml-auto font-mono text-2xs tabular-nums text-fg-muted" aria-live="polite">
         {step()+1} of {questions().length}
       </span>
     </div>
@@ -90,15 +91,15 @@ export function QuestionPanel(props: {
       if (step() < questions().length-1) move(step()+1);
       else if (props.connected && drafts.every((_, i) => ready(i))) props.onSubmit(drafts.map((_, i) => answers(i)));
     }}>
-      <fieldset ref={fieldsetRef} disabled={props.submitting} class="px-4 py-3.5 max-h-[42vh] overflow-y-auto min-w-0">
+      <fieldset ref={fieldsetRef} disabled={props.submitting} class="px-3.5 py-3.5 max-h-[min(60dvh,26rem)] overflow-y-auto overscroll-contain min-w-0">
         <legend ref={heading} tabIndex={-1} class="float-left w-full mb-3 outline-none">
           <Show when={question().header}>
-            <span class="block text-[11px] font-medium text-accent mb-1">{question().header}</span>
+            <span class="block text-2xs font-medium text-accent mb-1">{question().header}</span>
           </Show>
           <span class="block text-sm font-medium text-fg whitespace-pre-wrap break-words leading-snug">{question().question}</span>
         </legend>
         <div class="clear-both space-y-2">
-          <Show when={question().multiple}><p class="text-[11px] text-fg-muted">Select all that apply.</p></Show>
+          <Show when={question().multiple}><p class="text-2xs text-fg-muted">Select all that apply.</p></Show>
           <For each={(() => {
             const opts = [...(question().options || [])];
             const rec = ((question() as any).recommend as string | undefined || "").trim().toLowerCase();
@@ -113,10 +114,10 @@ export function QuestionPanel(props: {
             return (
               <label
                 onPointerDown={(e) => press(e.currentTarget)}
-                class={`flex items-start gap-3 rounded-xl border px-3.5 py-2.5 cursor-pointer transition-colors ${
+                class={`flex items-start gap-3 rounded-lg border px-3.5 py-2.5 min-h-10 [@media(pointer:coarse)]:min-h-11 cursor-pointer transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring ${
                   isSelected()
-                    ? "border-accent/45 bg-accent-subtle/65 shadow-2xs"
-                    : "border-border bg-surface/60 hover:bg-surface-muted/70 hover:border-border-strong"
+                    ? "border-[color-mix(in_oklab,var(--accent)_42%,var(--border))] bg-accent-subtle"
+                    : "border-border bg-surface hover:bg-surface-muted hover:border-border-strong"
                 }`}
               >
                 <input
@@ -129,7 +130,7 @@ export function QuestionPanel(props: {
                 <span
                   aria-hidden="true"
                   class={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center border transition-colors ${
-                    question().multiple ? "rounded-[5px]" : "rounded-full"
+                    question().multiple ? "rounded" : "rounded-full"
                   } ${
                     isSelected()
                       ? "border-accent bg-accent text-accent-foreground"
@@ -149,7 +150,7 @@ export function QuestionPanel(props: {
                   <span class="flex items-center gap-1.5 flex-wrap text-xs font-medium text-fg break-words">
                     <span>{option.label}</span>
                     <Show when={isRec()}>
-                      <span class="rounded-full border border-accent/25 bg-accent-subtle px-2 py-0.5 text-[10px] font-medium text-accent">
+                      <span class="rounded-full border border-[color-mix(in_oklab,var(--accent)_28%,var(--border))] bg-accent-subtle px-2 py-0.5 text-2xs font-medium text-accent">
                         Recommended
                       </span>
                     </Show>
@@ -166,17 +167,17 @@ export function QuestionPanel(props: {
               if (props.submitting) return;
               if (step() < questions().length-1) { setDrafts(step(), {selected:[DELEGATE_LABEL], custom:false}); move(step()+1); }
               else if (props.connected) props.onSubmit(drafts.map((_, i) => i === step() ? [DELEGATE_LABEL] : answers(i)));
-            }} class="flex w-full items-center gap-2.5 rounded-xl border border-dashed border-border-strong px-3.5 py-2.5 text-left text-xs text-fg-secondary transition-colors hover:border-accent/50 hover:bg-accent-subtle/30 hover:text-fg cursor-pointer">
+            }} class="flex w-full items-center gap-2.5 rounded-lg border border-dashed border-border-strong px-3.5 py-2.5 min-h-10 [@media(pointer:coarse)]:min-h-11 text-left text-xs text-fg-secondary transition-colors hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] hover:bg-accent-subtle hover:text-fg cursor-pointer">
               <Icon icon="lucide:sparkles" size={14} class="text-accent shrink-0" />
-              <span>{DELEGATE_LABEL} — the assistant proceeds with its best judgment</span>
+              <span>{DELEGATE_LABEL}. The assistant proceeds with its best judgment.</span>
             </button>
           </Show>
           <label
             onPointerDown={(e) => press(e.currentTarget)}
-            class={`flex items-center gap-3 rounded-xl border px-3.5 py-2.5 cursor-pointer transition-colors ${
+            class={`flex items-center gap-3 rounded-lg border px-3.5 py-2.5 min-h-10 [@media(pointer:coarse)]:min-h-11 cursor-pointer transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring ${
               draft().custom
-                ? "border-accent/45 bg-accent-subtle/65 shadow-2xs"
-                : "border-border bg-surface/60 hover:bg-surface-muted/70 hover:border-border-strong"
+                ? "border-[color-mix(in_oklab,var(--accent)_42%,var(--border))] bg-accent-subtle"
+                : "border-border bg-surface hover:bg-surface-muted hover:border-border-strong"
             }`}
           >
             <input
@@ -184,15 +185,19 @@ export function QuestionPanel(props: {
               name={`${props.request.id}-${step()}`}
               checked={draft().custom}
               onChange={(e) => {
-                setDrafts(step(), "custom", e.currentTarget.checked);
+                const checked = e.currentTarget.checked;
+                setDrafts(step(), "custom", checked);
                 if (!question().multiple) setDrafts(step(), "selected", []);
+                if (checked) {
+                  requestAnimationFrame(() => customTextareaRef?.focus());
+                }
               }}
               class="sr-only"
             />
             <span
               aria-hidden="true"
               class={`flex h-4 w-4 shrink-0 items-center justify-center border transition-colors ${
-                question().multiple ? "rounded-[5px]" : "rounded-full"
+                question().multiple ? "rounded" : "rounded-full"
               } ${
                 draft().custom
                   ? "border-accent bg-accent text-accent-foreground"
@@ -211,15 +216,15 @@ export function QuestionPanel(props: {
             <span class="text-xs font-medium text-fg-secondary">Type your own answer</span>
           </label>
           <Show when={draft().custom}>
-            <textarea aria-label="Your answer" placeholder="Type your own answer or provide more details..." value={draft().text} maxLength={4000} rows={2} onInput={(e) => setDrafts(step(), "text", e.currentTarget.value)} class="block w-full resize-y rounded-xl border border-border bg-surface-subtle/75 px-3.5 py-2.5 text-sm text-fg outline-none focus:border-accent/65 focus:bg-surface placeholder:text-fg-muted transition-colors" />
+            <textarea ref={customTextareaRef} aria-label="Your answer" placeholder="Type your own answer or provide more details…" value={draft().text} maxLength={4000} rows={2} onInput={(e) => setDrafts(step(), "text", e.currentTarget.value)} class="block w-full resize-y rounded-lg border border-border bg-surface-subtle px-3.5 py-2.5 text-sm max-sm:text-base text-fg outline-none focus:border-accent focus:bg-surface placeholder:text-fg-muted transition-colors" />
           </Show>
         </div>
       </fieldset>
-      <Show when={props.error}><p role="alert" class="px-4 pb-2 text-xs text-danger">{props.error}</p></Show>
-      <div class="flex items-center gap-2 border-t border-border/70 bg-surface-subtle/40 px-4 py-3">
-        <button type="button" disabled={step() === 0 || props.submitting} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} onClick={() => move(step()-1)} class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">Back</button>
-        <Show when={!props.connected}><span class="text-[11px] text-warning flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />Reconnecting…</span></Show>
-        <button type="submit" disabled={!ready(step()) || props.submitting || (step() === questions().length-1 && !props.connected)} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} class="ml-auto rounded-lg bg-accent hover:bg-accent-strong text-accent-foreground px-4 py-1.5 text-xs font-medium shadow-2xs disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">
+      <Show when={props.error}><p role="alert" class="px-3.5 pb-2 text-xs text-danger">{props.error}</p></Show>
+      <div class="flex items-center gap-2 border-t border-border-subtle bg-surface-subtle px-3.5 py-2.5">
+        <button type="button" disabled={step() === 0 || props.submitting} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} onClick={() => move(step()-1)} class="min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">Back</button>
+        <Show when={!props.connected}><span class="text-2xs text-warning flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />Reconnecting…</span></Show>
+        <button type="submit" disabled={!ready(step()) || props.submitting || (step() === questions().length-1 && !props.connected)} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} class="ml-auto min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg bg-accent hover:bg-accent-strong text-accent-foreground px-4 py-1.5 text-xs font-medium disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">
           {props.submitting ? "Sending…" : step() < questions().length-1 ? "Next" : "Send answers"}
         </button>
       </div>

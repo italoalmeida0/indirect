@@ -75,8 +75,8 @@ export function ToolbarContext() {
 
   /** The selection as it was when the popup OPENED (or when a mode pick
    * last committed it). applyDraft sends only the user's delta against it,
-   * so changes that arrived from the daemon meanwhile — an AI use_skill
-   * activation, a once skill expiring at turn end — are never undone by
+   * so changes that arrived from the daemon meanwhile (an AI use_skill
+   * activation, a once skill expiring at turn end) are never undone by
    * closing the popup. */
   let openSnapshot: { skills: string[]; usables: Record<string, string>; mode: string } = { skills: [], usables: {}, mode: "" };
 
@@ -318,8 +318,8 @@ export function ToolbarContext() {
     return (
       <Show when={modeSkills().length > 0}>
         <div class="px-1.5 pt-1 pb-1.5">
-          <div class="flex items-center justify-between px-1 pb-1.5">
-            <span class="text-[11px] font-medium text-fg-muted">Execution posture</span>
+          <div class="flex items-center justify-between px-0.5 pb-1.5">
+            <span class="text-2xs font-medium text-fg-muted">Execution posture</span>
           </div>
           <Show
             when={modeSkills().length > 1}
@@ -335,18 +335,18 @@ export function ToolbarContext() {
                         aria-checked={active()}
                         onPointerDown={(e) => press(e.currentTarget)}
                         onClick={() => chooseModeSkill(mode.name)}
-                        class="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface-subtle px-2.5 py-2 text-left transition-colors cursor-pointer"
+                        class="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface-subtle px-2.5 py-2 min-h-9 [@media(pointer:coarse)]:min-h-11 text-left transition-colors cursor-pointer"
                       >
                         <Iconify icon={mode.icon} size={14} class="text-accent shrink-0" />
                         <span class="flex-1 min-w-0">
                           <span class="flex items-center gap-1.5">
                             <span class="text-xs font-medium text-fg">{mode.label}</span>
-                            <span class="inline-flex items-center gap-1 rounded border border-border bg-surface px-1.5 py-px text-[10px] font-medium text-fg-muted">
+                            <span class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface px-1.5 py-px text-2xs font-medium text-fg-muted">
                               <Iconify icon="lucide:lock" size={9} class="shrink-0" />
                               <span>Locked</span>
                             </span>
                           </span>
-                          <span class="block text-[11px] text-fg-muted mt-0.5 leading-snug">{mode.description}</span>
+                          <span class="block text-2xs text-fg-muted mt-0.5 leading-snug">{mode.description}</span>
                         </span>
                       </button>
                     );
@@ -377,7 +377,7 @@ export function ToolbarContext() {
                       onBlur={() => setHoveredMode((cur) => (cur === mode.name ? null : cur))}
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => chooseModeSkill(mode.name)}
-                      class={`ui-segment flex-auto px-2 py-1.5 text-xs font-medium flex items-center justify-center gap-1.5 rounded-md cursor-pointer transition-colors ${
+                      class={`ui-segment flex-auto px-2 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-10 text-xs font-medium flex items-center justify-center gap-1.5 rounded-inner cursor-pointer transition-colors ${
                         active() ? "text-fg" : "text-fg-muted hover:text-fg-secondary"
                       }`}
                     >
@@ -387,13 +387,13 @@ export function ToolbarContext() {
                         class={active() ? "text-accent shrink-0" : "text-fg-muted shrink-0"}
                       />
                       <span>{mode.label}</span>
-                      <span class="sr-only"> — {mode.description}</span>
+                      <span class="sr-only">: {mode.description}</span>
                     </button>
                   );
                 }}
               </For>
             </div>
-            <div class="mt-1.5 px-1 flex items-start gap-1.5 text-[11px] text-fg-muted min-h-[1rem]">
+            <div class="mt-1.5 px-0.5 flex items-start gap-1.5 text-2xs text-fg-muted min-h-[1rem]">
               <span class="mt-1.5 h-1 w-1 rounded-full bg-accent shrink-0" aria-hidden="true" />
               <span class="line-clamp-2 leading-snug">{captionSpec()?.description}</span>
             </div>
@@ -405,37 +405,37 @@ export function ToolbarContext() {
 
   const additionalSkillList = () => (
     <>
-      <div class="max-h-56 overflow-y-auto px-0.5 [scrollbar-gutter:stable]">
-        <ul class="space-y-0.5" ref={(el) => attachSortable(el, { onReorder: reorderAdditional })}>
+      <div class="max-h-56 overflow-y-auto overscroll-contain">
+        <ul role="group" aria-label="Additional skills" class="space-y-0.5" ref={(el) => attachSortable(el, { onReorder: reorderAdditional })}>
           <For each={additionalSkills()} fallback={<li class="px-2 py-2 text-xs text-fg-muted">No additional skills on this host.</li>}>
             {([name, skill]) => {
               const selected = () => effectiveSelectedSkills().includes(name);
               return (
-                <li data-id={name} class="group/skill flex items-center gap-1 rounded-md px-1 py-0.5 hover:bg-surface-muted/65 transition-colors">
+                <li data-id={name} class="group/skill flex items-center gap-1 rounded-lg px-1.5 py-1 min-h-9 [@media(pointer:coarse)]:min-h-11 hover:bg-surface-muted transition-colors">
                   <button
                     type="button"
                     data-handle
                     aria-label={`Reorder ${name}`}
                     data-rc-tip="Drag to reorder"
-                    class={`shrink-0 p-1 rounded text-fg-muted hover:text-fg cursor-grab active:cursor-grabbing transition-opacity ${
+                    class={`shrink-0 p-1 rounded-inner text-fg-muted hover:text-fg cursor-grab active:cursor-grabbing transition-opacity ${
                       ui.isMobile() ? "opacity-60" : "opacity-0 group-hover/skill:opacity-70 focus-visible:opacity-100"
                     }`}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <Iconify icon="lucide:grip-vertical" size={13} />
                   </button>
-                  <div role="menu" aria-label={`Skill ${name}`} class="flex-1 flex min-w-0">
+                  <div class="flex-1 flex min-w-0">
                     <button
                       type="button"
                       role="menuitemcheckbox"
                       aria-checked={selected()}
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => toggleAdditional(name)}
-                      class="flex-1 min-w-0 py-1 pr-1.5 flex items-center gap-2 text-left cursor-pointer"
+                      class="flex-1 min-w-0 py-0.5 pr-1.5 flex items-center gap-2 text-left cursor-pointer"
                     >
                       <span
                         aria-hidden="true"
-                        class={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[4px] border transition-colors ${
+                        class={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border transition-colors ${
                           selected()
                             ? "border-accent bg-accent text-accent-foreground"
                             : "border-border-strong bg-surface group-hover/skill:border-fg-muted"
@@ -450,7 +450,7 @@ export function ToolbarContext() {
                           {name}
                         </span>
                         <Show when={skill?.description}>
-                          <span class="block text-[11px] text-fg-muted leading-tight truncate mt-0.5">
+                          <span class="block text-2xs text-fg-muted leading-tight truncate mt-0.5">
                             {skill?.description}
                           </span>
                         </Show>
@@ -464,11 +464,11 @@ export function ToolbarContext() {
                       data-rc-tip={`Activation policy: ${shownUsable(name)} (click to cycle)`}
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }}
-                      class={`shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none transition-colors cursor-pointer ${
+                      class={`relative shrink-0 rounded-inner border px-1.5 py-1 font-mono text-2xs font-medium leading-none transition-colors cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-1/2 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:w-11 [@media(pointer:coarse)]:after:-translate-1/2 ${
                         shownUsable(name) === "yolo"
-                          ? "border-warning/35 bg-warning-subtle text-warning hover:bg-warning/20"
+                          ? "border-[color-mix(in_oklab,var(--warning)_32%,var(--border))] bg-warning-subtle text-warning hover:opacity-90"
                           : shownUsable(name) === "deny"
-                          ? "border-danger/35 bg-danger-subtle text-danger hover:bg-danger/20"
+                          ? "border-[color-mix(in_oklab,var(--danger)_32%,var(--border))] bg-danger-subtle text-danger hover:opacity-90"
                           : "border-border bg-surface-subtle text-fg-secondary hover:bg-surface-muted hover:text-fg"
                       }`}
                     >
@@ -476,10 +476,10 @@ export function ToolbarContext() {
                     </button>
                   </Show>
                   <Show when={originalUsable(skill?.usable) === "yolo"}>
-                    <span data-rc-tip="Always usable without asking" class="shrink-0 rounded-md border border-warning/25 bg-warning-subtle/60 px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-warning">yolo</span>
+                    <span data-rc-tip="Always usable without asking" class="shrink-0 rounded-inner border border-[color-mix(in_oklab,var(--warning)_26%,var(--border))] bg-warning-subtle px-1.5 py-1 font-mono text-2xs font-medium leading-none text-warning">yolo</span>
                   </Show>
                   <Show when={originalUsable(skill?.usable) === "deny"}>
-                    <span data-rc-tip="Hidden from model auto-activation" class="shrink-0 rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[10px] font-medium leading-none text-fg-muted">hidden</span>
+                    <span data-rc-tip="Hidden from model auto-activation" class="shrink-0 rounded-inner border border-border bg-surface-subtle px-1.5 py-1 font-mono text-2xs font-medium leading-none text-fg-muted">hidden</span>
                   </Show>
                 </li>
               );
@@ -488,12 +488,12 @@ export function ToolbarContext() {
         </ul>
       </div>
       <Show when={(m.skillErrors?.() ?? []).length > 0}>
-        <div role="status" class="mx-1 mt-1.5 rounded-lg border border-warning/35 bg-warning-subtle px-2.5 py-2 text-[11px] text-warning">
+        <div role="status" class="mt-1.5 rounded-lg border border-[color-mix(in_oklab,var(--warning)_32%,var(--border))] bg-warning-subtle px-2.5 py-2 text-2xs text-warning">
           <div class="flex items-center gap-1.5 font-medium">
             <Iconify icon="lucide:circle-alert" size={12} />
             <span>{(m.skillErrors?.() ?? []).length === 1 ? "1 skill file failed to load" : `${(m.skillErrors?.() ?? []).length} skill files failed to load`}</span>
           </div>
-          <ul class="mt-1 space-y-0.5 text-fg-secondary font-mono text-[10px]">
+          <ul class="mt-1 space-y-0.5 text-fg-secondary font-mono text-2xs">
             <For each={m.skillErrors?.() ?? []}>{(err) => <li class="break-words">{err}</li>}</For>
           </ul>
         </div>
@@ -502,7 +502,7 @@ export function ToolbarContext() {
   );
 
   const permissionsList = (closeOnPick: boolean) => (
-    <div role="menu" aria-label="Agent permissions" class="space-y-1 px-0.5 pb-0.5">
+    <div role="menu" aria-label="Agent permissions" class="space-y-1 pb-0.5">
       <For
         each={[
           { full: false, label: "Ask for approval", description: "Ask before every tool call, including reads and commands.", icon: "lucide:hand" },
@@ -524,13 +524,13 @@ export function ToolbarContext() {
                 }
                 if (closeOnPick) c.setAccessMenuOpen(false);
               }}
-              class={`w-full flex items-start gap-2.5 px-2.5 py-2 text-left rounded-lg border transition-colors cursor-pointer ${
+              class={`w-full flex items-start gap-2.5 px-2.5 py-2 min-h-10 [@media(pointer:coarse)]:min-h-11 text-left rounded-lg border transition-colors cursor-pointer ${
                 active()
                   ? access.full
-                    ? "border-warning/30 bg-warning-subtle text-warning hover:bg-warning/20"
+                    ? "border-[color-mix(in_oklab,var(--warning)_30%,var(--border))] bg-warning-subtle text-warning"
                     : "border-border bg-surface-subtle text-fg"
                   : access.full
-                  ? "border-transparent hover:bg-warning-subtle/50 text-fg-secondary"
+                  ? "border-transparent hover:bg-warning-subtle text-fg-secondary"
                   : "border-transparent hover:bg-surface-muted text-fg-secondary"
               }`}
             >
@@ -541,7 +541,7 @@ export function ToolbarContext() {
               />
               <span class="flex-1 min-w-0">
                 <span class={`block text-xs font-medium ${access.full ? "text-warning" : "text-fg"}`}>{access.label}</span>
-                <span class={`block mt-0.5 text-[11px] leading-snug ${access.full && active() ? "text-warning/85" : "text-fg-muted"}`}>
+                <span class="block mt-0.5 text-2xs leading-snug text-fg-muted">
                   {access.description}
                 </span>
               </span>
@@ -574,7 +574,7 @@ export function ToolbarContext() {
       ui.setModelMenuOpen(false);
       c.setAddContextOpen(next);
     }}
-    class="rc-composer-add w-7 h-7 rounded-full text-fg-secondary hover:text-fg hover:bg-surface-muted flex items-center justify-center cursor-pointer transition-colors"
+    class="rc-composer-add ui-icon-button ui-icon-button-xs rounded-full text-fg-secondary"
     data-rc-tip={ui.isMobile() ? "Add & Settings" : "Add context"}
     aria-label={ui.isMobile() ? "Add & Settings" : "Add context"}
   >
@@ -602,7 +602,7 @@ export function ToolbarContext() {
       fallback={
         /* Desktop: original "Add context" menu */
         <>
-          <div class="px-2.5 py-1 text-[11px] font-medium text-fg-muted">
+          <div class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 border-b border-border-subtle text-2xs font-medium text-fg-muted">
             Add context
           </div>
           <MenuItem
@@ -643,7 +643,7 @@ export function ToolbarContext() {
     >
       {/* Mobile views: Root menu + Subviews */}
       <Show when={subView() === "main"}>
-        <div class="px-2.5 py-1 text-[11px] font-medium text-fg-muted">
+        <div class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 border-b border-border-subtle text-2xs font-medium text-fg-muted">
           Add context
         </div>
         <MenuItem
@@ -680,8 +680,8 @@ export function ToolbarContext() {
           <span>Actions</span>
         </MenuItem>
 
-        <div class="mt-1 border-t border-border/70 pt-1">
-          <div class="px-2.5 py-1 text-[11px] font-medium text-fg-muted">
+        <div class="mt-1 -mx-1.5 border-t border-border-subtle pt-1 px-1.5">
+          <div class="px-1.5 py-1 text-2xs font-medium text-fg-muted">
             Configuration
           </div>
           <MenuItem
@@ -693,7 +693,7 @@ export function ToolbarContext() {
             </span>
             <Show when={formatEffort(c.effort())}>
               <span
-                class={`shrink-0 font-mono text-[10px] ml-1 ${
+                class={`shrink-0 font-mono text-2xs ml-1 ${
                   normalizeEffort(c.effort()) === "max"
                     ? "text-accent font-medium"
                     : "text-fg-muted"
@@ -710,7 +710,7 @@ export function ToolbarContext() {
             onClick={() => switchSubView("mode")}
           >
             <span class="flex-1">Mode</span>
-            <span class="text-fg-secondary font-medium text-[11px] capitalize">
+            <span class="text-fg-secondary font-medium text-2xs capitalize">
               {currentModeSpec()?.label ?? c.agentMode()}
               <Show when={additionalCount() > 0}>
                 <span class="text-accent"> (+{additionalCount()})</span>
@@ -726,7 +726,7 @@ export function ToolbarContext() {
             onClick={() => switchSubView("access")}
           >
             <span class="flex-1">Permissions</span>
-            <span class={`inline-flex items-center text-[11px] font-medium ${c.yoloMode() ? "text-warning" : "text-fg-secondary"}`}>
+            <span class={`inline-flex items-center text-2xs font-medium ${c.yoloMode() ? "text-warning" : "text-fg-secondary"}`}>
               <span>{c.yoloMode() ? "Full" : "Ask"}</span>
             </span>
             <Iconify icon="lucide:chevron-right" size={13} class="text-fg-muted shrink-0 ml-1" />
@@ -737,12 +737,12 @@ export function ToolbarContext() {
 
       <Show when={subView() === "effort"}>
         <div ref={animateSubView}>
-          <div class="flex items-center justify-between px-1.5 py-1 border-b border-border-subtle">
+          <div class="-mx-1.5 -mt-1.5 mb-1 flex items-center justify-between px-2 py-1 border-b border-border-subtle">
             <button
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
-              class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
@@ -752,7 +752,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
-              class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
+              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -763,12 +763,12 @@ export function ToolbarContext() {
 
       <Show when={subView() === "model"}>
         <div ref={animateSubView}>
-          <div class="flex items-center justify-between px-1.5 py-1 border-b border-border-subtle">
+          <div class="-mx-1.5 -mt-1.5 mb-1.5 flex items-center justify-between px-2 py-1 border-b border-border-subtle">
             <button
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("effort")}
-              class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
@@ -778,7 +778,7 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
-              class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
+              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
             >
               Done
             </button>
@@ -789,12 +789,12 @@ export function ToolbarContext() {
 
       <Show when={subView() === "mode"}>
         <div ref={animateSubView}>
-          <div class="flex items-center justify-between px-1.5 py-1 mb-0.5 border-b border-border-subtle">
+          <div class="-mx-1.5 -mt-1.5 mb-1 flex items-center justify-between px-2 py-1 border-b border-border-subtle">
             <button
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
-              class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
@@ -807,17 +807,17 @@ export function ToolbarContext() {
                 applyDraft();
                 c.setAddContextOpen(false);
               }}
-              class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
+              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
             >
               Done
             </button>
           </div>
           <PostureSection />
-          <div class={`${modeSkills().length > 0 ? "mt-1 border-t border-border-subtle pt-1.5" : "pt-1"}`}>
-            <div class="flex items-center justify-between px-2.5 pb-1">
-              <span class="text-[11px] font-medium text-fg-muted">Skill matrix</span>
+          <div class={`${modeSkills().length > 0 ? "mt-1 -mx-1.5 border-t border-border-subtle pt-1.5 px-1.5" : "pt-1"}`}>
+            <div class="flex items-center justify-between px-1.5 pb-1">
+              <span class="text-2xs font-medium text-fg-muted">Skill matrix</span>
               <Show when={additionalSkills().length > 0}>
-                <span class="font-mono text-[10px] text-fg-muted tabular-nums">
+                <span class="font-mono text-2xs text-fg-muted tabular-nums">
                   {activeAdditionalCount()}/{additionalSkills().length} active
                 </span>
               </Show>
@@ -829,12 +829,12 @@ export function ToolbarContext() {
 
       <Show when={subView() === "access"}>
         <div ref={animateSubView}>
-          <div class="flex items-center justify-between px-1.5 py-1 mb-1 border-b border-border-subtle">
+          <div class="-mx-1.5 -mt-1.5 mb-1.5 flex items-center justify-between px-2 py-1 border-b border-border-subtle">
             <button
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => switchSubView("main")}
-              class="px-1.5 py-1 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
+              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
             >
               <Iconify icon="lucide:chevron-left" size={14} />
               <span>Back</span>
@@ -844,12 +844,12 @@ export function ToolbarContext() {
               type="button"
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => c.setAddContextOpen(false)}
-              class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
+              class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
             >
               Done
             </button>
           </div>
-          <p class="px-2.5 py-1 text-[11px] font-medium text-fg-muted">Execution permissions</p>
+          <p class="px-1.5 pb-1 text-2xs font-medium text-fg-muted">Execution permissions</p>
           {permissionsList(false)}
         </div>
       </Show>
@@ -864,13 +864,13 @@ export function ToolbarContext() {
   <button type="button" ref={c.modeBtn} data-menubtn data-rc-tip="Mode & skills" aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`} aria-expanded={c.modeMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.modeMenuOpen(); ui.closeMenus(); c.setModeMenuOpen(next); }}
-    class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer">
+    class="h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer">
     <Iconify icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")} size={13} class="text-accent shrink-0" />
-    <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}<Show when={additionalCount() > 0}><span class="font-mono text-[11px] text-accent">{` +${additionalCount()}`}</span></Show></span>
+    <span class="capitalize">{currentModeSpec()?.label ?? c.agentMode()}<Show when={additionalCount() > 0}><span class="font-mono text-2xs text-accent">{` +${additionalCount()}`}</span></Show></span>
     <Iconify icon="lucide:chevron-down" size={11} class={`text-fg-muted transition-transform duration-150 ${c.modeMenuOpen() ? "rotate-180" : ""}`} />
   </button>
   <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} onClose={() => c.setModeMenuOpen(false)} role="dialog" aria-label="Mode & Skills" placement="top-start" width="min(24.5rem, calc(100vw - 1.5rem))">
-    <div class="flex items-center justify-between px-2.5 py-1 border-b border-border-subtle mb-0.5">
+    <div class="-mx-1.5 -mt-1.5 mb-1 flex items-center justify-between px-3 py-1 border-b border-border-subtle">
       <span class="font-medium text-xs text-fg">Mode & Skills</span>
       <button
         type="button"
@@ -879,17 +879,17 @@ export function ToolbarContext() {
           applyDraft();
           c.setModeMenuOpen(false);
         }}
-        class="px-2 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
+        class="min-h-7 [@media(pointer:coarse)]:min-h-11 px-2 py-1 rounded-lg hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
       >
         Done
       </button>
     </div>
     <PostureSection />
-    <div class={`${modeSkills().length > 0 ? "mt-1 border-t border-border-subtle pt-1.5" : "pt-1"}`}>
-      <div class="flex items-center justify-between px-2.5 pb-1">
-        <span class="text-[11px] font-medium text-fg-muted">Skill matrix</span>
+    <div class={`${modeSkills().length > 0 ? "mt-1 -mx-1.5 border-t border-border-subtle pt-1.5 px-1.5" : "pt-1"}`}>
+      <div class="flex items-center justify-between px-1.5 pb-1">
+        <span class="text-2xs font-medium text-fg-muted">Skill matrix</span>
         <Show when={additionalSkills().length > 0}>
-          <span class="font-mono text-[10px] text-fg-muted tabular-nums">
+          <span class="font-mono text-2xs text-fg-muted tabular-nums">
             {activeAdditionalCount()}/{additionalSkills().length} active
           </span>
         </Show>
@@ -903,12 +903,12 @@ export function ToolbarContext() {
   <button type="button" ref={c.accessBtn} data-menubtn data-rc-tip={c.yoloMode() ? "Permissions: Full access" : "Permissions: Ask for approval"} aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`} aria-expanded={c.accessMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.accessMenuOpen(); ui.closeMenus(); c.setAccessMenuOpen(next); }}
-    class={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${c.yoloMode() ? "text-warning" : "text-fg-secondary hover:text-fg"}`}>
+    class={`h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${c.yoloMode() ? "text-warning" : "text-fg-secondary hover:text-fg"}`}>
     <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={13} class={c.yoloMode() ? "text-warning shrink-0" : "text-fg-muted shrink-0"} />
-    <span class="hidden sm:inline">{c.yoloMode() ? "Full" : "Ask"}</span>
+    <span class="hidden @[420px]:inline">{c.yoloMode() ? "Full" : "Ask"}</span>
   </button>
   <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="min(21rem, calc(100vw - 1.5rem))">
-    <p class="px-2.5 py-1 text-[11px] font-medium text-fg-muted border-b border-border-subtle mb-1">Execution permissions</p>
+    <p class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 text-2xs font-medium text-fg-muted border-b border-border-subtle">Execution permissions</p>
     {permissionsList(true)}
   </FloatMenu>
 </div>

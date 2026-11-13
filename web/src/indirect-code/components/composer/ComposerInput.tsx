@@ -47,15 +47,15 @@ export function ComposerInput() {
 <>
 <MentionMenu mentions={c.mentions} inputId="rc-composer" />
 <Show when={dragActive()}>
-  <div class="mx-3 mt-3 flex items-center justify-center gap-2 rounded-lg border border-dashed border-accent bg-accent-subtle px-3 py-2 text-xs font-medium text-accent pointer-events-none">
+  <div class="mx-3 mt-3 flex items-center justify-center gap-2 rounded-inner border border-dashed border-accent bg-accent-subtle px-3 py-2 text-xs font-medium text-accent pointer-events-none">
     <Iconify icon="lucide:upload-cloud" size={14} />
     <span>Drop files to attach to prompt</span>
   </div>
 </Show>
 <Show when={c.preparingAttachments() > 0}>
   <p role="status" class="px-3.5 pt-3 flex items-center gap-1.5 text-xs text-fg-muted">
-    <Iconify icon="lucide:loader-2" size={12} class="animate-spin text-accent" />
-    <span>Preparing {c.preparingAttachments()} file(s)...</span>
+    <span class="ui-spinner text-accent shrink-0" aria-hidden="true" />
+    <span>Preparing {c.preparingAttachments()} file(s)…</span>
   </p>
 </Show>
 {/* Attachment chips */}
@@ -64,39 +64,43 @@ export function ComposerInput() {
     <For each={c.pendingAttachments()}>
       {(att) => (
         <div
-          role="button"
-          tabIndex={0}
-          onClick={() => m.previewPending(att)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              m.previewPending(att);
-            }
-          }}
-          aria-label={`Preview ${att.name}`}
-          class="group flex items-center gap-1.5 bg-surface-subtle rounded-md border border-border pl-2 pr-1 py-1 text-xs max-w-[220px] cursor-pointer hover:border-border-strong hover:bg-surface-muted transition-colors"
-          data-rc-tip={`${att.name} (${Math.max(1, Math.round(att.size / 1024))}KB) — click to preview`}
+          class="group inline-flex items-center bg-surface-subtle rounded-inner border border-border max-w-[220px] text-xs hover:border-border-strong hover:bg-surface-muted transition-colors"
         >
-          <Show
-            when={att.loading}
-            fallback={<FileIcon path={att.name} size={15} />}
-          >
-            <span class="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
-          </Show>
-          <span class="truncate text-fg font-medium">{att.name}</span>
-          <span class="shrink-0 font-mono text-[10px] text-fg-muted tabular-nums">
-            {Math.max(1, Math.round(att.size / 1024))}K
-          </span>
-          <Show when={att.uploading}>
-            <span class="w-3 h-3 border-2 border-accent border-t-transparent rounded-full animate-spin shrink-0" />
-          </Show>
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
+            role="button"
+            tabIndex={0}
+            onClick={() => m.previewPending(att)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                m.previewPending(att);
+              }
+            }}
+            aria-label={`Preview ${att.name}`}
+            data-rc-tip={`${att.name} (${Math.max(1, Math.round(att.size / 1024))}KB) · click to preview`}
+            class="flex min-w-0 items-center gap-1.5 pl-2 pr-1 py-1 text-left cursor-pointer"
+          >
+            <Show
+              when={att.loading}
+              fallback={<FileIcon path={att.name} size={15} />}
+            >
+              <span class="ui-spinner text-accent shrink-0" aria-hidden="true" />
+            </Show>
+            <span class="truncate text-fg font-medium">{att.name}</span>
+            <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">
+              {Math.max(1, Math.round(att.size / 1024))}K
+            </span>
+            <Show when={att.uploading}>
+              <span class="ui-spinner text-accent shrink-0" aria-hidden="true" />
+            </Show>
+          </button>
+          <button
+            type="button"
+            onClick={() => {
               c.removePendingAttachment(att.key);
             }}
-            class="shrink-0 flex h-4 w-4 items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors cursor-pointer"
+            class="relative shrink-0 mr-1 flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-1/2 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:w-11 [@media(pointer:coarse)]:after:-translate-1/2"
             disabled={c.sending()}
             data-rc-tip="Remove attachment" aria-label={`Remove ${att.name}`}
           >
@@ -123,7 +127,7 @@ export function ComposerInput() {
     ref={textareaRef}
     disabled={s.creatingSession() || c.sending()}
     rows={1}
-    class="flex-1 min-w-0 bg-transparent text-[13px] leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-1 max-h-[160px] min-h-9 overflow-y-hidden"
+    class="flex-1 min-w-0 bg-transparent text-sm max-sm:text-base leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-1 max-h-[160px] min-h-9 overflow-y-hidden"
     placeholder="Ask anything, @ to mention, / for actions"
     value={c.inputPrompt()}
     onFocus={() => c.mentions.setFocused(true)}
@@ -221,7 +225,7 @@ export function ComposerInput() {
       onClick={() => {
         c.setInputPrompt("");
       }}
-      class="shrink-0 mr-2.5 mt-2.5 inline-grid h-6 w-6 place-items-center rounded-full text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+      class="ui-icon-button ui-icon-button-xs shrink-0 mr-2.5 mt-2 rounded-full text-fg-muted"
       data-rc-tip="Clear input" aria-label="Clear input"
     >
       <Iconify icon="lucide:x" size={13} />

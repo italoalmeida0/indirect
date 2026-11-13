@@ -694,7 +694,7 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
 
     assertWhisperQuietQueueHtml(html);
     expect(html).toContain("data-composer-queue-shelf");
-    expect(html).toContain("rounded-t-xl border border-b-0 border-border/80 bg-surface-subtle");
+    expect(html).toContain("rounded-t-surface border border-b-0 border-border-strong bg-surface-subtle");
     expect(html).toContain("data-queue-passive");
     expect(html).not.toContain("data-queue-staged");
     expect(html).toContain(">Queued<");
@@ -730,7 +730,7 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
     expect(html).toContain("data-queue-card");
     expect(html).toContain("data-queue-staged");
     expect(html).toContain('data-queue-item-state="steer"');
-    expect(html).toContain("rounded-2xl rounded-br-sm border border-dashed border-border-strong bg-surface/80");
+    expect(html).toContain("rounded-panel border border-dashed border-border-strong bg-surface");
     expect(html).toContain("Next step");
     expect(html).toContain("Focus on mobile viewport overflow");
     expect(html).toContain(">2<");

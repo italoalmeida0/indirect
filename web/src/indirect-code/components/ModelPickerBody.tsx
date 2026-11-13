@@ -343,7 +343,7 @@ export function ModelPickerBody(props: {
 
   return (
     <>
-      <div class="flex items-center gap-2 px-2.5 py-1.5 border-b border-border-subtle">
+      <div class="-mx-1.5 -mt-1.5 flex items-center gap-2 px-3 py-1.5 border-b border-border-subtle">
         <Show when={props.onBackToEffort}>
           <button
             type="button"
@@ -355,7 +355,7 @@ export function ModelPickerBody(props: {
               e.stopPropagation();
               props.onBackToEffort?.();
             }}
-            class="shrink-0 p-1 -ml-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+            class="ui-icon-button ui-icon-button-xs shrink-0 -ml-1 text-fg-muted"
           >
             <Iconify icon="lucide:arrow-left" size={13} />
           </button>
@@ -366,7 +366,7 @@ export function ModelPickerBody(props: {
           type="text"
           aria-label="Search models"
           placeholder="Search models…"
-          class="flex-1 min-w-0 bg-transparent text-xs text-fg placeholder:text-fg-muted focus:outline-none"
+          class="flex-1 min-w-0 bg-transparent text-xs max-sm:text-base text-fg placeholder:text-fg-muted focus:outline-none"
           value={props.filter()}
           onInput={(e) => props.setFilter(e.currentTarget.value)}
           onClick={(e) => e.stopPropagation()}
@@ -424,7 +424,7 @@ export function ModelPickerBody(props: {
               e.stopPropagation();
               props.setFilter("");
             }}
-            class="shrink-0 rounded p-0.5 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+            class="ui-icon-button ui-icon-button-xs shrink-0 text-fg-muted"
           >
             <Iconify icon="lucide:x" size={12} />
           </button>
@@ -435,7 +435,7 @@ export function ModelPickerBody(props: {
           onMouseDown={(e) => e.preventDefault()}
           onPointerDown={(e) => press(e.currentTarget)}
           onClick={props.onRefresh}
-          class="shrink-0 p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+          class="ui-icon-button ui-icon-button-xs shrink-0 -mr-1 text-fg-muted"
           data-rc-tip="Refresh models"
           aria-label="Refresh models"
         >
@@ -444,7 +444,7 @@ export function ModelPickerBody(props: {
       </div>
 
       <Show when={hasMultipleProviders()}>
-        <div class="relative border-b border-border-subtle">
+        <div class="-mx-1.5 relative border-b border-border-subtle">
           <div
             ref={(el) => {
               providerStripRef = el;
@@ -490,7 +490,7 @@ export function ModelPickerBody(props: {
                   if (providerContentRef === el) providerContentRef = undefined;
                 });
               }}
-              class="flex w-max items-center gap-1 px-2 py-1.5"
+              class="flex w-max items-center gap-1 px-3 py-1.5"
             >
               <button
                 type="button"
@@ -505,14 +505,14 @@ export function ModelPickerBody(props: {
                     behavior: reducedMotion() ? "auto" : "smooth",
                   });
                 }}
-                class={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                class={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 min-h-6 [@media(pointer:coarse)]:min-h-8 text-2xs font-medium transition-colors cursor-pointer ${
                   effectiveProvider() === "all"
                     ? "border-accent/35 bg-accent-subtle text-fg"
-                    : "border-border/80 bg-surface-subtle text-fg-muted hover:text-fg hover:bg-surface-muted"
+                    : "border-border bg-surface-subtle text-fg-muted hover:text-fg hover:bg-surface-muted"
                 }`}
               >
                 <span>All</span>
-                <span class={`font-mono text-[10px] tabular-nums ${effectiveProvider() === "all" ? "text-accent" : "text-fg-muted"}`}>
+                <span class={`font-mono text-2xs tabular-nums ${effectiveProvider() === "all" ? "text-accent" : "text-fg-muted"}`}>
                   {props.models().length}
                 </span>
               </button>
@@ -533,14 +533,14 @@ export function ModelPickerBody(props: {
                           behavior: reducedMotion() ? "auto" : "smooth",
                         });
                       }}
-                      class={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer ${
+                      class={`shrink-0 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 min-h-6 [@media(pointer:coarse)]:min-h-8 text-2xs font-medium transition-colors cursor-pointer ${
                         activeChip()
                           ? "border-accent/35 bg-accent-subtle text-fg"
-                          : "border-border/80 bg-surface-subtle text-fg-muted hover:text-fg hover:bg-surface-muted"
+                          : "border-border bg-surface-subtle text-fg-muted hover:text-fg hover:bg-surface-muted"
                       }`}
                     >
                       <span class="max-w-[110px] truncate">{g.provider}</span>
-                      <span class={`font-mono text-[10px] tabular-nums ${activeChip() ? "text-accent" : "text-fg-muted"}`}>
+                      <span class={`font-mono text-2xs tabular-nums ${activeChip() ? "text-accent" : "text-fg-muted"}`}>
                         {g.models.length}
                       </span>
                     </button>
@@ -554,7 +554,7 @@ export function ModelPickerBody(props: {
             <div
               data-provider-scroll-edge="left"
               aria-hidden={!canScrollLeft() ? "true" : undefined}
-              class={`absolute inset-y-0 left-0 z-10 flex items-center pl-1 pr-5 pointer-events-none transition-opacity duration-150 ${
+              class={`absolute inset-y-0 left-0 z-10 flex items-center pl-1.5 pr-5 pointer-events-none transition-opacity duration-150 ${
                 canScrollLeft() ? "opacity-100" : "opacity-0"
               }`}
               style={{
@@ -583,7 +583,7 @@ export function ModelPickerBody(props: {
                   }
                   stepProviderScroll(-1);
                 }}
-                class={`h-6 w-6 rounded-full border border-border/80 bg-surface-subtle hover:bg-surface-muted hover:border-border-strong active:scale-95 text-fg-secondary hover:text-fg shadow-xs flex items-center justify-center transition-[color,background-color,border-color,transform] duration-100 cursor-pointer ${
+                class={`relative h-6 w-6 rounded-full border border-border bg-surface-subtle hover:bg-surface-muted hover:border-border-strong active:scale-95 text-fg-secondary hover:text-fg flex items-center justify-center transition-[color,background-color,border-color,transform] duration-100 cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-1/2 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:w-11 [@media(pointer:coarse)]:after:-translate-1/2 ${
                   canScrollLeft() ? "pointer-events-auto" : "pointer-events-none"
                 }`}
               >
@@ -594,7 +594,7 @@ export function ModelPickerBody(props: {
             <div
               data-provider-scroll-edge="right"
               aria-hidden={!canScrollRight() ? "true" : undefined}
-              class={`absolute inset-y-0 right-0 z-10 flex items-center pr-1 pl-5 pointer-events-none transition-opacity duration-150 ${
+              class={`absolute inset-y-0 right-0 z-10 flex items-center pr-1.5 pl-5 pointer-events-none transition-opacity duration-150 ${
                 canScrollRight() ? "opacity-100" : "opacity-0"
               }`}
               style={{
@@ -623,7 +623,7 @@ export function ModelPickerBody(props: {
                   }
                   stepProviderScroll(1);
                 }}
-                class={`h-6 w-6 rounded-full border border-border/80 bg-surface-subtle hover:bg-surface-muted hover:border-border-strong active:scale-95 text-fg-secondary hover:text-fg shadow-xs flex items-center justify-center transition-[color,background-color,border-color,transform] duration-100 cursor-pointer ${
+                class={`relative h-6 w-6 rounded-full border border-border bg-surface-subtle hover:bg-surface-muted hover:border-border-strong active:scale-95 text-fg-secondary hover:text-fg flex items-center justify-center transition-[color,background-color,border-color,transform] duration-100 cursor-pointer [@media(pointer:coarse)]:after:content-[''] [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:inset-1/2 [@media(pointer:coarse)]:after:h-11 [@media(pointer:coarse)]:after:w-11 [@media(pointer:coarse)]:after:-translate-1/2 ${
                   canScrollRight() ? "pointer-events-auto" : "pointer-events-none"
                 }`}
               >
@@ -634,7 +634,7 @@ export function ModelPickerBody(props: {
         </div>
       </Show>
 
-      <div ref={listRef} class="max-h-60 overflow-y-auto overflow-x-hidden px-1 py-1 [scrollbar-gutter:stable]">
+      <div ref={listRef} class="max-h-60 overflow-y-auto overflow-x-hidden overscroll-contain pt-1 pb-0.5">
         <div class="flex flex-col space-y-0.5">
           <For
             each={groups()}
@@ -647,7 +647,7 @@ export function ModelPickerBody(props: {
             {(g) => (
               <div>
                 <Show when={effectiveProvider() === "all"}>
-                  <div class="px-2 pt-1.5 pb-0.5 text-[10px] font-mono font-medium text-fg-muted flex items-center gap-2">
+                  <div class="px-2.5 pt-1.5 pb-1 text-2xs font-mono font-medium text-fg-muted flex items-center gap-2">
                     <span class="truncate">{g.provider}</span>
                     <span class="h-px flex-1 bg-border-subtle" />
                   </div>
@@ -672,7 +672,7 @@ export function ModelPickerBody(props: {
                           onPointerEnter={() => setHighlightedId(m.id)}
                           onPointerDown={(e) => press(e.currentTarget)}
                           onClick={() => props.onPick(m.id)}
-                          class={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between gap-3 cursor-pointer transition-colors ${
+                          class={`ui-menu-item w-full text-left px-2.5 py-1.5 min-h-9 [@media(pointer:coarse)]:min-h-11 rounded-lg flex items-center justify-between gap-3 cursor-pointer transition-colors ${
                             active()
                               ? "bg-accent-subtle text-fg"
                               : highlighted()
@@ -681,18 +681,18 @@ export function ModelPickerBody(props: {
                           }`}
                         >
                           <span class="min-w-0 flex-1">
-                            <span class="block truncate text-[13px] font-medium leading-snug text-fg">
+                            <span class="block truncate text-sm font-medium leading-snug text-fg">
                               {primaryName()}
                             </span>
                             <Show when={secondarySlug()}>
-                              <span class="block truncate text-[11px] font-mono text-fg-muted leading-tight mt-0.5">
+                              <span class="block truncate text-2xs font-mono text-fg-muted leading-tight mt-0.5">
                                 {secondarySlug()}
                               </span>
                             </Show>
                           </span>
                           <span class="shrink-0 flex items-center gap-2">
                             <Show when={(m.context ?? 0) > 0}>
-                              <span class="font-mono text-[11px] text-fg-muted tabular-nums">
+                              <span class="font-mono text-2xs text-fg-muted tabular-nums">
                                 {compactTokens(m.context ?? 0)}
                               </span>
                             </Show>

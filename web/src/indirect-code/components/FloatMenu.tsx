@@ -34,7 +34,7 @@ export function FloatMenu(props: {
           role={props.role ?? "menu"}
           aria-label={props["aria-label"]}
           tabIndex={-1}
-          class="ui-popover ui-menu anim-float-in max-w-[calc(100vw-1rem)] overflow-y-auto p-1.5 text-xs [scrollbar-gutter:stable] focus:outline-none"
+          class="ui-popover ui-menu max-w-[calc(100vw-1rem)] p-1.5 text-xs focus:outline-none"
           style={props.width ? { width: props.width } : undefined}
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}

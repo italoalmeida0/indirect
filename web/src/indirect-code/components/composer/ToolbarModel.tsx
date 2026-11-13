@@ -14,7 +14,7 @@ export function ToolbarModel() {
 <>
 {/* Effort + Model pickers (desktop toolbar only — on mobile they live in the + menu) */}
 <Show when={!ui.isMobile()}>
-<div>
+<div class="min-w-0 shrink">
   <button
     type="button"
     ref={c.modelBtn}
@@ -32,17 +32,17 @@ export function ToolbarModel() {
         ui.setModelMenuOpen(false);
       }
     }}
-    class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+    class="h-7 min-w-0 flex items-center gap-1.5 px-2 rounded-lg text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
     data-rc-tip="Effort & model" aria-label={`Switch model: ${c.activeModelName()}${formatEffort(c.effort()) ? ` ${formatEffort(c.effort())}` : ""}`}
   >
     <Iconify icon="lucide:cpu" size={13} class="shrink-0 text-fg-muted" />
-    <span class="max-w-[130px] sm:max-w-[190px] truncate text-fg">{c.activeModelName()}</span>
+    <span class="max-w-[92px] @[380px]:max-w-[130px] @[480px]:max-w-[190px] truncate text-fg">{c.activeModelName()}</span>
     <Show when={formatEffort(c.effort())}>
       <span
-        class={`rounded border px-1 py-0.5 font-mono text-[10px] font-medium shrink-0 leading-none transition-colors ${
+        class={`hidden @[340px]:inline-flex items-center rounded border px-1 py-0.5 font-mono text-2xs font-medium shrink-0 leading-none transition-colors ${
           isMaxEffort()
             ? "border-accent/35 bg-accent-subtle text-accent"
-            : "border-border/80 bg-surface-subtle text-fg-muted"
+            : "border-border bg-surface-subtle text-fg-muted"
         }`}
       >
         {formatEffort(c.effort())}

@@ -8,9 +8,8 @@ import { IndirectBrand } from "../IndirectBrand";
 import { NeuralMatrixLoader } from "../LiveIndicators";
 
 /** Minimize/restore the composer (input, toolbar, footer) and the whole
- *  task plan (short viewports). Lives in the turn-status row, so it is only
- *  reachable in an existing conversation — a new conversation (draftMode)
- *  never shows it. */
+ *  task plan (short viewports). Shown on the active turn-status row when
+ *  expanded; when idle, the minimize icon lives inside `.rc-composer-toolbar`. */
 function ComposerCollapseToggle(props: { withHint: boolean }) {
   const s = useSession();
   const ui = useUI();
@@ -26,7 +25,7 @@ function ComposerCollapseToggle(props: { withHint: boolean }) {
         aria-label={label()}
         data-rc-tip={label()}
         data-composer-collapse
-        class={`shrink-0 p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer ${props.withHint ? "ml-auto" : ""}`}
+        class={`ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted ${props.withHint ? "ml-auto" : ""}`}
       >
         <Iconify icon={collapsed() ? "lucide:chevron-up" : "lucide:chevron-down"} size={14} />
       </button>
@@ -47,6 +46,7 @@ export function StatusBanners() {
     activeSessionId: s.activeSessionId(),
     workspaceBlocked: s.workspaceBlocked(),
   });
+  const restoreLabel = () => "Show composer and tasks";
   const completedTodos = () => t.todos().filter((item) => item.status === "completed").length;
   const todoPercent = () => (t.todos().length ? Math.round((completedTodos() / t.todos().length) * 100) : 0);
   const compacting = () => Boolean(t.compactingText?.());
@@ -64,6 +64,7 @@ export function StatusBanners() {
     const sep = raw.indexOf(" · ");
     return sep >= 0 ? raw.slice(sep + 3) : "";
   };
+  const cleanTurnHint = () => (t.turnHint() || "").replace(/`+/g, "").trim();
   return (
 <>
 <Show when={s.draftMode()}>
@@ -71,7 +72,52 @@ export function StatusBanners() {
     <IndirectBrand />
   </div>
 </Show>
-<Show when={s.activeSessionId() && hasTurnRow()}>
+<Show when={s.activeSessionId() && collapsed()}>
+  <button
+    type="button"
+    data-turn-status={hasTurnRow() ? "" : undefined}
+    data-composer-collapse
+    aria-expanded={false}
+    aria-label={restoreLabel()}
+    data-rc-tip={restoreLabel()}
+    onPointerDown={(e) => press(e.currentTarget)}
+    onClick={ui.toggleComposerCollapsed}
+    class="w-full flex items-center gap-2 rounded-panel border border-border bg-surface-subtle hover:bg-surface-muted px-3.5 py-2 min-h-9 [@media(pointer:coarse)]:min-h-11 text-xs text-fg-muted text-left transition-colors cursor-pointer min-w-0"
+  >
+    <Show
+      when={hasTurnRow()}
+      fallback={
+        <>
+          <Iconify icon="lucide:message-square" size={13} class="shrink-0 text-fg-muted" />
+          <span class="font-medium text-fg-secondary truncate">Composer minimized</span>
+          <Show when={t.todos().length > 0}>
+            <span class="shrink-0 rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs tabular-nums text-fg-muted">
+              {completedTodos()}/{t.todos().length}
+            </span>
+          </Show>
+        </>
+      }
+    >
+      <Show
+        when={isBusy()}
+        fallback={<Iconify icon="lucide:clock-3" size={13} class="shrink-0 text-fg-muted" />}
+      >
+        <NeuralMatrixLoader size={12} class="text-accent" />
+      </Show>
+      <span class={`shrink-0 font-medium ${isBusy() ? "ui-shimmer" : "text-fg-secondary"}`} style={turnShimmerStyle()}>{turnPrimary()}</span>
+      <Show when={turnElapsed()}>
+        <span class="shrink-0 text-fg-muted tabular-nums -ml-0.5">· {turnElapsed()}</span>
+      </Show>
+      <Show when={!compacting() && cleanTurnHint()}>
+        <span class="min-w-0 flex-1 truncate whitespace-nowrap overflow-hidden font-mono text-2xs text-fg-muted">· {cleanTurnHint()}</span>
+      </Show>
+    </Show>
+    <span class="ml-auto inline-flex items-center gap-1 shrink-0 text-2xs text-fg-muted">
+      <Iconify icon="lucide:chevron-up" size={14} />
+    </span>
+  </button>
+</Show>
+<Show when={s.activeSessionId() && !collapsed() && hasTurnRow()}>
   <div role="status" data-turn-status class="mb-1.5 flex items-center gap-2 px-1 text-xs text-fg-muted min-w-0">
     <Show
       when={isBusy()}
@@ -83,25 +129,18 @@ export function StatusBanners() {
     <Show when={turnElapsed()}>
       <span class="shrink-0 text-fg-muted tabular-nums -ml-0.5">· {turnElapsed()}</span>
     </Show>
-    <Show when={!compacting() && t.turnHint()}>{(hint) =>
-      <span class="min-w-0 flex-1 truncate whitespace-nowrap overflow-hidden font-mono text-[11px] text-fg-muted">· {hint()}</span>
-    }</Show>
-    <ComposerCollapseToggle withHint={compacting() || !t.turnHint()} />
-  </div>
-</Show>
-{/* No turn row (idle conversation): the chevron still needs a home, so it
-    rides its own right-aligned row. */}
-<Show when={s.activeSessionId() && !hasTurnRow()}>
-  <div class="mb-1 flex items-center justify-end px-1 text-xs text-fg-muted min-w-0">
-    <ComposerCollapseToggle withHint={false} />
+    <Show when={!compacting() && cleanTurnHint()}>
+      <span class="min-w-0 flex-1 truncate whitespace-nowrap overflow-hidden font-mono text-2xs text-fg-muted">· {cleanTurnHint()}</span>
+    </Show>
+    <ComposerCollapseToggle withHint={compacting() || !cleanTurnHint()} />
   </div>
 </Show>
 <Show when={s.activeSessionId() && t.todos().length && !collapsed()}>
-  <section aria-label="Task checklist" class="mb-2 rounded-lg border border-border bg-surface-subtle text-xs overflow-hidden">
-    <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={() => t.toggleTodosOpen()} aria-expanded={t.todosOpen()} class="w-full px-3 py-1.5 flex items-center gap-2 text-fg-secondary hover:bg-surface-muted/60 transition-colors cursor-pointer">
+  <section aria-label="Task checklist" class="mb-2 rounded-panel border border-border bg-surface-subtle text-xs overflow-hidden">
+    <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={() => t.toggleTodosOpen()} aria-expanded={t.todosOpen()} class="w-full px-3.5 py-2 min-h-9 [@media(pointer:coarse)]:min-h-11 flex items-center gap-2 text-fg-secondary hover:bg-surface-muted transition-colors cursor-pointer">
       <Iconify icon="lucide:list-checks" size={13} class={completedTodos() === t.todos().length ? "text-success shrink-0" : "text-accent shrink-0"} />
       <span class="font-medium text-fg">Task plan</span>
-      <span class="inline-flex items-center gap-1.5 rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[10px] font-medium tabular-nums text-fg-secondary">
+      <span class="inline-flex items-center gap-1.5 rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs font-medium tabular-nums text-fg-secondary">
         <span>{completedTodos()}/{t.todos().length}</span>
         <span class="w-8 h-1 rounded-full bg-surface-muted overflow-hidden">
           <span
@@ -110,10 +149,10 @@ export function StatusBanners() {
           />
         </span>
       </span>
-      <span class="flex-1 truncate text-left text-fg-muted">{!t.todosOpen() ? t.todos().find((item) => item.status === "in_progress")?.text : ""}</span>
+      <span class="flex-1 truncate text-left text-fg-muted">{!t.todosOpen() ? (t.todos().find((item) => item.status === "in_progress")?.text || "").replace(/`+/g, "") : ""}</span>
       <Iconify icon="lucide:chevron-down" size={13} class={`shrink-0 text-fg-muted transition-transform duration-150 ${t.todosOpen() ? "rotate-180" : ""}`} />
     </button>
-    <Show when={t.todosOpen()}><ol class="px-3 pb-2 pt-1.5 border-t border-border-subtle space-y-1.5 max-h-44 overflow-y-auto">
+    <Show when={t.todosOpen()}><ol class="px-3.5 pb-2.5 pt-2 border-t border-border-subtle space-y-1.5 max-h-44 overflow-y-auto overscroll-contain">
       <Index each={t.todos()}>{(item) => {
         const todoBusy = () => item().status === "in_progress" && t.sessionStatus() === "running";
         const todoShimmerStyle = createShimmerStyle(todoBusy);
@@ -129,13 +168,13 @@ export function StatusBanners() {
 </Show>
 <Show when={h.activeHost() && (h.connectionState() !== "connected" || h.activeHost()?.status !== "online")}>
   <div class="rc-delayed-banner">
-    <div role="status" class="mb-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2.5 text-xs text-fg flex items-start gap-2.5">
+    <div role="status" class="mb-2 rounded-panel border border-[color-mix(in_oklab,var(--warning)_26%,var(--border))] bg-warning-subtle px-3.5 py-2.5 text-xs text-fg flex items-start gap-2.5">
       <Iconify icon="lucide:unplug" size={14} class="text-warning shrink-0 mt-0.5" />
       <div class="flex-1 min-w-0">
         <p class="font-medium text-fg">{typeof navigator !== "undefined" && !navigator.onLine ? "Network offline" : h.connectionState() !== "connected" ? "Reconnecting to the gateway…" : `${h.activeHost()?.name || "Host"} is offline`}</p>
-        <p class="mt-0.5 text-fg-secondary">{typeof navigator !== "undefined" && !navigator.onLine ? "Check your internet connection to continue." : h.connectionState() !== "connected" ? "Restoring connection to gateway..." : "Start the daemon on this host to continue."}</p>
+        <p class="mt-0.5 text-fg-secondary">{typeof navigator !== "undefined" && !navigator.onLine ? "Check your internet connection to continue." : h.connectionState() !== "connected" ? "Restoring connection to gateway…" : "Start the daemon on this host to continue."}</p>
       </div>
-      <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={h.reconnect || h.loadHosts} class="shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Retry</button>
+      <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={h.reconnect || h.loadHosts} class="shrink-0 inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Retry</button>
     </div>
   </div>
 </Show>

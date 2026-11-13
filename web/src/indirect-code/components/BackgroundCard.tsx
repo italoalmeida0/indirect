@@ -28,8 +28,8 @@ function taskState(status: string) {
 
 function exitBadgeTone(code: number) {
   if (code === 0) return "border-border text-fg-muted bg-surface-subtle";
-  if (code === 130 || code === 143) return "border-warning/40 text-warning bg-warning-subtle/50";
-  return "border-danger/40 text-danger bg-danger-subtle/50";
+  if (code === 130 || code === 143) return "border-[color-mix(in_oklab,var(--warning)_32%,var(--border))] text-warning bg-warning-subtle";
+  return "border-[color-mix(in_oklab,var(--danger)_32%,var(--border))] text-danger bg-danger-subtle";
 }
 
 /**
@@ -133,10 +133,10 @@ export function BackgroundCard(props: { contextKey?: string }) {
   }
 
   function duration(job: SessionBgTask) {
-    if (!Number.isFinite(job.startedAt) || job.startedAt <= 0) return "—";
+    if (!Number.isFinite(job.startedAt) || job.startedAt <= 0) return "--";
     const end = job.status === "running" ? bg.clock() : job.endedAt;
     return typeof end === "number" && end > 0
-      ? elapsedLabel(Math.max(0, end - job.startedAt)) : "—";
+      ? elapsedLabel(Math.max(0, end - job.startedAt)) : "--";
   }
 
   const isOpen = (id: string) => open()[id] === true;
@@ -162,13 +162,13 @@ export function BackgroundCard(props: { contextKey?: string }) {
   };
   return (
     <Show when={tasks().length > 0}>
-      <div class={`${ui.convWidthClass()} mx-auto border-t border-border/70 px-3 py-2.5`} data-bg-card>
+      <div class={`w-full ${ui.convWidthClass()} mx-auto py-1`} data-bg-card>
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1.5 pb-2">
-          <span class="text-[11px] font-medium text-fg-secondary">Background tasks</span>
+          <span class="text-2xs font-medium text-fg-secondary">Background tasks</span>
           <button
             type="button"
-            class={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${showArchived()
-              ? "border-accent/35 bg-accent-subtle text-accent"
+            class={`inline-flex items-center gap-1 min-h-7 [@media(pointer:coarse)]:min-h-9 rounded-lg border px-2 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${showArchived()
+              ? "border-[color-mix(in_oklab,var(--accent)_35%,var(--border))] bg-accent-subtle text-accent"
               : "border-border bg-surface-subtle text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
             aria-pressed={showArchived()}
             aria-label={`Archived tasks (${archived().length})`}
@@ -179,7 +179,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
             <Iconify icon="lucide:archive" size={12} />
             <span class="tabular-nums">{archived().length}</span>
           </button>
-          <span class="ml-auto inline-flex items-center text-[11px] text-fg-muted tabular-nums whitespace-nowrap" data-bg-running-count>
+          <span class="ml-auto inline-flex items-center text-2xs text-fg-muted tabular-nums whitespace-nowrap" data-bg-running-count>
             {running().length} running
           </span>
         </div>
@@ -188,96 +188,91 @@ export function BackgroundCard(props: { contextKey?: string }) {
           <For each={visible()}>
             {(job) => (
               <div
-                class="rounded-xl border border-border/80 bg-surface shadow-2xs overflow-hidden"
+                class="rounded-panel border border-border bg-surface overflow-hidden"
                 data-bg-row={job.id}
               >
-                <div
-                  class="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-muted/60 transition-colors"
-                  onClick={() => toggle(job.id)}
-                >
-                  <span
-                    class={`inline-flex items-center justify-center shrink-0 ${taskState(job.status).color}`}
-                    role="img"
-                    aria-label={taskState(job.status).label}
-                    data-rc-tip={taskState(job.status).label}
-                    data-bg-status={job.status}
-                  >
-                    <Show
-                      when={job.status === "running"}
-                      fallback={<Iconify icon={taskState(job.status).icon} size={14} />}
-                    >
-                      <ProcessEqualizer size={13} class="text-accent" />
-                    </Show>
-                  </span>
-                  <span
-                    class="truncate text-fg min-w-0 flex-1 text-[12.5px]"
-                    data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
-                  >
-                    <ShellCmd
-                      prompt={job.kind === "exec_script" || job.kind === "python" ? "> " : "$ "}
-                      text={shortLabel(job.label || job.id)}
-                    />
-                  </span>
-                  <Show when={job.status !== "running" && job.exitCode !== undefined}>
-                    <span
-                      class={`shrink-0 rounded border px-1.5 py-0.5 font-mono text-[10px] leading-tight tabular-nums ${exitBadgeTone(job.exitCode!)}`}
-                      data-bg-exit-code={job.exitCode}
-                    >
-                      exit {job.exitCode}
-                    </span>
-                  </Show>
-                  <span class="text-[11px] text-fg-muted tabular-nums shrink-0" data-bg-duration>
-                    {duration(job)}
-                  </span>
-                  <Show when={job.status === "running"}>
-                    <button
-                      type="button"
-                      class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-danger hover:bg-danger-subtle/60 transition-colors cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        bg.stop(job.id);
-                      }}
-                      data-rc-tip="Stop task"
-                      aria-label="Stop task"
-                      data-bg-stop={job.id}
-                    >
-                      <Iconify icon="lucide:square" size={12} />
-                    </button>
-                  </Show>
-                  <Show when={!showArchived() && job.status !== "running"}>
-                    <button
-                      type="button"
-                      class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        dismiss(job.id);
-                      }}
-                      data-rc-tip="Dismiss task"
-                      aria-label="Dismiss task"
-                      data-bg-dismiss={job.id}
-                    >
-                      <Iconify icon="lucide:x" size={12} />
-                    </button>
-                  </Show>
+                <div class="flex items-center">
                   <button
                     type="button"
-                    class="shrink-0 inline-flex items-center justify-center rounded-md p-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggle(job.id);
-                    }}
                     aria-expanded={isOpen(job.id)}
                     data-rc-tip={isOpen(job.id) ? "Hide logs" : "Show logs"}
                     aria-label={isOpen(job.id) ? "Hide logs" : "Show logs"}
+                    class="flex-1 min-w-0 flex items-center gap-2 px-3.5 py-2 min-h-9 [@media(pointer:coarse)]:min-h-11 text-left cursor-pointer hover:bg-surface-muted/60 transition-colors"
+                    onClick={() => toggle(job.id)}
                   >
-                    <Iconify icon="lucide:chevron-down" size={14} class={`transition-transform ${isOpen(job.id) ? "rotate-180" : ""}`} />
+                    <span
+                      class={`inline-flex items-center justify-center shrink-0 ${taskState(job.status).color}`}
+                      role="img"
+                      aria-label={taskState(job.status).label}
+                      data-rc-tip={taskState(job.status).label}
+                      data-bg-status={job.status}
+                    >
+                      <Show
+                        when={job.status === "running"}
+                        fallback={<Iconify icon={taskState(job.status).icon} size={14} />}
+                      >
+                        <ProcessEqualizer size={13} class="text-accent" />
+                      </Show>
+                    </span>
+                    <span
+                      class="truncate text-fg min-w-0 flex-1 text-xs"
+                      data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
+                    >
+                      <ShellCmd
+                        prompt={job.kind === "exec_script" || job.kind === "python" ? "> " : "$ "}
+                        text={shortLabel(job.label || job.id)}
+                      />
+                    </span>
+                    <Show when={job.status !== "running" && job.exitCode !== undefined}>
+                      <span
+                        class={`shrink-0 rounded-inner border px-1.5 py-0.5 font-mono text-2xs leading-tight tabular-nums ${exitBadgeTone(job.exitCode!)}`}
+                        data-bg-exit-code={job.exitCode}
+                      >
+                        exit {job.exitCode}
+                      </span>
+                    </Show>
+                    <span class="text-2xs text-fg-muted tabular-nums shrink-0" data-bg-duration>
+                      {duration(job)}
+                    </span>
+                    <Iconify icon="lucide:chevron-down" size={14} class={`shrink-0 text-fg-muted transition-transform ${isOpen(job.id) ? "rotate-180" : ""}`} />
                   </button>
+                  <Show when={job.status === "running" || (!showArchived() && job.status !== "running")}>
+                    <div class="flex items-center gap-1.5 pr-2.5 pl-1 shrink-0">
+                      <Show when={job.status === "running"}>
+                        <button
+                          type="button"
+                          class="ui-icon-button ui-icon-button-xs ui-icon-button-danger shrink-0 rounded-lg"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            bg.stop(job.id);
+                          }}
+                          data-rc-tip="Stop task"
+                          aria-label="Stop task"
+                          data-bg-stop={job.id}
+                        >
+                          <Iconify icon="lucide:square" size={12} />
+                        </button>
+                      </Show>
+                      <Show when={!showArchived() && job.status !== "running"}>
+                        <button
+                          type="button"
+                          class="ui-icon-button ui-icon-button-xs shrink-0 rounded-lg text-fg-muted"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            dismiss(job.id);
+                          }}
+                          data-rc-tip="Dismiss task"
+                          aria-label="Dismiss task"
+                          data-bg-dismiss={job.id}
+                        >
+                          <Iconify icon="lucide:x" size={12} />
+                        </button>
+                      </Show>
+                    </div>
+                  </Show>
                 </div>
                 <Show when={isOpen(job.id)}>
-                  <div class="border-t border-border/70 bg-surface-subtle/60 rounded-b-xl overflow-hidden">
-                    {/* Single scroll surface for the expanded task body: the
-                        command block and the log share one scroller (same
-                        contract as ToolBody), never one scrollbar each. */}
+                  <div class="border-t border-border-subtle bg-surface-subtle overflow-hidden">
                     <div
                       ref={(el) => {
                         restoreToolScroll(`bg:${job.id}`, el);
@@ -285,20 +280,15 @@ export function BackgroundCard(props: { contextKey?: string }) {
                         onCleanup(followTail(el, () => isOpen(job.id) && job.status === "running"));
                       }}
                       onScroll={(e) => recordToolScroll(`bg:${job.id}`, e.currentTarget)}
-                      class="max-h-96 overflow-auto overscroll-contain [scrollbar-gutter:stable]"
+                      class="max-h-96 overflow-auto overscroll-contain"
                     >
                       <div class="min-w-full w-fit">
-                        <Show when={job.label}>
-                          <div class="border-b border-border/60 bg-surface/50">
-                            <CodeBlock embedded text={job.label} language={job.kind === "exec_script" ? "javascript" : job.kind === "python" ? "python" : "bash"} wrap={false} scrollKey={`bg:${job.id}:cmd`} />
-                          </div>
-                        </Show>
                         <div data-bg-log>
                           <CodeBlock embedded text={logText(job) || "No output yet."} language={undefined} plain wrap={false} scrollKey={`bg:${job.id}`} />
                         </div>
                         <Show when={(job.droppedLines || 0) > 0}>
-                          <p class="px-3 pb-1.5 text-[10px] text-fg-muted">
-                            {job.droppedLines} earlier lines discarded by the tail cap — use bg_check for full paging.
+                          <p class="px-3.5 pb-2 text-2xs text-fg-muted">
+                            {job.droppedLines} earlier lines discarded by the tail cap. Use bg_check for full paging.
                           </p>
                         </Show>
                       </div>
@@ -311,7 +301,7 @@ export function BackgroundCard(props: { contextKey?: string }) {
           <Show when={selected().length > 3}>
             <button
               type="button"
-              class="self-start px-3 py-1.5 text-xs font-medium text-fg-muted hover:text-fg transition-colors cursor-pointer"
+              class="self-start min-h-8 [@media(pointer:coarse)]:min-h-11 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
               aria-expanded={expanded()}
               onClick={() => setExpanded((value) => !value)}
               data-bg-list-toggle

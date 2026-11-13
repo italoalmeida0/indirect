@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { press } from "../../ds/motion/press";
 import { hasFileIcon } from "../files";
@@ -87,6 +87,8 @@ export function ApprovalCard(props: ApprovalCardProps) {
   return (
     <Show when={props.pendingApproval()} keyed>
       {(pa) => {
+        const [writeExpanded, setWriteExpanded] = createSignal(false);
+        const [editsExpanded, setEditsExpanded] = createSignal(false);
         const rawArgs = (tryParseArgs(pa.args) ?? {}) as Record<string, unknown>;
         const name = pa.tool || "tool";
         const legacyLang =
@@ -148,19 +150,19 @@ export function ApprovalCard(props: ApprovalCardProps) {
           <section
             aria-label="Tool approval request"
             data-approval-card
-            class={`${props.convWidthClass()} mx-auto border-t border-border/70 px-3 py-2.5`}
+            class={`w-full ${props.convWidthClass()} mx-auto py-1`}
           >
-            <div class="rounded-xl border border-border/80 bg-surface overflow-hidden">
-              <div class="px-3.5 py-2 border-b border-border/65 bg-surface-subtle/45 flex items-center gap-2 min-w-0">
+            <div class="rounded-panel border border-border bg-surface overflow-hidden">
+              <div class="px-3.5 py-2.5 border-b border-border-subtle bg-surface-subtle flex items-center gap-2 min-w-0">
                 <Iconify icon="lucide:shield-alert" size={14} class="text-warning shrink-0" />
                 <span class="text-xs font-medium text-fg shrink-0">Review tool call</span>
                 <span
-                  class="inline-flex items-center rounded border border-border bg-surface px-1.5 py-0.5 font-mono text-[11px] leading-tight text-fg-secondary truncate"
+                  class="inline-flex items-center rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-secondary truncate"
                   data-rc-tip={tipIfLong(name, 32)}
                 >
                   {name}
                 </span>
-                <span class="ml-auto inline-flex items-center gap-1.5 text-[11px] text-fg-muted shrink-0">
+                <span class="ml-auto inline-flex items-center gap-1.5 text-2xs text-fg-muted shrink-0">
                   <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
                   Safe mode
                 </span>
@@ -174,23 +176,23 @@ export function ApprovalCard(props: ApprovalCardProps) {
                   <Show
                     when={bashCmd.includes("\n")}
                     fallback={
-                      <div class="rounded-lg border border-border/70 bg-surface-subtle/65 px-3 py-2 font-mono text-xs text-fg whitespace-pre-wrap break-words [&>code]:whitespace-pre-wrap [&>code]:break-words max-h-56 overflow-y-auto">
+                      <div class="rounded-lg border border-border bg-surface-subtle px-3 py-2 font-mono text-xs text-fg whitespace-pre-wrap break-words [&>code]:whitespace-pre-wrap [&>code]:break-words max-h-56 overflow-y-auto">
                         <ShellCmd text={bashCmd} />
                       </div>
                     }
                   >
-                    <pre class="rounded-lg border border-border/70 bg-surface-subtle/65 px-3 py-2 font-mono text-xs text-fg whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
-                      <span class="text-fg-muted/75 select-none">$ </span>
+                    <pre class="rounded-lg border border-border bg-surface-subtle px-3 py-2 font-mono text-xs text-fg whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
+                      <span class="text-fg-muted select-none">$ </span>
                       {bashCmd}
                     </pre>
                   </Show>
-                  <p class="text-[11px] text-fg-muted">
+                  <p class="text-2xs text-fg-muted">
                     Moves to the background automatically after 10s.
                   </p>
                 </Show>
 
                 <Show when={name === "exec_script" || name === "python"}>
-                  <div class="flex items-center gap-1.5 text-[11px] font-medium text-fg-secondary">
+                  <div class="flex items-center gap-1.5 text-2xs font-medium text-fg-secondary">
                     <Iconify
                       icon={isUnsupportedLegacyPython ? "mdi:language-python" : "mdi:language-javascript"}
                       size={13}
@@ -200,14 +202,14 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       {isUnsupportedLegacyPython ? "Unsupported legacy Python call" : "Run JavaScript"}
                     </span>
                   </div>
-                  <pre class="rounded-lg border border-border/70 bg-surface-subtle/65 px-3 py-2 font-mono text-xs text-fg whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
+                  <pre class="rounded-lg border border-border bg-surface-subtle px-3 py-2 font-mono text-xs text-fg whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
                     {String(rawArgs.code || rawArgs.script || "")}
                   </pre>
                   <Show when={Boolean(rawArgs.work_dir) || envEntries.length > 0 || Boolean(rawArgs.stdin)}>
-                    <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <div class="flex flex-wrap items-center gap-1.5 text-2xs">
                       <Show when={rawArgs.work_dir}>
                         <span
-                          class="inline-flex items-center gap-1 rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-fg-secondary max-w-full truncate"
+                          class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-fg-secondary max-w-full truncate"
                           data-rc-tip={tipIfLong(String(rawArgs.work_dir))}
                         >
                           <span class="text-fg-muted">cwd</span>
@@ -215,7 +217,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                         </span>
                       </Show>
                       <Show when={envEntries.length > 0}>
-                        <span class="inline-flex items-center gap-1 rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-fg-secondary max-w-full truncate">
+                        <span class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-fg-secondary max-w-full truncate">
                           <span class="text-fg-muted">env</span>
                           <span class="truncate">
                             {envEntries.map(([k, v]) => `${k}=${String(v ?? "")}`).join(" ")}
@@ -224,7 +226,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       </Show>
                       <Show when={rawArgs.stdin}>
                         <span
-                          class="inline-flex items-center gap-1 rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-fg-secondary max-w-full truncate"
+                          class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-fg-secondary max-w-full truncate"
                           data-rc-tip={tipIfLong(String(rawArgs.stdin))}
                         >
                           <span class="text-fg-muted">stdin</span>
@@ -233,7 +235,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       </Show>
                     </div>
                   </Show>
-                  <p class="text-[11px] text-fg-muted">
+                  <p class="text-2xs text-fg-muted">
                     {isUnsupportedLegacyPython
                       ? "Legacy Python execution was removed. Reject so the agent rewrites the snippet as JavaScript."
                       : "Moves to the background automatically after 10s."}
@@ -249,7 +251,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                         {formatDurationSecs(Number(rawArgs.max_wait_seconds))}
                       </span>
                     </Show>
-                    <span class="text-[11px] text-fg-muted truncate min-w-0">
+                    <span class="text-2xs text-fg-muted truncate min-w-0">
                       {rawArgs.reason
                         ? String(rawArgs.reason)
                         : "Ends early when a background task finishes"}
@@ -282,7 +284,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       {String(rawArgs.path || "")}
                     </span>
                     <Show when={rawArgs.limit || rawArgs.offset}>
-                      <span class="shrink-0 inline-flex items-center rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[11px] leading-tight text-fg-muted tabular-nums">
+                      <span class="shrink-0 inline-flex items-center rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-muted tabular-nums">
                         {(() => {
                           const off = Math.max(1, Number(rawArgs.offset || 1));
                           const lim = Number(rawArgs.limit || 0);
@@ -304,19 +306,25 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       {String(rawArgs.path || "")}
                     </span>
                     <Show when={writeLines.length > 0}>
-                      <span class="shrink-0 inline-flex items-center rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[11px] leading-tight text-fg-muted tabular-nums">
+                      <span class="shrink-0 inline-flex items-center rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-muted tabular-nums">
                         {writeLines.length} {writeLines.length === 1 ? "line" : "lines"}
                       </span>
                     </Show>
                   </div>
                   <Show when={writeLines.length > 0}>
-                    <pre class="rounded-lg border border-border/70 bg-surface-subtle/65 px-3 py-2 font-mono text-[11px] text-fg-secondary whitespace-pre-wrap break-words max-h-36 overflow-y-auto">
-                      {writeLines.slice(0, 12).join("\n")}
+                    <pre class={`rounded-lg border border-border bg-surface-subtle px-3 py-2 font-mono text-2xs text-fg-secondary whitespace-pre-wrap break-words ${writeExpanded() ? "max-h-72" : "max-h-36"} overflow-y-auto`}>
+                      {(writeExpanded() ? writeLines : writeLines.slice(0, 12)).join("\n")}
                     </pre>
                     <Show when={writeLines.length > 12}>
-                      <div class="text-[11px] text-fg-muted tabular-nums">
-                        +{writeLines.length - 12} more lines
-                      </div>
+                      <button
+                        type="button"
+                        data-action="approval-expand-write"
+                        aria-expanded={writeExpanded()}
+                        onClick={() => setWriteExpanded((v) => !v)}
+                        class="inline-flex items-center gap-1 rounded-inner px-2 py-1 -ml-2 min-h-8 [@media(pointer:coarse)]:min-h-11 text-2xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted tabular-nums transition-colors cursor-pointer"
+                      >
+                        {writeExpanded() ? "Show fewer lines" : `+${writeLines.length - 12} more lines`}
+                      </button>
                     </Show>
                   </Show>
                 </Show>
@@ -332,22 +340,22 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       {String(rawArgs.path || "")}
                     </span>
                     <Show when={editList.length > 0}>
-                      <span class="shrink-0 inline-flex items-center rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[11px] leading-tight text-fg-muted tabular-nums">
+                      <span class="shrink-0 inline-flex items-center rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-muted tabular-nums">
                         {editList.length} change{editList.length === 1 ? "" : "s"}
                       </span>
                     </Show>
                   </div>
                   <Show when={editList.length > 0}>
-                    <div class="rounded-lg border border-border/70 overflow-hidden divide-y divide-border/60 font-mono text-[11px]">
-                      <For each={editList.slice(0, 2)}>
+                    <div class="rounded-lg border border-border overflow-hidden divide-y divide-border-subtle font-mono text-2xs">
+                      <For each={editsExpanded() ? editList : editList.slice(0, 2)}>
                         {(hunk) => {
                           const oldLines = hunk.oldText ? hunk.oldText.split("\n") : [];
                           const newLines = hunk.newText ? hunk.newText.split("\n") : [];
                           return (
                             <div data-edit-hunk>
                               <Show when={oldLines.length > 0 || newLines.length === 0}>
-                                <div class="px-2.5 py-1 bg-danger-subtle/40 text-fg whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
-                                  <For each={(oldLines.length > 0 ? oldLines : [""]).slice(0, 6)}>
+                                <div class={`px-3 py-1.5 bg-danger-subtle/40 text-fg whitespace-pre-wrap break-words ${editsExpanded() ? "max-h-60" : "max-h-24"} overflow-y-auto`}>
+                                  <For each={editsExpanded() ? (oldLines.length > 0 ? oldLines : [""]) : (oldLines.length > 0 ? oldLines : [""]).slice(0, 6)}>
                                     {(line) => (
                                       <div class="flex items-start">
                                         <span
@@ -360,14 +368,14 @@ export function ApprovalCard(props: ApprovalCardProps) {
                                       </div>
                                     )}
                                   </For>
-                                  <Show when={oldLines.length > 6}>
-                                    <div class="pl-4 text-fg-muted">…</div>
+                                  <Show when={!editsExpanded() && oldLines.length > 6}>
+                                    <button type="button" onClick={() => setEditsExpanded(true)} class="pl-4 text-left text-fg-muted hover:text-fg cursor-pointer">…</button>
                                   </Show>
                                 </div>
                               </Show>
                               <Show when={newLines.length > 0 || oldLines.length === 0}>
-                                <div class="px-2.5 py-1 bg-success-subtle/40 text-fg whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
-                                  <For each={(newLines.length > 0 ? newLines : [""]).slice(0, 6)}>
+                                <div class={`px-3 py-1.5 bg-success-subtle/40 text-fg whitespace-pre-wrap break-words ${editsExpanded() ? "max-h-60" : "max-h-24"} overflow-y-auto`}>
+                                  <For each={editsExpanded() ? (newLines.length > 0 ? newLines : [""]) : (newLines.length > 0 ? newLines : [""]).slice(0, 6)}>
                                     {(line) => (
                                       <div class="flex items-start">
                                         <span
@@ -380,8 +388,8 @@ export function ApprovalCard(props: ApprovalCardProps) {
                                       </div>
                                     )}
                                   </For>
-                                  <Show when={newLines.length > 6}>
-                                    <div class="pl-4 text-fg-muted">…</div>
+                                  <Show when={!editsExpanded() && newLines.length > 6}>
+                                    <button type="button" onClick={() => setEditsExpanded(true)} class="pl-4 text-left text-fg-muted hover:text-fg cursor-pointer">…</button>
                                   </Show>
                                 </div>
                               </Show>
@@ -390,9 +398,15 @@ export function ApprovalCard(props: ApprovalCardProps) {
                         }}
                       </For>
                       <Show when={editList.length > 2}>
-                        <div class="px-2.5 py-1.5 bg-surface-subtle/50 font-sans text-[11px] text-fg-muted tabular-nums">
-                          +{editList.length - 2} more changes
-                        </div>
+                        <button
+                          type="button"
+                          data-action="approval-expand-edits"
+                          aria-expanded={editsExpanded()}
+                          onClick={() => setEditsExpanded((v) => !v)}
+                          class="w-full text-left px-3 py-1.5 min-h-8 [@media(pointer:coarse)]:min-h-11 bg-surface-subtle hover:bg-surface-muted font-sans text-2xs font-medium text-fg-muted hover:text-fg tabular-nums transition-colors cursor-pointer"
+                        >
+                          {editsExpanded() ? "Show fewer changes" : `+${editList.length - 2} more changes`}
+                        </button>
                       </Show>
                     </div>
                   </Show>
@@ -410,7 +424,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                     </span>
                     <Show when={rawArgs.path}>
                       <span
-                        class="font-mono text-[11px] text-fg-muted truncate"
+                        class="font-mono text-2xs text-fg-muted truncate"
                         data-rc-tip={tipIfLong(String(rawArgs.path))}
                       >
                         {String(rawArgs.path)}
@@ -424,7 +438,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                     <Iconify icon="lucide:list-checks" size={14} class="text-accent shrink-0" />
                     <span class="font-medium text-fg">Update task plan</span>
                     <Show when={todoItems.length > 0}>
-                      <span class="shrink-0 inline-flex items-center rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-[11px] leading-tight text-fg-muted tabular-nums">
+                      <span class="shrink-0 inline-flex items-center rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-muted tabular-nums">
                         {todoItems.length} {todoItems.length === 1 ? "task" : "tasks"}
                       </span>
                     </Show>
@@ -504,8 +518,8 @@ export function ApprovalCard(props: ApprovalCardProps) {
               </div>
 
               <Show when={hasRawArgs}>
-                <details class="group border-t border-border/60">
-                  <summary class="list-none [&::-webkit-details-marker]:hidden px-3.5 py-1.5 flex items-center gap-1.5 text-[11px] text-fg-muted hover:text-fg-secondary cursor-pointer select-none transition-colors">
+                <details class="group border-t border-border-subtle">
+                  <summary class="list-none [&::-webkit-details-marker]:hidden px-3.5 py-2 min-h-8 [@media(pointer:coarse)]:min-h-11 flex items-center gap-1.5 text-2xs text-fg-muted hover:text-fg-secondary cursor-pointer select-none transition-colors">
                     <Iconify
                       icon="lucide:chevron-right"
                       size={12}
@@ -513,19 +527,19 @@ export function ApprovalCard(props: ApprovalCardProps) {
                     />
                     <span>Arguments</span>
                   </summary>
-                  <pre class="px-3.5 pb-2.5 font-mono text-[11px] text-fg-secondary overflow-x-auto whitespace-pre-wrap break-words max-h-40">
+                  <pre class="px-3.5 pb-2.5 font-mono text-2xs text-fg-secondary overflow-x-auto whitespace-pre-wrap break-words max-h-40">
                     {formattedArgs}
                   </pre>
                 </details>
               </Show>
 
-              <div class="px-3.5 py-2 border-t border-border/65 bg-surface-subtle/30 flex items-center justify-between gap-2 flex-wrap">
+              <div class="px-3.5 py-2.5 border-t border-border-subtle bg-surface-subtle flex items-center justify-between gap-2 flex-wrap">
                 <button
                   type="button"
                   data-action="approval-reject"
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => props.respondApproval(false)}
-                  class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 [@media(pointer:coarse)]:min-h-10 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                  class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                 >
                   Reject
                 </button>
@@ -541,7 +555,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                         props.setYoloMode(true);
                         props.respondApproval(true, true);
                       }}
-                      class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 [@media(pointer:coarse)]:min-h-10 text-xs font-medium text-fg-secondary hover:border-border-strong hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                      class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium text-fg-secondary hover:border-border-strong hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                     >
                       Always allow
                     </button>
@@ -550,7 +564,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       data-action="approval-once"
                       onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => props.respondApproval(true)}
-                      class="inline-flex items-center justify-center rounded-lg bg-fg text-background hover:opacity-90 px-3.5 py-1 min-h-7 [@media(pointer:coarse)]:min-h-10 text-xs font-medium transition-opacity cursor-pointer"
+                      class="inline-flex items-center justify-center rounded-lg bg-fg text-background hover:opacity-90 px-3.5 py-1 min-h-8 [@media(pointer:coarse)]:min-h-11 text-xs font-medium transition-opacity cursor-pointer"
                     >
                       Allow once
                     </button>
