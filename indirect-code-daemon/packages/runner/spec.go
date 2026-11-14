@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"indirect/indirect-code-daemon/packages/agent/tools"
 )
 
 // ProtoVersion is the IPC protocol this build speaks.
@@ -42,16 +44,25 @@ type Spec struct {
 	CWD       string   `json:"cwd"`
 	// Code is the inline JavaScript source when Kind == "exec_script" (executed
 	// in-process by --runner-command via packages/qjs). Kept out of state.json.
-	Code          string   `json:"code,omitempty"`
+	Code string `json:"code,omitempty"`
+	// RawScript is the shell command source when Kind == "bash" (executed
+	// in-process by --runner-command via embedded unish). Kept out of state.json.
+	RawScript string `json:"rawScript,omitempty"`
+	// Jail carries the live policy/jail specification for embedded unish and QuickJS.
+	// Kept out of state.json.
+	Jail *tools.RuntimeJailSpec `json:"jail,omitempty"`
+	// ExpectDaemon indicates a foreground parent will attach Role=="daemon" right
+	// after launch to serve interactive mid-execution approvals.
+	ExpectDaemon  bool     `json:"expectDaemon,omitempty"`
 	ShellPath     string   `json:"shellPath,omitempty"`
-	ShellFlag     string   `json:"shellFlag,omitempty"`
-	JailRoots     []string `json:"jailRoots,omitempty"`
-	ReadOnlyRoots []string `json:"readOnlyRoots,omitempty"`
-	FSReadRoots   []string `json:"fsReadRoots,omitempty"`
-	FSWriteRoots  []string `json:"fsWriteRoots,omitempty"`
-	NetAllow      []string `json:"netAllow,omitempty"`
-	Fingerprint   string   `json:"fingerprint,omitempty"`
-	NoDedupe      bool     `json:"noDedupe,omitempty"`
+	ShellFlag     string                 `json:"shellFlag,omitempty"`
+	JailRoots     []string               `json:"jailRoots,omitempty"`
+	ReadOnlyRoots []string               `json:"readOnlyRoots,omitempty"`
+	FSReadRoots   []string               `json:"fsReadRoots,omitempty"`
+	FSWriteRoots  []string               `json:"fsWriteRoots,omitempty"`
+	NetAllow      []string               `json:"netAllow,omitempty"`
+	Fingerprint   string                 `json:"fingerprint,omitempty"`
+	NoDedupe      bool                   `json:"noDedupe,omitempty"`
 	// Stdin is the inline payload fed to the command's standard input.
 	// Kept OUT of the durable state/log: it is launch data, not metadata.
 	Stdin string `json:"stdin,omitempty"`
@@ -66,6 +77,14 @@ type Spec struct {
 	BrainPath string `json:"brainPath"`
 }
 
+// commandLaunch is sent strictly over the private gateWrite pipe from --runner
+// to --runner-command (never placed in environment variables or state.json).
+type commandLaunch struct {
+	Spec         Spec   `json:"spec"`
+	ControlAddr  string `json:"controlAddr,omitempty"`
+	ControlToken string `json:"controlToken,omitempty"`
+}
+
 // Validate rejects a spec that cannot possibly run.
 func (s *Spec) Validate() error {
 	if s.JobID == "" || s.SessionID == "" {
@@ -75,7 +94,7 @@ func (s *Spec) Validate() error {
 		if strings.TrimSpace(s.Code) == "" {
 			return fmt.Errorf("runner: code is required for exec_script")
 		}
-	} else if s.Path == "" {
+	} else if s.Path == "" && strings.TrimSpace(s.RawScript) == "" {
 		return fmt.Errorf("runner: path is required")
 	}
 	if s.OutPath == "" || s.BrainPath == "" {

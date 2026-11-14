@@ -1051,9 +1051,10 @@ func (s *wsServer) handleRaw(raw []byte) {
 			SessionID string `json:"sessionId"`
 			CallID    string `json:"callId"`
 			Approved  bool   `json:"approved"`
+			Decision  string `json:"decision"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.onApprovalResponse(req.SessionID, req.CallID, req.Approved, req.Always)
+		s.onApprovalResponse(req.SessionID, req.CallID, req.Approved, req.Always, req.Decision)
 
 	case "question_response":
 		var req struct {
@@ -1339,13 +1340,17 @@ func (s *wsServer) onQueueInterruptNow(sessionID, queueID string) {
 	}
 }
 
-func (s *wsServer) onApprovalResponse(sessionID, callID string, approved, always bool) {
+func (s *wsServer) onApprovalResponse(sessionID, callID string, approved, always bool, decision ...string) {
 	res := s.sessions.route(sessionID, false)
 	if res.Error != "" {
 		return
 	}
+	var dec string
+	if len(decision) > 0 {
+		dec = decision[0]
+	}
 	select {
-	case res.Inbox <- Envelope{SessionID: sessionID, Payload: approvalResponseMsg{ID: callID, Approved: approved, Always: always}}:
+	case res.Inbox <- Envelope{SessionID: sessionID, Payload: approvalResponseMsg{ID: callID, Approved: approved, Always: always, Decision: dec}}:
 	case <-time.After(replyTimeout):
 	}
 }
@@ -1759,9 +1764,22 @@ func (s *wsServer) onSlashCommand(res spawnResult, sessionID, text string) bool 
 		case <-time.After(replyTimeout):
 		}
 		return true
-	case "/jail", "/unjail":
+	case "/jail", "/unjail", "/auto", "/ask", "/full":
+		var msg jailMsg
+		msg.Command = command
+		switch command {
+		case "/auto", "/jail":
+			msg.Jail = true
+			msg.Access = "auto"
+		case "/ask":
+			msg.Jail = true
+			msg.Access = "ask"
+		case "/full", "/unjail":
+			msg.Jail = false
+			msg.Access = "full"
+		}
 		select {
-		case res.Inbox <- Envelope{SessionID: sessionID, Payload: jailMsg{Jail: command == "/jail"}}:
+		case res.Inbox <- Envelope{SessionID: sessionID, Payload: msg}:
 		case <-time.After(replyTimeout):
 		}
 		return true
@@ -1773,8 +1791,11 @@ func (s *wsServer) onSlashCommand(res spawnResult, sessionID, text string) bool 
 		s.slashReply(sessionID, text, "### ⚡ Indirect Code Slash Commands\n"+
 			"- `/compact` — Summarize and compact conversation to free up context\n"+
 			"- `/clear` — Start a fresh blank session (history is kept)\n"+
-			"- `/jail` — Confine agent tools strictly to session directory\n"+
-			"- `/unjail` — Allow agent tools to read/write external paths")
+			"- `/auto` — Smart sandboxed autonomy (prompts on risky/outside actions)\n"+
+			"- `/ask` — Supervised sandboxed mode (prompts before tool actions)\n"+
+			"- `/full` — Full host access without sandbox restrictions\n"+
+			"- `/jail` — Lock session sandbox (alias for `/auto`)\n"+
+			"- `/unjail` — Unlock session sandbox (alias for `/full`)")
 		return true
 	}
 	return false

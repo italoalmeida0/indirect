@@ -938,17 +938,27 @@ func TestQueueReorderClearIdleOptionsAndCrashRecoveryNormalization(t *testing.T)
 	})
 
 	// Idle queue_send_now preserves Options, Model, YOLO, and AttachmentIDs when starting a turn!
+	// Explicit Options.Access takes precedence over legacy YOLO; legacy YOLO still promotes empty Access to "full".
 	gotSnap := make(chan workerSnapshot, 1)
 	idleRec := newTestRecord("idle-opts")
 	idleRec.Options = SessionOptions{Mode: "talk", Effort: "low", Access: "ask"}
-	idleRec.Queue = []QueuedMessage{{
-		ID:      "q-opts",
-		Text:    "run with custom options",
-		Model:   "claude-opus-4-6",
-		YOLO:    true,
-		Options: &SessionOptions{Mode: "agentic", Effort: "high", Access: "ask"},
-		Seq:     1,
-	}}
+	idleRec.Queue = []QueuedMessage{
+		{
+			ID:      "q-opts",
+			Text:    "run with custom options",
+			Model:   "claude-opus-4-6",
+			YOLO:    true,
+			Options: &SessionOptions{Mode: "agentic", Effort: "high", Access: "auto"},
+			Seq:     1,
+		},
+		{
+			ID:    "q-yolo",
+			Text:  "run with legacy yolo",
+			Model: "claude-sonnet-4-6",
+			YOLO:  true,
+			Seq:   2,
+		},
+	}
 	idleAct, _, _, stopIdle := newTestActor(t, idleRec, func(snap workerSnapshot, env workerEnv, ctx context.Context) {
 		gotSnap <- snap
 		env.inbox <- Envelope{Payload: workerFinishedMsg{gen: snap.gen}}
@@ -957,8 +967,13 @@ func TestQueueReorderClearIdleOptionsAndCrashRecoveryNormalization(t *testing.T)
 
 	idleAct.inbox <- Envelope{Payload: queueSendNowMsg{QueueID: "q-opts"}}
 	snap := <-gotSnap
-	if snap.model != "claude-opus-4-6" || snap.options.Mode != "agentic" || snap.options.Effort != "high" || snap.options.Access != "full" {
-		t.Fatalf("idle queue_send_now dropped item Model/YOLO/Options: model=%q options=%+v", snap.model, snap.options)
+	if snap.model != "claude-opus-4-6" || snap.options.Mode != "agentic" || snap.options.Effort != "high" || snap.options.Access != "auto" {
+		t.Fatalf("idle queue_send_now dropped item Model/Options or let YOLO overwrite explicit Access: model=%q options=%+v", snap.model, snap.options)
+	}
+	// After first turn finishes, queued q-yolo (with nil Options and YOLO=true) drains and promotes Access to "full".
+	snapYolo := <-gotSnap
+	if snapYolo.model != "claude-sonnet-4-6" || snapYolo.options.Access != "full" {
+		t.Fatalf("expected legacy YOLO with nil Options to promote Access=full, got model=%q options=%+v", snapYolo.model, snapYolo.options)
 	}
 
 	// Boot + WAL Crash-Recovery Normalization:

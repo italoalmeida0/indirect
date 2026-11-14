@@ -31,7 +31,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { deflateSync } from "node:zlib";
 import {
-  copyFileSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -640,13 +639,6 @@ async function boot() {
     extraPath = `${bunBinDir}${path.delimiter}${extraPath}`;
   }
   if (process.platform === "win32") {
-    const cachedUnish = path.join(homedir(), ".indirect-code", "external", "bin", "unish.exe");
-    if (existsSync(cachedUnish)) {
-      const destUnish = path.join(daemonDir, "external", "bin", "unish.exe");
-      mkdirSync(path.dirname(destUnish), { recursive: true });
-      copyFileSync(cachedUnish, destUnish);
-      extraPath = `${path.dirname(destUnish)};${extraPath}`;
-    }
     for (const g of ["C:\\Program Files\\Git\\bin", "C:\\Program Files\\Git\\usr\\bin"]) {
       if (existsSync(g)) extraPath = `${g};${extraPath}`;
     }

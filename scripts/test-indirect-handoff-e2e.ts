@@ -19,6 +19,10 @@ const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const DAEMON_DIR = join(ROOT, "indirect-code-daemon");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const hasSessionOnDisk = (slotDir: string, id: string) =>
+  existsSync(join(slotDir, "sessions", `${id}.jsonl`)) ||
+  existsSync(join(slotDir, "sessions", id, "manifest.json"));
+
 async function main() {
   const rollback = process.argv.includes("--rollback");
   const work = join(tmpdir(), `handoff-e2e-${Date.now()}`);
@@ -170,7 +174,7 @@ async function main() {
       while (!sawSession && Date.now() - sessionStart < 5000) await sleep(100);
       assert(sawSession, `restored daemon is not serving its sessions: ${out}`);
       assert.equal(readFileSync(join(root, "slots", "active"), "utf8").trim(), "a", "failed update flipped active");
-      assert(existsSync(join(root, "slots", "slot-a", "sessions", "s1.jsonl")), "rollback lost the session");
+      assert(hasSessionOnDisk(join(root, "slots", "slot-a"), "s1"), "rollback lost the session");
       console.log("PASS: migration failure restored the old daemon and session without updater reconnects");
       return;
     }
@@ -187,7 +191,12 @@ async function main() {
     await sleep(5000);
     const active = readFileSync(join(root, "slots", "active"), "utf8").trim();
     assert.equal(active, "b", `active slot = ${active}`);
-    assert(existsSync(join(root, "slots", "slot-b", "sessions", "s1.jsonl")), "session in new slot");
+    assert(hasSessionOnDisk(join(root, "slots", "slot-b"), "s1"), "session in new slot");
+    sawSession = null;
+    daemonSock?.send(JSON.stringify({ type: "get_session", sessionId: "s1" }));
+    const promSessionStart = Date.now();
+    while (!sawSession && Date.now() - promSessionStart < 5000) await sleep(100);
+    assert(sawSession, "promoted daemon is not serving its sessions");
     assert(!existsSync(join(root, "slots", "slot-a")), "old slot cleaned");
     assert(!existsSync(join(root, "slots", "update.fail")), "no fail signal");
     console.log(`brutal update OK: connects=${connects.length} disconnects=${disconnects}`);

@@ -51,11 +51,17 @@ type ScriptOptions struct {
 	ShellPath     string
 	ShellFlag     string
 	MemoryLimit   int
+	TmpDir        string
 	JailRoots     []string
 	ReadOnlyRoots []string
 	FSReadRoots   []string
 	FSWriteRoots  []string
 	NetAllow      []string
+	CheckAccess   func(ctx context.Context, kind, target string, argv []string) error
+	DialContext   func(ctx context.Context, network, addr string) (net.Conn, error)
+	Listen        func(ctx context.Context, network, addr string) (net.Listener, error)
+	ListenPacket  func(ctx context.Context, network, addr string) (net.PacketConn, error)
+	ShellExec     func(ctx context.Context, cmd, cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 }
 
 const (
@@ -87,6 +93,7 @@ type rtAsyncEvent struct {
 type rtChildProc struct {
 	mu           sync.Mutex
 	cmd          *exec.Cmd
+	inProcess    bool
 	stdin        *asyncByteWriter
 	stdoutPipe   io.Closer
 	stderrPipe   io.Closer
@@ -153,11 +160,17 @@ type rtEntry struct {
 	isEvalEntry bool
 	shellPath     string
 	shellFlag     string
+	tmpDir        string
 	jailRoots     []string
 	readOnlyRoots []string
 	fsReadRoots   []string
 	fsWriteRoots  []string
 	netAllow      []string
+	checkAccess   func(ctx context.Context, kind, target string, argv []string) error
+	dialContext   func(ctx context.Context, network, addr string) (net.Conn, error)
+	listen        func(ctx context.Context, network, addr string) (net.Listener, error)
+	listenPacket  func(ctx context.Context, network, addr string) (net.PacketConn, error)
+	shellExec     func(ctx context.Context, cmd, cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 
 	stdinMu             sync.Mutex
 	stdin               io.Reader
@@ -728,7 +741,11 @@ func RunScript(ctx context.Context, opts ScriptOptions) (int, error) {
 		}
 	}
 
-	hasSandbox := len(jailRoots) > 0 || len(readOnlyRoots) > 0 || len(fsReadRoots) > 0 || len(fsWriteRoots) > 0 || len(netAllow) > 0
+	hasSandbox := len(jailRoots) > 0 || len(readOnlyRoots) > 0 || len(fsReadRoots) > 0 || len(fsWriteRoots) > 0 || len(netAllow) > 0 || opts.CheckAccess != nil
+	tmpDir := opts.TmpDir
+	if tmpDir == "" {
+		tmpDir = strings.TrimSpace(rawEnv["__INDIRECT_TMPDIR"])
+	}
 	envMap := make(map[string]string, len(rawEnv))
 	for k, v := range rawEnv {
 		if hasSandbox {
@@ -782,11 +799,17 @@ func RunScript(ctx context.Context, opts ScriptOptions) (int, error) {
 		isEvalEntry:      isEvalEntry,
 		shellPath:        opts.ShellPath,
 		shellFlag:        opts.ShellFlag,
+		tmpDir:           tmpDir,
 		jailRoots:        jailRoots,
 		readOnlyRoots:    readOnlyRoots,
 		fsReadRoots:      fsReadRoots,
 		fsWriteRoots:     fsWriteRoots,
 		netAllow:         netAllow,
+		checkAccess:      opts.CheckAccess,
+		dialContext:      opts.DialContext,
+		listen:           opts.Listen,
+		listenPacket:     opts.ListenPacket,
+		shellExec:        opts.ShellExec,
 		stdin:            opts.Stdin,
 		stdinCredits:     stdinCredits,
 		stdout:           stdout,

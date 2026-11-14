@@ -130,7 +130,27 @@ func (s *Sandbox) CheckNetHost(host string) error {
 }
 
 func (s *Sandbox) CheckReadPath(path string) error {
-	if err := s.CheckPath(path); err != nil {
+	if s != nil && s.isInteractive() {
+		target, err := canonicalOrParent(path)
+		if err != nil {
+			return fmt.Errorf("sandbox path: %w", err)
+		}
+		rules := s.EffectiveRules()
+		if eff, r := MatchRules(rules, "fs_read", target, s.Root); eff == "deny" {
+			return fmt.Errorf("permission denied: read %q blocked by rule %q", path, r.Pattern)
+		} else if eff != "allow" && s.Locked() {
+			if prot, reason := IsProtectedWorkspacePath(s.Root, target, false); prot {
+				return fmt.Errorf("jailed: %s", reason)
+			}
+			rootAbs, rerr := canonical(s.Root)
+			if rerr != nil {
+				return fmt.Errorf("sandbox root: %w", rerr)
+			}
+			if !s.isAllowed(rootAbs, target) {
+				return fmt.Errorf("jailed: path %q is outside sandbox root %q (use /unjail to disable)", path, s.Root)
+			}
+		}
+	} else if err := s.CheckPath(path); err != nil {
 		return err
 	}
 	if s == nil || s.Permissions == nil {
@@ -143,13 +163,33 @@ func (s *Sandbox) CheckReadPath(path string) error {
 }
 
 func (s *Sandbox) CheckWritePath(path string) error {
-	if err := s.CheckPath(path); err != nil {
-		return err
-	}
 	if s != nil && s.ProjectReadOnly() {
 		if target, err := canonicalOrParent(path); err == nil && !s.isUnderExtraRoot(target) {
 			return fmt.Errorf("permission denied: project workspace is read-only in this session")
 		}
+	}
+	if s != nil && s.isInteractive() {
+		target, err := canonicalOrParent(path)
+		if err != nil {
+			return fmt.Errorf("sandbox path: %w", err)
+		}
+		rules := s.EffectiveRules()
+		if eff, r := MatchRules(rules, "fs_write", target, s.Root); eff == "deny" {
+			return fmt.Errorf("permission denied: write %q blocked by rule %q", path, r.Pattern)
+		} else if eff != "allow" && s.Locked() {
+			if prot, reason := IsProtectedWorkspacePath(s.Root, target, true); prot {
+				return fmt.Errorf("jailed: %s", reason)
+			}
+			rootAbs, rerr := canonical(s.Root)
+			if rerr != nil {
+				return fmt.Errorf("sandbox root: %w", rerr)
+			}
+			if !s.isAllowed(rootAbs, target) {
+				return fmt.Errorf("jailed: path %q is outside sandbox root %q (use /unjail to disable)", path, s.Root)
+			}
+		}
+	} else if err := s.CheckPath(path); err != nil {
+		return err
 	}
 	if s == nil || s.Permissions == nil {
 		return nil

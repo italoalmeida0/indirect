@@ -207,6 +207,22 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 		model = lastModel
 	}
 	now := time.Now().UnixMilli()
+	if strings.TrimSpace(options.Access) == "" {
+		if cfg := a.cfg.load(); cfg != nil {
+			switch strings.ToLower(strings.TrimSpace(cfg.Settings.DefaultAccess)) {
+			case "auto", "ask", "full":
+				options.Access = strings.ToLower(strings.TrimSpace(cfg.Settings.DefaultAccess))
+			default:
+				if cfg.Settings.JailByDefault {
+					options.Access = "auto"
+				} else {
+					options.Access = "full"
+				}
+			}
+		} else {
+			options.Access = "full"
+		}
+	}
 	norm := normalizedOptions(options)
 	// Creation is passive: the client sends ONLY the active skills,
 	// sorted by priority (first = primary), each with a usable override
@@ -236,7 +252,8 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 	rec := &SessionRecord{
 		Options: norm, ID: sessID, CWD: cwd,
 		Title: title, TitleSource: titleSource, Model: model,
-		Status: "idle", CreatedAt: now, UpdatedAt: now,
+		Status: "idle", Jailed: norm.Access == "ask" || norm.Access == "auto",
+		CreatedAt: now, UpdatedAt: now,
 		Skills: recSkills,
 	}
 	st := newDiskStore(a.dataDir)

@@ -334,7 +334,15 @@ func cloneReadOnlySandbox(parent *Sandbox, cwd, brainDir string) *Sandbox {
 		for _, extra := range parent.extraRoots {
 			sb.AllowExtra(extra)
 		}
-		if parent.Locked() {
+		if mode, ok := parent.InteractiveAccessMode(); ok {
+			subMode := mode
+			if subMode == "ask" {
+				// Explore itself was already approved pre-tool; allow non-protected
+				// workspace reads while enforcing all deny/allow rules and jail bounds.
+				subMode = "auto"
+			}
+			sb.SetInteractivePolicy(subMode, parent.EffectiveRules())
+		} else if parent.Locked() {
 			sb.Lock()
 		}
 	}

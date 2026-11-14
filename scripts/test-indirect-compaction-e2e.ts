@@ -195,14 +195,6 @@ async function boot() {
   assert(mkModel.success, `model create failed: ${JSON.stringify(mkModel)}`);
   const daemonDir = mkdtempSync(path.join(tmpdir(), "llmgw-cmp-d-"));
   mkdirSync(path.join(daemonDir, "workspace"), { recursive: true });
-  if (process.platform === "win32") {
-    const cachedUnish = path.join(homedir(), ".indirect-code", "external", "bin", "unish.exe");
-    if (existsSync(cachedUnish)) {
-      const destUnish = path.join(daemonDir, "external", "bin", "unish.exe");
-      mkdirSync(path.dirname(destUnish), { recursive: true });
-      copyFileSync(cachedUnish, destUnish);
-    }
-  }
   const workDir = path.join(daemonDir, "workspace");
   const daemonProc = Bun.spawn(
     [daemonBin, "--worker", "--connect", pair.connectUrl, "--data-dir", daemonDir, "--name", "Compact E2E"],

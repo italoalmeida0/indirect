@@ -5,7 +5,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -121,24 +120,16 @@ func TestProtocolToleratesUnknownAndGarbage(t *testing.T) {
 
 // ---- full lifecycle with a REAL command ----
 
-// testShell resolves the shell the daemon would use: unish on Windows
-// (the daemon downloads/pins it — there is NO cmd fallback) and sh on
-// unix. The runner is generic; the shell arrives in the Spec, so the test
-// supplies the real one. Commands are bash-compatible (unish runs them
-// everywhere).
+// testShell resolves the embedded unish shell on Windows and /bin/sh on POSIX
+// (where cancel_posix_test.go also exercises external child signal traps).
 func testShell(t *testing.T) (string, []string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		// CI puts the built unish on PATH (UNISH_TEST_BINARY).
-		for _, cand := range []string{os.Getenv("UNISH_TEST_BINARY"), "unish"} {
-			if cand == "" {
-				continue
-			}
-			if p, err := exec.LookPath(cand); err == nil {
-				return p, []string{"-c"}
-			}
+		exe, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
 		}
-		t.Skip("unish not available on Windows (no cmd fallback by design)")
+		return exe, []string{"--sh-c"}
 	}
 	return "/bin/sh", []string{"-c"}
 }

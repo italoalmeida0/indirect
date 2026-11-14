@@ -85,6 +85,21 @@ frontend + daemon. Run checks from the appropriate project root.
   fixed-order, automatically sized and sort-only; persist sort state only.
   Model selections are shared across cards and tables, capped at 10,000 IDs;
   Selected only queries send IDs in a POST body. Audit reads use bounded workers.
+- Embedded `unish` shell + unified jail/approval policy: `unish@v1.2.0` (with
+  patched `third_party/mvdan-sh`) is compiled directly into the multi-call
+  binary (`--sh` / `--sh-c`, `packages/unishcli`); `bash` and `exec_script` (`$`
+  and `child_process`) never probe or download a host shell. Sessions use 3-tier
+  `SessionOptions.Access` (`"ask" | "auto" | "full"`, seeded from
+  `Settings.DefaultAccess` or `JailByDefault`), global `Settings.PermissionRules`
+  and per-session `SessionRecord.SessionGrants` (`Deny > Allow`). Pre-tool AST
+  classification (`packages/agent/tools/shell_classify.go`) and runtime
+  `unish.Jail` + QuickJS hooks enforce workspace/brain/tmp confinement,
+  protected subpaths (`.git/hooks`, `.git/config`, `.env*`, `.indirect`,
+  `.vscode`), private-LAN/metadata SSRF blocks, and runner control-port
+  isolation. Foreground runner commands route mid-execution `Ask` prompts over
+  authenticated loopback IPC (pausing `AutoBackgroundAfter`) and fail-closed
+  once detached to background; scoped `"session"` / `"always"` approvals never
+  mutate `Access` to `"full"`.
 - Daemon process helpers: `packages/proctable` powers `KillTree` (including
   setsid'd descendants); `packages/linereader` replaces `bufio.Scanner` for
   unbounded input such as SSE. Kills escalate TERM → grace → KILL + tree sweep;

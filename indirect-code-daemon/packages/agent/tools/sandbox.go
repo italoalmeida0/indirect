@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -25,6 +26,157 @@ type Sandbox struct {
 	// per-session brain scratch space). Set once via AllowExtra during
 	// setup, before Lock and before any tool runs.
 	extraRoots []string
+
+	policyMu         sync.RWMutex
+	interactive      bool
+	accessMode       string // "ask" | "auto" | "full"
+	rules            []PermissionRule
+	activeCallGrants []PermissionRule
+	approver         MidExecApprover
+	onApprovalWait   func(waiting bool)
+}
+
+// SetInteractivePolicy configures interactive 3-tier access mode ("ask" | "auto" | "full")
+// and combined permission rules (global PermissionRules + SessionGrants) on the sandbox.
+func (s *Sandbox) SetInteractivePolicy(accessMode string, rules []PermissionRule) {
+	if s == nil {
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(accessMode))
+	switch mode {
+	case "ask", "auto", "full":
+	default:
+		mode = "auto"
+	}
+	s.policyMu.Lock()
+	s.interactive = true
+	s.accessMode = mode
+	s.rules = NormalizePermissionRules(rules)
+	s.policyMu.Unlock()
+	s.locked.Store(mode != "full")
+}
+
+// UpdateRules atomically replaces the active permission rules on s (for example
+// after a mid-turn "session" or "always" approval grant).
+func (s *Sandbox) UpdateRules(rules []PermissionRule) {
+	if s == nil {
+		return
+	}
+	s.policyMu.Lock()
+	s.rules = NormalizePermissionRules(rules)
+	s.policyMu.Unlock()
+}
+
+// SetActiveCallGrants sets or clears ephemeral rules granted for the single
+// currently-executing tool call.
+func (s *Sandbox) SetActiveCallGrants(grants []PermissionRule) {
+	if s == nil {
+		return
+	}
+	s.policyMu.Lock()
+	if len(grants) == 0 {
+		s.activeCallGrants = nil
+	} else {
+		s.activeCallGrants = append([]PermissionRule(nil), grants...)
+	}
+	s.policyMu.Unlock()
+}
+
+// SetMidExecApprover registers the mid-execution interactive approver and wait-state
+// callback used when startDirect runs PolicyRuntime in-process.
+func (s *Sandbox) SetMidExecApprover(approver MidExecApprover, onWait func(waiting bool)) {
+	if s == nil {
+		return
+	}
+	s.policyMu.Lock()
+	s.approver = approver
+	s.onApprovalWait = onWait
+	s.policyMu.Unlock()
+}
+
+// MidExecHooks returns the registered mid-execution approver and wait-state callback.
+func (s *Sandbox) MidExecHooks() (MidExecApprover, func(bool)) {
+	if s == nil {
+		return nil, nil
+	}
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.approver, s.onApprovalWait
+}
+
+// InteractiveAccessMode returns (accessMode, true) when SetInteractivePolicy was enabled.
+func (s *Sandbox) InteractiveAccessMode() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.accessMode, s.interactive
+}
+
+func (s *Sandbox) isInteractive() bool {
+	if s == nil {
+		return false
+	}
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	return s.interactive
+}
+
+// EffectiveRules returns the snapshot of durable/session rules plus active call grants.
+func (s *Sandbox) EffectiveRules() []PermissionRule {
+	if s == nil {
+		return nil
+	}
+	s.policyMu.RLock()
+	defer s.policyMu.RUnlock()
+	if len(s.rules) == 0 && len(s.activeCallGrants) == 0 {
+		return nil
+	}
+	out := make([]PermissionRule, 0, len(s.rules)+len(s.activeCallGrants))
+	out = append(out, s.rules...)
+	out = append(out, s.activeCallGrants...)
+	return out
+}
+
+// BuildRuntimeJail snapshots s into a serializable RuntimeJailSpec for bash or
+// exec_script execution (preserving CallGrants even if the command detaches to background).
+func (s *Sandbox) BuildRuntimeJail(brainDir string) *RuntimeJailSpec {
+	if s == nil {
+		return nil
+	}
+	s.policyMu.RLock()
+	interactive := s.interactive
+	mode := s.accessMode
+	rules := append([]PermissionRule(nil), s.rules...)
+	callGrants := append([]PermissionRule(nil), s.activeCallGrants...)
+	s.policyMu.RUnlock()
+
+	locked := s.Locked()
+	projRO := s.ProjectReadOnly()
+	if !interactive && !locked && !projRO && s.Permissions == nil {
+		return nil
+	}
+	if !interactive {
+		if locked {
+			mode = "auto"
+		} else {
+			mode = "full"
+		}
+	}
+	return &RuntimeJailSpec{
+		Workspace:       s.Root,
+		BrainDir:        brainDir,
+		ExtraRoots:      append([]string(nil), s.extraRoots...),
+		ReadOnlyRoots:   s.ReadOnlyRoots(),
+		FSReadScopes:    s.FSReadScopes(),
+		FSWriteScopes:   s.FSWriteScopes(),
+		NetAllow:        s.NetAllowScopes(),
+		ProjectReadOnly: projRO,
+		AccessMode:      mode,
+		Rules:           rules,
+		CallGrants:      callGrants,
+	}
 }
 
 // SetProjectReadOnly marks the primary project Root as read-only while
@@ -123,10 +275,30 @@ func (s *Sandbox) JailRoots() []string {
 	return roots
 }
 
-// CheckPath verifies that path resolves inside the sandbox root.
-// Returns an error describing the violation if not. No-op when unlocked.
+// CheckPath verifies that path resolves inside the sandbox root (or matches an
+// active permission grant when interactive policy is enabled).
+// Returns an error describing the violation if not. No-op when unlocked unless
+// an explicit deny rule matches.
 // Callers should pass an already-absolute path (use resolvePath() first).
 func (s *Sandbox) CheckPath(path string) error {
+	if s == nil {
+		return nil
+	}
+	if s.isInteractive() {
+		target, err := canonicalOrParent(path)
+		if err != nil {
+			return fmt.Errorf("sandbox path: %w", err)
+		}
+		rules := s.EffectiveRules()
+		if eff, r := MatchRules(rules, "fs_read", target, s.Root); eff == "deny" {
+			return fmt.Errorf("permission denied: path %q blocked by rule %q", path, r.Pattern)
+		} else if eff == "allow" {
+			return nil
+		}
+		if eff, _ := MatchRules(rules, "fs_write", target, s.Root); eff == "allow" {
+			return nil
+		}
+	}
 	if !s.Locked() {
 		return nil
 	}
@@ -198,6 +370,11 @@ func (s *Sandbox) CheckExecScript(code string) error {
 // outside root via shell arguments or redirections.
 func (s *Sandbox) CheckCommand(cmd string) error {
 	if s == nil || (!s.Locked() && !s.ProjectReadOnly()) {
+		return nil
+	}
+	if s.isInteractive() {
+		// Interactive turns evaluate shell ASTs via EvaluateShellCommand pre-tool
+		// and enforce live unish.Jail + PolicyCapabilityHook at execution time.
 		return nil
 	}
 	cmd = strings.TrimSpace(cmd)

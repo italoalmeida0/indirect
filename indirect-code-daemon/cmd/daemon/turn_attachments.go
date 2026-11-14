@@ -561,3 +561,22 @@ func jailNotice(jailed bool) string {
 	}
 	return "Sandbox unlocked for future turns."
 }
+
+func accessModeNotice(access, cmd string) string {
+	switch cmd {
+	case "/jail":
+		return "Sandbox locked (Auto mode enabled)."
+	case "/unjail":
+		return "Sandbox unlocked (Full access enabled)."
+	}
+	switch access {
+	case "auto":
+		return "Access mode set to Auto (sandboxed)."
+	case "ask":
+		return "Access mode set to Ask for approval (sandboxed)."
+	case "full":
+		return "Access mode set to Full access (unjailed)."
+	default:
+		return jailNotice(access != "full")
+	}
+}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"indirect/indirect-code-daemon/internal/durable"
+	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/processutil"
 )
 
@@ -181,32 +182,23 @@ func runWith(spec Spec, opts runOptions) int {
 	if opts.barrier != nil {
 		opts.barrier("ownership-published")
 	}
-	encoder := json.NewEncoder(gateWrite)
-	if err := encoder.Encode(spec); err != nil {
-		return abortLaunch()
-	}
-	if err := encoder.Encode(true); err != nil {
-		return abortLaunch()
-	}
-	_ = gateWrite.Close()
-	if opts.barrier != nil {
-		opts.barrier("payload-released")
-	}
 
-	// 4. IPC: optional optimization. Bind failure = file-only mode.
+	// 4. Bind loopback IPC endpoint BEFORE releasing the launch gate so
+	// --runner-command receives ControlAddr + ControlToken over its private pipe
+	// (never in os.Environ) and blocks ControlPort inside its network policy.
 	ln, token := listenLoopback()
+	var lnPort int
+	launchPayload := commandLaunch{Spec: spec}
 	if ln != nil {
-		host, port, _ := net.SplitHostPort(ln.Addr().String())
-		p, _ := strconv.Atoi(port)
-		st.Transport = Transport{Type: "tcp", Host: host, Port: p, Token: token}
-		if err := opts.writeState(spec.Root, st); err != nil {
-			_ = ln.Close()
-			ln = nil
-			st.Transport = Transport{}
+		_, portStr, _ := net.SplitHostPort(ln.Addr().String())
+		lnPort, _ = strconv.Atoi(portStr)
+		launchPayload.ControlAddr = ln.Addr().String()
+		launchPayload.ControlToken = token
+		if launchPayload.Spec.Jail != nil {
+			clonedJail := *launchPayload.Spec.Jail
+			clonedJail.ControlPort = lnPort
+			launchPayload.Spec.Jail = &clonedJail
 		}
-	}
-	if ln != nil {
-		defer ln.Close()
 	}
 
 	// 5. Wiring: output broadcaster + connection manager + signals.
@@ -227,9 +219,32 @@ func runWith(spec Spec, opts runOptions) int {
 			}()
 		})
 	}
-	serve := &server{spec: spec, token: token, bc: bc, killFn: startReap}
+	serve := newServer(spec, token, bc, startReap)
 	if ln != nil {
+		defer ln.Close()
 		go serve.serve(ln)
+	}
+
+	encoder := json.NewEncoder(gateWrite)
+	if err := encoder.Encode(launchPayload); err != nil {
+		return abortLaunch()
+	}
+	if err := encoder.Encode(true); err != nil {
+		return abortLaunch()
+	}
+	_ = gateWrite.Close()
+	if opts.barrier != nil {
+		opts.barrier("payload-released")
+	}
+
+	if ln != nil {
+		host, _, _ := net.SplitHostPort(ln.Addr().String())
+		st.Transport = Transport{Type: "tcp", Host: host, Port: lnPort, Token: token}
+		if err := opts.writeState(spec.Root, st); err != nil {
+			_ = ln.Close()
+			ln = nil
+			st.Transport = Transport{}
+		}
 	}
 
 	// Terminal signals become graceful kills (state + copy survive).
@@ -394,12 +409,32 @@ func maybeSelfClean(spec Spec) {
 // ---- IPC server side ----
 
 type server struct {
-	spec   Spec
-	token  string
-	bc     *broadcast
-	killFn func()
-	mu     sync.Mutex
-	killed bool
+	spec           Spec
+	token          string
+	bc             *broadcast
+	killFn         func()
+	startedAt      time.Time
+	mu             sync.Mutex
+	killed         bool
+	apprMu         sync.Mutex
+	cmdConn        *Conn
+	daemonConn     *Conn
+	daemonAttachCh chan struct{}
+	daemonAttached bool
+	daemonDetached bool
+	pendingReqs    map[string]struct{}
+}
+
+func newServer(spec Spec, token string, bc *broadcast, killFn func()) *server {
+	return &server{
+		spec:           spec,
+		token:          token,
+		bc:             bc,
+		killFn:         killFn,
+		startedAt:      time.Now(),
+		daemonAttachCh: make(chan struct{}),
+		pendingReqs:    make(map[string]struct{}),
+	}
 }
 
 func (s *server) markKilled(reason string) {
@@ -426,9 +461,16 @@ func (s *server) killf() {
 }
 
 func (s *server) sendDone(code int, end int64) {
+	doneMsg := Done{Type: VerbDone, ExitCode: code, EndedAt: end}
 	s.bc.broadcast(func(c *Conn) {
-		_ = c.Send(Done{Type: VerbDone, ExitCode: code, EndedAt: end})
+		_ = c.Send(doneMsg)
 	})
+	s.apprMu.Lock()
+	dc := s.daemonConn
+	s.apprMu.Unlock()
+	if dc != nil {
+		_ = dc.Send(doneMsg)
+	}
 }
 
 // serve accepts sequential parent connections (a restarted parent simply
@@ -448,7 +490,7 @@ func (s *server) handle(raw net.Conn) {
 	_ = raw.SetDeadline(time.Now().Add(10 * time.Second))
 	c := NewConn(raw)
 
-	// Handshake: the parent greets first (hello{token, logCursor}).
+	// Handshake: the peer greets first (hello{token, role, logCursor}).
 	msg, err := c.Recv()
 	if err != nil {
 		return
@@ -458,6 +500,15 @@ func (s *server) handle(raw net.Conn) {
 		return // proto mismatch or bad token: silent file-only fallback
 	}
 	_ = raw.SetDeadline(time.Time{})
+
+	switch hello.Role {
+	case "command":
+		s.handleCommandConn(raw, c)
+		return
+	case "daemon":
+		s.handleDaemonConn(raw, c)
+		return
+	}
 
 	cursor := hello.LogCursor
 	s.bc.register(c, &cursor)
@@ -487,6 +538,145 @@ func (s *server) handle(raw net.Conn) {
 			if v.LogCursor > 0 {
 				s.bc.setcursor(c, v.LogCursor)
 			}
+		}
+	}
+}
+
+func (s *server) handleCommandConn(raw net.Conn, c *Conn) {
+	// Never apply a short read deadline to the command connection: mid-execution
+	// approval waits for human review (minutes) without polling traffic.
+	_ = raw.SetReadDeadline(time.Time{})
+	s.apprMu.Lock()
+	s.cmdConn = c
+	s.apprMu.Unlock()
+	defer func() {
+		s.apprMu.Lock()
+		if s.cmdConn == c {
+			s.cmdConn = nil
+			for k := range s.pendingReqs {
+				delete(s.pendingReqs, k)
+			}
+		}
+		s.apprMu.Unlock()
+	}()
+
+	_ = c.Send(Hello{Type: VerbHello, Proto: ProtoVersion, Role: "command", JobID: s.spec.JobID, PID: os.Getpid()})
+
+	for {
+		m, err := c.Recv()
+		if err != nil {
+			return
+		}
+		switch v := m.(type) {
+		case *AskApproval:
+			if v.ReqID == "" {
+				continue
+			}
+			s.apprMu.Lock()
+			dc := s.daemonConn
+			attachCh := s.daemonAttachCh
+			detached := s.daemonDetached
+			s.apprMu.Unlock()
+			if dc == nil && !detached && ReadDisposition(s.spec.Root, s.spec.JobID) != DispBackground {
+				waitBudget := 150 * time.Millisecond
+				if s.spec.ExpectDaemon {
+					waitBudget = 3 * time.Second
+				}
+				if rem := waitBudget - time.Since(s.startedAt); rem > 0 {
+					select {
+					case <-attachCh:
+					case <-time.After(rem):
+					}
+					s.apprMu.Lock()
+					dc = s.daemonConn
+					s.apprMu.Unlock()
+				}
+			}
+			s.apprMu.Lock()
+			if dc != nil {
+				s.pendingReqs[v.ReqID] = struct{}{}
+				if err := dc.Send(*v); err != nil {
+					delete(s.pendingReqs, v.ReqID)
+					s.daemonConn = nil
+					s.daemonDetached = true
+					dc = nil
+				}
+			}
+			s.apprMu.Unlock()
+			if dc == nil {
+				// Fail-closed immediately when no foreground daemon is attached
+				// (e.g. backgrounded task or disconnected parent).
+				_ = c.Send(ApprovalReply{
+					Type:  VerbApprovalReply,
+					ReqID: v.ReqID,
+					Resp:  tools.MidExecApprovalResp{Decision: "deny"},
+				})
+			}
+		case *Ping:
+			_ = c.Send(Ping{Type: VerbPing})
+		}
+	}
+}
+
+func (s *server) handleDaemonConn(raw net.Conn, c *Conn) {
+	s.apprMu.Lock()
+	s.daemonConn = c
+	s.daemonDetached = false
+	if !s.daemonAttached {
+		s.daemonAttached = true
+		close(s.daemonAttachCh)
+	}
+	s.apprMu.Unlock()
+	defer func() {
+		// Fail-closed: if the foreground daemon detaches or disconnects while any
+		// mid-execution request is in flight, immediately unblock the command with "deny".
+		s.apprMu.Lock()
+		var cmd *Conn
+		var pending []string
+		if s.daemonConn == c {
+			s.daemonConn = nil
+			s.daemonDetached = true
+			cmd = s.cmdConn
+			for reqID := range s.pendingReqs {
+				pending = append(pending, reqID)
+				delete(s.pendingReqs, reqID)
+			}
+		}
+		s.apprMu.Unlock()
+		if cmd != nil {
+			for _, reqID := range pending {
+				_ = cmd.Send(ApprovalReply{
+					Type:  VerbApprovalReply,
+					ReqID: reqID,
+					Resp:  tools.MidExecApprovalResp{Decision: "deny"},
+				})
+			}
+		}
+	}()
+
+	_ = c.Send(Hello{Type: VerbHello, Proto: ProtoVersion, Role: "daemon", JobID: s.spec.JobID, PID: os.Getpid()})
+
+	for {
+		_ = raw.SetReadDeadline(time.Now().Add(3 * pingEvery))
+		m, err := c.Recv()
+		if err != nil {
+			return
+		}
+		switch v := m.(type) {
+		case *ApprovalReply:
+			s.apprMu.Lock()
+			delete(s.pendingReqs, v.ReqID)
+			cmd := s.cmdConn
+			s.apprMu.Unlock()
+			if cmd != nil {
+				_ = cmd.Send(*v)
+			}
+		case *Ping:
+			_ = c.Send(Ping{Type: VerbPing})
+		case *Kill:
+			s.killf()
+			s.bc.kill()
+			return
 		}
 	}
 }

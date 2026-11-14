@@ -71,6 +71,7 @@ func (r *root) stopMaintenance() {
 
 // bootActors starts the four actors (called by main after pairing/config).
 func (r *root) bootActors() {
+	r.cfg.configDir = r.configPathDir()
 
 	r.ws = newWSActor()
 	r.bgSup = newBGSupervisor(r.dataDir)

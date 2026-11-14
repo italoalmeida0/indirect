@@ -111,7 +111,17 @@ func (en *rtEntry) resolvePath(p string) string {
 func (en *rtEntry) hasSandboxRestrictions() bool {
 	en.mu.Lock()
 	defer en.mu.Unlock()
-	return len(en.jailRoots) > 0 || len(en.readOnlyRoots) > 0 || len(en.fsReadRoots) > 0 || len(en.fsWriteRoots) > 0 || len(en.netAllow) > 0
+	return len(en.jailRoots) > 0 || len(en.readOnlyRoots) > 0 || len(en.fsReadRoots) > 0 || len(en.fsWriteRoots) > 0 || len(en.netAllow) > 0 || en.checkAccess != nil
+}
+
+func wrapAccessErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if strings.HasPrefix(err.Error(), "EACCES:") {
+		return err
+	}
+	return fmt.Errorf("EACCES: %w", err)
 }
 
 func checkScopedTarget(op, rawPath, target string, scopes []string) error {
@@ -194,7 +204,12 @@ func (en *rtEntry) checkPath(p string) error {
 	if isNullDevicePath(p) {
 		return nil
 	}
-	if err := en.checkJailPath(p); err != nil {
+	if en.checkAccess != nil {
+		resolved := en.resolvePath(p)
+		if err := en.checkAccess(en.ctx, "fs_read", resolved, nil); err != nil {
+			return wrapAccessErr(err)
+		}
+	} else if err := en.checkJailPath(p); err != nil {
 		return err
 	}
 	if len(en.fsReadRoots) == 0 {
@@ -212,7 +227,16 @@ func (en *rtEntry) checkPathNoFollow(p string) error {
 	if isNullDevicePath(p) {
 		return nil
 	}
-	if err := en.checkJailPathNoFollow(p); err != nil {
+	if en.checkAccess != nil {
+		resolved := en.resolvePath(p)
+		target, err := canonicalOrParentPathNoFollow(resolved)
+		if err != nil {
+			target = resolved
+		}
+		if err := en.checkAccess(en.ctx, "fs_read", target, nil); err != nil {
+			return wrapAccessErr(err)
+		}
+	} else if err := en.checkJailPathNoFollow(p); err != nil {
 		return err
 	}
 	if len(en.fsReadRoots) == 0 {
@@ -230,7 +254,12 @@ func (en *rtEntry) checkWritePath(p string) error {
 	if isNullDevicePath(p) {
 		return nil
 	}
-	if err := en.checkJailPath(p); err != nil {
+	if en.checkAccess != nil {
+		resolved := en.resolvePath(p)
+		if err := en.checkAccess(en.ctx, "fs_write", resolved, nil); err != nil {
+			return wrapAccessErr(err)
+		}
+	} else if err := en.checkJailPath(p); err != nil {
 		return err
 	}
 	en.mu.Lock()
@@ -264,7 +293,16 @@ func (en *rtEntry) checkWritePathNoFollow(p string) error {
 	if isNullDevicePath(p) {
 		return nil
 	}
-	if err := en.checkJailPathNoFollow(p); err != nil {
+	if en.checkAccess != nil {
+		resolved := en.resolvePath(p)
+		target, err := canonicalOrParentPathNoFollow(resolved)
+		if err != nil {
+			target = resolved
+		}
+		if err := en.checkAccess(en.ctx, "fs_write", target, nil); err != nil {
+			return wrapAccessErr(err)
+		}
+	} else if err := en.checkJailPathNoFollow(p); err != nil {
 		return err
 	}
 	en.mu.Lock()
@@ -294,7 +332,7 @@ func (en *rtEntry) checkWritePathNoFollow(p string) error {
 	return checkScopedTarget("write", p, target, wScopes)
 }
 
-func (en *rtEntry) checkNetHost(host string) error {
+func (en *rtEntry) checkNetAllowList(host string) error {
 	en.mu.Lock()
 	allow := en.netAllow
 	en.mu.Unlock()
@@ -326,6 +364,30 @@ func (en *rtEntry) checkNetHost(host string) error {
 		}
 	}
 	return fmt.Errorf("EACCES: permission denied: network host %q is outside declared allowlist", host)
+}
+
+func (en *rtEntry) checkNetHost(host string) error {
+	if err := en.checkNetAllowList(host); err != nil {
+		return err
+	}
+	if en.checkAccess != nil {
+		if err := en.checkAccess(en.ctx, "net", host, nil); err != nil {
+			return wrapAccessErr(err)
+		}
+	}
+	return nil
+}
+
+func (en *rtEntry) checkNetListen(addr string) error {
+	if err := en.checkNetAllowList(addr); err != nil {
+		return err
+	}
+	if en.checkAccess != nil {
+		if err := en.checkAccess(en.ctx, "net_listen", addr, nil); err != nil {
+			return wrapAccessErr(err)
+		}
+	}
+	return nil
 }
 
 func evalPathSymlinksAndJunctionsEx(p string, allowMissingLeaf bool) (string, error) {
@@ -796,6 +858,10 @@ func (en *rtEntry) opRuntimeInit() (string, []byte, bool, string, error) {
 		numCPU = 1
 	}
 
+	tmpDir := en.tmpDir
+	if tmpDir == "" {
+		tmpDir = os.TempDir()
+	}
 	osMetrics := collectOSMetrics()
 	initData := map[string]any{
 		"argv":        en.argv,
@@ -807,7 +873,7 @@ func (en *rtEntry) opRuntimeInit() (string, []byte, bool, string, error) {
 		"pid":         os.Getpid(),
 		"ppid":        os.Getppid(),
 		"homedir":     home,
-		"tmpdir":      os.TempDir(),
+		"tmpdir":      tmpDir,
 		"hostname":    host,
 		"cpus":        numCPU,
 		"osMetrics":   osMetrics,
@@ -4799,6 +4865,11 @@ func (en *rtEntry) applySandboxEnvRoots(out map[string]string) {
 	} else {
 		delete(out, "__INDIRECT_NET_ALLOW")
 	}
+	if en.tmpDir != "" {
+		out["__INDIRECT_TMPDIR"] = en.tmpDir
+	} else {
+		delete(out, "__INDIRECT_TMPDIR")
+	}
 }
 
 func (en *rtEntry) enforceChildEnvMap(out map[string]string) {
@@ -5067,6 +5138,62 @@ func lookPathWithEnv(file, cwd string, envSlice []string) (string, error) {
 
 var errNoNativeShell = errors.New("no native shell available")
 
+func buildPOSIXShellCmdline(command string, args []string) string {
+	cmdline := command
+	if len(args) > 0 {
+		cmdPart := command
+		if strings.ContainsAny(cmdPart, " \t") && !isAlreadyShellQuoted(cmdPart) && !strings.ContainsAny(cmdPart, "\"'';|&<>()$`") {
+			cmdPart = posixShellQuote(cmdPart)
+		}
+		quotedArgs := make([]string, len(args))
+		for i, a := range args {
+			quotedArgs[i] = quotePOSIXShellArgIfNeeded(a)
+		}
+		cmdline = cmdPart + " " + strings.Join(quotedArgs, " ")
+	}
+	return cmdline
+}
+
+func (en *rtEntry) shouldRunInProcessShell(req cpSpawnReq, cwd string, envSlice []string) (string, bool) {
+	if en.shellExec == nil {
+		return "", false
+	}
+	switch v := req.Shell.(type) {
+	case bool:
+		if v {
+			return buildPOSIXShellCmdline(req.Command, req.Args), true
+		}
+	case string:
+		if v == "$" || v == "true" {
+			return buildPOSIXShellCmdline(req.Command, req.Args), true
+		}
+		if v != "" {
+			return "", false
+		}
+	}
+	if en.execPath != "" && len(req.Args) == 2 && req.Args[0] == "--sh-c" {
+		if req.Command == en.execPath {
+			return req.Args[1], true
+		}
+		if resolved, err := lookPathWithEnv(req.Command, cwd, envSlice); err == nil && strings.EqualFold(filepath.Clean(resolved), filepath.Clean(en.execPath)) {
+			return req.Args[1], true
+		}
+	}
+	return "", false
+}
+
+func (en *rtEntry) checkDirectExec(ctx context.Context, cmd *exec.Cmd) error {
+	if en.checkAccess == nil || cmd == nil || cmd.Err != nil {
+		return nil
+	}
+	if en.execPath != "" && strings.EqualFold(filepath.Clean(cmd.Path), filepath.Clean(en.execPath)) {
+		if len(cmd.Args) >= 2 && cmd.Args[1] == "--js" {
+			return nil
+		}
+	}
+	return en.checkAccess(ctx, "exec", cmd.Path, cmd.Args)
+}
+
 func (en *rtEntry) buildExecCmd(ctx context.Context, req cpSpawnReq, cwd string, envSlice []string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
 	useShell := false
@@ -5116,15 +5243,7 @@ func (en *rtEntry) buildExecCmd(ctx context.Context, req cpSpawnReq, cwd string,
 				}
 				cmdline = cmdPart + " " + strings.Join(quotedArgs, " ")
 			} else {
-				cmdPart := req.Command
-				if strings.ContainsAny(cmdPart, " \t") && !isAlreadyShellQuoted(cmdPart) && !strings.ContainsAny(cmdPart, "\"'';|&<>()$`") {
-					cmdPart = posixShellQuote(cmdPart)
-				}
-				quotedArgs := make([]string, len(req.Args))
-				for i, a := range req.Args {
-					quotedArgs[i] = quotePOSIXShellArgIfNeeded(a)
-				}
-				cmdline = cmdPart + " " + strings.Join(quotedArgs, " ")
+				cmdline = buildPOSIXShellCmdline(req.Command, req.Args)
 			}
 		}
 		if shFlag == "/d /s /c" {
@@ -5137,7 +5256,7 @@ func (en *rtEntry) buildExecCmd(ctx context.Context, req cpSpawnReq, cwd string,
 		resolvedProg, lookErr := lookPathWithEnv(req.Command, cwd, envSlice)
 		execArgs := req.Args
 		if en.execPath != "" && (req.Command == en.execPath || (lookErr == nil && strings.EqualFold(filepath.Clean(resolvedProg), filepath.Clean(en.execPath)))) {
-			if len(execArgs) > 0 && execArgs[0] != "--js" && execArgs[0] != "--js-exec-direct" && execArgs[0] != "--worker" && execArgs[0] != "--runner" && execArgs[0] != "--runner-command" && execArgs[0] != "--update-start" && execArgs[0] != "--update-end" && execArgs[0] != "--slot" && !strings.HasPrefix(execArgs[0], "-test.") {
+			if len(execArgs) > 0 && execArgs[0] != "--js" && execArgs[0] != "--js-exec-direct" && execArgs[0] != "--sh" && execArgs[0] != "--sh-c" && execArgs[0] != "--worker" && execArgs[0] != "--runner" && execArgs[0] != "--runner-command" && execArgs[0] != "--update-start" && execArgs[0] != "--update-end" && execArgs[0] != "--slot" && !strings.HasPrefix(execArgs[0], "-test.") {
 				execArgs = append([]string{"--js"}, execArgs...)
 			}
 		}
@@ -5244,7 +5363,91 @@ func (en *rtEntry) opCPSpawnSync(argsStr string, stdinBytes []byte) (string, []b
 	}
 
 	killSigName := resolveKillSignalName(req.KillSignal)
-	cmd, buildErr := en.buildExecCmd(cmdCtx, req, cwd, envMapToSlice(envMap))
+	envSlice := envMapToSlice(envMap)
+	if shellScript, ok := en.shouldRunInProcessShell(req, cwd, envSlice); ok {
+		shellCtx, shellCancel := context.WithCancel(cmdCtx)
+		defer shellCancel()
+		stdoutBuf := &boundedBufferWriter{max: maxBuf, onExceed: shellCancel}
+		stderrBuf := &boundedBufferWriter{max: maxBuf, onExceed: shellCancel}
+		var stdinReader io.Reader = strings.NewReader("")
+		if inheritedStdinFile != nil {
+			stdinReader = inheritedStdinFile
+		} else if inMode != "ignore" && len(stdinBytes) > 0 {
+			stdinReader = bytes.NewReader(stdinBytes)
+		}
+		var outW io.Writer = stdoutBuf
+		switch outMode {
+		case "ignore":
+			outW = io.Discard
+		case "inherit":
+			outW = en.stdout
+		}
+		var errW io.Writer = stderrBuf
+		switch errMode {
+		case "ignore":
+			errW = io.Discard
+		case "inherit":
+			errW = en.stderr
+		}
+		exitCode, runErr := en.shellExec(shellCtx, shellScript, cwd, envSlice, stdinReader, outW, errW)
+		var (
+			status  *int
+			sigStr  *string
+			errStr  string
+			errCode string
+		)
+		if stdoutBuf.Exceeded() || stderrBuf.Exceeded() {
+			errStr = fmt.Sprintf("spawnSync %s ENOBUFS", req.Command)
+			errCode = "ENOBUFS"
+			s := killSigName
+			sigStr = &s
+		} else if cmdCtx.Err() != nil {
+			s := killSigName
+			sigStr = &s
+			if cmdCtx.Err() == context.DeadlineExceeded {
+				errStr = fmt.Sprintf("spawnSync %s ETIMEDOUT", req.Command)
+				errCode = "ETIMEDOUT"
+			} else {
+				errStr = cmdCtx.Err().Error()
+			}
+		} else if runErr != nil && exitCode == 0 {
+			if errors.Is(runErr, os.ErrPermission) {
+				errCode = "EACCES"
+				errStr = fmt.Sprintf("spawnSync %s EACCES", req.Command)
+			} else {
+				errStr = runErr.Error()
+			}
+		} else {
+			c := exitCode
+			status = &c
+		}
+		stdoutBytes := stdoutBuf.Bytes()
+		stderrBytes := stderrBuf.Bytes()
+		combined := make([]byte, len(stdoutBytes)+len(stderrBytes))
+		copy(combined, stdoutBytes)
+		copy(combined[len(stdoutBytes):], stderrBytes)
+		meta := map[string]any{
+			"pid":        os.Getpid(),
+			"status":     status,
+			"signal":     sigStr,
+			"stdoutLen":  len(stdoutBytes),
+			"stderrLen":  len(stderrBytes),
+			"stdoutNull": outMode != "pipe",
+			"stderrNull": errMode != "pipe",
+		}
+		if errStr != "" {
+			meta["error"] = errStr
+			if errCode != "" {
+				meta["errorCode"] = errCode
+				meta["syscall"] = "spawnSync " + req.Command
+				meta["path"] = req.Command
+			}
+		}
+		resJSON, _ := json.Marshal(meta)
+		return string(resJSON), combined, true, "", nil
+	}
+
+	cmd, buildErr := en.buildExecCmd(cmdCtx, req, cwd, envSlice)
 	if buildErr != nil {
 		res, _ := json.Marshal(map[string]any{
 			"pid":        0,
@@ -5252,6 +5455,20 @@ func (en *rtEntry) opCPSpawnSync(argsStr string, stdinBytes []byte) (string, []b
 			"signal":     nil,
 			"error":      fmt.Sprintf("spawnSync %s ENOENT: %s", req.Command, buildErr.Error()),
 			"errorCode":  "ENOENT",
+			"syscall":    "spawnSync " + req.Command,
+			"path":       req.Command,
+			"stdoutNull": true,
+			"stderrNull": true,
+		})
+		return string(res), nil, true, "", nil
+	}
+	if accessErr := en.checkDirectExec(cmdCtx, cmd); accessErr != nil {
+		res, _ := json.Marshal(map[string]any{
+			"pid":        0,
+			"status":     nil,
+			"signal":     nil,
+			"error":      fmt.Sprintf("spawnSync %s EACCES: %s", req.Command, accessErr.Error()),
+			"errorCode":  "EACCES",
 			"syscall":    "spawnSync " + req.Command,
 			"path":       req.Command,
 			"stdoutNull": true,
@@ -5591,13 +5808,264 @@ func (en *rtEntry) opCPSpawnAsync(argsStr string, stdinBytes []byte) (string, []
 	outMode := stdioModeAt(req.Stdio, 1)
 	errMode := stdioModeAt(req.Stdio, 2)
 
-	cmd, buildErr := en.buildExecCmd(cmdCtx, req, cwd, envMapToSlice(envMap))
+	envSlice := envMapToSlice(envMap)
+	if shellScript, ok := en.shouldRunInProcessShell(req, cwd, envSlice); ok {
+		var (
+			stdinReader      io.Reader = strings.NewReader("")
+			stdinPipe        io.WriteCloser
+			stdinPipeReader  *io.PipeReader
+			stdoutPipe       io.ReadCloser
+			stdoutPipeWriter *io.PipeWriter
+			stderrPipe       io.ReadCloser
+			stderrPipeWriter *io.PipeWriter
+		)
+		if inMode == "inherit" && !req.HasInput && len(stdinBytes) == 0 {
+			if f := en.directInheritedStdinFile(); f != nil {
+				stdinReader = f
+			} else if en.stdin != nil {
+				stdinPipeReader, stdinPipe = io.Pipe()
+				stdinReader = stdinPipeReader
+			}
+		} else if inMode != "ignore" {
+			stdinPipeReader, stdinPipe = io.Pipe()
+			stdinReader = stdinPipeReader
+		}
+
+		var shellOut io.Writer = io.Discard
+		if outMode == "inherit" && req.Shell != "$" {
+			if f, ok := en.stdout.(*os.File); ok {
+				shellOut = f
+			} else {
+				r, w := io.Pipe()
+				stdoutPipe, stdoutPipeWriter, shellOut = r, w, w
+			}
+		} else if outMode != "ignore" {
+			r, w := io.Pipe()
+			stdoutPipe, stdoutPipeWriter, shellOut = r, w, w
+		}
+
+		var shellErr io.Writer = io.Discard
+		if errMode == "inherit" && req.Shell != "$" {
+			if f, ok := en.stderr.(*os.File); ok {
+				shellErr = f
+			} else {
+				r, w := io.Pipe()
+				stderrPipe, stderrPipeWriter, shellErr = r, w, w
+			}
+		} else if errMode != "ignore" {
+			r, w := io.Pipe()
+			stderrPipe, stderrPipeWriter, shellErr = r, w, w
+		}
+
+		var stdinWriter *asyncByteWriter
+		if stdinPipe != nil {
+			stdinWriter = newAsyncByteWriter(stdinPipe, func() {
+				_ = stdinPipe.Close()
+			})
+		}
+		id := req.ID
+		if stdinWriter != nil {
+			stdinWriter.onDrain = func() {
+				en.pushEvent(rtAsyncEvent{id: id, kind: rtEventChildDrain})
+			}
+		}
+		outCredits := makeStreamCredits()
+		errCredits := makeStreamCredits()
+		doneCh := make(chan struct{})
+		childEntry := &rtChildProc{
+			inProcess:  true,
+			stdin:      stdinWriter,
+			stdoutPipe: stdoutPipe,
+			stderrPipe: stderrPipe,
+			outCredits: outCredits,
+			errCredits: errCredits,
+			cancel:     cancel,
+			detached:   req.Detached,
+			done:       doneCh,
+		}
+		en.childMu.Lock()
+		en.children[id] = childEntry
+		en.childMu.Unlock()
+
+		if inMode != "ignore" && (req.HasInput || len(stdinBytes) > 0) && stdinWriter != nil {
+			if len(stdinBytes) > 0 {
+				_, _ = stdinWriter.Enqueue(stdinBytes)
+			}
+			stdinWriter.EnqueueClose()
+		} else if inMode == "inherit" && stdinWriter != nil {
+			go func() {
+				_, inherited, _, _, _ := en.opProcessStdinRead("")
+				if len(inherited) > 0 {
+					_, _ = stdinWriter.Enqueue(inherited)
+				}
+				stdinWriter.EnqueueClose()
+			}()
+		}
+
+		var wg sync.WaitGroup
+		pumpPipe := func(r io.Reader, kind int32, mode string, inheritOut io.Writer, credits chan struct{}, isStderr bool) {
+			defer wg.Done()
+			buf := make([]byte, 32*1024)
+			var creditBytes int
+			needCredit := true
+			for {
+				if mode != "inherit" && mode != "ignore" && credits != nil && needCredit {
+					select {
+					case <-credits:
+						needCredit = false
+					case <-cmdCtx.Done():
+						return
+					}
+				}
+				n, rerr := r.Read(buf)
+				if n > 0 {
+					creditBytes += n
+					if creditBytes >= 4096 {
+						creditBytes = 0
+						needCredit = true
+					}
+					if mode == "inherit" {
+						en.writeMu.Lock()
+						_, _ = inheritOut.Write(buf[:n])
+						en.writeMu.Unlock()
+					} else if mode != "ignore" {
+						chunk := make([]byte, n)
+						copy(chunk, buf[:n])
+						if req.Shell == "$" {
+							childEntry.mu.Lock()
+							syncWait := childEntry.syncWaiting
+							if isStderr {
+								if int64(len(childEntry.errBytes))+int64(len(chunk)) <= maxBuf {
+									childEntry.errBytes = append(childEntry.errBytes, chunk...)
+								}
+							} else {
+								if int64(len(childEntry.outBytes))+int64(len(chunk)) <= maxBuf {
+									childEntry.outBytes = append(childEntry.outBytes, chunk...)
+								}
+							}
+							childEntry.mu.Unlock()
+							if syncWait {
+								continue
+							}
+						}
+						en.pushEvent(rtAsyncEvent{id: id, kind: kind, bin: chunk})
+					}
+				}
+				if rerr != nil {
+					return
+				}
+			}
+		}
+		if stdoutPipe != nil {
+			wg.Add(1)
+			go pumpPipe(stdoutPipe, rtEventChildStdout, outMode, en.stdout, outCredits, false)
+		}
+		if stderrPipe != nil {
+			wg.Add(1)
+			go pumpPipe(stderrPipe, rtEventChildStderr, errMode, en.stderr, errCredits, true)
+		}
+
+		stopAfter := context.AfterFunc(cmdCtx, func() {
+			if stdinWriter != nil {
+				stdinWriter.Abort()
+			}
+			if stdinPipeReader != nil {
+				_ = stdinPipeReader.Close()
+			}
+		})
+
+		go func() {
+			defer close(doneCh)
+			exitCode, runErr := en.shellExec(cmdCtx, shellScript, cwd, envSlice, stdinReader, shellOut, shellErr)
+			if stdoutPipeWriter != nil {
+				_ = stdoutPipeWriter.Close()
+			}
+			if stderrPipeWriter != nil {
+				_ = stderrPipeWriter.Close()
+			}
+			if stdinPipeReader != nil {
+				_ = stdinPipeReader.Close()
+			}
+			wg.Wait()
+			childEntry.mu.Lock()
+			childEntry.reaped = true
+			childEntry.mu.Unlock()
+			stopAfter()
+			if stdinWriter != nil {
+				stdinWriter.Abort()
+			}
+			ctxErr := cmdCtx.Err()
+			en.childMu.Lock()
+			ch := en.children[id]
+			delete(en.children, id)
+			if en.finishedChildren != nil && ch != nil && req.Shell == "$" {
+				for k := range en.finishedChildren {
+					if len(en.finishedChildren) < 8 {
+						break
+					}
+					delete(en.finishedChildren, k)
+				}
+				en.finishedChildren[id] = ch
+			}
+			en.childMu.Unlock()
+			cancel()
+
+			var killedSig string
+			if ch != nil {
+				ch.mu.Lock()
+				killedSig = ch.killedSignal
+				ch.mu.Unlock()
+			}
+
+			var code any = exitCode
+			var sigStr *string
+			if killedSig != "" {
+				sigStr = &killedSig
+				code = nil
+			} else if ctxErr != nil {
+				s := resolveKillSignalName(req.KillSignal)
+				sigStr = &s
+				code = nil
+			} else if runErr != nil && exitCode == 0 {
+				code = 1
+			}
+			if ch != nil {
+				ch.mu.Lock()
+				if cInt, ok := code.(int); ok {
+					ch.finalCode = &cInt
+				}
+				ch.finalSignal = sigStr
+				ch.mu.Unlock()
+			}
+			meta, _ := json.Marshal(map[string]any{
+				"code":   code,
+				"signal": sigStr,
+			})
+			en.pushEvent(rtAsyncEvent{id: id, kind: rtEventChildExit, json: string(meta)})
+		}()
+
+		meta, _ := json.Marshal(map[string]any{"pid": os.Getpid()})
+		return string(meta), nil, false, "", nil
+	}
+
+	cmd, buildErr := en.buildExecCmd(cmdCtx, req, cwd, envSlice)
 	if buildErr != nil {
 		cancel()
 		meta, _ := json.Marshal(map[string]any{
 			"pid":       0,
 			"error":     fmt.Sprintf("spawn %s ENOENT: %s", req.Command, buildErr.Error()),
 			"errorCode": "ENOENT",
+			"syscall":   "spawn " + req.Command,
+			"path":      req.Command,
+		})
+		return string(meta), nil, false, "", nil
+	}
+	if accessErr := en.checkDirectExec(cmdCtx, cmd); accessErr != nil {
+		cancel()
+		meta, _ := json.Marshal(map[string]any{
+			"pid":       0,
+			"error":     fmt.Sprintf("spawn %s EACCES: %s", req.Command, accessErr.Error()),
+			"errorCode": "EACCES",
 			"syscall":   "spawn " + req.Command,
 			"path":      req.Command,
 		})
@@ -6057,7 +6525,7 @@ func (en *rtEntry) opCPKillChild(argsStr string) (string, []byte, bool, string, 
 	en.childMu.Lock()
 	ch := en.children[req.ID]
 	en.childMu.Unlock()
-	if ch == nil || ch.cmd == nil || ch.cmd.Process == nil {
+	if ch == nil || (!ch.inProcess && (ch.cmd == nil || ch.cmd.Process == nil)) {
 		return "false", nil, false, "", nil
 	}
 	ch.mu.Lock()
@@ -6065,6 +6533,18 @@ func (en *rtEntry) opCPKillChild(argsStr string) (string, []byte, bool, string, 
 	ch.mu.Unlock()
 	if reaped {
 		return "false", nil, false, "", nil
+	}
+	if ch.inProcess {
+		if sigNum == 0 {
+			return "true", nil, false, "", nil
+		}
+		ch.mu.Lock()
+		ch.killedSignal = signalNameFromNumber(sigNum)
+		ch.mu.Unlock()
+		if ch.cancel != nil {
+			ch.cancel()
+		}
+		return "true", nil, false, "", nil
 	}
 	if sigNum == 0 {
 		if isProcessAlive(ch.cmd.Process.Pid) {
@@ -8874,7 +9354,15 @@ func (en *rtEntry) streamHTTPFetch(ctx context.Context, id int32, req httpFetchR
 		DisableKeepAlives:  true,
 		DisableCompression: true,
 		DialContext: func(dctx context.Context, network, addr string) (net.Conn, error) {
-			c, derr := dialer.DialContext(dctx, network, addr)
+			var (
+				c    net.Conn
+				derr error
+			)
+			if en.dialContext != nil {
+				c, derr = en.dialContext(dctx, network, addr)
+			} else {
+				c, derr = dialer.DialContext(dctx, network, addr)
+			}
 			if derr != nil {
 				return nil, derr
 			}
@@ -9460,23 +9948,34 @@ func (en *rtEntry) listenTCPHost(reqHost string, port int) (net.Listener, string
 	defaulted := reqHost == ""
 	host := reqHost
 	if defaulted {
-		if en.checkNetHost(net.JoinHostPort("::", portStr)) == nil {
+		if en.checkNetListen(net.JoinHostPort("::", portStr)) == nil {
 			host = "::"
 		} else {
 			host = "127.0.0.1"
 		}
 	}
 	addr := net.JoinHostPort(host, portStr)
-	if err := en.checkNetHost(addr); err != nil {
+	if err := en.checkNetListen(addr); err != nil {
 		return nil, "", "", 0, "EACCES", err
 	}
 	listenAddr := addr
 	if host == "::" {
 		listenAddr = ":" + portStr
 	}
-	rawLn, err := net.Listen("tcp", listenAddr)
-	if err != nil && host == "::" {
-		rawLn, err = net.Listen("tcp", addr)
+	var (
+		rawLn net.Listener
+		err   error
+	)
+	if en.listen != nil {
+		rawLn, err = en.listen(en.ctx, "tcp", listenAddr)
+		if err != nil && host == "::" {
+			rawLn, err = en.listen(en.ctx, "tcp", addr)
+		}
+	} else {
+		rawLn, err = net.Listen("tcp", listenAddr)
+		if err != nil && host == "::" {
+			rawLn, err = net.Listen("tcp", addr)
+		}
 	}
 	if err != nil {
 		code, cerr := classifyListenError(addr, err)
@@ -10517,8 +11016,16 @@ func (en *rtEntry) opNetConnect(argsStr string) (string, []byte, bool, string, e
 	en.netMu.Unlock()
 	go func() {
 		defer dialCancel()
-		var d net.Dialer
-		rawConn, err := d.DialContext(dialCtx, "tcp", addr)
+		var (
+			rawConn net.Conn
+			err     error
+		)
+		if en.dialContext != nil {
+			rawConn, err = en.dialContext(dialCtx, "tcp", addr)
+		} else {
+			var d net.Dialer
+			rawConn, err = d.DialContext(dialCtx, "tcp", addr)
+		}
 		en.netMu.Lock()
 		_, stillDialing := en.netDialCancel[connID]
 		if !req.TLS {
@@ -10825,13 +11332,13 @@ func (en *rtEntry) opDgramBind(argsStr string) (string, []byte, bool, string, er
 	portStr := strconv.Itoa(req.Port)
 	if addr == "" {
 		if netType == "udp6" {
-			if en.checkNetHost(net.JoinHostPort("::", portStr)) == nil {
+			if en.checkNetListen(net.JoinHostPort("::", portStr)) == nil {
 				addr = "::"
 			} else {
 				addr = "::1"
 			}
 		} else {
-			if en.checkNetHost(net.JoinHostPort("0.0.0.0", portStr)) == nil {
+			if en.checkNetListen(net.JoinHostPort("0.0.0.0", portStr)) == nil {
 				addr = "0.0.0.0"
 			} else {
 				addr = "127.0.0.1"
@@ -10839,7 +11346,7 @@ func (en *rtEntry) opDgramBind(argsStr string) (string, []byte, bool, string, er
 		}
 	}
 	hostPort := net.JoinHostPort(addr, portStr)
-	if err := en.checkNetHost(hostPort); err != nil {
+	if err := en.checkNetListen(hostPort); err != nil {
 		return "", nil, false, "EACCES", err
 	}
 	udpAddr, err := net.ResolveUDPAddr(netType, hostPort)

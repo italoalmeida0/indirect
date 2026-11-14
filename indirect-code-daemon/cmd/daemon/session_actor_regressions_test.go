@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,8 +181,15 @@ func TestApprovalAlwaysAllowPersistsBeforeWake(t *testing.T) {
 	a.state, a.gen = stateRunning, 1
 	a.rec.Options = SessionOptions{Mode: "build", Access: "ask"}
 	waiter := make(chan approvalOutcome, 1)
-	a.onWorkerApprovalReq(workerApprovalReqMsg{gen: 1, id: "call", callID: "call", tool: "bash", reply: waiter})
-	a.onApprovalResponse(approvalResponseMsg{ID: "call", Approved: true, Always: true})
+	a.onWorkerApprovalReq(workerApprovalReqMsg{
+		gen:    1,
+		id:     "call",
+		callID: "call",
+		tool:   "bash",
+		args:   json.RawMessage(`{"command":"git push origin main"}`),
+		reply:  waiter,
+	})
+	a.onApprovalResponse(approvalResponseMsg{ID: "call", Approved: true, Always: true, Decision: "always"})
 	if result := <-waiter; !result.approved {
 		t.Fatal("valid always-allow approval was denied")
 	}
@@ -189,8 +197,14 @@ func TestApprovalAlwaysAllowPersistsBeforeWake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disk.Options.Access != "full" || a.rec.Options.Access != "full" {
-		t.Fatalf("always-allow grant was not durable: disk=%q actor=%q", disk.Options.Access, a.rec.Options.Access)
+	if disk.Options.Access != "ask" || a.rec.Options.Access != "ask" {
+		t.Fatalf("always-allow must not mutate session access to full: disk=%q actor=%q", disk.Options.Access, a.rec.Options.Access)
+	}
+	if len(disk.SessionGrants) != 1 || disk.SessionGrants[0].Pattern != "git push" {
+		t.Fatalf("expected durable session grant for 'git push', got %+v", disk.SessionGrants)
+	}
+	if cfg := a.supCfg.load(); cfg == nil || len(cfg.Settings.PermissionRules) != 1 || cfg.Settings.PermissionRules[0].Pattern != "git push" {
+		t.Fatalf("expected durable global permission rule for 'git push', got %+v", cfg)
 	}
 }
 
@@ -201,6 +215,9 @@ func TestStaleAlwaysAllowCannotGrantAccess(t *testing.T) {
 	if a.rec.Options.Access != "ask" {
 		t.Fatalf("stale always-allow response changed access to %q", a.rec.Options.Access)
 	}
+	if len(a.rec.SessionGrants) != 0 {
+		t.Fatalf("stale always-allow granted rules: %+v", a.rec.SessionGrants)
+	}
 }
 
 func TestApprovalAlwaysAllowWriteFailureDenies(t *testing.T) {
@@ -208,18 +225,28 @@ func TestApprovalAlwaysAllowWriteFailureDenies(t *testing.T) {
 	a.state, a.gen = stateRunning, 1
 	a.rec.Options = SessionOptions{Mode: "build", Access: "ask"}
 	waiter := make(chan approvalOutcome, 1)
-	a.onWorkerApprovalReq(workerApprovalReqMsg{gen: 1, id: "call", callID: "call", tool: "bash", reply: waiter})
+	a.onWorkerApprovalReq(workerApprovalReqMsg{
+		gen:    1,
+		id:     "call",
+		callID: "call",
+		tool:   "bash",
+		args:   json.RawMessage(`{"command":"git push origin main"}`),
+		reply:  waiter,
+	})
 	badRoot := filepath.Join(t.TempDir(), "not-a-directory")
 	if err := os.WriteFile(badRoot, []byte("file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	a.store.dataDir = badRoot
-	a.onApprovalResponse(approvalResponseMsg{ID: "call", Approved: true, Always: true})
+	a.onApprovalResponse(approvalResponseMsg{ID: "call", Approved: true, Always: true, Decision: "always"})
 	if result := <-waiter; result.approved {
 		t.Fatal("always-allow approval succeeded after persistence failure")
 	}
 	if a.rec.Options.Access != "ask" {
 		t.Fatalf("failed always-allow grant changed access to %q", a.rec.Options.Access)
+	}
+	if len(a.rec.SessionGrants) != 0 {
+		t.Fatalf("failed always-allow left session grants: %+v", a.rec.SessionGrants)
 	}
 }
 

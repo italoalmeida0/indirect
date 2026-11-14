@@ -85,7 +85,7 @@ func ensureRunnerBinary(root string) (string, error) {
 // command (bash AND exec_script) runs through the crash-only runner.
 func runnerStarter(root, sessionID, brainDir string) tools.Starter {
 	return func(ctx context.Context, spec tools.ExecSpec) (*tools.Proc, error) {
-		return startRunner(root, sessionID, brainDir, spec)
+		return startRunnerWithContext(ctx, root, sessionID, brainDir, spec)
 	}
 }
 
@@ -93,6 +93,13 @@ func runnerStarter(root, sessionID, brainDir string) tools.Starter {
 // tool-visible handle. The identity exists from THIS moment (state file
 // + out naming), before any Slow() registration.
 func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.Proc, error) {
+	return startRunnerWithContext(context.Background(), root, sessionID, brainDir, spec)
+}
+
+func startRunnerWithContext(ctx context.Context, root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.Proc, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	bin, err := ensureRunnerBinary(root)
 	if err != nil {
 		return nil, err
@@ -135,17 +142,33 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 	} else {
 		specPath = bin
 	}
+	rawScript := spec.RawScript
+	if rawScript == "" && spec.Kind == "bash" && len(spec.Argv) >= 3 {
+		rawScript = spec.Argv[2]
+	}
 	rawForFingerprint := spec.Command
 	if spec.Kind == "exec_script" && spec.Code != "" {
 		rawForFingerprint = strings.TrimSpace(spec.Code)
-	} else if spec.Kind == "bash" && len(spec.Argv) >= 3 {
-		rawForFingerprint = spec.Argv[2]
+	} else if spec.Kind == "bash" && rawScript != "" {
+		rawForFingerprint = rawScript
 	}
 	noDedupe := spec.NoDedupe || (spec.Kind == "exec_script" && spec.Stdin != "")
 	var fp string
 	if !noDedupe {
 		fp = bgFingerprint(spec.Kind, rawForFingerprint)
 	}
+	var jailCopy *tools.RuntimeJailSpec
+	if spec.Jail != nil {
+		cp := *spec.Jail
+		if cp.BrainDir == "" && brainDir != "" {
+			cp.BrainDir = brainDir
+		}
+		if cp.TmpDir == "" && cp.BrainDir != "" {
+			cp.TmpDir = filepath.Join(cp.BrainDir, "tmp")
+		}
+		jailCopy = &cp
+	}
+	expectDaemon := jailCopy != nil && spec.Approver != nil
 	rs := runner.Spec{
 		JobID: jobID, SessionID: sessionID, Kind: spec.Kind, Label: tools.ClipLabel(spec.Command),
 		Fingerprint: fp,
@@ -153,6 +176,9 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 		Path:        specPath, Args: specArgs, Env: spec.Env, CWD: spec.CWD,
 		Stdin:         spec.Stdin,
 		Code:          spec.Code,
+		RawScript:     rawScript,
+		Jail:          jailCopy,
+		ExpectDaemon:  expectDaemon,
 		ShellPath:     spec.ShellPath,
 		ShellFlag:     spec.ShellFlag,
 		JailRoots:     spec.JailRoots,
@@ -185,10 +211,39 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 		_ = os.Remove(claimPath)
 		return nil, fmt.Errorf("start runner: %w", err)
 	}
+
+	fgApprCtx, detachApproval := context.WithCancel(ctx)
+	if expectDaemon {
+		var waitMu sync.Mutex
+		waitDepth := 0
+		setWaiting := func(delta int) {
+			if spec.OnApprovalWait == nil {
+				return
+			}
+			waitMu.Lock()
+			prev := waitDepth > 0
+			waitDepth = max(0, waitDepth+delta)
+			next := waitDepth > 0
+			waitMu.Unlock()
+			if prev != next {
+				spec.OnApprovalWait(next)
+			}
+		}
+		wrappedApprover := func(askCtx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
+			setWaiting(1)
+			defer setWaiting(-1)
+			return spec.Approver(askCtx, req)
+		}
+		go func() {
+			_ = runner.AttachApprovalHandler(fgApprCtx, root, jobID, 5*time.Second, wrappedApprover)
+		}()
+	}
+
 	exited := make(chan struct{})
 	var waitErr error
 	go func() {
 		waitErr = cmd.Wait() // reaped ONCE (cmd.Wait is not re-callable)
+		detachApproval()
 		if waitErr != nil && runnerStderr.Len() > 0 {
 			if st, serr := os.Stat(outPath); serr != nil || st.Size() == 0 {
 				_ = os.WriteFile(outPath, runnerStderr.Bytes(), 0o600)
@@ -213,10 +268,12 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 			return waitErr
 		},
 		Stop: func() {
+			detachApproval()
 			stopRunner(root, jobID, cmd.Process.Pid, runnerIdentity)
 		},
-		Pump:    tools.TailLog(outPath),
+		Pump: tools.TailLog(outPath),
 		Cleanup: func(remove bool) {
+			detachApproval()
 			if remove || runner.ReadDisposition(root, jobID) == runner.DispInline {
 				if st, err := runner.ReadState(runner.StatePath(root, jobID)); err == nil && !st.OutcomeUnknown && st.Terminal() && st.OutputReady {
 					_ = os.Remove(runner.StatePath(root, jobID))
@@ -226,6 +283,7 @@ func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.
 			}
 		},
 		Disposition: func(jid, disp string) error {
+			detachApproval()
 			return runner.WriteDisposition(root, jid, disp)
 		},
 	}

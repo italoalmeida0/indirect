@@ -99,6 +99,7 @@ type metaLine struct {
 	// on every meta rewrite like Widgets — the meta line is the durable
 	// copy once the WAL commits.
 	Skills        map[string]skills.SessionSkill `json:"skills,omitempty"`
+	SessionGrants []tools.PermissionRule         `json:"sessionGrants,omitempty"`
 	AttentionSeq  int64                          `json:"attentionSeq,omitempty"`
 	SeenSeq       int64                          `json:"seenSeq,omitempty"`
 	AttentionKind string                         `json:"attentionKind,omitempty"`
@@ -188,6 +189,7 @@ func splitRecord(rec *SessionRecord) ([]turnLine, metaLine) {
 		BgTasks:              rec.BgTasks,
 		Widgets:              rec.Widgets,
 		Skills:               rec.Skills,
+		SessionGrants:        append([]tools.PermissionRule(nil), rec.SessionGrants...),
 		AttentionSeq:         rec.AttentionSeq,
 		SeenSeq:              rec.SeenSeq,
 		AttentionKind:        rec.AttentionKind,
@@ -493,8 +495,9 @@ func assembleRecord(lines []turnLine, meta metaLine) *SessionRecord {
 		Status: meta.Status, Pinned: meta.Pinned, Jailed: meta.Jailed,
 		CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt,
 		Attachments: meta.Attachments, Compaction: meta.Compaction,
-		Skills:  meta.Skills,
-		TurnSeq: meta.TurnSeq, Queue: meta.Queue,
+		Skills:        meta.Skills,
+		SessionGrants: append([]tools.PermissionRule(nil), meta.SessionGrants...),
+		TurnSeq:       meta.TurnSeq, Queue: meta.Queue,
 		ApprovalDeadlineUnix: meta.ApprovalDeadlineUnix,
 		BgTasks:              meta.BgTasks,
 		Widgets:              meta.Widgets,

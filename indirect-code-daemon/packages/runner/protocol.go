@@ -8,38 +8,60 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"indirect/indirect-code-daemon/packages/agent/tools"
 )
 
-// IPC protocol v1 — FROZEN: exactly five verbs,
-// forever. Growth is always additive: receivers ignore unknown types and
+// IPC protocol v1 — additive growth: receivers ignore unknown types and
 // fields; a proto mismatch silently falls back to file-only mode. The
-// protocol is never load-bearing — files carry everything.
+// protocol is never load-bearing for completion — files carry everything.
 //
-//	hello — bidirectional greeting + auth + cursor exchange
-//	out   — runner→parent output chunk with its log offset
-//	ping  — liveness, both directions
-//	kill  — parent→runner cancellation
-//	done  — runner→parent terminal outcome (also written to the state)
+//	hello          — bidirectional greeting + auth + role + cursor exchange
+//	out            — runner→parent output chunk with its log offset
+//	ping           — liveness, both directions
+//	kill           — parent→runner cancellation
+//	done           — runner→parent terminal outcome (also written to the state)
+//	ask_approval   — command→runner→daemon interactive capability prompt
+//	approval_reply — daemon→runner→command interactive capability decision
 const (
-	VerbHello = "hello"
-	VerbOut   = "out"
-	VerbPing  = "ping"
-	VerbKill  = "kill"
-	VerbDone  = "done"
+	VerbHello         = "hello"
+	VerbOut           = "out"
+	VerbPing          = "ping"
+	VerbKill          = "kill"
+	VerbDone          = "done"
+	VerbAskApproval   = "ask_approval"
+	VerbApprovalReply = "approval_reply"
 )
 
-// Hello is the greeting. Parent→runner: Token (auth) + LogCursor (bytes
+// Hello is the greeting. Parent→runner: Token (auth) + Role + LogCursor (bytes
 // of the out log the parent already has). Runner→parent: identity +
 // LogSize (bytes written so far). Unknown fields are ignored, so the two
 // directions share one shape.
 type Hello struct {
 	Type      string `json:"type"`
 	Proto     int    `json:"proto"`
+	Role      string `json:"role,omitempty"` // "" / "client" | "daemon" | "command"
 	JobID     string `json:"jobId,omitempty"`
 	PID       int    `json:"pid,omitempty"`
 	Token     string `json:"token,omitempty"`
 	LogCursor int64  `json:"logCursor,omitempty"`
 	LogSize   int64  `json:"logSize,omitempty"`
+}
+
+// AskApproval carries a mid-execution capability prompt from --runner-command
+// through --runner to the attached foreground daemon turn worker.
+type AskApproval struct {
+	Type  string                   `json:"type"`
+	ReqID string                   `json:"reqId"`
+	Req   tools.MidExecApprovalReq `json:"req"`
+}
+
+// ApprovalReply carries the user's decision (or fail-closed "deny") back to
+// --runner-command.
+type ApprovalReply struct {
+	Type  string                    `json:"type"`
+	ReqID string                    `json:"reqId"`
+	Resp  tools.MidExecApprovalResp `json:"resp"`
 }
 
 // Out carries one output chunk. Chunk is base64 so offsets stay
@@ -113,6 +135,18 @@ func DecodeLine(line []byte) (any, error) {
 		return &m, nil
 	case VerbDone:
 		var m Done
+		if json.Unmarshal(line, &m) != nil {
+			return nil, nil
+		}
+		return &m, nil
+	case VerbAskApproval:
+		var m AskApproval
+		if json.Unmarshal(line, &m) != nil {
+			return nil, nil
+		}
+		return &m, nil
+	case VerbApprovalReply:
+		var m ApprovalReply
 		if json.Unmarshal(line, &m) != nil {
 			return nil, nil
 		}

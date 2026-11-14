@@ -22,20 +22,11 @@ func TestUnishExternalChild(t *testing.T) {
 	}
 }
 
-// Tool-boundary cases run with the pinned unish as a portable executor
-// (one shell on every OS). UNSH SEMANTICS (quoting, arrays, pipelines…)
-// are tested in the unish repo — never here; only daemon contracts
-// (output capture, exit status, bounded output, process-tree cancel).
-// CI builds a pinned unish on every OS. Local runs opt in with the same binary.
+// Tool-boundary cases run with embedded unish on every OS (Linux, macOS, Windows).
 func TestUnishToolBoundary(t *testing.T) {
-	bin := os.Getenv("UNISH_TEST_BINARY")
-	if bin == "" {
-		t.Skip("set UNISH_TEST_BINARY to exercise the pinned unish executable")
+	if err := EnsureShell(t.TempDir()); err != nil {
+		t.Fatalf("EnsureShell failed: %v", err)
 	}
-	if !probeShellPath(bin, "-c") {
-		t.Fatal("configured unish cannot execute commands")
-	}
-	SetShellOverride(bin, "-c", true)
 	t.Cleanup(ClearShellOverride)
 	for _, tc := range []struct {
 		name, command, want string

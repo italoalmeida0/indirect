@@ -8,8 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"indirect/indirect-code-daemon/internal/durable"
+	"indirect/indirect-code-daemon/packages/agent/tools"
 )
 
 // configRevision hashes editor-owned fields. v2: settings only
@@ -90,6 +92,16 @@ func validateEditableConfig(cfg *DaemonConfig) error {
 	default:
 		return errors.New("Invalid agent settings")
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Settings.DefaultAccess)) {
+	case "", "auto", "ask", "full":
+	default:
+		return errors.New("Invalid default access mode")
+	}
+	for _, r := range cfg.Settings.PermissionRules {
+		if _, err := tools.ValidateAndNormalizeRule(r); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -100,6 +112,15 @@ func normalizedHarness(s HarnessSettings) HarnessSettings {
 	}
 	if s.MidTurnSend == "" {
 		s.MidTurnSend = deliveryQueue
+	}
+	switch strings.ToLower(strings.TrimSpace(s.DefaultAccess)) {
+	case "auto", "ask", "full":
+		s.DefaultAccess = strings.ToLower(strings.TrimSpace(s.DefaultAccess))
+	default:
+		s.DefaultAccess = ""
+	}
+	if len(s.PermissionRules) > 0 {
+		s.PermissionRules = tools.NormalizePermissionRules(s.PermissionRules)
 	}
 	return s
 }

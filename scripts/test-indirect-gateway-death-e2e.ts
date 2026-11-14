@@ -200,7 +200,11 @@ async function main() {
       log("p1", `update_failed: ${String((failed as any)?.reason || "").slice(0, 160)}`);
       assert(/verify|mismatch|small|suspicious|download/i.test(String((failed as any)?.reason || "")), "[p1] expected verify/download failure");
       assert(w.proc.exitCode === null, "[p1] daemon died on truncated mirror");
-      assert(existsSync(join(w.root, "slots", "slot-a", "sessions", "s1.jsonl")), "[p1] active session intact");
+      assert(
+        existsSync(join(w.root, "slots", "slot-a", "sessions", "s1.jsonl")) ||
+          existsSync(join(w.root, "slots", "slot-a", "sessions", "s1", "manifest.json")),
+        "[p1] active session intact",
+      );
       assert(!existsSync(join(w.root, "slots", "slot-b")), "[p1] no torn inactive slot left");
       log("p1", "truncated download -> clean abort, session intact — PASS");
     } finally { await w.cleanup(); }
@@ -225,7 +229,11 @@ async function main() {
       const failed = await waitFor(w, "update_failed", () => true, 180000, "p2-failed");
       log("p2", `update_failed: ${String((failed as any)?.reason || "").slice(0, 160)}`);
       await sleep(5000);
-      assert(existsSync(join(w.root, "slots", "slot-a", "sessions", "s1.jsonl")), "[p2] active session intact");
+      assert(
+        existsSync(join(w.root, "slots", "slot-a", "sessions", "s1.jsonl")) ||
+          existsSync(join(w.root, "slots", "slot-a", "sessions", "s1", "manifest.json")),
+        "[p2] active session intact",
+      );
       const { readFileSync: rf } = await import("node:fs");
       const active = rf(join(w.root, "slots", "active"), "utf8").trim();
       assert.equal(active, "a", `[p2] active slot flipped under death (got ${active})`);
@@ -261,7 +269,11 @@ async function main() {
         await sleep(1000);
       }
       assert.equal(active, "b", `[p4] promote did not flip with dead gateway (got ${active})`);
-      assert(existsSync(join(w.root, "slots", "slot-b", "sessions", "s1.jsonl")), "[p4] new session intact");
+      assert(
+        existsSync(join(w.root, "slots", "slot-b", "sessions", "s1.jsonl")) ||
+          existsSync(join(w.root, "slots", "slot-b", "sessions", "s1", "manifest.json")),
+        "[p4] new session intact",
+      );
       assert(!existsSync(join(w.root, "slots", "slot-a")), "[p4] old slot survived promote");
       log("p4", "promote with dead gateway -> local-first flip to slot-b — PASS");
     } finally { await w.cleanup(); }

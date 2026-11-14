@@ -119,12 +119,17 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	var fsReadRoots []string
 	var fsWriteRoots []string
 	var netAllow []string
+	var jailSpec *RuntimeJailSpec
+	var sbApprover MidExecApprover
+	var sbOnWait func(bool)
 	if t.Sandbox != nil {
 		jailRoots = t.Sandbox.JailRoots()
 		readOnlyRoots = t.Sandbox.ReadOnlyRoots()
 		fsReadRoots = t.Sandbox.FSReadScopes()
 		fsWriteRoots = t.Sandbox.FSWriteScopes()
 		netAllow = t.Sandbox.NetAllowScopes()
+		jailSpec = t.Sandbox.BuildRuntimeJail(t.BrainDir)
+		sbApprover, sbOnWait = t.Sandbox.MidExecHooks()
 	}
 
 	// Detach the process lifetime from the turn: once the execution
@@ -134,6 +139,8 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	bgCtx, bgCancel := context.WithCancel(context.WithoutCancel(ctx))
 	start := time.Now()
 	argv := append([]string{exePath}, a.Args...)
+	bgTimer := newPauseableTimer(AutoBackgroundAfter)
+	defer bgTimer.Stop()
 	proc, err := startWith(bgCtx, t.Starter, ExecSpec{
 		JobID:         core.ExecutionID(ctx),
 		Kind:          "exec_script",
@@ -150,9 +157,17 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		FSReadRoots:   fsReadRoots,
 		FSWriteRoots:  fsWriteRoots,
 		NetAllow:      netAllow,
-		NoDedupe:      noDedupe,
-		LogDir:        t.LogDir,
-		SplitStderr:   false,
+		Jail:          jailSpec,
+		Approver:      sbApprover,
+		OnApprovalWait: func(waiting bool) {
+			bgTimer.SetWaiting(waiting)
+			if sbOnWait != nil {
+				sbOnWait(waiting)
+			}
+		},
+		NoDedupe:    noDedupe,
+		LogDir:      t.LogDir,
+		SplitStderr: false,
 	})
 	if err != nil {
 		bgCancel()
@@ -265,7 +280,7 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		stop()
 		out := <-doneCh
 		return finishSync(out.runErr, ctx.Err())
-	case <-time.After(AutoBackgroundAfter):
+	case <-bgTimer.C():
 		select {
 		case out := <-doneCh:
 			return finishSync(out.runErr, ctx.Err())

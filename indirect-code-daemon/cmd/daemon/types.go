@@ -14,19 +14,21 @@ import (
 // v2: Skills/MCP removed (never used, no legacy). Unknown JSON keys from v1
 // config files are ignored on load, so old config.json files keep parsing.
 type HarnessSettings struct {
-	Model                string `json:"model,omitempty"`
-	Reasoning            string `json:"reasoning,omitempty"`    // "off" | "low" | "medium" | "high"
-	AutoCompactThreshold int    `json:"auto_compact_threshold"` // 0=off, 80, 85, 90, 95
-	NoAutoTitle          bool   `json:"no_auto_title,omitempty"`
-	JailByDefault        bool   `json:"jail_by_default"`
-	ToolRender           string `json:"tool_render,omitempty"`   // "box" | "flat"
-	MidTurnSend          string `json:"mid_turn_send,omitempty"` // "queue" | "steer" | "interrupt"
-	CompactInput         bool   `json:"compact_input"`
-	CompactMode          bool   `json:"compact_mode"`
-	RecursiveFileSuggest bool   `json:"recursive_file_suggest"`
-	RespectGitignore     bool   `json:"respect_gitignore"`
-	Insecure             bool   `json:"insecure"`
-	HTTPProxy            string `json:"http_proxy,omitempty"`
+	Model                string                 `json:"model,omitempty"`
+	Reasoning            string                 `json:"reasoning,omitempty"`    // "off" | "low" | "medium" | "high"
+	AutoCompactThreshold int                    `json:"auto_compact_threshold"` // 0=off, 80, 85, 90, 95
+	NoAutoTitle          bool                   `json:"no_auto_title,omitempty"`
+	JailByDefault        bool                   `json:"jail_by_default"`
+	DefaultAccess        string                 `json:"default_access,omitempty"`   // "" | "auto" | "ask" | "full"
+	PermissionRules      []tools.PermissionRule `json:"permission_rules,omitempty"` // persistent allow/deny rules
+	ToolRender           string                 `json:"tool_render,omitempty"`      // "box" | "flat"
+	MidTurnSend          string                 `json:"mid_turn_send,omitempty"`    // "queue" | "steer" | "interrupt"
+	CompactInput         bool                   `json:"compact_input"`
+	CompactMode          bool                   `json:"compact_mode"`
+	RecursiveFileSuggest bool                   `json:"recursive_file_suggest"`
+	RespectGitignore     bool                   `json:"respect_gitignore"`
+	Insecure             bool                   `json:"insecure"`
+	HTTPProxy            string                 `json:"http_proxy,omitempty"`
 }
 
 // DaemonConfig holds credentials and gateway connection details.
@@ -170,8 +172,9 @@ type SessionRecord struct {
 	// usability table). Resolved into the effective tool policy and the
 	// ephemeral <skill> prefix at request time; never part of the
 	// persisted message history.
-	Skills   map[string]skills.SessionSkill `json:"skills,omitempty"`
-	LastDate string                         `json:"lastDate,omitempty"`
+	Skills        map[string]skills.SessionSkill `json:"skills,omitempty"`
+	SessionGrants []tools.PermissionRule         `json:"sessionGrants,omitempty"`
+	LastDate      string                         `json:"lastDate,omitempty"`
 	LastMode string                         `json:"lastMode,omitempty"`
 	// Compaction is the incremental chain head (previous summary +
 	// file ops + cut anchor + count). Persisted on every compaction so the

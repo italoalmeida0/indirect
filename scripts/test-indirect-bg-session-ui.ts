@@ -38,10 +38,10 @@ async function run(label: string) {
           // Explicit phase flag: the history contains bg_test (unknown-id
           // warning) from the earlier bg_await scenario, so a regex would
           // match the wrong id and loop on immediate warnings.
-          if(!cancelBashed){cancelBashed=true;return sse('bash',{command:'sleep_300'});}
+          if(!cancelBashed){cancelBashed=true;return sse('bash',{command:'sleep 300'});}
           if(!cancelBgId){
             const hist=JSON.stringify(body?.messages||[]);
-            const m=hist.match(/bg_[A-Za-z0-9]{8,}/);
+            const m=hist.match(/\b[0-9a-f]{16}_[0-9a-f]{16}\b/)||hist.match(/bg_[A-Za-z0-9]{8,}/);
             if(m){cancelBgId=m[0];return sse('bg_await',{max_wait_seconds:360,waiting_for:cancelBgId,reason:'test wait'});}
             return sse('bash',{command:'sleep 30'});
           }

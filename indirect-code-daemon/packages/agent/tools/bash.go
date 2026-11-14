@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +48,7 @@ const bashSchema = `{"type":"object","properties":{"command":{"type":"string","d
 
 func (t *BashTool) Name() string { return "bash" }
 func (t *BashTool) Description() string {
-	return fmt.Sprintf("Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). There is no timeout: if the command still runs after %s it automatically moves to the background (you are notified with a job id; read the output with bg_check, wait with bg_await, stop it with bg_cancel).", humanDuration(AutoBackgroundAfter))
+	return fmt.Sprintf("Execute a POSIX/bash-compatible shell command (embedded cross-platform unish builtins plus host binaries on PATH across Linux, macOS, and Windows) in the current working directory. Returns stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). There is no timeout: if the command still runs after %s it automatically moves to the background (you are notified with a job id; read the output with bg_check, wait with bg_await, stop it with bg_cancel).", humanDuration(AutoBackgroundAfter))
 }
 func (t *BashTool) Schema() json.RawMessage { return json.RawMessage(bashSchema) }
 
@@ -93,13 +93,31 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		}
 	}
 	label := ClipLabel(a.Command)
+	var jailSpec *RuntimeJailSpec
+	var sbApprover MidExecApprover
+	var sbOnWait func(bool)
+	if t.Sandbox != nil {
+		jailSpec = t.Sandbox.BuildRuntimeJail(t.BrainDir)
+		sbApprover, sbOnWait = t.Sandbox.MidExecHooks()
+	}
+	bgTimer := newPauseableTimer(AutoBackgroundAfter)
+	defer bgTimer.Stop()
 	proc, err := startWith(runCtx, t.Starter, ExecSpec{
-		JobID:       core.ExecutionID(ctx),
-		Kind:        "bash",
-		Command:     label,
-		Argv:        []string{sh.path, sh.flag, a.Command},
-		CWD:         cwd,
-		Env:         env,
+		JobID:      core.ExecutionID(ctx),
+		Kind:       "bash",
+		Command:    label,
+		RawScript:  a.Command,
+		Argv:       []string{sh.path, sh.flag, a.Command},
+		CWD:        cwd,
+		Env:        env,
+		Jail:       jailSpec,
+		Approver:   sbApprover,
+		OnApprovalWait: func(waiting bool) {
+			bgTimer.SetWaiting(waiting)
+			if sbOnWait != nil {
+				sbOnWait(waiting)
+			}
+		},
 		LogDir:      t.LogDir,
 		SplitStderr: true,
 	})
@@ -251,7 +269,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		waitErr := <-waitCh
 		<-done
 		return finishSync(waitErr)
-	case <-time.After(AutoBackgroundAfter):
+	case <-bgTimer.C():
 		select {
 		case waitErr := <-waitCh:
 			<-done
@@ -381,8 +399,12 @@ func finishBashCommand(a bashArgs, cwd string, start time.Time, output *outputAc
 	_ = progress
 	exitCode := 0
 	if waitErr != nil {
-		if ee, ok := waitErr.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
+		type exitCodeCarrier interface {
+			ExitCode() int
+		}
+		var ec exitCodeCarrier
+		if errors.As(waitErr, &ec) {
+			exitCode = ec.ExitCode()
 		} else {
 			exitCode = -1
 		}
@@ -802,14 +824,11 @@ func currentShell() shellCommand {
 	if o != nil {
 		return *o
 	}
-	return resolveShell(runtime.GOOS, isExecutableFile, exec.LookPath, probeShellPath)
+	exe, _ := os.Executable()
+	return resolveEmbeddedShell(exe)
 }
 
-// SetShellOverride pins the shell used by BashTool. The daemon calls it
-// once at startup from ensureShell, after probing the
-// bash -> unish -> zsh -> sh chain (unish-only on Windows), so every
-// command in the process uses the verified shell. isBash marks
-// bash-compatible syntax (bash itself and unish, which is bash-like).
+// SetShellOverride pins the shell used by BashTool.
 func SetShellOverride(path, flag string, isBash bool) {
 	shellMu.Lock()
 	defer shellMu.Unlock()
@@ -823,75 +842,32 @@ func ClearShellOverride() {
 	shellOverride = nil
 }
 
-// probeShellPath runs a trivial command through a candidate shell: a binary
-// that merely exists but cannot execute (wrong arch, corrupt download)
-// must NOT be selected.
-func probeShellPath(path, flag string) bool {
-	if path == "" {
-		return false
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, path, flag, "echo shell-probe-ok").CombinedOutput()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(out), "shell-probe-ok")
-}
-
-// ShellForTests returns the shell the daemon would use (path, flag): the
-// pinned override when set, else the process resolution. Tests use it so
-// they exercise the REAL terminal path (unish on Windows, no cmd
-// fallback) instead of a substitute.
+// ShellForTests returns the shell the daemon uses (path, flag): the pinned
+// override when set, else embedded unish ("<exe> --sh-c").
 func ShellForTests() (string, string) {
 	s := currentShell()
 	return s.path, s.flag
 }
 
-// ShellDescription reports the shell used to run commands (e.g.
-// "/bin/bash -c", "<dataDir>/bin/unish -c"). Surfaced in the system
-// prompt so the model writes compatible commands on the first try.
+// ShellDescription reports the shell used to run commands. Surfaced in the
+// system prompt so the model writes compatible commands on the first try.
 func ShellDescription() string {
 	s := currentShell()
 	if s.path == "" {
 		return "(no shell available)"
 	}
+	if s.flag == "--sh-c" {
+		return "unish " + EmbeddedUnishVersion + " (embedded cross-platform bash-compatible shell)"
+	}
 	return s.path + " " + s.flag
 }
 
-// resolveShell picks the terminal for BashTool. Unix chain: bash
-// (/bin/bash, then PATH) -> unish (PATH here; the managed data-dir copy is
-// pinned via SetShellOverride at startup) -> zsh -> sh. Every candidate is
-// probed with a trivial command so an unexecutable binary is skipped.
-// Windows uses unish only (same PATH lookup here; startup pins the managed
-// copy and refuses to start when it is unusable). Business rule: no
-// fallback on Windows — the model always writes unish-compatible commands.
-func resolveShell(goos string, executable func(string) bool, lookPath func(string) (string, error), probe func(path, flag string) bool) shellCommand {
-	if goos == "windows" {
-		if path, err := lookPath("unish"); err == nil && probe(path, "-c") {
-			return shellCommand{path: path, flag: "-c", isBash: true}
-		}
+func resolveEmbeddedShell(exePath string) shellCommand {
+	exePath = strings.TrimSpace(exePath)
+	if exePath == "" {
 		return shellCommand{}
 	}
-	if executable("/bin/bash") && probe("/bin/bash", "-c") {
-		return shellCommand{path: "/bin/bash", flag: "-c", isBash: true}
-	}
-	if path, err := lookPath("bash"); err == nil && probe(path, "-c") {
-		return shellCommand{path: path, flag: "-c", isBash: true}
-	}
-	if path, err := lookPath("unish"); err == nil && probe(path, "-c") {
-		return shellCommand{path: path, flag: "-c", isBash: true}
-	}
-	if path, err := lookPath("zsh"); err == nil && probe(path, "-c") {
-		return shellCommand{path: path, flag: "-c"}
-	}
-	if executable("/bin/sh") && probe("/bin/sh", "-c") {
-		return shellCommand{path: "/bin/sh", flag: "-c"}
-	}
-	if path, err := lookPath("sh"); err == nil && probe(path, "-c") {
-		return shellCommand{path: path, flag: "-c"}
-	}
-	return shellCommand{}
+	return shellCommand{path: exePath, flag: "--sh-c", isBash: true}
 }
 
 var (

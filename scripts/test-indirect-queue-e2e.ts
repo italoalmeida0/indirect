@@ -16,7 +16,7 @@
  * (`bun run build:daemon`).
  */
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { promises as fs } from "fs";
 import { homedir, tmpdir } from "os";
 import path from "path";
@@ -793,13 +793,6 @@ async function boot() {
 
   let extraPath = process.env.PATH || "";
   if (process.platform === "win32") {
-    const cachedUnish = path.join(homedir(), ".indirect-code", "external", "bin", "unish.exe");
-    if (existsSync(cachedUnish)) {
-      const destUnish = path.join(daemonDir, "external", "bin", "unish.exe");
-      mkdirSync(path.dirname(destUnish), { recursive: true });
-      copyFileSync(cachedUnish, destUnish);
-      extraPath = `${path.dirname(destUnish)};${extraPath}`;
-    }
     const gitBin = "C:\\Program Files\\Git\\bin";
     if (existsSync(gitBin)) {
       extraPath = `${gitBin};${extraPath}`;

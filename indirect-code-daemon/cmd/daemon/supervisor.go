@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/filetrack"
 	"indirect/indirect-code-daemon/packages/searchindex"
 )
@@ -856,15 +857,16 @@ func newResumeSnapshot(rec *SessionRecord, header *walHeader) *workerSnapshot {
 	}
 	return &workerSnapshot{
 		// gen assigned at spawn (route sets act.gen+1).
-		jailed:        rec.Jailed,
+		jailed:        effectiveSessionJailed(rec.Options.Access, rec.Jailed),
 		turnIndex:     header.TurnIndex,
 		hotBaseTurn:   rec.HotBaseTurn,
 		hotBaseMsgIdx: rec.HotBaseMsgIdx,
 		totalTurns:    rec.TotalTurns,
 		totalMsgs:     rec.globalMsgCount(),
 		model:         rec.Model,
-		options:     normalizedOptions(rec.Options),
-		messages:    cloneMessages(rec.Messages),
+		options:       normalizedOptions(rec.Options),
+		sessionGrants: append([]tools.PermissionRule(nil), rec.SessionGrants...),
+		messages:      cloneMessages(rec.Messages),
 		usage:       rec.Usage,
 		compaction:  cloneJSON(rec.Compaction),
 		context:     cloneJSON(rec.Context),

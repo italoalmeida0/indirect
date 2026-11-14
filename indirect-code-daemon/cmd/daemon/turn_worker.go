@@ -67,6 +67,8 @@ type workerSnapshot struct {
 	// drive the effective tool policy and the ephemeral <skill> prefix
 	// (request-only, never persisted).
 	skills map[string]skills.SessionSkill
+	// sessionGrants snapshot the session's scoped permission grants.
+	sessionGrants []tools.PermissionRule
 	// resume, when True, continues the fused transcript via agent.Continue
 	// instead of opening a new user turn (crash/watchdog resume path).
 	compact   bool
@@ -109,9 +111,10 @@ func snapshotTurn(act *sessionActor, gen int, prompt string, meta map[string]str
 		context:     cloneJSON(act.rec.Context),
 		attachments: append([]AttachmentRef(nil), act.rec.Attachments...),
 		todos:       append([]tools.TodoItem(nil), act.rec.Todos...),
-		widgets:     append([]tools.WidgetFile(nil), act.rec.Widgets...),
-		skills:      cloneSkillsMap(act.rec.Skills),
-		bgTasks:     runningBgTasks(act.rec.BgTasks),
+		widgets:       append([]tools.WidgetFile(nil), act.rec.Widgets...),
+		skills:        cloneSkillsMap(act.rec.Skills),
+		sessionGrants: append([]tools.PermissionRule(nil), act.rec.SessionGrants...),
+		bgTasks:       runningBgTasks(act.rec.BgTasks),
 		cwd:         act.rec.CWD,
 		prompt:      prompt,
 		promptMeta:  cloneJSON(meta),
@@ -226,6 +229,12 @@ type turnBridge struct {
 	mutationSeq     int
 	jobMutationMark map[string]int
 	toolNames       map[string]string
+	sessionGrants   []tools.PermissionRule
+	activeToolMu    sync.Mutex
+	activeCallID    string
+	activeTool      string
+	activeArgs      json.RawMessage
+	midExecSeq      uint64
 	sandbox         *tools.Sandbox
 	brainDir        string
 	exploreTool     *tools.ExploreTool
@@ -275,14 +284,17 @@ func (w *turnBridge) run() error {
 
 	sb := tools.NewSandbox(w.sessionCWD)
 	w.sandbox = sb
+	w.sessionGrants = append([]tools.PermissionRule(nil), w.snap.sessionGrants...)
 	brainDir := w.env.brainDir(w.env.actorID)
 	w.brainDir = brainDir
 	if brainDir != "" {
+		_ = os.MkdirAll(brainDir, 0o700)
 		sb.AllowExtra(brainDir)
 	}
-	if cfg.Settings.JailByDefault || w.snap.jailed {
+	if effectiveSessionJailed(w.snap.options.Access, w.snap.jailed) {
 		sb.Lock()
 	}
+	sb.SetMidExecApprover(w.midExecApprove, w.onMidExecApprovalWait)
 	w.tfc = beginTurnTracking(w.sessionCWD, w.snap.turnIndex, brainDir)
 	if len(w.snap.incoming) > 0 {
 		w.tfc.tracker = filetrack.RestoreTurnTracker(dropBrainTracked(w.snap.incoming, brainDir))
@@ -580,6 +592,9 @@ func (w *turnBridge) refreshFromActor(requestCtx context.Context, allowSteer boo
 			return context.Canceled
 		}
 		rf.model, rf.options = rr.model, rr.options
+		w.snap.options = rr.options
+		w.snap.jailed = rr.jailed
+		w.sessionGrants = append([]tools.PermissionRule(nil), rr.sessionGrants...)
 		w.snap.skills = rr.skills // complete skill snapshot from the actor
 		if err := w.resolveSkillPolicy(); err != nil {
 			return err
@@ -645,15 +660,46 @@ func (w *turnBridge) refreshFromActor(requestCtx context.Context, allowSteer boo
 	return nil
 }
 
+func (w *turnBridge) effectivePermissionRules() []tools.PermissionRule {
+	var global []tools.PermissionRule
+	if w.env.cfg != nil {
+		if liveCfg := w.env.cfg.load(); liveCfg != nil {
+			global = liveCfg.Settings.PermissionRules
+		}
+	}
+	if len(global) == 0 && len(w.cfg.Settings.PermissionRules) > 0 {
+		global = w.cfg.Settings.PermissionRules
+	}
+	if len(w.sessionGrants) == 0 && len(global) == 0 {
+		return nil
+	}
+	out := make([]tools.PermissionRule, 0, len(w.sessionGrants)+len(global))
+	out = append(out, w.sessionGrants...)
+	out = append(out, global...)
+	return out
+}
+
+func (w *turnBridge) syncSandboxInteractivePolicy() {
+	if w.sandbox == nil {
+		return
+	}
+	effAccess := effectiveSessionAccess(w.snap.options.Access, w.snap.jailed)
+	if w.skillEff.AskAutoApprove {
+		effAccess = "full"
+	}
+	w.sandbox.SetInteractivePolicy(effAccess, w.effectivePermissionRules())
+}
+
 func (w *turnBridge) applySandboxSkillPolicy() {
 	if w.sandbox == nil {
 		return
 	}
 	ro := w.skillEff.ToolDecision("write") == skills.PolicyDeny && w.skillEff.ToolDecision("edit") == skills.PolicyDeny
 	w.sandbox.SetProjectReadOnly(ro)
+	w.syncSandboxInteractivePolicy()
 	if ro {
 		w.sandbox.Lock()
-	} else if !w.cfg.Settings.JailByDefault && !w.snap.jailed {
+	} else if !effectiveSessionJailed(w.snap.options.Access, w.snap.jailed) || w.skillEff.AskAutoApprove {
 		w.sandbox.Unlock()
 	}
 	readDenied := w.skillEff.ToolDecision("read") == skills.PolicyDeny &&
@@ -752,11 +798,133 @@ func (w *turnBridge) wrapClient(c provider.Client) provider.Client {
 	return casHydratingClient{inner: hooked, store: w.env.store}
 }
 
+func (w *turnBridge) setActiveApprovalTool(callID, toolName string, args json.RawMessage) {
+	w.activeToolMu.Lock()
+	w.activeCallID = callID
+	w.activeTool = toolName
+	if len(args) > 0 {
+		w.activeArgs = append(json.RawMessage(nil), args...)
+	} else {
+		w.activeArgs = nil
+	}
+	w.activeToolMu.Unlock()
+}
+
+func (w *turnBridge) clearActiveApprovalTool() {
+	if w.sandbox != nil {
+		w.sandbox.SetActiveCallGrants(nil)
+	}
+	w.activeToolMu.Lock()
+	w.activeCallID = ""
+	w.activeTool = ""
+	w.activeArgs = nil
+	w.activeToolMu.Unlock()
+}
+
+func (w *turnBridge) onMidExecApprovalWait(waiting bool) {
+	if !waiting {
+		// Human resolved a mid-execution prompt: refresh the declared foreground
+		// tool wait window so the watchdog does not treat the resumed 10s window
+		// as overdue.
+		w.declareWait("tool", time.Now().Add(tools.AutoBackgroundAfter+2*tuneWatchEvery))
+	}
+}
+
+func (w *turnBridge) midExecApprove(ctx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
+	if w.env.inbox == nil {
+		return tools.MidExecApprovalResp{Decision: "deny"}, nil
+	}
+	if ctx.Err() != nil || w.ctx.Err() != nil {
+		return tools.MidExecApprovalResp{Decision: "deny"}, context.Canceled
+	}
+	w.activeToolMu.Lock()
+	baseCallID := w.activeCallID
+	toolName := w.activeTool
+	toolArgs := append(json.RawMessage(nil), w.activeArgs...)
+	w.midExecSeq++
+	seq := w.midExecSeq
+	w.activeToolMu.Unlock()
+
+	if toolName == "" {
+		toolName = "bash"
+	}
+	if len(toolArgs) == 0 {
+		raw, _ := json.Marshal(map[string]any{"capability": req.Capability, "target": req.Target})
+		toolArgs = raw
+	}
+	var id string
+	if baseCallID != "" {
+		id = fmt.Sprintf("%s__rt%d", baseCallID, seq)
+	} else {
+		id = "rt_" + randomID8()
+	}
+
+	var propCopy *tools.PermissionRule
+	if req.ProposedRule != nil {
+		cp := *req.ProposedRule
+		propCopy = &cp
+	}
+	meta := &tools.ToolApprovalMeta{
+		Capability:      req.Capability,
+		Target:          req.Target,
+		Reason:          req.Reason,
+		Risk:            req.Risk,
+		AccessMode:      req.AccessMode,
+		ProposedRule:    propCopy,
+		CanAllowSession: req.CanAllowSession,
+		CanAllowAlways:  req.CanAllowAlways,
+	}
+
+	ch := make(chan approvalOutcome, 1)
+	select {
+	case w.env.inbox <- w.stamp(workerApprovalReqMsg{
+		gen:     w.snap.gen,
+		id:      id,
+		callID:  id,
+		tool:    toolName,
+		args:    toolArgs,
+		meta:    meta,
+		midExec: true,
+		reply:   ch,
+	}):
+	case <-ctx.Done():
+		return tools.MidExecApprovalResp{Decision: "deny"}, ctx.Err()
+	case <-w.ctx.Done():
+		return tools.MidExecApprovalResp{Decision: "deny"}, w.ctx.Err()
+	}
+
+	select {
+	case out := <-ch:
+		if out.stale || ctx.Err() != nil || w.ctx.Err() != nil {
+			return tools.MidExecApprovalResp{Decision: "deny"}, context.Canceled
+		}
+		if len(out.effectiveRules) > 0 && w.sandbox != nil {
+			w.sandbox.UpdateRules(out.effectiveRules)
+		}
+		if !out.approved {
+			return tools.MidExecApprovalResp{Decision: "deny"}, nil
+		}
+		dec := out.decision
+		if dec == "" {
+			dec = "once"
+		}
+		return tools.MidExecApprovalResp{
+			Decision:    dec,
+			GrantedRule: out.grantedRule,
+		}, nil
+	case <-ctx.Done():
+		return tools.MidExecApprovalResp{Decision: "deny"}, ctx.Err()
+	case <-w.ctx.Done():
+		return tools.MidExecApprovalResp{Decision: "deny"}, w.ctx.Err()
+	}
+}
+
 // approveTool blocks the worker until the human answers (or timeout/cancel).
 // The actor moves to awaitingApproval and arms the 15-min timer; the reply
 // arrives as approvalResponseMsg → the actor wakes this hook via the
 // per-call channel.
 func (w *turnBridge) approveTool(call provider.ToolCallBlock) (bool, string, json.RawMessage) {
+	w.clearActiveApprovalTool()
 	trace("worker.approve.enter", map[string]any{"sid": w.env.actorID, "tool": call.Name, "gen": w.snap.gen})
 	if w.ctx.Err() != nil {
 		return false, "Turn cancelled", nil
@@ -790,8 +958,24 @@ func (w *turnBridge) approveTool(call provider.ToolCallBlock) (bool, string, jso
 			if out.reason != "" {
 				return false, out.reason, nil
 			}
+			if out.decision == "deny" && out.meta != nil {
+				capLabel := out.meta.Capability
+				if capLabel == "" {
+					capLabel = "tool"
+				}
+				targetLabel := out.meta.Target
+				if targetLabel == "" {
+					targetLabel = call.Name
+				}
+				return false, fmt.Sprintf("Permission denied by user for %s: %s. Do not retry this blocked action; use an alternative inside the workspace or ask the user.", capLabel, targetLabel), nil
+			}
 			return false, "User rejected tool execution", nil
 		}
+		if w.sandbox != nil {
+			w.sandbox.UpdateRules(out.effectiveRules)
+			w.sandbox.SetActiveCallGrants(out.callGrants)
+		}
+		w.setActiveApprovalTool(id, call.Name, call.Arguments)
 		return true, "", nil
 	case <-w.ctx.Done():
 		return false, "Turn cancelled", nil
@@ -799,9 +983,14 @@ func (w *turnBridge) approveTool(call provider.ToolCallBlock) (bool, string, jso
 }
 
 type approvalOutcome struct {
-	reason   string
-	approved bool
-	stale    bool
+	reason         string
+	approved       bool
+	stale          bool
+	decision       string
+	meta           *tools.ToolApprovalMeta
+	grantedRule    *tools.PermissionRule
+	callGrants     []tools.PermissionRule
+	effectiveRules []tools.PermissionRule
 }
 
 func (w *turnBridge) askQuestions(ctx context.Context, req tools.QuestionRequest) ([][]string, error) {
@@ -1293,6 +1482,7 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 		w.toolNames[e.ID] = e.Name
 		payload["event"] = map[string]any{"type": "tool_call", "id": e.ID, "name": e.Name, "args": e.Args}
 	case core.EvToolResult:
+		w.clearActiveApprovalTool()
 		w.declareWait("", time.Time{}) // tool finished: declared wait over
 		if toolName := w.toolNames[e.ID]; (toolName == "bash" || toolName == "exec_script") && !e.Result.IsError {
 			det, _ := e.Details.(map[string]any)

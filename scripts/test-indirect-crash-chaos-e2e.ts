@@ -254,7 +254,11 @@ async function main() {
       log("k3", `daemon up (pid ${pid}) after flip-without-boot`);
       await sleep(3000);
       assert.equal(rfs(join(root, "slots", "active"), "utf8").trim(), "b", "[k3] active moved away from flipped slot");
-      assert(existsSync(join(root, "slots", "slot-b", "sessions", "s1.jsonl")), "[k3] flipped slot sessions intact");
+      assert(
+        existsSync(join(root, "slots", "slot-b", "sessions", "s1.jsonl")) ||
+          existsSync(join(root, "slots", "slot-b", "sessions", "s1", "manifest.json")),
+        "[k3] flipped slot sessions intact",
+      );
       try { d.proc.kill("SIGKILL"); } catch {}
       killAll(work);
       log("k3", "post-flip power loss -> new slot serves, sessions intact — PASS");
@@ -336,7 +340,11 @@ async function main() {
       await sleep(4000);
       // Second launcher must detect the live pid and refuse or exit —
       // it must NOT wipe the first daemon's sessions.
-      assert(existsSync(join(root, "slots", "slot-a", "sessions", "s1.jsonl")), "[k8] sessions wiped by double boot");
+      assert(
+        existsSync(join(root, "slots", "slot-a", "sessions", "s1.jsonl")) ||
+          existsSync(join(root, "slots", "slot-a", "sessions", "s1", "manifest.json")),
+        "[k8] sessions wiped by double boot",
+      );
       try { process.kill(pid1, 0); } catch { throw new Error("[k8] first daemon killed by double boot"); }
       try { d1.proc.kill("SIGKILL"); } catch {}
       try { d2.proc.kill("SIGKILL"); } catch {}

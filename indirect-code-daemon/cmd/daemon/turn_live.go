@@ -387,6 +387,7 @@ func compactionPayload(cs *core.CompactionState) any {
 func sessionPayloadMeta(rec *SessionRecord) map[string]any {
 	return map[string]any{
 		"id": rec.ID, "cwd": rec.CWD, "title": rec.Title, "model": rec.Model, "status": rec.Status,
+		"jailed": effectiveSessionJailed(rec.Options.Access, rec.Jailed),
 		"pinned": rec.Pinned, "usage": rec.Usage, "context": rec.Context, "options": normalizedOptions(rec.Options),
 		"turn": rec.Turn, "todos": rec.Todos, "todosOpen": rec.TodosOpen,
 		"workspace": inspectWorkspace(rec.CWD),
@@ -402,6 +403,7 @@ func sessionPayloadMeta(rec *SessionRecord) map[string]any {
 		// resolved approval mode: "yolo" hides the YOLO/ASK selector in the
 		// UI (always yolo), "ask" shows it (spec 4.2).
 		"skills":        skillsPayload(rec.Skills),
+		"sessionGrants": sessionGrantsPayload(rec.SessionGrants),
 		"approvalMode":  skillsApprovalMode(rec),
 		"attentionSeq":  rec.AttentionSeq,
 		"seenSeq":       rec.SeenSeq,
@@ -424,6 +426,13 @@ func sessionPayload(rec *SessionRecord) map[string]any {
 	p["messages"] = sanitizeMessagesForFrontend(rec.Options.Mode, rec.Messages, rec.Attachments)
 	p["fileBalloons"] = fileBalloonPayloads(rec.FileBalloons)
 	return p
+}
+
+func sessionGrantsPayload(in []tools.PermissionRule) []tools.PermissionRule {
+	if len(in) == 0 {
+		return []tools.PermissionRule{}
+	}
+	return append([]tools.PermissionRule(nil), in...)
 }
 
 // skillsApprovalMode resolves the session's effective approval display for

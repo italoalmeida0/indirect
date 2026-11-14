@@ -77,8 +77,9 @@ func fireAndForget(inbox chan<- Envelope, env Envelope, onDrop func()) {
 // used to interleave and silently drop each other's fields (the later store
 // won). Readers stay lock-free — only writers take mu.
 type configCell struct {
-	ptr atomic.Pointer[DaemonConfig]
-	mu  sync.Mutex
+	ptr       atomic.Pointer[DaemonConfig]
+	mu        sync.Mutex
+	configDir string
 }
 
 func (c *configCell) load() *DaemonConfig { return c.ptr.Load() }

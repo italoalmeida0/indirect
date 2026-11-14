@@ -16,9 +16,14 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"indirect/indirect-code-daemon/packages/unishcli"
 )
 
 func TestMain(m *testing.M) {
+	if ok, code := unishcli.MaybeRunArgs(os.Args); ok {
+		os.Exit(code)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--js" {
 		args := os.Args[2:]
 		var code, filename string
@@ -74,40 +79,9 @@ var (
 
 func resolveTestNativeShell() (string, string) {
 	testShellOnce.Do(func() {
-		probe := func(bin string) bool {
-			if bin == "" {
-				return false
-			}
-			out, err := exec.Command(bin, "-c", "echo ok").Output()
-			return err == nil && strings.TrimSpace(string(out)) == "ok"
-		}
-		if runtime.GOOS == "windows" {
-			var candidates []string
-			if v := strings.TrimSpace(os.Getenv("UNISH_TEST_BINARY")); v != "" {
-				candidates = append(candidates, v)
-			}
-			if p, err := exec.LookPath("unish"); err == nil {
-				candidates = append(candidates, p)
-			}
-			if home, err := os.UserHomeDir(); err == nil && home != "" {
-				candidates = append(candidates, filepath.Join(home, ".indirect-code", "external", "bin", "unish.exe"))
-			}
-			for _, cand := range candidates {
-				if probe(cand) {
-					testShellPath = cand
-					testShellFlag = "-c"
-					return
-				}
-			}
-			return
-		}
-		for _, name := range []string{"/bin/bash", "bash", "unish", "zsh", "/bin/sh", "sh"} {
-			p, err := exec.LookPath(name)
-			if err == nil && probe(p) {
-				testShellPath = p
-				testShellFlag = "-c"
-				return
-			}
+		if exe, err := os.Executable(); err == nil && exe != "" {
+			testShellPath = exe
+			testShellFlag = "--sh-c"
 		}
 	})
 	return testShellPath, testShellFlag

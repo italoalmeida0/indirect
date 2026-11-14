@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/sessionstore"
 )
@@ -218,6 +219,7 @@ func recordFromMeta(meta metaLine) *SessionRecord {
 		CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt,
 		Attachments: meta.Attachments, Compaction: meta.Compaction,
 		Skills:               meta.Skills,
+		SessionGrants:        append([]tools.PermissionRule(nil), meta.SessionGrants...),
 		TurnSeq:              meta.TurnSeq,
 		Queue:                meta.Queue,
 		ApprovalDeadlineUnix: meta.ApprovalDeadlineUnix,

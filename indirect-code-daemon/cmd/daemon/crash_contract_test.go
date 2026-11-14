@@ -6,31 +6,31 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
-	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/processutil"
 	"indirect/indirect-code-daemon/packages/runner"
+	"indirect/indirect-code-daemon/packages/unishcli"
 )
 
 func TestMain(m *testing.M) {
-	if len(os.Args) == 2 && os.Args[1] == "--runner-command" {
-		os.Exit(runner.CommandMain())
+	if ok, code := unishcli.MaybeRunArgs(os.Args); ok {
+		os.Exit(code)
 	}
-	if !tools.ShellAvailable() {
-		if env := os.Getenv("UNISH_TEST_BINARY"); env != "" {
-			if info, err := os.Stat(env); err == nil && !info.IsDir() {
-				tools.SetShellOverride(env, "-c", true)
-			}
+	if len(os.Args) > 1 && os.Args[1] == "--js" {
+		os.Exit(jsMain(os.Args[2:]))
+	}
+	for _, a := range os.Args[1:] {
+		if a == "--" {
+			break
 		}
-	}
-	if !tools.ShellAvailable() && runtime.GOOS == "windows" {
-		cand := tools.UnishBinPath(filepath.Join(defaultDataDir(), "external"))
-		if info, err := os.Stat(cand); err == nil && !info.IsDir() {
-			tools.SetShellOverride(cand, "-c", true)
+		if a == "--runner-command" {
+			os.Exit(runner.CommandMain())
+		}
+		if a == "--runner" {
+			runnerMain()
+			os.Exit(0)
 		}
 	}
 	os.Exit(m.Run())

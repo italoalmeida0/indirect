@@ -202,11 +202,27 @@ func looksLikeHTML(body []byte) bool {
 	return strings.HasPrefix(s, "<!doctype html") || strings.HasPrefix(s, "<html")
 }
 
-// guard applies the SSRF policy (loopback allowed only in tests).
+// guard applies the SSRF and interactive permission policy.
 func (t *FetchURLTool) guard(host string) error {
 	if t.Sandbox != nil {
 		if err := t.Sandbox.CheckNetHost(host); err != nil {
 			return err
+		}
+		if mode, ok := t.Sandbox.InteractiveAccessMode(); ok {
+			if eff, r := MatchRules(t.Sandbox.EffectiveRules(), "net", host, t.Sandbox.Root); eff == "deny" {
+				return fmt.Errorf("permission denied: network host %q blocked by rule %q", host, r.Pattern)
+			}
+			h := strings.ToLower(strings.TrimSpace(host))
+			if h == "169.254.169.254" || h == "metadata.google.internal" {
+				return fmt.Errorf("fetch_url: cloud metadata blocked")
+			}
+			if mode == "full" {
+				return nil
+			}
+			if isLoopbackHost(host) {
+				return nil
+			}
+			return guardSSRF(host)
 		}
 	}
 	if t.TestAllowLoopback && isLoopbackHost(host) {

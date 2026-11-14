@@ -25,6 +25,7 @@ import (
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/qjs"
+	"indirect/indirect-code-daemon/packages/unishcli"
 
 	"github.com/gorilla/websocket"
 )
@@ -54,6 +55,9 @@ type link struct {
 // (--worker / the update handoff flags / --slot). Everything else is
 // boot. No legacy shapes: an invocation that mixes roles fails loudly.
 func main() {
+	if ok, code := unishcli.MaybeRunArgs(os.Args); ok {
+		os.Exit(code)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "--js" {
 		os.Exit(jsMain(os.Args[2:]))
 	}
@@ -204,12 +208,9 @@ func jsMain(args []string) int {
 	if shPath == "" {
 		shPath, shFlag = tools.ShellForTests()
 	}
-	if shPath == "" && runtime.GOOS == "windows" {
-		cand := tools.UnishBinPath(filepath.Join(defaultDataDir(), "external"))
-		if info, err := os.Stat(cand); err == nil && !info.IsDir() {
-			shPath = cand
-			shFlag = "-c"
-		}
+	if shPath == "" && exe != "" {
+		shPath = exe
+		shFlag = "--sh-c"
 	}
 	if shPath != "" && shFlag == "" {
 		shFlag = "-c"
@@ -377,12 +378,6 @@ func daemonMain() {
 		if cfg := root.cfg.load(); cfg != nil {
 			fmt.Printf("Ready - host '%s' connected.\n", cfg.Name)
 		}
-	}
-
-	// Shell check (failure disables bash, not boot; exec_script is always built-in).
-	sharedDir := filepath.Join(root.rootDir(), "external")
-	if err := tools.EnsureShell(sharedDir); err != nil {
-		fmt.Printf("Warning: no shell available (%v); bash tool disabled, exec_script tool active.\n", err)
 	}
 
 	// Builtin skills (builtin_skills/*.js) are embedded in the binary and

@@ -3,16 +3,105 @@ package tools
 import (
 	"context"
 	"errors"
-	"indirect/indirect-code-daemon/packages/qjs"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/italoalmeida0/unish/pkg/unish"
+	"indirect/indirect-code-daemon/packages/qjs"
 )
 
 // errEmptyArgv is the direct starter's guard against a malformed spec.
 var errEmptyArgv = errors.New("tools: empty argv")
+
+type exitCodeError struct {
+	code int
+}
+
+func (e *exitCodeError) Error() string {
+	return fmt.Sprintf("exit status %d", e.code)
+}
+
+func (e *exitCodeError) ExitCode() int {
+	return e.code
+}
+
+// pauseableTimer implements an AutoBackgroundAfter timer that pauses and resets
+// whenever execution blocks on a mid-execution interactive user approval prompt.
+type pauseableTimer struct {
+	mu      sync.Mutex
+	dur     time.Duration
+	paused  bool
+	fired   bool
+	stopped bool
+	timer   *time.Timer
+	ch      chan struct{}
+}
+
+func newPauseableTimer(d time.Duration) *pauseableTimer {
+	pt := &pauseableTimer{
+		dur: d,
+		ch:  make(chan struct{}),
+	}
+	pt.mu.Lock()
+	pt.timer = time.AfterFunc(d, pt.fire)
+	pt.mu.Unlock()
+	return pt
+}
+
+func (pt *pauseableTimer) fire() {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if pt.paused || pt.fired || pt.stopped {
+		return
+	}
+	pt.fired = true
+	close(pt.ch)
+}
+
+func (pt *pauseableTimer) SetWaiting(waiting bool) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if pt.fired || pt.stopped {
+		return
+	}
+	if waiting {
+		if !pt.paused {
+			pt.paused = true
+			if pt.timer != nil {
+				pt.timer.Stop()
+			}
+		}
+		return
+	}
+	if pt.paused {
+		pt.paused = false
+		if pt.timer != nil {
+			pt.timer.Stop()
+		}
+		pt.timer = time.AfterFunc(pt.dur, pt.fire)
+	}
+}
+
+func (pt *pauseableTimer) Stop() {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	if pt.stopped {
+		return
+	}
+	pt.stopped = true
+	if pt.timer != nil {
+		pt.timer.Stop()
+	}
+}
+
+func (pt *pauseableTimer) C() <-chan struct{} {
+	return pt.ch
+}
 
 func init() {
 	if len(os.Args) >= 3 && os.Args[1] == "--js-exec-direct" {
@@ -118,9 +207,13 @@ type ExecSpec struct {
 	JailRoots     []string // sandbox root confinement for exec_script
 	ReadOnlyRoots []string // read-only roots within JailRoots (e.g. plan/learning project root)
 	FSReadRoots   []string // scoped filesystem read roots (PermissionSet.FS.Read)
-	FSWriteRoots  []string // scoped filesystem write roots (PermissionSet.FS.Write)
-	NetAllow      []string // allowed network hosts (PermissionSet.Net.Allow)
-	NoDedupe      bool     // true when stdin/env/work_dir make this run non-dedupable
+	FSWriteRoots   []string // scoped filesystem write roots (PermissionSet.FS.Write)
+	NetAllow       []string // allowed network hosts (PermissionSet.Net.Allow)
+	RawScript      string
+	Jail           *RuntimeJailSpec
+	Approver       MidExecApprover
+	OnApprovalWait func(waiting bool)
+	NoDedupe       bool // true when stdin/env/work_dir make this run non-dedupable
 	// SplitStderr keeps a separate stderr log;
 	// the runner merges both into one out log and leaves this false.
 	SplitStderr bool
@@ -170,12 +263,177 @@ const (
 	DispCancelled  = "cancelled"
 )
 
-// startDirect is today's behavior: a local process whose output lands in
-// a temp file under LogDir; the pump only observes the file (killing the
-// daemon can never SIGPIPE the child).
+func wrapApproverWithWait(approver MidExecApprover, onWait func(bool)) MidExecApprover {
+	if approver == nil {
+		return nil
+	}
+	if onWait == nil {
+		return approver
+	}
+	return func(ctx context.Context, req MidExecApprovalReq) (MidExecApprovalResp, error) {
+		onWait(true)
+		defer onWait(false)
+		return approver(ctx, req)
+	}
+}
+
+func startDirectInProcess(ctx context.Context, spec ExecSpec) (*Proc, bool, error) {
+	isDefaultUnish := spec.Kind == "bash" && len(spec.Argv) >= 2 && spec.Argv[1] == "--sh-c"
+	isJailedJS := spec.Kind == "exec_script" && spec.Jail != nil && spec.Approver != nil
+	if !isDefaultUnish && !(spec.Kind == "bash" && spec.Jail != nil && len(spec.Argv) >= 3 && spec.Argv[1] == "--sh-c") && !isJailedJS {
+		return nil, false, nil
+	}
+
+	log, err := newProcessLog(spec.LogDir, "bg_"+spec.Kind+"_*.log")
+	if err != nil {
+		return nil, true, err
+	}
+	var errLog *processLog
+	if spec.SplitStderr {
+		if errLog, err = newProcessLog(spec.LogDir, "bg_"+spec.Kind+"_stderr_*.log"); err != nil {
+			log.close(true)
+			return nil, true, err
+		}
+	}
+
+	execCtx, execCancel := context.WithCancel(ctx)
+	env := spec.Env
+	if len(env) == 0 {
+		if spec.Kind == "exec_script" {
+			env = execScriptEnv(nil)
+		} else {
+			env = os.Environ()
+		}
+	}
+	approver := wrapApproverWithWait(spec.Approver, spec.OnApprovalWait)
+
+	var rt *PolicyRuntime
+	if spec.Jail != nil {
+		var jerr error
+		rt, jerr = NewPolicyRuntime(*spec.Jail, env, approver)
+		if jerr != nil {
+			execCancel()
+			log.close(true)
+			if errLog != nil {
+				errLog.close(true)
+			}
+			return nil, true, jerr
+		}
+	}
+
+	outW := io.Writer(log.file)
+	errW := io.Writer(log.file)
+	if errLog != nil {
+		errW = errLog.file
+	}
+
+	exited := make(chan struct{})
+	var waitErr error
+	go func() {
+		defer close(exited)
+		defer execCancel()
+		var exitCode int
+		var runErr error
+		if spec.Kind == "bash" {
+			script := spec.RawScript
+			if script == "" && len(spec.Argv) >= 3 {
+				script = spec.Argv[2]
+			}
+			if rt != nil {
+				exitCode, runErr = rt.ExecShell(execCtx, script, spec.CWD, env, strings.NewReader(spec.Stdin), outW, errW)
+			} else {
+				sess, serr := unish.NewSession(
+					unish.WithWorkDir(spec.CWD),
+					unish.WithInheritEnv(false),
+					unish.WithEnv(env),
+				)
+				if serr != nil {
+					waitErr = serr
+					return
+				}
+				res, eerr := sess.ExecWith(execCtx, script, unish.ExecOptions{
+					Stdin:  strings.NewReader(spec.Stdin),
+					Stdout: outW,
+					Stderr: errW,
+				})
+				_ = sess.Close()
+				runErr = eerr
+				if res != nil {
+					exitCode = res.ExitCode
+				}
+			}
+		} else {
+			exe, _ := os.Executable()
+			var extraArgs []string
+			if len(spec.Argv) > 1 {
+				extraArgs = spec.Argv[1:]
+			}
+			envMap := make(map[string]string, len(env))
+			for _, kv := range env {
+				if idx := strings.IndexByte(kv, '='); idx > 0 {
+					envMap[kv[:idx]] = kv[idx+1:]
+				}
+			}
+			baseOpts := qjs.ScriptOptions{
+				Code:          spec.Code,
+				Filename:      "<exec_script>",
+				CWD:           spec.CWD,
+				Args:          extraArgs,
+				Env:           envMap,
+				Stdin:         strings.NewReader(spec.Stdin),
+				Stdout:        outW,
+				Stderr:        errW,
+				ShellPath:     spec.ShellPath,
+				ShellFlag:     spec.ShellFlag,
+				ExecPath:      exe,
+				JailRoots:     spec.JailRoots,
+				ReadOnlyRoots: spec.ReadOnlyRoots,
+				FSReadRoots:   spec.FSReadRoots,
+				FSWriteRoots:  spec.FSWriteRoots,
+				NetAllow:      spec.NetAllow,
+			}
+			if rt != nil {
+				baseOpts = rt.QJSOptions(baseOpts)
+			}
+			exitCode, runErr = qjs.RunScript(execCtx, baseOpts)
+		}
+		if exitCode != 0 {
+			waitErr = &exitCodeError{code: exitCode}
+		} else if runErr != nil {
+			waitErr = runErr
+		}
+	}()
+
+	proc := &Proc{
+		PID:      os.Getpid(),
+		LogPath:  log.file.Name(),
+		BrainLog: log.file.Name(),
+		Exited:   exited,
+		Wait: func() error {
+			<-exited
+			return waitErr
+		},
+		Stop:    execCancel,
+		Pump:    log.pump,
+		Cleanup: log.close,
+	}
+	if errLog != nil {
+		proc.ErrLogPath = errLog.file.Name()
+		proc.PumpErr = errLog.pump
+		proc.Cleanup = func(remove bool) { log.close(remove); errLog.close(remove) }
+	}
+	return proc, true, nil
+}
+
+// startDirect is today's behavior: a local process (or in-process embedded
+// unish / jailed qjs session) whose output lands in a temp file under LogDir;
+// the pump only observes the file (killing the daemon can never SIGPIPE the child).
 func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 	if spec.Kind == "exec_script" && strings.TrimSpace(spec.Code) == "" {
 		return nil, errEmptyArgv
+	}
+	if proc, handled, err := startDirectInProcess(ctx, spec); handled {
+		return proc, err
 	}
 	var codeFilePath string
 	if spec.Kind == "exec_script" && spec.Code != "" {

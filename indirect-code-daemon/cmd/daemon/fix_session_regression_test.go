@@ -346,9 +346,13 @@ func TestAlwaysAllowMidTurnSync(t *testing.T) {
 	a.pending = &pendingAsk{id: "call_1", kind: "approval", tool: "exec"}
 
 	pinged := false
+	configPinged := false
 	a.onEvent = func(collection string) {
 		if collection == "sessions" {
 			pinged = true
+		}
+		if collection == "config" {
+			configPinged = true
 		}
 	}
 	sessionDataEmitted := false
@@ -364,11 +368,17 @@ func TestAlwaysAllowMidTurnSync(t *testing.T) {
 		Always:   true,
 	})
 
-	if a.rec.Options.Access != "full" {
-		t.Errorf("access = %q, want 'full'", a.rec.Options.Access)
+	if a.rec.Options.Access != "ask" {
+		t.Errorf("access = %q, want 'ask' (scoped grant must not flip access to full)", a.rec.Options.Access)
+	}
+	if len(a.rec.SessionGrants) != 1 || a.rec.SessionGrants[0].Pattern != "exec" {
+		t.Errorf("sessionGrants = %+v, want scoped allow rule", a.rec.SessionGrants)
 	}
 	if !pinged {
 		t.Error("approval always-allow did not trigger pingChange()")
+	}
+	if !configPinged {
+		t.Error("approval always-allow did not trigger config change ping")
 	}
 	if !sessionDataEmitted {
 		t.Error("approval always-allow did not emit session_data")

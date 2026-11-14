@@ -45,7 +45,9 @@ type pendingAsk struct {
 	deadline int64 // unix milli, persisted in rec.ApprovalDeadlineUnix
 	// approval resume data (V2-004: enough to re-render the original
 	// request after a reconnect — correlation id, tool, arguments).
-	args json.RawMessage
+	args    json.RawMessage
+	meta    *tools.ToolApprovalMeta
+	midExec bool
 	// question resume data
 	recommended [][]string
 	notice      string
@@ -154,7 +156,7 @@ func newSessionActor(id string, rec *SessionRecord, store *diskStore, wsSend fun
 	cfg.store(&DaemonConfig{})
 	var jailed bool
 	if rec != nil {
-		jailed = rec.Jailed
+		jailed = effectiveSessionJailed(rec.Options.Access, rec.Jailed)
 	}
 	return &sessionActor{
 		id: id, store: store, wsSend: wsSend, bg: bg, onEvent: onEvent, supCfg: cfg, jailed: jailed,
@@ -334,7 +336,7 @@ func (a *sessionActor) handleData(env Envelope) {
 							a.rec.Options = normalizedOptions(*item.Options)
 							optsChanged = true
 						}
-						if item.YOLO && a.rec.Options.Access == "ask" {
+						if item.YOLO && (item.Options == nil || item.Options.Access == "") && a.rec.Options.Access != "full" {
 							a.rec.Options.Access = "full"
 							optsChanged = true
 						}
@@ -372,7 +374,14 @@ func (a *sessionActor) handleData(env Envelope) {
 				}
 			}
 			select {
-			case m.Reply <- workerRefreshResult{model: a.rec.Model, options: normalizedOptions(a.rec.Options), context: a.pendingContext, skills: cloneSkillsMap(a.rec.Skills)}:
+			case m.Reply <- workerRefreshResult{
+				model:         a.rec.Model,
+				options:       normalizedOptions(a.rec.Options),
+				jailed:        effectiveSessionJailed(a.rec.Options.Access, a.rec.Jailed || a.jailed),
+				context:       a.pendingContext,
+				skills:        cloneSkillsMap(a.rec.Skills),
+				sessionGrants: append([]tools.PermissionRule(nil), a.rec.SessionGrants...),
+			}:
 				a.pendingContext = nil
 			default:
 				// Worker stopped waiting (cancelled/timeout): drop.
@@ -472,8 +481,12 @@ func (a *sessionActor) handleData(env Envelope) {
 			a.saveOrAppend(walEvent{Type: walTypeModel, Model: m.Model})
 		}
 		a.rec.Options = normalizedOptions(m.Options)
+		a.jailed = a.rec.Options.Access == "ask" || a.rec.Options.Access == "auto"
+		a.rec.Jailed = a.jailed
 		opts := a.rec.Options
+		jailed := a.rec.Jailed
 		a.saveOrAppend(walEvent{Type: walTypeOptions, Options: &opts})
+		a.saveOrAppend(walEvent{Type: walTypeMeta, Jailed: &jailed})
 		a.rec.UpdatedAt = time.Now().UnixMilli()
 		if a.persistErr != nil {
 			break
@@ -499,11 +512,34 @@ func (a *sessionActor) handleData(env Envelope) {
 		a.onMarkSeen(m)
 	case jailMsg:
 		a.touch()
-		a.jailed = m.Jail
-		a.rec.Jailed = m.Jail
-		a.saveOrAppend(walEvent{Type: walTypeMeta})
+		targetAccess := strings.ToLower(strings.TrimSpace(m.Access))
+		switch targetAccess {
+		case "auto", "ask", "full":
+		default:
+			if m.Jail {
+				targetAccess = "auto"
+			} else {
+				targetAccess = "full"
+			}
+		}
+		jailed := targetAccess != "full"
+		a.jailed = jailed
+		a.rec.Jailed = jailed
+		a.rec.Options = normalizedOptions(SessionOptions{
+			Effort: a.rec.Options.Effort,
+			Mode:   a.rec.Options.Mode,
+			Access: targetAccess,
+		})
+		opts := a.rec.Options
+		a.rec.UpdatedAt = time.Now().UnixMilli()
+		a.saveOrAppend(walEvent{Type: walTypeOptions, Options: &opts})
+		a.saveOrAppend(walEvent{Type: walTypeMeta, Jailed: &jailed})
+		if a.persistErr != nil {
+			break
+		}
 		a.pingChange()
-		a.emit(map[string]any{"type": "notice", "sessionId": a.id, "message": jailNotice(m.Jail)})
+		a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": sessionPayloadPaged(a.rec, 0)})
+		a.emit(map[string]any{"type": "notice", "hostId": a.hostID(), "sessionId": a.id, "message": accessModeNotice(targetAccess, m.Command)})
 	case attachUploadMsg:
 		m.Reply <- a.onAttachUpload(m)
 	case workerTitleMsg:
@@ -892,11 +928,20 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 // ---- turn lifecycle ----
 
 func (a *sessionActor) startTurn(prompt string, attachmentIDs []string, model string, yolo bool, options *SessionOptions) error {
+	hasExplicitAccess := options != nil && strings.TrimSpace(options.Access) != ""
 	if options != nil {
 		a.rec.Options = normalizedOptions(*options)
 	}
-	if yolo && a.rec.Options.Access == "ask" {
+	if yolo && !hasExplicitAccess {
 		a.rec.Options.Access = "full"
+	}
+	if hasExplicitAccess || yolo {
+		a.jailed = a.rec.Options.Access == "ask" || a.rec.Options.Access == "auto"
+		a.rec.Jailed = a.jailed
+	} else {
+		effAccess := effectiveSessionAccess(a.rec.Options.Access, a.rec.Jailed || a.jailed)
+		a.jailed = effAccess != "full"
+		a.rec.Jailed = a.jailed
 	}
 	return a.startTurnWithMeta(prompt, attachmentIDs, model, nil)
 }
@@ -935,11 +980,12 @@ func (a *sessionActor) startTurnWithMeta(prompt string, attachmentIDs []string, 
 	// Persist turn configuration and queue consumption with the header. A
 	// crash before the opening message must retain enough to resume once.
 	attSeq, seenSeq, attKind := a.rec.AttentionSeq, a.rec.SeenSeq, a.rec.AttentionKind
+	jailed := a.rec.Jailed
 	for _, ev := range []walEvent{
 		{Type: walTypeOptions, Options: &a.rec.Options},
 		{Type: walTypeQueue, Queue: a.rec.Queue},
 		{Type: walTypeTitle, Title: a.rec.Title, TitleSource: a.rec.TitleSource},
-		{Type: walTypeMeta, AttentionSeq: &attSeq, SeenSeq: &seenSeq, AttentionKind: &attKind},
+		{Type: walTypeMeta, Jailed: &jailed, AttentionSeq: &attSeq, SeenSeq: &seenSeq, AttentionKind: &attKind},
 	} {
 		if err := appendWALEvent(a.wal, ev); err != nil {
 			a.storageError(err)
@@ -1248,7 +1294,7 @@ func (a *sessionActor) doCancel(reason string) {
 		switch a.pending.kind {
 		case "approval":
 			if !emittedAppr[a.pending.id] {
-				a.emit(map[string]any{"type": "approval_resolved", "sessionId": a.id, "callId": a.pending.id, "approved": false})
+				a.emit(map[string]any{"type": "approval_resolved", "hostId": a.hostID(), "sessionId": a.id, "callId": a.pending.id, "approved": false, "decision": "deny"})
 			}
 		case "question":
 			if !emittedQ[a.pending.id] {
@@ -1355,35 +1401,147 @@ func (a *sessionActor) onApprovalResponse(m approvalResponseMsg) {
 		return
 	}
 	a.touch()
-	approved := m.Approved && modeToolRestriction(a.rec.Options.Mode, a.pending.tool) == ""
-	if approved && m.Always {
-		// "Always allow" is part of this validated approval transaction. The
-		// access grant must reach durable storage before the worker is woken;
-		// a failed write therefore denies this approval and leaves access ask.
-		previous := a.rec.Options.Access
-		a.rec.Options.Access = "full"
-		opts := a.rec.Options
-		if err := a.saveOrAppend(walEvent{Type: walTypeOptions, Options: &opts}); err != nil {
-			a.rec.Options.Access = previous
+	decision := strings.ToLower(strings.TrimSpace(m.Decision))
+	var approved bool
+	switch decision {
+	case "once", "session", "always":
+		approved = true
+	case "deny":
+		approved = false
+	default:
+		if !m.Approved {
+			decision = "deny"
 			approved = false
+		} else if m.Always {
+			decision = "always"
+			approved = true
 		} else {
-			a.resolveMidTurnAttention()
-			a.pingChange()
-			// The human just resolved the approval: clear the pending overlay
-			// BEFORE the snapshot so session_data (which now carries the
-			// complete client overlay) cannot resurrect the approval card.
-			a.clearPending()
-			a.setState(stateRunning)
-			a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": sessionPayloadPaged(a.rec, 0)})
+			decision = "once"
+			approved = true
 		}
 	}
+	if approved && !a.pending.midExec && modeToolRestriction(a.rec.Options.Mode, a.pending.tool) != "" {
+		approved = false
+		decision = "deny"
+	}
+
+	pendingMeta := a.pending.meta
+	var grantedRule *tools.PermissionRule
+	if approved && (decision == "session" || decision == "always") {
+		if pendingMeta != nil {
+			allowPersist := (decision == "session" && pendingMeta.CanAllowSession) ||
+				(decision == "always" && pendingMeta.CanAllowAlways)
+			if allowPersist && pendingMeta.ProposedRule != nil {
+				if normRule, err := tools.ValidateAndNormalizeRule(*pendingMeta.ProposedRule); err == nil {
+					grantedRule = &normRule
+				}
+			}
+		} else if a.pending.tool != "" {
+			if normRule, err := tools.ValidateAndNormalizeRule(tools.PermissionRule{
+				Effect:  "allow",
+				Kind:    "tool",
+				Pattern: a.pending.tool,
+			}); err == nil {
+				grantedRule = &normRule
+			}
+		}
+	}
+
+	persistedGrant := false
+	notifiedConfig := false
+	grantErrMsg := ""
+	if approved && grantedRule != nil {
+		// Scoped grant persistence is part of this validated approval transaction:
+		// grants MUST reach durable storage before the worker wakes, and NEVER
+		// mutate SessionOptions.Access to "full".
+		prevGrants := append([]tools.PermissionRule(nil), a.rec.SessionGrants...)
+		nextGrants, _ := tools.UpsertPermissionRule(a.rec.SessionGrants, *grantedRule)
+		a.rec.SessionGrants = nextGrants
+		if err := a.saveOrAppend(walEvent{Type: walTypeSessionGrants, SessionGrants: a.rec.SessionGrants}); err != nil {
+			a.rec.SessionGrants = prevGrants
+			approved = false
+			decision = "deny"
+			grantedRule = nil
+			grantErrMsg = "Could not persist session permission grant: " + err.Error()
+		} else if decision == "always" && a.supCfg != nil {
+			mu := a.supCfg.writeLock()
+			mu.Lock()
+			curCfg := a.supCfg.load()
+			var nextCfg DaemonConfig
+			if curCfg != nil {
+				nextCfg = *curCfg
+			}
+			nextCfg.Settings.PermissionRules, _ = tools.UpsertPermissionRule(nextCfg.Settings.PermissionRules, *grantedRule)
+			nextCfg.Settings = normalizedHarness(nextCfg.Settings)
+			cfgDir := a.configDir()
+			var cfgErr error
+			if cfgDir != "" {
+				cfgErr = saveDaemonConfig(cfgDir, &nextCfg)
+			}
+			if cfgErr == nil {
+				a.supCfg.store(&nextCfg)
+				notifiedConfig = true
+			}
+			mu.Unlock()
+			if cfgErr != nil {
+				a.rec.SessionGrants = prevGrants
+				_ = a.saveOrAppend(walEvent{Type: walTypeSessionGrants, SessionGrants: a.rec.SessionGrants})
+				approved = false
+				decision = "deny"
+				grantedRule = nil
+				grantErrMsg = "Could not save global permission rule: " + cfgErr.Error()
+			} else {
+				persistedGrant = true
+			}
+		} else {
+			persistedGrant = true
+		}
+	}
+
 	a.resolveMidTurnAttention()
-	trace("actor.approval", map[string]any{"sid": a.id, "id": m.ID, "approved": approved})
+	trace("actor.approval", map[string]any{"sid": a.id, "id": m.ID, "approved": approved, "decision": decision})
 	a.clearPending()
 	a.setState(stateRunning)
 	approved = approved && a.persistErr == nil
-	a.wakeApproval(m.ID, approved)
-	a.emit(map[string]any{"type": "approval_resolved", "sessionId": a.id, "callId": m.ID, "approved": approved})
+	if !approved {
+		decision = "deny"
+		grantedRule = nil
+		if grantErrMsg == "" && a.persistErr != nil {
+			grantErrMsg = "Session storage is unavailable: " + a.persistErr.Error()
+		}
+	}
+	if persistedGrant && approved {
+		a.pingChange()
+		if notifiedConfig && a.onEvent != nil {
+			a.onEvent("config")
+		}
+		a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": sessionPayloadPaged(a.rec, 0)})
+	}
+	var callGrants []tools.PermissionRule
+	if approved && pendingMeta != nil {
+		callGrants = append([]tools.PermissionRule(nil), pendingMeta.CallGrants...)
+	}
+	a.wakeApprovalOutcome(m.ID, approvalOutcome{
+		reason:         grantErrMsg,
+		approved:       approved,
+		decision:       decision,
+		meta:           pendingMeta,
+		grantedRule:    grantedRule,
+		callGrants:     callGrants,
+		effectiveRules: a.effectivePermissionRules(),
+	})
+	resolvedEv := map[string]any{
+		"type":      "approval_resolved",
+		"hostId":    a.hostID(),
+		"sessionId": a.id,
+		"callId":    m.ID,
+		"approved":  approved,
+		"decision":  decision,
+	}
+	if grantErrMsg != "" {
+		resolvedEv["error"] = grantErrMsg
+	}
+	a.emit(resolvedEv)
 }
 
 func (a *sessionActor) onQuestionResponse(m questionResponseMsg) {
@@ -1686,11 +1844,12 @@ func (a *sessionActor) startSeededTurn(turnSeq int, model string, yolo bool, att
 	a.wal = wal
 	a.cancelReason = ""
 	attSeq, seenSeq, attKind := a.rec.AttentionSeq, a.rec.SeenSeq, a.rec.AttentionKind
+	jailed := a.rec.Jailed
 	for _, ev := range []walEvent{
 		{Type: walTypeOptions, Options: &a.rec.Options},
 		{Type: walTypeQueue, Queue: a.rec.Queue},
 		{Type: walTypeTitle, Title: a.rec.Title, TitleSource: a.rec.TitleSource},
-		{Type: walTypeMeta, AttentionSeq: &attSeq, SeenSeq: &seenSeq, AttentionKind: &attKind},
+		{Type: walTypeMeta, Jailed: &jailed, AttentionSeq: &attSeq, SeenSeq: &seenSeq, AttentionKind: &attKind},
 	} {
 		if err := appendWALEvent(a.wal, ev); err != nil {
 			a.storageError(err)
@@ -2261,6 +2420,9 @@ func (a *sessionActor) newForkSkeleton(newID, title string, now int64) *SessionR
 			rec.Skills[k] = v
 		}
 	}
+	if len(a.rec.SessionGrants) > 0 {
+		rec.SessionGrants = append([]tools.PermissionRule(nil), a.rec.SessionGrants...)
+	}
 	if a.rec.Widgets != nil {
 		rec.Widgets = append([]tools.WidgetFile(nil), a.rec.Widgets...)
 	}
@@ -2479,9 +2641,7 @@ func (a *sessionActor) clientOverlay() map[string]any {
 	if p := a.pending; p != nil {
 		switch p.kind {
 		case "approval":
-			extra["pendingApproval"] = map[string]any{
-				"callId": p.id, "tool": p.tool, "args": p.args, "deadline": p.deadline,
-			}
+			extra["pendingApproval"] = pendingApprovalPayload(p)
 		case "question":
 			if p.question != nil {
 				extra["question"] = map[string]any{"id": p.id, "questions": p.question.Questions}
@@ -2563,7 +2723,7 @@ func (a *sessionActor) onWALAppend(m walAppendMsg) {
 		// Tracker snapshot for the LIVE file-changes view: keep it so a
 		// mid-turn get_turn_changes can rebuild the live balloon.
 		a.liveIncoming = append([]filetrack.TrackedFile(nil), ev.Incoming...)
-	case walTypeQueue, walTypeTitle, walTypeModel, walTypeOptions, walTypeTurnState, walTypeMeta, walTypeAttach, walTypeWidgets, walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
+	case walTypeQueue, walTypeTitle, walTypeModel, walTypeOptions, walTypeTurnState, walTypeMeta, walTypeAttach, walTypeWidgets, walTypeSessionGrants, walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
 		a.applyControlWAL(ev)
 	}
 	a.rec.UpdatedAt = time.Now().UnixMilli()
@@ -2599,6 +2759,8 @@ func (a *sessionActor) applyControlWAL(ev walEvent) {
 		a.rec.Attachments = append([]AttachmentRef(nil), ev.Attachments...)
 	case walTypeWidgets:
 		a.rec.Widgets = append([]tools.WidgetFile(nil), ev.Widgets...)
+	case walTypeSessionGrants:
+		a.rec.SessionGrants = append([]tools.PermissionRule(nil), ev.SessionGrants...)
 	case walTypeBgTask, walTypeBgChunk, walTypeBgFinish:
 		a.applyBgWAL(ev)
 	case walTypeMeta:
@@ -2641,79 +2803,141 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 		return
 	}
 	options := normalizedOptions(a.rec.Options)
-	if reason := modeToolRestriction(options.Mode, m.tool); reason != "" {
-		m.reply <- approvalOutcome{reason: reason}
-		return
-	}
-	// Skill policy gate (defense in depth — the registry already hides
-	// denied tools): arg-key deny refuses the call, and a per-tool "ask"
-	// forces human approval even under the session YOLO toggle while a
-	// per-tool "yolo" runs free even in ask mode.
-	eff, err := skillRegistry().resolveSession(a.rec.Skills, options.Mode)
-	if err != nil {
-		m.reply <- approvalOutcome{reason: "skill policy: " + err.Error()}
-		return
-	}
-	if reason := skillsArgRestriction(eff, m.tool, m.args); reason != "" {
-		m.reply <- approvalOutcome{reason: reason}
-		return
-	}
-	// The agentic mode's own machinery (summary + completion) is ALWAYS
-	// active and ALWAYS yolo — it is part of the mode, not governed by
-	// skill rules: no skill policy may ask, deny or slow it down.
-	if m.tool == "summary" || m.tool == completionToolName {
-		m.reply <- approvalOutcome{approved: true}
-		return
-	}
-	// use_skill has its OWN rules (the usability table of the target
-	// skill) and is never governed by skill permission entries or by the
-	// session approvalMode: usable "ask" forces human approval even under
-	// session YOLO; "yolo" runs free even in ask mode; "deny"/"never"
-	// (including a skill module without a usable key), another mode's
-	// skill and an unknown name refuse.
-	forceHuman := false
-	if m.tool == "use_skill" {
-		switch verdict, reason := useSkillUsableGate(a.rec.Skills, options.Mode, m.args); verdict {
-		case "approve":
-			m.reply <- approvalOutcome{approved: true}
+	effAccess := effectiveSessionAccess(a.rec.Options.Access, a.rec.Jailed || a.jailed)
+	effectiveRules := a.effectivePermissionRules()
+
+	var reqMeta *tools.ToolApprovalMeta
+	if m.midExec {
+		if m.meta != nil {
+			cp := *m.meta
+			reqMeta = &cp
+		}
+		if effAccess == "full" {
+			m.reply <- approvalOutcome{approved: true, decision: "once", effectiveRules: effectiveRules}
 			return
-		case "ask":
-			forceHuman = true
-		default: // refuse
+		}
+		if reqMeta != nil {
+			if effRule, r := tools.MatchRules(effectiveRules, reqMeta.Capability, reqMeta.Target, a.rec.CWD); effRule == "deny" {
+				m.reply <- approvalOutcome{
+					approved: false,
+					decision: "deny",
+					reason:   fmt.Sprintf("Permission denied by rule %q", r.Pattern),
+					meta:     reqMeta,
+				}
+				return
+			} else if effRule == "allow" {
+				m.reply <- approvalOutcome{approved: true, decision: "once", effectiveRules: effectiveRules}
+				return
+			}
+			if reqMeta.Capability == "fs_read" {
+				if effRule, _ := tools.MatchRules(effectiveRules, "fs_write", reqMeta.Target, a.rec.CWD); effRule == "allow" {
+					m.reply <- approvalOutcome{approved: true, decision: "once", effectiveRules: effectiveRules}
+					return
+				}
+			}
+		}
+	} else {
+		if reason := modeToolRestriction(options.Mode, m.tool); reason != "" {
 			m.reply <- approvalOutcome{reason: reason}
 			return
 		}
-	}
-	if !forceHuman {
-		// Skill policy chain (arg -> tool -> inherit list -> earlier
-		// skills -> deny). A resolved "ask" shows human approval unless
-		// the session's own YOLO toggle or the main skill's approvalMode yolo
-		// auto-approves it.
-		switch skillsApproval(eff, m.tool, m.args) {
-		case skills.PolicyYolo:
-			m.reply <- approvalOutcome{approved: true}
+		eff, err := skillRegistry().resolveSession(a.rec.Skills, options.Mode)
+		if err != nil {
+			m.reply <- approvalOutcome{reason: "skill policy: " + err.Error()}
 			return
-		case skills.PolicyDeny:
-			m.reply <- approvalOutcome{reason: "tool denied by the active skill policy"}
+		}
+		if reason := skillsArgRestriction(eff, m.tool, m.args); reason != "" {
+			m.reply <- approvalOutcome{reason: reason}
 			return
-		default: // ask
-			if options.Access == "full" || m.tool == "question" || m.tool == "todo" {
-				m.reply <- approvalOutcome{approved: true}
+		}
+		if m.tool == "summary" || m.tool == completionToolName {
+			m.reply <- approvalOutcome{approved: true, decision: "once"}
+			return
+		}
+		forceHuman := false
+		if m.tool == "use_skill" {
+			switch verdict, reason := useSkillUsableGate(a.rec.Skills, options.Mode, m.args); verdict {
+			case "approve":
+				m.reply <- approvalOutcome{approved: true, decision: "once"}
+				return
+			case "ask":
+				forceHuman = true
+				reqMeta = &tools.ToolApprovalMeta{
+					Capability: "tool",
+					Target:     extractUseSkillTarget(m.args),
+					Reason:     "Skill requires approval before activation",
+					Risk:       "low",
+					AccessMode: effAccess,
+				}
+			default: // refuse
+				m.reply <- approvalOutcome{reason: reason}
 				return
 			}
 		}
+		if !forceHuman {
+			sp := skillsApproval(eff, m.tool, m.args)
+			if sp == skills.PolicyDeny {
+				m.reply <- approvalOutcome{reason: "tool denied by the active skill policy"}
+				return
+			}
+			if eff.AskAutoApprove {
+				effAccess = "full"
+			}
+			if m.tool == "question" || m.tool == "todo" || m.tool == "session_history" {
+				if effRule, r := tools.MatchRules(effectiveRules, "tool", m.tool, a.rec.CWD); effRule == "deny" {
+					m.reply <- approvalOutcome{reason: fmt.Sprintf("Blocked by permission rule %q", r.Pattern)}
+					return
+				}
+				m.reply <- approvalOutcome{approved: true, decision: "once"}
+				return
+			}
+			ro := eff.ToolDecision("write") == skills.PolicyDeny && eff.ToolDecision("edit") == skills.PolicyDeny
+			evalAccess := effAccess
+			if sp == skills.PolicyYolo && !eff.AskAutoApprove && evalAccess == "ask" {
+				evalAccess = "auto"
+			}
+			eval := tools.EvaluateToolCall(m.tool, m.args, evalAccess, a.rec.CWD, a.brainDir(), ro, effectiveRules)
+			switch eval.Verdict {
+			case tools.VerdictDeny:
+				reason := eval.Meta.Reason
+				if reason == "" {
+					reason = fmt.Sprintf("Blocked by permission policy for %s: %s", eval.Meta.Capability, eval.Meta.Target)
+				}
+				m.reply <- approvalOutcome{
+					approved: false,
+					decision: "deny",
+					reason:   reason,
+					meta:     &eval.Meta,
+				}
+				return
+			case tools.VerdictAllow:
+				m.reply <- approvalOutcome{
+					approved:       true,
+					decision:       "once",
+					callGrants:     eval.Meta.CallGrants,
+					effectiveRules: effectiveRules,
+				}
+				return
+			default:
+				cp := eval.Meta
+				reqMeta = &cp
+			}
+		}
 	}
+
 	// The browser returns callId; use that identity for both sides.
 	if m.callID != "" {
 		m.id = m.callID
 	}
 	a.touch()
 	a.approvalWaiters[m.id] = m.reply
-	trace("actor.wait", map[string]any{"sid": a.id, "kind": "approval", "id": m.id, "tool": m.tool})
+	trace("actor.wait", map[string]any{"sid": a.id, "kind": "approval", "id": m.id, "tool": m.tool, "midExec": m.midExec})
 	a.enterAwait("approval", m.id, nil)
 	a.pending.tool = m.tool
 	a.pending.args = m.args
-	a.emit(map[string]any{"type": "tool_approval_request", "sessionId": a.id, "callId": m.id, "tool": m.tool, "args": m.args})
+	a.pending.meta = reqMeta
+	a.pending.midExec = m.midExec
+	a.emit(approvalEventPayload(a.hostID(), a.id, m.id, m.tool, m.args, reqMeta))
 }
 
 // onWorkerQuestionReq: same for the question tool.
@@ -2740,6 +2964,14 @@ func (a *sessionActor) onWorkerQuestionReq(m workerQuestionReqMsg) {
 
 // wakeApproval delivers the human decision to the blocked worker.
 func (a *sessionActor) wakeApproval(id string, approved bool) {
+	dec := "deny"
+	if approved {
+		dec = "once"
+	}
+	a.wakeApprovalOutcome(id, approvalOutcome{approved: approved, decision: dec})
+}
+
+func (a *sessionActor) wakeApprovalOutcome(id string, out approvalOutcome) {
 	ch, ok := a.approvalWaiters[id]
 	if !ok {
 		trace("actor.waiter.lost", map[string]any{"sid": a.id, "kind": "approval", "id": id})
@@ -2747,9 +2979,113 @@ func (a *sessionActor) wakeApproval(id string, approved bool) {
 	}
 	delete(a.approvalWaiters, id)
 	select {
-	case ch <- approvalOutcome{approved: approved}:
+	case ch <- out:
 	default:
 	}
+}
+
+func (a *sessionActor) brainDir() string {
+	if a == nil || a.store == nil || a.id == "" {
+		return ""
+	}
+	return a.store.brainDir(a.id)
+}
+
+func (a *sessionActor) configDir() string {
+	if a != nil && a.supCfg != nil && a.supCfg.configDir != "" {
+		return a.supCfg.configDir
+	}
+	if a != nil && a.store != nil {
+		return a.store.dataDir
+	}
+	return ""
+}
+
+func (a *sessionActor) globalPermissionRules() []tools.PermissionRule {
+	if a == nil || a.supCfg == nil {
+		return nil
+	}
+	if cfg := a.supCfg.load(); cfg != nil && len(cfg.Settings.PermissionRules) > 0 {
+		return append([]tools.PermissionRule(nil), cfg.Settings.PermissionRules...)
+	}
+	return nil
+}
+
+func (a *sessionActor) effectivePermissionRules() []tools.PermissionRule {
+	global := a.globalPermissionRules()
+	var session []tools.PermissionRule
+	if a != nil && a.rec != nil && len(a.rec.SessionGrants) > 0 {
+		session = a.rec.SessionGrants
+	}
+	if len(global) == 0 && len(session) == 0 {
+		return nil
+	}
+	out := make([]tools.PermissionRule, 0, len(session)+len(global))
+	out = append(out, session...)
+	out = append(out, global...)
+	return out
+}
+
+func applyApprovalMetaToMap(dst map[string]any, meta *tools.ToolApprovalMeta) {
+	if meta == nil {
+		return
+	}
+	if meta.Capability != "" {
+		dst["capability"] = meta.Capability
+	}
+	if meta.Target != "" {
+		dst["target"] = meta.Target
+	}
+	if meta.Reason != "" {
+		dst["reason"] = meta.Reason
+	}
+	if meta.Risk != "" {
+		dst["risk"] = meta.Risk
+	}
+	if meta.AccessMode != "" {
+		dst["accessMode"] = meta.AccessMode
+	}
+	if meta.ProposedRule != nil {
+		dst["proposedRule"] = meta.ProposedRule
+	}
+	dst["canAllowSession"] = meta.CanAllowSession
+	dst["canAllowAlways"] = meta.CanAllowAlways
+}
+
+func approvalEventPayload(hostID, sessionID, callID, tool string, args json.RawMessage, meta *tools.ToolApprovalMeta) map[string]any {
+	ev := map[string]any{
+		"type":      "tool_approval_request",
+		"sessionId": sessionID,
+		"callId":    callID,
+		"tool":      tool,
+		"args":      args,
+	}
+	if hostID != "" {
+		ev["hostId"] = hostID
+	}
+	applyApprovalMetaToMap(ev, meta)
+	return ev
+}
+
+func pendingApprovalPayload(p *pendingAsk) map[string]any {
+	m := map[string]any{
+		"callId":   p.id,
+		"tool":     p.tool,
+		"args":     p.args,
+		"deadline": p.deadline,
+	}
+	applyApprovalMetaToMap(m, p.meta)
+	return m
+}
+
+func extractUseSkillTarget(raw json.RawMessage) string {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if len(raw) > 0 && json.Unmarshal(raw, &body) == nil && strings.TrimSpace(body.Name) != "" {
+		return strings.TrimSpace(body.Name)
+	}
+	return "use_skill"
 }
 
 func (a *sessionActor) wakeQuestion(id string, answers [][]string) {

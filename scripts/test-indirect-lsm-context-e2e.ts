@@ -12,7 +12,7 @@
  * (`bun run build:daemon`).
  */
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "fs";
 import { promises as fs } from "fs";
 import { homedir, tmpdir } from "os";
 import path from "path";
@@ -229,14 +229,6 @@ async function boot() {
   const daemonDir = mkdtempSync(path.join(tmpdir(), "llmgw-lsm-d-"));
   const workDir = path.join(daemonDir, "workspace");
   mkdirSync(workDir, { recursive: true });
-  if (process.platform === "win32") {
-    const cachedUnish = path.join(homedir(), ".indirect-code", "external", "bin", "unish.exe");
-    if (existsSync(cachedUnish)) {
-      const destUnish = path.join(daemonDir, "external", "bin", "unish.exe");
-      mkdirSync(path.dirname(destUnish), { recursive: true });
-      copyFileSync(cachedUnish, destUnish);
-    }
-  }
 
   const daemonProc = Bun.spawn(
     [daemonBin, "--worker", "--connect", pair.connectUrl, "--data-dir", daemonDir, "--name", "LSM Context E2E"],

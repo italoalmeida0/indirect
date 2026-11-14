@@ -60,6 +60,7 @@ type approvalResponseMsg struct {
 	ID       string
 	Approved bool
 	Always   bool
+	Decision string // "" | "once" | "session" | "always" | "deny"
 }
 
 // questionResponseMsg answers a pending question. Correlated by id.
@@ -317,25 +318,29 @@ type workerRefreshMsg struct {
 }
 
 type workerRefreshResult struct {
-	stale   bool
-	model   string
-	options SessionOptions
-	context []provider.Message
+	stale         bool
+	model         string
+	options       SessionOptions
+	jailed        bool
+	context       []provider.Message
+	sessionGrants []tools.PermissionRule
 	// skills is the CURRENT session skill map (complete snapshot): the
 	// worker re-resolves the skill policy and rebuilds the ephemeral
 	// <skill> prefix from it before every provider request.
 	skills map[string]skills.SessionSkill
 }
 
-// workerApprovalReqMsg: worker blocked in approveTool; actor moves to
-// awaitingApproval, emits tool_approval_request, arms the 15-min timer.
+// workerApprovalReqMsg: worker blocked in approveTool or mid-execution runner IPC;
+// actor moves to awaitingApproval, emits tool_approval_request, arms the 15-min timer.
 type workerApprovalReqMsg struct {
-	gen    int
-	id     string
-	tool   string
-	args   json.RawMessage
-	callID string
-	reply  chan approvalOutcome
+	gen     int
+	id      string
+	tool    string
+	args    json.RawMessage
+	callID  string
+	meta    *tools.ToolApprovalMeta
+	midExec bool
+	reply   chan approvalOutcome
 }
 
 // workerQuestionReqMsg: same for the question tool.
@@ -471,9 +476,11 @@ type slashReplyMsg struct {
 	Ack     chan any
 }
 
-// jailMsg locks/unlocks the sandbox for future turns.
+// jailMsg sets the session access mode / sandbox lock.
 type jailMsg struct {
-	Jail bool
+	Jail    bool
+	Access  string // "" | "auto" | "ask" | "full"
+	Command string
 }
 
 // attachUploadMsg stores an attachment upload.

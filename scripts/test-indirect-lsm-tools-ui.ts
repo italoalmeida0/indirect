@@ -25,7 +25,7 @@
  * (`bun run build:daemon`).
  */
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { promises as fs } from "fs";
 import { homedir, tmpdir } from "os";
 import path from "path";
@@ -665,15 +665,6 @@ async function boot() {
   tempDirs.push(daemonDir);
   const workDir = path.join(daemonDir, "workspace");
   mkdirSync(path.join(workDir, "src"), { recursive: true });
-
-  if (process.platform === "win32") {
-    const cachedUnish = path.join(homedir(), ".indirect-code", "external", "bin", "unish.exe");
-    if (existsSync(cachedUnish)) {
-      const destUnish = path.join(daemonDir, "external", "bin", "unish.exe");
-      mkdirSync(path.dirname(destUnish), { recursive: true });
-      copyFileSync(cachedUnish, destUnish);
-    }
-  }
 
   // Seed workspace files: >25KB 600-line diagnostic log + TypeScript source files.
   const diagLines: string[] = [];

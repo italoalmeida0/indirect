@@ -13,7 +13,7 @@
  * (`bun run build:daemon`).
  */
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { promises as fs } from "fs";
 import { homedir, tmpdir } from "os";
 import path from "path";
@@ -909,15 +909,6 @@ async function boot() {
   const workDir = path.join(daemonDir, "workspace");
   const imgDir = path.join(workDir, "images");
   mkdirSync(imgDir, { recursive: true });
-
-  if (process.platform === "win32") {
-    const cachedUnish = path.join(homedir(), ".indirect-code", "external", "bin", "unish.exe");
-    if (existsSync(cachedUnish)) {
-      const destUnish = path.join(daemonDir, "external", "bin", "unish.exe");
-      mkdirSync(path.dirname(destUnish), { recursive: true });
-      copyFileSync(cachedUnish, destUnish);
-    }
-  }
 
   // Generate 10 workspace images:
   //   - 8 opaque 2200x1400 high-res PNGs (large noisy/patterned PNG -> small JPEG)

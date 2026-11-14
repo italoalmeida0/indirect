@@ -60,7 +60,12 @@ func normalizedOptions(o SessionOptions) SessionOptions {
 		o.Effort = canonicalReasoning(o.Effort)
 	}
 	o.Mode = canonicalSessionMode(o.Mode)
-	if o.Access != "ask" {
+	switch strings.ToLower(strings.TrimSpace(o.Access)) {
+	case "ask":
+		o.Access = "ask"
+	case "auto":
+		o.Access = "auto"
+	default:
 		o.Access = "full"
 	}
 	// Skills is a create/configure INPUT only: persisted options always
@@ -68,6 +73,28 @@ func normalizedOptions(o SessionOptions) SessionOptions {
 	// the live selection is SessionRecord.Skills.
 	o.Skills = []SkillChoice{}
 	return o
+}
+
+// effectiveSessionAccess resolves the effective access mode ("ask" | "auto" | "full")
+// honoring explicit Access first and legacy Jailed fallback when Access was unset.
+func effectiveSessionAccess(rawAccess string, jailed bool) string {
+	switch strings.ToLower(strings.TrimSpace(rawAccess)) {
+	case "ask":
+		return "ask"
+	case "auto":
+		return "auto"
+	case "full":
+		return "full"
+	default:
+		if jailed {
+			return "auto"
+		}
+		return "full"
+	}
+}
+
+func effectiveSessionJailed(rawAccess string, jailed bool) bool {
+	return effectiveSessionAccess(rawAccess, jailed) != "full"
 }
 
 // optionsEqual compares two SessionOptions (Skills is a slice).
@@ -108,7 +135,7 @@ func sessionSystemPrompt(cfg DaemonConfig, cwd string, options SessionOptions) s
 	fmt.Fprintf(&prompt, "OS: %s/%s, Shell: bash\n", runtime.GOOS, runtime.GOARCH)
 	prompt.WriteString(systemDirectives)
 	prompt.WriteString(toolResultsEnvelope)
-	if cfg.Settings.JailByDefault {
+	if options.Access == "ask" || options.Access == "auto" {
 		prompt.WriteString("Sandbox: Strict jail mode is active. Only access files inside the working directory and your session memory workspace.\n")
 	}
 	return prompt.String()
