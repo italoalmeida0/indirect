@@ -77,10 +77,11 @@ export interface ComposerCtxValue extends Composer {
   /** Per-skill session usable override (ask/yolo/deny/inherit). Cycling
    * lives in the Mode & Skills popup, which edits a local draft. */
   skillUsables: SessionOptions["skillUsables"];
-  /** Resolved approval mode ("ask" | "yolo"); yolo hides the YOLO/ASK selector. */
+  /** Resolved approval mode ("ask" | "yolo"); yolo hides the permissions selector. */
   approvalMode: SessionOptions["approvalMode"];
-  yoloMode: SessionOptions["yoloMode"];
-  setYoloMode: SessionOptions["setYoloMode"];
+  accessMode: SessionOptions["accessMode"];
+  setAccessMode: SessionOptions["setAccessMode"];
+  isFullAccess: SessionOptions["isFullAccess"];
   modeMenuOpen: SessionOptions["modeMenuOpen"];
   setModeMenuOpen: SessionOptions["setModeMenuOpen"];
   accessMenuOpen: SessionOptions["accessMenuOpen"];

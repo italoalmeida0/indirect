@@ -104,7 +104,7 @@ func snapshotTurn(act *sessionActor, gen int, prompt string, meta map[string]str
 		hotBaseMsgIdx: act.rec.HotBaseMsgIdx,
 		totalTurns:    max(act.rec.TotalTurns, act.rec.TurnSeq),
 		totalMsgs:     act.rec.globalMsgCount(),
-		model:         act.rec.Model, options: normalizedOptions(act.recordOptions()),
+		model:         act.rec.Model, options: normalizedOptionsWithJail(act.recordOptions(), act.rec.Jailed || act.jailed),
 		messages: cloneMessages(act.rec.Messages),
 		usage:       act.rec.Usage,
 		compaction:  cloneJSON(act.rec.Compaction),

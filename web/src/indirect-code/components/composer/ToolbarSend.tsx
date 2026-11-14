@@ -7,7 +7,7 @@ export function ToolbarSend() {
   const c = useComposerCtx();
   const s = useSession();
   const t = useTranscriptCtx();
-  const isDraft = () => s.draftMode() || !s.activeSessionId();
+  const isDraft = () => s.draftMode?.() || !s.activeSessionId();
   const isPromptBlank = createMemo(() => {
     const raw = c.inputPrompt();
     for (let i = 0; i < raw.length; i++) {

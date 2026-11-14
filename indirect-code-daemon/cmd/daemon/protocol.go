@@ -122,6 +122,7 @@ type discardAndResendMsg struct {
 	AttachmentIDs []string
 	Model         string
 	YOLO          bool
+	Options       *SessionOptions
 	Reply         chan any // discardResendResult
 }
 
@@ -149,6 +150,7 @@ type truncateAndRunMsg struct {
 	AttachmentIDs []string
 	Model         string
 	YOLO          bool
+	Options       *SessionOptions
 	Reply         chan any // truncateRunResult
 }
 
@@ -169,6 +171,7 @@ type forkAndResendMsg struct {
 	AttachmentIDs []string
 	Model         string
 	YOLO          bool
+	Options       *SessionOptions
 	Reply         chan any // forkResendResult
 }
 
@@ -184,6 +187,7 @@ type seededStartMsg struct {
 	TurnSeq       int
 	Model         string
 	YOLO          bool
+	Options       *SessionOptions
 	AttachmentIDs []string
 	Reply         chan any // seededStartResult
 }

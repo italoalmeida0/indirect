@@ -131,9 +131,10 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     expect(toolbarCtx).toContain('data-rc-tip={ui.isMobile() ? "Add & Settings" : "Add context"}');
     expect(toolbarCtx).toContain("aria-expanded={c.addContextOpen()}");
     expect(toolbarCtx).toContain('data-rc-tip="Mode & skills"');
-    expect(toolbarCtx).toContain(
-      'data-rc-tip={c.yoloMode() ? "Permissions: Full access" : "Permissions: Ask for approval"}',
-    );
+    expect(toolbarCtx).toContain("data-rc-tip={currentAccessSpec().tip}");
+    expect(toolbarCtx).toContain('tip: "Permissions: Auto (sandboxed)"');
+    expect(toolbarCtx).toContain('tip: "Permissions: Ask for approval"');
+    expect(toolbarCtx).toContain('tip: "Permissions: Full access (unjailed)"');
     expect(toolbarCtx).toContain(
       "data-rc-tip={`Activation policy: ${shownUsable(name)} (click to cycle)`}",
     );

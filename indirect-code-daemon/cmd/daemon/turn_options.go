@@ -97,6 +97,11 @@ func effectiveSessionJailed(rawAccess string, jailed bool) bool {
 	return effectiveSessionAccess(rawAccess, jailed) != "full"
 }
 
+func normalizedOptionsWithJail(o SessionOptions, jailed bool) SessionOptions {
+	o.Access = effectiveSessionAccess(o.Access, jailed)
+	return normalizedOptions(o)
+}
+
 // optionsEqual compares two SessionOptions (Skills is a slice).
 func optionsEqual(a, b SessionOptions) bool {
 	return a.Effort == b.Effort && a.Mode == b.Mode && a.Access == b.Access

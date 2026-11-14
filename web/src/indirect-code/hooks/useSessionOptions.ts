@@ -1,6 +1,11 @@
 import type { DaemonCommand } from "../daemon-protocol";
 import { normalizeEffort } from "../utils/format";
-import { normalizeSkillSelection } from "../utils/settingsValidation";
+import {
+  isValidAccessMode,
+  normalizeAccessMode,
+  normalizeSkillSelection,
+  type AccessMode,
+} from "../utils/settingsValidation";
 import {
   MODE_SKILL_NAMES,
   baseMode,
@@ -95,9 +100,14 @@ export function createSessionOptions(opts: {
   /** Current SignalDB `configDoc()?.lastSelection` snapshot (used to guard
    * Draft `lastLocalSelection` from clearing against pre-edit config state). */
   getSavedSelection?: () => any;
+  /** Host-level default access mode for new drafts when `lastSelection.access` is unset. */
+  getDefaultAccess?: () => AccessMode;
   /** Optional causal pull clock tracker from the WS transport layer. */
   causalPullClock?: CausalPullClock;
 }) {
+  const defaultAccessFallback = (): AccessMode =>
+    normalizeAccessMode(opts.getDefaultAccess?.(), "auto");
+
   const [effort, setEffort] = createSignal("medium");
   const [effortPreviewing, setEffortPreviewing] = createSignal(false);
   // Base session mode display echo ("agentic" | "talk"). The value actually
@@ -107,10 +117,18 @@ export function createSessionOptions(opts: {
   const arraysEqual = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
   const [selectedSkills, setSelectedSkills] = createSignal<string[]>([], { equals: arraysEqual });
   /** Resolved approval mode from the daemon ("ask" | "yolo"). "yolo" hides
-   * the YOLO/ASK selector (spec 4.2). */
+   * the execution permissions selector (spec 4.2). */
   const [approvalMode, setApprovalMode] = createSignal<"ask" | "yolo">("ask");
   const [activeModel, setActiveModel] = createSignal("");
-  const [yoloMode, setYoloMode] = createSignal(true);
+  const [rawAccessMode, setRawAccessMode] = createSignal<AccessMode>(defaultAccessFallback());
+  const accessMode = (): AccessMode =>
+    approvalMode() === "yolo" ? "full" : rawAccessMode();
+  const setAccessMode = (mode: AccessMode) => {
+    setRawAccessMode(normalizeAccessMode(mode, defaultAccessFallback()));
+  };
+  const isFullAccess = (): boolean => accessMode() === "full";
+  const yoloMode = isFullAccess;
+  const setYoloMode = (v: boolean) => setAccessMode(v ? "full" : "ask");
   const [modeMenuOpen, setModeMenuOpen] = createSignal(false);
   const [accessMenuOpen, setAccessMenuOpen] = createSignal(false);
   let modeBtn: HTMLButtonElement | undefined;
@@ -182,18 +200,21 @@ export function createSessionOptions(opts: {
         effort: normalizeEffort(effort()) || "medium",
         mode: pendingMode(),
         skills: selection.map((name) => ({ name, ...usableEntry(name, usables[name]) })),
-        access: yoloMode() ? "full" : "ask",
+        access: accessMode(),
       };
     });
   }
 
-  type LocalSelection = ReturnType<typeof sessionOptions> & { model: string };
+  type LocalSelection = ReturnType<typeof sessionOptions> & {
+    model: string;
+    userAccess?: AccessMode;
+  };
 
   function canonicalChoice(c: any): {
     model: string;
     effort: string;
     mode: "agentic" | "talk";
-    access: "ask" | "full";
+    access: AccessMode;
     skills: string[];
     skillUsables: Record<string, string>;
   } {
@@ -217,7 +238,7 @@ export function createSessionOptions(opts: {
       model: String(c?.model || ""),
       effort: normalizeEffort(String(c?.effort || "")) || "medium",
       mode,
-      access: c?.access === "ask" ? "ask" : "full",
+      access: normalizeAccessMode(c?.access, defaultAccessFallback()),
       skills,
       skillUsables: usablesMap,
     };
@@ -393,7 +414,11 @@ export function createSessionOptions(opts: {
   }
 
   function configureSession() {
-    const nextSelection: LocalSelection = { model: untrack(activeModel), ...sessionOptions() };
+    const nextSelection: LocalSelection = {
+      model: untrack(activeModel),
+      ...sessionOptions(),
+      ...(untrack(approvalMode) === "yolo" ? { userAccess: untrack(rawAccessMode) } : {}),
+    };
     recordLocalSelection(nextSelection, true);
     const sid = untrack(() => opts.getSessionId());
     if (sid) {
@@ -490,18 +515,25 @@ export function createSessionOptions(opts: {
       // The live skill selection is NOT taken from options.skills (the daemon
       // echoes it empty): it arrives as the session skill map snapshot via
       // applySessionSkills.
-      setYoloMode(options?.access !== "ask");
+      if (isValidAccessMode(options?.userAccess)) {
+        setRawAccessMode(normalizeAccessMode(options.userAccess));
+      } else if (mode === "talk" && options?.access === "full") {
+        if (!draftSeeded && !opts.getSessionId()) {
+          setRawAccessMode(defaultAccessFallback());
+        }
+      } else {
+        setRawAccessMode(normalizeAccessMode(options?.access, defaultAccessFallback()));
+      }
     });
   }
 
   /** Applies the daemon's resolved approval mode (session snapshot).
-   * Only forces `yoloMode` true when primary skill locks `mode === "yolo"`;
-   * never alters `yoloMode` when `mode === "ask"`. */
+   * Primary skill locking `mode === "yolo"` forces effective `accessMode()`
+   * to `"full"` while preserving the user's underlying `rawAccessMode`. */
   function applyApprovalMode(mode: string | undefined) {
     untrack(() => {
       const next = mode === "yolo" ? "yolo" : "ask";
       setApprovalMode(next);
-      if (next === "yolo") setYoloMode(true);
     });
   }
 
@@ -557,7 +589,6 @@ export function createSessionOptions(opts: {
       lastObservedLiveChoice = { sid, choice: canonicalChoice(incoming), updatedAt };
       applyModelWithCatalog(model, knownModelIds, fallbackModelId);
       applyOptions(options);
-      if (approvalMode() === "yolo") setYoloMode(true);
       return true;
     });
   }
@@ -666,7 +697,6 @@ export function createSessionOptions(opts: {
       };
       applyModelWithCatalog(model, knownModelIds, fallbackModelId);
       applyOptions(options);
-      if (approvalMode() === "yolo") setYoloMode(true);
       return true;
     });
   }
@@ -1076,7 +1106,14 @@ export function createSessionOptions(opts: {
         opts.send({ type: "update_skills", sessionId: sid, set, unset, order: skills });
       } else {
         draftSeeded = true; // an in-draft pick is the user's: keep it
-        recordLocalSelection({ model: activeModel(), ...sessionOptions() }, false);
+        recordLocalSelection(
+          {
+            model: activeModel(),
+            ...sessionOptions(),
+            ...(approvalMode() === "yolo" ? { userAccess: rawAccessMode() } : {}),
+          },
+          false,
+        );
       }
     });
   }
@@ -1087,6 +1124,7 @@ export function createSessionOptions(opts: {
     untrack(() => {
       setSkillUsables({});
       setApprovalMode("ask");
+      setRawAccessMode(defaultAccessFallback());
       setSelectedSkills([]);
       draftSeeded = false;
     });
@@ -1136,6 +1174,9 @@ export function createSessionOptions(opts: {
     resetSkillState,
     activeModel,
     setActiveModel,
+    accessMode,
+    setAccessMode,
+    isFullAccess,
     yoloMode,
     setYoloMode,
     modeMenuOpen,

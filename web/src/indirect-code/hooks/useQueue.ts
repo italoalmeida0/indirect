@@ -1,6 +1,10 @@
 import { createSignal } from "solid-js";
 import type { DaemonCommand, WireSessionOptions } from "../daemon-protocol";
-import { normalizeMidTurnSend, type MidTurnDelivery } from "../utils/settingsValidation";
+import {
+  normalizeAccessMode,
+  normalizeMidTurnSend,
+  type MidTurnDelivery,
+} from "../utils/settingsValidation";
 import type { QueuedMessage } from "../viewTypes";
 import { createAttachmentDraft } from "./useAttachmentDraft";
 
@@ -19,7 +23,7 @@ function normalizeQueuedOptions(raw: unknown): WireSessionOptions | undefined {
     effort: typeof r.effort === "string" && r.effort ? r.effort : "medium",
     mode: typeof r.mode === "string" && r.mode ? r.mode : "talk",
     skills,
-    access: typeof r.access === "string" && r.access ? r.access : "full",
+    access: normalizeAccessMode(r.access, "full"),
   };
 }
 
@@ -171,7 +175,7 @@ export function createQueue(opts: {
       sessionId: sid,
       text,
       model,
-      yolo,
+      yolo: options ? options.access === "full" : yolo,
       attachmentIds,
       ...(delivery ? { delivery } : {}),
       ...(options ? { options } : {}),

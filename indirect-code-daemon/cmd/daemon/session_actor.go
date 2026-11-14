@@ -376,7 +376,7 @@ func (a *sessionActor) handleData(env Envelope) {
 			select {
 			case m.Reply <- workerRefreshResult{
 				model:         a.rec.Model,
-				options:       normalizedOptions(a.rec.Options),
+				options:       normalizedOptionsWithJail(a.rec.Options, a.rec.Jailed || a.jailed),
 				jailed:        effectiveSessionJailed(a.rec.Options.Access, a.rec.Jailed || a.jailed),
 				context:       a.pendingContext,
 				skills:        cloneSkillsMap(a.rec.Skills),
@@ -927,22 +927,32 @@ func (a *sessionActor) onQueueOp(m queueOpMsg) {
 
 // ---- turn lifecycle ----
 
-func (a *sessionActor) startTurn(prompt string, attachmentIDs []string, model string, yolo bool, options *SessionOptions) error {
+func applyTurnOptionsAndAccess(rec *SessionRecord, actorJailed *bool, yolo bool, options *SessionOptions) {
+	prevAccess := rec.Options.Access
+	prevJailed := rec.Jailed
+	if actorJailed != nil && *actorJailed {
+		prevJailed = true
+	}
 	hasExplicitAccess := options != nil && strings.TrimSpace(options.Access) != ""
 	if options != nil {
-		a.rec.Options = normalizedOptions(*options)
+		rec.Options = normalizedOptions(*options)
 	}
-	if yolo && !hasExplicitAccess {
-		a.rec.Options.Access = "full"
+	if !hasExplicitAccess {
+		if yolo {
+			rec.Options.Access = "full"
+		} else {
+			rec.Options.Access = effectiveSessionAccess(prevAccess, prevJailed)
+		}
 	}
-	if hasExplicitAccess || yolo {
-		a.jailed = a.rec.Options.Access == "ask" || a.rec.Options.Access == "auto"
-		a.rec.Jailed = a.jailed
-	} else {
-		effAccess := effectiveSessionAccess(a.rec.Options.Access, a.rec.Jailed || a.jailed)
-		a.jailed = effAccess != "full"
-		a.rec.Jailed = a.jailed
+	jailed := rec.Options.Access == "ask" || rec.Options.Access == "auto"
+	rec.Jailed = jailed
+	if actorJailed != nil {
+		*actorJailed = jailed
 	}
+}
+
+func (a *sessionActor) startTurn(prompt string, attachmentIDs []string, model string, yolo bool, options *SessionOptions) error {
+	applyTurnOptionsAndAccess(a.rec, &a.jailed, yolo, options)
 	return a.startTurnWithMeta(prompt, attachmentIDs, model, nil)
 }
 
@@ -1674,6 +1684,8 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 		return
 	}
 	previous := cloneRecord(a.rec)
+	prevJailed := a.jailed
+	applyTurnOptionsAndAccess(a.rec, &a.jailed, m.YOLO, m.Options)
 	a.markUserSeen()
 	globalCut := a.rec.HotBaseMsgIdx + idx
 	// Cut the boundary turn and everything below it.
@@ -1695,6 +1707,7 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 	// ONE durable commit: the cut AND the new row land together.
 	if err := a.store.persistEdited(a.id, m.TurnID, a.rec.Messages[idx:], nil, recordMeta(a.rec)); err != nil {
 		a.rec = previous
+		a.jailed = prevJailed
 		replyResend(m.Reply, discardResendResult{Error: "Could not save: " + err.Error()})
 		return
 	}
@@ -1706,7 +1719,7 @@ func (a *sessionActor) applyDiscardAndResend(m discardAndResendMsg) {
 	a.emit(tailContentEvent(a.hostID(), a.id, "session_content", a.rec, 0, nil))
 	a.pingChange()
 	// Start the turn SEEDED (the row exists; the worker runs Continue).
-	if err := a.startSeededTurn(m.TurnID, m.Model, m.YOLO, ids); err != nil {
+	if err := a.startSeededTurn(m.TurnID, m.Model, m.YOLO, ids, m.Options); err != nil {
 		// The message is SAFE (durable row above) — report, never lose.
 		replyResend(m.Reply, discardResendResult{Error: "Message saved, but the turn did not start: " + err.Error()})
 		return
@@ -1766,6 +1779,8 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 		return
 	}
 	previous := cloneRecord(a.rec)
+	prevJailed := a.jailed
+	applyTurnOptionsAndAccess(a.rec, &a.jailed, m.YOLO, m.Options)
 	a.markUserSeen()
 	localKeep := keep - a.rec.HotBaseMsgIdx
 	// Cut at Keep + the same three repairs onEditApply applies.
@@ -1788,6 +1803,7 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 	// ONE durable commit: the cut AND the new row land together.
 	if err := a.store.persistEdited(a.id, row.TurnIndex, a.rec.Messages[insertStart:], nil, recordMeta(a.rec)); err != nil {
 		a.rec = previous
+		a.jailed = prevJailed
 		select {
 		case m.Reply <- truncateRunResult{Error: "Could not save: " + err.Error()}:
 		default:
@@ -1801,7 +1817,7 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 	a.emit(map[string]any{"type": "session_truncated", "hostId": a.hostID(), "sessionId": a.id, "keepIndex": keep - 1})
 	a.emit(tailContentEvent(a.hostID(), a.id, "session_content", a.rec, 0, nil))
 	a.pingChange()
-	if err := a.startSeededTurn(row.TurnIndex, m.Model, m.YOLO, ids); err != nil {
+	if err := a.startSeededTurn(row.TurnIndex, m.Model, m.YOLO, ids, m.Options); err != nil {
 		// The message is SAFE (durable row above) — report, never lose.
 		select {
 		case m.Reply <- truncateRunResult{Error: "Message saved, but the turn did not start: " + err.Error()}:
@@ -1818,14 +1834,17 @@ func (a *sessionActor) onTruncateAndRun(m truncateAndRunMsg) {
 // startSeededTurn starts a turn whose user row already exists in the
 // record (atomic discard&resend / fork&resend). Same contract as
 // startTurnWithMeta minus the TurnSeq bump: the row carries turnSeq.
-func (a *sessionActor) startSeededTurn(turnSeq int, model string, yolo bool, attachIDs []string) error {
+func (a *sessionActor) startSeededTurn(turnSeq int, model string, yolo bool, attachIDs []string, options ...*SessionOptions) error {
 	if a.state != stateIdle || a.persistErr != nil || a.closing {
 		return fmt.Errorf("session is busy or cannot persist")
 	}
-	if yolo && a.rec.Options.Access == "ask" {
-		a.rec.Options.Access = "full"
+	var opt *SessionOptions
+	if len(options) > 0 {
+		opt = options[0]
 	}
 	previous := *a.rec
+	prevJailed := a.jailed
+	applyTurnOptionsAndAccess(a.rec, &a.jailed, yolo, opt)
 	a.gen++
 	if model != "" {
 		a.rec.Model = model
@@ -1838,6 +1857,7 @@ func (a *sessionActor) startSeededTurn(turnSeq int, model string, yolo bool, att
 	wal, err := a.store.openWAL(a.id, h)
 	if err != nil {
 		*a.rec = previous
+		a.jailed = prevJailed
 		a.storageError(err)
 		return err
 	}
@@ -1973,6 +1993,10 @@ func (a *sessionActor) applyForkAndResend(m forkAndResendMsg) {
 		replyForkResend(m.Reply, forkResendResult{Error: "Could not copy attachment: " + err.Error()})
 		return
 	}
+	applyTurnOptionsAndAccess(forkRec, nil, m.YOLO, m.Options)
+	if m.Model != "" {
+		forkRec.Model = m.Model
+	}
 	newTurn := max(forkRec.TurnSeq, forkRec.TotalTurns) + 1
 	firstMsgIdx := forkRec.globalMsgCount()
 	row := a.externalizeMsg(seededUserMessage(forkRec, text, ids))
@@ -2005,7 +2029,7 @@ func (a *sessionActor) applyForkAndResend(m forkAndResendMsg) {
 	// Start the seeded turn in the FORK (its actor spawns on this message)
 	// BEFORE answering: the client must learn whether the turn actually
 	// started. The fork and its user row are already durable either way.
-	if err := a.startForkedSeeded(fr.NewID, newTurn, m.Model, m.YOLO, ids); err != nil {
+	if err := a.startForkedSeeded(fr.NewID, newTurn, m.Model, m.YOLO, ids, m.Options); err != nil {
 		replyForkResend(m.Reply, forkResendResult{NewID: fr.NewID, Error: "Fork created but the turn did not start: " + err.Error()})
 		return
 	}
@@ -2113,7 +2137,11 @@ func (a *sessionActor) copySelectedForkAttachments(rec *SessionRecord, ids []str
 // transparently by the supervisor) and reports whether the turn actually
 // started. A failure here never loses the fork's durable user row, but the
 // caller must surface it instead of claiming success.
-func (a *sessionActor) startForkedSeeded(forkID string, turnSeq int, model string, yolo bool, attachIDs []string) error {
+func (a *sessionActor) startForkedSeeded(forkID string, turnSeq int, model string, yolo bool, attachIDs []string, options ...*SessionOptions) error {
+	var opt *SessionOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
 	inbox, control, ok := a.sessionRoute(forkID)
 	_ = control
 	if !ok {
@@ -2121,7 +2149,7 @@ func (a *sessionActor) startForkedSeeded(forkID string, turnSeq int, model strin
 	}
 	reply := make(chan any, 1)
 	select {
-	case inbox <- Envelope{SessionID: forkID, Payload: seededStartMsg{TurnSeq: turnSeq, Model: model, YOLO: yolo, AttachmentIDs: attachIDs, Reply: reply}}:
+	case inbox <- Envelope{SessionID: forkID, Payload: seededStartMsg{TurnSeq: turnSeq, Model: model, YOLO: yolo, Options: opt, AttachmentIDs: attachIDs, Reply: reply}}:
 	case <-time.After(replyTimeout):
 		return fmt.Errorf("fork session busy")
 	}
@@ -2157,7 +2185,7 @@ func (a *sessionActor) onSeededStart(m seededStartMsg) {
 		return
 	}
 	ids := messageAttachmentIDs(a.rec.Messages[last], a.rec.Attachments)
-	if err := a.startSeededTurn(m.TurnSeq, m.Model, m.YOLO, ids); err != nil {
+	if err := a.startSeededTurn(m.TurnSeq, m.Model, m.YOLO, ids, m.Options); err != nil {
 		select {
 		case m.Reply <- seededStartResult{Error: err.Error()}:
 		default:
@@ -2406,10 +2434,11 @@ func (a *sessionActor) onFork(m forkReqMsg) {
 }
 
 func (a *sessionActor) newForkSkeleton(newID, title string, now int64) *SessionRecord {
+	jailed := effectiveSessionJailed(a.rec.Options.Access, a.rec.Jailed || a.jailed)
 	rec := &SessionRecord{
 		ID: newID, CWD: resolvePath(a.rec.CWD),
 		Title: title, TitleSource: "manual", Model: a.rec.Model,
-		Options: normalizedOptions(a.rec.Options), Status: "idle", Jailed: a.rec.Jailed,
+		Options: normalizedOptionsWithJail(a.rec.Options, jailed), Status: "idle", Jailed: jailed,
 		CreatedAt: now, UpdatedAt: now,
 		LastDate: a.rec.LastDate, LastMode: a.rec.LastMode,
 		AttentionSeq: 0, SeenSeq: 0, AttentionKind: "",

@@ -6,15 +6,21 @@ import { FileIcon } from "../presentation";
 import { extractTodoItems, tryParseArgs } from "../utils/tools";
 import { formatDurationSecs } from "../utils/format";
 import { useBackground } from "../ctx";
-import type { PendingApproval } from "../types";
+import type {
+  AccessMode,
+  ApprovalDecision,
+  PendingApproval,
+  PermissionCapability,
+  PermissionRule,
+} from "../types";
 import { ShellCmd } from "./CodeBlock";
 
-/** Tool call approval card (narrow props instead of the god-ctx). */
+/** Tool call & runtime capability approval card (narrow props instead of the god-ctx). */
 export interface ApprovalCardProps {
   pendingApproval: () => PendingApproval | null;
   convWidthClass: () => string;
-  respondApproval: (approved: boolean, always?: boolean) => void;
-  setYoloMode: (v: boolean) => void;
+  respondApproval: (decision: ApprovalDecision) => void;
+  accessMode?: () => AccessMode;
 }
 
 interface ApprovalEditHunk {
@@ -82,6 +88,51 @@ function tipIfLong(text: string, min = 48): string | undefined {
   return text.length > min ? text : undefined;
 }
 
+function capabilityBadgeMeta(
+  capability: PermissionCapability | undefined,
+  reason: string | undefined,
+): { label: string; icon: string } {
+  const lowerReason = (reason || "").toLowerCase();
+  switch (capability) {
+    case "exec":
+      return { label: "Command", icon: "lucide:terminal" };
+    case "fs_read":
+      if (
+        lowerReason.includes("secret") ||
+        lowerReason.includes("credential") ||
+        lowerReason.includes("protected") ||
+        lowerReason.includes(".env")
+      ) {
+        return { label: "Protected file", icon: "lucide:folder-lock" };
+      }
+      return { label: "Read outside workspace", icon: "lucide:folder-lock" };
+    case "fs_write":
+      return { label: "Write file", icon: "lucide:file-pen-line" };
+    case "net":
+      return { label: "Network access", icon: "lucide:globe" };
+    case "tool":
+      return { label: "Tool", icon: "lucide:wrench" };
+    default:
+      return { label: "Permission check", icon: "lucide:shield-alert" };
+  }
+}
+
+function formatProposedRuleScope(rule: PermissionRule): string {
+  const effect = rule.effect === "deny" ? "deny" : "allow";
+  switch (rule.kind) {
+    case "exec":
+      return `Scope: ${effect} command "${rule.pattern}"`;
+    case "net":
+      return `Scope: ${effect} host "${rule.pattern}"`;
+    case "fs_read":
+      return `Scope: ${effect} read path "${rule.pattern}"`;
+    case "fs_write":
+      return `Scope: ${effect} path "${rule.pattern}"`;
+    case "tool":
+      return `Scope: ${effect} tool "${rule.pattern}"`;
+  }
+}
+
 export function ApprovalCard(props: ApprovalCardProps) {
   const jobs = useBackground().sessionJobs;
   return (
@@ -145,30 +196,162 @@ export function ApprovalCard(props: ApprovalCardProps) {
           }
           return (pa.args || "").trim();
         })();
+        const isHighRisk = pa.risk === "high";
+        const effectiveAccess: "ask" | "auto" =
+          pa.accessMode ?? (props.accessMode?.() === "auto" ? "auto" : "ask");
+        const headerIcon =
+          isHighRisk
+            ? "lucide:shield-alert"
+            : pa.capability === "net"
+              ? "lucide:globe"
+              : pa.capability === "fs_read" || pa.capability === "fs_write"
+                ? "lucide:folder-lock"
+                : pa.capability === "exec"
+                  ? "lucide:terminal"
+                  : "lucide:shield-alert";
+        const headerIconClass = isHighRisk
+          ? "text-danger shrink-0"
+          : pa.capability === "net"
+            ? "text-accent shrink-0"
+            : "text-warning shrink-0";
+        const headerTitle = pa.capability ? "Review permission request" : "Review tool call";
+        const hasCallout = Boolean(pa.capability || pa.target || pa.reason);
+        const capMeta = capabilityBadgeMeta(pa.capability, pa.reason);
+        const showAllowAlways =
+          !isUnsupportedLegacyPython && (pa.canAllowAlways ?? Boolean(pa.proposedRule));
+        const showAllowSession =
+          !isUnsupportedLegacyPython && (pa.canAllowSession ?? Boolean(pa.proposedRule));
+        const showScopedButtons = showAllowAlways || showAllowSession;
+        const totalButtons =
+          1 +
+          (showAllowAlways ? 1 : 0) +
+          (showAllowSession ? 1 : 0) +
+          (!isUnsupportedLegacyPython ? 1 : 0);
 
         return (
           <section
             aria-label="Tool approval request"
             data-approval-card
+            data-approval-risk={pa.risk || "default"}
             class={`w-full ${props.convWidthClass()} mx-auto py-1`}
           >
             <div class="rounded-panel border border-border bg-surface overflow-hidden">
-              <div class="px-3.5 py-2.5 border-b border-border-subtle bg-surface-subtle flex items-center gap-2 min-w-0">
-                <Iconify icon="lucide:shield-alert" size={14} class="text-warning shrink-0" />
-                <span class="text-xs font-medium text-fg shrink-0">Review tool call</span>
+              <div
+                data-approval-header
+                class="px-3 sm:px-3.5 py-2 sm:py-2.5 border-b border-border-subtle bg-surface-subtle flex flex-nowrap items-center gap-1.5 sm:gap-2 min-w-0"
+              >
+                <Iconify icon={headerIcon} size={14} class={headerIconClass} />
+                <Show
+                  when={Boolean(pa.capability)}
+                  fallback={<span class="text-xs font-medium text-fg shrink-0">{headerTitle}</span>}
+                >
+                  <span class="text-xs font-medium text-fg shrink-0 sm:hidden">
+                    Permission request
+                  </span>
+                  <span class="hidden sm:inline text-xs font-medium text-fg shrink-0">
+                    {headerTitle}
+                  </span>
+                </Show>
                 <span
-                  class="inline-flex items-center rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-secondary truncate"
+                  class="inline-flex items-center rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-secondary min-w-0 max-w-28 sm:max-w-48 truncate"
                   data-rc-tip={tipIfLong(name, 32)}
                 >
                   {name}
                 </span>
-                <span class="ml-auto inline-flex items-center gap-1.5 text-2xs text-fg-muted shrink-0">
-                  <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
-                  Safe mode
-                </span>
+                <Show
+                  when={isHighRisk}
+                  fallback={
+                    <Show
+                      when={effectiveAccess === "auto"}
+                      fallback={
+                        <span
+                          data-approval-badge="ask"
+                          class="ml-auto inline-flex items-center gap-1.5 text-2xs text-fg-muted shrink-0 whitespace-nowrap"
+                        >
+                          <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
+                          <span class="sm:hidden">Ask</span>
+                          <span class="hidden sm:inline">Supervised · Ask</span>
+                        </span>
+                      }
+                    >
+                      <span
+                        data-approval-badge="auto"
+                        class="ml-auto inline-flex items-center gap-1.5 rounded-inner border border-accent/25 bg-accent-subtle px-2 py-0.5 text-2xs font-medium text-accent shrink-0 whitespace-nowrap"
+                      >
+                        <span class="h-1.5 w-1.5 rounded-full bg-accent shrink-0" aria-hidden="true" />
+                        <span class="sm:hidden">Auto</span>
+                        <span class="hidden sm:inline">Auto · Boundary check</span>
+                      </span>
+                    </Show>
+                  }
+                >
+                  <span
+                    data-approval-badge="high-risk"
+                    class="ml-auto inline-flex items-center gap-1.5 rounded-inner border border-danger/30 bg-danger-subtle px-2 py-0.5 text-2xs font-medium text-danger shrink-0 whitespace-nowrap"
+                  >
+                    <span class="h-1.5 w-1.5 rounded-full bg-danger shrink-0" aria-hidden="true" />
+                    High risk
+                  </span>
+                </Show>
               </div>
 
-              <div class="px-3.5 py-2.5 text-xs space-y-2">
+              <div class="px-3.5 py-2.5 text-xs space-y-2.5">
+                <Show when={hasCallout}>
+                  <div
+                    data-approval-callout
+                    class={`rounded-lg border px-3 py-2 space-y-1.5 ${
+                      isHighRisk
+                        ? "border-danger/30 bg-danger-subtle/35"
+                        : "border-border bg-surface-subtle"
+                    }`}
+                  >
+                    <Show when={pa.capability || pa.target}>
+                      <div class="flex flex-wrap items-center gap-1.5 min-w-0">
+                        <Show when={pa.capability}>
+                          <span
+                            data-approval-capability={pa.capability}
+                            class={`inline-flex items-center gap-1 rounded-inner border px-1.5 py-0.5 text-2xs font-medium shrink-0 ${
+                              isHighRisk
+                                ? "border-danger/30 bg-danger-subtle text-danger"
+                                : "border-border bg-surface text-fg-secondary"
+                            }`}
+                          >
+                            <Iconify
+                              icon={capMeta.icon}
+                              size={11}
+                              class={isHighRisk ? "text-danger shrink-0" : "text-fg-muted shrink-0"}
+                            />
+                            <span>{capMeta.label}</span>
+                          </span>
+                        </Show>
+                        <Show when={pa.target}>
+                          <code
+                            data-approval-target
+                            class="font-mono text-xs text-fg break-words [overflow-wrap:anywhere] min-w-0"
+                          >
+                            {pa.target}
+                          </code>
+                        </Show>
+                      </div>
+                    </Show>
+                    <Show when={pa.reason}>
+                      <p class="text-xs text-fg-secondary leading-snug break-words">
+                        {pa.reason}
+                      </p>
+                    </Show>
+                    <Show when={pa.proposedRule && showScopedButtons}>
+                      <div
+                        data-approval-scope
+                        class="pt-1.5 border-t border-border-subtle flex items-center gap-1.5 text-2xs text-fg-muted min-w-0"
+                      >
+                        <Iconify icon="lucide:shield-check" size={12} class="text-accent shrink-0" />
+                        <span class="font-mono text-fg-secondary break-words [overflow-wrap:anywhere] min-w-0">
+                          {formatProposedRuleScope(pa.proposedRule!)}
+                        </span>
+                      </div>
+                    </Show>
+                  </div>
+                </Show>
                 <Show when={name === "bash"}>
                   <Show when={bashDesc}>
                     <div class="text-xs text-fg-secondary">{bashDesc}</div>
@@ -237,7 +420,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                   </Show>
                   <p class="text-2xs text-fg-muted">
                     {isUnsupportedLegacyPython
-                      ? "Legacy Python execution was removed. Reject so the agent rewrites the snippet as JavaScript."
+                      ? "Legacy Python execution was removed. Deny so the agent rewrites the snippet as JavaScript."
                       : "Moves to the background automatically after 10s."}
                   </p>
                 </Show>
@@ -533,42 +716,66 @@ export function ApprovalCard(props: ApprovalCardProps) {
                 </details>
               </Show>
 
-              <div class="px-3.5 py-2 border-t border-border-subtle bg-surface-subtle flex items-center justify-between gap-2 flex-wrap">
+              <div
+                class={
+                  showScopedButtons
+                    ? "px-3.5 py-2.5 border-t border-border-subtle bg-surface-subtle grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center"
+                    : "px-3.5 py-2 border-t border-border-subtle bg-surface-subtle flex items-center justify-between gap-2 flex-wrap"
+                }
+              >
                 <button
                   type="button"
-                  data-action="approval-reject"
+                  data-action="approval-deny"
                   onPointerDown={(e) => press(e.currentTarget)}
-                  onClick={() => props.respondApproval(false)}
-                  class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                  onClick={() => props.respondApproval("deny")}
+                  class={`inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg-secondary hover:border-danger/35 hover:bg-danger-subtle hover:text-danger transition-colors cursor-pointer ${
+                    showScopedButtons ? "sm:mr-auto" : ""
+                  }`}
                 >
-                  Reject
+                  Deny
                 </button>
+                <Show when={showAllowAlways}>
+                  <button
+                    type="button"
+                    data-action="approval-always"
+                    data-rc-tip="Save global allow rule in Settings -> Permissions"
+                    aria-label="Always allow"
+                    onPointerDown={(e) => press(e.currentTarget)}
+                    onClick={() => props.respondApproval("always")}
+                    class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg-secondary hover:border-border-strong hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                  >
+                    Always allow
+                  </button>
+                </Show>
+                <Show when={showAllowSession}>
+                  <button
+                    type="button"
+                    data-action="approval-session"
+                    data-rc-tip="Allow matching requests in this conversation only"
+                    aria-label="Allow for session"
+                    onPointerDown={(e) => press(e.currentTarget)}
+                    onClick={() => props.respondApproval("session")}
+                    class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg hover:border-border-strong hover:bg-surface-muted transition-colors cursor-pointer"
+                  >
+                    Allow for session
+                  </button>
+                </Show>
                 <Show when={!isUnsupportedLegacyPython}>
-                  <div class="flex items-center gap-2 ml-auto">
-                    <button
-                      type="button"
-                      data-action="approval-always"
-                      data-rc-tip="Enable Full access and allow all tool calls"
-                      aria-label="Always allow (enable Full access)"
-                      onPointerDown={(e) => press(e.currentTarget)}
-                      onClick={() => {
-                        props.setYoloMode(true);
-                        props.respondApproval(true, true);
-                      }}
-                      class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg-secondary hover:border-border-strong hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-                    >
-                      Always allow
-                    </button>
-                    <button
-                      type="button"
-                      data-action="approval-once"
-                      onPointerDown={(e) => press(e.currentTarget)}
-                      onClick={() => props.respondApproval(true)}
-                      class="inline-flex items-center justify-center rounded-lg bg-fg text-background hover:opacity-90 px-3.5 py-1 min-h-7 text-xs font-medium transition-opacity cursor-pointer"
-                    >
-                      Allow once
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    data-action="approval-once"
+                    onPointerDown={(e) => press(e.currentTarget)}
+                    onClick={() => props.respondApproval("once")}
+                    class={`inline-flex items-center justify-center rounded-lg bg-fg text-background hover:opacity-90 px-3.5 py-1 min-h-7 text-xs font-medium transition-opacity cursor-pointer ${
+                      showScopedButtons && totalButtons === 3
+                        ? "col-span-2 sm:col-span-1"
+                        : !showScopedButtons
+                          ? "ml-auto"
+                          : ""
+                    }`}
+                  >
+                    Allow once
+                  </button>
                 </Show>
               </div>
             </div>

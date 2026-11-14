@@ -72,6 +72,7 @@ render(() => {
       session={
         {
           creatingSession: () => false,
+          draftMode: () => !sid(),
           activeSessionId: sid,
           activeProject: () => ({ id: "project" }),
         } as any

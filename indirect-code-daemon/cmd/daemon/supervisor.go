@@ -864,7 +864,7 @@ func newResumeSnapshot(rec *SessionRecord, header *walHeader) *workerSnapshot {
 		totalTurns:    rec.TotalTurns,
 		totalMsgs:     rec.globalMsgCount(),
 		model:         rec.Model,
-		options:       normalizedOptions(rec.Options),
+		options:       normalizedOptionsWithJail(rec.Options, rec.Jailed),
 		sessionGrants: append([]tools.PermissionRule(nil), rec.SessionGrants...),
 		messages:      cloneMessages(rec.Messages),
 		usage:       rec.Usage,

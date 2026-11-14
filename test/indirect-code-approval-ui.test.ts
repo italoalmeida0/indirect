@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { transformAsync } from "@babel/core";
 import tsPreset from "@babel/preset-typescript";
 import solidPreset from "babel-preset-solid";
-import type { PendingApproval } from "../web/src/indirect-code/types";
+import type { AccessMode, PendingApproval } from "../web/src/indirect-code/types";
 
 interface RenderApprovalOpts {
   approval: PendingApproval | null;
   convWidthClass?: string;
+  accessMode?: AccessMode;
   jobs?: Array<{ id: string; label?: string; status: string }>;
 }
 
@@ -65,7 +66,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
                         pendingApproval={() => opts.approval}
                         convWidthClass={() => opts.convWidthClass || "max-w-3xl"}
                         respondApproval={() => {}}
-                        setYoloMode={() => {}}
+                        accessMode={() => opts.accessMode || "ask"}
                       />
                     </BackgroundCtx.Provider>
                   ));
@@ -142,9 +143,10 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(html).toBe("");
   });
 
-  test("bash renders 1:1 lane alignment, whisper-quiet header, ShellCmd syntax highlight, Arguments disclosure & neutral Always allow", () => {
+  test("bash renders 1:1 lane alignment, whisper-quiet header, ShellCmd syntax highlight, Arguments disclosure & scoped buttons", () => {
     const html = renderApprovalCardSsr({
       convWidthClass: "max-w-3xl",
+      accessMode: "ask",
       approval: {
         callId: "call-bash-1",
         tool: "bash",
@@ -152,6 +154,14 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
           command: 'bun test --bail "test/indirect-code-approval-ui.test.ts"',
           description: "Run approval UI unit suite",
         }),
+        proposedRule: {
+          id: "rule-bun-test",
+          effect: "allow",
+          kind: "exec",
+          pattern: "bun test",
+        },
+        canAllowSession: true,
+        canAllowAlways: true,
       },
     });
 
@@ -162,7 +172,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(html).toContain('data-glyph="lucide:shield-alert"');
     expect(html).toContain(">Review tool call<");
     expect(html).toContain(">bash<");
-    expect(html).toContain(">Safe mode<");
+    expect(html).toContain("Supervised · Ask");
     expect(html).toContain("Run approval UI unit suite");
     expect(html).toContain("$ ");
     expect(html).toContain("--bail");
@@ -171,10 +181,12 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(html).toContain(">Arguments<");
 
     // Calm action hierarchy & mobile touch sizing
-    expect(html).toContain('data-action="approval-reject"');
+    expect(html).toContain('data-action="approval-deny"');
     expect(html).toContain('data-action="approval-always"');
-    expect(html).toContain('data-rc-tip="Enable Full access and allow all tool calls"');
-    expect(html).toContain('aria-label="Always allow (enable Full access)"');
+    expect(html).toContain('data-rc-tip="Save global allow rule in Settings -> Permissions"');
+    expect(html).toContain('aria-label="Always allow"');
+    expect(html).toContain('data-action="approval-session"');
+    expect(html).toContain('aria-label="Allow for session"');
     expect(html).toContain('data-action="approval-once"');
     expect(html).toContain("bg-fg text-background");
     expect(html).toContain("min-h-7");
@@ -208,6 +220,8 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
           env: { NODE_ENV: "test", CI: "1" },
           stdin: "hello",
         }),
+        canAllowSession: true,
+        canAllowAlways: true,
       },
     });
     assertWhisperQuietApprovalHtml(jsHtml);
@@ -220,6 +234,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(jsHtml).toContain(">stdin<");
     expect(jsHtml).toContain("Moves to the background automatically after 10s.");
     expect(jsHtml).toContain('data-action="approval-always"');
+    expect(jsHtml).toContain('data-action="approval-session"');
     expect(jsHtml).toContain('data-action="approval-once"');
 
     const pyHtml = renderApprovalCardSsr({
@@ -233,10 +248,11 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(pyHtml).toContain("Unsupported legacy Python call");
     expect(pyHtml).toContain('data-glyph="mdi:language-python"');
     expect(pyHtml).toContain(
-      "Legacy Python execution was removed. Reject so the agent rewrites the snippet as JavaScript.",
+      "Legacy Python execution was removed. Deny so the agent rewrites the snippet as JavaScript.",
     );
-    expect(pyHtml).toContain('data-action="approval-reject"');
+    expect(pyHtml).toContain('data-action="approval-deny"');
     expect(pyHtml).not.toContain('data-action="approval-always"');
+    expect(pyHtml).not.toContain('data-action="approval-session"');
     expect(pyHtml).not.toContain('data-action="approval-once"');
 
     const legacyExecPyHtml = renderApprovalCardSsr({
@@ -249,6 +265,125 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     assertWhisperQuietApprovalHtml(legacyExecPyHtml);
     expect(legacyExecPyHtml).toContain("Unsupported legacy Python call");
     expect(legacyExecPyHtml).not.toContain('data-action="approval-once"');
+  });
+
+  test("renders dynamic capability callouts, proposed rule scope chips, High risk vs Auto badges, and non-persistable button gating", () => {
+    // 1. High-risk Auto command prompt (git push)
+    const highRiskHtml = renderApprovalCardSsr({
+      accessMode: "auto",
+      approval: {
+        callId: "call-push-1",
+        tool: "bash",
+        args: JSON.stringify({ command: "git push origin main" }),
+        capability: "exec",
+        target: "git push origin main",
+        reason: "Pushing commits to a remote repository modifies external state.",
+        risk: "high",
+        accessMode: "auto",
+        proposedRule: {
+          id: "rule-push",
+          effect: "allow",
+          kind: "exec",
+          pattern: "git push",
+        },
+        canAllowSession: true,
+        canAllowAlways: true,
+      },
+    });
+    assertWhisperQuietApprovalHtml(highRiskHtml);
+    expect(highRiskHtml).toContain(">Review permission request<");
+    expect(highRiskHtml).toContain('data-approval-badge="high-risk"');
+    expect(highRiskHtml).toContain("High risk");
+    expect(highRiskHtml).toContain('data-approval-callout');
+    expect(highRiskHtml).toContain('data-approval-capability="exec"');
+    expect(highRiskHtml).toContain(">Command<");
+    expect(highRiskHtml).toContain("git push origin main");
+    expect(highRiskHtml).toContain(
+      "Pushing commits to a remote repository modifies external state.",
+    );
+    expect(highRiskHtml).toContain('data-approval-scope');
+    expect(highRiskHtml).toContain('Scope: allow command "git push"');
+    expect(highRiskHtml).toContain('data-action="approval-deny"');
+    expect(highRiskHtml).toContain('data-action="approval-always"');
+    expect(highRiskHtml).toContain('data-action="approval-session"');
+    expect(highRiskHtml).toContain('data-action="approval-once"');
+
+    // 2. Medium-risk Auto runtime network boundary check
+    const netHtml = renderApprovalCardSsr({
+      accessMode: "auto",
+      approval: {
+        callId: "call-net-1",
+        tool: "exec_script",
+        args: JSON.stringify({ code: "await fetch('https://api.github.com/repos');" }),
+        capability: "net",
+        target: "api.github.com:443",
+        reason: "Script requested network access to api.github.com:443.",
+        risk: "medium",
+        accessMode: "auto",
+        proposedRule: {
+          id: "rule-gh",
+          effect: "allow",
+          kind: "net",
+          pattern: "api.github.com",
+        },
+        canAllowSession: true,
+        canAllowAlways: true,
+      },
+    });
+    assertWhisperQuietApprovalHtml(netHtml);
+    expect(netHtml).toContain(">Review permission request<");
+    expect(netHtml).toContain('data-approval-badge="auto"');
+    expect(netHtml).toContain("Auto · Boundary check");
+    expect(netHtml).toContain(">Network access<");
+    expect(netHtml).toContain("api.github.com:443");
+    expect(netHtml).toContain('Scope: allow host "api.github.com"');
+
+    // 3. Outside path write & protected file read badges
+    const fsWriteHtml = renderApprovalCardSsr({
+      accessMode: "auto",
+      approval: {
+        callId: "call-write-out",
+        tool: "write",
+        args: JSON.stringify({ path: "../shared-lib/index.ts", content: "export {};\n" }),
+        capability: "fs_write",
+        target: "../shared-lib/index.ts",
+        reason: "Target path is outside the active workspace root.",
+        proposedRule: {
+          id: "rule-shared",
+          effect: "allow",
+          kind: "fs_write",
+          pattern: "../shared-lib/**",
+        },
+        canAllowSession: true,
+        canAllowAlways: false,
+      },
+    });
+    assertWhisperQuietApprovalHtml(fsWriteHtml);
+    expect(fsWriteHtml).toContain(">Write file<");
+    expect(fsWriteHtml).toContain('Scope: allow path "../shared-lib/**"');
+    expect(fsWriteHtml).toContain('data-action="approval-session"');
+    expect(fsWriteHtml).not.toContain('data-action="approval-always"');
+
+    const secretReadHtml = renderApprovalCardSsr({
+      accessMode: "auto",
+      approval: {
+        callId: "call-secret",
+        tool: "read",
+        args: JSON.stringify({ path: ".env.production" }),
+        capability: "fs_read",
+        target: ".env.production",
+        reason: "Reading protected secret file .env.production.",
+        canAllowSession: false,
+        canAllowAlways: false,
+      },
+    });
+    assertWhisperQuietApprovalHtml(secretReadHtml);
+    expect(secretReadHtml).toContain(">Protected file<");
+    expect(secretReadHtml).toContain('data-action="approval-deny"');
+    expect(secretReadHtml).toContain('data-action="approval-once"');
+    expect(secretReadHtml).not.toContain('data-action="approval-session"');
+    expect(secretReadHtml).not.toContain('data-action="approval-always"');
+    expect(secretReadHtml).not.toContain("data-approval-scope");
   });
 
   test("read renders FileIcon, path, and line-range chip (L10-50 and L10+), and hides Arguments when empty", () => {

@@ -13,6 +13,7 @@ import { createMentions } from "./useMentions";
 import { slashCommand } from "../utils/composerTokens";
 import {
   normalizeMidTurnSend,
+  type AccessMode,
   type MidTurnDelivery,
 } from "../utils/settingsValidation";
 import { createAttachmentDraft } from "./useAttachmentDraft";
@@ -40,7 +41,7 @@ export function createComposer(opts: {
     effort: string;
     mode: string;
     skills: SkillChoiceWire[];
-    access: string;
+    access: AccessMode;
   };
   isSessionRunning: () => boolean;
   isWorkspaceBlocked: () => boolean;

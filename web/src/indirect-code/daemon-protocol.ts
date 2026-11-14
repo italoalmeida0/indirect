@@ -1,7 +1,22 @@
 import type { TranscriptCursor } from "./transcript/order";
 import type { SessionContext } from "./context";
-import type { MidTurnDelivery } from "./utils/settingsValidation";
+import type {
+  AccessMode,
+  ApprovalDecision,
+  MidTurnDelivery,
+  PermissionCapability,
+  PermissionEffect,
+  PermissionRule,
+} from "./utils/settingsValidation";
 import type { QueuedMessage, TodoItem } from "./viewTypes";
+
+export type {
+  AccessMode,
+  ApprovalDecision,
+  PermissionCapability,
+  PermissionEffect,
+  PermissionRule,
+};
 
 /** Typed daemon protocol (WebSocket boundary).
  *
@@ -37,7 +52,7 @@ export interface SessionChoice {
    * enum (invalid falls back to "talk"). */
   mode: string;
   skills: SkillChoiceWire[];
-  access: string;
+  access: AccessMode;
 }
 
 export type WireSessionOptions = Omit<SessionChoice, "model">;
@@ -75,12 +90,12 @@ export type DaemonCommand = CommandBase &
   | { type: "queue_clear"; sessionId: string }
   | { type: "cancel"; sessionId: string }
   | { type: "bg_cancel"; jobId: string; sessionId: string }
-  | { type: "fork_session"; sessionId: string; index: number; requestId?: string; editText?: string; model?: string; yolo?: boolean; attachmentIds?: string[] }
-  | { type: "discard_and_resend"; sessionId: string; requestId?: string; turnId: number; text: string; model: string; yolo: boolean; attachmentIds?: string[] }
-  | { type: "fork_and_resend"; sessionId: string; requestId?: string; turnId: number; text: string; model: string; yolo: boolean; attachmentIds?: string[] }
-  | { type: "regenerate"; sessionId: string; index: number; text?: string; model: string; yolo: boolean }
-  | { type: "edit_message"; sessionId: string; requestId?: string; index: number; text: string; model: string; yolo: boolean; regenerate: boolean; attachmentIds?: string[] }
-  | { type: "create_session"; requestId: string; cwd: string; title: string; model: string; options: WireSessionOptions }
+  | { type: "fork_session"; sessionId: string; index: number; requestId?: string; editText?: string; model?: string; yolo?: boolean; options?: WireSessionOptions; attachmentIds?: string[] }
+  | { type: "discard_and_resend"; sessionId: string; requestId?: string; turnId: number; text: string; model: string; yolo: boolean; options?: WireSessionOptions; attachmentIds?: string[] }
+  | { type: "fork_and_resend"; sessionId: string; requestId?: string; turnId: number; text: string; model: string; yolo: boolean; options?: WireSessionOptions; attachmentIds?: string[] }
+  | { type: "regenerate"; sessionId: string; index: number; text?: string; model: string; yolo: boolean; options?: WireSessionOptions }
+  | { type: "edit_message"; sessionId: string; requestId?: string; index: number; text: string; model: string; yolo: boolean; options?: WireSessionOptions; regenerate: boolean; attachmentIds?: string[] }
+  | { type: "create_session"; requestId: string; cwd: string; title: string; model: string; yolo?: boolean; options: WireSessionOptions }
   | { type: "delete_session"; sessionId: string }
   | { type: "rename_session"; sessionId: string; title: string }
   | { type: "toggle_pin"; sessionId: string }
@@ -97,7 +112,7 @@ export type DaemonCommand = CommandBase &
   | { type: "check_workspace"; requestId: string; sessionId: string; projectId?: string }
   | { type: "question_response"; sessionId: string; questionId: string; answers: string[][] }
   | { type: "convert_response"; sessionId: string; requestId: string; text?: string; error?: string }
-  | { type: "tool_approval_response"; sessionId: string; callId: string; approved: boolean; always: boolean }
+  | { type: "tool_approval_response"; sessionId: string; callId: string; approved: boolean; always: boolean; decision: ApprovalDecision }
   | { type: "set_todos_open"; sessionId: string; open: boolean }
   | { type: "set_project_collapsed"; projectId: string; collapsed: boolean }
   | { type: "get_turn_changes"; sessionId: string; requestId?: string }
@@ -180,8 +195,30 @@ export type DaemonEvent = EventBase &
     | { type: "question_request"; sessionId?: string; question?: WireRecord }
     | { type: "question_resolved"; sessionId?: string; questionId: string }
     | { type: "question_error"; sessionId?: string; questionId: string; message?: string }
-    | { type: "tool_approval_request"; sessionId?: string; callId: string; tool: string; args: unknown }
-    | { type: "approval_resolved"; sessionId?: string; callId: string; approved?: boolean; error?: string }
+    | {
+        type: "tool_approval_request";
+        sessionId?: string;
+        callId: string;
+        tool: string;
+        args: unknown;
+        deadline?: number;
+        capability?: PermissionCapability;
+        target?: string;
+        reason?: string;
+        risk?: "low" | "medium" | "high";
+        accessMode?: "ask" | "auto";
+        proposedRule?: PermissionRule;
+        canAllowSession?: boolean;
+        canAllowAlways?: boolean;
+      }
+    | {
+        type: "approval_resolved";
+        sessionId?: string;
+        callId: string;
+        approved?: boolean;
+        decision?: ApprovalDecision;
+        error?: string;
+      }
     | { type: "convert_request"; sessionId?: string; requestId: string; filename: string; data: string }
     | { type: "convert_resolved"; sessionId?: string; requestId: string }
     | { type: "session_queue"; sessionId?: string; queue: QueuedMessage[] }

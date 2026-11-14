@@ -671,8 +671,12 @@ func (s *wsServer) handleRaw(raw []byte) {
 			CWD       string         `json:"cwd"`
 			Title     string         `json:"title"`
 			Model     string         `json:"model"`
+			YOLO      bool           `json:"yolo"`
 		}
 		_ = json.Unmarshal(raw, &req)
+		if req.YOLO && strings.TrimSpace(req.Options.Access) == "" {
+			req.Options.Access = "full"
+		}
 		if s.admin.createSession(req.CWD, req.Title, req.Model, req.Options, req.RequestID) {
 			_ = s.rememberSelection(req.Model, req.Options)
 		}
@@ -855,13 +859,14 @@ func (s *wsServer) handleRaw(raw []byte) {
 
 	case "fork_session":
 		var req struct {
-			SessionID     string   `json:"sessionId"`
-			Index         int      `json:"index"`
-			RequestID     string   `json:"requestId"`
-			EditText      string   `json:"editText"`
-			EditModel     string   `json:"model"`
-			YOLO          bool     `json:"yolo"`
-			AttachmentIDs []string `json:"attachmentIds"`
+			SessionID     string          `json:"sessionId"`
+			Index         int             `json:"index"`
+			RequestID     string          `json:"requestId"`
+			EditText      string          `json:"editText"`
+			EditModel     string          `json:"model"`
+			YOLO          bool            `json:"yolo"`
+			Options       *SessionOptions `json:"options"`
+			AttachmentIDs []string        `json:"attachmentIds"`
 		}
 		_ = json.Unmarshal(raw, &req)
 		if req.EditText != "" {
@@ -874,77 +879,81 @@ func (s *wsServer) handleRaw(raw []byte) {
 			}
 			s.onForkAndResend(req.SessionID, req.RequestID, forkAndResendMsg{
 				TurnID: turnID, Text: req.EditText, AttachmentIDs: req.AttachmentIDs,
-				Model: req.EditModel, YOLO: req.YOLO,
+				Model: req.EditModel, YOLO: req.YOLO, Options: req.Options,
 			})
 			return
 		}
-		s.onFork(req.SessionID, req.Index, req.RequestID, req.EditText, req.EditModel, req.YOLO, req.AttachmentIDs)
+		s.onFork(req.SessionID, req.Index, req.RequestID, req.EditText, req.EditModel, req.YOLO, req.AttachmentIDs, req.Options)
 
 	case "regenerate":
 		var req struct {
-			SessionID string `json:"sessionId"`
-			Index     int    `json:"index"`
-			Text      string `json:"text"`
-			Model     string `json:"model"`
-			YOLO      bool   `json:"yolo"`
+			SessionID string          `json:"sessionId"`
+			Index     int             `json:"index"`
+			Text      string          `json:"text"`
+			Model     string          `json:"model"`
+			YOLO      bool            `json:"yolo"`
+			Options   *SessionOptions `json:"options"`
 		}
 		_ = json.Unmarshal(raw, &req)
-		s.onRegenerate(req.SessionID, req.Index, req.Text, req.Model, req.YOLO)
+		s.onRegenerate(req.SessionID, req.Index, req.Text, req.Model, req.YOLO, req.Options)
 
 	case "edit_message":
 		var req struct {
-			SessionID     string    `json:"sessionId"`
-			RequestID     string    `json:"requestId"`
-			Index         int       `json:"index"`
-			Text          string    `json:"text"`
-			Model         string    `json:"model"`
-			Regen         bool      `json:"regenerate"`
-			YOLO          bool      `json:"yolo"`
-			AttachmentIDs *[]string `json:"attachmentIds"`
+			SessionID     string          `json:"sessionId"`
+			RequestID     string          `json:"requestId"`
+			Index         int             `json:"index"`
+			Text          string          `json:"text"`
+			Model         string          `json:"model"`
+			Regen         bool            `json:"regenerate"`
+			YOLO          bool            `json:"yolo"`
+			Options       *SessionOptions `json:"options"`
+			AttachmentIDs *[]string       `json:"attachmentIds"`
 		}
 		_ = json.Unmarshal(raw, &req)
 		if req.Regen {
 			// Regenerate/discard&resend rides the ATOMIC primitive now (turn
 			// id resolved from the row index below).
-			s.onEditMessage(req.SessionID, req.RequestID, req.Index, req.Text, req.Model, req.Regen, req.YOLO, req.AttachmentIDs)
+			s.onEditMessage(req.SessionID, req.RequestID, req.Index, req.Text, req.Model, req.Regen, req.YOLO, req.AttachmentIDs, req.Options)
 			return
 		}
-		s.onEditMessage(req.SessionID, req.RequestID, req.Index, req.Text, req.Model, req.Regen, req.YOLO, req.AttachmentIDs)
+		s.onEditMessage(req.SessionID, req.RequestID, req.Index, req.Text, req.Model, req.Regen, req.YOLO, req.AttachmentIDs, req.Options)
 
 	case "discard_and_resend":
 		// ATOMIC discard&resend / regenerate (turnId = the boundary turn's
 		// index). Reply event always: discard_and_resend_result.
 		var req struct {
-			SessionID     string   `json:"sessionId"`
-			TurnID        int      `json:"turnId"`
-			Text          string   `json:"text"`
-			Model         string   `json:"model"`
-			YOLO          bool     `json:"yolo"`
-			AttachmentIDs []string `json:"attachmentIds"`
-			RequestID     string   `json:"requestId"`
+			SessionID     string          `json:"sessionId"`
+			TurnID        int             `json:"turnId"`
+			Text          string          `json:"text"`
+			Model         string          `json:"model"`
+			YOLO          bool            `json:"yolo"`
+			Options       *SessionOptions `json:"options"`
+			AttachmentIDs []string        `json:"attachmentIds"`
+			RequestID     string          `json:"requestId"`
 		}
 		_ = json.Unmarshal(raw, &req)
 		s.onDiscardAndResend(req.SessionID, req.RequestID, discardAndResendMsg{
 			TurnID: req.TurnID, Text: req.Text, AttachmentIDs: req.AttachmentIDs,
-			Model: req.Model, YOLO: req.YOLO,
+			Model: req.Model, YOLO: req.YOLO, Options: req.Options,
 		})
 
 	case "fork_and_resend":
 		// Fork the prefix ABOVE the turn + start a turn there with Text.
 		// Reply event always: fork_and_resend_result.
 		var req struct {
-			SessionID     string   `json:"sessionId"`
-			TurnID        int      `json:"turnId"`
-			Text          string   `json:"text"`
-			Model         string   `json:"model"`
-			YOLO          bool     `json:"yolo"`
-			AttachmentIDs []string `json:"attachmentIds"`
-			RequestID     string   `json:"requestId"`
+			SessionID     string          `json:"sessionId"`
+			TurnID        int             `json:"turnId"`
+			Text          string          `json:"text"`
+			Model         string          `json:"model"`
+			YOLO          bool            `json:"yolo"`
+			Options       *SessionOptions `json:"options"`
+			AttachmentIDs []string        `json:"attachmentIds"`
+			RequestID     string          `json:"requestId"`
 		}
 		_ = json.Unmarshal(raw, &req)
 		s.onForkAndResend(req.SessionID, req.RequestID, forkAndResendMsg{
 			TurnID: req.TurnID, Text: req.Text, AttachmentIDs: req.AttachmentIDs,
-			Model: req.Model, YOLO: req.YOLO,
+			Model: req.Model, YOLO: req.YOLO, Options: req.Options,
 		})
 
 	case "create_project":
@@ -1411,7 +1420,11 @@ func (s *wsServer) onPull(id json.RawMessage, collection string) {
 	}
 }
 
-func (s *wsServer) onFork(sessionID string, index int, requestID, editText, editModel string, yolo bool, attachmentIDs []string) {
+func (s *wsServer) onFork(sessionID string, index int, requestID, editText, editModel string, yolo bool, attachmentIDs []string, options ...*SessionOptions) {
+	var opt *SessionOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
 	res := s.sessions.route(sessionID, true)
 	if res.Error != "" {
 		s.error(sessionID, requestID, "Session not found")
@@ -1462,7 +1475,7 @@ func (s *wsServer) onFork(sessionID string, index int, requestID, editText, edit
 						if forkRec := s.readRecord(fr.NewID); forkRec != nil {
 							keepIdx = forkRec.globalMsgCount()
 						}
-						s.truncateAndRun(fr.NewID, keepIdx, editText, editModel, yolo, attachmentIDs)
+						s.truncateAndRun(fr.NewID, keepIdx, editText, editModel, yolo, attachmentIDs, opt)
 					}
 					return
 				}
@@ -1476,7 +1489,11 @@ func (s *wsServer) onFork(sessionID string, index int, requestID, editText, edit
 	}
 }
 
-func (s *wsServer) onRegenerate(sessionID string, index int, text, model string, yolo bool) {
+func (s *wsServer) onRegenerate(sessionID string, index int, text, model string, yolo bool, options ...*SessionOptions) {
+	var opt *SessionOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
 	// Last user message at/before index, drop it + tail, re-run with its text.
 	rec := s.readFullRecord(sessionID)
 	if rec == nil {
@@ -1513,12 +1530,16 @@ func (s *wsServer) onRegenerate(sessionID string, index int, text, model string,
 	// Regenerate rides the ATOMIC primitive (empty text = reuse original).
 	s.onDiscardAndResend(sessionID, "", discardAndResendMsg{
 		TurnID: rec.Messages[userIdx].TurnIndex,
-		Model:  model, YOLO: yolo,
+		Model:  model, YOLO: yolo, Options: opt,
 		AttachmentIDs: messageAttachmentIDs(rec.Messages[userIdx], rec.Attachments),
 	})
 }
 
-func (s *wsServer) onEditMessage(sessionID, requestID string, index int, text, model string, regen bool, yolo bool, attachmentIDs *[]string) {
+func (s *wsServer) onEditMessage(sessionID, requestID string, index int, text, model string, regen bool, yolo bool, attachmentIDs *[]string, options ...*SessionOptions) {
+	var opt *SessionOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
 	// Every failure path answers the client (edit_message_result): a silent
 	// return used to lose the user's edited text forever (the frontend had
 	// already dropped its edit buffer).
@@ -1584,7 +1605,7 @@ func (s *wsServer) onEditMessage(sessionID, requestID string, index int, text, m
 		// boundary row's turn (index -> TurnIndex).
 		s.onDiscardAndResend(sessionID, requestID, discardAndResendMsg{
 			TurnID: msg.TurnIndex, Text: text, AttachmentIDs: ids,
-			Model: model, YOLO: yolo,
+			Model: model, YOLO: yolo, Options: opt,
 		})
 		return
 	}
@@ -1722,14 +1743,18 @@ func (s *wsServer) readFullRecord(sessionID string) *SessionRecord {
 // message does cut + insert + start in a single durable commit. The old
 // two-step (editRegenerateMsg then userPromptMsg) could lose the edit text
 // when the second leg failed after a persisted truncation.
-func (s *wsServer) truncateAndRun(sessionID string, index int, text, model string, yolo bool, attachmentIDs []string) {
+func (s *wsServer) truncateAndRun(sessionID string, index int, text, model string, yolo bool, attachmentIDs []string, options ...*SessionOptions) {
+	var opt *SessionOptions
+	if len(options) > 0 {
+		opt = options[0]
+	}
 	res := s.sessions.route(sessionID, false)
 	if res.Error != "" {
 		return
 	}
 	rr := make(chan any, 1)
 	select {
-	case res.Inbox <- Envelope{SessionID: sessionID, Payload: truncateAndRunMsg{Keep: index, Text: text, AttachmentIDs: attachmentIDs, Model: model, YOLO: yolo, Reply: rr}}:
+	case res.Inbox <- Envelope{SessionID: sessionID, Payload: truncateAndRunMsg{Keep: index, Text: text, AttachmentIDs: attachmentIDs, Model: model, YOLO: yolo, Options: opt, Reply: rr}}:
 	case <-time.After(replyTimeout):
 		s.error(sessionID, "", "Session busy")
 		return

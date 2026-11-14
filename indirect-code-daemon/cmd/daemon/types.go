@@ -277,8 +277,9 @@ type SessionSummary struct {
 	// ApprovalMode is the resolved display mode ("ask" | "yolo") derived
 	// from the primary skill. The mirror carries it so selecting a session
 	// or refreshing the list never resets the permissions UI.
-	ApprovalMode  string `json:"approvalMode,omitempty"`
-	AttentionSeq  int64  `json:"attentionSeq,omitempty"`
+	ApprovalMode  string                 `json:"approvalMode,omitempty"`
+	SessionGrants []tools.PermissionRule `json:"sessionGrants,omitempty"`
+	AttentionSeq  int64                  `json:"attentionSeq,omitempty"`
 	SeenSeq       int64  `json:"seenSeq,omitempty"`
 	AttentionKind string `json:"attentionKind,omitempty"`
 }

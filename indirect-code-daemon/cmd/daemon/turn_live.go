@@ -388,7 +388,7 @@ func sessionPayloadMeta(rec *SessionRecord) map[string]any {
 	return map[string]any{
 		"id": rec.ID, "cwd": rec.CWD, "title": rec.Title, "model": rec.Model, "status": rec.Status,
 		"jailed": effectiveSessionJailed(rec.Options.Access, rec.Jailed),
-		"pinned": rec.Pinned, "usage": rec.Usage, "context": rec.Context, "options": normalizedOptions(rec.Options),
+		"pinned": rec.Pinned, "usage": rec.Usage, "context": rec.Context, "options": normalizedOptionsWithJail(rec.Options, rec.Jailed),
 		"turn": rec.Turn, "todos": rec.Todos, "todosOpen": rec.TodosOpen,
 		"workspace": inspectWorkspace(rec.CWD),
 		"createdAt": rec.CreatedAt, "updatedAt": rec.UpdatedAt,

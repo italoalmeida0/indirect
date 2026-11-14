@@ -152,14 +152,12 @@ describe("composer execution-permission trigger (ToolbarContext)", () => {
     "utf8",
   );
 
-  test("desktop trigger and mobile summary show borderless short Full/Ask labels without status dots while menu and aria-label keep full descriptions", () => {
-    expect(src).toContain('aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`}');
-    expect(src).toContain(
-      'class={`h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${c.yoloMode() ? "text-warning" : "text-fg-secondary hover:text-fg"}`}',
-    );
-    expect(src).toContain('<span class="hidden @[420px]:inline">{c.yoloMode() ? "Full" : "Ask"}</span>');
-    expect(src).toContain('<span>{c.yoloMode() ? "Full" : "Ask"}</span>');
+  test("desktop trigger and mobile summary show borderless short Auto/Ask/Full labels without status dots while menu and aria-label keep full descriptions", () => {
+    expect(src).toContain("aria-label={`Agent permissions: ${currentAccessSpec().label}`}");
+    expect(src).toContain('<span class="hidden @[420px]:inline">{currentAccessSpec().short}</span>');
+    expect(src).toContain("<span>{currentAccessSpec().short}</span>");
     expect(src).not.toContain("h-1.5 w-1.5 rounded-full bg-warning");
+    expect(src).toContain('label: "Auto"');
     expect(src).toContain('label: "Ask for approval"');
     expect(src).toContain('label: "Full access"');
   });

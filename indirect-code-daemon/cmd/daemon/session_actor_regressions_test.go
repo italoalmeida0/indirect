@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
 )
@@ -247,6 +248,64 @@ func TestApprovalAlwaysAllowWriteFailureDenies(t *testing.T) {
 	}
 	if len(a.rec.SessionGrants) != 0 {
 		t.Fatalf("failed always-allow left session grants: %+v", a.rec.SessionGrants)
+	}
+}
+
+func TestSeededResendAndSummaryWireAccessAlignment(t *testing.T) {
+	rec := &SessionRecord{
+		ID:       "sess-align",
+		Messages: darMsgs(4),
+		TurnSeq:  2,
+		Options:  SessionOptions{Mode: "agentic", Access: "auto", Effort: "medium"},
+		Jailed:   true,
+		SessionGrants: []tools.PermissionRule{
+			{ID: "r1", Effect: "allow", Kind: "net", Pattern: "api.github.com"},
+		},
+	}
+	a, st := darActor(t, rec)
+	a.jailed = true
+	a.routeFn = answeringForkRoute()
+
+	// 1. Summary mirror exposes sessionGrants and resolved options.access.
+	item := sessionListItem(summaryFromMeta(recordMeta(a.rec)))
+	grants, ok := item["sessionGrants"].([]tools.PermissionRule)
+	if !ok || len(grants) != 1 || grants[0].Pattern != "api.github.com" {
+		t.Fatalf("sessionListItem omitted sessionGrants: %#v", item["sessionGrants"])
+	}
+
+	// 2. fork_and_resend honors updated Options.Access ("ask") in the fork.
+	fReply := make(chan any, 1)
+	a.onForkAndResend(forkAndResendMsg{
+		TurnID:  2,
+		Text:    "forked with ask",
+		Options: &SessionOptions{Mode: "agentic", Access: "ask", Effort: "high"},
+		Reply:   fReply,
+	})
+	fr := (<-fReply).(forkResendResult)
+	if fr.Error != "" {
+		t.Fatalf("fork_and_resend failed: %s", fr.Error)
+	}
+	fork, err := st.loadSession(fr.NewID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fork.Options.Access != "ask" || !fork.Jailed || fork.Options.Effort != "high" {
+		t.Fatalf("fork options mismatch: access=%q jailed=%v effort=%q", fork.Options.Access, fork.Jailed, fork.Options.Effort)
+	}
+
+	// 3. discard_and_resend with YOLO=true and nil Options unjails an "auto" session cleanly.
+	dReply := make(chan any, 1)
+	a.onDiscardAndResend(discardAndResendMsg{
+		TurnID: 1,
+		Text:   "unjailed resend",
+		YOLO:   true,
+		Reply:  dReply,
+	})
+	if dr := (<-dReply).(discardResendResult); dr.Error != "" {
+		t.Fatalf("discard_and_resend failed: %s", dr.Error)
+	}
+	if a.rec.Options.Access != "full" || a.rec.Jailed || a.jailed {
+		t.Fatalf("expected unjailed full access after YOLO resend, got access=%q rec.Jailed=%v actor.jailed=%v", a.rec.Options.Access, a.rec.Jailed, a.jailed)
 	}
 }
 

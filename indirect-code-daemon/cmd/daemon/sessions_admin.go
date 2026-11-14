@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/searchindex"
 	"indirect/indirect-code-daemon/packages/skills"
 )
@@ -39,21 +40,24 @@ func summaryFromMeta(meta metaLine) SessionSummary {
 		lastTurnStartedAt = meta.Turn.StartedAt
 		lastTurnEndedAt = meta.Turn.EndedAt
 	}
+	opts := meta.Options
+	opts.Access = effectiveSessionAccess(opts.Access, meta.Jailed)
 	return SessionSummary{ID: meta.ID, CWD: resolvePath(meta.CWD), Title: meta.Title,
 		Model: meta.Model, Status: meta.Status, Pinned: meta.Pinned,
 		CreatedAt: meta.CreatedAt, UpdatedAt: meta.UpdatedAt,
 		LastTurnStartedAt: lastTurnStartedAt,
 		LastTurnEndedAt:   lastTurnEndedAt,
-		TodosOpen:         meta.TodosOpen, Options: &meta.Options,
+		TodosOpen:         meta.TodosOpen, Options: &opts,
 		Skills:        cloneSkillsMap(meta.Skills),
 		ApprovalMode:  skillsApprovalModeFor(meta.Skills, meta.Options.Mode),
+		SessionGrants: append([]tools.PermissionRule(nil), meta.SessionGrants...),
 		AttentionSeq:  meta.AttentionSeq,
 		SeenSeq:       meta.SeenSeq,
 		AttentionKind: meta.AttentionKind}
 }
 
 func sessionListItem(s SessionSummary) map[string]any {
-	return map[string]any{
+	item := map[string]any{
 		"id": s.ID, "cwd": s.CWD, "title": s.Title, "model": s.Model,
 		"status": s.Status, "pinned": s.Pinned,
 		"createdAt": s.CreatedAt, "updatedAt": s.UpdatedAt,
@@ -69,6 +73,10 @@ func sessionListItem(s SessionSummary) map[string]any {
 		"seenSeq":       s.SeenSeq,
 		"attentionKind": s.AttentionKind,
 	}
+	if len(s.SessionGrants) > 0 {
+		item["sessionGrants"] = s.SessionGrants
+	}
+	return item
 }
 
 // sessionAdmin bundles the callbacks a WS dispatcher needs: route to the

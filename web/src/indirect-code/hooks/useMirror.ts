@@ -3,6 +3,7 @@ import { createDataLayer } from "../store/sessions";
 import type { DaemonCommand } from "../daemon-protocol";
 import { projectsByActivity, compareSessions } from "../paths";
 import type { Project, SessionSummary } from "../types";
+import { arePermissionRulesEqual } from "../utils/settingsValidation";
 
 function areSessionOptionsEqual(
   a: SessionSummary["options"],
@@ -78,7 +79,8 @@ export function areSessionsEqual(a: SessionSummary, b: SessionSummary): boolean 
     a.todosOpen === b.todosOpen &&
     a.approvalMode === b.approvalMode &&
     areSessionOptionsEqual(a.options, b.options) &&
-    areSessionSkillsEqual(a.skills, b.skills)
+    areSessionSkillsEqual(a.skills, b.skills) &&
+    arePermissionRulesEqual(a.sessionGrants, b.sessionGrants)
   );
 }
 

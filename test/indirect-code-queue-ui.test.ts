@@ -509,7 +509,9 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
                       daemonSettings: () => ({
                         autoCompactPercent: 80,
                         noAutoTitle: false,
-                        jailByDefault: false,
+                        defaultAccess: "auto",
+                        jailByDefault: true,
+                        permissionRules: [],
                         insecureTls: false,
                         httpProxy: "",
                         midTurnSend,

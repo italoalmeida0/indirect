@@ -1,5 +1,20 @@
 import type { RcProject, RcSession } from "./store/sessions";
-import type { MidTurnDelivery } from "./utils/settingsValidation";
+import type {
+  AccessMode,
+  ApprovalDecision,
+  MidTurnDelivery,
+  PermissionCapability,
+  PermissionEffect,
+  PermissionRule,
+} from "./utils/settingsValidation";
+
+export type {
+  AccessMode,
+  ApprovalDecision,
+  PermissionCapability,
+  PermissionEffect,
+  PermissionRule,
+};
 
 /**
  * Interfaces
@@ -147,12 +162,23 @@ export interface PendingApproval {
   callId: string;
   tool: string;
   args: string;
+  deadline?: number;
+  capability?: PermissionCapability;
+  target?: string;
+  reason?: string;
+  risk?: "low" | "medium" | "high";
+  accessMode?: "ask" | "auto";
+  proposedRule?: PermissionRule;
+  canAllowSession?: boolean;
+  canAllowAlways?: boolean;
 }
 
 export interface AgentSettings {
   autoCompactPercent: number;
   noAutoTitle: boolean;
+  defaultAccess: AccessMode;
   jailByDefault: boolean;
+  permissionRules: PermissionRule[];
   insecureTls: boolean;
   httpProxy: string;
   midTurnSend: MidTurnDelivery;
