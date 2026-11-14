@@ -860,7 +860,7 @@ try {
     // Move cursor away from popover region before clicking so mid-sweep is unhovered
     await trigger.click();
     await page.waitForSelector("[data-context-meter]", { timeout: 5_000 });
-    await page.waitForTimeout(160);
+    await page.waitForTimeout(260);
 
     const midSweepCanvas = await inspectCanvasSweep(page);
     assert(
@@ -879,8 +879,8 @@ try {
     );
     captures[`desktop_${theme}_midsweep`] = await capturePopoverBase64(page);
 
-    // Wait for 780ms sweep to settle completely
-    await page.waitForTimeout(820);
+    // Wait for 1300ms sweep to settle completely (260 + 1300 = 1560ms)
+    await page.waitForTimeout(1300);
 
     const settledCanvas = await inspectCanvasSweep(page);
     assert(
@@ -1099,7 +1099,11 @@ try {
     );
     // Atomic replaceState handoff (`batch`): 1 browser Back step closes SettingsModal AND leaves popover closed with zero [inert] leak!
     await page.goBack();
-    await page.waitForTimeout(200);
+    await page
+      .getByText("Runtime & messaging")
+      .waitFor({ state: "detached", timeout: 1_500 })
+      .catch(() => {});
+    await page.waitForTimeout(80);
     assert.equal(
       await page.getByText("Runtime & messaging").count(),
       0,
@@ -1143,7 +1147,7 @@ try {
       assert(triggerBox, "expected mobile context trigger box");
       await page.touchscreen.tap(triggerBox.x + triggerBox.width / 2, triggerBox.y + triggerBox.height / 2);
       await page.waitForSelector("[data-context-meter]", { timeout: 5_000 });
-      await page.waitForTimeout(880);
+      await page.waitForTimeout(1550);
 
       const bounds = await page.evaluate(() => {
         const pop = document.querySelector<HTMLElement>("[data-floatmenu]")!;
@@ -1248,7 +1252,7 @@ try {
       assert(box);
       await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
       await page.waitForSelector("[data-context-meter]", { timeout: 5_000 });
-      await page.waitForTimeout(880);
+      await page.waitForTimeout(1550);
     };
 
     // Edge Case A: Armed state (used 172.4K > 160K usable limit at 80%)
@@ -1270,11 +1274,63 @@ try {
     assert(armedSnap.footerText.includes("Compacts next step"));
 
     captures.mobile_390x844_dark_armed = await capturePopoverBase64(page, 8);
+
+    // Edge Case A1b: Live Compaction Receding Particle Dissolve while popover stays open (172.4K -> 44.8K)
+    scenario.usedTokens = 44_800;
+    scenario.compactionCount = 3;
+    broadcastWS({ type: "session_data", sessionId: "s-main", session: buildSessionRecord() });
+    await page.waitForTimeout(340);
+
+    const midRecedeSnap = await page.evaluate(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>("[data-context-bar] canvas")!;
+      const ctx = canvas.getContext("2d")!;
+      const w = canvas.width;
+      const h = canvas.height;
+      const d = ctx.getImageData(0, 0, w, h).data;
+      let wakeSparkPixels = 0;
+      for (let y = Math.floor(h * 0.12); y < Math.floor(h * 0.88); y++) {
+        for (let x = Math.floor(w * 0.32); x < Math.floor(w * 0.86); x++) {
+          const i = (y * w + x) * 4;
+          const r = d[i]!;
+          const g = d[i + 1]!;
+          const b = d[i + 2]!;
+          const a = d[i + 3]!;
+          const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+          if (a > 55 && chroma > 24) wakeSparkPixels++;
+        }
+      }
+      return {
+        subState: document.querySelector("[data-context-subtitle]")?.getAttribute("data-subtitle-state"),
+        subText: document.querySelector("[data-context-subtitle]")?.textContent?.trim() || "",
+        figText: document.querySelector("[data-context-primary-figure]")?.textContent?.trim() || "",
+        wakeSparkPixels,
+      };
+    });
+    assert.equal(midRecedeSnap.subState, "receding", `expected 'receding' subtitle state during live compaction, got '${midRecedeSnap.subState}'`);
+    assert(midRecedeSnap.subText.includes("Compacting context…"), `expected 'Compacting context…' during live compaction, got '${midRecedeSnap.subText}'`);
+    assert(midRecedeSnap.wakeSparkPixels > 25, `expected active receding/spark pixels in wake, got ${midRecedeSnap.wakeSparkPixels}`);
+    assert.notEqual(midRecedeSnap.figText, "44.8K", `expected live token countdown during recession, got '${midRecedeSnap.figText}'`);
+
+    await page.waitForTimeout(1400);
+    const settledRecedeSnap = await page.evaluate(() => ({
+      subState: document.querySelector("[data-context-subtitle]")?.getAttribute("data-subtitle-state"),
+      subText: document.querySelector("[data-context-subtitle]")?.textContent?.trim() || "",
+      figText: document.querySelector("[data-context-primary-figure]")?.textContent?.trim() || "",
+      pctText: document.querySelector("[data-context-pct-hero]")?.textContent?.trim() || "",
+      footerText: document.querySelector("[data-context-footer-strip]")?.textContent?.trim() || "",
+    }));
+    assert.equal(settledRecedeSnap.subState, "idle:freed");
+    assert(settledRecedeSnap.subText.includes("Freed 128K") && settledRecedeSnap.subText.includes("115K usable left"), `unexpected post-compaction subtitle '${settledRecedeSnap.subText}'`);
+    assert.equal(settledRecedeSnap.figText, "44.8K");
+    assert.equal(settledRecedeSnap.pctText, "22% full");
+    assert(settledRecedeSnap.footerText.includes("Compacted 3×"));
+
     await page.goBack();
     await page.waitForTimeout(180);
 
     // Edge Case A2: 100% Full (`200K of 200K`) — symmetric left & right curved colored capsule borders
     scenario.usedTokens = 200_000;
+    scenario.compactionCount = 0;
     broadcastWS({ type: "session_data", sessionId: "s-main", session: buildSessionRecord() });
     await page.waitForTimeout(200);
     await openPopover();
@@ -1385,10 +1441,10 @@ try {
     const sheet1 = await renderCompositeSheet(
       browser,
       "Context & Usable Auto-Compact Meter — Opening Sweep & Settled Lattice (Dark 2x)",
-      "780ms incandescent shockwave (both parities lit) -> settled (col+row)%2===0 diamond lattice + 80% usable reticle",
+      "1300ms incandescent shockwave (both parities lit) -> settled (col+row)%2===0 diamond lattice + 80% usable reticle",
       [
         {
-          label: "Mid-Sweep (~190ms) — Incandescent Frontier Shockwave",
+          label: "Mid-Sweep (~260ms) — Incandescent Frontier Shockwave",
           sub: "Live token count-up · radial bloom · 100% dense leading pixel wall",
           base64: captures.desktop_dark_midsweep!,
         },

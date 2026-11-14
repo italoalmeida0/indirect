@@ -19,6 +19,7 @@ import { compactTokens } from "../../context";
 import { useComposerCtx, useModal, useTranscriptCtx, useUI } from "../../ctx";
 import { cacheHitPct, fmtUsd, usageCosts } from "../../transcript";
 import {
+  type BarZonesLayout,
   computeBarZones,
   computeContextMeterMath,
   computeTokenMix,
@@ -26,11 +27,13 @@ import {
   resolveContextUsed,
   type ContextSegmentId,
   type ContextZoneId,
+  type UsageBreakdownInput,
 } from "../../utils/contextMeter";
 
 type Rgb = [number, number, number];
 
-const SWEEP_DURATION_MS = 780;
+const SWEEP_DURATION_MS = 1300;
+const RECEDE_DURATION_MS = 1450;
 const TRACK_RADIUS = 10;
 const INNER_PAD = 2;
 const CONTOUR_LW = 1.35;
@@ -199,6 +202,12 @@ export function ContextUsageMeter(props: {
   const [sweepP, setSweepP] = createSignal(reducedMotion() ? 1 : 0);
   const [isSweeping, setIsSweeping] = createSignal(false);
   const [sweepEpoch, setSweepEpoch] = createSignal(0);
+  const [recedeP, setRecedeP] = createSignal(1);
+  const [isReceding, setIsReceding] = createSignal(false);
+  const [recedeEpoch, setRecedeEpoch] = createSignal(0);
+  const [recedeFromTokens, setRecedeFromTokens] = createSignal<number | null>(null);
+  const [recedeTargetTokens, setRecedeTargetTokens] = createSignal<number | null>(null);
+  const [freedTokens, setFreedTokens] = createSignal(0);
   const [barWidth, setBarWidth] = createSignal(320);
 
   const [canvasEl, setCanvasEl] = createSignal<HTMLCanvasElement>();
@@ -209,6 +218,10 @@ export function ContextUsageMeter(props: {
   let lastSubtitleKey = "";
   let touchStart: { id: number; x: number; y: number } | null = null;
   let lastCellPointerType = "mouse";
+  let prevObservedUsed: number | null | undefined;
+  let prevObservedUsage: UsageBreakdownInput | null = null;
+  let recedeOriginUsage: UsageBreakdownInput | null = null;
+  let lastRenderedUsed = 0;
   const cellRefs: Partial<Record<ContextZoneId, HTMLElement>> = {};
 
   const autoCompactPercent = createMemo(
@@ -220,9 +233,18 @@ export function ContextUsageMeter(props: {
   const windowTokens = createMemo(() => rawCtx().window || 0);
   const isEstimated = createMemo(() => rawCtx().tokensLabel?.startsWith("~") ?? false);
 
+  const effectiveUsed = createMemo(() => {
+    const raw = usedTokens();
+    if (!isReceding()) return raw;
+    const from = recedeFromTokens();
+    const to = recedeTargetTokens() ?? raw;
+    if (from === null || to === null) return raw;
+    return Math.round(lerp(from, to, recedeP()));
+  });
+
   const math = createMemo(() =>
     computeContextMeterMath({
-      used: usedTokens(),
+      used: effectiveUsed(),
       window: windowTokens(),
       autoCompactPercent: autoCompactPercent(),
     }),
@@ -245,7 +267,7 @@ export function ContextUsageMeter(props: {
   const zones = createMemo(() =>
     computeBarZones({
       cssW: barWidth(),
-      used: usedTokens(),
+      used: effectiveUsed(),
       window: windowTokens(),
       autoCompactPercent: autoCompactPercent(),
       usage: usage(),
@@ -267,6 +289,9 @@ export function ContextUsageMeter(props: {
   });
 
   const triggerReplay = () => {
+    setIsReceding(false);
+    setRecedeP(1);
+    setFreedTokens(0);
     if (reducedMotion()) {
       setSweepP(1);
       setIsSweeping(false);
@@ -274,6 +299,62 @@ export function ContextUsageMeter(props: {
     }
     setSweepEpoch((n) => n + 1);
   };
+
+  // Detect live context compaction drops while open and trigger receding particle dissolve.
+  createEffect(() => {
+    const nextUsed = usedTokens();
+    const win = windowTokens();
+    const curUsage = untrack(usage);
+
+    if (prevObservedUsed === undefined) {
+      prevObservedUsed = nextUsed;
+      prevObservedUsage = curUsage ? { ...curUsage } : null;
+      lastRenderedUsed = nextUsed ?? 0;
+      return;
+    }
+
+    const prev = prevObservedUsed;
+    const prevU = prevObservedUsage;
+    prevObservedUsed = nextUsed;
+    prevObservedUsage = curUsage ? { ...curUsage } : null;
+
+    if (nextUsed === null || win <= 0) {
+      setIsReceding(false);
+      setRecedeP(1);
+      setFreedTokens(0);
+      lastRenderedUsed = nextUsed ?? 0;
+      return;
+    }
+
+    if (prev !== null && nextUsed > prev + Math.max(200, win * 0.005)) {
+      setIsReceding(false);
+      setRecedeP(1);
+      setFreedTokens(0);
+    }
+
+    const startFrom = untrack(isReceding) ? lastRenderedUsed : (prev ?? nextUsed);
+    const dropRatio = (startFrom - nextUsed) / win;
+    if (prev !== null && dropRatio > 0.05) {
+      const freed = Math.max(0, Math.round(startFrom - nextUsed));
+      setFreedTokens(freed);
+      recedeOriginUsage = prevU ?? (curUsage ? { ...curUsage } : null);
+      if (reducedMotion()) {
+        setIsReceding(false);
+        setRecedeP(1);
+        lastRenderedUsed = nextUsed;
+      } else {
+        setIsSweeping(false);
+        setSweepP(1);
+        setRecedeFromTokens(Math.round(startFrom));
+        setRecedeTargetTokens(Math.round(nextUsed));
+        setRecedeP(0);
+        setIsReceding(true);
+        setRecedeEpoch((n) => n + 1);
+      }
+    } else if (!untrack(isReceding)) {
+      lastRenderedUsed = nextUsed;
+    }
+  });
 
   // Every mount inside FloatMenu (open false -> true) starts a fresh sweep.
   createEffect(() => {
@@ -314,6 +395,9 @@ export function ContextUsageMeter(props: {
     let palette = resolvePalette(probeCtx, canvas);
     let rafId = 0;
     let sweepStartMs: number | null = null;
+    let seenRecedeEpoch = untrack(recedeEpoch);
+    let recedeStartMs: number | null = null;
+    let recedeStartLayout: BarZonesLayout | null = null;
     let lastFrameMs = performance.now();
 
     const weights: Record<ContextSegmentId, number> = {
@@ -375,16 +459,55 @@ export function ContextUsageMeter(props: {
         const dt = clamp((nowMs - lastFrameMs) * 0.001, 0, 0.08);
         lastFrameMs = nowMs;
 
-        const used = usedTokens();
+        const rawUsed = usedTokens();
         const win = windowTokens();
-        const hasSweepableFill = !isStatic && used !== null && used > 0 && win > 0;
+
+        const curRecEpoch = recedeEpoch();
+        if (curRecEpoch !== seenRecedeEpoch) {
+          seenRecedeEpoch = curRecEpoch;
+          recedeStartMs = nowMs;
+          const fromTok = recedeFromTokens() ?? rawUsed ?? 0;
+          recedeStartLayout = computeBarZones({
+            cssW,
+            used: fromTok,
+            window: win,
+            autoCompactPercent: autoCompactPercent(),
+            usage: recedeOriginUsage ?? usage(),
+            inset: INNER_PAD,
+          });
+        }
+
+        let rTime = 1;
+        let used = rawUsed;
+
+        if (!isStatic && isReceding() && rawUsed !== null && win > 0) {
+          if (recedeStartMs === null) recedeStartMs = nowMs;
+          rTime = clamp((nowMs - recedeStartMs) / RECEDE_DURATION_MS, 0, 1);
+          const curRecedeP = rTime >= 1 ? 1 : 1 - Math.pow(1 - rTime, 2.55);
+          const fromTok = recedeFromTokens() ?? rawUsed;
+          const toTok = recedeTargetTokens() ?? rawUsed;
+          used = Math.round(lerp(fromTok, toTok, curRecedeP));
+          lastRenderedUsed = used;
+          if (Math.abs(curRecedeP - recedeP()) > 0.003 || rTime >= 1) {
+            setRecedeP(curRecedeP);
+          }
+          if (rTime >= 1) {
+            setIsReceding(false);
+          }
+        } else {
+          recedeStartMs = null;
+          if (rawUsed !== null) lastRenderedUsed = rawUsed;
+        }
+
+        const hasSweepableFill =
+          !isStatic && !isReceding() && used !== null && used > 0 && win > 0;
 
         let uTime = 1;
         let curSweepP = 1;
         if (hasSweepableFill) {
           if (sweepStartMs === null) sweepStartMs = nowMs;
           uTime = clamp((nowMs - sweepStartMs) / SWEEP_DURATION_MS, 0, 1);
-          curSweepP = uTime >= 1 ? 1 : 1 - Math.pow(1 - uTime, 2.4);
+          curSweepP = uTime >= 1 ? 1 : 1 - Math.pow(1 - uTime, 2.25);
           if (Math.abs(curSweepP - sweepP()) > 0.004 || uTime >= 1) {
             setSweepP(curSweepP);
           }
@@ -404,7 +527,11 @@ export function ContextUsageMeter(props: {
           usage: usage(),
           inset: INNER_PAD,
         });
-        const currentMath = math();
+        const currentMath = computeContextMeterMath({
+          used,
+          window: win,
+          autoCompactPercent: autoCompactPercent(),
+        });
         const focusZone = activeZone();
         const kLerp = isStatic ? 1 : 1 - Math.exp(-dt * 18);
 
@@ -447,6 +574,11 @@ export function ContextUsageMeter(props: {
             ? 0
             : Math.sin(Math.min(1, uTime / 0.09) * Math.PI * 0.5) *
               (1 - Math.pow(Math.max(0, (uTime - 0.72) / 0.28), 2));
+        const rEnv =
+          rTime >= 0.998
+            ? 0
+            : Math.sin(Math.min(1, rTime / 0.07) * Math.PI * 0.5) *
+              (1 - Math.pow(Math.max(0, (rTime - 0.76) / 0.24), 1.8));
 
         // ---------------------------------------------------------------------
         // Pass 0: Recessed outer pocket & uniform 4-sided 1px outer hairline
@@ -858,8 +990,9 @@ export function ContextUsageMeter(props: {
                 ? 0
                 : clamp((s.x0 + localRimBlend - innerLeft) / visibleOccupiedW, 0, 1);
             const isLast = ri === reachedSegs.length - 1;
+            const edgeGlow = Math.max(env, rEnv * 0.85);
             const endOff = isLast
-              ? env > 0.01 && visibleOccupiedW > 12
+              ? edgeGlow > 0.01 && visibleOccupiedW > 12
                 ? clamp((visibleOccupiedW - 7) / visibleOccupiedW, startOff, 0.98)
                 : 1
               : clamp((sEnd - localRimBlend - innerLeft) / visibleOccupiedW, startOff, 1);
@@ -868,9 +1001,12 @@ export function ContextUsageMeter(props: {
             if (endOff > startOff) {
               contourGrad.addColorStop(endOff, rgbaStr(rimRgb, rimAlpha));
             }
-            if (isLast && env > 0.01 && visibleOccupiedW > 12) {
+            if (isLast && edgeGlow > 0.01 && visibleOccupiedW > 12) {
               const hotRim = lerpRgb(rawRgb, [255, 255, 255], isDark ? 0.86 : 0.62);
-              contourGrad.addColorStop(1, rgbaStr(hotRim, clamp(0.95 * env + rimAlpha * (1 - env), 0.4, 0.98)));
+              contourGrad.addColorStop(
+                1,
+                rgbaStr(hotRim, clamp(0.95 * edgeGlow + rimAlpha * (1 - edgeGlow), 0.4, 0.98)),
+              );
             }
           }
 
@@ -925,6 +1061,110 @@ export function ContextUsageMeter(props: {
             ctx.stroke();
             ctx.restore();
           }
+        }
+
+        // ---------------------------------------------------------------------
+        // Pass 4b: Compaction Receding Particle Dissolve (2x2 colored pixel sparks
+        //          evaporating off the shrinking right cap into a ~38px wake)
+        // ---------------------------------------------------------------------
+        if (rEnv > 0.01 && innerW > 6 && innerH > 6) {
+          const recedingX = frontierX;
+          const originSegs =
+            recedeStartLayout && recedeStartLayout.segments.length > 0
+              ? recedeStartLayout.segments
+              : zLayout.segments;
+          const originEndX = recedeStartLayout
+            ? recedeStartLayout.occupiedEndX
+            : innerRight;
+
+          const resolveWakeRgb = (sampleX: number): Rgb => {
+            for (let si = 0; si < originSegs.length; si++) {
+              const s = originSegs[si]!;
+              if (sampleX <= s.x1 || si === originSegs.length - 1) {
+                return segmentBaseRgb(s.id, palette);
+              }
+            }
+            return palette.accent;
+          };
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(innerLeft, topY, innerW, innerH, endOuterR);
+          ctx.clip();
+
+          // Warm sublimating glow right on the shrinking right cap
+          const lipRgb = resolveWakeRgb(recedingX + 2);
+          const lipHotRgb = lerpRgb(lipRgb, [255, 255, 255], isDark ? 0.78 : 0.48);
+          const lipBloom = ctx.createRadialGradient(
+            recedingX,
+            cssH * 0.5,
+            1,
+            recedingX,
+            cssH * 0.5,
+            24,
+          );
+          lipBloom.addColorStop(0, rgbaStr(lipHotRgb, (isDark ? 0.26 : 0.19) * rEnv));
+          lipBloom.addColorStop(0.5, rgbaStr(lipRgb, 0.1 * rEnv));
+          lipBloom.addColorStop(1, rgbaStr(lipRgb, 0));
+          ctx.fillStyle = lipBloom;
+          ctx.fillRect(Math.max(innerLeft, recedingX - 24), topY, 50, innerH);
+
+          const maxWakeX = Math.min(innerRight - cell, originEndX + 16, recedingX + 42);
+          for (let col = 0; col < cols; col++) {
+            const xBase = x0 + col * pitch;
+            const cx = xBase + 1;
+            if (cx < recedingX - 1.5 || xBase > maxWakeX) continue;
+
+            const wakeDist = cx - recedingX;
+            const baseWakeRgb = resolveWakeRgb(cx);
+
+            for (let row = 0; row < rows; row++) {
+              const hSpawn = cellHash(col, row, 31);
+              const densityCap = wakeDist < 8 ? 0.64 : 0.46;
+              if (hSpawn > densityCap) continue;
+
+              const sparkReach =
+                (10 + cellHash(col, row, 37) * 30) * (0.32 + 0.68 * rEnv);
+              const age = clamp((wakeDist + 1.5) / Math.max(5, sparkReach), 0, 1);
+              if (age <= 0 || age >= 1) continue;
+
+              const driftX =
+                age * (3.5 + cellHash(col, row, 41) * 14.5) +
+                Math.sin(tSec * 6.5 + hSpawn * 14) * 1.1 * age;
+              const vyDir = (cellHash(col, row, 43) - 0.52) * 2;
+              const driftY =
+                Math.pow(age, 1.32) * vyDir * 10.5 +
+                Math.cos(tSec * 5.2 + cellHash(col, row, 47) * 11) * 0.9 * age;
+
+              const sx = Math.round((xBase + driftX) * 2) * 0.5;
+              const sy = Math.round((y0 + row * pitch + driftY) * 2) * 0.5;
+              if (
+                sx < recedingX - 1 ||
+                sx + cell > innerRight - 0.5 ||
+                sy < topY + 0.5 ||
+                sy + cell > botY - 0.5
+              ) {
+                continue;
+              }
+
+              const lipHeat =
+                age < 0.32 ? (1 - age / 0.32) * (isDark ? 0.78 : 0.48) : 0;
+              const sparkRgb = lerpRgb(baseWakeRgb, [255, 255, 255], lipHeat);
+              const sparkAlpha = clamp(
+                Math.pow(1 - age, 1.38) *
+                  rEnv *
+                  (0.7 + 0.3 * cellHash(col, row, 53)),
+                0,
+                1,
+              );
+              if (sparkAlpha < 0.04) continue;
+
+              ctx.fillStyle = rgbaStr(sparkRgb, sparkAlpha);
+              ctx.fillRect(sx, sy, cell, cell);
+            }
+          }
+
+          ctx.restore();
         }
 
         // ---------------------------------------------------------------------
@@ -1068,11 +1308,15 @@ export function ContextUsageMeter(props: {
     if (isSweeping() && sweepP() < 0.96 && (usedTokens() ?? 0) > 0 && windowTokens() > 0) {
       return "sweep";
     }
+    if (isReceding() && recedeP() < 0.96 && windowTokens() > 0) {
+      return "receding";
+    }
     const cm = math();
     if (cm.window <= 0) return "idle:no-window";
     if (cm.used === null) return `idle:empty:${cm.autoCompactPercent}`;
-    if (!cm.autoCompactEnabled) return "idle:off";
-    return cm.isArmed ? "idle:armed" : "idle:usable";
+    if (!cm.autoCompactEnabled) return freedTokens() > 0 ? "idle:freed" : "idle:off";
+    if (cm.isArmed) return "idle:armed";
+    return freedTokens() > 0 ? "idle:freed" : "idle:usable";
   });
 
   createEffect(() => {
@@ -1221,6 +1465,19 @@ export function ContextUsageMeter(props: {
       );
     }
 
+    if (isReceding() && recedeP() < 0.96 && cm.window > 0) {
+      const freedLive = Math.max(0, Math.round(freedTokens() * recedeP()));
+      return (
+        <>
+          <span class="h-1.5 w-1.5 rounded-full bg-accent animate-pulse shrink-0" />
+          <span class="font-medium text-fg-secondary shrink-0">Compacting context…</span>
+          <span class="text-fg-muted tabular-nums truncate">
+            · Freeing {compactTokens(freedLive > 0 ? freedLive : freedTokens())}
+          </span>
+        </>
+      );
+    }
+
     if (cm.window <= 0) {
       return (
         <span class="text-fg-muted truncate">
@@ -1248,6 +1505,19 @@ export function ContextUsageMeter(props: {
     }
 
     if (!cm.autoCompactEnabled) {
+      if (freedTokens() > 0) {
+        return (
+          <>
+            <Iconify icon="lucide:check" size={12} class="text-success shrink-0" />
+            <span class="font-medium text-success tabular-nums shrink-0">
+              Freed {compactTokens(freedTokens())}
+            </span>
+            <span class="text-fg-muted tabular-nums truncate">
+              · {compactTokens(Math.max(0, cm.window - cm.used))} free
+            </span>
+          </>
+        );
+      }
       return (
         <>
           <span class="h-1.5 w-1.5 rounded-full bg-accent shrink-0" />
@@ -1274,6 +1544,20 @@ export function ContextUsageMeter(props: {
               ? `+${compactTokens(cm.overThresholdTokens)} over `
               : "at "}
             {compactTokens(cm.usableLimit)} ({cm.autoCompactPercent}%)
+          </span>
+        </>
+      );
+    }
+
+    if (freedTokens() > 0) {
+      return (
+        <>
+          <Iconify icon="lucide:check" size={12} class="text-success shrink-0" />
+          <span class="font-medium text-success tabular-nums shrink-0">
+            Freed {compactTokens(freedTokens())}
+          </span>
+          <span class="text-fg-muted tabular-nums truncate">
+            · {compactTokens(cm.usableRemaining!)} usable left
           </span>
         </>
       );
@@ -1379,11 +1663,22 @@ export function ContextUsageMeter(props: {
     if (!reducedMotion() && isSweeping() && p < 0.995 && used !== null && used > 0 && win > 0) {
       return `${isEstimated() ? "~" : ""}${compactTokens(Math.round(used * p))}`;
     }
+    if (!reducedMotion() && isReceding() && recedeP() < 0.998) {
+      const eff = effectiveUsed();
+      if (eff !== null && win > 0) {
+        return `${isEstimated() ? "~" : ""}${compactTokens(eff)}`;
+      }
+    }
     return props.settledHeadline;
   };
 
   const pctHeroToneClass = () => {
-    const p = props.pct() ?? 0;
+    const win = windowTokens();
+    const eff = effectiveUsed();
+    const p =
+      isReceding() && eff !== null && win > 0
+        ? Math.round((eff * 100) / win)
+        : (props.pct() ?? 0);
     if (p >= 92) return "text-danger";
     if (math().isArmed || p >= 78) return "text-warning";
     return "text-accent";
@@ -1401,6 +1696,13 @@ export function ContextUsageMeter(props: {
       untrack(windowTokens) > 0
     ) {
       return `${Math.round(targetPct * p)}% full`;
+    }
+    if (!reducedMotion() && isReceding() && recedeP() < 0.998) {
+      const eff = effectiveUsed();
+      const win = windowTokens();
+      if (eff !== null && win > 0) {
+        return `${Math.round((eff * 100) / win)}% full`;
+      }
     }
     return props.settledPctLabel;
   };
