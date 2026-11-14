@@ -902,6 +902,14 @@ try {
     await page.locator('[data-action="add-permission-rule"]').click();
 
     assert.equal(await page.locator("[data-permission-rule-row]").count(), 3);
+    // Re-scroll `#rc-set-permissions` cleanly below the sticky nav header so both
+    // the section heading/DefaultAccessPicker and the 3-row GlobalPermissionRulesManager are framed.
+    await page.evaluate(() => {
+      document
+        .getElementById("rc-set-permissions")
+        ?.scrollIntoView({ behavior: "instant", block: "start" });
+    });
+    await page.waitForTimeout(220);
     await snap(page, `04-desktop-settings-permissions-${theme}.png`);
 
     // Revoke `rule_gh_api`, then save Settings and inspect `update_config`
@@ -970,9 +978,7 @@ try {
         timeout: 5_000,
       });
       await assertZeroHorizontalOverflow(page, `mobile-${width}-${theme}-permissions-sheet`);
-      if (width === 360) {
-        await snap(page, `05-mobile-360-permissions-sheet-${theme}.png`);
-      }
+      await snap(page, `05-mobile-${width}-permissions-sheet-${theme}.png`);
 
       // Tap `Ask for approval` -> verify `configure_session`, then restore `Auto` and close sheet
       state.commands.length = 0;
@@ -1057,9 +1063,30 @@ try {
         assert(b.width >= 60 && b.height >= 28, `button ${b.sel} too small: ${JSON.stringify(b)}`);
       }
 
-      if (width === 360) {
-        await snap(page, `06-mobile-360-approval-card-${theme}.png`);
-      }
+      // Verify ApprovalCard header stays single-line on 360px & 390px mobile (zero 2nd-row wrap)
+      const headerGeom = await page.evaluate(() => {
+        const hdr = document.querySelector<HTMLElement>("[data-approval-header]");
+        const badge = document.querySelector<HTMLElement>("[data-approval-badge]");
+        if (!hdr || !badge) return null;
+        const hr = hdr.getBoundingClientRect();
+        const br = badge.getBoundingClientRect();
+        return {
+          headerHeight: Math.round(hr.height * 100) / 100,
+          badgeRight: Math.round(br.right * 100) / 100,
+          headerRight: Math.round(hr.right * 100) / 100,
+        };
+      });
+      assert(headerGeom, `missing [data-approval-header] on ${width}x${height}`);
+      assert(
+        headerGeom.headerHeight <= 44,
+        `expected single-line ApprovalCard header on ${width}x${height}, got height=${headerGeom.headerHeight}px`,
+      );
+      assert(
+        headerGeom.badgeRight <= headerGeom.headerRight + 1,
+        `ApprovalCard badge overflowed header on ${width}x${height}: ${JSON.stringify(headerGeom)}`,
+      );
+
+      await snap(page, `06-mobile-${width}-approval-card-${theme}.png`);
 
       // Tap `Allow once` -> verify wire response
       state.commands.length = 0;
@@ -1072,21 +1099,50 @@ try {
         "once",
       );
 
-      // Verify Settings -> Permissions layout at narrow mobile width (360px)
-      if (width === 360) {
-        await page.locator(".rc-sidebar-toggle").first().click();
-        await page.waitForTimeout(220);
-        await page.locator('aside.rc-sidebar button[aria-label*="Settings"]').first().click();
-        await page.waitForSelector('nav[aria-label="Settings sections"]', { timeout: 5_000 });
-        await page
-          .locator('nav[aria-label="Settings sections"] button', { hasText: "Permissions" })
-          .first()
-          .click();
-        await page.waitForSelector("#rc-set-permissions", { timeout: 5_000 });
-        await page.waitForTimeout(450);
-        await assertZeroHorizontalOverflow(page, `mobile-360-${theme}-settings-permissions`);
-        await snap(page, `07-mobile-360-settings-permissions-${theme}.png`);
-      }
+      // Verify Settings -> Permissions layout & all 6 jump-bar pills (including `Runtime`) at 390px & 360px
+      await page.locator(".rc-sidebar-toggle").first().click();
+      await page.waitForTimeout(220);
+      await page.locator('aside.rc-sidebar button[aria-label*="Settings"]').first().click();
+      await page.waitForSelector('nav[aria-label="Settings sections"]', { timeout: 5_000 });
+
+      const navGeometry = await page.evaluate(() => {
+        const nav = document.querySelector<HTMLElement>('nav[aria-label="Settings sections"]');
+        const runtimePill = document.querySelector<HTMLElement>(
+          '[data-settings-jump="rc-set-runtime"]',
+        );
+        if (!nav || !runtimePill) return null;
+        const nr = nav.getBoundingClientRect();
+        const rr = runtimePill.getBoundingClientRect();
+        return {
+          navScrollWidth: nav.scrollWidth,
+          navClientWidth: nav.clientWidth,
+          navRight: Math.round(nr.right * 100) / 100,
+          runtimeLeft: Math.round(rr.left * 100) / 100,
+          runtimeRight: Math.round(rr.right * 100) / 100,
+        };
+      });
+      assert(navGeometry, `missing Settings sections nav on ${width}x${height}`);
+      assert(
+        navGeometry.navScrollWidth <= navGeometry.navClientWidth + 1 &&
+          navGeometry.runtimeLeft >= 0 &&
+          navGeometry.runtimeRight <= width,
+        `Runtime jump pill clipped on ${width}x${height}: ${JSON.stringify(navGeometry)}`,
+      );
+
+      await page
+        .locator('nav[aria-label="Settings sections"] button', { hasText: "Permissions" })
+        .first()
+        .click();
+      await page.waitForSelector("#rc-set-permissions", { timeout: 5_000 });
+      await page.waitForTimeout(450);
+      await page.evaluate(() => {
+        document
+          .getElementById("rc-set-permissions")
+          ?.scrollIntoView({ behavior: "instant", block: "start" });
+      });
+      await page.waitForTimeout(120);
+      await assertZeroHorizontalOverflow(page, `mobile-${width}-${theme}-settings-permissions`);
+      await snap(page, `07-mobile-${width}-settings-permissions-${theme}.png`);
 
       assert.deepEqual(pageErrors, [], `Mobile ${width}x${height} (${theme}) page errors`);
       await context.close();

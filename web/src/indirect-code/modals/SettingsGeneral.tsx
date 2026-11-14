@@ -1201,12 +1201,17 @@ function GlobalPermissionRulesManager(props: {
               onChange={(e) =>
                 setDraftKind(e.currentTarget.value as PermissionCapability)
               }
-              class="w-full sm:w-auto h-7 rounded-control border border-border-strong bg-surface pl-2.5 pr-6 text-xs text-fg outline-none focus:border-accent transition-colors cursor-pointer"
+              class="w-full sm:w-auto h-7 appearance-none rounded-control border border-border-strong bg-surface pl-2.5 pr-6 text-xs text-fg outline-none focus:border-accent transition-colors cursor-pointer"
             >
               <For each={PERMISSION_KIND_OPTIONS}>
                 {(k) => <option value={k.value}>{k.label}</option>}
               </For>
             </select>
+            <Iconify
+              icon="lucide:chevron-down"
+              size={12}
+              class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-fg-muted"
+            />
           </div>
         </div>
 
@@ -1254,7 +1259,7 @@ function GlobalPermissionRulesManager(props: {
       >
         <div
           data-permission-rules-list
-          class="rounded-lg border border-border divide-y divide-border-subtle overflow-hidden"
+          class="rounded-lg border border-border overflow-hidden"
         >
           <For each={props.rules()}>
             {(rule) => {
@@ -1263,7 +1268,7 @@ function GlobalPermissionRulesManager(props: {
               return (
                 <div
                   data-permission-rule-row={rule.id}
-                  class="px-3 py-2 bg-surface hover:bg-surface-subtle/60 flex items-center justify-between gap-2 min-w-0 transition-colors"
+                  class="px-3 py-2 border-b border-border-subtle last:border-b-0 bg-surface hover:bg-surface-subtle/60 flex items-center justify-between gap-2 min-w-0 transition-colors"
                 >
                   <div class="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
                     <Badge tone={isDeny() ? "danger" : "success"}>

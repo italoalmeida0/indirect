@@ -101,7 +101,7 @@ export function SettingsModal() {
                   disabled={m.savingSettings()}
                   onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => jumpTo(sec.id)}
-                  class="inline-flex shrink-0 whitespace-nowrap items-center gap-1 rounded-lg px-1.5 sm:px-2 py-1 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-50"
+                  class="inline-flex shrink-0 whitespace-nowrap items-center gap-1 rounded-lg px-0.5 sm:px-2 py-1 text-[10px] sm:text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-50"
                 >
                   <Show when={sec.icon}>
                     <Iconify icon={sec.icon!} size={11} class="text-accent shrink-0" />

@@ -1240,6 +1240,12 @@ describe("3-way AccessMode (ask / auto / full), scoped approvals & Settings perm
       opts.applyOptions({ effort: "high", mode: "agentic" });
       expect(opts.accessMode()).toBe("full");
       expect(opts.isFullAccess()).toBe(true);
+
+      // Host switch resetSkillState() resets rawAccessMode to the new host's defaultAccessFallback()
+      defaultAccess = "auto";
+      opts.resetSkillState();
+      expect(opts.accessMode()).toBe("auto");
+      expect(opts.isFullAccess()).toBe(false);
     } finally {
       disposeRoot();
     }

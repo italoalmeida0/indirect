@@ -1124,6 +1124,7 @@ export function createSessionOptions(opts: {
     untrack(() => {
       setSkillUsables({});
       setApprovalMode("ask");
+      setRawAccessMode(defaultAccessFallback());
       setSelectedSkills([]);
       draftSeeded = false;
     });

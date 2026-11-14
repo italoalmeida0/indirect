@@ -236,11 +236,24 @@ export function ApprovalCard(props: ApprovalCardProps) {
             class={`w-full ${props.convWidthClass()} mx-auto py-1`}
           >
             <div class="rounded-panel border border-border bg-surface overflow-hidden">
-              <div class="px-3.5 py-2.5 border-b border-border-subtle bg-surface-subtle flex flex-wrap items-center gap-2 min-w-0">
+              <div
+                data-approval-header
+                class="px-3 sm:px-3.5 py-2 sm:py-2.5 border-b border-border-subtle bg-surface-subtle flex flex-nowrap items-center gap-1.5 sm:gap-2 min-w-0"
+              >
                 <Iconify icon={headerIcon} size={14} class={headerIconClass} />
-                <span class="text-xs font-medium text-fg shrink-0">{headerTitle}</span>
+                <Show
+                  when={Boolean(pa.capability)}
+                  fallback={<span class="text-xs font-medium text-fg shrink-0">{headerTitle}</span>}
+                >
+                  <span class="text-xs font-medium text-fg shrink-0 sm:hidden">
+                    Permission request
+                  </span>
+                  <span class="hidden sm:inline text-xs font-medium text-fg shrink-0">
+                    {headerTitle}
+                  </span>
+                </Show>
                 <span
-                  class="inline-flex items-center rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-secondary truncate"
+                  class="inline-flex items-center rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-secondary min-w-0 max-w-28 sm:max-w-48 truncate"
                   data-rc-tip={tipIfLong(name, 32)}
                 >
                   {name}
@@ -253,26 +266,28 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       fallback={
                         <span
                           data-approval-badge="ask"
-                          class="ml-auto inline-flex items-center gap-1.5 text-2xs text-fg-muted shrink-0"
+                          class="ml-auto inline-flex items-center gap-1.5 text-2xs text-fg-muted shrink-0 whitespace-nowrap"
                         >
                           <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
-                          Supervised · Ask
+                          <span class="sm:hidden">Ask</span>
+                          <span class="hidden sm:inline">Supervised · Ask</span>
                         </span>
                       }
                     >
                       <span
                         data-approval-badge="auto"
-                        class="ml-auto inline-flex items-center gap-1.5 rounded-inner border border-accent/25 bg-accent-subtle px-2 py-0.5 text-2xs font-medium text-accent shrink-0"
+                        class="ml-auto inline-flex items-center gap-1.5 rounded-inner border border-accent/25 bg-accent-subtle px-2 py-0.5 text-2xs font-medium text-accent shrink-0 whitespace-nowrap"
                       >
                         <span class="h-1.5 w-1.5 rounded-full bg-accent shrink-0" aria-hidden="true" />
-                        Auto · Boundary check
+                        <span class="sm:hidden">Auto</span>
+                        <span class="hidden sm:inline">Auto · Boundary check</span>
                       </span>
                     </Show>
                   }
                 >
                   <span
                     data-approval-badge="high-risk"
-                    class="ml-auto inline-flex items-center gap-1.5 rounded-inner border border-danger/30 bg-danger-subtle px-2 py-0.5 text-2xs font-medium text-danger shrink-0"
+                    class="ml-auto inline-flex items-center gap-1.5 rounded-inner border border-danger/30 bg-danger-subtle px-2 py-0.5 text-2xs font-medium text-danger shrink-0 whitespace-nowrap"
                   >
                     <span class="h-1.5 w-1.5 rounded-full bg-danger shrink-0" aria-hidden="true" />
                     High risk
