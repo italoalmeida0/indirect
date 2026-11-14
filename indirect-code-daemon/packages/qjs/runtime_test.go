@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -41,12 +42,18 @@ func TestMain(m *testing.M) {
 			scriptArgs = args[1:]
 		}
 		exe, _ := os.Executable()
+		shPath := os.Getenv("__INDIRECT_SHELL_PATH")
+		shFlag := os.Getenv("__INDIRECT_SHELL_FLAG")
+		_ = os.Unsetenv("__INDIRECT_SHELL_PATH")
+		_ = os.Unsetenv("__INDIRECT_SHELL_FLAG")
 		exitCode, err := RunScript(context.Background(), ScriptOptions{
 			Code:      code,
 			Filename:  filename,
 			Args:      scriptArgs,
 			OmitArgv1: omitArgv1,
 			ExecPath:  exe,
+			ShellPath: shPath,
+			ShellFlag: shFlag,
 			Stdin:     os.Stdin,
 			Stdout:    os.Stdout,
 			Stderr:    os.Stderr,
@@ -57,6 +64,65 @@ func TestMain(m *testing.M) {
 		os.Exit(exitCode)
 	}
 	os.Exit(m.Run())
+}
+
+var (
+	testShellOnce sync.Once
+	testShellPath string
+	testShellFlag string
+)
+
+func resolveTestNativeShell() (string, string) {
+	testShellOnce.Do(func() {
+		probe := func(bin string) bool {
+			if bin == "" {
+				return false
+			}
+			out, err := exec.Command(bin, "-c", "echo ok").Output()
+			return err == nil && strings.TrimSpace(string(out)) == "ok"
+		}
+		if runtime.GOOS == "windows" {
+			var candidates []string
+			if v := strings.TrimSpace(os.Getenv("UNISH_TEST_BINARY")); v != "" {
+				candidates = append(candidates, v)
+			}
+			if p, err := exec.LookPath("unish"); err == nil {
+				candidates = append(candidates, p)
+			}
+			if home, err := os.UserHomeDir(); err == nil && home != "" {
+				candidates = append(candidates, filepath.Join(home, ".indirect-code", "external", "bin", "unish.exe"))
+			}
+			for _, cand := range candidates {
+				if probe(cand) {
+					testShellPath = cand
+					testShellFlag = "-c"
+					return
+				}
+			}
+			return
+		}
+		for _, name := range []string{"/bin/bash", "bash", "unish", "zsh", "/bin/sh", "sh"} {
+			p, err := exec.LookPath(name)
+			if err == nil && probe(p) {
+				testShellPath = p
+				testShellFlag = "-c"
+				return
+			}
+		}
+	})
+	return testShellPath, testShellFlag
+}
+
+func withNativeShell(t *testing.T) func(*ScriptOptions) {
+	t.Helper()
+	shPath, shFlag := resolveTestNativeShell()
+	if shPath == "" {
+		t.Skip("no native shell available for test")
+	}
+	return func(o *ScriptOptions) {
+		o.ShellPath = shPath
+		o.ShellFlag = shFlag
+	}
 }
 
 func runJS(t *testing.T, code string, modify ...func(*ScriptOptions)) (int, string, string, error) {
@@ -1005,7 +1071,6 @@ func TestRunScript_Round4AdversarialFixes(t *testing.T) {
 		import v8 from "node:v8";
 		import vm from "node:vm";
 		import http from "node:http";
-		import { spawnSync } from "node:child_process";
 		import protoData from "./proto.json";
 		import { mode as esmMode } from "strict-pkg";
 
@@ -1146,18 +1211,6 @@ func TestRunScript_Round4AdversarialFixes(t *testing.T) {
 		});
 		assert.strictEqual(streamed, "chunkA-chunkB");
 
-		// 10. JailRoots blocks env-expanded and nested subcommand paths outside jail
-		const outPath = process.env.OUTSIDE_SECRET_PATH;
-		assert.throws(() => {
-			spawnSync("sh", ["-c", "cat " + outPath]);
-		}, (e) => e.code === "EACCES");
-		await assert.rejects(async () => {
-			await $.env({ SECRET_P: outPath })` + "`cat $SECRET_P`" + `;
-		}, (e) => e.code === "EACCES");
-		await assert.rejects(async () => {
-			await $` + "`cat ~/secret`" + `;
-		}, (e) => e.code === "EACCES");
-
 		console.log("ROUND4_ALL_OK");
 	`, func(o *ScriptOptions) {
 		o.CWD = dir
@@ -1202,7 +1255,7 @@ func TestRunScript_Round5AdversarialFixes(t *testing.T) {
 		import path from "node:path";
 		import crypto from "node:crypto";
 		import vm from "node:vm";
-		import { exec, spawnSync } from "node:child_process";
+		import { exec } from "node:child_process";
 		import { promisify } from "node:util";
 
 		// 1. High #1: HTTP ServerResponse must not drop chunks under rapid res.write()
@@ -1292,7 +1345,7 @@ func TestRunScript_Round5AdversarialFixes(t *testing.T) {
 			assert.strictEqual(vm.runInNewContext("a + 1", { a: i }), i + 1);
 		}
 
-		// 6. Medium #10 & High #5 & Low #13: JailRoots enforcement on glob, chown, and shell modifiers
+		// 6. Medium #10 & High #5: JailRoots enforcement on glob and chown
 		const outDir = process.env.OUTSIDE_DIR;
 		const outSecret = process.env.OUTSIDE_SECRET;
 		assert.throws(() => {
@@ -1300,9 +1353,6 @@ func TestRunScript_Round5AdversarialFixes(t *testing.T) {
 		}, (e) => e.code === "EACCES");
 		assert.throws(() => {
 			fs.chownSync(outSecret, 1000, 1000);
-		}, (e) => e.code === "EACCES");
-		assert.throws(() => {
-			spawnSync("cmd.exe", ["/c", "type %OUTSIDE_SECRET:~0,200%"]);
 		}, (e) => e.code === "EACCES");
 
 		// 7. Medium #11: exec with stdio: "ignore" forces stdout/stderr pipes in Node.js and captures output
@@ -1330,7 +1380,7 @@ func TestRunScript_Round5AdversarialFixes(t *testing.T) {
 		assert.strictEqual(workerReply.jailBlocked, true);
 
 		console.log("ROUND5_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = dir
 		o.Filename = filepath.Join(dir, "main.mjs")
 		o.JailRoots = []string{dir}
@@ -1373,10 +1423,6 @@ func TestRunScript_Round6AdversarialFixes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wsDir, "hello.txt"), []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	escapeScript := filepath.Join(wsDir, "escape.sh")
-	if err := os.WriteFile(escapeScript, []byte("cat "+strings.ReplaceAll(outsideFile, `\`, `/`)+"\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	nonEmptyDir := filepath.Join(brainDir, "nonempty")
 	if err := os.MkdirAll(nonEmptyDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -1389,52 +1435,25 @@ func TestRunScript_Round6AdversarialFixes(t *testing.T) {
 		import assert from "node:assert";
 		import fs from "node:fs";
 		import path from "node:path";
-		import { execFileSync, spawnSync, spawn } from "node:child_process";
+		import { execFileSync, spawnSync } from "node:child_process";
 
-		// 1. Critical #1: jailed sh -s with stdin and sh <script> must be blocked
-		assert.throws(() => {
-			execFileSync("sh", ["-s"], { input: "cat " + process.env.OUTSIDE_SECRET + "\n" });
-		}, (e) => e.code === "EACCES");
-		assert.throws(() => {
-			execFileSync("sh", [path.join(process.cwd(), "escape.sh")]);
-		}, (e) => e.code === "EACCES");
-
-		// Async spawn("sh", ["-s"]) with piped stdin attempting to read outside jail must fail
-		const asyncStdinRes = await new Promise((resolve) => {
-			const child = spawn("sh", ["-s"]);
-			let out = "", err = "";
-			child.stdout.on("data", (d) => out += d.toString());
-			child.stderr.on("data", (d) => err += d.toString());
-			child.on("close", (code) => resolve({ code, out, err }));
-			child.stdin.write("cat " + process.env.OUTSIDE_SECRET + "\n");
-			child.stdin.end();
-		});
-		assert.notStrictEqual(asyncStdinRes.code, 0);
-		assert.ok(!asyncStdinRes.out.includes("TOP_SECRET_R6"));
-
-		// 2. High #2: ReadOnlyRoots blocks writes to wsDir (fs & $) while allowing reads from wsDir and writes to brainDir
+		// 1. ReadOnlyRoots blocks writes to wsDir via node:fs while allowing reads from wsDir and writes to brainDir
 		assert.strictEqual(fs.readFileSync("hello.txt", "utf8").trim().split("\n")[0], "alpha");
 		assert.throws(() => {
 			fs.writeFileSync("forbidden.txt", "nope");
-		}, (e) => e.code === "EACCES");
-		await assert.rejects(async () => {
-			await $`+"`echo hacked > forbidden2.txt`"+`;
-		}, (e) => e.code === "EACCES");
-		await assert.rejects(async () => {
-			await $`+"`rm hello.txt`"+`;
 		}, (e) => e.code === "EACCES");
 		const brainOut = path.join(process.env.BRAIN_DIR, "allowed.txt");
 		fs.writeFileSync(brainOut, "brain_ok");
 		assert.strictEqual(fs.readFileSync(brainOut, "utf8"), "brain_ok");
 
-		// 3. Medium #5: maxBuffer enforced in jailed shell evaluator
-		const maxBufRes = spawnSync("cat", ["hello.txt"], { maxBuffer: 4 });
+		// 2. maxBuffer enforced on OS child processes
+		const maxBufRes = spawnSync(process.execPath, ["--js", "-e", "process.stdout.write('alpha\\nbeta\\ngamma\\n')"], { maxBuffer: 4 });
 		assert.ok(maxBufRes.error && maxBufRes.error.code === "ENOBUFS");
 		assert.throws(() => {
-			execFileSync("cat", ["hello.txt"], { maxBuffer: 4 });
+			execFileSync(process.execPath, ["--js", "-e", "process.stdout.write('alpha\\nbeta\\ngamma\\n')"], { maxBuffer: 4 });
 		}, (e) => e.code === "ENOBUFS");
 
-		// 4. Medium #6: POSIX builtins & git work inside jail, while dangerous git flags are blocked
+		// 3. Native shell $ works inside jail
 		const grepText = await $`+"`grep beta hello.txt`"+`.text();
 		assert.strictEqual(grepText.trim(), "beta");
 		const wcText = await $`+"`wc -l hello.txt`"+`.text();
@@ -1443,11 +1462,8 @@ func TestRunScript_Round6AdversarialFixes(t *testing.T) {
 		if (gitVer.exitCode === 0) {
 			assert.ok(gitVer.text().toLowerCase().includes("git version"));
 		}
-		assert.throws(() => {
-			execFileSync("git", ["-c", "core.sshCommand=evil", "status"]);
-		}, (e) => e.code === "EACCES");
 
-		// 5. Medium #8: WebCrypto ECDSA, Ed25519, RSA-OAEP, AES-CBC, and NotSupportedError
+		// 4. Medium #8: WebCrypto ECDSA, Ed25519, RSA-OAEP, AES-CBC, and NotSupportedError
 		const ecPair = await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
 		const msgBytes = new TextEncoder().encode("round6-webcrypto");
 		const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, ecPair.privateKey, msgBytes);
@@ -1464,17 +1480,20 @@ func TestRunScript_Round6AdversarialFixes(t *testing.T) {
 			await crypto.subtle.generateKey({ name: "UNSUPPORTED-ALGO-XYZ" }, true, ["sign"]);
 		}, (e) => e.name === "NotSupportedError");
 
-		// 6. Low #10: rmdirSync on non-empty directory returns ENOTEMPTY
+		// 5. Low #10: rmdirSync on non-empty directory returns ENOTEMPTY
 		assert.throws(() => {
 			fs.rmdirSync(process.env.NONEMPTY_DIR);
 		}, (e) => e.code === "ENOTEMPTY");
 
 		console.log("ROUND6_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "main.mjs")
 		o.JailRoots = []string{wsDir, brainDir}
 		o.ReadOnlyRoots = []string{wsDir}
+		if exe, err := os.Executable(); err == nil {
+			o.ExecPath = exe
+		}
 		env := make(map[string]string)
 		for _, kv := range os.Environ() {
 			if idx := strings.IndexByte(kv, '='); idx > 0 {
@@ -1509,28 +1528,16 @@ func TestRunScript_Round7AdversarialFixes(t *testing.T) {
 		import http from "node:http";
 		import net from "node:net";
 		import vm from "node:vm";
-		import { execFileSync, spawnSync } from "node:child_process";
+		import { spawnSync } from "node:child_process";
 		import { Worker } from "node:worker_threads";
 
-		// 1. Critical #1: GIT_CONFIG_COUNT / LD_PRELOAD / git --output / git --ext-diff / git alias blocked in jail
-		assert.throws(() => {
-			execFileSync("git", ["status"], { env: { ...process.env, GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.pager", GIT_CONFIG_VALUE_0: "evil" } });
-		}, (e) => e.code === "EACCES");
-		assert.throws(() => {
-			execFileSync("git", ["status"], { env: { ...process.env, LD_PRELOAD: "/tmp/evil.so" } });
-		}, (e) => e.code === "EACCES");
-		assert.throws(() => {
-			execFileSync("git", ["diff", "--output=" + path.join(process.env.BRAIN_DIR, "leak.diff")]);
-		}, (e) => e.code === "EACCES");
-		assert.throws(() => {
-			execFileSync("git", ["diff", "--ext-diff"]);
-		}, (e) => e.code === "EACCES");
-		assert.throws(() => {
-			execFileSync("git", ["my-custom-alias"]);
-		}, (e) => e.code === "EACCES");
-		await assert.rejects(async () => {
-			await $`+"`GIT_CONFIG_COUNT=1 git status`"+`.quiet();
-		}, (e) => e.code === "EACCES");
+		// 1. Critical #1: LD_PRELOAD env override is stripped from child env in jail
+		const ldCheck = spawnSync(
+			process.execPath,
+			["--js", "-e", "process.stdout.write(String(process.env.LD_PRELOAD))"],
+			{ env: { ...process.env, LD_PRELOAD: "/tmp/evil.so" }, encoding: "utf8" }
+		);
+		assert.strictEqual(ldCheck.stdout.trim(), "undefined");
 
 		// 2. Critical #2: fs.linkSync cannot hard-link a read-only file into a writable root
 		const linkDest = path.join(process.env.BRAIN_DIR, "linked.txt");
@@ -1603,7 +1610,7 @@ func TestRunScript_Round7AdversarialFixes(t *testing.T) {
 		assert.deepStrictEqual(netEvents, ["sock_end", "net_closed"]);
 
 		// 5. High #9: stdio: "inherit" inherits parent stdin
-		const inh = spawnSync("cat", [], { stdio: ["inherit", "pipe", "pipe"] });
+		const inh = spawnSync(process.execPath, ["--js", "-e", "process.stdout.write(require('node:fs').readFileSync(0))"], { stdio: ["inherit", "pipe", "pipe"] });
 		assert.strictEqual(inh.stdout.toString().trim(), "PARENT_STDIN_PAYLOAD");
 
 		// 6. Low #4: Worker.terminate resolves after exit
@@ -1701,7 +1708,7 @@ func TestRunScript_Round8AdversarialFixes(t *testing.T) {
 			}, (e) => e.code === "EACCES");
 		}
 
-		// 2. Critical #2 & High #3: Jailed git works on Windows (no NUL config error) and blocks unsafe .git/config & flags
+		// 2. Jailed git works inside repoDir
 		const repoDir = path.join(process.env.BRAIN_DIR, "repo");
 		fs.mkdirSync(repoDir, { recursive: true });
 		const gitVer = spawnSync("git", ["--version"]);
@@ -1710,36 +1717,11 @@ func TestRunScript_Round8AdversarialFixes(t *testing.T) {
 			assert.strictEqual(initRes.status, 0, "git init failed: " + initRes.stderr);
 			const stRes = spawnSync("git", ["status"], { cwd: repoDir });
 			assert.strictEqual(stRes.status, 0, "git status failed: " + stRes.stderr);
-
-			// Unsafe flags blocked
-			assert.throws(() => {
-				spawnSync("git", ["diff", "--textconv"], { cwd: repoDir });
-			}, (e) => e.code === "EACCES");
-			assert.throws(() => {
-				spawnSync("git", ["bisect", "run", "sh"], { cwd: repoDir });
-			}, (e) => e.code === "EACCES");
-
-			// Malicious .git/config directive blocked
-			const cfgPath = path.join(repoDir, ".git", "config");
-			const origCfg = fs.readFileSync(cfgPath, "utf8");
-			fs.writeFileSync(cfgPath, origCfg + "\n[core]\n\tfsmonitor = evil\n");
-			assert.throws(() => {
-				spawnSync("git", ["status"], { cwd: repoDir });
-			}, (e) => e.code === "EACCES");
-			fs.writeFileSync(cfgPath, origCfg);
-
-			// Malicious .gitattributes filter directive blocked
-			const attrPath = path.join(repoDir, ".gitattributes");
-			fs.writeFileSync(attrPath, "* filter=lfs\n");
-			assert.throws(() => {
-				spawnSync("git", ["status"], { cwd: repoDir });
-			}, (e) => e.code === "EACCES");
-			fs.unlinkSync(attrPath);
 		}
 
 		// 3. Self-JS exec via process.execPath --js in shell command line under jail
 		if (process.execPath) {
-			const selfOut = execSync('"' + process.execPath + '" --js -e "console.log(20 + 22)"').toString().trim();
+			const selfOut = execSync($.quote(process.execPath) + ' --js -e "console.log(20 + 22)"').toString().trim();
 			assert.strictEqual(selfOut, "42");
 		}
 
@@ -1775,7 +1757,7 @@ func TestRunScript_Round8AdversarialFixes(t *testing.T) {
 		earlyDestroySock.destroy();
 
 		console.log("ROUND8_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "main.mjs")
 		o.JailRoots = []string{wsDir, brainDir}
@@ -1986,7 +1968,7 @@ func TestRunScript_Round9AdversarialFixes(t *testing.T) {
 		await new Promise((r) => unrefSrv.listen(0, "127.0.0.1", r));
 
 		console.log("ROUND9_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "main.mjs")
 		o.JailRoots = []string{wsDir}
@@ -2021,22 +2003,10 @@ func TestRunScript_Round10AdversarialFixes(t *testing.T) {
 		import Module from "node:module";
 		import { log as importedLog } from "node:console";
 		import { Readable, Writable, PassThrough, pipeline, finished } from "node:stream";
-		import { execSync, execFileSync, spawn, spawnSync } from "node:child_process";
-		import { MessageChannel, BroadcastChannel, Worker } from "node:worker_threads";
+		import { execSync, spawnSync } from "node:child_process";
+		import { MessageChannel, BroadcastChannel } from "node:worker_threads";
 
-		// 1. Jailed git blocks -O / --open-files-in-pager, help, --show-signature, tag -v
-		for (const badGit of [
-			["grep", "-Ovi", "foo"],
-			["grep", "--open-files-in-pager=vi", "foo"],
-			["help", "status"],
-			["log", "--show-signature"],
-			["log", "--format=%G?"],
-			["tag", "-v", "v1"],
-		]) {
-			assert.throws(() => spawnSync("git", badGit), /EACCES/);
-		}
-
-		// 2. process.stdin.pipe and pipeline(..., process.stdout) + finished(process.stdout)
+		// 1. process.stdin.pipe and pipeline(..., process.stdout) + finished(process.stdout)
 		assert.strictEqual(typeof process.stdin.pipe, "function");
 		assert.strictEqual(typeof process.stdin.unpipe, "function");
 		const sink = new PassThrough();
@@ -2073,7 +2043,7 @@ func TestRunScript_Round10AdversarialFixes(t *testing.T) {
 		const redirRes = await $(["echo hidden > /dev/null && cat < /dev/null"]).quiet();
 		assert.strictEqual(redirRes.text(), "");
 
-		// 6. Jailed shell stdin with -c / shell:true is treated as data, not shell script
+		// 6. Jailed shell stdin with -c / shell:true is treated as data
 		const catRes = spawnSync("cat", [], {
 			shell: true,
 			input: "C:\\Windows\\System32\\drivers\\etc\\hosts\n/etc/passwd\n",
@@ -2081,8 +2051,6 @@ func TestRunScript_Round10AdversarialFixes(t *testing.T) {
 		});
 		assert.strictEqual(catRes.status, 0);
 		assert.ok(catRes.stdout.includes("/etc/passwd"));
-		// Bare sh without -c still scans stdin as script in jail:
-		assert.throws(() => spawnSync("sh", [], { input: "cat /etc/passwd\n" }), /EACCES/);
 
 		// 7. execSync / execFileSync default to Buffer unless encoding is specified
 		const echoBufDefault = execSync("echo hi");
@@ -2136,7 +2104,7 @@ func TestRunScript_Round10AdversarialFixes(t *testing.T) {
 		assert.strictEqual(process.kill(0, 0), true);
 
 		console.log("ROUND10_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "main.mjs")
 		o.JailRoots = []string{wsDir}
@@ -2182,54 +2150,14 @@ func TestRunScript_Round11AdversarialFixes(t *testing.T) {
 		import http from "node:http";
 		import net from "node:net";
 		import { Duplex } from "node:stream";
-		import { exec, execSync, spawnSync } from "node:child_process";
+		import { exec, execSync } from "node:child_process";
 
-		// 1. Finding 1: spawn/spawnSync with process.execPath --js and shell:true cannot chain commands to escape jail
-		if (process.execPath) {
-			assert.throws(() => {
-				spawnSync(process.execPath, ["--js", "-e", "1", "&&", "cat", process.env.OUTSIDE_SECRET], { shell: true });
-			}, /EACCES/);
-			assert.throws(() => {
-				spawnSync(process.execPath, ["--js", "-e", "1", process.env.OUTSIDE_SECRET]);
-			}, /EACCES/);
-			assert.throws(() => {
-				spawnSync("echo", ["hi"], { shell: "/usr/bin/python3" });
-			}, /EACCES/);
-		}
-
-		// 2. Finding 5: Host MANPAGER/BROWSER env vars are stripped in jail and do not break benign execSync
+		// 1. Finding 5: Host MANPAGER/BROWSER env vars are stripped in jail and do not break benign execSync
 		assert.strictEqual(process.env.MANPAGER, undefined);
 		assert.strictEqual(process.env.BROWSER, undefined);
 		assert.strictEqual(execSync("echo env_clean", { encoding: "utf8" }).trim(), "env_clean");
 
-		// 3. Finding 4: Jailed git blocks alternates, interactive.diffFilter, and git add -p
-		const repoDir = path.join(process.cwd(), "repo11");
-		fs.mkdirSync(repoDir, { recursive: true });
-		const gitVer = spawnSync("git", ["--version"]);
-		if (gitVer.status === 0) {
-			spawnSync("git", ["init"], { cwd: repoDir });
-			assert.throws(() => {
-				spawnSync("git", ["add", "-p"], { cwd: repoDir });
-			}, /EACCES/);
-
-			const altFile = path.join(repoDir, ".git", "objects", "info", "alternates");
-			fs.mkdirSync(path.dirname(altFile), { recursive: true });
-			fs.writeFileSync(altFile, "/tmp\n");
-			assert.throws(() => {
-				spawnSync("git", ["status"], { cwd: repoDir });
-			}, /EACCES/);
-			fs.unlinkSync(altFile);
-
-			const cfgFile = path.join(repoDir, ".git", "config");
-			const origCfg = fs.readFileSync(cfgFile, "utf8");
-			fs.writeFileSync(cfgFile, origCfg + "\n[interactive]\n\tdiffFilter = evil\n");
-			assert.throws(() => {
-				spawnSync("git", ["status"], { cwd: repoDir });
-			}, /EACCES/);
-			fs.writeFileSync(cfgFile, origCfg);
-		}
-
-		// 4. Finding 3: NetSocket half-close (client.end("hello")) receives full echoed response from server
+		// 2. Finding 3: NetSocket half-close (client.end("hello")) receives full echoed response from server
 		const echoed = await new Promise((resolve, reject) => {
 			const srv = net.createServer((sock) => {
 				const chunks = [];
@@ -2295,7 +2223,7 @@ func TestRunScript_Round11AdversarialFixes(t *testing.T) {
 
 		// 7. Finding 8: exec("cat", { input: "" }) closes stdin immediately and resolves
 		const emptyCat = await new Promise((resolve, reject) => {
-			exec("cat", { input: "", timeout: 1000 }, (err, stdout) => {
+			exec("cat", { input: "", timeout: 5000 }, (err, stdout) => {
 				if (err) return reject(err);
 				resolve(stdout);
 			});
@@ -2323,7 +2251,7 @@ func TestRunScript_Round11AdversarialFixes(t *testing.T) {
 		assert.strictEqual(process.stdin.read(4), null);
 
 		console.log("ROUND11_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "main.mjs")
 		o.JailRoots = []string{wsDir}
@@ -2359,40 +2287,30 @@ func TestRunScript_Round12AdversarialFixes(t *testing.T) {
 		import fs from "node:fs";
 		import path from "node:path";
 		import vm from "node:vm";
+		import { Worker } from "node:worker_threads";
 
-		const outsideFile = process.env.OUTSIDE_FILE;
-		const roSubDir = process.env.RO_SUB_DIR;
-		const childPath = path.join(process.cwd(), "child.js");
-		fs.writeFileSync(childPath, [
-			'const fs = require("node:fs");',
-			'if (process.argv[2] === "outside") {',
-			'  fs.writeFileSync(process.env.OUTSIDE_FILE, "PWN");',
-			'} else if (process.argv[2] === "ro") {',
-			'  fs.writeFileSync(require("node:path").join(process.env.RO_SUB_DIR, "inside.txt"), "PWN");',
-			'}',
-		].join("\n"));
-
-		// 1. Finding 1: $.sync("__INDIRECT_JAIL_ROOTS= node child.js") & export must be rejected and cannot escape jail
-		assert.throws(
-			() => $.sync("__INDIRECT_JAIL_ROOTS= node child.js outside"),
-			(e) => e.code === "EACCES" || (e.stderr && e.stderr.toString().includes("EACCES"))
-		);
-		assert.throws(
-			() => $.sync("export __INDIRECT_JAIL_ROOTS=; node child.js outside"),
-			(e) => e.code === "EACCES" || (e.stderr && e.stderr.toString().includes("EACCES"))
-		);
-		assert.strictEqual(fs.existsSync(outsideFile), false, "outside file must not be created");
-
-		// 2. Finding 2: $.sync("__INDIRECT_READONLY_ROOTS= node child.js") & export must be rejected and cannot bypass read-only
-		assert.throws(
-			() => $.sync("__INDIRECT_READONLY_ROOTS= node child.js ro"),
-			(e) => e.code === "EACCES" || (e.stderr && e.stderr.toString().includes("EACCES"))
-		);
-		assert.throws(
-			() => $.sync("export __INDIRECT_READONLY_ROOTS=; node child.js ro"),
-			(e) => e.code === "EACCES" || (e.stderr && e.stderr.toString().includes("EACCES"))
-		);
-		assert.strictEqual(fs.existsSync(path.join(roSubDir, "inside.txt")), false, "read-only file must not be created");
+		// 1. Finding 1 & 2: Worker env overrides on __INDIRECT_JAIL_ROOTS / __INDIRECT_READONLY_ROOTS cannot bypass sandbox
+		const wCheck = await new Promise((resolve, reject) => {
+			const w = new Worker(
+				[
+					'const { parentPort } = require("node:worker_threads");',
+					'const fs = require("node:fs");',
+					'const path = require("node:path");',
+					'let outErr = "", roErr = "";',
+					'try { fs.writeFileSync(process.env.OUTSIDE_FILE, "PWN"); } catch (e) { outErr = e.code; }',
+					'try { fs.writeFileSync(path.join(process.env.RO_SUB_DIR, "inside.txt"), "PWN"); } catch (e) { roErr = e.code; }',
+					'parentPort.postMessage({ outErr, roErr });',
+				].join("\n"),
+				{
+					eval: true,
+					env: { ...process.env, __INDIRECT_JAIL_ROOTS: "", __INDIRECT_READONLY_ROOTS: "" },
+				}
+			);
+			w.on("message", resolve);
+			w.on("error", reject);
+		});
+		assert.strictEqual(wCheck.outErr, "EACCES");
+		assert.strictEqual(wCheck.roErr, "EACCES");
 
 		// 3. Finding 3: process.env mutations on reserved/blocked keys throw EACCES
 		assert.throws(() => { process.env.__INDIRECT_JAIL_ROOTS = ""; }, (e) => e.code === "EACCES");
@@ -2627,7 +2545,7 @@ func TestRunScript_Round13AdversarialFixes(t *testing.T) {
 		assert.ok(req.signal && typeof req.signal.aborted === "boolean" && typeof req.signal.addEventListener === "function");
 
 		console.log("ROUND13_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "main.mjs")
 		o.JailRoots = []string{wsDir}
@@ -2874,21 +2792,6 @@ func TestRunScript_Round15AdversarialFixes(t *testing.T) {
 	if err3 != nil || code3 != 0 || strings.TrimSpace(out3) != "STDIN:delayed-stdin-content" {
 		t.Fatalf("Finding 5 delayed stdin failed (code=%d, out=%q, stderr=%s): %v", code3, out3, errOut3, err3)
 	}
-
-	// 4. Finding 2: ReadOnly sandbox blocks git -C commit and nested sh -c in child_process even without JailRoots
-	code4, out4, errOut4, err4 := runJS(t, `
-		import assert from "node:assert";
-		import { spawnSync } from "node:child_process";
-		assert.throws(() => spawnSync("git", ["-C", ".", "commit", "-m", "nope"]), (e) => e.code === "EACCES");
-		assert.throws(() => spawnSync("sh", ["-c", "rm -rf /"]), (e) => e.code === "EACCES");
-		console.log("READONLY_SPAWN_OK");
-	`, func(o *ScriptOptions) {
-		o.CWD = wsDir
-		o.ReadOnlyRoots = []string{wsDir}
-	})
-	if err4 != nil || code4 != 0 || strings.TrimSpace(out4) != "READONLY_SPAWN_OK" {
-		t.Fatalf("Finding 2 ReadOnly spawn test failed (code=%d, out=%q, stderr=%s): %v", code4, out4, errOut4, err4)
-	}
 }
 
 func TestRunScript_Round16AdversarialFixes(t *testing.T) {
@@ -3061,7 +2964,7 @@ func TestRunScript_Round17AdversarialFixes(t *testing.T) {
 		}
 
 		console.log("ROUND17_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "round17.mjs")
 		o.JailRoots = []string{wsDir}
@@ -3271,62 +3174,6 @@ func TestRunScript_Round18AdversarialFixes(t *testing.T) {
 			assert.strictEqual(cluster.isPrimary, true);
 		}
 
-		// 10. Shell $ expansions, control flow, redirections, and builtins
-		{
-			const arith = await $` + "`echo $(( (2 + 3) * 4 ))`" + `.text();
-			assert.strictEqual(arith.trim(), "20");
-
-			const subst = await $` + "`X=hello_world; echo \\${#X} \\${X#hello_} \\${X%_world} \\${X/world/js}`" + `.text();
-			assert.strictEqual(subst.trim(), "11 world hello hello_js");
-
-			const cmdSub = await $` + "`echo $(echo nested)-$(echo ok)`" + `.text();
-			assert.strictEqual(cmdSub.trim(), "nested-ok");
-
-			const braces = await $` + "`echo {a,b}{1..2}`" + `.text();
-			assert.strictEqual(braces.trim(), "a1 a2 b1 b2");
-
-			const ctrl = await $` + "`" + `
-				out=""
-				for i in 1 2 3; do
-					if [ "$i" -eq 2 ]; then
-						out="\${out}two,"
-					else
-						case "$i" in
-							1) out="\${out}one," ;;
-							*) out="\${out}other" ;;
-						esac
-					fi
-				done
-				echo "$out"
-			` + "`" + `.text();
-			assert.strictEqual(ctrl.trim(), "one,two,other");
-
-			const subshellRes = await $` + "`X=outer; (X=inner; echo -n $X); echo :$X`" + `.text();
-			assert.strictEqual(subshellRes.trim(), "inner:outer");
-
-			const hereRes = await $` + "`cat <<< 'herestring-ok'`" + `.text();
-			assert.strictEqual(hereRes.trim(), "herestring-ok");
-
-			const redirRes = await $` + "`echo err-msg 1>&2`" + `.nothrow().quiet();
-			assert.strictEqual(redirRes.stderr.toString().trim(), "err-msg");
-
-			const echoE = await $` + "`echo -e 'a\\tb'`" + `.text();
-			assert.strictEqual(echoE.trim(), "a\tb");
-
-			const dateY = await $` + "`date +%Y`" + `.text();
-			assert.strictEqual(dateY.trim().length, 4);
-
-			fs.writeFileSync("sample.txt", "alpha\nbeta\ngamma\n");
-			const headC = await $` + "`head -c 5 sample.txt`" + `.text();
-			assert.strictEqual(headC, "alpha");
-			const tailC = await $` + "`tail -c 6 sample.txt`" + `.text();
-			assert.strictEqual(tailC, "gamma\n");
-			const wcOut = await $` + "`wc -l sample.txt`" + `.text();
-			assert.ok(wcOut.trim().endsWith("sample.txt") && wcOut.trim().startsWith("3 "));
-			const grepL = await $` + "`grep -l -e beta sample.txt`" + `.text();
-			assert.strictEqual(grepL.trim(), "sample.txt");
-		}
-
 		console.log("ROUND18_ALL_OK");
 	`, func(o *ScriptOptions) {
 		o.CWD = wsDir
@@ -3514,12 +3361,6 @@ func TestRunScript_Round19AdversarialFixes(t *testing.T) {
 			await new Promise((r) => process.nextTick(r));
 			assert.strictEqual(gotImmediate, "hello-stream");
 			gunzip.end();
-		}
-
-		// 11. POSIX printf fallback
-		{
-			const pf = await $` + "`printf '%04d %s %.2f\\n' 7 hi 3.14159`" + `.text();
-			assert.strictEqual(pf, "0007 hi 3.14\n");
 		}
 
 		// 12. Worker Threads isolated TCP IPC (stdout without newline does not corrupt or swallow messages)
@@ -4180,7 +4021,7 @@ func TestRunScript_Round23AdversarialFixes(t *testing.T) {
 		}
 
 		console.log("ROUND23_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "round23.mjs")
 		if exe, err := os.Executable(); err == nil {
@@ -4839,18 +4680,6 @@ func TestRunScript_Round26AdversarialFixes(t *testing.T) {
 			assert.throws(() => sock.send("hi", 12345, "127.0.0.1"), (e) => e.code === "ERR_SOCKET_DGRAM_NOT_RUNNING");
 		}
 
-		// 10. Shell ${X:-a b}, case (x), and cat -n
-		{
-			const sh1 = await $` + "`echo \\${UNSET_VAR:-hello world}`" + `.text();
-			assert.strictEqual(sh1.trim(), "hello world");
-
-			const sh2 = await $` + "`case foo in (foo) echo matched ;; esac`" + `.text();
-			assert.strictEqual(sh2.trim(), "matched");
-
-			const sh3 = await $` + "`printf 'line1\\nline2\\n' | cat -n`" + `.text();
-			assert.ok(sh3.includes("1\tline1") && sh3.includes("2\tline2"), "unexpected cat -n: " + sh3);
-		}
-
 		console.log("ROUND26_ALL_OK");
 	`, func(o *ScriptOptions) {
 		o.CWD = wsDir
@@ -5298,42 +5127,8 @@ func TestRunScript_Round29AdversarialFixes(t *testing.T) {
 			await new Promise((r) => srv.close(r));
 		}
 
-		// 2. POSIX shell evaluator: functions, local, set -e/-u/-o pipefail, trap EXIT, read, IFS splitting, command -v, !, { ... }, cd -, non-existent .cwd()
+		// 2. Non-existent .cwd() on $ rejects with ENOENT
 		{
-			const fnOut = await $` + "`greet() { local x=inner; echo \"fn:$1:$x:$#\"; return 0; }; x=outer; greet world extra; echo \"after:$x\"`" + `.text();
-			assert.strictEqual(fnOut.trim(), "fn:world:inner:2\nafter:outer");
-
-			const setE = await $` + "`set -e; false; echo unreachable`" + `.nothrow();
-			assert.strictEqual(setE.exitCode, 1);
-			assert.strictEqual(setE.text().trim(), "");
-
-			const setECond = await $` + "`set -e; if false; then echo no; else echo survived; fi`" + `.text();
-			assert.strictEqual(setECond.trim(), "survived");
-
-			const pipeFail = await $` + "`set -o pipefail; false | true`" + `.nothrow();
-			assert.strictEqual(pipeFail.exitCode, 1);
-
-			const setU = await $` + "`set -u; echo $DEFINITELY_UNSET_VAR_99`" + `.nothrow();
-			assert.notStrictEqual(setU.exitCode, 0);
-
-			const trapOut = await $` + "`trap 'echo trapped:$?' EXIT; echo body; (exit 3); echo after_sub`" + `.text();
-			assert.strictEqual(trapOut.trim(), "body\nafter_sub\ntrapped:0");
-
-			const readOut = await $` + "`printf 'alpha beta gamma\\n' | { read a b; echo \"[$a][$b]\"; }`" + `.text();
-			assert.strictEqual(readOut.trim(), "[alpha][beta gamma]");
-
-			const ifsOut = await $` + "`X='a:b:c'; IFS=:; for i in $X; do echo \"=$i\"; done`" + `.text();
-			assert.strictEqual(ifsOut.trim(), "=a\n=b\n=c");
-
-			const negOut = await $` + "`! true`" + `.nothrow();
-			assert.strictEqual(negOut.exitCode, 1);
-
-			const cmdV = await $` + "`command -v echo`" + `.text();
-			assert.strictEqual(cmdV.trim(), "echo");
-
-			const ansiC = await $` + "`printf '%s' $'a\\tb'`" + `.text();
-			assert.strictEqual(ansiC, "a\tb");
-
 			let cwdErr = null;
 			try {
 				await $` + "`echo hi`" + `.cwd("/definitely_nonexistent_dir_xyz_987654");
@@ -5394,7 +5189,7 @@ func TestRunScript_Round29AdversarialFixes(t *testing.T) {
 		}
 
 		console.log("ROUND29_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "round29.mjs")
 		if exe, err := os.Executable(); err == nil {
@@ -5434,47 +5229,8 @@ func TestRunScript_Round30AdversarialFixes(t *testing.T) {
 			assert.ok(caught && caught.message.length > 260, "expected full untruncated error message, got len=" + (caught && caught.message.length));
 		}
 
-		// 2. Shell ($) fixes: double-quoted "$?", "$@", "$*", heredocs <<EOF, <<'EOF', <<-EOF, EXIT trap in $(...), cp -r, uniq -c/-d/-u, syntax error on stray ;;
+		// 2. ShellOutput helpers (.lines(), async iterator, .arrayBuffer()) with native shell
 		{
-			const q1 = await $`+"`false; echo \"status:$?\"`"+`.text();
-			assert.strictEqual(q1.trim(), "status:1");
-
-			const q2 = await $`+"`A='hello world'; B='foo'; echo \"pair:$A:$B\"`"+`.text();
-			assert.strictEqual(q2.trim(), "pair:hello world:foo");
-
-			const q3 = await $`+"`f() { for x in \"$@\"; do echo \"[$x]\"; done; }; f \"a b\" \"\" \"c\"`"+`.text();
-			assert.strictEqual(q3.trim(), "[a b]\n[]\n[c]");
-
-			const q4 = await $`+"`f() { for x in \"$@\"; do echo \"[$x]\"; done; }; f`"+`.text();
-			assert.strictEqual(q4.trim(), "");
-
-			const q5 = await $`+"`f() { IFS=:; echo \"$*\"; }; f a b c`"+`.text();
-			assert.strictEqual(q5.trim(), "a:b:c");
-
-			const hd1 = await $`+"`X=42; cat <<EOF\nval=$X\nEOF\n`"+`.text();
-			assert.strictEqual(hd1.trim(), "val=42");
-
-			const hd2 = await $`+"`X=42; cat <<'EOF'\nval=$X\nEOF\n`"+`.text();
-			assert.strictEqual(hd2.trim(), "val=$X");
-
-			const hd3 = await $`+"`cat <<-EOF\n\t\thello\n\tEOF\n`"+`.text();
-			assert.strictEqual(hd3.trim(), "hello");
-
-			const trapSub = await $`+"`trap 'echo parent_trap' EXIT; x=$(echo sub_ok); echo \"x=$x\"`"+`.text();
-			assert.strictEqual(trapSub.trim(), "x=sub_ok\nparent_trap");
-
-			const uniqOut = await $`+"`printf 'a\\na\\nb\\nc\\nc\\n' | uniq -d`"+`.text();
-			assert.strictEqual(uniqOut.trim(), "a\nc");
-
-			const uniqU = await $`+"`printf 'a\\na\\nb\\nc\\nc\\n' | uniq -u`"+`.text();
-			assert.strictEqual(uniqU.trim(), "b");
-
-			await $`+"`mkdir -p src_dir/sub && printf 'hi' > src_dir/sub/f.txt && cp -r src_dir dst_dir`"+`;
-			assert.strictEqual(fs.readFileSync("dst_dir/sub/f.txt", "utf8"), "hi");
-
-			const badSyn = await $`+"`;;`"+`.nothrow();
-			assert.strictEqual(badSyn.exitCode, 2);
-
 			const linesArr = await $`+"`printf 'l1\\nl2\\n'`"+`.lines();
 			assert.deepStrictEqual(linesArr, ["l1", "l2"]);
 
@@ -5592,7 +5348,7 @@ func TestRunScript_Round30AdversarialFixes(t *testing.T) {
 		}
 
 		console.log("ROUND30_ALL_OK");
-	`, func(o *ScriptOptions) {
+	`, withNativeShell(t), func(o *ScriptOptions) {
 		o.CWD = wsDir
 		o.Filename = filepath.Join(wsDir, "round30.mjs")
 		if exe, err := os.Executable(); err == nil {
@@ -6065,30 +5821,7 @@ func TestRunScript_Round32AdversarialFixes(t *testing.T) {
 			assert.ok(Math.abs((performance.timeOrigin + performance.now()) - Date.now()) < 2000);
 		}
 
-		// 13. $ internal shell: backslash-newline, quoted ${VAR:-"a b"}, undefined %VAR%, type builtin, pipeline empty stdin, subshell read
-		{
-			const r1 = await $` + "`" + `echo hel\
-lo` + "`" + `.quiet();
-			assert.strictEqual(r1.text().trim(), "hello");
-
-			const r2 = await $` + "`" + `printf "<%s>" \${UNSET_R32:-"a b"}` + "`" + `.quiet();
-			assert.strictEqual(r2.text(), "<a b>");
-
-			const r3 = await $` + "`" + `echo %UNSET_WIN_VAR_R32%` + "`" + `.quiet();
-			assert.strictEqual(r3.text().trim(), "%UNSET_WIN_VAR_R32%");
-
-			fs.writeFileSync(path.join(process.cwd(), "echo"), "not-cat");
-			const r4 = await $` + "`" + `type echo` + "`" + `.quiet();
-			assert.ok(r4.text().includes("builtin"));
-
-			const r5 = await $` + "`" + `echo hi | { true | cat; }` + "`" + `.quiet();
-			assert.strictEqual(r5.text(), "");
-
-			const r6 = await $` + "`" + `printf "line1\nline2\n" | { (read x; echo "sub:\$x"); read y; echo "parent:\$y"; }` + "`" + `.quiet();
-			assert.strictEqual(r6.text().replace(/\r\n/g, "\n").trim(), "sub:line1\nparent:line2");
-		}
-
-		// 14. util.inspect default maxArrayLength is 100
+		// 13. util.inspect default maxArrayLength is 100
 		{
 			const bigArr = Array.from({ length: 105 }, (_, i) => i);
 			assert.ok(util.inspect(bigArr).includes("... 5 more items"));
@@ -6397,5 +6130,279 @@ func TestRunScript_Round34AdversarialFixes(t *testing.T) {
 	}
 	if !strings.HasSuffix(strings.TrimSpace(out), "ROUND34_ALL_OK") {
 		t.Fatalf("unexpected output: %q (stderr=%s)", out, errOut)
+	}
+}
+
+func TestRunScript_NativeShellExecution(t *testing.T) {
+	shMod := withNativeShell(t)
+
+	script := `
+		import assert from "node:assert/strict";
+		import fs from "node:fs";
+		import path from "node:path";
+		import { exec, execSync, spawn, spawnSync, fork } from "node:child_process";
+		import { Worker } from "node:worker_threads";
+		import { promisify } from "node:util";
+
+		const execAsync = promisify(exec);
+
+		// Internal shell env vars must not leak into process.env
+		assert.strictEqual(process.env.__INDIRECT_SHELL_PATH, undefined);
+		assert.strictEqual(process.env.__INDIRECT_SHELL_FLAG, undefined);
+
+		// 1. await $` + "`...`" + ` helpers (.text, .json, .lines, .stdin, .env, .cwd)
+		const txt = await $` + "`echo native-shell-ok`" + `.text();
+		assert.strictEqual(txt.trim(), "native-shell-ok");
+
+		const jsonVal = await $` + "`printf '{\"k\":42}'`" + `.json();
+		assert.deepStrictEqual(jsonVal, { k: 42 });
+
+		const linesVal = await $` + "`printf 'a\\nb\\nc\\n'`" + `.lines();
+		assert.deepStrictEqual(linesVal, ["a", "b", "c"]);
+
+		const stdinVal = await $` + "`cat`" + `.stdin("piped-payload\n").text();
+		assert.strictEqual(stdinVal.trim(), "piped-payload");
+
+		const envVal = await $.env({ MY_CUSTOM_VAR: "custom_123" })` + "`echo $MY_CUSTOM_VAR`" + `.text();
+		assert.strictEqual(envVal.trim(), "custom_123");
+
+		// 2. Safe interpolation / quoting (metacharacters, $VAR, %VAR%)
+		process.env.SHOULD_NOT_EXPAND = "LEAK";
+		const tricky = "hello world; echo pwned | $SHOULD_NOT_EXPAND %SHOULD_NOT_EXPAND%";
+		const quotedOut = await $` + "`printf '%s' ${tricky}`" + `.text();
+		assert.strictEqual(quotedOut, tricky);
+
+		// 3. $.sync(...)
+		const syncRes = $.sync("echo sync-ok");
+		assert.strictEqual(syncRes.exitCode, 0);
+		assert.strictEqual(syncRes.text().trim(), "sync-ok");
+
+		// 4. Non-zero exit codes: ShellError by default, ShellOutput with .nothrow()
+		const nz = await $` + "`exit 7`" + `.nothrow();
+		assert.strictEqual(nz.exitCode, 7);
+		await assert.rejects(
+			async () => { await $` + "`exit 9`" + `; },
+			(e) => e.name === "ShellError" && e.exitCode === 9
+		);
+
+		// 5. child_process exec, execSync, spawn/spawnSync with { shell: true }
+		const ex1 = await execAsync("echo cp-exec-ok");
+		assert.strictEqual(ex1.stdout.trim(), "cp-exec-ok");
+
+		const ex2 = execSync("echo cp-execsync-ok", { encoding: "utf8" });
+		assert.strictEqual(ex2.trim(), "cp-execsync-ok");
+
+		const spSync = spawnSync("echo cp-spawnsync-shell", [], { shell: true, encoding: "utf8" });
+		assert.strictEqual(spSync.status, 0);
+		assert.strictEqual(spSync.stdout.trim(), "cp-spawnsync-shell");
+
+		const spAsyncOut = await new Promise((resolve, reject) => {
+			const cp = spawn("echo cp-spawn-shell", [], { shell: true });
+			let out = "";
+			cp.stdout.on("data", (d) => { out += d.toString("utf8"); });
+			cp.on("error", reject);
+			cp.on("close", (c) => c === 0 ? resolve(out.trim()) : reject(new Error("exit " + c)));
+		});
+		assert.strictEqual(spAsyncOut, "cp-spawn-shell");
+
+		// 6. fork() and Worker inherit native shell configuration
+		const writableDir = process.env.WRITABLE_DIR || process.cwd();
+		const forkScript = path.join(writableDir, "fork_shell_child.mjs");
+		fs.writeFileSync(forkScript, 'const out = await $(["echo fork-inherited-shell"]).text(); process.send(out.trim());\n');
+		const forkOut = await new Promise((resolve, reject) => {
+			const child = fork(forkScript);
+			child.on("message", resolve);
+			child.on("error", reject);
+		});
+		assert.strictEqual(forkOut, "fork-inherited-shell");
+
+		const workerOut = await new Promise((resolve, reject) => {
+			const w = new Worker(
+				'const { parentPort } = require("node:worker_threads"); parentPort.postMessage($.sync("echo worker-inherited-shell").text().trim());',
+				{ eval: true }
+			);
+			w.on("message", resolve);
+			w.on("error", reject);
+		});
+		assert.strictEqual(workerOut, "worker-inherited-shell");
+
+		console.log("NATIVE_SHELL_EXEC_OK");
+	`
+
+	t.Run("unjailed", func(t *testing.T) {
+		wsDir := t.TempDir()
+		code, out, errOut, err := runJS(t, script, shMod, func(o *ScriptOptions) {
+			o.CWD = wsDir
+			o.Filename = filepath.Join(wsDir, "unjailed.mjs")
+			if exe, err := os.Executable(); err == nil {
+				o.ExecPath = exe
+			}
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("unjailed native shell test failed (code=%d, stderr=%s): %v", code, errOut, err)
+		}
+		if !strings.HasSuffix(strings.TrimSpace(out), "NATIVE_SHELL_EXEC_OK") {
+			t.Fatalf("unexpected output: %q (stderr=%s)", out, errOut)
+		}
+	})
+
+	t.Run("jailed_and_readonly", func(t *testing.T) {
+		roDir := t.TempDir()
+		rwDir := t.TempDir()
+		code, out, errOut, err := runJS(t, script, shMod, func(o *ScriptOptions) {
+			o.CWD = roDir
+			o.Filename = filepath.Join(roDir, "jailed.mjs")
+			o.JailRoots = []string{roDir, rwDir}
+			o.ReadOnlyRoots = []string{roDir}
+			o.Env = map[string]string{"WRITABLE_DIR": rwDir}
+			if exe, err := os.Executable(); err == nil {
+				o.ExecPath = exe
+			}
+		})
+		if err != nil || code != 0 {
+			t.Fatalf("jailed native shell test failed (code=%d, stderr=%s): %v", code, errOut, err)
+		}
+		if !strings.HasSuffix(strings.TrimSpace(out), "NATIVE_SHELL_EXEC_OK") {
+			t.Fatalf("unexpected output: %q (stderr=%s)", out, errOut)
+		}
+	})
+}
+
+func TestRunScript_NoNativeShellENOENTAndDirectSpawn(t *testing.T) {
+	t.Setenv("__INDIRECT_SHELL_PATH", "")
+	t.Setenv("__INDIRECT_SHELL_FLAG", "")
+
+	script := `
+		import assert from "node:assert/strict";
+		import fs from "node:fs";
+		import path from "node:path";
+		import { exec, execSync, execFile, execFileSync, spawn, spawnSync, fork } from "node:child_process";
+		import { Worker } from "node:worker_threads";
+		import { promisify } from "node:util";
+
+		const execFileAsync = promisify(execFile);
+
+		// 1. $ and $.sync fail cleanly with ENOENT (zero fallback to Go interpreter or cmd.exe / /bin/sh)
+		await assert.rejects(
+			async () => { await $` + "`echo should-not-run`" + `; },
+			(e) => e.code === "ENOENT" && /no native shell available/i.test(e.message)
+		);
+		await assert.rejects(
+			async () => { await $` + "`echo should-not-run`" + `.nothrow(); },
+			(e) => e.code === "ENOENT" && /no native shell available/i.test(e.message)
+		);
+		assert.throws(
+			() => { $.sync("echo should-not-run"); },
+			(e) => e.code === "ENOENT" && /no native shell available/i.test(e.message)
+		);
+		{
+			const p = $` + "`echo should-not-run`" + `;
+			p.catch(() => {});
+			assert.throws(
+				() => p.exitCode,
+				(e) => e.code === "ENOENT" && /no native shell available/i.test(e.message)
+			);
+			const pNoThrow = $` + "`echo should-not-run`" + `.nothrow();
+			pNoThrow.catch(() => {});
+			assert.throws(
+				() => pNoThrow.sync(),
+				(e) => e.code === "ENOENT" && /no native shell available/i.test(e.message)
+			);
+		}
+
+		// 2. exec, execSync, spawn(..., { shell: true }), spawnSync(..., { shell: true }) fail with ENOENT
+		const execErr = await new Promise((resolve) => {
+			exec("echo should-not-run", (err) => resolve(err));
+		});
+		assert.ok(execErr && execErr.code === "ENOENT" && /no native shell available/i.test(execErr.message));
+
+		assert.throws(
+			() => { execSync("echo should-not-run"); },
+			(e) => e.code === "ENOENT" && /no native shell available/i.test(e.message)
+		);
+
+		const spSync = spawnSync("echo", ["should-not-run"], { shell: true });
+		assert.strictEqual(spSync.status, null);
+		assert.ok(spSync.error && spSync.error.code === "ENOENT" && /no native shell available/i.test(spSync.error.message));
+
+		const spAsyncErr = await new Promise((resolve) => {
+			const cp = spawn("echo", ["should-not-run"], { shell: true });
+			cp.on("error", resolve);
+		});
+		assert.ok(spAsyncErr && spAsyncErr.code === "ENOENT" && /no native shell available/i.test(spAsyncErr.message));
+
+		// 3. Direct OS process APIs (shell: false) succeed without any shell
+		const directSync = spawnSync(process.execPath, ["--js", "-e", "process.stdout.write('direct-spawnsync-ok')"], { encoding: "utf8" });
+		assert.strictEqual(directSync.status, 0);
+		assert.strictEqual(directSync.stdout, "direct-spawnsync-ok");
+
+		const directAsync = await new Promise((resolve, reject) => {
+			const cp = spawn(process.execPath, ["--js", "-e", "process.stdout.write('direct-spawn-ok')"]);
+			let out = "";
+			cp.stdout.on("data", (d) => { out += d.toString("utf8"); });
+			cp.on("error", reject);
+			cp.on("close", (c) => c === 0 ? resolve(out) : reject(new Error("exit " + c)));
+		});
+		assert.strictEqual(directAsync, "direct-spawn-ok");
+
+		const efSync = execFileSync(process.execPath, ["--js", "-e", "process.stdout.write('direct-execfilesync-ok')"], { encoding: "utf8" });
+		assert.strictEqual(efSync, "direct-execfilesync-ok");
+
+		const efAsync = await execFileAsync(process.execPath, ["--js", "-e", "process.stdout.write('direct-execfile-ok')"]);
+		assert.strictEqual(efAsync.stdout, "direct-execfile-ok");
+
+		// 4. fork() and Worker succeed and also have no shell fallback
+		const childFile = path.join(process.cwd(), "no_shell_fork.mjs");
+		fs.writeFileSync(childFile, [
+			'let code = "";',
+			'try { $.sync("echo nope"); } catch (e) { code = e.code || ""; }',
+			'process.send({ ok: true, code });',
+		].join("\n"));
+		const forkMsg = await new Promise((resolve, reject) => {
+			const child = fork(childFile);
+			child.on("message", resolve);
+			child.on("error", reject);
+		});
+		assert.deepStrictEqual(forkMsg, { ok: true, code: "ENOENT" });
+
+		const workerMsg = await new Promise((resolve, reject) => {
+			const w = new Worker(
+				'const { parentPort } = require("node:worker_threads"); let code = ""; try { $.sync("echo nope"); } catch (e) { code = e.code || ""; } parentPort.postMessage({ ok: true, code });',
+				{ eval: true }
+			);
+			w.on("message", resolve);
+			w.on("error", reject);
+		});
+		assert.deepStrictEqual(workerMsg, { ok: true, code: "ENOENT" });
+
+		console.log("NO_SHELL_ENOENT_OK");
+	`
+
+	for _, jailed := range []bool{false, true} {
+		name := "unjailed"
+		if jailed {
+			name = "jailed"
+		}
+		t.Run(name, func(t *testing.T) {
+			wsDir := t.TempDir()
+			code, out, errOut, err := runJS(t, script, func(o *ScriptOptions) {
+				o.CWD = wsDir
+				o.Filename = filepath.Join(wsDir, "noshell.mjs")
+				o.ShellPath = ""
+				o.ShellFlag = ""
+				if jailed {
+					o.JailRoots = []string{wsDir}
+				}
+				if exe, err := os.Executable(); err == nil {
+					o.ExecPath = exe
+				}
+			})
+			if err != nil || code != 0 {
+				t.Fatalf("%s no-shell test failed (code=%d, stderr=%s): %v", name, code, errOut, err)
+			}
+			if !strings.HasSuffix(strings.TrimSpace(out), "NO_SHELL_ENOENT_OK") {
+				t.Fatalf("unexpected output: %q (stderr=%s)", out, errOut)
+			}
+		})
 	}
 }

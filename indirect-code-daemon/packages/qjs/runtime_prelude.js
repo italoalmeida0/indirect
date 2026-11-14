@@ -11115,6 +11115,7 @@
         if (meta.errorCode) err.code = meta.errorCode;
         if (meta.syscall) err.syscall = meta.syscall;
         if (meta.path) err.path = meta.path;
+        cp._spawnError = err;
         const closeCode = err.code === "ENOENT" ? (isWin ? -4058 : -2) : -1;
         processObj.nextTick(() => {
           endChildStreams();
@@ -11128,6 +11129,7 @@
     } catch (err) {
       activeChildren.delete(id);
       cp._closed = true;
+      cp._spawnError = err;
       cp.unref();
       const closeCode = err && err.code === "ENOENT" ? (isWin ? -4058 : -2) : -1;
       processObj.nextTick(() => {
@@ -11517,6 +11519,19 @@
         return this._result;
       }
       this._executed = true;
+      if (this._cp && this._cp._spawnError) {
+        const err = this._cp._spawnError;
+        if (err && typeof err === "object" && err.exitCode === undefined) err.exitCode = 1;
+        this._syncCompleted = true;
+        this._error = err;
+        if (this._asyncReject) {
+          const rej = this._asyncReject;
+          this._asyncResolve = null;
+          this._asyncReject = null;
+          rej(err);
+        }
+        throw err;
+      }
       if (this._cp && this._cp._id) {
         this._syncCompleted = true;
         const res = hostCall("cp.waitChild", String(this._cp._id));
@@ -11563,6 +11578,11 @@
       if (!this._quiet) {
         if (outBuf.length > 0) processObj.stdout.write(outBuf);
         if (errBuf.length > 0) processObj.stderr.write(errBuf);
+      }
+      if (res.error && res.status === null && res.signal === null) {
+        if (res.error.exitCode === undefined) res.error.exitCode = 1;
+        this._error = res.error;
+        throw res.error;
       }
       const code = res.status !== null && res.status !== undefined ? res.status : (res.signal ? sigExitCode(res.signal) : 1);
       this._result = new ShellOutput(outBuf, errBuf, code);

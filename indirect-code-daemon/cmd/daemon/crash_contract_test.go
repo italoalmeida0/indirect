@@ -6,9 +6,12 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
+	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/processutil"
 	"indirect/indirect-code-daemon/packages/runner"
 )
@@ -16,6 +19,19 @@ import (
 func TestMain(m *testing.M) {
 	if len(os.Args) == 2 && os.Args[1] == "--runner-command" {
 		os.Exit(runner.CommandMain())
+	}
+	if !tools.ShellAvailable() {
+		if env := os.Getenv("UNISH_TEST_BINARY"); env != "" {
+			if info, err := os.Stat(env); err == nil && !info.IsDir() {
+				tools.SetShellOverride(env, "-c", true)
+			}
+		}
+	}
+	if !tools.ShellAvailable() && runtime.GOOS == "windows" {
+		cand := tools.UnishBinPath(filepath.Join(defaultDataDir(), "external"))
+		if info, err := os.Stat(cand); err == nil && !info.IsDir() {
+			tools.SetShellOverride(cand, "-c", true)
+		}
 	}
 	os.Exit(m.Run())
 }

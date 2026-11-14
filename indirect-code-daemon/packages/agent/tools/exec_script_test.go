@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -491,6 +492,92 @@ func TestExecScriptRound12PermissionsAndDirectEnv(t *testing.T) {
 		t.Fatalf("scoped exec_script failed: %v", err)
 	}
 	if got := strings.TrimSpace(toolResultText(t, res)); got != "SCOPED_OK" {
+		t.Fatalf("unexpected output: %q", got)
+	}
+}
+
+func TestExecScriptDescriptionAndSchemaContract(t *testing.T) {
+	tool := &ExecScriptTool{}
+	desc := tool.Description()
+	schemaStr := string(tool.Schema())
+
+	for _, forbidden := range []string{"quickjs", "fallback", "jailed", "node:fs", "node:crypto", "node:zlib", "node:sqlite"} {
+		if strings.Contains(strings.ToLower(desc), forbidden) {
+			t.Fatalf("Description() must not contain %q; got: %s", forbidden, desc)
+		}
+		if strings.Contains(strings.ToLower(schemaStr), forbidden) {
+			t.Fatalf("Schema() must not contain %q; got: %s", forbidden, schemaStr)
+		}
+	}
+
+	for _, required := range []string{
+		"Node.js",
+		"import",
+		"require",
+		"await",
+		"$",
+		".text()",
+		".json()",
+		".lines()",
+		".nothrow()",
+		".cwd(dir)",
+		".env(vars)",
+		".stdin(input)",
+		`$.sync("cmd")`,
+		"last 2000 lines or 50KB (whichever is hit first)",
+		"non-zero exit",
+		"There is no timeout: if the script still runs after 10.0s it automatically moves to the background (you are notified with a job id; read the output with bg_check, wait with bg_await, stop it with bg_cancel).",
+	} {
+		if !strings.Contains(desc, required) {
+			t.Fatalf("Description() missing %q; got:\n%s", required, desc)
+		}
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(tool.Schema(), &parsed); err != nil {
+		t.Fatalf("Schema() is not valid JSON: %v", err)
+	}
+	if !strings.Contains(schemaStr, "Node.js") || !strings.Contains(schemaStr, "$") {
+		t.Fatalf("Schema() should mention Node.js and $, got: %s", schemaStr)
+	}
+}
+
+func TestExecScriptNoShellFailsDollarButAllowsDirectChildProcess(t *testing.T) {
+	SetShellOverride("", "", false)
+	defer ClearShellOverride()
+
+	root := t.TempDir()
+	tool := &ExecScriptTool{CWD: root, LogDir: t.TempDir()}
+
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"code": `
+			import assert from "node:assert/strict";
+			import cp from "node:child_process";
+
+			// $ and shell:true must fail cleanly with ENOENT and zero fallback when no shell is configured.
+			await assert.rejects(
+				async () => { await $` + "`echo should-not-run`" + `; },
+				(e) => e && e.code === "ENOENT"
+			);
+			assert.throws(
+				() => { $.sync("echo should-not-run"); },
+				(e) => e && e.code === "ENOENT"
+			);
+			assert.throws(
+				() => { cp.execSync("echo should-not-run"); },
+				(e) => e && e.code === "ENOENT"
+			);
+
+			// Direct OS process spawning (shell: false) continues to work without a shell.
+			const out = cp.execFileSync(process.execPath, ["--js-exec-direct", "console.log('DIRECT_CHILD_OK')"], { encoding: "utf8" });
+			assert.equal(out.trim(), "DIRECT_CHILD_OK");
+			console.log("NO_SHELL_CONTRACT_OK");
+		`,
+	}), nil)
+	if err != nil {
+		t.Fatalf("exec_script failed: %v", err)
+	}
+	if got := strings.TrimSpace(toolResultText(t, res)); got != "NO_SHELL_CONTRACT_OK" {
 		t.Fatalf("unexpected output: %q", got)
 	}
 }

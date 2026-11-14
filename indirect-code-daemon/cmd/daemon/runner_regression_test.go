@@ -78,19 +78,41 @@ func TestMultiCallJSRole(t *testing.T) {
 		t.Fatalf("unexpected --js file argv output: %q", string(outFile))
 	}
 
-	// 4. Stdin script (-) with $ template tag safe interpolation of metacharacters
+	// 4. Stdin script (-) with argv forwarding (no shell required)
 	cmdStdin := exec.Command(bin, "--js", "-", "hello&world|test")
 	cmdStdin.Stdin = strings.NewReader(`
-		const val = process.argv[2];
-		const res = await $` + "`" + `${process.execPath} --js -e "console.log(process.argv[1])" ${val}` + "`" + `.nothrow().quiet();
-		console.log("argv1:" + process.argv[1] + ":interpolated:" + res.text().trim());
+		console.log("argv1:" + process.argv[1] + ":argv2:" + process.argv[2]);
 	`)
 	outStdin, err := cmdStdin.CombinedOutput()
 	if err != nil {
 		t.Fatalf("--js - failed: %v\n%s", err, outStdin)
 	}
-	if strings.TrimSpace(string(outStdin)) != "argv1:-:interpolated:hello&world|test" {
+	if strings.TrimSpace(string(outStdin)) != "argv1:-:argv2:hello&world|test" {
 		t.Fatalf("unexpected --js - output: %q", string(outStdin))
+	}
+
+	// 5. Stdin script (-) with $ template tag safe interpolation of metacharacters when a host shell is available
+	if shPath, shFlag := tools.ShellForTests(); shPath != "" {
+		if shFlag == "" {
+			shFlag = "-c"
+		}
+		cmdDollar := exec.Command(bin, "--js", "-", "hello&world|test")
+		cmdDollar.Env = append(os.Environ(),
+			"__INDIRECT_SHELL_PATH="+shPath,
+			"__INDIRECT_SHELL_FLAG="+shFlag,
+		)
+		cmdDollar.Stdin = strings.NewReader(`
+			const val = process.argv[2];
+			const res = await $` + "`" + `${process.execPath} --js -e "console.log(process.argv[1])" ${val}` + "`" + `.nothrow().quiet();
+			console.log("argv1:" + process.argv[1] + ":interpolated:" + res.text().trim());
+		`)
+		outDollar, err := cmdDollar.CombinedOutput()
+		if err != nil {
+			t.Fatalf("--js - with $ failed: %v\n%s", err, outDollar)
+		}
+		if strings.TrimSpace(string(outDollar)) != "argv1:-:interpolated:hello&world|test" {
+			t.Fatalf("unexpected --js - $ output: %q", string(outDollar))
+		}
 	}
 }
 

@@ -197,7 +197,23 @@ func jsMain(args []string) int {
 
 	cwd, _ := os.Getwd()
 	exe, _ := os.Executable()
-	shPath, shFlag := tools.ShellForTests()
+	shPath := os.Getenv("__INDIRECT_SHELL_PATH")
+	shFlag := os.Getenv("__INDIRECT_SHELL_FLAG")
+	_ = os.Unsetenv("__INDIRECT_SHELL_PATH")
+	_ = os.Unsetenv("__INDIRECT_SHELL_FLAG")
+	if shPath == "" {
+		shPath, shFlag = tools.ShellForTests()
+	}
+	if shPath == "" && runtime.GOOS == "windows" {
+		cand := tools.UnishBinPath(filepath.Join(defaultDataDir(), "external"))
+		if info, err := os.Stat(cand); err == nil && !info.IsDir() {
+			shPath = cand
+			shFlag = "-c"
+		}
+	}
+	if shPath != "" && shFlag == "" {
+		shFlag = "-c"
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

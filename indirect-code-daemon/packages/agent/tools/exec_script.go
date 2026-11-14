@@ -17,13 +17,13 @@ import (
 )
 
 type ExecScriptArgs struct {
-	// Code is the JavaScript snippet to execute in the built-in QuickJS-NG Node/Web/Shell runtime.
+	// Code is the JavaScript snippet to execute in the Node.js runtime.
 	Code string `json:"code"`
 	// Stdin feeds text into the process standard input.
 	Stdin string `json:"stdin,omitempty"`
 	// Env adds extra environment variables (SANDBOX-safe keys only).
 	Env map[string]string `json:"env,omitempty"`
-	// Workdir overrides the run directory (jailed to CWD when sandboxed).
+	// Workdir overrides the run directory.
 	Workdir string `json:"work_dir,omitempty"`
 	// Legacy fields from migrated v4 Python tool calls (accepted so unmarshal does not fail with unknown field).
 	LegacyLang string   `json:"legacy_lang,omitempty"`
@@ -31,12 +31,12 @@ type ExecScriptArgs struct {
 	Args       []string `json:"args,omitempty"`
 }
 
-// ExecScriptTool executes JavaScript code in the daemon's built-in QuickJS-NG
-// Node.js / WinterCG Web / Shell ($) runtime. Like BashTool it is a
-// command-execution tool: the frontend renders it as a terminal card, it
-// participates in approval review, and the sandbox permission prompt covers
-// it. There is deliberately NO timeout parameter: like bash, a run still going
-// after AutoBackgroundAfter detaches into a background job.
+// ExecScriptTool executes JavaScript code in the daemon's Node.js runtime with
+// the built-in global $ shell helper. Like BashTool it is a command-execution
+// tool: the frontend renders it as a terminal card, it participates in approval
+// review, and the sandbox permission prompt covers it. There is deliberately NO
+// timeout parameter: like bash, a run still going after AutoBackgroundAfter
+// detaches into a background job.
 type ExecScriptTool struct {
 	// Starter launches the script. Nil = direct local execution; the
 	// daemon injects the runner-backed starter (crash-only tasks).
@@ -56,17 +56,13 @@ type ExecScriptTool struct {
 func (t *ExecScriptTool) Name() string { return "exec_script" }
 
 func (t *ExecScriptTool) Description() string {
-	return fmt.Sprintf("Execute JavaScript (`code`) in the built-in Node.js / Web / Shell runtime (powered by QuickJS-NG), with optional `stdin`, `env` and `work_dir`. "+
-		"Supports ES2023+, top-level await, ES modules (`import`) and CommonJS (`require`), local file & node_modules resolution, "+
-		"Node.js built-ins (`fs`, `fs/promises`, `path`, `os`, `child_process`, `crypto`, `zlib`, `http`, `https`, `net`, `dns`, `util`, `events`, `assert`, `url`, `buffer`, `stream`, `timers`, `process`), "+
-		"Web globals (`fetch`, `Request`, `Response`, `Headers`, `FormData`, `Blob`, `File`, `URL`, `TextEncoder`, `TextDecoder`, `AbortController`, `crypto.subtle`), "+
-		"and the shell helper `$` (e.g. `await $`git status`.text()`, `$.sync('ls -la')`). "+
-		"Use for data analysis, structured file transforms, HTTP requests, hashing, or multi-step scripts. "+
-		"Stdout/stderr are captured (truncated to last 2000 lines or 50KB, whichever is hit first); a non-zero exit is reported with the exit code. "+
-		"There is no timeout: if the execution still runs after %s it automatically moves to the background (you are notified with a job id; read the output with bg_check, wait with bg_await, stop it with bg_cancel).", humanDuration(AutoBackgroundAfter))
+	return fmt.Sprintf("Execute JavaScript (`code`) in Node.js (supports ES module `import`, CommonJS `require`, and top-level `await`), with optional `stdin`, `env`, and `work_dir`. "+
+		"In addition to standard Node.js APIs, a global `$` shell helper is built in: ``await $`cmd` `` (with `.text()`, `.json()`, `.lines()`, `.nothrow()`, `.cwd(dir)`, `.env(vars)`, `.stdin(input)`) and `$.sync(\"cmd\")`. "+
+		"Returns stdout and stderr, truncated to last 2000 lines or 50KB (whichever is hit first); a non-zero exit code is reported in the output without failing the tool call. "+
+		"There is no timeout: if the script still runs after %s it automatically moves to the background (you are notified with a job id; read the output with bg_check, wait with bg_await, stop it with bg_cancel).", humanDuration(AutoBackgroundAfter))
 }
 
-const execScriptSchema = `{"type":"object","properties":{"code":{"type":"string","description":"JavaScript code to execute (supports top-level await, ES import, CommonJS require, Node built-ins, Web fetch/crypto, and $ shell helper)."},"stdin":{"type":"string","description":"Text piped to process.stdin."},"env":{"type":"object","additionalProperties":{"type":"string"},"description":"Extra environment variables."},"work_dir":{"type":"string","description":"Run directory (defaults to session CWD; jailed when sandboxed)."}},"required":["code"]}`
+const execScriptSchema = `{"type":"object","properties":{"code":{"type":"string","description":"JavaScript code to execute in Node.js (supports ES import, CommonJS require, top-level await, and the global $ shell helper)."},"stdin":{"type":"string","description":"Text piped to process.stdin."},"env":{"type":"object","additionalProperties":{"type":"string"},"description":"Extra environment variables."},"work_dir":{"type":"string","description":"Working directory (defaults to the current working directory)."}},"required":["code"]}`
 
 func (t *ExecScriptTool) Schema() json.RawMessage { return json.RawMessage(execScriptSchema) }
 
