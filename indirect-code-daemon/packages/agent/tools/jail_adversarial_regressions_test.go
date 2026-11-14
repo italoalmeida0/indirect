@@ -613,3 +613,191 @@ func TestJailRegression_NonExistentPathEntriesStrippedZeroPrompts(t *testing.T) 
 		}
 	}
 }
+
+// Regression for Defect R2-2: Leading-zero port formatting (`:0<port>`, `:000<port>`),
+// hex/octal port tokens, and non-canonical loopback IPs (`2130706433`, `127.1`,
+// `0x7f000001`) MUST NOT bypass ControlPort isolation in unish external binaries
+// or QuickJS network APIs across any access mode.
+func TestJailRegression_LeadingZeroAndEncodedControlPortBlocked(t *testing.T) {
+	ws := t.TempDir()
+	tmpDir := t.TempDir()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	ctrlPort := ln.Addr().(*net.TCPAddr).Port
+
+	var ctrlHits atomic.Int32
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			ctrlHits.Add(1)
+			_ = c.Close()
+		}
+	}()
+
+	for _, mode := range []string{"auto", "ask", "full"} {
+		var asks atomic.Int32
+		rt, err := NewPolicyRuntime(RuntimeJailSpec{
+			AccessMode:  mode,
+			Workspace:   ws,
+			TmpDir:      tmpDir,
+			ControlPort: ctrlPort,
+		}, os.Environ(), func(ctx context.Context, req MidExecApprovalReq) (MidExecApprovalResp, error) {
+			asks.Add(1)
+			return MidExecApprovalResp{Decision: "once"}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		argvVectors := [][]string{
+			{"curl", "-sS", fmt.Sprintf("http://127.0.0.1:0%d/", ctrlPort)},
+			{"curl", "-sS", fmt.Sprintf("http://127.0.0.1:000%d/", ctrlPort)},
+			{"curl", "-sS", fmt.Sprintf("http://localhost:0%d/", ctrlPort)},
+			{"curl", "-sS", fmt.Sprintf("http://[::1]:0%d/", ctrlPort)},
+			{"curl", "-sS", fmt.Sprintf("http://2130706433:%d/", ctrlPort)},
+			{"curl", "-sS", fmt.Sprintf("http://127.1:0%d/", ctrlPort)},
+			{"curl", "-sS", fmt.Sprintf("http://0x7f000001:%d/", ctrlPort)},
+			{"nc", "127.0.0.1", fmt.Sprintf("0%d", ctrlPort)},
+			{"python3", "-c", fmt.Sprintf("import socket; socket.create_connection(('127.1', 0x%x))", ctrlPort)},
+		}
+		for _, argv := range argvVectors {
+			if !argvTargetsControlPort(argv, ctrlPort) {
+				t.Fatalf("mode=%s argvTargetsControlPort missed %v (port=%d)", mode, argv, ctrlPort)
+			}
+			herr := rt.Hook().CheckAccess(context.Background(), unish.AccessRequest{
+				Op:      unish.OpExec,
+				Command: argv[0],
+				Binary:  argv[0],
+				Argv:    argv,
+				WorkDir: ws,
+			})
+			if herr == nil {
+				t.Fatalf("mode=%s CheckAccess(OpExec) MUST hard-deny ControlPort vector %v", mode, argv)
+			}
+		}
+
+		// Live unish execution with curl (if installed) using `:0<ctrlPort>`: must exit 126 with 0 prompts and 0 TCP hits.
+		if _, lookErr := exec.LookPath("curl"); lookErr == nil {
+			var out, errBuf bytes.Buffer
+			cmd := fmt.Sprintf("curl -sS --max-time 1 http://127.0.0.1:0%d/", ctrlPort)
+			code, _ := rt.ExecShell(context.Background(), cmd, ws, os.Environ(), nil, &out, &errBuf)
+			if code == 0 {
+				t.Fatalf("mode=%s live curl to :0%d MUST be denied, got exit 0", mode, ctrlPort)
+			}
+		}
+
+		if asks.Load() != 0 {
+			t.Fatalf("mode=%s ControlPort vectors MUST hard-deny with 0 prompts, got %d", mode, asks.Load())
+		}
+		if ctrlHits.Load() != 0 {
+			t.Fatalf("mode=%s ControlPort listener MUST receive 0 connections, got %d", mode, ctrlHits.Load())
+		}
+	}
+}
+
+// Regression for Defect R2-3: External curl/wget SSRF parity with fetch_url & QuickJS:
+//   1) Cloud metadata URLs (including IPv4-mapped IPv6, decimal/hex inet_aton, and --resolve)
+//      are VerdictDeny (0 prompts) in ALL modes ("auto", "ask", "full"), even with allow exec curl.
+//   2) Private LAN, *.localhost, and non-canonical IP encodings (`127.1`, `2130706433`, `0x7f000001`)
+//      are VerdictDeny (0 prompts) in jailed modes ("auto", "ask"), even with allow exec curl.
+//   3) Benign canonical loopback (`http://127.0.0.1:<port>/`) stays VerdictAllow in "auto" mode.
+func TestJailRegression_CurlWgetSSRFParityAcrossAutoAskAndFull(t *testing.T) {
+	ws := t.TempDir()
+	allowCurlRule := []PermissionRule{
+		{ID: "r-curl", Effect: "allow", Kind: "exec", Pattern: "curl"},
+		{ID: "r-wget", Effect: "allow", Kind: "exec", Pattern: "wget"},
+	}
+
+	metadataArgs := [][]string{
+		{"curl", "-sS", "http://169.254.169.254/latest/meta-data/"},
+		{"curl", "-sS", "http://[::ffff:169.254.169.254]/latest/meta-data/"},
+		{"curl", "-sS", "http://metadata.google.internal/computeMetadata/v1/"},
+		{"curl", "-sS", "http://100.100.100.200/latest/meta-data/"},
+		{"curl", "-sS", "http://[fd00:ec2::254]/latest/meta-data/"},
+		{"curl", "-sS", "http://2852039166/latest/meta-data/"},
+		{"curl", "-sS", "http://0xa9fea9fe/latest/meta-data/"},
+		{"curl", "--resolve", "example.com:80:169.254.169.254", "http://example.com/"},
+		{"wget", "-qO-", "http://169.254.169.254/latest/meta-data/"},
+	}
+	for _, mode := range []string{"auto", "ask", "full"} {
+		for _, rules := range [][]PermissionRule{nil, allowCurlRule} {
+			for _, argv := range metadataArgs {
+				ev, _ := EvaluateExecArgv(argv, nil, ws, ws, "", mode, false, rules)
+				if ev.Verdict != VerdictDeny {
+					t.Fatalf("mode=%s rules=%d argv=%v expected VerdictDeny on metadata SSRF, got %s (%+v)", mode, len(rules), argv, ev.Verdict, ev.Meta)
+				}
+			}
+		}
+	}
+
+	jailedDenyArgs := [][]string{
+		{"curl", "-sS", "http://10.0.0.1/"},
+		{"curl", "-sS", "http://192.168.1.1/"},
+		{"curl", "-sS", "http://172.16.0.1/"},
+		{"curl", "-sS", "http://[::ffff:10.0.0.1]/"},
+		{"curl", "-sS", "http://sub.localhost:8080/"},
+		{"curl", "-sS", "http://127.1:8080/"},
+		{"curl", "-sS", "http://2130706433:8080/"},
+		{"curl", "-sS", "http://0x7f000001:8080/"},
+		{"wget", "-qO-", "http://10.0.0.1/"},
+	}
+	for _, mode := range []string{"auto", "ask"} {
+		for _, rules := range [][]PermissionRule{nil, allowCurlRule} {
+			for _, argv := range jailedDenyArgs {
+				ev, _ := EvaluateExecArgv(argv, nil, ws, ws, "", mode, false, rules)
+				if ev.Verdict != VerdictDeny {
+					t.Fatalf("mode=%s rules=%d argv=%v expected VerdictDeny on private/non-canonical SSRF, got %s (%+v)", mode, len(rules), argv, ev.Verdict, ev.Meta)
+				}
+			}
+		}
+	}
+
+	// Verify live unish ExecShell returns non-zero with 0 approval prompts for metadata (including full) and private LAN (auto).
+	for _, mode := range []string{"auto", "full"} {
+		var asks atomic.Int32
+		rt, err := NewPolicyRuntime(RuntimeJailSpec{
+			AccessMode: mode,
+			Workspace:  ws,
+			Rules:      allowCurlRule,
+		}, os.Environ(), func(ctx context.Context, req MidExecApprovalReq) (MidExecApprovalResp, error) {
+			asks.Add(1)
+			return MidExecApprovalResp{Decision: "once"}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, lookErr := exec.LookPath("curl"); lookErr == nil {
+			var out, errBuf bytes.Buffer
+			code, _ := rt.ExecShell(context.Background(), "curl -sS --max-time 1 http://169.254.169.254/latest/meta-data/", ws, os.Environ(), nil, &out, &errBuf)
+			if code == 0 {
+				t.Fatalf("mode=%s curl metadata must fail closed, got exit 0", mode)
+			}
+			if mode == "auto" {
+				codeLAN, _ := rt.ExecShell(context.Background(), "curl -sS --max-time 1 http://10.0.0.1/", ws, os.Environ(), nil, &out, &errBuf)
+				if codeLAN == 0 {
+					t.Fatalf("mode=auto curl private LAN must fail closed, got exit 0")
+				}
+			}
+		}
+		if asks.Load() != 0 {
+			t.Fatalf("mode=%s SSRF hard-denies MUST trigger 0 prompts, got %d", mode, asks.Load())
+		}
+	}
+
+	// Benign canonical loopback in auto mode remains VerdictAllow; public domain remains VerdictAsk without rule.
+	evLoop, _ := EvaluateExecArgv([]string{"curl", "-sS", "http://127.0.0.1:18080/health"}, nil, ws, ws, "", "auto", false, nil)
+	if evLoop.Verdict != VerdictAllow {
+		t.Fatalf("expected VerdictAllow for canonical 127.0.0.1 loopback in auto mode, got %s", evLoop.Verdict)
+	}
+	evPub, _ := EvaluateExecArgv([]string{"curl", "-sS", "https://example.com/"}, nil, ws, ws, "", "auto", false, nil)
+	if evPub.Verdict != VerdictAsk {
+		t.Fatalf("expected VerdictAsk for public URL in auto mode without net rule, got %s", evPub.Verdict)
+	}
+}

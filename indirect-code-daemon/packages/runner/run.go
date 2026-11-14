@@ -244,7 +244,12 @@ func runWith(spec Spec, opts runOptions) int {
 			_ = ln.Close()
 			ln = nil
 			st.Transport = Transport{}
+			serve.markTransportPublished(false)
+		} else {
+			serve.markTransportPublished(true)
 		}
+	} else {
+		serve.markTransportPublished(false)
 	}
 
 	// Terminal signals become graceful kills (state + copy survive).
@@ -409,32 +414,48 @@ func maybeSelfClean(spec Spec) {
 // ---- IPC server side ----
 
 type server struct {
-	spec           Spec
-	token          string
-	bc             *broadcast
-	killFn         func()
-	startedAt      time.Time
-	mu             sync.Mutex
-	killed         bool
-	apprMu         sync.Mutex
-	cmdConn        *Conn
-	daemonConn     *Conn
-	daemonAttachCh chan struct{}
-	daemonAttached bool
-	daemonDetached bool
-	pendingReqs    map[string]struct{}
+	spec                 Spec
+	token                string
+	bc                   *broadcast
+	killFn               func()
+	startedAt            time.Time
+	mu                   sync.Mutex
+	killed               bool
+	apprMu               sync.Mutex
+	cmdConn              *Conn
+	daemonConn           *Conn
+	daemonAttachCh       chan struct{}
+	daemonAttached       bool
+	daemonDetached       bool
+	transportReadyCh     chan struct{}
+	transportPublished   bool
+	transportPublishedOK bool
+	transportPublishedAt time.Time
+	pendingReqs          map[string]struct{}
 }
 
 func newServer(spec Spec, token string, bc *broadcast, killFn func()) *server {
 	return &server{
-		spec:           spec,
-		token:          token,
-		bc:             bc,
-		killFn:         killFn,
-		startedAt:      time.Now(),
-		daemonAttachCh: make(chan struct{}),
-		pendingReqs:    make(map[string]struct{}),
+		spec:             spec,
+		token:            token,
+		bc:               bc,
+		killFn:           killFn,
+		startedAt:        time.Now(),
+		daemonAttachCh:   make(chan struct{}),
+		transportReadyCh: make(chan struct{}),
+		pendingReqs:      make(map[string]struct{}),
 	}
+}
+
+func (s *server) markTransportPublished(ok bool) {
+	s.apprMu.Lock()
+	if !s.transportPublished {
+		s.transportPublished = true
+		s.transportPublishedOK = ok
+		s.transportPublishedAt = time.Now()
+		close(s.transportReadyCh)
+	}
+	s.apprMu.Unlock()
 }
 
 func (s *server) markKilled(reason string) {
@@ -578,18 +599,38 @@ func (s *server) handleCommandConn(raw net.Conn, c *Conn) {
 			detached := s.daemonDetached
 			s.apprMu.Unlock()
 			if dc == nil && !detached && ReadDisposition(s.spec.Root, s.spec.JobID) != DispBackground {
-				waitBudget := 150 * time.Millisecond
 				if s.spec.ExpectDaemon {
-					waitBudget = 3 * time.Second
-				}
-				if rem := waitBudget - time.Since(s.startedAt); rem > 0 {
 					select {
+					case <-s.transportReadyCh:
 					case <-attachCh:
-					case <-time.After(rem):
+					case <-time.After(10 * time.Second):
 					}
 					s.apprMu.Lock()
 					dc = s.daemonConn
+					pubOK := s.transportPublished && s.transportPublishedOK
+					origin := s.transportPublishedAt
 					s.apprMu.Unlock()
+					if dc == nil && pubOK {
+						if rem := 2*time.Second - time.Since(origin); rem > 0 {
+							select {
+							case <-attachCh:
+							case <-time.After(rem):
+							}
+							s.apprMu.Lock()
+							dc = s.daemonConn
+							s.apprMu.Unlock()
+						}
+					}
+				} else {
+					if rem := 150*time.Millisecond - time.Since(s.startedAt); rem > 0 {
+						select {
+						case <-attachCh:
+						case <-time.After(rem):
+						}
+						s.apprMu.Lock()
+						dc = s.daemonConn
+						s.apprMu.Unlock()
+					}
 				}
 			}
 			s.apprMu.Lock()

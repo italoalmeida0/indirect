@@ -351,7 +351,7 @@ func normalizeHostForSSRF(host string) string {
 	return h
 }
 
-func parseNormalizedAddr(host string) (netip.Addr, bool) {
+func parseCanonicalNormalizedAddr(host string) (netip.Addr, bool) {
 	h := strings.TrimSpace(host)
 	h = strings.Trim(h, "[]")
 	if h == "" {
@@ -366,6 +366,108 @@ func parseNormalizedAddr(host string) (netip.Addr, bool) {
 		}
 	}
 	return netip.Addr{}, false
+}
+
+func parseInetAtonPart(part string) (uint64, bool) {
+	if part == "" {
+		return 0, false
+	}
+	if strings.HasPrefix(part, "0x") || strings.HasPrefix(part, "0X") {
+		if len(part) <= 2 {
+			return 0, false
+		}
+		v, err := strconv.ParseUint(part[2:], 16, 32)
+		return v, err == nil
+	}
+	if len(part) > 1 && part[0] == '0' {
+		allOctal := true
+		for i := 1; i < len(part); i++ {
+			if part[i] < '0' || part[i] > '7' {
+				allOctal = false
+				break
+			}
+		}
+		if allOctal {
+			v, err := strconv.ParseUint(part[1:], 8, 32)
+			return v, err == nil
+		}
+	}
+	for i := 0; i < len(part); i++ {
+		if part[i] < '0' || part[i] > '9' {
+			return 0, false
+		}
+	}
+	v, err := strconv.ParseUint(part, 10, 32)
+	return v, err == nil
+}
+
+func parseInetAtonIPv4(host string) (netip.Addr, bool) {
+	h := strings.TrimRight(strings.Trim(strings.TrimSpace(host), "[]"), ".")
+	if h == "" || strings.Contains(h, ":") {
+		return netip.Addr{}, false
+	}
+	parts := strings.Split(h, ".")
+	if len(parts) < 1 || len(parts) > 4 {
+		return netip.Addr{}, false
+	}
+	var vals [4]uint64
+	for i, p := range parts {
+		v, ok := parseInetAtonPart(p)
+		if !ok {
+			return netip.Addr{}, false
+		}
+		vals[i] = v
+	}
+	var b [4]byte
+	switch len(parts) {
+	case 1:
+		if vals[0] > 0xffffffff {
+			return netip.Addr{}, false
+		}
+		b = [4]byte{byte(vals[0] >> 24), byte(vals[0] >> 16), byte(vals[0] >> 8), byte(vals[0])}
+	case 2:
+		if vals[0] > 0xff || vals[1] > 0xffffff {
+			return netip.Addr{}, false
+		}
+		b = [4]byte{byte(vals[0]), byte(vals[1] >> 16), byte(vals[1] >> 8), byte(vals[1])}
+	case 3:
+		if vals[0] > 0xff || vals[1] > 0xff || vals[2] > 0xffff {
+			return netip.Addr{}, false
+		}
+		b = [4]byte{byte(vals[0]), byte(vals[1]), byte(vals[2] >> 8), byte(vals[2])}
+	case 4:
+		if vals[0] > 0xff || vals[1] > 0xff || vals[2] > 0xff || vals[3] > 0xff {
+			return netip.Addr{}, false
+		}
+		b = [4]byte{byte(vals[0]), byte(vals[1]), byte(vals[2]), byte(vals[3])}
+	}
+	return netip.AddrFrom4(b), true
+}
+
+func parseNormalizedAddrWithKind(host string) (addr netip.Addr, nonCanonical bool, ok bool) {
+	if a, ok := parseCanonicalNormalizedAddr(host); ok {
+		return a, false, true
+	}
+	trimmed := strings.TrimRight(strings.Trim(strings.TrimSpace(host), "[]"), ".")
+	if trimmed != "" {
+		if a, ok := parseCanonicalNormalizedAddr(trimmed); ok {
+			return a, true, true
+		}
+	}
+	if a, ok := parseInetAtonIPv4(host); ok {
+		return a, true, true
+	}
+	return netip.Addr{}, false, false
+}
+
+func isNonCanonicalIPHost(host string) bool {
+	_, nonCanonical, ok := parseNormalizedAddrWithKind(host)
+	return ok && nonCanonical
+}
+
+func parseNormalizedAddr(host string) (netip.Addr, bool) {
+	addr, _, ok := parseNormalizedAddrWithKind(host)
+	return addr, ok
 }
 
 var (
@@ -395,7 +497,7 @@ func isCloudMetadataHost(host string) bool {
 }
 
 func isLoopbackHost(host string) bool {
-	if addr, ok := parseNormalizedAddr(host); ok {
+	if addr, ok := parseCanonicalNormalizedAddr(host); ok {
 		return addr.IsLoopback()
 	}
 	h := strings.ToLower(strings.TrimSpace(host))
@@ -406,7 +508,7 @@ func isLoopbackOrUnspecifiedHost(host string) bool {
 	if isLoopbackHost(host) {
 		return true
 	}
-	if addr, ok := parseNormalizedAddr(host); ok && addr.IsUnspecified() {
+	if addr, ok := parseNormalizedAddr(host); ok && (addr.IsLoopback() || addr.IsUnspecified()) {
 		return true
 	}
 	return false

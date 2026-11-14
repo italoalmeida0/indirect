@@ -111,7 +111,7 @@ func (en *rtEntry) resolvePath(p string) string {
 func (en *rtEntry) hasSandboxRestrictions() bool {
 	en.mu.Lock()
 	defer en.mu.Unlock()
-	return len(en.jailRoots) > 0 || len(en.readOnlyRoots) > 0 || len(en.fsReadRoots) > 0 || len(en.fsWriteRoots) > 0 || len(en.netAllow) > 0 || en.checkAccess != nil
+	return len(en.jailRoots) > 0 || len(en.readOnlyRoots) > 0 || len(en.fsReadRoots) > 0 || len(en.fsWriteRoots) > 0 || len(en.netAllow) > 0 || en.checkAccess != nil || en.extraChildEnv != nil
 }
 
 func wrapAccessErr(err error) error {
@@ -1736,7 +1736,25 @@ func (en *rtEntry) ensureChildWorkerChannel() (*rtWorkerChannel, error) {
 		en.workerChansMu.Unlock()
 		return nil, fmt.Errorf("missing worker control port")
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", portStr), 5*time.Second)
+	portNum, perr := strconv.Atoi(strings.TrimSpace(portStr))
+	if perr != nil || portNum <= 0 || portNum > 65535 {
+		en.workerChansMu.Unlock()
+		return nil, fmt.Errorf("invalid worker control port %q", portStr)
+	}
+	targetAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(portNum))
+	if err := en.checkNetHostResolved(targetAddr, targetAddr); err != nil {
+		en.workerChansMu.Unlock()
+		return nil, err
+	}
+	var conn net.Conn
+	var err error
+	if en.dialContext != nil {
+		dialCtx, dialCancel := context.WithTimeout(en.ctx, 5*time.Second)
+		conn, err = en.dialContext(dialCtx, "tcp", targetAddr)
+		dialCancel()
+	} else {
+		conn, err = net.DialTimeout("tcp", targetAddr, 5*time.Second)
+	}
 	if err != nil {
 		en.workerChansMu.Unlock()
 		return nil, err
@@ -4745,7 +4763,8 @@ func isBlockedJailedEnvKey(k string) bool {
 	if strings.HasPrefix(u, "__INDIRECT_") {
 		switch u {
 		case "__INDIRECT_WORKER_THREAD_ID", "__INDIRECT_WORKER_THREAD", "__INDIRECT_WORKER_ID", "__INDIRECT_WORKER_DATA",
-			"__INDIRECT_WORKER_DATA_FILE", "__INDIRECT_WORKER_EVAL_FILE", "__INDIRECT_WT_CTL_PORT", "__INDIRECT_FORK_IPC":
+			"__INDIRECT_WORKER_DATA_FILE", "__INDIRECT_WORKER_EVAL_FILE", "__INDIRECT_WORKER_ENV_DATA",
+			"__INDIRECT_WT_CTL_PORT", "__INDIRECT_FORK_IPC":
 			return false
 		default:
 			return true
@@ -4853,7 +4872,6 @@ func signalNameFromNumber(sig int) string {
 
 func (en *rtEntry) applySandboxEnvRoots(out map[string]string) {
 	en.mu.Lock()
-	defer en.mu.Unlock()
 	if len(en.jailRoots) > 0 {
 		out["__INDIRECT_JAIL_ROOTS"] = strings.Join(en.jailRoots, string(os.PathListSeparator))
 	} else {
@@ -4883,6 +4901,17 @@ func (en *rtEntry) applySandboxEnvRoots(out map[string]string) {
 		out["__INDIRECT_TMPDIR"] = en.tmpDir
 	} else {
 		delete(out, "__INDIRECT_TMPDIR")
+	}
+	extraFn := en.extraChildEnv
+	en.mu.Unlock()
+	if extraFn != nil {
+		for k, v := range extraFn() {
+			if v != "" {
+				out[k] = v
+			} else {
+				delete(out, k)
+			}
+		}
 	}
 }
 
@@ -5201,7 +5230,7 @@ func (en *rtEntry) checkDirectExec(ctx context.Context, cmd *exec.Cmd) error {
 		return nil
 	}
 	if en.execPath != "" && strings.EqualFold(filepath.Clean(cmd.Path), filepath.Clean(en.execPath)) {
-		if len(cmd.Args) >= 2 && cmd.Args[1] == "--js" {
+		if len(cmd.Args) >= 2 && (cmd.Args[1] == "--js" || cmd.Args[1] == "--js-exec-direct") {
 			return nil
 		}
 	}

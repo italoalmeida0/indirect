@@ -697,8 +697,15 @@ func evaluateExecArgvCore(
 		}
 	}
 
-	// 4. Full mode allows everything not explicitly denied above.
+	// 4. Full mode allows everything not explicitly denied above — except cloud
+	// metadata SSRF via curl/wget, which stays hard-blocked in every mode.
 	if accessMode == "full" {
+		if bin == "curl" || bin == "wget" {
+			ev, _ := evalCurlWgetCommand(bin, innerArgv, innerDyn, effectiveCwd, workspace, brainDir, accessMode, projectReadOnly, rules, true)
+			if ev.Verdict == VerdictDeny {
+				return ev, false
+			}
+		}
 		return PolicyEvaluation{Verdict: VerdictAllow}, true
 	}
 
@@ -1325,8 +1332,12 @@ func evalCurlWgetCommand(
 	var outFiles []string
 	for i := 1; i < len(argv); i++ {
 		a := argv[i]
-		if (a == "-o" || a == "--output" || a == "-O") && i+1 < len(argv) {
-			if a != "-O" {
+		if a == "--" {
+			urls = append(urls, argv[i+1:]...)
+			break
+		}
+		if (a == "-o" || a == "--output" || a == "-O" || a == "--output-document") && i+1 < len(argv) {
+			if a != "-O" || bin == "wget" {
 				outFiles = append(outFiles, argv[i+1])
 				i++
 			} else if projectReadOnly {
@@ -1341,26 +1352,56 @@ func evalCurlWgetCommand(
 			}
 			continue
 		}
+		if a == "--url" && i+1 < len(argv) {
+			urls = append(urls, argv[i+1])
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "--url=") {
+			urls = append(urls, strings.TrimPrefix(a, "--url="))
+			continue
+		}
+		if (a == "--resolve" || a == "--connect-to") && i+1 < len(argv) {
+			urls = append(urls, extractCurlOverrideTargets(a, argv[i+1])...)
+			i++
+			continue
+		}
+		if strings.HasPrefix(a, "--resolve=") {
+			urls = append(urls, extractCurlOverrideTargets("--resolve", strings.TrimPrefix(a, "--resolve="))...)
+			continue
+		}
+		if strings.HasPrefix(a, "--connect-to=") {
+			urls = append(urls, extractCurlOverrideTargets("--connect-to", strings.TrimPrefix(a, "--connect-to="))...)
+			continue
+		}
+		if isCurlWgetValueFlag(bin, a) && i+1 < len(argv) {
+			i++
+			continue
+		}
 		if strings.HasPrefix(a, "-") {
 			continue
 		}
-		if strings.Contains(a, "://") || (!strings.HasPrefix(a, "/") && strings.Contains(a, ".")) {
+		if looksLikeCurlWgetURLArg(a) {
 			urls = append(urls, a)
 		}
+	}
+	fsEvalMode := "auto"
+	if accessMode == "full" {
+		fsEvalMode = "full"
 	}
 	for _, out := range outFiles {
 		if isNullTarget(out) || out == "-" {
 			continue
 		}
 		resolved := resolvePath(cwd, expandHomePrefix(out))
-		ev := evaluateFSCheck("fs_write", "", resolved, out, "auto", workspace, brainDir, projectReadOnly, rules)
+		ev := evaluateFSCheck("fs_write", "", resolved, out, fsEvalMode, workspace, brainDir, projectReadOnly, rules)
 		if ev.Verdict != VerdictAllow {
 			return ev, false
 		}
 	}
 
 	if len(urls) == 0 {
-		if explicitExecAllowed {
+		if accessMode == "full" || explicitExecAllowed {
 			return PolicyEvaluation{Verdict: VerdictAllow}, true
 		}
 		prop, ok := ProposeExecRule(argv)
@@ -1384,7 +1425,10 @@ func evalCurlWgetCommand(
 	callGrants = append(callGrants, PermissionRule{Effect: "allow", Kind: "exec", Pattern: rawCmd})
 	allExplicit := explicitExecAllowed
 	for _, rawU := range urls {
-		candidate := rawU
+		candidate := strings.TrimSpace(rawU)
+		if candidate == "" {
+			continue
+		}
 		if !strings.Contains(candidate, "://") {
 			candidate = "http://" + candidate
 		}
@@ -1393,8 +1437,23 @@ func evalCurlWgetCommand(
 			allExplicit = false
 			continue
 		}
-		host := strings.ToLower(u.Hostname())
-		if eff, r := MatchRules(rules, "net", u.Host, workspace); eff == "deny" {
+		rawHost := u.Hostname()
+		host := normalizeHostForSSRF(rawHost)
+
+		// 1. Cloud metadata endpoints are ALWAYS hard-blocked in every mode (including "full" and explicitExecAllowed).
+		if isCloudMetadataHost(rawHost) {
+			return PolicyEvaluation{
+				Verdict: VerdictDeny,
+				Meta: ToolApprovalMeta{
+					Capability: "net",
+					Target:     nonEmpty(u.Host, rawHost),
+					Reason:     fmt.Sprintf("Cloud metadata endpoint %q is blocked", rawHost),
+				},
+			}, false
+		}
+
+		// 2. Explicit Deny rules always win.
+		if eff, r := MatchRules(rules, "net", strings.ToLower(u.Host), workspace); eff == "deny" {
 			return PolicyEvaluation{
 				Verdict: VerdictDeny,
 				Meta: ToolApprovalMeta{
@@ -1403,18 +1462,63 @@ func evalCurlWgetCommand(
 					Reason:     fmt.Sprintf("Network access to %q blocked by rule %q", u.Host, r.Pattern),
 				},
 			}, false
-		} else if eff == "allow" {
+		}
+
+		// 3. In jailed modes ("auto" and "ask"), hard-deny *.localhost subdomains,
+		// non-canonical IP encodings (127.1, integer/hex/octal IPs), and non-loopback
+		// private/reserved IPs — matching fetch_url & QuickJS fetch SSRF parity.
+		if accessMode != "full" {
+			if strings.HasSuffix(host, ".localhost") {
+				return PolicyEvaluation{
+					Verdict: VerdictDeny,
+					Meta: ToolApprovalMeta{
+						Capability: "net",
+						Target:     nonEmpty(u.Host, rawHost),
+						Reason:     fmt.Sprintf("Subdomain %q under .localhost is blocked against SSRF", rawHost),
+					},
+				}, false
+			}
+			if addr, nonCanonical, ok := parseNormalizedAddrWithKind(rawHost); ok {
+				if nonCanonical {
+					return PolicyEvaluation{
+						Verdict: VerdictDeny,
+						Meta: ToolApprovalMeta{
+							Capability: "net",
+							Target:     nonEmpty(u.Host, rawHost),
+							Reason:     fmt.Sprintf("Non-canonical IP address encoding %q is blocked", rawHost),
+						},
+					}, false
+				}
+				if !addr.IsLoopback() && isPrivateOrReservedAddr(addr) {
+					return PolicyEvaluation{
+						Verdict: VerdictDeny,
+						Meta: ToolApprovalMeta{
+							Capability: "net",
+							Target:     nonEmpty(u.Host, rawHost),
+							Reason:     fmt.Sprintf("Private or reserved IP address %q is blocked", rawHost),
+						},
+					}, false
+				}
+			}
+		}
+
+		// 4. Explicit Allow rules on net.
+		if eff, _ := MatchRules(rules, "net", strings.ToLower(u.Host), workspace); eff == "allow" {
 			callGrants = append(callGrants, PermissionRule{Effect: "allow", Kind: "net", Pattern: host})
 			continue
 		}
-		if isLoopbackHost(host) {
+
+		if accessMode == "full" {
+			continue
+		}
+		if isLoopbackHost(rawHost) && accessMode == "auto" {
 			continue
 		}
 		if explicitExecAllowed {
 			callGrants = append(callGrants, PermissionRule{Effect: "allow", Kind: "net", Pattern: host})
 			continue
 		}
-		prop, ok := ProposeNetRule(host)
+		prop, ok := ProposeNetRule(rawHost)
 		callGrants = append(callGrants, PermissionRule{Effect: "allow", Kind: "net", Pattern: host})
 		return PolicyEvaluation{
 			Verdict: VerdictAsk,
@@ -1435,6 +1539,88 @@ func evalCurlWgetCommand(
 		Verdict: VerdictAllow,
 		Meta:    ToolApprovalMeta{CallGrants: callGrants},
 	}, allExplicit
+}
+
+func isCurlWgetValueFlag(bin, flag string) bool {
+	switch flag {
+	case "-X", "--request", "-H", "--header", "-d", "--data", "--data-raw",
+		"--data-binary", "--data-urlencode", "-F", "--form", "-u", "--user",
+		"-A", "--user-agent", "-e", "--referer", "-m", "--max-time",
+		"--connect-timeout", "--retry", "-b", "--cookie", "-c", "--cookie-jar",
+		"-x", "--proxy", "--resolve", "--connect-to", "-w", "--write-out":
+		return true
+	}
+	if bin == "wget" {
+		switch flag {
+		case "-t", "--tries", "-T", "--timeout", "-U", "-P", "--directory-prefix",
+			"--post-data", "--post-file", "--method", "--body-data":
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeCurlWgetURLArg(a string) bool {
+	s := strings.TrimSpace(a)
+	if s == "" || strings.HasPrefix(s, "/") {
+		return false
+	}
+	if strings.Contains(s, "://") || strings.Contains(s, ".") || strings.Contains(s, ":") {
+		return true
+	}
+	hostPart := s
+	if slash := strings.IndexByte(hostPart, '/'); slash >= 0 {
+		hostPart = hostPart[:slash]
+	}
+	if strings.EqualFold(hostPart, "localhost") || strings.EqualFold(hostPart, "metadata") || strings.EqualFold(hostPart, "instance-data") {
+		return true
+	}
+	_, ok := parseInetAtonIPv4(hostPart)
+	return ok
+}
+
+func extractCurlOverrideTargets(flag, val string) []string {
+	v := strings.TrimSpace(strings.TrimPrefix(val, "+"))
+	if v == "" {
+		return nil
+	}
+	var out []string
+	if flag == "--resolve" {
+		// Format: [+]host:port:addr[,addr]...
+		first := strings.IndexByte(v, ':')
+		if first >= 0 {
+			rest := v[first+1:]
+			second := strings.IndexByte(rest, ':')
+			if second >= 0 {
+				addrs := rest[second+1:]
+				for _, addr := range strings.Split(addrs, ",") {
+					addr = strings.TrimSpace(addr)
+					if addr != "" {
+						if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
+							addr = "[" + addr + "]"
+						}
+						out = append(out, "http://"+addr)
+					}
+				}
+			}
+		}
+	} else if flag == "--connect-to" {
+		// Format: HOST1:PORT1:HOST2:PORT2 (where HOST/PORT may be bracketed IPv6 or empty)
+		// Inspect the trailing connect target if non-empty.
+		parts := strings.Split(v, ":")
+		if len(parts) >= 4 {
+			host2 := strings.TrimSpace(parts[len(parts)-2])
+			port2 := strings.TrimSpace(parts[len(parts)-1])
+			if host2 != "" {
+				if port2 != "" {
+					out = append(out, "http://"+host2+":"+port2)
+				} else {
+					out = append(out, "http://"+host2)
+				}
+			}
+		}
+	}
+	return out
 }
 
 func allKillTargetsAreShellJobs(args []string) bool {

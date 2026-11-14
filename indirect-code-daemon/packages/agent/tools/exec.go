@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -109,82 +110,51 @@ func init() {
 		exe, _ := os.Executable()
 		shellPath := os.Getenv("__INDIRECT_SHELL_PATH")
 		shellFlag := os.Getenv("__INDIRECT_SHELL_FLAG")
-		codeSrc := os.Args[2]
-		if codeFile := os.Getenv("__INDIRECT_CODE_FILE"); codeFile != "" {
-			if raw, rerr := os.ReadFile(codeFile); rerr == nil {
-				codeSrc = string(raw)
-			}
-			_ = os.Remove(codeFile)
-		}
-		var jailRoots []string
-		if raw := os.Getenv("__INDIRECT_JAIL_ROOTS"); raw != "" {
-			for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
-				if p = strings.TrimSpace(p); p != "" {
-					jailRoots = append(jailRoots, p)
-				}
-			}
-		}
-		var readOnlyRoots []string
-		if raw := os.Getenv("__INDIRECT_READONLY_ROOTS"); raw != "" {
-			for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
-				if p = strings.TrimSpace(p); p != "" {
-					readOnlyRoots = append(readOnlyRoots, p)
-				}
-			}
-		}
-		var fsReadRoots []string
-		if raw := os.Getenv("__INDIRECT_FS_READ_ROOTS"); raw != "" {
-			for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
-				if p = strings.TrimSpace(p); p != "" {
-					fsReadRoots = append(fsReadRoots, p)
-				}
-			}
-		}
-		var fsWriteRoots []string
-		if raw := os.Getenv("__INDIRECT_FS_WRITE_ROOTS"); raw != "" {
-			for _, p := range strings.Split(raw, string(os.PathListSeparator)) {
-				if p = strings.TrimSpace(p); p != "" {
-					fsWriteRoots = append(fsWriteRoots, p)
-				}
-			}
-		}
-		var netAllow []string
-		if raw := os.Getenv("__INDIRECT_NET_ALLOW"); raw != "" {
-			for _, p := range strings.Split(raw, ",") {
-				if p = strings.TrimSpace(p); p != "" {
-					netAllow = append(netAllow, p)
-				}
-			}
-		}
+		codeFile := os.Getenv("__INDIRECT_CODE_FILE")
 		_ = os.Unsetenv("__INDIRECT_CODE_FILE")
 		_ = os.Unsetenv("__INDIRECT_SHELL_PATH")
 		_ = os.Unsetenv("__INDIRECT_SHELL_FLAG")
-		_ = os.Unsetenv("__INDIRECT_JAIL_ROOTS")
-		_ = os.Unsetenv("__INDIRECT_READONLY_ROOTS")
-		_ = os.Unsetenv("__INDIRECT_FS_READ_ROOTS")
-		_ = os.Unsetenv("__INDIRECT_FS_WRITE_ROOTS")
-		_ = os.Unsetenv("__INDIRECT_NET_ALLOW")
+		if shellPath != "" && shellFlag == "" {
+			shellFlag = "-c"
+		}
+
+		rt, opts, jerr := PolicyRuntimeFromProcessEnv()
+		if jerr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "js error initializing jail: %v\n", jerr)
+			os.Exit(1)
+		}
+
+		codeSrc := os.Args[2]
+		if codeFile != "" {
+			raw, rerr := os.ReadFile(codeFile)
+			if rerr != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", codeFile, rerr)
+				os.Exit(1)
+			}
+			codeSrc = string(raw)
+			if rt == nil || !rt.isUnderReadOnlyProject(codeFile) {
+				_ = os.Remove(codeFile)
+			}
+		}
+
 		var scriptArgs []string
 		if len(os.Args) > 3 {
 			scriptArgs = os.Args[3:]
 		}
-		code, err := qjs.RunScript(context.Background(), qjs.ScriptOptions{
-			Code:          codeSrc,
-			Filename:      "<exec_script>",
-			CWD:           cwd,
-			Args:          scriptArgs,
-			Stdin:         os.Stdin,
-			Stdout:        os.Stdout,
-			Stderr:        os.Stderr,
-			ShellPath:     shellPath,
-			ShellFlag:     shellFlag,
-			ExecPath:      exe,
-			JailRoots:     jailRoots,
-			ReadOnlyRoots: readOnlyRoots,
-			FSReadRoots:   fsReadRoots,
-			FSWriteRoots:  fsWriteRoots,
-			NetAllow:      netAllow,
-		})
+		opts.Code = codeSrc
+		opts.Filename = "<exec_script>"
+		opts.CWD = cwd
+		opts.Args = scriptArgs
+		opts.Stdin = os.Stdin
+		opts.Stdout = os.Stdout
+		opts.Stderr = os.Stderr
+		opts.ShellPath = shellPath
+		opts.ShellFlag = shellFlag
+		opts.ExecPath = exe
+		if rt != nil {
+			opts = rt.QJSOptions(opts)
+		}
+		code, err := qjs.RunScript(context.Background(), opts)
 		if err != nil && code == 0 {
 			code = 1
 		}
@@ -522,6 +492,11 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 	}
 	if len(spec.NetAllow) > 0 {
 		env = append(env, "__INDIRECT_NET_ALLOW="+strings.Join(spec.NetAllow, ","))
+	}
+	if spec.Jail != nil {
+		if jb, jerr := json.Marshal(spec.Jail); jerr == nil {
+			env = append(env, EnvRuntimeJailSpec+"="+string(jb))
+		}
 	}
 	cmd.Env = env
 	if spec.Stdin != "" {

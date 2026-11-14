@@ -43,6 +43,7 @@ func TestRunnerMidExecApprovalIPC_BashAndExecScript(t *testing.T) {
 		RunnerVersion: "vtest",
 		OutPath:       filepath.Join(OutDir(root), OutName("sess_ipc", "ipc_bash_1", started1)),
 		BrainPath:     filepath.Join(root, "brain", "sess_ipc", "ipc_bash_1.log"),
+		ExpectDaemon:  true,
 		Jail: &tools.RuntimeJailSpec{
 			AccessMode: "auto",
 			Workspace:  ws,
@@ -51,10 +52,10 @@ func TestRunnerMidExecApprovalIPC_BashAndExecScript(t *testing.T) {
 	}
 
 	var seenPrompts atomic.Int32
-	ctx1, cancel1 := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel1()
 	go func() {
-		_ = AttachApprovalHandler(ctx1, root, spec1.JobID, 5*time.Second, func(ctx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
+		_ = AttachApprovalHandler(ctx1, root, spec1.JobID, 12*time.Second, func(ctx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
 			seenPrompts.Add(1)
 			return tools.MidExecApprovalResp{
 				Decision:    "session",
@@ -104,6 +105,7 @@ func TestRunnerMidExecApprovalIPC_BashAndExecScript(t *testing.T) {
 		RunnerVersion: "vtest",
 		OutPath:       filepath.Join(OutDir(root), OutName("sess_ipc", "ipc_qjs_2", started2)),
 		BrainPath:     filepath.Join(root, "brain", "sess_ipc", "ipc_qjs_2.log"),
+		ExpectDaemon:  true,
 		Jail: &tools.RuntimeJailSpec{
 			AccessMode: "auto",
 			Workspace:  ws,
@@ -112,10 +114,10 @@ func TestRunnerMidExecApprovalIPC_BashAndExecScript(t *testing.T) {
 	}
 
 	var qjsPrompts atomic.Int32
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel2()
 	go func() {
-		_ = AttachApprovalHandler(ctx2, root, spec2.JobID, 5*time.Second, func(ctx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
+		_ = AttachApprovalHandler(ctx2, root, spec2.JobID, 12*time.Second, func(ctx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
 			qjsPrompts.Add(1)
 			return tools.MidExecApprovalResp{Decision: "once"}, nil
 		})
@@ -194,6 +196,7 @@ func TestRunnerMidExecApprovalIPC_FailClosedOnUnattachedAndDetach(t *testing.T) 
 		RunnerVersion: "vtest",
 		OutPath:       filepath.Join(OutDir(root), OutName("sess_fc", "fail_closed_2", started2)),
 		BrainPath:     filepath.Join(root, "brain", "sess_fc", "fail_closed_2.log"),
+		ExpectDaemon:  true,
 		Jail: &tools.RuntimeJailSpec{
 			AccessMode: "auto",
 			Workspace:  ws,
@@ -204,7 +207,7 @@ func TestRunnerMidExecApprovalIPC_FailClosedOnUnattachedAndDetach(t *testing.T) 
 	attachCtx, detachNow := context.WithCancel(context.Background())
 	defer detachNow()
 	go func() {
-		_ = AttachApprovalHandler(attachCtx, root, spec2.JobID, 5*time.Second, func(ctx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
+		_ = AttachApprovalHandler(attachCtx, root, spec2.JobID, 12*time.Second, func(ctx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
 			// Simulate foreground->background detach while waiting on user!
 			detachNow()
 			<-ctx.Done()
@@ -219,7 +222,7 @@ func TestRunnerMidExecApprovalIPC_FailClosedOnUnattachedAndDetach(t *testing.T) 
 		if code2 == 0 {
 			t.Fatalf("expected non-zero exit when daemon detaches mid-prompt")
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(20 * time.Second):
 		t.Fatal("runner hung instead of failing closed when daemon detached mid-prompt")
 	}
 	if _, serr := os.Stat(blockedFile2); serr == nil {

@@ -11,10 +11,35 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/italoalmeida0/unish/pkg/unish"
 )
+
+// EnvJailSessionConfig holds the hydrated unish.Jail, optional CapabilityHook,
+// and scrubbed environment variables produced from a parent process's
+// __INDIRECT_* sandbox propagation variables.
+type EnvJailSessionConfig struct {
+	Jail     *unish.Jail
+	Hook     unish.CapabilityHook
+	CleanEnv []string
+}
+
+var (
+	envJailBuilderMu sync.RWMutex
+	envJailBuilder   func(rawEnv []string) (*EnvJailSessionConfig, error)
+)
+
+// RegisterEnvJailBuilder registers the PolicyRuntime-backed env jail builder
+// (installed by packages/agent/tools at init time) so child --sh / --sh-c
+// invocations enforce the full RuntimeJailSpec, PolicyCapabilityHook, and
+// ControlPort isolation.
+func RegisterEnvJailBuilder(fn func(rawEnv []string) (*EnvJailSessionConfig, error)) {
+	envJailBuilderMu.Lock()
+	envJailBuilder = fn
+	envJailBuilderMu.Unlock()
+}
 
 // MaybeRunArgs intercepts multi-call "--sh" and "--sh-c" invocations at process
 // startup (both the production daemon binary and `go test` binaries).
@@ -89,22 +114,20 @@ func runEmbeddedShCLI(rest []string) int {
 			// Script file + optional positional arguments.
 			scriptFile := arg
 			posArgs := rest[i+1:]
-			raw, err := os.ReadFile(scriptFile)
-			if err != nil {
-				_, _ = fmt.Fprintf(os.Stderr, "unish: %s: %v\n", scriptFile, err)
-				return 127
+			scriptSrc, errCode := readScriptFileChecked(scriptFile)
+			if errCode != 0 {
+				return errCode
 			}
-			return runEmbeddedScript(string(raw), posArgs)
+			return runEmbeddedScript(scriptSrc, posArgs)
 		}
 	}
 	if len(rest) > 0 {
 		scriptFile := rest[0]
-		raw, err := os.ReadFile(scriptFile)
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "unish: %s: %v\n", scriptFile, err)
-			return 127
+		scriptSrc, errCode := readScriptFileChecked(scriptFile)
+		if errCode != 0 {
+			return errCode
 		}
-		return runEmbeddedScript(string(raw), rest[1:])
+		return runEmbeddedScript(scriptSrc, rest[1:])
 	}
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -137,18 +160,56 @@ func runRestWithPrologue(prologue string, rest []string) int {
 		return runEmbeddedScript(prologue+rest[1], posArgs)
 	}
 	if len(rest) >= 1 && !strings.HasPrefix(rest[0], "-") {
-		raw, err := os.ReadFile(rest[0])
-		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "unish: %s: %v\n", rest[0], err)
-			return 127
+		scriptSrc, errCode := readScriptFileChecked(rest[0])
+		if errCode != 0 {
+			return errCode
 		}
-		return runEmbeddedScript(prologue+string(raw), rest[1:])
+		return runEmbeddedScript(prologue+scriptSrc, rest[1:])
 	}
 	raw, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return 1
 	}
 	return runEmbeddedScriptWithStdin(prologue+string(raw), nil, strings.NewReader(""))
+}
+
+func readScriptFileChecked(scriptFile string) (string, int) {
+	cfg, err := resolveEnvJailSession(os.Environ())
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "unish: jail init failed: %v\n", err)
+		return "", 1
+	}
+	absPath, aerr := filepath.Abs(scriptFile)
+	if aerr != nil {
+		absPath = scriptFile
+	}
+	cwd, _ := os.Getwd()
+	req := unish.AccessRequest{
+		Op:      unish.OpRead,
+		Command: "unish",
+		Path:    absPath,
+		RawPath: scriptFile,
+		WorkDir: cwd,
+	}
+	if cfg != nil {
+		if cfg.Hook != nil {
+			if cerr := cfg.Hook.CheckAccess(context.Background(), req); cerr != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "unish: %s: %v\n", scriptFile, cerr)
+				return "", 126
+			}
+		} else if cfg.Jail != nil {
+			if cerr := cfg.Jail.CheckAccess(context.Background(), req); cerr != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "unish: %s: %v\n", scriptFile, cerr)
+				return "", 126
+			}
+		}
+	}
+	raw, rerr := os.ReadFile(absPath)
+	if rerr != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "unish: %s: %v\n", scriptFile, rerr)
+		return "", 127
+	}
+	return string(raw), 0
 }
 
 func runEmbeddedScript(script string, posArgs []string) int {
@@ -160,7 +221,7 @@ func runEmbeddedScriptWithStdin(script string, posArgs []string, stdin io.Reader
 	defer stop()
 
 	cwd, _ := os.Getwd()
-	jail, cleanEnv, err := buildEnvJail(os.Environ())
+	jailCfg, err := resolveEnvJailSession(os.Environ())
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "unish: jail init failed: %v\n", err)
 		return 1
@@ -169,10 +230,13 @@ func runEmbeddedScriptWithStdin(script string, posArgs []string, stdin io.Reader
 	opts := []unish.SessionOption{
 		unish.WithWorkDir(cwd),
 		unish.WithInheritEnv(false),
-		unish.WithEnv(cleanEnv),
+		unish.WithEnv(jailCfg.CleanEnv),
 	}
-	if jail != nil {
-		opts = append(opts, unish.WithJail(jail))
+	if jailCfg.Jail != nil {
+		opts = append(opts, unish.WithJail(jailCfg.Jail))
+	}
+	if jailCfg.Hook != nil {
+		opts = append(opts, unish.WithHook(jailCfg.Hook))
 	}
 
 	sess, err := unish.NewSession(opts...)
@@ -217,10 +281,88 @@ func runEmbeddedScriptWithStdin(script string, posArgs []string, stdin io.Reader
 	return 0
 }
 
+func resolveEnvJailSession(rawEnv []string) (*EnvJailSessionConfig, error) {
+	envJailBuilderMu.RLock()
+	builder := envJailBuilder
+	envJailBuilderMu.RUnlock()
+	if builder != nil {
+		cfg, err := builder(rawEnv)
+		if err != nil {
+			return nil, err
+		}
+		if cfg != nil {
+			return cfg, nil
+		}
+	}
+	jail, clean, err := buildEnvJail(rawEnv)
+	if err != nil {
+		return nil, err
+	}
+	return &EnvJailSessionConfig{
+		Jail:     jail,
+		CleanEnv: clean,
+	}, nil
+}
+
+func parseEnvPathList(v string) []string {
+	trimmed := strings.TrimSpace(v)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []string
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			out := make([]string, 0, len(arr))
+			for _, item := range arr {
+				if p := strings.TrimSpace(item); p != "" {
+					out = append(out, p)
+				}
+			}
+			return out
+		}
+	}
+	parts := filepath.SplitList(v)
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func parseEnvCommaList(v string) []string {
+	trimmed := strings.TrimSpace(v)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []string
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			out := make([]string, 0, len(arr))
+			for _, item := range arr {
+				if p := strings.TrimSpace(item); p != "" {
+					out = append(out, p)
+				}
+			}
+			return out
+		}
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // buildEnvJail honors __INDIRECT_* sandbox environment variables when the
 // multi-call binary is spawned as a child shell process.
 func buildEnvJail(rawEnv []string) (*unish.Jail, []string, error) {
 	var jailRoots, roRoots, fsRead, fsWrite, netAllow []string
+	var sawRuntimeSpec bool
 	clean := make([]string, 0, len(rawEnv))
 	for _, kv := range rawEnv {
 		eq := strings.IndexByte(kv, '=')
@@ -230,21 +372,28 @@ func buildEnvJail(rawEnv []string) (*unish.Jail, []string, error) {
 		}
 		k, v := kv[:eq], kv[eq+1:]
 		switch k {
+		case "__INDIRECT_RUNTIME_JAIL_SPEC":
+			if strings.TrimSpace(v) != "" {
+				sawRuntimeSpec = true
+			}
 		case "__INDIRECT_JAIL_ROOTS":
-			_ = json.Unmarshal([]byte(v), &jailRoots)
+			jailRoots = parseEnvPathList(v)
 		case "__INDIRECT_READONLY_ROOTS":
-			_ = json.Unmarshal([]byte(v), &roRoots)
+			roRoots = parseEnvPathList(v)
 		case "__INDIRECT_FS_READ_ROOTS":
-			_ = json.Unmarshal([]byte(v), &fsRead)
+			fsRead = parseEnvPathList(v)
 		case "__INDIRECT_FS_WRITE_ROOTS":
-			_ = json.Unmarshal([]byte(v), &fsWrite)
+			fsWrite = parseEnvPathList(v)
 		case "__INDIRECT_NET_ALLOW":
-			_ = json.Unmarshal([]byte(v), &netAllow)
-		case "__INDIRECT_SHELL_PATH", "__INDIRECT_SHELL_FLAG":
-			// Internal qjs test plumbing; strip from shell env.
+			netAllow = parseEnvCommaList(v)
+		case "__INDIRECT_SHELL_PATH", "__INDIRECT_SHELL_FLAG", "__INDIRECT_TMPDIR":
+			// Internal qjs plumbing; strip from shell env.
 		default:
 			clean = append(clean, kv)
 		}
+	}
+	if sawRuntimeSpec && len(jailRoots) == 0 && len(roRoots) == 0 && len(fsRead) == 0 && len(fsWrite) == 0 && len(netAllow) == 0 {
+		return nil, nil, fmt.Errorf("runtime jail spec set without registered PolicyRuntime builder")
 	}
 
 	if len(jailRoots) == 0 && len(roRoots) == 0 && len(fsRead) == 0 && len(fsWrite) == 0 && len(netAllow) == 0 {
@@ -285,6 +434,7 @@ func buildEnvJail(rawEnv []string) (*unish.Jail, []string, error) {
 	cfg.ReadOnlyRoots = readOnly
 	cfg.OutsideAction = unish.DecisionDeny
 	cfg.ReadOnlyWriteAction = unish.DecisionDeny
+	cfg.Exec = unish.ExecPolicy{Mode: unish.ExecAllowAll}
 	for _, r := range roRoots {
 		if r == "" {
 			continue

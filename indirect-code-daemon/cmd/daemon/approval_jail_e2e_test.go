@@ -1,18 +1,24 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/qjs"
 )
 
 type sseStep struct {
@@ -928,5 +934,262 @@ func TestPerformPairingDefaultsFreshHostToAutoAccessAndJailed(t *testing.T) {
 	opts := sess["options"].(SessionOptions)
 	if opts.Access != "auto" || sess["jailed"] != true {
 		t.Fatalf("freshly paired host create_session must default to access=auto jailed=true, got options=%+v jailed=%v", opts, sess["jailed"])
+	}
+}
+
+// Regression for Defect R2-1: Child QuickJS (`--js`, `--js-exec-direct`, `worker_threads.Worker`,
+// `child_process.fork`) and embedded unish (`--sh`, `--sh-c`) subprocesses MUST inherit the full
+// RuntimeJailSpec / PolicyRuntime + ControlPort isolation, validate script file reads before
+// os.ReadFile, and parse os.PathListSeparator-delimited __INDIRECT_JAIL_ROOTS cleanly.
+func TestQJSChildSubprocessesInheritPolicyRuntimeAndControlPortIsolation(t *testing.T) {
+	ws := t.TempDir()
+	brainDir := t.TempDir()
+	tmpDir := t.TempDir()
+	outsideDir := t.TempDir()
+
+	if err := os.WriteFile(filepath.Join(ws, "allowed.txt"), []byte("WORKSPACE_OK"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".env"), []byte("PROD_DB_PASS=supersecret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outsideSecret := filepath.Join(outsideDir, "secret.txt")
+	if err := os.WriteFile(outsideSecret, []byte("OUTSIDE_SECRET_VALUE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ctrlLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ctrlLn.Close()
+	ctrlPort := ctrlLn.Addr().(*net.TCPAddr).Port
+
+	var ctrlHits atomic.Int32
+	go func() {
+		for {
+			c, aerr := ctrlLn.Accept()
+			if aerr != nil {
+				return
+			}
+			ctrlHits.Add(1)
+			_ = c.Close()
+		}
+	}()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var asks atomic.Int32
+	rt, err := tools.NewPolicyRuntime(tools.RuntimeJailSpec{
+		AccessMode:  "auto",
+		Workspace:   ws,
+		BrainDir:    brainDir,
+		TmpDir:      tmpDir,
+		ControlPort: ctrlPort,
+	}, os.Environ(), func(ctx context.Context, req tools.MidExecApprovalReq) (tools.MidExecApprovalResp, error) {
+		asks.Add(1)
+		return tools.MidExecApprovalResp{Decision: "deny"}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outsideSlash := filepath.ToSlash(outsideSecret)
+	envSlash := filepath.ToSlash(filepath.Join(ws, ".env"))
+	forkChildPath := filepath.Join(ws, "fork_probe.mjs")
+	forkSrc := fmt.Sprintf(`
+import fs from "node:fs";
+import net from "node:net";
+
+const res = { allowed: fs.readFileSync("allowed.txt", "utf8"), envBlocked: false, outsideBlocked: false, ctrlBlocked: false };
+try { fs.readFileSync(%q, "utf8"); } catch (e) { res.envBlocked = true; }
+try { fs.readFileSync(%q, "utf8"); } catch (e) { res.outsideBlocked = true; }
+await new Promise((resolve) => {
+  const s = net.connect(%d, "127.0.0.1");
+  s.on("connect", () => { s.destroy(); resolve(); });
+  s.on("error", () => { res.ctrlBlocked = true; resolve(); });
+});
+process.send(res);
+`, envSlash, outsideSlash, ctrlPort)
+	if err := os.WriteFile(forkChildPath, []byte(forkSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	parentScript := fmt.Sprintf(`
+const cp = require("node:child_process");
+const fs = require("node:fs");
+const assert = require("node:assert");
+const { Worker } = require("node:worker_threads");
+
+(async () => {
+  // 0. Internal jail transport env MUST NOT be readable or mutable in JS process.env.
+  assert.strictEqual(process.env.__INDIRECT_RUNTIME_JAIL_SPEC, undefined);
+
+  // 1. Direct spawnSync(process.execPath, ["--js", "-e", ...])
+  const probeCode = %q;
+  const sub = cp.spawnSync(process.execPath, ["--js", "-e", probeCode], { encoding: "utf8" });
+  if (sub.status !== 0) {
+    throw new Error("child --js failed unexpectedly: status=" + sub.status + " stderr=" + sub.stderr + " stdout=" + sub.stdout);
+  }
+  const subRes = JSON.parse(sub.stdout.trim());
+  assert.strictEqual(subRes.allowed, "WORKSPACE_OK");
+  assert.strictEqual(subRes.envBlocked, true, "child --js read .env: " + JSON.stringify(subRes));
+  assert.strictEqual(subRes.shellOutsideBlocked, true, "child --js shell read outside secret: " + JSON.stringify(subRes));
+  assert.strictEqual(subRes.ctrlBlocked, true, "child --js connected to ControlPort: " + JSON.stringify(subRes));
+  assert.strictEqual(subRes.metaBlocked, true, "child --js fetched cloud metadata: " + JSON.stringify(subRes));
+
+  // 2. Script file argument read check BEFORE os.ReadFile (zero SyntaxError content leak).
+  for (const args of [
+    ["--js", %q],
+    ["--js", "--", %q],
+    ["--js", %q],
+  ]) {
+    const r = cp.spawnSync(process.execPath, args, { encoding: "utf8" });
+    assert.notStrictEqual(r.status, 0, "expected non-zero exit for " + JSON.stringify(args));
+    const combined = (r.stdout || "") + (r.stderr || "");
+    assert.ok(!combined.includes("OUTSIDE_SECRET_VALUE"), "leaked outside secret: " + combined);
+    assert.ok(!combined.includes("PROD_DB_PASS"), "leaked .env secret: " + combined);
+    assert.ok(!combined.includes("SyntaxError"), "parsed unauthorized file as JS: " + combined);
+  }
+
+  // 3. worker_threads.Worker ({ eval: true })
+  const workerRes = await new Promise((resolve, reject) => {
+    const w = new Worker(%q, { eval: true });
+    w.on("message", resolve);
+    w.on("error", reject);
+  });
+  assert.deepStrictEqual(workerRes, {
+    allowed: "WORKSPACE_OK",
+    envBlocked: true,
+    outsideBlocked: true,
+    shellOutsideBlocked: true,
+    ctrlBlocked: true,
+  });
+
+  // 4. child_process.fork()
+  const forkRes = await new Promise((resolve, reject) => {
+    const child = cp.fork(%q);
+    child.on("message", resolve);
+    child.on("error", reject);
+  });
+  assert.deepStrictEqual(forkRes, {
+    allowed: "WORKSPACE_OK",
+    envBlocked: true,
+    outsideBlocked: true,
+    ctrlBlocked: true,
+  });
+
+  // 5. Forged env override attempt (trying to blank __INDIRECT_RUNTIME_JAIL_SPEC and point __INDIRECT_WT_CTL_PORT at ControlPort).
+  const forged = cp.spawnSync(
+    process.execPath,
+    ["--js", "-e", "const fs = require('node:fs'); try { fs.readFileSync(" + JSON.stringify(%q) + "); console.log('ESCAPED'); } catch { console.log('STILL_JAILED'); }"],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        __INDIRECT_RUNTIME_JAIL_SPEC: "",
+        __INDIRECT_WT_CTL_PORT: String(%d),
+        __INDIRECT_FORK_IPC: "1",
+      },
+    }
+  );
+  assert.strictEqual(forged.stdout.trim(), "STILL_JAILED", "forged env escaped: " + forged.stdout + " " + forged.stderr);
+
+  console.log("R2_1_ALL_ISOLATED_OK");
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+`,
+		fmt.Sprintf(`
+const fs = require("node:fs");
+const cp = require("node:child_process");
+const net = require("node:net");
+(async () => {
+  const out = { allowed: fs.readFileSync("allowed.txt", "utf8"), envBlocked: false, shellOutsideBlocked: false, ctrlBlocked: false, metaBlocked: false };
+  try { fs.readFileSync(%q, "utf8"); } catch { out.envBlocked = true; }
+  try {
+    const s = cp.execSync("cat " + %q, { encoding: "utf8" });
+    if (!String(s).includes("OUTSIDE_SECRET_VALUE")) out.shellOutsideBlocked = true;
+  } catch { out.shellOutsideBlocked = true; }
+  await new Promise((resolve) => {
+    const sock = net.connect(%d, "127.0.0.1");
+    sock.on("connect", () => { sock.destroy(); resolve(); });
+    sock.on("error", () => { out.ctrlBlocked = true; resolve(); });
+  });
+  try {
+    await fetch("http://169.254.169.254/latest/meta-data/");
+  } catch { out.metaBlocked = true; }
+  console.log(JSON.stringify(out));
+})();
+`, envSlash, outsideSlash, ctrlPort),
+		outsideSlash,
+		outsideSlash,
+		envSlash,
+		fmt.Sprintf(`
+const { parentPort } = require("node:worker_threads");
+const fs = require("node:fs");
+const cp = require("node:child_process");
+const net = require("node:net");
+(async () => {
+  const out = { allowed: fs.readFileSync("allowed.txt", "utf8"), envBlocked: false, outsideBlocked: false, shellOutsideBlocked: false, ctrlBlocked: false };
+  try { fs.readFileSync(%q, "utf8"); } catch { out.envBlocked = true; }
+  try { fs.readFileSync(%q, "utf8"); } catch { out.outsideBlocked = true; }
+  try { cp.execSync("cat " + %q, { encoding: "utf8" }); } catch { out.shellOutsideBlocked = true; }
+  await new Promise((resolve) => {
+    const sock = net.connect(%d, "127.0.0.1");
+    sock.on("connect", () => { sock.destroy(); resolve(); });
+    sock.on("error", () => { out.ctrlBlocked = true; resolve(); });
+  });
+  parentPort.postMessage(out);
+})();
+`, envSlash, outsideSlash, outsideSlash, ctrlPort),
+		filepath.ToSlash(forkChildPath),
+		outsideSlash,
+		ctrlPort,
+	)
+
+	var stdout, stderr bytes.Buffer
+	qjsOpts := rt.QJSOptions(qjs.ScriptOptions{
+		Code:      parentScript,
+		Filename:  filepath.Join(ws, "parent.js"),
+		CWD:       ws,
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+		ExecPath:  exe,
+		ShellPath: exe,
+		ShellFlag: "--sh-c",
+	})
+	code, runErr := qjs.RunScript(context.Background(), qjsOpts)
+	if runErr != nil || code != 0 || !strings.Contains(stdout.String(), "R2_1_ALL_ISOLATED_OK") {
+		t.Fatalf("parent QJS run failed: code=%d err=%v\nstdout=%s\nstderr=%s", code, runErr, stdout.String(), stderr.String())
+	}
+	if asks.Load() != 0 {
+		t.Fatalf("expected 0 approval prompts across child --js/Worker/fork escapes, got %d", asks.Load())
+	}
+	if ctrlHits.Load() != 0 {
+		t.Fatalf("ControlPort listener MUST receive 0 connections across all child --js/Worker/fork/forged-env vectors, got %d", ctrlHits.Load())
+	}
+
+	// 6. Verify standalone unishcli (`--sh-c` and `--sh <script>`) honors os.PathListSeparator-delimited
+	// __INDIRECT_JAIL_ROOTS (not only JSON arrays) and blocks reading outside scripts before os.ReadFile.
+	jailListEnv := append(os.Environ(), "__INDIRECT_JAIL_ROOTS="+strings.Join([]string{ws, tmpDir}, string(os.PathListSeparator)))
+	cmdShC := exec.Command(exe, "--sh-c", "cat '"+outsideSlash+"'")
+	cmdShC.Dir = ws
+	cmdShC.Env = jailListEnv
+	outShC, errShC := cmdShC.CombinedOutput()
+	if errShC == nil || strings.Contains(string(outShC), "OUTSIDE_SECRET_VALUE") {
+		t.Fatalf("--sh-c with PathListSeparator __INDIRECT_JAIL_ROOTS escaped jail: err=%v out=%q", errShC, string(outShC))
+	}
+
+	cmdShFile := exec.Command(exe, "--sh", outsideSecret)
+	cmdShFile.Dir = ws
+	cmdShFile.Env = jailListEnv
+	outShFile, errShFile := cmdShFile.CombinedOutput()
+	if errShFile == nil || strings.Contains(string(outShFile), "OUTSIDE_SECRET_VALUE") {
+		t.Fatalf("--sh <outsideFile> escaped pre-read jail check: err=%v out=%q", errShFile, string(outShFile))
 	}
 }

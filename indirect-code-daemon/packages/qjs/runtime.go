@@ -57,6 +57,7 @@ type ScriptOptions struct {
 	FSReadRoots   []string
 	FSWriteRoots  []string
 	NetAllow      []string
+	ExtraChildEnv func() map[string]string
 	CheckAccess   func(ctx context.Context, kind, target string, argv []string) error
 	DialContext   func(ctx context.Context, network, addr string) (net.Conn, error)
 	Listen        func(ctx context.Context, network, addr string) (net.Listener, error)
@@ -166,6 +167,7 @@ type rtEntry struct {
 	fsReadRoots   []string
 	fsWriteRoots  []string
 	netAllow      []string
+	extraChildEnv func() map[string]string
 	checkAccess   func(ctx context.Context, kind, target string, argv []string) error
 	dialContext   func(ctx context.Context, network, addr string) (net.Conn, error)
 	listen        func(ctx context.Context, network, addr string) (net.Listener, error)
@@ -741,7 +743,7 @@ func RunScript(ctx context.Context, opts ScriptOptions) (int, error) {
 		}
 	}
 
-	hasSandbox := len(jailRoots) > 0 || len(readOnlyRoots) > 0 || len(fsReadRoots) > 0 || len(fsWriteRoots) > 0 || len(netAllow) > 0 || opts.CheckAccess != nil
+	hasSandbox := len(jailRoots) > 0 || len(readOnlyRoots) > 0 || len(fsReadRoots) > 0 || len(fsWriteRoots) > 0 || len(netAllow) > 0 || opts.CheckAccess != nil || opts.ExtraChildEnv != nil
 	tmpDir := opts.TmpDir
 	if tmpDir == "" {
 		tmpDir = strings.TrimSpace(rawEnv["__INDIRECT_TMPDIR"])
@@ -805,6 +807,7 @@ func RunScript(ctx context.Context, opts ScriptOptions) (int, error) {
 		fsReadRoots:      fsReadRoots,
 		fsWriteRoots:     fsWriteRoots,
 		netAllow:         netAllow,
+		extraChildEnv:    opts.ExtraChildEnv,
 		checkAccess:      opts.CheckAccess,
 		dialContext:      opts.DialContext,
 		listen:           opts.Listen,

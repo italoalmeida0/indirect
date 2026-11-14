@@ -2,10 +2,12 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,6 +19,63 @@ import (
 	"indirect/indirect-code-daemon/packages/qjs"
 	"indirect/indirect-code-daemon/packages/unishcli"
 )
+
+// EnvRuntimeJailSpec is the internal environment variable used to propagate the
+// full RuntimeJailSpec (including ControlPort, AccessMode, ProjectReadOnly,
+// Workspace/Brain/Tmp roots, and PermissionRules) across child --js,
+// --js-exec-direct, worker_threads.Worker, child_process.fork, and --sh/--sh-c
+// invocations. QuickJS strips all __INDIRECT_* variables from JS process.env
+// and re-injects this variable into child OS processes via ExtraChildEnv.
+const EnvRuntimeJailSpec = "__INDIRECT_RUNTIME_JAIL_SPEC"
+
+func init() {
+	unishcli.RegisterEnvJailBuilder(buildUnishCLIEnvJail)
+}
+
+func buildUnishCLIEnvJail(rawEnv []string) (*unishcli.EnvJailSessionConfig, error) {
+	var specJSON string
+	hasSpecKey := false
+	clean := make([]string, 0, len(rawEnv))
+	for _, kv := range rawEnv {
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			clean = append(clean, kv)
+			continue
+		}
+		k, v := kv[:eq], kv[eq+1:]
+		switch k {
+		case EnvRuntimeJailSpec:
+			hasSpecKey = true
+			specJSON = strings.TrimSpace(v)
+		case "__INDIRECT_JAIL_ROOTS", "__INDIRECT_READONLY_ROOTS",
+			"__INDIRECT_FS_READ_ROOTS", "__INDIRECT_FS_WRITE_ROOTS",
+			"__INDIRECT_NET_ALLOW", "__INDIRECT_SHELL_PATH",
+			"__INDIRECT_SHELL_FLAG", "__INDIRECT_TMPDIR":
+			// Strip internal sandbox transport variables from child shell env.
+		default:
+			clean = append(clean, kv)
+		}
+	}
+	if !hasSpecKey {
+		return nil, nil
+	}
+	if specJSON == "" {
+		return nil, fmt.Errorf("empty %s", EnvRuntimeJailSpec)
+	}
+	var spec RuntimeJailSpec
+	if err := json.Unmarshal([]byte(specJSON), &spec); err != nil {
+		return nil, fmt.Errorf("invalid %s: %w", EnvRuntimeJailSpec, err)
+	}
+	rt, err := NewPolicyRuntime(spec, clean, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &unishcli.EnvJailSessionConfig{
+		Jail:     rt.Jail(),
+		Hook:     rt.Hook(),
+		CleanEnv: rt.PrepareEnv(clean),
+	}, nil
+}
 
 // RuntimeJailSpec describes the complete sandbox, policy rules, and control-port
 // isolation configuration for one bash or exec_script execution.
@@ -694,6 +753,15 @@ func (rt *PolicyRuntime) checkHardBlockedNet(host string, port int, resolvedIP s
 	if rt.spec.AccessMode != "full" {
 		if host != "" && strings.HasSuffix(normalizeHostForSSRF(host), ".localhost") {
 			return fmt.Sprintf("subdomain %q under .localhost is blocked", host)
+		}
+		if host != "" && isNonCanonicalIPHost(host) {
+			return fmt.Sprintf("non-canonical IP address encoding %q is blocked", host)
+		}
+		if addr, ok := parseNormalizedAddr(host); ok && !addr.IsLoopback() && isPrivateOrReservedAddr(addr) {
+			return fmt.Sprintf("private or reserved IP address %q is blocked", host)
+		}
+		if addr, ok := parseNormalizedAddr(resolvedIP); ok && !addr.IsLoopback() && isPrivateOrReservedAddr(addr) {
+			return fmt.Sprintf("private or reserved IP address %q is blocked", resolvedIP)
 		}
 		if resolvedIP != "" && host != "" && !isLoopbackHost(host) && isLoopbackHost(resolvedIP) {
 			return fmt.Sprintf("DNS rebinding from %q to loopback address %s is blocked", host, resolvedIP)
@@ -1466,7 +1534,215 @@ func (rt *PolicyRuntime) QJSOptions(base qjs.ScriptOptions) qjs.ScriptOptions {
 	out.ShellExec = func(ctx context.Context, cmd, cwd string, env []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 		return rt.ExecShell(ctx, cmd, cwd, env, stdin, stdout, stderr)
 	}
+	out.ExtraChildEnv = func() map[string]string {
+		snap := rt.SnapshotSpec()
+		b, err := json.Marshal(snap)
+		if err != nil {
+			return nil
+		}
+		return map[string]string{
+			EnvRuntimeJailSpec: string(b),
+		}
+	}
 	return out
+}
+
+// SnapshotSpec returns a copy of rt's RuntimeJailSpec including all live
+// session/always permission rules accrued during execution.
+func (rt *PolicyRuntime) SnapshotSpec() RuntimeJailSpec {
+	if rt == nil {
+		return RuntimeJailSpec{}
+	}
+	snap := rt.spec
+	snap.Rules = rt.effectiveRules()
+	snap.CallGrants = nil
+	return snap
+}
+
+func parseInheritedEnvPathList(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []string
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			out := make([]string, 0, len(arr))
+			for _, p := range arr {
+				if p = strings.TrimSpace(p); p != "" {
+					out = append(out, p)
+				}
+			}
+			return out
+		}
+	}
+	var out []string
+	for _, p := range filepath.SplitList(raw) {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func parseInheritedEnvCommaList(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		var arr []string
+		if err := json.Unmarshal([]byte(trimmed), &arr); err == nil {
+			out := make([]string, 0, len(arr))
+			for _, p := range arr {
+				if p = strings.TrimSpace(p); p != "" {
+					out = append(out, p)
+				}
+			}
+			return out
+		}
+	}
+	var out []string
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// PolicyRuntimeFromProcessEnv reads and clears inherited __INDIRECT_* sandbox
+// environment variables for child --js and --js-exec-direct processes, returning
+// a live fail-closed *PolicyRuntime (when EnvRuntimeJailSpec is set) and base
+// qjs.ScriptOptions. Any malformed EnvRuntimeJailSpec fails closed with an error.
+func PolicyRuntimeFromProcessEnv() (*PolicyRuntime, qjs.ScriptOptions, error) {
+	rawSpec, hasSpec := os.LookupEnv(EnvRuntimeJailSpec)
+	jailRoots := parseInheritedEnvPathList(os.Getenv("__INDIRECT_JAIL_ROOTS"))
+	readOnlyRoots := parseInheritedEnvPathList(os.Getenv("__INDIRECT_READONLY_ROOTS"))
+	fsReadRoots := parseInheritedEnvPathList(os.Getenv("__INDIRECT_FS_READ_ROOTS"))
+	fsWriteRoots := parseInheritedEnvPathList(os.Getenv("__INDIRECT_FS_WRITE_ROOTS"))
+	netAllow := parseInheritedEnvCommaList(os.Getenv("__INDIRECT_NET_ALLOW"))
+	tmpDir := strings.TrimSpace(os.Getenv("__INDIRECT_TMPDIR"))
+
+	_ = os.Unsetenv(EnvRuntimeJailSpec)
+	_ = os.Unsetenv("__INDIRECT_JAIL_ROOTS")
+	_ = os.Unsetenv("__INDIRECT_READONLY_ROOTS")
+	_ = os.Unsetenv("__INDIRECT_FS_READ_ROOTS")
+	_ = os.Unsetenv("__INDIRECT_FS_WRITE_ROOTS")
+	_ = os.Unsetenv("__INDIRECT_NET_ALLOW")
+	_ = os.Unsetenv("__INDIRECT_TMPDIR")
+
+	base := qjs.ScriptOptions{
+		TmpDir:        tmpDir,
+		JailRoots:     jailRoots,
+		ReadOnlyRoots: readOnlyRoots,
+		FSReadRoots:   fsReadRoots,
+		FSWriteRoots:  fsWriteRoots,
+		NetAllow:      netAllow,
+	}
+	if !hasSpec {
+		return nil, base, nil
+	}
+	specStr := strings.TrimSpace(rawSpec)
+	if specStr == "" {
+		return nil, base, fmt.Errorf("empty %s", EnvRuntimeJailSpec)
+	}
+	var spec RuntimeJailSpec
+	if err := json.Unmarshal([]byte(specStr), &spec); err != nil {
+		return nil, base, fmt.Errorf("invalid %s: %w", EnvRuntimeJailSpec, err)
+	}
+	rt, err := NewPolicyRuntime(spec, os.Environ(), nil)
+	if err != nil {
+		return nil, base, err
+	}
+	return rt, rt.QJSOptions(base), nil
+}
+
+// CheckScriptFileRead validates read permission against rt or fallback JailRoots/FSReadRoots
+// BEFORE a child --js or --js-exec-direct entrypoint reads a script file from disk.
+func CheckScriptFileRead(ctx context.Context, rt *PolicyRuntime, opts qjs.ScriptOptions, filePath string) error {
+	absPath := filePath
+	if a, err := filepath.Abs(filePath); err == nil {
+		absPath = a
+	}
+	if rt != nil && rt.hook != nil {
+		cwd, _ := os.Getwd()
+		if err := rt.hook.CheckAccess(ctx, unish.AccessRequest{
+			Op:      unish.OpRead,
+			Command: "exec_script",
+			Path:    absPath,
+			RawPath: filePath,
+			WorkDir: cwd,
+		}); err != nil {
+			return fmt.Errorf("EACCES: %w", err)
+		}
+	}
+	if opts.CheckAccess != nil && rt == nil {
+		if err := opts.CheckAccess(ctx, "fs_read", absPath, nil); err != nil {
+			return err
+		}
+	}
+	canon, err := canonicalOrParent(absPath)
+	if err != nil {
+		canon = filepath.Clean(absPath)
+	}
+	if len(opts.FSReadRoots) > 0 {
+		if len(opts.FSReadRoots) == 1 && opts.FSReadRoots[0] == "__NONE__" {
+			return fmt.Errorf("EACCES: permission denied, open '%s'", filePath)
+		}
+		allowed := false
+		for _, r := range opts.FSReadRoots {
+			if r == "" || r == "__NONE__" {
+				continue
+			}
+			rc, rerr := canonicalOrParent(r)
+			if rerr != nil {
+				rc = filepath.Clean(r)
+			}
+			if isUnderCleanOSPath(rc, canon) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("EACCES: permission denied, open '%s'", filePath)
+		}
+	}
+	if len(opts.JailRoots) > 0 {
+		allowed := false
+		for _, r := range opts.JailRoots {
+			if r == "" {
+				continue
+			}
+			rc, rerr := canonicalOrParent(r)
+			if rerr != nil {
+				rc = filepath.Clean(r)
+			}
+			if isUnderCleanOSPath(rc, canon) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			for _, r := range opts.ReadOnlyRoots {
+				if r == "" {
+					continue
+				}
+				rc, rerr := canonicalOrParent(r)
+				if rerr != nil {
+					rc = filepath.Clean(r)
+				}
+				if isUnderCleanOSPath(rc, canon) {
+					allowed = true
+					break
+				}
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("EACCES: permission denied, open '%s'", filePath)
+		}
+	}
+	return nil
 }
 
 func parseNetHostPort(target string) (string, int) {
@@ -1523,10 +1799,8 @@ func argvTargetsControlPort(argv []string, port int) bool {
 	if port <= 0 || len(argv) == 0 {
 		return false
 	}
-	portStr := strconv.Itoa(port)
-	colonPort := ":" + portStr
 	for _, arg := range argv {
-		if containsBoundedPortRef(arg, colonPort) {
+		if containsColonPortValue(arg, port) || urlTargetsPort(arg, port) {
 			return true
 		}
 	}
@@ -1538,7 +1812,7 @@ func argvTargetsControlPort(argv []string, port int) bool {
 	bin := baseProgName(checkArgv[0])
 	if isNetworkOrScriptExecBinary(bin) {
 		for _, arg := range checkArgv[1:] {
-			if containsStandaloneToken(arg, portStr) {
+			if containsNumericPortToken(arg, port) {
 				return true
 			}
 		}
@@ -1546,53 +1820,131 @@ func argvTargetsControlPort(argv []string, port int) bool {
 	return false
 }
 
-func containsBoundedPortRef(s, colonPort string) bool {
-	idx := 0
-	for {
-		pos := strings.Index(s[idx:], colonPort)
-		if pos < 0 {
-			return false
-		}
-		absPos := idx + pos
-		end := absPos + len(colonPort)
-		nextIsDigit := end < len(s) && s[end] >= '0' && s[end] <= '9'
-		if !nextIsDigit {
-			return true
-		}
-		idx = absPos + 1
+func urlTargetsPort(raw string, port int) bool {
+	s := strings.TrimSpace(raw)
+	if !strings.Contains(s, "://") {
+		return false
 	}
+	u, err := url.Parse(s)
+	if err != nil || u.Port() == "" {
+		return false
+	}
+	return matchesNumericPortLiteral(u.Port(), port)
 }
 
-func containsStandaloneToken(s, token string) bool {
-	if s == token {
+func containsColonPortValue(s string, port int) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] != ':' || i+1 >= len(s) {
+			continue
+		}
+		tok, end := scanNumericLiteral(s, i+1)
+		if tok == "" {
+			continue
+		}
+		if end < len(s) && isASCIIAlphaOrUnderscore(s[end]) {
+			continue
+		}
+		if matchesNumericPortLiteral(tok, port) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsNumericPortToken(s string, port int) bool {
+	i := 0
+	for i < len(s) {
+		if s[i] < '0' || s[i] > '9' {
+			i++
+			continue
+		}
+		prevBad := i > 0 && (isASCIIAlphaOrUnderscore(s[i-1]) || s[i-1] == '.')
+		tok, end := scanNumericLiteral(s, i)
+		if tok == "" {
+			i++
+			continue
+		}
+		nextBad := end < len(s) && (isASCIIAlphaOrUnderscore(s[end]) || s[end] == '.')
+		if !prevBad && !nextBad && matchesNumericPortLiteral(tok, port) {
+			return true
+		}
+		i = end
+	}
+	return false
+}
+
+func scanNumericLiteral(s string, start int) (string, int) {
+	if start >= len(s) || s[start] < '0' || s[start] > '9' {
+		return "", start
+	}
+	if s[start] == '0' && start+2 < len(s) {
+		switch s[start+1] {
+		case 'x', 'X':
+			end := start + 2
+			for end < len(s) && isASCIIHex(s[end]) {
+				end++
+			}
+			if end > start+2 {
+				return s[start:end], end
+			}
+		case 'o', 'O':
+			end := start + 2
+			for end < len(s) && s[end] >= '0' && s[end] <= '7' {
+				end++
+			}
+			if end > start+2 {
+				return s[start:end], end
+			}
+		}
+	}
+	end := start
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	return s[start:end], end
+}
+
+func matchesNumericPortLiteral(tok string, port int) bool {
+	if tok == "" || port <= 0 {
+		return false
+	}
+	if len(tok) > 2 && (strings.HasPrefix(tok, "0x") || strings.HasPrefix(tok, "0X")) {
+		if v, err := strconv.ParseInt(tok[2:], 16, 32); err == nil && int(v) == port {
+			return true
+		}
+		return false
+	}
+	if len(tok) > 2 && (strings.HasPrefix(tok, "0o") || strings.HasPrefix(tok, "0O")) {
+		if v, err := strconv.ParseInt(tok[2:], 8, 32); err == nil && int(v) == port {
+			return true
+		}
+		return false
+	}
+	if v, err := strconv.Atoi(tok); err == nil && v == port {
 		return true
 	}
-	idx := 0
-	for {
-		pos := strings.Index(s[idx:], token)
-		if pos < 0 {
-			return false
-		}
-		absPos := idx + pos
-		end := absPos + len(token)
-		prevAlnum := absPos > 0 && isASCIIAlnum(s[absPos-1])
-		nextAlnum := end < len(s) && isASCIIAlnum(s[end])
-		if !prevAlnum && !nextAlnum {
+	if len(tok) > 1 && tok[0] == '0' {
+		if v, err := strconv.ParseInt(tok[1:], 8, 32); err == nil && int(v) == port {
 			return true
 		}
-		idx = absPos + 1
 	}
+	return false
 }
 
-func isASCIIAlnum(b byte) bool {
-	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
+func isASCIIAlphaOrUnderscore(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
+}
+
+func isASCIIHex(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'f') || (b >= 'A' && b <= 'F')
 }
 
 func isNetworkOrScriptExecBinary(bin string) bool {
 	switch bin {
 	case "curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "openssl",
 		"ssh", "scp", "sftp", "python", "python3", "python2", "node", "bun", "deno",
-		"perl", "ruby", "php", "powershell", "pwsh", "cmd":
+		"perl", "ruby", "php", "powershell", "pwsh", "cmd", "busybox",
+		"sh", "bash", "zsh", "dash", "ksh", "ash", "unish":
 		return true
 	default:
 		return strings.HasPrefix(bin, "python3.")

@@ -1296,7 +1296,17 @@ func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []Permiss
 				},
 			}
 		}
-		if addr, ok := parseNormalizedAddr(rawHost); ok {
+		if addr, nonCanonical, ok := parseNormalizedAddrWithKind(rawHost); ok {
+			if nonCanonical {
+				return PolicyEvaluation{
+					Verdict: VerdictDeny,
+					Meta: ToolApprovalMeta{
+						Capability: "net",
+						Target:     nonEmpty(u.Host, rawHost),
+						Reason:     fmt.Sprintf("Non-canonical IP address encoding %q is blocked", rawHost),
+					},
+				}
+			}
 			if !addr.IsLoopback() && isPrivateOrReservedAddr(addr) {
 				return PolicyEvaluation{
 					Verdict: VerdictDeny,

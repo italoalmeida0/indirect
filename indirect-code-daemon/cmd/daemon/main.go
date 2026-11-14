@@ -90,6 +90,12 @@ func jsMain(args []string) int {
 		stdin      io.Reader = os.Stdin
 	)
 
+	policyRT, baseOpts, jailErr := tools.PolicyRuntimeFromProcessEnv()
+	if jailErr != nil {
+		fmt.Fprintf(os.Stderr, "js error initializing jail: %v\n", jailErr)
+		return 1
+	}
+
 	stripLeadingDashDash := func(s []string) []string {
 		if len(s) > 0 && s[0] == "--" {
 			return s[1:]
@@ -120,6 +126,10 @@ func jsMain(args []string) int {
 			absPath, err := filepath.Abs(filePath)
 			if err != nil {
 				absPath = filePath
+			}
+			if cerr := tools.CheckScriptFileRead(context.Background(), policyRT, baseOpts, absPath); cerr != nil {
+				fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", filePath, cerr)
+				return 1
 			}
 			raw, err := os.ReadFile(absPath)
 			if err != nil {
@@ -189,6 +199,10 @@ func jsMain(args []string) int {
 		if err != nil {
 			absPath = filePath
 		}
+		if cerr := tools.CheckScriptFileRead(context.Background(), policyRT, baseOpts, absPath); cerr != nil {
+			fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", filePath, cerr)
+			return 1
+		}
 		raw, err := os.ReadFile(absPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", filePath, err)
@@ -235,19 +249,23 @@ func jsMain(args []string) int {
 		}
 	}()
 
-	exitCode, err := qjs.RunScript(ctx, qjs.ScriptOptions{
-		Code:      code,
-		Filename:  filename,
-		CWD:       cwd,
-		Args:      scriptArgs,
-		OmitArgv1: omitArgv1,
-		Stdin:     stdin,
-		Stdout:    os.Stdout,
-		Stderr:    os.Stderr,
-		ExecPath:  exe,
-		ShellPath: shPath,
-		ShellFlag: shFlag,
-	})
+	opts := baseOpts
+	opts.Code = code
+	opts.Filename = filename
+	opts.CWD = cwd
+	opts.Args = scriptArgs
+	opts.OmitArgv1 = omitArgv1
+	opts.Stdin = stdin
+	opts.Stdout = os.Stdout
+	opts.Stderr = os.Stderr
+	opts.ExecPath = exe
+	opts.ShellPath = shPath
+	opts.ShellFlag = shFlag
+	if policyRT != nil {
+		opts = policyRT.QJSOptions(opts)
+	}
+
+	exitCode, err := qjs.RunScript(ctx, opts)
 	if sc := int(sigCode.Load()); sc != 0 {
 		return sc
 	}
