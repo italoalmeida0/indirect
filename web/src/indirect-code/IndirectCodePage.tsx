@@ -18,6 +18,7 @@ import { HostCard } from "./components/HostCard";
 import { RemoteHints } from "./presentation";
 import { projectForDirectory } from "./paths";
 import { createMobileFlag } from "./utils/mobileFlag";
+import { useIndirectCodeDocumentScope } from "./utils/documentScope";
 import { normalizeMidTurnSend } from "./utils/settingsValidation";
 import { contextDisplay, type GatewayModel } from "./context";
 import { api } from "../api";
@@ -155,6 +156,7 @@ function WorkspaceHeader() {
 
 /** Edge-to-edge background with native mobile safe-area padding. */
 export function WorkspaceShell(props: { children: JSX.Element }) {
+  useIndirectCodeDocumentScope();
   return (
     <div data-density="compact" class="rc-app-shell fixed inset-0 w-full h-dvh flex flex-col bg-background text-fg overflow-hidden font-sans select-none">
       {props.children}

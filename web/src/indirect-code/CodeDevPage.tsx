@@ -12,6 +12,7 @@ import { createHosts } from "./hooks/useHosts";
 import { createRelay } from "./hooks/useRelay";
 import { createMirror } from "./hooks/useMirror";
 import { RemoteHints } from "./presentation";
+import { useIndirectCodeDocumentScope } from "./utils/documentScope";
 import { Icon, Icons, toast } from "../ui";
 
 interface DebugTool {
@@ -288,6 +289,7 @@ function JsonHighlightViewer(props: {
 }
 
 export default function CodeDevPage() {
+  useIndirectCodeDocumentScope();
   const [activeTab, setActiveTab] = createSignal<
     "payloads" | "stream" | "system" | "tools" | "frames" | "wal"
   >("payloads");

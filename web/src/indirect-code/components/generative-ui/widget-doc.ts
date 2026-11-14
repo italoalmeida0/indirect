@@ -421,6 +421,30 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
   .gu-bar-value { margin-left: auto; }
 }
 .gu-hidden { display: none !important; }
+@media (hover: hover) and (pointer: fine) {
+  *, *::before, *::after { --gu-scrollbar-thumb: transparent; }
+  *:hover { --gu-scrollbar-thumb: color-mix(in oklab, var(--gu-text) 22%, transparent); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner, ::-webkit-resizer { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--gu-scrollbar-thumb);
+    border: 2px solid transparent;
+    border-radius: 9999px;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active {
+    background-color: var(--gu-text-faint);
+    background-clip: content-box;
+  }
+  @-moz-document url-prefix() {
+    * { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+    *:hover { scrollbar-color: color-mix(in oklab, var(--gu-text) 22%, transparent) transparent; }
+  }
+}
+@media (hover: none), (pointer: coarse) {
+  ::-webkit-scrollbar { display: none; width: 0; height: 0; }
+  * { scrollbar-width: none; -ms-overflow-style: none; }
+}
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }

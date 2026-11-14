@@ -141,7 +141,58 @@ html:not(.mobile) ::-webkit-scrollbar-thumb:hover {
     scrollbar-width: thin;
     scrollbar-color: var(--border-strong) transparent;
   }
+  html[data-indirect-code]:not(.mobile),
+  html[data-indirect-code]:not(.mobile) * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+  html[data-indirect-code]:not(.mobile):hover,
+  html[data-indirect-code]:not(.mobile) *:hover,
+  html[data-indirect-code]:not(.mobile) .tarnav-codeblock:hover > .font-mono {
+    scrollbar-color: var(--border-strong) transparent;
+  }
 }
+
+/* Indirect Code desktop: fixed-geometry auto-hide scrollbars that reveal only
+ * on the hovered scroll container (reset on `*` prevents a hovered outer
+ * scroller from revealing unhovered nested code/table scrollers). */
+html[data-indirect-code]:not(.mobile),
+html[data-indirect-code]:not(.mobile) * {
+  --rc-scrollbar-thumb: transparent;
+}
+html[data-indirect-code]:not(.mobile):hover,
+html[data-indirect-code]:not(.mobile) *:hover,
+html[data-indirect-code]:not(.mobile) .tarnav-codeblock:hover > .font-mono {
+  --rc-scrollbar-thumb: var(--border-strong);
+}
+html[data-indirect-code]:not(.mobile)::-webkit-scrollbar,
+html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-track,
+html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-track,
+html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-corner,
+html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-corner,
+html[data-indirect-code]:not(.mobile)::-webkit-resizer,
+html[data-indirect-code]:not(.mobile) ::-webkit-resizer {
+  background: transparent;
+}
+html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-thumb,
+html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-thumb {
+  background-color: var(--rc-scrollbar-thumb);
+  border: 2px solid transparent;
+  border-radius: 9999px;
+  background-clip: content-box;
+}
+html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-thumb:hover,
+html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-thumb:hover,
+html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-thumb:active,
+html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-thumb:active {
+  background-color: var(--text-muted);
+  background-clip: content-box;
+}
+
 /* Mobile (html.mobile, set before first paint in web/index.html): hide
  * scrollbars — overlay momentum scrolling already signals position, and
  * thin desktop rails just eat layout width on a phone. Scrolling itself
@@ -155,10 +206,14 @@ html.mobile * {
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
-.no-scrollbar::-webkit-scrollbar {
+.no-scrollbar::-webkit-scrollbar,
+html[data-indirect-code]:not(.mobile) :is(.no-scrollbar, .ui-segmented, .ui-tabs-list, [class*="scrollbar-width:none"], [class*="::-webkit-scrollbar]:hidden"])::-webkit-scrollbar {
   display: none;
+  width: 0;
+  height: 0;
 }
-.no-scrollbar {
+.no-scrollbar,
+html[data-indirect-code]:not(.mobile) :is(.no-scrollbar, .ui-segmented, .ui-tabs-list, [class*="scrollbar-width:none"], [class*="::-webkit-scrollbar]:hidden"]) {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
