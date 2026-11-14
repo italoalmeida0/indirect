@@ -13,7 +13,7 @@ export function ScrollOverlays() {
 <>
 {/* Detached older-history pill or floating pin-at-bottom */}
 <Show
-  when={t.historyHasNewer()}
+  when={t.historyHasNewer?.()}
   fallback={
     <Show when={!t.isAtBottom() && t.messages().length > 0}>
       <div class="absolute bottom-full inset-x-0 mb-2 flex justify-center pointer-events-none z-30 px-4">

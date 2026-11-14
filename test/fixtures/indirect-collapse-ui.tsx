@@ -53,6 +53,8 @@ render(() => {
     messages: () => layout ? [{ role: "assistant" }] : [],
     isAtBottom: () => !layout,
     pinAtBottom: () => {},
+    historyHasNewer: () => false,
+    reloadLatest: () => {},
   };
   const composer: any = {
     inputPrompt: () => "",
@@ -106,6 +108,7 @@ render(() => {
     usageOpen: () => false,
     setUsageOpen: () => {},
     closeMenus: () => {},
+    convWidthClass: () => "max-w-3xl",
   };
   Object.assign(api, { setActive, setDraft, setCollapsed, setBlocked, setTodos, setTurn, active, draft, collapsed, setModalOpen });
   return (

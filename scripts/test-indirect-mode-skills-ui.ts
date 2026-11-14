@@ -168,7 +168,7 @@ try {
   await page.keyboard.press("Escape");
 
   // --- Draft again, none of the 4 exist: additionals alone decide the mode ---
-  await page.getByRole("button", { name: "New Conversation", exact: true }).click();
+  await page.getByRole("button", { name: "New conversation", exact: true }).click();
   await ev(`a => a.setOfficial({ custom: { name: "custom", description: "c", body: "", enabled: true, usable: "ask", mode: "agentic" } })`);
   await openModeMenu();
   assert.equal((await radios()).length, 0, "Mode section must disappear when no mode skill exists");

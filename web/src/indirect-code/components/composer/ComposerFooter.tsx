@@ -1,26 +1,19 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { press } from "../../../ds/motion/press";
-import { compactTokens } from "../../context";
-import { baseNameOf, cacheHitPct, fmtUsd, usageCosts } from "../../transcript";
-import { useComposerCtx, useSession, useTranscriptCtx, useUI } from "../../ctx";
+import { baseNameOf } from "../../transcript";
+import { useComposerCtx, useSession, useUI } from "../../ctx";
 import { FloatMenu } from "../FloatMenu";
+import { ContextUsageMeter } from "./ContextUsageMeter";
 
 export function ComposerFooter() {
   const c = useComposerCtx();
   const s = useSession();
-  const t = useTranscriptCtx();
   const ui = useUI();
   const pct = () => c.activeContext().percent;
   const contextTokensLabel = () => {
     const ctx = c.activeContext();
     return ctx.tokensLabel ?? ctx.label.replace(/\s*\(\d+%\)$/, "");
-  };
-  const barToneClass = () => {
-    const p = pct() ?? 0;
-    if (p >= 92) return "bg-danger";
-    if (p >= 78) return "bg-warning";
-    return "bg-accent";
   };
 
   return (
@@ -122,93 +115,18 @@ export function ComposerFooter() {
       <Iconify icon="lucide:folder" size={12} class="shrink-0 text-fg-muted" />
       <span class="truncate">{s.currentProject()?.name || baseNameOf(s.activeSession()?.cwd) || "Project"}</span>
     </span>
-    <FloatMenu anchor={() => ui.contextBtn} open={ui.usageOpen()} onClose={() => ui.setUsageOpen(false)} placement="top-end" width="min(19.5rem, calc(100vw - 1.5rem))">
-      <div class="p-1.5 text-xs space-y-2.5">
-        <div class="space-y-1.5">
-          <div class="flex items-center justify-between gap-2">
-            <span class="text-2xs font-medium text-fg-muted">Conversation context</span>
-            <Show when={pct() !== null}>
-              <span class="rounded border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs font-medium text-fg-secondary tabular-nums">
-                {pct()}% full
-              </span>
-            </Show>
-          </div>
-          <div class="font-mono text-sm font-medium text-fg tabular-nums tracking-tight">{contextTokensLabel()}</div>
-          <Show when={pct() !== null}>
-            <div
-              class="h-1.5 rounded-full bg-surface-muted overflow-hidden"
-              role="progressbar"
-              aria-label="Context used"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.min(100, pct() ?? 0)}
-            >
-              <div class={`h-full rounded-full transition-all duration-200 ${barToneClass()}`} style={{ width: `${Math.min(100, pct() ?? 0)}%` }} />
-            </div>
-          </Show>
-          <p class="text-2xs text-fg-muted leading-snug">
-            {c.activeContext().window > 0 ? `${compactTokens(c.activeContext().window)} token window.` : "Context limit not configured."}
-            {" "}Latest request + response.
-          </p>
-        </div>
-
-        <div class="-mx-3 px-3 pt-2.5 border-t border-border-subtle space-y-2">
-          <Show
-            when={t.activeUsage()}
-            fallback={
-              <>
-                <div class="text-2xs font-medium text-fg-muted">Session telemetry</div>
-                <p class="text-fg-muted text-2xs leading-snug">
-                  No usage reported yet. Run a turn to inspect input, cache, and output tokens.
-                </p>
-              </>
-            }
-          >
-            {(u) => {
-              const costs = usageCosts(u());
-              const totalTok = () => Math.max(1, (u().inTok || 0) + (u().cacheTok || 0) + (u().outTok || 0) + (u().reasoningTok || 0));
-              const chip = (v: number | undefined) =>
-                costs ? <span class="text-fg-muted ml-1.5">${fmtUsd(v || 0)}</span> : null;
-              return (
-                <div class="space-y-2">
-                  <div class="flex items-center justify-between gap-2">
-                    <span class="text-2xs font-medium text-fg-muted">Session telemetry</span>
-                    <Show when={costs && costs.total > 0}>
-                      <span class="font-mono text-2xs font-medium text-fg tabular-nums">
-                        ${fmtUsd(costs!.total)}
-                      </span>
-                    </Show>
-                  </div>
-                  <div class="h-1 rounded-full bg-surface-muted overflow-hidden flex gap-px" aria-hidden="true">
-                    <div class="h-full bg-accent" style={{ width: `${((u().inTok || 0) / totalTok()) * 100}%` }} />
-                    <div class="h-full bg-tone-sky" style={{ width: `${((u().cacheTok || 0) / totalTok()) * 100}%` }} />
-                    <div class="h-full bg-tone-violet" style={{ width: `${((u().outTok || 0) / totalTok()) * 100}%` }} />
-                    <div class="h-full bg-tone-amber" style={{ width: `${((u().reasoningTok || 0) / totalTok()) * 100}%` }} />
-                  </div>
-                  <div class="space-y-1 pt-0.5 font-mono text-2xs tabular-nums">
-                    <div class="flex items-center justify-between">
-                      <span class="flex items-center gap-1.5 font-sans text-fg-secondary"><span class="h-1.5 w-1.5 rounded-full bg-accent" />Input</span>
-                      <span class="text-fg">{compactTokens(u().inTok)}{chip(costs?.input)}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                      <span class="flex items-center gap-1.5 font-sans text-fg-secondary"><span class="h-1.5 w-1.5 rounded-full bg-tone-sky" />Cache{(() => { const p = cacheHitPct(u()); return p === null ? "" : ` (${p}%)`; })()}</span>
-                      <span class="text-fg">{compactTokens(u().cacheTok)}{chip(costs?.cache)}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                      <span class="flex items-center gap-1.5 font-sans text-fg-secondary"><span class="h-1.5 w-1.5 rounded-full bg-tone-violet" />Output</span>
-                      <span class="text-fg">{compactTokens(u().outTok)}{chip(costs?.output)}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                      <span class="flex items-center gap-1.5 font-sans text-fg-secondary"><span class="h-1.5 w-1.5 rounded-full bg-tone-amber" />Reasoning</span>
-                      <span class="text-fg">{compactTokens(u().reasoningTok)}{chip(costs?.reasoning)}</span>
-                    </div>
-                  </div>
-                </div>
-              );
-            }}
-          </Show>
-        </div>
-      </div>
+    <FloatMenu
+      anchor={() => ui.contextBtn}
+      open={ui.usageOpen()}
+      onClose={() => ui.setUsageOpen(false)}
+      placement="top-end"
+      width="min(23rem, calc(100vw - 1rem))"
+    >
+      <ContextUsageMeter
+        pct={pct}
+        settledPctLabel={<>{pct()}% full</>}
+        settledHeadline={<>{contextTokensLabel()}</>}
+      />
     </FloatMenu>
     {/* Tooltip suppressed while usage popover is open via aria-expanded (replaces disabled={ui.usageOpen()}) */}
     <button

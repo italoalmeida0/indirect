@@ -48,7 +48,7 @@ export function Composer() {
 <Show when={!ui.historyView()}>
 <div class={wrapperClass()} data-composer-shell>
   <ScrollOverlays />
-  <div class={`w-full ${ui.convWidthClass()} mx-auto my-auto shrink-0`}>
+  <div class={`w-full ${ui.convWidthClass?.() ?? "max-w-3xl"} mx-auto my-auto shrink-0`}>
   <StatusBanners />
     <Show when={!collapsed()}>
     <Show when={!s.workspaceBlocked()} fallback={
