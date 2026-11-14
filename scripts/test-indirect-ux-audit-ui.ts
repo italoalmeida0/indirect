@@ -908,7 +908,7 @@ try {
       "Queued shelf header (open)",
     );
 
-    // (b.7) Open SettingsModal and click the LEFT label text (`box.x + 28`) on ALL 8 switch rows!
+    // (b.7) Open SettingsModal and click the LEFT label text (`box.x + 28`) on ALL 7 switch rows!
     await page.locator('button[aria-label*="Settings"]').first().click();
     await page.waitForSelector('nav[aria-label="Settings sections"]', { timeout: 5000 });
     await page.waitForTimeout(200);
@@ -924,7 +924,6 @@ try {
           "settings-turn-sound",
           "settings-turn-notify",
           "settings-auto-update",
-          "settings-jail-default",
           "settings-insecure-tls",
           "settings-auto-title",
         ]
@@ -934,7 +933,6 @@ try {
           "settings-turn-notify",
           "settings-turn-sound",
           "settings-auto-update",
-          "settings-jail-default",
           "settings-insecure-tls",
           "settings-auto-title",
         ];

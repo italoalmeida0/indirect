@@ -53,6 +53,7 @@ import { createDaemonUpdate } from "./hooks/useDaemonUpdate";
 import { createModals } from "./hooks/useModals";
 import { createRelay } from "./hooks/useRelay";
 import { createMirror } from "./hooks/useMirror";
+import { resolveDefaultAccess } from "./utils/settingsValidation";
 import { createTranscript } from "./hooks/useTranscript";
 import { createSessionOptions } from "./hooks/useSessionOptions";
 import { createReview } from "./hooks/useReview";
@@ -409,6 +410,7 @@ export default function IndirectCodePage() {
     getSessionId: () => activeSessionId(),
     getHostId: () => hosts.activeHostId(),
     getProjectId: () => projects.activeProject()?.id || "",
+    getOptions: () => options.sessionOptions(),
     toast: notice.toast,
     showChoice: modals.showChoice,
     onTurnIdle: () => turnChanges.requestBalloons(),
@@ -471,6 +473,7 @@ export default function IndirectCodePage() {
     getLockedMode: () => lockedSessionMode(),
     getMirrorSession: (sid) => mirror.sessions().find((x) => x.id === sid),
     getSavedSelection: () => mirror.configDoc()?.lastSelection,
+    getDefaultAccess: () => resolveDefaultAccess(mirror.configDoc()?.settings),
     causalPullClock: {
       nextClock: () => ++causalClock,
       confirmedClock: (collection) => confirmedPullClocks[collection],
@@ -903,7 +906,16 @@ export default function IndirectCodePage() {
     if (creatingSession()) return;
     setCreatingSession(true);
     creationRequestId = crypto.randomUUID();
-    relay.send({ type: "create_session", requestId: creationRequestId, cwd: talk ? "" : proj!.path, title: "", model: options.activeModel(), options: options.sessionOptions() });
+    const sessOpts = options.sessionOptions();
+    relay.send({
+      type: "create_session",
+      requestId: creationRequestId,
+      cwd: talk ? "" : proj!.path,
+      title: "",
+      model: options.activeModel(),
+      yolo: sessOpts.access === "full",
+      options: sessOpts,
+    });
   }
 
   async function deleteSession(id: string, e?: MouseEvent) {
@@ -1291,7 +1303,7 @@ export default function IndirectCodePage() {
         break;
       }
       case "approval_resolved": {
-        transcript.noteApprovalResolved(msg.sessionId, msg.callId);
+        transcript.noteApprovalResolved(msg.sessionId, msg.callId, msg.error);
         break;
       }
       case "convert_request": {
@@ -1696,6 +1708,7 @@ export default function IndirectCodePage() {
   createEffect(() => {
     const catalog = gatewayModels();
     const saved = mirror.configDoc()?.lastSelection;
+    void resolveDefaultAccess(mirror.configDoc()?.settings);
     const selection = options.reconcileSavedSelection(saved);
     if (activeSessionId()) return;
     untrack(() => {
@@ -1888,8 +1901,8 @@ export default function IndirectCodePage() {
   };
   const transcriptValue: TranscriptCtxValue = {
     ...transcript,
-    saveEditMsg: (idx, m) => transcript.saveEditMsg(idx, m, options.activeModel, options.yoloMode),
-    regenerateMsg: (idx) => transcript.regenerateMsg(idx, options.activeModel, options.yoloMode),
+    saveEditMsg: (idx, m) => transcript.saveEditMsg(idx, m, options.activeModel, options.sessionOptions),
+    regenerateMsg: (idx) => transcript.regenerateMsg(idx, options.activeModel, options.sessionOptions),
   };
   const composerValue: ComposerCtxValue = {
     ...composer,
@@ -1904,8 +1917,9 @@ export default function IndirectCodePage() {
     pendingMode: options.pendingMode,
     approvalMode: options.approvalMode,
     skillUsables: options.skillUsables,
-    yoloMode: options.yoloMode,
-    setYoloMode: options.setYoloMode,
+    accessMode: options.accessMode,
+    setAccessMode: options.setAccessMode,
+    isFullAccess: options.isFullAccess,
     modeMenuOpen: options.modeMenuOpen,
     setModeMenuOpen: options.setModeMenuOpen,
     accessMenuOpen: options.accessMenuOpen,

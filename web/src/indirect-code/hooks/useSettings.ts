@@ -9,16 +9,37 @@ import {
 } from "solid-js";
 import type { AgentSettings, SkillConfig } from "../types";
 import type { RcConfig } from "../store/sessions";
-import { normalizeMidTurnSend } from "../utils/settingsValidation";
+import {
+  arePermissionRulesEqual,
+  normalizeAccessMode,
+  normalizeMidTurnSend,
+  normalizePermissionRules,
+  resolveDefaultAccess,
+} from "../utils/settingsValidation";
 
 const defaults: AgentSettings = {
   autoCompactPercent: 80,
   noAutoTitle: false,
-  jailByDefault: false,
+  defaultAccess: "auto",
+  jailByDefault: true,
+  permissionRules: [],
   insecureTls: false,
   httpProxy: "",
   midTurnSend: "queue",
 };
+
+function areAgentSettingsEqual(a: AgentSettings, b: AgentSettings): boolean {
+  return (
+    a.autoCompactPercent === b.autoCompactPercent &&
+    a.noAutoTitle === b.noAutoTitle &&
+    normalizeAccessMode(a.defaultAccess, "auto") ===
+      normalizeAccessMode(b.defaultAccess, "auto") &&
+    arePermissionRulesEqual(a.permissionRules, b.permissionRules) &&
+    a.insecureTls === b.insecureTls &&
+    a.httpProxy === b.httpProxy &&
+    normalizeMidTurnSend(a.midTurnSend) === normalizeMidTurnSend(b.midTurnSend)
+  );
+}
 
 /** Settings edits are local drafts. Only the daemon mirror feeds the composer. */
 export function createSettings(opts: {
@@ -38,6 +59,7 @@ export function createSettings(opts: {
   const [savingSettings, setSavingSettings] = createSignal(false);
   const [settingsError, setSettingsError] = createSignal("");
   const [baseRevision, setBaseRevision] = createSignal<string>();
+  const [baseSettings, setBaseSettings] = createSignal<AgentSettings>();
   const configDoc = () => {
     const doc = opts.getConfigDoc();
     return doc?.hostId === opts.getHostId() ? doc : null;
@@ -57,21 +79,9 @@ export function createSettings(opts: {
    * syntax or schema error). The daemon watches its skills directory, so
    * this list — like savedSkills — refreshes on its own after an edit. */
   const skillErrors = createMemo<string[]>(() => configDoc()?.skillErrors ?? []);
-  const settingsChanged = createMemo(
-    () =>
-      !!(
-        showConfigModal() &&
-        !savingSettings() &&
-        baseRevision() &&
-        configDoc()?.revision &&
-        baseRevision() !== configDoc()?.revision
-      ),
-  );
-  let saveRequest: { id: string; host: string; revision?: string } | undefined;
-  let saveTimer: ReturnType<typeof setTimeout> | undefined;
-
   function readMirrorSettings(doc: RcConfig | null): AgentSettings {
     const s = doc?.settings || {};
+    const defaultAccess = resolveDefaultAccess(s);
     return {
       autoCompactPercent:
         s.autoCompactPercent ??
@@ -79,30 +89,44 @@ export function createSettings(opts: {
         s.auto_compact_threshold ??
         80,
       noAutoTitle: s.noAutoTitle ?? s.no_auto_title ?? false,
-      jailByDefault: s.jailByDefault ?? s.jail_by_default ?? false,
+      defaultAccess,
+      jailByDefault: defaultAccess !== "full",
+      permissionRules: normalizePermissionRules(
+        s.permissionRules ?? s.permission_rules,
+      ),
       insecureTls: s.insecureTls ?? s.insecure ?? false,
       httpProxy: s.httpProxy ?? s.http_proxy ?? "",
       midTurnSend: normalizeMidTurnSend(s.midTurnSend ?? s.mid_turn_send),
     };
   }
 
+  const settingsChanged = createMemo(() => {
+    if (!showConfigModal() || savingSettings()) return false;
+    const doc = configDoc();
+    if (!doc) return false;
+    const baseRev = baseRevision();
+    if (baseRev && doc.revision && baseRev !== doc.revision) return true;
+    const baseSnap = baseSettings();
+    if (baseSnap && !areAgentSettingsEqual(baseSnap, readMirrorSettings(doc))) {
+      return true;
+    }
+    return false;
+  });
+  let saveRequest: { id: string; host: string; revision?: string } | undefined;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
   const settingsDirty = () => {
     const cur = daemonSettings();
     const base = readMirrorSettings(configDoc());
-    return (
-      cur.autoCompactPercent !== base.autoCompactPercent ||
-      cur.noAutoTitle !== base.noAutoTitle ||
-      cur.jailByDefault !== base.jailByDefault ||
-      cur.insecureTls !== base.insecureTls ||
-      cur.httpProxy !== base.httpProxy ||
-      normalizeMidTurnSend(cur.midTurnSend) !== base.midTurnSend
-    );
+    return !areAgentSettingsEqual(cur, base);
   };
 
   function readMirror() {
     const doc = configDoc();
+    const snap = readMirrorSettings(doc);
     batch(() => {
-      setDaemonSettings(readMirrorSettings(doc));
+      setDaemonSettings(snap);
+      setBaseSettings(snap);
       setBaseRevision(doc?.revision);
     });
   }
@@ -221,6 +245,7 @@ export function createSettings(opts: {
         ),
       15000,
     );
+    const defaultAccess = normalizeAccessMode(s.defaultAccess, "auto");
     opts.send({
       type: "update_config",
       requestId: saveRequest.id,
@@ -228,7 +253,9 @@ export function createSettings(opts: {
       settings: {
         auto_compact_threshold: s.autoCompactPercent,
         no_auto_title: s.noAutoTitle,
-        jail_by_default: s.jailByDefault,
+        default_access: defaultAccess,
+        jail_by_default: defaultAccess !== "full",
+        permission_rules: normalizePermissionRules(s.permissionRules),
         insecure: s.insecureTls,
         http_proxy: s.httpProxy,
         mid_turn_send: normalizeMidTurnSend(s.midTurnSend),

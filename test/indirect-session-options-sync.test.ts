@@ -3,10 +3,13 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 import { createRoot, createSignal } from "solid-js";
 import { createSessionOptions } from "../web/src/indirect-code/hooks/useSessionOptions";
+import { createSettings } from "../web/src/indirect-code/hooks/useSettings";
 import { createTranscript } from "../web/src/indirect-code/hooks/useTranscript";
 import { createTurnChanges } from "../web/src/indirect-code/hooks/useTurnChanges";
 import { normalizeSessionMessages } from "../web/src/indirect-code/transcript/updaters";
+import { slashCommand } from "../web/src/indirect-code/utils/composerTokens";
 import { effectiveModeSkills } from "../web/src/indirect-code/utils/modeSkills";
+import { resolveDefaultAccess } from "../web/src/indirect-code/utils/settingsValidation";
 
 function installMinimalDocument() {
   const prevDocument = (globalThis as any).document;
@@ -1186,5 +1189,222 @@ describe("useTranscript routine session_data fast-path & safety invariants", () 
       disposeRoot();
       restore();
     }
+  });
+});
+
+describe("3-way AccessMode (ask / auto / full), scoped approvals & Settings permission rules", () => {
+  test("defaults brand-new drafts to auto, preserves user access across talk -> build, and locks talk to full", () => {
+    const sent: any[] = [];
+    let defaultAccess: "ask" | "auto" | "full" = "auto";
+    let disposeRoot = () => {};
+    const catalog: Record<string, { mode?: string; usable?: string; approvalMode?: string }> = {
+      build: { mode: "agentic", usable: "deny", approvalMode: "ask" },
+      talk: { mode: "talk", usable: "deny", approvalMode: "yolo" },
+      plan: { mode: "agentic", usable: "deny", approvalMode: "ask" },
+    };
+    const opts = createRoot((dispose) => {
+      disposeRoot = dispose;
+      return createSessionOptions({
+        send: (cmd) => sent.push(cmd),
+        getSessionId: () => "",
+        getSkill: (name) => catalog[name],
+        listModeSkills: () => ["build", "plan", "talk"],
+        getDefaultAccess: () => defaultAccess,
+      });
+    });
+
+    try {
+      // Unconfigured host draft starts in "auto"
+      expect(opts.accessMode()).toBe("auto");
+      expect(opts.isFullAccess()).toBe(false);
+      expect(opts.sessionOptions().access).toBe("auto");
+
+      // User selects "ask" in Build mode, switches to Talk (locked to "full" + approvalMode "yolo"), then back to Build
+      opts.resetDraftSkills(undefined, true);
+      opts.setAccessMode("ask");
+      expect(opts.accessMode()).toBe("ask");
+      expect(opts.approvalMode()).toBe("ask");
+
+      opts.syncSkills(["talk"]);
+      expect(opts.approvalMode()).toBe("yolo");
+      expect(opts.accessMode()).toBe("full");
+      expect(opts.sessionOptions().access).toBe("full");
+
+      opts.syncSkills(["build"]);
+      expect(opts.approvalMode()).toBe("ask");
+      expect(opts.accessMode()).toBe("ask");
+      expect(opts.sessionOptions().access).toBe("ask");
+
+      // Host default access fallback when remembered has no explicit access
+      defaultAccess = "full";
+      opts.applyOptions({ effort: "high", mode: "agentic" });
+      expect(opts.accessMode()).toBe("full");
+      expect(opts.isFullAccess()).toBe(true);
+    } finally {
+      disposeRoot();
+    }
+  });
+
+  test("respondApproval sends exact 4-decision wire payload and NEVER mutates session accessMode", () => {
+    const { restore } = installMinimalDocument();
+    const sent: any[] = [];
+    let disposeRoot = () => {};
+    const { opts, t } = createRoot((dispose) => {
+      disposeRoot = dispose;
+      const sessionOpts = createSessionOptions({
+        send: (cmd) => sent.push(cmd),
+        getSessionId: () => "s-auto",
+      });
+      const transcript = createTranscript({
+        send: (cmd) => sent.push(cmd),
+        isOpen: () => true,
+        getSessionId: () => "s-auto",
+        getHostId: () => "host-a",
+        toast: () => {},
+        showChoice: async () => null,
+        onTurnIdle: () => {},
+        onUsageContext: () => {},
+      });
+      return { opts: sessionOpts, t: transcript };
+    });
+
+    try {
+      opts.setAccessMode("auto");
+      const decisions = [
+        { decision: "once" as const, approved: true, always: false },
+        { decision: "session" as const, approved: true, always: false },
+        { decision: "always" as const, approved: true, always: true },
+        { decision: "deny" as const, approved: false, always: false },
+      ];
+
+      for (const item of decisions) {
+        t.noteApprovalRequest({
+          type: "tool_approval_request",
+          sessionId: "s-auto",
+          callId: `call-${item.decision}`,
+          tool: "bash",
+          args: JSON.stringify({ command: "git push origin main" }),
+          capability: "exec",
+          target: "git push origin main",
+          risk: "high",
+          accessMode: "auto",
+          proposedRule: { id: "r1", effect: "allow", kind: "exec", pattern: "git push" },
+          canAllowSession: true,
+          canAllowAlways: true,
+        });
+        expect(t.pendingApproval()?.callId).toBe(`call-${item.decision}`);
+        t.respondApproval(item.decision);
+        const last = sent[sent.length - 1];
+        expect(last).toEqual({
+          type: "tool_approval_response",
+          sessionId: "s-auto",
+          callId: `call-${item.decision}`,
+          approved: item.approved,
+          always: item.always,
+          decision: item.decision,
+        });
+        // Critical bug-fix invariant: Allow in session / Always allow NEVER switches accessMode to "full"!
+        expect(opts.accessMode()).toBe("auto");
+        expect(opts.isFullAccess()).toBe(false);
+      }
+    } finally {
+      disposeRoot();
+      restore();
+    }
+  });
+
+  test("createSettings syncs default_access + jail_by_default and tracks permission_rules in dirty/save payloads", () => {
+    expect(resolveDefaultAccess(undefined)).toBe("auto");
+    expect(resolveDefaultAccess({ jail_by_default: true })).toBe("auto");
+    expect(resolveDefaultAccess({ jail_by_default: false })).toBe("full");
+    expect(resolveDefaultAccess({ default_access: "ask", jail_by_default: false })).toBe("ask");
+
+    const sent: any[] = [];
+    const [configDoc, setConfigDoc] = createSignal<any>({
+      hostId: "host-a",
+      revision: "rev-1",
+      settings: {
+        default_access: "auto",
+        jail_by_default: true,
+        permission_rules: [],
+      },
+      skills: {},
+    });
+
+    let disposeRoot = () => {};
+    const settings = createRoot((dispose) => {
+      disposeRoot = dispose;
+      return createSettings({
+        send: (cmd) => sent.push(cmd),
+        isOpen: () => true,
+        isHostOnline: () => true,
+        getHostId: () => "host-a",
+        toast: () => {},
+        getConfigDoc: configDoc,
+        refreshConfig: async () => {},
+      });
+    });
+
+    try {
+      settings.openSettings("rc-set-permissions");
+      expect(settings.daemonSettings().defaultAccess).toBe("auto");
+      expect(settings.settingsDirty()).toBe(false);
+
+      // Adding a permission rule marks settings dirty
+      settings.setDaemonSettings((prev) => ({
+        ...prev,
+        defaultAccess: "ask",
+        jailByDefault: true,
+        permissionRules: [
+          {
+            id: "rule-push",
+            effect: "allow",
+            kind: "exec",
+            pattern: "git push",
+          },
+        ],
+      }));
+      expect(settings.settingsDirty()).toBe(true);
+
+      // Saving sends both default_access, synced jail_by_default, and permission_rules
+      expect(settings.saveDaemonConfig()).toBe(true);
+      const saveMsg = sent.find((m) => m.type === "update_config");
+      expect(saveMsg).toBeDefined();
+      expect(saveMsg.settings.default_access).toBe("ask");
+      expect(saveMsg.settings.jail_by_default).toBe(true);
+      expect(saveMsg.settings.permission_rules).toEqual([
+        {
+          id: "rule-push",
+          effect: "allow",
+          kind: "exec",
+          pattern: "git push",
+        },
+      ]);
+
+      // Complete save so timer is cleaned up
+      setConfigDoc({
+        hostId: "host-a",
+        revision: "rev-2",
+        settings: saveMsg.settings,
+        skills: {},
+      });
+      settings.handleSettingsMessage({
+        type: "config_updated",
+        hostId: "host-a",
+        requestId: saveMsg.requestId,
+        success: true,
+        revision: "rev-2",
+      });
+    } finally {
+      disposeRoot();
+    }
+  });
+
+  test("slashCommand recognizes /auto, /ask, /full, /jail, and /unjail", () => {
+    expect(slashCommand("/auto")).toBe("/auto");
+    expect(slashCommand("  /ask  ")).toBe("/ask");
+    expect(slashCommand("/full")).toBe("/full");
+    expect(slashCommand("/jail")).toBe("/jail");
+    expect(slashCommand("/unjail")).toBe("/unjail");
   });
 });

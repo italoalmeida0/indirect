@@ -14,7 +14,15 @@ import {
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal, useUI } from "../ctx";
 import { pushSupported } from "../hooks/usePushSubscription";
-import { normalizeMidTurnSend, type MidTurnDelivery } from "../utils/settingsValidation";
+import {
+  normalizeAccessMode,
+  normalizeMidTurnSend,
+  type AccessMode,
+  type MidTurnDelivery,
+  type PermissionCapability,
+  type PermissionEffect,
+  type PermissionRule,
+} from "../utils/settingsValidation";
 
 const THEME_OPTIONS: Array<{ value: ThemeMode; label: string }> = [
   { value: "light", label: "Light" },
@@ -60,6 +68,81 @@ const MID_TURN_SEND_OPTIONS: Array<{
     label: "Interrupt & send",
     icon: "lucide:zap",
     description: "Cancel active thinking or tool call and send immediately.",
+  },
+];
+
+const DEFAULT_ACCESS_OPTIONS: Array<{
+  value: AccessMode;
+  label: string;
+  recommended?: boolean;
+  icon: string;
+  description: string;
+}> = [
+  {
+    value: "auto",
+    label: "Auto",
+    recommended: true,
+    icon: "lucide:shield-check",
+    description:
+      "Sandboxed to workspace. Runs safe edits & dev commands; asks on outside paths, secrets, network, or destructive actions.",
+  },
+  {
+    value: "ask",
+    label: "Ask for approval",
+    icon: "lucide:hand",
+    description:
+      "Sandboxed to workspace. Asks before file writes, shell commands, network, or outside access.",
+  },
+  {
+    value: "full",
+    label: "Full access",
+    icon: "lucide:shield-alert",
+    description:
+      "Unjailed host access. Runs all commands, file edits, and network requests without asking.",
+  },
+];
+
+const PERMISSION_KIND_OPTIONS: Array<{
+  value: PermissionCapability;
+  label: string;
+  shortLabel: string;
+  icon: string;
+  placeholder: string;
+}> = [
+  {
+    value: "exec",
+    label: "Command prefix",
+    shortLabel: "Command",
+    icon: "lucide:terminal",
+    placeholder: "e.g. git push or npm publish",
+  },
+  {
+    value: "fs_read",
+    label: "Read path",
+    shortLabel: "Read",
+    icon: "lucide:folder-lock",
+    placeholder: "e.g. /opt/shared/** or .env.example",
+  },
+  {
+    value: "fs_write",
+    label: "Write path",
+    shortLabel: "Write",
+    icon: "lucide:file-pen-line",
+    placeholder: "e.g. ../shared-lib/**",
+  },
+  {
+    value: "net",
+    label: "Network host",
+    shortLabel: "Network",
+    icon: "lucide:globe",
+    placeholder: "e.g. api.github.com or *.npmjs.org",
+  },
+  {
+    value: "tool",
+    label: "Tool name",
+    shortLabel: "Tool",
+    icon: "lucide:wrench",
+    placeholder: "e.g. fetch_url",
   },
 ];
 
@@ -872,6 +955,354 @@ function AutoCompactGauge(props: {
   );
 }
 
+function DefaultAccessPicker(props: {
+  value: () => AccessMode;
+  onChange: (mode: AccessMode) => void;
+}) {
+  let groupEl: HTMLDivElement | undefined;
+  const currentOpt = () =>
+    DEFAULT_ACCESS_OPTIONS.find((o) => o.value === props.value()) ??
+    DEFAULT_ACCESS_OPTIONS[0]!;
+
+  const onRadioKeyDown = (e: KeyboardEvent) => {
+    const idx = DEFAULT_ACCESS_OPTIONS.findIndex(
+      (o) => o.value === currentOpt().value,
+    );
+    let nextIdx = -1;
+    if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+      nextIdx = (idx + 1) % DEFAULT_ACCESS_OPTIONS.length;
+    } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+      nextIdx =
+        (idx - 1 + DEFAULT_ACCESS_OPTIONS.length) %
+        DEFAULT_ACCESS_OPTIONS.length;
+    }
+    if (nextIdx >= 0) {
+      e.preventDefault();
+      const target = DEFAULT_ACCESS_OPTIONS[nextIdx]!;
+      props.onChange(target.value);
+      requestAnimationFrame(() => {
+        const radios = groupEl?.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+        radios?.[nextIdx]?.focus();
+      });
+    }
+  };
+
+  return (
+    <div
+      data-setting="default-access"
+      class="rounded-panel border border-border bg-surface p-3.5 space-y-3"
+    >
+      <div class="min-w-0">
+        <div class="text-xs font-medium text-fg">
+          Default permissions for new conversations
+        </div>
+        <div class="mt-0.5 text-2xs text-fg-muted">
+          Applied when starting a new conversation unless overridden in the composer.
+        </div>
+      </div>
+
+      <div
+        ref={groupEl}
+        role="radiogroup"
+        aria-label="Default permissions for new conversations"
+        onKeyDown={onRadioKeyDown}
+        class="grid grid-cols-1 sm:grid-cols-3 gap-2"
+      >
+        <For each={DEFAULT_ACCESS_OPTIONS}>
+          {(opt) => {
+            const active = () => currentOpt().value === opt.value;
+            const isFull = opt.value === "full";
+            return (
+              <button
+                type="button"
+                role="radio"
+                data-default-access-radio={opt.value}
+                aria-checked={active()}
+                tabIndex={active() ? 0 : -1}
+                onPointerDown={(e) => press(e.currentTarget)}
+                onClick={() => props.onChange(opt.value)}
+                class={`flex flex-col gap-1.5 rounded-lg border p-2.5 text-left transition-colors cursor-pointer min-w-0 ${
+                  active()
+                    ? isFull
+                      ? "border-[color-mix(in_oklab,var(--warning)_45%,var(--border))] bg-warning-subtle/60 text-fg"
+                      : "border-accent bg-accent-subtle/40 text-fg"
+                    : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle text-fg-secondary"
+                }`}
+              >
+                <div class="flex items-center justify-between gap-2 w-full min-w-0">
+                  <span class="inline-flex items-center gap-1.5 min-w-0 flex-wrap">
+                    <Iconify
+                      icon={opt.icon}
+                      size={14}
+                      class={`shrink-0 ${
+                        isFull
+                          ? active()
+                            ? "text-warning"
+                            : "text-warning/80"
+                          : active()
+                            ? "text-accent"
+                            : "text-fg-muted"
+                      }`}
+                    />
+                    <span
+                      class={`text-xs font-medium truncate ${
+                        isFull && active() ? "text-warning" : "text-fg"
+                      }`}
+                    >
+                      {opt.label}
+                    </span>
+                    <Show when={opt.recommended}>
+                      <span class="inline-flex items-center rounded-inner border border-accent/30 bg-accent-subtle px-1.5 py-px text-2xs font-medium leading-tight text-accent shrink-0">
+                        Recommended
+                      </span>
+                    </Show>
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    class={`h-2 w-2 shrink-0 rounded-full transition-colors ${
+                      active()
+                        ? isFull
+                          ? "bg-warning"
+                          : "bg-accent"
+                        : "border border-border-strong bg-transparent"
+                    }`}
+                  />
+                </div>
+                <p class="text-2xs text-fg-muted leading-relaxed">
+                  {opt.description}
+                </p>
+              </button>
+            );
+          }}
+        </For>
+      </div>
+    </div>
+  );
+}
+
+function makeRuleId(): string {
+  try {
+    return `rule_${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
+  } catch {
+    return `rule_${Math.random().toString(36).slice(2, 12)}`;
+  }
+}
+
+function GlobalPermissionRulesManager(props: {
+  rules: () => PermissionRule[];
+  onChange: (next: PermissionRule[]) => void;
+}) {
+  const [draftEffect, setDraftEffect] = createSignal<PermissionEffect>("allow");
+  const [draftKind, setDraftKind] = createSignal<PermissionCapability>("exec");
+  const [draftPattern, setDraftPattern] = createSignal("");
+
+  const currentKindMeta = () =>
+    PERMISSION_KIND_OPTIONS.find((k) => k.value === draftKind()) ??
+    PERMISSION_KIND_OPTIONS[0]!;
+
+  const kindMetaFor = (kind: PermissionCapability) =>
+    PERMISSION_KIND_OPTIONS.find((k) => k.value === kind) ??
+    PERMISSION_KIND_OPTIONS[0]!;
+
+  const handleAddRule = () => {
+    const pattern = draftPattern().trim();
+    if (!pattern) return;
+    const effect = draftEffect();
+    const kind = draftKind();
+    const existing = props.rules();
+    if (
+      existing.some(
+        (r) => r.effect === effect && r.kind === kind && r.pattern === pattern,
+      )
+    ) {
+      setDraftPattern("");
+      return;
+    }
+    const nextRule: PermissionRule = {
+      id: makeRuleId(),
+      effect,
+      kind,
+      pattern,
+      createdAt: Math.floor(Date.now() / 1000),
+    };
+    props.onChange([...existing, nextRule]);
+    setDraftPattern("");
+  };
+
+  const handleRemoveRule = (id: string) => {
+    props.onChange(props.rules().filter((r) => r.id !== id));
+  };
+
+  return (
+    <div
+      data-setting="permission-rules"
+      class="rounded-panel border border-border bg-surface p-3.5 space-y-3"
+    >
+      <div class="flex items-start justify-between gap-2.5 flex-wrap">
+        <div class="min-w-0 flex-1">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="text-xs font-medium text-fg">
+              Global permission rules
+            </span>
+            <Badge tone="neutral">
+              {props.rules().length}{" "}
+              {props.rules().length === 1 ? "rule" : "rules"}
+            </Badge>
+          </div>
+          <p class="mt-0.5 text-2xs text-fg-muted leading-relaxed">
+            Rules saved with 'Always allow' (or added below) apply across all conversations on this host. Deny rules always take precedence over Allow rules.
+          </p>
+        </div>
+      </div>
+
+      {/* Inline Add Rule Control */}
+      <div class="flex flex-col sm:flex-row sm:items-center gap-2">
+        <div class="flex items-center gap-2 min-w-0">
+          <div
+            role="group"
+            aria-label="Rule effect"
+            class="inline-flex shrink-0 items-center rounded-control border border-border bg-surface-subtle p-0.5"
+          >
+            <button
+              type="button"
+              data-rule-effect="allow"
+              aria-pressed={draftEffect() === "allow"}
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={() => setDraftEffect("allow")}
+              class={`rounded-md px-2 py-1 text-2xs font-medium transition-colors cursor-pointer ${
+                draftEffect() === "allow"
+                  ? "bg-success-subtle text-success border border-success/30"
+                  : "border border-transparent text-fg-muted hover:text-fg"
+              }`}
+            >
+              Allow
+            </button>
+            <button
+              type="button"
+              data-rule-effect="deny"
+              aria-pressed={draftEffect() === "deny"}
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={() => setDraftEffect("deny")}
+              class={`rounded-md px-2 py-1 text-2xs font-medium transition-colors cursor-pointer ${
+                draftEffect() === "deny"
+                  ? "bg-danger-subtle text-danger border border-danger/30"
+                  : "border border-transparent text-fg-muted hover:text-fg"
+              }`}
+            >
+              Deny
+            </button>
+          </div>
+
+          <div class="relative flex-1 sm:flex-none min-w-0">
+            <select
+              aria-label="Rule capability kind"
+              data-rule-kind
+              value={draftKind()}
+              onChange={(e) =>
+                setDraftKind(e.currentTarget.value as PermissionCapability)
+              }
+              class="w-full sm:w-auto h-7 rounded-control border border-border-strong bg-surface pl-2.5 pr-6 text-xs text-fg outline-none focus:border-accent transition-colors cursor-pointer"
+            >
+              <For each={PERMISSION_KIND_OPTIONS}>
+                {(k) => <option value={k.value}>{k.label}</option>}
+              </For>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 flex-1 min-w-0">
+          <input
+            type="text"
+            aria-label="Rule pattern"
+            data-rule-pattern
+            value={draftPattern()}
+            onInput={(e) => setDraftPattern(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                handleAddRule();
+              }
+            }}
+            placeholder={currentKindMeta().placeholder}
+            class="h-7 flex-1 min-w-0 rounded-control border border-border-strong bg-surface px-2.5 font-mono text-xs text-fg placeholder:font-sans placeholder:text-fg-muted outline-none focus:border-accent transition-colors"
+          />
+          <button
+            type="button"
+            data-action="add-permission-rule"
+            disabled={!draftPattern().trim()}
+            onPointerDown={(e) => press(e.currentTarget)}
+            onClick={handleAddRule}
+            class="h-7 shrink-0 inline-flex items-center gap-1 rounded-control border border-border-strong bg-surface-subtle hover:bg-surface-muted px-2.5 text-xs font-medium text-fg transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+          >
+            <Iconify icon="lucide:plus" size={13} class="shrink-0" />
+            <span>Add rule</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Rules List / Empty State */}
+      <Show
+        when={props.rules().length > 0}
+        fallback={
+          <div
+            data-permission-rules-empty
+            class="rounded-lg border border-dashed border-border bg-surface-subtle/50 px-3.5 py-4 text-center text-2xs text-fg-muted leading-relaxed"
+          >
+            No global permission rules yet. Choose 'Always allow' on an approval prompt or add a custom rule above.
+          </div>
+        }
+      >
+        <div
+          data-permission-rules-list
+          class="rounded-lg border border-border divide-y divide-border-subtle overflow-hidden"
+        >
+          <For each={props.rules()}>
+            {(rule) => {
+              const kMeta = () => kindMetaFor(rule.kind);
+              const isDeny = () => rule.effect === "deny";
+              return (
+                <div
+                  data-permission-rule-row={rule.id}
+                  class="px-3 py-2 bg-surface hover:bg-surface-subtle/60 flex items-center justify-between gap-2 min-w-0 transition-colors"
+                >
+                  <div class="flex flex-wrap items-center gap-1.5 min-w-0 flex-1">
+                    <Badge tone={isDeny() ? "danger" : "success"}>
+                      {isDeny() ? "Deny" : "Allow"}
+                    </Badge>
+                    <span class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 text-2xs font-medium text-fg-secondary shrink-0">
+                      <Iconify
+                        icon={kMeta().icon}
+                        size={11}
+                        class="text-fg-muted shrink-0"
+                      />
+                      <span>{kMeta().shortLabel}</span>
+                    </span>
+                    <code class="font-mono text-xs text-fg break-words [overflow-wrap:anywhere] min-w-0">
+                      {rule.pattern}
+                    </code>
+                  </div>
+                  <button
+                    type="button"
+                    data-action="remove-permission-rule"
+                    data-rule-id={rule.id}
+                    data-rc-tip="Revoke rule"
+                    aria-label={`Revoke ${rule.effect} rule for ${rule.pattern}`}
+                    onPointerDown={(e) => press(e.currentTarget)}
+                    onClick={() => handleRemoveRule(rule.id)}
+                    class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-danger-subtle hover:text-danger transition-colors cursor-pointer"
+                  >
+                    <Iconify icon="lucide:trash-2" size={13} />
+                  </button>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
 export function SettingsGeneralSection() {
   const m = useModal();
   const ui = useUI();
@@ -881,6 +1312,9 @@ export function SettingsGeneralSection() {
   const compactPct = () => m.daemonSettings().autoCompactPercent ?? 80;
   const midTurnSend = () =>
     normalizeMidTurnSend(m.daemonSettings().midTurnSend);
+  const defaultAccess = () =>
+    normalizeAccessMode(m.daemonSettings().defaultAccess, "auto");
+  const permissionRules = () => m.daemonSettings().permissionRules ?? [];
 
   return (
     <div class="space-y-6">
@@ -1142,12 +1576,45 @@ export function SettingsGeneralSection() {
         </div>
       </section>
 
-      {/* 4. Advanced Runtime & Context Compaction */}
+      {/* 4. Permissions & Sandbox */}
+      <section id="rc-set-permissions" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5">
+        <div>
+          <h3 class="text-sm font-medium text-fg">Permissions & sandbox</h3>
+          <p class="text-xs text-fg-muted mt-0.5">
+            Default execution permissions for new conversations and host-wide allow or deny rules.
+          </p>
+        </div>
+
+        <div class="space-y-3 text-xs">
+          <DefaultAccessPicker
+            value={defaultAccess}
+            onChange={(mode) =>
+              m.setDaemonSettings({
+                ...m.daemonSettings(),
+                defaultAccess: mode,
+                jailByDefault: mode !== "full",
+              })
+            }
+          />
+
+          <GlobalPermissionRulesManager
+            rules={permissionRules}
+            onChange={(nextRules) =>
+              m.setDaemonSettings({
+                ...m.daemonSettings(),
+                permissionRules: nextRules,
+              })
+            }
+          />
+        </div>
+      </section>
+
+      {/* 5. Advanced Runtime & Context Compaction */}
       <section id="rc-set-runtime" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5 pb-3">
         <div>
           <h3 class="text-sm font-medium text-fg">Runtime & messaging</h3>
           <p class="text-xs text-fg-muted mt-0.5">
-            Mid-turn message handling, context compaction partition, approval defaults, TLS policy, and upstream proxy.
+            Mid-turn message handling, context compaction partition, TLS policy, and upstream proxy.
           </p>
         </div>
 
@@ -1167,19 +1634,6 @@ export function SettingsGeneralSection() {
           />
 
           <div class="rounded-panel border border-border bg-surface divide-y divide-border-subtle overflow-hidden">
-            <SettingSwitchRow
-              id="settings-jail-default"
-              checked={() => m.daemonSettings().jailByDefault ?? false}
-              onChange={(checked) =>
-                m.setDaemonSettings({
-                  ...m.daemonSettings(),
-                  jailByDefault: checked,
-                })
-              }
-              title="Jail new conversations"
-              description="Start every session jailed: file writes and shell commands need approval first."
-            />
-
             <SettingSwitchRow
               id="settings-insecure-tls"
               checked={() => m.daemonSettings().insecureTls ?? false}

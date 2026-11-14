@@ -17,7 +17,13 @@ import solidReactivityAdapter from "@signaldb/solid";
 import createIndexedDBAdapter from "@signaldb/indexeddb";
 import { SyncManager } from "@signaldb/sync";
 import type { DaemonCommand, DaemonMessage, PullCommand, PullWireMessage } from "../daemon-protocol";
-import type { MidTurnDelivery } from "../utils/settingsValidation";
+import {
+  normalizeAccessMode,
+  normalizePermissionRules,
+  type AccessMode,
+  type MidTurnDelivery,
+  type PermissionRule,
+} from "../utils/settingsValidation";
 
 export type SessionAttentionKind = "approval" | "question" | "completed" | "error" | "cancelled" | "";
 
@@ -47,7 +53,7 @@ export interface RcSession {
   /** Semantic reason for the latest attention event when attentionSeq > seenSeq. */
   attentionKind?: SessionAttentionKind;
   todosOpen?: boolean;
-  options?: { effort: string; mode: string; skills: { name: string; usable?: string }[]; access: string };
+  options?: { effort: string; mode: string; skills: { name: string; usable?: string }[]; access: AccessMode };
   /** Session skill selection (daemon SessionRecord.Skills, complete
    * snapshot): name -> {priority, active, usable} plus the daemon-owned
    * turn markers (once/inContext/byAI). */
@@ -55,6 +61,8 @@ export interface RcSession {
   /** Resolved approval mode ("ask" | "yolo"): "yolo" hides the YOLO/ASK
    * selector in the UI. */
   approvalMode?: string;
+  /** Per-session permission grants saved with "Allow for session". */
+  sessionGrants?: PermissionRule[];
 }
 
 /** One mirrored project (host folder grouping conversations). */
@@ -81,6 +89,9 @@ export interface RcConfig {
   hostId: string;
   settings?: {
     mid_turn_send?: MidTurnDelivery;
+    default_access?: AccessMode;
+    jail_by_default?: boolean;
+    permission_rules?: PermissionRule[];
     [key: string]: any;
   };
   mcpServers?: Record<string, any>;
@@ -160,6 +171,8 @@ interface RawSessionRow {
   options?: { effort?: string; mode?: string; skills?: { name: string; usable?: string }[]; access?: string };
   skills?: Record<string, { priority?: number; active?: boolean; usable?: string }>;
   approvalMode?: string;
+  sessionGrants?: unknown;
+  session_grants?: unknown;
 }
 
 export function normalizeAttentionKind(k: unknown): Exclude<SessionAttentionKind, ""> | undefined {
@@ -201,10 +214,14 @@ export function normalizeSession(r: RawSessionRow, hostId: string): RcSession {
       // retired "build" name.
       mode: r.options.mode || "talk",
       skills: Array.isArray(r.options.skills) ? r.options.skills : [],
-      access: r.options.access || "full",
+      access: normalizeAccessMode(r.options.access, "full"),
     } : undefined,
     skills: normalizeSessionSkills(r.skills),
     approvalMode: r.approvalMode === "yolo" ? "yolo" : r.approvalMode === "ask" ? "ask" : undefined,
+    ...(() => {
+      const rawGrants = r.sessionGrants ?? r.session_grants;
+      return Array.isArray(rawGrants) ? { sessionGrants: normalizePermissionRules(rawGrants) } : {};
+    })(),
   };
 }
 

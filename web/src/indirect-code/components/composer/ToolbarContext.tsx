@@ -11,6 +11,46 @@ import { FloatMenu } from "../FloatMenu";
 import { MenuItem } from "../MenuItem";
 import { formatEffort, normalizeEffort } from "../../utils/format";
 import { baseMode, effectiveModeSkills, isModeSkillName as isModeSkill, originalUsable } from "../../utils/modeSkills";
+import type { AccessMode } from "../../utils/settingsValidation";
+
+export const ACCESS_MODE_SPECS: readonly {
+  mode: AccessMode;
+  short: string;
+  label: string;
+  recommended?: boolean;
+  tip: string;
+  description: string;
+  icon: string;
+}[] = [
+  {
+    mode: "auto",
+    short: "Auto",
+    label: "Auto",
+    recommended: true,
+    tip: "Permissions: Auto (sandboxed)",
+    description:
+      "Sandboxed to workspace. Runs safe edits & dev commands; asks on outside paths, secrets, network, or destructive actions.",
+    icon: "lucide:shield-check",
+  },
+  {
+    mode: "ask",
+    short: "Ask",
+    label: "Ask for approval",
+    tip: "Permissions: Ask for approval",
+    description:
+      "Sandboxed to workspace. Asks before file writes, shell commands, network, or outside access.",
+    icon: "lucide:hand",
+  },
+  {
+    mode: "full",
+    short: "Full",
+    label: "Full access",
+    tip: "Permissions: Full access (unjailed)",
+    description:
+      "Unjailed host access. Runs all commands, file edits, and network requests without asking.",
+    icon: "lucide:shield-alert",
+  },
+];
 
 /** The 4 mode skills form the single-choice primary selector. They render
  * from a temporary frontend cache until the daemon's official skill list
@@ -504,53 +544,79 @@ export function ToolbarContext() {
     </>
   );
 
+  const currentAccessSpec = () =>
+    ACCESS_MODE_SPECS.find((item) => item.mode === c.accessMode()) ?? ACCESS_MODE_SPECS[0]!;
+
   const permissionsList = (closeOnPick: boolean) => (
     <div role="menu" aria-label="Agent permissions" class="space-y-1 pb-0.5">
-      <For
-        each={[
-          { full: false, label: "Ask for approval", description: "Ask before every tool call, including reads and commands.", icon: "lucide:hand" },
-          { full: true, label: "Full access", description: "Allow all tool calls without asking (YOLO).", icon: "lucide:shield-alert" },
-        ]}
-      >
+      <For each={ACCESS_MODE_SPECS}>
         {(access) => {
-          const active = () => c.yoloMode() === access.full;
+          const active = () => c.accessMode() === access.mode;
+          const isFull = access.mode === "full";
+          const isAuto = access.mode === "auto";
           return (
             <button
               type="button"
               role="menuitemradio"
+              data-access-option={access.mode}
               aria-checked={active()}
               onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => {
-                if (c.yoloMode() !== access.full) {
-                  c.setYoloMode(access.full);
+                if (c.accessMode() !== access.mode) {
+                  c.setAccessMode(access.mode);
                   c.configureSession();
                 }
                 if (closeOnPick) c.setAccessMenuOpen(false);
               }}
               class={`w-full flex items-start gap-2.5 px-2.5 py-2 text-left rounded-lg border transition-colors cursor-pointer ${
                 active()
-                  ? access.full
+                  ? isFull
                     ? "border-[color-mix(in_oklab,var(--warning)_30%,var(--border))] bg-warning-subtle text-warning"
-                    : "border-border bg-surface-subtle text-fg"
-                  : access.full
-                  ? "border-transparent hover:bg-warning-subtle text-fg-secondary"
-                  : "border-transparent hover:bg-surface-muted text-fg-secondary"
+                    : isAuto
+                      ? "border-[color-mix(in_oklab,var(--accent)_28%,var(--border))] bg-accent-subtle/60 text-fg"
+                      : "border-border bg-surface-subtle text-fg"
+                  : isFull
+                    ? "border-transparent hover:bg-warning-subtle text-fg-secondary"
+                    : "border-transparent hover:bg-surface-muted text-fg-secondary"
               }`}
             >
               <Iconify
                 icon={access.icon}
                 size={15}
-                class={`mt-0.5 shrink-0 ${access.full ? "text-warning" : active() ? "text-accent" : "text-fg-muted"}`}
+                class={`mt-0.5 shrink-0 ${
+                  isFull
+                    ? "text-warning"
+                    : isAuto
+                      ? active()
+                        ? "text-accent"
+                        : "text-accent/80"
+                      : active()
+                        ? "text-fg"
+                        : "text-fg-muted"
+                }`}
               />
               <span class="flex-1 min-w-0">
-                <span class={`block text-xs font-medium ${access.full ? "text-warning" : "text-fg"}`}>{access.label}</span>
+                <span class="flex flex-wrap items-center gap-1.5">
+                  <span class={`text-xs font-medium ${isFull ? "text-warning" : "text-fg"}`}>
+                    {access.label}
+                  </span>
+                  <Show when={access.recommended}>
+                    <span class="inline-flex items-center rounded-inner border border-accent/30 bg-accent-subtle px-1.5 py-px text-2xs font-medium leading-tight text-accent">
+                      Recommended
+                    </span>
+                  </Show>
+                </span>
                 <span class="block mt-0.5 text-2xs leading-snug text-fg-muted">
                   {access.description}
                 </span>
               </span>
               <span class="w-4 mt-0.5 flex items-center justify-end shrink-0">
                 <Show when={active()}>
-                  <Iconify icon="lucide:check" size={13} class={access.full ? "text-warning shrink-0" : "text-accent shrink-0"} />
+                  <Iconify
+                    icon="lucide:check"
+                    size={13}
+                    class={isFull ? "text-warning shrink-0" : "text-accent shrink-0"}
+                  />
                 </Show>
               </span>
             </button>
@@ -614,9 +680,11 @@ export function ToolbarContext() {
       ui.isMobile()
         ? subView() === "model" || subView() === "mode"
           ? "min(24rem, calc(100vw - 1rem))"
-          : subView() === "effort" || subView() === "access"
-          ? "min(21rem, calc(100vw - 1rem))"
-          : "min(17rem, calc(100vw - 1.25rem))"
+          : subView() === "access"
+            ? "min(22.5rem, calc(100vw - 1rem))"
+            : subView() === "effort"
+              ? "min(21rem, calc(100vw - 1rem))"
+              : "min(17rem, calc(100vw - 1.25rem))"
         : "13rem"
     }
   >
@@ -744,13 +812,27 @@ export function ToolbarContext() {
 
           <Show when={!approvalSelectorHidden()}>
           <MenuItem
-            icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"}
-            iconClass={c.yoloMode() ? "text-warning" : "text-fg-muted"}
+            icon={currentAccessSpec().icon}
+            iconClass={
+              c.accessMode() === "full"
+                ? "text-warning"
+                : c.accessMode() === "auto"
+                  ? "text-accent"
+                  : "text-fg-muted"
+            }
             onClick={() => switchSubView("access")}
           >
             <span class="flex-1">Permissions</span>
-            <span class={`inline-flex items-center text-2xs font-medium ${c.yoloMode() ? "text-warning" : "text-fg-secondary"}`}>
-              <span>{c.yoloMode() ? "Full" : "Ask"}</span>
+            <span
+              class={`inline-flex items-center text-2xs font-medium ${
+                c.accessMode() === "full"
+                  ? "text-warning"
+                  : c.accessMode() === "auto"
+                    ? "text-accent"
+                    : "text-fg-secondary"
+              }`}
+            >
+              <span>{currentAccessSpec().short}</span>
             </span>
             <Iconify icon="lucide:chevron-right" size={13} class="text-fg-muted shrink-0 ml-1" />
           </MenuItem>
@@ -932,14 +1014,38 @@ export function ToolbarContext() {
 </div>
 <Show when={!approvalSelectorHidden()}>
 <div>
-  <button type="button" ref={c.accessBtn} data-menubtn data-rc-tip={c.yoloMode() ? "Permissions: Full access" : "Permissions: Ask for approval"} aria-label={`Agent permissions: ${c.yoloMode() ? "Full access" : "Ask for approval"}`} aria-expanded={c.accessMenuOpen()}
+  <button
+    type="button"
+    ref={c.accessBtn}
+    data-menubtn
+    data-access-mode={c.accessMode()}
+    data-rc-tip={currentAccessSpec().tip}
+    aria-label={`Agent permissions: ${currentAccessSpec().label}`}
+    aria-expanded={c.accessMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
     onClick={() => { const next = !c.accessMenuOpen(); ui.closeMenus(); c.setAccessMenuOpen(next); }}
-    class={`h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${c.yoloMode() ? "text-warning" : "text-fg-secondary hover:text-fg"}`}>
-    <Iconify icon={c.yoloMode() ? "lucide:shield-alert" : "lucide:hand"} size={13} class={c.yoloMode() ? "text-warning shrink-0" : "text-fg-muted shrink-0"} />
-    <span class="hidden @[420px]:inline">{c.yoloMode() ? "Full" : "Ask"}</span>
+    class={`h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${
+      c.accessMode() === "full"
+        ? "text-warning"
+        : c.accessMode() === "auto"
+          ? "text-fg hover:text-fg"
+          : "text-fg-secondary hover:text-fg"
+    }`}
+  >
+    <Iconify
+      icon={currentAccessSpec().icon}
+      size={13}
+      class={
+        c.accessMode() === "full"
+          ? "text-warning shrink-0"
+          : c.accessMode() === "auto"
+            ? "text-accent shrink-0"
+            : "text-fg-muted shrink-0"
+      }
+    />
+    <span class="hidden @[420px]:inline">{currentAccessSpec().short}</span>
   </button>
-  <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="min(21rem, calc(100vw - 1.5rem))">
+  <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="min(23rem, calc(100vw - 1.5rem))">
     <p class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 text-2xs font-medium text-fg-muted border-b border-border-subtle">Execution permissions</p>
     {permissionsList(true)}
   </FloatMenu>

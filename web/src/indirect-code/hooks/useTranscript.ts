@@ -5,7 +5,7 @@ import {
   nextHistoryCursor,
   type HistoryCursor,
 } from "../transcript/history";
-import type { DaemonCommand } from "../daemon-protocol";
+import type { DaemonCommand, WireSessionOptions } from "../daemon-protocol";
 import { batch, createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { copyText } from "../../ds/primitives/clipboard";
@@ -40,11 +40,61 @@ import type {
 } from "../daemon-protocol";
 import type { SessionContext } from "../context";
 import type {
-  ChatMessage, CompactionState, PendingApproval, RenderBlock, SessionUsage, ToolUnit,
+  ApprovalDecision, ChatMessage, CompactionState, PendingApproval, PermissionCapability, RenderBlock, SessionUsage, ToolUnit,
 } from "../types";
+import { normalizePermissionRule } from "../utils/settingsValidation";
 import { createAttachmentDraft } from "./useAttachmentDraft";
 import { createMentions } from "./useMentions";
 import type { StoredAttachment, TodoItem, TurnActivity } from "../viewTypes";
+
+function normalizePendingApproval(raw: any): PendingApproval | null {
+  if (!raw || typeof raw !== "object") return null;
+  const callId = String(raw.callId ?? raw.call_id ?? "").trim();
+  const tool = String(raw.tool ?? "").trim();
+  if (!callId || !tool) return null;
+  const rawArgs = raw.args;
+  const args =
+    typeof rawArgs === "string"
+      ? prettyArgs(rawArgs)
+      : JSON.stringify(rawArgs ?? {}, null, 2);
+  const rawCap = String(raw.capability ?? "").trim().toLowerCase();
+  const capability: PermissionCapability | undefined =
+    rawCap === "exec" ||
+    rawCap === "fs_read" ||
+    rawCap === "fs_write" ||
+    rawCap === "net" ||
+    rawCap === "tool"
+      ? rawCap
+      : undefined;
+  const rawRisk = String(raw.risk ?? "").trim().toLowerCase();
+  const risk: "low" | "medium" | "high" | undefined =
+    rawRisk === "low" || rawRisk === "medium" || rawRisk === "high"
+      ? rawRisk
+      : undefined;
+  const rawAccess = String(raw.accessMode ?? raw.access_mode ?? "")
+    .trim()
+    .toLowerCase();
+  const accessMode: "ask" | "auto" | undefined =
+    rawAccess === "ask" || rawAccess === "auto" ? rawAccess : undefined;
+  const proposedRule =
+    normalizePermissionRule(raw.proposedRule ?? raw.proposed_rule) ?? undefined;
+  const rawAllowSession = raw.canAllowSession ?? raw.can_allow_session;
+  const rawAllowAlways = raw.canAllowAlways ?? raw.can_allow_always;
+  return {
+    callId,
+    tool,
+    args,
+    ...(typeof raw.deadline === "number" ? { deadline: raw.deadline } : {}),
+    ...(capability ? { capability } : {}),
+    ...(typeof raw.target === "string" && raw.target ? { target: raw.target } : {}),
+    ...(typeof raw.reason === "string" && raw.reason ? { reason: raw.reason } : {}),
+    ...(risk ? { risk } : {}),
+    ...(accessMode ? { accessMode } : {}),
+    ...(proposedRule ? { proposedRule } : {}),
+    ...(typeof rawAllowSession === "boolean" ? { canAllowSession: rawAllowSession } : {}),
+    ...(typeof rawAllowAlways === "boolean" ? { canAllowAlways: rawAllowAlways } : {}),
+  };
+}
 
 /** Transcript domain: messages, turn state, thinking, live tools,
  * scroll, render blocks, and per-message ops (extracted verbatim from RemoteCodePage —
@@ -55,6 +105,7 @@ export function createTranscript(opts: {
   getSessionId: () => string;
   getHostId: () => string;
   getProjectId?: () => string;
+  getOptions?: () => WireSessionOptions;
   toast: (message: string, kind?: "ok" | "err") => void;
   showChoice: (o: { title: string; message: string; options: { id: string; label: string; hint?: string; primary?: boolean }[] }) => Promise<string | null>;
   /** Turn became idle: the page refreshes the review. */
@@ -1241,7 +1292,7 @@ export function createTranscript(opts: {
     // snapshots): strip it at ingestion so it never renders in a body.
     setToolProgress(Object.fromEntries(Object.entries(r.toolProgress || {}).map(([k, v]) => [k, stripToolEnvelopeDetailed(String(v)).body])));
     setToolStarts(r.toolStarts || {});
-    setPendingApproval(r.pendingApproval ? { ...r.pendingApproval, args: prettyArgs(r.pendingApproval.args) } : null);
+    setPendingApproval(normalizePendingApproval(r.pendingApproval));
     if (r.thinkingStartedAt && r.status === "running") startThinkingTimer(r.thinkingStartedAt);
     else stopThinkingTimer();
     if (r.usage) applyUsage(sid, r.usage, null);
@@ -1335,17 +1386,43 @@ export function createTranscript(opts: {
   function cancelCurrentTurn() {
     cancelTurnForSession(opts.getSessionId());
   }
-  function respondApproval(approved: boolean, always = false) {
+  function respondApproval(decision: ApprovalDecision | boolean, always = false) {
     const p = pendingApproval();
     if (!p || !opts.getSessionId()) return;
+    const resolvedDecision: ApprovalDecision =
+      typeof decision === "string"
+        ? decision
+        : !decision
+          ? "deny"
+          : always
+            ? "always"
+            : "once";
     opts.send({
       type: "tool_approval_response",
       sessionId: opts.getSessionId(),
       callId: p.callId,
-      approved,
-      always,
+      approved: resolvedDecision !== "deny",
+      always: resolvedDecision === "always",
+      decision: resolvedDecision,
     });
     setPendingApproval(null);
+  }
+
+  function resolveTurnWireOptions(
+    getAccessOrOptions?: () => WireSessionOptions | boolean,
+  ): { yolo: boolean; options?: WireSessionOptions } {
+    const val = getAccessOrOptions ? getAccessOrOptions() : opts.getOptions?.();
+    if (val && typeof val === "object") {
+      return { yolo: val.access === "full", options: val };
+    }
+    const fallbackOpts = opts.getOptions?.();
+    if (fallbackOpts) {
+      return {
+        yolo: typeof val === "boolean" ? val : fallbackOpts.access === "full",
+        options: fallbackOpts,
+      };
+    }
+    return { yolo: Boolean(val) };
   }
 
   const [forking, setForking] = createSignal(false);
@@ -1369,12 +1446,23 @@ export function createTranscript(opts: {
     forkEditFingerprint = "";
     setForking(true);
     opts.onForkKind?.("fork");
-    opts.send({ type: "fork_session", sessionId: sid, index: last.srcIdx, requestId: forkRequestId });
+    const sessOpts = opts.getOptions?.();
+    opts.send({
+      type: "fork_session",
+      sessionId: sid,
+      index: last.srcIdx,
+      requestId: forkRequestId,
+      ...(sessOpts ? { yolo: sessOpts.access === "full", options: sessOpts } : {}),
+    });
   }
   // Regenerate from message idx: the daemon drops that message and everything
   // after it, then re-runs the turn (chatbot regenerateMessage semantics).
   // Offers fork-vs-resend: fork preserves the current timeline in a copy.
-  async function regenerateMsg(idx: number, getModel: () => string, getYolo: () => boolean) {
+  async function regenerateMsg(
+    idx: number,
+    getModel: () => string,
+    getAccessOrOptions?: () => WireSessionOptions | boolean,
+  ) {
     const sid = opts.getSessionId();
     const host = opts.getHostId();
     if (!sid || !opts.isOpen()) return;
@@ -1405,6 +1493,7 @@ export function createTranscript(opts: {
       ],
     });
     if (!choice || opts.getHostId() !== host || opts.getSessionId() !== sid || !opts.isOpen() || sessionStatus() === "running") return;
+    const turnWire = resolveTurnWireOptions(getAccessOrOptions);
     if (choice === "fork") {
       forkRequestId = crypto.randomUUID();
       forkHostId = host;
@@ -1419,7 +1508,8 @@ export function createTranscript(opts: {
         turnId: userMsg?.turnIndex || 0,
         text: userText,
         model: getModel(),
-        yolo: getYolo(),
+        yolo: turnWire.yolo,
+        ...(turnWire.options ? { options: turnWire.options } : {}),
         attachmentIds: userMsg?.attachments?.map((a) => a.id),
       });
       return;
@@ -1439,7 +1529,8 @@ export function createTranscript(opts: {
       turnId: userMsg?.turnIndex || 0,
       text: userText,
       model: getModel(),
-      yolo: getYolo(),
+      yolo: turnWire.yolo,
+      ...(turnWire.options ? { options: turnWire.options } : {}),
       attachmentIds: userMsg?.attachments?.map((a) => a.id),
     });
     setSessionStatus("running");
@@ -1645,7 +1736,12 @@ export function createTranscript(opts: {
       setEditingMsgText("");
     });
   }
-  async function saveEditMsg(idx: number, m: ChatMessage, getModel: () => string, getYolo: () => boolean) {
+  async function saveEditMsg(
+    idx: number,
+    m: ChatMessage,
+    getModel: () => string,
+    getAccessOrOptions?: () => WireSessionOptions | boolean,
+  ) {
     flushEditDraft();
     const sid = opts.getSessionId();
     const host = opts.getHostId();
@@ -1680,6 +1776,7 @@ export function createTranscript(opts: {
       if (!choice || editFingerprint() !== initialEditFingerprint || opts.getHostId() !== host || opts.getSessionId() !== sid || editSource !== source || editingMsgIdx() !== idx || !opts.isOpen() || sessionStatus() === "running") return;
       attachmentIds = [...editingAttachments().map((a) => a.id), ...await Promise.all(editAttachments.pendingAttachments().map((a) => editAttachments.uploadOneAttachment(sid, a)))];
       if (editFingerprint() !== initialEditFingerprint || opts.getHostId() !== host || opts.getSessionId() !== sid || editSource !== source || editingMsgIdx() !== idx || !opts.isOpen() || sessionStatus() === "running") return;
+      const turnWire = resolveTurnWireOptions(getAccessOrOptions);
       if (choice === "fork") {
         // Fork at this message carrying the edited text: the daemon
         // applies it to the boundary user message and resends from there.
@@ -1691,7 +1788,17 @@ export function createTranscript(opts: {
         forkEditFingerprint = editFingerprint();
         setForking(true);
         opts.onForkKind?.("resend");
-        opts.send({ type: "fork_session", sessionId: sid, index: targetRawIdx, requestId: forkRequestId, editText: text, model: getModel(), yolo: getYolo(), attachmentIds });
+        opts.send({
+          type: "fork_session",
+          sessionId: sid,
+          index: targetRawIdx,
+          requestId: forkRequestId,
+          editText: text,
+          model: getModel(),
+          yolo: turnWire.yolo,
+          ...(turnWire.options ? { options: turnWire.options } : {}),
+          attachmentIds,
+        });
         return;
       }
       // ATOMIC discard&resend: the daemon cuts + inserts + starts in one
@@ -1710,13 +1817,15 @@ export function createTranscript(opts: {
         turnId: m.turnIndex || 0,
         text,
         model: getModel(),
-        yolo: getYolo(),
+        yolo: turnWire.yolo,
+        ...(turnWire.options ? { options: turnWire.options } : {}),
         attachmentIds,
       });
       setSessionStatus("running");
       return;
     }
     // Non-regen edit (save only): same ack contract (edit_message_result).
+    const turnWire = resolveTurnWireOptions(getAccessOrOptions);
     resendRequestId = crypto.randomUUID();
     resendHostId = host;
     resendSessionId = sid;
@@ -1729,7 +1838,8 @@ export function createTranscript(opts: {
       index: targetRawIdx,
       text,
       model: getModel(),
-      yolo: getYolo(),
+      yolo: turnWire.yolo,
+      ...(turnWire.options ? { options: turnWire.options } : {}),
       regenerate: false,
       attachmentIds,
     });
@@ -1901,20 +2011,19 @@ export function createTranscript(opts: {
   function noteApprovalRequest(msg: ToolApprovalRequestEvent) {
     if (msg.sessionId === opts.getSessionId()) {
       if (askResolved("a:", msg.callId)) return; // late replay: already resolved
-      setPendingApproval({
-        callId: msg.callId,
-        tool: msg.tool,
-        args:
-          typeof msg.args === "string"
-            ? msg.args
-            : JSON.stringify(msg.args, null, 2),
-      });
+      const normalized = normalizePendingApproval(msg);
+      if (normalized) setPendingApproval(normalized);
     }
   }
-  function noteApprovalResolved(sessionId: string | undefined, callId: string) {
+  function noteApprovalResolved(sessionId: string | undefined, callId: string, error?: string) {
     rememberResolvedAsk("a:", callId);
-    if (sessionId === opts.getSessionId() && pendingApproval()?.callId === callId) {
-      setPendingApproval(null);
+    if (sessionId === opts.getSessionId()) {
+      if (pendingApproval()?.callId === callId) {
+        setPendingApproval(null);
+      }
+      if (error) {
+        opts.toast(error, "err");
+      }
     }
   }
   function forkAckMatches(msg: any): boolean {

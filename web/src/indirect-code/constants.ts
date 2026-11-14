@@ -28,6 +28,21 @@ export const REASONING_LABELS: Record<string, string> = {
  */
 export const SLASH_COMMANDS = [
   {
+    cmd: "/auto",
+    desc: "Sandboxed Auto mode: allow safe workspace actions, ask on risky or outside operations",
+    args: "",
+  },
+  {
+    cmd: "/ask",
+    desc: "Supervised mode: sandbox workspace and ask before edits or commands",
+    args: "",
+  },
+  {
+    cmd: "/full",
+    desc: "Full access mode: unjailed execution without approval prompts",
+    args: "",
+  },
+  {
     cmd: "/compact",
     desc: "Compact conversation transcript to free up context tokens",
     args: "",
@@ -39,12 +54,12 @@ export const SLASH_COMMANDS = [
   },
   {
     cmd: "/jail",
-    desc: "Strictly confine agent filesystem tools to session directory",
+    desc: "Alias for /auto: confine agent to workspace with boundary checks",
     args: "",
   },
   {
     cmd: "/unjail",
-    desc: "Allow agent to access files outside session working directory",
+    desc: "Alias for /full: allow unjailed host access without prompts",
     args: "",
   },
 ];

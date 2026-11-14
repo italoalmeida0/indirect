@@ -13,6 +13,7 @@ import { createRelay } from "./hooks/useRelay";
 import { createMirror } from "./hooks/useMirror";
 import { RemoteHints } from "./presentation";
 import { useIndirectCodeDocumentScope } from "./utils/documentScope";
+import { normalizeAccessMode } from "./utils/settingsValidation";
 import { Icon, Icons, toast } from "../ui";
 
 interface DebugTool {
@@ -783,7 +784,10 @@ export default function CodeDevPage() {
     // default), never a placeholder.
     const mode = sessionMeta()?.mode || currentSession?.options?.mode || "agentic";
     const effort = sessionMeta()?.effort || currentSession?.options?.effort || "";
-    const access = sessionMeta()?.access || currentSession?.options?.access || "full";
+    const access = normalizeAccessMode(
+      sessionMeta()?.access || currentSession?.options?.access,
+      "auto",
+    );
     // options.skills is a create/configure input the daemon echoes empty;
     // the live selection is the session skill map and is not touched by a
     // prompt, so sending [] here is a no-op by contract.
@@ -795,7 +799,7 @@ export default function CodeDevPage() {
       text,
       hostId: hid,
       model: "",
-      yolo: true,
+      yolo: access === "full",
       options: { mode, effort, access, skills },
       attachmentIds: [],
       requestId: `prompt_${Date.now()}`,
