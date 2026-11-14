@@ -169,6 +169,7 @@ function renderTurnAggregate(
         onClick={toggle}
         data-step-rail-header=""
         chevronSize={13}
+        paddingClass="py-1.5"
         class="text-xs text-fg-muted hover:text-fg"
       >
         <span data-thinking-label={singleThinking() ? "" : undefined} class={`truncate min-w-0 tabular-nums ${headerShimmerActive() ? "ui-shimmer font-medium text-fg-secondary" : ""}`} style={shimmerStyle()}>

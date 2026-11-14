@@ -422,18 +422,20 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
 }
 .gu-hidden { display: none !important; }
 @media (hover: hover) and (pointer: fine) {
-  *, *::before, *::after { --gu-scrollbar-thumb: transparent; }
+  *, *::before, *::after { --gu-scrollbar-thumb: transparent; --gu-sb-pad: 3px; }
   *:hover { --gu-scrollbar-thumb: color-mix(in oklab, var(--gu-text) 22%, transparent); }
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar { width: 12px; height: 12px; }
   ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner, ::-webkit-resizer { background: transparent; }
   ::-webkit-scrollbar-thumb {
     background-color: var(--gu-scrollbar-thumb);
-    border: 2px solid transparent;
+    border: var(--gu-sb-pad) solid transparent;
     border-radius: 9999px;
     background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover, ::-webkit-scrollbar-thumb:active {
     background-color: var(--gu-text-faint);
+    --gu-sb-pad: 1px;
+    border-width: 1px;
     background-clip: content-box;
   }
   @-moz-document url-prefix() {

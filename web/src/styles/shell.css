@@ -153,12 +153,14 @@ html:not(.mobile) ::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* Indirect Code desktop: fixed-geometry auto-hide scrollbars that reveal only
- * on the hovered scroll container (reset on `*` prevents a hovered outer
- * scroller from revealing unhovered nested code/table scrollers). */
+/* Indirect Code desktop: fixed-geometry auto-hide scrollbars that reveal on
+ * the hovered scroll container and smoothly thicken when approaching/grabbing
+ * the rail (reset on `*` prevents an outer scroller's inline vars from leaking
+ * into unhovered nested code/table scrollers). */
 html[data-indirect-code]:not(.mobile),
 html[data-indirect-code]:not(.mobile) * {
   --rc-scrollbar-thumb: transparent;
+  --rc-sb-pad: 3px;
 }
 html[data-indirect-code]:not(.mobile):hover,
 html[data-indirect-code]:not(.mobile) *:hover,
@@ -167,8 +169,8 @@ html[data-indirect-code]:not(.mobile) .tarnav-codeblock:hover > .font-mono {
 }
 html[data-indirect-code]:not(.mobile)::-webkit-scrollbar,
 html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 12px;
+  height: 12px;
 }
 html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-track,
 html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-track,
@@ -181,15 +183,21 @@ html[data-indirect-code]:not(.mobile) ::-webkit-resizer {
 html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-thumb,
 html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-thumb {
   background-color: var(--rc-scrollbar-thumb);
-  border: 2px solid transparent;
+  border: var(--rc-sb-pad) solid transparent;
   border-radius: 9999px;
   background-clip: content-box;
 }
 html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-thumb:hover,
-html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-thumb:hover,
+html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--rc-scrollbar-thumb);
+  border: var(--rc-sb-pad) solid transparent;
+  background-clip: content-box;
+}
 html[data-indirect-code]:not(.mobile)::-webkit-scrollbar-thumb:active,
 html[data-indirect-code]:not(.mobile) ::-webkit-scrollbar-thumb:active {
   background-color: var(--text-muted);
+  --rc-sb-pad: 1px;
+  border-width: 1px;
   background-clip: content-box;
 }
 

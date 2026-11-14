@@ -1,6 +1,12 @@
-import { createSignal, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { Portal, render } from "solid-js/web";
 import { WorkspaceShell } from "../../web/src/indirect-code/IndirectCodePage";
+import {
+  AssistantTurnContent,
+  type TranscriptRenderCtx,
+} from "../../web/src/indirect-code/components/TranscriptBlocks";
+import { createTranscript } from "../../web/src/indirect-code/hooks/useTranscript";
+import { elapsedLabel } from "../../web/src/indirect-code/utils/format";
 import { useIndirectCodeDocumentScope } from "../../web/src/indirect-code/utils/documentScope";
 import { WIDGET_BASE_CSS } from "../../web/src/indirect-code/components/generative-ui/widget-doc";
 
@@ -13,6 +19,81 @@ function ScrollbarsFixture() {
   const [mode, setMode] = createSignal<"code" | "gateway">("code");
   const [extraScope, setExtraScope] = createSignal(false);
   const [portalOpen, setPortalOpen] = createSignal(true);
+  const [sid] = createSignal("s-scrollbars");
+  const [host] = createSignal("h-scrollbars");
+
+  const t = createTranscript({
+    send: () => {},
+    isOpen: () => true,
+    getSessionId: sid,
+    getHostId: host,
+    toast: () => {},
+    showChoice: async () => null,
+    onTurnIdle: () => {},
+    onUsageContext: () => {},
+  });
+
+  t.applySnapshot("s-scrollbars", {
+    status: "idle",
+    turn: null,
+    thinkingStartedAt: null,
+    todos: [],
+    todosOpen: false,
+    toolStarts: {},
+    messages: [
+      {
+        id: "u1",
+        role: "user",
+        turnIndex: 1,
+        content: [{ type: "text", text: "Check scrollbar geometry and tool aggregate" }],
+      },
+      {
+        id: "a1",
+        role: "assistant",
+        turnIndex: 1,
+        thinkingDuration: 3,
+        content: [
+          { type: "reasoning", summary: "Checking scrollbar padding and disclosure rows." },
+          { type: "tool_call", id: "call_r1", name: "read", arguments: { path: "web/src/styles/shell.css" } },
+          { type: "tool_result", call_id: "call_r1", content: "1:/* App shell */" },
+          { type: "tool_call", id: "call_r2", name: "read", arguments: { path: "web/src/indirect-code/components/Disclosure.tsx" } },
+          { type: "tool_result", call_id: "call_r2", content: "1:export function DisclosureTrigger() {}" },
+        ],
+      },
+      {
+        id: "a2",
+        role: "assistant",
+        turnIndex: 1,
+        content: [{ type: "text", text: "Updated desktop scrollbar and disclosure padding." }],
+      },
+    ],
+    transcript: { stream: "scrollbars-fixture", seq: 1 },
+  });
+
+  const rctx: TranscriptRenderCtx = {
+    renderBlocks: t.renderBlocks,
+    messages: t.messages,
+    sessionStatus: t.sessionStatus,
+    isPinned: t.transcriptScroll.isPinned,
+    thinkingStart: t.thinkingStart,
+    thinkingElapsed: t.thinkingElapsed,
+    thinkingIndex: t.thinkingIndex,
+    toolProgress: t.toolProgress,
+    toolStarts: t.toolStarts,
+    turnClock: t.turnClock,
+    elapsedLabel,
+    specialProgress: t.specialProgress,
+    backgroundJobs: () => [],
+    bgOutput: () => ({}),
+    bgClock: () => 0,
+    verboseChat: () => true,
+    hideToolMessages: () => false,
+    setPreviewFile: () => {},
+    activeSession: () => ({ id: "s-scrollbars", title: "Scrollbars", cwd: "/repo", updatedAt: Date.now() } as any),
+    activeSessionId: sid,
+    pendingApproval: t.pendingApproval,
+    projects: () => [],
+  };
 
   (window as any).scrollbarsUI = {
     mode,
@@ -28,8 +109,8 @@ function ScrollbarsFixture() {
 <head><style>${WIDGET_BASE_CSS}</style></head>
 <body>
   <div class="gu-root">
-    <div id="gu-scroller" class="gu-card" style="width: 220px; height: 110px; overflow-y: auto; padding: 10px;">
-      <div style="height: 360px;">Widget card</div>
+    <div id="gu-scroller" class="gu-card" style="width: 220px; height: 120px; overflow-y: auto; padding: 10px;">
+      <div id="gu-inner" style="width: 100%; height: 260px;">Widget card</div>
     </div>
   </div>
 </body>
@@ -42,7 +123,9 @@ function ScrollbarsFixture() {
         id="bg-scroller"
         class="h-40 w-52 overflow-y-auto border border-border bg-background p-3 text-xs text-fg"
       >
-        <div style={{ height: "460px" }}>Background scroller</div>
+        <div data-inner-box class="w-full" style={{ height: "460px" }}>
+          Background scroller
+        </div>
       </div>
 
       {/* 2. Scroller over --surface card */}
@@ -50,25 +133,32 @@ function ScrollbarsFixture() {
         id="surface-scroller"
         class="h-40 w-52 overflow-y-auto rounded-none border border-border bg-surface p-3 text-xs text-fg"
       >
-        <div style={{ height: "460px" }}>Surface scroller</div>
+        <div data-inner-box class="w-full" style={{ height: "460px" }}>
+          Surface scroller
+        </div>
       </div>
 
-      {/* 3. Outer transcript scroller with nested scrollable <pre> */}
+      {/* 3. Outer transcript scroller with nested scrollable <pre> and real TurnAggregate */}
       <div
         id="transcript-scroller"
-        class="transcript h-48 w-72 overflow-y-auto border border-border bg-background p-3 text-xs text-fg"
+        class="transcript h-64 w-80 overflow-y-auto border border-border bg-background p-3 text-xs text-fg"
       >
-        <p id="transcript-para" class="mb-3 h-10 bg-surface-subtle p-2">
+        <p id="transcript-para" data-inner-box class="mb-3 h-10 w-full bg-surface-subtle p-2">
           Outer paragraph
         </p>
         <pre
           id="nested-pre"
-          class="mb-3 h-24 w-56 overflow-auto border border-border bg-surface-subtle p-2 font-mono text-xs"
+          class="mb-3 h-28 w-60 overflow-auto border border-border bg-surface-subtle p-2 font-mono text-xs"
         >
-          <code style={{ display: "block", width: "520px", height: "280px" }}>
+          <code data-inner-box style={{ display: "block", width: "520px", height: "200px" }}>
             Nested code
           </code>
         </pre>
+        <div id="turn-aggregate-host" class="mb-3 w-full">
+          <For each={t.renderBlocks().filter((b) => b.kind === "series")}>
+            {(block) => <AssistantTurnContent ctx={rctx} block={block} finished={true} />}
+          </For>
+        </div>
         <div style={{ height: "480px" }}>Bottom spacer</div>
       </div>
 
@@ -136,13 +226,17 @@ function ScrollbarsFixture() {
                 id="portal-dialog-body"
                 class="ui-dialog-body fixed right-6 bottom-6 z-50 h-36 w-56 overflow-y-auto border border-border bg-surface-raised p-3 text-xs text-fg"
               >
-                <div style={{ height: "420px" }}>Dialog body</div>
+                <div data-inner-box class="w-full" style={{ height: "420px" }}>
+                  Dialog body
+                </div>
               </div>
               <div
                 id="portal-popover"
                 class="ui-popover ui-menu fixed right-72 bottom-6 z-50 h-36 w-52 overflow-y-auto p-2 text-xs text-fg"
               >
-                <div style={{ height: "420px" }}>Popover menu</div>
+                <div data-inner-box class="w-full" style={{ height: "420px" }}>
+                  Popover menu
+                </div>
               </div>
             </Portal>
           </Show>
