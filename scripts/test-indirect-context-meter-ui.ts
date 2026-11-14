@@ -617,14 +617,14 @@ async function inspectCanvasBorders(page: any) {
     const leftOuter = px(1, midY);
     const rightOuter = px(w - 2, midY);
 
-    // Recessed moat at physical x=3 vs x=w-4 (between outer border [0..2) and inner capsule [5..8))
-    const leftMoat = px(3, midY);
-    const rightMoat = px(w - 4, midY);
+    // Recessed moat at physical x=2 vs x=w-3 (between outer border [0..2) and inner capsule [4..7))
+    const leftMoat = px(2, midY);
+    const rightMoat = px(w - 3, midY);
 
-    // Peak chroma on leftmost capsule vertical border (physical x in [4..9])
+    // Peak chroma on leftmost capsule vertical border (physical x in [3..8])
     let leftCapMaxChroma = 0;
-    let leftCapPeakX = 5;
-    for (let x = 4; x <= 9; x++) {
+    let leftCapPeakX = 4;
+    for (let x = 3; x <= 8; x++) {
       const c = px(x, midY).chroma;
       if (c > leftCapMaxChroma) {
         leftCapMaxChroma = c;
@@ -632,10 +632,10 @@ async function inspectCanvasBorders(page: any) {
       }
     }
 
-    // Peak chroma on rightmost capsule vertical border (physical x in [w-10..w-5])
+    // Peak chroma on rightmost capsule vertical border (physical x in [w-9..w-4])
     let rightCapMaxChroma = 0;
-    let rightCapPeakDist = 5;
-    for (let dist = 4; dist <= 9; dist++) {
+    let rightCapPeakDist = 4;
+    for (let dist = 3; dist <= 8; dist++) {
       const c = px(w - 1 - dist, midY).chroma;
       if (c > rightCapMaxChroma) {
         rightCapMaxChroma = c;
@@ -644,10 +644,10 @@ async function inspectCanvasBorders(page: any) {
     }
 
     // Top-left & bottom-left curved arc check along concentric center (20, 20) at 45 deg
-    // Center is (10*dpr, 10*dpr) = (20, 20), radius ~ 6.75*dpr = 13.5 -> 20 - 13.5*0.7071 ≈ 10.45
+    // Center is (10*dpr, 10*dpr) = (20, 20), radius ~ 7.325*dpr = 14.65 -> 20 - 14.65*0.7071 ≈ 9.64
     let leftCornerChroma = 0;
     let rightCornerChroma = 0;
-    for (const off of [9, 10, 11]) {
+    for (const off of [8, 9, 10, 11]) {
       leftCornerChroma = Math.max(leftCornerChroma, px(off, off).chroma, px(off, h - 1 - off).chroma);
       rightCornerChroma = Math.max(
         rightCornerChroma,
@@ -660,6 +660,17 @@ async function inspectCanvasBorders(page: any) {
     let occupiedRightWallChroma = 0;
     for (let x = Math.floor(w * 0.465); x <= Math.ceil(w * 0.5); x++) {
       occupiedRightWallChroma = Math.max(occupiedRightWallChroma, px(x, midY).chroma);
+    }
+
+    // Seamless zero-gap continuity along top & bottom horizontal rims across BOTH
+    // Input -> Cache (~0.147*w) and Cache -> Output (~0.403*w) interior boundaries!
+    let minInteriorTopRimChroma = Infinity;
+    let minInteriorBotRimChroma = Infinity;
+    for (let x = Math.floor(w * 0.11); x <= Math.ceil(w * 0.43); x++) {
+      const topColMax = Math.max(px(x, 4).chroma, px(x, 5).chroma, px(x, 6).chroma);
+      const botColMax = Math.max(px(x, h - 5).chroma, px(x, h - 6).chroma, px(x, h - 7).chroma);
+      if (topColMax < minInteriorTopRimChroma) minInteriorTopRimChroma = topColMax;
+      if (botColMax < minInteriorBotRimChroma) minInteriorBotRimChroma = botColMax;
     }
 
     return {
@@ -676,6 +687,8 @@ async function inspectCanvasBorders(page: any) {
       leftCornerChroma,
       rightCornerChroma,
       occupiedRightWallChroma,
+      minInteriorTopRimChroma,
+      minInteriorBotRimChroma,
     };
   });
 }
@@ -948,8 +961,12 @@ try {
       `${theme}: rightmost occupied Reasoning segment must have complete right colored border (chroma=${settledBorders.occupiedRightWallChroma})`,
     );
     assert(
-      settledBorders.rightCapMaxChroma >= 12 && settledBorders.rightCornerChroma >= 10,
-      `${theme}: rightmost Auto-compact buffer capsule must have continuous curved right border at rest (${settledBorders.rightCapMaxChroma}, corner=${settledBorders.rightCornerChroma})`,
+      settledBorders.minInteriorTopRimChroma >= 24 && settledBorders.minInteriorBotRimChroma >= 24,
+      `${theme}: interior segment seams (Input->Cache, Cache->Output) must have unbroken zero-gap horizontal rims with no dark chiclet gaps (minTop=${settledBorders.minInteriorTopRimChroma}, minBot=${settledBorders.minInteriorBotRimChroma})`,
+    );
+    assert(
+      settledBorders.rightCapMaxChroma < 22,
+      `${theme}: unused Auto-compact buffer must NOT render a separate colored pill box border at rest (${settledBorders.rightCapMaxChroma})`,
     );
 
     captures[`desktop_${theme}_settled`] = await capturePopoverBase64(page);
@@ -1080,8 +1097,24 @@ try {
       await page.getByText("Runtime & messaging").isVisible(),
       `${theme}: clicking Configure must open SettingsModal to Runtime & messaging`,
     );
-    await page.keyboard.press("Escape");
-    await page.waitForTimeout(150);
+    // Atomic replaceState handoff (`batch`): 1 browser Back step closes SettingsModal AND leaves popover closed with zero [inert] leak!
+    await page.goBack();
+    await page.waitForTimeout(200);
+    assert.equal(
+      await page.getByText("Runtime & messaging").count(),
+      0,
+      `${theme}: single goBack() after Configure handoff must close SettingsModal`,
+    );
+    assert.equal(
+      await page.locator("[data-floatmenu]").count(),
+      0,
+      `${theme}: single goBack() after Configure handoff must not reopen FloatMenu`,
+    );
+    assert.equal(
+      await page.locator("[inert]").count(),
+      0,
+      `${theme}: zero [inert] elements must remain after closing SettingsModal`,
+    );
 
     await context.close();
   }

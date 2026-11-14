@@ -141,9 +141,9 @@ describe("contextMeter usable context & auto-compaction math", () => {
       },
     });
 
-    // innerLeft = 2.5, innerRight = 337.5, innerW = 335, usedRatio = 0.5 -> totalOccupiedW = 168
-    expect(zones.innerLeft).toBe(2.5);
-    expect(zones.innerRight).toBe(337.5);
+    // innerLeft = 2, innerRight = 338, innerW = 336, usedRatio = 0.5 -> totalOccupiedW = 168
+    expect(zones.innerLeft).toBe(2);
+    expect(zones.innerRight).toBe(338);
     expect(zones.totalOccupiedW).toBe(168);
     expect(zones.segments.map((s) => s.id)).toEqual([
       "input",
@@ -152,28 +152,28 @@ describe("contextMeter usable context & auto-compaction math", () => {
       "reasoning",
     ]);
 
-    // 4 segments separated by 3 × 1.5px = 4.5px inter-capsule gaps
+    // All 4 segments are 100% contiguous (zero inter-segment gap: seg[i].x1 === seg[i+1].x0)
     const sumSegW = zones.segments.reduce((acc, s) => acc + s.width, 0);
-    expect(sumSegW + 4.5).toBeCloseTo(zones.totalOccupiedW, 5);
-    expect(zones.segments[0]?.x0).toBe(2.5);
-    expect(zones.segments[zones.segments.length - 1]?.x1).toBeCloseTo(2.5 + 168, 5);
+    expect(sumSegW).toBeCloseTo(zones.totalOccupiedW, 5);
+    expect(zones.segments[0]?.x0).toBe(2);
+    expect(zones.segments[zones.segments.length - 1]?.x1).toBeCloseTo(2 + 168, 5);
+    for (let i = 0; i < zones.segments.length - 1; i++) {
+      expect(zones.segments[i]!.x1).toBeCloseTo(zones.segments[i + 1]!.x0, 6);
+    }
     const reasoningSeg = zones.segments.find((s) => s.id === "reasoning")!;
-    expect(reasoningSeg.width).toBeGreaterThanOrEqual(7);
+    expect(reasoningSeg.width).toBeGreaterThanOrEqual(6);
 
-    expect(zones.thresholdX).toBe(2.5 + Math.round(335 * 0.8));
+    expect(zones.thresholdX).toBe(2 + Math.round(336 * 0.8));
     expect(zones.usableZone).not.toBeNull();
+    expect(zones.usableZone?.x0).toBeCloseTo(2 + 168, 5);
     expect(zones.reserveZone).not.toBeNull();
-    expect(zones.reserveZone?.x1).toBe(337.5);
+    expect(zones.reserveZone?.x1).toBe(338);
 
-    // Hit-testing every zone and inter-segment gap midpoints
+    // Hit-testing every zone across contiguous boundaries
     for (let i = 0; i < zones.segments.length; i++) {
       const seg = zones.segments[i]!;
       const mid = (seg.x0 + seg.x1) * 0.5;
       expect(hitTestBarZone(zones, mid)).toBe(seg.id);
-      if (i < zones.segments.length - 1) {
-        const gapX = seg.x1 + 0.4;
-        expect(hitTestBarZone(zones, gapX)).toBe(seg.id);
-      }
     }
     expect(
       hitTestBarZone(zones, (zones.usableZone!.x0 + zones.usableZone!.x1) * 0.5),
@@ -184,7 +184,7 @@ describe("contextMeter usable context & auto-compaction math", () => {
     expect(hitTestBarZone(zones, -5)).toBeNull();
     expect(hitTestBarZone(zones, 999)).toBeNull();
 
-    // 100% full symmetry: leftmost segment starts at 2.5, rightmost ends at cssW - 2.5
+    // 100% full symmetry: leftmost segment starts at 2, rightmost ends at cssW - 2 = 338
     const fullZones = computeBarZones({
       cssW: 340,
       used: 200_000,
@@ -197,8 +197,8 @@ describe("contextMeter usable context & auto-compaction math", () => {
         reasoningTok: 15_000,
       },
     });
-    expect(fullZones.segments[0]?.x0).toBe(2.5);
-    expect(fullZones.segments[fullZones.segments.length - 1]?.x1).toBe(337.5);
+    expect(fullZones.segments[0]?.x0).toBe(2);
+    expect(fullZones.segments[fullZones.segments.length - 1]?.x1).toBe(338);
     expect(fullZones.usableZone).toBeNull();
     expect(fullZones.reserveZone).toBeNull();
 

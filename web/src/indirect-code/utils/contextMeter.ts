@@ -187,31 +187,23 @@ export function computeTokenMix(usage: UsageBreakdownInput | null | undefined): 
 }
 
 /**
- * Allocates pixel widths across non-zero segments with `segGap` separation
- * between adjacent segment capsules while enforcing a minimum visual width
- * (`7px` when space allows) so small slices retain complete 4-sided borders.
+ * Allocates contiguous zero-gap (`seg[i].x1 === seg[i+1].x0`) pixel widths across
+ * non-zero segments while enforcing a minimum visual width (`6px` when space allows)
+ * so small slices remain legible inside one unified occupied bar.
  */
 function allocateSegmentWidths(
   items: Array<{ id: ContextSegmentId; tokens: number }>,
   totalW: number,
-  segGap = 1.5,
 ): BarSegmentLayout[] {
   if (items.length === 0 || totalW <= 0) return [];
   const totalTok = items.reduce((acc, it) => acc + it.tokens, 0);
   if (totalTok <= 0) return [];
 
-  const gapCount = Math.max(0, items.length - 1);
-  const effectiveGap =
-    gapCount > 0
-      ? Math.max(0, Math.min(segGap, (totalW - items.length * 4) / gapCount))
-      : 0;
-  const availW = Math.max(0, totalW - effectiveGap * gapCount);
-
-  const minSegW = Math.min(7, availW / items.length);
+  const minSegW = Math.min(6, totalW / items.length);
   const widths = new Array<number>(items.length).fill(0);
   const locked = new Array<boolean>(items.length).fill(false);
 
-  let remW = availW;
+  let remW = totalW;
   let remTok = totalTok;
 
   for (let pass = 0; pass < items.length; pass++) {
@@ -246,7 +238,7 @@ function allocateSegmentWidths(
   for (let i = 0; i < items.length; i++) {
     const x0 = cursor;
     const x1 = i === items.length - 1 ? totalW : Math.min(totalW, cursor + widths[i]!);
-    cursor = x1 + effectiveGap;
+    cursor = x1;
     out.push({
       id: items[i]!.id,
       x0,
@@ -267,7 +259,7 @@ export function computeBarZones(params: {
   usage: UsageBreakdownInput | null | undefined;
   inset?: number;
 }): BarZonesLayout {
-  const inset = params.inset ?? 2.5;
+  const inset = params.inset ?? 2;
   const cssW = Math.max(0, params.cssW);
   const innerLeft = Math.min(inset, cssW * 0.5);
   const innerRight = Math.max(innerLeft, cssW - inset);
@@ -297,7 +289,7 @@ export function computeBarZones(params: {
       if (mix.cacheTok > 0) nonZero.push({ id: "cache", tokens: mix.cacheTok });
       if (mix.netOutTok > 0) nonZero.push({ id: "output", tokens: mix.netOutTok });
       if (mix.reasoningTok > 0) nonZero.push({ id: "reasoning", tokens: mix.reasoningTok });
-      segments = allocateSegmentWidths(nonZero, totalOccupiedW, 1.5).map((s) => ({
+      segments = allocateSegmentWidths(nonZero, totalOccupiedW).map((s) => ({
         ...s,
         x0: innerLeft + s.x0,
         x1: innerLeft + s.x1,
@@ -328,21 +320,16 @@ export function computeBarZones(params: {
         innerLeft + Math.min(6, innerW),
         Math.min(innerRight - minReservePx, rawTx),
       );
-      const usableStart = totalOccupiedW > 0 ? occupiedEndX + 1.5 : innerLeft;
-      const usableEnd = thresholdX - 1;
-      if (usableEnd - usableStart >= 4) {
+      if (thresholdX - occupiedEndX >= 2) {
         usableZone = {
           id: "usable",
-          x0: usableStart,
-          x1: usableEnd,
-          width: usableEnd - usableStart,
+          x0: occupiedEndX,
+          x1: thresholdX,
+          width: thresholdX - occupiedEndX,
         };
       }
-      const reserveStart =
-        totalOccupiedW > 0 && occupiedEndX >= thresholdX
-          ? occupiedEndX + 1.5
-          : thresholdX + 1;
-      if (innerRight - reserveStart >= 4) {
+      const reserveStart = Math.max(occupiedEndX, thresholdX);
+      if (innerRight - reserveStart >= 2) {
         reserveZone = {
           id: "reserve",
           x0: reserveStart,
@@ -350,16 +337,13 @@ export function computeBarZones(params: {
           width: innerRight - reserveStart,
         };
       }
-    } else {
-      const usableStart = totalOccupiedW > 0 ? occupiedEndX + 1.5 : innerLeft;
-      if (innerRight - usableStart >= 4) {
-        usableZone = {
-          id: "usable",
-          x0: usableStart,
-          x1: innerRight,
-          width: innerRight - usableStart,
-        };
-      }
+    } else if (innerRight - occupiedEndX >= 2) {
+      usableZone = {
+        id: "usable",
+        x0: occupiedEndX,
+        x1: innerRight,
+        width: innerRight - occupiedEndX,
+      };
     }
   }
 
@@ -385,28 +369,20 @@ export function hitTestBarZone(zones: BarZonesLayout, localX: number): ContextZo
   }
   const clampedX = Math.max(zones.innerLeft, Math.min(zones.innerRight, localX));
 
-  if (zones.totalOccupiedW > 0 && zones.segments.length > 0 && clampedX <= zones.occupiedEndX + 0.75) {
+  if (zones.totalOccupiedW > 0 && zones.segments.length > 0 && clampedX <= zones.occupiedEndX) {
     for (let i = 0; i < zones.segments.length; i++) {
       const seg = zones.segments[i]!;
-      const rightSplit =
-        i < zones.segments.length - 1
-          ? (seg.x1 + zones.segments[i + 1]!.x0) * 0.5
-          : zones.occupiedEndX + 0.75;
-      if (clampedX <= rightSplit) {
+      if (clampedX >= seg.x0 && (clampedX <= seg.x1 || i === zones.segments.length - 1)) {
         return seg.id;
       }
     }
   }
 
-  if (
-    zones.usableZone &&
-    clampedX > zones.occupiedEndX + 0.75 &&
-    clampedX <= (zones.thresholdX ?? zones.innerRight)
-  ) {
+  if (zones.usableZone && clampedX > zones.usableZone.x0 && clampedX <= zones.usableZone.x1) {
     return "usable";
   }
 
-  if (zones.reserveZone && clampedX >= (zones.thresholdX ?? zones.reserveZone.x0)) {
+  if (zones.reserveZone && clampedX >= zones.reserveZone.x0 && clampedX <= zones.reserveZone.x1) {
     return "reserve";
   }
 

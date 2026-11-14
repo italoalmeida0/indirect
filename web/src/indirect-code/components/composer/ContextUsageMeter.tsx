@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createSignal,
@@ -31,8 +32,9 @@ type Rgb = [number, number, number];
 
 const SWEEP_DURATION_MS = 780;
 const TRACK_RADIUS = 10;
-const INNER_PAD = 2.5;
-const SEG_STROKE_W = 1.5;
+const INNER_PAD = 2;
+const CONTOUR_LW = 1.35;
+const SPOTLIGHT_LW = 1.5;
 
 function clamp(v: number, min: number, max: number): number {
   return v < min ? min : v > max ? max : v;
@@ -49,6 +51,10 @@ function lerpRgb(a: Rgb, b: Rgb, t: number): Rgb {
     Math.round(a[1] + (b[1] - a[1]) * k),
     Math.round(a[2] + (b[2] - a[2]) * k),
   ];
+}
+
+function rgbaStr(rgb: Rgb, alpha: number): string {
+  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${clamp(alpha, 0, 1).toFixed(3)})`;
 }
 
 function cellHash(col: number, row: number, seed: number): number {
@@ -328,7 +334,6 @@ export function ContextUsageMeter(props: {
     let reserveGlow = 0;
 
     // Exact 1:1 physical pixel backing store (`cssW * dpr === canvas.width`)
-    // eliminates subpixel browser CSS stretch and left/right edge clipping.
     const syncSize = () =>
       untrack(() => {
         const rect = canvas.getBoundingClientRect();
@@ -351,6 +356,16 @@ export function ContextUsageMeter(props: {
         canvas.width = nextPhysW;
         canvas.height = nextPhysH;
       });
+
+    const resolveSegRgb = (
+      id: ContextSegmentId,
+      usedRatio: number,
+      isArmed: boolean,
+    ): Rgb => {
+      if (id === "context" && usedRatio >= 0.92) return palette.danger;
+      if (id === "context" && isArmed) return palette.warning;
+      return segmentBaseRgb(id, palette);
+    };
 
     const drawFrame = (nowMs: number, isStatic: boolean) =>
       untrack(() => {
@@ -419,11 +434,11 @@ export function ContextUsageMeter(props: {
         const isDark = palette.isDark;
         const innerLeft = zLayout.innerLeft;
         const innerRight = zLayout.innerRight;
+        const innerW = zLayout.innerW;
         const topY = INNER_PAD;
         const botY = cssH - INNER_PAD;
         const innerH = Math.max(0, botY - topY);
-        const endOuterR = TRACK_RADIUS - INNER_PAD; // 7.5px concentric outer capsule cap
-        const seamOuterR = 3.0;
+        const endOuterR = TRACK_RADIUS - INNER_PAD; // 8.0px concentric outer cap
         const tSec = isStatic ? 1.85 : nowMs * 0.001;
 
         const frontierX = innerLeft + zLayout.totalOccupiedW * curSweepP;
@@ -449,17 +464,50 @@ export function ContextUsageMeter(props: {
         ctx.fillStyle = `rgb(${pocketFill[0]}, ${pocketFill[1]}, ${pocketFill[2]})`;
         ctx.fill();
         ctx.lineWidth = 1;
-        ctx.strokeStyle = `rgba(${outerBorderRgb[0]}, ${outerBorderRgb[1]}, ${outerBorderRgb[2]}, ${
-          isDark ? "0.88" : "0.92"
-        })`;
+        ctx.strokeStyle = rgbaStr(outerBorderRgb, isDark ? 0.88 : 0.92);
         ctx.stroke();
         ctx.restore();
 
-        // Grid geometry: cell = 2px, pitch = 3px, checkerboard quincunx (col + row) % 2 === 0
+        // ---------------------------------------------------------------------
+        // Pass 1: Unified inner track subtle zone washes (NO separate pill boxes at rest)
+        // ---------------------------------------------------------------------
+        if (innerW > 2 && innerH > 2) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(innerLeft, topY, innerW, innerH, endOuterR);
+          ctx.clip();
+
+          if (zLayout.thresholdX !== null && zLayout.thresholdX < innerRight) {
+            const rWashAlpha =
+              (isDark ? 0.048 : 0.062) + reserveGlow * (isDark ? 0.1 : 0.12);
+            ctx.fillStyle = rgbaStr(palette.warning, rWashAlpha);
+            ctx.fillRect(
+              zLayout.thresholdX,
+              topY,
+              Math.max(0, innerRight - zLayout.thresholdX),
+              innerH,
+            );
+          }
+
+          if (usableGlow > 0.01 && zLayout.usableZone) {
+            const uWashAlpha = usableGlow * (isDark ? 0.1 : 0.12);
+            ctx.fillStyle = rgbaStr(palette.success, uWashAlpha);
+            ctx.fillRect(
+              zLayout.usableZone.x0,
+              topY,
+              zLayout.usableZone.width,
+              innerH,
+            );
+          }
+
+          ctx.restore();
+        }
+
+        // Global continuous quincunx lattice: cell = 2px, pitch = 3px, (col + row) % 2 === 0
         const cell = 2;
         const pitch = 3;
-        const usableInteriorH = Math.max(2, cssH - (INNER_PAD + SEG_STROKE_W) * 2);
-        const usableInteriorW = Math.max(2, cssW - (INNER_PAD + SEG_STROKE_W) * 2);
+        const usableInteriorH = Math.max(2, cssH - (INNER_PAD + CONTOUR_LW) * 2);
+        const usableInteriorW = Math.max(2, cssW - (INNER_PAD + CONTOUR_LW) * 2);
         const rows = Math.max(1, Math.floor((usableInteriorH + 1) / pitch));
         const cols = Math.max(1, Math.floor((usableInteriorW + 1) / pitch));
         const gridH = rows * pitch - (pitch - cell);
@@ -468,397 +516,467 @@ export function ContextUsageMeter(props: {
         const y0 = Math.round((cssH - gridH) / 2);
 
         // ---------------------------------------------------------------------
-        // Pass 1 & 2: Unused capacity capsules (Usable Free + Auto-Compact Buffer)
+        // Pass 2: Unused capacity socket lattice (continuous across Usable & Reserve)
         // ---------------------------------------------------------------------
-        const unusedStartX =
-          zLayout.totalOccupiedW > 0 && curSweepP > 0.01 ? frontierX + 1.5 : innerLeft;
+        const socketInX = innerLeft + 1;
+        const socketInY = topY + 1;
+        const socketInW = Math.max(0, innerW - 2);
+        const socketInH = Math.max(0, innerH - 2);
+        const socketInR = Math.max(1, endOuterR - 1);
 
-        // 2a. Usable Free region (`[unusedStartX .. usableEnd]`)
-        const usableEnd = zLayout.thresholdX !== null ? zLayout.thresholdX - 1 : innerRight;
-        if (usableEnd - unusedStartX >= 3 && innerH > 4) {
-          const uX = unusedStartX;
-          const uW = usableEnd - unusedStartX;
-          const uLeftR = uX <= innerLeft + 0.5 ? endOuterR : seamOuterR;
-          const uRightR = zLayout.thresholdX === null ? endOuterR : seamOuterR;
-          const sRgb = palette.success;
+        for (let col = 0; col < cols; col++) {
+          const x = x0 + col * pitch;
+          const cx = x + 1;
+          if (zLayout.totalOccupiedW > 0 && cx <= frontierX + 1.2) continue;
 
-          if (usableGlow > 0.01 && zLayout.usableZone) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.roundRect(
-              zLayout.usableZone.x0 + 1,
-              topY + 1,
-              Math.max(1, zLayout.usableZone.width - 2),
-              Math.max(1, innerH - 2),
-              [
-                Math.max(1, (zLayout.totalOccupiedW === 0 ? endOuterR : seamOuterR) - 1),
-                Math.max(1, uRightR - 1),
-                Math.max(1, uRightR - 1),
-                Math.max(1, (zLayout.totalOccupiedW === 0 ? endOuterR : seamOuterR) - 1),
-              ],
-            );
-            ctx.fillStyle = `rgba(${sRgb[0]}, ${sRgb[1]}, ${sRgb[2]}, ${(
-              usableGlow * (isDark ? 0.1 : 0.12)
-            ).toFixed(3)})`;
-            ctx.fill();
-            ctx.restore();
-          }
+          const inReserve = zLayout.thresholdX !== null && cx >= zLayout.thresholdX;
 
-          for (let col = 0; col < cols; col++) {
-            const x = x0 + col * pitch;
-            if (x < uX || x + cell > usableEnd) continue;
-            for (let row = 0; row < rows; row++) {
-              if (((col + row) & 1) !== 0) continue;
-              const y = y0 + row * pitch;
-              if (
-                !isCellInsideCapsule(
-                  x,
-                  y,
-                  cell,
-                  uX + 1,
-                  topY + 1,
-                  uW - 2,
-                  innerH - 2,
-                  Math.max(1, uLeftR - 1),
-                  Math.max(1, uRightR - 1),
-                  0.2,
-                )
-              ) {
-                continue;
-              }
-              let rgb: Rgb = palette.muted;
-              let alpha = isDark ? 0.088 : 0.118;
-              if (segSpotlighted) alpha *= 0.58;
-              if (win > 0 && usableGlow > 0.01 && x >= (zLayout.usableZone?.x0 ?? uX)) {
-                const uWave = 0.5 + 0.5 * Math.sin(tSec * 2.4 - col * 0.22 + row * 0.35);
-                rgb = lerpRgb(palette.muted, palette.success, usableGlow * 0.88);
-                alpha = lerp(alpha, (isDark ? 0.22 : 0.28) + 0.42 * uWave, usableGlow);
-              }
-              ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${clamp(alpha, 0, 1).toFixed(3)})`;
-              ctx.fillRect(x, y, cell, cell);
-            }
-          }
-
-          if (usableGlow > 0.02 && zLayout.usableZone && zLayout.usableZone.width >= 4) {
-            const uz = zLayout.usableZone;
-            const cLeftR = Math.max(
-              1,
-              (zLayout.totalOccupiedW === 0 ? endOuterR : seamOuterR) - SEG_STROKE_W * 0.5,
-            );
-            const cRightR = Math.max(1, uRightR - SEG_STROKE_W * 0.5);
-            ctx.save();
-            ctx.strokeStyle = `rgba(${sRgb[0]}, ${sRgb[1]}, ${sRgb[2]}, ${(0.86 * usableGlow).toFixed(3)})`;
-            ctx.lineWidth = SEG_STROKE_W;
-            ctx.beginPath();
-            ctx.roundRect(
-              uz.x0 + SEG_STROKE_W * 0.5,
-              topY + SEG_STROKE_W * 0.5,
-              Math.max(1, uz.width - SEG_STROKE_W),
-              Math.max(1, innerH - SEG_STROKE_W),
-              [cLeftR, cRightR, cRightR, cLeftR],
-            );
-            ctx.stroke();
-            ctx.restore();
-          }
-        }
-
-        // 2b. Auto-Compact Reserve Buffer capsule (`[rStart .. innerRight]`)
-        if (zLayout.thresholdX !== null && innerH > 4) {
-          const rStart = Math.max(unusedStartX, zLayout.thresholdX + 1);
-          const rW = innerRight - rStart;
-          if (rW >= 4) {
-            const rLeftR = rStart <= innerLeft + 0.5 ? endOuterR : seamOuterR;
-            const rRightR = endOuterR; // Always concentric with far-right track end
-            const wRgb = palette.warning;
-            const rLw = lerp(1.25, SEG_STROKE_W, reserveGlow);
-
-            // Clipped reserve interior wash + socket lattice
-            const inX = rStart + rLw;
-            const inY = topY + rLw;
-            const inW = Math.max(0, rW - rLw * 2);
-            const inH = Math.max(0, innerH - rLw * 2);
-            const inLR = Math.max(1, rLeftR - rLw);
-            const inRR = Math.max(1, rRightR - rLw);
-
-            if (inW > 1 && inH > 1) {
-              ctx.save();
-              ctx.beginPath();
-              ctx.roundRect(inX, inY, inW, inH, [inLR, inRR, inRR, inLR]);
-              ctx.clip();
-
-              const rWashAlpha =
-                (isDark ? 0.052 : 0.068) + reserveGlow * (isDark ? 0.1 : 0.12);
-              ctx.fillStyle = `rgba(${wRgb[0]}, ${wRgb[1]}, ${wRgb[2]}, ${rWashAlpha.toFixed(3)})`;
-              ctx.fillRect(inX, inY, inW, inH);
-
-              for (let col = 0; col < cols; col++) {
-                const x = x0 + col * pitch;
-                if (x < inX || x + cell > inX + inW) continue;
-                for (let row = 0; row < rows; row++) {
-                  if (((col + row) & 1) !== 0) continue;
-                  const y = y0 + row * pitch;
-                  if (!isCellInsideCapsule(x, y, cell, inX, inY, inW, inH, inLR, inRR, 0.2)) {
-                    continue;
-                  }
-                  let alpha = isDark ? 0.075 : 0.095;
-                  if (segSpotlighted) alpha *= 0.58;
-                  const rgb = lerpRgb(palette.muted, wRgb, 0.42 + reserveGlow * 0.58);
-                  if (reserveGlow > 0.01) {
-                    const rWave = 0.5 + 0.5 * Math.sin(tSec * 2.2 - col * 0.22 - row * 0.35);
-                    alpha = lerp(alpha, (isDark ? 0.24 : 0.3) + 0.42 * rWave, reserveGlow);
-                  }
-                  ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${clamp(alpha, 0, 1).toFixed(3)})`;
-                  ctx.fillRect(x, y, cell, cell);
-                }
-              }
-              ctx.restore();
+          for (let row = 0; row < rows; row++) {
+            if (((col + row) & 1) !== 0) continue;
+            const y = y0 + row * pitch;
+            if (
+              !isCellInsideCapsule(
+                x,
+                y,
+                cell,
+                socketInX,
+                socketInY,
+                socketInW,
+                socketInH,
+                socketInR,
+                socketInR,
+                0.2,
+              )
+            ) {
+              continue;
             }
 
-            // Complete 4-sided concentric amber capsule border (subtle at rest, luminous on spotlight)
-            const rBorderAlpha = lerp(
-              segSpotlighted ? (isDark ? 0.14 : 0.18) : isDark ? 0.26 : 0.32,
-              0.9,
-              reserveGlow,
-            );
-            const cLeftR = Math.max(1, rLeftR - rLw * 0.5);
-            const cRightR = Math.max(1, rRightR - rLw * 0.5);
-            ctx.save();
-            ctx.strokeStyle = `rgba(${wRgb[0]}, ${wRgb[1]}, ${wRgb[2]}, ${rBorderAlpha.toFixed(3)})`;
-            ctx.lineWidth = rLw;
-            ctx.beginPath();
-            ctx.roundRect(
-              rStart + rLw * 0.5,
-              topY + rLw * 0.5,
-              Math.max(1, rW - rLw),
-              Math.max(1, innerH - rLw),
-              [cLeftR, cRightR, cRightR, cLeftR],
-            );
-            ctx.stroke();
-            ctx.restore();
+            let rgb: Rgb = palette.muted;
+            let alpha = isDark ? 0.085 : 0.115;
+            if (segSpotlighted) alpha *= 0.58;
+
+            if (inReserve) {
+              alpha = isDark ? 0.068 : 0.088;
+              if (segSpotlighted) alpha *= 0.6;
+              rgb = lerpRgb(palette.muted, palette.warning, 0.36 + reserveGlow * 0.64);
+              if (reserveGlow > 0.01) {
+                const rWave = 0.5 + 0.5 * Math.sin(tSec * 2.2 - col * 0.22 - row * 0.35);
+                alpha = lerp(alpha, (isDark ? 0.24 : 0.3) + 0.42 * rWave, reserveGlow);
+              }
+            } else if (win > 0 && usableGlow > 0.01) {
+              const uWave = 0.5 + 0.5 * Math.sin(tSec * 2.4 - col * 0.22 + row * 0.35);
+              rgb = lerpRgb(palette.muted, palette.success, usableGlow * 0.88);
+              alpha = lerp(alpha, (isDark ? 0.24 : 0.3) + 0.42 * uWave, usableGlow);
+            }
+
+            ctx.fillStyle = rgbaStr(rgb, alpha);
+            ctx.fillRect(x, y, cell, cell);
           }
         }
 
         // ---------------------------------------------------------------------
-        // Pass 3 & 4: Occupied Colored Segment Capsules (4-Sided Concentric roundRects)
+        // Pass 3 & 4: Unified Occupied Capsule `U` (Zero Gaps, Seamless Layer Blending,
+        //             Complete Curved Left Start & Right End Contour)
         // ---------------------------------------------------------------------
-        if (zLayout.totalOccupiedW > 0 && frontierX > innerLeft + 1.5 && zLayout.segments.length > 0) {
-          for (let si = 0; si < zLayout.segments.length; si++) {
-            const seg = zLayout.segments[si]!;
-            // Mid-sweep: never draw static outline for unreached segments ahead of frontierX
-            if (seg.x0 >= frontierX - 0.5) continue;
+        const visibleOccupiedW = Math.max(0, frontierX - innerLeft);
+        const reachedSegs = zLayout.segments.filter((s) => s.x0 < frontierX - 0.5);
 
-            const segEnd = Math.min(seg.x1, frontierX);
-            const segW = segEnd - seg.x0;
-            if (segW < 1.5) continue;
+        if (zLayout.totalOccupiedW > 0 && visibleOccupiedW > 1.5 && reachedSegs.length > 0) {
+          const touchesRightEnd = visibleOccupiedW >= innerW - 0.5;
+          const rightOuterR = touchesRightEnd ? endOuterR : 4.25;
+          const lw = CONTOUR_LW;
 
-            const isLeadingSweepSeg = env > 0.01 && frontierX <= seg.x1 + 0.5;
-            const touchesLeft = si === 0 && seg.x0 <= innerLeft + 0.5;
-            const touchesRight = segEnd >= innerRight - 0.5;
+          const uInX = innerLeft + lw;
+          const uInY = topY + lw;
+          const uInW = Math.max(0, visibleOccupiedW - lw * 2);
+          const uInH = Math.max(0, innerH - lw * 2);
+          const uInLeftR = Math.max(1, endOuterR - lw);
+          const uInRightR = Math.max(1, rightOuterR - lw);
 
-            const outerLeftR = touchesLeft ? endOuterR : seamOuterR;
-            const outerRightR = touchesRight ? endOuterR : seamOuterR;
+          // 3a. Unified interior: blended horizontal layer wash + frontier plasma + unbroken LED lattice
+          if (uInW > 0.5 && uInH > 1) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.roundRect(uInX, uInY, uInW, uInH, [
+              uInLeftR,
+              uInRightR,
+              uInRightR,
+              uInLeftR,
+            ]);
+            ctx.clip();
 
-            const baseRgb =
-              seg.id === "context" && currentMath.usedRatio >= 0.92
-                ? palette.danger
-                : seg.id === "context" && currentMath.isArmed
-                  ? palette.warning
-                  : segmentBaseRgb(seg.id, palette);
-            const hotRgb = lerpRgb(baseRgb, [255, 255, 255], isDark ? 0.86 : 0.62);
-            const w = weights[seg.id];
-            const hl = highlights[seg.id];
-
-            const lw = SEG_STROKE_W;
-            const inX = seg.x0 + lw;
-            const inY = topY + lw;
-            const inW = Math.max(0, segW - lw * 2);
-            const inH = Math.max(0, innerH - lw * 2);
-            const inLR = Math.max(1, outerLeftR - lw);
-            const inRR = Math.max(1, outerRightR - lw);
-
-            // Clipped segment interior: tinted wash + frontier plasma + quincunx LED dots
-            if (inW > 0.5 && inH > 1) {
-              ctx.save();
-              ctx.beginPath();
-              ctx.roundRect(inX, inY, inW, inH, [inLR, inRR, inRR, inLR]);
-              ctx.clip();
-
-              const washAlpha = (isDark ? 0.11 : 0.14) * w + hl * 0.07;
-              ctx.fillStyle = `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, ${clamp(
-                washAlpha,
+            // Smoothly blended layer wash across contiguous segments
+            const washGrad = ctx.createLinearGradient(
+              innerLeft,
+              0,
+              innerLeft + visibleOccupiedW,
+              0,
+            );
+            const blendHalfPx = 4.5;
+            for (let ri = 0; ri < reachedSegs.length; ri++) {
+              const s = reachedSegs[ri]!;
+              const sEnd = Math.min(s.x1, frontierX);
+              const localBlend = Math.min(blendHalfPx, Math.max(0, (sEnd - s.x0) * 0.35));
+              const rgb = resolveSegRgb(s.id, currentMath.usedRatio, currentMath.isArmed);
+              const a = clamp(
+                (isDark ? 0.105 : 0.138) * weights[s.id] + highlights[s.id] * 0.065,
                 0,
                 0.45,
-              ).toFixed(3)})`;
-              ctx.fillRect(inX, inY, inW, inH);
+              );
+              const startOff =
+                ri === 0
+                  ? 0
+                  : clamp((s.x0 + localBlend - innerLeft) / visibleOccupiedW, 0, 1);
+              const endOff =
+                ri === reachedSegs.length - 1
+                  ? 1
+                  : clamp((sEnd - localBlend - innerLeft) / visibleOccupiedW, startOff, 1);
+              washGrad.addColorStop(startOff, rgbaStr(rgb, a));
+              if (endOff > startOff) {
+                washGrad.addColorStop(endOff, rgbaStr(rgb, a));
+              }
+            }
+            ctx.fillStyle = washGrad;
+            ctx.fillRect(uInX, uInY, uInW, uInH);
 
-              if (env > 0.01 && segEnd >= frontierX - 30) {
-                if (!isDark) {
-                  const plasmaStart = Math.max(inX, frontierX - 28);
-                  const plasmaGrad = ctx.createLinearGradient(plasmaStart, 0, frontierX + 2, 0);
-                  plasmaGrad.addColorStop(
-                    0,
-                    `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, 0)`,
-                  );
-                  plasmaGrad.addColorStop(
-                    1,
-                    `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, ${(0.32 * env).toFixed(3)})`,
-                  );
-                  ctx.fillStyle = plasmaGrad;
-                  ctx.fillRect(plasmaStart, inY, Math.max(0, frontierX - plasmaStart + 2), inH);
-                }
+            // Frontier incandescent bloom & Light-mode jewel plasma backdrop
+            const leadSeg = reachedSegs[reachedSegs.length - 1]!;
+            const leadRgb = resolveSegRgb(
+              leadSeg.id,
+              currentMath.usedRatio,
+              currentMath.isArmed,
+            );
+            const leadHotRgb = lerpRgb(leadRgb, [255, 255, 255], isDark ? 0.86 : 0.62);
 
-                const gx = frontierX - 3;
-                const gy = cssH * 0.5;
-                const bloom = ctx.createRadialGradient(gx, gy, 1.5, gx, gy, 26);
-                bloom.addColorStop(
+            if (env > 0.01) {
+              if (!isDark) {
+                const plasmaStart = Math.max(uInX, frontierX - 30);
+                const plasmaGrad = ctx.createLinearGradient(
+                  plasmaStart,
                   0,
-                  `rgba(${hotRgb[0]}, ${hotRgb[1]}, ${hotRgb[2]}, ${(
-                    (isDark ? 0.34 : 0.25) * env
-                  ).toFixed(3)})`,
+                  frontierX + 2,
+                  0,
                 );
-                bloom.addColorStop(
-                  0.45,
-                  `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, ${(0.15 * env).toFixed(3)})`,
-                );
-                bloom.addColorStop(1, `rgba(${baseRgb[0]}, ${baseRgb[1]}, ${baseRgb[2]}, 0)`);
-                ctx.fillStyle = bloom;
-                ctx.fillRect(Math.max(inX, gx - 28), inY, 56, inH);
+                plasmaGrad.addColorStop(0, rgbaStr(leadRgb, 0));
+                plasmaGrad.addColorStop(1, rgbaStr(leadRgb, 0.3 * env));
+                ctx.fillStyle = plasmaGrad;
+                ctx.fillRect(plasmaStart, uInY, Math.max(0, frontierX - plasmaStart + 2), uInH);
               }
 
-              for (let col = 0; col < cols; col++) {
-                const x = x0 + col * pitch;
-                if (x < inX || x + cell > inX + inW) continue;
-                const cx = x + 1;
-                const d = frontierX - cx;
-
-                for (let row = 0; row < rows; row++) {
-                  const y = y0 + row * pitch;
-                  if (!isCellInsideCapsule(x, y, cell, inX, inY, inW, inH, inLR, inRR, 0.2)) {
-                    continue;
-                  }
-
-                  const rowJitter = (cellHash(0, row, 9) - 0.5) * 4;
-                  const dJ = d + rowJitter * env;
-                  const leadMask = clamp((d + 1.5) / 2.5, 0, 1);
-                  if (leadMask <= 0.01) continue;
-
-                  const crest =
-                    env > 0.001
-                      ? env * leadMask * Math.exp(-Math.pow(Math.max(0, dJ - 3) / 15.5, 1.7))
-                      : 0;
-
-                  const isEven = ((col + row) & 1) === 0;
-                  const phase = cellHash(col, row, 2) * Math.PI * 2;
-                  const speed = 1.35 + cellHash(col, row, 3) * 1.9;
-                  const twinkle = 0.5 + 0.5 * Math.sin(tSec * speed + phase);
-                  const wave =
-                    0.5 +
-                    0.5 *
-                      Math.sin(
-                        tSec * 1.8 - col * 0.19 + Math.sin(row * 0.85) * 0.55 + phase * 0.3,
-                      );
-                  const spark = 0.46 * twinkle + 0.54 * wave;
-
-                  const baseFloor = isDark ? 0.18 : 0.25;
-                  const waveAmp = 0.76;
-                  const ambientAlpha = isEven
-                    ? baseFloor +
-                      (cellHash(col, row, 1) < 0.7
-                        ? waveAmp * Math.pow(spark, 1.5)
-                        : 0.09 * spark)
-                    : 0;
-
-                  const oddFillAlpha = !isEven
-                    ? Math.pow(crest, 1.4) * (0.48 + 0.52 * spark)
-                    : 0;
-
-                  let rawAlpha = Math.max(ambientAlpha * w, crest * 0.98, oddFillAlpha);
-                  if (!isDark && crest > 0.15 && crest <= 0.65) {
-                    rawAlpha = Math.max(rawAlpha, Math.min(1, crest * 1.35));
-                  }
-                  const finalAlpha = clamp(rawAlpha * leadMask, 0, 1);
-                  if (finalAlpha < 0.03) continue;
-
-                  const glintMix =
-                    isEven && spark > 0.89 && cellHash(col, row, 5) > 0.52
-                      ? isDark
-                        ? 0.68
-                        : 0.42
-                      : 0;
-
-                  let hotMix: number;
-                  if (isDark) {
-                    hotMix = Math.max(
-                      glintMix * Math.min(1, w),
-                      Math.pow(crest, 0.72) * 0.92,
-                    );
-                  } else {
-                    const crestHot = crest > 0.62 ? ((crest - 0.62) / 0.38) * 0.95 : 0;
-                    hotMix = Math.max(glintMix * Math.min(1, w), crestHot);
-                  }
-
-                  const dotRgb = lerpRgb(baseRgb, hotRgb, hotMix);
-                  ctx.fillStyle = `rgba(${dotRgb[0]}, ${dotRgb[1]}, ${dotRgb[2]}, ${finalAlpha.toFixed(3)})`;
-                  ctx.fillRect(x, y, cell, cell);
-                }
-              }
-
-              ctx.restore();
+              const gx = frontierX - 3.5;
+              const gy = cssH * 0.5;
+              const bloom = ctx.createRadialGradient(gx, gy, 1.5, gx, gy, 28);
+              bloom.addColorStop(0, rgbaStr(leadHotRgb, (isDark ? 0.34 : 0.25) * env));
+              bloom.addColorStop(0.45, rgbaStr(leadRgb, 0.14 * env));
+              bloom.addColorStop(1, rgbaStr(leadRgb, 0));
+              ctx.fillStyle = bloom;
+              ctx.fillRect(Math.max(uInX, gx - 30), uInY, 60, uInH);
             }
 
-            // Complete 4-sided concentric colored capsule border (NEVER clipped by outer track)
-            const cLeftR = Math.max(0.75, outerLeftR - lw * 0.5);
-            const cRightR = Math.max(0.75, outerRightR - lw * 0.5);
-            const restedRimAlpha = (isDark ? 0.8 : 0.84) * Math.min(1, w);
-            const strokeAlpha = clamp(lerp(restedRimAlpha, 0.98, hl), 0.18, 0.98);
-            const frameRgb = lerpRgb(
-              baseRgb,
-              [255, 255, 255],
-              (isDark ? 0.14 : 0.02) + hl * (isDark ? 0.22 : 0.08),
-            );
+            // Continuous unbroken quincunx LED matrix across all reached segments
+            for (let col = 0; col < cols; col++) {
+              const x = x0 + col * pitch;
+              const cx = x + 1;
+              if (x < uInX || cx > frontierX + 1.5) continue;
+
+              // Resolve primary segment + seamless ±3px color cross-blend at interior boundaries
+              let segIdx = 0;
+              for (let si = 0; si < reachedSegs.length; si++) {
+                const cand = reachedSegs[si]!;
+                if (cx >= cand.x0 && (cx <= cand.x1 || si === reachedSegs.length - 1)) {
+                  segIdx = si;
+                  break;
+                }
+              }
+              const seg = reachedSegs[segIdx]!;
+              let baseRgb = resolveSegRgb(
+                seg.id,
+                currentMath.usedRatio,
+                currentMath.isArmed,
+              );
+              let w = weights[seg.id];
+
+              if (!segSpotlighted && reachedSegs.length > 1) {
+                const seamBlendR = 3.2;
+                if (segIdx > 0 && cx - seg.x0 < seamBlendR) {
+                  const prevSeg = reachedSegs[segIdx - 1]!;
+                  const prevRgb = resolveSegRgb(
+                    prevSeg.id,
+                    currentMath.usedRatio,
+                    currentMath.isArmed,
+                  );
+                  const blendT = 0.5 + ((cx - seg.x0) / seamBlendR) * 0.5;
+                  baseRgb = lerpRgb(prevRgb, baseRgb, blendT);
+                  w = lerp(weights[prevSeg.id], w, blendT);
+                } else if (segIdx < reachedSegs.length - 1 && seg.x1 - cx < seamBlendR) {
+                  const nextSeg = reachedSegs[segIdx + 1]!;
+                  const nextRgb = resolveSegRgb(
+                    nextSeg.id,
+                    currentMath.usedRatio,
+                    currentMath.isArmed,
+                  );
+                  const blendT = 0.5 - ((seg.x1 - cx) / seamBlendR) * 0.5;
+                  baseRgb = lerpRgb(baseRgb, nextRgb, blendT);
+                  w = lerp(w, weights[nextSeg.id], blendT);
+                }
+              }
+
+              const hotRgb = lerpRgb(baseRgb, [255, 255, 255], isDark ? 0.86 : 0.62);
+              const d = frontierX - cx;
+
+              for (let row = 0; row < rows; row++) {
+                const y = y0 + row * pitch;
+                if (
+                  !isCellInsideCapsule(
+                    x,
+                    y,
+                    cell,
+                    uInX,
+                    uInY,
+                    uInW,
+                    uInH,
+                    uInLeftR,
+                    uInRightR,
+                    0.2,
+                  )
+                ) {
+                  continue;
+                }
+
+                const rowJitter = (cellHash(0, row, 9) - 0.5) * 4;
+                const dJ = d + rowJitter * env;
+                const leadMask = clamp((d + 1.5) / 2.5, 0, 1);
+                if (leadMask <= 0.01) continue;
+
+                const crest =
+                  env > 0.001
+                    ? env * leadMask * Math.exp(-Math.pow(Math.max(0, dJ - 3) / 15.5, 1.7))
+                    : 0;
+
+                const isEven = ((col + row) & 1) === 0;
+                const phase = cellHash(col, row, 2) * Math.PI * 2;
+                const speed = 1.35 + cellHash(col, row, 3) * 1.9;
+                const twinkle = 0.5 + 0.5 * Math.sin(tSec * speed + phase);
+                const wave =
+                  0.5 +
+                  0.5 *
+                    Math.sin(
+                      tSec * 1.8 - col * 0.19 + Math.sin(row * 0.85) * 0.55 + phase * 0.3,
+                    );
+                const spark = 0.46 * twinkle + 0.54 * wave;
+
+                const baseFloor = isDark ? 0.18 : 0.25;
+                const waveAmp = 0.76;
+                const ambientAlpha = isEven
+                  ? baseFloor +
+                    (cellHash(col, row, 1) < 0.7
+                      ? waveAmp * Math.pow(spark, 1.5)
+                      : 0.09 * spark)
+                  : 0;
+
+                const oddFillAlpha = !isEven
+                  ? Math.pow(crest, 1.4) * (0.48 + 0.52 * spark)
+                  : 0;
+
+                let rawAlpha = Math.max(ambientAlpha * w, crest * 0.98, oddFillAlpha);
+                if (!isDark && crest > 0.15 && crest <= 0.65) {
+                  rawAlpha = Math.max(rawAlpha, Math.min(1, crest * 1.35));
+                }
+                const finalAlpha = clamp(rawAlpha * leadMask, 0, 1);
+                if (finalAlpha < 0.03) continue;
+
+                const glintMix =
+                  isEven && spark > 0.89 && cellHash(col, row, 5) > 0.52
+                    ? isDark
+                      ? 0.68
+                      : 0.42
+                    : 0;
+
+                let hotMix: number;
+                if (isDark) {
+                  hotMix = Math.max(
+                    glintMix * Math.min(1, w),
+                    Math.pow(crest, 0.72) * 0.92,
+                  );
+                } else {
+                  const crestHot = crest > 0.62 ? ((crest - 0.62) / 0.38) * 0.95 : 0;
+                  hotMix = Math.max(glintMix * Math.min(1, w), crestHot);
+                }
+
+                const dotRgb = lerpRgb(baseRgb, hotRgb, hotMix);
+                ctx.fillStyle = rgbaStr(dotRgb, finalAlpha);
+                ctx.fillRect(x, y, cell, cell);
+              }
+            }
+
+            // Whisper-soft interior glass seam hairlines (no gaps, preserves unified flow)
+            for (let ri = 0; ri < reachedSegs.length - 1; ri++) {
+              const seamSeg = reachedSegs[ri]!;
+              const nextSeg = reachedSegs[ri + 1]!;
+              if (seamSeg.x1 >= frontierX - 0.5) continue;
+              const seamRgb = lerpRgb(
+                resolveSegRgb(seamSeg.id, currentMath.usedRatio, currentMath.isArmed),
+                resolveSegRgb(nextSeg.id, currentMath.usedRatio, currentMath.isArmed),
+                0.5,
+              );
+              const seamW = Math.max(weights[seamSeg.id], weights[nextSeg.id]);
+              ctx.fillStyle = rgbaStr(seamRgb, clamp(0.22 * seamW, 0.06, 0.4));
+              ctx.fillRect(Math.round(seamSeg.x1) - 0.5, uInY, 1, uInH);
+            }
+
+            ctx.restore();
+          }
+
+          // 3b. ONE Unified Multi-Color `roundRect` Contour Stroke for `U`
+          //     - Complete curved left arc (Input)
+          //     - Seamless unbroken top & bottom rims with smooth color-blend across seams
+          //     - Complete curved right cap (Reasoning / frontier / symmetric 100% full right arc)
+          const uX = innerLeft + lw * 0.5;
+          const uY = topY + lw * 0.5;
+          const uW = Math.max(1, visibleOccupiedW - lw);
+          const uH = Math.max(1, innerH - lw);
+          const cLeftR = Math.max(1, endOuterR - lw * 0.5); // 7.325px concentric with (10,10)
+          const cRightR = Math.max(1.25, rightOuterR - lw * 0.5);
+
+          const contourGrad = ctx.createLinearGradient(
+            innerLeft,
+            0,
+            innerLeft + visibleOccupiedW,
+            0,
+          );
+          const rimBlendHalfPx = 3.5;
+          for (let ri = 0; ri < reachedSegs.length; ri++) {
+            const s = reachedSegs[ri]!;
+            const sEnd = Math.min(s.x1, frontierX);
+            const localRimBlend = Math.min(rimBlendHalfPx, Math.max(0, (sEnd - s.x0) * 0.35));
+            const rawRgb = resolveSegRgb(s.id, currentMath.usedRatio, currentMath.isArmed);
+            const rimRgb = lerpRgb(rawRgb, [255, 255, 255], isDark ? 0.14 : 0.02);
+            const rimAlpha = clamp((isDark ? 0.8 : 0.84) * Math.min(1, weights[s.id]), 0.18, 0.96);
+
+            const startOff =
+              ri === 0
+                ? 0
+                : clamp((s.x0 + localRimBlend - innerLeft) / visibleOccupiedW, 0, 1);
+            const isLast = ri === reachedSegs.length - 1;
+            const endOff = isLast
+              ? env > 0.01 && visibleOccupiedW > 12
+                ? clamp((visibleOccupiedW - 7) / visibleOccupiedW, startOff, 0.98)
+                : 1
+              : clamp((sEnd - localRimBlend - innerLeft) / visibleOccupiedW, startOff, 1);
+
+            contourGrad.addColorStop(startOff, rgbaStr(rimRgb, rimAlpha));
+            if (endOff > startOff) {
+              contourGrad.addColorStop(endOff, rgbaStr(rimRgb, rimAlpha));
+            }
+            if (isLast && env > 0.01 && visibleOccupiedW > 12) {
+              const hotRim = lerpRgb(rawRgb, [255, 255, 255], isDark ? 0.86 : 0.62);
+              contourGrad.addColorStop(1, rgbaStr(hotRim, clamp(0.95 * env + rimAlpha * (1 - env), 0.4, 0.98)));
+            }
+          }
+
+          ctx.save();
+          ctx.strokeStyle = contourGrad;
+          ctx.lineWidth = lw;
+          ctx.beginPath();
+          ctx.roundRect(uX, uY, uW, uH, [cLeftR, cRightR, cRightR, cLeftR]);
+          ctx.stroke();
+          ctx.restore();
+
+          // 3c. Spotlight Highlight Frame ONLY on the actively hovered/pinned segment
+          for (let si = 0; si < reachedSegs.length; si++) {
+            const seg = reachedSegs[si]!;
+            const hl = highlights[seg.id];
+            if (hl <= 0.02) continue;
+            const segEnd = Math.min(seg.x1, frontierX);
+            const segVisW = segEnd - seg.x0;
+            if (segVisW < 3) continue;
+
+            const rawRgb = resolveSegRgb(seg.id, currentMath.usedRatio, currentMath.isArmed);
+            const spotRgb = lerpRgb(rawRgb, [255, 255, 255], isDark ? 0.3 : 0.08);
+            const sLw = SPOTLIGHT_LW;
+            const spotLeftR = si === 0 ? Math.max(1, endOuterR - sLw * 0.5) : 2.5;
+            const spotRightR =
+              si === reachedSegs.length - 1 && touchesRightEnd
+                ? Math.max(1, endOuterR - sLw * 0.5)
+                : si === reachedSegs.length - 1
+                  ? Math.max(1.25, rightOuterR - sLw * 0.5)
+                  : 2.5;
 
             ctx.save();
-            ctx.strokeStyle = `rgba(${frameRgb[0]}, ${frameRgb[1]}, ${frameRgb[2]}, ${strokeAlpha.toFixed(3)})`;
-            ctx.lineWidth = lw;
+            ctx.beginPath();
+            ctx.roundRect(innerLeft, topY, visibleOccupiedW, innerH, [
+              endOuterR,
+              rightOuterR,
+              rightOuterR,
+              endOuterR,
+            ]);
+            ctx.clip();
+
+            ctx.strokeStyle = rgbaStr(spotRgb, 0.95 * hl);
+            ctx.lineWidth = sLw;
             ctx.beginPath();
             ctx.roundRect(
-              seg.x0 + lw * 0.5,
-              topY + lw * 0.5,
-              Math.max(0.5, segW - lw),
-              Math.max(1, innerH - lw),
-              [cLeftR, cRightR, cRightR, cLeftR],
+              seg.x0 + sLw * 0.5,
+              topY + sLw * 0.5,
+              Math.max(1, segVisW - sLw),
+              Math.max(1, innerH - sLw),
+              [spotLeftR, spotRightR, spotRightR, spotLeftR],
             );
             ctx.stroke();
-
-            // Incandescent frontier right-edge glow on the leading segment during sweep
-            if (isLeadingSweepSeg && segW > 4) {
-              const glowStart = Math.max(seg.x0 + (touchesLeft ? 8 : 2), segEnd - 6);
-              if (segEnd - glowStart > 1) {
-                ctx.beginPath();
-                ctx.rect(glowStart, topY - 1, segEnd - glowStart + 2, innerH + 2);
-                ctx.clip();
-                ctx.strokeStyle = `rgba(${hotRgb[0]}, ${hotRgb[1]}, ${hotRgb[2]}, ${(
-                  0.92 * env
-                ).toFixed(3)})`;
-                ctx.lineWidth = lw;
-                ctx.beginPath();
-                ctx.roundRect(
-                  seg.x0 + lw * 0.5,
-                  topY + lw * 0.5,
-                  Math.max(0.5, segW - lw),
-                  Math.max(1, innerH - lw),
-                  [cLeftR, cRightR, cRightR, cLeftR],
-                );
-                ctx.stroke();
-              }
-            }
             ctx.restore();
           }
         }
 
         // ---------------------------------------------------------------------
-        // Pass 5: Auto-Compact Threshold Reticle Marker (`thresholdX`)
+        // Pass 5: Spotlight Frames for Usable / Reserve (ONLY on hover/pin) + 80% Reticle
         // ---------------------------------------------------------------------
+        const sLw = SPOTLIGHT_LW;
+        const cEndSpotR = Math.max(1, endOuterR - sLw * 0.5);
+
+        if (usableGlow > 0.02 && zLayout.usableZone && zLayout.usableZone.width >= 4) {
+          const uz = zLayout.usableZone;
+          const uLeftR = zLayout.totalOccupiedW === 0 ? cEndSpotR : 2.5;
+          const uRightR = zLayout.thresholdX === null ? cEndSpotR : 2.5;
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(innerLeft, topY, innerW, innerH, endOuterR);
+          ctx.clip();
+          ctx.strokeStyle = rgbaStr(palette.success, 0.88 * usableGlow);
+          ctx.lineWidth = sLw;
+          ctx.beginPath();
+          ctx.roundRect(
+            uz.x0 + sLw * 0.5,
+            topY + sLw * 0.5,
+            Math.max(1, uz.width - sLw),
+            Math.max(1, innerH - sLw),
+            [uLeftR, uRightR, uRightR, uLeftR],
+          );
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        if (reserveGlow > 0.02 && zLayout.reserveZone && zLayout.reserveZone.width >= 4) {
+          const rz = zLayout.reserveZone;
+          const rLeftR =
+            zLayout.totalOccupiedW === 0 && !zLayout.usableZone ? cEndSpotR : 2.5;
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(innerLeft, topY, innerW, innerH, endOuterR);
+          ctx.clip();
+          ctx.strokeStyle = rgbaStr(palette.warning, 0.9 * reserveGlow);
+          ctx.lineWidth = sLw;
+          ctx.beginPath();
+          ctx.roundRect(
+            rz.x0 + sLw * 0.5,
+            topY + sLw * 0.5,
+            Math.max(1, rz.width - sLw),
+            Math.max(1, innerH - sLw),
+            [rLeftR, cEndSpotR, cEndSpotR, rLeftR],
+          );
+          ctx.stroke();
+          ctx.restore();
+        }
+
         if (zLayout.thresholdX !== null) {
           const tx = Math.round(zLayout.thresholdX) + 0.5;
           const nearOrArmed =
@@ -870,15 +988,15 @@ export function ContextUsageMeter(props: {
             ? palette.warning
             : lerpRgb(palette.muted, palette.warning, 0.65);
           const lineAlpha = clamp(
-            (currentMath.isArmed ? 0.9 : isDark ? 0.58 : 0.66) +
-              Math.max(reserveGlow, usableGlow) * 0.32,
+            (currentMath.isArmed ? 0.9 : isDark ? 0.56 : 0.64) +
+              Math.max(reserveGlow, usableGlow) * 0.34,
             0,
             1,
           );
           const tickAlpha = clamp(lineAlpha + 0.22, 0, 1);
 
           ctx.save();
-          ctx.strokeStyle = `rgba(${markerRgb[0]}, ${markerRgb[1]}, ${markerRgb[2]}, ${lineAlpha.toFixed(3)})`;
+          ctx.strokeStyle = rgbaStr(markerRgb, lineAlpha);
           ctx.lineWidth = 1;
           ctx.setLineDash([3, 2]);
           ctx.beginPath();
@@ -887,7 +1005,7 @@ export function ContextUsageMeter(props: {
           ctx.stroke();
           ctx.setLineDash([]);
 
-          ctx.fillStyle = `rgba(${markerRgb[0]}, ${markerRgb[1]}, ${markerRgb[2]}, ${tickAlpha.toFixed(3)})`;
+          ctx.fillStyle = rgbaStr(markerRgb, tickAlpha);
           ctx.fillRect(tx - 1.5, topY, 3, 2.2);
           ctx.fillRect(tx - 1.5, botY - 2.2, 3, 2.2);
           ctx.restore();
@@ -1366,7 +1484,7 @@ export function ContextUsageMeter(props: {
         </div>
       </div>
 
-      {/* Centerpiece Segmented Dot-Matrix Bar (DPR-exact unified canvas, zero CSS edge clipping) */}
+      {/* Centerpiece Unified Segmented Dot-Matrix Bar */}
       <div
         role="progressbar"
         aria-label="Context used"
@@ -1677,8 +1795,10 @@ export function ContextUsageMeter(props: {
             onPointerDown={(e) => press(e.currentTarget)}
             onClick={(e) => {
               e.stopPropagation();
-              ui.setUsageOpen(false);
-              m.openSettings?.("rc-set-runtime");
+              batch(() => {
+                ui.setUsageOpen(false);
+                m.openSettings?.("rc-set-runtime");
+              });
             }}
             class="h-6 px-2 rounded-md bg-surface-muted hover:bg-surface-strong text-fg font-medium text-2xs inline-flex items-center gap-1 shrink-0 cursor-pointer transition-colors"
           >
