@@ -400,7 +400,7 @@ func IsSafeEnvTemplateName(base string) bool {
 
 // IsProtectedWorkspacePath checks whether target (an absolute or workspace-relative
 // path) hits a protected subpath inside workspace (.git/hooks/**, .git/config,
-// .env*, private keys, .npmrc, .netrc).
+// .indirect/**, .env*, private keys, .npmrc, .netrc).
 func IsProtectedWorkspacePath(workspace, target string, forWrite bool) (bool, string) {
 	if target == "" {
 		return false, ""
@@ -414,6 +414,22 @@ func IsProtectedWorkspacePath(workspace, target string, forWrite bool) (bool, st
 		canon = filepath.Clean(resolved)
 	}
 	slashPath := filepath.ToSlash(canon)
+	if prot, reason := checkProtectedSlashPath(slashPath, forWrite); prot {
+		return true, reason
+	}
+
+	// Also inspect unresolved lexical path so a symlink inside .git/hooks, .indirect,
+	// or named .env pointing elsewhere does not bypass detection.
+	lexSlash := filepath.ToSlash(filepath.Clean(resolved))
+	if !strings.EqualFold(lexSlash, slashPath) {
+		if prot, reason := checkProtectedSlashPath(lexSlash, forWrite); prot {
+			return true, reason
+		}
+	}
+	return false, ""
+}
+
+func checkProtectedSlashPath(slashPath string, forWrite bool) (bool, string) {
 	lowerSlash := strings.ToLower(slashPath)
 	base := path.Base(lowerSlash)
 
@@ -427,27 +443,14 @@ func IsProtectedWorkspacePath(workspace, target string, forWrite bool) (bool, st
 	if forWrite && strings.HasSuffix(lowerSlash, "/.git") {
 		return true, "Modifying .git metadata directly requires explicit approval"
 	}
-	if forWrite && (strings.Contains(lowerSlash, "/.indirect/") || strings.HasSuffix(lowerSlash, "/.indirect")) {
-		return true, "Modifying .indirect configuration requires approval"
+	if strings.Contains(lowerSlash, "/.indirect/") || strings.HasSuffix(lowerSlash, "/.indirect") {
+		if forWrite {
+			return true, "Modifying .indirect configuration requires approval"
+		}
+		return true, "Reading .indirect configuration requires approval"
 	}
 	if forWrite && (strings.HasSuffix(lowerSlash, "/.vscode/tasks.json") || strings.HasSuffix(lowerSlash, "/.vscode/launch.json") || strings.HasSuffix(lowerSlash, "/.vscode/settings.json")) {
 		return true, "Modifying IDE workspace execution settings (.vscode) requires approval"
-	}
-
-	// Also inspect unresolved lexical path inside workspace so a symlink inside
-	// .git/hooks pointing elsewhere does not bypass detection.
-	if workspace != "" {
-		lexAbs := target
-		if !filepath.IsAbs(lexAbs) {
-			lexAbs = filepath.Join(workspace, lexAbs)
-		}
-		lexLower := strings.ToLower(filepath.ToSlash(filepath.Clean(lexAbs)))
-		if strings.Contains(lexLower, "/.git/hooks/") || strings.HasSuffix(lexLower, "/.git/hooks") {
-			return true, "Git repository hooks (.git/hooks) can execute arbitrary commands on git operations"
-		}
-		if strings.HasSuffix(lexLower, "/.git/config") {
-			return true, "Git repository configuration (.git/config) controls remotes, credentials, and hooks"
-		}
 	}
 
 	if base == ".env" || strings.HasPrefix(base, ".env.") {
@@ -470,6 +473,57 @@ func IsProtectedWorkspacePath(workspace, target string, forWrite bool) (bool, st
 		}
 	}
 	return false, ""
+}
+
+// isBroadWorkspaceCoverPattern reports whether rulePattern is a broad root/workspace
+// directory glob (such as "*" or "<workspace>/**") rather than an explicit rule for
+// a protected file or subpath inside workspace.
+func isBroadWorkspaceCoverPattern(rulePattern, workspace string) bool {
+	pat := strings.TrimSpace(rulePattern)
+	if pat == "" || pat == "*" || pat == "**" || pat == "/**" {
+		return true
+	}
+	if workspace == "" || !strings.HasSuffix(pat, "/**") {
+		return false
+	}
+	wsCanon, err := canonicalOrParent(workspace)
+	if err != nil {
+		wsCanon = filepath.Clean(workspace)
+	}
+	prefix := strings.TrimSuffix(pat, "/**")
+	if prefix == "" {
+		return true
+	}
+	pOS := filepath.FromSlash(prefix)
+	if !filepath.IsAbs(pOS) {
+		pOS = filepath.Join(wsCanon, pOS)
+	}
+	pCanon, err := canonicalOrParent(pOS)
+	if err != nil {
+		pCanon = filepath.Clean(pOS)
+	}
+	// If wsCanon is equal to or under pCanon, then pat ("<pCanon>/**") covers the
+	// entire workspace root and must not implicitly unlock protected subpaths.
+	return isUnder(pCanon, wsCanon)
+}
+
+func allowsPathByRule(rules []PermissionRule, capKind, targetPath, workspace string, isProtectedInWs bool) bool {
+	for _, r := range rules {
+		if strings.ToLower(strings.TrimSpace(r.Effect)) != "allow" {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(r.Kind)) != capKind {
+			continue
+		}
+		if !matchPathPattern(r.Pattern, targetPath, workspace) {
+			continue
+		}
+		if isProtectedInWs && isBroadWorkspaceCoverPattern(r.Pattern, workspace) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // ProposePathRule builds a safe PermissionRule for a filesystem read or write
@@ -619,15 +673,16 @@ func isAllowedInRoots(target string, roots ...string) bool {
 
 // ProposeNetRule builds a scoped network allow rule for an external host.
 func ProposeNetRule(hostOrAddr string) (*PermissionRule, bool) {
-	h, _ := splitHostPortLoose(hostOrAddr)
-	h = strings.ToLower(strings.TrimSpace(h))
+	rawHost, _ := splitHostPortLoose(hostOrAddr)
+	h := normalizeHostForSSRF(rawHost)
 	if h == "" || h == "*" {
 		return nil, false
 	}
-	if ip := net.ParseIP(h); ip != nil {
-		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
-			return nil, false
-		}
+	if isCloudMetadataHost(h) || isLoopbackHost(h) || strings.HasSuffix(h, ".localhost") {
+		return nil, false
+	}
+	if addr, ok := parseNormalizedAddr(h); ok && isPrivateOrReservedAddr(addr) {
+		return nil, false
 	}
 	return &PermissionRule{
 		ID:      NewRuleID(),
@@ -1044,6 +1099,9 @@ func evaluateFSCheck(
 		}
 	}
 
+	protected, protReason := IsProtectedWorkspacePath(workspace, resolvedPath, forWrite)
+	isProtInWs := inWorkspace && protected
+
 	// 2. Explicit Deny / Allow rules (fs_write grant also satisfies fs_read on the same path).
 	if eff, r := MatchRules(rules, capKind, resolvedPath, workspace); eff == "deny" {
 		return PolicyEvaluation{
@@ -1054,7 +1112,7 @@ func evaluateFSCheck(
 				Reason:     fmt.Sprintf("Permission denied by rule %q", r.Pattern),
 			},
 		}
-	} else if eff == "allow" {
+	} else if eff == "allow" && allowsPathByRule(rules, capKind, resolvedPath, workspace, isProtInWs) {
 		callRule := PermissionRule{Effect: "allow", Kind: capKind, Pattern: filepath.ToSlash(resolvedPath)}
 		return PolicyEvaluation{
 			Verdict: VerdictAllow,
@@ -1062,7 +1120,7 @@ func evaluateFSCheck(
 		}
 	}
 	if !forWrite {
-		if eff, _ := MatchRules(rules, "fs_write", resolvedPath, workspace); eff == "allow" {
+		if eff, _ := MatchRules(rules, "fs_write", resolvedPath, workspace); eff == "allow" && allowsPathByRule(rules, "fs_write", resolvedPath, workspace, isProtInWs) {
 			callRule := PermissionRule{Effect: "allow", Kind: "fs_read", Pattern: filepath.ToSlash(resolvedPath)}
 			return PolicyEvaluation{
 				Verdict: VerdictAllow,
@@ -1072,7 +1130,6 @@ func evaluateFSCheck(
 	}
 	if toolName != "" {
 		if eff, _ := MatchRules(rules, "tool", toolName, workspace); eff == "allow" && (inWorkspace || inBrain) {
-			protected, _ := IsProtectedWorkspacePath(workspace, resolvedPath, forWrite)
 			if !protected {
 				return PolicyEvaluation{Verdict: VerdictAllow}
 			}
@@ -1090,8 +1147,7 @@ func evaluateFSCheck(
 	}
 
 	// 5. Protected paths inside workspace ALWAYS prompt in both "auto" and "ask".
-	protected, protReason := IsProtectedWorkspacePath(workspace, resolvedPath, forWrite)
-	if inWorkspace && protected {
+	if isProtInWs {
 		prop, ok := ProposePathRule(capKind, resolvedPath, workspace, true)
 		callGrant := PermissionRule{Effect: "allow", Kind: capKind, Pattern: filepath.ToSlash(resolvedPath)}
 		return PolicyEvaluation{
@@ -1188,17 +1244,32 @@ func evaluateFSCheck(
 }
 
 func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []PermissionRule) PolicyEvaluation {
-	u, err := url.Parse(rawURL)
+	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Host == "" {
 		if accessMode == "full" || accessMode == "auto" {
 			return PolicyEvaluation{Verdict: VerdictAllow}
 		}
 	}
-	host := ""
+	rawHost := ""
 	if u != nil {
-		host = strings.ToLower(u.Hostname())
+		rawHost = u.Hostname()
 	}
-	if host != "" {
+	host := normalizeHostForSSRF(rawHost)
+
+	// 1. Cloud instance metadata endpoints are ALWAYS hard-blocked in every mode (including "full").
+	if rawHost != "" && isCloudMetadataHost(rawHost) {
+		return PolicyEvaluation{
+			Verdict: VerdictDeny,
+			Meta: ToolApprovalMeta{
+				Capability: "net",
+				Target:     nonEmpty(u.Host, rawHost),
+				Reason:     fmt.Sprintf("Cloud metadata endpoint %q is blocked", rawHost),
+			},
+		}
+	}
+
+	// 2. Explicit Deny rules always win before any Allow rule or mode check.
+	if rawHost != "" {
 		hostPort := strings.ToLower(u.Host)
 		if eff, r := MatchRules(rules, "net", hostPort, workspace); eff == "deny" {
 			return PolicyEvaluation{
@@ -1209,7 +1280,40 @@ func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []Permiss
 					Reason:     fmt.Sprintf("Network access to %q blocked by rule %q", u.Host, r.Pattern),
 				},
 			}
-		} else if eff == "allow" {
+		}
+	}
+
+	// 3. In jailed modes ("auto" and "ask"), hard-deny ambiguous *.localhost subdomains
+	// and private/link-local/unspecified/CGNAT literal IP targets against SSRF.
+	if accessMode != "full" && rawHost != "" {
+		if strings.HasSuffix(host, ".localhost") {
+			return PolicyEvaluation{
+				Verdict: VerdictDeny,
+				Meta: ToolApprovalMeta{
+					Capability: "net",
+					Target:     nonEmpty(u.Host, rawHost),
+					Reason:     fmt.Sprintf("Subdomain %q under .localhost is blocked against SSRF", rawHost),
+				},
+			}
+		}
+		if addr, ok := parseNormalizedAddr(rawHost); ok {
+			if !addr.IsLoopback() && isPrivateOrReservedAddr(addr) {
+				return PolicyEvaluation{
+					Verdict: VerdictDeny,
+					Meta: ToolApprovalMeta{
+						Capability: "net",
+						Target:     nonEmpty(u.Host, rawHost),
+						Reason:     fmt.Sprintf("Private or reserved IP address %q is blocked", rawHost),
+					},
+				}
+			}
+		}
+	}
+
+	// 4. Explicit Allow rules.
+	if rawHost != "" {
+		hostPort := strings.ToLower(u.Host)
+		if eff, _ := MatchRules(rules, "net", hostPort, workspace); eff == "allow" {
 			return PolicyEvaluation{
 				Verdict: VerdictAllow,
 				Meta: ToolApprovalMeta{
@@ -1218,17 +1322,18 @@ func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []Permiss
 			}
 		}
 	}
+
 	if accessMode == "full" {
 		return PolicyEvaluation{Verdict: VerdictAllow}
 	}
-	if host != "" && isLoopbackHost(host) && accessMode == "auto" {
+	if rawHost != "" && isLoopbackHost(rawHost) && accessMode == "auto" {
 		return PolicyEvaluation{Verdict: VerdictAllow}
 	}
 	target := rawURL
 	if host != "" {
 		target = host
 	}
-	prop, ok := ProposeNetRule(host)
+	prop, ok := ProposeNetRule(rawHost)
 	var callGrants []PermissionRule
 	if host != "" {
 		callGrants = []PermissionRule{{Effect: "allow", Kind: "net", Pattern: host}}

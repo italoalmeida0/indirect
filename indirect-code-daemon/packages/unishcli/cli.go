@@ -391,7 +391,10 @@ func SystemReadOnlyRoots(env []string, excludeAncestorsOf ...string) []string {
 
 	var out []string
 	add := func(p string, checkBroad bool) {
-		p = strings.TrimSpace(p)
+		p = strings.Trim(strings.TrimSpace(p), `"`)
+		if runtime.GOOS == "windows" && strings.HasPrefix(p, `\\?\`) && !strings.HasPrefix(strings.ToUpper(p), `\\?\UNC\`) {
+			p = p[4:]
+		}
 		if p == "" || !filepath.IsAbs(p) {
 			return
 		}
@@ -406,22 +409,39 @@ func SystemReadOnlyRoots(env []string, excludeAncestorsOf ...string) []string {
 		if seen[key] {
 			return
 		}
-		if _, err := os.Stat(clean); err != nil {
+		if info, err := os.Stat(clean); err != nil || !info.IsDir() {
 			return
 		}
 		seen[key] = true
 		out = append(out, clean)
+		if evaled, eerr := filepath.EvalSymlinks(clean); eerr == nil && evaled != "" {
+			eClean := filepath.Clean(evaled)
+			if runtime.GOOS == "windows" && strings.HasPrefix(eClean, `\\?\`) && !strings.HasPrefix(strings.ToUpper(eClean), `\\?\UNC\`) {
+				eClean = eClean[4:]
+			}
+			if !checkBroad || !isUnsafeBroad(eClean) {
+				eKey := eClean
+				if runtime.GOOS == "windows" {
+					eKey = strings.ToLower(eKey)
+				}
+				if !seen[eKey] {
+					seen[eKey] = true
+					out = append(out, eClean)
+				}
+			}
+		}
 	}
 
-	var pathVal string
+	var pathParts []string
 	for _, kv := range env {
 		if eq := strings.IndexByte(kv, '='); eq > 0 {
 			k := kv[:eq]
 			if k == "PATH" || (runtime.GOOS == "windows" && strings.EqualFold(k, "PATH")) {
-				pathVal = kv[eq+1:]
+				pathParts = append(pathParts, kv[eq+1:])
 			}
 		}
 	}
+	pathVal := strings.Join(pathParts, string(filepath.ListSeparator))
 	if pathVal == "" {
 		pathVal = os.Getenv("PATH")
 	}

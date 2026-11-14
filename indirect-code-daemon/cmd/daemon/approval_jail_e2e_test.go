@@ -854,3 +854,79 @@ func TestRunnerMidExecutionLoopbackApprovalAndPlanReadOnlyOverlayE2E(t *testing.
 		t.Fatalf("expected WORKSPACE_READ_OK and WRITE_BLOCKED_OK in plan bash output, got %s", string(planBodyJSON))
 	}
 }
+
+func TestPerformPairingDefaultsFreshHostToAutoAccessAndJailed(t *testing.T) {
+	skillRegistry().initFrom(t.TempDir())
+
+	pairSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/indirect-code/hosts/pair" {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"success":     true,
+				"hostId":      "paired-host-1",
+				"daemonToken": "dtok-1",
+				"apiKey":      "akey-1",
+				"gatewayUrl":  "http://127.0.0.1:9999",
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer pairSrv.Close()
+
+	freshDir := t.TempDir()
+	r := newRoot(freshDir)
+	pairURL := pairSrv.URL + "/api/indirect-code/hosts/pair?token=pair-secret"
+	if err := r.performPairing(pairURL, "fresh-box"); err != nil {
+		t.Fatalf("performPairing failed: %v", err)
+	}
+
+	diskCfg, err := loadDaemonConfig(freshDir)
+	if err != nil {
+		t.Fatalf("loadDaemonConfig after pairing: %v", err)
+	}
+	if diskCfg.Settings.DefaultAccess != "auto" || !diskCfg.Settings.JailByDefault {
+		t.Fatalf("freshly paired config.json must default to DefaultAccess=auto & JailByDefault=true, got %+v", diskCfg.Settings)
+	}
+
+	h := newWSHarness(t)
+	h.cfg.store(diskCfg)
+
+	// 1. Pulling config mirrors default_access="auto" and jail_by_default=true to browser clients.
+	h.mu.Lock()
+	from := len(h.sent)
+	h.mu.Unlock()
+	h.send(map[string]any{"type": "pull", "id": "p-cfg", "collection": "config"})
+	pullEv, _ := waitEventTimeout(t, h, from, 5*time.Second, func(m map[string]any) bool {
+		return m["type"] == "pull-response" && m["collection"] == "config"
+	})
+	items, _ := pullEv["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 config item in pull response, got %+v", pullEv)
+	}
+	pulledSettings, _ := items[0]["settings"].(HarnessSettings)
+	if pulledSettings.DefaultAccess != "auto" || !pulledSettings.JailByDefault {
+		t.Fatalf("pulled settings must expose DefaultAccess=auto & JailByDefault=true, got %+v", pulledSettings)
+	}
+
+	// 2. Creating a new session without explicit options.access seeds access="auto" and jailed=true.
+	h.mu.Lock()
+	from = len(h.sent)
+	h.mu.Unlock()
+	h.send(map[string]any{
+		"type":      "create_session",
+		"requestId": "c-fresh-paired",
+		"cwd":       t.TempDir(),
+		"title":     "fresh",
+		"model":     "m",
+		"options":   map[string]any{"mode": "agentic"},
+	})
+	created, _ := waitEventTimeout(t, h, from, 5*time.Second, func(m map[string]any) bool {
+		return m["type"] == "session_created" && m["requestId"] == "c-fresh-paired"
+	})
+	sess := created["session"].(map[string]any)
+	opts := sess["options"].(SessionOptions)
+	if opts.Access != "auto" || sess["jailed"] != true {
+		t.Fatalf("freshly paired host create_session must default to access=auto jailed=true, got options=%+v jailed=%v", opts, sess["jailed"])
+	}
+}

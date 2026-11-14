@@ -143,7 +143,14 @@ func (r *root) bootActors() {
 }
 
 func defaultConfig() *DaemonConfig {
-	return &DaemonConfig{Settings: HarnessSettings{}}
+	return &DaemonConfig{Settings: HarnessSettings{
+		AutoCompactThreshold: 95,
+		RespectGitignore:     true,
+		ToolRender:           "box",
+		Reasoning:            "medium",
+		DefaultAccess:        "auto",
+		JailByDefault:        true,
+	}}
 }
 
 // infraHealth is one actor's answer to a root ping round.

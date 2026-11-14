@@ -8,7 +8,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +45,8 @@ type FetchURLTool struct {
 	// foreground synchronous outputs exceeding 20KB spill losslessly to
 	// <BrainDir>/tool-<callID>.log while returning a compact inline preview.
 	BrainDir string
+	// ControlPort is the optional runner loopback IPC port that must never be dialed.
+	ControlPort int
 }
 
 func (t *FetchURLTool) Name() string { return "fetch_url" }
@@ -128,20 +132,21 @@ func (t *FetchURLTool) fetch(ctx context.Context, rawURL string, timeoutSec int)
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return "", "", false, fmt.Errorf("fetch_url: only http/https allowed (got %q)", u.Scheme)
 	}
-	if err := t.guard(u.Hostname()); err != nil {
+	if err := t.guardURL(u); err != nil {
 		return "", "", false, err
 	}
 
 	client := t.Client
 	if client == nil {
 		client = &http.Client{
-			Timeout: time.Duration(timeoutSec) * time.Second,
+			Timeout:   time.Duration(timeoutSec) * time.Second,
+			Transport: t.newPinnedTransport(timeoutSec),
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return fmt.Errorf("fetch_url: too many redirects")
 				}
-				// Re-guard every hop: a public URL may redirect to metadata IP.
-				if err := t.guard(req.URL.Hostname()); err != nil {
+				// Re-guard every hop: a public URL may redirect to metadata/private IP.
+				if err := t.guardURL(req.URL); err != nil {
 					return err
 				}
 				return nil
@@ -202,8 +207,33 @@ func looksLikeHTML(body []byte) bool {
 	return strings.HasPrefix(s, "<!doctype html") || strings.HasPrefix(s, "<html")
 }
 
+// guardURL validates both host and port against SSRF, metadata, and runner control-port rules.
+func (t *FetchURLTool) guardURL(u *url.URL) error {
+	if u == nil {
+		return fmt.Errorf("fetch_url: invalid URL")
+	}
+	host := u.Hostname()
+	if t.ControlPort > 0 {
+		pNum := 0
+		if pStr := u.Port(); pStr != "" {
+			pNum, _ = strconv.Atoi(pStr)
+		} else if u.Scheme == "http" {
+			pNum = 80
+		} else if u.Scheme == "https" {
+			pNum = 443
+		}
+		if pNum == t.ControlPort && isLoopbackOrUnspecifiedHost(host) {
+			return fmt.Errorf("fetch_url: runner control port blocked")
+		}
+	}
+	return t.guard(host)
+}
+
 // guard applies the SSRF and interactive permission policy.
 func (t *FetchURLTool) guard(host string) error {
+	if isCloudMetadataHost(host) {
+		return fmt.Errorf("fetch_url: cloud metadata blocked")
+	}
 	if t.Sandbox != nil {
 		if err := t.Sandbox.CheckNetHost(host); err != nil {
 			return err
@@ -211,10 +241,6 @@ func (t *FetchURLTool) guard(host string) error {
 		if mode, ok := t.Sandbox.InteractiveAccessMode(); ok {
 			if eff, r := MatchRules(t.Sandbox.EffectiveRules(), "net", host, t.Sandbox.Root); eff == "deny" {
 				return fmt.Errorf("permission denied: network host %q blocked by rule %q", host, r.Pattern)
-			}
-			h := strings.ToLower(strings.TrimSpace(host))
-			if h == "169.254.169.254" || h == "metadata.google.internal" {
-				return fmt.Errorf("fetch_url: cloud metadata blocked")
 			}
 			if mode == "full" {
 				return nil
@@ -231,13 +257,184 @@ func (t *FetchURLTool) guard(host string) error {
 	return guardSSRF(host)
 }
 
-func isLoopbackHost(host string) bool {
+func (t *FetchURLTool) newPinnedTransport(timeoutSec int) *http.Transport {
+	var tr *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+		tr = base.Clone()
+	} else {
+		tr = &http.Transport{}
+	}
+	dialer := &net.Dialer{
+		Timeout:   time.Duration(timeoutSec) * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	tr.DialContext = func(dialCtx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if isCloudMetadataHost(host) {
+			return nil, fmt.Errorf("fetch_url: cloud metadata blocked")
+		}
+		pNum, _ := strconv.Atoi(port)
+		if t.ControlPort > 0 && pNum == t.ControlPort && isLoopbackOrUnspecifiedHost(host) {
+			return nil, fmt.Errorf("fetch_url: runner control port blocked")
+		}
+		mode, interactive := "", false
+		if t.Sandbox != nil {
+			mode, interactive = t.Sandbox.InteractiveAccessMode()
+		}
+		allowPrivate := interactive && mode == "full"
+		allowLoopback := allowPrivate || (interactive && isLoopbackHost(host)) || (t.TestAllowLoopback && isLoopbackHost(host))
+
+		var candidates []netip.Addr
+		if parsed, ok := parseNormalizedAddr(host); ok {
+			candidates = []netip.Addr{parsed}
+		} else {
+			norm := normalizeHostForSSRF(host)
+			if !allowPrivate && strings.HasSuffix(norm, ".localhost") {
+				return nil, fmt.Errorf("fetch_url: localhost subdomain blocked")
+			}
+			resolved, rerr := net.DefaultResolver.LookupNetIP(dialCtx, "ip", host)
+			if rerr != nil {
+				return nil, rerr
+			}
+			if len(resolved) == 0 {
+				return nil, fmt.Errorf("fetch_url: host %q resolved to no addresses", host)
+			}
+			for _, r := range resolved {
+				candidates = append(candidates, r.WithZone("").Unmap())
+			}
+		}
+
+		var dialable []netip.Addr
+		for _, ip := range candidates {
+			if isCloudMetadataAddr(ip) {
+				return nil, fmt.Errorf("fetch_url: cloud metadata IP blocked (%s)", ip)
+			}
+			if t.ControlPort > 0 && pNum == t.ControlPort && (ip.IsLoopback() || ip.IsUnspecified()) {
+				return nil, fmt.Errorf("fetch_url: runner control port blocked")
+			}
+			if !allowPrivate {
+				if ip.IsLoopback() {
+					if !allowLoopback {
+						return nil, fmt.Errorf("fetch_url: loopback IP blocked (%s)", ip)
+					}
+				} else if isPrivateOrReservedAddr(ip) {
+					return nil, fmt.Errorf("fetch_url: private IP blocked (%s)", ip)
+				}
+			}
+			dialable = append(dialable, ip)
+		}
+
+		var lastErr error
+		for _, ip := range dialable {
+			target := net.JoinHostPort(ip.String(), port)
+			conn, derr := dialer.DialContext(dialCtx, network, target)
+			if derr == nil {
+				return conn, nil
+			}
+			lastErr = derr
+		}
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, fmt.Errorf("fetch_url: no valid address for %q", host)
+	}
+	return tr
+}
+
+func normalizeHostForSSRF(host string) string {
 	h := strings.ToLower(strings.TrimSpace(host))
-	if h == "localhost" || h == "localhost." || strings.HasSuffix(h, ".localhost") {
+	h = strings.Trim(h, "[]")
+	h = strings.TrimRight(h, ".")
+	return h
+}
+
+func parseNormalizedAddr(host string) (netip.Addr, bool) {
+	h := strings.TrimSpace(host)
+	h = strings.Trim(h, "[]")
+	if h == "" {
+		return netip.Addr{}, false
+	}
+	if addr, err := netip.ParseAddr(h); err == nil {
+		return addr.WithZone("").Unmap(), true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		if addr, ok := netip.AddrFromSlice(ip); ok {
+			return addr.WithZone("").Unmap(), true
+		}
+	}
+	return netip.Addr{}, false
+}
+
+var (
+	metadataIPv4AWS     = netip.MustParseAddr("169.254.169.254")
+	metadataIPv6AWS     = netip.MustParseAddr("fd00:ec2::254")
+	metadataIPv4Alibaba = netip.MustParseAddr("100.100.100.200")
+)
+
+func isCloudMetadataAddr(addr netip.Addr) bool {
+	u := addr.WithZone("").Unmap()
+	if !u.IsValid() {
+		return false
+	}
+	return u == metadataIPv4AWS || u == metadataIPv6AWS || u == metadataIPv4Alibaba
+}
+
+func isCloudMetadataHost(host string) bool {
+	if addr, ok := parseNormalizedAddr(host); ok {
+		return isCloudMetadataAddr(addr)
+	}
+	h := normalizeHostForSSRF(host)
+	switch h {
+	case "metadata.google.internal", "metadata", "instance-data":
 		return true
 	}
-	if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+	return strings.HasSuffix(h, ".metadata.google.internal")
+}
+
+func isLoopbackHost(host string) bool {
+	if addr, ok := parseNormalizedAddr(host); ok {
+		return addr.IsLoopback()
+	}
+	h := strings.ToLower(strings.TrimSpace(host))
+	return h == "localhost" || h == "localhost."
+}
+
+func isLoopbackOrUnspecifiedHost(host string) bool {
+	if isLoopbackHost(host) {
 		return true
+	}
+	if addr, ok := parseNormalizedAddr(host); ok && addr.IsUnspecified() {
+		return true
+	}
+	return false
+}
+
+func isPrivateOrReservedAddr(addr netip.Addr) bool {
+	u := addr.WithZone("").Unmap()
+	if !u.IsValid() {
+		return true
+	}
+	if isCloudMetadataAddr(u) {
+		return true
+	}
+	if u.IsLoopback() || u.IsPrivate() || u.IsLinkLocalUnicast() || u.IsLinkLocalMulticast() || u.IsMulticast() || u.IsUnspecified() {
+		return true
+	}
+	if u.Is4() {
+		b := u.As4()
+		switch {
+		case b[0] == 0:
+			return true
+		case b[0] == 100 && b[1] >= 64 && b[1] <= 127:
+			return true
+		case b[0] == 198 && (b[1] == 18 || b[1] == 19):
+			return true
+		case b[0] >= 240:
+			return true
+		}
 	}
 	return false
 }
@@ -245,16 +442,22 @@ func isLoopbackHost(host string) bool {
 // guardSSRF blocks private/loopback/link-local/metadata targets: private ranges,
 // cloud metadata IPs and localhost names — plus file:// never reaches here (scheme check).
 func guardSSRF(host string) error {
-	h := strings.ToLower(strings.TrimSpace(host))
+	h := strings.ToLower(strings.TrimSpace(strings.Trim(host, "[]")))
 	if h == "" {
 		return fmt.Errorf("fetch_url: empty host")
 	}
-	if h == "localhost" || h == "localhost." || strings.HasSuffix(h, ".localhost") || strings.HasSuffix(h, ".localhost.") {
+	norm := normalizeHostForSSRF(h)
+	if norm == "localhost" || strings.HasSuffix(norm, ".localhost") {
 		return fmt.Errorf("fetch_url: localhost blocked")
 	}
-	// Cloud instance metadata (reference security.ts).
-	if h == "169.254.169.254" || h == "metadata.google.internal" {
+	if isCloudMetadataHost(h) {
 		return fmt.Errorf("fetch_url: cloud metadata blocked")
+	}
+	if addr, ok := parseNormalizedAddr(h); ok {
+		if isPrivateOrReservedAddr(addr) {
+			return fmt.Errorf("fetch_url: private IP blocked (%s)", addr)
+		}
+		return nil
 	}
 	ips, err := net.LookupIP(h)
 	if err != nil || len(ips) == 0 {
@@ -274,29 +477,11 @@ func guardSSRF(host string) error {
 }
 
 func isPrivateIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsLinkLocalMulticast() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
 		return true
 	}
-	if ip4 := ip.To4(); ip4 != nil {
-		switch {
-		case ip4[0] == 10:
-			return true
-		case ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31:
-			return true
-		case ip4[0] == 192 && ip4[1] == 168:
-			return true
-		case ip4[0] == 169 && ip4[1] == 254:
-			return true
-		case ip4[0] == 127:
-			return true
-		}
-		return false
-	}
-	// IPv6 unique-local (fc00::/7) + loopback (::1 handled above).
-	if len(ip) == net.IPv6len && (ip[0]&0xfe) == 0xfc {
-		return true
-	}
-	return false
+	return isPrivateOrReservedAddr(addr.Unmap())
 }
 
 // extractArticle is a Readability-simplified main-content extraction:

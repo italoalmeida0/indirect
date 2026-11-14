@@ -228,7 +228,7 @@ func (a *sessionAdmin) createSession(cwd, title, model string, options SessionOp
 				}
 			}
 		} else {
-			options.Access = "full"
+			options.Access = "auto"
 		}
 	}
 	norm := normalizedOptions(options)

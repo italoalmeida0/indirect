@@ -378,6 +378,20 @@ func (en *rtEntry) checkNetHost(host string) error {
 	return nil
 }
 
+func (en *rtEntry) checkNetHostResolved(resolvedHostPort, origHostPort string) error {
+	if en.checkAccess != nil {
+		var argv []string
+		if origHostPort != "" && !strings.EqualFold(origHostPort, resolvedHostPort) {
+			argv = []string{origHostPort}
+		}
+		if err := en.checkAccess(en.ctx, "net", resolvedHostPort, argv); err != nil {
+			return wrapAccessErr(err)
+		}
+		return nil
+	}
+	return en.checkNetHost(resolvedHostPort)
+}
+
 func (en *rtEntry) checkNetListen(addr string) error {
 	if err := en.checkNetAllowList(addr); err != nil {
 		return err
@@ -11435,6 +11449,16 @@ func (en *rtEntry) opDgramSend(argsStr string, payload []byte) (string, []byte, 
 	targetAddr, err := net.ResolveUDPAddr(netType, hostPort)
 	if err != nil {
 		return "", nil, false, "EINVAL", err
+	}
+	if targetAddr != nil && targetAddr.IP != nil {
+		resolvedIP := targetAddr.IP.String()
+		if ip4 := targetAddr.IP.To4(); ip4 != nil {
+			resolvedIP = ip4.String()
+		}
+		resolvedHP := net.JoinHostPort(resolvedIP, strconv.Itoa(targetAddr.Port))
+		if err := en.checkNetHostResolved(resolvedHP, hostPort); err != nil {
+			return "", nil, false, "EACCES", err
+		}
 	}
 	en.dgramMu.Lock()
 	conn := en.dgramSocks[req.ID]

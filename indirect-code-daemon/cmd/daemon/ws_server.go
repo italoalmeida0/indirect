@@ -1402,7 +1402,7 @@ func (s *wsServer) onPull(id json.RawMessage, collection string) {
 		}
 	case "config":
 		cfg := s.cfg.load()
-		settings := HarnessSettings{}
+		settings := defaultConfig().Settings
 		var last *ModelSelection
 		name := ""
 		if cfg != nil {

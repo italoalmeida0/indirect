@@ -71,6 +71,7 @@ type PolicyRuntime struct {
 	liveRules     []PermissionRule
 	onceGrants    map[string]bool
 	writableRoots []string
+	readableRoots []string
 }
 
 // PolicyCapabilityHook implements unish.CapabilityHook with full argv-aware
@@ -126,7 +127,10 @@ func NewPolicyRuntime(spec RuntimeJailSpec, env []string, approver MidExecApprov
 	var writableRoots []string
 
 	addUnique := func(dst *[]string, p string) {
-		p = strings.TrimSpace(p)
+		p = strings.Trim(strings.TrimSpace(p), `"`)
+		if runtime.GOOS == "windows" && strings.HasPrefix(p, `\\?\`) && !strings.HasPrefix(strings.ToUpper(p), `\\?\UNC\`) {
+			p = p[4:]
+		}
 		if p == "" {
 			return
 		}
@@ -141,26 +145,38 @@ func NewPolicyRuntime(spec RuntimeJailSpec, env []string, approver MidExecApprov
 		*dst = append(*dst, p)
 	}
 
+	addRootAndCanon := func(dst *[]string, p string, skipBroad bool) {
+		if strings.TrimSpace(p) == "" {
+			return
+		}
+		addUnique(dst, p)
+		if c, err := canonicalOrParent(p); err == nil && c != "" {
+			if !skipBroad || !isBroadSystemDir(c) {
+				addUnique(dst, c)
+			}
+		}
+	}
+
 	if spec.ProjectReadOnly {
-		addUnique(&roRoots, spec.Workspace)
+		addRootAndCanon(&roRoots, spec.Workspace, false)
 	} else {
-		addUnique(&roots, spec.Workspace)
-		addUnique(&writableRoots, spec.Workspace)
+		addRootAndCanon(&roots, spec.Workspace, false)
+		addRootAndCanon(&writableRoots, spec.Workspace, false)
 	}
 	for _, er := range spec.ExtraRoots {
-		addUnique(&roots, er)
-		addUnique(&writableRoots, er)
+		addRootAndCanon(&roots, er, false)
+		addRootAndCanon(&writableRoots, er, false)
 	}
 	if spec.BrainDir != "" {
-		addUnique(&roots, spec.BrainDir)
-		addUnique(&writableRoots, spec.BrainDir)
+		addRootAndCanon(&roots, spec.BrainDir, false)
+		addRootAndCanon(&writableRoots, spec.BrainDir, false)
 	}
 	if spec.TmpDir != "" {
-		addUnique(&roots, spec.TmpDir)
-		addUnique(&writableRoots, spec.TmpDir)
+		addRootAndCanon(&roots, spec.TmpDir, false)
+		addRootAndCanon(&writableRoots, spec.TmpDir, false)
 	}
 	for _, ror := range spec.ReadOnlyRoots {
-		addUnique(&roRoots, ror)
+		addRootAndCanon(&roRoots, ror, false)
 	}
 
 	jailed := mode != "full"
@@ -168,50 +184,68 @@ func NewPolicyRuntime(spec RuntimeJailSpec, env []string, approver MidExecApprov
 		homeDir, _ := os.UserHomeDir()
 		excludes := []string{spec.Workspace, homeDir, os.TempDir()}
 		for _, sysRoot := range unishcli.SystemReadOnlyRoots(env, excludes...) {
-			// Skip if already in writable roots.
-			isWritable := false
-			for _, wr := range writableRoots {
-				if isUnderCleanOSPath(wr, sysRoot) {
-					isWritable = true
-					break
+			addCandidate := func(cand string, skipBroad bool) {
+				if cand == "" || (skipBroad && isBroadSystemDir(cand)) {
+					return
 				}
+				for _, wr := range writableRoots {
+					if isUnderCleanOSPath(wr, cand) {
+						return
+					}
+				}
+				addUnique(&roRoots, cand)
 			}
-			if !isWritable {
-				addUnique(&roRoots, sysRoot)
+			addCandidate(sysRoot, false)
+			if c, err := canonicalOrParent(sysRoot); err == nil && c != "" {
+				addCandidate(c, true)
 			}
 		}
 	}
 	rt.writableRoots = writableRoots
+	readable := make([]string, 0, len(roots)+len(roRoots))
+	readable = append(readable, roots...)
+	readable = append(readable, roRoots...)
+	rt.readableRoots = readable
 
 	var pathRules []unish.PathRule
 	if jailed && spec.Workspace != "" {
 		ws := filepath.ToSlash(spec.Workspace)
 		writeOps := []unish.AccessOp{unish.OpWrite, unish.OpDelete, unish.OpLink}
-		allFSOps := []unish.AccessOp{unish.OpRead, unish.OpWrite, unish.OpDelete, unish.OpList, unish.OpStat, unish.OpLink}
+		// Omit OpStat from workspace-internal protected path rules so `ls -la` or
+		// `[ -f .env ]` in the workspace root never triggers spurious stat prompts;
+		// content reads (OpRead), directory listings/chdir (OpList, OpChdir), and all
+		// mutations (OpWrite, OpDelete, OpLink) still require approval.
+		contentFSOps := []unish.AccessOp{unish.OpRead, unish.OpWrite, unish.OpDelete, unish.OpList, unish.OpChdir, unish.OpLink}
 		pathRules = append(pathRules,
 			unish.PathRule{
 				Pattern:  ws + "/.git/hooks/**",
-				Ops:      writeOps,
+				Ops:      contentFSOps,
 				Decision: unish.DecisionAsk,
 				Reason:   "Git repository hooks (.git/hooks) can execute arbitrary commands on git operations",
 			},
 			unish.PathRule{
 				Pattern:  ws + "/.git/hooks",
-				Ops:      writeOps,
+				Ops:      contentFSOps,
 				Decision: unish.DecisionAsk,
 				Reason:   "Git repository hooks (.git/hooks) can execute arbitrary commands on git operations",
 			},
 			unish.PathRule{
 				Pattern:  ws + "/.git/config",
-				Ops:      writeOps,
+				Ops:      contentFSOps,
 				Decision: unish.DecisionAsk,
 				Reason:   "Git repository configuration (.git/config) controls remotes, credentials, and hooks",
 			},
 			unish.PathRule{
 				Pattern:  ws + "/.indirect/**",
-				Ops:      writeOps,
+				Ops:      contentFSOps,
 				Decision: unish.DecisionAsk,
-				Reason:   "Modifying .indirect configuration requires approval",
+				Reason:   "Accessing .indirect configuration requires approval",
+			},
+			unish.PathRule{
+				Pattern:  ws + "/.indirect",
+				Ops:      contentFSOps,
+				Decision: unish.DecisionAsk,
+				Reason:   "Accessing .indirect configuration requires approval",
 			},
 			unish.PathRule{
 				Pattern:  ws + "/.vscode/tasks.json",
@@ -233,13 +267,13 @@ func NewPolicyRuntime(spec RuntimeJailSpec, env []string, approver MidExecApprov
 			},
 			unish.PathRule{
 				Pattern:  ws + "/.env",
-				Ops:      allFSOps,
+				Ops:      contentFSOps,
 				Decision: unish.DecisionAsk,
 				Reason:   "Accessing environment secret file \".env\" requires approval",
 			},
 			unish.PathRule{
 				Pattern:  ws + "/.env.*",
-				Ops:      allFSOps,
+				Ops:      contentFSOps,
 				Decision: unish.DecisionAsk,
 				Reason:   "Accessing environment secret file requires approval",
 			},
@@ -291,7 +325,22 @@ func NewPolicyRuntime(spec RuntimeJailSpec, env []string, approver MidExecApprov
 			Reason:   "cloud metadata endpoint is blocked",
 		},
 		unish.NetRule{
+			CIDR:     "fd00:ec2::254/128",
+			Decision: unish.DecisionDeny,
+			Reason:   "cloud metadata endpoint is blocked",
+		},
+		unish.NetRule{
+			CIDR:     "100.100.100.200/32",
+			Decision: unish.DecisionDeny,
+			Reason:   "cloud metadata endpoint is blocked",
+		},
+		unish.NetRule{
 			HostPattern: "metadata.google.internal",
+			Decision:    unish.DecisionDeny,
+			Reason:      "cloud metadata endpoint is blocked",
+		},
+		unish.NetRule{
+			HostPattern: "metadata.google.internal.",
 			Decision:    unish.DecisionDeny,
 			Reason:      "cloud metadata endpoint is blocked",
 		},
@@ -548,26 +597,141 @@ func (rt *PolicyRuntime) promptUser(ctx context.Context, req MidExecApprovalReq)
 	}
 }
 
+func (rt *PolicyRuntime) resolveTargetPaths(rawTarget, workDir string) (lexAbs, tCanon string, canonDiffers bool) {
+	p := strings.TrimSpace(rawTarget)
+	if p == "" {
+		return "", "", false
+	}
+	if !filepath.IsAbs(p) {
+		base := nonEmptyStr(workDir, rt.spec.Workspace)
+		if base != "" {
+			p = filepath.Join(base, p)
+		}
+	}
+	lexAbs = filepath.Clean(p)
+	if c, err := canonicalOrParent(lexAbs); err == nil && c != "" {
+		tCanon = filepath.Clean(c)
+	} else {
+		tCanon = lexAbs
+	}
+	return lexAbs, tCanon, !sameCleanOSPath(lexAbs, tCanon)
+}
+
+func (rt *PolicyRuntime) isPathInWorkspace(p string) bool {
+	if rt.spec.Workspace == "" || p == "" {
+		return false
+	}
+	wsLex := filepath.Clean(rt.spec.Workspace)
+	if isUnderCleanOSPath(wsLex, p) {
+		return true
+	}
+	if wsCanon, err := canonicalOrParent(rt.spec.Workspace); err == nil && wsCanon != "" {
+		if isUnderCleanOSPath(wsCanon, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func (rt *PolicyRuntime) isWorkspaceParentDir(p string) bool {
+	if rt.spec.Workspace == "" || p == "" {
+		return false
+	}
+	wsCanon, err := canonicalOrParent(rt.spec.Workspace)
+	if err != nil || wsCanon == "" {
+		wsCanon = filepath.Clean(rt.spec.Workspace)
+	}
+	parent := filepath.Dir(wsCanon)
+	if sameCleanOSPath(parent, wsCanon) {
+		return false
+	}
+	return sameCleanOSPath(p, parent)
+}
+
+func (rt *PolicyRuntime) isSafeWorkspaceEnvTemplate(lexAbs, tCanon string) bool {
+	if rt.spec.Workspace == "" || lexAbs == "" || tCanon == "" {
+		return false
+	}
+	wsCanon, err := canonicalOrParent(rt.spec.Workspace)
+	if err != nil || wsCanon == "" {
+		return false
+	}
+	if !rt.isPathInWorkspace(lexAbs) || !isUnderCleanOSPath(wsCanon, tCanon) {
+		return false
+	}
+	return IsSafeEnvTemplateName(filepath.Base(lexAbs)) && IsSafeEnvTemplateName(filepath.Base(tCanon))
+}
+
+func (rt *PolicyRuntime) checkProtectedWorkspaceTarget(lexAbs, tCanon string, forWrite bool) (bool, string) {
+	if rt.spec.Workspace == "" {
+		return false, ""
+	}
+	if tCanon != "" && rt.isPathInWorkspace(tCanon) {
+		if prot, reason := checkProtectedSlashPath(filepath.ToSlash(tCanon), forWrite); prot {
+			return true, reason
+		}
+	}
+	if lexAbs != "" && rt.isPathInWorkspace(lexAbs) {
+		if prot, reason := checkProtectedSlashPath(filepath.ToSlash(lexAbs), forWrite); prot {
+			return true, reason
+		}
+	}
+	return false, ""
+}
+
+func (rt *PolicyRuntime) checkHardBlockedNet(host string, port int, resolvedIP string) string {
+	if host != "" && isCloudMetadataHost(host) {
+		return "cloud metadata endpoint is blocked"
+	}
+	if resolvedIP != "" && isCloudMetadataHost(resolvedIP) {
+		return "cloud metadata endpoint is blocked"
+	}
+	if rt.spec.ControlPort > 0 && port == rt.spec.ControlPort {
+		if isLoopbackOrUnspecifiedHost(host) || (resolvedIP != "" && isLoopbackOrUnspecifiedHost(resolvedIP)) {
+			return "runner control port is restricted"
+		}
+	}
+	if rt.spec.AccessMode != "full" {
+		if host != "" && strings.HasSuffix(normalizeHostForSSRF(host), ".localhost") {
+			return fmt.Sprintf("subdomain %q under .localhost is blocked", host)
+		}
+		if resolvedIP != "" && host != "" && !isLoopbackHost(host) && isLoopbackHost(resolvedIP) {
+			return fmt.Sprintf("DNS rebinding from %q to loopback address %s is blocked", host, resolvedIP)
+		}
+	}
+	return ""
+}
+
 // jailApprover bridges unish.Jail DecisionAsk callbacks (filesystem & network)
 // to PolicyRuntime's rule engine and interactive MidExecApprover.
 func (rt *PolicyRuntime) jailApprover(ctx context.Context, req unish.AccessRequest) (unish.Decision, error) {
 	rules := rt.effectiveRules()
 	switch req.Op {
 	case unish.OpRead, unish.OpList, unish.OpStat, unish.OpChdir:
-		target := nonEmptyStr(req.Path, req.RawPath)
-		if eff, _ := MatchRules(rules, "fs_read", target, rt.spec.Workspace); eff == "deny" {
+		rawTarget := nonEmptyStr(req.Path, req.RawPath)
+		lexAbs, tCanon, canonDiffers := rt.resolveTargetPaths(rawTarget, req.WorkDir)
+		target := nonEmptyStr(tCanon, rawTarget)
+		if eff, _ := MatchRules(rules, "fs_read", lexAbs, rt.spec.Workspace); eff == "deny" {
 			return unish.DecisionDeny, nil
-		} else if eff == "allow" {
+		}
+		if canonDiffers {
+			if eff, _ := MatchRules(rules, "fs_read", tCanon, rt.spec.Workspace); eff == "deny" {
+				return unish.DecisionDeny, nil
+			}
+		}
+		prot, protReason := rt.checkProtectedWorkspaceTarget(lexAbs, tCanon, false)
+		if allowsPathByRule(rules, "fs_read", target, rt.spec.Workspace, prot) || allowsPathByRule(rules, "fs_write", target, rt.spec.Workspace, prot) {
 			return unish.DecisionAllow, nil
 		}
-		if IsSafeEnvTemplateName(filepath.Base(target)) {
+		if rt.isSafeWorkspaceEnvTemplate(lexAbs, tCanon) {
 			return unish.DecisionAllow, nil
 		}
-		prot, protReason := IsProtectedWorkspacePath(rt.spec.Workspace, target, false)
 		prop, ok := ProposePathRule("fs_read", target, rt.spec.Workspace, prot)
 		reason := fmt.Sprintf("Reading path %q requires approval", target)
+		risk := "medium"
 		if prot && protReason != "" {
 			reason = protReason
+			risk = "high"
 		} else if rt.spec.Workspace != "" {
 			reason = fmt.Sprintf("Reading %q outside workspace requires approval", target)
 		}
@@ -575,7 +739,7 @@ func (rt *PolicyRuntime) jailApprover(ctx context.Context, req unish.AccessReque
 			Capability:      "fs_read",
 			Target:          target,
 			Reason:          reason,
-			Risk:            "medium",
+			Risk:            risk,
 			AccessMode:      rt.promptAccessMode(),
 			ProposedRule:    prop,
 			CanAllowSession: ok,
@@ -587,16 +751,24 @@ func (rt *PolicyRuntime) jailApprover(ctx context.Context, req unish.AccessReque
 		return unish.DecisionAllow, nil
 
 	case unish.OpWrite, unish.OpDelete, unish.OpLink:
-		target := nonEmptyStr(req.Path, req.RawPath)
-		if rt.isUnderReadOnlyProject(target) {
+		rawTarget := nonEmptyStr(req.Path, req.RawPath)
+		lexAbs, tCanon, canonDiffers := rt.resolveTargetPaths(rawTarget, req.WorkDir)
+		target := nonEmptyStr(tCanon, rawTarget)
+		if rt.isUnderReadOnlyProject(lexAbs) || rt.isUnderReadOnlyProject(tCanon) {
 			return unish.DecisionDeny, nil
 		}
-		if eff, _ := MatchRules(rules, "fs_write", target, rt.spec.Workspace); eff == "deny" {
+		if eff, _ := MatchRules(rules, "fs_write", lexAbs, rt.spec.Workspace); eff == "deny" {
 			return unish.DecisionDeny, nil
-		} else if eff == "allow" {
+		}
+		if canonDiffers {
+			if eff, _ := MatchRules(rules, "fs_write", tCanon, rt.spec.Workspace); eff == "deny" {
+				return unish.DecisionDeny, nil
+			}
+		}
+		prot, protReason := rt.checkProtectedWorkspaceTarget(lexAbs, tCanon, true)
+		if allowsPathByRule(rules, "fs_write", target, rt.spec.Workspace, prot) {
 			return unish.DecisionAllow, nil
 		}
-		prot, protReason := IsProtectedWorkspacePath(rt.spec.Workspace, target, true)
 		prop, ok := ProposePathRule("fs_write", target, rt.spec.Workspace, prot)
 		risk := "medium"
 		reason := fmt.Sprintf("Writing to %q outside workspace requires approval", target)
@@ -620,6 +792,9 @@ func (rt *PolicyRuntime) jailApprover(ctx context.Context, req unish.AccessReque
 		return unish.DecisionAllow, nil
 
 	case unish.OpNetConnect, unish.OpNetListen:
+		if blockReason := rt.checkHardBlockedNet(req.Host, req.Port, req.ResolvedIP); blockReason != "" {
+			return unish.DecisionDeny, nil
+		}
 		hostTarget := formatNetTarget(req.Host, req.Port)
 		if eff, _ := MatchRules(rules, "net", hostTarget, rt.spec.Workspace); eff == "deny" {
 			return unish.DecisionDeny, nil
@@ -676,6 +851,13 @@ func (h *PolicyCapabilityHook) CheckAccess(ctx context.Context, req unish.Access
 		if len(argv) == 0 && binPath != "" {
 			argv = []string{binPath}
 		}
+		if rt.spec.ControlPort > 0 && argvTargetsControlPort(argv, rt.spec.ControlPort) {
+			return &unish.AccessDenialError{
+				Op:     unish.OpExec,
+				Target: nonEmptyStr(strings.Join(argv, " "), binPath),
+				Reason: "runner control port is restricted",
+			}
+		}
 		// Prevent writable-root binary spoofing (`PATH="$PWD:$PATH" git` or `./git`):
 		// if the resolved binary lives inside a writable root (workspace, tmpDir, brainDir),
 		// evaluate it as a local path binary rather than crediting a bare system basename!
@@ -722,52 +904,196 @@ func (h *PolicyCapabilityHook) CheckAccess(ctx context.Context, req unish.Access
 		}
 
 	case unish.OpRead, unish.OpList, unish.OpStat, unish.OpChdir:
-		target := nonEmptyStr(req.Path, req.RawPath)
-		if eff, r := MatchRules(rules, "fs_read", target, rt.spec.Workspace); eff == "deny" {
+		rawTarget := nonEmptyStr(req.Path, req.RawPath)
+		lexAbs, tCanon, canonDiffers := rt.resolveTargetPaths(rawTarget, req.WorkDir)
+		if eff, r := MatchRules(rules, "fs_read", lexAbs, rt.spec.Workspace); eff == "deny" {
 			return &unish.AccessDenialError{
 				Op:     req.Op,
-				Target: target,
+				Target: rawTarget,
 				Reason: fmt.Sprintf("path blocked by permission rule %q", r.Pattern),
 			}
-		} else if eff == "allow" {
-			return nil
 		}
-		if IsSafeEnvTemplateName(filepath.Base(target)) && rt.spec.Workspace != "" {
-			wsCanon, _ := canonicalOrParent(rt.spec.Workspace)
-			tCanon, _ := canonicalOrParent(target)
-			if wsCanon != "" && tCanon != "" && isUnderCleanOSPath(wsCanon, tCanon) {
-				return nil
+		if canonDiffers {
+			if eff, r := MatchRules(rules, "fs_read", tCanon, rt.spec.Workspace); eff == "deny" {
+				return &unish.AccessDenialError{
+					Op:     req.Op,
+					Target: rawTarget,
+					Reason: fmt.Sprintf("path blocked by permission rule %q", r.Pattern),
+				}
 			}
 		}
-		return rt.jail.CheckAccess(ctx, req)
+		prot, protReason := rt.checkProtectedWorkspaceTarget(lexAbs, tCanon, false)
+		if tCanon != "" && (allowsPathByRule(rules, "fs_read", tCanon, rt.spec.Workspace, prot) || allowsPathByRule(rules, "fs_write", tCanon, rt.spec.Workspace, prot)) {
+			return nil
+		}
+		if rt.spec.AccessMode != "full" {
+			if rt.isSafeWorkspaceEnvTemplate(lexAbs, tCanon) {
+				return nil
+			}
+			// Allow `ls -la` in workspace root to stat the `..` entry (exact parent
+			// directory metadata only — never OpList, OpRead, OpChdir, or sibling files).
+			if req.Op == unish.OpStat && rt.isWorkspaceParentDir(tCanon) {
+				return nil
+			}
+			if prot && req.Op != unish.OpStat {
+				dec, err := rt.jailApprover(ctx, unish.AccessRequest{
+					Op:      req.Op,
+					Command: req.Command,
+					Path:    nonEmptyStr(tCanon, lexAbs),
+					RawPath: rawTarget,
+					WorkDir: req.WorkDir,
+				})
+				if err != nil {
+					return err
+				}
+				if dec != unish.DecisionAllow {
+					return &unish.AccessDenialError{
+						Op:     req.Op,
+						Target: rawTarget,
+						Reason: nonEmptyStr(protReason, "access to protected workspace path denied"),
+					}
+				}
+				if tCanon != "" && rt.isPathInWorkspace(tCanon) {
+					return nil
+				}
+			}
+		}
+		if err := rt.jail.CheckAccess(ctx, req); err != nil {
+			return err
+		}
+		if tCanon != "" && (!sameCleanOSPath(rawTarget, tCanon) || (req.Path != "" && !sameCleanOSPath(req.Path, tCanon))) {
+			canonReq := req
+			canonReq.Path = tCanon
+			canonReq.RawPath = tCanon
+			if err := rt.jail.CheckAccess(ctx, canonReq); err != nil {
+				return err
+			}
+		}
+		return nil
 
 	case unish.OpWrite, unish.OpDelete, unish.OpLink:
-		target := nonEmptyStr(req.Path, req.RawPath)
-		if rt.isUnderReadOnlyProject(target) {
+		rawTarget := nonEmptyStr(req.Path, req.RawPath)
+		lexAbs, tCanon, canonDiffers := rt.resolveTargetPaths(rawTarget, req.WorkDir)
+		linkLex, linkCanon, linkDiffers := "", "", false
+		if req.TargetPath != "" {
+			linkLex, linkCanon, linkDiffers = rt.resolveTargetPaths(req.TargetPath, req.WorkDir)
+		}
+		if rt.isUnderReadOnlyProject(lexAbs) || rt.isUnderReadOnlyProject(tCanon) ||
+			(req.TargetPath != "" && (rt.isUnderReadOnlyProject(linkLex) || rt.isUnderReadOnlyProject(linkCanon))) {
 			return &unish.AccessDenialError{
 				Op:     req.Op,
-				Target: target,
+				Target: rawTarget,
 				Reason: "write not allowed in read-only mode",
 			}
 		}
-		if eff, r := MatchRules(rules, "fs_write", target, rt.spec.Workspace); eff == "deny" {
+		if eff, r := MatchRules(rules, "fs_write", lexAbs, rt.spec.Workspace); eff == "deny" {
 			return &unish.AccessDenialError{
 				Op:     req.Op,
-				Target: target,
+				Target: rawTarget,
 				Reason: fmt.Sprintf("path blocked by permission rule %q", r.Pattern),
 			}
-		} else if eff == "allow" && req.Op != unish.OpLink {
+		}
+		if canonDiffers {
+			if eff, r := MatchRules(rules, "fs_write", tCanon, rt.spec.Workspace); eff == "deny" {
+				return &unish.AccessDenialError{
+					Op:     req.Op,
+					Target: rawTarget,
+					Reason: fmt.Sprintf("path blocked by permission rule %q", r.Pattern),
+				}
+			}
+		}
+		if req.TargetPath != "" {
+			if eff, r := MatchRules(rules, "fs_write", linkLex, rt.spec.Workspace); eff == "deny" {
+				return &unish.AccessDenialError{
+					Op:     req.Op,
+					Target: req.TargetPath,
+					Reason: fmt.Sprintf("path blocked by permission rule %q", r.Pattern),
+				}
+			}
+			if linkDiffers {
+				if eff, r := MatchRules(rules, "fs_write", linkCanon, rt.spec.Workspace); eff == "deny" {
+					return &unish.AccessDenialError{
+						Op:     req.Op,
+						Target: req.TargetPath,
+						Reason: fmt.Sprintf("path blocked by permission rule %q", r.Pattern),
+					}
+				}
+			}
+		}
+		prot, protReason := rt.checkProtectedWorkspaceTarget(lexAbs, tCanon, true)
+		if !prot && req.TargetPath != "" {
+			prot, protReason = rt.checkProtectedWorkspaceTarget(linkLex, linkCanon, true)
+		}
+		if req.Op != unish.OpLink && tCanon != "" && allowsPathByRule(rules, "fs_write", tCanon, rt.spec.Workspace, prot) {
 			return nil
 		}
-		return rt.jail.CheckAccess(ctx, req)
+		if rt.spec.AccessMode != "full" && prot {
+			dec, err := rt.jailApprover(ctx, unish.AccessRequest{
+				Op:         req.Op,
+				Command:    req.Command,
+				Path:       nonEmptyStr(tCanon, lexAbs),
+				RawPath:    rawTarget,
+				TargetPath: req.TargetPath,
+				WorkDir:    req.WorkDir,
+			})
+			if err != nil {
+				return err
+			}
+			if dec != unish.DecisionAllow {
+				return &unish.AccessDenialError{
+					Op:     req.Op,
+					Target: rawTarget,
+					Reason: nonEmptyStr(protReason, "modifying protected workspace path denied"),
+				}
+			}
+			if req.Op != unish.OpLink && tCanon != "" && rt.isPathInWorkspace(tCanon) {
+				return nil
+			}
+		}
+		if err := rt.jail.CheckAccess(ctx, req); err != nil {
+			return err
+		}
+		needCanonCheck := (tCanon != "" && (!sameCleanOSPath(rawTarget, tCanon) || (req.Path != "" && !sameCleanOSPath(req.Path, tCanon)))) ||
+			(req.TargetPath != "" && linkCanon != "" && !sameCleanOSPath(req.TargetPath, linkCanon))
+		if needCanonCheck {
+			canonReq := req
+			if tCanon != "" {
+				canonReq.Path = tCanon
+				canonReq.RawPath = tCanon
+			}
+			if req.TargetPath != "" && linkCanon != "" {
+				canonReq.TargetPath = linkCanon
+			}
+			if err := rt.jail.CheckAccess(ctx, canonReq); err != nil {
+				return err
+			}
+		}
+		return nil
 
 	case unish.OpNetConnect, unish.OpNetListen:
 		hostTarget := formatNetTarget(req.Host, req.Port)
+		if blockReason := rt.checkHardBlockedNet(req.Host, req.Port, req.ResolvedIP); blockReason != "" {
+			return &unish.AccessDenialError{
+				Op:     req.Op,
+				Target: nonEmptyStr(hostTarget, req.ResolvedIP),
+				Reason: blockReason,
+			}
+		}
 		if eff, r := MatchRules(rules, "net", hostTarget, rt.spec.Workspace); eff == "deny" {
 			return &unish.AccessDenialError{
 				Op:     req.Op,
 				Target: hostTarget,
 				Reason: fmt.Sprintf("network host blocked by permission rule %q", r.Pattern),
+			}
+		}
+		if req.ResolvedIP != "" {
+			resolvedTarget := formatNetTarget(req.ResolvedIP, req.Port)
+			if eff, r := MatchRules(rules, "net", resolvedTarget, rt.spec.Workspace); eff == "deny" {
+				return &unish.AccessDenialError{
+					Op:     req.Op,
+					Target: resolvedTarget,
+					Reason: fmt.Sprintf("network address blocked by permission rule %q", r.Pattern),
+				}
 			}
 		}
 		return rt.jail.CheckAccess(ctx, req)
@@ -779,6 +1105,14 @@ func (h *PolicyCapabilityHook) CheckAccess(ctx context.Context, req unish.Access
 
 // DialContext implements unish.CapabilityHook.
 func (h *PolicyCapabilityHook) DialContext(ctx context.Context, cmdName, network, address string) (net.Conn, error) {
+	host, port := parseNetHostPort(address)
+	if blockReason := h.rt.checkHardBlockedNet(host, port, ""); blockReason != "" {
+		return nil, &unish.AccessDenialError{
+			Op:     unish.OpNetConnect,
+			Target: address,
+			Reason: blockReason,
+		}
+	}
 	if eff, r := MatchRules(h.rt.effectiveRules(), "net", address, h.rt.spec.Workspace); eff == "deny" {
 		return nil, &unish.AccessDenialError{
 			Op:     unish.OpNetConnect,
@@ -791,6 +1125,14 @@ func (h *PolicyCapabilityHook) DialContext(ctx context.Context, cmdName, network
 
 // Listen implements unish.CapabilityHook.
 func (h *PolicyCapabilityHook) Listen(ctx context.Context, cmdName, network, address string) (net.Listener, error) {
+	host, port := parseNetHostPort(address)
+	if blockReason := h.rt.checkHardBlockedNet(host, port, ""); blockReason != "" {
+		return nil, &unish.AccessDenialError{
+			Op:     unish.OpNetListen,
+			Target: address,
+			Reason: blockReason,
+		}
+	}
 	if eff, r := MatchRules(h.rt.effectiveRules(), "net", address, h.rt.spec.Workspace); eff == "deny" {
 		return nil, &unish.AccessDenialError{
 			Op:     unish.OpNetListen,
@@ -803,6 +1145,14 @@ func (h *PolicyCapabilityHook) Listen(ctx context.Context, cmdName, network, add
 
 // ListenPacket implements unish.CapabilityHook.
 func (h *PolicyCapabilityHook) ListenPacket(ctx context.Context, cmdName, network, address string) (net.PacketConn, error) {
+	host, port := parseNetHostPort(address)
+	if blockReason := h.rt.checkHardBlockedNet(host, port, ""); blockReason != "" {
+		return nil, &unish.AccessDenialError{
+			Op:     unish.OpNetListen,
+			Target: address,
+			Reason: blockReason,
+		}
+	}
 	if eff, r := MatchRules(h.rt.effectiveRules(), "net", address, h.rt.spec.Workspace); eff == "deny" {
 		return nil, &unish.AccessDenialError{
 			Op:     unish.OpNetListen,
@@ -813,18 +1163,21 @@ func (h *PolicyCapabilityHook) ListenPacket(ctx context.Context, cmdName, networ
 	return h.rt.jail.ListenPacket(ctx, cmdName, network, address)
 }
 
-// PrepareEnv injects session TMPDIR/TEMP/TMP and scrubs sensitive environment
-// overrides when jailed.
+// PrepareEnv injects session TMPDIR/TEMP/TMP, strips non-existent PATH entries
+// that would otherwise trigger outside-jail stat prompts during binary lookup,
+// and scrubs sensitive loader environment overrides when jailed.
 func (rt *PolicyRuntime) PrepareEnv(env []string) []string {
 	out := make([]string, 0, len(env)+4)
 	jailed := rt.spec.AccessMode != "full"
 	seenTmp := map[string]bool{}
+	seenPath := false
 	for _, kv := range env {
 		idx := strings.IndexByte(kv, '=')
 		if idx <= 0 {
 			continue
 		}
 		k := kv[:idx]
+		v := kv[idx+1:]
 		upper := strings.ToUpper(k)
 		if jailed && isDangerousLoaderEnv(upper) {
 			continue
@@ -837,6 +1190,17 @@ func (rt *PolicyRuntime) PrepareEnv(env []string) []string {
 			out = append(out, k+"="+rt.spec.TmpDir)
 			continue
 		}
+		if jailed && upper == "PATH" {
+			if runtime.GOOS == "windows" {
+				if seenPath {
+					continue
+				}
+				seenPath = true
+				k = "PATH"
+			}
+			out = append(out, k+"="+rt.sanitizePathEnvValue(v, rt.spec.Workspace))
+			continue
+		}
 		out = append(out, kv)
 	}
 	if rt.spec.TmpDir != "" {
@@ -847,6 +1211,54 @@ func (rt *PolicyRuntime) PrepareEnv(env []string) []string {
 		}
 	}
 	return out
+}
+
+func (rt *PolicyRuntime) isCoveredByReadableRoot(p string) bool {
+	if p == "" || len(rt.readableRoots) == 0 {
+		return true
+	}
+	for _, r := range rt.readableRoots {
+		if isUnderCleanOSPath(r, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func (rt *PolicyRuntime) sanitizePathEnvValue(rawPath, workDir string) string {
+	if strings.TrimSpace(rawPath) == "" {
+		return ""
+	}
+	parts := filepath.SplitList(rawPath)
+	kept := make([]string, 0, len(parts))
+	for _, entry := range parts {
+		d := strings.Trim(strings.TrimSpace(entry), `"`)
+		if runtime.GOOS == "windows" && strings.HasPrefix(d, `\\?\`) && !strings.HasPrefix(strings.ToUpper(d), `\\?\UNC\`) {
+			d = d[4:]
+		}
+		if d == "" {
+			continue
+		}
+		checkDir := d
+		if !filepath.IsAbs(checkDir) && workDir != "" {
+			checkDir = filepath.Join(workDir, checkDir)
+		}
+		checkDir = filepath.Clean(checkDir)
+		info, err := os.Stat(checkDir)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if len(rt.readableRoots) > 0 {
+			if !rt.isCoveredByReadableRoot(checkDir) {
+				continue
+			}
+			if c, cerr := canonicalOrParent(checkDir); cerr == nil && c != "" && !rt.isCoveredByReadableRoot(c) {
+				continue
+			}
+		}
+		kept = append(kept, checkDir)
+	}
+	return strings.Join(kept, string(filepath.ListSeparator))
 }
 
 func isDangerousLoaderEnv(upper string) bool {
@@ -933,14 +1345,25 @@ func (rt *PolicyRuntime) QJSOptions(base qjs.ScriptOptions) qjs.ScriptOptions {
 	if out.TmpDir == "" && rt.spec.TmpDir != "" {
 		out.TmpDir = rt.spec.TmpDir
 	}
-	if out.Env != nil && rt.spec.TmpDir != "" {
+	if out.Env != nil && (rt.spec.TmpDir != "" || rt.spec.AccessMode != "full") {
 		envCopy := make(map[string]string, len(out.Env)+3)
 		for k, v := range out.Env {
+			if rt.spec.AccessMode != "full" {
+				upper := strings.ToUpper(k)
+				if isDangerousLoaderEnv(upper) {
+					continue
+				}
+				if upper == "PATH" {
+					v = rt.sanitizePathEnvValue(v, rt.spec.Workspace)
+				}
+			}
 			envCopy[k] = v
 		}
-		envCopy["TMPDIR"] = rt.spec.TmpDir
-		envCopy["TEMP"] = rt.spec.TmpDir
-		envCopy["TMP"] = rt.spec.TmpDir
+		if rt.spec.TmpDir != "" {
+			envCopy["TMPDIR"] = rt.spec.TmpDir
+			envCopy["TEMP"] = rt.spec.TmpDir
+			envCopy["TMP"] = rt.spec.TmpDir
+		}
 		out.Env = envCopy
 	}
 	if rt.spec.AccessMode != "full" && len(out.JailRoots) == 0 {
@@ -985,12 +1408,24 @@ func (rt *PolicyRuntime) QJSOptions(base qjs.ScriptOptions) qjs.ScriptOptions {
 			})
 		case "net":
 			host, port := parseNetHostPort(target)
+			resolvedIP := ""
+			if len(argv) > 0 && strings.TrimSpace(argv[0]) != "" {
+				origHost, origPort := parseNetHostPort(argv[0])
+				if origHost != "" {
+					resolvedIP = host
+					host = origHost
+					if port == 0 {
+						port = origPort
+					}
+				}
+			}
 			return rt.hook.CheckAccess(ctx, unish.AccessRequest{
-				Op:      unish.OpNetConnect,
-				Command: "exec_script",
-				Proto:   "tcp",
-				Host:    host,
-				Port:    port,
+				Op:         unish.OpNetConnect,
+				Command:    "exec_script",
+				Proto:      "tcp",
+				Host:       host,
+				Port:       port,
+				ResolvedIP: resolvedIP,
 			})
 		case "net_listen":
 			host, port := parseNetHostPort(target)
@@ -1082,4 +1517,84 @@ func isUnderCleanOSPath(root, target string) bool {
 		r += sep
 	}
 	return strings.HasPrefix(t, r)
+}
+
+func argvTargetsControlPort(argv []string, port int) bool {
+	if port <= 0 || len(argv) == 0 {
+		return false
+	}
+	portStr := strconv.Itoa(port)
+	colonPort := ":" + portStr
+	for _, arg := range argv {
+		if containsBoundedPortRef(arg, colonPort) {
+			return true
+		}
+	}
+	unwrapped, _ := unwrapExecArgv(argv)
+	checkArgv := argv
+	if len(unwrapped) > 0 {
+		checkArgv = unwrapped
+	}
+	bin := baseProgName(checkArgv[0])
+	if isNetworkOrScriptExecBinary(bin) {
+		for _, arg := range checkArgv[1:] {
+			if containsStandaloneToken(arg, portStr) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsBoundedPortRef(s, colonPort string) bool {
+	idx := 0
+	for {
+		pos := strings.Index(s[idx:], colonPort)
+		if pos < 0 {
+			return false
+		}
+		absPos := idx + pos
+		end := absPos + len(colonPort)
+		nextIsDigit := end < len(s) && s[end] >= '0' && s[end] <= '9'
+		if !nextIsDigit {
+			return true
+		}
+		idx = absPos + 1
+	}
+}
+
+func containsStandaloneToken(s, token string) bool {
+	if s == token {
+		return true
+	}
+	idx := 0
+	for {
+		pos := strings.Index(s[idx:], token)
+		if pos < 0 {
+			return false
+		}
+		absPos := idx + pos
+		end := absPos + len(token)
+		prevAlnum := absPos > 0 && isASCIIAlnum(s[absPos-1])
+		nextAlnum := end < len(s) && isASCIIAlnum(s[end])
+		if !prevAlnum && !nextAlnum {
+			return true
+		}
+		idx = absPos + 1
+	}
+}
+
+func isASCIIAlnum(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
+}
+
+func isNetworkOrScriptExecBinary(bin string) bool {
+	switch bin {
+	case "curl", "wget", "nc", "ncat", "netcat", "socat", "telnet", "openssl",
+		"ssh", "scp", "sftp", "python", "python3", "python2", "node", "bun", "deno",
+		"perl", "ruby", "php", "powershell", "pwsh", "cmd":
+		return true
+	default:
+		return strings.HasPrefix(bin, "python3.")
+	}
 }
