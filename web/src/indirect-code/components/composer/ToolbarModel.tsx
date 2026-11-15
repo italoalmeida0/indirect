@@ -12,8 +12,7 @@ export function ToolbarModel() {
   const isMaxEffort = () => normalizeEffort(c.effort()) === "max";
   return (
 <>
-{/* Effort + Model pickers (desktop toolbar only — on mobile they live in the + menu) */}
-<Show when={!ui.isMobile()}>
+{/* Effort + Model pickers (desktop and mobile composer toolbar) */}
 <div class="min-w-0 shrink">
   <button
     type="button"
@@ -34,14 +33,18 @@ export function ToolbarModel() {
         ui.setModelMenuOpen(false);
       }
     }}
-    class="h-7 min-w-0 flex items-center gap-1.5 px-2 rounded-lg text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+    class={`rc-composer-model relative h-7 max-w-full min-w-0 flex items-center rounded-lg text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer ${
+      ui.isMobile() ? "gap-1 px-1.5" : "gap-1.5 px-2"
+    }`}
     data-rc-tip="Effort & model" aria-label={`Switch model: ${c.activeModelName()}${formatEffort(c.effort()) ? ` ${formatEffort(c.effort())}` : ""}`}
   >
-    <Iconify icon="lucide:cpu" size={13} class="shrink-0 text-fg-muted" />
-    <span class="max-w-[92px] @[380px]:max-w-[100px] @[500px]:max-w-[190px] truncate text-fg">{c.activeModelName()}</span>
+    <Show when={!ui.isMobile()}>
+      <Iconify icon="lucide:cpu" size={13} class="shrink-0 text-fg-muted" />
+    </Show>
+    <span class="min-w-0 truncate text-fg @[500px]:max-w-[200px]">{c.activeModelName()}</span>
     <Show when={formatEffort(c.effort())}>
       <span
-        class={`hidden @[340px]:inline-flex items-center rounded border px-1 py-0.5 font-mono text-2xs font-medium shrink-0 leading-none transition-colors ${
+        class={`inline-flex items-center rounded border px-1 py-0.5 font-mono text-2xs font-medium shrink-0 leading-none transition-colors ${
           isMaxEffort()
             ? "border-accent/35 bg-accent-subtle text-accent"
             : "border-border bg-surface-subtle text-fg-muted"
@@ -59,7 +62,7 @@ export function ToolbarModel() {
     role="dialog"
     aria-label="Reasoning effort"
     placement="top-start"
-    width="min(20.5rem, calc(100vw - 1.5rem))"
+    width={ui.isMobile() ? "min(20.5rem, calc(100vw - 1rem))" : "min(20.5rem, calc(100vw - 1.5rem))"}
   >
     <div>{c.effortPickerBody()}</div>
   </FloatMenu>
@@ -85,13 +88,12 @@ export function ToolbarModel() {
     role="dialog"
     aria-label="Select model"
     placement="top-start"
-    width="min(26rem, calc(100vw - 1.5rem))"
+    width={ui.isMobile() ? "min(24rem, calc(100vw - 1rem))" : "min(26rem, calc(100vw - 1.5rem))"}
   >
     <div>{c.modelPickerBody(true)}</div>
   </FloatMenu>
 
 </div>
-</Show>
 </>
   );
 }

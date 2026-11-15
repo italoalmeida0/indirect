@@ -303,6 +303,8 @@ html.mobile .rc-message-actions { opacity: 1; }
 @layer base {
   html.mobile .rc-sidebar-toggle,
   html.mobile .rc-composer-add,
+  html.mobile .rc-composer-icon-btn,
+  html.mobile .rc-composer-model,
   html.mobile .rc-composer-send,
   html.mobile .rc-composer-stop {
     position: relative;
@@ -311,6 +313,8 @@ html.mobile .rc-message-actions { opacity: 1; }
 @media (pointer: coarse) {
   .rc-sidebar-toggle,
   .rc-composer-add,
+  .rc-composer-icon-btn,
+  .rc-composer-model,
   .rc-composer-send,
   .rc-composer-stop {
     position: relative;
@@ -325,6 +329,16 @@ html.mobile .rc-message-actions { opacity: 1; }
     width: 44px;
     height: 44px;
     transform: translate(-50%, -50%);
+  }
+  .rc-composer-icon-btn::after,
+  .rc-composer-model::after {
+    content: "";
+    position: absolute;
+    left: -2px;
+    right: -2px;
+    top: 50%;
+    height: 44px;
+    transform: translateY(-50%);
   }
 }
 .rc-markdown blockquote {

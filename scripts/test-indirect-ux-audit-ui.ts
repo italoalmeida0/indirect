@@ -1185,7 +1185,7 @@ try {
 
       const isMobileDoc = await page.evaluate(() => document.documentElement.classList.contains("mobile"));
       if (!isMobileDoc) {
-        // Desktop: Effort -> Model -> Mode & Skills FloatMenu symmetry
+        // Desktop: Effort -> Model -> Mode & Skills -> Permissions FloatMenu symmetry + chevron parity
         await page.locator('[aria-label^="Switch model"]').first().click();
         await page.waitForTimeout(160);
         await measureOpenPopoverSymmetry(page, `${tag} Effort`);
@@ -1201,29 +1201,72 @@ try {
         await measureOpenPopoverSymmetry(page, `${tag} Mode & Skills`);
         await page.keyboard.press("Escape");
         await page.waitForTimeout(100);
+
+        const deskPermChevronCount = await page.locator("button[data-access-mode] svg").count();
+        assert.equal(deskPermChevronCount, 2, `${tag}: desktop Permissions button must include leading icon + chevron-down`);
       } else {
-        // Mobile: + menu FloatMenu symmetry + sleek 28px visual circle + >= 44px coarse ::after hit target
-        const addHit = await page.evaluate(() => {
-          const el = document.querySelector<HTMLElement>(".rc-composer-add");
-          if (!el) return null;
-          const r = el.getBoundingClientRect();
-          const after = getComputedStyle(el, "::after");
-          const aw = parseFloat(after.width) || 0;
-          const ah = parseFloat(after.height) || 0;
+        // Mobile: +, icon-only Mode, icon-only Permissions, and visible Model+Effort in composer toolbar
+        const mobBar = await page.evaluate(() => {
+          const measureHit = (el: HTMLElement | null) => {
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            const after = getComputedStyle(el, "::after");
+            const aw = parseFloat(after.width) || 0;
+            const ah = parseFloat(after.height) || 0;
+            return {
+              visualWidth: r.width,
+              visualHeight: r.height,
+              centerY: r.top + r.height / 2,
+              text: (el.textContent || "").trim(),
+              svgCount: el.querySelectorAll("svg").length,
+              width: Math.max(r.width, aw),
+              height: Math.max(r.height, ah),
+            };
+          };
           return {
-            visualWidth: r.width,
-            visualHeight: r.height,
-            width: Math.max(r.width, aw),
-            height: Math.max(r.height, ah),
+            add: measureHit(document.querySelector<HTMLElement>(".rc-composer-add")),
+            mode: measureHit(document.querySelector<HTMLElement>('button[aria-label^="Agent mode and skills"]')),
+            access: measureHit(document.querySelector<HTMLElement>("button[data-access-mode]")),
+            model: measureHit(document.querySelector<HTMLElement>("button.rc-composer-model")),
           };
         });
         assert(
-          addHit && addHit.visualWidth <= 30 && addHit.visualHeight <= 30 && addHit.height >= 44 && addHit.width >= 44,
-          `${tag}: .rc-composer-add expected <=30px visual & >=44px coarse hit target (${JSON.stringify(addHit)})`,
+          mobBar.add && mobBar.add.visualWidth <= 30 && mobBar.add.visualHeight <= 30 && mobBar.add.height >= 44 && mobBar.add.width >= 44,
+          `${tag}: .rc-composer-add expected <=30px visual & >=44px coarse hit target (${JSON.stringify(mobBar.add)})`,
         );
+        assert(
+          mobBar.mode && mobBar.mode.visualWidth <= 30 && mobBar.mode.visualHeight <= 30 && mobBar.mode.height >= 44 && mobBar.mode.text === "" && mobBar.mode.svgCount === 1,
+          `${tag}: mobile Mode button must be <=30px icon-only with >=44px vertical hit target (${JSON.stringify(mobBar.mode)})`,
+        );
+        assert(
+          mobBar.access && mobBar.access.visualWidth <= 30 && mobBar.access.visualHeight <= 30 && mobBar.access.height >= 44 && mobBar.access.text === "" && mobBar.access.svgCount === 1,
+          `${tag}: mobile Permissions button must be <=30px icon-only with >=44px vertical hit target (${JSON.stringify(mobBar.access)})`,
+        );
+        assert(
+          mobBar.model && mobBar.model.visualWidth >= 80 && mobBar.model.height >= 44 && /HIGH/i.test(mobBar.model.text),
+          `${tag}: mobile Model+Effort button must remain visible with effort badge in toolbar (${JSON.stringify(mobBar.model)})`,
+        );
+        assert(
+          Math.abs(mobBar.mode.centerY - mobBar.add.centerY) <= 1 &&
+            Math.abs(mobBar.access.centerY - mobBar.add.centerY) <= 1 &&
+            Math.abs(mobBar.model.centerY - mobBar.add.centerY) <= 1,
+          `${tag}: mobile composer toolbar controls must align on a single row (${JSON.stringify(mobBar)})`,
+        );
+
         await page.locator(".rc-composer-add").first().click();
         await page.waitForTimeout(180);
         await measureOpenPopoverSymmetry(page, `${tag} Mobile + menu`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(100);
+
+        await page.locator("button.rc-composer-model").first().click();
+        await page.waitForTimeout(180);
+        await measureOpenPopoverSymmetry(page, `${tag} Mobile Effort`);
+        await page.locator("[data-floatmenu] button").filter({ hasText: /Claude|Switch model/i }).first().click();
+        await page.waitForTimeout(180);
+        await measureOpenPopoverSymmetry(page, `${tag} Mobile Model`);
+        await page.keyboard.press("Escape");
+        await page.waitForTimeout(100);
         await page.keyboard.press("Escape");
         await page.waitForTimeout(100);
       }

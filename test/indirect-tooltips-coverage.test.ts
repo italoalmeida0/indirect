@@ -128,7 +128,7 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
 
   test("composer toolbar, skills matrix, footer, and send/attachment controls carry data-rc-tip", () => {
     const toolbarCtx = readIc("components/composer/ToolbarContext.tsx");
-    expect(toolbarCtx).toContain('data-rc-tip={ui.isMobile() ? "Add & Settings" : "Add context"}');
+    expect(toolbarCtx).toContain('data-rc-tip="Add context"');
     expect(toolbarCtx).toContain("aria-expanded={c.addContextOpen()}");
     expect(toolbarCtx).toContain('data-rc-tip="Mode & skills"');
     expect(toolbarCtx).toContain("data-rc-tip={currentAccessSpec().tip}");

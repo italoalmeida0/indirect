@@ -1439,6 +1439,7 @@ export default function IndirectCodePage() {
         filter={modelFilter}
         setFilter={setModelFilter}
         activeModelId={options.activeModel}
+        autoFocus={!isMobile()}
         onBackToEffort={
           withBackToEffort && modelFromEffort()
             ? () => {

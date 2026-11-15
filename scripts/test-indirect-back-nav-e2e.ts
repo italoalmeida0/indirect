@@ -909,43 +909,56 @@ try {
       await waitForSidebar(page, false, "back in session");
       console.log("✓ [390x844] Scenario 3 (mobile) passed: UI close leaves zero phantom history entries");
 
-      // 4) Mobile `+` sheet 3-level drilldown: + -> Claude Sonnet (effort) -> Switch model (model) ->
-      //    goBack -> effort -> goBack -> main -> Mode -> goBack -> main -> goBack -> closes + -> goBack -> sidebar!
-      await page.locator("button.rc-composer-add").click();
-      const plusDialog = page.locator('[data-floatmenu][aria-label="Add & Settings"]');
-      await plusDialog.waitFor({ state: "visible" });
+      // 4) Mobile composer toolbar popovers & 2-level Model/Effort drilldown:
+      //    Model/Effort -> Effort -> Switch model (Select model) -> goBack -> Effort -> goBack -> closed ->
+      //    Mode icon -> Mode & Skills -> goBack -> closed ->
+      //    + -> Add context -> goBack -> closed -> goBack -> sidebar!
+      await page.locator("button.rc-composer-model").click();
+      const effortDialog = page.locator('[data-floatmenu][aria-label="Reasoning effort"]');
+      await effortDialog.waitFor({ state: "visible" });
 
-      await plusDialog.getByText("Claude Sonnet 4.6").click();
-      await plusDialog.locator("[data-effort-picker]").waitFor({ state: "visible" });
-
-      await plusDialog.locator("button[data-effort-model-btn]").click();
-      await plusDialog.getByText("Select model", { exact: true }).waitFor({ state: "visible" });
-
-      await page.goBack();
-      await plusDialog.locator("[data-effort-picker]").waitFor({ state: "visible" });
+      await effortDialog.locator("button[data-effort-model-btn]").click();
+      const modelDialog = page.locator('[data-floatmenu][aria-label="Select model"]');
+      await modelDialog.waitFor({ state: "visible" });
 
       await page.goBack();
-      await plusDialog.getByText("Configuration", { exact: true }).waitFor({ state: "visible" });
-
-      // Also test Mode subview drilldown + Back
-      await plusDialog.getByText("Mode", { exact: true }).click();
-      await plusDialog.getByText("Mode & Skills", { exact: true }).waitFor({ state: "visible" });
-
-      await page.goBack();
-      await plusDialog.getByText("Configuration", { exact: true }).waitFor({ state: "visible" });
+      await effortDialog.waitFor({ state: "visible" });
 
       await page.goBack();
       await page.waitForFunction(
-        () => !document.querySelector('[data-floatmenu][aria-label="Add & Settings"]'),
+        () => !document.querySelector('[data-floatmenu][aria-label="Reasoning effort"]'),
+        null,
+        { timeout: 3000 },
+      );
+
+      // Mode icon button in mobile composer toolbar + Back
+      await page.locator('button[aria-label^="Agent mode and skills"]').click();
+      await page.locator('[data-floatmenu][aria-label="Mode & Skills"]').waitFor({ state: "visible" });
+
+      await page.goBack();
+      await page.waitForFunction(
+        () => !document.querySelector('[data-floatmenu][aria-label="Mode & Skills"]'),
+        null,
+        { timeout: 3000 },
+      );
+
+      // + Add context button in mobile composer toolbar + Back -> Back -> sidebar
+      await page.locator("button.rc-composer-add").click();
+      const plusDialog = page.locator('[data-floatmenu][aria-label="Add context"]');
+      await plusDialog.waitFor({ state: "visible" });
+
+      await page.goBack();
+      await page.waitForFunction(
+        () => !document.querySelector('[data-floatmenu][aria-label="Add context"]'),
         null,
         { timeout: 3000 },
       );
 
       await page.goBack();
-      await waitForSidebar(page, true, "opens sidebar after closing + sheet");
+      await waitForSidebar(page, true, "opens sidebar after closing mobile composer menus");
       await page.getByText("Idempotent double-entry posting lock").first().click();
       await waitForSidebar(page, false, "back in session");
-      console.log("✓ [390x844] Scenario 4 passed: mobile + sheet 3-level drilldown & Back unwinding");
+      console.log("✓ [390x844] Scenario 4 passed: mobile composer toolbar popovers & Back unwinding");
 
       // 10) F5 page.reload() on mobile while in session (and with SettingsModal open!) + Forward restore/bounce
       await page.locator('button[aria-label="Expand sidebar"]:visible').first().click();

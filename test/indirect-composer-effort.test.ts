@@ -133,11 +133,12 @@ describe("Separated Effort & Model picker contracts", () => {
     expect(thumbPos).toBeGreaterThan(ringPos);
   });
 
-  test("ToolbarModel and mobile + menu highlight Max effort with selected accent instead of fixed sky", () => {
+  test("ToolbarModel stays visible on both desktop and mobile and highlights Max effort with selected accent", () => {
     expect(toolbarModelSrc).not.toContain("tone-sky");
     expect(toolbarModelSrc).toContain("border-accent/35 bg-accent-subtle text-accent");
-    expect(toolbarCtxSrc).not.toContain("text-tone-sky font-medium");
-    expect(toolbarCtxSrc).toContain('normalizeEffort(c.effort()) === "max"\n                    ? "text-accent font-medium"');
+    // ToolbarModel itself must NOT be wrapped in <Show when={!ui.isMobile()}>; only the cpu icon is desktop-only.
+    expect(toolbarModelSrc).toContain('<div class="min-w-0 shrink">');
+    expect(toolbarModelSrc).not.toContain("hidden @[340px]:inline-flex");
   });
 
   test("ModelPickerBody has no bottom Reasoning effort footer", () => {
@@ -154,10 +155,11 @@ describe("Separated Effort & Model picker contracts", () => {
     expect(toolbarModelSrc).toContain("{c.modelPickerBody(true)}");
   });
 
-  test("Mobile + menu opens Effort subview first, transitions to Select model, and returns to Effort on Back", () => {
-    expect(toolbarCtxSrc).toContain('switchSubView("effort")');
-    expect(toolbarCtxSrc).toContain('c.effortPickerBody(() => switchSubView("model"))');
-    expect(toolbarCtxSrc).toContain('<Show when={subView() === "effort"}>');
+  test("ToolbarContext keeps Mode and Permissions directly in the composer toolbar as icon-only buttons on mobile and adds chevron to desktop Permissions", () => {
+    expect(toolbarCtxSrc).toContain("rc-composer-icon-btn");
+    expect(toolbarCtxSrc).toContain('aria-label="Add context"');
+    expect(toolbarCtxSrc).not.toContain("Add & Settings");
+    expect(toolbarCtxSrc).toContain("c.accessMenuOpen() ? \"rotate-180\" : \"\"");
   });
 
   test("IndirectCodePage closeMenus closes both effortMenuOpen and modelMenuOpen", () => {

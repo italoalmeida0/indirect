@@ -203,6 +203,7 @@ export function ModelPickerBody(props: {
   onPick: (id: string) => void;
   onRefresh: () => void;
   onBackToEffort?: () => void;
+  autoFocus?: boolean;
 }) {
   const [selectedProvider, setSelectedProvider] = createSignal<string>("all");
   const [highlightedId, setHighlightedId] = createSignal<string | null>(null);
@@ -412,7 +413,9 @@ export function ModelPickerBody(props: {
               e.stopPropagation();
             }
           }}
-          ref={(el) => setTimeout(() => el?.focus(), 40)}
+          ref={(el) => {
+            if (props.autoFocus !== false) setTimeout(() => el?.focus(), 40);
+          }}
         />
         <Show when={props.filter()}>
           <button

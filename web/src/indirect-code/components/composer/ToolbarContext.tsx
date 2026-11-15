@@ -1,15 +1,11 @@
 import { batch, createEffect, createSignal, untrack, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
-import { animate } from "../../../ds/motion/animate";
 import { createGlide } from "../../../ds/motion/glide";
 import { press } from "../../../ds/motion/press";
-import { reducedMotion } from "../../../ds/motion/reduced";
-import { motionTokens } from "../../../ds/motion/tokens";
 import { attachSortable } from "../../../sortable";
 import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { FloatMenu } from "../FloatMenu";
 import { MenuItem } from "../MenuItem";
-import { formatEffort, normalizeEffort } from "../../utils/format";
 import { baseMode, effectiveModeSkills, isModeSkillName as isModeSkill, originalUsable } from "../../utils/modeSkills";
 import type { AccessMode } from "../../utils/settingsValidation";
 
@@ -66,36 +62,6 @@ export function ToolbarContext() {
   const s = useSession();
   const ui = useUI();
 
-  // Mobile submenu navigation inside the "+" menu
-  const [localSubView, setLocalSubView] = createSignal<"main" | "effort" | "model" | "mode" | "access">("main");
-  const subView = () => (c.addContextSubView ? c.addContextSubView() : localSubView());
-  const setSubView = (next: "main" | "effort" | "model" | "mode" | "access") =>
-    c.setAddContextSubView ? c.setAddContextSubView(next) : setLocalSubView(next);
-  let subViewDir = 1;
-  const switchSubView = (next: "main" | "effort" | "model" | "mode" | "access") => {
-    const cur = subView();
-    subViewDir = next === "main" || (cur === "model" && next === "effort") ? -1 : 1;
-    setSubView(next);
-  };
-  const animateSubView = (el: HTMLElement) => {
-    if (untrack(reducedMotion)) return;
-    queueMicrotask(() => {
-      if (!el.isConnected) return;
-      animate(
-        el,
-        { opacity: 1, translate: "0px 0px", filter: "blur(0px)" },
-        { duration: 0.22, ease: motionTokens.ease.enter },
-        {
-          from: {
-            opacity: 0.2,
-            translate: `${subViewDir * 14}px 0px`,
-            filter: "blur(2.5px)",
-          },
-        },
-      );
-    });
-  };
-
   // Local draft state while the Mode & Skills popup is open: avoids lag/stutter
   // by deferring network sync and session re-snapshots until "Done" or close.
   const [draftSkills, setDraftSkills] = createSignal<string[]>([]);
@@ -103,7 +69,7 @@ export function ToolbarContext() {
   const [draftAgentMode, setDraftAgentMode] = createSignal<string>("");
   const [isEditing, setIsEditing] = createSignal(false);
 
-  const isMenuOpen = () => c.modeMenuOpen() || (c.addContextOpen() && subView() === "mode");
+  const isMenuOpen = () => c.modeMenuOpen();
   const effectiveSelectedSkills = () => (isEditing() ? draftSkills() : c.selectedSkills());
   const effectiveSkillUsables = () => (isEditing() ? draftUsables() : (c.skillUsables?.() ?? {}));
   const effectiveAgentMode = () => (isEditing() ? draftAgentMode() : c.agentMode());
@@ -186,13 +152,6 @@ export function ToolbarContext() {
     });
     c.configureSession();
   }
-
-  // Reset to main view whenever the menu closes
-  createEffect(() => {
-    if (!c.addContextOpen()) {
-      setSubView("main");
-    }
-  });
 
   /** The effective mode-skill list: cache before the official daemon list
    * loads, reconciled with it afterwards. For an EXISTING session the mode
@@ -626,9 +585,12 @@ export function ToolbarContext() {
     </div>
   );
 
+  const modeIcon = () =>
+    currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer");
+
   return (
 <>
-<div>
+<div class="shrink-0">
   <button
     type="button"
     ref={c.addBtn}
@@ -644,8 +606,8 @@ export function ToolbarContext() {
       c.setAddContextOpen(next);
     }}
     class="rc-composer-add relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-    data-rc-tip={ui.isMobile() ? "Add & Settings" : "Add context"}
-    aria-label={ui.isMobile() ? "Add & Settings" : "Add context"}
+    data-rc-tip="Add context"
+    aria-label="Add context"
   >
     <Iconify icon="lucide:plus" size={15} />
   </button>
@@ -653,337 +615,105 @@ export function ToolbarContext() {
     anchor={() => c.addBtn}
     open={c.addContextOpen()}
     onClose={() => c.setAddContextOpen(false)}
-    onEscape={() => {
-      if (ui.isMobile()) {
-        const cur = subView();
-        if (cur === "model") {
-          if (c.modelFilter?.()) {
-            c.setModelFilter?.("");
-            return;
-          }
-          switchSubView("effort");
-          return;
-        }
-        if (cur === "effort" || cur === "mode" || cur === "access") {
-          if (cur === "mode") applyDraft();
-          switchSubView("main");
-          return;
-        }
-      }
-      c.setAddContextOpen(false);
-      c.addBtn?.focus();
-    }}
     role="dialog"
-    aria-label={ui.isMobile() ? "Add & Settings" : "Add context"}
+    aria-label="Add context"
     placement="top-start"
-    width={
-      ui.isMobile()
-        ? subView() === "model" || subView() === "mode"
-          ? "min(24rem, calc(100vw - 1rem))"
-          : subView() === "access"
-            ? "min(22.5rem, calc(100vw - 1rem))"
-            : subView() === "effort"
-              ? "min(21rem, calc(100vw - 1rem))"
-              : "min(17rem, calc(100vw - 1.25rem))"
-        : "13rem"
-    }
+    width={ui.isMobile() ? "min(15rem, calc(100vw - 1.25rem))" : "13rem"}
   >
-    <Show
-      when={ui.isMobile()}
-      fallback={
-        /* Desktop: original "Add context" menu */
-        <>
-          <div class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 border-b border-border-subtle text-2xs font-medium text-fg-muted">
-            Add context
-          </div>
-          <MenuItem
-            icon="lucide:paperclip"
-            onClick={() => {
-              c.setAddContextOpen(false);
-              document.querySelector<HTMLInputElement>("#rc-file-input")?.click();
-            }}
-          >
-            <span>Attach files</span>
-          </MenuItem>
-          <MenuItem
-            icon="lucide:at-sign"
-            onClick={() => {
-              c.setAddContextOpen(false);
-              c.mentions.begin();
-              try {
-                document.querySelector<HTMLTextAreaElement>("#rc-composer")?.focus();
-              } catch {}
-            }}
-          >
-            <span>Mentions</span>
-          </MenuItem>
-          <MenuItem
-            icon="lucide:slash"
-            onClick={() => {
-              c.setAddContextOpen(false);
-              c.setInputPrompt("/");
-              try {
-                document.querySelector<HTMLTextAreaElement>("#rc-composer")?.focus();
-              } catch {}
-            }}
-          >
-            <span>Actions</span>
-          </MenuItem>
-        </>
-      }
+    <div class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 border-b border-border-subtle text-2xs font-medium text-fg-muted">
+      Add context
+    </div>
+    <MenuItem
+      icon="lucide:paperclip"
+      onClick={() => {
+        c.setAddContextOpen(false);
+        document.querySelector<HTMLInputElement>("#rc-file-input")?.click();
+      }}
     >
-      {/* Mobile views: Root menu + Subviews */}
-      <Show when={subView() === "main"}>
-        <div class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 border-b border-border-subtle text-2xs font-medium text-fg-muted">
-          Add context
-        </div>
-        <MenuItem
-          icon="lucide:paperclip"
-          onClick={() => {
-            c.setAddContextOpen(false);
-            document.querySelector<HTMLInputElement>("#rc-file-input")?.click();
-          }}
-        >
-          <span>Attach files</span>
-        </MenuItem>
-        <MenuItem
-          icon="lucide:at-sign"
-          onClick={() => {
-            c.setAddContextOpen(false);
-            c.mentions.begin();
-            try {
-              document.querySelector<HTMLTextAreaElement>("#rc-composer")?.focus();
-            } catch {}
-          }}
-        >
-          <span>Mentions</span>
-        </MenuItem>
-        <MenuItem
-          icon="lucide:slash"
-          onClick={() => {
-            c.setAddContextOpen(false);
-            c.setInputPrompt("/");
-            try {
-              document.querySelector<HTMLTextAreaElement>("#rc-composer")?.focus();
-            } catch {}
-          }}
-        >
-          <span>Actions</span>
-        </MenuItem>
-
-        <div class="mt-1 -mx-1.5 border-t border-border-subtle pt-1 px-1.5">
-          <div class="px-1.5 py-1 text-2xs font-medium text-fg-muted">
-            Configuration
-          </div>
-          <MenuItem
-            icon="lucide:cpu"
-            onClick={() => switchSubView("effort")}
-          >
-            <span class="flex-1 truncate text-fg font-medium text-xs">
-              {c.activeModelName()}
-            </span>
-            <Show when={formatEffort(c.effort())}>
-              <span
-                class={`shrink-0 font-mono text-2xs ml-1 ${
-                  normalizeEffort(c.effort()) === "max"
-                    ? "text-accent font-medium"
-                    : "text-fg-muted"
-                }`}
-              >
-                {formatEffort(c.effort())}
-              </span>
-            </Show>
-            <Iconify icon="lucide:chevron-right" size={13} class="text-fg-muted shrink-0 ml-1" />
-          </MenuItem>
-
-          <MenuItem
-            icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")}
-            onClick={() => switchSubView("mode")}
-          >
-            <span class="flex-1">Mode</span>
-            <span class="text-fg-secondary font-medium text-2xs capitalize">
-              {currentModeSpec()?.label ?? c.agentMode()}
-              <Show when={additionalCount() > 0}>
-                <span class="text-accent"> (+{additionalCount()})</span>
-              </Show>
-            </span>
-            <Iconify icon="lucide:chevron-right" size={13} class="text-fg-muted shrink-0 ml-1" />
-          </MenuItem>
-
-          <Show when={!approvalSelectorHidden()}>
-          <MenuItem
-            icon={currentAccessSpec().icon}
-            iconClass={
-              c.accessMode() === "full"
-                ? "text-warning"
-                : c.accessMode() === "auto"
-                  ? "text-accent"
-                  : "text-fg-muted"
-            }
-            onClick={() => switchSubView("access")}
-          >
-            <span class="flex-1">Permissions</span>
-            <span
-              class={`inline-flex items-center text-2xs font-medium ${
-                c.accessMode() === "full"
-                  ? "text-warning"
-                  : c.accessMode() === "auto"
-                    ? "text-accent"
-                    : "text-fg-secondary"
-              }`}
-            >
-              <span>{currentAccessSpec().short}</span>
-            </span>
-            <Iconify icon="lucide:chevron-right" size={13} class="text-fg-muted shrink-0 ml-1" />
-          </MenuItem>
-          </Show>
-        </div>
-      </Show>
-
-      <Show when={subView() === "effort"}>
-        <div ref={animateSubView}>
-          <div class="-mx-1.5 -mt-1.5 mb-1 flex items-center justify-between px-2 py-1 border-b border-border-subtle">
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => {
-                applyDraft();
-                switchSubView("main");
-              }}
-              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
-            >
-              <Iconify icon="lucide:chevron-left" size={14} />
-              <span>Back</span>
-            </button>
-            <span class="font-medium text-xs text-fg">Effort</span>
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => c.setAddContextOpen(false)}
-              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
-            >
-              Done
-            </button>
-          </div>
-          <div>{c.effortPickerBody(() => switchSubView("model"))}</div>
-        </div>
-      </Show>
-
-      <Show when={subView() === "model"}>
-        <div ref={animateSubView}>
-          <div class="-mx-1.5 -mt-1.5 mb-1.5 flex items-center justify-between px-2 py-1 border-b border-border-subtle">
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => switchSubView("effort")}
-              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
-            >
-              <Iconify icon="lucide:chevron-left" size={14} />
-              <span>Back</span>
-            </button>
-            <span class="font-medium text-xs text-fg">Select model</span>
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => c.setAddContextOpen(false)}
-              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
-            >
-              Done
-            </button>
-          </div>
-          <div>{c.modelPickerBody(false)}</div>
-        </div>
-      </Show>
-
-      <Show when={subView() === "mode"}>
-        <div ref={animateSubView}>
-          <div class="-mx-1.5 -mt-1.5 mb-1 flex items-center justify-between px-2 py-1 border-b border-border-subtle">
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => {
-                applyDraft();
-                switchSubView("main");
-              }}
-              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
-            >
-              <Iconify icon="lucide:chevron-left" size={14} />
-              <span>Back</span>
-            </button>
-            <span class="font-medium text-xs text-fg">Mode & Skills</span>
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => {
-                applyDraft();
-                c.setAddContextOpen(false);
-              }}
-              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg font-medium text-xs cursor-pointer transition-colors"
-            >
-              Done
-            </button>
-          </div>
-          <PostureSection />
-          <div class={`${modeSkills().length > 0 ? "mt-1 -mx-1.5 border-t border-border-subtle pt-1.5 px-1.5" : "pt-1"}`}>
-            <div class="flex items-center justify-between px-1.5 pb-1">
-              <span class="text-2xs font-medium text-fg-muted">Skill matrix</span>
-              <Show when={additionalSkills().length > 0}>
-                <span class="font-mono text-2xs text-fg-muted tabular-nums">
-                  {activeAdditionalCount()}/{additionalSkills().length} active
-                </span>
-              </Show>
-            </div>
-            {additionalSkillList()}
-          </div>
-        </div>
-      </Show>
-
-      <Show when={subView() === "access"}>
-        <div ref={animateSubView}>
-          <div class="-mx-1.5 -mt-1.5 mb-1.5 flex items-center justify-between px-2 py-1 border-b border-border-subtle">
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => {
-                applyDraft();
-                switchSubView("main");
-              }}
-              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg flex items-center gap-1 text-xs cursor-pointer transition-colors"
-            >
-              <Iconify icon="lucide:chevron-left" size={14} />
-              <span>Back</span>
-            </button>
-            <span class="font-medium text-xs text-fg">Permissions</span>
-            <button
-              type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => c.setAddContextOpen(false)}
-              class="px-1.5 py-0.5 rounded-md hover:bg-surface-muted text-fg-secondary hover:text-fg text-xs font-medium cursor-pointer transition-colors"
-            >
-              Done
-            </button>
-          </div>
-          <p class="px-1.5 pb-1 text-2xs font-medium text-fg-muted">Execution permissions</p>
-          {permissionsList(false)}
-        </div>
-      </Show>
-
-    </Show>
+      <span>Attach files</span>
+    </MenuItem>
+    <MenuItem
+      icon="lucide:at-sign"
+      onClick={() => {
+        c.setAddContextOpen(false);
+        c.mentions.begin();
+        try {
+          document.querySelector<HTMLTextAreaElement>("#rc-composer")?.focus();
+        } catch {}
+      }}
+    >
+      <span>Mentions</span>
+    </MenuItem>
+    <MenuItem
+      icon="lucide:slash"
+      onClick={() => {
+        c.setAddContextOpen(false);
+        c.setInputPrompt("/");
+        try {
+          document.querySelector<HTMLTextAreaElement>("#rc-composer")?.focus();
+        } catch {}
+      }}
+    >
+      <span>Actions</span>
+    </MenuItem>
   </FloatMenu>
 </div>
 
-{/* Desktop only: Mode and Permissions in the toolbar */}
-<Show when={!ui.isMobile()}>
-<div>
-  <button type="button" ref={c.modeBtn} data-menubtn data-rc-tip="Mode & skills" aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`} aria-expanded={c.modeMenuOpen()}
+<div class="shrink-0">
+  <button
+    type="button"
+    ref={c.modeBtn}
+    data-menubtn
+    data-rc-tip="Mode & skills"
+    aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`}
+    aria-expanded={c.modeMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
-    onClick={() => { const next = !c.modeMenuOpen(); ui.closeMenus(); c.setModeMenuOpen(next); }}
-    class="h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer">
-    <Iconify icon={currentModeSpec()?.icon ?? (c.agentMode() === "talk" ? "lucide:messages-square" : "lucide:hammer")} size={13} class="text-accent shrink-0" />
-    <span class="capitalize whitespace-nowrap">{currentModeSpec()?.label ?? c.agentMode()}<Show when={additionalCount() > 0}><span class="font-mono text-2xs text-accent">{` +${additionalCount()}`}</span></Show></span>
-    <Iconify icon="lucide:chevron-down" size={11} class={`text-fg-muted transition-transform duration-150 ${c.modeMenuOpen() ? "rotate-180" : ""}`} />
+    onClick={(e) => {
+      e.stopPropagation();
+      const next = !c.modeMenuOpen();
+      ui.closeMenus();
+      c.setModeMenuOpen(next);
+    }}
+    class={
+      ui.isMobile()
+        ? "rc-composer-icon-btn relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+        : "h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+    }
+  >
+    <Iconify icon={modeIcon()} size={ui.isMobile() ? 14 : 13} class="text-accent shrink-0" />
+    <Show
+      when={!ui.isMobile()}
+      fallback={
+        <Show when={additionalCount() > 0}>
+          <span
+            aria-hidden="true"
+            class="pointer-events-none absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-accent ring-1 ring-surface"
+          />
+        </Show>
+      }
+    >
+      <span class="capitalize whitespace-nowrap">
+        {currentModeSpec()?.label ?? c.agentMode()}
+        <Show when={additionalCount() > 0}>
+          <span class="font-mono text-2xs text-accent">{` +${additionalCount()}`}</span>
+        </Show>
+      </span>
+      <Iconify
+        icon="lucide:chevron-down"
+        size={11}
+        class={`shrink-0 text-fg-muted transition-transform duration-150 ${c.modeMenuOpen() ? "rotate-180" : ""}`}
+      />
+    </Show>
   </button>
-  <FloatMenu anchor={() => c.modeBtn} open={c.modeMenuOpen()} onClose={() => c.setModeMenuOpen(false)} role="dialog" aria-label="Mode & Skills" placement="top-start" width="min(24.5rem, calc(100vw - 1.5rem))">
+  <FloatMenu
+    anchor={() => c.modeBtn}
+    open={c.modeMenuOpen()}
+    onClose={() => c.setModeMenuOpen(false)}
+    role="dialog"
+    aria-label="Mode & Skills"
+    placement="top-start"
+    width={ui.isMobile() ? "min(24rem, calc(100vw - 1rem))" : "min(24.5rem, calc(100vw - 1.5rem))"}
+  >
     <div class="-mx-1.5 -mt-1.5 mb-1 flex items-center justify-between px-3 py-1 border-b border-border-subtle">
       <span class="font-medium text-xs text-fg">Mode & Skills</span>
       <button
@@ -1012,8 +742,9 @@ export function ToolbarContext() {
     </div>
   </FloatMenu>
 </div>
+
 <Show when={!approvalSelectorHidden()}>
-<div>
+<div class="shrink-0">
   <button
     type="button"
     ref={c.accessBtn}
@@ -1023,34 +754,58 @@ export function ToolbarContext() {
     aria-label={`Agent permissions: ${currentAccessSpec().label}`}
     aria-expanded={c.accessMenuOpen()}
     onPointerDown={(e) => press(e.currentTarget)}
-    onClick={() => { const next = !c.accessMenuOpen(); ui.closeMenus(); c.setAccessMenuOpen(next); }}
-    class={`h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${
-      c.accessMode() === "full"
-        ? "text-warning"
-        : c.accessMode() === "auto"
-          ? "text-fg hover:text-fg"
-          : "text-fg-secondary hover:text-fg"
-    }`}
+    onClick={(e) => {
+      e.stopPropagation();
+      const next = !c.accessMenuOpen();
+      ui.closeMenus();
+      c.setAccessMenuOpen(next);
+    }}
+    class={
+      ui.isMobile()
+        ? "rc-composer-icon-btn relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg cursor-pointer transition-colors hover:bg-surface-muted"
+        : `h-7 shrink-0 flex items-center gap-1.5 rounded-lg px-2 text-xs font-medium cursor-pointer transition-colors hover:bg-surface-muted ${
+            c.accessMode() === "full"
+              ? "text-warning"
+              : c.accessMode() === "auto"
+                ? "text-fg hover:text-fg"
+                : "text-fg-secondary hover:text-fg"
+          }`
+    }
   >
     <Iconify
       icon={currentAccessSpec().icon}
-      size={13}
+      size={ui.isMobile() ? 14 : 13}
       class={
         c.accessMode() === "full"
           ? "text-warning shrink-0"
           : c.accessMode() === "auto"
             ? "text-accent shrink-0"
-            : "text-fg-muted shrink-0"
+            : ui.isMobile()
+              ? "text-fg-secondary shrink-0"
+              : "text-fg-muted shrink-0"
       }
     />
-    <span class="hidden @[420px]:inline">{currentAccessSpec().short}</span>
+    <Show when={!ui.isMobile()}>
+      <span>{currentAccessSpec().short}</span>
+      <Iconify
+        icon="lucide:chevron-down"
+        size={11}
+        class={`shrink-0 text-fg-muted transition-transform duration-150 ${c.accessMenuOpen() ? "rotate-180" : ""}`}
+      />
+    </Show>
   </button>
-  <FloatMenu anchor={() => c.accessBtn} open={c.accessMenuOpen()} onClose={() => c.setAccessMenuOpen(false)} placement="top-start" width="min(23rem, calc(100vw - 1.5rem))">
+  <FloatMenu
+    anchor={() => c.accessBtn}
+    open={c.accessMenuOpen()}
+    onClose={() => c.setAccessMenuOpen(false)}
+    aria-label="Execution permissions"
+    placement="top-start"
+    width={ui.isMobile() ? "min(22.5rem, calc(100vw - 1rem))" : "min(23rem, calc(100vw - 1.5rem))"}
+  >
     <p class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 text-2xs font-medium text-fg-muted border-b border-border-subtle">Execution permissions</p>
     {permissionsList(true)}
   </FloatMenu>
 </div>
-</Show>
 </Show>
 </>
   );

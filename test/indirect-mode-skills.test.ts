@@ -152,10 +152,10 @@ describe("composer execution-permission trigger (ToolbarContext)", () => {
     "utf8",
   );
 
-  test("desktop trigger and mobile summary show borderless short Auto/Ask/Full labels without status dots while menu and aria-label keep full descriptions", () => {
+  test("desktop trigger shows short Auto/Ask/Full label + rotating chevron while mobile renders icon-only without status dots", () => {
     expect(src).toContain("aria-label={`Agent permissions: ${currentAccessSpec().label}`}");
-    expect(src).toContain('<span class="hidden @[420px]:inline">{currentAccessSpec().short}</span>');
     expect(src).toContain("<span>{currentAccessSpec().short}</span>");
+    expect(src).toContain('c.accessMenuOpen() ? "rotate-180" : ""');
     expect(src).not.toContain("h-1.5 w-1.5 rounded-full bg-warning");
     expect(src).toContain('label: "Auto"');
     expect(src).toContain('label: "Ask for approval"');

@@ -648,17 +648,27 @@ try {
     await page.waitForSelector('button[data-access-mode="auto"]', { timeout: 8_000 });
     await assertZeroHorizontalOverflow(page, `desktop-${theme}-initial`);
 
-    // Verify 3-way Permissions popover
+    // Verify 3-way Permissions popover & desktop chevron arrow
     const accessBtn = page.locator("button[data-access-mode]").first();
     assert.equal(await accessBtn.getAttribute("data-access-mode"), "auto");
     assert.equal(
       await accessBtn.getAttribute("data-rc-tip"),
       "Permissions: Auto (sandboxed)",
     );
+    assert.equal(
+      await accessBtn.locator("svg").count(),
+      2,
+      "Desktop Permissions button must render leading icon + chevron-down arrow",
+    );
     await accessBtn.click();
     await page.waitForSelector('[role="menuitemradio"][data-access-option="auto"]', {
       timeout: 5_000,
     });
+    assert.equal(
+      await accessBtn.locator("svg.rotate-180").count(),
+      1,
+      "Desktop Permissions chevron must rotate when menu is open",
+    );
 
     const autoOpt = page.locator('[role="menuitemradio"][data-access-option="auto"]');
     const askOpt = page.locator('[role="menuitemradio"][data-access-option="ask"]');
@@ -967,34 +977,39 @@ try {
       await page.waitForSelector("#rc-composer", { timeout: 10_000 });
       await assertZeroHorizontalOverflow(page, `mobile-${width}-${theme}-initial`);
 
-      // Open Mobile `+` menu -> tap `Permissions`
-      await page.locator('button[aria-label="Add & Settings"]').click();
-      const permRow = page.locator('[data-floatmenu] button', { hasText: "Permissions" }).first();
-      await permRow.waitFor({ state: "visible", timeout: 5_000 });
-      assert.match((await permRow.textContent()) || "", /Auto/);
-      await permRow.click();
+      // Mobile composer toolbar: Model+Effort visible + icon-only Mode & Permissions buttons directly in toolbar
+      const mobAccessBtn = page.locator("button[data-access-mode]").first();
+      await mobAccessBtn.waitFor({ state: "visible", timeout: 5_000 });
+      assert.equal(await mobAccessBtn.getAttribute("data-access-mode"), "auto");
+      assert.equal((await mobAccessBtn.textContent())?.trim() || "", "", "Mobile Permissions button must be icon-only");
+      assert.equal(await mobAccessBtn.locator("svg").count(), 1, "Mobile Permissions button must render only its icon (no chevron)");
+      await page.locator("button.rc-composer-model").first().waitFor({ state: "visible", timeout: 5_000 });
 
+      await mobAccessBtn.click();
       await page.waitForSelector('[role="menuitemradio"][data-access-option="auto"]', {
         timeout: 5_000,
       });
       await assertZeroHorizontalOverflow(page, `mobile-${width}-${theme}-permissions-sheet`);
       await snap(page, `05-mobile-${width}-permissions-sheet-${theme}.png`);
 
-      // Tap `Ask for approval` -> verify `configure_session`, then restore `Auto` and close sheet
+      // Tap `Ask for approval` -> verify `configure_session` & auto-close, then reopen & restore `Auto`
       state.commands.length = 0;
       await page.locator('[role="menuitemradio"][data-access-option="ask"]').click();
-      await page.waitForTimeout(120);
+      await page.waitForSelector('button[data-access-mode="ask"]', { timeout: 5_000 });
       assert.equal(
         state.commands.findLast((c) => c.type === "configure_session")?.options?.access,
         "ask",
       );
+      await mobAccessBtn.click();
+      await page.waitForSelector('[role="menuitemradio"][data-access-option="auto"]', {
+        timeout: 5_000,
+      });
       await page.locator('[role="menuitemradio"][data-access-option="auto"]').click();
-      await page.waitForTimeout(120);
+      await page.waitForSelector('button[data-access-mode="auto"]', { timeout: 5_000 });
       assert.equal(
         state.commands.findLast((c) => c.type === "configure_session")?.options?.access,
         "auto",
       );
-      await page.locator('[data-floatmenu] button', { hasText: "Done" }).click();
 
       // Broadcast 4-button high-risk approval card with long target path & rule scope
       const mobileApproval = {
