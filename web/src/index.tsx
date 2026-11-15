@@ -132,7 +132,7 @@ interface NavGroup {
 
 const USER_NAV: NavItem[] = [
   { path: "/", label: "Overview", icon: Icons.home },
-  { path: "/code", label: "Indirect Code", icon: Icons.idc },
+  { path: "/code", label: "Indirect Code", icon: "indirect-code" },
   { path: "/keys", label: "API keys", icon: Icons.key },
   { path: "/usage", label: "Usage", icon: Icons.chart },
   { path: "/limits", label: "Plan & limits", icon: "lucide:wallet" },
@@ -303,7 +303,7 @@ function AppShell(props: { children: JSX.Element }) {
       <aside class="gateway-rail hidden md:flex fixed inset-y-0 left-0 w-16 lg:w-64 flex-col items-center py-4 border-r border-border z-30">
         <a href="#/" class="gw-rail-brand flex items-center gap-2.5 lg:w-60 lg:px-2" aria-label="Indirect Gateway">
           <img src="/indirect-icon.svg" alt="Indirect" class="gw-rail-logo w-8 h-8 shrink-0 object-contain rounded" />
-          <span class="hidden lg:block truncate text-sm font-medium text-fg">Indirect Gateway</span>
+          <span class="brand-wordmark hidden lg:block truncate text-[13px] tracking-tight text-fg">INDIRECT GATEWAY</span>
         </a>
         <nav
           ref={setNav}
@@ -349,7 +349,7 @@ function AppShell(props: { children: JSX.Element }) {
         <div class="gw-mobile-header flex items-center justify-between h-14 px-4">
           <a href="#/" class="gw-mobile-brand flex items-center gap-2.5" aria-label="Indirect Gateway">
             <img src="/indirect-icon.svg" alt="Indirect" class="w-8 h-8 shrink-0 object-contain rounded" />
-            <span class="truncate text-sm font-medium">Indirect Gateway</span>
+            <span class="brand-wordmark truncate text-[13px] tracking-tight text-fg">INDIRECT GATEWAY</span>
           </a>
           <div class="gw-mobile-actions flex items-center gap-1">
             <ThemeToggle />
@@ -367,7 +367,7 @@ function AppShell(props: { children: JSX.Element }) {
       <Drawer open={mobileNav()} onClose={() => setMobileNav(false)} label="Navigation" side="left">
         <div class="flex items-center gap-2.5 px-4 pt-[calc(var(--sat)+1rem)] pb-3 border-b border-border-subtle">
           <img src="/indirect-icon.svg" alt="" class="w-7 h-7 shrink-0 object-contain rounded" />
-          <span class="text-sm font-medium">Indirect Gateway</span>
+          <span class="brand-wordmark truncate text-[13px] tracking-tight text-fg">INDIRECT GATEWAY</span>
         </div>
         <nav class="flex-1 overflow-y-auto overscroll-contain px-3 py-3 space-y-0.5" aria-label="Main navigation">
           <For each={USER_NAV}>{mobileLink}</For>

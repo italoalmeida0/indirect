@@ -71,7 +71,10 @@ export default function SetPasswordPage(props: { query: URLSearchParams }) {
           <div {...usal("zoomin-30 duration-700")}>
             <LogoMark class="w-10 h-10 rounded-xl mb-4" />
           </div>
-          <h1 class="text-2xl font-medium tracking-tight text-fg">Set your password</h1>
+          <h1 class="brand-wordmark text-2xl tracking-tight text-fg">
+            INDIRECT
+          </h1>
+          <p class="text-sm text-fg-secondary mt-1.5">Set your password</p>
         </div>
 
         <Card class="p-5 sm:p-6" motion="zoomin-15 duration-600 delay-150">

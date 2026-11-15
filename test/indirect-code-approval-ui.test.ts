@@ -598,3 +598,48 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(skillPreview).toContain("generative_ui_agentic");
   });
 });
+
+describe("Brand wordmark & Settings section-jump consistency", () => {
+  test("all brand surfaces use JetBrains Mono brand-wordmark / /indirect-icon.svg and Settings jump pills stay icon-free", async () => {
+    const root = join(import.meta.dir, "..");
+    const [
+      shellCss,
+      componentsCss,
+      indexSrc,
+      sidebarSrc,
+      brandSrc,
+      loginSrc,
+      setPwSrc,
+      chromeSrc,
+      settingsModalSrc,
+    ] = await Promise.all([
+      readFile(join(root, "web/src/styles/shell.css"), "utf8"),
+      readFile(join(root, "web/src/ds/components.css"), "utf8"),
+      readFile(join(root, "web/src/index.tsx"), "utf8"),
+      readFile(join(root, "web/src/indirect-code/components/WorkspaceSidebar.tsx"), "utf8"),
+      readFile(join(root, "web/src/indirect-code/components/IndirectBrand.tsx"), "utf8"),
+      readFile(join(root, "web/src/pages/Login.tsx"), "utf8"),
+      readFile(join(root, "web/src/pages/SetPassword.tsx"), "utf8"),
+      readFile(join(root, "web/src/chrome.tsx"), "utf8"),
+      readFile(join(root, "web/src/indirect-code/modals/SettingsModal.tsx"), "utf8"),
+    ]);
+
+    expect(shellCss).toMatch(/\.brand-wordmark\s*\{[^}]*font-family:\s*var\(--font-code\)/);
+    expect(shellCss).toMatch(/\.brand-wordmark\s*\{[^}]*font-weight:\s*600/);
+    expect(shellCss).toMatch(/\.brand-wordmark\s*\{[^}]*text-transform:\s*uppercase/);
+    expect(componentsCss).toMatch(/\.rc-brand-name\s*\{[^}]*font-family:\s*var\(--font-code\)/);
+
+    expect(indexSrc).toContain('{ path: "/code", label: "Indirect Code", icon: "indirect-code" }');
+    expect(indexSrc.match(/brand-wordmark[^\n]*>INDIRECT GATEWAY</g)?.length).toBe(3);
+    expect(sidebarSrc).toMatch(/brand-wordmark[\s\S]*?>\s*INDIRECT CODE\s*</);
+    expect(brandSrc).toContain(">INDIRECT<");
+    expect(loginSrc).toMatch(/brand-wordmark[\s\S]*?>\s*INDIRECT\s*</);
+    expect(setPwSrc).toMatch(/brand-wordmark[\s\S]*?>\s*INDIRECT\s*</);
+    expect(chromeSrc).toContain('src="/indirect-icon.svg"');
+
+    const navBlock = settingsModalSrc.split('aria-label="Settings sections"')[1]?.split("</nav>")[0] ?? "";
+    expect(navBlock).toContain('label: "Permissions"');
+    expect(navBlock).not.toContain("lucide:");
+    expect(navBlock).not.toContain("<Iconify");
+  });
+});

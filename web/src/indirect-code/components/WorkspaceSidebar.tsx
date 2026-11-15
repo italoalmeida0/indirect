@@ -164,10 +164,10 @@ export function WorkspaceSidebar() {
       <img
         src="/indirect-icon.svg"
         alt="Indirect"
-        class="w-4.5 h-4.5 shrink-0 object-contain rounded"
+        class="w-5 h-5 shrink-0 object-contain rounded"
       />
-      <span class="text-[13px] font-medium tracking-tight text-fg truncate">
-        Indirect Code
+      <span class="brand-wordmark text-[13px] tracking-tight text-fg truncate">
+        INDIRECT CODE
       </span>
     </div>
     <Show when={ui.sidebarOpen()}><SidebarToggle /></Show>

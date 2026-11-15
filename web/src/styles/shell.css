@@ -11,6 +11,11 @@
 
 /* The same two-column workspace is used in every display mode. Its brand
  * row and conversation header become the titlebar in an installed window. */
+.brand-wordmark {
+  font-family: var(--font-code);
+  font-weight: 600;
+  text-transform: uppercase;
+}
 .rc-workspace-header { height: 3rem; }
 .rc-window-header { padding-inline: 1rem; }
 
@@ -97,7 +102,7 @@
     padding-right: calc(var(--wco-right) + 0.5rem);
   }
   .gw-mobile-brand > span { display: none; }
-  .gw-mobile-brand > div { width: 1.5rem; height: 1.5rem; }
+  .gw-mobile-brand > div, .gw-mobile-brand > img { width: 1.5rem; height: 1.5rem; }
   .gw-mobile-actions button { width: 1.75rem; height: 1.75rem; }
   @media (min-width: 768px) {
     .gw-shell { --gw-rail-width: 4rem; }

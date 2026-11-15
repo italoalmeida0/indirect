@@ -152,8 +152,8 @@ export default function LoginPage() {
               class="object-contain w-10 h-10 rounded-xl mb-4"
             />
           </div>
-          <h1 class="text-2xl font-medium tracking-tight text-fg">
-            Indirect
+          <h1 class="brand-wordmark text-2xl tracking-tight text-fg">
+            INDIRECT
           </h1>
           <p class="text-sm text-fg-secondary mt-1.5">
             {mode() === "forgot" ? "Reset your password" : mode() === "2fa" ? "Two-factor verification" : "Sign in to your account"}

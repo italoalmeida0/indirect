@@ -896,9 +896,9 @@ export default function CodeDevPage() {
               DEV
             </span>
             <div class="flex flex-col min-w-0">
-              <span class="font-medium text-sm tracking-tight flex flex-wrap items-center gap-1.5 font-mono">
-                Indirect Code // Network Inspector
-                <span class="text-xs px-1.5 py-0.5 rounded bg-success-subtle text-success font-mono font-normal">
+              <span class="brand-wordmark text-sm tracking-tight flex flex-wrap items-center gap-1.5">
+                INDIRECT CODE // NETWORK INSPECTOR
+                <span class="text-xs px-1.5 py-0.5 rounded bg-success-subtle text-success font-mono font-normal normal-case">
                   DevTools style
                 </span>
               </span>

@@ -18,19 +18,11 @@ export function navigate(to: string): void {
 
 export function LogoMark(props: { class?: string }) {
   return (
-    <div
-      class={`rounded-lg bg-accent text-accent-fg flex items-center justify-center border border-line shadow-sm ${props.class ?? "w-8 h-8"}`}
-    >
-      <svg viewBox="0 0 32 32" class="w-[62%] h-[62%]" aria-hidden="true">
-        <path
-          d="M16 7l7 4v8l-7 4-7-4v-8z"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-        />
-        <circle cx="16" cy="15" r="2.5" fill="currentColor" />
-      </svg>
-    </div>
+    <img
+      src="/indirect-icon.svg"
+      alt="Indirect"
+      class={`object-contain shrink-0 rounded-lg ${props.class ?? "w-8 h-8"}`}
+    />
   );
 }
 
