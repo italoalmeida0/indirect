@@ -25,6 +25,10 @@ func copyVisionStateInto(dst, src *CompactionState, maxLen int) {
 		v := *src.LearnedMaxImages
 		dst.LearnedMaxImages = &v
 	}
+	if src.LearnedContextWindow > 0 {
+		dst.LearnedContextWindow = src.LearnedContextWindow
+		dst.LearnedContextModel = src.LearnedContextModel
+	}
 }
 
 var errSummarizerToolCall = errors.New("summarizer attempted a tool call")
@@ -33,6 +37,7 @@ type compactOptions struct {
 	keepTail         int
 	keepRecentTokens int
 	forceCut         bool
+	skipWarmFork     bool
 }
 
 // Compact summarizes older raw transcript spans into append-only FoldBlocks
@@ -58,6 +63,21 @@ func (a *Agent) CompactToTokenBudget(ctx context.Context, keepRecentTokens int, 
 	return a.compactWithOptions(ctx, compactOptions{
 		keepRecentTokens: keepRecentTokens,
 		forceCut:         true,
+	}, onProgress)
+}
+
+// CompactOverflow runs reactive overflow compaction: skips warm-prefix fork
+// uploads (since the live prefix just exceeded the upstream model's context
+// ceiling) and summarizes directly via bounded standalone chunks / mechanical
+// fallback so a 450k-token prefix is never re-uploaded N times in a row.
+func (a *Agent) CompactOverflow(ctx context.Context, keepRecentTokens int, onProgress func(string)) (string, error) {
+	if keepRecentTokens <= 0 {
+		keepRecentTokens = CompactionKeepRecentTokens / 2
+	}
+	return a.compactWithOptions(ctx, compactOptions{
+		keepRecentTokens: keepRecentTokens,
+		forceCut:         true,
+		skipWarmFork:     true,
 	}, onProgress)
 }
 
@@ -200,6 +220,7 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 	a.ensureSpanImageDigestsAt(ctx, history, baseMsgIdx, localStart, localCutIdx, workingState)
 
 	var totalUsage provider.Usage
+	skipWarmFork := opts.skipWarmFork
 	for spanIdx, sp := range spans {
 		if err := ctx.Err(); err != nil {
 			return "", err
@@ -212,7 +233,7 @@ func (a *Agent) compactWithOptions(ctx context.Context, opts compactOptions, sin
 			carry = carryOverSummary
 		}
 
-		blockSummary, spanUsage, err := a.summarizeSpan(ctx, history, baseMsgIdx, localCStart, localCEnd, localCutIdx, isFinalSpan, carry, workingState.ImageDigests, sink)
+		blockSummary, spanUsage, err := a.summarizeSpanWithWarmOpt(ctx, history, baseMsgIdx, localCStart, localCEnd, localCutIdx, isFinalSpan, carry, workingState.ImageDigests, &skipWarmFork, sink)
 		if err != nil {
 			return "", err
 		}
@@ -426,6 +447,21 @@ func (a *Agent) summarizeSpan(
 	digests map[string]string,
 	sink func(delta string),
 ) (string, provider.Usage, error) {
+	skipWarm := false
+	return a.summarizeSpanWithWarmOpt(ctx, history, baseMsgIdx, localCStart, localCEnd, localCutIdx, isFinalSpan, carryOverSummary, digests, &skipWarm, sink)
+}
+
+func (a *Agent) summarizeSpanWithWarmOpt(
+	ctx context.Context,
+	history []provider.Message,
+	baseMsgIdx int,
+	localCStart, localCEnd, localCutIdx int,
+	isFinalSpan bool,
+	carryOverSummary string,
+	digests map[string]string,
+	skipWarmFork *bool,
+	sink func(delta string),
+) (string, provider.Usage, error) {
 	var totalUsage provider.Usage
 	chunk := history[localCStart:localCEnd]
 	globalCStart := baseMsgIdx + localCStart
@@ -437,14 +473,14 @@ func (a *Agent) summarizeSpan(
 		if turnStart > localCStart && turnStart < localCEnd {
 			globalTurnStart := baseMsgIdx + turnStart
 			histChunk := history[localCStart:turnStart]
-			histSummary, u1, err := a.summarizeChunkWithFallback(ctx, histChunk, globalCStart, globalTurnStart, false, carryOverSummary, digests, sink)
+			histSummary, u1, err := a.summarizeChunkWithWarmOpt(ctx, histChunk, globalCStart, globalTurnStart, false, carryOverSummary, digests, skipWarmFork, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
 			totalUsage = totalUsage.Add(u1)
 
 			prefixChunk := history[turnStart:localCEnd]
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, prefixChunk, globalTurnStart, globalCEnd, true, "", digests, sink)
+			prefixSummary, u2, err := a.summarizeChunkWithWarmOpt(ctx, prefixChunk, globalTurnStart, globalCEnd, true, "", digests, skipWarmFork, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -453,7 +489,7 @@ func (a *Agent) summarizeSpan(
 			return combined, totalUsage, nil
 		}
 		if turnStart < localCStart && carryOverSummary != "" {
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, globalCStart, globalCEnd, true, "", digests, sink)
+			prefixSummary, u2, err := a.summarizeChunkWithWarmOpt(ctx, chunk, globalCStart, globalCEnd, true, "", digests, skipWarmFork, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -462,7 +498,7 @@ func (a *Agent) summarizeSpan(
 			return combined, totalUsage, nil
 		}
 		if turnStart >= 0 && turnStart < localCStart {
-			prefixSummary, u2, err := a.summarizeChunkWithFallback(ctx, chunk, globalCStart, globalCEnd, true, "", digests, sink)
+			prefixSummary, u2, err := a.summarizeChunkWithWarmOpt(ctx, chunk, globalCStart, globalCEnd, true, "", digests, skipWarmFork, sink)
 			if err != nil {
 				return "", totalUsage, err
 			}
@@ -471,7 +507,7 @@ func (a *Agent) summarizeSpan(
 		}
 	}
 
-	summary, u, err := a.summarizeChunkWithFallback(ctx, chunk, globalCStart, globalCEnd, false, carryOverSummary, digests, sink)
+	summary, u, err := a.summarizeChunkWithWarmOpt(ctx, chunk, globalCStart, globalCEnd, false, carryOverSummary, digests, skipWarmFork, sink)
 	totalUsage = totalUsage.Add(u)
 	if err != nil {
 		return "", totalUsage, err
@@ -497,6 +533,20 @@ func (a *Agent) summarizeChunkWithFallback(
 	digests map[string]string,
 	sink func(delta string),
 ) (string, provider.Usage, error) {
+	skipWarm := false
+	return a.summarizeChunkWithWarmOpt(ctx, chunk, cStart, cEnd, isTurnPrefix, carryOverSummary, digests, &skipWarm, sink)
+}
+
+func (a *Agent) summarizeChunkWithWarmOpt(
+	ctx context.Context,
+	chunk []provider.Message,
+	cStart, cEnd int,
+	isTurnPrefix bool,
+	carryOverSummary string,
+	digests map[string]string,
+	skipWarmFork *bool,
+	sink func(delta string),
+) (string, provider.Usage, error) {
 	var totalUsage provider.Usage
 	if err := ctx.Err(); err != nil {
 		return "", totalUsage, err
@@ -506,7 +556,7 @@ func (a *Agent) summarizeChunkWithFallback(
 	}
 
 	checkpoints := ExtractSummaryCheckpoints(chunk)
-	tryStandalone := !a.hasLivePrefixState()
+	tryStandalone := !a.hasLivePrefixState() || (skipWarmFork != nil && *skipWarmFork)
 
 	if !tryStandalone {
 		text, stopLen, u, err := a.runForkedSummarizer(ctx, chunk, cStart, cEnd, checkpoints, isTurnPrefix, false, digests, sink)
@@ -529,6 +579,12 @@ func (a *Agent) summarizeChunkWithFallback(
 		} else {
 			if ctx.Err() != nil {
 				return "", totalUsage, ctx.Err()
+			}
+			if err != nil && skipWarmFork != nil && (IsContextOverflow(err) || ClassifyVisionOrPayloadError(err) != nil) {
+				// Live prefix itself overflowed/rejected: latch skipWarmFork for
+				// all subsequent spans in this compaction pass so we never re-upload
+				// an oversized prefix N times.
+				*skipWarmFork = true
 			}
 			// Always fall back to pixel-free standalone runSummarizer (using
 			// SerializeConversationWithDigests) on ANY warm-prefix failure
@@ -788,9 +844,31 @@ func (a *Agent) MaybeAutoCompact(ctx context.Context, window int, sink func(delt
 	return a.MaybeAutoCompactAt(ctx, window, 0, sink)
 }
 
+// EffectiveContextWindow returns the active context ceiling, honoring any
+// lower upstream limit learned from a previous context-overflow error for the
+// same model (e.g. a 524k gateway alias backed by a 128k DeepSeek target).
+func (a *Agent) EffectiveContextWindow(configured int) int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	learned := 0
+	if a.compactionState != nil && a.compactionState.LearnedContextWindow > 0 {
+		if a.compactionState.LearnedContextModel == "" || a.compactionState.LearnedContextModel == a.Model {
+			learned = a.compactionState.LearnedContextWindow
+		}
+	}
+	if configured <= 0 {
+		return learned
+	}
+	if learned > 0 && learned < configured {
+		return learned
+	}
+	return configured
+}
+
 // MaybeAutoCompactAt evaluates the wire-ready projected context against window
 // and thresholdPct, compacting proactively when needed.
 func (a *Agent) MaybeAutoCompactAt(ctx context.Context, window int, thresholdPct int, sink func(delta string)) (bool, error) {
+	window = a.EffectiveContextWindow(window)
 	if window <= 0 {
 		return false, nil
 	}

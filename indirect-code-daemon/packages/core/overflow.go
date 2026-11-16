@@ -38,6 +38,55 @@ var contextOverflowPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)model_context_window_exceeded`),
 	regexp.MustCompile(`(?i)too many tokens`),
 	regexp.MustCompile(`(?i)token limit exceeded`),
+	regexp.MustCompile(`(?i)range of input length should be \[\d+,\s*\d+\]`),
+	regexp.MustCompile(`(?i)max_model_len`),
+	regexp.MustCompile(`(?i)max_seq_len`),
+	regexp.MustCompile(`(?i)max_input_tokens`),
+	regexp.MustCompile(`(?i)max_prompt_tokens`),
+	regexp.MustCompile(`(?i)(?:input|prompt|request|messages?|total)[_ ]tokens?[^\n]{0,40}(?:exceed|greater than|more than|over)`),
+	regexp.MustCompile(`(?i)reduce (?:your )?(?:prompt|input|messages|context)`),
+}
+
+var upstreamContextLimitPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)maximum context length is (\d[\d,]*)`),
+	regexp.MustCompile(`(?i)context window of (\d[\d,]*)`),
+	regexp.MustCompile(`(?i)exceeds[^\n\d]{0,25}context length \(?(\d[\d,]*)\)?`),
+	regexp.MustCompile(`(?i)context length is (?:only )?(\d[\d,]*)`),
+	regexp.MustCompile(`(?i)range of input length should be \[\d+,\s*(\d[\d,]*)\]`),
+	regexp.MustCompile(`(?i)max_model_len[\s:=(\[]+(\d[\d,]*)`),
+	regexp.MustCompile(`(?i)max_seq_len[\s:=(\[]+(\d[\d,]*)`),
+	regexp.MustCompile(`(?i)max_input_tokens[\s:=(\[]+(\d[\d,]*)`),
+	regexp.MustCompile(`(?i)max_prompt_tokens[\s:=(\[]+(\d[\d,]*)`),
+	regexp.MustCompile(`(?i)with (\d[\d,]*) maximum context length`),
+	regexp.MustCompile(`(?i)configured context size is (\d[\d,]*)`),
+	regexp.MustCompile(`(?i)maximum prompt length is (\d[\d,]*)`),
+	regexp.MustCompile(`(?i)exceeds the limit of (\d[\d,]*)`),
+}
+
+// ParseUpstreamContextLimit extracts the real token ceiling (>= 2048) reported
+// by an upstream context-overflow error message, or 0 when none can be parsed.
+// Used when a gateway model alias advertises a larger ContextWindow than the
+// concrete upstream target (e.g. 524k alias backed by a 128k DeepSeek target).
+func ParseUpstreamContextLimit(err error) int {
+	if err == nil {
+		return 0
+	}
+	msg := strings.TrimSpace(unicodeJSONUnescaper.Replace(err.Error()))
+	if msg == "" {
+		return 0
+	}
+	best := 0
+	for _, p := range upstreamContextLimitPatterns {
+		if m := p.FindStringSubmatch(msg); len(m) >= 2 {
+			raw := strings.ReplaceAll(m[1], ",", "")
+			if n, convErr := strconv.Atoi(raw); convErr == nil && n >= 2048 {
+				if best == 0 || n < best {
+					best = n
+				}
+			}
+		}
+	}
+	return best
 }
 
 var contextOverflowExclusions = []*regexp.Regexp{

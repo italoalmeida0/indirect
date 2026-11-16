@@ -136,6 +136,8 @@ func (t *InspectTool) Execute(ctx context.Context, raw json.RawMessage, progress
 	gi := ignore.Load(abs)
 	var entries []inspectEntry
 	truncated := false
+	started := time.Now()
+	lastPing := started
 	rootDepth := strings.Count(filepath.Clean(abs), string(os.PathSeparator))
 	err = filepath.WalkDir(abs, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -143,6 +145,14 @@ func (t *InspectTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		}
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if progress != nil && time.Since(lastPing) >= toolHeartbeatInterval {
+			lastPing = time.Now()
+			progress("")
+		}
+		if searchSoftTimeout > 0 && time.Since(started) >= searchSoftTimeout {
+			truncated = true
+			return filepath.SkipAll
 		}
 		if p == abs {
 			return nil

@@ -11,6 +11,7 @@ import (
 type sseEvent struct {
 	Event string // value of "event:" field (may be empty)
 	Data  string // concatenated "data:" lines
+	Err   error  // non-nil when the underlying stream terminated with an I/O error
 }
 
 // readSSE reads events from r and sends them on out. It closes out when r
@@ -74,4 +75,7 @@ func readSSE(r io.Reader, out chan<- sseEvent) {
 		}
 	}
 	flush()
+	if err := sc.Err(); err != nil {
+		out <- sseEvent{Err: err}
+	}
 }

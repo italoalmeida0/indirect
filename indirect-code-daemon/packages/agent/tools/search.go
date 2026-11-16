@@ -3,19 +3,32 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 	"unicode/utf8"
 
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/ignore"
 	"indirect/indirect-code-daemon/packages/provider"
 )
+
+// searchSoftTimeout caps a single foreground search call so an enormous or
+// network-mounted directory returns partial/truncated results instead of
+// hanging the turn or tripping the session watchdog. Overridable in tests.
+var searchSoftTimeout = 90 * time.Second
+
+const toolHeartbeatInterval = 2 * time.Second
+
+var errToolSoftTimeout = errors.New("tool soft time budget reached")
 
 type SearchArgs struct {
 	// Pattern is always an RE2 regular expression.
@@ -120,27 +133,72 @@ func (t *SearchTool) Execute(ctx context.Context, raw json.RawMessage, progress 
 	if err != nil {
 		return core.ToolResult{}, fmt.Errorf("search: invalid regex: %v", err)
 	}
+	var rePrefilter *regexp.Regexp
+	if !strings.Contains(pattern, `\A`) && !strings.Contains(pattern, `\z`) {
+		rePrefilter, _ = regexp.Compile("(?m)" + src)
+	}
 
-	// Resolve scope.
+	// Resolve scope and validate once up front so regular walked children do
+	// not pay per-file EvalSymlinks overhead across 50k+ file trees.
 	scope := "."
 	if p := strings.TrimSpace(a.Path); p != "" {
 		scope = p
 	}
-	absScope := resolvePath(t.CWD, scope)
-	if err := t.Sandbox.CheckPath(absScope); err != nil {
+	givenScope := resolvePath(t.CWD, scope)
+	if err := t.Sandbox.CheckReadPath(givenScope); err != nil {
 		return core.ToolResult{}, fmt.Errorf("search: invalid path: %v", err)
 	}
-	st, err := os.Stat(absScope)
+	st, err := os.Stat(givenScope)
 	if err != nil {
 		return core.ToolResult{}, fmt.Errorf("search: path not found: %s", scope)
+	}
+	absScope := givenScope
+	if resolved, rerr := filepath.EvalSymlinks(givenScope); rerr == nil {
+		if err := t.Sandbox.CheckReadPath(resolved); err != nil {
+			return core.ToolResult{}, fmt.Errorf("search: invalid path: %v", err)
+		}
+		absScope = resolved
+	}
+
+	cwdCanon := resolvePath(t.CWD, ".")
+	if resolvedCWD, rerr := filepath.EvalSymlinks(cwdCanon); rerr == nil {
+		cwdCanon = resolvedCWD
 	}
 
 	include, exclude := compileGlobFilter(a.Include, true), compileGlobFilter(a.Exclude, false)
 
+	started := time.Now()
+	lastPing := started
+	var pingMu sync.Mutex
+	maybeHeartbeat := func() {
+		if progress == nil {
+			return
+		}
+		pingMu.Lock()
+		now := time.Now()
+		if now.Sub(lastPing) >= toolHeartbeatInterval {
+			lastPing = now
+			pingMu.Unlock()
+			progress("")
+			return
+		}
+		pingMu.Unlock()
+	}
+
+	type searchFile struct {
+		abs      string
+		relSlash string
+	}
+
 	// Collect candidate files.
-	var files []string
+	var files []searchFile
+	timedOut := false
 	if !st.IsDir() {
-		files = []string{absScope}
+		rel, rerr := filepath.Rel(cwdCanon, absScope)
+		if rerr != nil {
+			rel, _ = filepath.Rel(t.CWD, givenScope)
+		}
+		files = []searchFile{{abs: absScope, relSlash: slash(rel)}}
 	} else {
 		var gi *ignore.Gitignore
 		if respectIgnore {
@@ -153,22 +211,53 @@ func (t *SearchTool) Execute(ctx context.Context, raw json.RawMessage, progress 
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			rel, _ := filepath.Rel(t.CWD, p)
+			maybeHeartbeat()
+			if searchSoftTimeout > 0 && time.Since(started) >= searchSoftTimeout {
+				timedOut = true
+				return errToolSoftTimeout
+			}
+			if p == absScope {
+				return nil
+			}
+			rel, rerr := filepath.Rel(cwdCanon, p)
+			if rerr != nil {
+				rel, _ = filepath.Rel(t.CWD, p)
+			}
 			if rel == "." {
 				return nil
 			}
+			relSlash := slash(rel)
 			// Skip well-known heavy dirs early (also covered by gitignore usually).
 			base := filepath.Base(p)
 			if d.IsDir() {
 				if base == ".git" || base == "node_modules" || base == ".hg" || base == ".svn" {
 					return filepath.SkipDir
 				}
-				if respectIgnore && gi != nil && gi.Match(slash(rel)+"/", true) {
+				if err := t.Sandbox.CheckWalkedReadEntry(p, d); err != nil {
+					return filepath.SkipDir
+				}
+				if respectIgnore && gi != nil && gi.Match(relSlash+"/", true) {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if respectIgnore && gi != nil && gi.Match(slash(rel), false) {
+			if d.Type()&os.ModeSymlink != 0 {
+				if err := t.Sandbox.CheckReadPath(p); err != nil {
+					return nil
+				}
+				info, ierr := os.Stat(p)
+				if ierr != nil || !info.Mode().IsRegular() || info.Size() > maxBytes {
+					return nil
+				}
+			} else {
+				if !d.Type().IsRegular() {
+					return nil
+				}
+				if err := t.Sandbox.CheckWalkedReadEntry(p, d); err != nil {
+					return nil
+				}
+			}
+			if respectIgnore && gi != nil && gi.Match(relSlash, false) {
 				return nil
 			}
 			if !include(rel) {
@@ -177,74 +266,67 @@ func (t *SearchTool) Execute(ctx context.Context, raw json.RawMessage, progress 
 			if exclude(rel) {
 				return nil
 			}
-			if info, err := d.Info(); err == nil && info.Size() > maxBytes {
-				return nil
-			}
-			files = append(files, p)
+			files = append(files, searchFile{abs: p, relSlash: relSlash})
 			return nil
 		})
-		if err != nil {
+		if err != nil && !errors.Is(err, errToolSoftTimeout) {
 			return core.ToolResult{}, err
 		}
 	}
-	sort.Strings(files)
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].relSlash < files[j].relSlash
+	})
 
-	var matches []SearchMatch
-	// counts/files accumulate aggregate modes (grep -c / grep -l).
-	counts := map[string]int{}
-	var countOrder []string
-	var filesOnly []string
-	filesSeen := map[string]bool{}
-	truncated := false
-outer:
-	for _, f := range files {
+	type fileScanResult struct {
+		relSlash string
+		count    int
+		hasFile  bool
+		matches  []SearchMatch
+	}
+
+	scanOne := func(sf searchFile) (fileScanResult, error) {
 		if ctx.Err() != nil {
-			return core.ToolResult{}, ctx.Err()
+			return fileScanResult{}, ctx.Err()
 		}
-		if err := t.Sandbox.CheckReadPath(f); err != nil {
-			continue
+		data, err := readSearchFile(sf.abs, maxBytes)
+		if err != nil || len(data) == 0 || !isText(data) {
+			return fileScanResult{}, nil
 		}
-		info, err := os.Stat(f)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > maxBytes {
-			continue
+		// Raw-byte RE2 prefilter: skips 99%+ of non-matching files without
+		// string conversion or per-line allocations while preserving ^ / $ semantics.
+		if rePrefilter != nil && !rePrefilter.Match(data) {
+			return fileScanResult{}, nil
 		}
-		rel, _ := filepath.Rel(t.CWD, f)
-		data, err := readSearchFile(f, maxBytes)
-		if err != nil {
-			continue
-		}
-		if !isText(data) {
-			continue
+		if a.FilesOnly && rePrefilter != nil {
+			return fileScanResult{relSlash: sf.relSlash, hasFile: true}, nil
 		}
 		lines := strings.Split(string(data), "\n")
+		if a.FilesOnly {
+			for _, ln := range lines {
+				if re.MatchString(ln) {
+					return fileScanResult{relSlash: sf.relSlash, hasFile: true}, nil
+				}
+			}
+			return fileScanResult{}, nil
+		}
+		if a.Count {
+			n := 0
+			for _, ln := range lines {
+				n += len(re.FindAllStringIndex(ln, -1))
+			}
+			if n > 0 {
+				return fileScanResult{relSlash: sf.relSlash, count: n}, nil
+			}
+			return fileScanResult{}, nil
+		}
+		var fMatches []SearchMatch
 		for i, ln := range lines {
 			if ctx.Err() != nil {
-				return core.ToolResult{}, ctx.Err()
-			}
-			if a.Count {
-				if n := len(re.FindAllStringIndex(ln, -1)); n > 0 {
-					if counts[slash(rel)] == 0 {
-						countOrder = append(countOrder, slash(rel))
-					}
-					counts[slash(rel)] += n
-				}
-				continue
-			}
-			if a.FilesOnly {
-				if re.MatchString(ln) && !filesSeen[slash(rel)] {
-					filesSeen[slash(rel)] = true
-					filesOnly = append(filesOnly, slash(rel))
-					if len(filesOnly) >= maxResults {
-						truncated = true
-						break outer
-					}
-					break
-				}
-				continue
+				return fileScanResult{}, ctx.Err()
 			}
 			if a.OnlyMatching {
 				for _, loc := range re.FindAllStringIndex(ln, -1) {
-					m := SearchMatch{File: slash(rel), Line: i + 1, Col: loc[0] + 1, Text: trimLine(ln[loc[0]:loc[1]])}
+					m := SearchMatch{File: sf.relSlash, Line: i + 1, Col: loc[0] + 1, Text: trimLine(ln[loc[0]:loc[1]])}
 					if ctxLines > 0 {
 						for k := i - ctxLines; k <= i+ctxLines; k++ {
 							if k < 0 || k >= len(lines) || k == i {
@@ -253,10 +335,9 @@ outer:
 							m.Context = append(m.Context, fmt.Sprintf("%d:%s", k+1, trimLine(lines[k])))
 						}
 					}
-					matches = append(matches, m)
-					if len(matches) >= maxResults {
-						truncated = true
-						break outer
+					fMatches = append(fMatches, m)
+					if len(fMatches) >= maxResults {
+						return fileScanResult{relSlash: sf.relSlash, matches: fMatches}, nil
 					}
 				}
 				continue
@@ -265,7 +346,7 @@ outer:
 			if loc == nil {
 				continue
 			}
-			m := SearchMatch{File: slash(rel), Line: i + 1, Col: loc[0] + 1, Text: trimLine(ln)}
+			m := SearchMatch{File: sf.relSlash, Line: i + 1, Col: loc[0] + 1, Text: trimLine(ln)}
 			if ctxLines > 0 {
 				for k := i - ctxLines; k <= i+ctxLines; k++ {
 					if k < 0 || k >= len(lines) || k == i {
@@ -274,16 +355,116 @@ outer:
 					m.Context = append(m.Context, fmt.Sprintf("%d:%s", k+1, trimLine(lines[k])))
 				}
 			}
-			matches = append(matches, m)
-			if len(matches) >= maxResults {
-				truncated = true
-				break outer
+			fMatches = append(fMatches, m)
+			if len(fMatches) >= maxResults {
+				return fileScanResult{relSlash: sf.relSlash, matches: fMatches}, nil
+			}
+		}
+		return fileScanResult{relSlash: sf.relSlash, matches: fMatches}, nil
+	}
+
+	var matches []SearchMatch
+	counts := map[string]int{}
+	var countOrder []string
+	var filesOnly []string
+	truncated := timedOut
+
+	workers := min(max(runtime.NumCPU(), 2), 8)
+	const batchSize = 256
+outer:
+	for startIdx := 0; startIdx < len(files); startIdx += batchSize {
+		if ctx.Err() != nil {
+			return core.ToolResult{}, ctx.Err()
+		}
+		maybeHeartbeat()
+		if searchSoftTimeout > 0 && time.Since(started) >= searchSoftTimeout {
+			timedOut = true
+			truncated = true
+			break
+		}
+		endIdx := min(startIdx+batchSize, len(files))
+		batch := files[startIdx:endIdx]
+		batchOut := make([]fileScanResult, len(batch))
+		wCount := min(workers, len(batch))
+		if wCount <= 1 {
+			for i, sf := range batch {
+				r, scanErr := scanOne(sf)
+				if scanErr != nil {
+					return core.ToolResult{}, scanErr
+				}
+				batchOut[i] = r
+			}
+		} else {
+			var wg sync.WaitGroup
+			var errOnce sync.Once
+			var firstErr error
+			idxCh := make(chan int, len(batch))
+			for i := range batch {
+				idxCh <- i
+			}
+			close(idxCh)
+			wg.Add(wCount)
+			for w := 0; w < wCount; w++ {
+				go func() {
+					defer wg.Done()
+					for i := range idxCh {
+						if ctx.Err() != nil {
+							errOnce.Do(func() { firstErr = ctx.Err() })
+							return
+						}
+						r, scanErr := scanOne(batch[i])
+						if scanErr != nil {
+							errOnce.Do(func() { firstErr = scanErr })
+							return
+						}
+						batchOut[i] = r
+					}
+				}()
+			}
+			wg.Wait()
+			if firstErr != nil {
+				return core.ToolResult{}, firstErr
+			}
+		}
+
+		for _, r := range batchOut {
+			if a.Count {
+				if r.count > 0 {
+					if counts[r.relSlash] == 0 {
+						countOrder = append(countOrder, r.relSlash)
+					}
+					counts[r.relSlash] += r.count
+				}
+				continue
+			}
+			if a.FilesOnly {
+				if r.hasFile {
+					filesOnly = append(filesOnly, r.relSlash)
+					if len(filesOnly) >= maxResults {
+						truncated = true
+						break outer
+					}
+				}
+				continue
+			}
+			for _, m := range r.matches {
+				matches = append(matches, m)
+				if len(matches) >= maxResults {
+					truncated = true
+					break outer
+				}
 			}
 		}
 	}
 
 	var b strings.Builder
 	var attrs []core.Attr
+	appendTimeoutNotice := func(sb *strings.Builder) {
+		if timedOut {
+			attrs = append(attrs, core.Attr{Key: "timed_out", Value: "true"})
+			fmt.Fprintf(sb, "\n[search reached its %s time budget after scanning %d candidate files; narrow `path` or `include` globs to scan deeper]\n", searchSoftTimeout.Round(time.Second), len(files))
+		}
+	}
 	if a.Count {
 		total := 0
 		for _, f := range countOrder {
@@ -300,12 +481,13 @@ outer:
 			}
 			fmt.Fprintf(&b, "%s: %d match%s\n", f, counts[f], plural(counts[f]))
 		}
-		if len(countOrder) == 0 {
+		if len(countOrder) == 0 && !timedOut {
 			attrs = append(attrs, core.Attr{Key: "info", Value: "no matches"})
 		}
 		if truncated {
 			attrs = append(attrs, core.Attr{Key: "truncated", Value: "true"})
 		}
+		appendTimeoutNotice(&b)
 		return core.ToolResult{
 				Content: []provider.Content{provider.TextBlock{Text: b.String()}},
 				Attrs:   attrs,
@@ -317,12 +499,13 @@ outer:
 		for _, f := range filesOnly {
 			fmt.Fprintf(&b, "%s\n", f)
 		}
-		if len(filesOnly) == 0 {
+		if len(filesOnly) == 0 && !timedOut {
 			attrs = append(attrs, core.Attr{Key: "info", Value: "no matches"})
 		}
 		if truncated {
 			attrs = append(attrs, core.Attr{Key: "truncated", Value: "true"})
 		}
+		appendTimeoutNotice(&b)
 		return core.ToolResult{
 				Content: []provider.Content{provider.TextBlock{Text: b.String()}},
 				Attrs:   attrs,
@@ -341,9 +524,10 @@ outer:
 			fmt.Fprintf(&nb, "  %s\n", c)
 		}
 	}
-	if len(matches) == 0 {
+	if len(matches) == 0 && !timedOut {
 		attrs = append(attrs, core.Attr{Key: "info", Value: "no matches"})
 	}
+	appendTimeoutNotice(&nb)
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: nb.String()}},
 		Attrs:   attrs,

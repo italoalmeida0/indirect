@@ -87,7 +87,7 @@ func NewAnthropic(apiKey, baseURL string) Client {
 	return &anthropicClient{
 		apiKey:  apiKey,
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: 0},
+		http:    NewHTTPClient(false),
 	}
 }
 
@@ -568,7 +568,8 @@ func (c *anthropicClient) Stream(ctx context.Context, req Request) (<-chan Event
 
 func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, req Request, out chan<- Event) {
 	defer close(out)
-	defer resp.Body.Close()
+	bodyReader := newStreamIdleReadCloser(resp.Body, ProviderStreamIdleTimeout)
+	defer bodyReader.Close()
 
 	var model Model
 	if c.modelOverride != nil {
@@ -579,7 +580,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 	out <- EventStart{Model: req.Model, Provider: c.Name()}
 
 	raw := make(chan sseEvent, 16)
-	go readSSE(resp.Body, raw)
+	go readSSE(bodyReader, raw)
 
 	type blockEntry struct {
 		kind      string // "text" | "tool_use" | "redacted"
@@ -598,6 +599,10 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 		usage        Usage
 		stop         StopReason = StopEnd
 		finalErr     error
+		// sawMessageStart records whether the stream opened a structured
+		// Anthropic message; if sawMessageStart && !sawStop, the stream was
+		// truncated mid-flight (network reset, proxy drop) and must retry.
+		sawMessageStart bool
 		// sawStop tracks a clean message_stop. Without it the stream was
 		// cut (connection closed, gateway abort): any tool_use block in
 		// the wreckage is incomplete and must error, never pass as a
@@ -665,6 +670,10 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 					break
 				}
 			}
+			if finalErr == nil && sawMessageStart {
+				stop = StopError
+				finalErr = fmt.Errorf("%s: truncated response: stream ended before message_stop", c.Name())
+			}
 		}
 		StampCost(model, &usage)
 		out <- EventUsage{Usage: usage}
@@ -683,6 +692,17 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 				if ctx.Err() != nil {
 					stop = StopAborted
 					finalErr = ctx.Err()
+				}
+				sendDone()
+				return
+			}
+			if ev.Err != nil {
+				if ctx.Err() != nil {
+					stop = StopAborted
+					finalErr = ctx.Err()
+				} else {
+					stop = StopError
+					finalErr = fmt.Errorf("%s: stream interrupted: %w", c.Name(), ev.Err)
 				}
 				sendDone()
 				return
@@ -724,6 +744,7 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 					return
 				}
 			case "message_start":
+				sawMessageStart = true
 				var start struct {
 					Message struct {
 						Model string `json:"model"`

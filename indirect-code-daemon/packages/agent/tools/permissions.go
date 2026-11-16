@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -129,16 +130,41 @@ func (s *Sandbox) CheckNetHost(host string) error {
 	return fmt.Errorf("permission denied: network host %q is outside declared allowlist", host)
 }
 
+// HasRulesForKind reports whether the sandbox has any active permission rule
+// matching kind (or wildcard "*"). Used as a zero-syscall fast-path check.
+func (s *Sandbox) HasRulesForKind(kind string) bool {
+	if s == nil {
+		return false
+	}
+	for _, r := range s.EffectiveRules() {
+		if r.Kind == kind || r.Kind == "*" {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Sandbox) CheckReadPath(path string) error {
 	if s != nil && s.isInteractive() {
+		locked := s.Locked()
+		rules := s.EffectiveRules()
+		hasReadRules := false
+		for _, r := range rules {
+			if r.Kind == "fs_read" || r.Kind == "*" {
+				hasReadRules = true
+				break
+			}
+		}
+		if !locked && !hasReadRules && s.Permissions == nil {
+			return nil
+		}
 		target, err := canonicalOrParent(path)
 		if err != nil {
 			return fmt.Errorf("sandbox path: %w", err)
 		}
-		rules := s.EffectiveRules()
 		if eff, r := MatchRules(rules, "fs_read", target, s.Root); eff == "deny" {
 			return fmt.Errorf("permission denied: read %q blocked by rule %q", path, r.Pattern)
-		} else if eff != "allow" && s.Locked() {
+		} else if eff != "allow" && locked {
 			if prot, reason := IsProtectedWorkspacePath(s.Root, target, false); prot {
 				return fmt.Errorf("jailed: %s", reason)
 			}
@@ -154,6 +180,56 @@ func (s *Sandbox) CheckReadPath(path string) error {
 		return err
 	}
 	if s == nil || s.Permissions == nil {
+		return nil
+	}
+	if len(s.Permissions.FS.Read) == 0 {
+		return fmt.Errorf("permission denied: this agent has no filesystem read permission")
+	}
+	return checkScopedPath("read", path, s.Permissions.FS.Read)
+}
+
+// CheckWalkedReadEntry validates a filesystem entry discovered during a
+// filepath.WalkDir rooted at an ALREADY canonicalized and CheckReadPath-verified
+// directory. Non-symlink entries inherit root confinement without repeating
+// expensive per-file EvalSymlinks calls (50k+ files on Windows NTFS), while
+// symlinks still go through full canonical CheckReadPath validation.
+func (s *Sandbox) CheckWalkedReadEntry(path string, d os.DirEntry) error {
+	if s == nil {
+		return nil
+	}
+	if d != nil && d.Type()&os.ModeSymlink != 0 {
+		return s.CheckReadPath(path)
+	}
+	if s.isInteractive() {
+		locked := s.Locked()
+		rules := s.EffectiveRules()
+		hasReadRules := false
+		for _, r := range rules {
+			if r.Kind == "fs_read" || r.Kind == "*" {
+				hasReadRules = true
+				break
+			}
+		}
+		if hasReadRules {
+			if eff, r := MatchRules(rules, "fs_read", path, s.Root); eff == "deny" {
+				return fmt.Errorf("permission denied: read %q blocked by rule %q", path, r.Pattern)
+			} else if eff == "allow" {
+				if s.Permissions == nil {
+					return nil
+				}
+				if len(s.Permissions.FS.Read) == 0 {
+					return fmt.Errorf("permission denied: this agent has no filesystem read permission")
+				}
+				return checkScopedPath("read", path, s.Permissions.FS.Read)
+			}
+		}
+		if locked {
+			if prot, reason := IsProtectedWorkspacePath(s.Root, path, false); prot {
+				return fmt.Errorf("jailed: %s", reason)
+			}
+		}
+	}
+	if s.Permissions == nil {
 		return nil
 	}
 	if len(s.Permissions.FS.Read) == 0 {

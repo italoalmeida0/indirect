@@ -780,26 +780,38 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 				}
 			}
 			// Reactive recovery: if the provider rejected due to context overflow,
-			// run up to 2 token-budgeted compaction passes (plus wire image shedding)
-			// instead of hard-failing, then terminate finitely if still overflowing.
+			// run up to 2 escalating compaction/latching passes (learning the real
+			// upstream context ceiling, skipping warm-prefix re-uploads, shedding
+			// wire images, latching oversized tool outputs, and rolling up FoldBlocks)
+			// before terminating finitely if still overflowing.
 			if IsContextOverflow(err) {
+				learnedWin := a.noteOverflowCeiling(err)
 				if overflowPasses < 2 {
 					overflowPasses++
 					sink(EvToolProgress{Text: "Context limit reached upstream; automatically compacting older context…"})
 					keepBudget := CompactionKeepRecentTokens / 2
+					if learnedWin > 0 && learnedWin/4 < keepBudget {
+						keepBudget = max(2048, learnedWin/4)
+					}
 					imgKeep := 2
+					latchBudget := keepBudget
 					if overflowPasses > 1 {
-						keepBudget = CompactionKeepRecentTokens / 8
+						keepBudget = 512
+						latchBudget = 1
 						imgKeep = 0
 					}
-					shedCount, _ := a.shedWireImagesReactive(ctx, nil, imgKeep, false)
-					summary, compactErr := a.CompactToTokenBudget(ctx, keepBudget, nil)
+					shedCount, _ := a.shedWireImagesReactive(ctx, nil, imgKeep, overflowPasses > 1)
+					summary, compactErr := a.CompactOverflow(ctx, keepBudget, nil)
 					compacted := compactErr == nil && summary != ""
 					latched := false
-					if !compacted && overflowPasses > 1 {
-						latched = a.latchOverflowTail(keepBudget)
+					if !compacted || overflowPasses > 1 {
+						latched = a.latchOverflowTail(latchBudget)
 					}
-					if compacted || latched || shedCount > 0 {
+					rolledUp := false
+					if overflowPasses > 1 {
+						rolledUp = a.forceRollupActiveBlocks()
+					}
+					if compacted || latched || shedCount > 0 || rolledUp {
 						if !a.PersistentTurns {
 							a.dropLastAssistantMessage()
 						}
@@ -1077,6 +1089,121 @@ func (a *Agent) buildContextFromLocked(msgs []provider.Message, clientName strin
 		msgs = append(msgs, *mirror)
 	}
 	return msgs
+}
+
+// noteOverflowCeiling records the real upstream context ceiling learned from a
+// context-overflow error so proactive auto-compaction on subsequent steps clamps
+// to the concrete target's limit even when a gateway alias advertises more.
+func (a *Agent) noteOverflowCeiling(err error) int {
+	limit := ParseUpstreamContextLimit(err)
+	if limit <= 0 {
+		system, tools, msgs := a.ContextSnapshot()
+		if used := provider.ContextTokens(system, tools, msgs); used >= 4096 {
+			limit = max(4096, used*85/100)
+		}
+	}
+	if limit <= 0 {
+		return 0
+	}
+	a.mu.Lock()
+	state := a.compactionStateLocked()
+	if state == nil {
+		state = &CompactionState{}
+	}
+	changed := false
+	if state.LearnedContextModel != a.Model || state.LearnedContextWindow <= 0 || limit < state.LearnedContextWindow {
+		state.LearnedContextWindow = limit
+		state.LearnedContextModel = a.Model
+		changed = true
+	}
+	eff := state.LearnedContextWindow
+	var onState func(*CompactionState)
+	if changed {
+		if a.contextWindow <= 0 || eff < a.contextWindow {
+			a.contextWindow = eff
+		}
+		a.setCompactionStateLocked(state)
+		a.rev++
+		onState = a.OnCompactionState
+	}
+	a.mu.Unlock()
+	if onState != nil {
+		onState(a.CompactionChain())
+	}
+	return eff
+}
+
+// forceRollupActiveBlocks consolidates multiple active FoldBlocks into one
+// compact mechanical Tier-2 FoldBlock during deep overflow recovery (pass >= 3).
+func (a *Agent) forceRollupActiveBlocks() bool {
+	a.mu.Lock()
+	state := a.compactionStateLocked()
+	if state == nil {
+		a.mu.Unlock()
+		return false
+	}
+	active := state.ActiveBlocks()
+	if len(active) < 2 {
+		a.mu.Unlock()
+		return false
+	}
+	var (
+		readFiles      []string
+		modFiles       []string
+		fileSpans      []string
+		activatedTools []string
+		failedCmds     []FailedCommandSummary
+		sourceIDs      []string
+		rawToksSum     int
+	)
+	for _, b := range active {
+		readFiles = MergeFileOps(readFiles, b.ReadFiles)
+		modFiles = MergeFileOps(modFiles, b.ModifiedFiles)
+		fileSpans = MergeFileOps(fileSpans, b.FileSpans)
+		activatedTools = MergeFileOps(activatedTools, b.ActivatedTools)
+		failedCmds = unionFailedCommands(failedCmds, b.FailedCommands)
+		sourceIDs = append(sourceIDs, b.ID)
+		rawToksSum += b.RawTokens
+	}
+	summary := mechanicalTier2Summary(active)
+	t2ID := state.allocBlockID()
+	t2 := FoldBlock{
+		ID:             t2ID,
+		Tier:           2,
+		StartIdx:       active[0].StartIdx,
+		EndIdx:         active[len(active)-1].EndIdx,
+		Topic:          deriveTier2Topic(active, summary),
+		Summary:        summary,
+		ReadFiles:      readFiles,
+		ModifiedFiles:  modFiles,
+		FileSpans:      fileSpans,
+		ActivatedTools: activatedTools,
+		FailedCommands: failedCmds,
+		SourceBlockIDs: sourceIDs,
+		RawTokens:      rawToksSum,
+		CreatedAt:      time.Now().UnixMilli(),
+	}
+	t2.BlockTokens = estimateFoldBlockTokens(t2)
+	retireSet := map[string]bool{}
+	for _, id := range sourceIDs {
+		retireSet[id] = true
+	}
+	for i := range state.Blocks {
+		if retireSet[state.Blocks[i].ID] && state.Blocks[i].RetiredByBlockID == "" {
+			state.Blocks[i].RetiredByBlockID = t2ID
+		}
+	}
+	state.Blocks = append(state.Blocks, t2)
+	state.Count++
+	state.SyncMirrors()
+	a.setCompactionStateLocked(state)
+	a.rev++
+	onState := a.OnCompactionState
+	a.mu.Unlock()
+	if onState != nil {
+		onState(a.CompactionChain())
+	}
+	return true
 }
 
 // latchOverflowTail advances CompactionState.PrunedBefore as a last-resort
@@ -1618,9 +1745,16 @@ func (a *Agent) runOneTool(ctx context.Context, tc provider.ToolCallBlock, sink 
 			sink(EvToolProgress{ID: tc.ID, Text: text})
 		})
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
 				res = ToolResult{
 					Content: []provider.Content{provider.TextBlock{Text: "aborted: " + err.Error()}},
+					IsError: true,
+				}
+				return
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				res = ToolResult{
+					Content: []provider.Content{provider.TextBlock{Text: "timed out: " + err.Error()}},
 					IsError: true,
 				}
 				return

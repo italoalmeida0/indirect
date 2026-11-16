@@ -109,9 +109,11 @@ type CompactionState struct {
 	Blocks           []FoldBlock       `json:"blocks,omitempty"`
 	NextBlockSeq     int               `json:"nextBlockSeq,omitempty"`
 	PrunedBefore     int               `json:"prunedBefore,omitempty"`
-	ImageDigests     map[string]string `json:"imageDigests,omitempty"`
-	EvictedImages    map[string]bool   `json:"evictedImages,omitempty"`
-	LearnedMaxImages *int              `json:"learnedMaxImages,omitempty"`
+	ImageDigests         map[string]string `json:"imageDigests,omitempty"`
+	EvictedImages        map[string]bool   `json:"evictedImages,omitempty"`
+	LearnedMaxImages     *int              `json:"learnedMaxImages,omitempty"`
+	LearnedContextWindow int               `json:"learnedContextWindow,omitempty"`
+	LearnedContextModel  string            `json:"learnedContextModel,omitempty"`
 }
 
 // CloneCompactionState returns a deep copy of s, or nil when s is nil.

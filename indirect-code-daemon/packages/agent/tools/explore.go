@@ -146,6 +146,13 @@ func (t *ExploreTool) Execute(ctx context.Context, raw json.RawMessage, progress
 
 	prompt := buildExplorePrompt(task, a.FocusPaths)
 	var totalUsage provider.Usage
+	lastPing := started
+	maybeHeartbeat := func() {
+		if progress != nil && time.Since(lastPing) >= toolHeartbeatInterval {
+			lastPing = time.Now()
+			progress("")
+		}
+	}
 
 	err := sub.Prompt(ctx, prompt, nil, func(ev core.AgentEvent) {
 		switch e := ev.(type) {
@@ -154,11 +161,15 @@ func (t *ExploreTool) Execute(ctx context.Context, raw json.RawMessage, progress
 			if t.OnUsage != nil {
 				t.OnUsage(e.Usage)
 			}
+			maybeHeartbeat()
 		case core.EvToolExecutionStart:
 			toolCallsRun++
+			lastPing = time.Now()
 			if progress != nil {
 				progress(formatExploreStepProgress(toolCallsRun, e.Name, e.Args))
 			}
+		case core.EvTurnStart, core.EvTextDelta, core.EvReasoningDelta, core.EvToolProgress, core.EvRetry:
+			maybeHeartbeat()
 		}
 	})
 	if err != nil {

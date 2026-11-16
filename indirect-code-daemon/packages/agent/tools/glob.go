@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/ignore"
@@ -97,12 +98,24 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	var pushed []string
 	var matches []string
 	truncated := false
+	timedOut := false
+	started := time.Now()
+	lastPing := started
 
 	var walkErr error
 	if !searchIgnored {
 		walkErr = filepath.WalkDir(searchDir, func(path string, d os.DirEntry, err error) error {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return ctxErr
+			}
+			if progress != nil && time.Since(lastPing) >= toolHeartbeatInterval {
+				lastPing = time.Now()
+				progress("")
+			}
+			if searchSoftTimeout > 0 && time.Since(started) >= searchSoftTimeout {
+				timedOut = true
+				truncated = true
+				return filepath.SkipAll
 			}
 			if err != nil {
 				if d != nil && d.IsDir() {
@@ -243,7 +256,7 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 
 	var text string
 	var attrs []core.Attr
-	if len(matches) == 0 {
+	if len(matches) == 0 && !timedOut {
 		attrs = append(attrs, core.Attr{Key: "info", Value: "no matches"})
 	} else {
 		text = strings.Join(matches, "\n")
@@ -251,6 +264,13 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		if truncated {
 			attrs = append(attrs, core.Attr{Key: "truncated", Value: "true"})
 		}
+	}
+	if timedOut {
+		attrs = append(attrs, core.Attr{Key: "timed_out", Value: "true"})
+		if text != "" {
+			text += "\n"
+		}
+		text += fmt.Sprintf("[glob reached its %s time budget; narrow `path` or `pattern`]", searchSoftTimeout.Round(time.Second))
 	}
 
 	return core.ToolResult{

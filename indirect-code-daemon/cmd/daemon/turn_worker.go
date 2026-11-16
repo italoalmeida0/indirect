@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
@@ -244,15 +245,17 @@ type turnBridge struct {
 	reg             core.Registry
 	tfc             *turnFileChanges
 	live            *liveTracker
-	currentStep     int
-	lastFoldSig     foldCompactionSig
+	currentStep      int
+	lastFoldSig      foldCompactionSig
+	lastWaitExtendMs atomic.Int64
 }
 
 type foldCompactionSig struct {
-	count        int
-	keepFrom     int
-	prunedBefore int
-	nBlocks      int
+	count         int
+	keepFrom      int
+	prunedBefore  int
+	nBlocks       int
+	learnedWindow int
 }
 
 func foldSigOf(state *core.CompactionState) foldCompactionSig {
@@ -260,10 +263,11 @@ func foldSigOf(state *core.CompactionState) foldCompactionSig {
 		return foldCompactionSig{}
 	}
 	return foldCompactionSig{
-		count:        state.Count,
-		keepFrom:     state.KeepFrom,
-		prunedBefore: state.PrunedBefore,
-		nBlocks:      len(state.Blocks),
+		count:         state.Count,
+		keepFrom:      state.KeepFrom,
+		prunedBefore:  state.PrunedBefore,
+		nBlocks:       len(state.Blocks),
+		learnedWindow: state.LearnedContextWindow,
 	}
 }
 
@@ -534,9 +538,17 @@ func (w *turnBridge) declareWait(op string, until time.Time) {
 	if !until.IsZero() {
 		ms = until.UnixMilli()
 	}
+	w.lastWaitExtendMs.Store(time.Now().UnixMilli())
 	select {
 	case w.env.inbox <- w.stamp(workerWaitMsg{gen: w.snap.gen, op: op, until: ms}):
 	case <-w.env.done:
+	}
+}
+
+func (w *turnBridge) extendProviderWaitThrottled() {
+	now := time.Now().UnixMilli()
+	if now-w.lastWaitExtendMs.Load() >= 2000 {
+		w.declareWait("provider", time.Now().Add(tuneWaitProvider))
 	}
 }
 
@@ -1455,20 +1467,38 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 		w.declareWait("", time.Time{}) // response arrived: provider wait over
 		payload["event"] = map[string]any{"type": "assistant_message", "message": e.Message}
 	case core.EvAssistantStart:
+		w.extendProviderWaitThrottled()
 		payload["event"] = map[string]any{"type": "assistant_start", "messageId": e.ID}
 	case core.EvTextDelta:
+		w.extendProviderWaitThrottled()
 		payload["event"] = map[string]any{"type": "text_delta", "delta": e.Delta}
 	case core.EvReasoningDelta:
+		w.extendProviderWaitThrottled()
 		payload["event"] = map[string]any{"type": "reasoning_delta", "delta": e.Delta}
 	case core.EvToolUseStart:
+		w.extendProviderWaitThrottled()
 		payload["event"] = map[string]any{"type": "tool_use_start", "id": e.ID, "name": e.Name}
 	case core.EvToolUseArgs:
+		w.extendProviderWaitThrottled()
 		payload["event"] = map[string]any{"type": "tool_use_args", "id": e.ID, "delta": e.Delta}
 	case core.EvToolUseEnd:
+		w.extendProviderWaitThrottled()
 		payload["event"] = map[string]any{"type": "tool_use_end", "id": e.ID}
 	case core.EvToolProgress:
 		if e.ID == "" && (strings.HasPrefix(e.Text, "Compacting") || strings.HasPrefix(e.Text, "Context limit reached upstream")) {
 			w.declareWait("provider", time.Now().Add(tuneWaitProvider))
+		} else if e.ID != "" {
+			wait := tuneWaitTool
+			if w.toolNames[e.ID] == "explore" {
+				wait = max(wait, tuneWaitProvider)
+			}
+			w.declareWait("tool", time.Now().Add(wait))
+		}
+		if e.Text == "" {
+			// Internal liveness heartbeat from long-running tools (search, glob,
+			// inspect, explore): heartbeat + declareWait above refreshed watchdog
+			// progress without emitting empty WS frames.
+			return
 		}
 		if e.ID == "" && strings.HasPrefix(e.Text, "Compacting") {
 			payload["event"] = map[string]any{"type": "compact_progress", "text": e.Text}
