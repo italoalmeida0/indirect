@@ -21,10 +21,12 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -379,6 +381,13 @@ func (en *rtEntry) checkNetHost(host string) error {
 }
 
 func (en *rtEntry) checkNetHostResolved(resolvedHostPort, origHostPort string) error {
+	allowTarget := origHostPort
+	if allowTarget == "" {
+		allowTarget = resolvedHostPort
+	}
+	if err := en.checkNetAllowList(allowTarget); err != nil {
+		return err
+	}
 	if en.checkAccess != nil {
 		var argv []string
 		if origHostPort != "" && !strings.EqualFold(origHostPort, resolvedHostPort) {
@@ -1582,6 +1591,8 @@ func (en *rtEntry) opProcessStdinRead(argsStr string) (string, []byte, bool, str
 type rtWorkerChannel struct {
 	mu           sync.Mutex
 	ln           net.Listener
+	port         int
+	token        string
 	conn         net.Conn
 	pending      [][]byte
 	pendingBytes int64
@@ -1677,12 +1688,20 @@ func (en *rtEntry) opWorkerListen(argsStr string) (string, []byte, bool, string,
 		return "", nil, false, "EINVAL", err
 	}
 	id := int32(id64)
+	var tokBytes [32]byte
+	if _, rerr := rand.Read(tokBytes[:]); rerr != nil {
+		return "", nil, false, "EIO", rerr
+	}
+	token := hex.EncodeToString(tokBytes[:])
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", nil, false, "EIO", err
 	}
+	port := ln.Addr().(*net.TCPAddr).Port
 	wc := &rtWorkerChannel{
 		ln:        ln,
+		port:      port,
+		token:     token,
 		notify:    make(chan struct{}, 1),
 		writeDone: make(chan struct{}),
 		credits:   makeWorkerCredits(),
@@ -1693,33 +1712,75 @@ func (en *rtEntry) opWorkerListen(argsStr string) (string, []byte, bool, string,
 	en.workerChansMu.Unlock()
 
 	go func() {
-		conn, err := ln.Accept()
-		_ = ln.Close()
-		if err != nil {
-			close(wc.writeDone)
-			close(wc.done)
-			return
-		}
-		wc.mu.Lock()
-		if wc.closed {
+		defer func() { _ = ln.Close() }()
+		for {
+			conn, aerr := ln.Accept()
+			if aerr != nil {
+				close(wc.writeDone)
+				close(wc.done)
+				return
+			}
+			wc.mu.Lock()
+			isClosed := wc.closed
 			wc.mu.Unlock()
-			_ = conn.Close()
-			close(wc.writeDone)
-			close(wc.done)
+			if isClosed {
+				_ = conn.Close()
+				close(wc.writeDone)
+				close(wc.done)
+				return
+			}
+			// Require the per-worker cryptographic handshake token immediately.
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			gotTok := make([]byte, len(token))
+			if _, rerr := io.ReadFull(conn, gotTok); rerr != nil || subtle.ConstantTimeCompare(gotTok, []byte(token)) != 1 {
+				_ = conn.Close()
+				continue
+			}
+			_ = conn.SetReadDeadline(time.Time{})
+			_ = ln.Close()
+			wc.mu.Lock()
+			if wc.closed {
+				wc.mu.Unlock()
+				_ = conn.Close()
+				close(wc.writeDone)
+				close(wc.done)
+				return
+			}
+			wc.conn = conn
+			select {
+			case wc.notify <- struct{}{}:
+			default:
+			}
+			wc.mu.Unlock()
+			go pumpWorkerWrites(wc)
+			pumpWorkerFrames(en, id, conn, wc.credits, wc.done)
 			return
 		}
-		wc.conn = conn
-		select {
-		case wc.notify <- struct{}{}:
-		default:
-		}
-		wc.mu.Unlock()
-		go pumpWorkerWrites(wc)
-		pumpWorkerFrames(en, id, conn, wc.credits, wc.done)
 	}()
 
-	port := ln.Addr().(*net.TCPAddr).Port
-	return strconv.Itoa(port), nil, false, "", nil
+	payload, _ := json.Marshal(struct {
+		Port  int    `json:"port"`
+		Token string `json:"token"`
+	}{Port: port, Token: token})
+	return string(payload), nil, false, "", nil
+}
+
+func (en *rtEntry) hasActiveWorkerListener(portStr, token string) bool {
+	portNum, err := strconv.Atoi(strings.TrimSpace(portStr))
+	if err != nil || portNum <= 0 || portNum > 65535 || len(token) != 64 {
+		return false
+	}
+	en.workerChansMu.Lock()
+	defer en.workerChansMu.Unlock()
+	for _, wc := range en.workerChans {
+		if wc == nil || wc.port != portNum || len(wc.token) != len(token) {
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(wc.token), []byte(token)) == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func (en *rtEntry) ensureChildWorkerChannel() (*rtWorkerChannel, error) {
@@ -1731,10 +1792,15 @@ func (en *rtEntry) ensureChildWorkerChannel() (*rtWorkerChannel, error) {
 	}
 	en.mu.Lock()
 	portStr := en.env["__INDIRECT_WT_CTL_PORT"]
+	token := strings.TrimSpace(en.env["__INDIRECT_WT_TOKEN"])
 	en.mu.Unlock()
 	if portStr == "" {
 		en.workerChansMu.Unlock()
 		return nil, fmt.Errorf("missing worker control port")
+	}
+	if len(token) != 64 {
+		en.workerChansMu.Unlock()
+		return nil, fmt.Errorf("missing or invalid worker control auth token")
 	}
 	portNum, perr := strconv.Atoi(strings.TrimSpace(portStr))
 	if perr != nil || portNum <= 0 || portNum > 65535 {
@@ -1759,6 +1825,13 @@ func (en *rtEntry) ensureChildWorkerChannel() (*rtWorkerChannel, error) {
 		en.workerChansMu.Unlock()
 		return nil, err
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if _, werr := conn.Write([]byte(token)); werr != nil {
+		_ = conn.Close()
+		en.workerChansMu.Unlock()
+		return nil, werr
+	}
+	_ = conn.SetWriteDeadline(time.Time{})
 	wc = &rtWorkerChannel{
 		conn:      conn,
 		notify:    make(chan struct{}, 1),
@@ -3231,7 +3304,11 @@ func (en *rtEntry) opFSCp(argsStr string) (string, []byte, bool, string, error) 
 				if linkTarget, rerr := os.Readlink(src); rerr == nil {
 					resolvedLink := linkTarget
 					if !filepath.IsAbs(resolvedLink) {
-						resolvedLink = filepath.Join(filepath.Dir(dest), resolvedLink)
+						canonParent, perr := canonicalSymlinkParentDir(dest)
+						if perr != nil {
+							return "", nil, false, "EACCES", fmt.Errorf("EACCES: %v", perr)
+						}
+						resolvedLink = filepath.Join(canonParent, resolvedLink)
 					}
 					if cerr := en.checkPath(resolvedLink); cerr != nil {
 						return "", nil, false, "EACCES", cerr
@@ -3289,7 +3366,11 @@ func (en *rtEntry) opFSCp(argsStr string) (string, []byte, bool, string, error) 
 					if rerr == nil {
 						resolvedLink := linkTarget
 						if !filepath.IsAbs(resolvedLink) {
-							resolvedLink = filepath.Join(filepath.Dir(target), resolvedLink)
+							canonParent, perr := canonicalSymlinkParentDir(target)
+							if perr != nil {
+								return fmt.Errorf("EACCES: %v", perr)
+							}
+							resolvedLink = filepath.Join(canonParent, resolvedLink)
 						}
 						if cerr := en.checkPath(resolvedLink); cerr != nil {
 							return cerr
@@ -3599,6 +3680,20 @@ func (en *rtEntry) opFSReadlink(pathArg string) (string, []byte, bool, string, e
 	return target, nil, false, "", nil
 }
 
+func canonicalSymlinkParentDir(linkPath string) (string, error) {
+	parentDir := filepath.Dir(linkPath)
+	if canon, err := evalPathSymlinksAndJunctions(parentDir); err == nil && canon != "" {
+		return filepath.Clean(canon), nil
+	}
+	if canon, err := filepath.EvalSymlinks(parentDir); err == nil && canon != "" {
+		return filepath.Clean(canon), nil
+	}
+	if canon, err := canonicalOrParentPath(parentDir); err == nil && canon != "" {
+		return filepath.Clean(canon), nil
+	}
+	return "", fmt.Errorf("cannot resolve symlink parent directory %q", parentDir)
+}
+
 func (en *rtEntry) opFSSymlink(argsStr string) (string, []byte, bool, string, error) {
 	var req struct {
 		Target string `json:"target"`
@@ -3613,7 +3708,11 @@ func (en *rtEntry) opFSSymlink(argsStr string) (string, []byte, bool, string, er
 	}
 	targetAbs := req.Target
 	if !filepath.IsAbs(targetAbs) {
-		targetAbs = filepath.Join(filepath.Dir(p), targetAbs)
+		canonParent, perr := canonicalSymlinkParentDir(p)
+		if perr != nil {
+			return "", nil, false, "EACCES", fmt.Errorf("EACCES: %v", perr)
+		}
+		targetAbs = filepath.Join(canonParent, targetAbs)
 	}
 	if err := en.checkPath(targetAbs); err != nil {
 		return "", nil, false, "EACCES", err
@@ -4764,7 +4863,7 @@ func isBlockedJailedEnvKey(k string) bool {
 		switch u {
 		case "__INDIRECT_WORKER_THREAD_ID", "__INDIRECT_WORKER_THREAD", "__INDIRECT_WORKER_ID", "__INDIRECT_WORKER_DATA",
 			"__INDIRECT_WORKER_DATA_FILE", "__INDIRECT_WORKER_EVAL_FILE", "__INDIRECT_WORKER_ENV_DATA",
-			"__INDIRECT_WT_CTL_PORT", "__INDIRECT_FORK_IPC":
+			"__INDIRECT_WT_CTL_PORT", "__INDIRECT_WT_TOKEN", "__INDIRECT_FORK_IPC":
 			return false
 		default:
 			return true
@@ -4922,6 +5021,17 @@ func (en *rtEntry) enforceChildEnvMap(out map[string]string) {
 	for k := range out {
 		if isBlockedJailedEnvKey(k) {
 			delete(out, k)
+		}
+	}
+	// Only permit worker/fork IPC env vars when they match an active listener
+	// opened by this runtime via opWorkerListen. Forged ports/tokens are stripped.
+	ctlPort := out["__INDIRECT_WT_CTL_PORT"]
+	ctlTok := out["__INDIRECT_WT_TOKEN"]
+	if ctlPort != "" || ctlTok != "" || out["__INDIRECT_FORK_IPC"] != "" {
+		if !en.hasActiveWorkerListener(ctlPort, ctlTok) {
+			delete(out, "__INDIRECT_WT_CTL_PORT")
+			delete(out, "__INDIRECT_WT_TOKEN")
+			delete(out, "__INDIRECT_FORK_IPC")
 		}
 	}
 	en.applySandboxEnvRoots(out)
@@ -5228,11 +5338,6 @@ func (en *rtEntry) shouldRunInProcessShell(req cpSpawnReq, cwd string, envSlice 
 func (en *rtEntry) checkDirectExec(ctx context.Context, cmd *exec.Cmd) error {
 	if en.checkAccess == nil || cmd == nil || cmd.Err != nil {
 		return nil
-	}
-	if en.execPath != "" && strings.EqualFold(filepath.Clean(cmd.Path), filepath.Clean(en.execPath)) {
-		if len(cmd.Args) >= 2 && (cmd.Args[1] == "--js" || cmd.Args[1] == "--js-exec-direct") {
-			return nil
-		}
 	}
 	return en.checkAccess(ctx, "exec", cmd.Path, cmd.Args)
 }

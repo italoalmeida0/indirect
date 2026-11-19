@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -309,6 +310,54 @@ func splitHostPortLoose(s string) (string, string) {
 		return strings.Trim(h, "[]"), p
 	}
 	return strings.Trim(s, "[]"), ""
+}
+
+func urlEffectivePort(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	if p := strings.TrimSpace(u.Port()); p != "" {
+		return p
+	}
+	switch strings.ToLower(strings.TrimSpace(u.Scheme)) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
+// matchNetRulesHostPort evaluates "net" rules against both host:port (when port
+// is non-empty) and bare host, preserving strict Deny > Allow precedence across
+// both forms so port-scoped rules (e.g. "127.0.0.1:8080") and host-only rules
+// (e.g. "example.com") both work consistently.
+func matchNetRulesHostPort(rules []PermissionRule, host, port, workspace string) (string, PermissionRule) {
+	h := strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
+	p := strings.TrimSpace(port)
+	var candidates []string
+	if h != "" && p != "" {
+		candidates = append(candidates, net.JoinHostPort(h, p))
+	}
+	if h != "" {
+		candidates = append(candidates, h)
+	}
+	var matchedAllow *PermissionRule
+	for _, target := range candidates {
+		eff, r := MatchRules(rules, "net", target, workspace)
+		if eff == "deny" {
+			return "deny", r
+		}
+		if eff == "allow" && matchedAllow == nil {
+			cp := r
+			matchedAllow = &cp
+		}
+	}
+	if matchedAllow != nil {
+		return "allow", *matchedAllow
+	}
+	return "", PermissionRule{}
 }
 
 func matchPathPattern(pat, target, workspace string) bool {
@@ -952,9 +1001,21 @@ func EvaluateToolCall(
 		}
 	}
 
+	canonArgs, canonErr := CanonicalizeToolArgs(rawArgs)
+	if canonErr != nil {
+		return PolicyEvaluation{
+			Verdict: VerdictDeny,
+			Meta: ToolApprovalMeta{
+				Capability: "tool",
+				Target:     canonicalTool,
+				Reason:     fmt.Sprintf("Invalid tool arguments: %v", canonErr),
+			},
+		}
+	}
+
 	var argMap map[string]any
-	if len(rawArgs) > 0 {
-		_ = json.Unmarshal(rawArgs, &argMap)
+	if len(canonArgs) > 0 && !bytes.Equal(canonArgs, []byte("null")) {
+		_ = json.Unmarshal(canonArgs, &argMap)
 	}
 	strArg := func(keys ...string) string {
 		for _, k := range keys {
@@ -1032,8 +1093,51 @@ func EvaluateToolCall(
 			},
 		}
 
-	case "search_web", "explore", "bg_await", "bg_check", "bg_cancel",
-		"question", "todo", "session_history", "widget_set", "widget_list", "widget_lint", "widget_read", "widget_edit":
+	case "widget_set":
+		if srcFile := strArg("src_file"); srcFile != "" {
+			resolved := resolvePath(workspace, srcFile)
+			fsEval := evaluateFSCheck("fs_read", "widget_set", resolved, srcFile, accessMode, workspace, brainDir, projectReadOnly, rules)
+			if fsEval.Verdict != VerdictAllow {
+				return fsEval
+			}
+		}
+		if eff, _ := MatchRules(rules, "tool", canonicalTool, workspace); eff == "allow" {
+			return PolicyEvaluation{Verdict: VerdictAllow}
+		}
+		if accessMode == "full" || accessMode == "auto" {
+			return PolicyEvaluation{Verdict: VerdictAllow}
+		}
+
+	case "search_web":
+		allNetAllowed := true
+		for _, ddgHost := range []string{"html.duckduckgo.com", "lite.duckduckgo.com"} {
+			eff, r := matchNetRulesHostPort(rules, ddgHost, "443", workspace)
+			if eff == "deny" {
+				return PolicyEvaluation{
+					Verdict: VerdictDeny,
+					Meta: ToolApprovalMeta{
+						Capability: "net",
+						Target:     ddgHost,
+						Reason:     fmt.Sprintf("Network access to %q blocked by rule %q", ddgHost, r.Pattern),
+					},
+				}
+			}
+			if eff != "allow" {
+				allNetAllowed = false
+			}
+		}
+		if allNetAllowed {
+			return PolicyEvaluation{Verdict: VerdictAllow}
+		}
+		if eff, _ := MatchRules(rules, "tool", canonicalTool, workspace); eff == "allow" {
+			return PolicyEvaluation{Verdict: VerdictAllow}
+		}
+		if accessMode == "full" || accessMode == "auto" {
+			return PolicyEvaluation{Verdict: VerdictAllow}
+		}
+
+	case "explore", "bg_await", "bg_check", "bg_cancel",
+		"question", "todo", "session_history", "widget_list", "widget_lint", "widget_read", "widget_edit":
 		if eff, _ := MatchRules(rules, "tool", canonicalTool, workspace); eff == "allow" {
 			return PolicyEvaluation{Verdict: VerdictAllow}
 		}
@@ -1270,14 +1374,14 @@ func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []Permiss
 
 	// 2. Explicit Deny rules always win before any Allow rule or mode check.
 	if rawHost != "" {
-		hostPort := strings.ToLower(u.Host)
-		if eff, r := MatchRules(rules, "net", hostPort, workspace); eff == "deny" {
+		port := urlEffectivePort(u)
+		if eff, r := matchNetRulesHostPort(rules, rawHost, port, workspace); eff == "deny" {
 			return PolicyEvaluation{
 				Verdict: VerdictDeny,
 				Meta: ToolApprovalMeta{
 					Capability: "net",
-					Target:     u.Host,
-					Reason:     fmt.Sprintf("Network access to %q blocked by rule %q", u.Host, r.Pattern),
+					Target:     nonEmpty(u.Host, rawHost),
+					Reason:     fmt.Sprintf("Network access to %q blocked by rule %q", nonEmpty(u.Host, rawHost), r.Pattern),
 				},
 			}
 		}
@@ -1322,12 +1426,16 @@ func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []Permiss
 
 	// 4. Explicit Allow rules.
 	if rawHost != "" {
-		hostPort := strings.ToLower(u.Host)
-		if eff, _ := MatchRules(rules, "net", hostPort, workspace); eff == "allow" {
+		port := urlEffectivePort(u)
+		if eff, _ := matchNetRulesHostPort(rules, rawHost, port, workspace); eff == "allow" {
+			grantPat := host
+			if isLoopbackHost(rawHost) && port != "" {
+				grantPat = net.JoinHostPort(host, port)
+			}
 			return PolicyEvaluation{
 				Verdict: VerdictAllow,
 				Meta: ToolApprovalMeta{
-					CallGrants: []PermissionRule{{Effect: "allow", Kind: "net", Pattern: host}},
+					CallGrants: []PermissionRule{{Effect: "allow", Kind: "net", Pattern: grantPat}},
 				},
 			}
 		}

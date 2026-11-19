@@ -75,7 +75,7 @@ func (t *InspectTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		scope = "."
 	}
 	abs := resolvePath(t.CWD, scope)
-	if err := t.Sandbox.CheckPath(abs); err != nil {
+	if err := t.Sandbox.CheckReadPath(abs); err != nil {
 		return core.ToolResult{}, fmt.Errorf("inspect: invalid path: %v", err)
 	}
 	depth := a.Depth
@@ -113,9 +113,18 @@ func (t *InspectTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		return core.ToolResult{}, fmt.Errorf("inspect: path not found: %s", scope)
 	}
 
+	if wantGit && t.Sandbox != nil {
+		rules := t.Sandbox.EffectiveRules()
+		if eff, _ := MatchRules(rules, "exec", "git", t.Sandbox.Root); eff == "deny" {
+			wantGit = false
+		} else if eff, _ := MatchRules(rules, "exec", "git status", t.Sandbox.Root); eff == "deny" {
+			wantGit = false
+		}
+	}
+
 	var gitFlags map[string]string
 	if wantGit {
-		gitFlags = gitStatusMap(t.CWD)
+		gitFlags = gitStatusMap(ctx, t.CWD)
 	}
 
 	var b strings.Builder
@@ -156,6 +165,14 @@ func (t *InspectTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		}
 		if p == abs {
 			return nil
+		}
+		if t.Sandbox != nil {
+			if cerr := t.Sandbox.CheckWalkedReadEntry(p, d); cerr != nil {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 		rel, _ := filepath.Rel(t.CWD, p)
 		relSlash := slash(rel)
@@ -260,7 +277,7 @@ func (t *InspectTool) Execute(ctx context.Context, raw json.RawMessage, progress
 			mtime = ", " + e.modTime.Format("2006-01-02 15:04")
 		}
 		if e.isDir {
-			size := dirSize(filepath.Join(t.CWD, filepath.FromSlash(e.rel)))
+			size := dirSize(filepath.Join(t.CWD, filepath.FromSlash(e.rel)), t.Sandbox)
 			fmt.Fprintf(&b, "%s%s%s/ (%s%s)\n", indent, flagField(flag), base, humanBytes(size), mtime)
 			continue
 		}
@@ -289,7 +306,7 @@ func lowerGlobs(patterns []string) []string {
 
 // dirSize sums file sizes under dir (single level walk, best-effort).
 // Symlink loops and unreadable entries are skipped silently.
-func dirSize(dir string) int64 {
+func dirSize(dir string, sb *Sandbox) int64 {
 	var total int64
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -300,6 +317,14 @@ func dirSize(dir string) int64 {
 		}
 		if p == dir {
 			return nil
+		}
+		if sb != nil {
+			if cerr := sb.CheckWalkedReadEntry(p, d); cerr != nil {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 		if !d.IsDir() {
 			if info, err := d.Info(); err == nil {
@@ -331,8 +356,8 @@ func humanBytes(n int64) string {
 
 // gitStatusMap runs `git status --porcelain -z` once and maps paths to flags.
 // Returns nil when not a repo or git is missing (no error — flags just empty).
-func gitStatusMap(cwd string) map[string]string {
-	out, err := runGit(cwd, "status", "--porcelain=v1", "-z", "--untracked-files=normal")
+func gitStatusMap(ctx context.Context, cwd string) map[string]string {
+	out, err := runGit(ctx, cwd, "status", "--porcelain=v1", "-z", "--untracked-files=normal")
 	if err != nil {
 		return nil
 	}
@@ -391,15 +416,33 @@ func countLines(data []byte) int {
 	return n
 }
 
-// runGit executes git with a fixed timeout, no pager, no color, and no
+// runGit executes git with a fixed timeout derived from ctx, no pager, no color,
+// disabled repository fsmonitor/hooks, isolated global/system config, and no
 // interactive prompts. Moved here from the removed git tool — inspect's
 // git-status flags are its only remaining user (git ops go via bash).
-func runGit(cwd string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+func runGit(ctx context.Context, cwd string, args ...string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	gitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "color.ui=false", "--no-pager"}, args...)...)
+	baseArgs := []string{
+		"-c", "color.ui=false",
+		"-c", "core.fsmonitor=false",
+		"-c", "core.hooksPath=/dev/null",
+		"--no-pager",
+	}
+	cmd := exec.CommandContext(gitCtx, "git", append(baseArgs, args...)...)
 	cmd.Dir = cwd
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME"), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0", "SYSTEMROOT=" + os.Getenv("SYSTEMROOT")}
+	cmd.Env = []string{
+		"PATH=" + os.Getenv("PATH"),
+		"HOME=" + os.Getenv("HOME"),
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"SYSTEMROOT=" + os.Getenv("SYSTEMROOT"),
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

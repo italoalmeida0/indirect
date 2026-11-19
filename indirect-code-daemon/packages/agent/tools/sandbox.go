@@ -292,11 +292,20 @@ func (s *Sandbox) CheckPath(path string) error {
 		rules := s.EffectiveRules()
 		if eff, r := MatchRules(rules, "fs_read", target, s.Root); eff == "deny" {
 			return fmt.Errorf("permission denied: path %q blocked by rule %q", path, r.Pattern)
-		} else if eff == "allow" {
-			return nil
-		}
-		if eff, _ := MatchRules(rules, "fs_write", target, s.Root); eff == "allow" {
-			return nil
+		} else {
+			inWs := s.Root != "" && (isUnderWorkspacePath(s.Root, target) || isUnderWorkspacePath(s.Root, path))
+			protRead, protReason := IsProtectedWorkspacePath(s.Root, path, false)
+			isProtReadInWs := inWs && protRead
+			if eff == "allow" && allowsPathByRule(rules, "fs_read", target, s.Root, isProtReadInWs) {
+				return nil
+			}
+			protWrite, _ := IsProtectedWorkspacePath(s.Root, path, true)
+			if weff, _ := MatchRules(rules, "fs_write", target, s.Root); weff == "allow" && allowsPathByRule(rules, "fs_write", target, s.Root, inWs && protWrite) {
+				return nil
+			}
+			if s.Locked() && protRead {
+				return fmt.Errorf("jailed: %s", protReason)
+			}
 		}
 	}
 	if !s.Locked() {

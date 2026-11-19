@@ -4,11 +4,68 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
 	"strconv"
 	"strings"
 )
+
+// CanonicalizeToolArgs decodes a top-level JSON object, folds its top-level keys
+// to lowercase, and rejects any duplicate or case-colliding keys (e.g. "path"
+// and "Path") so policy checks and tool unmarshaling always inspect the exact
+// same key set. Empty, whitespace-only, and literal "null" inputs are returned
+// unchanged without error.
+func CanonicalizeToolArgs(raw json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return trimmed, nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON tool args: %w", err)
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return nil, fmt.Errorf("tool args must be a JSON object")
+	}
+	out := make(map[string]json.RawMessage)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, fmt.Errorf("invalid JSON tool args key: %w", err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("tool args key must be a string")
+		}
+		var val json.RawMessage
+		if err := dec.Decode(&val); err != nil {
+			return nil, fmt.Errorf("invalid JSON tool args value for %q: %w", key, err)
+		}
+		lower := strings.ToLower(key)
+		if _, exists := out[lower]; exists {
+			return nil, fmt.Errorf("duplicate or case-colliding tool argument key %q", key)
+		}
+		out[lower] = val
+	}
+	endTok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("invalid JSON tool args: %w", err)
+	}
+	if d, ok := endTok.(json.Delim); !ok || d != '}' {
+		return nil, fmt.Errorf("unexpected JSON token in tool args")
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, fmt.Errorf("trailing data in JSON tool args")
+	}
+	canon, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(canon), nil
+}
 
 // unmarshalArgs decodes tool arguments tolerantly.
 //
@@ -40,9 +97,13 @@ func unmarshalArgs(raw json.RawMessage, target any) error {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return fmt.Errorf("empty args")
 	}
+	canon, err := CanonicalizeToolArgs(raw)
+	if err != nil {
+		return err
+	}
 	numericFields := numericFieldSet(target)
 	sliceFields := sliceFieldSet(target)
-	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec := json.NewDecoder(bytes.NewReader(canon))
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {

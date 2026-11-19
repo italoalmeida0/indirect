@@ -2774,6 +2774,9 @@
   // =========================================================================
 
   const envBacking = Object.assign(Object.create(null), init.env || {});
+  delete envBacking.__INDIRECT_WT_CTL_PORT;
+  delete envBacking.__INDIRECT_WT_TOKEN;
+  delete envBacking.__INDIRECT_FORK_IPC;
   const isWinEnv = init.platform === "win32";
   function resolveEnvKey(target, prop) {
     if (typeof prop !== "string" || !isWinEnv) return prop;
@@ -11353,10 +11356,11 @@
     }
     options = options || {};
     const ipcId = nextAsyncId++;
-    const ctlPort = Number(hostCall("worker.listen", String(ipcId)));
+    const listenInfo = JSON.parse(hostCall("worker.listen", String(ipcId)));
     const childEnv = Object.assign({}, options.env || processObj.env, {
       __INDIRECT_FORK_IPC: "1",
-      __INDIRECT_WT_CTL_PORT: String(ctlPort),
+      __INDIRECT_WT_CTL_PORT: String(listenInfo.port),
+      __INDIRECT_WT_TOKEN: String(listenInfo.token),
     });
     const spawnOpts = Object.assign({}, options, { env: childEnv });
     if (options.silent) {
@@ -18385,12 +18389,13 @@
       if (options && Array.isArray(options.argv)) {
         args.push(...options.argv.map(String));
       }
-      const ctlPort = Number(hostCall("worker.listen", String(this.threadId)));
+      const listenInfo = JSON.parse(hostCall("worker.listen", String(this.threadId)));
       const kShareEnv = Symbol.for("nodejs.worker_threads.SHARE_ENV");
       const envSource = (!options || options.env === undefined || options.env === kShareEnv) ? processObj.env : options.env;
       const childEnv = Object.assign({}, envSource, {
         __INDIRECT_WORKER_THREAD_ID: String(this.threadId),
-        __INDIRECT_WT_CTL_PORT: String(ctlPort),
+        __INDIRECT_WT_CTL_PORT: String(listenInfo.port),
+        __INDIRECT_WT_TOKEN: String(listenInfo.token),
       });
       if (workerEnvData.size > 0) {
         try {
@@ -18585,7 +18590,7 @@
       return origOnce(ev, fn);
     };
   }
-  const isForkChild = Boolean(init.env && init.env.__INDIRECT_FORK_IPC === "1" && init.env.__INDIRECT_WT_CTL_PORT);
+  const isForkChild = Boolean(init.env && init.env.__INDIRECT_FORK_IPC === "1" && init.env.__INDIRECT_WT_CTL_PORT && init.env.__INDIRECT_WT_TOKEN);
   let forkIpcStarted = false;
   let forkIpcRefed = false;
   function startForkIpcConn(wantRef) {

@@ -748,13 +748,17 @@ func RunScript(ctx context.Context, opts ScriptOptions) (int, error) {
 	if tmpDir == "" {
 		tmpDir = strings.TrimSpace(rawEnv["__INDIRECT_TMPDIR"])
 	}
+	isTopLevelExecScript := opts.Filename == "<exec_script>"
 	envMap := make(map[string]string, len(rawEnv))
 	for k, v := range rawEnv {
+		upper := strings.ToUpper(strings.TrimSpace(k))
+		if isTopLevelExecScript && (strings.HasPrefix(upper, "__INDIRECT_WT_") || upper == "__INDIRECT_FORK_IPC") {
+			continue
+		}
 		if hasSandbox {
 			if isBlockedJailedEnvKey(k) {
 				continue
 			}
-			upper := strings.ToUpper(k)
 			if upper == "HTTP_PROXY" || upper == "HTTPS_PROXY" || upper == "ALL_PROXY" {
 				if u, perr := url.Parse(v); perr == nil && u.User != nil {
 					u.User = nil

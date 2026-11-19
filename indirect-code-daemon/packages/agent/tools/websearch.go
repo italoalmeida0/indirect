@@ -87,8 +87,11 @@ func (t *SearchWebTool) Execute(ctx context.Context, raw json.RawMessage, progre
 		return core.ToolResult{}, fmt.Errorf("search_web: `offset` must be >= 0")
 	}
 	if t.Sandbox != nil {
-		if err := t.Sandbox.CheckNetHost("html.duckduckgo.com"); err != nil {
+		if err := t.checkSearchHost("html.duckduckgo.com"); err != nil {
 			return core.ToolResult{}, err
+		}
+		if eff, r := matchNetRulesHostPort(t.Sandbox.EffectiveRules(), "lite.duckduckgo.com", "443", t.Sandbox.Root); eff == "deny" {
+			return core.ToolResult{}, fmt.Errorf("permission denied: network host %q blocked by rule %q", "lite.duckduckgo.com", r.Pattern)
 		}
 	}
 	// Network tools bypass the filesystem jail (they touch no local files);
@@ -155,6 +158,19 @@ func (t *SearchWebTool) search(ctx context.Context, query string, count, offset 
 	return text, false, results, nil
 }
 
+func (t *SearchWebTool) checkSearchHost(host string) error {
+	if t.Sandbox == nil {
+		return nil
+	}
+	if err := t.Sandbox.CheckNetHost(host); err != nil {
+		return err
+	}
+	if eff, r := matchNetRulesHostPort(t.Sandbox.EffectiveRules(), host, "443", t.Sandbox.Root); eff == "deny" {
+		return fmt.Errorf("permission denied: network host %q blocked by rule %q", host, r.Pattern)
+	}
+	return nil
+}
+
 func (t *SearchWebTool) queryDDG(ctx context.Context, query string, count, offset int) ([]webResult, error) {
 	params := url.Values{}
 	params.Set("q", query)
@@ -163,9 +179,15 @@ func (t *SearchWebTool) queryDDG(ctx context.Context, query string, count, offse
 	}
 	params.Set("dc", fmt.Sprintf("%d", offset+1))
 
+	if err := t.checkSearchHost("html.duckduckgo.com"); err != nil {
+		return nil, err
+	}
 	body, err := t.getHTML(ctx, "https://html.duckduckgo.com/html/?"+params.Encode())
 	if err != nil || len(bytes.TrimSpace(body)) == 0 {
 		// Fallback to the lite endpoint (same as the TS reference).
+		if lerr := t.checkSearchHost("lite.duckduckgo.com"); lerr != nil {
+			return nil, lerr
+		}
 		lite := url.Values{}
 		lite.Set("q", query)
 		if offset > 0 {
@@ -202,7 +224,31 @@ func (t *SearchWebTool) getHTML(ctx context.Context, rawURL string) ([]byte, err
 
 	client := t.Client
 	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+		client = &http.Client{
+			Timeout:   15 * time.Second,
+			Transport: newPinnedHTTPTransport(15, t.Sandbox, 0, false, false),
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return fmt.Errorf("search_web: too many redirects")
+				}
+				if req.URL == nil || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
+					return fmt.Errorf("search_web: redirect to unsupported scheme blocked")
+				}
+				h := req.URL.Hostname()
+				if err := guardSSRF(h); err != nil {
+					return err
+				}
+				if t.Sandbox != nil {
+					if err := t.Sandbox.CheckNetHost(h); err != nil {
+						return err
+					}
+					if eff, r := matchNetRulesHostPort(t.Sandbox.EffectiveRules(), h, urlEffectivePort(req.URL), t.Sandbox.Root); eff == "deny" {
+						return fmt.Errorf("permission denied: network host %q blocked by rule %q", req.URL.Host, r.Pattern)
+					}
+				}
+				return nil
+			},
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

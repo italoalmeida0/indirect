@@ -139,18 +139,9 @@ func (t *FetchURLTool) fetch(ctx context.Context, rawURL string, timeoutSec int)
 	client := t.Client
 	if client == nil {
 		client = &http.Client{
-			Timeout:   time.Duration(timeoutSec) * time.Second,
-			Transport: t.newPinnedTransport(timeoutSec),
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if len(via) >= 5 {
-					return fmt.Errorf("fetch_url: too many redirects")
-				}
-				// Re-guard every hop: a public URL may redirect to metadata/private IP.
-				if err := t.guardURL(req.URL); err != nil {
-					return err
-				}
-				return nil
-			},
+			Timeout:       time.Duration(timeoutSec) * time.Second,
+			Transport:     t.newPinnedTransport(timeoutSec),
+			CheckRedirect: t.checkRedirect,
 		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -194,6 +185,41 @@ func (t *FetchURLTool) fetch(ctx context.Context, rawURL string, timeoutSec int)
 	}
 }
 
+func (t *FetchURLTool) checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 5 {
+		return fmt.Errorf("fetch_url: too many redirects")
+	}
+	if req.URL == nil || (req.URL.Scheme != "http" && req.URL.Scheme != "https") {
+		return fmt.Errorf("fetch_url: redirect to unsupported scheme blocked")
+	}
+	// Re-guard every hop: a public URL may redirect to metadata/private IP or denied host:port.
+	if err := t.guardURL(req.URL); err != nil {
+		return err
+	}
+	if len(via) > 0 && via[len(via)-1].URL != nil {
+		prev := via[len(via)-1].URL
+		prevLoopback := isLoopbackHost(prev.Hostname())
+		nextLoopback := isLoopbackHost(req.URL.Hostname())
+		prevPort := urlEffectivePort(prev)
+		nextPort := urlEffectivePort(req.URL)
+		if (!prevLoopback && nextLoopback) || (prevLoopback && nextLoopback && prevPort != nextPort) {
+			explicitAllow := false
+			if t.Sandbox != nil {
+				if eff, _ := matchNetRulesHostPort(t.Sandbox.EffectiveRules(), req.URL.Hostname(), nextPort, t.Sandbox.Root); eff == "allow" {
+					explicitAllow = true
+				}
+			}
+			if !explicitAllow {
+				if !prevLoopback && nextLoopback {
+					return fmt.Errorf("fetch_url: redirect from external host %q to loopback %q blocked", prev.Host, req.URL.Host)
+				}
+				return fmt.Errorf("fetch_url: redirect switching loopback port from %q to %q blocked", prev.Host, req.URL.Host)
+			}
+		}
+	}
+	return nil
+}
+
 func mimeOf(ct string) string {
 	if i := strings.Index(ct, ";"); i >= 0 {
 		return strings.TrimSpace(ct[:i])
@@ -213,35 +239,36 @@ func (t *FetchURLTool) guardURL(u *url.URL) error {
 		return fmt.Errorf("fetch_url: invalid URL")
 	}
 	host := u.Hostname()
-	if t.ControlPort > 0 {
-		pNum := 0
-		if pStr := u.Port(); pStr != "" {
-			pNum, _ = strconv.Atoi(pStr)
-		} else if u.Scheme == "http" {
-			pNum = 80
-		} else if u.Scheme == "https" {
-			pNum = 443
-		}
-		if pNum == t.ControlPort && isLoopbackOrUnspecifiedHost(host) {
+	port := urlEffectivePort(u)
+	if t.ControlPort > 0 && port != "" {
+		if pNum, err := strconv.Atoi(port); err == nil && pNum == t.ControlPort && isLoopbackOrUnspecifiedHost(host) {
 			return fmt.Errorf("fetch_url: runner control port blocked")
 		}
 	}
-	return t.guard(host)
+	return t.guardHostPort(host, port)
 }
 
 // guard applies the SSRF and interactive permission policy.
 func (t *FetchURLTool) guard(host string) error {
+	return t.guardHostPort(host, "")
+}
+
+func (t *FetchURLTool) guardHostPort(host, port string) error {
 	if isCloudMetadataHost(host) {
 		return fmt.Errorf("fetch_url: cloud metadata blocked")
 	}
 	if t.Sandbox != nil {
-		if err := t.Sandbox.CheckNetHost(host); err != nil {
+		target := host
+		if port != "" {
+			target = net.JoinHostPort(strings.Trim(host, "[]"), port)
+		}
+		if err := t.Sandbox.CheckNetHost(target); err != nil {
 			return err
 		}
+		if eff, r := matchNetRulesHostPort(t.Sandbox.EffectiveRules(), host, port, t.Sandbox.Root); eff == "deny" {
+			return fmt.Errorf("permission denied: network host %q blocked by rule %q", target, r.Pattern)
+		}
 		if mode, ok := t.Sandbox.InteractiveAccessMode(); ok {
-			if eff, r := MatchRules(t.Sandbox.EffectiveRules(), "net", host, t.Sandbox.Root); eff == "deny" {
-				return fmt.Errorf("permission denied: network host %q blocked by rule %q", host, r.Pattern)
-			}
 			if mode == "full" {
 				return nil
 			}
@@ -258,6 +285,10 @@ func (t *FetchURLTool) guard(host string) error {
 }
 
 func (t *FetchURLTool) newPinnedTransport(timeoutSec int) *http.Transport {
+	return newPinnedHTTPTransport(timeoutSec, t.Sandbox, t.ControlPort, t.TestAllowLoopback, true)
+}
+
+func newPinnedHTTPTransport(timeoutSec int, sb *Sandbox, controlPort int, testAllowLoopback bool, honorInteractive bool) *http.Transport {
 	var tr *http.Transport
 	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
 		tr = base.Clone()
@@ -277,15 +308,24 @@ func (t *FetchURLTool) newPinnedTransport(timeoutSec int) *http.Transport {
 			return nil, fmt.Errorf("fetch_url: cloud metadata blocked")
 		}
 		pNum, _ := strconv.Atoi(port)
-		if t.ControlPort > 0 && pNum == t.ControlPort && isLoopbackOrUnspecifiedHost(host) {
+		if controlPort > 0 && pNum == controlPort && isLoopbackOrUnspecifiedHost(host) {
 			return nil, fmt.Errorf("fetch_url: runner control port blocked")
 		}
+		var rules []PermissionRule
+		var wsRoot string
 		mode, interactive := "", false
-		if t.Sandbox != nil {
-			mode, interactive = t.Sandbox.InteractiveAccessMode()
+		if sb != nil {
+			rules = sb.EffectiveRules()
+			wsRoot = sb.Root
+			if eff, r := matchNetRulesHostPort(rules, host, port, wsRoot); eff == "deny" {
+				return nil, fmt.Errorf("permission denied: network host %q blocked by rule %q", addr, r.Pattern)
+			}
+			if honorInteractive {
+				mode, interactive = sb.InteractiveAccessMode()
+			}
 		}
-		allowPrivate := interactive && mode == "full"
-		allowLoopback := allowPrivate || (interactive && isLoopbackHost(host)) || (t.TestAllowLoopback && isLoopbackHost(host))
+		allowPrivate := honorInteractive && interactive && mode == "full"
+		allowLoopback := allowPrivate || (honorInteractive && interactive && isLoopbackHost(host)) || (testAllowLoopback && isLoopbackHost(host))
 
 		var candidates []netip.Addr
 		if parsed, ok := parseNormalizedAddr(host); ok {
@@ -312,8 +352,13 @@ func (t *FetchURLTool) newPinnedTransport(timeoutSec int) *http.Transport {
 			if isCloudMetadataAddr(ip) {
 				return nil, fmt.Errorf("fetch_url: cloud metadata IP blocked (%s)", ip)
 			}
-			if t.ControlPort > 0 && pNum == t.ControlPort && (ip.IsLoopback() || ip.IsUnspecified()) {
+			if controlPort > 0 && pNum == controlPort && (ip.IsLoopback() || ip.IsUnspecified()) {
 				return nil, fmt.Errorf("fetch_url: runner control port blocked")
+			}
+			if len(rules) > 0 {
+				if eff, r := matchNetRulesHostPort(rules, ip.String(), port, wsRoot); eff == "deny" {
+					return nil, fmt.Errorf("permission denied: network address %q blocked by rule %q", net.JoinHostPort(ip.String(), port), r.Pattern)
+				}
 			}
 			if !allowPrivate {
 				if ip.IsLoopback() {

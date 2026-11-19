@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -126,13 +127,24 @@ func init() {
 
 		codeSrc := os.Args[2]
 		if codeFile != "" {
+			if rt != nil {
+				if cerr := rt.CheckScriptFileRead(codeFile); cerr != nil {
+					_, _ = fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", codeFile, cerr)
+					os.Exit(1)
+				}
+			} else if len(opts.JailRoots) > 0 || len(opts.FSReadRoots) > 0 {
+				if cerr := CheckScriptFileRead(context.Background(), nil, opts, codeFile); cerr != nil {
+					_, _ = fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", codeFile, cerr)
+					os.Exit(1)
+				}
+			}
 			raw, rerr := os.ReadFile(codeFile)
 			if rerr != nil {
 				_, _ = fmt.Fprintf(os.Stderr, "js error reading %s: %v\n", codeFile, rerr)
 				os.Exit(1)
 			}
 			codeSrc = string(raw)
-			if rt == nil || !rt.isUnderReadOnlyProject(codeFile) {
+			if rt != nil && isStrictlyInsideCanonicalDir(codeFile, rt.TmpDir()) {
 				_ = os.Remove(codeFile)
 			}
 		}
@@ -406,43 +418,74 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 		return proc, err
 	}
 	var codeFilePath string
+	var ownedTmpDir string
+	cleanupCodeFiles := func() {
+		if codeFilePath != "" {
+			_ = os.Remove(codeFilePath)
+		}
+		if ownedTmpDir != "" {
+			_ = os.RemoveAll(ownedTmpDir)
+		}
+	}
 	if spec.Kind == "exec_script" && spec.Code != "" {
 		exe, _ := os.Executable()
 		var extraArgs []string
 		if len(spec.Argv) > 1 {
 			extraArgs = spec.Argv[1:]
 		}
-		if spec.LogDir != "" {
-			_ = os.MkdirAll(spec.LogDir, 0o700)
-		}
-		f, ferr := os.CreateTemp(spec.LogDir, "bg_code_*.js")
-		if ferr != nil {
-			return nil, ferr
-		}
-		_ = f.Chmod(0o600)
-		_, werr := f.WriteString(spec.Code)
-		cerr := f.Close()
-		if werr != nil || cerr != nil {
-			_ = os.Remove(f.Name())
-			if werr != nil {
-				return nil, werr
+		needCodeFile := len(spec.Code) > 8192 || strings.IndexByte(spec.Code, 0) >= 0
+		if !needCodeFile {
+			spec.Argv = append([]string{exe, "--js-exec-direct", spec.Code}, extraArgs...)
+		} else {
+			codeDir := spec.LogDir
+			if spec.Jail != nil {
+				jailCopy := *spec.Jail
+				if jailCopy.TmpDir != "" {
+					codeDir = jailCopy.TmpDir
+				} else if jailCopy.BrainDir != "" {
+					codeDir = filepath.Join(jailCopy.BrainDir, "tmp")
+					jailCopy.TmpDir = codeDir
+				} else {
+					td, terr := os.MkdirTemp(spec.LogDir, "bg_tmp_*")
+					if terr != nil {
+						return nil, terr
+					}
+					ownedTmpDir = td
+					codeDir = td
+					jailCopy.TmpDir = td
+				}
+				spec.Jail = &jailCopy
 			}
-			return nil, cerr
+			if codeDir != "" {
+				_ = os.MkdirAll(codeDir, 0o700)
+			}
+			f, ferr := os.CreateTemp(codeDir, "bg_code_*.js")
+			if ferr != nil {
+				cleanupCodeFiles()
+				return nil, ferr
+			}
+			_ = f.Chmod(0o600)
+			_, werr := f.WriteString(spec.Code)
+			cerr := f.Close()
+			if werr != nil || cerr != nil {
+				_ = os.Remove(f.Name())
+				cleanupCodeFiles()
+				if werr != nil {
+					return nil, werr
+				}
+				return nil, cerr
+			}
+			codeFilePath = f.Name()
+			spec.Argv = append([]string{exe, "--js-exec-direct", ""}, extraArgs...)
 		}
-		codeFilePath = f.Name()
-		spec.Argv = append([]string{exe, "--js-exec-direct", ""}, extraArgs...)
 	}
 	if len(spec.Argv) == 0 {
-		if codeFilePath != "" {
-			_ = os.Remove(codeFilePath)
-		}
+		cleanupCodeFiles()
 		return nil, errEmptyArgv
 	}
 	log, err := newProcessLog(spec.LogDir, "bg_"+spec.Kind+"_*.log")
 	if err != nil {
-		if codeFilePath != "" {
-			_ = os.Remove(codeFilePath)
-		}
+		cleanupCodeFiles()
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, spec.Argv[0], spec.Argv[1:]...)
@@ -515,9 +558,7 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 		cmd.Stderr = log.file
 	}
 	if err := cmd.Start(); err != nil {
-		if codeFilePath != "" {
-			_ = os.Remove(codeFilePath)
-		}
+		cleanupCodeFiles()
 		log.close(true)
 		if errLog != nil {
 			errLog.close(true)
@@ -528,10 +569,8 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 	var waitErr error
 	go func() {
 		waitErr = cmd.Wait() // reaped ONCE: cmd.Wait() must never be
-		if codeFilePath != "" {
-			_ = os.Remove(codeFilePath)
-		}
-		close(exited)        // called twice ("Wait was already called")
+		cleanupCodeFiles()
+		close(exited) // called twice ("Wait was already called")
 	}()
 	proc := &Proc{
 		PID:      cmd.Process.Pid,

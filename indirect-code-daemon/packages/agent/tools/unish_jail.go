@@ -933,11 +933,80 @@ func (h *PolicyCapabilityHook) CheckAccess(ctx context.Context, req unish.Access
 			argv[0] = binPath
 		}
 		workDir := nonEmptyStr(req.WorkDir, rt.spec.Workspace)
-		evalMode := "auto"
-		if rt.spec.AccessMode == "full" {
-			evalMode = "full"
+		evalMode := rt.spec.AccessMode
+		if evalMode == "" {
+			evalMode = "auto"
 		}
-		ev, _ := EvaluateExecArgv(argv, nil, workDir, rt.spec.Workspace, rt.spec.BrainDir, evalMode, rt.spec.ProjectReadOnly, rules)
+		if selfExe, eerr := os.Executable(); eerr == nil && selfExe != "" && binPath != "" && len(argv) >= 2 && (argv[1] == "--js" || argv[1] == "--js-exec-direct") {
+			if sameBinaryPath(binPath, selfExe) || (len(argv) > 0 && sameBinaryPath(argv[0], selfExe)) {
+				rawCmdStr := normalizeExecString(strings.Join(argv, " "))
+				baseCmdStr := normalizeExecString(strings.Join(append([]string{baseProgName(binPath)}, argv[1:]...), " "))
+				if eff, r := MatchRules(rules, "exec", rawCmdStr, rt.spec.Workspace); eff == "deny" {
+					return &unish.AccessDenialError{
+						Op:     unish.OpExec,
+						Target: rawCmdStr,
+						Reason: fmt.Sprintf("Command %q blocked by permission rule %q", rawCmdStr, r.Pattern),
+					}
+				}
+				if baseCmdStr != "" && baseCmdStr != rawCmdStr {
+					if eff, r := MatchRules(rules, "exec", baseCmdStr, rt.spec.Workspace); eff == "deny" {
+						return &unish.AccessDenialError{
+							Op:     unish.OpExec,
+							Target: rawCmdStr,
+							Reason: fmt.Sprintf("Command %q blocked by permission rule %q", rawCmdStr, r.Pattern),
+						}
+					}
+				}
+				if eff, r := MatchRules(rules, "tool", "exec_script", rt.spec.Workspace); eff == "deny" {
+					return &unish.AccessDenialError{
+						Op:     unish.OpExec,
+						Target: rawCmdStr,
+						Reason: fmt.Sprintf("Blocked by permission rule %q", r.Pattern),
+					}
+				}
+				if evalMode == "full" || evalMode == "auto" {
+					return nil
+				}
+				if eff, _ := MatchRules(rules, "exec", rawCmdStr, rt.spec.Workspace); eff == "allow" {
+					return nil
+				}
+				if baseCmdStr != "" {
+					if eff, _ := MatchRules(rules, "exec", baseCmdStr, rt.spec.Workspace); eff == "allow" {
+						return nil
+					}
+				}
+				if eff, _ := MatchRules(rules, "tool", "exec_script", rt.spec.Workspace); eff == "allow" {
+					return nil
+				}
+			}
+		}
+		ev, explicitAllow := EvaluateExecArgv(argv, nil, workDir, rt.spec.Workspace, rt.spec.BrainDir, evalMode, rt.spec.ProjectReadOnly, rules)
+		if evalMode == "ask" && ev.Verdict == VerdictAllow && !explicitAllow {
+			toolAllowed := false
+			if req.Command != "exec_script" {
+				if eff, _ := MatchRules(rules, "tool", "bash", rt.spec.Workspace); eff == "allow" {
+					toolAllowed = true
+				}
+			}
+			if !toolAllowed {
+				rawCmdStr := normalizeExecString(strings.Join(argv, " "))
+				prop, canPersist := ProposeExecRule(argv)
+				ev = PolicyEvaluation{
+					Verdict: VerdictAsk,
+					Meta: ToolApprovalMeta{
+						Capability:      "exec",
+						Target:          rawCmdStr,
+						Reason:          fmt.Sprintf("Supervised mode requires approval before executing `%s`", rawCmdStr),
+						Risk:            "low",
+						AccessMode:      "ask",
+						ProposedRule:    prop,
+						CanAllowSession: canPersist,
+						CanAllowAlways:  canPersist,
+						CallGrants:      []PermissionRule{{Effect: "allow", Kind: "exec", Pattern: rawCmdStr}},
+					},
+				}
+			}
+		}
 		switch ev.Verdict {
 		case VerdictAllow:
 			return nil
@@ -1231,9 +1300,11 @@ func (h *PolicyCapabilityHook) ListenPacket(ctx context.Context, cmdName, networ
 	return h.rt.jail.ListenPacket(ctx, cmdName, network, address)
 }
 
-// PrepareEnv injects session TMPDIR/TEMP/TMP, strips non-existent PATH entries
-// that would otherwise trigger outside-jail stat prompts during binary lookup,
-// and scrubs sensitive loader environment overrides when jailed.
+// PrepareEnv injects session TMPDIR/TEMP/TMP, strips internal __INDIRECT_*
+// variables, strips non-existent PATH entries that would otherwise trigger
+// outside-jail stat prompts during binary lookup, and scrubs daemon secrets,
+// proxy credentials, and dangerous loader/execution environment overrides when
+// jailed.
 func (rt *PolicyRuntime) PrepareEnv(env []string) []string {
 	out := make([]string, 0, len(env)+4)
 	jailed := rt.spec.AccessMode != "full"
@@ -1246,9 +1317,15 @@ func (rt *PolicyRuntime) PrepareEnv(env []string) []string {
 		}
 		k := kv[:idx]
 		v := kv[idx+1:]
-		upper := strings.ToUpper(k)
-		if jailed && isDangerousLoaderEnv(upper) {
+		upper := strings.ToUpper(strings.TrimSpace(k))
+		if strings.HasPrefix(upper, "__INDIRECT_") {
 			continue
+		}
+		if jailed {
+			if isDangerousLoaderEnv(upper) || isDaemonSecretEnvKey(k) {
+				continue
+			}
+			v = sanitizeProxyEnvVal(k, v)
 		}
 		if rt.spec.TmpDir != "" && (upper == "TMPDIR" || upper == "TEMP" || upper == "TMP") {
 			if seenTmp[upper] {
@@ -1269,7 +1346,7 @@ func (rt *PolicyRuntime) PrepareEnv(env []string) []string {
 			out = append(out, k+"="+rt.sanitizePathEnvValue(v, rt.spec.Workspace))
 			continue
 		}
-		out = append(out, kv)
+		out = append(out, k+"="+v)
 	}
 	if rt.spec.TmpDir != "" {
 		for _, k := range []string{"TMPDIR", "TEMP", "TMP"} {
@@ -1277,6 +1354,30 @@ func (rt *PolicyRuntime) PrepareEnv(env []string) []string {
 				out = append(out, k+"="+rt.spec.TmpDir)
 			}
 		}
+	}
+	return out
+}
+
+// scrubJailedDaemonEnv strips daemon secrets, internal __INDIRECT_* variables,
+// dangerous loader/execution overrides, and embedded proxy URL credentials.
+func scrubJailedDaemonEnv(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		idx := strings.IndexByte(kv, '=')
+		if idx <= 0 {
+			continue
+		}
+		k := kv[:idx]
+		v := kv[idx+1:]
+		upper := strings.ToUpper(strings.TrimSpace(k))
+		if strings.HasPrefix(upper, "__INDIRECT_") {
+			continue
+		}
+		if isDangerousLoaderEnv(upper) || isDaemonSecretEnvKey(k) {
+			continue
+		}
+		v = sanitizeProxyEnvVal(k, v)
+		out = append(out, k+"="+v)
 	}
 	return out
 }
@@ -1330,12 +1431,38 @@ func (rt *PolicyRuntime) sanitizePathEnvValue(rawPath, workDir string) string {
 }
 
 func isDangerousLoaderEnv(upper string) bool {
-	if strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "DYLD_") {
+	return isDangerousExecEnvVar(upper)
+}
+
+func isDangerousExecEnvVar(name string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(name))
+	if upper == "" {
+		return false
+	}
+	if strings.HasPrefix(upper, "LD_") || strings.HasPrefix(upper, "_LD_") || strings.HasPrefix(upper, "DYLD_") {
+		return true
+	}
+	if strings.HasPrefix(upper, "GIT_CONFIG_KEY_") || strings.HasPrefix(upper, "GIT_CONFIG_VALUE_") {
 		return true
 	}
 	switch upper {
-	case "BASH_ENV", "ENV", "CDPATH", "NODE_OPTIONS", "GIT_SSH_COMMAND", "GIT_EXEC_PATH", "PROMPT_COMMAND":
+	case "BASH_ENV", "ENV", "CDPATH", "NODE_OPTIONS", "PROMPT_COMMAND",
+		"GIT_EXTERNAL_DIFF", "GIT_SSH_COMMAND", "GIT_SSH", "GIT_EXEC_PATH",
+		"GIT_ASKPASS", "GIT_PROXY_COMMAND", "GIT_TEMPLATE_DIR", "GIT_EDITOR",
+		"GIT_SEQUENCE_EDITOR", "GIT_PAGER", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT":
 		return true
+	}
+	return false
+}
+
+func sameBinaryPath(a, b string) bool {
+	if sameCleanOSPath(a, b) {
+		return true
+	}
+	ca, errA := canonicalOrParent(a)
+	cb, errB := canonicalOrParent(b)
+	if errA == nil && errB == nil && ca != "" && cb != "" {
+		return sameCleanOSPath(ca, cb)
 	}
 	return false
 }
@@ -1417,10 +1544,11 @@ func (rt *PolicyRuntime) QJSOptions(base qjs.ScriptOptions) qjs.ScriptOptions {
 		envCopy := make(map[string]string, len(out.Env)+3)
 		for k, v := range out.Env {
 			if rt.spec.AccessMode != "full" {
-				upper := strings.ToUpper(k)
-				if isDangerousLoaderEnv(upper) {
+				upper := strings.ToUpper(strings.TrimSpace(k))
+				if isDangerousLoaderEnv(upper) || isDaemonSecretEnvKey(k) {
 					continue
 				}
+				v = sanitizeProxyEnvVal(k, v)
 				if upper == "PATH" {
 					v = rt.sanitizePathEnvValue(v, rt.spec.Workspace)
 				}
@@ -1656,6 +1784,46 @@ func PolicyRuntimeFromProcessEnv() (*PolicyRuntime, qjs.ScriptOptions, error) {
 		return nil, base, err
 	}
 	return rt, rt.QJSOptions(base), nil
+}
+
+// CheckScriptFileRead validates read permission for filePath against rt's
+// live capability hook and scoped read/jail roots before loading script source.
+func (rt *PolicyRuntime) CheckScriptFileRead(filePath string) error {
+	if rt == nil {
+		return nil
+	}
+	opts := qjs.ScriptOptions{
+		TmpDir:        rt.spec.TmpDir,
+		FSReadRoots:   rt.spec.FSReadScopes,
+		ReadOnlyRoots: rt.spec.ReadOnlyRoots,
+	}
+	return CheckScriptFileRead(context.Background(), rt, opts, filePath)
+}
+
+// isStrictlyInsideCanonicalDir reports whether filePath is an existing regular
+// non-symlink file whose canonical resolved path sits strictly inside canonical dir.
+func isStrictlyInsideCanonicalDir(filePath, dir string) bool {
+	if strings.TrimSpace(filePath) == "" || strings.TrimSpace(dir) == "" {
+		return false
+	}
+	linfo, err := os.Lstat(filePath)
+	if err != nil || linfo.Mode()&os.ModeSymlink != 0 || !linfo.Mode().IsRegular() {
+		return false
+	}
+	canonFile, err := filepath.EvalSymlinks(filePath)
+	if err != nil {
+		return false
+	}
+	canonDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	canonFile = filepath.Clean(canonFile)
+	canonDir = filepath.Clean(canonDir)
+	if sameCleanOSPath(canonFile, canonDir) {
+		return false
+	}
+	return isUnderCleanOSPath(canonDir, canonFile)
 }
 
 // CheckScriptFileRead validates read permission against rt or fallback JailRoots/FSReadRoots

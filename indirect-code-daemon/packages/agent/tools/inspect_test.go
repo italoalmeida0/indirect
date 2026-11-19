@@ -31,7 +31,7 @@ func TestInspectDir(t *testing.T) {
 
 func TestInspectNestedFiltersAndUnicodeGitStatus(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := runGit(dir, "init"); err != nil {
+	if _, err := runGit(context.Background(), dir, "init"); err != nil {
 		t.Fatal(err)
 	}
 	for _, sub := range []string{"src/deep", "src/generated/nested"} {
@@ -43,7 +43,7 @@ func TestInspectNestedFiltersAndUnicodeGitStatus(t *testing.T) {
 		}
 	}
 	// Stage files so porcelain reports individual Unicode paths, not a directory.
-	if _, err := runGit(dir, "add", "."); err != nil {
+	if _, err := runGit(context.Background(), dir, "add", "."); err != nil {
 		t.Fatal(err)
 	}
 	tool := &InspectTool{CWD: dir}

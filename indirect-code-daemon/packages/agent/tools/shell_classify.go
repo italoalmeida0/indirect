@@ -229,7 +229,8 @@ func (s *shellWalkState) walkCommand(cmd syntax.Command) {
 	}
 	switch c := cmd.(type) {
 	case *syntax.CallExpr:
-		// Inspect any embedded command/process substitutions inside words and assignments first.
+		// Inspect any embedded command/process substitutions inside words and assignments first,
+		// and flag dangerous execution environment variable assignments.
 		for _, as := range c.Assigns {
 			if as.Value != nil {
 				s.walkWordSubscripts(as.Value)
@@ -240,6 +241,16 @@ func (s *shellWalkState) walkCommand(cmd syntax.Command) {
 						s.walkWordSubscripts(elem.Value)
 					}
 				}
+			}
+			if as.Name != nil && isDangerousExecEnvVar(as.Name.Value) && s.accessMode != "full" {
+				s.recordEval(askNonPersistable(
+					"exec",
+					ClipLabel(formatSyntaxNode(c)),
+					fmt.Sprintf("Setting dangerous execution environment variable %q requires approval", as.Name.Value),
+					"high",
+					s.accessMode,
+					"",
+				), false)
 			}
 		}
 		for _, w := range c.Args {
@@ -340,6 +351,16 @@ func (s *shellWalkState) walkCommand(cmd syntax.Command) {
 		for _, as := range c.Args {
 			if as.Value != nil {
 				s.walkWordSubscripts(as.Value)
+			}
+			if as.Name != nil && isDangerousExecEnvVar(as.Name.Value) && s.accessMode != "full" {
+				s.recordEval(askNonPersistable(
+					"exec",
+					ClipLabel(formatSyntaxNode(c)),
+					fmt.Sprintf("Exporting dangerous execution environment variable %q requires approval", as.Name.Value),
+					"high",
+					s.accessMode,
+					"",
+				), false)
 			}
 		}
 
@@ -609,12 +630,23 @@ func evaluateExecArgvCore(
 	}
 	effectiveCwd := nonEmpty(cwd, workspace)
 
-	// Strip leading VAR=VAL tokens if any.
+	// Strip leading VAR=VAL tokens if any, noting dangerous execution env overrides.
+	origRawCmd := normalizeExecString(strings.Join(argv, " "))
+	dangerousEnvVar := ""
 	startIdx := 0
 	for startIdx < len(argv) && isEnvAssignToken(argv[startIdx]) {
+		if eq := strings.IndexByte(argv[startIdx], '='); eq > 0 {
+			k := argv[startIdx][:eq]
+			if dangerousEnvVar == "" && isDangerousExecEnvVar(k) {
+				dangerousEnvVar = k
+			}
+		}
 		startIdx++
 	}
 	if startIdx >= len(argv) {
+		if dangerousEnvVar != "" && accessMode != "full" {
+			return askNonPersistable("exec", origRawCmd, fmt.Sprintf("Setting dangerous execution environment variable %q requires approval", dangerousEnvVar), "high", accessMode, ""), false
+		}
 		return PolicyEvaluation{Verdict: VerdictAllow}, true
 	}
 	argv = argv[startIdx:]
@@ -625,8 +657,37 @@ func evaluateExecArgvCore(
 	}
 
 	// Unwrap `env`, `command`, `builtin`, `nohup`, `nice`, `timeout` to inspect inner command!
-	innerArgv, innerDyn, usedWrapper := unwrapArgvWithDynamic(argv, dynamic)
+	innerArgv, innerDyn, usedWrapper, envWrap := unwrapArgvWithDynamic(argv, dynamic)
+	if envWrap.dangerousVar != "" && dangerousEnvVar == "" {
+		dangerousEnvVar = envWrap.dangerousVar
+	}
+	if envWrap.hasSplitString {
+		// Inspect static words inside `env -S` for ProjectReadOnly or explicit deny rules first.
+		splitWords := strings.Fields(envWrap.splitValue)
+		if len(splitWords) > 0 {
+			subEv, _ := evaluateExecArgvCore(splitWords, nil, effectiveCwd, workspace, brainDir, accessMode, projectReadOnly, rules)
+			if subEv.Verdict == VerdictDeny {
+				return subEv, false
+			}
+		}
+		if eff, r := MatchRules(rules, "exec", origRawCmd, workspace); eff == "deny" {
+			return denyExec(origRawCmd, r), false
+		}
+		if accessMode != "full" {
+			return askNonPersistable("exec", origRawCmd, "`env -S` dynamic argument splitting requires explicit approval", "high", accessMode, origRawCmd), false
+		}
+	}
+	if envWrap.chdir != "" && accessMode != "full" {
+		resolvedDir := resolvePath(effectiveCwd, expandHomePrefix(envWrap.chdir))
+		ev := evaluateFSCheck("fs_read", "", resolvedDir, envWrap.chdir, "auto", workspace, brainDir, projectReadOnly, rules)
+		if ev.Verdict != VerdictAllow {
+			return ev, false
+		}
+	}
 	if len(innerArgv) == 0 {
+		if dangerousEnvVar != "" && accessMode != "full" {
+			return askNonPersistable("exec", origRawCmd, fmt.Sprintf("Setting dangerous execution environment variable %q requires approval", dangerousEnvVar), "high", accessMode, ""), false
+		}
 		return PolicyEvaluation{Verdict: VerdictAllow}, false
 	}
 	stripIfWrapped := func(ev PolicyEvaluation, exp bool) (PolicyEvaluation, bool) {
@@ -640,6 +701,10 @@ func evaluateExecArgvCore(
 
 	rawCmdStr := normalizeExecString(strings.Join(innerArgv, " "))
 	bin := baseProgName(innerArgv[0])
+	baseCmdStr := rawCmdStr
+	if bin != "" && strings.ContainsAny(innerArgv[0], `/\`) {
+		baseCmdStr = normalizeExecString(strings.Join(append([]string{bin}, innerArgv[1:]...), " "))
+	}
 	isLocalNonSystemBin := strings.ContainsAny(innerArgv[0], `/\`) && !isStandardSystemBinaryPath(innerArgv[0])
 
 	// Handle `sh -c <lit>` / `bash -c <lit>` / `unish -c <lit>`: inspect inner script
@@ -654,6 +719,11 @@ func evaluateExecArgvCore(
 			if eff, r := MatchRules(rules, "exec", rawCmdStr, workspace); eff == "deny" {
 				return denyExec(rawCmdStr, r), false
 			}
+			if baseCmdStr != rawCmdStr {
+				if eff, r := MatchRules(rules, "exec", baseCmdStr, workspace); eff == "deny" {
+					return denyExec(rawCmdStr, r), false
+				}
+			}
 			if accessMode == "full" {
 				return PolicyEvaluation{Verdict: VerdictAllow}, true
 			}
@@ -667,8 +737,9 @@ func evaluateExecArgvCore(
 		}
 	}
 
-	// 1. ProjectReadOnly check BEFORE allow rules: plan/explore mode never mutates workspace.
-	if projectReadOnly && !isLocalNonSystemBin {
+	// 1. ProjectReadOnly check BEFORE allow rules and BEFORE full-mode short-circuit:
+	// read-only / plan / explore sessions never mutate the project workspace.
+	if projectReadOnly {
 		if reason := checkReadOnlyArgvViolation(bin, innerArgv, innerDyn, effectiveCwd, workspace, brainDir); reason != "" {
 			return PolicyEvaluation{
 				Verdict: VerdictDeny,
@@ -685,6 +756,16 @@ func evaluateExecArgvCore(
 	if eff, r := MatchRules(rules, "exec", rawCmdStr, workspace); eff == "deny" {
 		return denyExec(rawCmdStr, r), false
 	}
+	if baseCmdStr != rawCmdStr {
+		if eff, r := MatchRules(rules, "exec", baseCmdStr, workspace); eff == "deny" {
+			return denyExec(rawCmdStr, r), false
+		}
+	}
+	if origRawCmd != rawCmdStr {
+		if eff, r := MatchRules(rules, "exec", origRawCmd, workspace); eff == "deny" {
+			return denyExec(origRawCmd, r), false
+		}
+	}
 
 	// 3. Explicit Allow rules (NEVER matching non-persistable dangerous wrappers like eval/sudo,
 	// and local/writable-root binaries only match path-qualified or wildcard rules).
@@ -694,19 +775,48 @@ func evaluateExecArgvCore(
 			if !isLocalNonSystemBin || strings.ContainsAny(r.Pattern, `/\*`) {
 				explicitExecAllowed = true
 			}
+		} else if !isLocalNonSystemBin && baseCmdStr != rawCmdStr {
+			if eff, _ := MatchRules(rules, "exec", baseCmdStr, workspace); eff == "allow" {
+				explicitExecAllowed = true
+			}
 		}
 	}
 
 	// 4. Full mode allows everything not explicitly denied above — except cloud
-	// metadata SSRF via curl/wget, which stays hard-blocked in every mode.
+	// metadata SSRF (via curl/wget or direct network tools) and ProjectReadOnly
+	// output writes, which stay hard-blocked in every mode.
 	if accessMode == "full" {
 		if bin == "curl" || bin == "wget" {
 			ev, _ := evalCurlWgetCommand(bin, innerArgv, innerDyn, effectiveCwd, workspace, brainDir, accessMode, projectReadOnly, rules, true)
 			if ev.Verdict == VerdictDeny {
 				return ev, false
 			}
+		} else if metaHost := argvCloudMetadataTarget(bin, innerArgv); metaHost != "" {
+			return PolicyEvaluation{
+				Verdict: VerdictDeny,
+				Meta: ToolApprovalMeta{
+					Capability: "net",
+					Target:     metaHost,
+					Reason:     fmt.Sprintf("Cloud metadata endpoint %q is blocked", metaHost),
+				},
+			}, false
 		}
 		return PolicyEvaluation{Verdict: VerdictAllow}, true
+	}
+
+	if dangerousEnvVar != "" {
+		return askNonPersistable("exec", origRawCmd, fmt.Sprintf("Setting dangerous execution environment variable %q requires approval", dangerousEnvVar), "high", accessMode, ""), false
+	}
+
+	if metaHost := argvCloudMetadataTarget(bin, innerArgv); metaHost != "" {
+		return PolicyEvaluation{
+			Verdict: VerdictDeny,
+			Meta: ToolApprovalMeta{
+				Capability: "net",
+				Target:     metaHost,
+				Reason:     fmt.Sprintf("Cloud metadata endpoint %q is blocked", metaHost),
+			},
+		}, false
 	}
 
 	// 5. Local or writable-root executable (`./build.sh` or spoofed `$PWD/git`) MUST NOT
@@ -765,7 +875,8 @@ func evaluateExecArgvCore(
 	// 7. Inspect specific high-signal commands (rm, git, curl/wget, kill).
 	switch bin {
 	case "rm", "rmdir", "del", "shred":
-		return stripIfWrapped(evalRmCommand(bin, innerArgv, innerDyn, effectiveCwd, workspace, brainDir, accessMode, projectReadOnly, rules), false)
+		ev := evalRmCommand(bin, innerArgv, innerDyn, effectiveCwd, workspace, brainDir, accessMode, projectReadOnly, rules)
+		return stripIfWrapped(ev, ev.Verdict == VerdictAllow && explicitExecAllowed)
 
 	case "git":
 		ev, exp := evalGitCommand(innerArgv, innerDyn, effectiveCwd, workspace, brainDir, accessMode, projectReadOnly, rules, explicitExecAllowed)
@@ -870,11 +981,25 @@ func askNonPersistable(capKind, target, reason, risk, accessMode, callExec strin
 	}
 }
 
-func unwrapArgvWithDynamic(argv []string, dyn []bool) ([]string, []bool, bool) {
+type envWrapperInfo struct {
+	dangerousVar   string
+	hasSplitString bool
+	splitValue     string
+	chdir          string
+}
+
+func unwrapArgvWithDynamic(argv []string, dyn []bool) ([]string, []bool, bool, envWrapperInfo) {
 	usedNonPersist := false
+	var info envWrapperInfo
 	curA, curD := argv, dyn
 	for len(curA) > 0 {
 		for len(curA) > 0 && isEnvAssignToken(curA[0]) {
+			if eq := strings.IndexByte(curA[0], '='); eq > 0 {
+				k := curA[0][:eq]
+				if info.dangerousVar == "" && isDangerousExecEnvVar(k) {
+					info.dangerousVar = k
+				}
+			}
 			curA = curA[1:]
 			curD = innerDynOffset(curD, 1)
 		}
@@ -891,8 +1016,45 @@ func unwrapArgvWithDynamic(argv []string, dyn []bool) ([]string, []bool, bool) {
 					i++
 					break
 				}
+				if a == "-S" || a == "--split-string" {
+					info.hasSplitString = true
+					if i+1 < len(curA) {
+						info.splitValue = curA[i+1]
+						i += 2
+					} else {
+						i++
+					}
+					continue
+				}
+				if strings.HasPrefix(a, "-S") && len(a) > 2 {
+					info.hasSplitString = true
+					info.splitValue = a[2:]
+					i++
+					continue
+				}
+				if strings.HasPrefix(a, "--split-string=") {
+					info.hasSplitString = true
+					info.splitValue = strings.TrimPrefix(a, "--split-string=")
+					i++
+					continue
+				}
+				if a == "-C" && i+1 < len(curA) {
+					info.chdir = curA[i+1]
+					i += 2
+					continue
+				}
+				if strings.HasPrefix(a, "-C") && len(a) > 2 {
+					info.chdir = a[2:]
+					i++
+					continue
+				}
+				if strings.HasPrefix(a, "--chdir=") {
+					info.chdir = strings.TrimPrefix(a, "--chdir=")
+					i++
+					continue
+				}
 				if strings.HasPrefix(a, "-") {
-					if (a == "-u" || a == "-C" || a == "-S") && i+1 < len(curA) {
+					if a == "-u" && i+1 < len(curA) {
 						i += 2
 					} else {
 						i++
@@ -900,6 +1062,12 @@ func unwrapArgvWithDynamic(argv []string, dyn []bool) ([]string, []bool, bool) {
 					continue
 				}
 				if isEnvAssignToken(a) {
+					if eq := strings.IndexByte(a, '='); eq > 0 {
+						k := a[:eq]
+						if info.dangerousVar == "" && isDangerousExecEnvVar(k) {
+							info.dangerousVar = k
+						}
+					}
 					i++
 					continue
 				}
@@ -907,28 +1075,28 @@ func unwrapArgvWithDynamic(argv []string, dyn []bool) ([]string, []bool, bool) {
 			}
 			if i >= len(curA) {
 				// bare `env` prints environment
-				return curA, curD, false
+				return curA, curD, false, info
 			}
 			usedNonPersist = true
 			curA = curA[i:]
 			curD = innerDynOffset(curD, i)
 		case "command", "builtin":
 			if len(curA) > 1 && (curA[1] == "-v" || curA[1] == "-V") {
-				return curA, curD, false
+				return curA, curD, false, info
 			}
 			i := 1
 			for i < len(curA) && strings.HasPrefix(curA[i], "-") {
 				i++
 			}
 			if i >= len(curA) {
-				return curA, curD, false
+				return curA, curD, false, info
 			}
 			usedNonPersist = true
 			curA = curA[i:]
 			curD = innerDynOffset(curD, i)
 		case "nohup":
 			if len(curA) <= 1 {
-				return curA, curD, true
+				return curA, curD, true, info
 			}
 			usedNonPersist = true
 			curA = curA[1:]
@@ -943,7 +1111,7 @@ func unwrapArgvWithDynamic(argv []string, dyn []bool) ([]string, []bool, bool) {
 				}
 			}
 			if i >= len(curA) {
-				return curA, curD, false
+				return curA, curD, false, info
 			}
 			curA = curA[i:]
 			curD = innerDynOffset(curD, i)
@@ -957,15 +1125,15 @@ func unwrapArgvWithDynamic(argv []string, dyn []bool) ([]string, []bool, bool) {
 				}
 			}
 			if i+1 >= len(curA) {
-				return curA, curD, false
+				return curA, curD, false, info
 			}
 			curA = curA[i+1:]
 			curD = innerDynOffset(curD, i+1)
 		default:
-			return curA, curD, usedNonPersist
+			return curA, curD, usedNonPersist, info
 		}
 	}
-	return curA, curD, usedNonPersist
+	return curA, curD, usedNonPersist, info
 }
 
 func innerDynOffset(dyn []bool, off int) []bool {
@@ -1116,28 +1284,43 @@ func evalGitCommand(
 		if a == "--" {
 			break
 		}
-		if a == "-C" && i+1 < len(argv) {
-			if i+1 < len(dyn) && dyn[i+1] {
+		if (a == "-C" && i+1 < len(argv)) || (strings.HasPrefix(a, "-C") && len(a) > 2) {
+			var dirVal string
+			var dirDyn bool
+			if a == "-C" {
+				dirVal = argv[i+1]
+				dirDyn = i+1 < len(dyn) && dyn[i+1]
+				i++
+			} else {
+				dirVal = a[2:]
+				dirDyn = i < len(dyn) && dyn[i]
+			}
+			if dirDyn {
 				return askNonPersistable("exec", rawCmd, "`git -C` with dynamic directory requires approval", "medium", accessMode, rawCmd), false
 			}
-			gitCwd = resolvePath(cwd, expandHomePrefix(argv[i+1]))
-			ev := evaluateFSCheck("fs_read", "", gitCwd, argv[i+1], "auto", workspace, brainDir, projectReadOnly, rules)
+			gitCwd = resolvePath(cwd, expandHomePrefix(dirVal))
+			ev := evaluateFSCheck("fs_read", "", gitCwd, dirVal, "auto", workspace, brainDir, projectReadOnly, rules)
 			if ev.Verdict != VerdictAllow {
 				return ev, false
 			}
-			i++
 			continue
 		}
-		if a == "-c" && i+1 < len(argv) {
-			cfgKV := strings.ToLower(argv[i+1])
-			if strings.Contains(cfgKV, "sshcommand") || strings.Contains(cfgKV, "fsmonitor") ||
-				strings.Contains(cfgKV, "hookspath") || strings.Contains(cfgKV, "pager") ||
-				strings.Contains(cfgKV, "credential") || strings.Contains(cfgKV, "proxy") ||
-				strings.Contains(cfgKV, "alias.") || strings.Contains(cfgKV, "diff.external") {
-				return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git -c %s` overrides executable git hooks/helpers and requires approval", argv[i+1]), "high", accessMode, rawCmd), false
+		if (a == "-c" && i+1 < len(argv)) || (strings.HasPrefix(a, "-c") && len(a) > 2) {
+			cfgVal := a[2:]
+			if a == "-c" {
+				cfgVal = argv[i+1]
+				i++
 			}
-			i++
+			if isDangerousGitConfigKV(cfgVal) {
+				return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git -c %s` overrides executable git hooks/helpers and requires approval", cfgVal), "high", accessMode, rawCmd), false
+			}
 			continue
+		}
+		if a == "--config-env" || strings.HasPrefix(a, "--config-env=") {
+			return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git %s` injects git configuration from environment and requires approval", a), "high", accessMode, rawCmd), false
+		}
+		if strings.HasPrefix(a, "--exec-path=") || (a == "--exec-path" && i+1 < len(argv)) {
+			return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git %s` overrides executable git helper path and requires approval", a), "high", accessMode, rawCmd), false
 		}
 		if strings.HasPrefix(a, "--git-dir") || strings.HasPrefix(a, "--work-tree") {
 			return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git %s` targeting custom git directory requires approval", a), "medium", accessMode, rawCmd), false
@@ -1305,6 +1488,20 @@ func evalGitCommand(
 	}, false
 }
 
+func isDangerousGitConfigKV(kv string) bool {
+	cfgKV := strings.ToLower(strings.TrimSpace(kv))
+	for _, needle := range []string{
+		"sshcommand", "fsmonitor", "hookspath", "pager", "credential",
+		"proxy", "alias.", "diff.external", "core.editor", "sequence.editor",
+		"askpass", "textconv", "filter.", "uploadpack", "receivepack",
+	} {
+		if strings.Contains(cfgKV, needle) {
+			return true
+		}
+	}
+	return false
+}
+
 func allFlagsIn(args []string, allowed ...string) bool {
 	set := make(map[string]bool, len(allowed))
 	for _, a := range allowed {
@@ -1330,50 +1527,221 @@ func evalCurlWgetCommand(
 	rawCmd := normalizeExecString(strings.Join(argv, " "))
 	var urls []string
 	var outFiles []string
+	var inFiles []string
+	curlRemoteName := false
+
+	addDataFile := func(val string, urlencode bool) {
+		if fp := extractCurlDataFile(val, urlencode); fp != "" {
+			inFiles = append(inFiles, fp)
+		}
+	}
+	addFormFile := func(val string) {
+		if fp := extractCurlFormFile(val); fp != "" {
+			inFiles = append(inFiles, fp)
+		}
+	}
+
 	for i := 1; i < len(argv); i++ {
 		a := argv[i]
 		if a == "--" {
 			urls = append(urls, argv[i+1:]...)
 			break
 		}
-		if (a == "-o" || a == "--output" || a == "-O" || a == "--output-document") && i+1 < len(argv) {
-			if a != "-O" || bin == "wget" {
-				outFiles = append(outFiles, argv[i+1])
-				i++
-			} else if projectReadOnly {
-				return PolicyEvaluation{
-					Verdict: VerdictDeny,
-					Meta: ToolApprovalMeta{
-						Capability: "fs_write",
-						Target:     rawCmd,
-						Reason:     "Read-only mode: downloading files into workspace is not allowed",
-					},
-				}, false
-			}
+		// Long flags with attached `=` or separate argument.
+		switch {
+		case a == "--output" && i+1 < len(argv):
+			outFiles = append(outFiles, argv[i+1])
+			i++
 			continue
-		}
-		if a == "--url" && i+1 < len(argv) {
+		case strings.HasPrefix(a, "--output="):
+			outFiles = append(outFiles, strings.TrimPrefix(a, "--output="))
+			continue
+		case a == "--output-document" && i+1 < len(argv):
+			outFiles = append(outFiles, argv[i+1])
+			i++
+			continue
+		case strings.HasPrefix(a, "--output-document="):
+			outFiles = append(outFiles, strings.TrimPrefix(a, "--output-document="))
+			continue
+		case a == "--remote-name" || a == "--remote-name-all":
+			curlRemoteName = true
+			continue
+		case a == "--upload-file" && i+1 < len(argv):
+			inFiles = append(inFiles, argv[i+1])
+			i++
+			continue
+		case strings.HasPrefix(a, "--upload-file="):
+			inFiles = append(inFiles, strings.TrimPrefix(a, "--upload-file="))
+			continue
+		case (a == "--data" || a == "--data-binary" || a == "--data-ascii") && i+1 < len(argv):
+			addDataFile(argv[i+1], false)
+			i++
+			continue
+		case strings.HasPrefix(a, "--data="):
+			addDataFile(strings.TrimPrefix(a, "--data="), false)
+			continue
+		case strings.HasPrefix(a, "--data-binary="):
+			addDataFile(strings.TrimPrefix(a, "--data-binary="), false)
+			continue
+		case strings.HasPrefix(a, "--data-ascii="):
+			addDataFile(strings.TrimPrefix(a, "--data-ascii="), false)
+			continue
+		case a == "--data-urlencode" && i+1 < len(argv):
+			addDataFile(argv[i+1], true)
+			i++
+			continue
+		case strings.HasPrefix(a, "--data-urlencode="):
+			addDataFile(strings.TrimPrefix(a, "--data-urlencode="), true)
+			continue
+		case a == "--form" && i+1 < len(argv):
+			addFormFile(argv[i+1])
+			i++
+			continue
+		case strings.HasPrefix(a, "--form="):
+			addFormFile(strings.TrimPrefix(a, "--form="))
+			continue
+		case a == "--post-file" && i+1 < len(argv):
+			inFiles = append(inFiles, argv[i+1])
+			i++
+			continue
+		case strings.HasPrefix(a, "--post-file="):
+			inFiles = append(inFiles, strings.TrimPrefix(a, "--post-file="))
+			continue
+		case a == "--config" && i+1 < len(argv):
+			inFiles = append(inFiles, argv[i+1])
+			i++
+			continue
+		case strings.HasPrefix(a, "--config="):
+			inFiles = append(inFiles, strings.TrimPrefix(a, "--config="))
+			continue
+		case (a == "--proxy" || a == "--preproxy" || a == "--socks4" || a == "--socks4a" || a == "--socks5" || a == "--socks5-hostname") && i+1 < len(argv):
 			urls = append(urls, argv[i+1])
 			i++
 			continue
-		}
-		if strings.HasPrefix(a, "--url=") {
+		case strings.HasPrefix(a, "--proxy="):
+			urls = append(urls, strings.TrimPrefix(a, "--proxy="))
+			continue
+		case strings.HasPrefix(a, "--preproxy="):
+			urls = append(urls, strings.TrimPrefix(a, "--preproxy="))
+			continue
+		case strings.HasPrefix(a, "--socks4="):
+			urls = append(urls, strings.TrimPrefix(a, "--socks4="))
+			continue
+		case strings.HasPrefix(a, "--socks4a="):
+			urls = append(urls, strings.TrimPrefix(a, "--socks4a="))
+			continue
+		case strings.HasPrefix(a, "--socks5="):
+			urls = append(urls, strings.TrimPrefix(a, "--socks5="))
+			continue
+		case strings.HasPrefix(a, "--socks5-hostname="):
+			urls = append(urls, strings.TrimPrefix(a, "--socks5-hostname="))
+			continue
+		case a == "--url" && i+1 < len(argv):
+			urls = append(urls, argv[i+1])
+			i++
+			continue
+		case strings.HasPrefix(a, "--url="):
 			urls = append(urls, strings.TrimPrefix(a, "--url="))
 			continue
-		}
-		if (a == "--resolve" || a == "--connect-to") && i+1 < len(argv) {
+		case (a == "--resolve" || a == "--connect-to") && i+1 < len(argv):
 			urls = append(urls, extractCurlOverrideTargets(a, argv[i+1])...)
 			i++
 			continue
-		}
-		if strings.HasPrefix(a, "--resolve=") {
+		case strings.HasPrefix(a, "--resolve="):
 			urls = append(urls, extractCurlOverrideTargets("--resolve", strings.TrimPrefix(a, "--resolve="))...)
 			continue
-		}
-		if strings.HasPrefix(a, "--connect-to=") {
+		case strings.HasPrefix(a, "--connect-to="):
 			urls = append(urls, extractCurlOverrideTargets("--connect-to", strings.TrimPrefix(a, "--connect-to="))...)
 			continue
 		}
+
+		// Short flags (including attached values `-oFILE`, `-OFILE`, `-TFILE`,
+		// `-d@FILE`, `-Ffile=@FILE`, `-xPROXY`, and clustered flags `-qOFILE`, `-fsSLoFILE`).
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) >= 2 {
+			consumed := false
+			flags := a[1:]
+			for j := 0; j < len(flags); j++ {
+				ch := flags[j]
+				rest := flags[j+1:]
+				takeVal := func() (string, bool) {
+					if rest != "" {
+						return rest, true
+					}
+					if i+1 < len(argv) {
+						i++
+						return argv[i], true
+					}
+					return "", false
+				}
+				switch ch {
+				case 'o':
+					if v, ok := takeVal(); ok {
+						outFiles = append(outFiles, v)
+					}
+					consumed = true
+				case 'O':
+					if bin == "wget" {
+						if v, ok := takeVal(); ok {
+							outFiles = append(outFiles, v)
+						}
+						consumed = true
+					} else {
+						curlRemoteName = true
+					}
+				case 'T':
+					if bin == "curl" {
+						if v, ok := takeVal(); ok {
+							inFiles = append(inFiles, v)
+						}
+						consumed = true
+					} else {
+						_, _ = takeVal()
+						consumed = true
+					}
+				case 'd':
+					if bin == "curl" {
+						if v, ok := takeVal(); ok {
+							addDataFile(v, false)
+						}
+						consumed = true
+					}
+				case 'F':
+					if bin == "curl" {
+						if v, ok := takeVal(); ok {
+							addFormFile(v)
+						}
+						consumed = true
+					}
+				case 'K':
+					if bin == "curl" {
+						if v, ok := takeVal(); ok {
+							inFiles = append(inFiles, v)
+						}
+						consumed = true
+					}
+				case 'x':
+					if v, ok := takeVal(); ok {
+						urls = append(urls, v)
+					}
+					consumed = true
+				case 'X', 'H', 'u', 'A', 'e', 'm', 'b', 'c', 'w':
+					if bin == "curl" {
+						_, _ = takeVal()
+						consumed = true
+					}
+				case 't', 'U', 'P':
+					if bin == "wget" {
+						_, _ = takeVal()
+						consumed = true
+					}
+				}
+				if consumed {
+					break
+				}
+			}
+			continue
+		}
+
 		if isCurlWgetValueFlag(bin, a) && i+1 < len(argv) {
 			i++
 			continue
@@ -1385,6 +1753,18 @@ func evalCurlWgetCommand(
 			urls = append(urls, a)
 		}
 	}
+
+	if curlRemoteName && projectReadOnly {
+		return PolicyEvaluation{
+			Verdict: VerdictDeny,
+			Meta: ToolApprovalMeta{
+				Capability: "fs_write",
+				Target:     rawCmd,
+				Reason:     "Read-only mode: downloading files into workspace is not allowed",
+			},
+		}, false
+	}
+
 	fsEvalMode := "auto"
 	if accessMode == "full" {
 		fsEvalMode = "full"
@@ -1395,6 +1775,16 @@ func evalCurlWgetCommand(
 		}
 		resolved := resolvePath(cwd, expandHomePrefix(out))
 		ev := evaluateFSCheck("fs_write", "", resolved, out, fsEvalMode, workspace, brainDir, projectReadOnly, rules)
+		if ev.Verdict != VerdictAllow {
+			return ev, false
+		}
+	}
+	for _, inF := range inFiles {
+		if inF == "" || inF == "-" || isNullTarget(inF) {
+			continue
+		}
+		resolved := resolvePath(cwd, expandHomePrefix(inF))
+		ev := evaluateFSCheck("fs_read", "", resolved, inF, fsEvalMode, workspace, brainDir, projectReadOnly, rules)
 		if ev.Verdict != VerdictAllow {
 			return ev, false
 		}
@@ -1439,6 +1829,7 @@ func evalCurlWgetCommand(
 		}
 		rawHost := u.Hostname()
 		host := normalizeHostForSSRF(rawHost)
+		port := urlEffectivePort(u)
 
 		// 1. Cloud metadata endpoints are ALWAYS hard-blocked in every mode (including "full" and explicitExecAllowed).
 		if isCloudMetadataHost(rawHost) {
@@ -1453,7 +1844,7 @@ func evalCurlWgetCommand(
 		}
 
 		// 2. Explicit Deny rules always win.
-		if eff, r := MatchRules(rules, "net", strings.ToLower(u.Host), workspace); eff == "deny" {
+		if eff, r := matchNetRulesHostPort(rules, rawHost, port, workspace); eff == "deny" {
 			return PolicyEvaluation{
 				Verdict: VerdictDeny,
 				Meta: ToolApprovalMeta{
@@ -1503,7 +1894,7 @@ func evalCurlWgetCommand(
 		}
 
 		// 4. Explicit Allow rules on net.
-		if eff, _ := MatchRules(rules, "net", strings.ToLower(u.Host), workspace); eff == "allow" {
+		if eff, _ := matchNetRulesHostPort(rules, rawHost, port, workspace); eff == "allow" {
 			callGrants = append(callGrants, PermissionRule{Effect: "allow", Kind: "net", Pattern: host})
 			continue
 		}
@@ -1539,6 +1930,53 @@ func evalCurlWgetCommand(
 		Verdict: VerdictAllow,
 		Meta:    ToolApprovalMeta{CallGrants: callGrants},
 	}, allExplicit
+}
+
+func extractCurlDataFile(val string, urlencode bool) string {
+	s := strings.TrimSpace(val)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "@") {
+		fp := strings.TrimSpace(s[1:])
+		if fp != "" && fp != "-" {
+			return fp
+		}
+		return ""
+	}
+	if urlencode {
+		if idx := strings.IndexByte(s, '@'); idx >= 0 {
+			fp := strings.TrimSpace(s[idx+1:])
+			if fp != "" && fp != "-" {
+				return fp
+			}
+		}
+	}
+	return ""
+}
+
+func extractCurlFormFile(val string) string {
+	s := strings.TrimSpace(val)
+	if s == "" {
+		return ""
+	}
+	rhs := s
+	if eq := strings.IndexByte(s, '='); eq >= 0 {
+		rhs = s[eq+1:]
+	}
+	rhs = strings.TrimSpace(rhs)
+	if !strings.HasPrefix(rhs, "@") && !strings.HasPrefix(rhs, "<") {
+		return ""
+	}
+	fp := rhs[1:]
+	if semi := strings.IndexByte(fp, ';'); semi >= 0 {
+		fp = fp[:semi]
+	}
+	fp = strings.Trim(strings.TrimSpace(fp), `"'`)
+	if fp == "" || fp == "-" {
+		return ""
+	}
+	return fp
 }
 
 func isCurlWgetValueFlag(bin, flag string) bool {
@@ -1579,6 +2017,27 @@ func looksLikeCurlWgetURLArg(a string) bool {
 	return ok
 }
 
+func splitColonBracketAware(s string) []string {
+	var parts []string
+	start := 0
+	inBracket := false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '[':
+			inBracket = true
+		case ']':
+			inBracket = false
+		case ':':
+			if !inBracket {
+				parts = append(parts, s[start:i])
+				start = i + 1
+			}
+		}
+	}
+	parts = append(parts, s[start:])
+	return parts
+}
+
 func extractCurlOverrideTargets(flag, val string) []string {
 	v := strings.TrimSpace(strings.TrimPrefix(val, "+"))
 	if v == "" {
@@ -1587,30 +2046,25 @@ func extractCurlOverrideTargets(flag, val string) []string {
 	var out []string
 	if flag == "--resolve" {
 		// Format: [+]host:port:addr[,addr]...
-		first := strings.IndexByte(v, ':')
-		if first >= 0 {
-			rest := v[first+1:]
-			second := strings.IndexByte(rest, ':')
-			if second >= 0 {
-				addrs := rest[second+1:]
-				for _, addr := range strings.Split(addrs, ",") {
-					addr = strings.TrimSpace(addr)
-					if addr != "" {
-						if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
-							addr = "[" + addr + "]"
-						}
-						out = append(out, "http://"+addr)
+		parts := splitColonBracketAware(v)
+		if len(parts) >= 3 {
+			addrs := strings.Join(parts[2:], ":")
+			for _, addr := range strings.Split(addrs, ",") {
+				addr = strings.TrimSpace(addr)
+				if addr != "" {
+					if strings.Contains(addr, ":") && !strings.HasPrefix(addr, "[") {
+						addr = "[" + addr + "]"
 					}
+					out = append(out, "http://"+addr)
 				}
 			}
 		}
 	} else if flag == "--connect-to" {
-		// Format: HOST1:PORT1:HOST2:PORT2 (where HOST/PORT may be bracketed IPv6 or empty)
-		// Inspect the trailing connect target if non-empty.
-		parts := strings.Split(v, ":")
+		// Format: HOST1:PORT1:HOST2:PORT2 (where HOST may be bracketed IPv6 or empty)
+		parts := splitColonBracketAware(v)
 		if len(parts) >= 4 {
-			host2 := strings.TrimSpace(parts[len(parts)-2])
-			port2 := strings.TrimSpace(parts[len(parts)-1])
+			host2 := strings.TrimSpace(parts[2])
+			port2 := strings.TrimSpace(parts[3])
 			if host2 != "" {
 				if port2 != "" {
 					out = append(out, "http://"+host2+":"+port2)
@@ -1621,6 +2075,40 @@ func extractCurlOverrideTargets(flag, val string) []string {
 		}
 	}
 	return out
+}
+
+func argvCloudMetadataTarget(bin string, argv []string) string {
+	switch bin {
+	case "nc", "ncat", "netcat", "socat", "telnet", "ssh", "scp", "sftp", "ftp":
+	default:
+		return ""
+	}
+	for _, arg := range argv[1:] {
+		s := strings.TrimSpace(arg)
+		if s == "" || strings.HasPrefix(s, "-") {
+			continue
+		}
+		if strings.Contains(s, "://") {
+			if u, err := url.Parse(s); err == nil && u.Hostname() != "" && isCloudMetadataHost(u.Hostname()) {
+				return u.Hostname()
+			}
+		}
+		cand := s
+		if at := strings.LastIndexByte(cand, '@'); at >= 0 {
+			cand = cand[at+1:]
+		}
+		if slash := strings.IndexByte(cand, '/'); slash >= 0 {
+			cand = cand[:slash]
+		}
+		h, _ := splitHostPortLoose(cand)
+		if h != "" && isCloudMetadataHost(h) {
+			return h
+		}
+		if isCloudMetadataHost(cand) {
+			return cand
+		}
+	}
+	return ""
 }
 
 func allKillTargetsAreShellJobs(args []string) bool {
@@ -1653,7 +2141,7 @@ func isStandardSystemBinaryPath(p string) bool {
 
 func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, workspace, brainDir string) string {
 	switch bin {
-	case "mkdir", "touch", "mv", "ln", "truncate", "install", "patch":
+	case "rm", "rmdir", "del", "shred", "mkdir", "touch", "mv", "ln", "truncate", "install", "patch":
 		// Allowed ONLY if every destination target is explicitly inside brainDir!
 		paths := nonFlagArgs(argv[1:])
 		if len(paths) == 0 {
@@ -1683,6 +2171,12 @@ func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, work
 				return fmt.Sprintf("Read-only mode: `tee` cannot write to workspace path %q", p)
 			}
 		}
+	case "tar":
+		if reason := checkReadOnlyTarViolation(argv[1:], cwd, brainDir); reason != "" {
+			return reason
+		}
+	case "chmod", "chown", "chgrp", "dd", "unzip", "gunzip", "bunzip2", "xz", "rsync":
+		return fmt.Sprintf("Read-only mode: `%s` cannot modify workspace files", bin)
 	case "sed":
 		for _, a := range argv[1:] {
 			if a == "-i" || strings.HasPrefix(a, "-i") || a == "--in-place" || strings.HasPrefix(a, "--in-place=") {
@@ -1693,6 +2187,21 @@ func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, work
 		for _, a := range argv[1:] {
 			if a == "-w" {
 				return "Read-only mode: `gofmt -w` is not allowed"
+			}
+		}
+	case "git":
+		sub, rest := extractCLISubcommand("git", argv[1:])
+		switch strings.ToLower(sub) {
+		case "add", "commit", "rm", "mv", "clean", "reset", "checkout", "restore",
+			"init", "clone", "pull", "merge", "rebase", "cherry-pick", "am", "revert", "switch":
+			return fmt.Sprintf("Read-only mode: `git %s` modifies workspace files", sub)
+		case "stash":
+			if len(rest) == 0 || (rest[0] != "list" && rest[0] != "show") {
+				return "Read-only mode: `git stash` modifies workspace files"
+			}
+		case "apply":
+			if !hasAnyFlag(rest, "--check") {
+				return "Read-only mode: `git apply` modifies workspace files"
 			}
 		}
 	case "go":
@@ -1710,6 +2219,128 @@ func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, work
 		switch sub {
 		case "install", "i", "add", "remove", "uninstall", "update", "up", "init", "create", "link", "publish":
 			return fmt.Sprintf("Read-only mode: `%s %s` modifies files", bin, sub)
+		}
+	}
+	return ""
+}
+
+func checkReadOnlyTarViolation(args []string, cwd, brainDir string) string {
+	isList := false
+	isCreate := false
+	isExtract := false
+	isModify := false
+	toStdout := false
+	archiveFile := ""
+	targetDir := cwd
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			break
+		}
+		switch {
+		case a == "--list":
+			isList = true
+		case a == "--create":
+			isCreate = true
+		case a == "--extract" || a == "--get":
+			isExtract = true
+		case a == "--append" || a == "--update" || a == "--delete" || a == "--catenate" || a == "--concatenate":
+			isModify = true
+		case a == "--to-stdout":
+			toStdout = true
+		case a == "--file" && i+1 < len(args):
+			archiveFile = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--file="):
+			archiveFile = strings.TrimPrefix(a, "--file=")
+		case a == "--directory" && i+1 < len(args):
+			targetDir = resolvePath(cwd, expandHomePrefix(args[i+1]))
+			i++
+		case strings.HasPrefix(a, "--directory="):
+			targetDir = resolvePath(cwd, expandHomePrefix(strings.TrimPrefix(a, "--directory=")))
+		case strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && len(a) > 1:
+			flags := a[1:]
+			for j := 0; j < len(flags); j++ {
+				switch flags[j] {
+				case 't':
+					isList = true
+				case 'c':
+					isCreate = true
+				case 'x':
+					isExtract = true
+				case 'r', 'u', 'A':
+					isModify = true
+				case 'O':
+					toStdout = true
+				case 'f':
+					if j+1 < len(flags) {
+						archiveFile = flags[j+1:]
+					} else if i+1 < len(args) {
+						i++
+						archiveFile = args[i]
+					}
+					j = len(flags)
+				case 'C':
+					var d string
+					if j+1 < len(flags) {
+						d = flags[j+1:]
+					} else if i+1 < len(args) {
+						i++
+						d = args[i]
+					}
+					if d != "" {
+						targetDir = resolvePath(cwd, expandHomePrefix(d))
+					}
+					j = len(flags)
+				}
+			}
+		case i == 0 && !strings.HasPrefix(a, "-"):
+			// Old-style tar keyletters without leading dash (e.g. `tar cf out.tar src.txt`).
+			for j := 0; j < len(a); j++ {
+				switch a[j] {
+				case 't':
+					isList = true
+				case 'c':
+					isCreate = true
+				case 'x':
+					isExtract = true
+				case 'r', 'u', 'A':
+					isModify = true
+				case 'O':
+					toStdout = true
+				case 'f':
+					if i+1 < len(args) {
+						i++
+						archiveFile = args[i]
+					}
+				}
+			}
+		}
+	}
+
+	if isList && !isCreate && !isExtract && !isModify {
+		return ""
+	}
+	if isCreate || isModify {
+		if archiveFile == "-" || isNullTarget(archiveFile) {
+			return ""
+		}
+		if archiveFile == "" {
+			return "Read-only mode: `tar` archive modification is not allowed"
+		}
+		resolved := resolvePath(cwd, expandHomePrefix(archiveFile))
+		if brainDir == "" || !isAllowedInRoots(resolved, brainDir) {
+			return fmt.Sprintf("Read-only mode: `tar` cannot write archive %q in workspace", archiveFile)
+		}
+		return ""
+	}
+	if isExtract {
+		if toStdout {
+			return ""
+		}
+		if brainDir == "" || !isAllowedInRoots(targetDir, brainDir) {
+			return fmt.Sprintf("Read-only mode: `tar` cannot extract into workspace %q", targetDir)
 		}
 	}
 	return ""

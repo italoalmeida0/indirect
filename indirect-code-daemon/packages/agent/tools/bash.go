@@ -100,6 +100,9 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 		jailSpec = t.Sandbox.BuildRuntimeJail(t.BrainDir)
 		sbApprover, sbOnWait = t.Sandbox.MidExecHooks()
 	}
+	if jailSpec != nil && jailSpec.AccessMode != "full" {
+		env = scrubJailedDaemonEnv(env)
+	}
 	bgTimer := newPauseableTimer(AutoBackgroundAfter)
 	defer bgTimer.Stop()
 	proc, err := startWith(runCtx, t.Starter, ExecSpec{

@@ -26,6 +26,11 @@ const (
 	MaxRawImageFileBytes = 50 * 1024 * 1024
 	maxRawImageFileBytes = MaxRawImageFileBytes
 
+	// maxImageInputDimension and maxImageInputPixels reject pixel-bomb image headers
+	// before decodeImage allocates a full RGBA buffer.
+	maxImageInputDimension = 16384
+	maxImageInputPixels    = 40_000_000
+
 	// maxImageDimension caps the longest edge at Anthropic/OpenAI optimal tile size,
 	// avoiding multi-tile token explosion and Anthropic's >20-image 2000px cliff.
 	maxImageDimension = 1568
@@ -120,6 +125,9 @@ func NormalizeImage(data []byte, mimeHint string) (NormalizedImage, error) {
 	origW, origH := cfg.Width, cfg.Height
 	if origW <= 0 || origH <= 0 {
 		return NormalizedImage{}, errUnsupportedImage
+	}
+	if origW > maxImageInputDimension || origH > maxImageInputDimension || int64(origW)*int64(origH) > maxImageInputPixels {
+		return NormalizedImage{}, fmt.Errorf("[Image omitted: dimensions %dx%d exceed maximum allowed pixel limit (%dpx max edge, %d max pixels).]", origW, origH, maxImageInputDimension, maxImageInputPixels)
 	}
 
 	canPassthroughFormat := origMime == "image/jpeg" ||

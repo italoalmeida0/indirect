@@ -57,6 +57,11 @@ type ExploreTool struct {
 	// OnUsage receives incremental provider.Usage deltas from each subagent
 	// model turn so session/billing usage accounting remains exact.
 	OnUsage func(provider.Usage)
+
+	// BeforeSubTool optionally validates every subagent tool call (for example
+	// enforcing parent skill tool decisions or argument restrictions). Returning
+	// allowed=false rejects the sub-tool call with reason.
+	BeforeSubTool func(tool string, args json.RawMessage) (allowed bool, reason string)
 }
 
 const exploreSchema = `{"type":"object","required":["task"],"properties":{"task":{"type":"string","description":"Concrete codebase or session-history research question to investigate."},"focus_paths":{"type":"array","items":{"type":"string"},"description":"Optional file or directory paths to prioritize first."}}}`
@@ -124,7 +129,31 @@ func (t *ExploreTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		if !isAllowedExploreTool(call.Name) {
 			return false, fmt.Sprintf("tool %q is not permitted in read-only explore subagent", call.Name), nil
 		}
-		return true, "", nil
+		canonArgs, err := CanonicalizeToolArgs(call.Arguments)
+		if err != nil {
+			return false, fmt.Sprintf("invalid args: %v", err), nil
+		}
+		if t.BeforeSubTool != nil {
+			if ok, reason := t.BeforeSubTool(call.Name, canonArgs); !ok {
+				return false, nonEmpty(reason, fmt.Sprintf("tool %q is not permitted", call.Name)), nil
+			}
+		}
+		if t.Sandbox != nil {
+			if mode, interactive := t.Sandbox.InteractiveAccessMode(); interactive {
+				ws := t.CWD
+				if t.Sandbox.Root != "" {
+					ws = t.Sandbox.Root
+				}
+				ev := EvaluateToolCall(call.Name, canonArgs, mode, ws, t.BrainDir, true, t.Sandbox.EffectiveRules())
+				switch ev.Verdict {
+				case VerdictDeny:
+					return false, nonEmpty(ev.Meta.Reason, fmt.Sprintf("tool %q blocked by permission policy", call.Name)), nil
+				case VerdictAsk:
+					return false, nonEmpty(ev.Meta.Reason, fmt.Sprintf("tool %q requires user approval and cannot run autonomously inside explore", call.Name)), nil
+				}
+			}
+		}
+		return true, "", canonArgs
 	}
 
 	sub.RequestMessages = func(msgs []provider.Message) []provider.Message {
@@ -346,13 +375,7 @@ func cloneReadOnlySandbox(parent *Sandbox, cwd, brainDir string) *Sandbox {
 			sb.AllowExtra(extra)
 		}
 		if mode, ok := parent.InteractiveAccessMode(); ok {
-			subMode := mode
-			if subMode == "ask" {
-				// Explore itself was already approved pre-tool; allow non-protected
-				// workspace reads while enforcing all deny/allow rules and jail bounds.
-				subMode = "auto"
-			}
-			sb.SetInteractivePolicy(subMode, parent.EffectiveRules())
+			sb.SetInteractivePolicy(mode, parent.EffectiveRules())
 		} else if parent.Locked() {
 			sb.Lock()
 		}

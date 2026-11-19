@@ -126,6 +126,14 @@ func (t *GlobTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			if path == searchDir {
 				return nil
 			}
+			if t.Sandbox != nil {
+				if cerr := t.Sandbox.CheckWalkedReadEntry(path, d); cerr != nil {
+					if d.IsDir() {
+						return filepath.SkipDir
+					}
+					return nil
+				}
+			}
 
 			rel, relErr := filepath.Rel(searchDir, path)
 			if relErr != nil {
