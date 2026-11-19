@@ -76,23 +76,22 @@ describe("Gateway IR top-level image decoding & source normalization", () => {
       imageSourceToDataUrl({ url: "data:image/gif;base64,R0lGODlhAQABAAAAACw=" }),
     ).toBe("data:image/gif;base64,R0lGODlhAQABAAAAACw=");
 
-    // Async imageToDataUrl: data: passthrough + reachable HTTP fetch to data: URL
+    // Async imageToDataUrl: data: passthrough + safe public HTTP fetch to data: URL (loopback blocked)
     expect(await imageToDataUrl("data:image/png;base64,AQID")).toBe("data:image/png;base64,AQID");
-    const imgSrv = Bun.serve({
-      port: 0,
-      hostname: "127.0.0.1",
-      fetch(req) {
-        if (new URL(req.url).pathname === "/ok.png") {
-          return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "image/png" } });
-        }
-        return new Response("not found", { status: 404 });
-      },
-    });
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (input: unknown) => {
+      const target = String((input as { url?: string }).url ?? input);
+      if (target === "https://8.8.8.8/ok.png") {
+        return new Response(new Uint8Array([1, 2, 3]), { headers: { "Content-Type": "image/png" } });
+      }
+      return new Response("not found", { status: 404 });
+    };
     try {
-      expect(await imageToDataUrl(`http://127.0.0.1:${imgSrv.port}/ok.png`)).toBe("data:image/png;base64,AQID");
-      expect(await imageToDataUrl(`http://127.0.0.1:${imgSrv.port}/missing.png`)).toBeNull();
+      expect(await imageToDataUrl("https://8.8.8.8/ok.png")).toBe("data:image/png;base64,AQID");
+      expect(await imageToDataUrl("https://8.8.8.8/missing.png")).toBeNull();
+      expect(await imageToDataUrl("http://127.0.0.1/ok.png")).toBeNull();
     } finally {
-      imgSrv.stop(true);
+      globalThis.fetch = realFetch;
     }
 
     // Malformed / empty sources return null
@@ -352,17 +351,18 @@ describe("Gateway IR multimodal tool_result translation", () => {
       url: "https://assets.example.com/mock.webp",
     });
 
-    const imgSrv = Bun.serve({
-      port: 0,
-      hostname: "127.0.0.1",
-      fetch() {
+    const specUrl = "https://8.8.8.8/spec.png";
+    const fetchedSpecB64 = Buffer.from([137, 80, 78, 71]).toString("base64");
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async (input: unknown) => {
+      const target = String((input as { url?: string }).url ?? input);
+      if (target === specUrl) {
         return new Response(new Uint8Array([137, 80, 78, 71]), {
           headers: { "Content-Type": "image/png" },
         });
-      },
-    });
-    const specUrl = `http://127.0.0.1:${imgSrv.port}/spec.png`;
-    const fetchedSpecB64 = Buffer.from([137, 80, 78, 71]).toString("base64");
+      }
+      return new Response("not found", { status: 404 });
+    };
 
     try {
       const originalAnthropic = {
@@ -487,7 +487,7 @@ describe("Gateway IR multimodal tool_result translation", () => {
         },
       ]);
     } finally {
-      imgSrv.stop(true);
+      globalThis.fetch = realFetch;
     }
   });
 

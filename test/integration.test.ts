@@ -118,7 +118,8 @@ beforeAll(async () => {
   upProc = spawn("test/fake-upstream.ts", { FAKE_UPSTREAM_PORT: String(UP_PORT), FAKE_UPSTREAM_KEY: UPSTREAM_KEY });
   gwProc = spawn("server/index.ts", {
     PORT: String(GW_PORT),
-    NODE_ENV: "development",
+    NODE_ENV: "test",
+    SAFE_FETCH_ALLOW_LOOPBACK: "true",
     DATA_DIR: dataDir,
     ADMIN_EMAIL: "boss@example.com",
     ADMIN_PASSWORD: ADMIN_PW,
@@ -1898,7 +1899,7 @@ describe("gateway end-to-end", () => {
     expect(manifest.icons.some((i) => i.sizes === "192x192")).toBe(true);
     expect(manifest.icons.some((i) => i.sizes === "512x512")).toBe(true);
 
-    // Forwarded headers dynamically customize manifest id, scope and start_url to match origin.
+    // With TRUST_PROXY disabled, untrusted forwarded headers must NOT poison manifest URLs.
     const fwdMan = await fetch(`${GW}/manifest.webmanifest`, {
       headers: {
         "x-forwarded-proto": "https",
@@ -1907,9 +1908,9 @@ describe("gateway end-to-end", () => {
     });
     expect(fwdMan.status).toBe(200);
     const fwdManifest = await fwdMan.json();
-    expect(fwdManifest.id).toBe("https://deconuno.hezz.it/");
-    expect(fwdManifest.scope).toBe("https://deconuno.hezz.it/");
-    expect(fwdManifest.start_url).toBe("https://deconuno.hezz.it/#/code");
+    expect(fwdManifest.id).toBe(`${GW}/`);
+    expect(fwdManifest.scope).toBe(`${GW}/`);
+    expect(fwdManifest.start_url).toBe(`${GW}/#/code`);
     for (const icon of manifest.icons) {
       const r = await fetch(`${GW}${icon.src}`);
       expect(r.status).toBe(200);

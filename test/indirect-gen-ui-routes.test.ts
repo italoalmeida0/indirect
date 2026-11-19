@@ -1,7 +1,11 @@
-import { describe, expect, test, beforeAll } from "bun:test";
+import { afterAll, describe, expect, test, beforeAll } from "bun:test";
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+import { db, type UserRow } from "../server/db";
+import { insertSessionRow, prepareSessionTokens } from "../server/auth";
+import { randomToken } from "../server/crypto";
+import { ApiError } from "../server/http";
 import {
   handleGenUiRoute,
   genUiImageCacheSize,
@@ -30,12 +34,18 @@ export default function App() {
   return <div className="gu-root"><h2 className="gu-title">hi {x}</h2></div>;
 }`;
 
-function post(path: string, body: unknown): Promise<Response> {
+let authToken = "";
+let testUserId = "";
+
+function post(path: string, body: unknown, token: string | null = authToken): Promise<Response> {
   return handleGenUiRoute(
     path,
     new Request(BASE + path, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: {
+        "content-type": "application/json",
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(body),
     }),
     new URL(BASE + path),
@@ -61,6 +71,34 @@ describe("gen-ui widget routes", () => {
     const libsDir = path.join(import.meta.dir, "..", "web", "public", "vendor", "gen-ui");
     const present = existsSync(path.join(libsDir, "d3.js")) && existsSync(path.join(libsDir, "three.js"));
     if (!present) await vendorGenUiLibs();
+
+    testUserId = `u_genui_${randomToken(8)}`;
+    const now = Date.now();
+    db.prepare(
+      "INSERT INTO users (id, email, name, role, status, created_at) VALUES (?, ?, 'GenUI Test', 'user', 'active', ?)",
+    ).run(testUserId, `${testUserId}@test.local`, now);
+    const user = db.prepare<UserRow, [string]>("SELECT * FROM users WHERE id = ?").get(testUserId)!;
+    const prepared = await prepareSessionTokens(user);
+    insertSessionRow(user.id, prepared);
+    authToken = prepared.accessToken;
+  });
+
+  afterAll(() => {
+    if (testUserId) {
+      db.prepare("DELETE FROM sessions WHERE user_id = ?").run(testUserId);
+      db.prepare("DELETE FROM users WHERE id = ?").run(testUserId);
+    }
+  });
+
+  test("POST rejects unauthenticated requests with 401", async () => {
+    let caught: unknown;
+    try {
+      await post("/api/indirect-code/gen-ui/widgets", { theme: "dark", jsx: APP, stateJSON: "{}" }, null);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).status).toBe(401);
   });
 
   test("POST stores a widget and returns its content-addressed URL", async () => {
@@ -122,7 +160,7 @@ describe("gen-ui widget routes", () => {
       path,
       new Request(POST_ORIGIN + path, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ theme: "dark", jsx, stateJSON: "{}" }),
       }),
       new URL(POST_ORIGIN + path),

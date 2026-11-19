@@ -58,12 +58,113 @@ export type WidgetLintRequest = {
   source: string;
   test?: string;
   state?: string;
+  signal?: AbortSignal;
 };
+
+export class WidgetLintBusyError extends Error {
+  readonly status = 503;
+  constructor(message = "widget lint queue is full, retry shortly") {
+    super(message);
+    this.name = "WidgetLintBusyError";
+  }
+}
 
 /** Hard ceiling for one lint (browser navigation deadline, seconds). */
 const LINT_TIMEOUT_S = 30;
 /** Extra test code gets a tighter budget so a hanging test can't stall. */
 const TEST_TIMEOUT_S = 10;
+/** Bounded Obscura concurrency: at most 2 processes running and 8 waiting. */
+const MAX_CONCURRENT_OBSCURA = 2;
+const MAX_OBSCURA_QUEUE = 8;
+/** Cap on obscura polling retries to prevent tight spawn loops on broken runs. */
+const MAX_OBSCURA_ATTEMPTS = 20;
+const OBSCURA_RETRY_DELAY_MS = 150;
+
+export const LINT_PAGE_CSP =
+  "default-src 'none'; script-src 'unsafe-inline' blob: data:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none';";
+
+type QueueWaiter = {
+  resolve: () => void;
+  reject: (err: Error) => void;
+  cleanup: () => void;
+};
+
+let activeObscura = 0;
+const obscuraQueue: QueueWaiter[] = [];
+
+function acquireObscuraSlot(signal?: AbortSignal): Promise<() => void> {
+  if (signal?.aborted) {
+    return Promise.reject(new Error("lint aborted"));
+  }
+  const makeRelease = () => {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = obscuraQueue.shift();
+      if (next) {
+        next.cleanup();
+        next.resolve();
+      } else {
+        activeObscura = Math.max(0, activeObscura - 1);
+      }
+    };
+  };
+  if (activeObscura < MAX_CONCURRENT_OBSCURA) {
+    activeObscura++;
+    return Promise.resolve(makeRelease());
+  }
+  if (obscuraQueue.length >= MAX_OBSCURA_QUEUE) {
+    return Promise.reject(new WidgetLintBusyError());
+  }
+  return new Promise<() => void>((resolve, reject) => {
+    const onAbort = () => {
+      const idx = obscuraQueue.indexOf(waiter);
+      if (idx >= 0) obscuraQueue.splice(idx, 1);
+      waiter.cleanup();
+      reject(new Error("lint aborted"));
+    };
+    const waiter: QueueWaiter = {
+      resolve: () => resolve(makeRelease()),
+      reject,
+      cleanup: () => {
+        signal?.removeEventListener("abort", onAbort);
+      },
+    };
+    obscuraQueue.push(waiter);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+/** Test/observability hook for the Obscura concurrency limiter. */
+export function widgetLintConcurrencyStats() {
+  return {
+    active: activeObscura,
+    queued: obscuraQueue.length,
+    maxConcurrent: MAX_CONCURRENT_OBSCURA,
+    maxQueue: MAX_OBSCURA_QUEUE,
+  };
+}
+
+async function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
+  if (!signal) {
+    await Bun.sleep(ms);
+    return;
+  }
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 /* ---------------- reporting contract (the lint page) ---------------- */
 
@@ -73,9 +174,9 @@ const TEST_TIMEOUT_S = 10;
  * errors that escape the harness land in `errors` via the page's error
  * hooks.
  */
-function lintPageHTML(stateJSON: string, hasTest: boolean, libEntries: Record<string, string>): string {
+export function lintPageHTML(stateJSON: string, hasTest: boolean, libEntries: Record<string, string>): string {
   return `<!doctype html>
-<html><head><meta charset="utf-8"></head><body>
+<html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${LINT_PAGE_CSP}"></head><body>
 <style>${WIDGET_BASE_CSS}</style>
 <script>${escapeScriptClose(REACT_RUNTIME_JS)}</script>
 <script>${escapeScriptClose(WEBGL_POLYFILL_JS)}</script>
@@ -304,6 +405,7 @@ export async function runWidgetLint(req: WidgetLintRequest): Promise<WidgetLintR
   try {
     return await runWidgetLintInner(req);
   } catch (e) {
+    if (e instanceof WidgetLintBusyError) throw e;
     // The lint is the model's feedback loop: an internal failure must come
     // back as a finding with the real message, never as a thrown error.
     return {
@@ -369,17 +471,27 @@ async function runWidgetLintInner(req: WidgetLintRequest): Promise<WidgetLintRes
     }
   }
 
-  const { errors: renderErrors, webgl } = await runInObscura({
-    widgetModule: buildJsxModuleBody(compiled.code),
-    testModule,
-    stateJSON,
-    timeoutS: testModule ? Math.min(LINT_TIMEOUT_S, TEST_TIMEOUT_S + 5) : LINT_TIMEOUT_S,
-    widgetMap: compiled.map,
-    testMap: testMap,
-    testRemap,
-    widgetSource: req.source,
-    testSource: testSource,
-  });
+  const releaseSlot = await acquireObscuraSlot(req.signal);
+  let renderErrors: WidgetLintError[];
+  let webgl: WebGLReport | null;
+  try {
+    const out = await runInObscura({
+      widgetModule: buildJsxModuleBody(compiled.code),
+      testModule,
+      stateJSON,
+      timeoutS: testModule ? Math.min(LINT_TIMEOUT_S, TEST_TIMEOUT_S + 5) : LINT_TIMEOUT_S,
+      widgetMap: compiled.map,
+      testMap: testMap,
+      testRemap,
+      widgetSource: req.source,
+      testSource: testSource,
+      signal: req.signal,
+    });
+    renderErrors = out.errors;
+    webgl = out.webgl;
+  } finally {
+    releaseSlot();
+  }
   // Shader compile/link failures reported by the WebGL polyfill are real
   // widget bugs (a driver reports them identically) — fail the lint with
   // them. Environment limitations of the lint browser (software
@@ -414,6 +526,7 @@ type ObscuraRun = {
   testRemap?: (pos: SourcePosition) => SourcePosition;
   widgetSource: string;
   testSource: string;
+  signal?: AbortSignal;
 };
 type LintPageResult = { errors?: PageError[]; output?: string[]; done?: boolean; webgl?: WebGLReport | null };
 
@@ -512,7 +625,15 @@ function finalizePageError(e: PageError, run: ObscuraRun): WidgetLintError {
  * test — so a "not done" result is inconclusive and the runner retries
  * until the deadline.
  */
-async function obscuraOnce(binary: string, dir: string, timeoutS: number): Promise<{ parsed: LintPageResult | null; raw: string; stderr: string }> {
+async function obscuraOnce(
+  binary: string,
+  dir: string,
+  timeoutS: number,
+  signal?: AbortSignal,
+): Promise<{ parsed: LintPageResult | null; raw: string; stderr: string; aborted?: boolean }> {
+  if (signal?.aborted) {
+    return { parsed: null, raw: "", stderr: "", aborted: true };
+  }
   let proc;
   try {
     proc = Bun.spawn(
@@ -531,12 +652,29 @@ async function obscuraOnce(binary: string, dir: string, timeoutS: number): Promi
         `install gcompat on Alpine, or set OBSCURA_PATH to a working binary`,
     };
   }
-  const killer = setTimeout(() => proc.kill(), timeoutS * 1000 + 2000);
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-  ]);
-  clearTimeout(killer);
+  const killProc = () => {
+    try {
+      proc.kill();
+    } catch {}
+  };
+  const killer = setTimeout(killProc, timeoutS * 1000 + 2000);
+  const onAbort = () => killProc();
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) killProc();
+  let stdout: string;
+  let stderr: string;
+  try {
+    [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+  } finally {
+    clearTimeout(killer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+  if (signal?.aborted) {
+    return { parsed: null, raw: "", stderr: "", aborted: true };
+  }
   const out = stdout.trim();
   let parsed: LintPageResult | null;
   try {
@@ -583,8 +721,30 @@ async function runInObscura(run: ObscuraRun): Promise<{ errors: WidgetLintError[
     // is what turns that into a "timed out" lint error.
     const deadline = Date.now() + run.timeoutS * 1000;
     let last: Awaited<ReturnType<typeof obscuraOnce>> | null = null;
-    while (Date.now() < deadline) {
-      last = await obscuraOnce(binary, dir, Math.max(2, Math.ceil((deadline - Date.now()) / 1000)));
+    for (let attempt = 0; attempt < MAX_OBSCURA_ATTEMPTS && Date.now() < deadline; attempt++) {
+      if (run.signal?.aborted) {
+        return {
+          errors: [{ phase: run.testModule ? "test" : "render", message: "lint aborted" }],
+          webgl: last?.parsed?.webgl ?? null,
+        };
+      }
+      if (attempt > 0) {
+        await sleepAbortable(OBSCURA_RETRY_DELAY_MS, run.signal);
+        if (run.signal?.aborted) {
+          return {
+            errors: [{ phase: run.testModule ? "test" : "render", message: "lint aborted" }],
+            webgl: last?.parsed?.webgl ?? null,
+          };
+        }
+        if (Date.now() >= deadline) break;
+      }
+      last = await obscuraOnce(binary, dir, Math.max(2, Math.ceil((deadline - Date.now()) / 1000)), run.signal);
+      if (last.aborted || run.signal?.aborted) {
+        return {
+          errors: [{ phase: run.testModule ? "test" : "render", message: "lint aborted" }],
+          webgl: last?.parsed?.webgl ?? null,
+        };
+      }
       // A binary that cannot even spawn never produces a page result: report
       // the loader diagnostic immediately instead of retrying to the deadline.
       if (last.stderr.startsWith("lint browser cannot start")) {

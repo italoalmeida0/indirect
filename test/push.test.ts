@@ -70,7 +70,8 @@ beforeAll(async () => {
     cwd: path.join(import.meta.dir, ".."),
     env: {
       ...process.env,
-      NODE_ENV: "production",
+      NODE_ENV: "test",
+      PUSH_ALLOW_LOOPBACK: "true",
       PORT: String(GW_PORT),
       DATA_DIR: dataDir,
       ADMIN_EMAIL: "admin@example.com",

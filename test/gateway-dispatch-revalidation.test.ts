@@ -43,7 +43,7 @@ beforeAll(async () => {
     }
     return Response.json({ id: "r", model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 2 } });
   } });
-  gateway = await startGateway();
+  gateway = await startGateway({ SAFE_FETCH_ALLOW_LOOPBACK: "true" });
   admin = await login(gateway.base, "admin@enterprise.test");
   user = await createUser(gateway.base, admin.accessToken, "dispatch-main@enterprise.test");
   const provider = async (name: string, kind: "openai" | "anthropic" | "responses") => {

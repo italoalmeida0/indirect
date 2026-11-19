@@ -1,12 +1,15 @@
-import { db, audit, inImmediateTx, type ApiKeyRow, type RemoteHostRow, type RemotePairingTokenRow } from "../db";
+import { db, audit, inImmediateTx, type ApiKeyRow, type RemoteHostRow, type RemotePairingTokenRow, type UserRow } from "../db";
 import { requireAuth } from "../auth";
 import { insertPreparedKey, markKeyRevoked, prepareKey } from "../keys";
 import { decryptSecret, randomToken, sha256Hex } from "../crypto";
 import { dropKeyLimiter } from "../ratelimit";
-import { err, json, readJsonBody } from "../http";
+import { ApiError, err, json, readJsonBody } from "../http";
 import { GATEWAY_SECRET, PUBLIC_URL } from "../config";
 import { closeDaemonSocket, disconnectDaemonSocket, isHostOnline, isHostUpdating } from "./relay";
 import { publicModelEntry, routerSnapshot } from "../models";
+import { allowedModels, modelAllowed } from "../model-policy";
+import { financialPolicyFor } from "../financial-policy";
+import { requireKeyProject } from "../projects";
 
 /**
  * Indirect Code REST endpoints:
@@ -26,17 +29,35 @@ export async function handleIndirectCodeRestRoute(
   // /v1/models may proxy an upstream catalog with different limits.
   if (path === "/api/indirect-code/models" && req.method === "GET") {
     const token = req.headers.get("authorization")?.replace(/^Bearer /, "") || "";
-    const host = db.prepare<{ id: string }, [string]>(
-      `SELECT h.id FROM remote_hosts h JOIN users u ON u.id = h.user_id
+    const row = db.prepare<UserRow & { host_id: string; api_key_id: string | null }, [string]>(
+      `SELECT u.*, h.id AS host_id, h.api_key_id FROM remote_hosts h JOIN users u ON u.id = h.user_id
        WHERE h.daemon_token_hash = ? AND u.status = 'active'`,
     ).get(sha256Hex(token));
-    if (!host) return err(401, "unauthorized daemon token", req);
+    if (!row) return err(401, "unauthorized daemon token", req);
+    let projectId: string | null = null;
+    if (row.api_key_id) {
+      const keyRow = db
+        .prepare<Pick<ApiKeyRow, "user_id" | "project_id" | "status">, [string]>(
+          "SELECT user_id, project_id, status FROM api_keys WHERE id = ?",
+        )
+        .get(row.api_key_id);
+      if (keyRow && keyRow.user_id === row.id && keyRow.status === "active" && keyRow.project_id) {
+        try {
+          projectId = requireKeyProject(row.id, keyRow.project_id)?.project.id ?? null;
+        } catch (error) {
+          if (error instanceof ApiError) return err(error.status, error.message, req, error.code);
+          throw error;
+        }
+      }
+    }
+    const allowed = allowedModels({ role: row.role, projectId });
+    const { showModelPrices } = financialPolicyFor(row);
     const snap = await routerSnapshot();
     // The daemon speaks Anthropic exclusively; every enabled registry model
     // is servable on that surface (OpenAI-only providers via translation).
     const models = Array.from(snap.models.values())
-      .filter((m) => m.enabled)
-      .map((m) => publicModelEntry(m, "gateway"));
+      .filter((m) => m.enabled && modelAllowed(allowed, m.id))
+      .map((m) => publicModelEntry(m, "gateway", { includePricing: showModelPrices }));
     return json({ success: true, models }, { req });
   }
 

@@ -200,6 +200,9 @@ export function extractOwnToolCalls(text: string, hints: DsmlToolHint[]): DsmlEx
 // parsing (streaming)
 // ---------------------------------------------------------------------------
 
+/** Hard cap on the held marker tail (bounded memory, matches dsml.ts). */
+const MAX_HOLD = 512 * 1024;
+
 /** Longest suffix that could still grow into the opening fence. */
 function partialFenceLen(s: string): number {
   const max = Math.min(s.length, FENCE_TAG.length + 3);
@@ -282,6 +285,13 @@ export class OwnStreamExtractor implements StreamRecoverer {
   private drain(): StreamEmit[] {
     const out: StreamEmit[] = [];
     for (;;) {
+      if (this.hold.length > MAX_HOLD) {
+        const r = extractOwnToolCalls(this.hold, this.hints);
+        this.hold = "";
+        this.holding = false;
+        out.push(...this.emit(r));
+        return out;
+      }
       const m = FENCE_MARKER.exec(this.hold);
       if (!m) break;
       const close = findFenceClose(this.hold, m.index + m[0].length);

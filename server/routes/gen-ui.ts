@@ -1,8 +1,9 @@
-import { err, json, readJsonBody } from "../http";
-import { isTrustedProxy } from "../http";
+import { err, hasControlCharacters, isTrustedProxy, json, readJsonBody } from "../http";
+import { requireAuth } from "../auth";
 import { db } from "../db";
 import { sha256Hex } from "../crypto";
-import { runWidgetLint } from "./widget-lint";
+import { isBlockedAddress, safeExternalFetch, SafeFetchError } from "../safe-fetch";
+import { runWidgetLint, WidgetLintBusyError } from "./widget-lint";
 import {
   buildJsxImportMap,
   buildJsxModuleBody,
@@ -15,7 +16,8 @@ import {
 import { compileJsxModule } from "../../web/src/indirect-code/components/generative-ui/jsx-compile";
 import { GEN_UI_LIB_FILES, LIB_MODULE_FILES, readVendorFile } from "./gen-ui-libs";
 import { createHash } from "crypto";
-import { lookup } from "node:dns";
+
+export { isBlockedAddress };
 
 /**
  * Generative UI widget documents (React TSX widgets only).
@@ -117,10 +119,21 @@ function contentId(parts: unknown[]): string {
  */
 function requestOrigin(req: Request, server?: { requestIP(req: Request): { address: string } | null }): string {
   if (isTrustedProxy(req, server)) {
-    const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
-    const proto = (req.headers.get("x-forwarded-proto") || "https").split(",")[0].trim();
-    if (host && (proto === "http" || proto === "https")) {
-      try { return new URL(`${proto}://${host.split(",")[0]!.trim()}`).origin; } catch {}
+    const rawHost = (req.headers.get("x-forwarded-host") || req.headers.get("host") || "").split(",")[0]!.trim();
+    const proto = (req.headers.get("x-forwarded-proto") || "https").split(",")[0]!.trim().toLowerCase();
+    if (
+      rawHost &&
+      rawHost.length <= 255 &&
+      !hasControlCharacters(rawHost) &&
+      !/[\s/\\?#@]/.test(rawHost) &&
+      (proto === "http" || proto === "https")
+    ) {
+      try {
+        const parsed = new URL(`${proto}://${rawHost}/`);
+        if (!parsed.username && !parsed.password && parsed.pathname === "/" && !parsed.search && !parsed.hash) {
+          return parsed.origin;
+        }
+      } catch {}
     }
   }
   try {
@@ -167,10 +180,50 @@ function moduleHeaders(contentType: string): Record<string, string> {
 const IMG_MAX_BYTES = 8 * 1024 * 1024;
 const IMG_TIMEOUT_MS = 10_000;
 const IMG_MAX_REDIRECTS = 3;
+const IMG_MAX_CONCURRENT = 8;
+const IMG_MAX_QUEUE = 24;
 
 type ImgEntry = { bytes: Uint8Array; type: string };
 const imgCache = new Map<string, ImgEntry>();
 let imgCacheBytes = 0;
+const inFlightImgs = new Map<string, Promise<ImgEntry>>();
+
+let activeImgDownloads = 0;
+const imgWaitQueue: Array<() => void> = [];
+
+class ImgProxyError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+function acquireImgSlot(): Promise<() => void> {
+  const makeRelease = () => {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = imgWaitQueue.shift();
+      if (next) {
+        next();
+      } else {
+        activeImgDownloads = Math.max(0, activeImgDownloads - 1);
+      }
+    };
+  };
+  if (activeImgDownloads < IMG_MAX_CONCURRENT) {
+    activeImgDownloads++;
+    return Promise.resolve(makeRelease());
+  }
+  if (imgWaitQueue.length >= IMG_MAX_QUEUE) {
+    return Promise.reject(new ImgProxyError(503, "image: too many concurrent downloads"));
+  }
+  return new Promise<() => void>((resolve) => {
+    imgWaitQueue.push(() => resolve(makeRelease()));
+  });
+}
 
 function putImage(url: string, entry: ImgEntry): void {
   const existing = imgCache.get(url);
@@ -204,194 +257,67 @@ export function sniffImageMime(bytes: Uint8Array): string | null {
   return null;
 }
 
-function isIPv4Literal(host: string): boolean {
-  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
-}
-
-/**
- * The 8 hextets of an IPv6 literal, or null when it is not one. A trailing
- * dotted quad (IPv4-mapped / IPv4-compatible / NAT64) is folded into the low
- * two groups: the WHATWG URL parser canonicalizes it to exactly that form
- * (`http://[::ffff:127.0.0.1]` -> hostname `[::ffff:7f00:1]`), which the
- * dotted-decimal check would never see.
- */
-function parseIPv6Literal(host: string): number[] | null {
-  let s = host;
-  const tail = /(?:^|:)(\d{1,3}(?:\.\d{1,3}){3})$/.exec(s);
-  if (tail) {
-    if (!tail.index) return null; // bare dotted quad: not an IPv6 literal
-    const oct = tail[1].split(".").map(Number);
-    if (oct.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
-    const hi = ((oct[0] << 8) | oct[1]).toString(16);
-    const lo = ((oct[2] << 8) | oct[3]).toString(16);
-    s = `${s.slice(0, tail.index)}:${hi}:${lo}`;
-  }
-  const halves = s.split("::");
-  if (halves.length > 2) return null;
-  const head = halves[0] ? halves[0].split(":") : [];
-  const rest = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
-  const groups = [...head, ...rest];
-  if (groups.some((g) => !/^[0-9a-f]{1,4}$/.test(g))) return null;
-  if (halves.length === 1) return groups.length === 8 ? groups.map((g) => parseInt(g, 16)) : null;
-  // "::" compresses at least one all-zero group.
-  if (groups.length > 7) return null;
-  return [
-    ...head.map((g) => parseInt(g, 16)),
-    ...new Array<number>(8 - groups.length).fill(0),
-    ...rest.map((g) => parseInt(g, 16)),
-  ];
-}
-
-function ipv4FromHextets(hi: number, lo: number): string {
-  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
-}
-
-/** True for any address a widget must never reach through the proxy. */
-export function isBlockedAddress(host: string): boolean {
-  const h = host.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0];
-  if (!h) return true;
-  if (isIPv4Literal(h)) {
-    const oct = h.split(".").map(Number);
-    if (oct.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-    const [a, b] = oct;
-    return (
-      a === 0 || // "this network"
-      a === 10 || // RFC1918
-      a === 127 || // loopback
-      (a === 100 && b >= 64 && b <= 127) || // CGNAT
-      (a === 169 && b === 254) || // link-local / cloud metadata
-      (a === 172 && b >= 16 && b <= 31) || // RFC1918
-      (a === 192 && b === 168) || // RFC1918
-      (a === 192 && b === 0) || // IETF protocol assignments
-      (a === 198 && (b === 18 || b === 19)) || // benchmarking
-      a >= 224 // multicast + reserved + broadcast
-    );
-  }
-  if (h.includes(":")) {
-    const words = parseIPv6Literal(h);
-    if (!words) return true; // malformed literal: fail closed
-    const [w0, w1, w2, w3, w4, w5, w6, w7] = words;
-    // Addresses that carry an IPv4 target inside: check the target with the
-    // IPv4 policy (loopback, RFC1918, metadata, …).
-    const embedded = () => isBlockedAddress(ipv4FromHextets(w6, w7));
-    // IPv4-mapped ::ffff:0:0/96 and IPv4-compatible ::/96 (deprecated).
-    if (w0 === 0 && w1 === 0 && w2 === 0 && w3 === 0 && w4 === 0 && w5 === 0xffff) return embedded();
-    if (w0 === 0 && w1 === 0 && w2 === 0 && w3 === 0 && w4 === 0 && w5 === 0) {
-      return w6 === 0 && w7 <= 1 ? true : embedded(); // :: / ::1 or the quad
-    }
-    // NAT64 well-known prefix 64:ff9b::/96.
-    if (w0 === 0x64 && w1 === 0xff9b && w2 === 0 && w3 === 0 && w4 === 0 && w5 === 0) return embedded();
-    // 6to4 2002::/16 carries the IPv4 destination in bits 16–47.
-    if (w0 === 0x2002) return isBlockedAddress(ipv4FromHextets(w1, w2));
-    // Only global unicast (2000::/3) leaves the box: loopback, unspecified,
-    // link-local, site-local, ULA, multicast and every other reserved range
-    // stay blocked.
-    if ((w0 & 0xe000) !== 0x2000) return true;
-    // 2001:db8::/32 is documentation-only (not routable).
-    if (w0 === 0x2001 && w1 === 0x0db8) return true;
-    return false;
-  }
-  // Hostname: obvious internal names never leave the box.
-  return (
-    h === "localhost" ||
-    h.endsWith(".localhost") ||
-    h.endsWith(".local") ||
-    h.endsWith(".internal") ||
-    h.endsWith(".home.arpa")
-  );
-}
-
-function lookupAll(host: string): Promise<{ address: string }[]> {
-  return new Promise((resolve, reject) => {
-    lookup(host, { all: true }, (err, addrs) => (err ? reject(err) : resolve(addrs)));
-  });
-}
-
-/** Validate scheme/host/IP policy for one hop of an image request. */
-async function assertImageTarget(raw: string): Promise<URL> {
+/** Quick synchronous URL pre-check so obvious bad/blocked URLs never occupy a download slot. */
+function precheckImageUrl(raw: string): void {
   let url: URL;
   try {
     url = new URL(raw);
   } catch {
-    throw new Error("invalid url");
+    throw new ImgProxyError(400, "image: invalid url");
   }
-  if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("unsupported scheme");
-  if (url.username || url.password) throw new Error("credentials in url");
-  const host = url.hostname;
-  if (isBlockedAddress(host)) throw new Error("blocked host");
-  if (!isIPv4Literal(host) && !host.includes(":")) {
-    let addrs: { address: string }[];
-    try {
-      addrs = await lookupAll(host);
-    } catch {
-      throw new Error("unresolvable host");
-    }
-    // Note: DNS rebinding TOCTOU is bounded by the fact the fetch follows
-    // immediately and the cache key is the URL, not the address.
-    if (!addrs.length || addrs.some((a) => isBlockedAddress(a.address))) throw new Error("blocked address");
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new ImgProxyError(400, "image: invalid url");
   }
-  return url;
+  if (url.username || url.password) {
+    throw new ImgProxyError(400, "image: invalid url");
+  }
+  if (isBlockedAddress(url.hostname)) {
+    throw new ImgProxyError(403, "image: blocked address");
+  }
 }
 
-/** Fetch one image URL with every hop validated; returns the bytes. */
+/** Fetch one image URL with every hop validated, under the global concurrency cap. */
 async function fetchImage(raw: string): Promise<ImgEntry> {
-  let current = raw;
-  for (let hop = 0; hop <= IMG_MAX_REDIRECTS; hop++) {
-    const url = await assertImageTarget(current);
-    const res = await fetch(url, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(IMG_TIMEOUT_MS),
-      credentials: "omit",
+  precheckImageUrl(raw);
+  const release = await acquireImgSlot();
+  try {
+    const res = await safeExternalFetch(raw, {
+      maxBytes: IMG_MAX_BYTES,
+      timeoutMs: IMG_TIMEOUT_MS,
+      maxRedirects: IMG_MAX_REDIRECTS,
       headers: { accept: "image/*,*/*;q=0.5" },
     });
-    if (res.status >= 300 && res.status < 400) {
-      const loc = res.headers.get("location");
-      try {
-        res.body?.cancel();
-      } catch {}
-      if (!loc || hop === IMG_MAX_REDIRECTS) throw new Error("too many redirects");
-      current = new URL(loc, url).toString();
-      continue;
-    }
-    if (!res.ok) throw new Error(`upstream ${res.status}`);
-    // The upstream content-type is advisory only — the binary signature is
-    // the contract (an error page dressed as text/plain with PNG bytes still
-    // has to be a real PNG to pass sniffImageMime below).
-    const declaredLen = Number(res.headers.get("content-length") || 0);
-    if (declaredLen > IMG_MAX_BYTES) {
-      try {
-        res.body?.cancel();
-      } catch {}
-      throw new Error("image too large");
-    }
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    if (res.body) {
-      const reader = res.body.getReader();
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.byteLength;
-        if (size > IMG_MAX_BYTES) {
-          try {
-            await reader.cancel();
-          } catch {}
-          throw new Error("image too large");
-        }
-        chunks.push(value);
-      }
-    }
-    const bytes = new Uint8Array(size);
-    let at = 0;
-    for (const c of chunks) {
-      bytes.set(c, at);
-      at += c.byteLength;
-    }
-    const mime = sniffImageMime(bytes);
-    if (!mime) throw new Error("not an image");
-    return { bytes, type: mime };
+    const mime = sniffImageMime(res.bytes);
+    if (!mime) throw new ImgProxyError(415, "image: not an image");
+    return { bytes: res.bytes, type: mime };
+  } finally {
+    release();
   }
-  throw new Error("too many redirects");
+}
+
+function mapImageFetchError(e: unknown): { status: number; message: string } {
+  if (e instanceof ImgProxyError) {
+    return { status: e.status, message: e.message };
+  }
+  if (e instanceof SafeFetchError) {
+    switch (e.code) {
+      case "too_large":
+        return { status: 413, message: "image: too large" };
+      case "blocked":
+        return { status: 403, message: "image: blocked address" };
+      case "invalid_url":
+      case "scheme":
+      case "credentials":
+        return { status: 400, message: "image: invalid url" };
+      case "redirects":
+        return { status: 400, message: "image: too many redirects" };
+      case "http_status":
+        return { status: 400, message: "image: upstream request failed" };
+      default:
+        return { status: 400, message: "image: fetch failed" };
+    }
+  }
+  return { status: 400, message: "image: fetch failed" };
 }
 
 function imageResponse(entry: ImgEntry): Response {
@@ -434,9 +360,14 @@ export async function handleGenUiRoute(
     if (!source.trim()) return err(400, "empty widget source", req);
     if (source.length + test.length > 1_500_000) return err(413, "widget too large", req);
     try {
-      const res = await runWidgetLint({ id, source, test, state });
+      const res = await runWidgetLint({ id, source, test, state, signal: req.signal });
       return json(res, { req });
     } catch (e) {
+      if (e instanceof WidgetLintBusyError) {
+        const resp = err(503, e.message, req);
+        resp.headers.set("Retry-After", "2");
+        return resp;
+      }
       // Never surface an opaque 500: the lint is the model's feedback loop,
       // so an internal failure becomes a structured lint error with the real
       // message (the stack lands in the gateway log for us).
@@ -451,6 +382,7 @@ export async function handleGenUiRoute(
   }
 
   if (path === "/api/indirect-code/gen-ui/widgets" && req.method === "POST") {
+    await requireAuth(req);
     const body = await readJsonBody(req, 2_500_000);
     const theme: "dark" | "light" = body?.theme === "light" ? "light" : "dark";
     const jsx = typeof body?.jsx === "string" ? body.jsx : "";
@@ -549,19 +481,25 @@ export async function handleGenUiRoute(
     if (cached) return imageResponse(cached);
     let entry: ImgEntry;
     try {
-      entry = await fetchImage(raw);
+      const existing = inFlightImgs.get(raw);
+      if (existing) {
+        entry = await existing;
+      } else {
+        const pending = fetchImage(raw);
+        inFlightImgs.set(raw, pending);
+        try {
+          entry = await pending;
+          putImage(raw, entry);
+        } finally {
+          if (inFlightImgs.get(raw) === pending) inFlightImgs.delete(raw);
+        }
+      }
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      const status = /too large/.test(message)
-        ? 413
-        : /did not answer|not an image/.test(message)
-          ? 415
-          : /blocked (?:host|address)/.test(message)
-            ? 403
-            : 400;
-      return err(status, `image: ${message}`, req);
+      const mapped = mapImageFetchError(e);
+      const resp = err(mapped.status, mapped.message, req);
+      if (mapped.status === 503) resp.headers.set("Retry-After", "1");
+      return resp;
     }
-    putImage(raw, entry);
     return imageResponse(entry);
   }
 

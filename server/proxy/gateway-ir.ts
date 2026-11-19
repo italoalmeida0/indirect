@@ -22,6 +22,7 @@ import { isReasoningTarget } from "./target-profile";
 import { countTextTokens, estimateThinkingTokens } from "../tokens";
 import { dsmlRecoverer, type DsmlToolHint } from "./dsml";
 import type { StreamEmit, StreamRecoverer } from "./recovery";
+import { safeExternalFetch } from "../safe-fetch";
 
 export interface IRTextBlock {
   type: "text";
@@ -400,33 +401,27 @@ const REVERSE_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
  *  extrapolates by per-char ratio. Bounds per-stream memory. */
 const OUT_SAMPLE_CAP = 500 * 1024;
 
-async function fetchImageToDataUrl(url: string): Promise<string> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), REVERSE_IMAGE_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { signal: ctrl.signal });
-    if (!res.ok) throw new Error(`image fetch failed: ${res.status}`);
-    const ct = (res.headers.get("content-type") || "image/jpeg").split(";")[0]!.trim() || "image/jpeg";
-    const buf = await res.arrayBuffer();
-    if (buf.byteLength > REVERSE_MAX_IMAGE_BYTES) throw new Error("image too large");
-    let binary = "";
-    const bytes = new Uint8Array(buf);
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
-    return `data:${ct};base64,${btoa(binary)}`;
-  } finally {
-    clearTimeout(t);
-  }
+async function fetchImageToDataUrl(url: string, signal?: AbortSignal): Promise<string> {
+  const res = await safeExternalFetch(url, {
+    maxBytes: REVERSE_MAX_IMAGE_BYTES,
+    timeoutMs: REVERSE_IMAGE_TIMEOUT_MS,
+    maxRedirects: 3,
+    signal,
+  });
+  const ct = (res.contentType || "image/jpeg").split(";")[0]!.trim() || "image/jpeg";
+  return `data:${ct};base64,${Buffer.from(res.bytes).toString("base64")}`;
 }
 
 /** Resolve an image URL-ish value to a `data:` URL (`data:` passthrough, `http(s):` fetch). */
-export async function imageToDataUrl(url: unknown): Promise<string | null> {
+export async function imageToDataUrl(url: unknown, signal?: AbortSignal): Promise<string | null> {
   const parsed = parseImageSource(url);
   if (!parsed) return null;
   if (parsed.url.startsWith("data:")) return parsed.url;
   if (/^https?:\/\//i.test(parsed.url)) {
     try {
-      return await fetchImageToDataUrl(parsed.url);
-    } catch {
+      return await fetchImageToDataUrl(parsed.url, signal);
+    } catch (err) {
+      if (signal?.aborted) throw err;
       return null;
     }
   }
@@ -455,7 +450,10 @@ function openAIToolChoiceToIR(choice: unknown): IRToolChoice {
 }
 
 /** Decode an OpenAI chat-completions request body into the gateway IR. */
-export async function decodeChatToIR(body: Record<string, unknown>): Promise<GatewayRequest> {
+export async function decodeChatToIR(
+  body: Record<string, unknown>,
+  opts?: { signal?: AbortSignal },
+): Promise<GatewayRequest> {
   const warnings: string[] = [];
   const systemParts: string[] = [];
   const messages: IRMessage[] = [];
@@ -569,7 +567,7 @@ export async function decodeChatToIR(body: Record<string, unknown>): Promise<Gat
       const r = asRecord(p);
       if (r.type === "image_url" || r.type === "input_image" || r.type === "image") {
         const rawImg = r.type === "image" ? (r.source !== undefined ? r.source : r) : (r.image_url !== undefined ? r.image_url : r);
-        const resolvedUrl = await imageToDataUrl(rawImg);
+        const resolvedUrl = await imageToDataUrl(rawImg, opts?.signal);
         if (!resolvedUrl) throw new Error("unsupported image_url (only base64 data: URLs and reachable image http(s) URLs are supported)");
         const parsed = parseImageSource(resolvedUrl);
         media.push({ type: "image", url: resolvedUrl, ...(parsed?.mediaType ? { mediaType: parsed.mediaType } : {}) });
@@ -752,7 +750,10 @@ export async function decodeAnthropicToIR(body: Record<string, unknown>): Promis
 // ---------------------------------------------------------------------------
 
 /** Decode an OpenAI Responses request body into the gateway IR. */
-export async function decodeResponsesToIR(body: Record<string, unknown>): Promise<GatewayRequest> {
+export async function decodeResponsesToIR(
+  body: Record<string, unknown>,
+  opts?: { signal?: AbortSignal },
+): Promise<GatewayRequest> {
   const warnings: string[] = [];
   const systemParts: string[] = [];
   const instr = body.instructions;
@@ -821,7 +822,7 @@ export async function decodeResponsesToIR(body: Record<string, unknown>): Promis
           textBuf += (textBuf ? "\n" : "") + r.text;
         } else if (r.type === "input_image" || r.type === "image_url" || r.type === "image") {
           const rawImg = r.type === "image" ? (r.source !== undefined ? r.source : r) : (r.image_url !== undefined ? r.image_url : r);
-          const resolvedUrl = await imageToDataUrl(rawImg);
+          const resolvedUrl = await imageToDataUrl(rawImg, opts?.signal);
           if (!resolvedUrl) throw new Error("unsupported input_image (only base64 data: URLs and reachable image http(s) URLs are supported)");
           const parsed = parseImageSource(resolvedUrl);
           media.push({ type: "image", url: resolvedUrl, ...(parsed?.mediaType ? { mediaType: parsed.mediaType } : {}) });
@@ -929,10 +930,14 @@ export async function decodeResponsesToIR(body: Record<string, unknown>): Promis
 }
 
 /** Decode any ingress protocol body into the gateway IR. */
-export async function decodeToIR(proto: Proto, body: Record<string, unknown>): Promise<GatewayRequest> {
+export async function decodeToIR(
+  proto: Proto,
+  body: Record<string, unknown>,
+  opts?: { signal?: AbortSignal },
+): Promise<GatewayRequest> {
   if (proto === "anthropic") return decodeAnthropicToIR(body);
-  if (proto === "responses") return decodeResponsesToIR(body);
-  return decodeChatToIR(body);
+  if (proto === "responses") return decodeResponsesToIR(body, opts);
+  return decodeChatToIR(body, opts);
 }
 
 // ---------------------------------------------------------------------------

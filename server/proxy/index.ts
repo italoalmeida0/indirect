@@ -470,8 +470,9 @@ async function passthroughModelsList(
   );
   let upstream: Response;
   try {
-    upstream = await fetch(url, { method: "GET", headers });
+    upstream = await fetch(url, { method: "GET", headers, signal: req.signal });
   } catch {
+    if (req.signal.aborted) return envelopeError(proto, 499, "client disconnected", "api_error", req);
     return envelopeError(proto, 502, "upstream is unreachable", "api_error", req);
   }
   const ct = upstream.headers.get("content-type") || "";
@@ -1024,7 +1025,9 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     return proxyRateLimit(req, url, slot.retryAfter, message, admissionSnapshot().queued);
   }
 
-  // Slot released exactly once, whatever happens below.
+  // Slot released exactly once, only after processing actually finishes (in the
+  // outer finally or SSE stream cleanup) — never prematurely on client abort
+  // while upstream or image fetch work is still unwinding.
   let slotReleased = false;
   const release = () => {
     if (!slotReleased) {
@@ -1032,7 +1035,6 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       slot.release();
     }
   };
-  req.signal.addEventListener("abort", release, { once: true });
   if (req.signal.aborted) {
     release();
     return envelopeError(proto, 499, "client disconnected", "api_error", req);
@@ -1379,6 +1381,9 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     // nothing here removes a key from rotation; the client owns backoff
     // and always receives the real upstream error.
     for (const cand of candidates.slice(0, LIMITS.maxFailoverAttempts)) {
+      if (req.signal.aborted) {
+        return envelopeError(proto, 499, "client disconnected", "api_error", req);
+      }
       // Translated candidates serve requests through the provider's
       // other-protocol endpoint (the gateway IR, every direction);
       // everything else is byte-faithful pass-through on its own
@@ -1463,9 +1468,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         // Decode lazily once; native requests retain fields not represented
         // by the cross-protocol IR. Every attempt still gets target profiling.
         try {
-          requestIR ??= await decodeToIR(proto as IRProto, bodyJson);
+          requestIR ??= await decodeToIR(proto as IRProto, bodyJson, { signal: req.signal });
           attemptBody = JSON.stringify(encodeIR(via as IRProto, requestIR, cand.upstreamModel));
         } catch (e) {
+          if (req.signal.aborted) {
+            return envelopeError(proto, 499, "client disconnected", "api_error", req);
+          }
           // Client-caused conversion failure (bad image URL, missing
           // tool_call_id): fail fast as 400 with no failover.
           noteProviderKeyOk(cand.key);
@@ -1542,6 +1550,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       );
       const onClientAbort = () => controller.abort(new Error("client disconnected"));
       req.signal.addEventListener("abort", onClientAbort, { once: true });
+      if (req.signal.aborted) onClientAbort();
 
       let upstream: Response;
       try {
@@ -1608,13 +1617,18 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
           () => controller.abort(new Error("error peek timeout")),
           LIMITS.upstreamNonStreamTimeoutMs,
         );
+        const onPeekAbort = () => controller.abort(new Error("client disconnected"));
+        req.signal.addEventListener("abort", onPeekAbort, { once: true });
+        if (req.signal.aborted) onPeekAbort();
         let errBody = "";
         try {
           errBody = await readBodyCapped(upstream, LIMITS.upstreamErrorPeekBytes);
         } catch {
           /* classified with an empty peek */
+        } finally {
+          clearTimeout(peekTimeout);
+          req.signal.removeEventListener("abort", onPeekAbort);
         }
-        clearTimeout(peekTimeout);
 
         const reported = parseBufferedUsage(upstream.headers.get("content-type") || "", errBody, cand.translated, cand.via);
         const reportedCounts = [reported.inTok, reported.cacheTok, reported.outTok, reported.reasonTok ?? 0];
@@ -1753,8 +1767,12 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
         resetIdle();
 
         const reader = upstream.body.getReader();
-        const onClientAbortStream = () => reader.cancel().catch(() => {});
+        const onClientAbortStream = () => {
+          controller.abort(new Error("client disconnected"));
+          reader.cancel().catch(() => {});
+        };
         req.signal.addEventListener("abort", onClientAbortStream, { once: true });
+        if (req.signal.aborted) onClientAbortStream();
 
         // Idempotent by construction: every terminal path (stream end, upstream
         // error, client cancel, disconnect after the response started) funnels
@@ -1870,6 +1888,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
       const bodyTimeout = setTimeout(() => controller.abort(new Error("upstream body timeout")), LIMITS.upstreamNonStreamTimeoutMs);
       const onBodyAbort = () => controller.abort(new Error("client disconnected"));
       req.signal.addEventListener("abort", onBodyAbort, { once: true });
+      if (req.signal.aborted) onBodyAbort();
       try {
         for (;;) {
           const { done, value } = await reader.read();

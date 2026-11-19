@@ -292,7 +292,7 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
   }
 
   if (path === "/manifest.webmanifest" || path === "/manifest.json") {
-    return handleManifestRoute(req, url);
+    return handleManifestRoute(req, url, server);
   }
 
   if (req.method === "GET" || req.method === "HEAD") {

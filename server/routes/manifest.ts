@@ -2,20 +2,44 @@ import { existsSync, readFileSync } from "fs";
 import path from "path";
 
 import { PUBLIC_URL, IS_PROD } from "../config";
-import { baseHeaders } from "../http";
+import { baseHeaders, hasControlCharacters, isTrustedProxy } from "../http";
 
 const STATIC_ROOT = path.resolve(process.env.STATIC_DIR || path.join(import.meta.dir, "..", "..", "dist"));
 const PUB_DIR = path.resolve(path.join(import.meta.dir, "..", "..", "web", "public"));
 
+type PeerServer = { requestIP(req: Request): { address: string } | null };
+
+function safeForwardedOrigin(protoRaw: string, hostRaw: string): string | null {
+  const proto = protoRaw.split(",")[0]!.trim().toLowerCase();
+  if (proto !== "http" && proto !== "https") return null;
+  const host = hostRaw.split(",")[0]!.trim();
+  if (!host || host.length > 255 || hasControlCharacters(host) || /[\s/\\?#@]/.test(host)) return null;
+  try {
+    const parsed = new URL(`${proto}://${host}/`);
+    if (parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) return null;
+    if (!parsed.hostname) return null;
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Determine the public origin of the incoming request.
- * Honors x-forwarded-proto and x-forwarded-host (when behind Caddy/Cloudflare/reverse proxy),
- * falling back to the URL or configured PUBLIC_URL.
+ * Honors x-forwarded-proto and x-forwarded-host ONLY when the request comes
+ * from a configured trusted proxy (`isTrustedProxy(req, server)`), falling back
+ * to the request URL origin or configured PUBLIC_URL.
  */
-export function getRequestOrigin(req: Request, url: URL): string {
-  const host = (req.headers.get("x-forwarded-host") || req.headers.get("host") || url.host || "").split(",")[0].trim();
-  const proto = (req.headers.get("x-forwarded-proto") || (url.protocol.replace(":", "") || "https")).split(",")[0].trim();
-  if (host) return `${proto}://${host}`.replace(/\/+$/, "");
+export function getRequestOrigin(req: Request, url: URL, server?: PeerServer): string {
+  if (isTrustedProxy(req, server)) {
+    const rawHost = req.headers.get("x-forwarded-host") || req.headers.get("host") || url.host || "";
+    const rawProto = req.headers.get("x-forwarded-proto") || url.protocol.replace(":", "") || "https";
+    const forwarded = safeForwardedOrigin(rawProto, rawHost);
+    if (forwarded) return forwarded;
+  }
+  if ((url.protocol === "http:" || url.protocol === "https:") && url.host) {
+    return url.origin;
+  }
   return PUBLIC_URL.replace(/\/+$/, "");
 }
 
@@ -63,8 +87,8 @@ function loadTemplate(): Record<string, any> {
  * base domain so browsers (Chrome, Edge, Android WebAPK) associate the PWA directly
  * with the base origin and do not display out-of-scope / domain warning notifications.
  */
-export function handleManifestRoute(req: Request, url: URL): Response {
-  const origin = getRequestOrigin(req, url);
+export function handleManifestRoute(req: Request, url: URL, server?: PeerServer): Response {
+  const origin = getRequestOrigin(req, url, server);
   const base = loadTemplate();
 
   const startPath = typeof base.start_url === "string" ? base.start_url : "/#/code";

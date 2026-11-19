@@ -1,7 +1,7 @@
 import { requireAuth } from "../auth";
 import { audit, db, inImmediateTx } from "../db";
 import { ApiError, clientIp, err, json, readJsonBody, v } from "../http";
-import { deleteSubscription, listSubscriptions, saveSubscription, vapidPublicKey } from "../push";
+import { deleteSubscription, listSubscriptions, saveSubscription, validatePushEndpoint, vapidPublicKey } from "../push";
 
 /**
  * Web Push REST endpoints (per-device subscriptions):
@@ -55,6 +55,7 @@ export async function handlePushRoute(path: string, req: Request, _url: URL): Pr
     if (typeof auth !== "string" || auth.length < 10 || auth.length > 512) {
       return err(400, "keys.auth is invalid", req);
     }
+    await validatePushEndpoint(endpoint);
     inImmediateTx(() => {
       const count = db
         .prepare<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?")
@@ -67,7 +68,10 @@ export async function handlePushRoute(path: string, req: Request, _url: URL): Pr
       if (count >= MAX_SUBS_PER_USER && !exists) {
         throw new ApiError(429, "too many push subscriptions for this user");
       }
-      saveSubscription(user.id, { endpoint, keys: { p256dh, auth } }, label);
+      const saved = saveSubscription(user.id, { endpoint, keys: { p256dh, auth } }, label);
+      if (!saved) {
+        throw new ApiError(409, "push subscription endpoint is already registered");
+      }
       audit("push.subscribed", { actorId: user.id, ip, meta: { pushService: endpointHost(endpoint), label } });
     });
     return json({ success: true }, { req });

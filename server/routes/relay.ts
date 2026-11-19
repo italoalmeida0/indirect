@@ -239,8 +239,9 @@ function daemonLive(ws: ServerWebSocket<WsData>): boolean {
   try {
     status = stmtUserStatus.get(userId)?.status;
   } catch (error) {
+    // Transient DB read failure: drop this frame without killing the socket.
     console.error("[RELAY] daemon account check failed:", error instanceof Error ? error.name : "unknown");
-    return true;
+    return false;
   }
   if (status !== "active") {
     dropDaemon(ws, "account_unavailable");
@@ -251,9 +252,10 @@ function daemonLive(ws: ServerWebSocket<WsData>): boolean {
     try {
       owned = stmtDaemonOwned.get(hostId, userId, tokenHash) !== null;
     } catch (error) {
+      // Transient DB read failure: drop this frame without killing the socket;
+      // keep revalidateAt untouched so the next frame retries ownership check.
       console.error("[RELAY] daemon host check failed:", error instanceof Error ? error.name : "unknown");
-      ws.data.revalidateAt = now + DAEMON_REVALIDATE_MS;
-      return true;
+      return false;
     }
     if (!owned) {
       dropDaemon(ws, "account_unavailable");
@@ -629,10 +631,15 @@ function maybePushTurnEnd(userId: string, hostId: string, parsed: unknown): void
   if (parsed.type === "agent_event") {
     const ev = parsed.event;
     if (isRelayRecord(ev) && ev.type === "turn_end") {
+      lastDisposition.delete(key);
       lastDisposition.set(
         key,
         ev.cancelled === true ? "cancelled" : typeof ev.error === "string" && ev.error ? "error" : "done",
       );
+      if (lastDisposition.size > 2000) {
+        const first = lastDisposition.keys().next();
+        if (!first.done) lastDisposition.delete(first.value);
+      }
     }
     return;
   }
@@ -656,6 +663,11 @@ function maybePushTurnEnd(userId: string, hostId: string, parsed: unknown): void
 
 function broadcastToUser(userId: string, data: string | object): void {
   broadcastToUserCompressed(userId, data, false);
+}
+
+/** Test hook: bounded turn disposition map size. */
+export function relayDispositionCacheSize(): number {
+  return lastDisposition.size;
 }
 
 /** Large transcript-carrying events compress 5-10x; small status
