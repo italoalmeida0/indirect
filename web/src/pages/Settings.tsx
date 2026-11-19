@@ -49,16 +49,26 @@ export default function SettingsPage() {
   const [curPw, setCurPw] = createSignal("");
   const [newPw, setNewPw] = createSignal("");
   const [newPw2, setNewPw2] = createSignal("");
+  const [pwTotpCode, setPwTotpCode] = createSignal("");
 
   // totp section
   const [totpSetup, setTotpSetup] = createSignal<{ secret: string; otpauthUri: string; qrDataUrl: string } | null>(null);
   const [totpCode, setTotpCode] = createSignal("");
+  const [setupVerifyOpen, setSetupVerifyOpen] = createSignal(false);
+  const [totpSetupPassword, setTotpSetupPassword] = createSignal("");
   const [disableTotpOpen, setDisableTotpOpen] = createSignal(false);
   const [totpDisableCode, setTotpDisableCode] = createSignal("");
+  const [totpDisablePassword, setTotpDisablePassword] = createSignal("");
 
-  // google link
+  // google link / unlink step-up
   let googleDiv: HTMLDivElement | undefined;
   const [googleClientId, setGoogleClientId] = createSignal<string | null>(null);
+  const [pendingGoogleIdToken, setPendingGoogleIdToken] = createSignal<string | null>(null);
+  const [googleLinkPassword, setGoogleLinkPassword] = createSignal("");
+  const [googleLinkCode, setGoogleLinkCode] = createSignal("");
+  const [unlinkGoogleOpen, setUnlinkGoogleOpen] = createSignal(false);
+  const [googleUnlinkPassword, setGoogleUnlinkPassword] = createSignal("");
+  const [googleUnlinkCode, setGoogleUnlinkCode] = createSignal("");
 
   // session naming
   const [namingJti, setNamingJti] = createSignal<string | null>(null);
@@ -74,6 +84,26 @@ export default function SettingsPage() {
     setSession({ ...currentSession()!, user });
   };
 
+  const submitGoogleLink = async (idToken: string, currentPassword?: string, code?: string) => {
+    setBusy(true);
+    try {
+      await api("POST", "/api/me/google/link", {
+        idToken,
+        ...(currentPassword ? { currentPassword } : {}),
+        ...(code ? { code } : {}),
+      });
+      toast("Google account linked");
+      setPendingGoogleIdToken(null);
+      setGoogleLinkPassword("");
+      setGoogleLinkCode("");
+      await reloadMe();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "link failed", "err");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   onMount(async () => {
     if (me().googleLinked) return;
     try {
@@ -81,13 +111,13 @@ export default function SettingsPage() {
       setGoogleClientId(cfg.googleClientId);
       if (cfg.googleClientId && googleDiv) {
         renderGoogleButton(googleDiv, cfg.googleClientId, async (idToken) => {
-          try {
-            await api("POST", "/api/me/google/link", { idToken });
-            toast("Google account linked");
-            await reloadMe();
-          } catch (e) {
-            toast(e instanceof Error ? e.message : "link failed", "err");
+          if (me().hasPassword || me().totpEnabled) {
+            setGoogleLinkPassword("");
+            setGoogleLinkCode("");
+            setPendingGoogleIdToken(idToken);
+            return;
           }
+          await submitGoogleLink(idToken);
         });
       }
     } catch {}
@@ -114,16 +144,22 @@ export default function SettingsPage() {
   const savePassword = async () => {
     if (newPw().length < 10) return toast("At least 10 characters", "err");
     if (newPw() !== newPw2()) return toast("Passwords do not match", "err");
+    if (me().hasPassword && !curPw()) return toast("Enter your current password", "err");
+    if (me().totpEnabled && pwTotpCode().trim().length !== 6) {
+      return toast("Enter your 6-digit authenticator code", "err");
+    }
     setBusy(true);
     try {
       await api("POST", "/api/me/password", {
         currentPassword: curPw() || undefined,
         newPassword: newPw(),
+        ...(me().totpEnabled ? { totpCode: pwTotpCode().trim() } : {}),
       });
       toast("Password updated");
       setCurPw("");
       setNewPw("");
       setNewPw2("");
+      setPwTotpCode("");
       await reloadMe();
     } catch (e) {
       toast(e instanceof Error ? e.message : "failed", "err");
@@ -132,16 +168,31 @@ export default function SettingsPage() {
     }
   };
 
-  const startTotp = async () => {
+  const startTotp = async (currentPassword?: string) => {
     setBusy(true);
     try {
-      const j = await api<{ secret: string; otpauthUri: string; qrDataUrl: string }>("POST", "/api/me/2fa/setup");
+      const j = await api<{ secret: string; otpauthUri: string; qrDataUrl: string }>(
+        "POST",
+        "/api/me/2fa/setup",
+        currentPassword ? { currentPassword } : {},
+      );
+      setSetupVerifyOpen(false);
+      setTotpSetupPassword("");
       setTotpSetup(j);
     } catch (e) {
       toast(e instanceof Error ? e.message : "failed", "err");
     } finally {
       setBusy(false);
     }
+  };
+
+  const openTotpSetup = () => {
+    if (me().hasPassword) {
+      setTotpSetupPassword("");
+      setSetupVerifyOpen(true);
+      return;
+    }
+    void startTotp();
   };
 
   const enableTotp = async () => {
@@ -162,13 +213,17 @@ export default function SettingsPage() {
   const disableTotp = async () => {
     setBusy(true);
     try {
-      await api("POST", "/api/me/2fa/disable", { code: totpDisableCode() });
+      await api("POST", "/api/me/2fa/disable", {
+        code: totpDisableCode(),
+        ...(me().hasPassword ? { currentPassword: totpDisablePassword() } : {}),
+      });
       toast("Two-factor authentication disabled");
       setDisableTotpOpen(false);
       setTotpDisableCode("");
+      setTotpDisablePassword("");
       await reloadMe();
     } catch (e) {
-      toast(e instanceof Error ? e.message : "invalid code", "err");
+      toast(e instanceof Error ? e.message : "invalid verification", "err");
     } finally {
       setBusy(false);
     }
@@ -177,8 +232,14 @@ export default function SettingsPage() {
   const unlinkGoogle = async () => {
     setBusy(true);
     try {
-      await api("DELETE", "/api/me/google/link");
+      await api("DELETE", "/api/me/google/link", {
+        ...(me().hasPassword ? { currentPassword: googleUnlinkPassword() } : {}),
+        ...(me().totpEnabled ? { code: googleUnlinkCode().trim() } : {}),
+      });
       toast("Google account unlinked");
+      setUnlinkGoogleOpen(false);
+      setGoogleUnlinkPassword("");
+      setGoogleUnlinkCode("");
       await reloadMe();
     } catch (e) {
       toast(e instanceof Error ? e.message : "failed", "err");
@@ -280,13 +341,40 @@ export default function SettingsPage() {
         <Card motion="fade-u duration-250">
           <CardHeader title="Password" subtitle={me().hasPassword ? undefined : "Set account password"} />
           <div class="px-5 pb-5 space-y-4">
-            <Show when={me().hasPassword}>
+            <Show
+              when={me().hasPassword}
+              fallback={
+                <p class="text-xs text-fg-muted">
+                  Setting a password for the first time requires a recent sign-in (within the last 5 minutes).
+                </p>
+              }
+            >
               <Input label="Current password" type="password" value={curPw()} onInput={setCurPw} autocomplete="current-password" />
             </Show>
             <Input label="New password" type="password" value={newPw()} onInput={setNewPw} autocomplete="new-password" hint="At least 10 characters" />
             <Input label="Confirm new password" type="password" value={newPw2()} onInput={setNewPw2} autocomplete="new-password" />
+            <Show when={me().totpEnabled}>
+              <OtpPinField
+                label="Current 6-digit authenticator code"
+                ariaLabel="Current 6-digit authenticator code"
+                value={pwTotpCode()}
+                onInput={setPwTotpCode}
+                placeholder="123456"
+                hint="Required when two-factor authentication is enabled."
+              />
+            </Show>
             <div class="flex justify-end">
-              <Btn onClick={savePassword} disabled={busy() || !newPw()}>Update password</Btn>
+              <Btn
+                onClick={savePassword}
+                disabled={
+                  busy() ||
+                  !newPw() ||
+                  (me().hasPassword && !curPw()) ||
+                  (me().totpEnabled && pwTotpCode().trim().length !== 6)
+                }
+              >
+                Update password
+              </Btn>
             </div>
           </div>
         </Card>
@@ -308,7 +396,7 @@ export default function SettingsPage() {
                   fallback={
                     <div class="space-y-3">
                       <p class="text-xs text-fg-secondary">Add an extra layer of security using an authenticator app.</p>
-                      <Btn variant="outline" onClick={startTotp} disabled={busy()}>
+                      <Btn variant="outline" onClick={openTotpSetup} disabled={busy()}>
                         <Icon name={Icons.shield} /> Set up 2FA
                       </Btn>
                     </div>
@@ -316,7 +404,15 @@ export default function SettingsPage() {
                 >
                   <div class="space-y-3">
                     <p class="text-xs text-fg-secondary">Your account requires a 6-digit code at sign-in.</p>
-                    <Btn variant="danger" size="sm" onClick={() => setDisableTotpOpen(true)}>
+                    <Btn
+                      variant="danger"
+                      size="sm"
+                      onClick={() => {
+                        setTotpDisableCode("");
+                        setTotpDisablePassword("");
+                        setDisableTotpOpen(true);
+                      }}
+                    >
                       Disable 2FA
                     </Btn>
                   </div>
@@ -341,7 +437,16 @@ export default function SettingsPage() {
                   }
                 >
                   <p class="text-sm text-fg-secondary">You can sign in using your Google account.</p>
-                  <Btn variant="danger" size="sm" onClick={unlinkGoogle} disabled={busy()}>
+                  <Btn
+                    variant="danger"
+                    size="sm"
+                    onClick={() => {
+                      setGoogleUnlinkPassword("");
+                      setGoogleUnlinkCode("");
+                      setUnlinkGoogleOpen(true);
+                    }}
+                    disabled={busy()}
+                  >
                     Unlink Google
                   </Btn>
                 </Show>
@@ -427,6 +532,51 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      {/* 2FA Setup Password Verification Modal */}
+      <Modal
+        open={setupVerifyOpen()}
+        onClose={() => { setSetupVerifyOpen(false); setTotpSetupPassword(""); }}
+        title="Verify your password"
+        subtitle="Confirm your current account password before generating a new two-factor secret."
+        width="max-w-md"
+        footer={
+          <>
+            <Btn
+              variant="outline"
+              size="sm"
+              onClick={() => { setSetupVerifyOpen(false); setTotpSetupPassword(""); }}
+            >
+              Cancel
+            </Btn>
+            <Btn
+              size="sm"
+              onClick={() => void startTotp(totpSetupPassword())}
+              loading={busy()}
+              disabled={!totpSetupPassword()}
+            >
+              Continue
+            </Btn>
+          </>
+        }
+      >
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (totpSetupPassword() && !busy()) void startTotp(totpSetupPassword());
+          }}
+          class="space-y-4"
+        >
+          <Input
+            label="Current password"
+            type="password"
+            value={totpSetupPassword()}
+            onInput={setTotpSetupPassword}
+            autocomplete="current-password"
+            required
+          />
+        </form>
+      </Modal>
+
       {/* 2FA Setup Modal */}
       <Modal
         open={!!totpSetup()}
@@ -486,16 +636,20 @@ export default function SettingsPage() {
 
       <Modal
         open={disableTotpOpen()}
-        onClose={() => setDisableTotpOpen(false)}
+        onClose={() => { setDisableTotpOpen(false); setTotpDisableCode(""); setTotpDisablePassword(""); }}
         title="Disable two-factor authentication"
-        subtitle="Confirm with your current 6-digit authenticator code before removing 2FA protection."
+        subtitle={
+          me().hasPassword
+            ? "Confirm your current password and 6-digit authenticator code before removing 2FA protection."
+            : "Confirm with your current 6-digit authenticator code before removing 2FA protection."
+        }
         width="max-w-md"
         footer={
           <>
             <Btn
               variant="outline"
               size="sm"
-              onClick={() => setDisableTotpOpen(false)}
+              onClick={() => { setDisableTotpOpen(false); setTotpDisableCode(""); setTotpDisablePassword(""); }}
             >
               Cancel
             </Btn>
@@ -504,7 +658,7 @@ export default function SettingsPage() {
               size="sm"
               onClick={disableTotp}
               loading={busy()}
-              disabled={totpDisableCode().length !== 6}
+              disabled={totpDisableCode().length !== 6 || (me().hasPassword && !totpDisablePassword())}
             >
               Disable 2FA
             </Btn>
@@ -512,6 +666,23 @@ export default function SettingsPage() {
         }
       >
         <div class="space-y-4">
+          <Show
+            when={me().hasPassword}
+            fallback={
+              <p class="text-xs text-fg-muted">
+                Accounts without a password require a recent sign-in (within the last 5 minutes).
+              </p>
+            }
+          >
+            <Input
+              label="Current password"
+              type="password"
+              value={totpDisablePassword()}
+              onInput={setTotpDisablePassword}
+              autocomplete="current-password"
+              required
+            />
+          </Show>
           <OtpPinField
             label="Current 6-digit authenticator code"
             ariaLabel="Current 6-digit authenticator code"
@@ -524,6 +695,129 @@ export default function SettingsPage() {
           <ModalNotice tone="warn" title="Reduced account protection">
             Disabling 2FA removes the second security layer. Your account will only require a password or Google OAuth to sign in.
           </ModalNotice>
+        </div>
+      </Modal>
+
+      {/* Google Link Step-Up Modal */}
+      <Modal
+        open={pendingGoogleIdToken() !== null}
+        onClose={() => { setPendingGoogleIdToken(null); setGoogleLinkPassword(""); setGoogleLinkCode(""); }}
+        title="Confirm Google account link"
+        subtitle="Verify your identity before linking this Google account."
+        width="max-w-md"
+        footer={
+          <>
+            <Btn
+              variant="outline"
+              size="sm"
+              onClick={() => { setPendingGoogleIdToken(null); setGoogleLinkPassword(""); setGoogleLinkCode(""); }}
+            >
+              Cancel
+            </Btn>
+            <Btn
+              size="sm"
+              onClick={() => {
+                const token = pendingGoogleIdToken();
+                if (!token) return;
+                void submitGoogleLink(
+                  token,
+                  me().hasPassword ? googleLinkPassword() : undefined,
+                  me().totpEnabled ? googleLinkCode().trim() : undefined,
+                );
+              }}
+              loading={busy()}
+              disabled={
+                (me().hasPassword && !googleLinkPassword()) ||
+                (me().totpEnabled && googleLinkCode().trim().length !== 6)
+              }
+            >
+              Link Google
+            </Btn>
+          </>
+        }
+      >
+        <div class="space-y-4">
+          <Show when={me().hasPassword}>
+            <Input
+              label="Current password"
+              type="password"
+              value={googleLinkPassword()}
+              onInput={setGoogleLinkPassword}
+              autocomplete="current-password"
+              required
+            />
+          </Show>
+          <Show when={me().totpEnabled}>
+            <OtpPinField
+              label="Current 6-digit authenticator code"
+              ariaLabel="Current 6-digit authenticator code"
+              value={googleLinkCode()}
+              onInput={setGoogleLinkCode}
+              placeholder="123456"
+            />
+          </Show>
+        </div>
+      </Modal>
+
+      {/* Google Unlink Step-Up Modal */}
+      <Modal
+        open={unlinkGoogleOpen()}
+        onClose={() => { setUnlinkGoogleOpen(false); setGoogleUnlinkPassword(""); setGoogleUnlinkCode(""); }}
+        title="Unlink Google account"
+        subtitle="Verify your identity before removing Google sign-in from your account."
+        width="max-w-md"
+        footer={
+          <>
+            <Btn
+              variant="outline"
+              size="sm"
+              onClick={() => { setUnlinkGoogleOpen(false); setGoogleUnlinkPassword(""); setGoogleUnlinkCode(""); }}
+            >
+              Cancel
+            </Btn>
+            <Btn
+              variant="danger"
+              size="sm"
+              onClick={unlinkGoogle}
+              loading={busy()}
+              disabled={
+                !me().hasPassword ||
+                !googleUnlinkPassword() ||
+                (me().totpEnabled && googleUnlinkCode().trim().length !== 6)
+              }
+            >
+              Unlink Google
+            </Btn>
+          </>
+        }
+      >
+        <div class="space-y-4">
+          <Show
+            when={me().hasPassword}
+            fallback={
+              <ModalNotice tone="warn" title="Password required">
+                Set an account password first so you do not lose access after unlinking Google.
+              </ModalNotice>
+            }
+          >
+            <Input
+              label="Current password"
+              type="password"
+              value={googleUnlinkPassword()}
+              onInput={setGoogleUnlinkPassword}
+              autocomplete="current-password"
+              required
+            />
+            <Show when={me().totpEnabled}>
+              <OtpPinField
+                label="Current 6-digit authenticator code"
+                ariaLabel="Current 6-digit authenticator code"
+                value={googleUnlinkCode()}
+                onInput={setGoogleUnlinkCode}
+                placeholder="123456"
+              />
+            </Show>
+          </Show>
         </div>
       </Modal>
     </div>

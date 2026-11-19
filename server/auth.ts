@@ -42,11 +42,12 @@ export function publicUser(u: UserRow) {
 
 export async function prepareSessionTokens(
   user: UserRow,
-  meta: { ip?: string | null; ua?: string | null; label?: string | null; family?: string | null; authMethod?: LoginMethod; mfaVerified?: boolean; recoveryVerifiedAt?: number | null } = {},
+  meta: { ip?: string | null; ua?: string | null; label?: string | null; family?: string | null; authMethod?: LoginMethod; mfaVerified?: boolean; recoveryVerifiedAt?: number | null; createdAt?: number } = {},
 ) {
   const jti = randomToken(16);
   const refreshToken = randomToken(32);
   const now = Date.now();
+  const createdAt = meta.createdAt ?? now;
   const policyVersion = corporateAuthConfig().version;
   const refreshExpiresAt = now + LIMITS.refreshTokenTtlMs;
   const accessToken = await jwtSign(
@@ -60,6 +61,7 @@ export async function prepareSessionTokens(
     refreshToken,
     refreshHash: sha256Hex(refreshToken),
     now,
+    createdAt,
     refreshExpiresAt,
     absExpiresAt: now + LIMITS.refreshAbsoluteTtlMs,
     ip: meta.ip ?? null,
@@ -84,7 +86,7 @@ export function insertSessionRow(
     prepared.jti,
     userId,
     prepared.refreshHash,
-    prepared.now,
+    prepared.createdAt,
     prepared.now,
     prepared.refreshExpiresAt,
     prepared.absExpiresAt,
@@ -208,8 +210,9 @@ export async function rotateRefreshToken(refreshToken: string): Promise<{
   if (!user || user.status !== "active") throw new ApiError(401, "account unavailable");
   assertSessionPolicy(user, session);
 
-  // Rotate: kill old session, create a fresh one (device label and family
-  // are carried over — the chain stays auditable as one login).
+  // Rotate: kill old session, create a fresh one (device label, family, and
+  // original authentication created_at are carried over — the chain stays
+  // auditable as one login and refresh cannot reset step-up freshness).
   const prepared = await prepareSessionTokens(user, {
     ip: session.ip,
     ua: session.ua,
@@ -217,6 +220,7 @@ export async function rotateRefreshToken(refreshToken: string): Promise<{
     family: session.family ?? session.jti,
     authMethod: session.auth_method as LoginMethod,
     mfaVerified: !!session.mfa_verified,
+    createdAt: session.created_at,
   });
   prepared.absExpiresAt = session.abs_expires_at;
   prepared.refreshExpiresAt = Math.min(prepared.refreshExpiresAt, session.abs_expires_at);
@@ -227,6 +231,7 @@ export async function rotateRefreshToken(refreshToken: string): Promise<{
     assertSessionPolicy(currentUser, current);
     // A recovery grant is one-use even if refresh raced its consumption.
     prepared.recoveryVerifiedAt = current.recovery_verified_at;
+    prepared.createdAt = current.created_at;
     markSessionRevoked(session.jti);
     insertSessionRow(user.id, prepared);
   });

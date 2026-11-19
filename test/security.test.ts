@@ -331,7 +331,7 @@ describe("security audit", () => {
     const ip = freshIp();
     const consumed = new Set<string>();
     // enable TOTP on u3
-    const setup = await api("/api/me/2fa/setup", { token: u3Token, method: "POST", ip });
+    const setup = await api("/api/me/2fa/setup", { token: u3Token, method: "POST", body: { currentPassword: U_PW }, ip });
     const secret = setup.json.secret as string;
     const enable = await api("/api/me/2fa/enable", {
       token: u3Token,
@@ -367,7 +367,7 @@ describe("security audit", () => {
     u3Token = finish.json.accessToken;
     const disable = await api("/api/me/2fa/disable", {
       token: u3Token,
-      body: { code: await unusedTotpCode(secret, consumed) },
+      body: { code: await unusedTotpCode(secret, consumed), currentPassword: U_PW },
       ip,
     });
     expect(disable.status).toBe(200);
@@ -407,7 +407,7 @@ describe("security audit", () => {
   test("2FA enable: invalid codes are brute-force locked like disable/login", async () => {
     const fresh = await makeUser("u4@audit.test");
     const ip = freshIp();
-    const setup = await api("/api/me/2fa/setup", { token: fresh, method: "POST", ip });
+    const setup = await api("/api/me/2fa/setup", { token: fresh, method: "POST", body: { currentPassword: U_PW }, ip });
     expect(setup.status).toBe(200);
     const secret = setup.json.secret as string;
 

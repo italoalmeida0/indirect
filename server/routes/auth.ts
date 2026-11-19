@@ -288,6 +288,7 @@ export async function handleAuthRoute(path: string, req: Request, server: Pick<S
         "UPDATE password_tokens SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at >= ?",
       ).run(now, tokenHash, now);
       if (result.changes !== 1) return false;
+      db.prepare("DELETE FROM password_tokens WHERE user_id = ? AND used_at IS NULL").run(row.user_id);
       db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, row.user_id);
       markUserSessionsRevoked(row.user_id);
       audit(`password.${row.kind}.completed`, { target: row.user_id, ip });

@@ -9,6 +9,15 @@ import { parseGlobList, parseInspectTree } from "../../utils/toolTrees";
 import { isDaemonBuiltinTool } from "../../utils/tools";
 import type { ToolPartProps } from "./toolUnitModel";
 
+function isHttpUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 interface ParsedBgJobItem {
   id: string;
   kind: "bash" | "exec_script" | "python";
@@ -407,17 +416,35 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     }
                   >
                     <ol class="px-3 pb-2 space-y-1.5">
-                      <For each={webResults().slice(0, 10)}>{(r: any, i: () => number) =>
-                        <li class="group rounded-inner border border-border bg-surface px-2.5 py-1.5 transition-colors hover:border-border-strong">
-                          <a href={String(r.url || "")} target="_blank" rel="noreferrer"
-                             class="flex items-baseline gap-1.5 text-xs leading-snug">
-                            <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">{i() + 1}.</span>
-                            <span class="font-medium text-fg group-hover:text-accent group-hover:underline line-clamp-1">{String(r.title || r.url || "")}</span>
-                          </a>
-                          <div class="mt-0.5 truncate font-mono text-2xs text-fg-muted">{String(r.url || "")}</div>
-                          <Show when={r.snippet}><p class="mt-0.5 text-xs leading-snug text-fg-secondary line-clamp-2">{String(r.snippet)}</p></Show>
-                        </li>
-                      }</For>
+                      <For each={webResults().slice(0, 10)}>{(r: any, i: () => number) => {
+                        const resultUrl = String(r.url || "");
+                        const resultLabel = String(r.title || r.url || "");
+                        return (
+                          <li class="group rounded-inner border border-border bg-surface px-2.5 py-1.5 transition-colors hover:border-border-strong">
+                            <Show
+                              when={isHttpUrl(resultUrl)}
+                              fallback={
+                                <span class="flex items-baseline gap-1.5 text-xs leading-snug">
+                                  <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">{i() + 1}.</span>
+                                  <span class="font-medium text-fg line-clamp-1">{resultLabel}</span>
+                                </span>
+                              }
+                            >
+                              <a
+                                href={resultUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="flex items-baseline gap-1.5 text-xs leading-snug"
+                              >
+                                <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">{i() + 1}.</span>
+                                <span class="font-medium text-fg group-hover:text-accent group-hover:underline line-clamp-1">{resultLabel}</span>
+                              </a>
+                            </Show>
+                            <div class="mt-0.5 truncate font-mono text-2xs text-fg-muted">{resultUrl}</div>
+                            <Show when={r.snippet}><p class="mt-0.5 text-xs leading-snug text-fg-secondary line-clamp-2">{String(r.snippet)}</p></Show>
+                          </li>
+                        );
+                      }}</For>
                     </ol>
                     <Show when={webResults().length > 10}>
                       <p class="px-3 pb-2 text-2xs text-fg-muted">+{webResults().length - 10} more matches</p>
@@ -459,19 +486,40 @@ export function ToolSearchBodies(props: ToolPartProps) {
                   <ArrivalSpillBanner spill={props.m.spill()} />
                 </Show>
                 <div class="px-3 pt-2">
-                  <a href={targetUrl()} target="_blank" rel="noreferrer"
-                     class="flex items-center gap-2 rounded-inner border border-border bg-surface px-2.5 py-2 transition-colors hover:border-border-strong">
-                    <span class="inline-flex shrink-0 items-center justify-center rounded-xs border border-border-subtle bg-accent-subtle px-1.5 py-0.5 font-mono text-2xs font-medium text-accent">
-                      {badgeChar()}
-                    </span>
-                    <span class="min-w-0">
-                      <span class="block truncate text-xs font-medium text-fg">{titleLabel()}</span>
-                      <Show when={hostLabel()}>
-                        <span class="block truncate font-mono text-2xs text-fg-muted">{hostLabel()}</span>
-                      </Show>
-                    </span>
-                    <Iconify icon="lucide:external-link" size={12} class="ml-auto shrink-0 text-fg-muted" />
-                  </a>
+                  <Show
+                    when={isHttpUrl(targetUrl())}
+                    fallback={
+                      <span class="flex items-center gap-2 rounded-inner border border-border bg-surface px-2.5 py-2">
+                        <span class="inline-flex shrink-0 items-center justify-center rounded-xs border border-border-subtle bg-accent-subtle px-1.5 py-0.5 font-mono text-2xs font-medium text-accent">
+                          {badgeChar()}
+                        </span>
+                        <span class="min-w-0">
+                          <span class="block truncate text-xs font-medium text-fg">{titleLabel()}</span>
+                          <Show when={hostLabel()}>
+                            <span class="block truncate font-mono text-2xs text-fg-muted">{hostLabel()}</span>
+                          </Show>
+                        </span>
+                      </span>
+                    }
+                  >
+                    <a
+                      href={targetUrl()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="flex items-center gap-2 rounded-inner border border-border bg-surface px-2.5 py-2 transition-colors hover:border-border-strong"
+                    >
+                      <span class="inline-flex shrink-0 items-center justify-center rounded-xs border border-border-subtle bg-accent-subtle px-1.5 py-0.5 font-mono text-2xs font-medium text-accent">
+                        {badgeChar()}
+                      </span>
+                      <span class="min-w-0">
+                        <span class="block truncate text-xs font-medium text-fg">{titleLabel()}</span>
+                        <Show when={hostLabel()}>
+                          <span class="block truncate font-mono text-2xs text-fg-muted">{hostLabel()}</span>
+                        </Show>
+                      </span>
+                      <Iconify icon="lucide:external-link" size={12} class="ml-auto shrink-0 text-fg-muted" />
+                    </a>
+                  </Show>
                 </div>
                 <Show
                   when={!props.u.result?.isError}

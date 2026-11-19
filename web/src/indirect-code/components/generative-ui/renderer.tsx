@@ -1,4 +1,5 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { authHeaders } from "../../../api";
 import { lockScroll, pushLayer } from "../../../ds/primitives/layers";
 import { MsgIconBtn } from "../MsgActions";
 import { useModal } from "../../ctx";
@@ -316,7 +317,7 @@ export function GenerativeUiWidget(props: {
     try {
       const res = await fetch("/api/indirect-code/gen-ui/widgets", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           theme: theme(),
           jsx: source(),
@@ -356,12 +357,44 @@ export function GenerativeUiWidget(props: {
     ),
   );
 
+  // Interaction tracking for widget-initiated sendPrompt: block immediate
+  // mount-time auto-fire (< 500ms) and require host-observed focus or pointer
+  // interaction with the iframe; otherwise downgrade to prefillPrompt so the
+  // user sees the text before sending. (Never rely on parent userActivation,
+  // which stays false when clicks happen inside an opaque-origin iframe.)
+  const MIN_MOUNT_SETTLE_MS = 500;
+  const INTERACTION_WINDOW_MS = 30_000;
+  let frameMountedAt = 0;
+  let lastFrameInteractionAt = 0;
+  createEffect(
+    on(finalUrl, (url) => {
+      frameMountedAt = url ? Date.now() : 0;
+      lastFrameInteractionAt = 0;
+    }),
+  );
+
   onMount(() => {
+    const onWindowBlur = () => {
+      const frame = finalEl();
+      if (frame && document.activeElement === frame) {
+        lastFrameInteractionAt = Date.now();
+      }
+    };
+    window.addEventListener("blur", onWindowBlur);
     const detach = attachGuBridge(
       () => (streaming() ? undefined : finalEl()?.contentWindow),
       {
         onSendPrompt: (text) => props.onSendPrompt(text),
         onPrefillPrompt: (text) => props.onPrefillPrompt?.(text),
+        canAutoSend: () => {
+          const now = Date.now();
+          if (frameMountedAt === 0 || now - frameMountedAt < MIN_MOUNT_SETTLE_MS) return false;
+          const frame = finalEl();
+          const focused = !!frame && document.activeElement === frame;
+          const recentInteraction =
+            lastFrameInteractionAt > 0 && now - lastFrameInteractionAt <= INTERACTION_WINDOW_MS;
+          return focused || recentInteraction;
+        },
         onOpenLink: (url) => {
           if (props.onOpenLink) props.onOpenLink(url);
           else window.open(url, "_blank", "noopener,noreferrer");
@@ -379,7 +412,10 @@ export function GenerativeUiWidget(props: {
         },
       },
     );
-    onCleanup(detach);
+    onCleanup(() => {
+      window.removeEventListener("blur", onWindowBlur);
+      detach();
+    });
   });
 
   /** Short content-hash ref from the published widget URL (error reports). */
@@ -569,6 +605,19 @@ export function GenerativeUiWidget(props: {
             referrerpolicy="no-referrer"
             title="Interactive widget"
             src={finalUrl()}
+            onLoad={() => {
+              frameMountedAt = Date.now();
+              lastFrameInteractionAt = 0;
+            }}
+            onPointerEnter={() => {
+              lastFrameInteractionAt = Date.now();
+            }}
+            onPointerDown={() => {
+              lastFrameInteractionAt = Date.now();
+            }}
+            onFocus={() => {
+              lastFrameInteractionAt = Date.now();
+            }}
             class={
               expanded()
                 ? "block h-full w-full border-0 bg-surface"

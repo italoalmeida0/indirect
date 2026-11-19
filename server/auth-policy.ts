@@ -69,7 +69,12 @@ export function accountAuthPolicy(userId: string) {
 
 export function requiresSso(user: UserRow, config = corporateAuthConfig()): boolean {
   const policy = accountAuthPolicy(user.id);
-  return config.requireManagedSso && policy.managed && !(policy.ssoExempt && user.role === "admin");
+  const effectiveExempt =
+    policy.ssoExempt &&
+    user.role === "admin" &&
+    !!user.totp_secret &&
+    recoveryCodesRemaining(user.id) > 0;
+  return config.requireManagedSso && policy.managed && !effectiveExempt;
 }
 
 export function assertLoginMethodAllowed(user: UserRow, method: LoginMethod): void {

@@ -19,6 +19,12 @@ export type GuBridgeOps = {
   onError?: (message: string) => void;
   /** Explicit (non-reactive) state save: widget calls window.__gu.saveState(). */
   onState?: (stateJSON: string) => void;
+  /**
+   * Optional host interaction gate checked before auto-sending a widget prompt.
+   * When false (e.g. fire-on-mount without user interaction with the iframe),
+   * sendPrompt downgrades to onPrefillPrompt so the user must explicitly send.
+   */
+  canAutoSend?: () => boolean;
 };
 
 /** A widget may ask for follow-ups, but never spam: cap the op rate. */
@@ -78,7 +84,19 @@ export function attachGuBridge(
     switch (data.__gu) {
       case "sendPrompt": {
         const text = typeof data.text === "string" ? data.text.slice(0, MAX_PROMPT_CHARS).trim() : "";
-        if (text) ops.onSendPrompt(text);
+        if (!text) return;
+        // Slash commands (e.g. /full, /yolo, /compact) can change session access
+        // or trigger host actions: never auto-execute them from an untrusted
+        // widget. Fall back to prefill so the human sees and submits explicitly.
+        if (text.trimStart().startsWith("/")) {
+          ops.onPrefillPrompt?.(text);
+          return;
+        }
+        if (ops.canAutoSend && !ops.canAutoSend()) {
+          ops.onPrefillPrompt?.(text);
+          return;
+        }
+        ops.onSendPrompt(text);
         return;
       }
       case "prefillPrompt": {

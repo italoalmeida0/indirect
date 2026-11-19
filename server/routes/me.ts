@@ -4,7 +4,6 @@ import { LIMITS } from "../config";
 import { db, stmts, audit, inImmediateTx, type UserRow } from "../db";
 import {
   hashPassword,
-  verifyPassword,
   newTotpSecret,
   totpUri,
   totpVerify,
@@ -20,13 +19,14 @@ import { disconnectSessionSockets } from "./relay";
 import { verifyGoogleIdToken } from "../google";
 import { sendSecurityAlert } from "../email";
 import { ApiError, clientIp, err, ok, rateLimitError, readJsonBody, v } from "../http";
-import { bruteforceClear, bruteforceFail, bruteforceLocked, consumeTotpCode } from "../ratelimit";
+import { bruteforceClear, bruteforceFail, bruteforceLocked } from "../ratelimit";
 import { DEFAULT_MODEL_CONTEXT, DEFAULT_MODEL_OUTPUT, routerSnapshot, listableModels } from "../models";
 import { allowedModels, modelAllowed } from "../model-policy";
 import { requireKeyProject, requireProjectAccess } from "../projects";
 import { financialPolicyFor, installationDefaults } from "../financial-policy";
 import { assertMfaCanDisable, consumeDurableTotp, corporateAuthConfig } from "../auth-policy";
 import { requireLiveActor } from "../live-auth";
+import { stepUp } from "./corporate-auth";
 
 const ENROLLMENT_TTL = 5 * 60_000;
 const credentialFingerprint = (user: UserRow) => sha256Hex(JSON.stringify([user.password_hash, user.totp_secret, user.google_id]));
@@ -74,19 +74,17 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     const newPassword = v.str(body, "newPassword", { min: 1, max: 256 })!;
     if (newPassword.length < 10) throw new ApiError(400, "password must be at least 10 characters");
 
-    if (ctx.user.password_hash) {
-      const current = v.str(body, "currentPassword", { min: 1, max: 256 })!;
-      const locked = bruteforceLocked(`pwchange:${ctx.user.id}`);
-      if (locked > 0) return rateLimitError(`too many attempts, retry in ${locked}s`, locked, req);
-      if (!(await verifyPassword(current, ctx.user.password_hash))) {
-        bruteforceFail(`pwchange:${ctx.user.id}`);
-        return err(401, "current password is incorrect", req);
-      }
-    }
+    const commitProof = await stepUp(ctx, body, {
+      passwordFields: ["currentPassword", "password"],
+      codeFields: ["totpCode", "code"],
+      staleSessionMessage: "sign in again before setting a password",
+    });
 
     const newHash = await hashPassword(newPassword);
     inImmediateTx(() => {
+      commitProof();
       db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(newHash, ctx.user.id);
+      db.prepare("DELETE FROM password_tokens WHERE user_id = ? AND used_at IS NULL").run(ctx.user.id);
       markUserSessionsRevoked(ctx.user.id, ctx.session.jti);
       audit("password.changed", { actorId: ctx.user.id, ip });
     });
@@ -100,34 +98,43 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     const ctx = await requireAuth(req);
     const ip = clientIp(req);
     const body = req.body ? await readJsonBody(req, LIMITS.authBodyBytes) : {};
-    if (Object.keys(body).some((key) => !["currentPassword", "currentCode", "useRecovery"].includes(key)) || (body.useRecovery !== undefined && typeof body.useRecovery !== "boolean")) throw new ApiError(400, "invalid authenticator setup fields");
+    if (
+      Object.keys(body).some(
+        (key) => !["currentPassword", "password", "currentCode", "code", "totpCode", "useRecovery"].includes(key),
+      ) ||
+      (body.useRecovery !== undefined && typeof body.useRecovery !== "boolean")
+    ) {
+      throw new ApiError(400, "invalid authenticator setup fields");
+    }
     const replacing = !!ctx.user.totp_secret;
     const viaRecovery = replacing && body.useRecovery === true;
-    const scope = `2fareplace:${ctx.user.id}`;
-    const locked = bruteforceLocked(scope);
-    if (locked) return rateLimitError(`too many attempts; retry in ${locked}s`, locked, req);
-    let currentCode = "";
-    if (replacing && !viaRecovery) {
-      if (typeof body.currentCode !== "string" || (ctx.user.password_hash && typeof body.currentPassword !== "string")) throw new ApiError(403, "confirm your current authenticator and account password before replacing it, or sign in with a recovery code");
-      currentCode = v.str(body, "currentCode", { min: 6, max: 6 })!;
-      const passwordValid = !ctx.user.password_hash || await verifyPassword(v.str(body, "currentPassword", { min: 1, max: 256 })!, ctx.user.password_hash);
-      if (!passwordValid || !await totpVerify(ctx.user.totp_secret!, currentCode)) {
-        bruteforceFail(scope);
-        throw new ApiError(401, "invalid account verification");
-      }
-    }
+    const commitProof = viaRecovery
+      ? null
+      : await stepUp(ctx, body, {
+          passwordFields: ["currentPassword", "password"],
+          codeFields: ["currentCode", "code", "totpCode"],
+          missingStatus: 403,
+          missingMessage: replacing
+            ? "confirm your current authenticator and account password before replacing it, or sign in with a recovery code"
+            : "confirm your account password before setting up two-factor authentication",
+          staleSessionMessage: replacing
+            ? "sign in again and confirm your current authenticator before replacing it, or sign in with a recovery code"
+            : "sign in again before setting up two-factor authentication",
+        });
     const secret = newTotpSecret();
     const uri = totpUri(secret, ctx.user.email);
     const qrDataUrl = await QRCode.toDataURL(uri, { margin: 1, width: 220 });
     const expiresAt = Date.now() + ENROLLMENT_TTL;
     inImmediateTx(() => {
-      requireLiveActor(ctx);
-      const session = stmts.sessionByJti.get(ctx.session.jti)!;
       if (viaRecovery) {
+        requireLiveActor(ctx);
+        const session = stmts.sessionByJti.get(ctx.session.jti)!;
         const verifiedAt = session.recovery_verified_at;
         if (!verifiedAt || verifiedAt > Date.now() || Date.now() - verifiedAt > ENROLLMENT_TTL) throw new ApiError(403, "sign in with an unused recovery code before replacing a lost authenticator; recovery approval lasts five minutes and works once");
         db.prepare("UPDATE sessions SET recovery_verified_at=NULL WHERE jti=?").run(session.jti);
-      } else if (replacing) consumeDurableTotp(ctx.user.totp_secret!, currentCode);
+      } else {
+        commitProof!();
+      }
       db.prepare("UPDATE users SET totp_pending = ? WHERE id = ?").run(secret, ctx.user.id);
       db.prepare(`INSERT INTO mfa_enrollments(user_id,session_jti,pending_hash,credential_fingerprint,policy_version,expires_at)
         VALUES (?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET session_jti=excluded.session_jti,pending_hash=excluded.pending_hash,
@@ -135,7 +142,6 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
         .run(ctx.user.id, ctx.session.jti, sha256Hex(secret), credentialFingerprint(ctx.user), corporateAuthConfig().version, expiresAt);
       audit("2fa.setup", { actorId: ctx.user.id, target: ctx.user.id, ip, meta: { replacement: replacing, viaRecovery } });
     });
-    bruteforceClear(scope);
     const response = ok({ secret, otpauthUri: uri, qrDataUrl, expiresAt }, req);
     response.headers.set("Cache-Control", "no-store");
     return response;
@@ -179,25 +185,22 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     if (!ctx.user.totp_secret) return err(400, "2FA is not enabled", req);
     assertMfaCanDisable(ctx.user);
     const body = await readJsonBody(req, LIMITS.authBodyBytes);
-    const code = v.str(body, "code", { min: 6, max: 6 })!;
-
-    const locked = bruteforceLocked(`2fadisable:${ctx.user.id}`);
-    if (locked > 0) return rateLimitError(`too many attempts, retry in ${locked}s`, locked, req);
-    const valid = await totpVerify(ctx.user.totp_secret, code);
-    if (!valid || !consumeTotpCode(sha256Hex(`${ctx.user.totp_secret}:${code}`))) {
-      bruteforceFail(`2fadisable:${ctx.user.id}`);
-      return err(401, "invalid code", req);
-    }
+    const commitProof = await stepUp(ctx, body, {
+      passwordFields: ["currentPassword", "password"],
+      codeFields: ["code", "totpCode"],
+      staleSessionMessage: "sign in again before disabling two-factor authentication",
+    });
 
     inImmediateTx(() => {
-      const current = stmts.userById.get(ctx.user.id);
-      if (!current || current.totp_secret !== ctx.user.totp_secret) throw new ApiError(409, "authenticator changed; sign in again");
+      const current = commitProof();
       assertMfaCanDisable(current);
-      consumeDurableTotp(current.totp_secret!, code);
       db.prepare("UPDATE users SET totp_secret = NULL, totp_pending = NULL WHERE id = ?").run(
         ctx.user.id,
       );
       db.prepare("DELETE FROM auth_recovery_codes WHERE user_id=?").run(ctx.user.id);
+      db.prepare("UPDATE corporate_account_policy SET sso_exempt = 0 WHERE user_id = ?").run(
+        ctx.user.id,
+      );
       markUserSessionsRevoked(ctx.user.id, ctx.session.jti);
       db.prepare("UPDATE sessions SET mfa_verified=0 WHERE jti=?").run(ctx.session.jti);
       audit("2fa.disabled", { actorId: ctx.user.id, ip });
@@ -213,23 +216,27 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     const ip = clientIp(req);
     const body = await readJsonBody(req, LIMITS.authBodyBytes);
     const idToken = v.str(body, "idToken", { min: 20, max: 8192 })!;
+    const commitProof = await stepUp(ctx, body, {
+      passwordFields: ["currentPassword", "password"],
+      codeFields: ["code", "totpCode"],
+      staleSessionMessage: "sign in again before linking a Google account",
+    });
 
     const identity = await verifyGoogleIdToken(idToken);
     if (!identity.emailVerified) return err(400, "Google email must be verified", req);
     // The session already proves identity, so the Google email does NOT need to
     // match the account email (e.g. work Google + personal gateway account).
     // Login never links identities by email; this explicit session-bound action does.
-    const conflict = inImmediateTx(() => {
+    inImmediateTx(() => {
       const existing = stmts.userByGoogleId.get(identity.sub);
-      if (existing && existing.id !== ctx.user.id) return true;
+      if (existing && existing.id !== ctx.user.id) {
+        throw new ApiError(409, "this Google account is linked to another user");
+      }
+      commitProof();
       db.prepare("UPDATE users SET google_id = ? WHERE id = ?").run(identity.sub, ctx.user.id);
       markUserSessionsRevoked(ctx.user.id, ctx.session.jti);
       audit("google.linked", { actorId: ctx.user.id, ip, meta: { email: identity.email } });
-      return false;
     });
-    if (conflict) {
-      return err(409, "this Google account is linked to another user", req);
-    }
     disconnectSessionSockets(ctx.user.id, { exceptJti: ctx.session.jti });
     void sendSecurityAlert(
       ctx.user.email,
@@ -245,7 +252,14 @@ export async function handleMeRoute(path: string, req: Request): Promise<Respons
     if (!ctx.user.password_hash) {
       return err(400, "set a password before unlinking Google", req);
     }
+    const body = req.body ? await readJsonBody(req, LIMITS.authBodyBytes) : {};
+    const commitProof = await stepUp(ctx, body, {
+      passwordFields: ["currentPassword", "password"],
+      codeFields: ["code", "totpCode"],
+      staleSessionMessage: "sign in again before unlinking Google",
+    });
     inImmediateTx(() => {
+      commitProof();
       db.prepare("UPDATE users SET google_id = NULL WHERE id = ?").run(ctx.user.id);
       markUserSessionsRevoked(ctx.user.id, ctx.session.jti);
       audit("google.unlinked", { actorId: ctx.user.id, ip });

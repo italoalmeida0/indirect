@@ -104,6 +104,49 @@ function latestSession(): Session | null {
   return stored ?? null;
 }
 
+/** Bearer authorization header for authenticated fetches outside `api()`. */
+export function authHeaders(): Record<string, string> {
+  const s = latestSession();
+  return s ? { Authorization: `Bearer ${s.accessToken}` } : {};
+}
+
+/** Purge user-scoped localStorage entries and SignalDB IndexedDB caches. */
+export async function clearClientStorage(): Promise<void> {
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && (key.startsWith("llmgw-") || key.startsWith("gu:state:"))) {
+        keysToRemove.push(key);
+      }
+    }
+    for (const key of keysToRemove) localStorage.removeItem(key);
+  } catch {}
+  try {
+    if (typeof indexedDB !== "undefined" && typeof indexedDB.databases === "function") {
+      const dbs = await indexedDB.databases();
+      await Promise.all(
+        dbs
+          .map((db) => db.name)
+          .filter((name): name is string => typeof name === "string" && name.startsWith("signaldb-rc:"))
+          .map(
+            (name) =>
+              new Promise<void>((resolve) => {
+                try {
+                  const req = indexedDB.deleteDatabase(name);
+                  req.onsuccess = () => resolve();
+                  req.onerror = () => resolve();
+                  req.onblocked = () => resolve();
+                } catch {
+                  resolve();
+                }
+              }),
+          ),
+      );
+    }
+  } catch {}
+}
+
 export function setSession(s: Session | null): void {
   // Storage BEFORE the signal: signal updates re-render synchronously, and a
   // mounted AppShell fires its first `api()` call inside that render — whose
@@ -112,7 +155,10 @@ export function setSession(s: Session | null): void {
   // the fresh session: no setItem, no reload, a 401 without a bearer), which
   // is exactly what happened when signing in from "/" (no #/login hash).
   if (s) localStorage.setItem(LS, JSON.stringify(s));
-  else localStorage.removeItem(LS);
+  else {
+    localStorage.removeItem(LS);
+    void clearClientStorage();
+  }
   setServerPolicy(null);
   setFinancialPolicyRev((n) => n + 1);
   setSessionSignal(s);
@@ -168,9 +214,7 @@ export class ApiFail extends Error {
 }
 
 async function rawCall<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
-  const headers: Record<string, string> = {};
-  const s = latestSession();
-  if (s) headers.Authorization = `Bearer ${s.accessToken}`;
+  const headers: Record<string, string> = { ...authHeaders() };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const res = await fetch(path, {
     method,

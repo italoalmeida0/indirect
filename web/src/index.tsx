@@ -15,6 +15,7 @@ import {
 } from "solid-js";
 
 import {
+  clearClientStorage,
   currentSession,
   onSessionChange,
   setSession,
@@ -267,6 +268,7 @@ function AppShell(props: { children: JSX.Element }) {
     try {
       await api("POST", "/api/auth/logout");
     } catch {}
+    await clearClientStorage();
     setSession(null);
     toast("Signed out");
   };

@@ -539,6 +539,104 @@ export function createComposer(opts: {
     }
   }
 
+  /**
+   * Sends a prompt originated from a Generative UI widget.
+   * Deliberately isolated from the user's composer draft:
+   *  - Never auto-executes slash commands (prefills instead).
+   *  - Never uploads, dispatches, or clears pending draft attachments.
+   *  - Never overwrites or clears text currently typed in the composer.
+   */
+  async function sendWidgetPrompt(rawText: string) {
+    const text = rawText.trim();
+    if (!text) return;
+    if (text.trimStart().startsWith("/")) {
+      setInputPrompt(text);
+      return;
+    }
+    if (sending()) return;
+    if (opts.isWorkspaceBlocked()) {
+      opts.checkWorkspace();
+      return;
+    }
+    if (!opts.isOpen() || !opts.isHostOnline()) {
+      opts.toast("Reconnect the host before sending a message", "err");
+      return;
+    }
+    if (opts.isCreatingSession()) return;
+    if (!opts.getModel()) {
+      opts.toast("Configure a compatible model in the gateway first", "err");
+      return;
+    }
+    const sid = opts.getSessionId();
+    const hostId = opts.getHostId();
+    if (!sid) {
+      setInputPrompt(text);
+      return;
+    }
+    const epoch = submissionEpoch;
+    setSending(true);
+    try {
+      if (
+        epoch !== submissionEpoch ||
+        opts.isDisposed() ||
+        opts.getHostId() !== hostId ||
+        opts.getSessionId() !== sid ||
+        !opts.isOpen() ||
+        !opts.isHostOnline()
+      )
+        return;
+      const model = opts.getModel();
+      const options = opts.getOptions();
+      const cleanText = sanitizeUserText(text);
+      const delivery = defaultMidTurnSend();
+      const requestId = crypto.randomUUID();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const accepted = new Promise<AcceptedReply>((resolve, reject) => {
+        promptReply = { id: requestId, resolve, reject };
+        timer = setTimeout(
+          () =>
+            notePromptReply(
+              requestId,
+              "Prompt confirmation timed out. Check the conversation before sending again.",
+            ),
+          15000,
+        );
+      });
+      opts.t.transcriptScroll.pin();
+      try {
+        opts.send({
+          type: "prompt",
+          requestId,
+          sessionId: sid,
+          text: cleanText,
+          model,
+          yolo: options.access === "full",
+          options,
+          attachmentIds: [],
+          midTurnDelivery: delivery,
+        });
+        await accepted;
+      } finally {
+        clearTimeout(timer);
+        if (promptReply?.id === requestId) promptReply = null;
+      }
+    } catch (error) {
+      if (
+        !opts.isDisposed() &&
+        opts.getHostId() === hostId &&
+        opts.getSessionId() === sid
+      ) {
+        opts.toast(
+          error instanceof Error ? error.message : "Could not send message",
+          "err",
+        );
+        opts.t.fetchSession(sid);
+      }
+    } finally {
+      setSending(false);
+    }
+  }
+
   return {
     inputPrompt,
     setInputPrompt,
@@ -557,6 +655,7 @@ export function createComposer(opts: {
     pickSlash,
     dismissSlash: () => setSlashDismissed(inputPrompt()),
     sendPrompt,
+    sendWidgetPrompt,
     notePromptReply,
   };
 }

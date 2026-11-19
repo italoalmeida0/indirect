@@ -1597,6 +1597,9 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
           targetId,
         );
         db.prepare("DELETE FROM auth_recovery_codes WHERE user_id = ?").run(targetId);
+        db.prepare("UPDATE corporate_account_policy SET sso_exempt = 0 WHERE user_id = ?").run(
+          targetId,
+        );
         markUserSessionsRevoked(targetId);
         auditAdmin(ctx.user, "user.2fa.reset", targetId, undefined, ip);
       });
@@ -1619,6 +1622,7 @@ export async function handleAdminRoute(path: string, req: Request, url: URL): Pr
         const current = stmts.userById.get(targetId);
         if (!current) throw new ApiError(404, "user not found");
         if (requiresSso(current)) throw new ApiError(403, "This account requires corporate sign-in");
+        db.prepare("DELETE FROM password_tokens WHERE user_id = ? AND used_at IS NULL").run(targetId);
         db.prepare(
           "INSERT INTO password_tokens (token_hash, user_id, kind, expires_at) VALUES (?, ?, 'reset', ?)",
         ).run(sha256Hex(token), targetId, Date.now() + LIMITS.passwordTokenTtlMs);

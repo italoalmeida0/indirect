@@ -154,7 +154,7 @@ test("managed SSO and administrator MFA policies prevent bypass and lockout, rev
     expect((await request(gateway.base, "/api/admin/corporate-auth", { token: admin.accessToken, method: "PUT", body: { enabled: true, issuer: idp.issuer, clientId: "indirect-test" } })).response.status).toBe(200);
     admin = await login(gateway.base, "admin@enterprise.test");
     expect((await request(gateway.base, `/api/admin/users/${employee.user.id}/corporate-auth`, { token: admin.accessToken, method: "PUT", body: { issuer: idp.issuer, subject: "employee-subject", managed: true } })).response.status).toBe(200);
-    const setup = await request(gateway.base, "/api/me/2fa/setup", { token: admin.accessToken, body: {} });
+    const setup = await request(gateway.base, "/api/me/2fa/setup", { token: admin.accessToken, body: { currentPassword: testPassword } });
     const secret = setup.data.secret as string;
     const enableCode = await totpAt(secret, Date.now() - 30_000);
     expect((await request(gateway.base, "/api/me/2fa/enable", { token: admin.accessToken, body: { code: enableCode } })).response.status).toBe(200);

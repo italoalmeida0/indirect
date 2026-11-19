@@ -1,9 +1,10 @@
 import { LIMITS, PUBLIC_URL } from "../config";
 import { db, stmts, audit, inImmediateTx, type UserRow } from "../db";
 import { requireAdmin, requireAuth, markUserSessionsRevoked, issue2faTempToken, verify2faTempToken, type AuthContext } from "../auth";
-import { accountAuthPolicy, assertCorporateAuthReady, assertLoginMethodAllowed, assertSessionPolicy, consumeDurableTotp, corporateAuthConfig, corporateAuthDto, corporateAuthReadiness, prepareCorporateAuthConfig, recoveryCodeHash, recoveryCodesRemaining, requiresSso, saveCorporateAuthConfig } from "../auth-policy";
+import { accountAuthPolicy, assertCorporateAuthReady, assertLoginMethodAllowed, assertSessionPolicy, consumeDurableTotp, corporateAuthConfig, corporateAuthDto, corporateAuthReadiness, prepareCorporateAuthConfig, recoveryCodeHash, recoveryCodesRemaining, requiresSso, saveCorporateAuthConfig, type LoginMethod } from "../auth-policy";
 import { b64uEncode, randomToken, sha256Hex, totpVerify, verifyPassword } from "../crypto";
 import { ApiError, baseHeaders, clientIp, hasControlCharacters, ok, rateLimitError, readJsonBody, v } from "../http";
+import { requireLiveActor } from "../live-auth";
 import { exchangeOidcCode, oidcCallbackUrl, oidcDiscovery } from "../oidc";
 import { bruteforceFail, bruteforceLocked, bruteforceClear, limits } from "../ratelimit";
 import { disconnectSessionSockets } from "./relay";
@@ -46,18 +47,95 @@ function assertCurrentActor(ctx: AuthContext): UserRow {
   return user;
 }
 
-async function stepUp(ctx: AuthContext, body: Record<string, unknown>): Promise<() => void> {
+const STEP_UP_FRESH_MS = 5 * 60_000;
+
+interface StepUpOptions {
+  passwordFields?: readonly string[];
+  codeFields?: readonly string[];
+  passwordlessAuthMethods?: readonly LoginMethod[];
+  missingStatus?: number;
+  missingMessage?: string;
+  staleSessionMessage?: string;
+}
+
+function readStepUpField(
+  body: Record<string, unknown>,
+  fields: readonly string[],
+  opts: { min: number; max: number; missingStatus?: number; missingMessage?: string },
+): string {
+  for (const field of fields) {
+    const value = body[field];
+    if (value !== undefined && value !== null && value !== "") {
+      return v.str(body, field, { min: opts.min, max: opts.max })!;
+    }
+  }
+  if (opts.missingStatus) {
+    throw new ApiError(opts.missingStatus, opts.missingMessage ?? `${fields[0]} is required`);
+  }
+  return v.str(body, fields[0]!, { min: opts.min, max: opts.max })!;
+}
+
+/**
+ * Re-authenticate the caller before sensitive credential or identity mutations:
+ *  - Passworded account: verifies account password AND (when 2FA is enabled) TOTP code.
+ *  - Passwordless account (OIDC/Google): requires a fresh session (<= 5 min since
+ *    original login) AND (when 2FA is enabled) TOTP code.
+ * Returns a callback to invoke inside the mutation's DB transaction that re-verifies
+ * the live actor and durably consumes the TOTP code.
+ */
+export async function stepUp(
+  ctx: AuthContext,
+  body: Record<string, unknown>,
+  opts: StepUpOptions = {},
+): Promise<() => UserRow> {
   const scope = `identity-proof:${ctx.user.id}`;
   const locked = bruteforceLocked(scope);
   if (locked) throw new ApiError(429, `too many attempts; retry in ${locked}s`);
+  const passwordFields = opts.passwordFields ?? ["password", "currentPassword"];
+  const codeFields = opts.codeFields ?? ["code", "totpCode"];
+  const now = Date.now();
+  let password = "";
+  if (ctx.user.password_hash) {
+    password = readStepUpField(body, passwordFields, {
+      min: 1,
+      max: 256,
+      missingStatus: opts.missingStatus,
+      missingMessage: opts.missingMessage,
+    });
+  } else {
+    const methodAllowed =
+      !opts.passwordlessAuthMethods ||
+      opts.passwordlessAuthMethods.includes(ctx.session.auth_method as LoginMethod);
+    const fresh =
+      ctx.session.created_at <= now + 5_000 && now - ctx.session.created_at <= STEP_UP_FRESH_MS;
+    if (!methodAllowed || !fresh) {
+      throw new ApiError(
+        401,
+        opts.staleSessionMessage ?? "sign in again to verify your identity",
+      );
+    }
+  }
+  const code = ctx.user.totp_secret
+    ? readStepUpField(body, codeFields, {
+        min: 6,
+        max: 6,
+        missingStatus: opts.missingStatus,
+        missingMessage: opts.missingMessage,
+      })
+    : "";
   let valid = true;
-  if (ctx.user.password_hash) valid = await verifyPassword(v.str(body, "password", { min: 1, max: 256 })!, ctx.user.password_hash);
-  else if (ctx.session.auth_method !== "oidc" || Date.now() - ctx.session.created_at > 5 * 60_000) throw new ApiError(401, "sign in with corporate identity again before changing the link");
-  const code = ctx.user.totp_secret ? v.str(body, "code", { min: 6, max: 6 })! : "";
-  if (ctx.user.totp_secret) valid = await totpVerify(ctx.user.totp_secret, code) && valid;
-  if (!valid) { bruteforceFail(scope); throw new ApiError(401, "invalid account verification"); }
+  if (ctx.user.password_hash) valid = await verifyPassword(password, ctx.user.password_hash);
+  if (ctx.user.totp_secret) valid = (await totpVerify(ctx.user.totp_secret, code)) && valid;
+  if (!valid) {
+    bruteforceFail(scope);
+    throw new ApiError(401, "invalid account verification");
+  }
   bruteforceClear(scope);
-  return () => { assertCurrentActor(ctx); if (ctx.user.totp_secret) consumeDurableTotp(ctx.user.totp_secret, code); };
+  return () => {
+    const current = requireLiveActor(ctx);
+    if (ctx.user.totp_secret) consumeDurableTotp(ctx.user.totp_secret, code);
+    return current;
+  };
 }
 
 function accountPolicyDto(userId: string) {
@@ -174,12 +252,18 @@ export async function handleCorporateAuthRoute(path: string, req: Request): Prom
   }
   if (path === "/api/me/oidc/link" && req.method === "POST") {
     const ctx = await requireAuth(req);
-    const proof = await stepUp(ctx, await readJsonBody(req, LIMITS.authBodyBytes));
+    const proof = await stepUp(ctx, await readJsonBody(req, LIMITS.authBodyBytes), {
+      passwordlessAuthMethods: ["oidc"],
+      staleSessionMessage: "sign in with corporate identity again before changing the link",
+    });
     return startFlow(req, ctx, proof);
   }
   if (path === "/api/me/oidc/link" && req.method === "DELETE") {
     const ctx = await requireAuth(req);
-    const proof = await stepUp(ctx, await readJsonBody(req, LIMITS.authBodyBytes));
+    const proof = await stepUp(ctx, await readJsonBody(req, LIMITS.authBodyBytes), {
+      passwordlessAuthMethods: ["oidc"],
+      staleSessionMessage: "sign in with corporate identity again before changing the link",
+    });
     if (requiresSso(ctx.user)) throw new ApiError(409, "an administrator must remove the managed SSO requirement before unlinking");
     if (!ctx.user.password_hash && !ctx.user.google_id) throw new ApiError(409, "set another sign-in method before unlinking corporate identity");
     inImmediateTx(() => {

@@ -1,7 +1,7 @@
 import { afterAll, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import path from "node:path";
-import { createUser, login, request, startGateway } from "./gateway-enterprise-fixture";
+import { createUser, login, request, startGateway, testPassword } from "./gateway-enterprise-fixture";
 
 /**
  * Audit coverage and request correlation.
@@ -402,7 +402,7 @@ test("session mutations, 2fa setup, and logout emit correlated audit rows withou
     token: user.accessToken,
     method: "POST",
     headers: { "X-Request-Id": "req-2fa-setup-0001" },
-    body: {},
+    body: { currentPassword: testPassword },
   });
   expect(setup2fa.response.status).toBe(200);
   const secretValue = String(setup2fa.data.secret);

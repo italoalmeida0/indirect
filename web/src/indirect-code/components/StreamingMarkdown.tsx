@@ -78,8 +78,7 @@ export function StreamingMarkdown(props: {
             frozen={() => frozenIds().has(seg.id)}
             ctx={widgetCtx()}
             onSendPrompt={(text) => {
-              composer?.setInputPrompt(text);
-              void composer?.sendPrompt();
+              void composer?.sendWidgetPrompt(text);
             }}
             onPrefillPrompt={(text) => composer?.setInputPrompt(text)}
           />

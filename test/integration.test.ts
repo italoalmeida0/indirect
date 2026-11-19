@@ -1798,7 +1798,7 @@ describe("gateway end-to-end", () => {
   });
 
   test("TOTP end-to-end: setup, enable, login requires code", async () => {
-    const setup = await api("/api/me/2fa/setup", { token: userToken, method: "POST" });
+    const setup = await api("/api/me/2fa/setup", { token: userToken, method: "POST", body: { currentPassword: userPw } });
     expect(setup.status).toBe(200);
     expect(setup.json.qrDataUrl).toMatch(/^data:image\/png/);
     const secret = setup.json.secret;
