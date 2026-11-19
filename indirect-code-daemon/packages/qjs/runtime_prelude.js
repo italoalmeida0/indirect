@@ -3198,7 +3198,7 @@
       napi: "9",
       llhttp: "9.2.1",
       unicode: "15.1",
-      quickjs: "0.17.0",
+      quickjs: "0.18.0",
       modules: "127",
     },
     release: { name: "node" },

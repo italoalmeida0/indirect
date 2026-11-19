@@ -32,7 +32,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.2"
+          bun-version: "1.4.4"
 
       - uses: actions/setup-node@v7
         with:
@@ -193,7 +193,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.2"
+          bun-version: "1.4.4"
 
       - name: Real executable update and rollback
         working-directory: .
@@ -233,7 +233,7 @@ jobs:
       #    against its prebuilt QuickJS archive.
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.2"
+          bun-version: "1.4.4"
 
       - uses: actions/setup-go@v7
         with:

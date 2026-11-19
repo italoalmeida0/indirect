@@ -1,5 +1,5 @@
 # ===== Build stage: bundle the dashboard SPA =====
-FROM oven/bun:1-slim AS webbuild
+FROM oven/bun:1.4.4-slim AS webbuild
 WORKDIR /app
 COPY package.json bun.lock ./
 COPY patches ./patches
@@ -12,7 +12,7 @@ COPY indirect-code-daemon/dist ./indirect-code-daemon/dist
 RUN bun ./build.ts
 
 # ===== Runtime stage: server + built assets =====
-FROM oven/bun:1-slim
+FROM oven/bun:1.4.4-slim
 WORKDIR /app
 
 ENV NODE_ENV=production \
