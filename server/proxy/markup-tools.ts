@@ -77,8 +77,8 @@ const TAG_RE = new RegExp(
     String.raw`(<\s*function\s*=\s*(?:["']\s*)?([^>\s"']+)(?:\s*["'])?\s*>)`,
     String.raw`(<\s*invoke\s+name\s*=\s*(?:["']\s*)?([^>\s"']+)(?:\s*["'])?\s*>)`,
     String.raw`(<\s*\/\s*parameter\s*>)`,
-    String.raw`(<\s*parameter\s*=\s*(?:["']\s*)?([^>\s"']+)[^>]*>)`,
-    String.raw`(<\s*parameter\s+name\s*=\s*(?:["']\s*)?([^>\s"']+)[^>]*>)`,
+    String.raw`(<\s*parameter\s*=\s*(?:["']\s*)?([^>\s"']+)(?:[\s"'][^>]*)?>)`,
+    String.raw`(<\s*parameter\s+name\s*=\s*(?:["']\s*)?([^>\s"']+)(?:[\s"'][^>]*)?>)`,
   ].join("|"),
   "gi",
 );

@@ -663,30 +663,38 @@ describe("Plan 3.5: Proxy & Relay resilience fixes", () => {
     expect(ex.committed).toBe(0);
   });
 
-  test("markup-tools TAG_RE has no catastrophic backtracking on long whitespace inputs", () => {
+  test("markup-tools TAG_RE has no catastrophic backtracking on long whitespace or unclosed identifier runs", () => {
     const hints = toolHintsFromRequest({
       tools: [{ type: "function", function: { name: "exec_bash", parameters: { type: "object", properties: { cmd: { type: "string" } } } } }],
     });
     const spaces = " ".repeat(50_000);
+    const chars = "a".repeat(50_000);
     const payloads = [
       `<tool_call><function=exec_bash><parameter=cmd${spaces}`,
       `<tool_call><function=exec_bash><parameter name=cmd${spaces}`,
       `<tool_call><function=exec_bash${spaces}`,
       `<tool_call><invoke name=exec_bash${spaces}`,
+      `<tool_calls><function=bash><parameter=${chars}`,
+      `<tool_calls><function=bash><parameter name=${chars}`,
     ];
     const started = performance.now();
     for (const p of payloads) {
       const r = extractMarkupToolCalls(p, hints, "fallback");
       expect(r.changed).toBe(false);
     }
-    expect(performance.now() - started).toBeLessThan(500);
+    expect(performance.now() - started).toBeLessThan(100);
 
-    // Valid tags still parse properly.
+    // Valid tags (bare, quoted, and with extra attributes) still parse properly.
     const valid = `<tool_call><function="exec_bash"><parameter name = "cmd" string="true">ls -la</parameter></function></tool_call>`;
     const ok = extractMarkupToolCalls(valid, hints, "fallback");
     expect(ok.changed).toBe(true);
     expect(ok.calls[0]?.name).toBe("exec_bash");
     expect(ok.calls[0]?.input).toEqual({ cmd: "ls -la" });
+
+    const bareValid = `<tool_call><function=exec_bash><parameter=cmd>pwd</parameter></function></tool_call>`;
+    const okBare = extractMarkupToolCalls(bareValid, hints, "fallback");
+    expect(okBare.changed).toBe(true);
+    expect(okBare.calls[0]?.input).toEqual({ cmd: "pwd" });
   });
 
   test("proxy concurrency slot is NOT released prematurely on abort while upstream work is unwinding", async () => {
