@@ -1,6 +1,6 @@
 {
   "name": "indirect",
-  "version": "2.2.7",
+  "version": "2.2.8",
   "description": "LLM API gateway with a personal dashboard and a Code agent workspace.",
   "type": "module",
   "scripts": {
