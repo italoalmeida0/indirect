@@ -269,7 +269,7 @@ func gcLogDirectory(ctx context.Context, baseDir string, oneSubdirLevel bool, ac
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			if !de.IsDir() {
+			if de.Type()&os.ModeSymlink != 0 || !de.IsDir() {
 				continue
 			}
 			if err := gcLogDirectory(ctx, filepath.Join(baseDir, de.Name()), false, active, policy, stats); err != nil {
@@ -283,7 +283,7 @@ func gcLogDirectory(ctx context.Context, baseDir string, oneSubdirLevel bool, ac
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if de.IsDir() {
+		if de.IsDir() || de.Type()&os.ModeSymlink != 0 {
 			continue
 		}
 		name := de.Name()
@@ -297,7 +297,7 @@ func gcLogDirectory(ctx context.Context, baseDir string, oneSubdirLevel bool, ac
 			continue
 		}
 		info, err := de.Info()
-		if err != nil {
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 			continue
 		}
 		age := policy.Now.Sub(info.ModTime())

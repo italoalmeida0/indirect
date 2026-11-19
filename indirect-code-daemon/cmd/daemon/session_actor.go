@@ -2866,6 +2866,16 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 			}
 		}
 	} else {
+		canonArgs, canonErr := canonicalizeToolArgs(m.args)
+		if canonErr != nil {
+			m.reply <- approvalOutcome{
+				approved: false,
+				decision: "deny",
+				reason:   fmt.Sprintf("invalid tool arguments: %v", canonErr),
+			}
+			return
+		}
+		m.args = canonArgs
 		if reason := modeToolRestriction(options.Mode, m.tool); reason != "" {
 			m.reply <- approvalOutcome{reason: reason}
 			return
@@ -2908,9 +2918,6 @@ func (a *sessionActor) onWorkerApprovalReq(m workerApprovalReqMsg) {
 			if sp == skills.PolicyDeny {
 				m.reply <- approvalOutcome{reason: "tool denied by the active skill policy"}
 				return
-			}
-			if eff.AskAutoApprove {
-				effAccess = "full"
 			}
 			if m.tool == "question" || m.tool == "todo" || m.tool == "session_history" {
 				if effRule, r := tools.MatchRules(effectiveRules, "tool", m.tool, a.rec.CWD); effRule == "deny" {

@@ -3,6 +3,7 @@
 # Usage: curl -fsSL <gateway>/r/indirect-code-install.sh | bash -s -- <gateway-url> <token>
 
 set -euo pipefail
+umask 077
 
 GW="${1:?usage: indirect-code-install.sh <gateway-url> <token> [host-name]}"
 TOK="${2:?usage: indirect-code-install.sh <gateway-url> <token> [host-name]}"
@@ -84,9 +85,32 @@ step "Downloading app"
 SLOTDIR="$ROOT/slots/slot-$ACTIVE"
 mkdir -p "$SLOTDIR/bin" "$LOGS" "$ROOT/brain" "$ROOT/external"
 TMP="$(mktemp "$SLOTDIR/bin/.app-XXXXXX")"
-trap 'rm -f "$TMP"' EXIT
-fetch "$GW/r/$ASSET?u=install-$(date +%s)" "$TMP" || fail "could not download $ASSET from $GW"
-chmod +x "$TMP"
+SUMS_TMP="$(mktemp "$SLOTDIR/bin/.sums-XXXXXX")"
+trap 'rm -f "$TMP" "$SUMS_TMP"' EXIT
+CACHE_BUST="install-$(date +%s)"
+fetch "$GW/r/$ASSET?u=$CACHE_BUST" "$TMP" || fail "could not download $ASSET from $GW"
+fetch "$GW/r/SHA256SUMS.txt?u=$CACHE_BUST" "$SUMS_TMP" || fail "could not download SHA256SUMS.txt from $GW"
+EXPECTED_SHA="$(awk -v asset="$ASSET" '{
+  sub(/\r$/, "")
+  hash=$1
+  file=$2
+  sub(/^\*/, "", file)
+  if (file == asset && length(hash) == 64 && hash ~ /^[0-9A-Fa-f]+$/) {
+    print tolower(hash)
+    exit
+  }
+}' "$SUMS_TMP")"
+rm -f "$SUMS_TMP"
+[ -n "$EXPECTED_SHA" ] || fail "missing valid SHA-256 checksum for $ASSET in SHA256SUMS.txt"
+if have sha256sum; then
+  ACTUAL_SHA="$(sha256sum "$TMP" | awk '{print tolower($1)}')"
+elif have shasum; then
+  ACTUAL_SHA="$(shasum -a 256 "$TMP" | awk '{print tolower($1)}')"
+else
+  fail "need sha256sum or shasum to verify $ASSET"
+fi
+[ -n "$ACTUAL_SHA" ] && [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] || fail "SHA-256 checksum mismatch for $ASSET (expected $EXPECTED_SHA, got ${ACTUAL_SHA:-empty})"
+chmod 0700 "$TMP"
 "$TMP" --version 2>&1 | grep -q "boot" || fail "downloaded file is not the app (bad gateway response?)"
 mv -f "$TMP" "$SLOTDIR/bin/$ASSET"
 trap - EXIT

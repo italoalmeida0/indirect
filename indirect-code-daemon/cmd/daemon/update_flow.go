@@ -300,8 +300,9 @@ func cleanInactiveSlot(root, active, inactive, ownDir string) error {
 // spawnUpdateStart re-spawns THIS binary in --update-start mode (detached):
 // the child SIGKILLs us once it is ready, so we just keep serving until
 // that happens. root/active/inactive identify the slots, version is the
-// manifest target, appPath is the verified new app binary.
-func spawnUpdateStart(root, active, inactive, version, appPath string) error {
+// manifest target, appPath is the verified new app binary, and expectedSHA
+// is its verified SHA-256 hex digest.
+func spawnUpdateStart(root, active, inactive, version, appPath, expectedSHA string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -310,7 +311,7 @@ func spawnUpdateStart(root, active, inactive, version, appPath string) error {
 	// The child needs the mirror: inherit INDIRECT_REPO_RAW (harness/mirror
 	// override) plus the gateway base so the new app's --update has context.
 	envGateway := os.Getenv("INDIRECT_REPO_RAW")
-	cmd := exec.Command(exe,
+	args := []string{
 		"--data-dir", activeDir,
 		"--config", filepath.Join(activeDir, "config.json"),
 		"--slot", active,
@@ -321,7 +322,11 @@ func spawnUpdateStart(root, active, inactive, version, appPath string) error {
 		"--expect-version", version,
 		"--parent-pid", strconv.Itoa(os.Getpid()),
 		"--app-path", appPath,
-	)
+	}
+	if expectedSHA != "" {
+		args = append(args, "--expect-sha256", expectedSHA)
+	}
+	cmd := exec.Command(exe, args...)
 	if envGateway != "" {
 		cmd.Env = append(os.Environ(), "INDIRECT_REPO_RAW="+envGateway)
 	}
@@ -336,9 +341,9 @@ func spawnUpdateStart(root, active, inactive, version, appPath string) error {
 
 // updateStartParams carries the --update-start CLI flags.
 type updateStartParams struct {
-	root, fromSlot, toSlot, expectVersion, appPath string
-	parentPid                                     int
-	stopServing                                   func()
+	root, fromSlot, toSlot, expectVersion, expectSHA256, appPath string
+	parentPid                                                    int
+	stopServing                                                  func()
 }
 
 // runUpdateStart is the naive updater: no sessions are ever loaded (fully
@@ -395,8 +400,21 @@ func runUpdateStart(dataDir, cfgPath string, p updateStartParams) int {
 		return updateStartFail(server, nil, p, fmt.Sprintf("copy sessions: %v", err), logf)
 	}
 
-	// Run the NEW app in --update mode (it migrates + fetches +
-	// verifies the new daemon, then spawns --update-end detached).
+	// Re-verify the staged new app binary's SHA-256 before executing it (fail closed).
+	expectedSHA := p.expectSHA256
+	if expectedSHA == "" {
+		var err error
+		expectedSHA, err = server.expectedAssetSum(p.expectVersion, daemonAssetName())
+		if err != nil {
+			return updateStartFail(server, nil, p, fmt.Sprintf("app sha256 resolve: %v", err), logf)
+		}
+	}
+	if err := verifyFileSHA256(p.appPath, expectedSHA); err != nil {
+		return updateStartFail(server, nil, p, fmt.Sprintf("app sha256 verify: %v", err), logf)
+	}
+
+	// Run the NEW app in --update mode (it migrates + verifies +
+	// stages itself, then spawns --update-end detached).
 	failFile := updateFailPath(p.root)
 	doneFile := updateDonePath(p.root)
 	_ = os.Remove(failFile)
@@ -551,7 +569,7 @@ func (d *DaemonServer) startUpdateRelay(logf func(string, ...any)) func() {
 func (d *DaemonServer) updateStartServeLoop(ctx context.Context, logf func(string, ...any)) {
 	backoff := time.Second
 	for ctx.Err() == nil {
-		if err := d.connectWebSocketContext(ctx, "&updating=1"); err != nil {
+		if err := d.connectWebSocketContext(ctx, "updating=1"); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -655,6 +673,8 @@ func doUpdateEndPromote(d *DaemonServer) error {
 	st := d.updateChecker()
 	st.mu.Lock()
 	st.available = ""
+	st.sumsVersion = ""
+	st.sums = nil
 	st.mu.Unlock()
 	d.broadcastUpdateState()
 	return nil

@@ -1,11 +1,11 @@
 package main
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -47,10 +47,12 @@ type releaseAsset struct {
 
 // updateState is the daemon's self-update runtime (guarded by mu).
 type updateState struct {
-	mu        sync.Mutex
-	available string // manifest version when != running ("" = none)
-	checkedAt int64
-	lastError string
+	mu          sync.Mutex
+	available   string            // manifest version when != running ("" = none)
+	sumsVersion string            // manifest version associated with sums
+	sums        map[string]string // asset filename -> normalized lowercase sha256 hex
+	checkedAt   int64
+	lastError   string
 	// handoffBusy guards concurrent beginHandoff calls.
 	handoffBusy bool
 	// verifyMismatch remembers the last self-verify failure (want vs got
@@ -60,6 +62,73 @@ type updateState struct {
 	mismatchWant string
 	mismatchGot  string
 	mismatchAt   int64
+}
+
+func normalizeSHA256Hex(raw string) (string, bool) {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if len(s) != 64 {
+		return "", false
+	}
+	if _, err := hex.DecodeString(s); err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+func cloneNormalizedSums(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		if norm, ok := normalizeSHA256Hex(v); ok {
+			out[k] = norm
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func versionsMatch(a, b string) bool {
+	na := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(a), "v"), "V")
+	nb := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(b), "v"), "V")
+	return na != "" && na == nb
+}
+
+// expectedAssetSum returns the verified 64-hex SHA-256 checksum for asset at
+// version from the cached manifest state or a fresh manifest fetch. Fails
+// closed when the manifest is unavailable, mismatched, or omits a valid sum.
+func (d *DaemonServer) expectedAssetSum(version, asset string) (string, error) {
+	st := d.updateChecker()
+	st.mu.Lock()
+	if versionsMatch(st.sumsVersion, version) {
+		if sum, ok := normalizeSHA256Hex(st.sums[asset]); ok {
+			st.mu.Unlock()
+			return sum, nil
+		}
+	}
+	st.mu.Unlock()
+
+	m, err := fetchManifestWithConfig(d)
+	if err != nil {
+		return "", fmt.Errorf("fetch manifest for checksum verification: %w", err)
+	}
+	if !versionsMatch(m.Daemon.Version, version) {
+		return "", fmt.Errorf("manifest version %q does not match target %q", m.Daemon.Version, version)
+	}
+	normSums := cloneNormalizedSums(m.Daemon.Sums)
+	st.mu.Lock()
+	st.sumsVersion = m.Daemon.Version
+	st.sums = normSums
+	st.mu.Unlock()
+
+	sum, ok := normSums[asset]
+	if !ok || sum == "" {
+		return "", fmt.Errorf("manifest missing valid sha256 checksum for %s (%s)", asset, version)
+	}
+	return sum, nil
 }
 
 func (d *DaemonServer) updateChecker() *updateState {
@@ -110,15 +179,11 @@ func fetchManifestGateway(d *DaemonServer) (*versionManifest, error) {
 	if gw == "" || token == "" {
 		return nil, fmt.Errorf("no gateway configured")
 	}
-	u, err := url.Parse(gw)
+	base, err := gatewayHTTPBaseURL(gw)
 	if err != nil {
 		return nil, err
 	}
-	scheme := "http"
-	if u.Scheme == "https" {
-		scheme = "https"
-	}
-	endpoint := fmt.Sprintf("%s://%s/api/indirect-code/versions", scheme, u.Host)
+	endpoint := base + "/api/indirect-code/versions"
 	req, err := http.NewRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -197,12 +262,15 @@ func (d *DaemonServer) checkForUpdates(reason string) {
 	st.lastError = ""
 	if m.Daemon.Version != daemonVersion && m.Daemon.Version != "" {
 		st.available = m.Daemon.Version
+		st.sumsVersion = m.Daemon.Version
+		st.sums = cloneNormalizedSums(m.Daemon.Sums)
 	} else {
 		st.available = ""
+		st.sumsVersion = ""
+		st.sums = nil
 	}
 	st.mu.Unlock()
 	d.broadcastUpdateState()
-	_ = m
 	_ = reason
 }
 func (d *DaemonServer) setUpdateError(msg string) {

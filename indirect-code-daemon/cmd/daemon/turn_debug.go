@@ -367,14 +367,14 @@ func simulateSessionPrompt(dcfg DaemonConfig, rec *SessionRecord, promptText str
 	if effort := canonicalReasoning(rec.Options.Effort); effort != "" && effort != "none" {
 		modelInfo.Reasoning = true
 	}
-	apiBase := strings.TrimRight(dcfg.GatewayURL, "/") + "/anthropic/v1"
+	apiBase := gatewayAPIBase(dcfg.GatewayURL)
 	client := provider.NewGatewayAnthropic(dcfg.APIKey, apiBase, modelInfo)
 
 	opt := rec.Options
 	if opt.Mode == "" {
 		opt.Mode = "agentic"
 	}
-	system := systemPromptWithBrain(dcfg, rec.CWD, opt, brainDir)
+	system := systemPromptWithBrain(dcfg, rec.CWD, opt, brainDir, rec.SessionGrants...)
 
 	sb := tools.NewSandbox(rec.CWD)
 	baseTools := []core.Tool{

@@ -101,9 +101,40 @@ try {
   $dest = Join-Path $SLOTDIR "bin/${ASSET}"
   
   $tmp = "${dest}.tmp.exe"
+  $sumsTmp = "${dest}.sha256sums.tmp"
+  $cacheBust = "install-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
   try {
-    Invoke-WebRequest -Uri "${GW}/r/${ASSET}?u=install-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" -OutFile $tmp -UseBasicParsing
-  } catch { Fail "could not download ${ASSET} from ${GW} ($($_.Exception.Message))" }
+    Invoke-WebRequest -Uri "${GW}/r/${ASSET}?u=${cacheBust}" -OutFile $tmp -UseBasicParsing
+  } catch {
+    Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+    Fail "could not download ${ASSET} from ${GW} ($($_.Exception.Message))"
+  }
+  try {
+    Invoke-WebRequest -Uri "${GW}/r/SHA256SUMS.txt?u=${cacheBust}" -OutFile $sumsTmp -UseBasicParsing
+  } catch {
+    Remove-Item -Force $tmp, $sumsTmp -ErrorAction SilentlyContinue
+    Fail "could not download SHA256SUMS.txt from ${GW} ($($_.Exception.Message))"
+  }
+
+  $expectedSha = ""
+  foreach ($line in (Get-Content -Path $sumsTmp -ErrorAction SilentlyContinue)) {
+    if ($line -match '^\s*([0-9A-Fa-f]{64})\s+\*?(.+?)\s*$') {
+      if ($Matches[2] -eq $ASSET) {
+        $expectedSha = $Matches[1].ToLowerInvariant()
+        break
+      }
+    }
+  }
+  Remove-Item -Force $sumsTmp -ErrorAction SilentlyContinue
+  if ([string]::IsNullOrWhiteSpace($expectedSha)) {
+    Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+    Fail "missing valid SHA-256 checksum for ${ASSET} in SHA256SUMS.txt"
+  }
+  $actualSha = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actualSha -ne $expectedSha) {
+    Remove-Item -Force $tmp -ErrorAction SilentlyContinue
+    Fail "SHA-256 checksum mismatch for ${ASSET} (expected ${expectedSha}, got ${actualSha})"
+  }
 
   $ver = & $tmp --version 2>&1
   if ($ver -notmatch "boot") {

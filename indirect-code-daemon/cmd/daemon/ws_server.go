@@ -2339,7 +2339,7 @@ func (s *wsServer) handleGetSessionDebug(sessionID, requestID string) {
 					if rd, ok := r.(readResult); ok && rd.Error == "" {
 						if rec, ok := rd.Payload.(*SessionRecord); ok && rec != nil {
 							brainDir := s.sessions.disk().ensureBrainDir(rec.ID)
-							sysPrompt := systemPromptWithBrain(dcfg, rec.CWD, rec.Options, brainDir)
+							sysPrompt := systemPromptWithBrain(dcfg, rec.CWD, rec.Options, brainDir, rec.SessionGrants...)
 							resp["systemPrompt"] = sysPrompt
 							resp["session"] = map[string]any{
 								"id":      rec.ID,

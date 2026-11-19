@@ -1,12 +1,16 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"indirect/indirect-code-daemon/packages/provider"
@@ -43,8 +47,23 @@ func TestHandoffPrimitivesE2E(t *testing.T) {
 		pad := make([]byte, (2<<20)-len(fakeBytes))
 		fakeBytes = append(fakeBytes, pad...)
 	}
+	sum := sha256.Sum256(fakeBytes)
+	sumHex := hex.EncodeToString(sum[:])
+	asset := daemonAssetName()
+	manifestBytes, _ := json.Marshal(versionManifest{
+		Daemon: releaseAsset{
+			Version: "vE2E.2",
+			Assets:  map[string]string{runtime.GOOS + "-" + runtime.GOARCH: asset},
+			Sums:    map[string]string{asset: sumHex},
+		},
+	})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write(fakeBytes)
+		if strings.HasSuffix(r.URL.Path, "/"+updateManifestFile) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(manifestBytes)
+			return
+		}
+		_, _ = w.Write(fakeBytes)
 	}))
 	defer srv.Close()
 	t.Setenv("INDIRECT_REPO_RAW", srv.URL)

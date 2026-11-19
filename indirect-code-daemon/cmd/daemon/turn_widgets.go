@@ -81,8 +81,8 @@ func (b *widgetStoreBridge) DeleteWidget(id string) error {
 // silent ok) when unreachable.
 func (w *turnBridge) widgetLint(ctx context.Context, id, source, test, state string) (tools.WidgetLintResult, error) {
 	cfg := w.cfg
-	base := strings.TrimRight(cfg.GatewayURL, "/")
-	if base == "" || cfg.DaemonToken == "" {
+	base, err := gatewayHTTPBaseURL(cfg.GatewayURL)
+	if err != nil || base == "" || cfg.DaemonToken == "" {
 		return tools.WidgetLintResult{}, fmt.Errorf("no gateway configured for widget lint")
 	}
 	body, err := json.Marshal(map[string]any{

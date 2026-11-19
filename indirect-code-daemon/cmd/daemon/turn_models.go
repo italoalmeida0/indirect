@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/provider"
@@ -17,7 +16,11 @@ func gatewayModel(ctx context.Context, gatewayURL, daemonToken, id string) provi
 	model := provider.Model{ID: id, Provider: "anthropic"}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(gatewayURL, "/")+"/api/indirect-code/models", nil)
+	base, err := gatewayHTTPBaseURL(gatewayURL)
+	if err != nil {
+		return model
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/api/indirect-code/models", nil)
 	if err != nil {
 		return model
 	}

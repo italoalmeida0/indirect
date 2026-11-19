@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +15,17 @@ import (
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
 )
+
+func makeTinyTestPNG(t *testing.T) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	img.SetRGBA(0, 0, color.RGBA{R: 10, G: 20, B: 30, A: 255})
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encode tiny png: %v", err)
+	}
+	return buf.Bytes()
+}
 
 func TestSeededResendReloadsExactRowsAndHonorsAttachmentReplacement(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "photo.png")
@@ -66,8 +81,9 @@ func TestSeededAttachmentOnlyEditDoesNotReuseOldText(t *testing.T) {
 }
 
 func TestSeededResendCarriesSelectedImageIntoModelRow(t *testing.T) {
+	pngBytes := makeTinyTestPNG(t)
 	path := filepath.Join(t.TempDir(), "photo.png")
-	if err := os.WriteFile(path, []byte("image-bytes"), 0o600); err != nil {
+	if err := os.WriteFile(path, pngBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	rec := &SessionRecord{ID: "sess1", Messages: darMsgs(2), TurnSeq: 1,
@@ -90,7 +106,7 @@ func TestSeededResendCarriesSelectedImageIntoModelRow(t *testing.T) {
 	}
 	found := false
 	for _, block := range hydrated[0].Content {
-		if image, ok := block.(provider.ImageBlock); ok && string(image.Data) == "image-bytes" {
+		if image, ok := block.(provider.ImageBlock); ok && bytes.Equal(image.Data, pngBytes) {
 			found = true
 		}
 	}

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -161,9 +163,9 @@ func (d *DaemonServer) runHandoff(version string) {
 		fail(fmt.Sprintf("clean update slot: %v", err))
 		return
 	}
-	// Download the new app into the clean slot + self-verify.
+	// Download the new app into the clean slot + SHA-256 verify + self-verify.
 	// (Background: user untouched, still serving normally.)
-	appPath, err := d.fetchAppTo(version, sl)
+	appPath, expectedSHA, err := d.fetchAppToVerified(version, sl)
 	if err != nil {
 		fail(fmt.Sprintf("app download: %v", err))
 		return
@@ -192,7 +194,7 @@ func (d *DaemonServer) runHandoff(version string) {
 	// recovery resumes the turns), takes over the pidfile + relay in
 	// "update" state, copies our slot, and runs the new app. We keep
 	// serving until the SIGKILL lands.
-	if err := spawnUpdateStart(d.rootDir(), sl.active, sl.inactive, version, appPath); err != nil {
+	if err := spawnUpdateStart(d.rootDir(), sl.active, sl.inactive, version, appPath, expectedSHA); err != nil {
 		fail(fmt.Sprintf("spawn updater: %v", err))
 		return
 	}
@@ -220,22 +222,29 @@ func (d *DaemonServer) abortHandoff(reason string) {
 }
 
 // fetchAppTo downloads the app asset (the multi-call binary — the ONLY
-// artifact) for version into the inactive slot's bin dir. Returns the
-// local path.
+// artifact) for version into the inactive slot's bin dir, verifying its
+// SHA-256 against the release manifest before chmod/rename/exec.
 func (d *DaemonServer) fetchAppTo(version string, sl slotLayout) (string, error) {
+	local, _, err := d.fetchAppToVerified(version, sl)
+	return local, err
+}
+
+func (d *DaemonServer) fetchAppToVerified(version string, sl slotLayout) (string, string, error) {
 	asset := daemonAssetName()
+	expectedSum, err := d.expectedAssetSum(version, asset)
+	if err != nil {
+		return "", "", err
+	}
 	binDir := filepath.Join(d.slotDir(sl.inactive), "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
-		return "", err
+		return "", "", err
 	}
 	local := filepath.Join(binDir, slotBinName())
 	// NOTE: no reuse of a leftover binary here. A previous attempt may
 	// have left bytes for a DIFFERENT version (or a stale-cache copy);
 	// the caller (runHandoff phase 0) always downloads fresh and
-	// self-verifies. Reusing by size alone once promoted a stale daemon
-	// past the point of rollback (E2E caught it: app vE2E.2 reused
-	// 1.0.21 bytes, new side fetched the same stale daemon, verify
-	// failed after the old daemon was already gone).
+	// verifies SHA-256 + --version. Reusing by size alone once promoted
+	// a stale daemon past the point of rollback.
 	// Gateway first (serves dist/ itself — instant, no CDN), mirror fallback.
 	var bases []string
 	if gb := gatewayBaseURL(d); gb != "" {
@@ -246,9 +255,12 @@ func (d *DaemonServer) fetchAppTo(version string, sl slotLayout) (string, error)
 	} else if mu := manifestURL(); mu != "" {
 		bases = append(bases, mu[:len(mu)-len(updateManifestFile)])
 	}
+	if len(bases) == 0 {
+		return "", "", fmt.Errorf("no update download source configured")
+	}
 	// Floating asset only: a single URL per base (no -v copies).
-	// Freshness is enforced by --version self-verify after download
-	// (plus a cache-buster query), not by immutable versioned URLs.
+	// Integrity is enforced by SHA-256 verification against the manifest
+	// BEFORE chmod/rename/exec, followed by --version self-verify.
 	var candidates []string
 	for _, b := range bases {
 		candidates = append(candidates,
@@ -257,35 +269,58 @@ func (d *DaemonServer) fetchAppTo(version string, sl slotLayout) (string, error)
 	}
 	tmp, err := os.CreateTemp(binDir, ".app-*")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tmpName)
+		}
+	}()
 	var dlErr error
 	for _, u := range candidates {
-		tmp.Seek(0, 0)
-		tmp.Truncate(0)
-		if err := fetchURL(u, tmp); err != nil {
+		if _, err := tmp.Seek(0, 0); err != nil {
+			dlErr = err
+			continue
+		}
+		if err := tmp.Truncate(0); err != nil {
+			dlErr = err
+			continue
+		}
+		actualSum, err := fetchURLWithSHA256(u, tmp)
+		if err != nil {
 			dlErr = fmt.Errorf("download %s: %w", asset, err)
+			continue
+		}
+		if subtle.ConstantTimeCompare([]byte(actualSum), []byte(expectedSum)) != 1 {
+			dlErr = fmt.Errorf("sha256 mismatch for %s: want %s, got %s", asset, expectedSum, actualSum)
 			continue
 		}
 		dlErr = nil
 		break
 	}
 	if dlErr != nil {
-		tmp.Close()
-		return "", dlErr
+		_ = tmp.Close()
+		return "", "", dlErr
 	}
-	tmp.Close()
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", "", err
+	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(tmpName, 0o755); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
 	if err := os.Rename(tmpName, local); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return local, nil
+	committed = true
+	return local, expectedSum, nil
 }
 
 // selfVerifyBinary runs `bin --version` and checks the output contains
@@ -462,30 +497,52 @@ func gatewayBaseURL(d *DaemonServer) string {
 	if d.configNow() == nil || d.configNow().GatewayURL == "" {
 		return ""
 	}
-	u, err := url.Parse(d.configNow().GatewayURL)
-	if err != nil || u.Host == "" {
+	base, err := gatewayHTTPBaseURL(d.configNow().GatewayURL)
+	if err != nil {
 		return ""
 	}
-	scheme := "http"
-	if u.Scheme == "wss" || u.Scheme == "https" {
-		scheme = "https"
-	}
-	return scheme + "://" + u.Host
+	return base
 }
 
-// fetchURL downloads url into w (5min timeout for binaries).
-func fetchURL(url string, w io.Writer) error {
+// fetchURLWithSHA256 downloads url into w while computing its SHA-256 digest
+// via io.TeeReader (5min timeout for binaries).
+func fetchURLWithSHA256(rawURL string, w io.Writer) (string, error) {
 	client := &http.Client{Timeout: 5 * time.Minute}
-	resp, err := client.Get(url)
+	resp, err := client.Get(rawURL)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	_, err = io.Copy(w, resp.Body)
-	return err
+	h := sha256.New()
+	if _, err := io.Copy(w, io.TeeReader(resp.Body, h)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// verifyFileSHA256 verifies that the file at path matches expectedHex (64-char SHA-256).
+func verifyFileSHA256(path, expectedHex string) error {
+	want, ok := normalizeSHA256Hex(expectedHex)
+	if !ok {
+		return fmt.Errorf("invalid expected sha256 checksum")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		return fmt.Errorf("sha256 mismatch for %s: want %s, got %s", filepath.Base(path), want, got)
+	}
+	return nil
 }
 
 // debugMirror reports what the daemon's own download path resolves:

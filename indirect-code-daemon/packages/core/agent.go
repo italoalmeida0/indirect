@@ -823,9 +823,12 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			if ClassifyVisionOrPayloadError(err) != nil {
 				break
 			}
-			if errors.Is(err, ErrRepetitionLoop) && attempt < 3 {
+			if errors.Is(err, ErrRepetitionLoop) {
+				if attempt >= maxRepetitionLoopRetries {
+					err = fmt.Errorf("%w: terminated after %d retries", err, maxRepetitionLoopRetries)
+					break
+				}
 				sink(EvToolProgress{Text: "Repetition loop detected; retrying response…"})
-				continue
 			}
 			if ctx.Err() != nil || !a.canRetryError(err, attempt) {
 				break
@@ -969,17 +972,19 @@ func (a *Agent) appendNudge(text string, sink func(AgentEvent)) {
 	sink(EvUserMessage{Message: nudge})
 }
 
+const maxRepetitionLoopRetries = 3
+
 // canRetryError reports whether a failed model call is worth another
-// attempt. Everything is retryable except context cancellation (user
-// stop / shutdown): only those end a turn. A 400, a dead key, a quota
-// wall — all keep retrying on the backoff schedule until success or
-// cancel, so no provider error ever feels like "failed, I'll stop".
-func (a *Agent) canRetryError(err error, _ int) bool {
+// attempt. Transient provider errors (rate limits, 5xx, network) retry on the
+// backoff schedule; ErrRepetitionLoop retries up to maxRepetitionLoopRetries
+// times with backoff before failing cleanly; client rejections (400/auth) and
+// context cancellation stop immediately.
+func (a *Agent) canRetryError(err error, attempt int) bool {
 	if err == nil {
 		return false
 	}
 	if errors.Is(err, ErrRepetitionLoop) {
-		return true
+		return attempt < maxRepetitionLoopRetries
 	}
 	// Non-retryable upstream rejections: retrying forever burns quota and
 	// hangs the turn until the user notices. This includes bad-request

@@ -412,11 +412,15 @@ func sortSkillsByNamePriority(m map[string]skills.SessionSkill, names []string) 
 // refused with a pointer back to the listing — asking a human to approve
 // a load that can only fail would be noise.
 func useSkillUsableGate(active map[string]skills.SessionSkill, mode string, args json.RawMessage) (verdict string, reason string) {
+	canon, err := canonicalizeToolArgs(args)
+	if err != nil {
+		return "refuse", "invalid use_skill arguments: " + err.Error()
+	}
 	var parsed struct {
 		Name string `json:"name"`
 	}
-	if len(args) > 0 {
-		_ = json.Unmarshal(args, &parsed)
+	if len(canon) > 0 {
+		_ = json.Unmarshal(canon, &parsed)
 	}
 	sk, ok := skillRegistry().get(parsed.Name)
 	if !ok {

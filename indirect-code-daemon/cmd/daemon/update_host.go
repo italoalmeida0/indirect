@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -146,17 +145,12 @@ func (d *DaemonServer) connectWebSocketOnce() error {
 	if cfg == nil {
 		return fmt.Errorf("no config")
 	}
-	u, err := url.Parse(cfg.GatewayURL)
+	wsURL, err := gatewayWSURL(cfg.GatewayURL, "")
 	if err != nil {
 		return err
 	}
-	scheme := "ws"
-	if u.Scheme == "https" {
-		scheme = "wss"
-	}
-	wsURL := fmt.Sprintf("%s://%s/api/indirect-code/daemon/ws?token=%s", scheme, u.Host, url.QueryEscape(cfg.DaemonToken))
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true}
-	conn, resp, err := dialer.Dial(wsURL, nil)
+	conn, resp, err := dialer.Dial(wsURL, daemonAuthHeader(cfg.DaemonToken))
 	if err != nil {
 		if isRevokedDialError(resp, err) {
 			return errDaemonRevoked
@@ -193,15 +187,10 @@ func (d *DaemonServer) connectWebSocketContext(ctx context.Context, extra string
 	if cfg == nil {
 		return fmt.Errorf("no config")
 	}
-	u, err := url.Parse(cfg.GatewayURL)
+	wsURL, err := gatewayWSURL(cfg.GatewayURL, extra)
 	if err != nil {
 		return err
 	}
-	scheme := "ws"
-	if u.Scheme == "https" {
-		scheme = "wss"
-	}
-	wsURL := fmt.Sprintf("%s://%s/api/indirect-code/daemon/ws?token=%s%s", scheme, u.Host, url.QueryEscape(cfg.DaemonToken), extra)
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, EnableCompression: true}
 	// Gorilla's DialContext bounds the handshake deadline but does not
@@ -221,7 +210,7 @@ func (d *DaemonServer) connectWebSocketContext(ctx context.Context, extra string
 		}
 	}()
 
-	conn, resp, err := dialer.DialContext(ctx, wsURL, nil)
+	conn, resp, err := dialer.DialContext(ctx, wsURL, daemonAuthHeader(cfg.DaemonToken))
 	if err != nil {
 		if isRevokedDialError(resp, err) {
 			// Host deleted while offline: token no longer exists

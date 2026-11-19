@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -220,5 +221,68 @@ func TestAgentToolCallWindowLoopPrevention(t *testing.T) {
 	}
 	if res := call("bash", A); res.IsError {
 		t.Fatal("A should execute again after leaving the window")
+	}
+}
+
+type alwaysLoopFakeClient struct {
+	attempts int
+}
+
+func (c *alwaysLoopFakeClient) Name() string { return "always-loop-fake" }
+
+func (c *alwaysLoopFakeClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	out := make(chan provider.Event, 20)
+	c.attempts++
+	go func() {
+		defer close(out)
+		out <- provider.EventStart{Provider: "always-loop-fake", Model: req.Model}
+		unit := "Repeating the exact same sentence over and over again forever.\n"
+		for range 6 {
+			select {
+			case <-ctx.Done():
+				return
+			case out <- provider.EventTextDelta{Delta: unit}:
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case out <- provider.EventDone{Stop: provider.StopEnd, Message: provider.Message{Role: provider.RoleAssistant}}:
+		}
+	}()
+	return out, nil
+}
+
+func TestAgentRepetitionLoopCapsRetriesWithBackoff(t *testing.T) {
+	client := &alwaysLoopFakeClient{}
+	a := NewAgent(client, "test-model", "test-system", NewRegistry())
+	a.PersistentTurns = true
+	a.RetrySchedule = []time.Duration{2 * time.Millisecond, 3 * time.Millisecond, 4 * time.Millisecond}
+
+	if !a.canRetryError(ErrRepetitionLoop, 0) || !a.canRetryError(ErrRepetitionLoop, 2) {
+		t.Fatal("expected ErrRepetitionLoop retryable for attempts < 3")
+	}
+	if a.canRetryError(ErrRepetitionLoop, 3) {
+		t.Fatal("expected ErrRepetitionLoop NOT retryable once attempt >= 3")
+	}
+
+	var retries []EvRetry
+	err := a.Prompt(context.Background(), "hello", nil, func(e AgentEvent) {
+		if r, ok := e.(EvRetry); ok {
+			retries = append(retries, r)
+		}
+	})
+	if err == nil || !errors.Is(err, ErrRepetitionLoop) {
+		t.Fatalf("expected ErrRepetitionLoop termination error, got %v", err)
+	}
+	// Initial attempt (0) + 3 retries (attempts 1, 2, 3) = 4 total calls.
+	if client.attempts != 4 {
+		t.Fatalf("expected 4 total attempts (1 initial + 3 retries), got %d", client.attempts)
+	}
+	if len(retries) != 3 {
+		t.Fatalf("expected 3 EvRetry backoff events, got %d", len(retries))
+	}
+	if retries[0].Delay != 2*time.Millisecond || retries[1].Delay != 3*time.Millisecond || retries[2].Delay != 4*time.Millisecond {
+		t.Fatalf("unexpected retry backoff delays: %+v", retries)
 	}
 }

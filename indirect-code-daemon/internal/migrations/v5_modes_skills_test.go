@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -163,5 +164,37 @@ func TestV5MovesTalkSessionsHome(t *testing.T) {
 	}
 	if got := cwdOf(homePath); got != home {
 		t.Fatalf("already-home talk cwd = %q, want %q", got, home)
+	}
+}
+
+func TestV5WritesAtomic0600Permissions(t *testing.T) {
+	dir := t.TempDir()
+	sessions := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(sessions, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sessions, "sess-perm.jsonl")
+	body := `{"kind":"meta","id":"sess-perm","options":{"mode":"build","access":"ask","skills":[]}}`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyV5(dir); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		fi, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("migrated session file mode = %o, want 0600", perm)
+		}
+	}
+	entries, err := os.ReadDir(sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "sess-perm.jsonl" {
+		t.Fatalf("unexpected leftover files in sessions dir: %d", len(entries))
 	}
 }

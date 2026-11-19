@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"indirect/indirect-code-daemon/internal/durable"
 )
 
 // v5 collapses the four legacy session modes (build/plan/learning/talk) to
@@ -121,11 +123,7 @@ func migrateSessionModes(path, home string) error {
 	if !changed {
 		return nil
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, bytes.Join(out, []byte("\n")), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return durable.Write(path, bytes.Join(out, []byte("\n")))
 }
 
 // rewriteMetaMode collapses options.mode and attaches the main skill

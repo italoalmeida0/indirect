@@ -307,6 +307,7 @@ func daemonMain() {
 		fromSlotFlag    = flag.String("from-slot", "", "Update source slot (a|b)")
 		toSlotFlag      = flag.String("to-slot", "", "Update target slot (a|b)")
 		expectVerFlag   = flag.String("expect-version", "", "Update target version")
+		expectSHAFlag   = flag.String("expect-sha256", "", "Expected SHA-256 of verified new app binary (--update-start only)")
 		parentPidFlag   = flag.Int("parent-pid", 0, "PID of the daemon waiting to be killed")
 		appFlag         = flag.String("app-path", "", "Verified new app binary (--update-start only)")
 		slotFlag        = flag.String("slot", "", "Active slot id (a|b), informational: passed by the boot role; dataDir already points at the slot")
@@ -339,6 +340,7 @@ func daemonMain() {
 			fromSlot:      *fromSlotFlag,
 			toSlot:        *toSlotFlag,
 			expectVersion: *expectVerFlag,
+			expectSHA256:  *expectSHAFlag,
 			appPath:       *appFlag,
 			parentPid:     *parentPidFlag,
 		}))
@@ -471,23 +473,130 @@ func daemonMain() {
 	}
 }
 
+// gatewayHTTPBaseURL normalizes a configured gateway URL (http, https, ws, wss)
+// into an HTTP(S) base URL without trailing slash, preserving TLS for both
+// https:// and wss://.
+func gatewayHTTPBaseURL(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return "", err
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("gateway URL missing host")
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https", "wss":
+		u.Scheme = "https"
+	case "http", "ws":
+		u.Scheme = "http"
+	default:
+		return "", fmt.Errorf("unsupported gateway URL scheme %q", u.Scheme)
+	}
+	u.RawQuery = ""
+	u.Fragment = ""
+	return strings.TrimRight(u.String(), "/"), nil
+}
+
+func gatewayAPIBase(raw string) string {
+	if base, err := gatewayHTTPBaseURL(raw); err == nil {
+		return base + "/anthropic/v1"
+	}
+	return strings.TrimRight(raw, "/") + "/anthropic/v1"
+}
+
+// gatewayWSURL builds the daemon WebSocket endpoint for rawGatewayURL without
+// placing the daemon token in the query string (auth travels via the
+// Authorization: Bearer header). Both https:// and wss:// map to wss://.
+func gatewayWSURL(rawGatewayURL, extra string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(rawGatewayURL))
+	if err != nil {
+		return "", err
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("gateway URL missing host")
+	}
+	var scheme string
+	switch strings.ToLower(u.Scheme) {
+	case "https", "wss":
+		scheme = "wss"
+	case "http", "ws":
+		scheme = "ws"
+	default:
+		return "", fmt.Errorf("unsupported gateway URL scheme %q", u.Scheme)
+	}
+	basePath := strings.TrimRight(u.Path, "/")
+	endpoint := fmt.Sprintf("%s://%s%s/api/indirect-code/daemon/ws", scheme, u.Host, basePath)
+	if q := strings.TrimLeft(strings.TrimSpace(extra), "?&"); q != "" {
+		endpoint += "?" + q
+	}
+	return endpoint, nil
+}
+
+func daemonAuthHeader(token string) http.Header {
+	if token == "" {
+		return nil
+	}
+	return http.Header{"Authorization": {"Bearer " + token}}
+}
+
+func isLoopbackHost(host string) bool {
+	h := strings.ToLower(strings.Trim(strings.TrimSpace(host), "[]"))
+	if h == "" {
+		return false
+	}
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
+}
+
+func normalizedOrigin(raw string) (string, string, string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "", "", "", false
+	}
+	var scheme, defPort string
+	switch strings.ToLower(u.Scheme) {
+	case "https", "wss":
+		scheme = "https"
+		defPort = "443"
+	case "http", "ws":
+		scheme = "http"
+		defPort = "80"
+	default:
+		return "", "", "", false
+	}
+	host := strings.ToLower(strings.Trim(u.Hostname(), "[]"))
+	if host == "" {
+		return "", "", "", false
+	}
+	port := u.Port()
+	if port == "" {
+		port = defPort
+	}
+	return scheme, host, port, true
+}
+
+func sameNormalizedOrigin(a, b string) bool {
+	sa, ha, pa, oka := normalizedOrigin(a)
+	sb, hb, pb, okb := normalizedOrigin(b)
+	return oka && okb && sa == sb && ha == hb && pa == pb
+}
+
 func (l *link) wsURL(extra string) (string, error) {
 	cfg := l.cfg.load()
 	if cfg == nil {
 		return "", fmt.Errorf("no config")
 	}
-	u, err := url.Parse(cfg.GatewayURL)
-	if err != nil {
-		return "", err
-	}
-	scheme := "ws"
-	if u.Scheme == "https" {
-		scheme = "wss"
-	}
-	return fmt.Sprintf("%s://%s/api/indirect-code/daemon/ws?token=%s%s", scheme, u.Host, url.QueryEscape(cfg.DaemonToken), extra), nil
+	return gatewayWSURL(cfg.GatewayURL, extra)
 }
 
 func (l *link) connectLoop(ctx context.Context) error {
+	cfg := l.cfg.load()
+	if cfg == nil {
+		return fmt.Errorf("no config")
+	}
 	wsURL, err := l.wsURL("")
 	if err != nil {
 		return err
@@ -506,7 +615,7 @@ func (l *link) connectLoop(ctx context.Context) error {
 			stopDialClose()
 		}
 	}()
-	conn, resp, err := dialer.DialContext(ctx, wsURL, nil)
+	conn, resp, err := dialer.DialContext(ctx, wsURL, daemonAuthHeader(cfg.DaemonToken))
 	if err != nil {
 		if isRevokedDialError(resp, err) {
 			fmt.Println("[REVOKED] This host was removed from the gateway. Exiting (re-pair to reconnect).")
@@ -641,17 +750,35 @@ func (r *root) performPairing(connectURL, hostName string) error {
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
 	}
+	scheme := strings.ToLower(u.Scheme)
+	if u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("invalid pairing URL: missing host")
+	}
+	if scheme != "https" && !(scheme == "http" && isLoopbackHost(u.Hostname())) {
+		return fmt.Errorf("refusing insecure pairing URL %q: must use https (http is only allowed for loopback hosts)", u.Scheme+"://"+u.Host)
+	}
 	hostname, _ := os.Hostname()
 	if hostName == "" {
 		hostName = hostname
 	}
 	pairReq := map[string]string{"name": hostName, "hostname": hostname, "os": runtime.GOOS, "arch": runtime.GOARCH}
-	if cfg := r.cfg.load(); cfg != nil && cfg.HostID != "" && cfg.DaemonToken != "" {
+	if cfg := r.cfg.load(); cfg != nil && cfg.HostID != "" && cfg.DaemonToken != "" && sameNormalizedOrigin(u.String(), cfg.GatewayURL) {
 		pairReq["hostId"] = cfg.HostID
 		pairReq["daemonToken"] = cfg.DaemonToken
 	}
 	reqBody, _ := json.Marshal(pairReq)
-	resp, err := http.Post(u.String(), "application/json", bytes.NewReader(reqBody))
+	req, err := http.NewRequest(http.MethodPost, u.String(), bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("invalid pairing request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return errors.New("pairing redirects are not allowed")
+		},
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("pairing request failed: %w", err)
 	}

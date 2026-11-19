@@ -278,7 +278,7 @@ func (w *turnBridge) run() error {
 		w.emit(map[string]any{"type": "session_data", "hostId": cfg.HostID, "session": sessionPayloadPaged(w.recordView(), 0)})
 		return fmt.Errorf("workspace unavailable")
 	}
-	apiBase := strings.TrimRight(cfg.GatewayURL, "/") + "/anthropic/v1"
+	apiBase := gatewayAPIBase(cfg.GatewayURL)
 	w.modelInfo = gatewayModel(w.ctx, cfg.GatewayURL, cfg.DaemonToken, w.snap.model)
 	if effort := canonicalReasoning(w.snap.options.Effort); effort != "" && effort != "none" {
 		w.modelInfo.Reasoning = true
@@ -383,7 +383,7 @@ func (w *turnBridge) run() error {
 
 	initTools := w.effectiveRegistry()
 
-	w.agent = core.NewAgent(w.client, w.modelToUse, systemPromptWithBrain(cfg, w.sessionCWD, w.snap.options, brainDir), initTools)
+	w.agent = core.NewAgent(w.client, w.modelToUse, systemPromptWithBrain(cfg, w.sessionCWD, w.snap.options, brainDir, w.sessionGrants...), initTools)
 	w.agent.SessionID = w.env.actorID
 	w.agent.TurnIndex = w.snap.turnIndex
 	w.agent.PersistentTurns = true
@@ -639,7 +639,7 @@ func (w *turnBridge) refreshFromActor(requestCtx context.Context, allowSteer boo
 		requestModel.Reasoning = true
 	}
 	if strings.TrimSpace(w.cfg.GatewayURL) != "" || w.client == nil {
-		apiBase := strings.TrimRight(w.cfg.GatewayURL, "/") + "/anthropic/v1"
+		apiBase := gatewayAPIBase(w.cfg.GatewayURL)
 		w.client = w.wrapClient(provider.NewGatewayAnthropic(w.cfg.APIKey, apiBase, requestModel))
 	}
 	w.modelToUse = w.modelInfo.ID
@@ -665,7 +665,7 @@ func (w *turnBridge) refreshFromActor(requestCtx context.Context, allowSteer boo
 	if w.env.brainDir != nil {
 		brainDir = w.env.brainDir(w.env.actorID)
 	}
-	system := systemPromptWithBrain(cfg, w.sessionCWD, rf.options, brainDir)
+	system := systemPromptWithBrain(cfg, w.sessionCWD, rf.options, brainDir, w.sessionGrants...)
 	w.agent.SetSystem(system)
 	w.agent.SetTools(w.effectiveRegistry())
 	w.agent.CompletionTool = modeCompletionTool(w.skillEff.Mode)
@@ -696,9 +696,6 @@ func (w *turnBridge) syncSandboxInteractivePolicy() {
 		return
 	}
 	effAccess := effectiveSessionAccess(w.snap.options.Access, w.snap.jailed)
-	if w.skillEff.AskAutoApprove {
-		effAccess = "full"
-	}
 	w.sandbox.SetInteractivePolicy(effAccess, w.effectivePermissionRules())
 }
 
@@ -709,9 +706,9 @@ func (w *turnBridge) applySandboxSkillPolicy() {
 	ro := w.skillEff.ToolDecision("write") == skills.PolicyDeny && w.skillEff.ToolDecision("edit") == skills.PolicyDeny
 	w.sandbox.SetProjectReadOnly(ro)
 	w.syncSandboxInteractivePolicy()
-	if ro {
+	if ro || effectiveSessionJailed(w.snap.options.Access, w.snap.jailed) {
 		w.sandbox.Lock()
-	} else if !effectiveSessionJailed(w.snap.options.Access, w.snap.jailed) || w.skillEff.AskAutoApprove {
+	} else {
 		w.sandbox.Unlock()
 	}
 	readDenied := w.skillEff.ToolDecision("read") == skills.PolicyDeny &&
@@ -941,6 +938,11 @@ func (w *turnBridge) approveTool(call provider.ToolCallBlock) (bool, string, jso
 	if w.ctx.Err() != nil {
 		return false, "Turn cancelled", nil
 	}
+	canonArgs, canonErr := canonicalizeToolArgs(call.Arguments)
+	if canonErr != nil {
+		return false, fmt.Sprintf("invalid tool arguments: %v", canonErr), nil
+	}
+	call.Arguments = canonArgs
 	// File mutations invalidate the exact-duplicate bg guard for jobs
 	// started before them; counted pre-approval (a rejected edit
 	// only loses a dedupe opportunity, never blocks real work).
@@ -988,9 +990,82 @@ func (w *turnBridge) approveTool(call provider.ToolCallBlock) (bool, string, jso
 			w.sandbox.SetActiveCallGrants(out.callGrants)
 		}
 		w.setActiveApprovalTool(id, call.Name, call.Arguments)
-		return true, "", nil
+		return true, "", canonArgs
 	case <-w.ctx.Done():
 		return false, "Turn cancelled", nil
+	}
+}
+
+// checkExploreSubTool enforces the parent session's active skill policy
+// (tool/argument denials) and permission policy/access mode on every sub-tool
+// call executed by ExploreTool. Designed to wire directly into
+// ExploreTool.BeforeSubTool.
+func (w *turnBridge) checkExploreSubTool(tool string, args json.RawMessage) (bool, string) {
+	canonArgs, err := canonicalizeToolArgs(args)
+	if err != nil {
+		return false, fmt.Sprintf("explore sub-tool %q arguments rejected: %v", tool, err)
+	}
+	policyTool := skillPolicyTool(tool)
+	if w.skillEff.ToolDecision(policyTool) == skills.PolicyDeny {
+		return false, fmt.Sprintf("tool %q is denied by the active skill policy", tool)
+	}
+	if reason := skillsArgRestriction(w.skillEff, tool, canonArgs); reason != "" {
+		return false, reason
+	}
+	sp := skillsApproval(w.skillEff, tool, canonArgs)
+	if sp == skills.PolicyDeny {
+		return false, fmt.Sprintf("tool %q is denied by the active skill policy", tool)
+	}
+
+	rules := w.effectivePermissionRules()
+	if w.sandbox != nil {
+		if liveRules := w.sandbox.EffectiveRules(); len(liveRules) > 0 {
+			rules = liveRules
+		}
+	}
+	if tool == "session_history" {
+		if effRule, r := tools.MatchRules(rules, "tool", "session_history", w.sessionCWD); effRule == "deny" {
+			return false, fmt.Sprintf("Blocked by permission rule %q", r.Pattern)
+		}
+		return true, ""
+	}
+
+	effAccess := effectiveSessionAccess(w.snap.options.Access, w.snap.jailed)
+	evalAccess := effAccess
+	if sp == skills.PolicyYolo && !w.skillEff.AskAutoApprove && evalAccess == "ask" {
+		evalAccess = "auto"
+	}
+	eval := tools.EvaluateToolCall(tool, canonArgs, evalAccess, w.sessionCWD, w.brainDir, true, rules)
+	switch eval.Verdict {
+	case tools.VerdictAllow:
+		return true, ""
+	case tools.VerdictDeny:
+		reason := eval.Meta.Reason
+		if reason == "" {
+			reason = fmt.Sprintf("Blocked by permission policy for %s: %s", eval.Meta.Capability, eval.Meta.Target)
+		}
+		return false, reason
+	default:
+		if w.env.inbox != nil && w.ctx != nil {
+			resp, err := w.midExecApprove(w.ctx, tools.MidExecApprovalReq{
+				Capability:      eval.Meta.Capability,
+				Target:          eval.Meta.Target,
+				Reason:          eval.Meta.Reason,
+				Risk:            eval.Meta.Risk,
+				AccessMode:      eval.Meta.AccessMode,
+				ProposedRule:    eval.Meta.ProposedRule,
+				CanAllowSession: eval.Meta.CanAllowSession,
+				CanAllowAlways:  eval.Meta.CanAllowAlways,
+			})
+			if err == nil && resp.Decision != "" && resp.Decision != "deny" {
+				return true, ""
+			}
+		}
+		reason := eval.Meta.Reason
+		if reason == "" {
+			reason = fmt.Sprintf("Permission required for %s (%s) in explore subagent", tool, eval.Meta.Target)
+		}
+		return false, reason
 	}
 }
 
@@ -1670,8 +1745,7 @@ func buildTurnPrompt(attachments []AttachmentRef, promptText string, attachmentI
 					}
 					contextParts = append(contextParts, note)
 				} else {
-					images = append(images, provider.ImageBlock{MimeType: ref.Mime, Data: data, SourcePath: ref.Name})
-					contextParts = append(contextParts, fmt.Sprintf("[Attached image: %s]", ref.Name))
+					contextParts = append(contextParts, fmt.Sprintf("[Attached image %q omitted: image normalization failed (%s)]", ref.Name, normErr.Error()))
 				}
 				continue
 			}
@@ -1719,7 +1793,7 @@ func (w *turnBridge) newSubagentClient(model provider.Model) provider.Client {
 	if strings.TrimSpace(w.cfg.GatewayURL) == "" && w.client != nil {
 		return w.client
 	}
-	apiBase := strings.TrimRight(w.cfg.GatewayURL, "/") + "/anthropic/v1"
+	apiBase := gatewayAPIBase(w.cfg.GatewayURL)
 	c := provider.WithHTTPClient(
 		provider.NewGatewayAnthropic(w.cfg.APIKey, apiBase, model),
 		provider.NewHTTPClientWithProxy(w.cfg.Settings.Insecure, w.cfg.Settings.HTTPProxy),
