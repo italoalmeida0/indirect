@@ -19,6 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
+	"indirect/indirect-code-daemon/packages/provider"
 	"indirect/indirect-code-daemon/packages/skills"
 )
 
@@ -596,6 +597,174 @@ func TestCheckExploreSubToolPolicyEnforcement(t *testing.T) {
 	w.snap.options.Access = "ask"
 	if ok, _ := w.checkExploreSubTool("read", json.RawMessage(`{"path":"main.go"}`)); ok {
 		t.Fatal("expected workspace read in explore subagent to respect Access=ask")
+	}
+}
+
+type exploreMockClient struct {
+	calls     []provider.ToolCallBlock
+	step      int
+	sawBlocks []provider.ToolResultBlock
+}
+
+func (c *exploreMockClient) Name() string { return "explore-mock" }
+
+func (c *exploreMockClient) Stream(ctx context.Context, req provider.Request) (<-chan provider.Event, error) {
+	out := make(chan provider.Event, 8)
+	c.step++
+	step := c.step
+	if step == 2 {
+		for _, m := range req.Messages {
+			if m.Role != provider.RoleTool {
+				continue
+			}
+			for _, blk := range m.Content {
+				if tr, ok := blk.(provider.ToolResultBlock); ok {
+					c.sawBlocks = append(c.sawBlocks, tr)
+				}
+			}
+		}
+	}
+	go func() {
+		defer close(out)
+		out <- provider.EventStart{Provider: "explore-mock", Model: req.Model}
+		if step == 1 {
+			content := make([]provider.Content, 0, len(c.calls))
+			for _, tc := range c.calls {
+				content = append(content, tc)
+			}
+			out <- provider.EventDone{
+				Stop: provider.StopToolUse,
+				Message: provider.Message{
+					Role:    provider.RoleAssistant,
+					Content: content,
+				},
+			}
+			return
+		}
+		out <- provider.EventTextDelta{Delta: "synthesis complete"}
+		out <- provider.EventDone{
+			Stop: provider.StopEnd,
+			Message: provider.Message{
+				Role:    provider.RoleAssistant,
+				Content: []provider.Content{provider.TextBlock{Text: "synthesis complete"}},
+			},
+		}
+	}()
+	return out, nil
+}
+
+// Plan 2.4 integrated end-to-end test: ExploreTool wired with BeforeSubTool: w.checkExploreSubTool
+// enforces skill tool/arg denials, protected paths, and parent session Access="ask" vs "auto".
+func TestExploreToolWithBeforeSubToolEnforcesSkillAndAskPolicy(t *testing.T) {
+	ws := t.TempDir()
+	brain := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "main.go"), []byte("package main\n// EXPLORE_ALLOWED_CANARY\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".env"), []byte("EXPLORE_ENV_SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := map[string]skills.Skill{
+		"restricted": {
+			Name:   "restricted",
+			Mode:   "agentic",
+			Usable: "yolo",
+			Permissions: map[string]skills.PermSpec{
+				"read": {
+					Policy: skills.PolicyAsk,
+					Args:   map[string]skills.Policy{"offset": skills.PolicyDeny},
+				},
+				"inspect": {Policy: skills.PolicyDeny},
+				"explore": {Policy: skills.PolicyAsk},
+			},
+		},
+	}
+	eff, err := skills.Resolve(store, map[string]skills.SessionSkill{"restricted": {Priority: 1, Active: true}}, "agentic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runExplore := func(access string) map[string]provider.ToolResultBlock {
+		t.Helper()
+		sb := tools.NewSandbox(ws)
+		sb.AllowExtra(brain)
+		sb.Lock()
+		w := &turnBridge{
+			sessionCWD: ws,
+			brainDir:   brain,
+			sandbox:    sb,
+			skillEff:   eff,
+			env: workerEnv{
+				brainDir: func(string) string { return brain },
+			},
+			snap: workerSnapshot{
+				jailed:  true,
+				options: SessionOptions{Mode: "agentic", Access: access},
+			},
+		}
+		w.applySandboxSkillPolicy()
+
+		client := &exploreMockClient{
+			calls: []provider.ToolCallBlock{
+				{ID: "c_inspect", Name: "inspect", Arguments: json.RawMessage(`{"path":"."}`)},
+				{ID: "c_arg", Name: "read", Arguments: json.RawMessage(`{"path":"main.go","Offset":1}`)},
+				{ID: "c_env", Name: "read", Arguments: json.RawMessage(`{"Path":".env"}`)},
+				{ID: "c_main", Name: "read", Arguments: json.RawMessage(`{"path":"main.go"}`)},
+			},
+		}
+		et := &tools.ExploreTool{
+			Client:        client,
+			Model:         "mock-model",
+			CWD:           ws,
+			Sandbox:       sb,
+			BrainDir:      brain,
+			MaxTurns:      4,
+			BeforeSubTool: w.checkExploreSubTool,
+		}
+		if _, err := et.Execute(context.Background(), json.RawMessage(`{"task":"inspect workspace"}`), nil); err != nil {
+			t.Fatalf("ExploreTool.Execute(access=%s): %v", access, err)
+		}
+		byID := make(map[string]provider.ToolResultBlock, len(client.sawBlocks))
+		for _, tr := range client.sawBlocks {
+			byID[tr.CallID] = tr
+		}
+		return byID
+	}
+
+	resultText := func(tr provider.ToolResultBlock) string {
+		var parts []string
+		for _, c := range tr.Content {
+			if tb, ok := c.(provider.TextBlock); ok {
+				parts = append(parts, tb.Text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	}
+
+	// Under Access="auto": skill-denied inspect, mixed-case denied arg Offset, and .env are ALL blocked;
+	// ordinary workspace read main.go succeeds.
+	autoRes := runExplore("auto")
+	if !autoRes["c_inspect"].IsError {
+		t.Fatalf("auto: skill-denied inspect must error, got %q", resultText(autoRes["c_inspect"]))
+	}
+	if !autoRes["c_arg"].IsError {
+		t.Fatalf("auto: mixed-case arg-denied read(Offset) must error, got %q", resultText(autoRes["c_arg"]))
+	}
+	if !autoRes["c_env"].IsError || strings.Contains(resultText(autoRes["c_env"]), "EXPLORE_ENV_SECRET") {
+		t.Fatalf("auto: protected .env read must error without leaking secret, got %q", resultText(autoRes["c_env"]))
+	}
+	if autoRes["c_main"].IsError || !strings.Contains(resultText(autoRes["c_main"]), "EXPLORE_ALLOWED_CANARY") {
+		t.Fatalf("auto: ordinary workspace read main.go should succeed, got isError=%v body=%q", autoRes["c_main"].IsError, resultText(autoRes["c_main"]))
+	}
+
+	// Under Access="ask": ordinary workspace read main.go MUST also be blocked without explicit allow rule.
+	askRes := runExplore("ask")
+	if !askRes["c_main"].IsError || strings.Contains(resultText(askRes["c_main"]), "EXPLORE_ALLOWED_CANARY") {
+		t.Fatalf("ask: workspace read main.go must be blocked in explore under Access=ask, got isError=%v body=%q", askRes["c_main"].IsError, resultText(askRes["c_main"]))
+	}
+	if !askRes["c_env"].IsError || strings.Contains(resultText(askRes["c_env"]), "EXPLORE_ENV_SECRET") {
+		t.Fatalf("ask: protected .env read must be blocked, got %q", resultText(askRes["c_env"]))
 	}
 }
 

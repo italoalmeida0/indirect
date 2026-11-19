@@ -364,6 +364,7 @@ func (w *turnBridge) run() error {
 		SessionID:      w.env.actorID,
 		SessionHistory: sessionHistoryTool,
 		OnUsage:        w.onSubagentUsage,
+		BeforeSubTool:  w.checkExploreSubTool,
 	}
 	w.exploreTool = exploreTool
 	w.reg = core.NewRegistry(append(append(append(append(baseTools, questionTool), todoTool, finishTool, summaryTool), bgCancelTool, bgAwaitTool, bgCheckTool), widgetSetTool, widgetListTool, widgetLintTool, widgetReadTool, widgetEditTool, useSkillTool, sessionHistoryTool, exploreTool)...)
@@ -1046,21 +1047,6 @@ func (w *turnBridge) checkExploreSubTool(tool string, args json.RawMessage) (boo
 		}
 		return false, reason
 	default:
-		if w.env.inbox != nil && w.ctx != nil {
-			resp, err := w.midExecApprove(w.ctx, tools.MidExecApprovalReq{
-				Capability:      eval.Meta.Capability,
-				Target:          eval.Meta.Target,
-				Reason:          eval.Meta.Reason,
-				Risk:            eval.Meta.Risk,
-				AccessMode:      eval.Meta.AccessMode,
-				ProposedRule:    eval.Meta.ProposedRule,
-				CanAllowSession: eval.Meta.CanAllowSession,
-				CanAllowAlways:  eval.Meta.CanAllowAlways,
-			})
-			if err == nil && resp.Decision != "" && resp.Decision != "deny" {
-				return true, ""
-			}
-		}
 		reason := eval.Meta.Reason
 		if reason == "" {
 			reason = fmt.Sprintf("Permission required for %s (%s) in explore subagent", tool, eval.Meta.Target)

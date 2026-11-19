@@ -436,59 +436,15 @@ func skillPolicyTool(tool string) string {
 	}
 }
 
-// canonicalizeToolArgs decodes a top-level JSON object while preserving exact
-// nested values, folds all top-level keys to lowercase, and rejects malformed
-// JSON, non-object payloads, trailing data, or any duplicate/case-colliding
-// top-level keys (e.g. "path" and "Path"). Empty or null payloads canonicalize
-// to "{}".
+// canonicalizeToolArgs delegates to tools.CanonicalizeToolArgs and normalizes
+// empty or null payloads to "{}" so callers can safely decode into a map.
 func canonicalizeToolArgs(raw json.RawMessage) (json.RawMessage, error) {
-	trimmed := bytes.TrimSpace(raw)
-	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
-		return json.RawMessage("{}"), nil
-	}
-	dec := json.NewDecoder(bytes.NewReader(trimmed))
-	tok, err := dec.Token()
-	if err != nil {
-		return nil, fmt.Errorf("invalid tool arguments JSON: %w", err)
-	}
-	delim, ok := tok.(json.Delim)
-	if !ok || delim != '{' {
-		return nil, fmt.Errorf("tool arguments must be a JSON object")
-	}
-	out := make(map[string]json.RawMessage)
-	for dec.More() {
-		ktok, err := dec.Token()
-		if err != nil {
-			return nil, fmt.Errorf("invalid tool argument key: %w", err)
-		}
-		key, ok := ktok.(string)
-		if !ok {
-			return nil, fmt.Errorf("tool argument key must be a string")
-		}
-		var val json.RawMessage
-		if err := dec.Decode(&val); err != nil {
-			return nil, fmt.Errorf("invalid value for argument %q: %w", key, err)
-		}
-		lower := strings.ToLower(key)
-		if _, exists := out[lower]; exists {
-			return nil, fmt.Errorf("duplicate or case-colliding tool argument key %q", key)
-		}
-		out[lower] = val
-	}
-	endTok, err := dec.Token()
-	if err != nil {
-		return nil, fmt.Errorf("unterminated tool arguments object: %w", err)
-	}
-	if endDelim, ok := endTok.(json.Delim); !ok || endDelim != '}' {
-		return nil, fmt.Errorf("invalid tool arguments object terminator")
-	}
-	var extra any
-	if err := dec.Decode(&extra); err != io.EOF {
-		return nil, fmt.Errorf("trailing data after tool arguments object")
-	}
-	canon, err := json.Marshal(out)
+	canon, err := tools.CanonicalizeToolArgs(raw)
 	if err != nil {
 		return nil, err
+	}
+	if len(canon) == 0 || bytes.Equal(canon, []byte("null")) {
+		return json.RawMessage("{}"), nil
 	}
 	return canon, nil
 }
