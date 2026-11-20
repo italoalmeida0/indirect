@@ -244,14 +244,14 @@ func (a *sessionActor) onQueueSendNow(m queueSendNowMsg) {
 		rest := append([]QueuedMessage(nil), a.rec.Queue[:idx]...)
 		rest = append(rest, a.rec.Queue[idx+1:]...)
 		a.rec.Queue = rest
-		if err := a.startTurn(item.Text, item.AttachmentIDs, item.Model, item.YOLO, item.Options); err != nil {
+		if err := a.startQueuedTurn(item); err != nil {
 			item.Delivery = deliverySteer
 			a.rec.Queue = append(a.rec.Queue, item)
 			sortQueueByDelivery(a.rec.Queue)
 			_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
+			a.pingChange()
+			a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 		}
-		a.pingChange()
-		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 		return
 	}
 	previous := cloneQueueSlice(a.rec.Queue)
@@ -329,15 +329,15 @@ func (a *sessionActor) onQueueInterruptNow(m queueInterruptNowMsg) {
 		rest := append([]QueuedMessage(nil), a.rec.Queue[:idx]...)
 		rest = append(rest, a.rec.Queue[idx+1:]...)
 		a.rec.Queue = rest
-		if err := a.startTurn(item.Text, item.AttachmentIDs, item.Model, item.YOLO, item.Options); err != nil {
+		if err := a.startQueuedTurn(item); err != nil {
 			item.Delivery = deliveryQueue
 			a.rec.Queue = append(a.rec.Queue, item)
 			demoteStagedQueueItems(a.rec.Queue)
 			sortQueueByDelivery(a.rec.Queue)
 			_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
+			a.pingChange()
+			a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 		}
-		a.pingChange()
-		a.emit(map[string]any{"type": "session_queue", "hostId": a.hostID(), "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 		return
 	}
 	if a.state == stateRunning || a.state == stateAwaitAppr || a.state == stateAwaitQ || a.state == stateCancel {

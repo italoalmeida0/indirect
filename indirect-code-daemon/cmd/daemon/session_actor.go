@@ -953,13 +953,22 @@ func applyTurnOptionsAndAccess(rec *SessionRecord, actorJailed *bool, yolo bool,
 
 func (a *sessionActor) startTurn(prompt string, attachmentIDs []string, model string, yolo bool, options *SessionOptions) error {
 	applyTurnOptionsAndAccess(a.rec, &a.jailed, yolo, options)
-	return a.startTurnWithMeta(prompt, attachmentIDs, model, nil)
+	return a.startTurnWithMetaOpts(prompt, attachmentIDs, model, nil, false)
+}
+
+func (a *sessionActor) startQueuedTurn(item QueuedMessage) error {
+	applyTurnOptionsAndAccess(a.rec, &a.jailed, item.YOLO, item.Options)
+	return a.startTurnWithMetaOpts(item.Text, item.AttachmentIDs, item.Model, nil, true)
 }
 
 // startTurnWithMeta seeds the opening user message with extra meta (used by
 // background wake-up turns for background_delivery). Refuses when not idle:
 // callers racing a fresh user turn fold the notice as late-result instead.
 func (a *sessionActor) startTurnWithMeta(prompt string, attachmentIDs []string, model string, meta map[string]string) error {
+	return a.startTurnWithMetaOpts(prompt, attachmentIDs, model, meta, false)
+}
+
+func (a *sessionActor) startTurnWithMetaOpts(prompt string, attachmentIDs []string, model string, meta map[string]string, emitQueue bool) error {
 	if a.state != stateIdle || a.persistErr != nil || a.closing {
 		return fmt.Errorf("session is busy or cannot persist")
 	}
@@ -1021,12 +1030,9 @@ func (a *sessionActor) startTurnWithMeta(prompt string, attachmentIDs []string, 
 	snap, env := snapshotTurn(a, gen, prompt, meta)
 	a.pendingContext = nil // Already included in the new worker history.
 	snap.attachIDs = append([]string(nil), attachmentIDs...)
-	startFn := a.startWorker
-	workerDone := a.workerDone
-	go func() {
-		defer close(workerDone)
-		startFn(snap, env, ctx)
-	}()
+	// Publish running status (and updated queue when launching a queued item)
+	// BEFORE spawning the worker goroutine so any observer synchronized on
+	// worker start sees the transition events already emitted.
 	a.pingChange()
 	// Foreground contract (v1 parity): running status so the UI flips to
 	// Stop immediately, not only when the first delta arrives.
@@ -1035,6 +1041,15 @@ func (a *sessionActor) startTurnWithMeta(prompt string, attachmentIDs []string, 
 		"type": "session_status", "hostId": hostID, "sessionId": a.id,
 		"status": "running", "turn": map[string]any{"startedAt": a.rec.Turn.StartedAt, "status": "running"},
 	})
+	if emitQueue {
+		a.emit(map[string]any{"type": "session_queue", "hostId": hostID, "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
+	}
+	startFn := a.startWorker
+	workerDone := a.workerDone
+	go func() {
+		defer close(workerDone)
+		startFn(snap, env, ctx)
+	}()
 	return nil
 }
 
@@ -1229,13 +1244,12 @@ func (a *sessionActor) finishTurn(ok bool) {
 		if demoteInterruptToSteer(a.rec.Queue) {
 			sortQueueByDelivery(a.rec.Queue)
 		}
-		if err := a.startTurn(head.Text, head.AttachmentIDs, head.Model, head.YOLO, head.Options); err != nil {
+		if err := a.startQueuedTurn(head); err != nil {
 			head.Delivery = deliveryQueue
 			a.rec.Queue = append([]QueuedMessage{head}, a.rec.Queue...)
 			demoteStagedQueueItems(a.rec.Queue)
 			sortQueueByDelivery(a.rec.Queue)
 			_ = a.saveOrAppend(walEvent{Type: walTypeQueue, Queue: a.rec.Queue})
-		} else {
 			a.pingChange()
 			a.emit(map[string]any{"type": "session_queue", "hostId": hostID, "sessionId": a.id, "queue": queuePayload(a.rec.Queue)})
 		}
@@ -1886,17 +1900,18 @@ func (a *sessionActor) startSeededTurn(turnSeq int, model string, yolo bool, att
 	snap, env := snapshotTurn(a, gen, "", nil)
 	snap.seeded = true
 	a.pendingContext = nil
-	workerDone := a.workerDone
-	go func() {
-		defer close(workerDone)
-		a.startWorker(snap, env, ctx)
-	}()
 	a.pingChange()
 	hostID := a.hostID()
 	a.emit(map[string]any{
 		"type": "session_status", "hostId": hostID, "sessionId": a.id,
 		"status": "running", "turn": map[string]any{"startedAt": a.rec.Turn.StartedAt, "status": "running"},
 	})
+	startFn := a.startWorker
+	workerDone := a.workerDone
+	go func() {
+		defer close(workerDone)
+		startFn(snap, env, ctx)
+	}()
 	return nil
 }
 

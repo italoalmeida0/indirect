@@ -650,6 +650,8 @@ func TestInterruptMidStreamPreservesPartialAssistantAndPromotesBehindPassiveQueu
 
 	turn2Gate := make(chan struct{})
 	turn2Entered := make(chan struct{})
+	turn1SawToolArgs := make(chan struct{})
+	var turn1ToolArgsOnce sync.Once
 	worker := func(snap workerSnapshot, env workerEnv, ctx context.Context) {
 		if snap.gen == 2 {
 			close(turn2Entered)
@@ -662,7 +664,13 @@ func TestInterruptMidStreamPreservesPartialAssistantAndPromotesBehindPassiveQueu
 			m.TurnIndex = snap.turnIndex
 			env.inbox <- Envelope{Epoch: snap.epoch, Payload: walAppendMsg{gen: snap.gen, ev: walMsgEvent(m)}}
 		}
-		err := ag.Prompt(ctx, snap.prompt, nil, func(core.AgentEvent) {})
+		err := ag.Prompt(ctx, snap.prompt, nil, func(ev core.AgentEvent) {
+			if snap.gen == 1 {
+				if _, ok := ev.(core.EvToolUseArgs); ok {
+					turn1ToolArgsOnce.Do(func() { close(turn1SawToolArgs) })
+				}
+			}
+		})
 		cancelled := ctx.Err() != nil
 		errStr := ""
 		if err != nil && !cancelled {
@@ -682,13 +690,17 @@ func TestInterruptMidStreamPreservesPartialAssistantAndPromotesBehindPassiveQueu
 		stop()
 	}()
 
-	// Start turn 1 and wait until partial thinking + text + unclosed tool_use are streamed.
+	// Start turn 1 and wait until the client has actually consumed partial
+	// thinking + text + unclosed tool_use deltas before interrupting.
 	r1 := make(chan any, 1)
 	act.inbox <- Envelope{Payload: userPromptMsg{Text: "turn 1 prompt", Reply: r1}}
 	<-r1
 	<-stream1Ready
-	// Give the client goroutine a moment to consume the flushed SSE chunks before cancel.
-	time.Sleep(40 * time.Millisecond)
+	select {
+	case <-turn1SawToolArgs:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for turn 1 client to consume EvToolUseArgs")
+	}
 
 	// Queue [Q1, Q2, INT_TARGET] passively, then trigger queue_interrupt_now on INT_TARGET!
 	enqueue := func(txt string) string {

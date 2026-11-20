@@ -23,19 +23,37 @@ type sseEvent struct {
 const gatewayUsageCommentPrefix = "x-gateway-usage"
 
 func readSSE(r io.Reader, out chan<- sseEvent) {
+	readSSEUntil(nil, r, out)
+}
+
+func readSSEUntil(done <-chan struct{}, r io.Reader, out chan<- sseEvent) {
 	defer close(out)
 	// linereader (GNU-correct): bufio.Scanner silently DROPS lines over
 	// its token cap (a 1.3MB minified line once broke grep in the wild);
 	// SSE data: payloads hit the same ceiling.
 	sc := linereader.New(r)
 
-	var ev sseEvent
-	flush := func() {
-		if ev.Data == "" && ev.Event == "" {
-			return
+	send := func(e sseEvent) bool {
+		if done == nil {
+			out <- e
+			return true
 		}
-		out <- ev
+		select {
+		case out <- e:
+			return true
+		case <-done:
+			return false
+		}
+	}
+
+	var ev sseEvent
+	flush := func() bool {
+		if ev.Data == "" && ev.Event == "" {
+			return true
+		}
+		ok := send(ev)
 		ev = sseEvent{}
+		return ok
 	}
 
 	for sc.Scan() {
@@ -46,14 +64,18 @@ func readSSE(r io.Reader, out chan<- sseEvent) {
 		// the CR leaks into names/data.
 		line := strings.TrimSuffix(sc.Text(), "\r")
 		if line == "" {
-			flush()
+			if !flush() {
+				return
+			}
 			continue
 		}
 		if strings.HasPrefix(line, ":") {
 			// comment / keep-alive — except the gateway usage signal.
 			payload := strings.TrimSpace(strings.TrimPrefix(line, ":"))
 			if rest, ok := cutPrefixFold(payload, gatewayUsageCommentPrefix); ok {
-				out <- sseEvent{Event: gatewayUsageCommentPrefix, Data: strings.TrimSpace(rest)}
+				if !send(sseEvent{Event: gatewayUsageCommentPrefix, Data: strings.TrimSpace(rest)}) {
+					return
+				}
 			}
 			continue
 		}
@@ -74,8 +96,10 @@ func readSSE(r io.Reader, out chan<- sseEvent) {
 			ev.Data += value
 		}
 	}
-	flush()
+	if !flush() {
+		return
+	}
 	if err := sc.Err(); err != nil {
-		out <- sseEvent{Err: err}
+		send(sseEvent{Err: err})
 	}
 }

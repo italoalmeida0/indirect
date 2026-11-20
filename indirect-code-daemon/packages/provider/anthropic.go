@@ -579,8 +579,10 @@ func (c *anthropicClient) runStream(ctx context.Context, resp *http.Response, re
 	}
 	out <- EventStart{Model: req.Model, Provider: c.Name()}
 
+	rawDone := make(chan struct{})
+	defer close(rawDone)
 	raw := make(chan sseEvent, 16)
-	go readSSE(bodyReader, raw)
+	go readSSEUntil(rawDone, bodyReader, raw)
 
 	type blockEntry struct {
 		kind      string // "text" | "tool_use" | "redacted"

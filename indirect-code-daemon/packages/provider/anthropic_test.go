@@ -3,10 +3,12 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnthropicBuildRequest(t *testing.T) {
@@ -629,8 +631,12 @@ func TestAnthropicRunStreamCancelMidToolUsePreservesPartialBlocks(t *testing.T) 
 		for ev := range evs {
 			if _, ok := ev.(EventToolArgs); ok && !sawToolArgs {
 				sawToolArgs = true
-				close(closeStream)
+				// Cancel ctx BEFORE unblocking the server handler so ctx.Err()
+				// is guaranteed non-nil before the server can emit HTTP EOF;
+				// reversing the order races EOF against cancel() and legitimately
+				// surfaces a truncated-stream error.
 				cancel()
+				close(closeStream)
 			}
 			if d, ok := ev.(EventDone); ok {
 				cp := d
@@ -664,5 +670,82 @@ func TestAnthropicRunStreamCancelMidToolUsePreservesPartialBlocks(t *testing.T) 
 		if gotText != "Partial answer before interrupt" {
 			t.Fatalf("iter %d: expected partial text preserved, got %q", iter, gotText)
 		}
+	}
+}
+
+func TestAnthropicRunStreamCancelAndImmediateEOFReportsAborted(t *testing.T) {
+	// Deterministically exercise clean EOF (`case ev, ok := <-raw: if !ok`)
+	// occurring right after context cancellation during an unclosed tool_use.
+	c := NewAnthropic("x", "http://example.invalid").(*anthropicClient)
+	payload := strings.Join([]string{
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"m\",\"usage\":{\"input_tokens\":10}}}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"analyzing request...\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"Partial answer before interrupt\"}}\n\n",
+		"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_partial\",\"name\":\"bash\"}}\n\n",
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"command\\\":\\\"sleep 10\"}}\n\n",
+	}, "")
+
+	for iter := 0; iter < 20; iter++ {
+		pr, pw := io.Pipe()
+		ctx, cancel := context.WithCancel(context.Background())
+		out := make(chan Event, 16)
+		resp := &http.Response{StatusCode: http.StatusOK, Body: pr}
+		go c.runStream(ctx, resp, Request{Model: "m"}, out)
+
+		go func() {
+			_, _ = io.WriteString(pw, payload)
+		}()
+
+		var doneEv *EventDone
+		sawToolArgs := false
+		for ev := range out {
+			if _, ok := ev.(EventToolArgs); ok && !sawToolArgs {
+				sawToolArgs = true
+				cancel()
+				_ = pw.Close() // clean io.EOF with ctx already cancelled
+			}
+			if d, ok := ev.(EventDone); ok {
+				cp := d
+				doneEv = &cp
+			}
+		}
+		cancel()
+		_ = pw.Close()
+
+		if !sawToolArgs || doneEv == nil {
+			t.Fatalf("iter %d: sawToolArgs=%v doneEv=%v", iter, sawToolArgs, doneEv)
+		}
+		if doneEv.Stop != StopAborted {
+			t.Fatalf("iter %d: expected StopAborted on cancelled clean EOF with unclosed tool_use, got %q (err=%v)", iter, doneEv.Stop, doneEv.Err)
+		}
+	}
+}
+
+func TestReadSSEUntilStopsWhenDoneClosed(t *testing.T) {
+	// Regression: when runStream exits on ctx.Done(), readSSEUntil must not
+	// block forever trying to write to an unread buffered channel.
+	var sb strings.Builder
+	for i := 0; i < 64; i++ {
+		sb.WriteString("event: ping\ndata: {}\n\n")
+	}
+	done := make(chan struct{})
+	out := make(chan sseEvent, 1) // deliberately tiny buffer
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		readSSEUntil(done, strings.NewReader(sb.String()), out)
+	}()
+
+	// Wait for the first event to confirm readSSEUntil is blocked on sending.
+	<-out
+	close(done)
+	select {
+	case <-exited:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readSSEUntil leaked after done channel was closed")
 	}
 }
