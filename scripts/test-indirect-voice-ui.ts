@@ -1252,6 +1252,22 @@ try {
       await page.waitForTimeout(200);
 
       // Idle running-turn assertions (Stop + Voice + Send + docked QueueShelf)
+      const parseColorAlpha = (bg: string): number => {
+        const s = (bg || "").trim().toLowerCase();
+        if (!s || s === "transparent") return 0;
+        const slash = s.match(/\/\s*([\d.]+%?)\s*\)$/);
+        if (slash) {
+          const raw = slash[1]!;
+          return raw.endsWith("%") ? parseFloat(raw) / 100 : parseFloat(raw);
+        }
+        const rgba = s.match(/^rgba\(\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*([\d.]+%?)\s*\)$/);
+        if (rgba) {
+          const raw = rgba[1]!;
+          return raw.endsWith("%") ? parseFloat(raw) / 100 : parseFloat(raw);
+        }
+        return 1;
+      };
+
       const idleGeom = await page.evaluate(() => {
         const round2 = (n: number) => Math.round(n * 100) / 100;
         const comp = document.querySelector<HTMLElement>(".rc-composer")!;
@@ -1286,6 +1302,29 @@ try {
           };
         };
 
+        const measureControl = (el: HTMLElement | null) => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          const cs = getComputedStyle(el);
+          const bf = cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "none";
+          return {
+            width: round2(r.width),
+            height: round2(r.height),
+            bg: cs.backgroundColor,
+            backdrop: bf,
+            boxShadow: cs.boxShadow,
+          };
+        };
+
+        const toolbarStyle = getComputedStyle(toolbar);
+        const controls = {
+          add: measureControl(toolbar.querySelector<HTMLElement>("button.rc-composer-add")),
+          mode: measureControl(toolbar.querySelector<HTMLElement>('button[aria-label^="Agent mode and skills"]')),
+          access: measureControl(toolbar.querySelector<HTMLElement>("button[data-access-mode]")),
+          model: measureControl(modelBtn),
+          stop: measureControl(toolbar.querySelector<HTMLElement>("button.rc-composer-stop")),
+        };
+
         return {
           themeAttr: document.documentElement.dataset.theme,
           overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -1293,11 +1332,14 @@ try {
           innerWidth: window.innerWidth,
           seamDiff: round2(Math.abs(shelfR.bottom - compR.top)),
           composerShadow: getComputedStyle(comp).boxShadow,
+          toolbarBg: toolbarStyle.backgroundColor,
+          toolbarBorderTop: toolbarStyle.borderTopWidth,
           toolbarRowSpread: round2(toolbarRowSpread),
           modelVisualWidth: round2(modelR.width),
           voiceTouch: measureTouch(voiceBtn),
           stopPresent: Boolean(toolbar.querySelector(".rc-composer-stop")),
           sendPresent: Boolean(toolbar.querySelector(".rc-composer-send")),
+          controls,
         };
       });
 
@@ -1313,6 +1355,15 @@ try {
         idleGeom.composerShadow === "none" || !/[1-9]/.test(shadowGeom),
         `${tag}: idle .rc-composer must have box-shadow: none (got ${idleGeom.composerShadow})`,
       );
+      assert.equal(parseColorAlpha(idleGeom.toolbarBg), 0, `${tag}: idle .rc-composer-toolbar must be transparent (got ${idleGeom.toolbarBg})`);
+      assert.equal(idleGeom.toolbarBorderTop, "0px", `${tag}: idle .rc-composer-toolbar must have no border-top (got ${idleGeom.toolbarBorderTop})`);
+      for (const name of ["add", "mode", "access", "model"] as const) {
+        const ctrl = idleGeom.controls[name];
+        assert(ctrl, `${tag}: idle toolbar control "${name}" missing`);
+        assert.equal(parseColorAlpha(ctrl.bg), 0, `${tag}: idle "${name}" must be transparent (got ${ctrl.bg})`);
+        assert.equal(ctrl.backdrop, "none", `${tag}: idle "${name}" must have backdrop-filter: none (got ${ctrl.backdrop})`);
+        assert.equal(ctrl.boxShadow, "none", `${tag}: idle "${name}" must have box-shadow: none (got ${ctrl.boxShadow})`);
+      }
       assert(idleGeom.toolbarRowSpread <= 2, `${tag}: idle toolbar wrapped (centerY spread=${idleGeom.toolbarRowSpread}px)`);
       assert.equal(idleGeom.stopPresent, true, `${tag}: Stop button must be present while turn is running`);
       assert.equal(idleGeom.sendPresent, true, `${tag}: Send button must be present while idle`);
@@ -1327,13 +1378,13 @@ try {
         );
       }
 
-      // Enter active voice (`listening`)
+      // Enter active voice (`listening`) and wait for the 240ms glass fade-in to settle
       await page.locator(".rc-composer-voice").click();
       await page.waitForFunction(
         () => document.querySelector(".rc-composer")?.getAttribute("data-voice-state") === "listening",
         { timeout: 8_000 },
       );
-      await page.waitForTimeout(100);
+      await page.waitForTimeout(320);
 
       const activeGeom = await page.evaluate(() => {
         const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -1341,6 +1392,7 @@ try {
         const toolbar = comp.querySelector<HTMLElement>(".rc-composer-toolbar")!;
         const canvas = comp.querySelector<HTMLCanvasElement>(".rc-voice-aurora-canvas")!;
         const ambient = document.querySelector<HTMLElement>(".rc-voice-ambient");
+        const modelBtn = toolbar.querySelector<HTMLElement>("button.rc-composer-model")!;
         const cancelBtn = toolbar.querySelector<HTMLElement>(".rc-composer-voice-cancel");
         const confirmBtn = toolbar.querySelector<HTMLElement>(".rc-composer-voice-confirm");
         const compR = comp.getBoundingClientRect();
@@ -1366,6 +1418,31 @@ try {
           };
         };
 
+        const measureControl = (el: HTMLElement | null) => {
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          const cs = getComputedStyle(el);
+          const bf = cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "none";
+          return {
+            width: round2(r.width),
+            height: round2(r.height),
+            bg: cs.backgroundColor,
+            backdrop: bf,
+            boxShadow: cs.boxShadow,
+          };
+        };
+
+        const toolbarStyle = getComputedStyle(toolbar);
+        const controls = {
+          add: measureControl(toolbar.querySelector<HTMLElement>("button.rc-composer-add")),
+          mode: measureControl(toolbar.querySelector<HTMLElement>('button[aria-label^="Agent mode and skills"]')),
+          access: measureControl(toolbar.querySelector<HTMLElement>("button[data-access-mode]")),
+          model: measureControl(modelBtn),
+          stop: measureControl(toolbar.querySelector<HTMLElement>("button.rc-composer-stop")),
+          cancel: measureControl(cancelBtn),
+          confirm: measureControl(confirmBtn),
+        };
+
         const dpr = Math.min(window.devicePixelRatio || 1, 2);
         const canvasLogicalW = canvas.width / dpr;
         const expectedLogicalW = Math.max(280, Math.round(compR.width + 40));
@@ -1374,7 +1451,10 @@ try {
           overflow: document.documentElement.scrollWidth > window.innerWidth + 1,
           scrollWidth: document.documentElement.scrollWidth,
           innerWidth: window.innerWidth,
+          toolbarBg: toolbarStyle.backgroundColor,
+          toolbarBorderTop: toolbarStyle.borderTopWidth,
           toolbarRowSpread: round2(toolbarRowSpread),
+          modelVisualWidth: round2(modelBtn.getBoundingClientRect().width),
           canvasLogicalW: round2(canvasLogicalW),
           expectedLogicalW,
           canvasDiff: round2(Math.abs(canvasLogicalW - expectedLogicalW)),
@@ -1382,6 +1462,7 @@ try {
           ambientDisplay: ambient ? getComputedStyle(ambient).display : "none",
           cancelTouch: measureTouch(cancelBtn),
           confirmTouch: measureTouch(confirmBtn),
+          controls,
         };
       });
 
@@ -1390,7 +1471,59 @@ try {
         false,
         `${tag}: active voice horizontal overflow scrollWidth=${activeGeom.scrollWidth} > innerWidth=${activeGeom.innerWidth}`,
       );
+      assert.equal(parseColorAlpha(activeGeom.toolbarBg), 0, `${tag}: active .rc-composer-toolbar must stay transparent (got ${activeGeom.toolbarBg})`);
+      assert.equal(activeGeom.toolbarBorderTop, "0px", `${tag}: active .rc-composer-toolbar must have no border-top (got ${activeGeom.toolbarBorderTop})`);
       assert(activeGeom.toolbarRowSpread <= 2, `${tag}: active voice toolbar wrapped (spread=${activeGeom.toolbarRowSpread}px)`);
+      assert(
+        activeGeom.modelVisualWidth >= 80,
+        `${tag}: active voice button.rc-composer-model visual width ${activeGeom.modelVisualWidth}px < 80px`,
+      );
+
+      // Verify frosted glass backing (dark/light) or opaque surface (high-contrast) + 0px layout jitter vs idle
+      for (const name of ["add", "mode", "access", "model", "stop"] as const) {
+        const before = idleGeom.controls[name]!;
+        const after = activeGeom.controls[name];
+        assert(after, `${tag}: active toolbar control "${name}" missing`);
+        const dw = Math.abs(after.width - before.width);
+        const dh = Math.abs(after.height - before.height);
+        assert(
+          dw <= 0.05 && dh <= 0.05,
+          `${tag}: "${name}" layout jitter on voice toggle: idle=${before.width}x${before.height} vs active=${after.width}x${after.height}`,
+        );
+        const alpha = parseColorAlpha(after.bg);
+        if (theme === "high-contrast") {
+          assert.equal(alpha, 1, `${tag}: high-contrast active "${name}" must have opaque surface (got ${after.bg})`);
+          assert.equal(after.backdrop, "none", `${tag}: high-contrast active "${name}" must have backdrop-filter: none (got ${after.backdrop})`);
+        } else {
+          assert(
+            alpha >= 0.5 && alpha < 0.99,
+            `${tag}: ${theme} active "${name}" must have translucent frosted background (alpha=${alpha}, bg=${after.bg})`,
+          );
+          assert(
+            after.backdrop.includes("blur("),
+            `${tag}: ${theme} active "${name}" must have backdrop-filter blur(...) (got ${after.backdrop})`,
+          );
+        }
+        if (name !== "stop") {
+          assert(
+            after.boxShadow.includes("inset"),
+            `${tag}: active "${name}" must draw hairline via inset box-shadow (got ${after.boxShadow})`,
+          );
+        }
+      }
+      for (const name of ["cancel", "confirm"] as const) {
+        const ctrl = activeGeom.controls[name];
+        assert(ctrl, `${tag}: active voice button "${name}" missing`);
+        const alpha = parseColorAlpha(ctrl.bg);
+        if (theme === "high-contrast") {
+          assert.equal(alpha, 1, `${tag}: high-contrast "${name}" must have opaque surface (got ${ctrl.bg})`);
+          assert.equal(ctrl.backdrop, "none", `${tag}: high-contrast "${name}" must have backdrop-filter: none (got ${ctrl.backdrop})`);
+        } else {
+          assert(alpha >= 0.5, `${tag}: ${theme} "${name}" must have non-transparent glass surface (alpha=${alpha}, bg=${ctrl.bg})`);
+          assert(ctrl.backdrop.includes("blur("), `${tag}: ${theme} "${name}" must have backdrop-filter blur(...) (got ${ctrl.backdrop})`);
+        }
+      }
+
       assert(
         activeGeom.canvasDiff <= 1,
         `${tag}: ResizeObserver aurora canvas width mismatch (logical=${activeGeom.canvasLogicalW} vs expected=${activeGeom.expectedLogicalW})`,
@@ -1441,8 +1574,30 @@ try {
         );
       }
 
+      // Wait for glass fade-out transition to finish and verify toolbar controls return cleanly to transparent
+      await page.waitForFunction(
+        () => {
+          const toolbar = document.querySelector<HTMLElement>(".rc-composer-toolbar");
+          if (!toolbar) return false;
+          const sels = [
+            "button.rc-composer-add",
+            'button[aria-label^="Agent mode and skills"]',
+            "button[data-access-mode]",
+            "button.rc-composer-model",
+          ];
+          return sels.every((sel) => {
+            const el = toolbar.querySelector<HTMLElement>(sel);
+            if (!el) return false;
+            const cs = getComputedStyle(el);
+            const bf = cs.backdropFilter || (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter || "none";
+            return cs.backgroundColor === "rgba(0, 0, 0, 0)" && bf === "none" && cs.boxShadow === "none";
+          });
+        },
+        { timeout: 2_000 },
+      );
+
       console.log(
-        `[voice-ui] ${tag} PASSED: modelW=${idleGeom.modelVisualWidth}px seam=${idleGeom.seamDiff}px canvas=${activeGeom.canvasLogicalW}px overflow=0`,
+        `[voice-ui] ${tag} PASSED: modelW=${activeGeom.modelVisualWidth}px seam=${idleGeom.seamDiff}px canvas=${activeGeom.canvasLogicalW}px glass=${theme === "high-contrast" ? "opaque" : "frosted"} jitter=0px overflow=0`,
       );
       await context.close();
     }

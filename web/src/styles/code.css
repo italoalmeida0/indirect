@@ -638,7 +638,8 @@ html.mobile .rc-message-actions { opacity: 1; }
   border-color: color-mix(in oklch, var(--foreground) 18%, var(--border-strong));
 }
 :root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] {
-  border: 2px solid var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .rc-voice-aurora-clip {
@@ -788,11 +789,11 @@ html.mobile .rc-composer-voice:active:not(:disabled) {
 }
 
 .rc-composer-voice-confirm {
-  background: color-mix(in oklab, var(--foreground) 14%, var(--surface-raised));
-  border: 1px solid color-mix(in oklab, var(--foreground) 18%, var(--border-strong));
+  background: color-mix(in oklab, var(--foreground) 14%, var(--voice-glass-bg-hover));
+  border: 1px solid color-mix(in oklab, var(--foreground) 14%, var(--voice-glass-border-hover));
   color: var(--foreground);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: var(--voice-glass-blur);
+  backdrop-filter: var(--voice-glass-blur);
   animation: rc-voice-pop-in 0.28s var(--ease-spring) backwards;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
@@ -814,11 +815,11 @@ html.mobile .rc-composer-voice-confirm:active:not(:disabled) {
 }
 
 .rc-composer-voice-cancel {
-  background: color-mix(in oklab, var(--surface-muted) 82%, transparent);
-  border: 1px solid color-mix(in oklab, var(--border-strong) 55%, transparent);
+  background: var(--voice-glass-bg);
+  border: 1px solid var(--voice-glass-border);
   color: var(--text-secondary);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: var(--voice-glass-blur);
+  backdrop-filter: var(--voice-glass-blur);
   animation: rc-voice-pop-in 0.32s var(--ease-spring) backwards;
   transition:
     background-color var(--duration-fast) var(--ease-standard),
@@ -828,13 +829,78 @@ html.mobile .rc-composer-voice-confirm:active:not(:disabled) {
 }
 html:not(.mobile) .rc-composer-voice-cancel:hover:not(:disabled),
 html.mobile .rc-composer-voice-cancel:active:not(:disabled) {
-  background: var(--danger-subtle);
-  border-color: color-mix(in oklab, var(--danger) 45%, var(--border));
+  background: color-mix(in oklab, var(--danger) 20%, var(--voice-glass-bg-hover));
+  border-color: color-mix(in oklab, var(--danger) 45%, var(--voice-glass-border-hover));
   color: var(--danger);
 }
 .rc-composer-voice-cancel:disabled {
   opacity: 0.36;
   cursor: not-allowed;
+}
+
+/* Frosted glass backing for toolbar controls sitting above the active voice
+ * aurora. Scoped strictly to [data-voice-active="true"] so idle controls stay
+ * transparent; inset box-shadow draws the hairline with 0px layout shift. */
+.rc-composer .rc-composer-toolbar button:not(
+  .rc-composer-send,
+  .rc-composer-voice,
+  .rc-composer-voice-cancel,
+  .rc-composer-voice-confirm
+) {
+  transition:
+    background-color 0.24s var(--ease-standard),
+    border-color 0.24s var(--ease-standard),
+    box-shadow 0.24s var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard),
+    -webkit-backdrop-filter 0.24s var(--ease-standard),
+    backdrop-filter 0.24s var(--ease-standard);
+}
+.rc-composer[data-voice-active="true"] .rc-composer-toolbar button:not(
+  .rc-composer-stop,
+  .rc-composer-voice,
+  .rc-composer-voice-cancel,
+  .rc-composer-voice-confirm,
+  .rc-composer-send
+) {
+  background-color: var(--voice-glass-bg);
+  box-shadow: inset 0 0 0 1px var(--voice-glass-border);
+  -webkit-backdrop-filter: var(--voice-glass-blur);
+  backdrop-filter: var(--voice-glass-blur);
+}
+html:not(.mobile) .rc-composer[data-voice-active="true"] .rc-composer-toolbar button:not(
+  .rc-composer-stop,
+  .rc-composer-voice,
+  .rc-composer-voice-cancel,
+  .rc-composer-voice-confirm,
+  .rc-composer-send
+):hover:not(:disabled),
+html.mobile .rc-composer[data-voice-active="true"] .rc-composer-toolbar button:not(
+  .rc-composer-stop,
+  .rc-composer-voice,
+  .rc-composer-voice-cancel,
+  .rc-composer-voice-confirm,
+  .rc-composer-send
+):active:not(:disabled),
+.rc-composer[data-voice-active="true"] .rc-composer-toolbar button:not(
+  .rc-composer-stop,
+  .rc-composer-voice,
+  .rc-composer-voice-cancel,
+  .rc-composer-voice-confirm,
+  .rc-composer-send
+)[aria-expanded="true"] {
+  background-color: var(--voice-glass-bg-hover);
+  box-shadow: inset 0 0 0 1px var(--voice-glass-border-hover);
+}
+.rc-composer[data-voice-active="true"] .rc-composer-stop {
+  background-color: color-mix(in oklab, var(--danger) 16%, var(--voice-glass-bg));
+  border-color: color-mix(in oklab, var(--danger) 38%, var(--voice-glass-border));
+  -webkit-backdrop-filter: var(--voice-glass-blur);
+  backdrop-filter: var(--voice-glass-blur);
+}
+html:not(.mobile) .rc-composer[data-voice-active="true"] .rc-composer-stop:hover:not(:disabled),
+html.mobile .rc-composer[data-voice-active="true"] .rc-composer-stop:active:not(:disabled) {
+  background-color: color-mix(in oklab, var(--danger) 24%, var(--voice-glass-bg-hover));
+  border-color: color-mix(in oklab, var(--danger) 50%, var(--voice-glass-border-hover));
 }
 
 :root[data-theme="high-contrast"] .rc-composer-voice,
@@ -849,6 +915,23 @@ html.mobile .rc-composer-voice-cancel:active:not(:disabled) {
 :root[data-theme="high-contrast"] .rc-composer-voice-confirm:not(:disabled) {
   border-color: var(--accent);
   color: var(--accent);
+}
+html:not(.mobile):root[data-theme="high-contrast"] .rc-composer-voice-cancel:hover:not(:disabled),
+html.mobile:root[data-theme="high-contrast"] .rc-composer-voice-cancel:active:not(:disabled) {
+  background: var(--surface-muted);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+:root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop {
+  background-color: var(--surface);
+  border-color: var(--danger);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html:not(.mobile):root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop:hover:not(:disabled),
+html.mobile:root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop:active:not(:disabled) {
+  background-color: var(--surface-muted);
+  border-color: var(--danger);
 }
 
 /* Status overlay entrance & live recording dot */
@@ -923,7 +1006,8 @@ html.mobile .rc-composer-voice-cancel:active:not(:disabled) {
     animation: none !important;
   }
   .rc-voice-bars-svg rect,
-  .rc-voice-status-overlay {
+  .rc-voice-status-overlay,
+  .rc-composer .rc-composer-toolbar button {
     transition: none !important;
   }
   html:not(.mobile) .rc-composer-voice:hover:not(:disabled) .rc-voice-bars-svg rect,
@@ -951,7 +1035,7 @@ html.mobile .rc-composer-voice-cancel:active:not(:disabled) {
 ) {
   animation: none !important;
 }
-:root[data-reduced-motion="reduce"] :is(.rc-voice-bars-svg rect, .rc-voice-status-overlay) {
+:root[data-reduced-motion="reduce"] :is(.rc-voice-bars-svg rect, .rc-voice-status-overlay, .rc-composer .rc-composer-toolbar button) {
   transition: none !important;
 }
 :root[data-reduced-motion="reduce"] .rc-composer-voice .rc-voice-bars-svg rect {
