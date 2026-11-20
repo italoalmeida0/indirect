@@ -86,6 +86,7 @@ jobs:
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.mjs" bun scripts/test-indirect-settings-ui.ts
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.mjs" bun scripts/test-indirect-mode-skills-ui.ts
           PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.mjs" bun scripts/test-indirect-office-ui.ts
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/transcript-browser/node_modules/playwright/index.mjs" bun scripts/test-indirect-voice-ui.ts
 
       - name: Enterprise administration browser regressions (production SPA)
         env:

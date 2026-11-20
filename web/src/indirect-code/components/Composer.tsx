@@ -1,8 +1,11 @@
-import { Show } from "solid-js";
+import { createSignal, onCleanup, Show } from "solid-js";
 import { Icon as Iconify } from "../../components/icon";
 import { press } from "../../ds/motion/press";
 import { useComposerCtx, useQueue, useSession, useTranscriptCtx, useUI } from "../ctx";
 import { composerIsCollapsed } from "../utils/composerState";
+import { useVoice } from "../voice/VoiceContext";
+import { VoiceAmbientGlow, VoiceAuroraCanvas } from "../voice/VoiceAurora";
+import type { AuroraMode, DotMatrixAurora } from "../voice/aurora";
 import { ScrollOverlays } from "./composer/ScrollOverlays";
 import { StatusBanners } from "./composer/StatusBanners";
 import { ComposerInput } from "./composer/ComposerInput";
@@ -18,17 +21,40 @@ export function Composer() {
   const s = useSession();
   const t = useTranscriptCtx();
   const ui = useUI();
-  // Short viewports: the whole composer (input, toolbar, footer) can be
-  // minimized, leaving a single restore bar above. Never in a new conversation
-  // or blocked workspace.
-  const collapsed = () => composerIsCollapsed({
-    composerCollapsed: ui.composerCollapsed(),
-    draftMode: s.draftMode(),
-    activeSessionId: s.activeSessionId(),
-    workspaceBlocked: s.workspaceBlocked(),
+  const voice = useVoice();
+  const [composerEl, setComposerEl] = createSignal<HTMLDivElement | null>(null);
+  let unbindAurora: (() => void) | null = null;
+  const handleBindAurora = (aurora: DotMatrixAurora | null) => {
+    unbindAurora?.();
+    unbindAurora = aurora ? voice.registerAurora(aurora) : null;
+  };
+  onCleanup(() => {
+    unbindAurora?.();
+    unbindAurora = null;
+    voice.setComposerElement(null);
   });
+  const auroraMode = (): AuroraMode => {
+    const st = voice.state();
+    return st === "starting" ? "loading" : st;
+  };
+  // Short viewports: the whole composer (input, toolbar, footer) can be
+  // minimized, leaving a single restore bar above. Never in a new conversation,
+  // blocked workspace, or during active voice dictation.
+  const collapsed = () =>
+    !voice.isActive() &&
+    composerIsCollapsed({
+      composerCollapsed: ui.composerCollapsed(),
+      draftMode: s.draftMode(),
+      activeSessionId: s.activeSessionId(),
+      workspaceBlocked: s.workspaceBlocked(),
+    });
   const canCollapse = () =>
-    Boolean(s.activeSessionId() && !s.draftMode() && !s.workspaceBlocked());
+    Boolean(
+      s.activeSessionId() &&
+        !s.draftMode() &&
+        !s.workspaceBlocked() &&
+        !voice.isActive(),
+    );
   const hasTurnRow = () =>
     Boolean(t.turnActivity() || t.compactingText?.());
   const hasQueueShelf = () =>
@@ -67,46 +93,66 @@ export function Composer() {
         </div>
       </div>
     }>
-    <ComposerQueueShelf />
-    <div
-      data-queue-docked={hasQueueShelf() ? "true" : undefined}
-      class="@container rc-composer relative z-10 flex flex-col data-[queue-docked=true]:rounded-t-none data-[queue-docked=true]:shadow-none data-[queue-docked=true]:border-border-strong data-[queue-docked=true]:border-t-border"
-    >
-    <ComposerInput />
-    <div class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 pt-1 pb-2">
-      <div class="flex flex-1 min-w-0 flex-nowrap items-center gap-1 text-xs text-fg-secondary">
-      <ToolbarContext />
-      <ToolbarModel />
+    <div class="relative">
+      <Show when={!voice.isIdle()}>
+        <VoiceAmbientGlow mode={auroraMode()} />
+      </Show>
+      <ComposerQueueShelf />
+      <div
+        ref={(el) => {
+          setComposerEl(el);
+          voice.setComposerElement(el);
+        }}
+        data-queue-docked={hasQueueShelf() ? "true" : undefined}
+        data-voice-active={voice.isActive() ? "true" : undefined}
+        data-voice-state={voice.state()}
+        onPointerDown={() => {
+          if (voice.reveal()?.active) voice.clearReveal();
+        }}
+        class="@container rc-composer relative z-10 flex flex-col data-[queue-docked=true]:rounded-t-none data-[queue-docked=true]:shadow-none data-[queue-docked=true]:border-border-strong data-[queue-docked=true]:border-t-border"
+      >
+      <VoiceAuroraCanvas
+        mode={auroraMode()}
+        progress={voice.downloadProgress()}
+        hostEl={composerEl()}
+        onBindController={handleBindAurora}
+      />
+      <ComposerInput />
+      <div class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 pt-1 pb-2">
+        <div class="flex flex-1 min-w-0 flex-nowrap items-center gap-1 text-xs text-fg-secondary">
+        <ToolbarContext />
+        <ToolbarModel />
+        </div>
+        <div class="flex shrink-0 items-center gap-1.5">
+          <Show when={canCollapse() && !hasTurnRow()}>
+            <button
+              type="button"
+              onPointerDown={(e) => press(e.currentTarget)}
+              onClick={ui.toggleComposerCollapsed}
+              aria-expanded={true}
+              aria-label="Hide composer and tasks"
+              data-rc-tip="Hide composer and tasks"
+              data-composer-collapse
+              class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+            >
+              <Iconify icon="lucide:chevron-down" size={14} />
+            </button>
+          </Show>
+          <ToolbarSend />
+        </div>
       </div>
-      <div class="flex shrink-0 items-center gap-1.5">
-        <Show when={canCollapse() && !hasTurnRow()}>
-          <button
-            type="button"
-            onPointerDown={(e) => press(e.currentTarget)}
-            onClick={ui.toggleComposerCollapsed}
-            aria-expanded={true}
-            aria-label="Hide composer and tasks"
-            data-rc-tip="Hide composer and tasks"
-            data-composer-collapse
-            class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-          >
-            <Iconify icon="lucide:chevron-down" size={14} />
-          </button>
-        </Show>
-        <ToolbarSend />
+      <input
+        id="rc-file-input"
+        type="file"
+        class="hidden"
+        multiple
+        onChange={(e) => {
+          c.handleFiles(e.currentTarget.files ?? []);
+          e.currentTarget.value = "";
+        }}
+       />
       </div>
     </div>
-    <input
-      id="rc-file-input"
-      type="file"
-      class="hidden"
-      multiple
-      onChange={(e) => {
-        c.handleFiles(e.currentTarget.files ?? []);
-        e.currentTarget.value = "";
-      }}
-     />
-  </div>
     </Show>
     <ComposerFooter />
     </Show>

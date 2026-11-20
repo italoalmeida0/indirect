@@ -12,6 +12,7 @@ import { serve } from "bun";
 import { existsSync } from "fs";
 import path from "path";
 
+import solidPlugin from "./plugins/solid-plugin";
 import app from "./web/index.html";
 
 const port = Number(Bun.argv[2] || 5700);
@@ -23,6 +24,41 @@ const API = process.env.GATEWAY_API || "http://localhost:3000";
  *  scripts and friends must never be readable through the dev port. */
 const DEV_ROOT = path.resolve(import.meta.dir);
 const SERVABLE_DIRS = new Set(["web", "plugins", "dist"]);
+
+/** Standalone worker/worklet entrypoints compiled on demand in dev (mirroring build.ts). */
+const ortWasmOnlyPlugin: import("bun").BunPlugin = {
+  name: "ort-wasm-only",
+  setup(build) {
+    const wasmEntry = path.join(DEV_ROOT, "node_modules", "onnxruntime-web", "dist", "ort.wasm.bundle.min.mjs");
+    build.onResolve({ filter: /^onnxruntime-web$/ }, () => ({ path: wasmEntry }));
+  },
+};
+
+const DEV_WORKERS: Record<string, { entry: string; plugins?: import("bun").BunPlugin[] }> = {
+  "/workers/history-worker.js": {
+    entry: path.join(DEV_ROOT, "web", "src", "indirect-code", "transcript", "history-worker.ts"),
+    plugins: [solidPlugin],
+  },
+  "/workers/voice-worker.js": {
+    entry: path.join(DEV_ROOT, "web", "src", "indirect-code", "voice", "voice-worker.ts"),
+    plugins: [ortWasmOnlyPlugin],
+  },
+  "/workers/voice-worklet.js": {
+    entry: path.join(DEV_ROOT, "web", "src", "indirect-code", "voice", "voice-worklet.ts"),
+  },
+};
+
+/** Strict allowlist for self-hosted ONNX Runtime Web WASM assets in dev. */
+const DEV_ORT_ASSETS: Record<string, { file: string; contentType: string }> = {
+  "/vendor/ort/ort-wasm-simd-threaded.wasm": {
+    file: path.join(DEV_ROOT, "node_modules", "onnxruntime-web", "dist", "ort-wasm-simd-threaded.wasm"),
+    contentType: "application/wasm",
+  },
+  "/vendor/ort/ort-wasm-simd-threaded.mjs": {
+    file: path.join(DEV_ROOT, "node_modules", "onnxruntime-web", "dist", "ort-wasm-simd-threaded.mjs"),
+    contentType: "text/javascript; charset=utf-8",
+  },
+};
 function resolveDevFile(urlPath: string): string | null {
   let decoded: string;
   try {
@@ -77,6 +113,50 @@ const server = serve({
           { error: `dev proxy: backend unreachable at ${API} (is \`bun run dev\` running?)` },
           { status: 502 },
         );
+      }
+    }
+
+    if (req.method === "GET" || req.method === "HEAD") {
+      const workerSpec = DEV_WORKERS[url.pathname];
+      if (workerSpec) {
+        if (!existsSync(workerSpec.entry)) return new Response("Not found", { status: 404 });
+        try {
+          const built = await Bun.build({
+            entrypoints: [workerSpec.entry],
+            target: "browser",
+            minify: false,
+            sourcemap: "none",
+            ...(workerSpec.plugins ? { plugins: workerSpec.plugins } : {}),
+          });
+          if (!built.success || !built.outputs[0]) {
+            console.error(`[dev-web] failed to bundle ${url.pathname}:`, built.logs);
+            return new Response("Worker bundle failed", { status: 500 });
+          }
+          const code = await built.outputs[0].text();
+          return new Response(req.method === "HEAD" ? null : code, {
+            status: 200,
+            headers: {
+              "Content-Type": "text/javascript; charset=utf-8",
+              "Cache-Control": "no-store",
+            },
+          });
+        } catch (err) {
+          console.error(`[dev-web] error bundling ${url.pathname}:`, err);
+          return new Response("Internal server error", { status: 500 });
+        }
+      }
+
+      const ortAsset = DEV_ORT_ASSETS[url.pathname];
+      if (ortAsset) {
+        const file = Bun.file(ortAsset.file);
+        if (!(await file.exists())) return new Response("Not found", { status: 404 });
+        return new Response(req.method === "HEAD" ? null : file, {
+          status: 200,
+          headers: {
+            "Content-Type": ortAsset.contentType,
+            "Cache-Control": "no-cache",
+          },
+        });
       }
     }
 

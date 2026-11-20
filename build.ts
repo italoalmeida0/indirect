@@ -144,6 +144,62 @@ async function build() {
     process.exit(1);
   }
 
+  // Voice ASR worker & AudioWorklet capture processor (standalone, outside the
+  // SPA bundle so zero voice/ORT/Parakeet bytes enter the initial preload graph).
+  // Alias bare "onnxruntime-web" (referenced inside parakeet.js's unused
+  // backend.js) to the WASM-only bundle so JSEP/WebGPU runtime (~413 KB) is
+  // never pulled into voice-worker.js.
+  console.log("[build] Bundling voice worker and AudioWorklet...");
+  const ortWasmOnlyPlugin: import("bun").BunPlugin = {
+    name: "ort-wasm-only",
+    setup(build) {
+      const wasmEntry = path.join(ROOT, "node_modules", "onnxruntime-web", "dist", "ort.wasm.bundle.min.mjs");
+      build.onResolve({ filter: /^onnxruntime-web$/ }, () => ({ path: wasmEntry }));
+    },
+  };
+  const voiceWorkerResult = await Bun.build({
+    entrypoints: [path.join(ROOT, "web", "src", "indirect-code", "voice", "voice-worker.ts")],
+    outdir: path.join(distDir, "workers"),
+    target: "browser",
+    minify: true,
+    sourcemap: "none",
+    plugins: [ortWasmOnlyPlugin],
+  });
+  if (!voiceWorkerResult.success) {
+    console.error("[build] voice worker failed:");
+    for (const log of voiceWorkerResult.logs) console.error(log);
+    process.exit(1);
+  }
+  const voiceWorkletResult = await Bun.build({
+    entrypoints: [path.join(ROOT, "web", "src", "indirect-code", "voice", "voice-worklet.ts")],
+    outdir: path.join(distDir, "workers"),
+    target: "browser",
+    minify: true,
+    sourcemap: "none",
+  });
+  if (!voiceWorkletResult.success) {
+    console.error("[build] voice worklet failed:");
+    for (const log of voiceWorkletResult.logs) console.error(log);
+    process.exit(1);
+  }
+
+  // Self-hosted ONNX Runtime Web WASM runtime (emitted to dist/vendor/ort/,
+  // never copied into web/public/ so git stays free of runtime binaries).
+  {
+    const ortSrcDir = path.join(ROOT, "node_modules", "onnxruntime-web", "dist");
+    const ortDestDir = path.join(distDir, "vendor", "ort");
+    const ortFiles = ["ort-wasm-simd-threaded.wasm", "ort-wasm-simd-threaded.mjs"] as const;
+    mkdirSync(ortDestDir, { recursive: true });
+    for (const file of ortFiles) {
+      const src = path.join(ortSrcDir, file);
+      if (!existsSync(src)) {
+        throw new Error(`Missing ${src}: run \`bun install\` to restore onnxruntime-web`);
+      }
+      cpSync(src, path.join(ortDestDir, file));
+    }
+    console.log(`[build] onnxruntime-web WASM runtime -> dist/vendor/ort/ (${ortFiles.length} files)`);
+  }
+
   // Generative UI sandbox libraries (d3, gsap, chart.js, three...) inlined
   // into widget frames.
   console.log("[build] Vendoring generative UI sandbox libraries...");

@@ -39,7 +39,7 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
   h.set("X-Content-Type-Options", "nosniff");
   h.set("X-Frame-Options", "DENY");
   h.set("Referrer-Policy", "strict-origin-when-cross-origin");
-  h.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  h.set("Permissions-Policy", "camera=(), microphone=(self), geolocation=()");
   if (isHtml) {
     // Google GSI button needs accounts.google.com scripts/frames; everything
     // else is self-hosted. No 'unsafe-inline' — the inline scripts we ship in
@@ -51,6 +51,7 @@ export function baseHeaders(req?: Request, isHtml = false): Headers {
       [
         "default-src 'self'",
         "script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com/gsi/client 'sha256-irJfLmBsOF5THDLD+AWwo/3Pyl3T7p4Nke5b1WhBAu4=' 'sha256-epltEam/2K5Bq/xlpojFaju1SPH4yyuVJZ/+WV4OLMQ='",
+        "worker-src 'self'",
         // 'self' hosts sandboxed Generative UI widget documents
         // (/api/indirect-code/gen-ui/widgets/:id, CSP-sandboxed themselves).
         "frame-src 'self' https://accounts.google.com/gsi/",

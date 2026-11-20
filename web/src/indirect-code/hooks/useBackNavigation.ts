@@ -65,6 +65,7 @@ export interface NavProjectionState {
   mentionsOpen: boolean;
   editMentionsOpen: boolean;
   slashOpen: boolean;
+  voiceActive?: boolean;
 }
 
 export interface NavLayerActions {
@@ -104,6 +105,7 @@ export interface NavLayerActions {
   dismissMentions: () => void;
   dismissEditMentions: () => void;
   dismissSlash: () => void;
+  cancelVoice?: () => void;
 }
 
 export interface HistoryAdapter {
@@ -395,6 +397,14 @@ export function projectNavLayers(
     stack.push({
       key: "menu:slash",
       pop: () => actions.dismissSlash(),
+    });
+  }
+
+  // 8. Active voice dictation (highest-priority transient capture).
+  if (state.voiceActive && actions.cancelVoice) {
+    stack.push({
+      key: "mode:voice",
+      pop: () => actions.cancelVoice!(),
     });
   }
 

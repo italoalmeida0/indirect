@@ -3,6 +3,8 @@ import { Icon as Iconify } from "../../../components/icon";
 import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { MentionMenu } from "../MentionMenu";
 import { FileIcon } from "../../presentation";
+import { useVoice } from "../../voice/VoiceContext";
+import { VoiceRevealOverlay, VoiceStatusOverlay } from "../../voice/VoiceOverlays";
 
 export function syncComposerHeight(el: HTMLTextAreaElement, text: string) {
   if (!text) {
@@ -30,9 +32,11 @@ export function ComposerInput() {
   const s = useSession();
   const m = useModal();
   const ui = useUI();
+  const voice = useVoice();
   let textareaRef: HTMLTextAreaElement | undefined;
   let inputUpdatedCaret = false;
   const [dragActive, setDragActive] = createSignal(false);
+  const hideTextarea = () => voice.isActive() || Boolean(voice.reveal()?.active);
 
   createEffect(() => {
     const text = c.inputPrompt();
@@ -41,6 +45,12 @@ export function ComposerInput() {
       textareaRef.value = text;
     }
     syncComposerHeight(textareaRef, text);
+  });
+
+  createEffect(() => {
+    if (voice.isActive() && textareaRef && typeof document !== "undefined" && document.activeElement === textareaRef) {
+      textareaRef.blur();
+    }
   });
 
   return (
@@ -114,7 +124,7 @@ export function ComposerInput() {
 
 {/* Input row: textarea occupies remaining width, clear button takes its own size */}
 <div
-  class="flex items-start"
+  class="relative flex items-start"
   onDragEnter={(e) => {
     if (e.dataTransfer?.types?.includes("Files")) setDragActive(true);
   }}
@@ -126,15 +136,24 @@ export function ComposerInput() {
     id="rc-composer"
     ref={textareaRef}
     disabled={s.creatingSession() || c.sending()}
+    readOnly={voice.isActive()}
+    tabIndex={voice.isActive() ? -1 : undefined}
     rows={1}
-    class="flex-1 min-w-0 bg-transparent text-[13px] leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-1 max-h-[160px] min-h-9 overflow-y-hidden"
+    class={`flex-1 min-w-0 bg-transparent text-[13px] leading-[20px] text-fg placeholder:text-fg-muted focus:outline-none resize-none px-3.5 pt-3 pb-1 max-h-[160px] min-h-9 overflow-y-hidden${hideTextarea() ? " opacity-0 pointer-events-none" : ""}`}
     placeholder={ui.isMobile() ? "Ask anything · @ files · / actions" : "Ask anything, @ to mention, / for actions"}
     value={c.inputPrompt()}
     onFocus={() => c.mentions.setFocused(true)}
     onBlur={() => { c.mentions.setFocused(false); }}
-    onSelect={(e) => c.mentions.setCaret(e.currentTarget.selectionStart)}
-    onClick={(e) => c.mentions.setCaret(e.currentTarget.selectionStart)}
+    onSelect={(e) => {
+      c.mentions.setCaret(e.currentTarget.selectionStart);
+      voice.captureSelection(e.currentTarget);
+    }}
+    onClick={(e) => {
+      c.mentions.setCaret(e.currentTarget.selectionStart);
+      voice.captureSelection(e.currentTarget);
+    }}
     onKeyUp={(e) => {
+      voice.captureSelection(e.currentTarget);
       if (inputUpdatedCaret) {
         inputUpdatedCaret = false;
         return;
@@ -144,6 +163,8 @@ export function ComposerInput() {
     onInput={(e) => {
       const el = e.currentTarget;
       inputUpdatedCaret = true;
+      if (voice.reveal()?.active) voice.clearReveal();
+      voice.captureSelection(el);
       batch(() => {
         c.setInputPrompt(el.value);
         c.mentions.setCaret(el.selectionStart);
@@ -181,6 +202,10 @@ export function ComposerInput() {
     }}
     onKeyDown={(e) => {
       inputUpdatedCaret = false;
+      if (voice.isActive()) {
+        if (e.key !== "Escape") e.preventDefault();
+        return;
+      }
       if (e.isComposing) return;
       if (c.mentions.keyDown(e)) return;
       if (c.slashMatches().length > 0) {
@@ -219,7 +244,7 @@ export function ComposerInput() {
       }
     }}
   />
-  <Show when={c.inputPrompt().length > 0}>
+  <Show when={c.inputPrompt().length > 0 && !hideTextarea()}>
     <button
       type="button"
       onClick={() => {
@@ -231,6 +256,13 @@ export function ComposerInput() {
       <Iconify icon="lucide:x" size={13} />
     </button>
   </Show>
+  <VoiceStatusOverlay
+    active={voice.isActive()}
+    listening={voice.state() === "listening"}
+    statusText={voice.statusText()}
+    statusMeta={voice.statusMeta()}
+  />
+  <VoiceRevealOverlay reveal={voice.reveal()} />
 </div>
 </>
   );

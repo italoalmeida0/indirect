@@ -21,7 +21,7 @@ import { createMobileFlag } from "./utils/mobileFlag";
 import { useIndirectCodeDocumentScope } from "./utils/documentScope";
 import { normalizeMidTurnSend } from "./utils/settingsValidation";
 import { contextDisplay, type GatewayModel } from "./context";
-import { api } from "../api";
+import { api, currentSession } from "../api";
 import { Onboarding } from "./components/Onboarding";
 import { WorkspaceSidebar } from "./components/WorkspaceSidebar";
 import { TranscriptView } from "./components/TranscriptView";
@@ -66,6 +66,8 @@ import { createSettings } from "./hooks/useSettings";
 import { createSessionAttention, type LiveSessionAttentionOverlay } from "./hooks/useSessionAttention";
 import { normalizeAttentionKind } from "./store/sessions";
 import { baseMode, effectiveModeSkills } from "./utils/modeSkills";
+import { createVoiceController } from "./voice/useVoice";
+import { VoiceProvider } from "./voice/VoiceContext";
 
 function createNarrowViewportFlag(): () => boolean {
   const read = () =>
@@ -731,7 +733,48 @@ export default function IndirectCodePage() {
       }
     })(),
   );
+  const voice = createVoiceController({
+    getHostId: () => hosts.activeHostId(),
+    getSessionId: () => activeSessionId(),
+    getInputPrompt: () => composer.inputPrompt(),
+    setInputPrompt: (value) => {
+      composer.setInputPrompt(value);
+    },
+    setCaret: (pos) => composer.mentions.setCaret(pos),
+    onBeforeStart: () => {
+      closeMenus();
+      if (composerCollapsed()) {
+        setComposerCollapsed(false);
+        try {
+          localStorage.setItem("llmgw-rc-composer-collapsed", "0");
+        } catch {}
+      }
+    },
+    onToast: notice.toast,
+    isMobile,
+    getAuthToken: () => currentSession()?.accessToken,
+  });
+  let lastVoiceScope = `${untrack(() => hosts.activeHostId())}\0${untrack(() => activeSessionId())}`;
+  createEffect(() => {
+    const scope = `${hosts.activeHostId()}\0${activeSessionId()}`;
+    if (scope !== lastVoiceScope) {
+      lastVoiceScope = scope;
+      untrack(() => {
+        if (voice.isActive()) voice.cancel();
+        else voice.clearReveal();
+      });
+    }
+  });
+  createEffect(() => {
+    if (historyView() || workspace.workspaceBlocked()) {
+      untrack(() => {
+        if (voice.isActive()) voice.cancel();
+        else voice.clearReveal();
+      });
+    }
+  });
   const toggleComposerCollapsed = () => {
+    if (voice.isActive()) return;
     const next = !composerCollapsed();
     setComposerCollapsed(next);
     try {
@@ -856,6 +899,8 @@ export default function IndirectCodePage() {
   function startNewConversation(projectId?: string) {
     if (creatingSession()) return;
     const prevSessionId = untrack(activeSessionId);
+    if (voice.isActive()) voice.cancel();
+    else voice.clearReveal();
     closeMenus();
     options.resetPendingChoice();
     options.setEffortPreviewing(false);
@@ -1053,6 +1098,7 @@ export default function IndirectCodePage() {
         if (r.approvalMode) options.applyApprovalMode(r.approvalMode);
         options.applySessionSkills(r.skills);
         // Attachments stay in the draft until upload succeeds on this new session.
+        voice.clearReveal();
         void composer.sendPrompt();
         break;
       }
@@ -1492,8 +1538,30 @@ export default function IndirectCodePage() {
         startNewConversation();
         return;
       }
+      if (
+        e.key === "Enter" &&
+        !e.isComposing &&
+        !e.shiftKey &&
+        !e.altKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        voice.state() === "listening"
+      ) {
+        const target = e.target as HTMLElement | null;
+        if (target && target.closest("button, a, [role='button'], [role='menuitem']")) {
+          return;
+        }
+        e.preventDefault();
+        voice.confirm();
+        return;
+      }
       if (e.key === "Escape") {
         if (e.defaultPrevented) return;
+        if (voice.isActive()) {
+          e.preventDefault();
+          voice.cancel();
+          return;
+        }
         if (document.querySelector('[role="dialog"]:not([data-state="closing"]):not([data-floatmenu])')) return;
         if (document.querySelector("[data-floatmenu]")) {
           closeMenus();
@@ -1793,6 +1861,7 @@ export default function IndirectCodePage() {
       mentionsOpen: composer.mentions.open(),
       editMentionsOpen: transcript.editMentions.open(),
       slashOpen: composer.slashMatches().length > 0,
+      voiceActive: voice.isActive(),
     }),
     actions: {
       clearPairingData: () => modals.setPairingData(null),
@@ -1862,6 +1931,7 @@ export default function IndirectCodePage() {
       dismissMentions: () => composer.mentions.dismiss(),
       dismissEditMentions: () => transcript.editMentions.dismiss(),
       dismissSlash: () => composer.dismissSlash(),
+      cancelVoice: () => voice.cancel(),
     },
   });
 
@@ -1907,6 +1977,10 @@ export default function IndirectCodePage() {
   };
   const composerValue: ComposerCtxValue = {
     ...composer,
+    sendPrompt: () => {
+      voice.clearReveal();
+      return composer.sendPrompt();
+    },
     activeModel: options.activeModel,
     activeModelName,
     effort: options.effort,
@@ -1982,6 +2056,7 @@ export default function IndirectCodePage() {
   };
 
   return (
+    <VoiceProvider value={voice}>
     <RemoteCodeProvider
       host={hostValue}
       session={sessionValue}
@@ -2015,5 +2090,6 @@ export default function IndirectCodePage() {
       <UpdateFreezeOverlay />
     </WorkspaceShell>
     </RemoteCodeProvider>
+    </VoiceProvider>
   );
 }

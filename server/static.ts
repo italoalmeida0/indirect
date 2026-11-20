@@ -10,7 +10,12 @@ import { baseHeaders } from "./http";
  * the static root; dotfiles and directories are never served directly.
  */
 
-const STATIC_ROOT = path.resolve(process.env.STATIC_DIR || path.join(import.meta.dir, "..", "dist"));
+const DEFAULT_STATIC_ROOT = path.resolve(import.meta.dir, "..", "dist");
+
+function currentStaticRoot(explicitRoot?: string): string {
+  if (explicitRoot) return path.resolve(explicitRoot);
+  return process.env.STATIC_DIR ? path.resolve(process.env.STATIC_DIR) : DEFAULT_STATIC_ROOT;
+}
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -37,8 +42,9 @@ const MIME: Record<string, string> = {
 
 const IMMUTABLE_EXT = new Set([".js", ".css", ".woff", ".woff2", ".png", ".jpg", ".webp", ".svg", ".ico"]);
 
-/** Resolve a URL path to a file inside STATIC_ROOT, or null when unsafe/missing. */
-export function resolveStaticFile(urlPath: string): { filePath: string; isHtml: boolean } | null {
+/** Resolve a URL path to a file inside the static root, or null when unsafe/missing. */
+export function resolveStaticFile(urlPath: string, staticRoot?: string): { filePath: string; isHtml: boolean } | null {
+  const root = currentStaticRoot(staticRoot);
   let decoded: string;
   try {
     decoded = decodeURIComponent(urlPath);
@@ -52,8 +58,8 @@ export function resolveStaticFile(urlPath: string): { filePath: string; isHtml: 
   const stripped = decoded.replace(/^\/+/, "");
   const normalized = path.normalize(stripped);
   if (normalized.startsWith("..") || path.isAbsolute(normalized)) return null;
-  const fullPath = path.join(STATIC_ROOT, normalized);
-  if (!fullPath.startsWith(STATIC_ROOT + path.sep) && fullPath !== STATIC_ROOT) return null;
+  const fullPath = path.join(root, normalized);
+  if (!fullPath.startsWith(root + path.sep) && fullPath !== root) return null;
 
   const segments = normalized.split(path.sep);
   if (segments.some((s) => s.startsWith("."))) return null; // no dotfiles
@@ -66,7 +72,7 @@ export function resolveStaticFile(urlPath: string): { filePath: string; isHtml: 
   if (!existsSync(finalPath) || statSync(finalPath).isDirectory()) {
     // SPA fallback: extension-less GET paths render the dashboard shell (never for missing /r/ release binaries).
     if (path.extname(normalized) === "" && !normalized.startsWith("r" + path.sep) && normalized !== "r") {
-      const indexPath = path.join(STATIC_ROOT, "index.html");
+      const indexPath = path.join(root, "index.html");
       if (!existsSync(indexPath)) return null;
       finalPath = indexPath;
     } else {
@@ -83,9 +89,10 @@ function assetEtag(stats: { size: number; mtimeMs: number }): string {
   return `W/"${stats.size.toString(16)}-${Math.floor(stats.mtimeMs).toString(16)}"`;
 }
 
-export function serveStatic(req: Request, urlPath: string): Response | null {
-  if (!existsSync(STATIC_ROOT)) return null;
-  const resolved = resolveStaticFile(urlPath === "/" ? "/index.html" : urlPath);
+export function serveStatic(req: Request, urlPath: string, staticRoot?: string): Response | null {
+  const root = currentStaticRoot(staticRoot);
+  if (!existsSync(root)) return null;
+  const resolved = resolveStaticFile(urlPath === "/" ? "/index.html" : urlPath, root);
   if (!resolved) return null;
 
   const file = Bun.file(resolved.filePath);
@@ -106,12 +113,13 @@ export function serveStatic(req: Request, urlPath: string): Response | null {
   // rendering old notification shapes after deploys.
   const basename = path.basename(resolved.filePath);
   const isPushSw = basename === "push-sw.js";
+  const isWorkerAsset = resolved.filePath.includes(path.sep + "workers" + path.sep);
   const isReleaseAsset = resolved.filePath.includes(path.sep + "r" + path.sep);
 
-  const immutable = !resolved.isHtml && !isPushSw && !isReleaseAsset && IMMUTABLE_EXT.has(path.extname(resolved.filePath));
+  const immutable = !resolved.isHtml && !isPushSw && !isWorkerAsset && !isReleaseAsset && IMMUTABLE_EXT.has(path.extname(resolved.filePath));
   headers.set(
     "Cache-Control",
-    resolved.isHtml || isPushSw
+    resolved.isHtml || isPushSw || isWorkerAsset
       ? "no-cache"
       : isReleaseAsset
         ? "public, max-age=60, must-revalidate"

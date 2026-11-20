@@ -32,11 +32,31 @@ function scriptHash(source: string): string {
 describe("CSP inline script hashes", () => {
   const headers = baseHeaders(undefined, true);
   const csp = headers.get("Content-Security-Policy") || "";
-  const scriptSrc = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith("script-src ")) || "";
-  const imgSrc = csp.split(";").map((s) => s.trim()).find((s) => s.startsWith("img-src ")) || "";
+  const permissionsPolicy = headers.get("Permissions-Policy") || "";
+  const directives = csp.split(";").map((s) => s.trim());
+  const scriptSrc = directives.find((s) => s.startsWith("script-src ")) || "";
+  const workerSrc = directives.find((s) => s.startsWith("worker-src ")) || "";
+  const connectSrc = directives.find((s) => s.startsWith("connect-src ")) || "";
+  const imgSrc = directives.find((s) => s.startsWith("img-src ")) || "";
 
-  test("script-src never falls back to unsafe-inline", () => {
+  test("script-src never falls back to unsafe-inline or unsafe-eval and stays free of external CDNs", () => {
     expect(scriptSrc).not.toContain("'unsafe-inline'");
+    expect(scriptSrc).not.toContain("'unsafe-eval'");
+    expect(scriptSrc).toContain("'wasm-unsafe-eval'");
+    expect(scriptSrc).not.toContain("cdn.jsdelivr.net");
+    expect(scriptSrc).not.toContain("unpkg.com");
+    expect(scriptSrc).not.toContain("esm.sh");
+  });
+
+  test("voice CSP & Permissions-Policy allow self-hosted microphone and workers without external model CDNs", () => {
+    expect(permissionsPolicy).toContain("microphone=(self)");
+    expect(permissionsPolicy).not.toContain("microphone=()");
+    expect(permissionsPolicy).toContain("camera=()");
+    expect(permissionsPolicy).toContain("geolocation=()");
+    expect(workerSrc).toBe("worker-src 'self'");
+    expect(connectSrc).not.toContain("huggingface.co");
+    expect(connectSrc).not.toContain("hf.co");
+    expect(connectSrc).not.toContain("cdn.jsdelivr.net");
   });
 
   test("img-src allows blob: ObjectURLs for CAS transcript images", () => {

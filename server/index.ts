@@ -14,6 +14,11 @@ import { handleAdminRoute } from "./routes/admin";
 import { handleIndirectCodeRestRoute } from "./routes/indirect-code";
 import { handleGenUiRoute } from "./routes/gen-ui";
 import { ensureObscuraBrowser } from "./routes/obscura";
+import {
+  handleVoiceModelRoute,
+  shutdownVoiceModelManager,
+  startVoiceModelBootstrap,
+} from "./voice-model";
 import { handlePushRoute } from "./routes/push";
 import { handleManifestRoute } from "./routes/manifest";
 import { handleIndirectCodeUpgrade, remoteRelayWsHandlers, type WsData } from "./routes/relay";
@@ -184,6 +189,9 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.on(sig, () => {
     console.log(`\n[BOOT] ${sig} received, flushing usage buffers...`);
     try {
+      shutdownVoiceModelManager();
+    } catch {}
+    try {
       flushUsage();
     } catch {}
     process.exit(0);
@@ -272,6 +280,8 @@ async function route(req: Request, server: any): Promise<Response | undefined> {
     }
     const viaGenUi = await handleGenUiRoute(path, req, url, server);
     if (viaGenUi) return viaGenUi;
+    const viaVoiceModel = await handleVoiceModelRoute(path, req);
+    if (viaVoiceModel) return viaVoiceModel;
     const viaIndirectCode = await handleIndirectCodeRestRoute(path, req, url);
     if (viaIndirectCode) return viaIndirectCode;
     const viaPush = await handlePushRoute(path, req, url);
@@ -366,5 +376,14 @@ console.log(`[BOOT] data dir: ${DATA_DIR}`);
 void ensureObscuraBrowser()
   .then((p) => console.log(`[BOOT] obscura lint browser: ${p}`))
   .catch((e) => console.warn(`[BOOT] obscura lint browser unavailable: ${e instanceof Error ? e.message : e}`));
+
+// Self-hosted Parakeet v3 voice model: fetched into DATA_DIR non-blockingly at
+// boot so browsers always pull weights same-origin (skipped in test mode).
+void startVoiceModelBootstrap()
+  .then((summary) => {
+    if (summary.skipped) return;
+    console.log(`[BOOT] voice model: ${summary.dir} (${summary.readyCount}/${summary.totalCount} files ready)`);
+  })
+  .catch((e) => console.warn(`[BOOT] voice model bootstrap unavailable: ${e instanceof Error ? e.message : e}`));
 
 export { server };

@@ -14,7 +14,7 @@
     "release": "bun ./scripts/release.ts",
     "update": "bun ./scripts/release.ts",
     "update:release": "bun ./scripts/release.ts",
-    "test": "DATA_DIR=./data/test bun test",
+    "test": "DATA_DIR=./data/test INDIRECT_SKIP_VOICE_MODEL_DOWNLOAD=1 bun test",
     "lint": "eslint . && bun ./scripts/check-unused-exports.ts",
     "typecheck": "tsc --noEmit",
     "bench": "bun ./test/bench.ts",
@@ -82,10 +82,15 @@
     "babel-preset-solid": "^1.9.19",
     "eslint": "^10.15.0",
     "eslint-plugin-solid": "^0.17.1",
+    "onnxruntime-web": "1.30.0",
+    "parakeet.js": "1.4.4",
     "postcss": "^8.5.33",
     "solid-js": "^1.9.19",
     "tailwindcss": "^4.3.5",
     "typescript-eslint": "^8.73.0"
+  },
+  "overrides": {
+    "onnxruntime-web": "1.30.0"
   },
   "patchedDependencies": {
     "streaming-markdown@0.2.15": "patches/streaming-markdown@0.2.15.patch"

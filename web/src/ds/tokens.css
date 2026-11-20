@@ -144,6 +144,44 @@
   --z-modal: 50;
   --z-toast: 60;
   --z-floating: 70;
+
+  /* Voice composer dot-matrix aurora, ambient glow & reveal tokens (light). */
+  --voice-aurora-voice-1: oklch(62% 0.19 52);
+  --voice-aurora-voice-2: oklch(56% 0.22 6);
+  --voice-aurora-voice-3: oklch(55% 0.145 170);
+  --voice-aurora-voice-4: oklch(54% 0.175 244);
+  --voice-aurora-voice-5: oklch(53% 0.22 316);
+  --voice-aurora-voice-6: oklch(58% 0.21 34);
+  --voice-aurora-think-1: oklch(53% 0.13 178);
+  --voice-aurora-think-2: oklch(52% 0.165 244);
+  --voice-aurora-think-3: oklch(50% 0.19 272);
+  --voice-aurora-think-4: oklch(52% 0.2 302);
+  --voice-aurora-core: oklch(44% 0.18 265);
+  --voice-glow-listening: linear-gradient(
+    90deg,
+    var(--voice-aurora-voice-1),
+    var(--voice-aurora-voice-3),
+    var(--voice-aurora-voice-4),
+    var(--voice-aurora-voice-5),
+    var(--voice-aurora-voice-2)
+  );
+  --voice-glow-thinking: linear-gradient(
+    90deg,
+    var(--voice-aurora-think-1),
+    var(--voice-aurora-think-2),
+    var(--voice-aurora-think-3),
+    var(--voice-aurora-think-4)
+  );
+  --voice-glow-loading: linear-gradient(
+    90deg,
+    var(--voice-aurora-think-2),
+    var(--voice-aurora-think-3),
+    var(--voice-aurora-think-4)
+  );
+  --voice-rec-dot: var(--danger);
+  --voice-bloom-start: var(--text-muted);
+  --voice-bloom-mid: var(--text-secondary);
+  --voice-bloom-end: var(--foreground);
 }
 
 :root[data-theme="dark"] {
@@ -187,6 +225,20 @@
   --shadow-raised: 0 8px 22px oklch(0% 0 0 / 0.22);
   --shadow-floating: 0 22px 55px oklch(0% 0 0 / 0.34), 0 0 0 1px oklch(100% 0 0 / 0.04);
   --overlay-scrim: oklch(5% 0 0 / 0.56);
+  --voice-aurora-voice-1: rgb(255 146 56);
+  --voice-aurora-voice-2: rgb(255 68 128);
+  --voice-aurora-voice-3: rgb(34 232 184);
+  --voice-aurora-voice-4: rgb(56 189 248);
+  --voice-aurora-voice-5: rgb(217 70 239);
+  --voice-aurora-voice-6: rgb(251 96 56);
+  --voice-aurora-think-1: rgb(45 212 191);
+  --voice-aurora-think-2: rgb(56 189 248);
+  --voice-aurora-think-3: rgb(129 140 248);
+  --voice-aurora-think-4: rgb(192 132 252);
+  --voice-aurora-core: rgb(255 255 255);
+  --voice-glow-listening: linear-gradient(90deg, rgb(255 123 0), rgb(34 229 184), rgb(56 189 248), rgb(232 121 249), rgb(255 71 126));
+  --voice-glow-thinking: linear-gradient(90deg, rgb(45 212 191), rgb(56 189 248), rgb(129 140 248), rgb(192 132 252));
+  --voice-glow-loading: linear-gradient(90deg, rgb(56 189 248), rgb(129 140 248), rgb(192 132 252));
 }
 
 /* Accents. Teal is the default (declared on :root above). */
@@ -250,6 +302,20 @@
   --shadow-raised: 0 0 0 1px #fff;
   --shadow-floating: 0 0 0 1px #fff, 0 12px 36px rgb(0 0 0 / 0.6);
   --overlay-scrim: rgb(0 0 0 / 0.78);
+  --voice-aurora-voice-1: var(--accent);
+  --voice-aurora-voice-2: var(--foreground);
+  --voice-aurora-voice-3: var(--accent);
+  --voice-aurora-voice-4: var(--foreground);
+  --voice-aurora-voice-5: var(--accent);
+  --voice-aurora-voice-6: var(--foreground);
+  --voice-aurora-think-1: var(--accent);
+  --voice-aurora-think-2: var(--accent);
+  --voice-aurora-think-3: var(--accent);
+  --voice-aurora-think-4: var(--accent);
+  --voice-aurora-core: var(--accent);
+  --voice-glow-listening: linear-gradient(90deg, var(--accent), var(--accent));
+  --voice-glow-thinking: linear-gradient(90deg, var(--accent), var(--accent));
+  --voice-glow-loading: linear-gradient(90deg, var(--accent), var(--accent));
 }
 
 /* Compact density: same grammar, tighter controls and smaller radii, for
