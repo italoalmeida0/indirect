@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test, vi } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, test, vi } from "bun:test";
 import { createRoot } from "solid-js";
 import type { DaemonCommand } from "../web/src/indirect-code/daemon-protocol";
 
@@ -6,13 +6,42 @@ import type { DaemonCommand } from "../web/src/indirect-code/daemon-protocol";
 // questionSubmitting (via question_error) so the modal is answerable again.
 
 mock.module("virtual:icons", () => ({ registry: {} }));
-// Timers are faked per test — restore the real clock AFTER each test or the
-// fake clock leaks into later test FILES (same process): their beforeAll
-// hooks (Bun.sleep-based readiness polls) then hang forever.
-afterEach(() => { vi.useRealTimers(); });
+const STUBBED_GLOBAL_KEYS = [
+  "localStorage",
+  "document",
+  "window",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+] as const;
+let savedBrowserGlobals: Map<string, PropertyDescriptor | undefined> | null = null;
+
+function restoreBrowserGlobals() {
+  if (!savedBrowserGlobals) return;
+  const root = globalThis as Record<string, unknown>;
+  for (const [key, desc] of savedBrowserGlobals) {
+    if (desc) Object.defineProperty(globalThis, key, desc);
+    else delete root[key];
+  }
+  savedBrowserGlobals = null;
+}
+
+// Timers are faked per test — restore the real clock and stubbed DOM globals
+// AFTER each test or they leak into later test FILES (same process).
+afterEach(() => {
+  vi.useRealTimers();
+  restoreBrowserGlobals();
+});
+afterAll(() => {
+  restoreBrowserGlobals();
+});
 
 /** DOM globals the web hooks read at module init or in scroll plumbing. */
 function stubBrowserGlobals() {
+  if (!savedBrowserGlobals) {
+    savedBrowserGlobals = new Map(
+      STUBBED_GLOBAL_KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+    );
+  }
   const storage = new Map<string, string>();
   const root = globalThis as Record<string, unknown>;
   root.localStorage = {

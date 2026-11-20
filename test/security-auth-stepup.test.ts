@@ -639,7 +639,7 @@ test("4.5 pending password_tokens are invalidated on password change, admin send
 
 test("5.1 attachGuBridge blocks slash commands and unconfirmed auto-send, falling back to prefillPrompt", () => {
   const listeners: Array<(e: MessageEvent) => void> = [];
-  const prevWindow = (globalThis as any).window;
+  const prevWindowDesc = Object.getOwnPropertyDescriptor(globalThis, "window");
   (globalThis as any).window = {
     addEventListener: (type: string, fn: (e: MessageEvent) => void) => {
       if (type === "message") listeners.push(fn);
@@ -686,7 +686,8 @@ test("5.1 attachGuBridge blocks slash commands and unconfirmed auto-send, fallin
     detach();
     expect(listeners).toHaveLength(0);
   } finally {
-    (globalThis as any).window = prevWindow;
+    if (prevWindowDesc) Object.defineProperty(globalThis, "window", prevWindowDesc);
+    else delete (globalThis as Record<string, unknown>).window;
   }
 });
 
@@ -699,8 +700,8 @@ test("5.2 clearClientStorage purges llmgw-* and gu:state:* localStorage keys and
   ]);
   const deletedDbs: string[] = [];
 
-  const prevLocalStorage = (globalThis as any).localStorage;
-  const prevIndexedDB = (globalThis as any).indexedDB;
+  const prevLocalStorageDesc = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const prevIndexedDBDesc = Object.getOwnPropertyDescriptor(globalThis, "indexedDB");
   (globalThis as any).localStorage = {
     get length() {
       return store.size;
@@ -730,7 +731,9 @@ test("5.2 clearClientStorage purges llmgw-* and gu:state:* localStorage keys and
     expect(Array.from(store.keys())).toEqual(["unrelated-key"]);
     expect(deletedDbs).toEqual(["signaldb-rc:host1:sessions", "signaldb-rc:host1:projects"]);
   } finally {
-    (globalThis as any).localStorage = prevLocalStorage;
-    (globalThis as any).indexedDB = prevIndexedDB;
+    if (prevLocalStorageDesc) Object.defineProperty(globalThis, "localStorage", prevLocalStorageDesc);
+    else delete (globalThis as Record<string, unknown>).localStorage;
+    if (prevIndexedDBDesc) Object.defineProperty(globalThis, "indexedDB", prevIndexedDBDesc);
+    else delete (globalThis as Record<string, unknown>).indexedDB;
   }
 });

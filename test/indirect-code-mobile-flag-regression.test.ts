@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import path from "path";
 
@@ -54,13 +54,20 @@ const DEVICES: Device[] = [
 const classes = new Set<string>();
 let device: Device = DEVICES[0];
 
+const STUBBED_GLOBAL_KEYS = ["window", "navigator", "matchMedia", "document"] as const;
+let savedGlobals: Map<string, PropertyDescriptor | undefined> | null = null;
+
 beforeAll(() => {
+  savedGlobals = new Map(
+    STUBBED_GLOBAL_KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
   const root = globalThis as Record<string, unknown>;
   const matchMedia = () => ({ matches: false }); // pointer flags are not used anymore
   root.window = {
     get innerWidth() { return device.innerWidth; },
     matchMedia,
     addEventListener: () => {},
+    removeEventListener: () => {},
   };
   root.navigator = {
     get userAgent() { return device.ua; },
@@ -68,6 +75,8 @@ beforeAll(() => {
   };
   root.matchMedia = matchMedia;
   root.document = {
+    addEventListener: () => {},
+    removeEventListener: () => {},
     documentElement: {
       classList: {
         contains: (c: string) => classes.has(c),
@@ -78,6 +87,16 @@ beforeAll(() => {
       },
     },
   };
+});
+
+afterAll(() => {
+  if (!savedGlobals) return;
+  const root = globalThis as Record<string, unknown>;
+  for (const [key, desc] of savedGlobals) {
+    if (desc) Object.defineProperty(globalThis, key, desc);
+    else delete root[key];
+  }
+  savedGlobals = null;
 });
 
 function runFlag(d: Device): boolean {

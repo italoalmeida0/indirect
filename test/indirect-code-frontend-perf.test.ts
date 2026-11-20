@@ -160,10 +160,13 @@ const SAVED_GLOBAL_KEYS = [
   "requestAnimationFrame",
   "cancelAnimationFrame",
 ] as const;
-const savedGlobals = new Map<string, { present: boolean; value: unknown }>();
-for (const key of SAVED_GLOBAL_KEYS) {
-  const g = globalThis as Record<string, unknown>;
-  savedGlobals.set(key, { present: key in g, value: g[key] });
+let savedGlobals: Map<string, PropertyDescriptor | undefined> | null = null;
+
+function captureGlobalsOnce() {
+  if (savedGlobals) return;
+  savedGlobals = new Map(
+    SAVED_GLOBAL_KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
 }
 
 afterEach(() => {
@@ -171,14 +174,16 @@ afterEach(() => {
 });
 
 afterAll(() => {
+  if (!savedGlobals) return;
   const g = globalThis as Record<string, unknown>;
-  for (const [key, entry] of savedGlobals.entries()) {
-    if (entry.present) {
-      g[key] = entry.value;
+  for (const [key, desc] of savedGlobals.entries()) {
+    if (desc) {
+      Object.defineProperty(globalThis, key, desc);
     } else {
       delete g[key];
     }
   }
+  savedGlobals = null;
 });
 
 class FakeNode {
@@ -403,6 +408,7 @@ class FakeElement extends FakeNode {
 }
 
 function installTestBrowserEnv() {
+  captureGlobalsOnce();
   const storage = new Map<string, string>();
   let setItemCalls = 0;
   const docListeners = new Map<string, Set<() => void>>();

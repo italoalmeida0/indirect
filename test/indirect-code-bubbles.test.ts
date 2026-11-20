@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, mock, test, vi } from "bun:test";
+import { afterAll, afterEach, describe, expect, mock, test, vi } from "bun:test";
 import { createRoot } from "solid-js";
 import type { DaemonCommand } from "../web/src/indirect-code/daemon-protocol";
 import type { Session } from "../web/src/api";
@@ -13,12 +13,43 @@ import { createBackground } from "../web/src/indirect-code/hooks/useBackground";
 // virtual:icons is a build-time module (iconify plugin) absent from bun test;
 // hooks pulling the UI graph transitively only need the registry export.
 mock.module("virtual:icons", () => ({ registry: {} }));
+const STUBBED_GLOBAL_KEYS = [
+  "localStorage",
+  "document",
+  "window",
+  "requestAnimationFrame",
+  "cancelAnimationFrame",
+] as const;
+let savedBrowserGlobals: Map<string, PropertyDescriptor | undefined> | null = null;
+
+function restoreBrowserGlobals() {
+  if (!savedBrowserGlobals) return;
+  const root = globalThis as Record<string, unknown>;
+  for (const [key, desc] of savedBrowserGlobals) {
+    if (desc) Object.defineProperty(globalThis, key, desc);
+    else delete root[key];
+  }
+  savedBrowserGlobals = null;
+}
+
 // Safety net: a test that throws before its finally clause would leak the
-// fake clock into later test FILES (same process) — restore unconditionally.
-afterEach(() => { vi.useRealTimers(); });
+// fake clock or stubbed DOM globals into later test FILES (same process) —
+// restore unconditionally.
+afterEach(() => {
+  vi.useRealTimers();
+  restoreBrowserGlobals();
+});
+afterAll(() => {
+  restoreBrowserGlobals();
+});
 
 /** DOM globals the web hooks read at module init or in scroll plumbing. */
 function stubBrowserGlobals() {
+  if (!savedBrowserGlobals) {
+    savedBrowserGlobals = new Map(
+      STUBBED_GLOBAL_KEYS.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+    );
+  }
   const storage = new Map<string, string>();
   const root = globalThis as Record<string, unknown>;
   root.localStorage = {
@@ -186,8 +217,8 @@ describe("Bug 32 — relay reconnect survives a failing auth refresh", () => {
       close() {}
     }
     const root = globalThis as Record<string, unknown>;
-    const previousWebSocket = root.WebSocket;
-    const previousLocation = root.location;
+    const previousWebSocketDesc = Object.getOwnPropertyDescriptor(globalThis, "WebSocket");
+    const previousLocationDesc = Object.getOwnPropertyDescriptor(globalThis, "location");
     root.WebSocket = FakeWebSocket;
     root.location = { protocol: "http:", host: "dashboard.test" };
     vi.useFakeTimers();
@@ -233,8 +264,10 @@ describe("Bug 32 — relay reconnect survives a failing auth refresh", () => {
       api.setSession(previousSession);
     } finally {
       vi.useRealTimers();
-      root.WebSocket = previousWebSocket;
-      root.location = previousLocation;
+      if (previousWebSocketDesc) Object.defineProperty(globalThis, "WebSocket", previousWebSocketDesc);
+      else delete root.WebSocket;
+      if (previousLocationDesc) Object.defineProperty(globalThis, "location", previousLocationDesc);
+      else delete root.location;
     }
   });
 });

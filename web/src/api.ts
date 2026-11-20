@@ -31,11 +31,16 @@ export interface Session {
 const LS = "cache_code_session";
 
 function loadStored(): Session | null {
+  if (typeof localStorage === "undefined" || typeof localStorage.getItem !== "function") {
+    return null;
+  }
   try {
     const raw = localStorage.getItem(LS);
     return raw ? JSON.parse(raw) : null;
   } catch {
-    localStorage.removeItem(LS);
+    try {
+      if (typeof localStorage.removeItem === "function") localStorage.removeItem(LS);
+    } catch {}
     return null;
   }
 }
@@ -154,9 +159,13 @@ export function setSession(s: Session | null): void {
   // found an empty store, zeroed the signal back to null mid-render (killing
   // the fresh session: no setItem, no reload, a 401 without a bearer), which
   // is exactly what happened when signing in from "/" (no #/login hash).
-  if (s) localStorage.setItem(LS, JSON.stringify(s));
-  else {
-    localStorage.removeItem(LS);
+  if (typeof localStorage !== "undefined") {
+    if (s) localStorage.setItem(LS, JSON.stringify(s));
+    else {
+      localStorage.removeItem(LS);
+      void clearClientStorage();
+    }
+  } else if (!s) {
     void clearClientStorage();
   }
   setServerPolicy(null);
@@ -267,7 +276,7 @@ export async function publicApi<T = any>(method: string, path: string, body?: un
   return rawCall<T>(method, path, body);
 }
 
-if (typeof document !== "undefined") {
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible" && latestSession()) {
       void api("GET", "/api/me/financial-policy").catch(() => {});
