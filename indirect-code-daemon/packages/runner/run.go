@@ -202,9 +202,17 @@ func runWith(spec Spec, opts runOptions) int {
 	}
 
 	// 5. Wiring: output broadcaster + connection manager + signals.
-	bc := newBroadcaster(out)
+	// Tail through an independent read-only handle so Windows FD.Pread never
+	// mutates the child's inherited stdout/stderr file offset, and join
+	// bc.stop() before closing bcFile/out so ReadAt can never race with Close.
+	bcFile := out
+	if r, openErr := os.Open(spec.OutPath); openErr == nil {
+		bcFile = r
+		defer r.Close()
+	}
+	bc := newBroadcaster(bcFile)
 	go bc.run()
-	defer bc.kill()
+	defer bc.stop()
 	// Arm escalation independently of Wait: the command leader itself may
 	// ignore TERM. Cancellation and normal completion share one reaper,
 	// which is joined before the terminal record is published.
@@ -738,15 +746,28 @@ type broadcast struct {
 	out     *os.File
 	off     int64
 	killedC chan struct{}
+	done    chan struct{}
 	once    sync.Once
 }
 
 func newBroadcaster(out *os.File) *broadcast {
-	return &broadcast{conns: map[*bconn]struct{}{}, out: out, killedC: make(chan struct{})}
+	return &broadcast{
+		conns:   map[*bconn]struct{}{},
+		out:     out,
+		killedC: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
 }
 
 func (b *broadcast) kill() {
 	b.once.Do(func() { close(b.killedC) })
+}
+
+// stop signals the broadcaster loop to exit and waits until run() finishes so
+// callers can safely close the tailed file with no concurrent ReadAt in flight.
+func (b *broadcast) stop() {
+	b.kill()
+	<-b.done
 }
 
 func (b *broadcast) register(c *Conn, cursor *int64) {
@@ -801,10 +822,25 @@ func (b *broadcast) broadcast(send func(*Conn)) {
 // byte offsets (the dedup key). Sends are best-effort (rule: the socket
 // NEVER blocks the runner) — gaps repair from the log.
 func (b *broadcast) run() {
+	defer close(b.done)
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	buf := make([]byte, flushMaxLen)
+	finalPass := func() {
+		// one last pass for trailing bytes
+		if n, _ := b.out.ReadAt(buf, b.off); n > 0 {
+			b.mu.Lock()
+			b.off += int64(n)
+			b.mu.Unlock()
+		}
+	}
 	for {
+		select {
+		case <-b.killedC:
+			finalPass()
+			return
+		default:
+		}
 		n, err := b.out.ReadAt(buf, b.off)
 		if n > 0 {
 			chunk := string(EncodeChunk(buf[:n]))
@@ -835,13 +871,7 @@ func (b *broadcast) run() {
 		}
 		select {
 		case <-b.killedC:
-			// one last pass for trailing bytes
-			n, _ := b.out.ReadAt(buf, b.off)
-			if n > 0 {
-				b.mu.Lock()
-				b.off += int64(n)
-				b.mu.Unlock()
-			}
+			finalPass()
 			return
 		case <-tick.C:
 		}

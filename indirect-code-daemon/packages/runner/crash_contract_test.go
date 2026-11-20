@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -236,6 +237,29 @@ func TestCrashContractHardKillAfterCommitRetainsOutcome(t *testing.T) {
 		log, err := os.ReadFile(st.BrainPath)
 		if err != nil || strings.Count(string(log), "exactly-once") != 1 {
 			t.Fatal("committed output lost or duplicated")
+		}
+	}
+}
+
+// Regression test: runWith must join the broadcaster goroutine before closing
+// the output file handles so ReadAt never races with os.File.Close (which can
+// deadlock inside Go 1.26 internal/poll.(*FD).Close on Windows).
+func TestBroadcasterStopJoinsBeforeClose(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.log")
+	if err := os.WriteFile(path, []byte("initial output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 64; i++ {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bc := newBroadcaster(f)
+		go bc.run()
+		bc.stop()
+		if err := f.Close(); err != nil {
+			t.Fatalf("iter %d: close failed after bc.stop(): %v", i, err)
 		}
 	}
 }
