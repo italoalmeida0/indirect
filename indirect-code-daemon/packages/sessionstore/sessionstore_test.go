@@ -433,9 +433,13 @@ func TestYearScaleColdSeekableZstdCompressionAndSubMillisecondQueries(t *testing
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
 	medianJump := latencies[len(latencies)/2]
 	p95Jump := latencies[(len(latencies)*95)/100]
+	coldReadBudget := 2 * time.Millisecond
+	if raceEnabled {
+		coldReadBudget *= 10
+	}
 	t.Logf("Cold random-access latency: single-turn=%v (1 frame), 5-turn ReadAroundMsg median=%v p95=%v", singleDur, medianJump, p95Jump)
-	if medianJump >= 2*time.Millisecond {
-		t.Fatalf("expected Cold ReadAroundMsg median latency < 2ms, got %v", medianJump)
+	if medianJump >= coldReadBudget {
+		t.Fatalf("expected Cold ReadAroundMsg median latency < %v, got %v", coldReadBudget, medianJump)
 	}
 
 	// 3. ReadBeforeTurn across Cold boundary.
@@ -455,7 +459,7 @@ func TestYearScaleColdSeekableZstdCompressionAndSubMillisecondQueries(t *testing
 		beforeWin.Messages,
 		allExpectedMsgs[beforeWin.History.FirstIndex:beforeWin.History.FirstIndex+len(beforeWin.Messages)],
 	)
-	if beforeDur >= 2*time.Millisecond {
+	if beforeDur >= coldReadBudget {
 		t.Logf("note: single-shot ReadBeforeTurn took %v", beforeDur)
 	}
 

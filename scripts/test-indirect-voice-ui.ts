@@ -96,10 +96,23 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WS_ROOT = path.join(SCRIPT_DIR, "..");
 const DIST_DIR = path.join(WS_ROOT, "dist");
 
-if (!existsSync(path.join(DIST_DIR, "index.html"))) {
+const indexHtmlPath = path.join(DIST_DIR, "index.html");
+if (!existsSync(indexHtmlPath)) {
   throw new Error("dist/index.html missing — run `bun run build:web` first");
 }
-const cssName = Array.from(new Bun.Glob("assets/*.css").scanSync(DIST_DIR))[0];
+const indexHtml = await fs.readFile(indexHtmlPath, "utf8");
+const linkedCss = Array.from(indexHtml.matchAll(/<link\b[^>]*>/gi))
+  .map((m) => m[0])
+  .filter((tag) => /\brel=["']stylesheet["']/i.test(tag))
+  .map((tag) => tag.match(/\bhref=["']\/?(assets\/[^"']+\.css)["']/i)?.[1])
+  .find((href): href is string => Boolean(href && existsSync(path.join(DIST_DIR, href))));
+const cssCandidates = Array.from(new Bun.Glob("assets/*.css").scanSync(DIST_DIR))
+  .map((p) => p.replaceAll("\\", "/"))
+  .sort();
+const cssName =
+  linkedCss ??
+  cssCandidates.find((p) => p.startsWith("assets/boot-")) ??
+  cssCandidates[0];
 if (!cssName) {
   throw new Error("dist/assets/*.css missing — run `bun run build:web` first");
 }

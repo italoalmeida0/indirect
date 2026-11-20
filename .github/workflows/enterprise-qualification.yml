@@ -83,7 +83,7 @@ jobs:
           esac
           test "$host_arch" = "$EXPECTED_ARCH"
           test "$(bun -p 'process.arch')" = "$EXPECTED_ARCH"
-          test "$(bun --version)" = 1.4.2
+          test "$(bun --version)" = 1.4.4
           free_kib=$(df -Pk "$RUNNER_TEMP" | awk 'NR==2 {print $4}')
           (( free_kib >= minimum_gib * 1024 * 1024 )) || { echo "Need at least $minimum_gib GiB free on the fixture volume" >&2; exit 1; }
           report_dir="$RUNNER_TEMP/enterprise-evidence-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"

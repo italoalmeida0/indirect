@@ -1002,17 +1002,18 @@ describe("collapseCwd", () => {
 
 describe("pairing modal visibility", () => {
   test("silent token generation fills the card without popping the modal", async () => {
+    const prevLocalStorageDesc = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     const store = new Map<string, string>();
     (globalThis as any).localStorage ??= {
       getItem: (k: string) => (store.has(k) ? store.get(k)! : null),
       setItem: (k: string, v: string) => void store.set(k, String(v)),
       removeItem: (k: string) => void store.delete(k),
     };
-    const { createModals } = await import("../web/src/indirect-code/hooks/useModals");
     const realFetch = globalThis.fetch;
     (globalThis as any).fetch = async () =>
       new Response(JSON.stringify({ connectUrl: "http://x/pair/abc" }), { status: 200 });
     try {
+      const { createModals } = await import("../web/src/indirect-code/hooks/useModals");
       const toasts: string[] = [];
       const modals = createModals({ toast: (m) => void toasts.push(m) });
       await modals.generatePairingToken({ silent: true });
@@ -1024,6 +1025,11 @@ describe("pairing modal visibility", () => {
       expect(toasts).toEqual([]);
     } finally {
       globalThis.fetch = realFetch;
+      if (prevLocalStorageDesc) {
+        Object.defineProperty(globalThis, "localStorage", prevLocalStorageDesc);
+      } else {
+        delete (globalThis as Record<string, unknown>).localStorage;
+      }
     }
   });
 });
@@ -1495,6 +1501,7 @@ describe("Turn-end browser notification (useTurnNotify)", () => {
 
   test("noteMessage notifies only on running->idle, any host, enriched by turn_end", async () => {
     const { createTurnNotify } = await import("../web/src/indirect-code/hooks/useTurnNotify");
+    const prevNotificationDesc = Object.getOwnPropertyDescriptor(globalThis, "Notification");
     // Notification API stub: capture shows instead of OS popups.
     const shown: { title: string; body: string }[] = [];
     (globalThis as any).Notification = class {
@@ -1505,41 +1512,44 @@ describe("Turn-end browser notification (useTurnNotify)", () => {
       }
       close() {}
     };
-    const opened: { hostId: string; sessionId: string }[] = [];
-    const n = createTurnNotify({
-      hosts: () => [{ id: "h1", name: "Mac", hostname: "mac", os: "darwin", arch: "arm64", userId: "u", apiKeyId: null, status: "online", lastSeenAt: null, createdAt: 0 }],
-      sessions: () => [{ id: "s1", title: "Fix bug" } as any],
-      toast: () => {},
-      onOpenSession: (hostId, sessionId) => opened.push({ hostId, sessionId }),
-    });
+    try {
+      const opened: { hostId: string; sessionId: string }[] = [];
+      const n = createTurnNotify({
+        hosts: () => [{ id: "h1", name: "Mac", hostname: "mac", os: "darwin", arch: "arm64", userId: "u", apiKeyId: null, status: "online", lastSeenAt: null, createdAt: 0 }],
+        sessions: () => [{ id: "s1", title: "Fix bug" } as any],
+        toast: () => {},
+        onOpenSession: (hostId, sessionId) => opened.push({ hostId, sessionId }),
+      });
 
-    const run = (hostId: string, sessionId: string) => ({ type: "session_status", hostId, sessionId, status: "running" }) as any;
-    const idle = (hostId: string, sessionId: string) => ({ type: "session_status", hostId, sessionId, status: "idle" }) as any;
+      const run = (hostId: string, sessionId: string) => ({ type: "session_status", hostId, sessionId, status: "running" }) as any;
+      const idle = (hostId: string, sessionId: string) => ({ type: "session_status", hostId, sessionId, status: "idle" }) as any;
 
-    // Stray idle with no running turn: silent (reconnect replay safety).
-    expect(n.noteMessage(idle("h1", "s1"))).toBe(false);
-    expect(shown.length).toBe(0);
+      // Stray idle with no running turn: silent (reconnect replay safety).
+      expect(n.noteMessage(idle("h1", "s1"))).toBe(false);
+      expect(shown.length).toBe(0);
 
-    // running -> turn_end(error) -> idle: notifies as failed.
-    expect(n.noteMessage(run("h1", "s1"))).toBe(true);
-    expect(n.noteMessage({ type: "agent_event", hostId: "h1", sessionId: "s1", event: { type: "turn_end", error: "boom" } } as any)).toBe(true);
-    expect(shown.length).toBe(0); // turn_end alone never notifies (per-step)
-    expect(n.noteMessage(idle("h1", "s1"))).toBe(true);
-    expect(shown.length).toBe(1);
-    expect(shown[0]!.title).toBe("Turn failed — Fix bug");
+      // running -> turn_end(error) -> idle: notifies as failed.
+      expect(n.noteMessage(run("h1", "s1"))).toBe(true);
+      expect(n.noteMessage({ type: "agent_event", hostId: "h1", sessionId: "s1", event: { type: "turn_end", error: "boom" } } as any)).toBe(true);
+      expect(shown.length).toBe(0); // turn_end alone never notifies (per-step)
+      expect(n.noteMessage(idle("h1", "s1"))).toBe(true);
+      expect(shown.length).toBe(1);
+      expect(shown[0]!.title).toBe("Turn failed — Fix bug");
 
-    // Second idle without running: silent (no double notify).
-    expect(n.noteMessage(idle("h1", "s1"))).toBe(false);
-    expect(shown.length).toBe(1);
+      // Second idle without running: silent (no double notify).
+      expect(n.noteMessage(idle("h1", "s1"))).toBe(false);
+      expect(shown.length).toBe(1);
 
-    // turn_start also arms (daemon live path), cancelled disposition varies text.
-    expect(n.noteMessage({ type: "agent_event", hostId: "h9", sessionId: "s9", event: { type: "turn_start" } } as any)).toBe(true);
-    expect(n.noteMessage({ type: "agent_event", hostId: "h9", sessionId: "s9", event: { type: "turn_end", cancelled: true } } as any)).toBe(true);
-    expect(n.noteMessage(idle("h9", "s9"))).toBe(true);
-    expect(shown.length).toBe(2);
-    expect(shown[1]!.title).toContain("Turn cancelled");
-
-    delete (globalThis as any).Notification;
+      // turn_start also arms (daemon live path), cancelled disposition varies text.
+      expect(n.noteMessage({ type: "agent_event", hostId: "h9", sessionId: "s9", event: { type: "turn_start" } } as any)).toBe(true);
+      expect(n.noteMessage({ type: "agent_event", hostId: "h9", sessionId: "s9", event: { type: "turn_end", cancelled: true } } as any)).toBe(true);
+      expect(n.noteMessage(idle("h9", "s9"))).toBe(true);
+      expect(shown.length).toBe(2);
+      expect(shown[1]!.title).toContain("Turn cancelled");
+    } finally {
+      if (prevNotificationDesc) Object.defineProperty(globalThis, "Notification", prevNotificationDesc);
+      else delete (globalThis as Record<string, unknown>).Notification;
+    }
   });
 
   test("buildTurnPayload is display-only (no secrets on lock screens)", async () => {
@@ -1670,6 +1680,7 @@ describe("Wait-state notifications (approval/question/stalled error)", () => {
     expect(turnNotifyText({ title: "Fix bug", hostName: "Mac", disposition: "question" }).title).toBe(
       "Your answer needed — Fix bug",
     );
+    const prevNotificationDesc = Object.getOwnPropertyDescriptor(globalThis, "Notification");
     const shown: string[] = [];
     (globalThis as any).Notification = class {
       static permission = "granted";
@@ -1679,31 +1690,35 @@ describe("Wait-state notifications (approval/question/stalled error)", () => {
       }
       close() {}
     };
-    const n = createTurnNotify({
-      hosts: () => [],
-      sessions: () => [],
-      toast: () => {},
-      onOpenSession: () => {},
-    });
-    const run = { type: "session_status", hostId: "h1", sessionId: "s1", status: "running" } as any;
-    expect(n.noteMessage(run)).toBe(true);
-    // Approval notifies once per callId.
-    const appr = { type: "tool_approval_request", hostId: "h1", sessionId: "s1", callId: "c1", tool: "bash" } as any;
-    expect(n.noteMessage(appr)).toBe(true);
-    expect(n.noteMessage(appr)).toBe(false);
-    expect(shown.filter((t) => t.startsWith("Approval"))).toHaveLength(1);
-    // Question notifies once per question id.
-    const q = { type: "question_request", hostId: "h1", sessionId: "s1", question: { id: "q1" } } as any;
-    expect(n.noteMessage(q)).toBe(true);
-    expect(n.noteMessage(q)).toBe(false);
-    expect(shown.filter((t) => t.startsWith("Your answer"))).toHaveLength(1);
-    // turn_end error arms a fatal; retry clears it (no stalled notification).
-    expect(n.noteMessage({ type: "agent_event", hostId: "h1", sessionId: "s1", event: { type: "turn_end", error: "boom" } } as any)).toBe(true);
-    expect(n.noteMessage({ type: "agent_event", hostId: "h1", sessionId: "s1", event: { type: "retry", attempt: 1 } } as any)).toBe(false);
-    // Normal idle still notifies once as failed (no duplicate from watchdog).
-    expect(n.noteMessage({ type: "session_status", hostId: "h1", sessionId: "s1", status: "idle" } as any)).toBe(true);
-    expect(shown.filter((t) => t.startsWith("Turn failed"))).toHaveLength(1);
-    delete (globalThis as any).Notification;
+    try {
+      const n = createTurnNotify({
+        hosts: () => [],
+        sessions: () => [],
+        toast: () => {},
+        onOpenSession: () => {},
+      });
+      const run = { type: "session_status", hostId: "h1", sessionId: "s1", status: "running" } as any;
+      expect(n.noteMessage(run)).toBe(true);
+      // Approval notifies once per callId.
+      const appr = { type: "tool_approval_request", hostId: "h1", sessionId: "s1", callId: "c1", tool: "bash" } as any;
+      expect(n.noteMessage(appr)).toBe(true);
+      expect(n.noteMessage(appr)).toBe(false);
+      expect(shown.filter((t) => t.startsWith("Approval"))).toHaveLength(1);
+      // Question notifies once per question id.
+      const q = { type: "question_request", hostId: "h1", sessionId: "s1", question: { id: "q1" } } as any;
+      expect(n.noteMessage(q)).toBe(true);
+      expect(n.noteMessage(q)).toBe(false);
+      expect(shown.filter((t) => t.startsWith("Your answer"))).toHaveLength(1);
+      // turn_end error arms a fatal; retry clears it (no stalled notification).
+      expect(n.noteMessage({ type: "agent_event", hostId: "h1", sessionId: "s1", event: { type: "turn_end", error: "boom" } } as any)).toBe(true);
+      expect(n.noteMessage({ type: "agent_event", hostId: "h1", sessionId: "s1", event: { type: "retry", attempt: 1 } } as any)).toBe(false);
+      // Normal idle still notifies once as failed (no duplicate from watchdog).
+      expect(n.noteMessage({ type: "session_status", hostId: "h1", sessionId: "s1", status: "idle" } as any)).toBe(true);
+      expect(shown.filter((t) => t.startsWith("Turn failed"))).toHaveLength(1);
+    } finally {
+      if (prevNotificationDesc) Object.defineProperty(globalThis, "Notification", prevNotificationDesc);
+      else delete (globalThis as Record<string, unknown>).Notification;
+    }
   });
 });
 
@@ -1731,6 +1746,7 @@ describe("Notification tags are unique per event", () => {
 describe("Turn notifications follow the primary skill, not the collapsed mode", () => {
   test("workspace turns notify, talk/learning stay silent, unknown session still notifies", async () => {
     const { createTurnNotify } = await import("../web/src/indirect-code/hooks/useTurnNotify");
+    const prevNotificationDesc = Object.getOwnPropertyDescriptor(globalThis, "Notification");
     const shown: string[] = [];
     (globalThis as any).Notification = class {
       static permission = "granted";
@@ -1740,38 +1756,42 @@ describe("Turn notifications follow the primary skill, not the collapsed mode", 
       }
       close() {}
     };
-    // Storage v5 collapses every workspace session to mode "agentic"; the
-    // primary skill is what still separates Plan from Learning/Talk.
-    const mkSessions = () => [
-      { id: "build-s", title: "Build", hostId: "h1", options: { mode: "agentic" }, skills: { build: { priority: 0, active: true } } },
-      { id: "plan-s", title: "Plan", hostId: "h1", options: { mode: "agentic" }, skills: { plan: { priority: 0, active: true } } },
-      { id: "talk-s", title: "Talk", hostId: "h1", options: { mode: "talk" }, skills: { talk: { priority: 0, active: true } } },
-      { id: "learn-s", title: "Learn", hostId: "h1", options: { mode: "agentic" }, skills: { learning: { priority: 0, active: true } } },
-      // Legacy mirrors (pre-v5 rows) only carry the mode.
-      { id: "legacy-build", title: "Legacy build", hostId: "h1", options: { mode: "build" } },
-      { id: "legacy-plan", title: "Legacy plan", hostId: "h1", options: { mode: "plan" } },
-      { id: "legacy-learn", title: "Legacy learn", hostId: "h1", options: { mode: "learning" } },
-    ];
-    const n = createTurnNotify({
-      hosts: () => [],
-      sessions: mkSessions as any,
-      toast: () => {},
-      onOpenSession: () => {},
-    });
-    const idle = (sid: string) => ({ type: "session_status", hostId: "h1", sessionId: sid, status: "idle" }) as any;
-    const run = (sid: string) => ({ type: "session_status", hostId: "h1", sessionId: sid, status: "running" }) as any;
-    const ids = ["build-s", "plan-s", "talk-s", "learn-s", "legacy-build", "legacy-plan", "legacy-learn", "unknown-s"];
-    for (const sid of ids) n.noteMessage(run(sid));
-    for (const sid of ids) n.noteMessage(idle(sid));
-    expect(shown.filter((t) => t.includes("Build"))).toHaveLength(1);
-    expect(shown.filter((t) => t.includes("Plan"))).toHaveLength(1);
-    expect(shown.filter((t) => t.includes("Talk"))).toHaveLength(0);
-    expect(shown.filter((t) => t.includes("Learn"))).toHaveLength(0);
-    expect(shown.filter((t) => t.includes("Legacy build"))).toHaveLength(1);
-    expect(shown.filter((t) => t.includes("Legacy plan"))).toHaveLength(1);
-    expect(shown.filter((t) => t.includes("Legacy learn"))).toHaveLength(0);
-    expect(shown.filter((t) => t.includes("unknown"))).toHaveLength(1);
-    delete (globalThis as any).Notification;
+    try {
+      // Storage v5 collapses every workspace session to mode "agentic"; the
+      // primary skill is what still separates Plan from Learning/Talk.
+      const mkSessions = () => [
+        { id: "build-s", title: "Build", hostId: "h1", options: { mode: "agentic" }, skills: { build: { priority: 0, active: true } } },
+        { id: "plan-s", title: "Plan", hostId: "h1", options: { mode: "agentic" }, skills: { plan: { priority: 0, active: true } } },
+        { id: "talk-s", title: "Talk", hostId: "h1", options: { mode: "talk" }, skills: { talk: { priority: 0, active: true } } },
+        { id: "learn-s", title: "Learn", hostId: "h1", options: { mode: "agentic" }, skills: { learning: { priority: 0, active: true } } },
+        // Legacy mirrors (pre-v5 rows) only carry the mode.
+        { id: "legacy-build", title: "Legacy build", hostId: "h1", options: { mode: "build" } },
+        { id: "legacy-plan", title: "Legacy plan", hostId: "h1", options: { mode: "plan" } },
+        { id: "legacy-learn", title: "Legacy learn", hostId: "h1", options: { mode: "learning" } },
+      ];
+      const n = createTurnNotify({
+        hosts: () => [],
+        sessions: mkSessions as any,
+        toast: () => {},
+        onOpenSession: () => {},
+      });
+      const idle = (sid: string) => ({ type: "session_status", hostId: "h1", sessionId: sid, status: "idle" }) as any;
+      const run = (sid: string) => ({ type: "session_status", hostId: "h1", sessionId: sid, status: "running" }) as any;
+      const ids = ["build-s", "plan-s", "talk-s", "learn-s", "legacy-build", "legacy-plan", "legacy-learn", "unknown-s"];
+      for (const sid of ids) n.noteMessage(run(sid));
+      for (const sid of ids) n.noteMessage(idle(sid));
+      expect(shown.filter((t) => t.includes("Build"))).toHaveLength(1);
+      expect(shown.filter((t) => t.includes("Plan"))).toHaveLength(1);
+      expect(shown.filter((t) => t.includes("Talk"))).toHaveLength(0);
+      expect(shown.filter((t) => t.includes("Learn"))).toHaveLength(0);
+      expect(shown.filter((t) => t.includes("Legacy build"))).toHaveLength(1);
+      expect(shown.filter((t) => t.includes("Legacy plan"))).toHaveLength(1);
+      expect(shown.filter((t) => t.includes("Legacy learn"))).toHaveLength(0);
+      expect(shown.filter((t) => t.includes("unknown"))).toHaveLength(1);
+    } finally {
+      if (prevNotificationDesc) Object.defineProperty(globalThis, "Notification", prevNotificationDesc);
+      else delete (globalThis as Record<string, unknown>).Notification;
+    }
   });
 
   test("notifiesOnTurnEnd resolves an inactive primary away", async () => {

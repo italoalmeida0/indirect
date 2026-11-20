@@ -23,12 +23,13 @@
 // Run: bun scripts/test-indirect-gateway-death-e2e.ts (needs built binaries,
 // no model, no browser — fake WS gateway + controllable mirror).
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
-import { DAEMON_BIN, PLAT, buildBin, killAll, killProc } from "./indirect-e2e-win";
+import { DAEMON_BIN, IS_WIN, PLAT, buildBin, killAll, killProc } from "./indirect-e2e-win";
 
 const ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const DAEMON_DIR = join(ROOT, "indirect-code-daemon");
@@ -56,17 +57,22 @@ async function bootWorld(tag: string, opts: { mirrorDelayMs?: number; mirrorFail
   mkdirSync(join(root, "slots", "slot-a", "sessions"), { recursive: true });
   mkdirSync(mirror, { recursive: true });
 
-  const oldBin = join(work, "app-old");
-  const newBin = join(work, "app-new");
   // Multi-call binary: ONE build per version, stamped for both roles.
   const both = ["daemonVersion", "launcherVersion"];
-  build("./cmd/daemon", "9.9.8", oldBin, both);
-  build("./cmd/daemon", "9.9.9", newBin, both);
+  const oldBin = build("./cmd/daemon", "9.9.8", join(work, "app-old"), both);
+  const newBin = build("./cmd/daemon", "9.9.9", join(work, "app-new"), both);
+  const daemonAsset = `indirect-code-${PLAT}${IS_WIN ? ".exe" : ""}`;
 
   const { copyFileSync, writeFileSync: wfs, readFileSync } = await import("node:fs");
-  copyFileSync(newBin, join(mirror, DAEMON_BIN));
+  const mirrorAssetPath = join(mirror, daemonAsset);
+  copyFileSync(newBin, mirrorAssetPath);
+  const newBinSha256 = createHash("sha256").update(readFileSync(mirrorAssetPath)).digest("hex");
   wfs(join(mirror, "versions.json"), JSON.stringify({
-    daemon: { version: "9.9.9", assets: { [PLAT]: DAEMON_BIN }, sums: {} },
+    daemon: {
+      version: "9.9.9",
+      assets: { [PLAT]: daemonAsset },
+      sums: { [daemonAsset]: newBinSha256 },
+    },
   }));
 
   copyFileSync(oldBin, join(root, "slots", "slot-a", "bin", DAEMON_BIN));

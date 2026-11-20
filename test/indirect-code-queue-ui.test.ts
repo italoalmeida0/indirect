@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFile } from "fs/promises";
 import { join } from "path";
 import { transformAsync } from "@babel/core";
@@ -395,8 +395,13 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
   }) => string;
   let renderSettingsGeneralSsr!: (midTurnSend: MidTurnDelivery) => string;
 
+  let savedLocalStorageDesc: PropertyDescriptor | undefined;
+  let installedLocalStorage = false;
+
   beforeAll(async () => {
+    savedLocalStorageDesc = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     if (typeof globalThis.localStorage === "undefined") {
+      installedLocalStorage = true;
       const mem = new Map<string, string>();
       Object.defineProperty(globalThis, "localStorage", {
         configurable: true,
@@ -863,5 +868,15 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
     expect(pickerSlice).not.toContain("h-6 w-6 rounded-md border");
     expect(pickerSlice).not.toContain("bg-warning-subtle");
     expect(pickerSlice).not.toContain("border-warning");
+  });
+
+  afterAll(() => {
+    if (!installedLocalStorage) return;
+    if (savedLocalStorageDesc) {
+      Object.defineProperty(globalThis, "localStorage", savedLocalStorageDesc);
+    } else {
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+    installedLocalStorage = false;
   });
 });

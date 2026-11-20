@@ -6190,14 +6190,21 @@ func TestRunScript_NativeShellExecution(t *testing.T) {
 		});
 		assert.strictEqual(forkOut, "fork-inherited-shell");
 
-		const workerOut = await new Promise((resolve, reject) => {
-			const w = new Worker(
-				'const { parentPort } = require("node:worker_threads"); parentPort.postMessage($.sync("echo worker-inherited-shell").text().trim());',
-				{ eval: true }
-			);
-			w.on("message", resolve);
-			w.on("error", reject);
-		});
+		const w = new Worker(
+			'const { parentPort } = require("node:worker_threads"); parentPort.postMessage($.quiet().sync("echo worker-inherited-shell").text().trim());',
+			{ eval: true }
+		);
+		const [workerOut, workerExit] = await Promise.all([
+			new Promise((resolve, reject) => {
+				w.on("message", resolve);
+				w.on("error", reject);
+			}),
+			new Promise((resolve, reject) => {
+				w.once("exit", resolve);
+				w.on("error", reject);
+			}),
+		]);
+		assert.strictEqual(workerExit, 0);
 		assert.strictEqual(workerOut, "worker-inherited-shell");
 
 		console.log("NATIVE_SHELL_EXEC_OK");

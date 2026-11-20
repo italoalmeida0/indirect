@@ -260,9 +260,15 @@ func wrapApproverWithWait(approver MidExecApprover, onWait func(bool)) MidExecAp
 }
 
 func startDirectInProcess(ctx context.Context, spec ExecSpec) (*Proc, bool, error) {
-	isDefaultUnish := spec.Kind == "bash" && len(spec.Argv) >= 2 && spec.Argv[1] == "--sh-c"
+	// Interactive mid-execution approvers are Go callbacks that cannot cross a
+	// raw exec.Command boundary (unlike the daemon's runner IPC path), so keep
+	// jailed direct bash/exec_script runs with an Approver in-process.
+	// Without an Approver, startDirect spawns a real detached child process
+	// ("<exe> --sh-c" or "<exe> --js-exec-direct") with its own PID while still
+	// enforcing EnvRuntimeJailSpec in the child.
+	isJailedUnish := spec.Kind == "bash" && spec.Jail != nil && spec.Approver != nil && len(spec.Argv) >= 2 && spec.Argv[1] == "--sh-c"
 	isJailedJS := spec.Kind == "exec_script" && spec.Jail != nil && spec.Approver != nil
-	if !isDefaultUnish && !(spec.Kind == "bash" && spec.Jail != nil && len(spec.Argv) >= 3 && spec.Argv[1] == "--sh-c") && !isJailedJS {
+	if !isJailedUnish && !isJailedJS {
 		return nil, false, nil
 	}
 
@@ -537,9 +543,13 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 		env = append(env, "__INDIRECT_NET_ALLOW="+strings.Join(spec.NetAllow, ","))
 	}
 	if spec.Jail != nil {
-		if jb, jerr := json.Marshal(spec.Jail); jerr == nil {
-			env = append(env, EnvRuntimeJailSpec+"="+string(jb))
+		jb, jerr := json.Marshal(spec.Jail)
+		if jerr != nil {
+			cleanupCodeFiles()
+			log.close(true)
+			return nil, fmt.Errorf("marshal runtime jail spec: %w", jerr)
 		}
+		env = append(env, EnvRuntimeJailSpec+"="+string(jb))
 	}
 	cmd.Env = env
 	if spec.Stdin != "" {
@@ -550,6 +560,7 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 	var errLog *processLog
 	if spec.SplitStderr {
 		if errLog, err = newProcessLog(spec.LogDir, "bg_"+spec.Kind+"_stderr_*.log"); err != nil {
+			cleanupCodeFiles()
 			log.close(true)
 			return nil, err
 		}
@@ -581,13 +592,17 @@ func startDirect(ctx context.Context, spec ExecSpec) (*Proc, error) {
 			<-exited
 			return waitErr // safe: exited closes after the write
 		},
-		Stop:    func() { killProcessGroup(cmd) },
-		Pump:    log.pump,
+		Stop: func() { killProcessGroup(cmd) },
+		// Use TailLog (a separate read-only handle) rather than log.pump
+		// (ReadAt on the child's inherited stdout/stderr handle): on Windows
+		// FD.Pread seeks and restores the shared kernel file offset, which
+		// races with concurrent child writes and can corrupt output.
+		Pump:    TailLog(log.file.Name()),
 		Cleanup: log.close,
 	}
 	if errLog != nil {
 		proc.ErrLogPath = errLog.file.Name()
-		proc.PumpErr = errLog.pump
+		proc.PumpErr = TailLog(errLog.file.Name())
 		proc.Cleanup = func(remove bool) { log.close(remove); errLog.close(remove) }
 	}
 	return proc, nil

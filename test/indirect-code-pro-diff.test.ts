@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "fs";
 import {
   escapeHtml,
@@ -86,6 +86,10 @@ function inspectSpanHtml(html: string): {
   expect(stack).toEqual([]);
   return { decodedText, classes, wordAddTexts, wordDelTexts };
 }
+
+beforeAll(async () => {
+  await preloadCodeHighlight();
+});
 
 describe("pro-grade language resolution & hljs class mapping", () => {
   test("maps common basenames, lockfiles, and dotfiles accurately", () => {

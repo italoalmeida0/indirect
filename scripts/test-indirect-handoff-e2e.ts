@@ -8,6 +8,7 @@
 //
 // Run: bun scripts/test-indirect-handoff-e2e.ts [--rollback]. Builds its fixtures.
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,9 +46,15 @@ async function main() {
   // Mirror serves the new app + manifest 9.9.9 (ONE artifact, ONE field).
   const { copyFileSync, writeFileSync: wfs, readFileSync, mkdirSync: mkMirror } = await import("node:fs");
   mkMirror(mirror, { recursive: true });
-  copyFileSync(newBin, join(mirror, daemonAsset));
+  const mirrorAssetPath = join(mirror, daemonAsset);
+  copyFileSync(newBin, mirrorAssetPath);
+  const newBinSha256 = createHash("sha256").update(readFileSync(mirrorAssetPath)).digest("hex");
   const manifest = {
-    daemon: { version: "9.9.9", assets: { [PLAT]: daemonAsset }, sums: {} },
+    daemon: {
+      version: "9.9.9",
+      assets: { [PLAT]: daemonAsset },
+      sums: { [daemonAsset]: newBinSha256 },
+    },
   };
   wfs(join(mirror, "versions.json"), JSON.stringify(manifest));
 
@@ -78,6 +85,7 @@ async function main() {
   let daemonSock: any = null;
   let sawDone: any = null;
   let sawFailed: any = null;
+  let sawUpdate: any = null;
   let sawSession: any = null;
   const gw = Bun.serve<{ updating: boolean }>({
     hostname: "127.0.0.1", port: 0,
@@ -115,6 +123,7 @@ async function main() {
           const m = JSON.parse(String(data));
           if (m.type === "update_done") sawDone = m;
           if (m.type === "update_failed") sawFailed = m;
+          if (m.type === "daemon_update") sawUpdate = m;
           if (m.type === "session_data" && m.session?.id === "s1") sawSession = m;
         } catch {}
       },
@@ -156,11 +165,16 @@ async function main() {
     }
     console.log("apply sent; waiting for updater (?updating=1 reconnect)...");
     const t0 = Date.now();
-    while (updatingConnects.length < 1 && Date.now() - t0 < 60000) await sleep(500);
-    assert(updatingConnects.length >= 1, "updater reconnected with ?updating=1 (owns host)");
+    while (updatingConnects.length < 1 && !sawFailed && Date.now() - t0 < 60000) await sleep(500);
+    assert(
+      updatingConnects.length >= 1,
+      `updater reconnected with ?updating=1 (owns host); connects=${connects.length} disconnects=${disconnects} ` +
+      `sawFailed=${JSON.stringify(sawFailed)} sawUpdate=${JSON.stringify(sawUpdate)} ` +
+      `manifest=${JSON.stringify(manifest)}\n--- daemon output ---\n${out}`,
+    );
     await sleep(6000);
     assert.equal(proc.exitCode, 0, `supervisor did not hand over cleanly: ${out}`);
-    assert(connects.length >= 2, "updater never claimed the host");
+    assert(connects.length >= 2, `updater never claimed the host (connects=${connects.length}, sawFailed=${JSON.stringify(sawFailed)}): ${out}`);
     if (rollback) {
       const start = Date.now();
       while ((!sawFailed || !daemonSock || daemonSock.data.updating) && Date.now() - start < 30000) await sleep(100);
@@ -186,7 +200,7 @@ async function main() {
     while ((disconnects < 1 || connects.length < 2 || !sawDone) && Date.now() - tProm < 120000) await sleep(500);
     assert(disconnects >= 1, "old daemon disconnected (SIGKILLed by updater)");
     assert(connects.length >= 2, `new daemon connected (connects=${connects.length})`);
-    assert(sawDone && sawDone.version === "9.9.9", `expected update_done 9.9.9, got ${JSON.stringify(sawDone)}`);
+    assert(sawDone && sawDone.version === "9.9.9", `expected update_done 9.9.9, got ${JSON.stringify(sawDone)} (sawFailed=${JSON.stringify(sawFailed)}): ${out}`);
     console.log("new daemon connected + update_done; settling...");
     await sleep(5000);
     const active = readFileSync(join(root, "slots", "active"), "utf8").trim();
