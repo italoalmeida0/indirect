@@ -17,8 +17,8 @@ export function MenuItem(props: {
   return (
     <button
       type="button"
+      ref={press}
       role={props.role}
-      onPointerDown={(e) => press(e.currentTarget)}
       onClick={props.onClick}
       data-rc-tip={props.tip}
       aria-label={props.tip}

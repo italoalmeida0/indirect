@@ -1,21 +1,34 @@
-import { For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { Badge } from "../../ds/components/controls";
 import { press } from "../../ds/motion/press";
 import { reducedMotion } from "../../ds/motion/reduced";
-import { Badge, Btn, Modal } from "../../ui";
+import { Btn, Modal } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal } from "../ctx";
+import { validateProxyUrl } from "../hooks/useSettings";
 
 import { SettingsGeneralSection } from "./SettingsGeneral";
+
+const SETTINGS_SECTIONS = [
+  { id: "rc-set-appearance", label: "Appearance" },
+  { id: "rc-set-notifications", label: "Notifications" },
+  { id: "rc-set-updates", label: "Updates" },
+  { id: "rc-set-permissions", label: "Permissions" },
+  { id: "rc-set-runtime", label: "Runtime" },
+] as const;
 
 export function SettingsModal() {
   const m = useModal();
   const hosts = useHost();
-  const activeTab = m.settingsTab;
   const hostObj = () => hosts.activeHost?.() ?? null;
   const hostStatus = () => hostObj()?.status || "offline";
+  const [bodyEl, setBodyEl] = createSignal<HTMLDivElement | undefined>(undefined);
+  const [activeSection, setActiveSection] = createSignal<string>(SETTINGS_SECTIONS[0].id);
+
+  const proxyInvalid = () => Boolean(validateProxyUrl(m.daemonSettings().httpProxy ?? ""));
 
   const jumpTo = (id: string) => {
-    m.setSettingsTab("general");
+    setActiveSection(id);
     requestAnimationFrame(() => {
       document.getElementById(id)?.scrollIntoView({
         behavior: reducedMotion() ? "auto" : "smooth",
@@ -24,56 +37,109 @@ export function SettingsModal() {
     });
   };
 
+  createEffect(() => {
+    const container = bodyEl();
+    if (!m.showConfigModal() || !container) return;
+
+    const updateActive = () => {
+      const containerRect = container.getBoundingClientRect();
+      const atBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight <= 12;
+      if (atBottom) {
+        setActiveSection(SETTINGS_SECTIONS[SETTINGS_SECTIONS.length - 1].id);
+        return;
+      }
+      let current: string = SETTINGS_SECTIONS[0].id;
+      for (const sec of SETTINGS_SECTIONS) {
+        const el = document.getElementById(sec.id);
+        if (!el) continue;
+        const offset = el.getBoundingClientRect().top - containerRect.top;
+        if (offset <= 88) {
+          current = sec.id;
+        }
+      }
+      setActiveSection(current);
+    };
+
+    updateActive();
+    container.addEventListener("scroll", updateActive, { passive: true });
+    onCleanup(() => container.removeEventListener("scroll", updateActive));
+  });
+
+  const requestClose = () => {
+    if (m.savingSettings()) return;
+    if (m.settingsDirty() && typeof m.showConfirm === "function") {
+      void m
+        .showConfirm({
+          title: "Discard unsaved changes?",
+          message:
+            "Your host setting changes have not been saved yet. Discard them and close Settings?",
+          confirmText: "Discard",
+          cancelText: "Keep editing",
+          danger: true,
+        })
+        .then((ok) => {
+          if (ok) m.cancelSettings();
+        });
+      return;
+    }
+    m.cancelSettings();
+  };
+
   return (
     <Modal
       open={m.showConfigModal()}
       title="Host & agent settings"
-      subtitle="Customize your workspace and the agent on this host."
+      subtitle="Customize this device and the agent running on your host."
       width="max-w-2xl"
-      onClose={m.cancelSettings}
+      bodyRef={setBodyEl}
+      onClose={requestClose}
       footer={
-        <>
-          <Btn
-            variant="outline"
-            size="sm"
-            disabled={m.savingSettings()}
-            onClick={m.cancelSettings}
-          >
-            Cancel
-          </Btn>
-          <Btn
-            size="sm"
-            disabled={m.savingSettings() || m.settingsChanged() || !m.settingsDirty()}
-            onClick={m.saveDaemonConfig}
-          >
-            {m.savingSettings() ? "Saving…" : "Save changes"}
-          </Btn>
-        </>
+        <div class="flex w-full items-center justify-between gap-3 flex-wrap">
+          <Show when={m.settingsDirty()}>
+            <span class="text-2xs text-fg-muted">Unsaved host changes</span>
+          </Show>
+          <div class="flex items-center gap-2 ml-auto">
+            <Btn
+              variant="outline"
+              size="sm"
+              disabled={m.savingSettings()}
+              onClick={requestClose}
+            >
+              Cancel
+            </Btn>
+            <Btn
+              size="sm"
+              disabled={
+                m.savingSettings() ||
+                m.settingsChanged() ||
+                !m.configLoaded() ||
+                !m.settingsDirty() ||
+                proxyInvalid()
+              }
+              onClick={m.saveDaemonConfig}
+            >
+              {m.savingSettings() ? "Saving…" : "Save changes"}
+            </Btn>
+          </div>
+        </div>
       }
     >
       <div class="w-full min-w-0">
         {/* Sticky Host Telemetry & Section Jump Bar (flush with dialog header & scroll padding) */}
         <div class="sticky -top-4 sm:-top-5 z-10 -mx-4 sm:-mx-6 -mt-4 sm:-mt-5 mb-4 px-4 sm:px-6 py-2 sm:py-2.5 bg-surface-raised border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-x-3 gap-y-1.5">
           <div class="flex items-center gap-2 min-w-0">
-            <span
-              class={`h-2 w-2 shrink-0 rounded-full ${
-                hostStatus() === "online"
-                  ? "bg-success"
-                  : hostStatus() === "updating"
-                    ? "bg-warning animate-pulse"
-                    : "bg-fg-muted"
-              }`}
-            />
             <span class="truncate text-xs font-medium text-fg">
               {hostObj()?.name || hostObj()?.hostname || "Connected host"}
             </span>
             <Badge
+              dot
               tone={
                 hostStatus() === "online"
-                  ? "green"
+                  ? "success"
                   : hostStatus() === "updating"
-                    ? "amber"
-                    : "zinc"
+                    ? "warning"
+                    : "neutral"
               }
             >
               {hostStatus() === "online"
@@ -83,29 +149,31 @@ export function SettingsModal() {
                   : "Offline"}
             </Badge>
           </div>
-          <nav aria-label="Settings sections" class="flex w-full sm:w-auto items-center justify-between sm:justify-start gap-0 sm:gap-0.5 overflow-x-auto no-scrollbar max-w-full">
-            <For
-              each={[
-                { id: "rc-set-appearance", label: "Appearance" },
-                { id: "rc-set-notifications", label: "Alerts" },
-                { id: "rc-set-updates", label: "Updates" },
-                { id: "rc-set-permissions", label: "Permissions" },
-                { id: "rc-set-mid-turn-send", label: "Queue" },
-                { id: "rc-set-runtime", label: "Runtime" },
-              ]}
-            >
-              {(sec) => (
-                <button
-                  type="button"
-                  data-settings-jump={sec.id}
-                  disabled={m.savingSettings()}
-                  onPointerDown={(e) => press(e.currentTarget)}
-                  onClick={() => jumpTo(sec.id)}
-                  class="inline-flex shrink-0 whitespace-nowrap items-center rounded-lg px-0.5 sm:px-2 py-1 text-[10px] sm:text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  <span>{sec.label}</span>
-                </button>
-              )}
+          <nav
+            aria-label="Settings sections"
+            class="flex w-full sm:w-auto items-center justify-between sm:justify-start gap-0.5 overflow-x-auto no-scrollbar max-w-full"
+          >
+            <For each={SETTINGS_SECTIONS}>
+              {(sec) => {
+                const isActive = () => activeSection() === sec.id;
+                return (
+                  <button
+                    type="button"
+                    data-settings-jump={sec.id}
+                    aria-current={isActive() ? "true" : undefined}
+                    disabled={m.savingSettings()}
+                    ref={press}
+                    onClick={() => jumpTo(sec.id)}
+                    class={`inline-flex shrink-0 whitespace-nowrap items-center rounded-lg px-1.5 sm:px-2 py-1 text-[10.5px] sm:text-[11px] font-medium transition-colors cursor-pointer disabled:opacity-50 ${
+                      isActive()
+                        ? "bg-surface-muted text-fg"
+                        : "text-fg-secondary hover:bg-surface-muted hover:text-fg"
+                    }`}
+                  >
+                    <span>{sec.label}</span>
+                  </button>
+                );
+              }}
             </For>
           </nav>
         </div>
@@ -138,9 +206,7 @@ export function SettingsModal() {
           disabled={m.savingSettings()}
           class="min-w-0 disabled:opacity-60"
         >
-          <Show when={activeTab() === "general" || !activeTab()}>
-            <SettingsGeneralSection />
-          </Show>
+          <SettingsGeneralSection />
         </fieldset>
       </div>
     </Modal>

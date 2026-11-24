@@ -176,14 +176,14 @@ func (s *Sandbox) CheckReadPath(path string) error {
 			}
 			if !allowedByRule && locked {
 				if prot {
-					return fmt.Errorf("jailed: %s", protReason)
+					return fmt.Errorf("Restricted to workspace: %s", protReason)
 				}
 				rootAbs, rerr := canonical(s.Root)
 				if rerr != nil {
 					return fmt.Errorf("sandbox root: %w", rerr)
 				}
 				if !s.isAllowed(rootAbs, target) {
-					return fmt.Errorf("jailed: path %q is outside sandbox root %q (use /unjail to disable)", path, s.Root)
+					return fmt.Errorf("Restricted to workspace: path %q is outside workspace root %q (switch to Full access to allow)", path, s.Root)
 				}
 			}
 		}
@@ -237,7 +237,7 @@ func (s *Sandbox) CheckWalkedReadEntry(path string, d os.DirEntry) error {
 					}
 				}
 				if !allowedByRule {
-					return fmt.Errorf("jailed: %s", reason)
+					return fmt.Errorf("Restricted to workspace: %s", reason)
 				}
 			}
 		}
@@ -272,14 +272,14 @@ func (s *Sandbox) CheckWritePath(path string) error {
 			allowedByRule := eff == "allow" && allowsPathByRule(rules, "fs_write", target, s.Root, isProtInWs)
 			if !allowedByRule && s.Locked() {
 				if prot {
-					return fmt.Errorf("jailed: %s", protReason)
+					return fmt.Errorf("Restricted to workspace: %s", protReason)
 				}
 				rootAbs, rerr := canonical(s.Root)
 				if rerr != nil {
 					return fmt.Errorf("sandbox root: %w", rerr)
 				}
 				if !s.isAllowed(rootAbs, target) {
-					return fmt.Errorf("jailed: path %q is outside sandbox root %q (use /unjail to disable)", path, s.Root)
+					return fmt.Errorf("Restricted to workspace: path %q is outside workspace root %q (switch to Full access to allow)", path, s.Root)
 				}
 			}
 		}

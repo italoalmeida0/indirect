@@ -28,7 +28,7 @@ export function NewProjectModal() {
 
   const breadcrumbs = createMemo(() => {
     const raw = (s.folderCurrent() || s.newProjectPath()).trim();
-    if (!raw) return [] as Array<{ label: string; path: string }>;
+    if (!raw) return { items: [] as Array<{ label: string; path: string }>, truncated: false };
     const isWin = /^[a-zA-Z]:[\\/]/.test(raw);
     const sep = isWin && raw.includes("\\") ? "\\" : "/";
     const normalized = raw.replace(/[\\/]+/g, sep);
@@ -53,7 +53,10 @@ export function NewProjectModal() {
         crumbs.push({ label: part, path: acc });
       }
     });
-    return crumbs.slice(-7);
+    return {
+      items: crumbs.slice(-7),
+      truncated: crumbs.length > 7,
+    };
   });
 
   const handleListKeyDown = (e: KeyboardEvent) => {
@@ -119,7 +122,7 @@ export function NewProjectModal() {
         <button
           type="button"
           disabled={!canGoParent()}
-          onPointerDown={(e) => press(e.currentTarget)}
+          ref={press}
           onClick={() => s.goParentFolder()}
           data-rc-tip="Parent folder"
           aria-label="Parent folder"
@@ -130,7 +133,7 @@ export function NewProjectModal() {
 
         <button
           type="button"
-          onPointerDown={(e) => press(e.currentTarget)}
+          ref={press}
           onClick={() => s.navigateFolder("~")}
           data-rc-tip="Home directory"
           aria-label="Home directory"
@@ -142,8 +145,16 @@ export function NewProjectModal() {
         <span class="mx-1 h-3.5 w-px shrink-0 bg-border-subtle" aria-hidden="true" />
 
         <div class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <Show when={breadcrumbs().truncated}>
+            <span class="shrink-0 px-1 font-mono text-xs text-fg-muted select-none" aria-hidden="true">
+              …
+            </span>
+            <span class="text-fg-muted/50 text-xs select-none shrink-0" aria-hidden="true">
+              /
+            </span>
+          </Show>
           <For
-            each={breadcrumbs()}
+            each={breadcrumbs().items}
             fallback={
               <span class="truncate px-2 text-xs font-medium text-fg-secondary">
                 Select project folder
@@ -151,7 +162,7 @@ export function NewProjectModal() {
             }
           >
             {(crumb, idx) => {
-              const isLeaf = () => idx() === breadcrumbs().length - 1;
+              const isLeaf = () => idx() === breadcrumbs().items.length - 1;
               return (
                 <>
                   <Show when={idx() > 0 && crumb.label !== "/"}>
@@ -162,7 +173,7 @@ export function NewProjectModal() {
                   <button
                     type="button"
                     data-rc-tip={crumb.path}
-                    onPointerDown={(e) => press(e.currentTarget)}
+                    ref={press}
                     onClick={() => s.navigateFolder(crumb.path)}
                     class={`max-w-44 shrink-0 truncate rounded-md px-2 py-1 font-mono text-xs transition-colors cursor-pointer ${
                       isLeaf()
@@ -189,7 +200,7 @@ export function NewProjectModal() {
           type="button"
           aria-label="Close"
           data-rc-tip="Close"
-          onPointerDown={(e) => press(e.currentTarget)}
+          ref={press}
           onClick={closeModal}
           class="ui-icon-button h-7 w-7 shrink-0 rounded-lg"
         >
@@ -214,7 +225,7 @@ export function NewProjectModal() {
           aria-label="Folder path on host"
           class="min-w-0 flex-1 bg-transparent py-0.5 font-mono text-xs text-fg placeholder:text-fg-muted outline-none"
           value={s.newProjectPath()}
-          placeholder="/home/user/my-project"
+          placeholder="path/to/my-project"
           ref={(el) => {
             if (typeof window !== "undefined" && !window.matchMedia?.("(pointer: coarse)").matches) {
               setTimeout(() => el?.focus(), 40);
@@ -228,7 +239,7 @@ export function NewProjectModal() {
         <button
           type="submit"
           data-rc-tip="Navigate to path"
-          onPointerDown={(e) => press(e.currentTarget)}
+          ref={press}
           class="inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2.5 text-[11px] font-medium text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
         >
           <span>Go</span>
@@ -257,7 +268,7 @@ export function NewProjectModal() {
           when={!s.folderLoading()}
           fallback={
             <div class="flex h-full items-center justify-center gap-2 text-xs text-fg-muted">
-              <span class="ui-spinner ui-spinner-sm text-accent" aria-hidden="true" />
+              <span class="ui-spinner w-3.5 h-3.5 text-accent" aria-hidden="true" />
               <span>Reading directory…</span>
             </div>
           }
@@ -265,13 +276,15 @@ export function NewProjectModal() {
           <For
             each={s.folderEntries()}
             fallback={
-              <div class="flex h-full flex-col items-center justify-center px-4 py-8 text-center text-xs text-fg-muted">
-                <Iconify icon="lucide:folder-open" size={20} class="mb-2 text-fg-muted" />
-                <p class="font-medium text-fg-secondary">No subdirectories here</p>
-                <p class="mt-0.5 text-2xs text-fg-muted">
-                  Choose "Open this folder" to use this directory as your workspace root.
-                </p>
-              </div>
+              <Show when={!s.folderError()}>
+                <div class="flex h-full flex-col items-center justify-center px-4 py-8 text-center text-xs text-fg-muted">
+                  <Iconify icon="lucide:folder-open" size={20} class="mb-2 text-fg-muted" />
+                  <p class="font-medium text-fg-secondary">No subdirectories here</p>
+                  <p class="mt-0.5 text-2xs text-fg-muted">
+                    Choose "Open this folder" to use this directory as your workspace root.
+                  </p>
+                </div>
+              </Show>
             }
           >
             {(folder) => {
@@ -283,7 +296,7 @@ export function NewProjectModal() {
                   type="button"
                   data-folder-item=""
                   data-folder-path={folder.path}
-                  onPointerDown={(e) => press(e.currentTarget)}
+                  ref={press}
                   onClick={() => {
                     if (s.folderError()) s.setFolderError("");
                     s.navigateFolder(folder.path);
@@ -333,8 +346,13 @@ export function NewProjectModal() {
           <Btn variant="outline" size="sm" onClick={closeModal}>
             Cancel
           </Btn>
-          <Btn size="sm" disabled={!isCurrentValid()} onClick={s.createProject}>
-            Open this folder
+          <Btn
+            size="sm"
+            loading={Boolean(s.creatingProject?.())}
+            disabled={!isCurrentValid() || Boolean(s.creatingProject?.())}
+            onClick={s.createProject}
+          >
+            {s.creatingProject?.() ? "Opening…" : "Open this folder"}
           </Btn>
         </div>
       </div>

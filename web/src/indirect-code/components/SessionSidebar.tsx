@@ -3,7 +3,7 @@ import { Icon as Iconify } from "../../components/icon";
 import { timeAgo } from "../utils/format";
 import { sessionTimeLabel } from "../paths";
 import type { SessionSummary } from "../types";
-import { RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
+import { attentionKindToTone, RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
 
 export function SessionStopButton(props: {
   sessionId: string;
@@ -23,7 +23,7 @@ export function SessionStopButton(props: {
       onFocus={() => setHovered(true)}
       onBlur={() => setHovered(false)}
       disabled={props.isCancelling}
-      class={`rc-msg-action w-5 h-5 rounded-md flex items-center justify-center shrink-0 border border-transparent transition-colors ${
+      class={`rc-session-stop relative w-5 h-5 rounded-md flex items-center justify-center shrink-0 border border-transparent transition-colors ${
         props.isCancelling
           ? "text-fg-muted opacity-60 cursor-default"
           : hovered()
@@ -56,6 +56,7 @@ export function SessionStopButton(props: {
 /** Sidebar session line (full row with inline rename + hover/context actions). */
 export interface SessionRowCtx {
   isMobile: () => boolean;
+  isOverlay?: () => boolean;
   activeSessionId: () => string | null;
   selectedSessions: () => Set<string>;
   selectionMode: () => boolean;
@@ -75,6 +76,7 @@ export interface SessionRowCtx {
   cancelTurnForSession: (id: string, e: MouseEvent | KeyboardEvent) => void;
   isSessionUnread?: (session: SessionSummary) => boolean;
   sessionAttentionLabel?: (session: SessionSummary) => string;
+  sessionAttentionKind?: (session: SessionSummary) => string | undefined;
   openContextMenu?: (session: SessionSummary, anchor: HTMLElement) => void;
   contextMenuSessionId?: () => string | null;
   registerLongPressCancel?: (cancel: () => void) => void;
@@ -84,13 +86,20 @@ const LONG_PRESS_MS = 420;
 const LONG_PRESS_MOVE_PX = 8;
 
 export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
+  const isOverlay = () => (ctx.isOverlay ? ctx.isOverlay() : ctx.isMobile());
   const isActive = () => s.id === ctx.activeSessionId();
   const selected = () => ctx.selectedSessions().has(s.id);
   const menuOpen = () => ctx.contextMenuSessionId?.() === s.id;
   const isRenaming = () => ctx.renamingId() === s.id;
   const isUnread = () => Boolean(ctx.isSessionUnread?.(s));
+  const isTalk = () => (s.options?.mode || "").toLowerCase() === "talk";
   const isRunning = () =>
     s.status === "running" || (s.id === ctx.activeSessionId() && ctx.sessionStatus() === "running");
+  const tooltipText = () => {
+    if (isRenaming() || menuOpen()) return undefined;
+    if (isTalk() || !s.cwd) return s.title;
+    return `${s.title}\n${s.cwd}`;
+  };
 
   let longPressTimer: ReturnType<typeof setTimeout> | undefined;
   let startX = 0;
@@ -134,7 +143,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
         if (isRenaming()) return;
         const target = e.target as HTMLElement | null;
         if (target?.closest("button, input")) return;
-        const isTouchHold = e.pointerType === "touch" || (ctx.isMobile() && e.button === 0);
+        const isTouchHold = e.pointerType === "touch" || (isOverlay() && e.button === 0);
         if (!isTouchHold || !ctx.openContextMenu) return;
         clearLongPress();
         longPressActive = false;
@@ -196,6 +205,8 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
           ctx.toggleSessionSelect(s.id);
           return;
         }
+        // Second click of a desktop double-click should not trigger a duplicate navigation right before inline rename.
+        if (e.detail >= 2 && !isOverlay()) return;
         ctx.setHistoryView(false);
         ctx.selectSession(s.id);
         ctx.closeSidebarOnMobile();
@@ -215,12 +226,14 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
           ctx.closeSidebarOnMobile();
         }
       }}
-      onDblClick={() => {
-        if (ctx.selectionMode() || ctx.isMobile()) return;
+      onDblClick={(e) => {
+        if (ctx.selectionMode() || isOverlay()) return;
+        e.preventDefault();
+        e.stopPropagation();
         ctx.setRenameText(s.title);
         ctx.setRenamingId(s.id);
       }}
-      class={`group flex ${ctx.isMobile() ? "min-h-8 py-0.5" : "h-7.5"} items-center gap-1.5 px-2 rounded-lg cursor-pointer text-[12.5px] transition-colors touch-manipulation select-none [-webkit-touch-callout:none] ${
+      class={`group flex ${isOverlay() ? "min-h-8 py-0.5" : "h-7.5"} items-center gap-1.5 px-2 rounded-lg cursor-pointer text-[12.5px] transition-colors touch-manipulation select-none [-webkit-touch-callout:none] ${
         isActive() && !ctx.selectionMode()
           ? "bg-surface-strong/70 font-medium text-fg"
           : selected()
@@ -231,7 +244,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                 ? "font-medium text-fg hover:bg-surface-muted/75"
                 : "text-fg-secondary hover:bg-surface-muted/75 hover:text-fg"
       }`}
-      data-rc-tip={isRenaming() || menuOpen() ? undefined : `${s.title}\n${s.cwd}`}
+      data-rc-tip={tooltipText()}
     >
       <Show when={ctx.selectionMode()}>
         <button
@@ -277,32 +290,51 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                 data-session-unread={s.id}
                 class="w-5 h-5 flex items-center justify-center shrink-0"
               >
-                <UnreadDot label={ctx.sessionAttentionLabel?.(s) ?? "Unread update"} />
+                <UnreadDot
+                  tone={attentionKindToTone(ctx.sessionAttentionKind?.(s) ?? s.attentionKind)}
+                  label={ctx.sessionAttentionLabel?.(s) ?? "Unread update"}
+                />
               </span>
             </Show>
             {/* Desktop row actions fade in OVER a fixed trailing slot instead of
                 reflowing the row: the title, unread dot and stop spinner never
                 shift under the pointer when the row is hovered. */}
             <div
-              class={`relative flex items-center justify-end shrink-0 ${
-                !ctx.isMobile() && !ctx.selectionMode() ? "min-w-[3.5rem]" : ""
+              class={`relative flex items-center justify-end gap-1 shrink-0 ${
+                !isOverlay() && !ctx.selectionMode() ? "min-w-[4rem]" : ""
               }`}
             >
               <span
                 class={`rc-row-time text-2xs text-fg-muted tabular-nums transition-opacity ${
-                  !ctx.isMobile() && !ctx.selectionMode()
+                  !isOverlay() && !ctx.selectionMode()
                     ? "group-hover:opacity-0 group-focus-within:opacity-0"
                     : ""
                 }`}
               >
                 {timeAgo(sessionTimeLabel(s))}
               </span>
-              <Show when={!ctx.isMobile() && !ctx.selectionMode()}>
-                <div class="rc-row-actions absolute inset-y-0 right-0 flex items-center opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
+              <Show when={isOverlay() && !ctx.selectionMode() && Boolean(ctx.openContextMenu)}>
+                <button
+                  type="button"
+                  data-session-menubtn
+                  aria-label={`Conversation actions for ${s.title}`}
+                  aria-haspopup="menu"
+                  aria-expanded={menuOpen()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    ctx.openContextMenu?.(s, e.currentTarget);
+                  }}
+                  class="ui-icon-button ui-icon-button-xs text-fg-muted hover:text-fg hover:bg-surface-subtle shrink-0"
+                >
+                  <Iconify icon="lucide:ellipsis" size={14} />
+                </button>
+              </Show>
+              <Show when={!isOverlay() && !ctx.selectionMode()}>
+                <div class="rc-row-actions absolute inset-y-0 right-0 flex items-center gap-0.5 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto">
                   <button
                     type="button"
                     onClick={(e) => ctx.togglePin(s.id, e)}
-                    class="rc-row-action flex h-[18px] w-[18px] items-center justify-center rounded text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                    class="rc-row-action flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip={s.pinned ? "Unpin" : "Pin"} aria-label={s.pinned ? "Unpin" : "Pin"}
                   >
                     <Iconify icon={s.pinned ? "lucide:pin-off" : "lucide:pin"} size={12} />
@@ -314,7 +346,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                       ctx.setRenameText(s.title);
                       ctx.setRenamingId(s.id);
                     }}
-                    class="rc-row-action flex h-[18px] w-[18px] items-center justify-center rounded text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
+                    class="rc-row-action flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                     data-rc-tip="Rename" aria-label="Rename"
                   >
                     <Iconify icon="lucide:pencil" size={12} />
@@ -322,7 +354,7 @@ export function SessionRow(ctx: SessionRowCtx, s: SessionSummary) {
                   <button
                     type="button"
                     onClick={(e) => ctx.deleteSession(s.id, e)}
-                    class="rc-row-action flex h-[18px] w-[18px] items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer"
+                    class="rc-row-action flex h-5 w-5 items-center justify-center rounded text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer"
                     data-rc-tip="Delete" aria-label="Delete"
                   >
                     <Iconify icon="lucide:trash-2" size={12} />

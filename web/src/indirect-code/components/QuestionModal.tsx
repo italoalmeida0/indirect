@@ -81,9 +81,11 @@ export function QuestionPanel(props: {
           </For>
         </div>
       </Show>
-      <span class="ml-auto font-mono text-2xs tabular-nums text-fg-muted" aria-live="polite">
-        {step()+1} of {questions().length}
-      </span>
+      <Show when={questions().length > 1}>
+        <span class="ml-auto font-mono text-2xs tabular-nums text-fg-muted" aria-live="polite">
+          {step()+1} of {questions().length}
+        </span>
+      </Show>
     </div>
     <form onSubmit={(e) => {
       e.preventDefault();
@@ -113,7 +115,7 @@ export function QuestionPanel(props: {
             const isRec = () => Boolean((question() as any).recommend && option.label.trim().toLowerCase() === ((question() as any).recommend as string).trim().toLowerCase());
             return (
               <label
-                onPointerDown={(e) => press(e.currentTarget)}
+                ref={press}
                 class={`flex items-start gap-2.5 rounded-lg border px-3 py-2 cursor-pointer transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring ${
                   isSelected()
                     ? "border-[color-mix(in_oklab,var(--accent)_42%,var(--border))] bg-accent-subtle"
@@ -163,17 +165,20 @@ export function QuestionPanel(props: {
             );
           }}</For>
           <Show when={(question() as any).decide_later && !question().multiple}>
-            <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={() => {
+            <button type="button" ref={press} onClick={() => {
               if (props.submitting) return;
               if (step() < questions().length-1) { setDrafts(step(), {selected:[DELEGATE_LABEL], custom:false}); move(step()+1); }
               else if (props.connected) props.onSubmit(drafts.map((_, i) => i === step() ? [DELEGATE_LABEL] : answers(i)));
-            }} class="flex w-full items-center gap-2.5 rounded-lg border border-dashed border-border-strong px-3 py-2 text-left text-xs text-fg-secondary transition-colors hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] hover:bg-accent-subtle hover:text-fg cursor-pointer">
-              <Icon icon="lucide:sparkles" size={14} class="text-accent shrink-0" />
-              <span>{DELEGATE_LABEL}. The assistant proceeds with its best judgment.</span>
+            }} class="flex w-full items-start gap-2.5 rounded-lg border border-dashed border-border-strong px-3 py-2 text-left text-xs text-fg-secondary transition-colors hover:border-[color-mix(in_oklab,var(--accent)_45%,var(--border))] hover:bg-accent-subtle hover:text-fg cursor-pointer">
+              <Icon icon="lucide:sparkles" size={14} class="mt-0.5 text-accent shrink-0" />
+              <span class="min-w-0 flex-1">
+                <span class="block font-medium text-fg">Let the assistant decide</span>
+                <span class="block mt-0.5 text-2xs text-fg-muted leading-snug">Proceeds using its best judgment</span>
+              </span>
             </button>
           </Show>
           <label
-            onPointerDown={(e) => press(e.currentTarget)}
+            ref={press}
             class={`flex items-center gap-2.5 rounded-lg border px-3 py-2 cursor-pointer transition-colors has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-ring ${
               draft().custom
                 ? "border-[color-mix(in_oklab,var(--accent)_42%,var(--border))] bg-accent-subtle"
@@ -222,10 +227,12 @@ export function QuestionPanel(props: {
       </fieldset>
       <Show when={props.error}><p role="alert" class="px-3.5 pb-2 text-xs text-danger">{props.error}</p></Show>
       <div class="flex items-center gap-2 border-t border-border-subtle bg-surface-subtle px-3.5 py-2">
-        <button type="button" disabled={step() === 0 || props.submitting} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} onClick={() => move(step()-1)} class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">Back</button>
+        <Show when={questions().length > 1}>
+          <button type="button" ref={press} disabled={step() === 0 || props.submitting} onClick={() => move(step()-1)} class="rounded-lg border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:text-fg hover:bg-surface-muted disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">Back</button>
+        </Show>
         <Show when={!props.connected}><span class="text-2xs text-warning flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />Reconnecting…</span></Show>
-        <button type="submit" disabled={!ready(step()) || props.submitting || (step() === questions().length-1 && !props.connected)} onPointerDown={(e) => { if (!e.currentTarget.disabled) press(e.currentTarget); }} class="ml-auto rounded-lg bg-accent hover:bg-accent-strong text-accent-foreground px-4 py-1.5 text-xs font-medium disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">
-          {props.submitting ? "Sending…" : step() < questions().length-1 ? "Next" : "Send answers"}
+        <button type="submit" ref={press} disabled={!ready(step()) || props.submitting || (step() === questions().length-1 && !props.connected)} class="ml-auto rounded-lg bg-accent hover:bg-accent-strong text-accent-foreground px-4 py-1.5 text-xs font-medium disabled:opacity-40 cursor-pointer disabled:cursor-default transition-colors">
+          {props.submitting ? "Sending…" : step() < questions().length-1 ? "Next" : questions().length === 1 ? "Send answer" : "Send answers"}
         </button>
       </div>
     </form>

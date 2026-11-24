@@ -1438,7 +1438,15 @@ func MechanicalBlockSummaryWithDigests(msgs []provider.Message, startIdx, endIdx
 		sb.WriteString("\n")
 	}
 	if len(ops.Modified) > 0 || len(ops.Read) > 0 {
-		sb.WriteString(fmt.Sprintf("- Touched %d modified file(s) and %d read file(s).\n", len(ops.Modified), len(ops.Read)))
+		modS := "s"
+		if len(ops.Modified) == 1 {
+			modS = ""
+		}
+		readS := "s"
+		if len(ops.Read) == 1 {
+			readS = ""
+		}
+		sb.WriteString(fmt.Sprintf("- Touched %d modified file%s and %d read file%s.\n", len(ops.Modified), modS, len(ops.Read), readS))
 	}
 	if len(checkpoints) == 0 && len(toolOrder) == 0 && len(ops.Modified) == 0 && len(ops.Read) == 0 {
 		sb.WriteString(fmt.Sprintf("- Processed %d conversation turns.\n", len(msgs)))

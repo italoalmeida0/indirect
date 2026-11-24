@@ -1607,7 +1607,7 @@ func (a *sessionActor) onStateTimeout(m stateTimeoutMsg) {
 		a.resolveMidTurnAttention()
 		a.clearPending()
 		a.setState(stateRunning)
-		a.emit(map[string]any{"type": "system_notice", "sessionId": a.id, "text": "User didn't respond in 15min — proceeding with recommended."})
+		a.emit(map[string]any{"type": "system_notice", "sessionId": a.id, "text": "No response after 15 min — proceeding with the recommended option."})
 		trace("actor.timeout", map[string]any{"sid": a.id, "kind": "question", "id": id})
 		a.wakeQuestion(id, rec)
 		a.emit(map[string]any{"type": "question_resolved", "sessionId": a.id, "questionId": id})
@@ -1615,7 +1615,7 @@ func (a *sessionActor) onStateTimeout(m stateTimeoutMsg) {
 		timeoutID := a.pending.id
 		a.clearPending()
 		trace("actor.timeout", map[string]any{"sid": a.id, "kind": "approval", "id": timeoutID})
-		a.emit(map[string]any{"type": "system_notice", "sessionId": a.id, "text": "Approval timed out after 15min — turn cancelled."})
+		a.emit(map[string]any{"type": "system_notice", "sessionId": a.id, "text": "Approval timed out after 15 min — turn canceled."})
 		// Approval timeout cancels the turn but keeps the queue intact.
 		// Do NOT drain the inbox here (B2): the timeout message was already
 		// delivered, so there is nothing to "requeue" — and the next slot
@@ -3509,7 +3509,7 @@ func (a *sessionActor) quarantine() {
 	a.setState(stateOrphaned)
 	a.pingChange()
 	a.emit(map[string]any{"type": "session_status", "hostId": a.hostID(), "sessionId": a.id, "status": "orphaned",
-		"error": "turn worker stuck: context ignored for ~2min; session quarantined, start a new turn to recover"})
+		"error": "Turn stopped responding — send a message to continue."})
 }
 
 func (a *sessionActor) doPassivate() {

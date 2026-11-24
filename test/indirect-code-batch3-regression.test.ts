@@ -52,7 +52,7 @@ describe("Batch 3 Bug Fixes & Regression Suite", () => {
 
     const pageSrc = readFileSync(join(root, "web/src/indirect-code/IndirectCodePage.tsx"), "utf-8");
     expect(pageSrc).toContain('case "notice":');
-    expect(pageSrc).toContain('msg.level === "warn"');
+    expect(pageSrc).toContain('level === "warn"');
   });
 
   test("BUG-R3-T3-06: CompactionBalloon strips raw markdown syntax from collapsed preview", () => {
@@ -106,9 +106,8 @@ describe("Batch 3 Bug Fixes & Regression Suite", () => {
     expect(jsSrc).toContain("truncation := truncateTail(text, defaultMaxLines, defaultMaxBytes)");
     expect(jsSrc).toContain('attrs = append(attrs, core.Attr{Key: "truncated", Value: "true"})');
 
-    const editSrc = readFileSync(join(root, "web/src/indirect-code/components/tool/ToolEditBodies.tsx"), "utf-8");
-    expect(editSrc).toContain("props.u.result?.toolDetails?.truncated");
-    expect(editSrc).toContain("Output truncated (showing last");
+    const envSrc = readFileSync(join(root, "web/src/indirect-code/utils/envelope.ts"), "utf-8");
+    expect(envSrc).toContain('a.truncated === "true"');
   });
 
   test("BUG-T3-12: Project row copy path action button in WorkspaceSidebar", () => {
@@ -123,7 +122,7 @@ describe("Batch 3 Bug Fixes & Regression Suite", () => {
     expect(settingsSrc).toContain('{ value: "high-contrast", label: "Contrast" }');
     expect(settingsSrc).toContain("for={props.id}");
     expect(settingsSrc).toContain("id={props.id}");
-    expect(settingsSrc).toContain('id="settings-auto-update"');
+    expect(settingsSrc).not.toContain('id="settings-auto-update"');
     expect(settingsSrc).toContain('for="settings-upstream-proxy"');
     expect(settingsSrc).toContain('id="settings-upstream-proxy"');
     expect(settingsSrc).toContain('id="settings-auto-title"');

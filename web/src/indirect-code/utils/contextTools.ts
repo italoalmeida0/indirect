@@ -495,6 +495,11 @@ export function parseSessionHistoryView(
           ? Number(foundHeader[1])
           : 0;
 
+  const cleanRawText = trimmed
+    .replace(/\s*Pass\s+`?include_live_tail\s*[:=]\s*true`?\s+to search the live transcript\.?/gi, "")
+    .replace(/\s*\(\d+\s+live-tail messages excluded;\s*set\s+`?include_live_tail\s*=\s*true`?\s+to include them\)\.?/gi, "")
+    .trim();
+
   return {
     action: "search",
     query: rawQuery,
@@ -503,7 +508,7 @@ export function parseSessionHistoryView(
     hitCount,
     hitCountKnown,
     hits,
-    rawText: trimmed,
+    rawText: cleanRawText,
   };
 }
 
@@ -549,10 +554,14 @@ export function parseExploreView(
     ? rawFocus.map((p: unknown) => String(p ?? "").trim()).filter(Boolean)
     : [];
 
-  const synthesis = String(rawOutput || "").trim();
-  const capNoteMatch = /\[Note:\s*explore reached its (\d+)-turn cap after (\d+) tool call\(s\)\.\]/i.exec(synthesis);
+  const rawSynthesis = String(rawOutput || "").trim();
+  const capNoteRe = /\s*\[Note:\s*explore reached its (\d+)-turn cap after (\d+) tool calls?(?:\(s\))?\.\]\s*$/i;
+  const capNoteMatch = capNoteRe.exec(rawSynthesis);
   const stoppedFallbackMatch =
-    /^Explore subagent stopped after (\d+) turn\(s\) and (\d+) read-only tool call\(s\)/m.exec(synthesis);
+    /^Explore subagent stopped after (\d+) turn(?:\(s\)|s?) and (\d+) read-only tool call(?:\(s\)|s?)/m.exec(rawSynthesis);
+  const synthesis = (capNoteMatch ? rawSynthesis.slice(0, capNoteMatch.index) : rawSynthesis)
+    .replace(/\s*\[\.{3}\s*explore synthesis truncated to [^\]]+\]\s*$/i, "")
+    .trim();
 
   const turns =
     parseFiniteInt(details?.turns ?? env.turns) ??
@@ -635,9 +644,14 @@ export function extractArrivalSpillInfo(
     return { spilled: false, cleanBody: text };
   }
 
-  const cleanBody = trailerMatch
+  const withoutTrailer = trailerMatch
     ? text.slice(0, trailerMatch.index).replace(/(?:\r?\n)+$/, "")
     : text;
+  const cleanBody = withoutTrailer
+    .replace(/(?:\r?\n)*--- \[(?:middle|tail):[^\]]+\] ---(?:\r?\n)*/g, "\n…\n")
+    .replace(/(?:\r?\n)*\.\.\. \(\d+ more diagnostic span(?:\(s\)|s?) in saved file\)(?:\r?\n)*/gi, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
 
   const fullPath = trailerMatch?.[1]?.trim() || undefined;
   const attrFile = typeof env?.spill_file === "string" ? env.spill_file.trim() : "";

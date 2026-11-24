@@ -17,6 +17,7 @@ export interface CompactionBalloonProps {
   compaction?: CompactionState | null;
   summary?: string;
   hasOlderAbove?: boolean;
+  defaultExpanded?: boolean;
 }
 
 const MAX_HEADER_FILES = 8;
@@ -264,8 +265,8 @@ function EraTimelineSection(props: {
     <div class="rounded-inner border border-border bg-surface overflow-hidden transition-colors">
       <button
         type="button"
+        ref={press}
         aria-expanded={props.open}
-        onPointerDown={(e) => press(e.currentTarget)}
         onClick={() => props.onToggle()}
         class="w-full flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 px-3 py-2 text-left hover:bg-surface-muted/60 transition-colors cursor-pointer min-w-0"
       >
@@ -281,18 +282,18 @@ function EraTimelineSection(props: {
           <span
             data-rc-tip={
               sourceIds().length > 0
-                ? `Tier ${props.block.tier} rollup merged from ${sourceIds().join(", ")}`
-                : `Tier ${props.block.tier} merged rollup`
+                ? `Merged from ${sourceIds().join(", ")}`
+                : "Merged summary"
             }
             class="inline-flex items-center gap-1 rounded-pill px-1.5 py-px text-2xs font-medium bg-accent-subtle text-accent border border-border-subtle shrink-0"
           >
-            Tier {props.block.tier} · Merged
+            Merged
           </span>
         </Show>
         <Show when={props.block.topic?.trim()}>
           <span
             data-rc-tip={props.block.topic}
-            class="text-[11px] font-medium text-fg truncate min-w-[6rem] flex-1"
+            class="text-xs font-medium text-fg truncate min-w-[6rem] flex-1"
           >
             {props.block.topic}
           </span>
@@ -414,7 +415,7 @@ function EraTimelineSection(props: {
 }
 
 export function CompactionBalloon(props: CompactionBalloonProps) {
-  const [expanded, setExpanded] = createSignal(false);
+  const [expanded, setExpanded] = createSignal(Boolean(props.defaultExpanded));
   const [copied, setCopied] = createSignal(false);
   const [eraOpenOverrides, setEraOpenOverrides] = createSignal<Record<string, boolean>>({});
 
@@ -453,12 +454,12 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
   const visualDigestTip = () => {
     const cap = learnedMaxImages();
     if (cap === 0) {
-      return "Upstream model is text-only · image pixels converted to searchable text digests";
+      return "Text-only model · images summarized as text";
     }
     if (cap !== null && cap > 0) {
-      return `Searchable visual digests cached · upstream live wire cap: ${cap} ${cap === 1 ? "image" : "images"}`;
+      return `Image summaries cached · max ${cap} live ${cap === 1 ? "image" : "images"}`;
     }
-    return "Past screenshots preserved as searchable text digests";
+    return "Earlier images preserved as text summaries";
   };
 
   const count = () => props.compaction?.count ?? 0;
@@ -516,7 +517,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
           class="mb-1.5 flex items-center justify-center gap-1.5 px-2 text-center text-2xs text-fg-muted"
         >
           <span>
-            Context boundary · earlier turns above are folded into eras and searchable via conversation history
+            Earlier turns above are summarized and remain searchable
           </span>
         </div>
       </Show>
@@ -525,35 +526,18 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
         <div class="h-px flex-1 bg-border" />
         <button
           type="button"
+          ref={press}
           aria-expanded={expanded()}
-          onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => setExpanded(!expanded())}
           class="inline-flex flex-wrap justify-center items-center gap-1.5 max-w-full rounded-pill border border-border bg-surface-subtle px-2.5 py-1 text-2xs text-fg-secondary hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
         >
           <Iconify icon="lucide:archive" size={11} class="text-fg-muted shrink-0" />
-          <span class="font-medium">Context Compacted</span>
-          <Show when={activeBlocks().length > 1}>
-            <span class="rounded-pill bg-accent-subtle px-1.5 py-px font-mono text-2xs text-accent tabular-nums">
-              {activeBlocks().length} eras
-            </span>
-          </Show>
+          <span class="font-medium">Context compacted</span>
           <Show when={count() > 0}>
             <span class="font-mono text-2xs text-fg-muted">#{count()}</span>
           </Show>
           <Show when={isSplitTurn()}>
-            <span class="text-2xs text-fg-muted">· Split Turn</span>
-          </Show>
-          <Show when={visualDigestCount() > 0}>
-            <span
-              data-compaction-visual-digests
-              data-rc-tip={visualDigestTip()}
-              class="inline-flex items-center gap-1 rounded-pill border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-secondary tabular-nums"
-            >
-              <Iconify icon="lucide:eye" size={11} class="text-accent shrink-0" />
-              <span>
-                {visualDigestCount()} {visualDigestCount() === 1 ? "visual digest" : "visual digests"} cached
-              </span>
-            </span>
+            <span class="text-2xs text-fg-muted">· Split turn</span>
           </Show>
           <Show when={hasUsage()}>
             <span class="hidden sm:inline font-mono text-2xs text-fg-muted tabular-nums">
@@ -584,14 +568,14 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono tabular-nums min-w-0">
               <Show
                 when={isEraMode()}
-                fallback={<span class="font-sans font-medium text-fg-secondary">Compacted context summary</span>}
+                fallback={<span class="font-sans font-medium text-fg-secondary">Compacted summary</span>}
               >
                 <span class="font-sans font-medium text-fg-secondary">
-                  {activeBlocks().length} {activeBlocks().length === 1 ? "era" : "eras"}
+                  {activeBlocks().length} {activeBlocks().length === 1 ? "summary" : "summaries"}
                 </span>
                 <Show when={retiredBlockCount() > 0}>
                   <span
-                    data-rc-tip={`${retiredBlockCount()} earlier Tier 1 ${retiredBlockCount() === 1 ? "block" : "blocks"} merged into Tier 2 rollups`}
+                    data-rc-tip={`${retiredBlockCount()} earlier ${retiredBlockCount() === 1 ? "summary" : "summaries"} merged`}
                     class="text-fg-muted"
                   >
                     ({retiredBlockCount()} merged)
@@ -600,16 +584,17 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
               </Show>
               <Show when={visualDigestCount() > 0}>
                 <span
+                  data-compaction-visual-digests
                   data-rc-tip={visualDigestTip()}
                   class="inline-flex items-center gap-1 font-sans text-fg-secondary"
                 >
                   <Iconify icon="lucide:eye" size={11} class="text-accent shrink-0" />
                   <span>
-                    {visualDigestCount()} {visualDigestCount() === 1 ? "visual digest" : "visual digests"} cached
+                    {visualDigestCount()} {visualDigestCount() === 1 ? "image" : "images"} summarized
                   </span>
                   <Show when={learnedMaxImages() !== null}>
                     <span class="font-mono text-fg-muted">
-                      ({learnedMaxImages() === 0 ? "text-only wire" : `wire cap ${learnedMaxImages()}`})
+                      ({learnedMaxImages() === 0 ? "text-only" : `max ${learnedMaxImages()} live`})
                     </span>
                   </Show>
                 </span>
@@ -627,20 +612,15 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
                   <span>${costUsd().toFixed(4)}</span>
                 </Show>
               </Show>
-              <Show when={!hasUsage() && hasBlockTokRatio()}>
-                <span>
-                  {compactTokens(totalRawTok())} → {compactTokens(totalBlockTok())}
-                </span>
-              </Show>
             </div>
 
             <div class="flex items-center gap-1 ml-auto shrink-0">
               <Show when={activeBlocks().length > 1}>
                 <button
                   type="button"
-                  onPointerDown={(e) => press(e.currentTarget)}
+                  ref={press}
                   onClick={toggleAllEras}
-                  data-rc-tip={allErasExpanded() ? "Collapse all eras" : "Expand all eras"}
+                  data-rc-tip={allErasExpanded() ? "Collapse all" : "Expand all"}
                   class="inline-flex items-center gap-1 rounded-inner px-1.5 py-0.5 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                 >
                   <Iconify
@@ -653,7 +633,7 @@ export function CompactionBalloon(props: CompactionBalloonProps) {
               <Show when={copyText()}>
                 <button
                   type="button"
-                  onPointerDown={(e) => press(e.currentTarget)}
+                  ref={press}
                   onClick={handleCopy}
                   class="inline-flex items-center gap-1 rounded-inner px-1.5 py-0.5 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
                   data-rc-tip={copied() ? "Copied" : "Copy summary"}

@@ -190,9 +190,11 @@ export function getThemeMode(): ThemeMode {
 }
 
 export function getTheme(): Theme {
-  if (document.documentElement.dataset.theme === "high-contrast") return "high-contrast";
-  if (document.documentElement.dataset.theme === "dark") return "dark";
-  if (document.documentElement.dataset.theme === "light") return "light";
+  if (typeof document !== "undefined") {
+    if (document.documentElement.dataset.theme === "high-contrast") return "high-contrast";
+    if (document.documentElement.dataset.theme === "dark") return "dark";
+    if (document.documentElement.dataset.theme === "light") return "light";
+  }
   // Unset (pre-init): resolve like the inline init script in index.html.
   try {
     const s = localStorage.getItem(THEME_KEY);
@@ -200,7 +202,7 @@ export function getTheme(): Theme {
     if (s === "dark") return "dark";
     if (s === "light") return "light";
   } catch {}
-  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return typeof window !== "undefined" && window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 const [theme, setThemeSignal] = createSignal<Theme>(getTheme());
@@ -860,10 +862,17 @@ export function Tooltip(props: {
 }
 
 export function Badge(props: {
-  tone: BadgeTone | LegacyTone;
+  tone?: BadgeTone | LegacyTone;
+  dot?: boolean;
+  size?: "sm" | "md";
+  class?: string;
   children: JSX.Element;
 }) {
-  return <DsBadge tone={props.tone}>{props.children}</DsBadge>;
+  return (
+    <DsBadge tone={props.tone} dot={props.dot} size={props.size} class={props.class}>
+      {props.children}
+    </DsBadge>
+  );
 }
 
 export function ModalSection(props: {

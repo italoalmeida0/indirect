@@ -49,10 +49,27 @@ export function Dialog(props: DialogProps) {
   const [inheritedDensity, setInheritedDensity] = createSignal<string | undefined>(undefined);
 
   const presence = createPresence(() => props.open, {
-    enter: (panel) => {
-      if (scrim) animate(scrim, { opacity: "1" }, { duration: motionTokens.duration.standard, ease: motionTokens.ease.enter }, { from: { opacity: "0" } });
-      animate(panel, { opacity: "1" }, { duration: motionTokens.duration.fast, ease: motionTokens.ease.enter }, { from: { opacity: "0" } });
-      return animate(panel, { transform: "none" }, motionTokens.spring.smooth, { from: { transform: "translateY(8px) scale(0.96)" } });
+    enter: (panel, reversing) => {
+      if (scrim) {
+        animate(
+          scrim,
+          { opacity: "1" },
+          { duration: motionTokens.duration.standard, ease: motionTokens.ease.enter },
+          reversing ? undefined : { from: { opacity: "0" } },
+        );
+      }
+      animate(
+        panel,
+        { opacity: "1" },
+        { duration: motionTokens.duration.fast, ease: motionTokens.ease.enter },
+        reversing ? undefined : { from: { opacity: "0" } },
+      );
+      return animate(
+        panel,
+        { transform: "none" },
+        motionTokens.spring.smooth,
+        reversing ? undefined : { from: { transform: "translateY(8px) scale(0.96)" } },
+      );
     },
     exit: (panel) => {
       if (scrim) animate(scrim, { opacity: "0" }, tween.exit);

@@ -347,6 +347,7 @@ describe("parseExploreView and parseHumanDurationMs", () => {
         duration_ms: 8420,
       },
     );
+    const cleanedSynthesis = "### Summary\nActor state is isolated per session.";
     expect(live).toEqual({
       task: "Trace how sessionActor drains control before inbox",
       focusPaths: ["cmd/daemon", "packages/agent"],
@@ -356,7 +357,7 @@ describe("parseExploreView and parseHumanDurationMs", () => {
       outputTokens: 1_850,
       durationMs: 8420,
       turnCapReached: true,
-      synthesis,
+      synthesis: cleanedSynthesis,
     });
 
     // Reloaded from disk (<tool_result ...attrs...>body</tool_result> only)
@@ -378,7 +379,7 @@ describe("parseExploreView and parseHumanDurationMs", () => {
     expect(reloaded.durationLabel).toBe("8.4s");
     expect(reloaded.durationMs).toBe(8400);
     expect(reloaded.turnCapReached).toBe(true);
-    expect(reloaded.synthesis).toBe(synthesis);
+    expect(reloaded.synthesis).toBe(cleanedSynthesis);
   });
 
   test("latestExploreProgress extracts the newest step from concatenated tool_progress chunks", () => {
@@ -439,7 +440,7 @@ describe("extractArrivalSpillInfo, formatSpillBytes, and footerFromAttrs", () =>
     });
   });
 
-  test("footerFromAttrs formats spilled brain fact cleanly and suppresses redundant truncated chip", () => {
+  test("footerFromAttrs formats spilled fact cleanly and suppresses redundant truncated chip", () => {
     expect(
       footerFromAttrs({
         exit: "0",
@@ -453,7 +454,7 @@ describe("extractArrivalSpillInfo, formatSpillBytes, and footerFromAttrs", () =>
       }),
     ).toEqual([
       { label: "exit 0", tone: "muted" },
-      { label: "saved full output (1,420 lines) to brain", tone: "muted" },
+      { label: "saved full output (1,420 lines)", tone: "muted" },
     ]);
 
     expect(
@@ -462,7 +463,7 @@ describe("extractArrivalSpillInfo, formatSpillBytes, and footerFromAttrs", () =>
         spilled: "true",
       }),
     ).toEqual([
-      { label: "saved full output to brain", tone: "muted" },
+      { label: "saved full output", tone: "muted" },
     ]);
 
     // Non-spilled truncated page still emits "page truncated"
@@ -577,9 +578,9 @@ describe("useToolUnitModel & normalizeSessionMessages integration", () => {
       expect(m.spill().bytes).toBe(92_160);
       expect(m.output()).toBe("PASS test/suite.test.ts");
       expect(m.terminal().output).toBe("PASS test/suite.test.ts");
+      // Dedicated ArrivalSpillBanner shows spill metadata, so footer suppresses the duplicate saved-full-output fact.
       expect(m.footer()).toEqual([
         { label: "exit 0", tone: "muted" },
-        { label: "saved full output (2,100 lines) to brain", tone: "muted" },
       ]);
       dispose();
     });
@@ -621,7 +622,7 @@ describe("Context tool SolidJS component invariants & bundle compilation", () =>
     expect(headerSrc).toContain("data-explore-step");
     expect(balloonSrc).toContain("data-compaction-boundary-caption");
     expect(balloonSrc).toContain(
-      "Context boundary · earlier turns above are folded into eras and searchable via",
+      "Earlier turns above are summarized and remain searchable",
     );
   });
 

@@ -16,9 +16,7 @@ export function MsgIconBtn(props: {
   return (
     <button
       type="button"
-      onPointerDown={(e) => {
-        if (!props.disabled) press(e.currentTarget);
-      }}
+      ref={press}
       onClick={props.onClick}
       disabled={props.disabled}
       class={
@@ -47,7 +45,7 @@ export interface MsgActionState {
 export function UserMsgActions(props: MsgActionState & { onEdit: () => void }) {
   return (
     <div class="rc-message-actions flex items-center gap-0.5 -mr-1.5 mt-1 transition-opacity">
-      <MsgIconBtn tip="Fork conversation from here" icon="lucide:git-branch" disabled={props.forking || !props.canFork} onClick={props.onFork} />
+      <MsgIconBtn tip="Fork conversation from here" icon="lucide:git-branch" compact disabled={props.forking || !props.canFork} onClick={props.onFork} />
       <Show when={props.showCopy}>
         <MsgIconBtn tip="Copy" icon="lucide:copy" compact copied={props.copied} onClick={props.onCopy} />
       </Show>

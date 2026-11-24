@@ -69,31 +69,67 @@ export function sanitizeUserText(text: string): string {
   return res;
 }
 
-/** Strips a leading <system-reminder>...</system-reminder>, <system_prompt>...</system_prompt>,
- * or <system-warn>...</system-warn> block from a user message so the chat UI displays only the user's actual text. */
+/** Strips all stacked leading <system-reminder>...</system-reminder>, <system_prompt>...</system_prompt>,
+ * or <system-warn>...</system-warn> blocks from a user message so the chat UI displays only the user's actual text. */
 export function stripLeadingSystemPrompt(text: string): string {
-  const trimmed = text.trim();
-  for (const tag of ["<system-reminder>", "<system_prompt>", "<system-warn>"]) {
-    const closeTag = tag.replace("<", "</");
-    if (trimmed.startsWith(tag)) {
-      const endIdx = trimmed.indexOf(closeTag);
-      if (endIdx !== -1) {
-        return trimmed.slice(endIdx + closeTag.length).trim();
+  let cur = text;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const trimmed = cur.trim();
+    for (const tag of ["<system-reminder>", "<system_prompt>", "<system-warn>"]) {
+      const closeTag = tag.replace("<", "</");
+      if (trimmed.startsWith(tag)) {
+        const endIdx = trimmed.indexOf(closeTag);
+        if (endIdx !== -1) {
+          cur = trimmed.slice(endIdx + closeTag.length).trim();
+          changed = true;
+          break;
+        }
       }
     }
   }
-  return text;
+  return cur;
+}
+
+/** True when a tool_result payload is a daemon summary-gate refusal meant solely for the model. */
+export function isSummaryGateToolResult(text?: string | null): boolean {
+  if (!text) return false;
+  const stripped = text.replace(/^<tool_result\b[^>]*>/i, "").replace(/<\/tool_result>\s*$/i, "").trim();
+  return stripped.startsWith(SUMMARY_GATE_BLOCK_PREFIX);
 }
 
 export function withoutContinueNudges(messages: ChatMessage[]): ChatMessage[] {
-  return messages.filter((m) => {
-    if (m.role !== "user") return true;
-    const text = m.blocks
-      .filter((b) => b.type === "text")
-      .map((b) => b.text ?? "")
-      .join("");
-    return !isSyntheticNudge(text);
-  });
+  const blockedCallIds = new Set<string>();
+  for (const m of messages) {
+    for (const b of m.blocks) {
+      if (b.type === "tool_result" && b.toolId && isSummaryGateToolResult(b.toolResult)) {
+        blockedCallIds.add(b.toolId);
+      }
+    }
+  }
+  return messages
+    .filter((m) => {
+      if (m.role !== "user") return true;
+      const text = m.blocks
+        .filter((b) => b.type === "text")
+        .map((b) => b.text ?? "")
+        .join("");
+      return !isSyntheticNudge(text);
+    })
+    .map((m) => {
+      if (blockedCallIds.size === 0) return m;
+      const nextBlocks = m.blocks.filter(
+        (b) =>
+          !(
+            (b.type === "tool_call" || b.type === "tool_result") &&
+            b.toolId &&
+            blockedCallIds.has(b.toolId)
+          ),
+      );
+      return nextBlocks.length === m.blocks.length ? m : { ...m, blocks: nextBlocks };
+    })
+    .filter((m) => m.blocks.length > 0 || m.streaming);
 }
 interface TodoActivityPassthroughEntry {
   kind: "passthrough";

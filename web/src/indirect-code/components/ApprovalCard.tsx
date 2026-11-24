@@ -84,6 +84,54 @@ function resolveFallbackTarget(args: Record<string, unknown>): string {
   );
 }
 
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  exec_script: "JavaScript",
+  search_web: "Web search",
+  web_search: "Web search",
+  fetch_url: "Fetch URL",
+  bg_await: "Wait",
+  bg_cancel: "Stop task",
+  use_skill: "Load skill",
+};
+
+const SHOWN_ARG_KEYS: Record<string, Set<string>> = {
+  bash: new Set(["command", "description"]),
+  exec_script: new Set(["code", "script", "work_dir", "env", "stdin", "legacy_lang"]),
+  python: new Set(["code", "script", "work_dir", "env", "stdin", "legacy_lang"]),
+  read: new Set(["path", "offset", "limit"]),
+  write: new Set(["path", "content"]),
+  edit: new Set(["path", "edits", "old_text", "new_text", "old_string", "new_string", "old", "new"]),
+  glob: new Set(["pattern", "path"]),
+  bg_await: new Set(["max_wait_seconds", "reason"]),
+  bg_cancel: new Set(["job_id"]),
+  todo: new Set(["items", "todos"]),
+  todowrite: new Set(["items", "todos"]),
+};
+
+function displayToolName(tool: string): string {
+  return TOOL_DISPLAY_NAMES[tool] ?? tool;
+}
+
+function hasUnshownArgs(
+  name: string,
+  rawArgs: Record<string, unknown>,
+  rawStr: string | undefined,
+  fallbackTarget: string,
+): boolean {
+  const keys = Object.keys(rawArgs);
+  if (keys.length === 0) {
+    return Boolean(rawStr?.trim() && rawStr.trim() !== "{}");
+  }
+  const shown = SHOWN_ARG_KEYS[name];
+  if (shown) {
+    return keys.some((k) => !shown.has(k));
+  }
+  if (fallbackTarget && keys.length === 1 && scalarText(rawArgs[keys[0]!]) === fallbackTarget) {
+    return false;
+  }
+  return true;
+}
+
 function tipIfLong(text: string, min = 48): string | undefined {
   return text.length > min ? text : undefined;
 }
@@ -183,9 +231,9 @@ export function ApprovalCard(props: ApprovalCardProps) {
           "todowrite",
         ].includes(name);
         const fallbackTarget = !isDedicatedTool ? resolveFallbackTarget(rawArgs) : "";
-        const hasRawArgs =
-          Object.keys(rawArgs).length > 0 ||
-          Boolean(pa.args?.trim() && pa.args.trim() !== "{}");
+        const toolLabel = displayToolName(name);
+        const isMappedToolName = Boolean(TOOL_DISPLAY_NAMES[name]);
+        const showRawArgs = hasUnshownArgs(name, rawArgs, pa.args, fallbackTarget);
         const formattedArgs = (() => {
           if (Object.keys(rawArgs).length > 0) {
             try {
@@ -199,6 +247,19 @@ export function ApprovalCard(props: ApprovalCardProps) {
         const isHighRisk = pa.risk === "high";
         const effectiveAccess: "ask" | "auto" =
           pa.accessMode ?? (props.accessMode?.() === "auto" ? "auto" : "ask");
+        const autoBadgeLabel = (() => {
+          const lowerReason = (pa.reason || "").toLowerCase();
+          if (
+            (pa.capability === "fs_read" || pa.capability === "fs_write") &&
+            !lowerReason.includes("secret") &&
+            !lowerReason.includes("credential") &&
+            !lowerReason.includes("protected") &&
+            !lowerReason.includes(".env")
+          ) {
+            return "Auto · Outside workspace";
+          }
+          return "Auto";
+        })();
         const headerIcon =
           isHighRisk
             ? "lucide:shield-alert"
@@ -253,10 +314,12 @@ export function ApprovalCard(props: ApprovalCardProps) {
                   </span>
                 </Show>
                 <span
-                  class="inline-flex items-center rounded-inner border border-border bg-surface px-1.5 py-0.5 font-mono text-2xs leading-tight text-fg-secondary min-w-0 max-w-28 sm:max-w-48 truncate"
-                  data-rc-tip={tipIfLong(name, 32)}
+                  class={`inline-flex items-center rounded-inner border border-border bg-surface px-1.5 py-0.5 text-2xs leading-tight text-fg-secondary min-w-0 max-w-28 sm:max-w-48 truncate ${
+                    isMappedToolName ? "font-medium" : "font-mono"
+                  }`}
+                  data-rc-tip={isMappedToolName ? name : tipIfLong(name, 32)}
                 >
-                  {name}
+                  {toolLabel}
                 </span>
                 <Show
                   when={isHighRisk}
@@ -270,7 +333,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                         >
                           <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" aria-hidden="true" />
                           <span class="sm:hidden">Ask</span>
-                          <span class="hidden sm:inline">Supervised · Ask</span>
+                          <span class="hidden sm:inline">Ask for approval</span>
                         </span>
                       }
                     >
@@ -280,7 +343,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       >
                         <span class="h-1.5 w-1.5 rounded-full bg-accent shrink-0" aria-hidden="true" />
                         <span class="sm:hidden">Auto</span>
-                        <span class="hidden sm:inline">Auto · Boundary check</span>
+                        <span class="hidden sm:inline">{autoBadgeLabel}</span>
                       </span>
                     </Show>
                   }
@@ -369,9 +432,6 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       {bashCmd}
                     </pre>
                   </Show>
-                  <p class="text-2xs text-fg-muted">
-                    Moves to the background automatically after 10s.
-                  </p>
                 </Show>
 
                 <Show when={name === "exec_script" || name === "python"}>
@@ -418,11 +478,11 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       </Show>
                     </div>
                   </Show>
-                  <p class="text-2xs text-fg-muted">
-                    {isUnsupportedLegacyPython
-                      ? "Legacy Python execution was removed. Deny so the agent rewrites the snippet as JavaScript."
-                      : "Moves to the background automatically after 10s."}
-                  </p>
+                  <Show when={isUnsupportedLegacyPython}>
+                    <p class="text-2xs text-fg-muted">
+                      Legacy Python execution was removed. Deny so the agent rewrites the snippet as JavaScript.
+                    </p>
+                  </Show>
                 </Show>
 
                 <Show when={name === "bg_await"}>
@@ -687,7 +747,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                     >
                       <FileIcon path={String(rawArgs.path)} size={14} />
                     </Show>
-                    <span class="font-mono text-fg shrink-0">{name}</span>
+                    <span class={isMappedToolName ? "font-medium text-fg shrink-0" : "font-mono text-fg shrink-0"}>{toolLabel}</span>
                     <Show when={fallbackTarget}>
                       <span
                         class="font-mono text-fg-secondary truncate min-w-0"
@@ -700,7 +760,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                 </Show>
               </div>
 
-              <Show when={hasRawArgs}>
+              <Show when={showRawArgs}>
                 <details class="group border-t border-border-subtle">
                   <summary class="list-none [&::-webkit-details-marker]:hidden px-3.5 py-1.5 flex items-center gap-1.5 text-2xs text-fg-muted hover:text-fg-secondary cursor-pointer select-none transition-colors">
                     <Iconify
@@ -725,8 +785,8 @@ export function ApprovalCard(props: ApprovalCardProps) {
               >
                 <button
                   type="button"
+                  ref={press}
                   data-action="approval-deny"
-                  onPointerDown={(e) => press(e.currentTarget)}
                   onClick={() => props.respondApproval("deny")}
                   class={`inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg-secondary hover:border-danger/35 hover:bg-danger-subtle hover:text-danger transition-colors cursor-pointer ${
                     showScopedButtons ? "sm:mr-auto" : ""
@@ -737,10 +797,10 @@ export function ApprovalCard(props: ApprovalCardProps) {
                 <Show when={showAllowAlways}>
                   <button
                     type="button"
+                    ref={press}
                     data-action="approval-always"
-                    data-rc-tip="Save global allow rule in Settings -> Permissions"
+                    data-rc-tip="Save global allow rule in Settings → Permissions"
                     aria-label="Always allow"
-                    onPointerDown={(e) => press(e.currentTarget)}
                     onClick={() => props.respondApproval("always")}
                     class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg-secondary hover:border-border-strong hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
                   >
@@ -750,10 +810,10 @@ export function ApprovalCard(props: ApprovalCardProps) {
                 <Show when={showAllowSession}>
                   <button
                     type="button"
+                    ref={press}
                     data-action="approval-session"
                     data-rc-tip="Allow matching requests in this conversation only"
                     aria-label="Allow for session"
-                    onPointerDown={(e) => press(e.currentTarget)}
                     onClick={() => props.respondApproval("session")}
                     class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-3 py-1 min-h-7 text-xs font-medium text-fg hover:border-border-strong hover:bg-surface-muted transition-colors cursor-pointer"
                   >
@@ -763,8 +823,8 @@ export function ApprovalCard(props: ApprovalCardProps) {
                 <Show when={!isUnsupportedLegacyPython}>
                   <button
                     type="button"
+                    ref={press}
                     data-action="approval-once"
-                    onPointerDown={(e) => press(e.currentTarget)}
                     onClick={() => props.respondApproval("once")}
                     class={`inline-flex items-center justify-center rounded-lg bg-fg text-background hover:opacity-90 px-3.5 py-1 min-h-7 text-xs font-medium transition-opacity cursor-pointer ${
                       showScopedButtons && totalButtons === 3

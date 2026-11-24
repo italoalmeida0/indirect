@@ -301,7 +301,7 @@ func (t *WidgetSetTool) Execute(ctx context.Context, raw json.RawMessage, progre
 	if res.Skipped {
 		verdict = "lint skipped"
 	} else if !res.OK {
-		verdict = fmt.Sprintf("LINT FAILED (%d error(s))", len(res.Errors))
+		verdict = fmt.Sprintf("LINT FAILED (%d error%s)", len(res.Errors), pluralS(len(res.Errors)))
 	}
 	lintText := renderWidgetLintText(res, a.ID)
 	attrs := []core.Attr{
@@ -411,7 +411,7 @@ func (t *WidgetListTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		if f.Placeholder != "" {
 			ph = fmt.Sprintf(", %q", f.Placeholder)
 		}
-		fmt.Fprintf(&b, "  %s (%s, %d lines%s%s)\n", f.ID, humanBytes(int64(len(f.Source))), lines, ph, mtime)
+		fmt.Fprintf(&b, "  %s (%s, %d line%s%s%s)\n", f.ID, humanBytes(int64(len(f.Source))), lines, pluralS(lines), ph, mtime)
 	}
 	attrs := []core.Attr{{Key: "total", Value: fmt.Sprintf("%d", len(files))}}
 	if len(files) == 0 {
@@ -472,7 +472,7 @@ func (t *WidgetLintTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		{Key: "ok", Value: fmt.Sprintf("%t", res.OK || res.Skipped)},
 	}
 	if !res.OK && !res.Skipped {
-		attrs = append(attrs, core.Attr{Key: "warning", Value: fmt.Sprintf("lint failed (%d error(s))", len(res.Errors))})
+		attrs = append(attrs, core.Attr{Key: "warning", Value: fmt.Sprintf("lint failed (%d error%s)", len(res.Errors), pluralS(len(res.Errors)))})
 	}
 	return core.ToolResult{
 		Content: []provider.Content{provider.TextBlock{Text: text}},
@@ -687,7 +687,7 @@ func (t *WidgetEditTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	}
 	return core.ToolResult{
 		Attrs: []core.Attr{
-			{Key: "info", Value: fmt.Sprintf("Successfully replaced %d block(s) in %s.", len(a.Edits), a.ID)},
+			{Key: "info", Value: fmt.Sprintf("Successfully replaced %d block%s in %s.", len(a.Edits), pluralS(len(a.Edits)), a.ID)},
 			{Key: "path", Value: a.ID},
 			{Key: "edits", Value: fmt.Sprintf("%d", len(a.Edits))},
 		},

@@ -141,7 +141,7 @@ func (t *SearchWebTool) search(ctx context.Context, query string, count, offset 
 		return "", false, nil, err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d result%s for %q\n", len(results), plural(len(results)), query)
+	fmt.Fprintf(&b, "%d result%s for %q\n", len(results), pluralS(len(results)), query)
 	for i, r := range results {
 		fmt.Fprintf(&b, "\n%d. %s\n   %s\n", i+1, r.Title, r.URL)
 		if r.Snippet != "" {

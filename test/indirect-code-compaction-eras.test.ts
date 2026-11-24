@@ -467,9 +467,9 @@ describe("Compaction summary sanitization, failed command formatting, and E2E DO
 
   test("preserves E2E collapsed pill label and timeline badges in CompactionBalloon.tsx", () => {
     const src = readFileSync(balloonFilePath, "utf8");
-    expect(src).toContain("Context Compacted");
-    expect(src).toContain("· Split Turn");
-    expect(src).toContain("Tier {props.block.tier} · Merged");
+    expect(src).toContain("Context compacted");
+    expect(src).toContain("· Split turn");
+    expect(src).toContain("Merged");
     expect(src).toContain("msgs #{props.block.startIdx}–#{props.block.endIdx}");
   });
 });

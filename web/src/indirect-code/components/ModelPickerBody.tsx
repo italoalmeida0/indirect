@@ -201,17 +201,28 @@ export function ModelPickerBody(props: {
   setFilter: (v: string) => void;
   activeModelId: () => string;
   onPick: (id: string) => void;
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
   onBackToEffort?: () => void;
   autoFocus?: boolean;
 }) {
   const [selectedProvider, setSelectedProvider] = createSignal<string>("all");
   const [highlightedId, setHighlightedId] = createSignal<string | null>(null);
+  const [refreshing, setRefreshing] = createSignal(false);
   const [canScrollLeft, setCanScrollLeft] = createSignal(false);
   const [canScrollRight, setCanScrollRight] = createSignal(false);
   let listRef: HTMLDivElement | undefined;
   let providerStripRef: HTMLDivElement | undefined;
   let providerContentRef: HTMLDivElement | undefined;
+
+  const handleRefresh = async () => {
+    if (refreshing()) return;
+    setRefreshing(true);
+    try {
+      await props.onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const updateScrollBounds = () => {
     const el = providerStripRef;
@@ -300,6 +311,14 @@ export function ModelPickerBody(props: {
 
   const allProviderGroups = createMemo(() => groupModelsByProvider(props.models()));
   const hasMultipleProviders = createMemo(() => allProviderGroups().length >= 2);
+  const isFiltering = createMemo(() => props.filter().trim().length > 0);
+  const filteredCountByProvider = createMemo(() => {
+    const counts = new Map<string, number>();
+    for (const g of groupModelsByProvider(props.filtered())) {
+      counts.set(g.provider, g.models.length);
+    }
+    return counts;
+  });
   const effectiveProvider = createMemo(() => {
     const picked = selectedProvider();
     if (picked === "all") return "all";
@@ -348,10 +367,10 @@ export function ModelPickerBody(props: {
         <Show when={props.onBackToEffort}>
           <button
             type="button"
+            ref={press}
             aria-label="Back to effort"
             data-rc-tip="Back to effort"
             onMouseDown={(e) => e.preventDefault()}
-            onPointerDown={(e) => press(e.currentTarget)}
             onClick={(e) => {
               e.stopPropagation();
               props.onBackToEffort?.();
@@ -435,14 +454,15 @@ export function ModelPickerBody(props: {
         <span class="h-3.5 w-px bg-border-subtle shrink-0" aria-hidden="true" />
         <button
           type="button"
+          ref={press}
+          disabled={refreshing()}
           onMouseDown={(e) => e.preventDefault()}
-          onPointerDown={(e) => press(e.currentTarget)}
-          onClick={props.onRefresh}
-          class="p-1 rounded-md shrink-0 -mr-1 text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
+          onClick={() => void handleRefresh()}
+          class="p-1 rounded-md shrink-0 -mr-1 text-fg-muted hover:text-fg hover:bg-surface-muted disabled:opacity-60 disabled:cursor-default transition-colors cursor-pointer"
           data-rc-tip="Refresh models"
           aria-label="Refresh models"
         >
-          <Iconify icon="lucide:refresh-cw" size={12} />
+          <Iconify icon="lucide:refresh-cw" size={12} class={refreshing() ? "animate-spin text-accent" : undefined} />
         </button>
       </div>
 
@@ -497,9 +517,9 @@ export function ModelPickerBody(props: {
             >
               <button
                 type="button"
+                ref={press}
                 aria-pressed={effectiveProvider() === "all"}
                 onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={(e) => press(e.currentTarget)}
                 onClick={(e) => {
                   setSelectedProvider("all");
                   e.currentTarget.scrollIntoView?.({
@@ -516,18 +536,20 @@ export function ModelPickerBody(props: {
               >
                 <span>All</span>
                 <span class={`font-mono text-2xs tabular-nums ${effectiveProvider() === "all" ? "text-accent" : "text-fg-muted"}`}>
-                  {props.models().length}
+                  {isFiltering() ? props.filtered().length : props.models().length}
                 </span>
               </button>
               <For each={allProviderGroups()}>
                 {(g) => {
                   const activeChip = () => effectiveProvider() === g.provider;
+                  const chipCount = () =>
+                    isFiltering() ? (filteredCountByProvider().get(g.provider) ?? 0) : g.models.length;
                   return (
                     <button
                       type="button"
+                      ref={press}
                       aria-pressed={activeChip()}
                       onMouseDown={(e) => e.preventDefault()}
-                      onPointerDown={(e) => press(e.currentTarget)}
                       onClick={(e) => {
                         setSelectedProvider(activeChip() ? "all" : g.provider);
                         e.currentTarget.scrollIntoView?.({
@@ -540,11 +562,11 @@ export function ModelPickerBody(props: {
                         activeChip()
                           ? "border-accent/35 bg-accent-subtle text-fg"
                           : "border-border bg-surface-subtle text-fg-muted hover:text-fg hover:bg-surface-muted"
-                      }`}
+                      } ${isFiltering() && chipCount() === 0 && !activeChip() ? "opacity-50" : ""}`}
                     >
                       <span class="max-w-[110px] truncate">{g.provider}</span>
                       <span class={`font-mono text-2xs tabular-nums ${activeChip() ? "text-accent" : "text-fg-muted"}`}>
-                        {g.models.length}
+                        {chipCount()}
                       </span>
                     </button>
                   );
@@ -643,7 +665,7 @@ export function ModelPickerBody(props: {
             each={groups()}
             fallback={
               <div class="px-2.5 py-4 text-xs text-fg-muted text-center">
-                {props.models().length ? "No models match." : "No compatible models configured in the gateway."}
+                {props.models().length ? "No models match." : "No compatible models available."}
               </div>
             }
           >
@@ -670,10 +692,10 @@ export function ModelPickerBody(props: {
                       return (
                         <button
                           type="button"
+                          ref={press}
                           data-model-row={m.id}
                           data-highlighted={highlighted() ? "1" : undefined}
                           onPointerEnter={() => setHighlightedId(m.id)}
-                          onPointerDown={(e) => press(e.currentTarget)}
                           onClick={() => props.onPick(m.id)}
                           class={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between gap-3 cursor-pointer transition-colors ${
                             active()
@@ -696,7 +718,7 @@ export function ModelPickerBody(props: {
                           <span class="shrink-0 flex items-center gap-2">
                             <Show when={(m.context ?? 0) > 0}>
                               <span class="font-mono text-2xs text-fg-muted tabular-nums">
-                                {compactTokens(m.context ?? 0)}
+                                {compactTokens(m.context ?? 0)} ctx
                               </span>
                             </Show>
                             <span class="w-3.5 flex items-center justify-end shrink-0">

@@ -98,8 +98,8 @@ export function ToolUnitHeader(props: ToolPartProps) {
     >
       <button
         type="button"
+        ref={press}
         aria-expanded={props.m.open()}
-        onPointerDown={(e) => press(e.currentTarget)}
         onClick={props.m.toggle}
         class="group/tool flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 py-0.5 items-center gap-1.5 rounded-md text-left text-xs cursor-pointer hover:bg-surface-muted/60 transition-colors"
       >

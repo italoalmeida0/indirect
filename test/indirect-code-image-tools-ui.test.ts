@@ -84,7 +84,7 @@ describe("Image read detection, formatting, and toolSummary", () => {
     // 1. Running / pending image read before result arrives
     expect(toolSummary(mkReadUnit({ path: "docs/dashboard-4k.png" }))).toEqual({
       icon: "lucide:image",
-      verb: "Analyzed",
+      verb: "Reading",
       target: "dashboard-4k.png",
     });
 
@@ -112,7 +112,7 @@ describe("Image read detection, formatting, and toolSummary", () => {
       ),
     ).toEqual({
       icon: "lucide:image",
-      verb: "Analyzed",
+      verb: "Read",
       target: "dashboard-4k.png",
       stat: "1568×882 · 142 KB",
     });
@@ -125,7 +125,7 @@ describe("Image read detection, formatting, and toolSummary", () => {
       `Read image file [image/jpeg]\n[Image resized from 3840x2160 to 1568x882]</tool_result>`;
     expect(toolSummary(mkReadUnit({ path: "docs/dashboard-4k.png" }, { text: walEnvelope }))).toEqual({
       icon: "lucide:image",
-      verb: "Analyzed",
+      verb: "Read",
       target: "dashboard-4k.png",
       stat: "1568×882 · 142 KB",
     });
@@ -140,7 +140,7 @@ describe("Image read detection, formatting, and toolSummary", () => {
       ),
     ).toEqual({
       icon: "lucide:image",
-      verb: "Analyzed",
+      verb: "Read",
       target: "wide.png",
       stat: "3840×2160 → 1568×882",
     });
@@ -152,7 +152,7 @@ describe("Image read detection, formatting, and toolSummary", () => {
       ),
     ).toEqual({
       icon: "lucide:image",
-      verb: "Analyzed",
+      verb: "Read",
       target: "icon.png",
       stat: "PNG",
     });
@@ -170,7 +170,7 @@ describe("Image read detection, formatting, and toolSummary", () => {
       ),
     ).toEqual({
       icon: "lucide:image",
-      verb: "Analyzed",
+      verb: "Read",
       target: "missing.webp",
     });
 
@@ -187,7 +187,7 @@ describe("Image read detection, formatting, and toolSummary", () => {
       ),
     ).toEqual({
       icon: "lucide:file-text",
-      verb: "Analyzed",
+      verb: "Read",
       target: "read.go#L85-94",
     });
 
@@ -349,9 +349,8 @@ describe("useToolUnitModel.imageReadDetails & WAL durability", () => {
     expect(legacyParsed?.origWidth).toBe(3000);
     expect(legacyParsed?.width).toBe(1500);
     expect(legacyParsed?.previewDataUrl).toBeUndefined();
-    expect(legacyParsed?.hints).toEqual([
-      "Multiply coordinates by 2.00 to map to original image.",
-    ]);
+    // AI-only coordinate multiplier instructions are stripped from user-facing hints.
+    expect(legacyParsed?.hints).toEqual([]);
 
     // Error state and non-image read return undefined
     const errored = evalModel(
@@ -419,7 +418,7 @@ describe("SSR <ToolBody> ImageReadCard & <CompactionBalloon> visual digest chip"
                 }
 
                 export function renderCompactionBalloonSsr(compaction) {
-                  return renderToString(() => <CompactionBalloon compaction={compaction} />);
+                  return renderToString(() => <CompactionBalloon compaction={compaction} defaultExpanded />);
                 }
               `;
               const transformed = await transformAsync(entryCode, {
@@ -698,7 +697,7 @@ describe("SSR <ToolBody> ImageReadCard & <CompactionBalloon> visual digest chip"
     expect(resolveCompactionViewModel(singleDigestState).visualDigestCount).toBe(1);
     const htmlSingle = renderCompactionBalloonSsr(singleDigestState);
     expect(htmlSingle).toContain("data-compaction-visual-digests");
-    expect(htmlSingle).toContain("1 visual digest cached");
+    expect(htmlSingle).toContain("1 image summarized");
 
     const multiDigestState: CompactionState = {
       previousSummary: "## Goal\nMulti-image audit.",
@@ -722,8 +721,8 @@ describe("SSR <ToolBody> ImageReadCard & <CompactionBalloon> visual digest chip"
     expect(multiVm.learnedMaxImages).toBe(2);
     const htmlMulti = renderCompactionBalloonSsr(multiDigestState);
     expect(htmlMulti).toContain("data-compaction-visual-digests");
-    expect(htmlMulti).toContain("4 visual digests cached");
-    expect(htmlMulti).toContain("wire cap: 2 images");
+    expect(htmlMulti).toContain("4 images summarized");
+    expect(htmlMulti).toContain("max 2 live");
 
     const evictedOnlyState: CompactionState = {
       previousSummary: "## Goal\nShed wire images.",
@@ -735,7 +734,7 @@ describe("SSR <ToolBody> ImageReadCard & <CompactionBalloon> visual digest chip"
     };
     expect(resolveCompactionViewModel(evictedOnlyState).visualDigestCount).toBe(2);
     const htmlEvicted = renderCompactionBalloonSsr(evictedOnlyState);
-    expect(htmlEvicted).toContain("2 visual digests cached");
+    expect(htmlEvicted).toContain("2 images summarized");
     expect(htmlEvicted).toContain("text-only");
 
     // Lightweight daemon WS projection (imageDigestCount / evictedImageCount without raw maps)
@@ -752,8 +751,8 @@ describe("SSR <ToolBody> ImageReadCard & <CompactionBalloon> visual digest chip"
     expect(wireVm.evictedImageCount).toBe(3);
     expect(wireVm.learnedMaxImages).toBe(2);
     const htmlWireCount = renderCompactionBalloonSsr(wireCountState);
-    expect(htmlWireCount).toContain("5 visual digests cached");
-    expect(htmlWireCount).toContain("wire cap: 2 images");
+    expect(htmlWireCount).toContain("5 images summarized");
+    expect(htmlWireCount).toContain("max 2 live");
   });
 
   test("preserves live preview_data_url across snapshot reconciliations, drops it on reload, and ignores raw ImageBlock in tool_result", () => {

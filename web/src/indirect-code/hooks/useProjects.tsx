@@ -64,17 +64,22 @@ export function createProjects(opts: {
   const [folderCurrent, setFolderCurrent] = createSignal("");
   const [folderLoading, setFolderLoading] = createSignal(false);
   const [folderError, setFolderError] = createSignal("");
+  const [creatingProject, setCreatingProject] = createSignal(false);
   const [folderNavStack, setFolderNavStack] = createSignal<string[]>([]);
   let pendingFolderPrev: string | null = null;
   let folderRequestId = "";
   let requestedPath = "";
   let projectCreationId = "";
+  let projectCreateTimer: ReturnType<typeof setTimeout> | undefined;
   const [pendingProjectId, setPendingProjectId] = createSignal("");
 
   createEffect(() => {
     if (!showNewProjectModal()) {
       setFolderNavStack([]);
       pendingFolderPrev = null;
+      clearTimeout(projectCreateTimer);
+      projectCreateTimer = undefined;
+      setCreatingProject(false);
     }
   });
 
@@ -143,6 +148,7 @@ export function createProjects(opts: {
     requestFolders(activeProject()?.path || "~");
   }
   function createProject() {
+    if (creatingProject()) return;
     const reportError = (msg: string) => {
       if (showNewProjectModal()) setFolderError(msg);
       else opts.toast(msg, "err");
@@ -162,6 +168,11 @@ export function createProjects(opts: {
       return;
     }
     setFolderError("");
+    setCreatingProject(true);
+    clearTimeout(projectCreateTimer);
+    projectCreateTimer = setTimeout(() => {
+      setCreatingProject(false);
+    }, 15000);
     // Daemon is the source of truth; ack arrives as project_created.
     projectCreationId = crypto.randomUUID();
     opts.send({ type: "create_project", path: rawPath, requestId: projectCreationId });
@@ -229,6 +240,9 @@ export function createProjects(opts: {
   /** project_created event; returns the project when it matches our ack. */
   function noteProjectCreated(msg: ProjectCreatedEvent): { id: string; name?: string } | null {
     if (msg.requestId !== projectCreationId) return null;
+    clearTimeout(projectCreateTimer);
+    projectCreateTimer = undefined;
+    setCreatingProject(false);
     const p = msg.project;
     if (!p?.id) return null;
     setShowNewProjectModal(false);
@@ -338,6 +352,9 @@ export function createProjects(opts: {
     })(),
   );
   function setSidebarView(v: "projects" | "talk") {
+    if (v !== sidebarView() && selectionMode()) {
+      setSelectedSessions(new Set<string>());
+    }
     setSidebarViewSignal(v);
     try { localStorage.setItem("llmgw-rc-sidebar-view", v); } catch {}
   }
@@ -359,25 +376,39 @@ export function createProjects(opts: {
     return !s.title.toLowerCase().includes(q) && s.cwd.toLowerCase().includes(q);
   }
   const [searchResults, setSearchResults] = createSignal<import("../viewTypes").SearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = createSignal(false);
   let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let searchLoadingTimer: ReturnType<typeof setTimeout> | null = null;
   let searchSeq = 0;
   let latestSearchReqId = "";
   // Debounced daemon full-text search (transcripts live on the host).
   function queueDaemonSearch(q: string) {
     if (searchTimer != null) clearTimeout(searchTimer);
     searchTimer = null;
+    if (searchLoadingTimer != null) clearTimeout(searchLoadingTimer);
+    searchLoadingTimer = null;
     const query = q.trim();
     if (query.length < 2) {
       latestSearchReqId = "";
+      setSearchLoading(false);
       setSearchResults([]);
       return;
     }
     const requestId = `search_${++searchSeq}`;
     latestSearchReqId = requestId;
+    if (opts.isOpen()) setSearchLoading(true);
     searchTimer = setTimeout(() => {
       searchTimer = null;
       if (latestSearchReqId !== requestId) return;
-      if (opts.isOpen()) opts.send({ type: "search", query, limit: 30, requestId });
+      if (opts.isOpen()) {
+        opts.send({ type: "search", query, limit: 30, requestId });
+        searchLoadingTimer = setTimeout(() => {
+          searchLoadingTimer = null;
+          if (latestSearchReqId === requestId) setSearchLoading(false);
+        }, 5000);
+      } else {
+        setSearchLoading(false);
+      }
     }, 300);
   }
   onCleanup(() => {
@@ -385,7 +416,15 @@ export function createProjects(opts: {
       clearTimeout(searchTimer);
       searchTimer = null;
     }
+    if (searchLoadingTimer != null) {
+      clearTimeout(searchLoadingTimer);
+      searchLoadingTimer = null;
+    }
+    clearTimeout(projectCreateTimer);
+    projectCreateTimer = undefined;
     latestSearchReqId = "";
+    setSearchLoading(false);
+    setCreatingProject(false);
   });
   function noteSearchResults(msg: SearchResultsEvent) {
     if (msg.requestId) {
@@ -393,6 +432,11 @@ export function createProjects(opts: {
     } else if (typeof msg.query === "string" && msg.query.trim() !== sessionFilter().trim()) {
       return;
     }
+    if (searchLoadingTimer != null) {
+      clearTimeout(searchLoadingTimer);
+      searchLoadingTimer = null;
+    }
+    setSearchLoading(false);
     const raw = Array.isArray(msg.results) ? msg.results : [];
     setSearchResults(
       raw.map((r: any) => ({
@@ -432,13 +476,23 @@ export function createProjects(opts: {
       return next;
     });
   }
+  function scopedSessions() {
+    return sidebarView() === "talk"
+      ? talkSessions()
+      : opts.sessions().filter((s) => !isTalkSession(s));
+  }
   function selectAllSessions() {
-    const all = opts.sessions();
-    if (all.length === 0) return;
-    if (selectedSessions().size === all.length) {
-      setSelectedSessions(new Set<string>());
+    const scoped = scopedSessions();
+    if (scoped.length === 0) return;
+    const allSelected = scoped.every((s) => selectedSessions().has(s.id));
+    if (allSelected) {
+      setSelectedSessions((prev) => {
+        const next = new Set(prev);
+        for (const s of scoped) next.delete(s.id);
+        return next;
+      });
     } else {
-      setSelectedSessions(new Set<string>(all.map((s) => s.id)));
+      setSelectedSessions(new Set<string>(scoped.map((s) => s.id)));
     }
   }
   function exitSelectionMode() {
@@ -492,6 +546,7 @@ export function createProjects(opts: {
     sessionMenu, setSessionMenu, projectMenu, setProjectMenu,
     pickProject, openNewProjectModal,
     folderEntries, folderParent, folderCurrent, folderLoading, folderError, folderNavStack,
+    creatingProject, setCreatingProject,
     setFolderLoading, setFolderError, noteFolderRequestFailed: revertPendingFolderNav,
     requestFolders, navigateFolder, stepBackFolder, goParentFolder,
     createProject, deleteProject, quickStartProject,
@@ -504,7 +559,7 @@ export function createProjects(opts: {
     sessionsOfProject, projectSessions, looseSessions, talkSessions, isTalkSession,
     sidebarView, setSidebarView,
     sessionFilter, setSessionFilter, matchQuery, matchedByCwd,
-    searchResults, setSearchResults, queueDaemonSearch, noteSearchResults,
+    searchResults, setSearchResults, searchLoading, queueDaemonSearch, noteSearchResults,
     renamingId, setRenamingId, renameText, setRenameText, submitRename,
     selectionMode, setSelectionMode, selectedSessions, setSelectedSessions,
     toggleSessionSelect, selectAllSessions, exitSelectionMode, togglePin, pinSelected, deleteSelected,

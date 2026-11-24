@@ -19,12 +19,12 @@ export function ScrollOverlays() {
       <div class="absolute bottom-full inset-x-0 mb-2 flex justify-center pointer-events-none z-30 px-4">
         <button
           type="button"
-          onPointerDown={(e) => press(e.currentTarget)}
+          ref={press}
           onClick={() => t.pinAtBottom()}
           class="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
         >
-          <Iconify icon="lucide:pin" size={13} class="text-accent shrink-0" />
-          <span>Pin at bottom</span>
+          <Iconify icon="lucide:arrow-down" size={13} class="text-accent shrink-0" />
+          <span>Jump to latest</span>
         </button>
       </div>
     </Show>
@@ -33,8 +33,8 @@ export function ScrollOverlays() {
   <div class="absolute bottom-full inset-x-0 mb-2 flex justify-center pointer-events-none z-30 px-4">
     <button
       type="button"
+      ref={press}
       data-history-jump-latest
-      onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => t.reloadLatest()}
       class="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-surface-raised/95 backdrop-blur-md border border-border text-fg-secondary shadow-raised hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
     >
@@ -62,10 +62,11 @@ export function ScrollOverlays() {
         return (
           <button
             type="button"
+            ref={press}
+            data-rc-tip={sc.desc}
             onMouseDown={(e) => e.preventDefault()}
-            onPointerDown={(e) => press(e.currentTarget)}
             onClick={() => c.pickSlash(sc.cmd)}
-            class={`ui-menu-item w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-3 transition-colors cursor-pointer ${
+            class={`ui-menu-item w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex flex-col sm:flex-row sm:items-start sm:justify-between gap-0.5 sm:gap-3 transition-colors cursor-pointer ${
               active()
                 ? "bg-accent-subtle text-fg"
                 : "text-fg-secondary hover:bg-surface-muted hover:text-fg"
@@ -77,7 +78,7 @@ export function ScrollOverlays() {
                 <span class="text-2xs text-fg-muted">{sc.args}</span>
               </Show>
             </div>
-            <span class="text-xs text-fg-muted truncate">{sc.desc}</span>
+            <span class="text-xs text-fg-muted sm:text-right line-clamp-2 leading-snug min-w-0">{sc.desc}</span>
           </button>
         );
       }}

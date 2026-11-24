@@ -36,7 +36,7 @@ func TestEditPreviewReturnsDiffWithoutWriting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := envAttr(preview, "info"); got != "Successfully replaced 1 block(s) in a.txt." {
+	if got := envAttr(preview, "info"); got != "Successfully replaced 1 block in a.txt." {
 		t.Fatalf("preview AI info = %q", got)
 	}
 	display := editDisplay(t, preview)

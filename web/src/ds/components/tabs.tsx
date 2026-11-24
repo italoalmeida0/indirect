@@ -43,9 +43,11 @@ export function Tabs<T extends string>(props: TabsProps<T>) {
   const [list, setList] = createSignal<HTMLDivElement>();
   const [indicator, setIndicator] = createSignal<HTMLSpanElement>();
   const selectedIndex = () => Math.max(0, props.items.findIndex((item) => item.value === props.value));
+  const line = () => props.variant === "line";
   createGlide({
     container: list,
     indicator,
+    axis: () => (line() ? "x" : "both"),
     target: () => {
       void props.value;
       return list()?.querySelector<HTMLElement>('[aria-selected="true"]') ?? null;
@@ -58,7 +60,6 @@ export function Tabs<T extends string>(props: TabsProps<T>) {
     props.onChange(props.items[next]!.value);
     queueMicrotask(() => list()?.querySelectorAll<HTMLElement>('[role="tab"]')[next]?.focus({ preventScroll: true }));
   };
-  const line = () => props.variant === "line";
   return (
     <div
       ref={setList}

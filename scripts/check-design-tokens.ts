@@ -37,21 +37,13 @@ const PARITY_ALLOWLIST = new Set([
 // Specific lines preserved for existing unit test source-string assertions
 const TEST_CONTRACT_SUBSTRINGS = [
   "html[data-theme=\"high-contrast\"]",
-  "--color-surface: #000000",
-  "--color-card: #0a0a0a",
-  "--color-elev: #141414",
-  "--color-line: #404040",
-  "--color-ink-50: #ffffff",
-  "--color-ink-100: #ffffff",
-  "--color-ink-200: #f5f5f5",
-  "--color-ink-300: #e5e5e5",
-  "--color-ink-400: #d4d4d4",
-  "--color-ink-500: #a3a3a3",
-  "text-[10px] text-ink-500 transition-opacity",
 ];
 
 const RAW_PALETTE_RE =
   /\b(?:bg|text|border|ring|from|to|via|fill|stroke)-(?:emerald|rose|amber|sky|blue|purple|teal|indigo|pink|violet|green|orange|red|yellow|cyan|fuchsia|lime|slate|gray|zinc|stone)-(?:50|100|200|300|400|500|600|700|800|900|950)\b/g;
+
+const UNDEFINED_SURFACE_RE =
+  /\b(?:bg|text|border|ring|from|to|via|fill|stroke)-surface-elevated\b/g;
 
 const HEAVY_FONT_RE = /\bfont-(?:semibold|bold|extrabold|black)\b/g;
 const UPPERCASE_CLASS_RE = /\buppercase\b/g;
@@ -104,6 +96,17 @@ for (const file of files) {
         file,
         line: i + 1,
         rule: "raw-tailwind-palette",
+        match: m[0],
+        snippet: trimmed.slice(0, 100),
+      });
+    }
+
+    // 1b. Undefined surface utilities (e.g. bg-surface-elevated -> use bg-surface-raised)
+    for (const m of lineText.matchAll(UNDEFINED_SURFACE_RE)) {
+      violations.push({
+        file,
+        line: i + 1,
+        rule: "undefined-surface-token",
         match: m[0],
         snippet: trimmed.slice(0, 100),
       });

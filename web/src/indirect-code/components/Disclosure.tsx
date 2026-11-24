@@ -26,10 +26,10 @@ export function DisclosureTrigger(props: DisclosureTriggerProps) {
   return (
     <button
       type="button"
+      ref={press}
       aria-expanded={props["aria-expanded"] ?? props.open}
       aria-label={props["aria-label"]}
       data-step-rail-header={props["data-step-rail-header"]}
-      onPointerDown={(e) => press(e.currentTarget)}
       onClick={props.onClick}
       class={`group/disc flex w-[calc(100%+0.75rem)] -mx-1.5 px-1.5 ${props.paddingClass ?? "py-1"} items-center gap-1.5 rounded-md text-left cursor-pointer hover:bg-surface-muted/60 transition-colors ${props.class ?? ""}`}
     >

@@ -69,8 +69,12 @@ export function FloatMenu(props: {
             if (e.key === "Escape") {
               e.preventDefault();
               e.stopPropagation();
-              props.onClose?.();
-              props.anchor()?.focus();
+              if (props.onEscape) {
+                props.onEscape();
+              } else {
+                props.onClose?.();
+                props.anchor()?.focus();
+              }
               return;
             }
             if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Home" || e.key === "End") {

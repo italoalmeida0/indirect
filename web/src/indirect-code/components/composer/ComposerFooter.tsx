@@ -1,7 +1,6 @@
 import { For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { press } from "../../../ds/motion/press";
-import { baseNameOf } from "../../transcript";
 import { useComposerCtx, useSession, useUI } from "../../ctx";
 import { FloatMenu } from "../FloatMenu";
 import { ContextUsageMeter } from "./ContextUsageMeter";
@@ -27,19 +26,17 @@ export function ComposerFooter() {
     <div>
       <button
         type="button"
-        ref={s.projBtn}
+        ref={(el) => {
+          s.projBtn = el;
+          press(el);
+        }}
         data-menubtn
         aria-expanded={s.projectMenuOpen()}
-        onPointerDown={(e) => press(e.currentTarget)}
         onClick={(e) => {
           e.stopPropagation();
-          s.setProjectMenuOpen(!s.projectMenuOpen());
-          ui.setEffortMenuOpen(false);
-          ui.setModelMenuOpen(false);
-          c.setAddContextOpen(false);
-          c.setModeMenuOpen(false);
-          c.setAccessMenuOpen(false);
-          ui.setUsageOpen(false);
+          const next = !s.projectMenuOpen();
+          ui.closeMenus();
+          s.setProjectMenuOpen(next);
         }}
         class="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:text-fg hover:border-border-strong hover:bg-surface-subtle transition-colors cursor-pointer"
         data-rc-tip="Project" aria-label={`Project: ${s.activeProject()?.name || "Select project"}`}
@@ -110,11 +107,7 @@ export function ComposerFooter() {
   </div>
 </Show>
 <Show when={s.activeSessionId()}>
-  <div class="flex items-center justify-between gap-3 px-3.5 py-1.5 text-2xs text-fg-muted" data-composer-footer>
-    <span class="flex items-center gap-1.5 min-w-0" data-rc-tip={s.currentProject()?.path}>
-      <Iconify icon="lucide:folder" size={12} class="shrink-0 text-fg-muted" />
-      <span class="truncate">{s.currentProject()?.name || baseNameOf(s.activeSession()?.cwd) || "Project"}</span>
-    </span>
+  <div class="flex items-center justify-end gap-3 px-3.5 py-1.5 text-2xs text-fg-muted" data-composer-footer>
     <FloatMenu
       anchor={() => ui.contextBtn}
       open={ui.usageOpen()}
@@ -131,12 +124,14 @@ export function ComposerFooter() {
     {/* Tooltip suppressed while usage popover is open via aria-expanded (replaces disabled={ui.usageOpen()}) */}
     <button
       type="button"
-      ref={ui.contextBtn}
+      ref={(el) => {
+        ui.contextBtn = el;
+        press(el);
+      }}
       data-menubtn
       data-rc-tip="Context & token usage"
       aria-label={`Conversation context: ${c.activeContext().label}`}
       aria-expanded={ui.usageOpen()}
-      onPointerDown={(e) => press(e.currentTarget)}
       onClick={() => { const next = !ui.usageOpen(); ui.closeMenus(); ui.setUsageOpen(next); }}
       class="flex items-center gap-1.5 rounded-lg px-2 py-0.5 -mr-2 font-mono text-2xs tabular-nums text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
     >

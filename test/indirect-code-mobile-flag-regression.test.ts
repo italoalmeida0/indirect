@@ -140,13 +140,14 @@ describe("mobile touch affordances (drawer, row actions, hit targets)", () => {
     expect(src).toMatch(/fixed inset-0 z-30[^"]*"[\s\S]{0,120}setSidebarOpen\(false\)/);
   });
 
-  test("session rows stay clean on mobile and expose actions via long-press popup + inline rename Save/Cancel", () => {
+  test("session rows stay clean on mobile and expose actions via overflow button + long-press popup + inline rename Save/Cancel", () => {
     const src = read("web/src/indirect-code/components/SessionSidebar.tsx");
     const ws = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
-    // Desktop keeps hover-revealed .rc-row-actions; mobile suppresses inline row action clutter.
+    // Desktop keeps hover-revealed .rc-row-actions; mobile exposes a single clean overflow menu trigger.
     expect(src).toContain("rc-row-actions");
     expect(src).toContain("rc-row-action ");
-    expect(src).toContain("!ctx.isMobile() && !ctx.selectionMode()");
+    expect(src).toContain("!isOverlay() && !ctx.selectionMode()");
+    expect(src).toContain("data-session-menubtn");
     expect(css).not.toContain("html.mobile .rc-sidebar .rc-row-actions");
     expect(css).not.toContain("html.mobile .rc-sidebar .rc-row-action");
     // Long-press + context menu + explicit Save/Cancel rename affordances.
@@ -157,15 +158,14 @@ describe("mobile touch affordances (drawer, row actions, hit targets)", () => {
     expect(ws).toContain("Unpin conversation");
   });
 
-  test("sidebar toggle, composer add and send stay sleek visually while meeting 44px coarse ::after hit targets", () => {
+  test("sidebar toggle, composer add and send stay sleek visually while meeting coarse ::after hit targets without overlap", () => {
     const codeCss = read("web/src/styles/code.css");
     expect(read("web/src/indirect-code/components/SidebarToggle.tsx")).toContain("rc-sidebar-toggle");
     expect(read("web/src/indirect-code/components/composer/ToolbarContext.tsx")).toContain("rc-composer-add");
     expect(read("web/src/indirect-code/components/composer/ToolbarSend.tsx")).toContain("rc-composer-send");
     expect(css).not.toContain("min-width: 2.25rem;");
-    expect(codeCss).toMatch(
-      /\.rc-sidebar-toggle::after,[\s\S]*?\.rc-composer-add::after,[\s\S]*?\.rc-composer-send::after,[\s\S]*?\.rc-composer-stop::after[\s\S]*?width: 44px;[\s\S]*?height: 44px;/,
-    );
+    expect(codeCss).toMatch(/\.rc-sidebar-toggle::after\s*\{[\s\S]*?width: 44px;[\s\S]*?height: 44px;/);
+    expect(codeCss).toMatch(/\.rc-composer-add::after,[\s\S]*?height: 44px;/);
   });
 
   test("composer keeps Enter = newline on touch, Ctrl/Cmd+Enter sends", () => {

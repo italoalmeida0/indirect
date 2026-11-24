@@ -32,7 +32,6 @@ import {
 
 type Rgb = [number, number, number];
 
-const SWEEP_DURATION_MS = 1300;
 const RECEDE_DURATION_MS = 1450;
 const TRACK_RADIUS = 10;
 const INNER_PAD = 2;
@@ -199,9 +198,6 @@ export function ContextUsageMeter(props: {
 
   const [hoveredZone, setHoveredZone] = createSignal<ContextZoneId | null>(null);
   const [pinnedZone, setPinnedZone] = createSignal<ContextZoneId | null>(null);
-  const [sweepP, setSweepP] = createSignal(reducedMotion() ? 1 : 0);
-  const [isSweeping, setIsSweeping] = createSignal(false);
-  const [sweepEpoch, setSweepEpoch] = createSignal(0);
   const [recedeP, setRecedeP] = createSignal(1);
   const [isReceding, setIsReceding] = createSignal(false);
   const [recedeEpoch, setRecedeEpoch] = createSignal(0);
@@ -256,6 +252,7 @@ export function ContextUsageMeter(props: {
     const u = usage();
     return u ? usageCosts(u) : null;
   });
+  const hasCost = createMemo(() => Boolean(costs() && costs()!.total > 0));
   const hitPct = createMemo(() => {
     const u = usage();
     return u ? cacheHitPct(u) : null;
@@ -287,18 +284,6 @@ export function ContextUsageMeter(props: {
     target: activeGlideTarget,
     transition: motionTokens.spring.snappy,
   });
-
-  const triggerReplay = () => {
-    setIsReceding(false);
-    setRecedeP(1);
-    setFreedTokens(0);
-    if (reducedMotion()) {
-      setSweepP(1);
-      setIsSweeping(false);
-      return;
-    }
-    setSweepEpoch((n) => n + 1);
-  };
 
   // Detect live context compaction drops while open and trigger receding particle dissolve.
   createEffect(() => {
@@ -343,8 +328,6 @@ export function ContextUsageMeter(props: {
         setRecedeP(1);
         lastRenderedUsed = nextUsed;
       } else {
-        setIsSweeping(false);
-        setSweepP(1);
         setRecedeFromTokens(Math.round(startFrom));
         setRecedeTargetTokens(Math.round(nextUsed));
         setRecedeP(0);
@@ -356,31 +339,10 @@ export function ContextUsageMeter(props: {
     }
   });
 
-  // Every mount inside FloatMenu (open false -> true) starts a fresh sweep.
-  createEffect(() => {
-    sweepEpoch();
-    if (reducedMotion()) {
-      setSweepP(1);
-      setIsSweeping(false);
-      return;
-    }
-    const used = untrack(usedTokens);
-    const win = untrack(windowTokens);
-    if (used === null || used <= 0 || win <= 0) {
-      setSweepP(1);
-      setIsSweeping(false);
-      return;
-    }
-    setSweepP(0);
-    setIsSweeping(true);
-  });
-
-  // Canvas shader & RAF loop
+  // Canvas shader with on-demand RAF (zero idle loop when settled)
   createEffect(() => {
     const canvas = canvasEl();
     const reduced = reducedMotion();
-    const epoch = sweepEpoch();
-    void epoch;
     if (!canvas || typeof document === "undefined" || typeof window === "undefined") return;
 
     const ctx = canvas.getContext("2d");
@@ -394,7 +356,6 @@ export function ContextUsageMeter(props: {
     let dpr = 1;
     let palette = resolvePalette(probeCtx, canvas);
     let rafId = 0;
-    let sweepStartMs: number | null = null;
     let seenRecedeEpoch = untrack(recedeEpoch);
     let recedeStartMs: number | null = null;
     let recedeStartLayout: BarZonesLayout | null = null;
@@ -451,10 +412,10 @@ export function ContextUsageMeter(props: {
       return segmentBaseRgb(id, palette);
     };
 
-    const drawFrame = (nowMs: number, isStatic: boolean) =>
+    const drawFrame = (nowMs: number, isStatic: boolean): boolean =>
       untrack(() => {
         syncSize();
-        if (cssW <= 4 || cssH <= 4) return;
+        if (cssW <= 4 || cssH <= 4) return false;
 
         const dt = clamp((nowMs - lastFrameMs) * 0.001, 0, 0.08);
         lastFrameMs = nowMs;
@@ -479,8 +440,10 @@ export function ContextUsageMeter(props: {
 
         let rTime = 1;
         let used = rawUsed;
+        let recedingActive = false;
 
         if (!isStatic && isReceding() && rawUsed !== null && win > 0) {
+          recedingActive = true;
           if (recedeStartMs === null) recedeStartMs = nowMs;
           rTime = clamp((nowMs - recedeStartMs) / RECEDE_DURATION_MS, 0, 1);
           const curRecedeP = rTime >= 1 ? 1 : 1 - Math.pow(1 - rTime, 2.55);
@@ -493,30 +456,11 @@ export function ContextUsageMeter(props: {
           }
           if (rTime >= 1) {
             setIsReceding(false);
+            recedingActive = false;
           }
         } else {
           recedeStartMs = null;
           if (rawUsed !== null) lastRenderedUsed = rawUsed;
-        }
-
-        const hasSweepableFill =
-          !isStatic && !isReceding() && used !== null && used > 0 && win > 0;
-
-        let uTime = 1;
-        let curSweepP = 1;
-        if (hasSweepableFill) {
-          if (sweepStartMs === null) sweepStartMs = nowMs;
-          uTime = clamp((nowMs - sweepStartMs) / SWEEP_DURATION_MS, 0, 1);
-          curSweepP = uTime >= 1 ? 1 : 1 - Math.pow(1 - uTime, 2.25);
-          if (Math.abs(curSweepP - sweepP()) > 0.004 || uTime >= 1) {
-            setSweepP(curSweepP);
-          }
-          if (uTime >= 1 && isSweeping()) {
-            setIsSweeping(false);
-          }
-        } else {
-          if (sweepP() !== 1) setSweepP(1);
-          if (isSweeping()) setIsSweeping(false);
         }
 
         const zLayout = computeBarZones({
@@ -534,6 +478,13 @@ export function ContextUsageMeter(props: {
         });
         const focusZone = activeZone();
         const kLerp = isStatic ? 1 : 1 - Math.exp(-dt * 18);
+        let settling = false;
+
+        const stepTo = (cur: number, target: number): number => {
+          if (isStatic || Math.abs(target - cur) <= 0.005) return target;
+          settling = true;
+          return lerp(cur, target, kLerp);
+        };
 
         const segIds: ContextSegmentId[] = ["input", "cache", "output", "reasoning", "context"];
         const segSpotlighted =
@@ -549,11 +500,11 @@ export function ContextUsageMeter(props: {
                   ? 0.28
                   : 0.44;
           const targetH = focusZone === id ? 1 : 0;
-          weights[id] = lerp(weights[id], targetW, kLerp);
-          highlights[id] = lerp(highlights[id], targetH, kLerp);
+          weights[id] = stepTo(weights[id], targetW);
+          highlights[id] = stepTo(highlights[id], targetH);
         }
-        usableGlow = lerp(usableGlow, focusZone === "usable" ? 1 : 0, kLerp);
-        reserveGlow = lerp(reserveGlow, focusZone === "reserve" ? 1 : 0, kLerp);
+        usableGlow = stepTo(usableGlow, focusZone === "usable" ? 1 : 0);
+        reserveGlow = stepTo(reserveGlow, focusZone === "reserve" ? 1 : 0);
 
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, cssW, cssH);
@@ -566,14 +517,10 @@ export function ContextUsageMeter(props: {
         const botY = cssH - INNER_PAD;
         const innerH = Math.max(0, botY - topY);
         const endOuterR = TRACK_RADIUS - INNER_PAD; // 8.0px concentric outer cap
-        const tSec = isStatic ? 1.85 : nowMs * 0.001;
+        const tSec = recedingActive ? nowMs * 0.001 : 1.85;
 
-        const frontierX = innerLeft + zLayout.totalOccupiedW * curSweepP;
-        const env =
-          uTime >= 0.999
-            ? 0
-            : Math.sin(Math.min(1, uTime / 0.09) * Math.PI * 0.5) *
-              (1 - Math.pow(Math.max(0, (uTime - 0.72) / 0.28), 2));
+        const frontierX = innerLeft + zLayout.totalOccupiedW;
+        const env = 0;
         const rEnv =
           rTime >= 0.998
             ? 0
@@ -1250,17 +1197,33 @@ export function ContextUsageMeter(props: {
           ctx.fillRect(tx - 1.5, botY - 2.2, 3, 2.2);
           ctx.restore();
         }
+
+        return !isStatic && (recedingActive || settling);
       });
+
+    const tick = (nowMs: number) => {
+      rafId = 0;
+      if (drawFrame(nowMs, false)) {
+        rafId = window.requestAnimationFrame(tick);
+      }
+    };
+
+    const renderNow = () => {
+      const more = drawFrame(performance.now(), reduced);
+      if (more && !reduced && !rafId) {
+        rafId = window.requestAnimationFrame(tick);
+      }
+    };
 
     palette = resolvePalette(probeCtx, canvas);
     syncSize();
-    drawFrame(performance.now(), reduced);
+    renderNow();
 
     let ro: ResizeObserver | undefined;
     if (typeof ResizeObserver === "function") {
       ro = new ResizeObserver(() => {
         syncSize();
-        drawFrame(performance.now(), reduced);
+        renderNow();
       });
       ro.observe(canvas);
     }
@@ -1269,7 +1232,7 @@ export function ContextUsageMeter(props: {
     if (typeof MutationObserver === "function") {
       mo = new MutationObserver(() => {
         palette = resolvePalette(probeCtx, canvas);
-        drawFrame(performance.now(), reduced);
+        renderNow();
       });
       mo.observe(document.documentElement, {
         attributes: true,
@@ -1277,22 +1240,16 @@ export function ContextUsageMeter(props: {
       });
     }
 
-    if (!reduced) {
-      const tick = (nowMs: number) => {
-        drawFrame(nowMs, false);
-        rafId = window.requestAnimationFrame(tick);
-      };
-      rafId = window.requestAnimationFrame(tick);
-    } else {
-      createEffect(() => {
-        void activeZone();
-        void usedTokens();
-        void windowTokens();
-        void autoCompactPercent();
-        void usage();
-        drawFrame(performance.now(), true);
-      });
-    }
+    createEffect(() => {
+      void activeZone();
+      void usedTokens();
+      void windowTokens();
+      void autoCompactPercent();
+      void usage();
+      void isReceding();
+      void recedeEpoch();
+      renderNow();
+    });
 
     onCleanup(() => {
       if (rafId) window.cancelAnimationFrame(rafId);
@@ -1305,15 +1262,12 @@ export function ContextUsageMeter(props: {
   const subtitleStateKey = createMemo(() => {
     const z = activeZone();
     if (z) return `zone:${z}`;
-    if (isSweeping() && sweepP() < 0.96 && (usedTokens() ?? 0) > 0 && windowTokens() > 0) {
-      return "sweep";
-    }
     if (isReceding() && recedeP() < 0.96 && windowTokens() > 0) {
       return "receding";
     }
     const cm = math();
     if (cm.window <= 0) return "idle:no-window";
-    if (cm.used === null) return `idle:empty:${cm.autoCompactPercent}`;
+    if (cm.used === null) return "idle:empty";
     if (!cm.autoCompactEnabled) return freedTokens() > 0 ? "idle:freed" : "idle:off";
     if (cm.isArmed) return "idle:armed";
     return freedTokens() > 0 ? "idle:freed" : "idle:usable";
@@ -1339,10 +1293,8 @@ export function ContextUsageMeter(props: {
     lastSubtitleKey = key;
   });
 
-  const costSuffix = (v: number | undefined) => {
-    const cObj = costs();
-    return cObj ? ` · $${fmtUsd(v || 0)}` : "";
-  };
+  const costSuffix = (v: number | undefined) =>
+    hasCost() ? ` · $${fmtUsd(v || 0)}` : "";
 
   const renderSubtitleContent = (): JSX.Element => {
     const z = activeZone();
@@ -1424,6 +1376,16 @@ export function ContextUsageMeter(props: {
     if (z === "usable") {
       const freeVal =
         cm.usableRemaining ?? Math.max(0, cm.window - (cm.used ?? 0));
+      if (cm.isArmed || (cm.autoCompactEnabled && freeVal <= 0)) {
+        return (
+          <>
+            <span class="h-2 w-2 rounded-[2px] bg-warning shrink-0" />
+            <span class="font-medium text-fg shrink-0">Usable free</span>
+            <span class="font-mono tabular-nums text-warning shrink-0">0 left</span>
+            <span class="text-fg-muted truncate">· Compacts next turn</span>
+          </>
+        );
+      }
       return (
         <>
           <span class="h-2 w-2 rounded-[2px] bg-success shrink-0" />
@@ -1434,7 +1396,7 @@ export function ContextUsageMeter(props: {
           <span class="text-fg-muted truncate">
             ·{" "}
             {cm.autoCompactEnabled
-              ? `${cm.usableLeftPct ?? 100}% left before ${cm.autoCompactPercent}% limit`
+              ? `${cm.usableLeftPct ?? 100}% left before ${cm.effectiveThresholdPercent}% threshold`
               : "Free window capacity"}
           </span>
         </>
@@ -1449,18 +1411,8 @@ export function ContextUsageMeter(props: {
             {compactTokens(cm.reserveTokens)}
           </span>
           <span class="text-fg-muted truncate">
-            · Reserved above {cm.autoCompactPercent}%
+            · Reserved above {cm.effectiveThresholdPercent}%
           </span>
-        </>
-      );
-    }
-
-    if (isSweeping() && sweepP() < 0.96 && (cm.used ?? 0) > 0 && cm.window > 0) {
-      return (
-        <>
-          <span class="h-1.5 w-1.5 rounded-full bg-accent animate-pulse shrink-0" />
-          <span class="font-medium text-fg-secondary shrink-0">Scanning context</span>
-          <span class="text-fg-muted truncate">· Latest request + response</span>
         </>
       );
     }
@@ -1481,7 +1433,7 @@ export function ContextUsageMeter(props: {
     if (cm.window <= 0) {
       return (
         <span class="text-fg-muted truncate">
-          Context limit not configured. Latest request + response.
+          Session totals tracked without a model context window.
         </span>
       );
     }
@@ -1493,13 +1445,7 @@ export function ContextUsageMeter(props: {
           <span class="font-medium text-fg tabular-nums shrink-0">
             {compactTokens(cm.usableLimit)} usable
           </span>
-          <span class="text-fg-muted truncate">
-            ·{" "}
-            {cm.autoCompactEnabled
-              ? `Auto-compact at ${cm.autoCompactPercent}%`
-              : `${compactTokens(cm.window)} token window`}{" "}
-            · Latest request + response
-          </span>
+          <span class="text-fg-muted truncate">· Waiting for first turn</span>
         </>
       );
     }
@@ -1524,9 +1470,7 @@ export function ContextUsageMeter(props: {
           <span class="font-medium text-fg tabular-nums shrink-0">
             {compactTokens(Math.max(0, cm.window - cm.used))} free
           </span>
-          <span class="text-fg-muted truncate">
-            · Auto-compact off · Latest request + response
-          </span>
+          <span class="text-fg-muted truncate">· Remaining in window</span>
         </>
       );
     }
@@ -1536,14 +1480,14 @@ export function ContextUsageMeter(props: {
         <>
           <span class="h-1.5 w-1.5 rounded-full bg-warning shrink-0" />
           <span class="font-medium text-warning tabular-nums shrink-0">
-            Auto-compact armed
+            Compacts next turn
           </span>
           <span class="text-fg-muted tabular-nums truncate">
             ·{" "}
             {cm.overThresholdTokens > 0
               ? `+${compactTokens(cm.overThresholdTokens)} over `
               : "at "}
-            {compactTokens(cm.usableLimit)} ({cm.autoCompactPercent}%)
+            {compactTokens(cm.usableLimit)}
           </span>
         </>
       );
@@ -1570,7 +1514,7 @@ export function ContextUsageMeter(props: {
           {compactTokens(cm.usableRemaining!)} usable left
         </span>
         <span class="text-fg-muted tabular-nums truncate">
-          · {cm.usableUsedPct}% of {compactTokens(cm.usableLimit)} ({cm.autoCompactPercent}% auto)
+          · {cm.usableUsedPct}% of {compactTokens(cm.usableLimit)}
         </span>
       </>
     );
@@ -1579,13 +1523,13 @@ export function ContextUsageMeter(props: {
   const bindZoneTrigger = (zoneId: ContextZoneId) => ({
     ref: (el: HTMLElement) => {
       cellRefs[zoneId] = el;
+      press(el);
       onCleanup(() => {
         if (cellRefs[zoneId] === el) delete cellRefs[zoneId];
       });
     },
     onPointerDown: (e: PointerEvent) => {
       lastCellPointerType = e.pointerType || "mouse";
-      press(e.currentTarget as HTMLElement);
     },
     onPointerEnter: (e: PointerEvent) => {
       if (e.pointerType === "mouse") {
@@ -1657,12 +1601,9 @@ export function ContextUsageMeter(props: {
   });
 
   const primaryHeadlineContent = (): JSX.Element => {
-    const used = untrack(usedTokens);
-    const win = untrack(windowTokens);
-    const p = sweepP();
-    if (!reducedMotion() && isSweeping() && p < 0.995 && used !== null && used > 0 && win > 0) {
-      return `${isEstimated() ? "~" : ""}${compactTokens(Math.round(used * p))}`;
-    }
+    const used = usedTokens();
+    const win = windowTokens();
+    if (used === null) return "—";
     if (!reducedMotion() && isReceding() && recedeP() < 0.998) {
       const eff = effectiveUsed();
       if (eff !== null && win > 0) {
@@ -1685,18 +1626,6 @@ export function ContextUsageMeter(props: {
   };
 
   const pctHeroContent = (): JSX.Element => {
-    const targetPct = props.pct();
-    const p = sweepP();
-    if (
-      targetPct !== null &&
-      !reducedMotion() &&
-      isSweeping() &&
-      p < 0.995 &&
-      (untrack(usedTokens) ?? 0) > 0 &&
-      untrack(windowTokens) > 0
-    ) {
-      return `${Math.round(targetPct * p)}% full`;
-    }
     if (!reducedMotion() && isReceding() && recedeP() < 0.998) {
       const eff = effectiveUsed();
       const win = windowTokens();
@@ -1709,33 +1638,12 @@ export function ContextUsageMeter(props: {
 
   return (
     <div class="px-2 pt-2 pb-1 text-xs select-none" data-context-meter>
-      {/* Eyebrow & Replay Action Row */}
+      {/* Eyebrow */}
       <div class="flex items-center justify-between gap-2">
         <span class="text-2xs font-medium text-fg-muted">Conversation context</span>
-        <Show when={(usedTokens() ?? 0) > 0 && windowTokens() > 0}>
-          <button
-            type="button"
-            data-context-rescan
-            data-rc-tip="Replay context scan"
-            aria-label="Replay context scan"
-            onPointerDown={(e) => press(e.currentTarget)}
-            onClick={(e) => {
-              e.stopPropagation();
-              triggerReplay();
-            }}
-            class="h-5 px-1.5 -mr-1 rounded-md inline-flex items-center gap-1 text-2xs text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer shrink-0"
-          >
-            <Iconify
-              icon="lucide:refresh-cw"
-              size={11}
-              class={isSweeping() ? "animate-spin text-accent" : ""}
-            />
-            <span>Rescan</span>
-          </button>
-        </Show>
       </div>
 
-      {/* Primary Hero Metric Cluster: `96.4K  48% full` + `of 200K · 160K usable` */}
+      {/* Primary Hero Metric Cluster: `96.4K  48% full` + `/ 200K` */}
       <div class="mt-1 flex items-baseline justify-between gap-2">
         <div class="inline-flex items-baseline gap-2 min-w-0 shrink-0">
           <span
@@ -1747,7 +1655,7 @@ export function ContextUsageMeter(props: {
           <Show when={props.pct() !== null}>
             <span
               data-context-pct-hero
-              class={`font-mono text-[15px] font-medium tabular-nums tracking-tight shrink-0 transition-colors ${pctHeroToneClass()}`}
+              class={`font-mono text-base font-medium tabular-nums tracking-tight shrink-0 transition-colors ${pctHeroToneClass()}`}
             >
               {pctHeroContent()}
             </span>
@@ -1757,15 +1665,9 @@ export function ContextUsageMeter(props: {
         <span class="text-2xs font-normal tabular-nums text-fg-muted truncate text-right">
           <Show
             when={windowTokens() > 0}
-            fallback={<>Context limit not configured</>}
+            fallback={<>No limit configured</>}
           >
-            of {compactTokens(windowTokens())}
-            <Show when={math().autoCompactEnabled} fallback={<> window</>}>
-              {" · "}
-              <span class={math().isArmed ? "text-warning font-medium" : "text-fg-secondary"}>
-                {compactTokens(math().usableLimit)} usable
-              </span>
-            </Show>
+            / {compactTokens(windowTokens())}
           </Show>
         </span>
       </div>
@@ -1825,7 +1727,7 @@ export function ContextUsageMeter(props: {
             setHoveredZone(null);
           }
         }}
-        class="relative mt-2.5 h-[42px] min-[375px]:h-[46px] rounded-[10px] select-none touch-pan-y cursor-crosshair"
+        class="relative mt-2.5 h-[42px] min-[375px]:h-[46px] rounded-control select-none touch-pan-y cursor-default"
       >
         <canvas
           ref={setCanvasEl}
@@ -1834,14 +1736,11 @@ export function ContextUsageMeter(props: {
         />
       </div>
 
-      {/* Session Telemetry & Usable Partition Interactive Grid */}
+      {/* Session Totals & Usable Partition Interactive Grid */}
       <div class="mt-3 pt-2.5 border-t border-border-subtle space-y-2">
         <div class="flex items-center justify-between gap-2">
-          <span class="inline-flex items-baseline gap-1.5 min-w-0">
-            <span class="text-2xs font-medium text-fg-muted shrink-0">Session telemetry</span>
-            <span class="text-2xs text-fg-muted/80 truncate">· Latest request + response</span>
-          </span>
-          <Show when={costs() && costs()!.total > 0}>
+          <span class="text-2xs font-medium text-fg-muted shrink-0">Session totals</span>
+          <Show when={hasCost()}>
             <span class="font-mono text-2xs font-medium text-fg tabular-nums shrink-0">
               ${fmtUsd(costs()!.total)}
             </span>
@@ -1911,7 +1810,7 @@ export function ContextUsageMeter(props: {
                       </span>
                       <span class="mt-0.5 flex items-center justify-between gap-1 pl-3.5 text-2xs text-fg-muted tabular-nums w-full">
                         <span>{item.sub}</span>
-                        <Show when={costs()}>
+                        <Show when={hasCost()}>
                           <span class="font-mono">${fmtUsd(item.cost || 0)}</span>
                         </Show>
                       </span>
@@ -1932,6 +1831,9 @@ export function ContextUsageMeter(props: {
                   activeZone() !== null && activeZone() !== "usable";
                 const reserveDim = () =>
                   activeZone() !== null && activeZone() !== "reserve";
+                const usableExhausted = () =>
+                  math().isArmed ||
+                  (math().autoCompactEnabled && (math().usableRemaining ?? 1) <= 0);
 
                 return (
                   <>
@@ -1946,37 +1848,48 @@ export function ContextUsageMeter(props: {
                       onFocus={usableTrigger.onFocus}
                       onBlur={usableTrigger.onBlur}
                       onClick={usableTrigger.onClick}
-                      class={`group relative z-10 flex items-center justify-between gap-1.5 rounded-lg px-2 py-1 text-left cursor-pointer transition-opacity duration-150 ${
+                      class={`group relative z-10 flex flex-col justify-center rounded-lg px-2 py-1.5 text-left cursor-pointer transition-opacity duration-150 ${
                         math().autoCompactEnabled ? "" : "col-span-2"
                       } ${usableDim() ? "opacity-55" : "opacity-100"}`}
                     >
-                      <span class="inline-flex items-center gap-1.5 min-w-0">
+                      <span class="flex items-center justify-between gap-1.5 w-full">
+                        <span class="inline-flex items-center gap-1.5 min-w-0">
+                          <span
+                            class={`h-2 w-2 rounded-[2px] shrink-0 ${
+                              usableExhausted() ? "bg-warning" : "bg-success"
+                            }`}
+                          />
+                          <span
+                            class={`text-xs transition-colors ${
+                              usableSpot()
+                                ? "font-medium text-fg"
+                                : "text-fg-secondary group-hover:text-fg"
+                            }`}
+                          >
+                            Usable free
+                          </span>
+                        </span>
                         <span
-                          class={`h-2 w-2 rounded-[2px] shrink-0 ${
-                            math().isArmed ? "bg-warning" : "bg-success"
-                          }`}
-                        />
-                        <span
-                          class={`text-2xs transition-colors ${
-                            usableSpot()
-                              ? "font-medium text-fg"
-                              : "text-fg-secondary group-hover:text-fg"
+                          class={`font-mono text-xs font-medium tabular-nums shrink-0 ${
+                            usableExhausted() ? "text-warning" : "text-fg"
                           }`}
                         >
-                          Usable free
+                          {usableExhausted()
+                            ? "0 left"
+                            : compactTokens(
+                                math().usableRemaining ??
+                                  Math.max(0, windowTokens() - (usedTokens() ?? 0)),
+                              )}
                         </span>
                       </span>
-                      <span
-                        class={`font-mono text-2xs font-medium tabular-nums shrink-0 ${
-                          math().isArmed ? "text-warning" : "text-fg"
-                        }`}
-                      >
-                        {math().isArmed
-                          ? "Armed"
-                          : compactTokens(
-                              math().usableRemaining ??
-                                Math.max(0, windowTokens() - (usedTokens() ?? 0)),
-                            )}
+                      <span class="mt-0.5 flex items-center justify-between gap-1 pl-3.5 text-2xs text-fg-muted tabular-nums w-full">
+                        <span>
+                          {usableExhausted()
+                            ? "Compacts next turn"
+                            : math().autoCompactEnabled
+                              ? `${math().usableLeftPct ?? 100}% of limit`
+                              : "Free capacity"}
+                        </span>
                       </span>
                     </button>
 
@@ -1992,24 +1905,29 @@ export function ContextUsageMeter(props: {
                         onFocus={reserveTrigger.onFocus}
                         onBlur={reserveTrigger.onBlur}
                         onClick={reserveTrigger.onClick}
-                        class={`group relative z-10 flex items-center justify-between gap-1.5 rounded-lg px-2 py-1 text-left cursor-pointer transition-opacity duration-150 ${
+                        class={`group relative z-10 flex flex-col justify-center rounded-lg px-2 py-1.5 text-left cursor-pointer transition-opacity duration-150 ${
                           reserveDim() ? "opacity-55" : "opacity-100"
                         }`}
                       >
-                        <span class="inline-flex items-center gap-1.5 min-w-0">
-                          <span class="h-2 w-2 rounded-[2px] bg-warning shrink-0" />
-                          <span
-                            class={`text-2xs transition-colors ${
-                              reserveSpot()
-                                ? "font-medium text-fg"
-                                : "text-fg-secondary group-hover:text-fg"
-                            }`}
-                          >
-                            Buffer
+                        <span class="flex items-center justify-between gap-1.5 w-full">
+                          <span class="inline-flex items-center gap-1.5 min-w-0">
+                            <span class="h-2 w-2 rounded-[2px] bg-warning shrink-0" />
+                            <span
+                              class={`text-xs transition-colors ${
+                                reserveSpot()
+                                  ? "font-medium text-fg"
+                                  : "text-fg-secondary group-hover:text-fg"
+                              }`}
+                            >
+                              Buffer
+                            </span>
+                          </span>
+                          <span class="font-mono text-xs font-medium tabular-nums text-fg shrink-0">
+                            {compactTokens(math().reserveTokens)}
                           </span>
                         </span>
-                        <span class="font-mono text-2xs font-medium tabular-nums text-fg shrink-0">
-                          {compactTokens(math().reserveTokens)}
+                        <span class="mt-0.5 flex items-center justify-between gap-1 pl-3.5 text-2xs text-fg-muted tabular-nums w-full">
+                          <span>Safety reserve</span>
                         </span>
                       </button>
                     </Show>
@@ -2045,7 +1963,7 @@ export function ContextUsageMeter(props: {
                               size={12}
                               class="text-fg-muted shrink-0"
                             />
-                            <span class="truncate">No window limit set</span>
+                            <span class="truncate">Auto-compact unavailable</span>
                           </>
                         }
                       >
@@ -2065,16 +1983,15 @@ export function ContextUsageMeter(props: {
                     />
                     <span class="truncate tabular-nums">
                       Auto-compact at{" "}
-                      <span class="font-medium text-fg">{math().autoCompactPercent}%</span> (
-                      {compactTokens(math().usableLimit)})
+                      <span class="font-medium text-fg">{math().effectiveThresholdPercent}%</span>
                     </span>
                   </Show>
                 }
               >
                 <Iconify icon="lucide:zap" size={12} class="text-warning shrink-0" />
                 <span class="truncate tabular-nums">
-                  <span class="font-medium text-warning">Compacts next step</span> ·{" "}
-                  {math().autoCompactPercent}% limit
+                  <span class="font-medium text-warning">Compacts next turn</span> ·{" "}
+                  {math().effectiveThresholdPercent}% threshold
                 </span>
               </Show>
             }
@@ -2083,8 +2000,8 @@ export function ContextUsageMeter(props: {
             <span class="truncate tabular-nums">
               Compacted <span class="font-medium text-fg">{compactionCount()}×</span>
               {math().autoCompactEnabled
-                ? ` · Auto at ${math().autoCompactPercent}%`
-                : " · Auto off"}
+                ? ` · Auto-compact at ${math().effectiveThresholdPercent}%`
+                : " · Auto-compact off"}
             </span>
           </Show>
         </div>
@@ -2092,9 +2009,9 @@ export function ContextUsageMeter(props: {
         <Show when={typeof m?.openSettings === "function"}>
           <button
             type="button"
+            ref={press}
             data-context-configure
             data-rc-tip="Configure auto-compaction in Settings"
-            onPointerDown={(e) => press(e.currentTarget)}
             onClick={(e) => {
               e.stopPropagation();
               batch(() => {
@@ -2105,9 +2022,7 @@ export function ContextUsageMeter(props: {
             class="h-6 px-2 rounded-md bg-surface-muted hover:bg-surface-strong text-fg font-medium text-2xs inline-flex items-center gap-1 shrink-0 cursor-pointer transition-colors"
           >
             <Iconify icon="lucide:sliders-horizontal" size={11} class="text-fg-secondary" />
-            <span>
-              {math().autoCompactEnabled ? `Auto ${math().autoCompactPercent}%` : "Configure"}
-            </span>
+            <span>Configure</span>
           </button>
         </Show>
       </div>

@@ -713,7 +713,6 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 		)
 		for attempt := 0; ; attempt++ {
 			stop, assistantMsg, discardedChars, err = a.oneTurn(ctx, sink)
-			sink(EvTurnEnd{Stop: stop, Err: err})
 			if err == nil {
 				break
 			}
@@ -731,7 +730,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 							evicted, _ := a.shedWireImagesReactive(ctx, &zero, 0, true)
 							if evicted > 0 {
 								visionShedPasses++
-								sink(EvToolProgress{Text: "Model does not support inline images; converted live images to visual digests and retrying…"})
+								sink(EvToolProgress{Text: "Model does not support inline images — summarizing images and retrying…"})
 								if !a.PersistentTurns {
 									a.dropLastAssistantMessage()
 								}
@@ -753,7 +752,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 							evicted, _ := a.shedWireImagesReactive(ctx, &capVal, capVal, capVal == 0)
 							if evicted > 0 {
 								visionShedPasses++
-								sink(EvToolProgress{Text: fmt.Sprintf("Provider image limit reached; dehydrated %d older image(s) to visual digests and retrying…", evicted)})
+								sink(EvToolProgress{Text: "Image limit reached — summarizing older images and retrying…"})
 								if !a.PersistentTurns {
 									a.dropLastAssistantMessage()
 								}
@@ -769,7 +768,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 							evicted, _ := a.shedWireImagesReactive(ctx, nil, nextKeep, nextKeep == 0)
 							if evicted > 0 {
 								visionShedPasses++
-								sink(EvToolProgress{Text: fmt.Sprintf("Payload size limit reached; dehydrated %d wire image(s) to visual digests and retrying…", evicted)})
+								sink(EvToolProgress{Text: "Payload too large — summarizing older images and retrying…"})
 								if !a.PersistentTurns {
 									a.dropLastAssistantMessage()
 								}
@@ -788,7 +787,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 				learnedWin := a.noteOverflowCeiling(err)
 				if overflowPasses < 2 {
 					overflowPasses++
-					sink(EvToolProgress{Text: "Context limit reached upstream; automatically compacting older context…"})
+					sink(EvToolProgress{Text: "Context limit reached — compacting older context…"})
 					keepBudget := CompactionKeepRecentTokens / 2
 					if learnedWin > 0 && learnedWin/4 < keepBudget {
 						keepBudget = max(2048, learnedWin/4)
@@ -828,7 +827,7 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 					err = fmt.Errorf("%w: terminated after %d retries", err, maxRepetitionLoopRetries)
 					break
 				}
-				sink(EvToolProgress{Text: "Repetition loop detected; retrying response…"})
+				sink(EvToolProgress{Text: "Repetition detected — retrying response…"})
 			}
 			if ctx.Err() != nil || !a.canRetryError(err, attempt) {
 				break
@@ -839,9 +838,11 @@ func (a *Agent) runLoop(ctx context.Context, sink func(AgentEvent)) error {
 			delay := a.retryDelay(attempt)
 			sink(EvRetry{Attempt: attempt + 1, Delay: delay, Err: err})
 			if sleepErr := sleepRetry(ctx, delay); sleepErr != nil {
+				sink(EvTurnEnd{Stop: provider.StopError, Err: sleepErr})
 				return sleepErr
 			}
 		}
+		sink(EvTurnEnd{Stop: stop, Err: err})
 		if err != nil {
 			return err
 		}

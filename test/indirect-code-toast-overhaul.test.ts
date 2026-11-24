@@ -238,7 +238,7 @@ describe("DS Toast stack & useNotice unification", () => {
     expect(css).toContain("top: max(0.875rem, calc(var(--sat) + 0.5rem));");
     expect(css).toContain("bottom: auto;");
     expect(css).toContain("top: max(3.25rem, calc(var(--sat) + 2.75rem));");
-    expect(css).toContain("border-radius: 0.75rem;");
+    expect(css).toContain("border-radius: var(--radius-panel);");
     expect(css).not.toMatch(/\.ui-toast-(?:ok|err)\s+\.ui-toast-icon\s*\{[^}]*background:\s*var\(--(?:success|danger)-subtle\)/);
 
     const toastSrc = readFileSyncFs(join(ROOT, "web/src/ds/components/toast.tsx"), "utf8");
@@ -260,11 +260,11 @@ describe("useTurnNotify foreground suppression & background fallback", () => {
     // 1. turnNotifyText contract for OS / Web Push notifications is 100% preserved
     expect(turnNotifyText({ title: "Fix bug", hostName: "Mac", disposition: "done" })).toEqual({
       title: "Turn finished — Fix bug",
-      body: "Mac · tap to open",
+      body: "Mac · click to open",
     });
     expect(turnNotifyText({ title: "Fix bug", hostName: "Mac", disposition: "approval" })).toEqual({
       title: "Approval needed — Fix bug",
-      body: "Mac · tap to open",
+      body: "Mac · click to open",
     });
 
     const prevNotification = (globalThis as any).Notification;

@@ -11,10 +11,14 @@ import {
 import { createHosts } from "./hooks/useHosts";
 import { createRelay } from "./hooks/useRelay";
 import { createMirror } from "./hooks/useMirror";
-import { RemoteHints } from "./presentation";
 import { useIndirectCodeDocumentScope } from "./utils/documentScope";
 import { normalizeAccessMode } from "./utils/settingsValidation";
-import { Icon, Icons, toast } from "../ui";
+import { Btn, Icon, Icons, Modal, toast } from "../ui";
+
+function wordCount(text?: string): number {
+  const trimmed = (text || "").trim();
+  return trimmed ? trimmed.split(/\s+/).length : 0;
+}
 
 interface DebugTool {
   name: string;
@@ -330,11 +334,29 @@ export default function CodeDevPage() {
 
   let streamContainerRef: HTMLDivElement | undefined;
   let smokeTimeout: ReturnType<typeof setTimeout> | undefined;
+  const [confirmState, setConfirmState] = createSignal<{
+    title: string;
+    message: string;
+    confirmText: string;
+    cancelText: string;
+    danger: boolean;
+    resolve: (ok: boolean) => void;
+  } | null>(null);
 
   // Initialize Hosts
   const hosts = createHosts({
     toast: (msg, kind) => toast(msg, kind),
-    showConfirm: async (opts) => confirm(opts.message || "Confirm?"),
+    showConfirm: (opts) =>
+      new Promise<boolean>((resolve) => {
+        setConfirmState({
+          title: opts.title || "Confirm action",
+          message: opts.message || "",
+          confirmText: opts.confirmText || "Confirm",
+          cancelText: opts.cancelText || "Cancel",
+          danger: Boolean(opts.danger),
+          resolve,
+        });
+      }),
   });
 
   // Relay connection
@@ -594,6 +616,7 @@ export default function CodeDevPage() {
       clearTimeout(smokeTimeout);
       smokeTimeout = undefined;
     }
+    confirmState()?.resolve(false);
   });
 
   createEffect(() => {
@@ -887,10 +910,18 @@ export default function CodeDevPage() {
       data-density="compact"
       class="flex flex-col min-h-dvh lg:h-screen w-full max-w-full bg-background text-fg font-sans select-text overflow-x-hidden lg:overflow-hidden"
     >
-      <RemoteHints />
       {/* ===== TOP BAR / HEADER ===== */}
       <header class="flex flex-wrap items-center justify-between px-4 py-2 bg-surface-subtle border-b border-border shrink-0 gap-3 z-20">
         <div class="flex flex-wrap items-center gap-3 min-w-0 max-w-full">
+          <a
+            href="#/code"
+            class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors shrink-0"
+            data-rc-tip="Return to Indirect Code"
+            data-rc-tip-placement="bottom"
+          >
+            <Icon name="lucide:arrow-left" size={13} />
+            <span>Back to Indirect Code</span>
+          </a>
           <div class="flex items-center gap-2 min-w-0">
             <span class="inline-flex items-center justify-center w-7 h-7 rounded bg-accent-subtle text-accent font-mono font-medium text-xs border border-accent/35 shadow-2xs shrink-0">
               DEV
@@ -1117,15 +1148,6 @@ export default function CodeDevPage() {
                   onInput={(e) => setRequestFilter(e.currentTarget.value)}
                   class="min-w-0 flex-1 bg-surface border border-border rounded-control px-2.5 py-1 text-xs font-mono text-fg placeholder:text-fg-muted focus:outline-none focus:border-accent"
                 />
-                <button
-                  type="button"
-                  onClick={clearAllNetworkLogs}
-                  class="ui-icon-button ui-icon-button-xs rounded-lg hover:bg-danger-subtle hover:text-danger"
-                  aria-label="Clear requests log"
-                  data-rc-tip="Clear requests log"
-                >
-                  <Icon name={Icons.trash} size={14} />
-                </button>
               </div>
 
               {/* Request rows */}
@@ -1326,7 +1348,7 @@ export default function CodeDevPage() {
                             <div class="flex flex-wrap items-center gap-3 tabular-nums">
                               <span>Chars: <span class="font-medium text-fg">{req().system?.length || 0}</span></span>
                               <span>·</span>
-                              <span>Words: <span class="font-medium text-fg">{req().system?.split(/\s+/).length || 0}</span></span>
+                              <span>Words: <span class="font-medium text-fg">{wordCount(req().system)}</span></span>
                               <span>·</span>
                               <span>Est. tokens: <span class="font-medium text-warning">~{Math.round((req().system?.length || 0) / 4)}</span></span>
                             </div>
@@ -1627,7 +1649,7 @@ export default function CodeDevPage() {
               </div>
               <div class="flex flex-wrap items-center gap-3">
                 <span class="text-2xs text-fg-secondary tabular-nums">
-                  Chars: {systemPrompt().length} · Words: {systemPrompt().split(/\s+/).length} · Est. tokens: ~{Math.round(systemPrompt().length / 4)}
+                  Chars: {systemPrompt().length} · Words: {wordCount(systemPrompt())} · Est. tokens: ~{Math.round(systemPrompt().length / 4)}
                 </span>
                 <button
                   onClick={() => copyText(systemPrompt(), "System prompt")}
@@ -1937,6 +1959,44 @@ export default function CodeDevPage() {
           Send prompt
         </button>
       </footer>
+
+      <Modal
+        open={Boolean(confirmState())}
+        title={confirmState()?.title || "Confirm action"}
+        width="max-w-md"
+        onClose={() => {
+          confirmState()?.resolve(false);
+          setConfirmState(null);
+        }}
+        footer={
+          <>
+            <Btn
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                confirmState()?.resolve(false);
+                setConfirmState(null);
+              }}
+            >
+              {confirmState()?.cancelText || "Cancel"}
+            </Btn>
+            <Btn
+              variant={confirmState()?.danger ? "danger" : "primary"}
+              size="sm"
+              onClick={() => {
+                confirmState()?.resolve(true);
+                setConfirmState(null);
+              }}
+            >
+              {confirmState()?.confirmText || "Confirm"}
+            </Btn>
+          </>
+        }
+      >
+        <p class="text-xs sm:text-sm text-fg-secondary whitespace-pre-line leading-relaxed">
+          {confirmState()?.message}
+        </p>
+      </Modal>
     </div>
   );
 }

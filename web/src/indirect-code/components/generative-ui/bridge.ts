@@ -19,6 +19,8 @@ export type GuBridgeOps = {
   onError?: (message: string) => void;
   /** Explicit (non-reactive) state save: widget calls window.__gu.saveState(). */
   onState?: (stateJSON: string) => void;
+  /** Fired when the widget runtime finishes booting and is ready for host theme/accent sync. */
+  onReady?: () => void;
   /**
    * Optional host interaction gate checked before auto-sending a widget prompt.
    * When false (e.g. fire-on-mount without user interaction with the iframe),
@@ -26,6 +28,29 @@ export type GuBridgeOps = {
    */
   canAutoSend?: () => boolean;
 };
+
+export type WidgetAccent =
+  | "teal"
+  | "neutral"
+  | "violet"
+  | "blue"
+  | "green"
+  | "amber"
+  | "orange"
+  | "coral"
+  | "rose";
+
+const VALID_ACCENTS = new Set<string>([
+  "teal",
+  "neutral",
+  "violet",
+  "blue",
+  "green",
+  "amber",
+  "orange",
+  "coral",
+  "rose",
+]);
 
 /** A widget may ask for follow-ups, but never spam: cap the op rate. */
 const MAX_OPS_PER_MINUTE = 60;
@@ -79,7 +104,21 @@ export function attachGuBridge(
   const handler = (event: MessageEvent) => {
     if (event.source !== frameWindow()) return;
     const data: any = event.data;
-    if (!data || typeof data !== "object" || data.__gu !== "sendPrompt" && data.__gu !== "prefillPrompt" && data.__gu !== "openLink" && data.__gu !== "resize" && data.__gu !== "error" && data.__gu !== "state") return;
+    if (
+      !data ||
+      typeof data !== "object" ||
+      (data.__gu !== "sendPrompt" &&
+        data.__gu !== "prefillPrompt" &&
+        data.__gu !== "openLink" &&
+        data.__gu !== "resize" &&
+        data.__gu !== "error" &&
+        data.__gu !== "state" &&
+        data.__gu !== "ready")
+    ) return;
+    if (data.__gu === "ready") {
+      ops.onReady?.();
+      return;
+    }
     if (!rateOk()) return;
     switch (data.__gu) {
       case "sendPrompt": {
@@ -134,4 +173,25 @@ export function widgetTheme(): "dark" | "light" {
   const attr = document.documentElement.getAttribute("data-theme");
   if (attr === "light" || attr === "dark") return attr;
   return document.documentElement.classList.contains("light") ? "light" : "dark";
+}
+
+/** Current host accent for the widget document (defaults to "teal"). */
+export function widgetAccent(): WidgetAccent {
+  const attr = document.documentElement.getAttribute("data-accent");
+  if (attr && VALID_ACCENTS.has(attr)) return attr as WidgetAccent;
+  return "teal";
+}
+
+/** Sync host theme and/or accent into a mounted widget iframe. */
+export function postGuTheme(
+  frameWindow: Window | null | undefined,
+  params: { theme?: "dark" | "light"; accent?: WidgetAccent },
+): void {
+  if (!frameWindow) return;
+  try {
+    frameWindow.postMessage(
+      { __gu: "theme", theme: params.theme, accent: params.accent },
+      "*",
+    );
+  } catch {}
 }

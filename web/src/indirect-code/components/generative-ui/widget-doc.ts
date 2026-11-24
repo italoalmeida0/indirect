@@ -29,7 +29,7 @@ export const WIDGET_BASE_CSS = `
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, ui-sans-serif, Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, Roboto, "Helvetica Neue", Arial, sans-serif;
   background: var(--gu-bg);
   color: var(--gu-text);
   -webkit-font-smoothing: antialiased;
@@ -38,104 +38,116 @@ body {
   overflow: hidden;
 }
 ::selection { background: color-mix(in oklab, var(--gu-brand) 28%, transparent); }
-/* Tokens mirror the host theme (web/style.tailwindcss.css): ink / card /
-   elev / line / accent / brand. The widget surface IS the host card color,
-   so a widget reads as native transcript content, not an embedded page. */
+/* Tokens mirror the host Arc theme (web/src/ds/tokens.css). The widget surface
+   IS the host --surface color, so a widget reads as native transcript content,
+   not an embedded page. */
 :root {
   color-scheme: dark;
-  --ink-950: oklch(0.13 0.002 70);
-  --ink-900: oklch(0.16 0.002 70);
-  --ink-850: oklch(0.19 0.002 70);
-  --ink-800: oklch(0.22 0.003 70);
-  --ink-700: oklch(0.26 0.003 70);
-  --ink-600: oklch(0.32 0.004 70);
-  --ink-500: oklch(0.55 0.005 70);
-  --ink-400: oklch(0.68 0.005 70);
-  --ink-300: oklch(0.82 0.004 70);
-  --ink-200: oklch(0.92 0.003 70);
-  --ink-100: oklch(0.96 0.002 80);
-  --accent: oklch(0.95 0.002 80);
-  --accent-500: oklch(0.95 0.002 80);
-  --accent-strong: oklch(0.99 0.001 80);
-  --accent-fg: oklch(0.16 0.002 70);
-  --brand-300: oklch(0.84 0.09 175);
-  --brand-400: oklch(0.76 0.11 175);
-  --brand-500: oklch(0.74 0.11 175);
-  --brand-600: oklch(0.66 0.11 175);
-  --card: oklch(0.16 0.002 70);
-  --elev: oklch(0.22 0.003 70);
-  --line: oklch(0.26 0.003 70);
-  --gu-bg: oklch(0.16 0.002 70);
-  --gu-elev: oklch(0.22 0.003 70);
-  --gu-fill: oklch(0.19 0.002 70);
-  --gu-line: oklch(0.26 0.003 70);
-  --gu-text: oklch(0.96 0.002 80);
-  --gu-text-dim: oklch(0.68 0.005 70);
-  --gu-text-faint: oklch(0.55 0.005 70);
-  --gu-accent: oklch(0.95 0.002 80);
-  --gu-accent-fg: oklch(0.16 0.002 70);
-  --gu-brand: oklch(0.74 0.11 175);
-  --gu-ok: oklch(0.76 0.15 150);
-  --gu-warn: oklch(0.78 0.15 70);
-  --gu-danger: oklch(0.65 0.2 25);
-  --gu-grid: oklch(0.22 0.003 70);
-  --gu-chart-1: oklch(0.74 0.11 175);
-  --gu-chart-2: oklch(0.70 0.15 245);
-  --gu-chart-3: oklch(0.78 0.15 70);
-  --gu-chart-4: oklch(0.72 0.16 355);
-  --gu-chart-5: oklch(0.68 0.005 70);
+  --ink-950: oklch(19% 0 0);
+  --ink-900: oklch(21.5% 0 0);
+  --ink-850: oklch(23% 0 0);
+  --ink-800: oklch(26% 0 0);
+  --ink-700: oklch(29% 0 0);
+  --ink-600: oklch(64% 0 0);
+  --ink-500: oklch(64% 0 0);
+  --ink-400: oklch(78% 0 0);
+  --ink-300: oklch(84% 0 0);
+  --ink-200: oklch(90% 0 0);
+  --ink-100: oklch(93.5% 0 0);
+  --accent: oklch(96% 0 0);
+  --accent-500: oklch(96% 0 0);
+  --accent-strong: oklch(100% 0 0);
+  --accent-fg: oklch(19% 0 0);
+  --gu-bg: oklch(21.5% 0 0);
+  --gu-elev: oklch(25% 0 0);
+  --gu-fill: oklch(26% 0 0);
+  --gu-line: oklch(29% 0 0);
+  --gu-text: oklch(93.5% 0 0);
+  --gu-text-muted: oklch(78% 0 0);
+  --gu-text-dim: var(--gu-text-muted);
+  --gu-text-faint: oklch(64% 0 0);
+  --gu-accent: oklch(96% 0 0);
+  --gu-accent-fg: oklch(19% 0 0);
+  --gu-brand: oklch(72% 0.13 182);
+  --brand-300: color-mix(in oklab, var(--gu-brand) 82%, white);
+  --brand-400: var(--gu-brand);
+  --brand-500: var(--gu-brand);
+  --brand-600: color-mix(in oklab, var(--gu-brand) 82%, black);
+  --card: var(--gu-bg);
+  --elev: var(--gu-elev);
+  --line: var(--gu-line);
+  --gu-ok: oklch(79% 0.14 162);
+  --gu-warn: oklch(73.5% 0.105 74);
+  --gu-danger: oklch(71% 0.155 8);
+  --gu-grid: oklch(29% 0 0);
+  --gu-chart-1: var(--gu-brand);
+  --gu-chart-2: oklch(74% 0.125 290);
+  --gu-chart-3: oklch(73.5% 0.105 74);
+  --gu-chart-4: oklch(79% 0.095 236);
+  --gu-chart-5: oklch(78% 0 0);
   --gu-radius: 10px;
   --gu-radius-sm: 7px;
   --gu-gap: 12px;
-  --gu-shadow: 0 1px 2px rgb(0 0 0 / 18%);
-  --gu-thumb: oklch(0.99 0.001 80);
+  --gu-shadow: 0 1px 2px oklch(0% 0 0 / 0.18);
+  --gu-thumb: oklch(97% 0 0);
 }
 [data-theme="light"] {
   color-scheme: light;
-  --ink-950: oklch(0.98 0.002 80);
-  --ink-900: oklch(0.99 0.001 80);
-  --ink-850: oklch(0.95 0.003 80);
-  --ink-800: oklch(0.92 0.004 80);
-  --ink-700: oklch(0.88 0.004 80);
-  --ink-600: oklch(0.45 0.006 70);
-  --ink-500: oklch(0.52 0.005 70);
-  --ink-400: oklch(0.42 0.006 70);
-  --ink-300: oklch(0.32 0.006 70);
-  --ink-200: oklch(0.24 0.005 70);
-  --ink-100: oklch(0.14 0.004 70);
-  --accent: oklch(0.2 0.005 70);
-  --accent-500: oklch(0.2 0.005 70);
-  --accent-strong: oklch(0.14 0.004 70);
-  --accent-fg: oklch(0.99 0.001 80);
-  --brand-300: oklch(0.60 0.13 175);
-  --brand-400: oklch(0.52 0.12 175);
-  --brand-500: oklch(0.55 0.12 175);
-  --brand-600: oklch(0.48 0.12 175);
-  --card: oklch(0.99 0.001 80);
-  --elev: oklch(0.95 0.003 80);
-  --line: oklch(0.88 0.004 80);
-  --gu-bg: oklch(0.99 0.001 80);
-  --gu-elev: oklch(0.99 0.001 80);
-  --gu-fill: oklch(0.95 0.003 80);
-  --gu-line: oklch(0.88 0.004 80);
-  --gu-text: oklch(0.14 0.004 70);
-  --gu-text-dim: oklch(0.36 0.006 70);
-  --gu-text-faint: oklch(0.52 0.005 70);
-  --gu-accent: oklch(0.2 0.005 70);
-  --gu-accent-fg: oklch(0.99 0.001 80);
-  --gu-brand: oklch(0.55 0.12 175);
-  --gu-ok: oklch(0.55 0.16 150);
-  --gu-warn: oklch(0.55 0.16 70);
-  --gu-danger: oklch(0.55 0.22 25);
-  --gu-grid: oklch(0.92 0.004 80);
-  --gu-chart-1: oklch(0.55 0.12 175);
-  --gu-chart-2: oklch(0.55 0.16 245);
-  --gu-chart-3: oklch(0.55 0.16 70);
-  --gu-chart-4: oklch(0.55 0.16 355);
-  --gu-chart-5: oklch(0.45 0.006 70);
-  --gu-shadow: 0 1px 2px rgb(28 28 30 / 5%);
-  --gu-thumb: oklch(0.99 0.001 80);
+  --ink-950: oklch(100% 0 0);
+  --ink-900: oklch(98.6% 0 0);
+  --ink-850: oklch(97.5% 0 0);
+  --ink-800: oklch(95.8% 0 0);
+  --ink-700: oklch(90% 0 0);
+  --ink-600: oklch(54% 0 0);
+  --ink-500: oklch(54% 0 0);
+  --ink-400: oklch(42% 0 0);
+  --ink-300: oklch(34% 0 0);
+  --ink-200: oklch(23% 0 0);
+  --ink-100: oklch(18% 0 0);
+  --accent: oklch(15% 0 0);
+  --accent-500: oklch(15% 0 0);
+  --accent-strong: oklch(15% 0 0);
+  --accent-fg: oklch(100% 0 0);
+  --gu-bg: oklch(100% 0 0);
+  --gu-elev: oklch(97.5% 0 0);
+  --gu-fill: oklch(95.8% 0 0);
+  --gu-line: oklch(90% 0 0);
+  --gu-text: oklch(18% 0 0);
+  --gu-text-muted: oklch(42% 0 0);
+  --gu-text-dim: var(--gu-text-muted);
+  --gu-text-faint: oklch(54% 0 0);
+  --gu-accent: oklch(15% 0 0);
+  --gu-accent-fg: oklch(100% 0 0);
+  --gu-brand: oklch(54% 0.12 182);
+  --gu-ok: oklch(50% 0.12 162);
+  --gu-warn: oklch(55% 0.12 68);
+  --gu-danger: oklch(53% 0.18 10);
+  --gu-grid: oklch(90% 0 0);
+  --gu-chart-1: var(--gu-brand);
+  --gu-chart-2: oklch(51% 0.16 290);
+  --gu-chart-3: oklch(55% 0.12 68);
+  --gu-chart-4: oklch(51% 0.11 240);
+  --gu-chart-5: oklch(42% 0 0);
+  --gu-shadow: 0 1px 2px oklch(0% 0 0 / 0.04);
+  --gu-thumb: oklch(100% 0 0);
 }
+/* Host accent overrides (synced from html[data-accent]). */
+:root[data-accent="neutral"] { --gu-brand: oklch(80% 0 0); }
+:root[data-accent="violet"] { --gu-brand: oklch(70% 0.18 290); }
+:root[data-accent="blue"] { --gu-brand: oklch(72% 0.15 256); }
+:root[data-accent="green"] { --gu-brand: oklch(79% 0.14 162); }
+:root[data-accent="amber"] { --gu-brand: oklch(85% 0.14 84); }
+:root[data-accent="orange"] { --gu-brand: oklch(79% 0.14 58); }
+:root[data-accent="coral"] { --gu-brand: oklch(75% 0.14 25); }
+:root[data-accent="rose"] { --gu-brand: oklch(76% 0.15 352); }
+:root[data-theme="light"][data-accent="neutral"] { --gu-brand: oklch(33% 0 0); }
+:root[data-theme="light"][data-accent="violet"] { --gu-brand: oklch(54% 0.24 287); }
+:root[data-theme="light"][data-accent="blue"] { --gu-brand: oklch(53% 0.22 260); }
+:root[data-theme="light"][data-accent="green"] { --gu-brand: oklch(58% 0.14 162); }
+:root[data-theme="light"][data-accent="amber"] { --gu-brand: oklch(60% 0.14 75); }
+:root[data-theme="light"][data-accent="orange"] { --gu-brand: oklch(61% 0.16 53); }
+:root[data-theme="light"][data-accent="coral"] { --gu-brand: oklch(59% 0.19 26); }
+:root[data-theme="light"][data-accent="rose"] { --gu-brand: oklch(58% 0.2 354); }
 .gu-root {
   padding: 16px;
   background: var(--gu-bg);
@@ -151,31 +163,30 @@ body {
 /* Header group: title + caption stay tight wherever they sit. */
 .gu-header .gu-title, .gu-header .gu-subtitle { margin-bottom: 2px; }
 .gu-header .gu-caption, .gu-header .gu-body { margin: 0; }
-/* Type scale: one clear hierarchy (title > subtitle > body > caption). */
-.gu-title { font-size: 17px; font-weight: 600; line-height: 1.3; letter-spacing: -0.02em; text-wrap: balance; margin: 0 0 3px; color: var(--gu-text); }
-.gu-subtitle { font-size: 13.5px; font-weight: 600; line-height: 1.4; letter-spacing: -0.01em; margin: 0 0 3px; color: var(--gu-text); }
+/* Type scale: one clear hierarchy (title > subtitle > body > caption), weights 400/500 only. */
+.gu-title { font-size: 17px; font-weight: 500; line-height: 1.3; letter-spacing: -0.02em; text-wrap: balance; margin: 0 0 3px; color: var(--gu-text); }
+.gu-subtitle { font-size: 13.5px; font-weight: 500; line-height: 1.4; letter-spacing: -0.01em; margin: 0 0 3px; color: var(--gu-text); }
 .gu-body { margin: 0 0 10px; color: var(--gu-text); text-wrap: pretty; }
 .gu-caption { font-size: 12px; line-height: 1.5; color: var(--gu-text-faint); margin: 0 0 12px; text-wrap: pretty; }
-.gu-strong { font-weight: 600; }
+.gu-strong { font-weight: 500; }
 .gu-dim { color: var(--gu-text-dim); }
-.gu-mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.gu-mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
 .gu-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gu-gap); }
 .gu-col { display: flex; flex-direction: column; gap: var(--gu-gap); }
 /* Inside a stack the gap owns the rhythm; block margins would double it. */
 .gu-col > :is(.gu-title, .gu-subtitle, .gu-body, .gu-caption, .gu-divider) { margin: 0; }
 .gu-spacer { flex: 1 1 auto; }
 .gu-divider { border: 0; border-top: 1px solid var(--gu-line); margin: 12px 0; }
-/* Surfaces: prefer ONE surface per widget. Cards group; panels nest flat. */
+/* Surfaces: prefer ONE surface per widget. Cards rest on a crisp 1px border, no drop shadows. */
 .gu-card {
   background: var(--gu-elev);
   border: 1px solid var(--gu-line);
   border-radius: 12px;
-  box-shadow: var(--gu-shadow);
   padding: 14px;
 }
 .gu-card.is-selected {
   background: color-mix(in oklab, var(--gu-brand) 6%, var(--gu-elev));
-  box-shadow: inset 0 0 0 1.5px var(--gu-brand), var(--gu-shadow);
+  box-shadow: inset 0 0 0 1.5px var(--gu-brand);
   border-color: transparent;
 }
 .gu-panel {
@@ -191,7 +202,7 @@ body {
   appearance: none; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   min-height: 32px; padding: 0 14px;
-  font: inherit; font-size: 13px; font-weight: 550; line-height: 1.2; white-space: nowrap;
+  font: inherit; font-size: 13px; font-weight: 500; line-height: 1.2; white-space: nowrap;
   color: var(--gu-text);
   background: var(--gu-elev);
   border: 1px solid var(--gu-line);
@@ -224,7 +235,7 @@ body {
 }
 .gu-segmented .gu-btn, .gu-segmented button {
   min-height: 28px; padding: 0 12px; min-width: 0;
-  font-family: inherit; font-size: 12.5px; font-weight: 550; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: transparent; border: 0; border-radius: 8px; box-shadow: none; color: var(--gu-text-dim);
 }
@@ -237,7 +248,7 @@ body {
 .gu-choice {
   appearance: none; cursor: pointer; -webkit-tap-highlight-color: transparent;
   min-height: 40px; padding: 8px 10px;
-  font: inherit; font-size: 13px; font-weight: 550; color: var(--gu-text);
+  font: inherit; font-size: 13px; font-weight: 500; color: var(--gu-text);
   background: var(--gu-elev); border: 1px solid var(--gu-line); border-radius: 10px;
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
 }
@@ -296,13 +307,13 @@ body {
   width: 17px; height: 17px; margin: 0; flex: none; accent-color: var(--gu-accent); cursor: pointer;
 }
 .gu-field { display: flex; flex-direction: column; gap: 6px; }
-.gu-field > span { font-size: 12px; font-weight: 550; color: var(--gu-text-dim); display: flex; justify-content: space-between; gap: 8px; }
-.gu-field > span output, .gu-field > span .gu-field-value { font-weight: 600; color: var(--gu-text); font-variant-numeric: tabular-nums; }
+.gu-field > span { font-size: 12px; font-weight: 500; color: var(--gu-text-dim); display: flex; justify-content: space-between; gap: 8px; }
+.gu-field > span output, .gu-field > span .gu-field-value { font-weight: 500; color: var(--gu-text); font-variant-numeric: tabular-nums; }
 .gu-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; min-height: 28px; }
 .gu-chip {
   display: inline-flex; align-items: center; gap: 5px;
   min-height: 24px; padding: 2px 10px; border-radius: 999px;
-  font-size: 12px; font-weight: 550;
+  font-size: 12px; font-weight: 500;
   color: var(--gu-text-dim);
   background: var(--gu-fill);
   border: 0;
@@ -316,7 +327,7 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
 .gu-badge {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 600; line-height: 1.4; white-space: nowrap;
+  font-size: 11px; font-weight: 500; line-height: 1.4; white-space: nowrap;
   color: var(--gu-text-dim);
   background: var(--gu-fill);
 }
@@ -338,17 +349,16 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
   background: var(--gu-elev);
   border: 1px solid var(--gu-line);
   border-radius: 12px;
-  box-shadow: var(--gu-shadow);
   padding: 12px;
 }
-.gu-kpi-value { display: block; font-size: 21px; font-weight: 650; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.gu-kpi-value { display: block; font-size: 21px; font-weight: 500; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .gu-kpi-label { display: block; font-size: 12px; font-weight: 500; color: var(--gu-text-faint); margin-top: 2px; }
 /* Tables: hairlines only, no zebra, always inside .gu-table-wrap. */
 .gu-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: var(--gu-radius); }
 .gu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .gu-table th {
-  text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.06em; color: var(--gu-text-faint); white-space: nowrap;
+  text-align: left; font-size: 11px; font-weight: 500;
+  color: var(--gu-text-faint); white-space: nowrap;
   padding: 8px 10px; border-bottom: 1px solid var(--gu-line);
 }
 .gu-table td {
@@ -371,7 +381,7 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
   background: var(--gu-chart-1);
   transition: width 260ms ease;
 }
-.gu-bar-value { flex: 0 0 auto; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gu-bar-value { flex: 0 0 auto; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .gu-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--gu-text-dim); }
 .gu-swatch {
   display: inline-block; width: 9px; height: 9px; border-radius: 3px;
@@ -684,6 +694,21 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
   });
   // Runs when the widget leaves the page (iframe swap, navigation, close).
   window.addEventListener("pagehide", runDestroy);
+  // Receive live host theme/accent updates from the parent window.
+  var __accents = { teal: 1, neutral: 1, violet: 1, blue: 1, green: 1, amber: 1, orange: 1, coral: 1, rose: 1 };
+  window.addEventListener("message", function (ev) {
+    if (ev.source !== window.parent) return;
+    var d = ev.data;
+    if (!d || typeof d !== "object" || d.__gu !== "theme") return;
+    if (d.theme === "dark" || d.theme === "light") {
+      document.documentElement.setAttribute("data-theme", d.theme);
+    }
+    if (typeof d.accent === "string" && __accents[d.accent]) {
+      if (d.accent === "teal") document.documentElement.removeAttribute("data-accent");
+      else document.documentElement.setAttribute("data-accent", d.accent);
+    }
+  });
+  try { window.parent.postMessage({ __gu: "ready" }, "*"); } catch {}
 })();
 `;
 }
@@ -759,6 +784,8 @@ export function buildJsxImportMap(moduleUrls: {
 
 export type WidgetDocParams = {
   theme: "dark" | "light";
+  /** Optional host accent (defaults to "teal" when omitted). */
+  accent?: string;
   /** URL of the stored widget module (compiled TSX source, served as ESM). */
   moduleUrl: string;
   /** JSON import map (from buildJsxImportMap) resolving react + lib modules. */
@@ -827,6 +854,17 @@ export function widgetMetaCSP(nonce: string, origin: string): string {
   ].join("; ");
 }
 
+const VALID_DOC_ACCENTS = new Set([
+  "neutral",
+  "violet",
+  "blue",
+  "green",
+  "amber",
+  "orange",
+  "coral",
+  "rose",
+]);
+
 /**
  * The final widget document. Served by /api/indirect-code/gen-ui/widgets/:id
  * with widgetCSP() as a response header (CSP meta is inert here — the header
@@ -834,8 +872,10 @@ export function widgetMetaCSP(nonce: string, origin: string): string {
  * contexts).
  */
 export function buildWidgetDocument(params: WidgetDocParams): string {
+  const accentAttr =
+    params.accent && VALID_DOC_ACCENTS.has(params.accent) ? ` data-accent="${params.accent}"` : "";
   return `<!doctype html>
-<html data-theme="${params.theme}"><head><meta charset="utf-8">
+<html data-theme="${params.theme}"${accentAttr}><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="${widgetMetaCSP(params.scriptNonce, params.origin)}">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${WIDGET_BASE_CSS}</style>

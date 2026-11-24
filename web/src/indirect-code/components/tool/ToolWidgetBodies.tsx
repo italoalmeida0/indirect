@@ -2,7 +2,6 @@ import { createMemo, createSignal, For, Show } from "solid-js";
 import { Icon as Iconify } from "../../../components/icon";
 import { press } from "../../../ds/motion/press";
 import { CodeBlock, DiffView, stripLinePrefixNotice } from "../CodeBlock";
-import { StreamingMarkdown } from "../StreamingMarkdown";
 import { diffStat } from "../../transcript";
 import { parseEditResults, synthesizeEditSectionsFromArgs, type FileEditSection } from "../../utils/toolEdits";
 import { extractTodoItems, resolveWidgetId } from "../../utils/tools";
@@ -268,12 +267,17 @@ function WidgetEditCard(props: { sec: FileEditSection; scrollKey?: string; hideH
       <Show when={!props.hideHeader}>
         <button
           type="button"
+          ref={press}
           aria-expanded={open()}
-          onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => setOpen(!open())}
           class="group/file flex w-full items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted/60 text-xs text-left cursor-pointer transition-colors select-none"
         >
           <div class="flex items-center gap-2 min-w-0 flex-1">
+            <Iconify
+              icon="lucide:chevron-right"
+              size={12}
+              class={`shrink-0 text-fg-muted transition-transform duration-150 ease-out ${open() ? "rotate-90" : ""}`}
+            />
             <Iconify icon="lucide:layout-template" size={13} class="shrink-0 text-accent" />
             <span class="font-mono font-medium text-fg truncate">{props.sec.file || "widget"}</span>
             <span class="shrink-0 rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg-secondary">
@@ -285,7 +289,7 @@ function WidgetEditCard(props: { sec: FileEditSection; scrollKey?: string; hideH
               </span>
             </Show>
             <Show when={stat().add > 0 || stat().del > 0}>
-              <span class="font-mono text-2xs shrink-0 tabular-nums">
+              <span class="font-mono text-2xs shrink-0 tabular-nums ml-auto">
                 <Show when={stat().add > 0}>
                   <span class="text-success">+{stat().add}</span>
                 </Show>
@@ -298,11 +302,6 @@ function WidgetEditCard(props: { sec: FileEditSection; scrollKey?: string; hideH
               </span>
             </Show>
           </div>
-          <Iconify
-            icon="lucide:chevron-right"
-            size={12}
-            class={`shrink-0 text-fg-muted transition-transform duration-150 ease-out ${open() ? "rotate-90" : ""}`}
-          />
         </button>
       </Show>
       <Show when={effectiveOpen()}>
@@ -477,15 +476,10 @@ export function ToolWidgetBodies(props: ToolPartProps) {
         <Show
           when={!(props.m.args().delete || details()?.deleted) || Boolean(props.u.result?.isError)}
           fallback={
-            <div class="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-              <div class="flex items-center gap-2 min-w-0">
-                <Iconify icon="lucide:trash-2" size={13} class="shrink-0 text-fg-muted" />
-                <span class="font-mono font-medium text-fg truncate">{widgetId()}</span>
-                <span class="text-fg-muted truncate">Removed from session widget store</span>
-              </div>
-              <span class="shrink-0 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
-                deleted
-              </span>
+            <div class="flex items-center gap-2 px-3 py-2 text-xs min-w-0">
+              <Iconify icon="lucide:trash-2" size={13} class="shrink-0 text-fg-muted" />
+              <span class="font-mono font-medium text-fg truncate">{widgetId()}</span>
+              <span class="text-fg-muted truncate">Widget removed</span>
             </div>
           }
         >
@@ -743,8 +737,8 @@ export function ToolWidgetBodies(props: ToolPartProps) {
               <Show when={lint().errors.length === 0 && !lint().output && lint().notes.length === 0}>
                 <div class="px-3 py-2 text-xs text-fg-secondary">
                   {lint().skipped
-                    ? "Gateway linter unavailable · widget stored without smoke-render validation."
-                    : "Compiled TSX, passed sandbox import audit, and smoke-rendered cleanly."}
+                    ? "Validation skipped · widget saved."
+                    : "Compiled and verified."}
                 </div>
               </Show>
               <Show when={typeof props.m.args().test === "string" && String(props.m.args().test).trim().length > 0}>
@@ -859,12 +853,7 @@ export function ToolWidgetBodies(props: ToolPartProps) {
               <div class="flex items-center justify-between gap-3 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
                 <div class="flex items-center gap-2 min-w-0">
                   <Iconify icon="lucide:list-checks" size={13} class="shrink-0 text-fg-muted" />
-                  <span class="font-medium text-fg-secondary">Task checklist</span>
-                  <Show when={total() > 0}>
-                    <span class="font-mono text-2xs text-fg-muted tabular-nums">
-                      {done()}/{total()} completed
-                    </span>
-                  </Show>
+                  <span class="font-medium text-fg-secondary">Task plan</span>
                 </div>
                 <Show when={total() > 0}>
                   <div class="flex items-center gap-2 shrink-0">
@@ -950,55 +939,32 @@ export function ToolWidgetBodies(props: ToolPartProps) {
       {/* use_skill */}
       <Show when={toolName() === "use_skill"}>
         {(() => {
-          const skillName = () =>
-            String(props.m.args().name || props.m.args().skill || details()?.skill || "skill").trim();
           const once = () => Boolean(props.m.args().once);
           const rawBody = () => (props.m.output() || "").trim();
-          const isAckPlaceholder = () => /^<skill\b[^>]*>$/i.test(rawBody());
           return (
-            <>
-              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle bg-surface-subtle px-3 py-1.5 text-xs">
-                <div class="flex items-center gap-1.5 min-w-0">
-                  <Iconify icon="lucide:sparkles" size={13} class="shrink-0 text-accent" />
-                  <span class="font-mono font-medium text-fg truncate">{skillName()}</span>
+            <Show
+              when={!props.u.result?.isError}
+              fallback={
+                <div class="px-3 py-2 text-xs font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
+                  {rawBody() ||
+                    props.m.mergedEnv()?.error ||
+                    props.m.mergedEnv()?.info ||
+                    "Skill activation failed."}
                 </div>
-                <Show when={!props.u.result?.isError}>
-                  <span class="shrink-0 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
-                    {once() ? "this turn only" : "session active"}
-                  </span>
-                </Show>
+              }
+            >
+              <div class="flex items-center justify-between gap-2 px-3 py-2 text-xs text-fg-secondary">
+                <span>
+                  {!props.u.result
+                    ? props.active
+                      ? "Loading skill…"
+                      : "Skill activation did not complete."
+                    : once()
+                      ? "Active for this turn."
+                      : "Active in this session."}
+                </span>
               </div>
-              <Show
-                when={!props.u.result?.isError}
-                fallback={
-                  <div class="px-3 py-2 text-xs font-mono text-danger bg-danger-subtle whitespace-pre-wrap [overflow-wrap:anywhere] break-words">
-                    {rawBody() ||
-                      props.m.mergedEnv()?.error ||
-                      props.m.mergedEnv()?.info ||
-                      "Skill activation failed."}
-                  </div>
-                }
-              >
-                <Show
-                  when={rawBody() && !isAckPlaceholder()}
-                  fallback={
-                    <div class="px-3 py-2 text-xs text-fg-secondary">
-                      {!props.u.result
-                        ? props.active
-                          ? "Loading skill instructions…"
-                          : "Skill activation did not complete."
-                        : "Skill instructions are loaded and active in session context."}
-                    </div>
-                  }
-                >
-                  <div class="px-3 py-2 text-xs leading-relaxed text-fg rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words">
-                    <StreamingMarkdown basic={true} noNestedScroll>
-                      {rawBody()}
-                    </StreamingMarkdown>
-                  </div>
-                </Show>
-              </Show>
-            </>
+            </Show>
           );
         })()}
       </Show>

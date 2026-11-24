@@ -275,14 +275,27 @@ func TestCompactionProgressEmitsCompactProgressEvent(t *testing.T) {
 		t.Fatalf("expected compact text, got: %v", ev1["text"])
 	}
 
-	// 2. Regular tool progress with non-empty ID
-	w.handleEvent(core.EvToolProgress{ID: "call-123", Text: "Running bash..."})
+	// 2. System recovery progress with empty ID routes to compact_progress too
+	w.handleEvent(core.EvToolProgress{Text: "Repetition detected — retrying response…"})
 	if len(emitted) != 2 {
 		t.Fatalf("expected 2 events, got %d", len(emitted))
 	}
-	ev2, ok := emitted[1]["event"].(map[string]any)
+	evRecovery, ok := emitted[1]["event"].(map[string]any)
+	if !ok || evRecovery["type"] != "compact_progress" {
+		t.Fatalf("expected compact_progress for system recovery text, got: %+v", emitted[1])
+	}
+	if evRecovery["text"] != "Repetition detected — retrying response…" {
+		t.Fatalf("expected recovery text, got: %v", evRecovery["text"])
+	}
+
+	// 3. Regular tool progress with non-empty ID
+	w.handleEvent(core.EvToolProgress{ID: "call-123", Text: "Running bash..."})
+	if len(emitted) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(emitted))
+	}
+	ev2, ok := emitted[2]["event"].(map[string]any)
 	if !ok || ev2["type"] != "tool_progress" {
-		t.Fatalf("expected tool_progress event type, got: %+v", emitted[1])
+		t.Fatalf("expected tool_progress event type, got: %+v", emitted[2])
 	}
 	if ev2["id"] != "call-123" {
 		t.Fatalf("expected tool call id, got: %v", ev2["id"])

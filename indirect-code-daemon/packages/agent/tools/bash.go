@@ -434,7 +434,7 @@ func finishBashCommand(a bashArgs, cwd string, start time.Time, output *outputAc
 		attrs = append(attrs, core.Attr{Key: "page", Value: fmt.Sprintf("%d-%d/%d", startLine, endLine, snapshot.totalLines)})
 		if snapshot.lastLinePartial {
 			attrs = append(attrs, core.Attr{Key: "partial_last_line", Value: formatSize(output.getLastLineBytes())})
-		} else {
+		} else if endLine < snapshot.totalLines {
 			next := endLine + 1
 			attrs = append(attrs, core.Attr{Key: "next", Value: fmt.Sprintf("%d", next)})
 		}
@@ -524,7 +524,7 @@ func capToolDetailPreview(text string, maxBytes int) (string, bool) {
 	if omitted < 0 {
 		omitted = 0
 	}
-	marker := fmt.Sprintf("\n... [%d bytes omitted] ...\n", omitted)
+	marker := fmt.Sprintf("\n… [%d bytes omitted] …\n", omitted)
 	for len(headPart)+len(marker)+len(tailPart) > maxBytes && tailBudget > 16 {
 		tailBudget -= 32
 		tailPart = snapUTF8Suffix(text, tailBudget)
@@ -532,7 +532,7 @@ func capToolDetailPreview(text string, maxBytes int) (string, bool) {
 		if omitted < 0 {
 			omitted = 0
 		}
-		marker = fmt.Sprintf("\n... [%d bytes omitted] ...\n", omitted)
+		marker = fmt.Sprintf("\n… [%d bytes omitted] …\n", omitted)
 	}
 	return headPart + marker + tailPart, true
 }

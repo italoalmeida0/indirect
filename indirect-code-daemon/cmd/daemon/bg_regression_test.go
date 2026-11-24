@@ -176,7 +176,7 @@ func TestBgInlineResultNeverLeaksPaths(t *testing.T) {
 	// Truncation is an envelope attr (page/truncated), not body prose.
 	// The exact line count is platform-dependent (\r\n output on Windows
 	// changes the count), so assert the SHAPE: page="from-to/total" with
-	// truncated=true and a next cursor beyond the shown range.
+	// truncated=true and no bogus next cursor past totalLines on tail output.
 	attrs := map[string]string{}
 	for _, a := range res.Attrs {
 		attrs[a.Key] = a.Value
@@ -195,8 +195,12 @@ func TestBgInlineResultNeverLeaksPaths(t *testing.T) {
 	if !(fi <= ti && ti <= totaI) {
 		t.Fatalf("page range out of order: %q", attrs["page"])
 	}
-	if attrs["next"] != fmt.Sprintf("%d", ti+1) {
-		t.Fatalf("next attr must continue after %s: %q", to, attrs["next"])
+	if ti < totaI {
+		if attrs["next"] != fmt.Sprintf("%d", ti+1) {
+			t.Fatalf("next attr must continue after %s: %q", to, attrs["next"])
+		}
+	} else if attrs["next"] != "" {
+		t.Fatalf("tail-truncated output at end (%s/%s) must not emit next attr: %q", to, total, attrs["next"])
 	}
 	// Details are UI-only (core.ToolResult.Details never reaches the LLM —
 	// provider.ToolResultBlock carries Content only), so the full output

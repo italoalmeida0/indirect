@@ -1813,11 +1813,11 @@ func (s *wsServer) onSlashCommand(res spawnResult, sessionID, text string) bool 
 		// assistant reply), not a transient toast. The frontend and the
 		// black-box tests both rely on it as a deterministic, model-free
 		// way to seed a [user, assistant] pair.
-		s.slashReply(sessionID, text, "### ⚡ Indirect Code Slash Commands\n"+
+		s.slashReply(sessionID, text, "### Indirect Code Slash Commands\n"+
 			"- `/compact` — Summarize and compact conversation to free up context\n"+
 			"- `/clear` — Start a fresh blank session (history is kept)\n"+
 			"- `/auto` — Smart sandboxed autonomy (prompts on risky/outside actions)\n"+
-			"- `/ask` — Supervised sandboxed mode (prompts before tool actions)\n"+
+			"- `/ask` — Ask for approval mode (prompts before tool actions)\n"+
 			"- `/full` — Full host access without sandbox restrictions\n"+
 			"- `/jail` — Lock session sandbox (alias for `/auto`)\n"+
 			"- `/unjail` — Unlock session sandbox (alias for `/full`)")

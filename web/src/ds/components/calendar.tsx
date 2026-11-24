@@ -431,12 +431,10 @@ export function Calendar(props: CalendarProps) {
           <Show when={props.showToday}>
             <button
               type="button"
+              ref={press}
               class="ui-calendar-today-btn"
               aria-disabled={todayIdle() || undefined}
               aria-label={`Today, ${today.toLocaleDateString(locale(), { dateStyle: "full" })}`}
-              onPointerDown={(e) => {
-                if (!todayIdle()) press(e.currentTarget);
-              }}
               onClick={goToToday}
             >
               Today
@@ -444,13 +442,11 @@ export function Calendar(props: CalendarProps) {
           </Show>
           <button
             type="button"
+            ref={press}
             class="ui-calendar-nav-btn"
             aria-label="Previous month"
             data-tip="Previous month"
             aria-disabled={previousDisabled() || undefined}
-            onPointerDown={(e) => {
-              if (!previousDisabled()) press(e.currentTarget);
-            }}
             onClick={() => {
               if (!previousDisabled()) changeMonth(previousMonth());
             }}
@@ -459,13 +455,11 @@ export function Calendar(props: CalendarProps) {
           </button>
           <button
             type="button"
+            ref={press}
             class="ui-calendar-nav-btn"
             aria-label="Next month"
             data-tip="Next month"
             aria-disabled={nextDisabled() || undefined}
-            onPointerDown={(e) => {
-              if (!nextDisabled()) press(e.currentTarget);
-            }}
             onClick={() => {
               if (!nextDisabled()) changeMonth(nextMonth());
             }}
@@ -825,7 +819,7 @@ export function RangeCalendar(props: RangeCalendarProps) {
                   aria-pressed={selected()}
                   tabIndex={present && key === activeTabKey() ? 0 : -1}
                   class={`analytics-day ui-range-day ${outside ? "is-outside" : ""} ${selected() ? "is-selected" : between() ? "is-between" : ""} ${hasSpan() && isStart() ? "is-range-start" : ""} ${hasSpan() && isEnd() ? "is-range-end" : ""} ${key === todayKey ? "is-today" : ""}`}
-                  onPointerDown={(e) => press(e.currentTarget)}
+                  ref={press}
                   onClick={() => select(key)}
                   onPointerEnter={() => {
                     if (choosingEnd()) setHover(key);
@@ -850,7 +844,7 @@ export function RangeCalendar(props: RangeCalendarProps) {
           aria-label="Previous month"
           data-tip="Previous month"
           class="analytics-icon-button"
-          onPointerDown={(e) => press(e.currentTarget)}
+          ref={press}
           onClick={() => move(-1)}
         >
           <Glyph icon="lucide:chevron-left" size={16} />
@@ -865,7 +859,7 @@ export function RangeCalendar(props: RangeCalendarProps) {
             <button
               type="button"
               class="ui-calendar-today-btn"
-              onPointerDown={(e) => press(e.currentTarget)}
+              ref={press}
               onClick={goToToday}
             >
               Today
@@ -876,7 +870,7 @@ export function RangeCalendar(props: RangeCalendarProps) {
             aria-label="Next month"
             data-tip="Next month"
             class="analytics-icon-button"
-            onPointerDown={(e) => press(e.currentTarget)}
+            ref={press}
             onClick={() => move(1)}
           >
             <Glyph icon="lucide:chevron-right" size={16} />

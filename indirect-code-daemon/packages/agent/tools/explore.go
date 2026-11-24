@@ -421,7 +421,7 @@ func extractExploreSynthesis(history []provider.Message, turnsUsed, toolCallsRun
 		if len(parts) > 0 {
 			text := strings.Join(parts, "\n\n")
 			if stoppedByCap {
-				text += fmt.Sprintf("\n\n[Note: explore reached its %d-turn cap after %d tool call(s).]", turnsUsed, toolCallsRun)
+				text += fmt.Sprintf("\n\n[Note: explore reached its %d-turn cap after %d tool call%s.]", turnsUsed, toolCallsRun, pluralS(toolCallsRun))
 			}
 			return text
 		}
@@ -429,7 +429,7 @@ func extractExploreSynthesis(history []provider.Message, turnsUsed, toolCallsRun
 
 	// Fallback if the model exhausted its turn budget calling tools without emitting prose.
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Explore subagent stopped after %d turn(s) and %d read-only tool call(s) without a final prose synthesis.", turnsUsed, toolCallsRun)
+	fmt.Fprintf(&sb, "Explore subagent stopped after %d turn%s and %d read-only tool call%s without a final prose synthesis.", turnsUsed, pluralS(turnsUsed), toolCallsRun, pluralS(toolCallsRun))
 	var snippets []string
 	for i := len(history) - 1; i >= 0 && len(snippets) < 3; i-- {
 		m := history[i]

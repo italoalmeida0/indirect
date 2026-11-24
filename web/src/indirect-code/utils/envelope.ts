@@ -82,19 +82,21 @@ export interface FooterFact {
 export function footerFromAttrs(a: Record<string, string>): FooterFact[] {
   const parts: FooterFact[] = [];
   if (a.exit !== undefined) parts.push({ label: `exit ${a.exit}`, tone: a.exit === "0" ? "muted" : "fail" });
-  else if (a.status) parts.push({ label: a.status, tone: a.status === "running" ? "ok" : "muted" });
+  else if (a.status && a.status !== "background") parts.push({ label: a.status, tone: a.status === "running" ? "ok" : "muted" });
   if (a.duration) parts.push({ label: `Took ${a.duration}`, tone: "muted" });
   if (a.spilled === "true") {
     const spillLines = a.spill_lines !== undefined ? Number(a.spill_lines) : NaN;
     parts.push({
       label:
         Number.isFinite(spillLines) && spillLines > 0
-          ? `saved full output (${Math.trunc(spillLines).toLocaleString("en-US")} lines) to brain`
-          : "saved full output to brain",
+          ? `saved full output (${Math.trunc(spillLines).toLocaleString("en-US")} lines)`
+          : "saved full output",
       tone: "muted",
     });
   } else if (a.truncated === "true" && a.page) {
     parts.push({ label: `${a.page} truncated`, tone: "muted" });
+  } else if (a.truncated === "true") {
+    parts.push({ label: "truncated", tone: "muted" });
   } else if (a.page) {
     parts.push({ label: a.page, tone: "muted" });
   }

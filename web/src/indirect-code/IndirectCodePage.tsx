@@ -15,7 +15,6 @@ import { SidebarToggle } from "./components/SidebarToggle";
 import { Icon as Iconify } from "../components/icon";
 import { IndirectBrand } from "./components/IndirectBrand";
 import { HostCard } from "./components/HostCard";
-import { RemoteHints } from "./presentation";
 import { projectForDirectory } from "./paths";
 import { createMobileFlag } from "./utils/mobileFlag";
 import { useIndirectCodeDocumentScope } from "./utils/documentScope";
@@ -89,11 +88,20 @@ function createNarrowViewportFlag(): () => boolean {
   return narrow;
 }
 
+function isApplePlatform(): boolean {
+  try {
+    return typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "");
+  } catch {
+    return false;
+  }
+}
+
 /** The workspace header becomes the native titlebar when WCO is enabled. */
 function WorkspaceHeader() {
   const ui = useUI();
   const session = useSession();
   const transcript = useContext(TranscriptCtx);
+  const shortcutLabel = isApplePlatform() ? "⌘K" : "Ctrl+K";
   const isHistory = () => Boolean(ui.historyView?.());
   const title = () => isHistory() ? "Conversation history"
     : session.draftMode() ? "New conversation" : session.activeSession()?.title || "Conversation";
@@ -134,11 +142,11 @@ function WorkspaceHeader() {
               type="button"
               onClick={() => ui.setHistoryView?.(!isHistory())}
               class={`ui-icon-button h-7 w-7 rounded-lg ${isHistory() ? "bg-surface-muted text-fg" : "text-fg-muted hover:bg-surface-muted hover:text-fg"}`}
-              data-rc-tip="Conversation history (Ctrl+K)"
+              data-rc-tip={`Conversation history (${shortcutLabel})`}
               data-rc-tip-placement="bottom"
-              aria-label="Search conversations"
+              aria-label="Conversation history"
             >
-              <Iconify icon="lucide:search" size={14} />
+              <Iconify icon="lucide:history" size={14} />
             </button>
             <button
               type="button"
@@ -217,9 +225,18 @@ export function UpdateFreezeOverlay() {
   };
   const updating = () => updatingHostId() !== "";
   const updatingHost = () => hosts.hosts().find((h) => h.id === updatingHostId());
+  const hostName = () => updatingHost()?.name || updatingHost()?.hostname || "this host";
   const upd = () => {
     const hid = updatingHostId();
     return hid ? ui.daemonUpdate.stateFor(hid) : null;
+  };
+  const versionTransition = () => {
+    const info = upd();
+    if (!info) return "";
+    if (info.current && info.target && info.current !== info.target) {
+      return `${info.current} → ${info.target}`;
+    }
+    return info.target || "";
   };
   return (
     <Show when={updating()}>
@@ -228,38 +245,38 @@ export function UpdateFreezeOverlay() {
           <div>
             <IndirectBrand />
             <h2 class="mt-5 text-lg font-medium text-fg">
-              Updating {updatingHost()?.name || updatingHost()?.hostname || "daemon"}…
+              Updating {hostName()}
             </h2>
             <p class="mx-auto mt-2 max-w-sm text-[13px] leading-relaxed text-fg-secondary">
-              {upd()?.target ? `Installing ${upd()?.target}. ` : ""}Sessions are safe, nothing is lost.
+              Your conversations and files are safe. This workspace will reconnect automatically.
             </p>
           </div>
           <div class="mx-auto max-w-sm space-y-3 rounded-panel border border-border bg-surface p-4 text-left">
-            <div class="flex items-center gap-3">
-              <span aria-hidden="true" class="ui-spinner text-fg-secondary text-sm shrink-0" />
-              <div class="min-w-0 flex-1 text-xs">
-                <div class="flex items-center justify-between gap-2">
-                  <p class="font-medium text-fg">Updating…</p>
-                  <Show when={upd()?.current && upd()?.target}>
-                    <span class="font-mono text-2xs text-fg-muted tabular-nums">
-                      {upd()?.current} → {upd()?.target}
-                    </span>
-                  </Show>
-                </div>
-                <p class="mt-0.5 truncate text-2xs text-fg-muted">
-                  {updatingHost()?.name || updatingHost()?.hostname || updatingHostId()} · {upd()?.current ? `from ${upd()?.current}` : "working"}…
-                </p>
+            <div class="flex items-center justify-between gap-3 text-xs">
+              <div class="flex items-center gap-2.5 min-w-0">
+                <span aria-hidden="true" class="ui-spinner w-3.5 h-3.5 text-fg-secondary shrink-0" />
+                <span class="font-medium text-fg truncate">Installing update</span>
               </div>
+              <Show when={versionTransition()}>
+                <span class="font-mono text-2xs text-fg-muted tabular-nums shrink-0">
+                  {versionTransition()}
+                </span>
+              </Show>
             </div>
             <div class="h-1 overflow-hidden rounded-full bg-surface-muted">
               <div class="h-full w-1/3 animate-[rc-update-slide_1.2s_ease-in-out_infinite_alternate] rounded-full bg-fg" />
             </div>
           </div>
-          {/* Shared HostCard (same component as the update overlay):
+          {/* Shared HostCard (same component as the sidebar):
               per-instance anchor ref + opener gating, so the menu can
               never jump to the hidden card. */}
-          <div class="mx-auto w-full max-w-sm rounded-panel border border-border bg-surface p-1.5 text-left">
-            <HostCard id="overlay" />
+          <div class="mx-auto w-full max-w-sm space-y-1.5 text-left">
+            <Show when={hosts.hosts().length > 1}>
+              <p class="px-1 text-2xs text-fg-muted">Switch to another host</p>
+            </Show>
+            <div class="rounded-panel border border-border bg-surface p-1.5">
+              <HostCard id="overlay" />
+            </div>
           </div>
         </div>
       </div>
@@ -356,6 +373,7 @@ export default function IndirectCodePage() {
       pendingDiscardReloadSid = null;
       setCreatingSession(false);
       projects.setFolderLoading(false);
+      projects.setCreatingProject(false);
       mirror.dataLayer.disconnect();
       transcript.stopThinkingTimer();
       composer.cancelUploads();
@@ -587,6 +605,7 @@ export default function IndirectCodePage() {
     historyView,
     updating: isActiveHostUpdating,
     isMobile,
+    overlaySidebar,
     sidebarOpen,
     hosts: () => hosts.hosts(),
     sessions: () => mirror.sessions(),
@@ -647,6 +666,7 @@ export default function IndirectCodePage() {
   const turnNotify = createTurnNotify({
     hosts: () => hosts.hosts(),
     sessions: () => mirror.sessions(),
+    sessionsForHost: (hid) => mirror.sessionsForHost(hid),
     toast: notice.toast,
     activeHostId: () => hosts.activeHostId(),
     activeSessionId: () => (historyView() ? "" : activeSessionId()),
@@ -845,7 +865,7 @@ export default function IndirectCodePage() {
         options.setActiveModel(models[0]?.id || "");
       }
     } catch {
-      notice.toast("Could not refresh the gateway model catalog", "err");
+      notice.toast("Could not refresh models.", "err");
     }
   }
 
@@ -856,8 +876,11 @@ export default function IndirectCodePage() {
   // --- Session orchestration (composes the domains) ---
   function selectSession(id: string, messageIdx?: number) {
     if (creatingSession()) return;
-    if (activeSessionId() === id && typeof messageIdx === "number") {
-      transcript.jumpToMessage(messageIdx);
+    if (activeSessionId() === id && !draftMode()) {
+      closeMenus();
+      if (typeof messageIdx === "number") {
+        transcript.jumpToMessage(messageIdx);
+      }
       return;
     }
     const prevSessionId = untrack(activeSessionId);
@@ -1039,6 +1062,28 @@ export default function IndirectCodePage() {
       transcript.noteForkAndResendResult({ ...msg, ok: false });
     }
     if (settings.handleSettingsMessage(msg)) return;
+    if ((msg as { type?: string }).type === "system_notice") {
+      const sn = msg as { text?: unknown; message?: unknown; level?: unknown };
+      const text =
+        typeof sn.text === "string" && sn.text.trim()
+          ? sn.text.trim()
+          : typeof sn.message === "string" && sn.message.trim()
+            ? sn.message.trim()
+            : "";
+      if (text) {
+        const level = typeof sn.level === "string" ? sn.level.toLowerCase() : "";
+        const kind: "ok" | "err" =
+          level === "warn" ||
+          level === "warning" ||
+          level === "error" ||
+          level === "err" ||
+          /\b(?:timed out|cancelled|failed)\b/i.test(text)
+            ? "err"
+            : "ok";
+        notice.toast(text, kind);
+      }
+      return;
+    }
     switch (msg.type) {
       case "relay_connected":
         break;
@@ -1145,7 +1190,13 @@ export default function IndirectCodePage() {
 
       case "notice": {
         if (msg.message) {
-          const kind: "ok" | "err" = msg.level === "warn" || msg.level === "warning" || msg.level === "error" || msg.level === "err" || /not enough|fail|error|cannot|unable/i.test(msg.message) ? "err" : "ok";
+          const level = (msg.level || "").toLowerCase();
+          const explicitErr = level === "warn" || level === "warning" || level === "error" || level === "err";
+          const explicitOk = level === "ok" || level === "info" || level === "success";
+          const inferredErr =
+            !explicitOk &&
+            /\b(?:not enough|failed|cannot|unable)\b|(?<!\b(?:0|no|zero)\s)\berrors?\b/i.test(msg.message);
+          const kind: "ok" | "err" = explicitErr || inferredErr ? "err" : "ok";
           notice.toast(msg.message, kind);
         }
         break;
@@ -1419,7 +1470,10 @@ export default function IndirectCodePage() {
         if (composer.notePromptReply(msg.requestId, msg.message || "Could not send message")) break;
         if (msg.requestId === creationRequestId) { setCreatingSession(false); }
         if (projects.isFolderRequest(msg.requestId)) { projects.noteFolderRequestFailed(); projects.setFolderLoading(false); projects.setFolderError(msg.message || "Could not browse folders"); break; }
-        if (projects.isProjectCreation(msg.requestId) && projects.showNewProjectModal()) { projects.setFolderError(msg.message || "Could not create project"); break; }
+        if (projects.isProjectCreation(msg.requestId)) {
+          projects.setCreatingProject(false);
+          if (projects.showNewProjectModal()) { projects.setFolderError(msg.message || "Could not create project"); break; }
+        }
         if (msg.sessionId && msg.sessionId !== activeSessionId()) break;
         if (transcript.editAttachments.failUpload(msg.requestId, msg.message || "Upload failed")) break;
         if (queue.editDraft.failUpload(msg.requestId, msg.message || "Upload failed")) break;
@@ -1438,7 +1492,7 @@ export default function IndirectCodePage() {
         if (msg.replyTo === "pull") break;
 
         transcript.clearCompacting();
-        notice.toast(msg.message || "Daemon returned an error", "err");
+        notice.toast(msg.message || "Host returned an error", "err");
         if (activeSessionId()) transcript.fetchSession(activeSessionId());
         break;
       }
@@ -1527,13 +1581,20 @@ export default function IndirectCodePage() {
     // Esc cascades: menus -> overlay drawer -> history -> editor -> preview -> confirm.
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
+      const modalBlocking = () =>
+        Boolean(
+          document.querySelector('[role="dialog"]:not([data-state="closing"]):not([data-floatmenu])') ||
+            modals.confirmState() ||
+            modals.choiceState(),
+        );
       if (mod && e.key.toLowerCase() === "k") {
-        if (document.querySelector('[role="dialog"]:not([data-state="closing"]):not([data-floatmenu])') || modals.confirmState()) return;
+        if (modalBlocking()) return;
         e.preventDefault();
         setHistoryView((prev) => !prev);
         return;
       }
       if (mod && e.key.toLowerCase() === "n") {
+        if (modalBlocking()) return;
         e.preventDefault();
         startNewConversation();
         return;
@@ -2069,7 +2130,6 @@ export default function IndirectCodePage() {
       ui={uiValue}
     >
     <WorkspaceShell>
-      <RemoteHints />
       {/* Main Workspace Layout or Connect Host Onboarding */}
       <Show
         when={hosts.hosts().length > 0}

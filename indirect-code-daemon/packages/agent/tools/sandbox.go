@@ -304,7 +304,7 @@ func (s *Sandbox) CheckPath(path string) error {
 				return nil
 			}
 			if s.Locked() && protRead {
-				return fmt.Errorf("jailed: %s", protReason)
+				return fmt.Errorf("Restricted to workspace: %s", protReason)
 			}
 		}
 	}
@@ -322,7 +322,7 @@ func (s *Sandbox) CheckPath(path string) error {
 		return fmt.Errorf("sandbox path: %w", err)
 	}
 	if !s.isAllowed(rootAbs, target) {
-		return fmt.Errorf("jailed: path %q is outside sandbox root %q (use /unjail to disable)", path, s.Root)
+		return fmt.Errorf("Restricted to workspace: path %q is outside workspace root %q (switch to Full access to allow)", path, s.Root)
 	}
 	return nil
 }
@@ -403,7 +403,7 @@ func (s *Sandbox) CheckCommand(cmd string) error {
 
 func (s *Sandbox) checkLockedCommandDepth(cmd string, depth int) error {
 	if depth > 8 {
-		return fmt.Errorf("jailed: deeply nested shell command is not allowed (use /unjail to disable)")
+		return fmt.Errorf("Restricted to workspace: deeply nested shell command is not allowed (switch to Full access to allow)")
 	}
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
@@ -419,7 +419,7 @@ func (s *Sandbox) checkLockedCommandDepth(cmd string, depth int) error {
 	lower := strings.ToLower(cmd)
 	for _, b := range banned {
 		if strings.Contains(lower, strings.ToLower(b)) {
-			return fmt.Errorf("jailed: command contains banned pattern %q (use /unjail to disable)", b)
+			return fmt.Errorf("Restricted to workspace: command contains banned pattern %q (switch to Full access to allow)", b)
 		}
 	}
 	for _, sub := range extractShellSubstitutions(cmd) {
@@ -1194,7 +1194,7 @@ func (s *Sandbox) checkCommandPath(path string) error {
 	}
 	expanded := expandHome(path)
 	if strings.HasPrefix(expanded, "/") && !filepath.IsAbs(expanded) {
-		return fmt.Errorf("jailed: path %q is outside sandbox root %q (use /unjail to disable)", path, s.Root)
+		return fmt.Errorf("Restricted to workspace: path %q is outside workspace root %q (switch to Full access to allow)", path, s.Root)
 	}
 	if !filepath.IsAbs(expanded) {
 		expanded = filepath.Join(s.Root, filepath.FromSlash(expanded))
@@ -1204,7 +1204,7 @@ func (s *Sandbox) checkCommandPath(path string) error {
 		return fmt.Errorf("sandbox path: %w", err)
 	}
 	if !s.isAllowed(rootAbs, target) {
-		return fmt.Errorf("jailed: path %q is outside sandbox root %q (use /unjail to disable)", path, s.Root)
+		return fmt.Errorf("Restricted to workspace: path %q is outside workspace root %q (switch to Full access to allow)", path, s.Root)
 	}
 	return nil
 }
@@ -1224,7 +1224,7 @@ func (s *Sandbox) checkCDTarget(dir string) error {
 	// back inside root, so a `cd /etc` escape would slip through. Treat
 	// it as an unconditional escape attempt: outside any project root.
 	if strings.HasPrefix(expanded, "/") && !filepath.IsAbs(expanded) {
-		return fmt.Errorf("jailed: cd outside sandbox root is not allowed (use /unjail to disable)")
+		return fmt.Errorf("Restricted to workspace: cd outside workspace root is not allowed (switch to Full access to allow)")
 	}
 	if !filepath.IsAbs(expanded) {
 		// Relative targets (including `..`) resolve against the sandbox
@@ -1236,7 +1236,7 @@ func (s *Sandbox) checkCDTarget(dir string) error {
 		return fmt.Errorf("sandbox path: %w", err)
 	}
 	if !s.isAllowed(rootAbs, target) {
-		return fmt.Errorf("jailed: cd outside sandbox root is not allowed (use /unjail to disable)")
+		return fmt.Errorf("Restricted to workspace: cd outside workspace root is not allowed (switch to Full access to allow)")
 	}
 	return nil
 }

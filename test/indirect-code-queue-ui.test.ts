@@ -620,6 +620,7 @@ describe("SSR QueueCard, ToolbarSend & SettingsGeneralSection", () => {
                 export const theme = () => "dark";
                 export function Badge(props: any) { return <span data-ui-badge>{props.children}</span>; }
                 export function Btn(props: any) { return <button type="button">{props.children}</button>; }
+                export function Select(props: any) { return <button type="button" data-ui-select>{props.value}</button>; }
                 export async function copyWithToast() { return false; }
               `;
               const out = await transformAsync(uiStub, {

@@ -14,6 +14,7 @@ export interface ContextMeterMath {
   used: number | null;
   autoCompactEnabled: boolean;
   autoCompactPercent: number;
+  effectiveThresholdPercent: number;
   usableLimit: number;
   reserveTokens: number;
   thresholdRatio: number;
@@ -122,6 +123,8 @@ export function computeContextMeterMath(input: ContextMeterInput): ContextMeterM
       : null;
 
   const usableLimit = computeUsableLimit(win, normalizedPct);
+  const effectiveThresholdPercent =
+    autoCompactEnabled && win > 0 ? Math.round((usableLimit / win) * 100) : 0;
   const reserveTokens = win > 0 ? Math.max(0, win - usableLimit) : 0;
   const thresholdRatio = win > 0 ? Math.min(1, Math.max(0, usableLimit / win)) : 1;
   const usedRatio = used !== null && win > 0 ? Math.min(1, Math.max(0, used / win)) : 0;
@@ -142,6 +145,7 @@ export function computeContextMeterMath(input: ContextMeterInput): ContextMeterM
     used,
     autoCompactEnabled,
     autoCompactPercent: normalizedPct,
+    effectiveThresholdPercent,
     usableLimit,
     reserveTokens,
     thresholdRatio,

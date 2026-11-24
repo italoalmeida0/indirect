@@ -1,6 +1,9 @@
 import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { Portal } from "solid-js/web";
 import { authHeaders } from "../../../api";
+import { Icon } from "../../../components/icon";
 import { lockScroll, pushLayer } from "../../../ds/primitives/layers";
+import { copyToClipboard } from "../../../ui";
 import { MsgIconBtn } from "../MsgActions";
 import { useModal } from "../../ctx";
 import { claimLiveWidget, releaseLiveWidget } from "./widget-live";
@@ -10,10 +13,12 @@ import { CodeBlock } from "../CodeBlock";
 import {
   attachGuBridge,
   clampFrameHeight,
-  MIN_FRAME_HEIGHT,
+  postGuTheme,
+  widgetAccent,
   widgetTheme,
 } from "./bridge";
 import { parseGenerativeUiDsl, type GenerativeUiData } from "./dsl";
+import { resolvePublishedFrame } from "./frame-height";
 import { fetchWidgetSource, invalidateWidgetSources, widgetSourceVersion } from "./widget-source";
 
 /**
@@ -61,11 +66,14 @@ export function GenerativeUiWidget(props: {
   const [finalHeight, setFinalHeight] = createSignal<number>(0);
   const [error, setError] = createSignal<string>("");
   const [theme, setTheme] = createSignal(widgetTheme());
+  const [accent, setAccent] = createSignal(widgetAccent());
   const [unfrozen, setUnfrozen] = createSignal(false);
   const [deactivated, setDeactivated] = createSignal(false);
   const [superseded, setSuperseded] = createSignal(false);
   const [showSource, setShowSource] = createSignal(false);
   const [copiedSource, setCopiedSource] = createSignal(false);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => clearTimeout(copiedTimer));
   const liveToken = Symbol("gu-live");
   /** Immersive fullscreen overlay (games/3D widgets on small screens). */
   const [expanded, setExpanded] = createSignal(false);
@@ -190,12 +198,27 @@ export function GenerativeUiWidget(props: {
   };
 
   onMount(() => {
-    const observer = new MutationObserver(() => setTheme(widgetTheme()));
+    const syncHostAppearance = () => {
+      setTheme(widgetTheme());
+      setAccent(widgetAccent());
+    };
+    const observer = new MutationObserver(syncHostAppearance);
     observer.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ["data-theme", "class"],
+      attributeFilter: ["data-theme", "data-accent", "class"],
     });
     onCleanup(() => observer.disconnect());
+  });
+
+  const syncFrameTheme = () => {
+    postGuTheme(finalEl()?.contentWindow, { theme: theme(), accent: accent() });
+  };
+  createEffect(() => {
+    const frame = finalEl();
+    const curTheme = theme();
+    const curAccent = accent();
+    if (!frame) return;
+    postGuTheme(frame.contentWindow, { theme: curTheme, accent: curAccent });
   });
 
   // ---- one live instance per session (transcript-wide) ----
@@ -410,6 +433,9 @@ export function GenerativeUiWidget(props: {
           const id = data().id;
           if (id) writeSavedState(id, stateJSON);
         },
+        onReady: () => {
+          syncFrameTheme();
+        },
       },
     );
     onCleanup(() => {
@@ -433,249 +459,274 @@ export function GenerativeUiWidget(props: {
   };
 
   const isStatic = () => !data().id || (!props.ctx && !streaming());
+  const dockInlineToolbar = () => showSource() || missing();
+
+  const renderToolbarButtons = () => (
+    <Show
+      when={!frozen()}
+      fallback={<MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />}
+    >
+      <Show when={savedState() !== null}>
+        <MsgIconBtn
+          tip="Reset widget state"
+          icon="lucide:rotate-ccw"
+          compact
+          onClick={resetState}
+        />
+      </Show>
+      <Show when={!!source()}>
+        <MsgIconBtn
+          tip="Inspect source code"
+          icon="lucide:code"
+          compact
+          onClick={() => setShowSource(!showSource())}
+        />
+      </Show>
+      <MsgIconBtn tip="Reload widget" icon="lucide:refresh-cw" compact onClick={reload} />
+      <MsgIconBtn
+        tip={expanded() ? "Exit fullscreen" : "Fullscreen widget"}
+        icon={expanded() ? "lucide:minimize" : "lucide:maximize"}
+        compact
+        onClick={() => setExpanded(!expanded())}
+      />
+      <MsgIconBtn
+        tip="Unload widget"
+        icon="lucide:eye-off"
+        compact
+        onClick={() => {
+          setExpanded(false);
+          setDeactivated(true);
+        }}
+      />
+    </Show>
+  );
+
+  const renderCardContents = (isExpanded: boolean) => (
+    <>
+      <Show when={showSource() && !!source()}>
+        <div class="border-b border-border-subtle bg-surface-subtle p-3 text-fg">
+          <div class="mb-2 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-xs font-medium text-fg-secondary">Source code</span>
+              <span class="rounded-inner bg-surface-muted px-1.5 py-0.5 font-mono tabular-nums text-2xs text-fg-muted truncate">
+                {data().id}.tsx
+              </span>
+            </div>
+            <div class="flex items-center gap-1 shrink-0">
+              <MsgIconBtn
+                tip={copiedSource() ? "Copied" : "Copy source code"}
+                icon="lucide:copy"
+                compact
+                copied={copiedSource()}
+                onClick={() => {
+                  void copyToClipboard(source()).then((ok) => {
+                    if (!ok) return;
+                    setCopiedSource(true);
+                    clearTimeout(copiedTimer);
+                    copiedTimer = setTimeout(() => setCopiedSource(false), 2000);
+                  });
+                }}
+              />
+              <MsgIconBtn
+                tip="Close source view"
+                icon="lucide:x"
+                compact
+                onClick={() => setShowSource(false)}
+              />
+            </div>
+          </div>
+          <div class="max-h-80 overflow-auto rounded-inner border border-border bg-surface p-2 text-xs">
+            <CodeBlock text={source()} language="tsx" wrap={false} maxH="max-h-72" />
+          </div>
+        </div>
+      </Show>
+      <Show when={frozen() && !streaming()}>
+        <div class="flex items-center justify-center gap-2 px-10 py-1.5">
+          <span class="truncate font-mono tabular-nums text-2xs text-fg-muted">{data().id || "widget"}</span>
+          <button
+            type="button"
+            class="ui-button ui-button-sm ui-button-outline cursor-pointer"
+            onClick={reactivate}
+          >
+            Load
+          </button>
+        </div>
+      </Show>
+      <Show when={!frozen() && (streaming() || (!finalUrl() && !isStatic() && !missing())) && !error()}>
+        <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center p-4">
+          <div class="flex max-w-full items-center gap-2 rounded-pill border border-border bg-surface-raised shadow-resting py-1.5 pr-3.5 pl-3">
+            <span class="h-3.5 w-3.5 shrink-0 ui-spinner text-fg-muted" />
+            <span class="truncate text-2xs font-medium text-fg-secondary">
+              {data().placeholder || "Building your widget"}
+            </span>
+          </div>
+        </div>
+      </Show>
+      <Show when={missing()}>
+        <div class="flex items-center gap-2 px-3 py-1.5">
+          <span class="shrink-0 text-2xs font-medium text-danger">Widget not found</span>
+          <span class="min-w-0 flex-1 truncate font-mono tabular-nums text-2xs text-fg-muted">{data().id}</span>
+          <Show when={props.onPrefillPrompt}>
+            <button
+              type="button"
+              class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
+              onClick={() => props.onPrefillPrompt?.(`The widget with id "${data().id}" is referenced by a generative_ui fence but has no stored source. Store it with widget_set (id: "${data().id}").`)}
+            >
+              Ask to fix
+            </button>
+          </Show>
+        </div>
+      </Show>
+      <Show when={isStatic() && !streaming() && !missing()}>
+        <div class="p-4">
+          <div class="text-2xs font-medium text-fg-secondary">{data().placeholder || "Interactive widget"}</div>
+          <Show when={Object.keys(data().state ?? {}).length}>
+            <pre class="mt-2 max-h-40 overflow-auto rounded-inner border border-border-subtle bg-surface-subtle p-2 font-mono text-2xs text-fg-secondary">
+              {JSON.stringify(data().state ?? {}, null, 2)}
+            </pre>
+          </Show>
+          <div class="mt-2 text-2xs text-fg-muted">
+            Static preview · this fence has no <code>widget_id:</code> link to a stored widget source.
+          </div>
+        </div>
+      </Show>
+      <Show
+        when={!frozen() && !streaming() && !missing() && !!finalUrl()}
+        fallback={
+          /* Widgets compile at publish time: this thin inert surface keeps
+             the placeholder visible while streaming/loading; the frame
+             grows to fit the mounted widget (bridge resize). Never when
+             the widget is unloaded (frozen), missing or static — those
+             states render their own compact card. */
+          <Show when={!frozen() && !missing() && !isStatic() && !error()}>
+            <div class="block w-full border-0 bg-surface" style={{ height: `${MIN_START_HEIGHT}px` }} />
+          </Show>
+        }
+      >
+        <iframe
+          ref={setFinalEl}
+          sandbox="allow-scripts"
+          referrerpolicy="no-referrer"
+          title="Interactive widget"
+          src={finalUrl()}
+          onLoad={() => {
+            frameMountedAt = Date.now();
+            lastFrameInteractionAt = 0;
+            syncFrameTheme();
+          }}
+          onPointerEnter={() => {
+            lastFrameInteractionAt = Date.now();
+          }}
+          onPointerDown={() => {
+            lastFrameInteractionAt = Date.now();
+          }}
+          onFocus={() => {
+            lastFrameInteractionAt = Date.now();
+          }}
+          class={
+            isExpanded
+              ? "block h-full w-full border-0 bg-surface"
+              : "block w-full border-0 bg-surface transition-[height] duration-200 ease-out motion-reduce:transition-none"
+          }
+          style={
+            isExpanded
+              ? { height: "100%" }
+              : { height: `${clampFrameHeight(finalHeight() || MIN_START_HEIGHT)}px` }
+          }
+        />
+      </Show>
+      <Show when={error()}>
+        <div class="flex items-center gap-2 border-t border-border-subtle bg-surface-subtle px-3 py-2">
+          <span class="shrink-0 text-2xs font-medium text-danger">Widget error</span>
+          <span class="min-w-0 flex-1 truncate text-2xs text-fg-secondary" data-rc-tip={error()}>
+            {error()}
+          </span>
+          <Show when={props.onPrefillPrompt}>
+            <button
+              type="button"
+              class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
+              onClick={() => props.onPrefillPrompt?.(reportText())}
+            >
+              Ask to fix
+            </button>
+          </Show>
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            data-rc-tip="Dismiss error"
+            class="rc-msg-action inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-inner text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors"
+            onClick={() => setError("")}
+          >
+            <Icon icon="lucide:x" size={12} />
+          </button>
+        </div>
+      </Show>
+    </>
+  );
 
   return (
     <>
       {/* One surface only: the host card and the widget document share the
-          `card` token, so the frame seam is invisible. While the widget is
+          `--surface` token, so the frame seam is invisible. While the widget is
           not ready, a centered loading pill (placeholder text) floats over
           the streaming preview; runtime errors land in the footer below. */}
-      <div
-        ref={(el) => {
-          hostRootEl = el;
-        }}
-        class={expanded() ? "group/guhost fixed inset-0 z-40 flex flex-col overflow-hidden bg-background/95" : "group/guhost"}
-      >
-        <Show when={!streaming()}>
+      <Show
+        when={expanded()}
+        fallback={
           <div
-            class={
-              expanded()
-                ? "pointer-events-none flex items-center justify-end gap-1 p-2"
-                /* max-md: opacity-100 — no hover on touch screens, so the
-                   reload/fullscreen/unload controls must always show there. */
-                : "pointer-events-none mb-2 flex items-center justify-end gap-0.5 opacity-0 transition-opacity group-hover/guhost:opacity-100 focus-within:opacity-100 max-md:opacity-100"
-            }
+            ref={(el) => {
+              hostRootEl = el;
+            }}
+            class="group/guhost mb-3"
           >
-            <div class="pointer-events-auto flex items-center gap-0.5">
-              <Show
-                when={!frozen()}
-                fallback={<MsgIconBtn tip="Load this widget" icon="lucide:play" compact onClick={reactivate} />}
-              >
-                <Show when={savedState() !== null}>
-                  <MsgIconBtn
-                    tip="Reset widget state"
-                    icon="lucide:rotate-ccw"
-                    compact
-                    onClick={resetState}
-                  />
+            <div class="gu-card-host relative overflow-hidden rounded-panel border border-border bg-surface">
+              <Show when={!streaming()}>
+                <Show
+                  when={!dockInlineToolbar()}
+                  fallback={
+                    <div class="flex items-center justify-end gap-0.5 border-b border-border-subtle bg-surface-subtle/60 px-2 py-1">
+                      <div class="flex items-center gap-0.5">{renderToolbarButtons()}</div>
+                    </div>
+                  }
+                >
+                  <div class="gu-host-toolbar pointer-events-none absolute top-2 right-2 z-20 flex items-center gap-0.5 rounded-inner border border-border/80 bg-surface-raised/90 p-0.5 shadow-resting backdrop-blur-sm">
+                    <div class="pointer-events-auto flex items-center gap-0.5">
+                      {renderToolbarButtons()}
+                    </div>
+                  </div>
                 </Show>
-                <Show when={!!source()}>
-                  <MsgIconBtn
-                    tip="Inspect source code"
-                    icon="lucide:code"
-                    compact
-                    onClick={() => setShowSource(!showSource())}
-                  />
-                </Show>
-                <MsgIconBtn tip="Reload widget" icon="lucide:refresh-cw" compact onClick={reload} />
-                <MsgIconBtn
-                  tip={expanded() ? "Exit fullscreen" : "Fullscreen widget"}
-                  icon={expanded() ? "lucide:minimize" : "lucide:maximize"}
-                  compact
-                  onClick={() => setExpanded(!expanded())}
-                />
-                <MsgIconBtn
-                  tip="Unload widget"
-                  icon="lucide:eye-off"
-                  compact
-                  onClick={() => {
-                    setExpanded(false);
-                    setDeactivated(true);
-                  }}
-                />
               </Show>
+              {renderCardContents(false)}
             </div>
           </div>
-        </Show>
+        }
+      >
         <div
-          class={
-            expanded()
-              ? "relative min-h-0 flex-1 overflow-hidden"
-              : "gu-card-host relative mb-3 overflow-hidden rounded-panel border border-border bg-surface"
-          }
-        >
-        <Show when={showSource() && !!source()}>
-          <div class="border-b border-border-subtle bg-surface-subtle p-3 text-fg">
-            <div class="mb-2 flex items-center justify-between gap-2">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="text-xs font-medium text-fg-secondary">Source code</span>
-                <span class="rounded-xs bg-surface-muted px-1.5 py-0.5 font-mono tabular-nums text-2xs text-fg-muted truncate">{data().id}.tsx</span>
+          class="mb-3 rounded-panel border border-border-subtle bg-surface-subtle"
+          style={{ height: `${clampFrameHeight(finalHeight() || MIN_START_HEIGHT)}px` }}
+          aria-hidden="true"
+        />
+        <Portal>
+          <div
+            ref={(el) => {
+              hostRootEl = el;
+            }}
+            data-density="compact"
+            class="group/guhost fixed inset-0 z-[var(--z-modal)] flex flex-col overflow-hidden bg-background/95 pt-[var(--sat)] pb-[var(--sab)] pl-[var(--sal)] pr-[var(--sar)]"
+          >
+            <Show when={!streaming()}>
+              <div class="flex shrink-0 items-center justify-end gap-1 border-b border-border-subtle bg-surface px-2.5 py-1.5">
+                <div class="flex items-center gap-0.5">{renderToolbarButtons()}</div>
               </div>
-              <div class="flex items-center gap-1 shrink-0">
-                <MsgIconBtn
-                  tip={copiedSource() ? "Copied" : "Copy source code"}
-                  icon="lucide:copy"
-                  compact
-                  copied={copiedSource()}
-                  onClick={() => {
-                    void navigator.clipboard.writeText(source());
-                    setCopiedSource(true);
-                    setTimeout(() => setCopiedSource(false), 2000);
-                  }}
-                />
-                <MsgIconBtn
-                  tip="Close source view"
-                  icon="lucide:x"
-                  compact
-                  onClick={() => setShowSource(false)}
-                />
-              </div>
-            </div>
-            <div class="max-h-80 overflow-auto rounded-control border border-border bg-surface p-2 text-xs">
-              <CodeBlock text={source()} language="tsx" wrap={false} maxH="max-h-72" />
+            </Show>
+            <div class="relative min-h-0 flex-1 overflow-hidden bg-surface">
+              {renderCardContents(true)}
             </div>
           </div>
-        </Show>
-        <Show when={frozen() && !streaming()}>
-          <div class="flex items-center justify-center gap-2 px-3 py-1.5">
-            <span class="truncate font-mono tabular-nums text-[11px] text-fg-muted">{data().id || "widget"}</span>
-            <button
-              type="button"
-              class="ui-button ui-button-sm ui-button-outline cursor-pointer"
-              onClick={reactivate}
-            >
-              Load
-            </button>
-          </div>
-        </Show>
-        <Show when={!frozen() && (streaming() || (!finalUrl() && !isStatic() && !missing())) && !error()}>
-          <div class="pointer-events-none absolute inset-0 z-10 grid place-items-center p-4">
-            <div class="flex max-w-full items-center gap-2 rounded-pill border border-border bg-surface-elevated py-1.5 pr-3.5 pl-3">
-              <span class="h-3.5 w-3.5 shrink-0 ui-spinner text-fg-muted" />
-              <span class="truncate text-[11px] font-medium text-fg-secondary">
-                {data().placeholder || "Building your widget"}
-              </span>
-            </div>
-          </div>
-        </Show>
-        <Show when={missing()}>
-          <div class="flex items-center gap-2 px-3 py-1.5">
-            <span class="shrink-0 text-[11px] font-medium text-danger">Widget not found</span>
-            <span class="min-w-0 flex-1 truncate font-mono tabular-nums text-[11px] text-fg-muted">{data().id}</span>
-            <Show when={props.onPrefillPrompt}>
-              <button
-                type="button"
-                class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
-                onClick={() => props.onPrefillPrompt?.(`The widget with id "${data().id}" is referenced by a generative_ui fence but has no stored source. Store it with widget_set (id: "${data().id}").`)}
-              >
-                Ask to fix
-              </button>
-            </Show>
-          </div>
-        </Show>
-        <Show when={isStatic() && !streaming() && !missing()}>
-          <div class="p-4">
-            <div class="text-[11px] font-medium text-fg-secondary">{data().placeholder || "Interactive widget"}</div>
-            <Show when={Object.keys(data().state ?? {}).length}>
-              <pre class="mt-2 max-h-40 overflow-auto rounded-control border border-border-subtle bg-surface-subtle p-2 font-mono text-[11px] text-fg-secondary">
-                {JSON.stringify(data().state ?? {}, null, 2)}
-              </pre>
-            </Show>
-            <div class="mt-2 text-[11px] text-fg-muted">
-              Static preview · this fence has no <code>widget_id:</code> link to a stored widget source.
-            </div>
-          </div>
-        </Show>
-        <Show
-          when={!frozen() && !streaming() && !missing() && !!finalUrl()}
-          fallback={
-            /* Widgets compile at publish time: this thin inert surface keeps
-               the placeholder visible while streaming/loading; the frame
-               grows to fit the mounted widget (bridge resize). Never when
-               the widget is unloaded (frozen), missing or static — those
-               states render their own compact card. */
-            <Show when={!frozen() && !missing() && !isStatic() && !error()}>
-              <div class="block w-full border-0 bg-surface" style={{ height: `${MIN_START_HEIGHT}px` }} />
-            </Show>
-          }
-        >
-          <iframe
-            ref={setFinalEl}
-            sandbox="allow-scripts"
-            referrerpolicy="no-referrer"
-            title="Interactive widget"
-            src={finalUrl()}
-            onLoad={() => {
-              frameMountedAt = Date.now();
-              lastFrameInteractionAt = 0;
-            }}
-            onPointerEnter={() => {
-              lastFrameInteractionAt = Date.now();
-            }}
-            onPointerDown={() => {
-              lastFrameInteractionAt = Date.now();
-            }}
-            onFocus={() => {
-              lastFrameInteractionAt = Date.now();
-            }}
-            class={
-              expanded()
-                ? "block h-full w-full border-0 bg-surface"
-                : "block w-full border-0 bg-surface transition-[height] duration-200 ease-out motion-reduce:transition-none"
-            }
-            style={
-              expanded()
-                ? { height: "100%" }
-                : { height: `${clampFrameHeight(finalHeight() || MIN_START_HEIGHT)}px` }
-            }
-          />
-        </Show>
-        <Show when={error()}>
-          <div class="flex items-center gap-2 border-t border-border-subtle bg-surface-subtle px-3 py-2">
-            <span class="shrink-0 text-[11px] font-medium text-danger">Widget error</span>
-            <span class="min-w-0 flex-1 truncate text-[11px] text-fg-secondary" data-rc-tip={error()}>
-              {error()}
-            </span>
-            <Show when={props.onPrefillPrompt}>
-              <button
-                type="button"
-                class="ui-button ui-button-sm ui-button-outline shrink-0 cursor-pointer"
-                onClick={() => props.onPrefillPrompt?.(reportText())}
-              >
-                Ask to fix
-              </button>
-            </Show>
-            <button
-              type="button"
-              aria-label="Dismiss error"
-              data-rc-tip="Dismiss error"
-              class="shrink-0 cursor-pointer rounded-md px-1.5 py-0.5 text-[13px] leading-none text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors"
-              onClick={() => setError("")}
-            >
-              ×
-            </button>
-          </div>
-        </Show>
-        </div>
-      </div>
+        </Portal>
+      </Show>
     </>
   );
-}
-
-/**
- * Keeps the previously painted height while the same widget is republished
- * (same content-addressed URL family) so an update never flashes the thin
- * loading state again.
- */
-function resolvePublishedFrame(params: {
-  nextUrl: string;
-  currentUrl: string;
-  currentHeight: number;
-  cachedHeight: number | undefined;
-}): { url: string; height: number } {
-  const { nextUrl, currentUrl, currentHeight, cachedHeight } = params;
-  if (nextUrl === currentUrl) return { url: nextUrl, height: currentHeight || cachedHeight || MIN_FRAME_HEIGHT };
-  return { url: nextUrl, height: cachedHeight ?? MIN_FRAME_HEIGHT };
 }
 
 const frameHeights = new Map<string, number>();

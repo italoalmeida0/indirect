@@ -20,10 +20,10 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
       expect(src).toMatch(/setRenamingId\(s\.id\)/);
     });
 
-    test("SessionSidebar hides inline .rc-row-actions on mobile and renders explicit Save/Cancel rename buttons", () => {
+    test("SessionSidebar hides inline .rc-row-actions on overlay/mobile and renders explicit Save/Cancel rename buttons", () => {
       const src = read("web/src/indirect-code/components/SessionSidebar.tsx");
       expect(src).toContain("isMobile: () => boolean;");
-      expect(src).toContain("<Show when={!ctx.isMobile() && !ctx.selectionMode()}>");
+      expect(src).toContain("<Show when={!isOverlay() && !ctx.selectionMode()}>");
       expect(src).toContain('aria-label="Rename conversation"');
       expect(src).toContain('aria-label="Save rename"');
       expect(src).toContain('aria-label="Cancel rename"');
@@ -42,10 +42,11 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
   });
 
   describe("BUG-T3-03, BUG-T3-04 & BUG-R3-T4-06: Project row, chevron, visual highlight, and accessibility", () => {
-    test("project row unifies chevron, folder icon, and name into a single accessible toggle button", () => {
+    test("project row separates chevron toggle from project selection without collapsing on select", () => {
       const src = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
-      expect(src).toMatch(/<button[^>]*aria-label="Toggle project"[^>]*aria-expanded=\{s\.isProjectExpanded\(p\)\}/);
-      expect(src).toMatch(/onClick=\{\(\)\s*=>\s*\{\s*s\.pickProject\(p\.id\);\s*s\.toggleProjectExpanded\(p\.id\);\s*\}\}/);
+      expect(src).toMatch(/aria-label=\{s\.isProjectExpanded\(p\) \? `Collapse \$\{p\.name\}` : `Expand \$\{p\.name\}`\}/);
+      expect(src).toContain("aria-expanded={s.isProjectExpanded(p)}");
+      expect(src).toContain("s.pickProject(p.id);");
     });
 
     test("active project has crisp visual background highlight", () => {
@@ -82,11 +83,11 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
       expect(p.selectedSessions().size).toBe(0);
     });
 
-    test("WorkspaceSidebar renders Select All / Deselect All button", () => {
+    test("WorkspaceSidebar renders Select all / Deselect all button", () => {
       const src = read("web/src/indirect-code/components/WorkspaceSidebar.tsx");
       expect(src).toMatch(/s\.selectAllSessions\(\)/);
-      expect(src).toContain("Select All");
-      expect(src).toContain("Deselect All");
+      expect(src).toContain("Select all");
+      expect(src).toContain("Deselect all");
     });
   });
 
@@ -96,7 +97,7 @@ describe("Sidebar and Multi-Project Bug Fixes Regression", () => {
       // Should NOT require size > 0 to show batch bar container
       expect(src).not.toContain("<Show when={s.selectionMode() && s.selectedSessions().size > 0}>");
       expect(src).toContain("<Show when={s.selectionMode()}>");
-      expect(src).toContain("Select conversations to delete");
+      expect(src).toContain("None selected");
       expect(src).toMatch(/disabled=\{s\.selectedSessions\(\)\.size === 0\}/);
     });
   });

@@ -93,13 +93,13 @@ describe("Fixer B2-4 Regression Tests", () => {
   describe("BUG-T5-01: Finished background tool row displays output instead of frozen Running in background…", () => {
     test("ToolSearchBodies bash block displays output when bgRunning() is false", () => {
       const src = readFileSync("web/src/indirect-code/components/tool/ToolSearchBodies.tsx", "utf-8");
-      expect(src).toContain('text={props.m.bgRunning()');
+      expect(src).toContain("text={bashOut()}");
       expect(src).not.toContain('props.m.bgRunning() || props.m.isDetachedBg()');
     });
 
     test("ToolEditBodies exec_script block displays output when bgRunning() is false", () => {
       const src = readFileSync("web/src/indirect-code/components/tool/ToolEditBodies.tsx", "utf-8");
-      expect(src).toContain('text={props.m.bgRunning() ?');
+      expect(src).toContain("text={execOut()}");
       expect(src).not.toContain('props.m.bgRunning() || props.m.isDetachedBg()');
     });
   });
@@ -143,10 +143,10 @@ describe("Fixer B2-4 Regression Tests", () => {
     });
   });
 
-  describe("BUG-R3-T2-08: Binary file rows in balloon show chevron and cursor pointer", () => {
-    test("isExpandable includes binary files so chevron and pointer are shown", () => {
+  describe("BUG-R3-T2-08: Non-diff binary file rows stay non-expandable with alignment spacer", () => {
+    test("isExpandable checks hasDiff so binary rows without a diff do not show a dead disclosure chevron", () => {
       const src = readFileSync("web/src/indirect-code/components/TurnChangesBalloon.tsx", "utf-8");
-      expect(src).toContain('const isExpandable = () => hasDiff() || props.f.status === "binary";');
+      expect(src).toContain("const isExpandable = () => hasDiff();");
       expect(src).toContain("<Show when={isExpandable()}>");
     });
   });

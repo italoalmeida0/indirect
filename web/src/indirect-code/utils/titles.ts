@@ -30,10 +30,12 @@ export function specialTitle(units: ToolUnit[], extra?: { texts?: number; though
   const files = count("read");
   const searches = count("glob", "search");
   const inspections = count("inspect");
-  const commands = count("bash", "exec_script", "python", "bg_await");
+  const commands = count("bash", "exec_script", "python");
+  const waits = count("bg_await");
   const edits = count("edit", "write", "patch");
   const questions = count("question");
-  const web = count("fetch_url", "search_web");
+  const webPages = count("fetch_url");
+  const webSearches = count("search_web");
   const bgChecks = count("bg_check", "bg_list", "bg_tail");
   const bgCancels = count("bg_cancel");
   const todoWrites = count("todo", "todowrite");
@@ -53,9 +55,11 @@ export function specialTitle(units: ToolUnit[], extra?: { texts?: number; though
     searches +
     inspections +
     commands +
+    waits +
     edits +
     questions +
-    web +
+    webPages +
+    webSearches +
     bgChecks +
     bgCancels +
     todoWrites +
@@ -79,9 +83,11 @@ export function specialTitle(units: ToolUnit[], extra?: { texts?: number; though
   if (exploreParts.length > 0) parts.push(`Explored ${exploreParts.join(", ")}`);
 
   if (commands > 0) parts.push(`Ran ${plural(commands, "command")}`);
+  if (waits > 0) parts.push("Waited");
   if (edits > 0) parts.push(`Made ${plural(edits, "edit")}`);
   if (questions > 0) parts.push(`Asked ${plural(questions, "question")}`);
-  if (web > 0) parts.push(`Checked ${plural(web, "page")}`);
+  if (webSearches > 0) parts.push(`Ran ${plural(webSearches, "web search", "web searches")}`);
+  if (webPages > 0) parts.push(`Fetched ${plural(webPages, "page")}`);
   if (bgChecks > 0) parts.push(`Checked ${plural(bgChecks, "job")}`);
   if (bgCancels > 0) parts.push(`Stopped ${plural(bgCancels, "job")}`);
   if (todoWrites > 0) parts.push("Updated task plan");
@@ -92,8 +98,8 @@ export function specialTitle(units: ToolUnit[], extra?: { texts?: number; though
   if (widgetInspects > 0) parts.push(`Inspected ${plural(widgetInspects, "widget")}`);
   if (summaries > 0) parts.push(`Recorded ${plural(summaries, "summary", "summaries")}`);
   if (finishes > 0) parts.push("Completed response");
-  if (historyLookups > 0) parts.push(`Searched ${plural(historyLookups, "history query", "history queries")}`);
-  if (explorations > 0) parts.push(`Delegated ${plural(explorations, "investigation")}`);
+  if (historyLookups > 0) parts.push(`Checked history${historyLookups > 1 ? ` (${historyLookups})` : ""}`);
+  if (explorations > 0) parts.push(`Investigated ${plural(explorations, "area")}`);
   if (mcp > 0) parts.push(`Used ${plural(mcp, "MCP tool")}`);
   if (others > 0) parts.push(plural(others, "call"));
   if ((extra?.texts || 0) > 0) parts.push(plural(extra!.texts!, "note"));

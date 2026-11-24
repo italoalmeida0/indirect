@@ -236,9 +236,7 @@ export function DatePicker(props: DatePickerProps) {
                   type="button"
                   class="ui-date-picker-clear"
                   disabled={!props.value}
-                  onPointerDown={(e) => {
-                    if (props.value) press(e.currentTarget);
-                  }}
+                  ref={press}
                   onClick={() => selectDate(undefined)}
                 >
                   Clear

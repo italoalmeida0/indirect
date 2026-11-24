@@ -151,7 +151,7 @@ export function createReview(opts: {
   function downloadPreviewFile() {
     const f = previewFile();
     if (!f || (!f.blob && f.dataB64 == null && !f.dataUrl?.startsWith("blob:"))) {
-      opts.toast("Original bytes unavailable for download", "err");
+      opts.toast("Original file unavailable for download.", "err");
       return;
     }
     try {

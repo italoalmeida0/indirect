@@ -8,8 +8,10 @@ export function VoiceStatusOverlay(props: {
   listening: boolean;
   statusText: string;
   statusMeta?: string;
+  draftText?: string;
 }) {
   const shimmerStyle = createShimmerStyle(() => props.active);
+  const draftPreview = () => (props.draftText || "").trim().replace(/\s+/g, " ");
 
   return (
     <div
@@ -18,38 +20,53 @@ export function VoiceStatusOverlay(props: {
       aria-hidden={props.active ? undefined : "true"}
       data-voice-status-overlay
       data-active={props.active ? "true" : undefined}
-      class="rc-voice-status-overlay pointer-events-none select-none absolute inset-0 flex items-start justify-between gap-3 px-3.5 pt-3 pb-1 text-[13px] leading-[20px]"
+      class="rc-voice-status-overlay pointer-events-none select-none absolute inset-0 flex flex-col justify-start px-3.5 pt-3 pb-1 text-[13px] leading-[20px]"
     >
       <Show when={props.active}>
-        <span
-          class="min-w-0 truncate font-medium tracking-[-0.01em] ui-shimmer"
-          style={shimmerStyle()}
-        >
-          {props.statusText}
-        </span>
-        <Show when={props.listening || Boolean(props.statusMeta)}>
-          <span class="inline-flex h-[20px] shrink-0 items-center gap-2 text-xs font-medium text-fg-muted tabular-nums">
-            <Show when={props.listening}>
-              <span class="rc-voice-live-dot" aria-hidden="true" />
-            </Show>
-            <Show when={props.statusMeta}>
-              <span data-voice-status-meta>{props.statusMeta}</span>
-            </Show>
+        <div class="flex items-start justify-between gap-3 w-full min-w-0">
+          <span
+            class="min-w-0 truncate font-medium tracking-[-0.01em] ui-shimmer"
+            style={shimmerStyle()}
+          >
+            {props.statusText}
           </span>
+          <Show when={props.listening || Boolean(props.statusMeta)}>
+            <span class="inline-flex h-[20px] shrink-0 items-center gap-2 text-xs font-medium text-fg-muted tabular-nums">
+              <Show when={props.listening}>
+                <span class="rc-voice-live-dot" aria-hidden="true" />
+              </Show>
+              <Show when={props.statusMeta}>
+                <span data-voice-status-meta>{props.statusMeta}</span>
+              </Show>
+            </span>
+          </Show>
+        </div>
+        <Show when={draftPreview()}>
+          <p class="mt-0.5 text-xs leading-snug text-fg-muted/55 truncate w-full">
+            {draftPreview()}
+          </p>
         </Show>
       </Show>
     </div>
   );
 }
 
-export function VoiceRevealOverlay(props: { reveal: VoiceRevealState | null | undefined }) {
+export function VoiceRevealOverlay(props: {
+  reveal: VoiceRevealState | null | undefined;
+  onDismiss?: () => void;
+}) {
   return (
     <Show when={props.reveal && props.reveal.active ? props.reveal : null}>
       {(r) => (
         <div
           aria-hidden="true"
           data-voice-reveal-overlay
-          class="pointer-events-none absolute inset-0 overflow-hidden px-3.5 pt-3 pb-1 text-[13px] leading-[20px] font-normal text-fg"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            props.onDismiss?.();
+          }}
+          class="cursor-text absolute inset-0 overflow-hidden px-3.5 pt-3 pb-1 text-[13px] leading-[20px] font-normal text-fg"
         >
           <div
             class="whitespace-pre-wrap break-words"

@@ -16,6 +16,19 @@ import { UnreadDot } from "./LiveIndicators";
  * flag or a hidden card can never misposition it.
  *
  * `id` must be unique per mount site ("sidebar" | "overlay"). */
+function formatHostOs(os?: string): string {
+  switch ((os || "").toLowerCase()) {
+    case "darwin":
+      return "macOS";
+    case "linux":
+      return "Linux";
+    case "windows":
+      return "Windows";
+    default:
+      return os || "";
+  }
+}
+
 export function HostCard(props: { id: "sidebar" | "overlay" }) {
   const h = useHost();
   const m = useModal();
@@ -33,7 +46,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
     h.connectionState() !== "connected"
       ? "Reconnecting…"
       : h.activeHost()?.status === "online"
-        ? "Connected"
+        ? "Online"
         : h.activeHost()?.status === "updating"
           ? "Updating…"
           : "Offline";
@@ -52,7 +65,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
             data-rc-tip="Switch host"
             aria-label={`Select host: ${hostName()} ${statusLabel()}`}
             aria-haspopup="menu"
-            aria-expanded={h.hostMenuOpen()}
+            aria-expanded={mine()}
             onClick={() => {
               const next = h.hostMenuAnchor() === props.id ? !h.hostMenuOpen() : true;
               ui.closeMenus();
@@ -87,7 +100,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
           data-rc-tip="Switch host"
           aria-label={`Select host: ${hostName()} ${statusLabel()}`}
           aria-haspopup="menu"
-          aria-expanded={h.hostMenuOpen()}
+          aria-expanded={mine()}
           onClick={() => {
             const next = h.hostMenuAnchor() === props.id ? !h.hostMenuOpen() : true;
             ui.closeMenus();
@@ -154,7 +167,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
                     />
                     <span class="truncate">
                       {host.status === "online" ? "Online" : host.status === "updating" ? "Updating…" : "Offline"}
-                      {host.os ? ` · ${host.os}` : ""}
+                      {host.os ? ` · ${formatHostOs(host.os)}` : ""}
                     </span>
                   </span>
                 </span>
@@ -187,6 +200,7 @@ export function HostCard(props: { id: "sidebar" | "overlay" }) {
             <Iconify icon="lucide:plus" size={13} class="text-fg-muted shrink-0" />
             <span>Connect another host</span>
           </button>
+          <div role="separator" class="my-1 border-t border-border-subtle" />
           <button
             type="button"
             class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 text-xs hover:bg-danger-subtle"

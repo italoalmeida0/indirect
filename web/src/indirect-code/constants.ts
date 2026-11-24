@@ -34,12 +34,12 @@ export const SLASH_COMMANDS = [
   },
   {
     cmd: "/ask",
-    desc: "Supervised mode: sandbox workspace and ask before edits or commands",
+    desc: "Ask for approval: sandbox workspace and ask before edits or commands",
     args: "",
   },
   {
     cmd: "/full",
-    desc: "Full access mode: unjailed execution without approval prompts",
+    desc: "Full access mode: unrestricted workspace & host access without approval prompts",
     args: "",
   },
   {
@@ -50,16 +50,6 @@ export const SLASH_COMMANDS = [
   {
     cmd: "/clear",
     desc: "Start a fresh blank session (history is kept)",
-    args: "",
-  },
-  {
-    cmd: "/jail",
-    desc: "Alias for /auto: confine agent to workspace with boundary checks",
-    args: "",
-  },
-  {
-    cmd: "/unjail",
-    desc: "Alias for /full: allow unjailed host access without prompts",
     args: "",
   },
 ];

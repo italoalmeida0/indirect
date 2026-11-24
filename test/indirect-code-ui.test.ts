@@ -331,7 +331,7 @@ test("aggregate title summarizes activity counts", () => {
   const unit = (toolName: string): ToolUnit => ({ call: { type: "tool_call", toolId: toolName, toolName } });
   expect(specialTitle([unit("read"), unit("read"), unit("glob")])).toBe("Explored 2 files, 1 search");
   expect(specialTitle([unit("bash"), unit("bash"), unit("edit")])).toBe("Ran 2 commands · Made 1 edit");
-  expect(specialTitle([unit("fetch_url"), unit("mystery")])).toBe("Checked 1 page · 1 call");
+  expect(specialTitle([unit("fetch_url"), unit("mystery")])).toBe("Fetched 1 page · 1 call");
   expect(specialTitle([unit("read")], { texts: 2 })).toBe("Explored 1 file · 2 notes");
   expect(specialTitle([], { thoughts: 1 })).toBe("Thinking");
   expect(specialTitle([])).toBe("Tools");
@@ -590,16 +590,16 @@ describe("Indirect Code toolSummary", () => {
   test("summarizes search/inspect/patch/git calls", () => {
     expect(toolSummary({
       call: { type: "tool_call", toolId: "s1", toolName: "search", toolArgs: JSON.stringify({ pattern: "from \"../", path: "web/src" }) }
-    })).toEqual({ icon: "lucide:search", verb: "Search", target: "from \"../ in src" });
+    })).toEqual({ icon: "lucide:search", verb: "Searching", target: "from \"../ in src" });
     expect(toolSummary({
       call: { type: "tool_call", toolId: "s2", toolName: "search", toolArgs: JSON.stringify({ pattern: "foo\\d" }) }
-    })).toEqual({ icon: "lucide:search", verb: "Search", target: "foo\\d" });
+    })).toEqual({ icon: "lucide:search", verb: "Searching", target: "foo\\d" });
     expect(toolSummary({
       call: { type: "tool_call", toolId: "i1", toolName: "inspect", toolArgs: JSON.stringify({ path: "server/routes" }) }
-    })).toEqual({ icon: "lucide:folder-tree", verb: "Inspect", target: "server/routes" });
+    })).toEqual({ icon: "lucide:folder-tree", verb: "Inspecting", target: "server/routes" });
     expect(toolSummary({
       call: { type: "tool_call", toolId: "i2", toolName: "inspect", toolArgs: "{}" }
-    })).toEqual({ icon: "lucide:folder-tree", verb: "Inspect", target: "workspace" });
+    })).toEqual({ icon: "lucide:folder-tree", verb: "Inspecting", target: "workspace" });
     // Verb/target come from the details.dry_run flag (a planned/approved edit),
     // never from an argument the model could send.
     expect(toolSummary({
@@ -609,7 +609,7 @@ describe("Indirect Code toolSummary", () => {
     expect(toolSummary({
       call: { type: "tool_call", toolId: "p2", toolName: "patch", toolArgs: JSON.stringify({ edits: [{ file: "a.ts", old: "x", new: "y" }] }) },
       result: { type: "tool_result", toolId: "p2", toolDetails: { dry_run: false } },
-    })).toEqual({ icon: "lucide:file-diff", verb: "Patch", target: "a.ts" });
+    })).toEqual({ icon: "lucide:file-diff", verb: "Patched", target: "a.ts" });
     expect(toolSummary({
       call: { type: "tool_call", toolId: "e1", toolName: "edit", toolArgs: JSON.stringify({ edits: [{ file: "a.ts", old: "x", new: "y" }] }) },
       result: { type: "tool_result", toolId: "e1", toolDetails: { dry_run: true } },
@@ -622,13 +622,13 @@ describe("Indirect Code toolSummary", () => {
   test("summarizes search_web and fetch_url calls", () => {
     expect(toolSummary({
       call: { type: "tool_call", toolId: "w1", toolName: "search_web", toolArgs: JSON.stringify({ query: "golang html parser" }) }
-    })).toEqual({ icon: "lucide:globe", verb: "Web search", target: "golang html parser" });
+    })).toEqual({ icon: "lucide:globe", verb: "Searching web", target: "golang html parser" });
     expect(toolSummary({
       call: { type: "tool_call", toolId: "w2", toolName: "fetch_url", toolArgs: JSON.stringify({ url: "https://www.example.com/post?q=1" }) }
-    })).toEqual({ icon: "lucide:link", verb: "Fetch", target: "example.com" });
+    })).toEqual({ icon: "lucide:link", verb: "Fetching", target: "example.com" });
     expect(toolSummary({
       call: { type: "tool_call", toolId: "w3", toolName: "fetch_url", toolArgs: "{}" }
-    })).toEqual({ icon: "lucide:link", verb: "Fetch", target: "url" });
+    })).toEqual({ icon: "lucide:link", verb: "Fetching", target: "url" });
   });
 });
 
@@ -1489,7 +1489,7 @@ describe("Turn-end browser notification (useTurnNotify)", () => {
     const { turnNotifyText } = await import("../web/src/indirect-code/hooks/useTurnNotify");
     expect(turnNotifyText({ title: "Fix bug", hostName: "Mac", disposition: "done" })).toEqual({
       title: "Turn finished — Fix bug",
-      body: "Mac · tap to open",
+      body: "Mac · click to open",
     });
     expect(turnNotifyText({ title: "Fix bug", hostName: "Mac", disposition: "error" }).title).toBe(
       "Turn failed — Fix bug",
@@ -1787,7 +1787,9 @@ describe("Turn notifications follow the primary skill, not the collapsed mode", 
       expect(shown.filter((t) => t.includes("Legacy build"))).toHaveLength(1);
       expect(shown.filter((t) => t.includes("Legacy plan"))).toHaveLength(1);
       expect(shown.filter((t) => t.includes("Legacy learn"))).toHaveLength(0);
-      expect(shown.filter((t) => t.includes("unknown"))).toHaveLength(1);
+      // Unknown sessions still notify using a clean fallback title instead of leaking raw session IDs.
+      expect(shown.filter((t) => t.includes("Conversation"))).toHaveLength(1);
+      expect(shown.some((t) => t.includes("unknown"))).toBe(false);
     } finally {
       if (prevNotificationDesc) Object.defineProperty(globalThis, "Notification", prevNotificationDesc);
       else delete (globalThis as Record<string, unknown>).Notification;

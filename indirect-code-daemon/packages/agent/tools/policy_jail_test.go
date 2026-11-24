@@ -304,3 +304,60 @@ func TestPolicyRuntime_ControlPortBlockedEvenInFullMode(t *testing.T) {
 		t.Fatalf("expected ControlPort 127.0.0.1:%d to be blocked even in full mode", port)
 	}
 }
+
+func TestApprovalCopyCleanlinessAndNoBackticks(t *testing.T) {
+	ws := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+
+	cases := []struct {
+		name string
+		eval PolicyEvaluation
+	}{
+		{"git push", EvaluateShellCommand("git push origin main", ws, ws, "", "auto", false, nil)},
+		{"pipe to sh", EvaluateShellCommand("echo hi | sh", ws, ws, "", "auto", false, nil)},
+		{"exec_script ask", EvaluateToolCall("exec_script", mustJSON(t, map[string]any{"code": "1+1"}), "ask", ws, "", false, nil)},
+		{"search_web ask", EvaluateToolCall("search_web", mustJSON(t, map[string]any{"query": "go"}), "ask", ws, "", false, nil)},
+		{"bg_cancel ask", EvaluateToolCall("bg_cancel", mustJSON(t, map[string]any{"job_id": "1"}), "ask", ws, "", false, nil)},
+		{"outside read", EvaluateToolCall("read", mustJSON(t, map[string]any{"path": outside}), "auto", ws, "", false, nil)},
+		{"outbound fetch", EvaluateToolCall("fetch_url", mustJSON(t, map[string]any{"url": "https://example.com"}), "auto", ws, "", false, nil)},
+		{"localhost subdomain", EvaluateToolCall("fetch_url", mustJSON(t, map[string]any{"url": "http://sub.localhost/"}), "auto", ws, "", false, nil)},
+	}
+	for _, tc := range cases {
+		if strings.Contains(tc.eval.Meta.Reason, "`") {
+			t.Errorf("%s: Reason contains raw backtick: %q", tc.name, tc.eval.Meta.Reason)
+		}
+		if strings.Contains(tc.eval.Meta.Reason, "Supervised mode") {
+			t.Errorf("%s: Reason contains legacy 'Supervised mode': %q", tc.name, tc.eval.Meta.Reason)
+		}
+		if strings.Contains(tc.eval.Meta.Reason, "SSRF") {
+			t.Errorf("%s: Reason leaks raw 'SSRF': %q", tc.name, tc.eval.Meta.Reason)
+		}
+		if tc.eval.Meta.ProposedRule != nil && strings.Contains(tc.eval.Meta.ProposedRule.Label, "`") {
+			t.Errorf("%s: ProposedRule.Label contains raw backtick: %q", tc.name, tc.eval.Meta.ProposedRule.Label)
+		}
+	}
+
+	evOut := EvaluateToolCall("read", mustJSON(t, map[string]any{"path": outside}), "auto", ws, "", false, nil)
+	if evOut.Meta.Reason != "Read file outside workspace" {
+		t.Errorf("outside read Reason = %q, want %q", evOut.Meta.Reason, "Read file outside workspace")
+	}
+	evFetch := EvaluateToolCall("fetch_url", mustJSON(t, map[string]any{"url": "https://example.com"}), "auto", ws, "", false, nil)
+	if evFetch.Meta.Reason != "Outbound network request requires approval" {
+		t.Errorf("outbound fetch Reason = %q, want %q", evFetch.Meta.Reason, "Outbound network request requires approval")
+	}
+	evSub := EvaluateToolCall("fetch_url", mustJSON(t, map[string]any{"url": "http://sub.localhost/"}), "auto", ws, "", false, nil)
+	if evSub.Meta.Reason != `Localhost subdomain "sub.localhost" is blocked for security` {
+		t.Errorf("localhost subdomain Reason = %q", evSub.Meta.Reason)
+	}
+	evSearch := EvaluateToolCall("search_web", mustJSON(t, map[string]any{"query": "go"}), "ask", ws, "", false, nil)
+	if evSearch.Meta.ProposedRule == nil || evSearch.Meta.ProposedRule.Label != "Allow Web search" {
+		t.Errorf("search_web ProposedRule.Label = %+v, want 'Allow Web search'", evSearch.Meta.ProposedRule)
+	}
+
+	sb := NewSandbox(ws)
+	sb.Lock()
+	err := sb.CheckPath(outside)
+	if err == nil || !strings.HasPrefix(err.Error(), "Restricted to workspace:") || !strings.Contains(err.Error(), "(switch to Full access to allow)") {
+		t.Errorf("sandbox CheckPath error = %v, want Restricted to workspace + switch to Full access", err)
+	}
+}

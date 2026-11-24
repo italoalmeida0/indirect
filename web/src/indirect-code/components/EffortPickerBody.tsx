@@ -114,7 +114,6 @@ export function EffortPickerBody(props: {
 
   createEffect(() => {
     const maxActive = isMax();
-    const reduced = reducedMotion();
     const canvas = canvasEl();
     const thumb = thumbEl();
     if (!maxActive || !canvas) return;
@@ -130,7 +129,6 @@ export function EffortPickerBody(props: {
     let accentRgb: [number, number, number] = [90, 190, 175];
     let glintRgb: [number, number, number] = [170, 225, 215];
     let brightAccent = true;
-    let rafId = 0;
 
     const refreshColors = () => {
       accentRgb = sampleElementColor(probeCtx, canvas);
@@ -161,7 +159,7 @@ export function EffortPickerBody(props: {
       canvas.height = Math.max(1, Math.round(cssH * dpr));
     };
 
-    const drawFrame = (nowMs: number, isStatic: boolean) => {
+    const drawStaticMatrix = () => {
       syncSize();
       if (cssW <= 0 || cssH <= 0) return;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -177,7 +175,7 @@ export function EffortPickerBody(props: {
       const gridW = cols * pitch - (pitch - cell);
       const y0 = Math.round((cssH - gridH) / 2);
       const x0 = Math.round((cssW - gridW) / 2);
-      const t = isStatic ? 1.85 : nowMs * 0.001;
+      const t = 1.85;
 
       for (let c = 0; c < cols; c++) {
         const u = cols > 1 ? c / (cols - 1) : 1;
@@ -213,13 +211,13 @@ export function EffortPickerBody(props: {
 
     refreshColors();
     syncSize();
-    drawFrame(performance.now(), reduced);
+    drawStaticMatrix();
 
     let ro: ResizeObserver | undefined;
     if (typeof ResizeObserver === "function") {
       ro = new ResizeObserver(() => {
         syncSize();
-        drawFrame(performance.now(), reduced);
+        drawStaticMatrix();
       });
       ro.observe(canvas);
     }
@@ -228,7 +226,7 @@ export function EffortPickerBody(props: {
     if (typeof MutationObserver === "function") {
       mo = new MutationObserver(() => {
         refreshColors();
-        drawFrame(performance.now(), reduced);
+        drawStaticMatrix();
       });
       mo.observe(document.documentElement, {
         attributes: true,
@@ -236,16 +234,7 @@ export function EffortPickerBody(props: {
       });
     }
 
-    if (!reduced) {
-      const tick = (nowMs: number) => {
-        drawFrame(nowMs, false);
-        rafId = window.requestAnimationFrame(tick);
-      };
-      rafId = window.requestAnimationFrame(tick);
-    }
-
     onCleanup(() => {
-      if (rafId) window.cancelAnimationFrame(rafId);
       ro?.disconnect();
       mo?.disconnect();
     });
@@ -329,10 +318,10 @@ export function EffortPickerBody(props: {
         </span>
         <button
           type="button"
+          ref={press}
           data-effort-model-btn
           data-rc-tip="Switch model"
           aria-label={`Select model: ${props.activeModelName()}`}
-          onPointerDown={(e) => press(e.currentTarget)}
           onClick={(e) => {
             e.stopPropagation();
             props.onOpenModelPicker();
@@ -348,7 +337,7 @@ export function EffortPickerBody(props: {
         </button>
       </div>
 
-      <div class="mt-3 mb-1.5 flex items-center justify-between text-[11px] text-fg-muted select-none">
+      <div class="mt-3 mb-1.5 flex items-center justify-between text-2xs text-fg-muted select-none">
         <span>Faster</span>
         <span>Smarter</span>
       </div>
@@ -396,7 +385,7 @@ export function EffortPickerBody(props: {
         onPointerCancel={(e) => finishPointer(e, true)}
         onLostPointerCapture={(e) => finishPointer(e, false)}
         onKeyDown={(e) => handleStepKey(e, false)}
-        class="relative h-9 rounded-[10px] overflow-hidden isolate select-none touch-none cursor-pointer"
+        class="relative h-9 rounded-control overflow-hidden isolate select-none touch-none cursor-pointer"
       >
         {/* Normal recessed track surface, left progress fill, and 7 discrete stop dots */}
         <div
@@ -463,7 +452,7 @@ export function EffortPickerBody(props: {
           aria-hidden="true"
           data-effort-thumb
           class={`absolute top-1 w-[20px] h-[28px] rounded-inner pointer-events-none bg-[var(--control-thumb)] [box-shadow:var(--control-thumb-shadow)] ${
-            dragging() ? "transition-none" : "transition-[left] duration-100 ease-out"
+            dragging() || reducedMotion() ? "transition-none" : "transition-[left] duration-100 ease-out"
           }`}
           style={{
             left: `calc(4px + ${ratio()} * (100% - 28px))`,

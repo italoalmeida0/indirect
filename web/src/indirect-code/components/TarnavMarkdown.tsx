@@ -274,8 +274,8 @@ function makeRenderer(root: HTMLElement, opts: TarnavRendererOptions) {
         language.textContent = "code";
         const container = wrap.appendChild(document.createElement("div"));
         container.className = opts.noNestedScroll
-          ? "font-mono text-[11px] text-fg-secondary overflow-visible select-text"
-          : "font-mono text-[11px] text-fg-secondary overflow-x-auto overflow-y-auto select-text [scrollbar-gutter:stable] max-h-56";
+          ? "font-mono text-2xs text-fg-secondary overflow-visible select-text"
+          : "font-mono text-2xs text-fg-secondary overflow-x-auto overflow-y-auto select-text [scrollbar-gutter:stable] max-h-56";
         const pre = container.appendChild(document.createElement("pre"));
         pre.setAttribute("data-streamdown", "code-block");
         pre.className = opts.noNestedScroll

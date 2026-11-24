@@ -1,9 +1,10 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { press } from "../../ds/motion/press";
-import { Badge, Btn, Modal, ModalNotice, copyToClipboard, toast } from "../../ui";
+import { Badge, Btn, Modal, copyToClipboard, toast } from "../../ui";
 import { Icon as Iconify } from "../../components/icon";
 import { useModal } from "../ctx";
 import { indirectInstallCommands } from "../install";
+import type { ChoiceOption } from "../viewTypes";
 
 export { NewProjectModal } from "./NewProjectModal";
 
@@ -15,15 +16,41 @@ function defaultPlatform(): "unix" | "windows" {
   }
 }
 
+function isDestructiveChoice(opt: ChoiceOption): boolean {
+  return Boolean((opt as { danger?: boolean }).danger) || /\bdiscard\b|\bdelete\b|\bremove\b/i.test(opt.label);
+}
+
+function isRecommendedChoice(opt: ChoiceOption): boolean {
+  return Boolean((opt as { recommended?: boolean }).recommended) && !isDestructiveChoice(opt);
+}
+
 export function ChoiceModal() {
   const m = useModal();
   const state = () => m.choiceState();
+
+  createEffect(() => {
+    const st = state();
+    if (!st || typeof window === "undefined") return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      const num = Number(e.key);
+      if (!Number.isInteger(num) || num < 1 || num > st.options.length) return;
+      const picked = st.options[num - 1];
+      if (!picked) return;
+      e.preventDefault();
+      e.stopPropagation();
+      st.resolve(picked.id);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    onCleanup(() => window.removeEventListener("keydown", onKeyDown, true));
+  });
 
   return (
     <Modal
       open={!!state()}
       title={state()?.title || "Choose option"}
-      subtitle="Select one of the choices below to continue."
       onClose={() => state()?.resolve(null)}
       footer={
         <Btn
@@ -43,56 +70,71 @@ export function ChoiceModal() {
         </Show>
         <div class="flex flex-col gap-2">
           <For each={state()?.options || []}>
-            {(opt, idx) => (
-              <button
-                type="button"
-                onPointerDown={(e) => press(e.currentTarget)}
-                onClick={() => state()?.resolve(opt.id)}
-                class={`flex items-center justify-between gap-3 rounded-panel border px-3.5 py-2.5 text-left transition-colors cursor-pointer group ${
-                  opt.primary
-                    ? "border-accent bg-accent-subtle/40 hover:bg-accent-subtle"
-                    : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle"
-                }`}
-              >
-                <div class="flex items-start gap-3 min-w-0 flex-1">
-                  <span
-                    class={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-2xs font-medium tabular-nums ${
-                      opt.primary
-                        ? "bg-accent text-accent-foreground"
-                        : "border border-border bg-surface-subtle text-fg-muted group-hover:text-fg"
-                    }`}
-                  >
-                    {idx() + 1}
-                  </span>
-                  <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2 flex-wrap">
-                      <span
-                        class={`text-xs sm:text-sm font-medium ${
-                          opt.primary ? "text-fg" : "text-fg-secondary group-hover:text-fg"
-                        }`}
-                      >
-                        {opt.label}
-                      </span>
-                      <Show when={opt.primary}>
-                        <Badge tone="accent">Recommended</Badge>
+            {(opt, idx) => {
+              const destructive = () => isDestructiveChoice(opt);
+              const recommended = () => isRecommendedChoice(opt);
+              const accentCard = () => Boolean(opt.primary && !destructive());
+              return (
+                <button
+                  type="button"
+                  ref={press}
+                  onClick={() => state()?.resolve(opt.id)}
+                  class={`flex items-center justify-between gap-3 rounded-panel border px-3.5 py-2.5 text-left transition-colors cursor-pointer group ${
+                    accentCard()
+                      ? "border-accent bg-accent-subtle/40 hover:bg-accent-subtle"
+                      : destructive()
+                        ? "border-border bg-surface hover:border-danger/45 hover:bg-danger-subtle/40"
+                        : "border-border bg-surface hover:border-border-strong hover:bg-surface-subtle"
+                  }`}
+                >
+                  <div class="flex items-start gap-3 min-w-0 flex-1">
+                    <span
+                      class={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-2xs font-medium tabular-nums ${
+                        accentCard()
+                          ? "bg-accent text-accent-foreground"
+                          : "border border-border bg-surface-subtle text-fg-muted group-hover:text-fg"
+                      }`}
+                    >
+                      {idx() + 1}
+                    </span>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <span
+                          class={`text-xs sm:text-sm font-medium ${
+                            accentCard()
+                              ? "text-fg"
+                              : destructive()
+                                ? "text-fg group-hover:text-danger"
+                                : "text-fg-secondary group-hover:text-fg"
+                          }`}
+                        >
+                          {opt.label}
+                        </span>
+                        <Show when={recommended()}>
+                          <Badge tone="accent">Recommended</Badge>
+                        </Show>
+                      </div>
+                      <Show when={opt.hint}>
+                        <p class="mt-0.5 text-xs text-fg-muted leading-relaxed">
+                          {opt.hint}
+                        </p>
                       </Show>
                     </div>
-                    <Show when={opt.hint}>
-                      <p class="mt-0.5 text-xs text-fg-muted leading-relaxed">
-                        {opt.hint}
-                      </p>
-                    </Show>
                   </div>
-                </div>
-                <Iconify
-                  icon="lucide:arrow-right"
-                  size={14}
-                  class={`shrink-0 transition-transform group-hover:translate-x-0.5 ${
-                    opt.primary ? "text-accent" : "text-fg-muted group-hover:text-fg"
-                  }`}
-                />
-              </button>
-            )}
+                  <Iconify
+                    icon="lucide:arrow-right"
+                    size={14}
+                    class={`shrink-0 transition-transform group-hover:translate-x-0.5 ${
+                      accentCard()
+                        ? "text-accent"
+                        : destructive()
+                          ? "text-fg-muted group-hover:text-danger"
+                          : "text-fg-muted group-hover:text-fg"
+                    }`}
+                  />
+                </button>
+              );
+            }}
           </For>
         </div>
       </div>
@@ -108,11 +150,7 @@ export function ConfirmModal() {
     <Modal
       open={!!state()}
       title={state()?.title || "Confirm action"}
-      subtitle={
-        state()?.danger
-          ? "Review the permanent host operation below before confirming."
-          : "Review the details below before continuing."
-      }
+      width="max-w-md"
       onClose={() => {
         state()?.resolve(false);
         m.setConfirmState(null);
@@ -142,14 +180,9 @@ export function ConfirmModal() {
         </>
       }
     >
-      <div class="space-y-4">
-        <ModalNotice
-          tone={state()?.danger ? "danger" : "info"}
-          title={state()?.danger ? "Destructive action" : "Confirmation"}
-        >
-          <span class="whitespace-pre-line leading-relaxed">{state()?.message}</span>
-        </ModalNotice>
-      </div>
+      <p class="text-xs sm:text-sm text-fg-secondary whitespace-pre-line leading-relaxed">
+        {state()?.message}
+      </p>
     </Modal>
   );
 }
@@ -175,17 +208,61 @@ export function PairModal() {
     <Modal
       open={m.showPairModal()}
       title="Pair Indirect Code host"
-      subtitle="Run a one-time bootstrap command on your workstation or server to pair its local daemon."
+      subtitle="Run a one-time command on your workstation or server to connect it."
       width="max-w-xl"
       onClose={() => m.setShowPairModal(false)}
       footer={
-        <Btn size="sm" onClick={() => m.setShowPairModal(false)}>
-          Done
-        </Btn>
+        <div class="flex w-full items-center justify-between gap-3 flex-wrap">
+          <Show when={m.pairingData()}>
+            <div class="flex items-center gap-2 text-xs text-fg-secondary min-w-0">
+              <span class="ui-spinner w-3.5 h-3.5 text-accent shrink-0" aria-hidden="true" />
+              <span class="truncate">Waiting for host…</span>
+            </div>
+          </Show>
+          <div class="flex items-center gap-2 ml-auto">
+            <Show when={m.pairingData()}>
+              <Btn
+                variant="outline"
+                size="sm"
+                loading={m.pairingLoading()}
+                disabled={m.pairingLoading()}
+                onClick={() => void m.generatePairingToken()}
+              >
+                Regenerate token
+              </Btn>
+            </Show>
+            <Btn size="sm" onClick={() => m.setShowPairModal(false)}>
+              Done
+            </Btn>
+          </div>
+        </div>
       }
     >
       <div class="space-y-4 text-xs">
-        <Show when={m.pairingData()}>
+        <Show
+          when={m.pairingData()}
+          fallback={
+            <div class="flex flex-col items-center justify-center gap-3 rounded-panel border border-border bg-surface-subtle/50 px-4 py-8 text-center">
+              <Show
+                when={m.pairingLoading()}
+                fallback={
+                  <>
+                    <Iconify icon="lucide:terminal" size={20} class="text-fg-muted" />
+                    <p class="text-xs text-fg-secondary">
+                      Generate a one-time command to connect a new host.
+                    </p>
+                    <Btn size="sm" onClick={() => void m.generatePairingToken()}>
+                      Generate pairing command
+                    </Btn>
+                  </>
+                }
+              >
+                <span class="ui-spinner w-4 h-4 text-accent" aria-hidden="true" />
+                <p class="text-xs text-fg-secondary">Generating pairing command…</p>
+              </Show>
+            </div>
+          }
+        >
           {(p) => {
             const cmds = () => indirectInstallCommands(p().connectUrl);
             const activeCmd = () => (osTab() === "windows" ? cmds().windows : cmds().unix);
@@ -197,7 +274,7 @@ export function PairModal() {
                     <span class="h-2 w-2 shrink-0 rounded-full bg-success animate-pulse" />
                     <span class="font-medium text-fg">One-time pairing token active</span>
                   </div>
-                  <Badge tone="green">Valid ~15m</Badge>
+                  <Badge tone="success">Valid ~15m</Badge>
                 </div>
 
                 {/* Unified Workstation Terminal Command Block */}
@@ -212,7 +289,7 @@ export function PairModal() {
                         type="button"
                         role="tab"
                         aria-selected={osTab() === "unix"}
-                        onPointerDown={(e) => press(e.currentTarget)}
+                        ref={press}
                         onClick={() => setOsTab("unix")}
                         class={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "unix"
@@ -227,7 +304,7 @@ export function PairModal() {
                         type="button"
                         role="tab"
                         aria-selected={osTab() === "windows"}
-                        onPointerDown={(e) => press(e.currentTarget)}
+                        ref={press}
                         onClick={() => setOsTab("windows")}
                         class={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "windows"
@@ -242,7 +319,7 @@ export function PairModal() {
 
                     <button
                       type="button"
-                      onPointerDown={(e) => press(e.currentTarget)}
+                      ref={press}
                       onClick={() => copyCmd(osTab(), activeCmd())}
                       class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer ml-auto"
                     >
@@ -274,13 +351,13 @@ export function PairModal() {
                       },
                       {
                         step: "02",
-                        title: "Daemon pairs",
-                        desc: "Installs the binary, claims the token, and starts the service.",
+                        title: "Host connects",
+                        desc: "Installs Indirect Code, claims the token, and starts automatically.",
                       },
                       {
                         step: "03",
                         title: "Local workspace",
-                        desc: "Files, git state, and sessions remain on that machine.",
+                        desc: "Files, git state, and conversations remain on that machine.",
                       },
                     ]}
                   >

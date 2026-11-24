@@ -103,6 +103,38 @@ export interface InspectTree {
 const inspectMeta = /^([^,()]+?)(?:,\s*(\d+)\s*lines?)?(?:,\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}))?$/;
 
 function parseEntryLine(line: string, forceDepthZero: boolean): InspectEntry | null {
+  // Support Unicode box-drawing tree prefixes emitted by modern inspect (`├── `, `└── `, `│   `).
+  const treeMatch = /^((?:│ {3}| {4})*)(?:├── |└── )(.*)$/.exec(line);
+  if (treeMatch) {
+    const treeDepth = forceDepthZero ? 0 : Math.floor(treeMatch[1].length / 4);
+    const afterBranch = treeMatch[2];
+    const flagMatch = /^(?:\[([^\]]*)\] ?)?(.*)$/.exec(afterBranch);
+    if (!flagMatch) return null;
+    const rest = flagMatch[2].trim();
+    if (!rest) return null;
+    const b = rest.match(/^(.*?)(\/)?(?: \((.*)\))?$/);
+    if (!b) return null;
+    const name = b[1].trim();
+    if (!name) return null;
+    const entry: InspectEntry = {
+      depth: treeDepth,
+      name,
+      isDir: b[2] === "/",
+      flag: (flagMatch[1] || "").trim(),
+    };
+    if (b[3] !== undefined) {
+      const mm = b[3].trim().match(inspectMeta);
+      if (mm) {
+        entry.size = mm[1].trim();
+        if (mm[2] !== undefined) entry.lines = parseInt(mm[2], 10);
+        if (mm[3] !== undefined) entry.mtime = mm[3];
+      } else {
+        entry.size = b[3].trim();
+      }
+    }
+    return entry;
+  }
+
   const m = line.match(/^( *)(?:\[([^\]]*)\] ?)?(.*)$/);
   if (!m) return null;
   const leading = m[1].length;
@@ -139,7 +171,7 @@ function parseEntryLine(line: string, forceDepthZero: boolean): InspectEntry | n
 }
 
 /** Parse the AI-visible inspect tree text. Null when unparseable. */
-export function parseInspectTree(raw: string): InspectTree | null {
+export function parseInspectTree(raw: string, env?: Record<string, string>): InspectTree | null {
   const text = (raw || "").replace(/\n+$/, "");
   if (!text) return null;
   const lines = text.split("\n");
@@ -160,12 +192,32 @@ export function parseInspectTree(raw: string): InspectTree | null {
       entries,
     };
   }
+  // Modern daemon header: bare directory line (`./`, `src/`, `web/src/indirect-code/`)
+  // followed by 0 or more indented / box-drawing entries.
+  const one = lines[0].trim();
+  const isBareDirHeader = !one.startsWith("[") && /^[^\s(]+\/$/.test(one);
+  if (isBareDirHeader) {
+    const entries: InspectEntry[] = [];
+    for (const ln of lines.slice(1)) {
+      if (!ln.trim()) continue;
+      const e = parseEntryLine(ln, false);
+      if (e) entries.push(e);
+    }
+    const envTotal = env?.total !== undefined ? Number(env.total) : NaN;
+    const count = Number.isFinite(envTotal) && envTotal >= 0 ? Math.trunc(envTotal) : entries.length;
+    const envCap = env?.truncated === "true" && entries.length > 0 ? entries.length : undefined;
+    return {
+      scope: one,
+      count,
+      capped: envCap,
+      entries,
+    };
+  }
   // Single-file form: one line, no header. Valid as a tree when it looks
   // like an entry: a flagged row ("[A]   src/util.go (...)") or a path
   // with an optional "(meta)" tail ("file.txt", "file.txt (4.2 kB, 10
   // lines)") — audit bug 38 accepts the bare form too. A prose line
   // ("garbage without structure") is not a tree.
-  const one = lines[0].trim();
   const looksLikeEntry = one.startsWith("[") || /^\S+(?:\s+\(.*\))?$/.test(one);
   if (lines.length === 1 && looksLikeEntry) {
     const e = parseEntryLine(lines[0], true);
@@ -179,7 +231,10 @@ export interface GlobList {
   none: boolean;
   files: string[];
   truncated: boolean;
+  timedOut?: boolean;
 }
+
+const GLOB_TIMEOUT_RE = /^\[glob reached its \d+s time budget[^\]]*\]$/i;
 
 /** Parse the AI-visible glob result text. Null when unparseable. */
 export function parseGlobList(raw: string): GlobList | null {
@@ -188,16 +243,25 @@ export function parseGlobList(raw: string): GlobList | null {
   if (text === "No files matched the pattern.") return { none: true, files: [], truncated: false };
   const lines = text.split("\n");
   let truncated = false;
-  const last = lines[lines.length - 1].trim();
-  if (/^\(Truncated: showing first \d+ matches\)$/.test(last)) {
-    truncated = true;
-    lines.pop();
+  let timedOut = false;
+  while (lines.length > 0) {
+    const last = lines[lines.length - 1].trim();
+    if (/^\(Truncated: showing first \d+ matches\)$/.test(last)) {
+      truncated = true;
+      lines.pop();
+    } else if (GLOB_TIMEOUT_RE.test(last)) {
+      truncated = true;
+      timedOut = true;
+      lines.pop();
+    } else {
+      break;
+    }
   }
-  const files = lines.map((l) => l.trim()).filter(Boolean);
-  if (files.length === 0) return null;
+  const files = lines.map((l) => l.trim()).filter((l) => Boolean(l) && !GLOB_TIMEOUT_RE.test(l));
+  if (files.length === 0) return timedOut ? { none: true, files: [], truncated: true, timedOut: true } : null;
   // The truncation marker was already detected and popped above (exact
   // regex) — the old startsWith("(") heuristic rejected any legit filename
   // beginning with "(" (audit bug 39), and a split line can never contain
   // "\n". Real filenames pass through untouched.
-  return { none: false, files, truncated };
+  return { none: false, files, truncated, ...(timedOut ? { timedOut: true } : {}) };
 }

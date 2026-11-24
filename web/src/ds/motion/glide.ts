@@ -22,6 +22,12 @@ export interface GlideOptions {
   transition?: Transition;
   /** Inset the indicator from the item edges, px. */
   inset?: number;
+  /**
+   * "both" (default) matches translateX/Y, width and height.
+   * "x" animates translateX and width only, preserving CSS height and vertical
+   * positioning (used by line-variant tab underlines).
+   */
+  axis?: "both" | "x" | (() => "both" | "x");
 }
 
 export function createGlide(opts: GlideOptions): void {
@@ -48,7 +54,14 @@ export function createGlide(opts: GlideOptions): void {
       return;
     }
     const box = measure(item);
-    const frame = { translate: `${box.x}px ${box.y}px`, width: `${box.w}px`, height: `${box.h}px` };
+    const axis = typeof opts.axis === "function" ? opts.axis() : (opts.axis ?? "both");
+    let frame: Record<string, string>;
+    if (axis === "x") {
+      if (indicator.style.height) indicator.style.height = "";
+      frame = { translate: `${box.x}px 0px`, width: `${box.w}px` };
+    } else {
+      frame = { translate: `${box.x}px ${box.y}px`, width: `${box.w}px`, height: `${box.h}px` };
+    }
     if (!placed || !visible || !glide) {
       // Jump into place, then fade in if it was hidden.
       for (const [key, value] of Object.entries(frame)) (indicator.style as unknown as Record<string, string>)[key] = value;

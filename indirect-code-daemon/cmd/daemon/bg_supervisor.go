@@ -442,9 +442,9 @@ func (b *bgSupervisor) onCancel(jobID, by string) any {
 	j.Status = BgStatusCancelled
 	j.EndedAt = time.Now().UnixMilli()
 	if by != "" {
-		j.Result = fmt.Sprintf("Background task %s cancelled by %s.", j.Label, by)
+		j.Result = fmt.Sprintf("Background task %s canceled by %s.", j.Label, by)
 		if j.LogPath != "" {
-			bgAppendLogLine(j.LogPath, fmt.Sprintf("\n[cancelled by %s]\n", by))
+			bgAppendLogLine(j.LogPath, fmt.Sprintf("\n[canceled by %s]\n", by))
 		}
 	}
 	_ = os.Remove(b.pidPath(jobID))
@@ -616,7 +616,7 @@ func (b *bgSupervisor) cancelJob(callerSessionID, jobID string) (tools.BgCancelO
 	case <-time.After(replyTimeout):
 		return tools.BgCancelOutcome{}, fmt.Errorf("bg supervisor unreachable")
 	}
-	return tools.BgCancelOutcome{OK: true, Status: BgStatusCancelled, Kind: kind, Notice: fmt.Sprintf("Background task %s cancelled: the work is stopped and its result will NOT be delivered. Re-run it differently instead of waiting.", label)}, nil
+	return tools.BgCancelOutcome{OK: true, Status: BgStatusCancelled, Kind: kind, Notice: fmt.Sprintf("Background task %s canceled: the work is stopped and its result will NOT be delivered. Re-run it differently instead of waiting.", label)}, nil
 }
 
 // ---- delivery (completion/cancel notices to the owner session) ----
@@ -643,7 +643,7 @@ func (b *bgSupervisor) deliver(j *bgJob, finished bool) {
 	} else {
 		var sb strings.Builder
 		sb.WriteString("<system-reminder>\n")
-		fmt.Fprintf(&sb, "Background task %s was cancelled by the user.\n", j.Label)
+		fmt.Fprintf(&sb, "Background task %s was canceled by the user.\n", j.Label)
 		fmt.Fprintf(&sb, "Partial output (if any) is in the session task — read it with bg_check (job_id %s).\n", j.ID)
 		sb.WriteString("Do not wait for it — continue your work another way.</system-reminder>")
 		text = sb.String()

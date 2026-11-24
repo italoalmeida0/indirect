@@ -40,7 +40,10 @@ export function Button(props: ButtonProps) {
   createEffect(on(key, (value, previous) => {
     const el = label();
     if (!el || value === previous) return;
-    animate(el, { opacity: "1", translate: "0px 0px" }, motionTokens.spring.snappy, { from: { opacity: "0", translate: "0px 2px" } });
+    animate(el, { opacity: "1", translate: "0px 0px" }, motionTokens.spring.snappy, {
+      from: { opacity: "0", translate: "0px 2px" },
+      clear: ["opacity"],
+    });
   }, { defer: true }));
   return (
     <button

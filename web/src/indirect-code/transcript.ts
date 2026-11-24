@@ -752,7 +752,9 @@ export function parseImageReadDetails(input: {
         hintOrigH = posInt(legacyCoord[2]);
         hintW = posInt(legacyCoord[3]);
         hintH = posInt(legacyCoord[4]);
-        const remainder = (legacyCoord[5] || "").trim();
+        const remainder = (legacyCoord[5] || "")
+          .replace(/Multiply coordinates by [0-9.]+ to map to original image\.?/i, "")
+          .trim();
         if (remainder) hints.push(remainder);
         continue;
       }
@@ -864,7 +866,7 @@ export function toolSummary(u: ToolUnit): ToolSummary {
         const stat = u.result && !u.result.isError ? formatImageSummaryStat(imageInfo) : undefined;
         return {
           icon: "lucide:image",
-          verb: "Analyzed",
+          verb: u.result ? "Read" : "Reading",
           target: baseNameOf(imageInfo.path || args.path) || imageInfo.path || String(args.path || "") || "image",
           ...(stat ? { stat } : {}),
         };
@@ -872,28 +874,56 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       if (u.result?.isError && isImageReadPath(args.path)) {
         return {
           icon: "lucide:image",
-          verb: "Analyzed",
+          verb: "Read",
           target: baseNameOf(args.path) || String(args.path || "") || "image",
         };
       }
+      const fileLabel = baseNameOf(args.path) || args.path || "file";
+      const pageStr = String(mergedDetails?.env?.page || "").trim();
+      const pageRange = /^(\d+)-(\d+)(?:\/\d+)?$/.exec(pageStr);
+      if (pageRange) {
+        return {
+          icon: "lucide:file-text",
+          verb: u.result ? "Read" : "Reading",
+          target: `${fileLabel}#L${pageRange[1]}-${pageRange[2]}`,
+        };
+      }
+      const hasExplicitRange = Boolean(args.offset) || Boolean(args.limit);
+      if (!u.result || u.result.isError) {
+        if (!hasExplicitRange) {
+          return { icon: "lucide:file-text", verb: u.result ? "Read" : "Reading", target: fileLabel };
+        }
+        const off = Math.max(1, Number(args.offset || 1));
+        const lim = Number(args.limit || 0);
+        return {
+          icon: "lucide:file-text",
+          verb: u.result ? "Read" : "Reading",
+          target: lim > 0 ? `${fileLabel}#L${off}-${off + lim - 1}` : `${fileLabel}#L${off}+`,
+        };
+      }
       // Daemon offset is 1-indexed (schema: "Line number to start reading
-      // from (1-indexed)"); the display block numbers lines with startLine+i+1,
-      // so the label must use off directly, not off+1.
+      // from (1-indexed)"); strip trailing newline so a 35-line file shows #L1-35, not #L1-36.
       const off = Math.max(1, Number(args.offset || 1));
-      const lines = res ? res.split("\n").length : 0;
+      const cleanBody = bodyWithoutFooter(cleanRes).replace(/\r?\n$/, "");
+      const lines = cleanBody ? cleanBody.split("\n").length : 0;
       const lim = Number(args.limit || 0);
-      const end = lim > 0 ? off + lim - 1 : off + lines - 1;
+      const end = lines > 0 ? off + lines - 1 : lim > 0 ? off + lim - 1 : off;
       return {
         icon: "lucide:file-text",
-        verb: "Analyzed",
-        target: `${baseNameOf(args.path) || args.path || "file"}#L${off}-${Math.max(end, off)}`,
+        verb: "Read",
+        target: lines > 0 || hasExplicitRange ? `${fileLabel}#L${off}-${Math.max(end, off)}` : fileLabel,
       };
     }
     case "glob": {
-      const n = res ? res.split("\n").filter((l) => l.trim()).length : 0;
+      const { cleanRes } = unwrapToolSummaryInput(res, details);
+      const bodyLines = bodyWithoutFooter(cleanRes)
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l && !/^\(Truncated:/i.test(l) && !/^\[glob reached its \d+s time budget/i.test(l) && l !== "No files matched the pattern.");
+      const n = bodyLines.length;
       return {
         icon: "lucide:search",
-        verb: "Searched",
+        verb: u.result ? "Searched" : "Searching",
         target: String(args.pattern || ""),
         stat: n > 0 ? `${n} match${n === 1 ? "" : "es"}` : undefined,
       };
@@ -977,13 +1007,13 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       const target = `${pat.length > 80 ? pat.slice(0, 80) + "…" : pat}${scope}`;
       return {
         icon: "lucide:search",
-        verb: "Search",
+        verb: u.result ? "Searched" : "Searching",
         target: target || "pattern",
       };
     }
     case "inspect": {
       const target = args.path && String(args.path) !== "." ? String(args.path) : "workspace";
-      return { icon: "lucide:folder-tree", verb: "Inspect", target };
+      return { icon: "lucide:folder-tree", verb: u.result ? "Inspected" : "Inspecting", target };
     }
     case "patch":
     case "edit": {
@@ -995,7 +1025,11 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       ].filter(Boolean))];
       const shown = files.slice(0, 3).join(", ") + (files.length > 3 ? ` +${files.length - 3}` : "");
       const isPreview = details?.dry_run === true;
-      const verb = isPreview ? (name === "patch" ? "Preview patch" : "Preview edit") : (name === "patch" ? "Patch" : "Edited");
+      const verb = isPreview
+        ? (name === "patch" ? "Preview patch" : "Preview edit")
+        : u.result
+          ? (name === "patch" ? "Patched" : "Edited")
+          : (name === "patch" ? "Patching" : "Editing");
       // Prefer the frontend-only display rendering (details.display); the
       // AI-visible text is a one-line confirmation with no diff.
       const st = diffStat(details?.display ?? res);
@@ -1010,7 +1044,7 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       const q = String(args.query || "").replace(/\s+/g, " ").trim();
       return {
         icon: "lucide:globe",
-        verb: "Web search",
+        verb: u.result ? "Searched web" : "Searching web",
         target: q.length > 90 ? q.slice(0, 90) + "…" : q || "query",
       };
     }
@@ -1023,7 +1057,7 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       }
       return {
         icon: "lucide:link",
-        verb: "Fetch",
+        verb: u.result ? "Fetched" : "Fetching",
         target: host.length > 90 ? host.slice(0, 90) + "…" : host || "url",
       };
     }
@@ -1070,13 +1104,14 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       };
     }
     case "write": {
-      const content = String(args.content || "");
+      const content = String(args.content || "").replace(/\r?\n$/, "");
       const n = content ? content.split("\n").length : 0;
+      const verb = !u.result ? "Writing" : details?.created === false ? "Updated" : "Created";
       return {
         icon: "lucide:file-text",
-        verb: "Created",
+        verb,
         target: baseNameOf(args.path) || args.path || "file",
-        stat: n > 0 ? `${n} lines` : undefined,
+        stat: n > 0 ? `${n} ${n === 1 ? "line" : "lines"}` : undefined,
       };
     }
     case "use_skill": {

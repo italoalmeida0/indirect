@@ -134,9 +134,9 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     expect(toolbarCtx).toContain("data-rc-tip={currentAccessSpec().tip}");
     expect(toolbarCtx).toContain('tip: "Permissions: Auto (sandboxed)"');
     expect(toolbarCtx).toContain('tip: "Permissions: Ask for approval"');
-    expect(toolbarCtx).toContain('tip: "Permissions: Full access (unjailed)"');
+    expect(toolbarCtx).toContain('tip: "Permissions: Full access"');
     expect(toolbarCtx).toContain(
-      "data-rc-tip={`Activation policy: ${shownUsable(name)} (click to cycle)`}",
+      "data-rc-tip={`Activation policy: ${usableLabel()} (click to cycle)`}",
     );
     expect(toolbarCtx).toContain('data-rc-tip="Drag to reorder"');
 
@@ -151,9 +151,7 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     expect(toolbarSend).toContain(
       'data-rc-tip={t.turnActivity()?.status === "cancelling" ? "Stopping…" : "Stop"}',
     );
-    expect(toolbarSend).toContain(
-      'data-rc-tip={c.sending() ? "Uploading attachments..." : isDraft() ? "Start conversation" : "Send"}',
-    );
+    expect(toolbarSend).toContain("data-rc-tip={sendTip()}");
 
     const composerInput = readIc("components/composer/ComposerInput.tsx");
     expect(composerInput).toContain('data-rc-tip="Remove attachment"');
@@ -184,7 +182,7 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     expect(sidebarToggle).toContain('data-rc-tip-placement="bottom"');
 
     const page = readIc("IndirectCodePage.tsx");
-    expect(page).toContain('data-rc-tip="Conversation history (Ctrl+K)"');
+    expect(page).toContain("data-rc-tip={`Conversation history (${shortcutLabel})`}");
     expect(page).toContain('data-rc-tip="New conversation"');
     expect(page).toContain('data-rc-tip-placement="bottom"');
 
@@ -193,7 +191,7 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     expect(switchHostMatches.length).toBe(2);
 
     const sidebar = readIc("components/WorkspaceSidebar.tsx");
-    expect(sidebar).toContain('data-rc-tip="Toggle project"');
+    expect(sidebar).toContain('data-rc-tip={s.isProjectExpanded(p) ? "Collapse" : "Expand"}');
     expect(sidebar).toContain('data-rc-tip="Copy project path"');
     expect(sidebar).toContain('data-rc-tip="Create new project"');
     expect(sidebar).toContain('data-rc-tip="Host & agent settings"');
@@ -220,11 +218,10 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     const queue = readIc("components/QueueCard.tsx");
     expect(queue).toContain('data-rc-tip={collapsed() ? "Expand queue" : "Collapse queue"}');
     expect(queue).toContain('data-rc-tip="Sends automatically when current step finishes"');
-    expect(queue).toContain('data-rc-tip="Interrupt current step and send now"');
+    expect(queue).toContain('data-rc-tip="Interrupt and send now"');
     expect(queue).toContain('data-rc-tip="Return to queue"');
     expect(queue).toContain('data-rc-tip="Clear queued messages"');
-    expect(queue).toContain('data-rc-tip="Send on next AI step"');
-    expect(queue).toContain('data-rc-tip="Stop current step and send now"');
+    expect(queue).toContain('data-rc-tip="Send on next step"');
     expect(queue).toContain('data-rc-tip="Send message now"');
     expect(queue).toContain('data-rc-tip="Move earlier in queue"');
     expect(queue).toContain('data-rc-tip="Move later in queue"');
@@ -272,11 +269,12 @@ describe("Indirect Code tooltip coverage & zero native HTML title attributes", (
     expect(preview).toContain('data-rc-tip="Limit preview length"');
 
     const codeDev = readIc("CodeDevPage.tsx");
-    expect(codeDev).toContain("<RemoteHints />");
+    expect(codeDev).not.toContain("<RemoteHints />");
     expect(codeDev).toContain('data-rc-tip="Toggle compact or pretty JSON"');
     expect(codeDev).toContain('data-rc-tip="Copy full JSON"');
     expect(codeDev).toContain('data-rc-tip="Download JSON file"');
     expect(codeDev).toContain('data-rc-tip="Refresh daemon debug state"');
-    expect(codeDev).toContain('data-rc-tip="Clear requests log"');
+    expect(codeDev).toContain('data-rc-tip="Return to Indirect Code"');
+    expect(codeDev).toContain('data-rc-tip="Clear all recorded network payloads and events (Frontend-only)"');
   });
 });

@@ -117,7 +117,7 @@ func (w *turnBridge) widgetLint(ctx context.Context, id, source, test, state str
 	if err := json.Unmarshal(raw, &res); err != nil {
 		snippet := strings.TrimSpace(string(raw))
 		if len(snippet) > 300 {
-			snippet = snippet[:300] + "..."
+			snippet = snippet[:300] + "…"
 		}
 		return tools.WidgetLintResult{}, fmt.Errorf("bad lint response (status %d): %v; body: %s", resp.StatusCode, err, snippet)
 	}
@@ -125,7 +125,7 @@ func (w *turnBridge) widgetLint(ctx context.Context, id, source, test, state str
 		if len(res.Errors) == 0 {
 			snippet := strings.TrimSpace(string(raw))
 			if len(snippet) > 300 {
-				snippet = snippet[:300] + "..."
+				snippet = snippet[:300] + "…"
 			}
 			return tools.WidgetLintResult{}, fmt.Errorf("lint failed (status %d): %s", resp.StatusCode, snippet)
 		}

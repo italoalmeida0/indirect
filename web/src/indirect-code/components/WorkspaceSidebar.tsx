@@ -9,8 +9,26 @@ import { SessionRow, type SessionRowCtx } from "./SessionSidebar";
 import { FloatMenu } from "./FloatMenu";
 import { HostCard } from "./HostCard";
 import { SidebarToggle } from "./SidebarToggle";
-import { RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
+import { RadialSpokeSpinner, UnreadDot, type UnreadDotTone } from "./LiveIndicators";
 import type { Project, SessionSummary } from "../types";
+
+function isApplePlatform(): boolean {
+  try {
+    return typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "");
+  } catch {
+    return false;
+  }
+}
+
+function rollupUnreadTone(list: SessionSummary[], isUnread: (s: SessionSummary) => boolean): UnreadDotTone {
+  let hasError = false;
+  for (const item of list) {
+    if (!isUnread(item)) continue;
+    if (item.attentionKind === "approval" || item.attentionKind === "question") return "warning";
+    if (item.attentionKind === "error") hasError = true;
+  }
+  return hasError ? "danger" : "accent";
+}
 
 interface SessionMenuState {
   sessionId: string;
@@ -88,6 +106,7 @@ export function WorkspaceSidebar() {
 
   const rowCtx = (): SessionRowCtx => ({
     isMobile: ui.isMobile,
+    isOverlay: overlaySidebar,
     activeSessionId: s.activeSessionId,
     selectedSessions: s.selectedSessions,
     selectionMode: s.selectionMode,
@@ -131,6 +150,15 @@ export function WorkspaceSidebar() {
     </Show>
   );
   const currentView = () => s.sidebarView?.() ?? "projects";
+  const tabSessions = () =>
+    currentView() === "talk"
+      ? (s.talkSessions?.() ?? [])
+      : (s.sessions?.() ?? []).filter((item) => !(s.isTalkSession?.(item) ?? false));
+  const allTabSelected = () => {
+    const list = tabSessions();
+    return list.length > 0 && list.every((item) => s.selectedSessions().has(item.id));
+  };
+  const shortcutLabel = isApplePlatform() ? "⌘K" : "Ctrl K";
   const projectsTabUnread = () =>
     currentView() === "talk" &&
     (s.sessions?.() ?? []).some(
@@ -178,7 +206,7 @@ export function WorkspaceSidebar() {
     <a
       href="#/"
       onClick={handleBackToGatewayClick}
-      onPointerDown={(e) => press(e.currentTarget)}
+      ref={press}
       class="rc-nav-row text-fg-muted hover:text-fg hover:bg-surface-muted/75"
     >
       <span aria-hidden="true" class="rc-nav-icon">
@@ -188,7 +216,7 @@ export function WorkspaceSidebar() {
     </a>
     <button
       type="button"
-      onPointerDown={(e) => press(e.currentTarget)}
+      ref={press}
       onClick={() => {
         s.startNewConversation();
         ui.closeSidebarOnMobile();
@@ -206,7 +234,7 @@ export function WorkspaceSidebar() {
     </button>
     <button
       type="button"
-      onPointerDown={(e) => press(e.currentTarget)}
+      ref={press}
       onClick={() => {
         ui.setHistoryView(true);
         ui.closeSidebarOnMobile();
@@ -222,7 +250,7 @@ export function WorkspaceSidebar() {
       </span>
       <span class="min-w-0 flex-1 truncate">Conversation history</span>
       <Show when={!overlaySidebar()}>
-        <Kbd class="shrink-0">Ctrl K</Kbd>
+        <Kbd class="shrink-0">{shortcutLabel}</Kbd>
       </Show>
     </button>
   </nav>
@@ -275,16 +303,16 @@ export function WorkspaceSidebar() {
             />
           }
         >
-          <div class="flex items-center gap-2">
-            <span class="text-2xs font-medium text-fg-secondary tabular-nums">
-              {s.selectedSessions().size} selected
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-2xs font-medium text-fg-secondary truncate">
+              Select conversations
             </span>
             <button
               type="button"
               onClick={() => s.selectAllSessions()}
-              class="px-2 py-0.5 rounded-md text-2xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted cursor-pointer transition-colors"
+              class="px-2 py-0.5 rounded-md text-2xs font-medium text-fg-muted hover:text-fg hover:bg-surface-muted cursor-pointer transition-colors shrink-0"
             >
-              {s.sessions().length > 0 && s.selectedSessions().size === s.sessions().length ? "Deselect All" : "Select All"}
+              {allTabSelected() ? "Deselect all" : "Select all"}
             </button>
           </div>
         </Show>
@@ -340,6 +368,7 @@ export function WorkspaceSidebar() {
                 </button>
                 <button
                   type="button"
+                  data-rc-tip="Start in your home directory (~)"
                   onClick={() => {
                     s.newProjBtn?.focus();
                     s.setNewProjectMenuOpen(false);
@@ -348,7 +377,7 @@ export function WorkspaceSidebar() {
                   class="ui-menu-item rounded-lg px-2.5 py-1.5 text-xs text-fg-secondary hover:text-fg hover:bg-surface-muted"
                 >
                   <Iconify icon="lucide:zap" size={13} class="text-warning shrink-0" />
-                  <span>Quick start</span>
+                  <span>Quick start (~)</span>
                 </button>
               </FloatMenu>
             </div>
@@ -372,10 +401,12 @@ export function WorkspaceSidebar() {
         fallback={
           <button
             type="button"
+            ref={press}
             onClick={s.openNewProjectModal}
-            class="w-full text-left px-2.5 py-2 rounded-lg border border-dashed border-border text-xs text-fg-muted hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
+            class="w-full flex items-center gap-1.5 text-left px-2.5 py-2 rounded-lg border border-dashed border-border text-xs text-fg-muted hover:text-fg hover:border-border-strong transition-colors cursor-pointer"
           >
-            + Select a project folder on the host
+            <Iconify icon="lucide:folder-plus" size={13} class="shrink-0" />
+            <span>Add project folder</span>
           </button>
         }
       >
@@ -392,6 +423,8 @@ export function WorkspaceSidebar() {
                 };
                 const folderHasUnread = () =>
                   !s.isProjectExpanded(p) && list().some((sess) => Boolean(s.isSessionUnread?.(sess)));
+                const folderUnreadTone = () =>
+                  rollupUnreadTone(list(), (sess) => Boolean(s.isSessionUnread?.(sess)));
                 const folderHasRunning = () =>
                   !s.isProjectExpanded(p) &&
                   list().some(
@@ -402,7 +435,7 @@ export function WorkspaceSidebar() {
                 return (
                   <div data-project-id={p.id}>
                     <div
-                      class={`group flex h-7.5 items-center gap-1 pr-1 rounded-lg text-[12.5px] transition-colors ${
+                      class={`group flex h-7.5 items-center gap-0.5 pr-1 rounded-lg text-[12.5px] transition-colors ${
                         activeProj()
                           ? "bg-surface-strong/70 font-medium text-fg"
                           : folderHasUnread()
@@ -413,23 +446,33 @@ export function WorkspaceSidebar() {
                     >
                       <button
                         type="button"
-                        aria-label="Toggle project"
+                        aria-label={s.isProjectExpanded(p) ? `Collapse ${p.name}` : `Expand ${p.name}`}
                         aria-expanded={s.isProjectExpanded(p)}
-                        data-rc-tip="Toggle project"
-                        onPointerDown={(e) => press(e.currentTarget)}
-                        onClick={() => {
-                          s.pickProject(p.id);
+                        data-rc-tip={s.isProjectExpanded(p) ? "Collapse" : "Expand"}
+                        ref={press}
+                        onClick={(e) => {
+                          e.stopPropagation();
                           s.toggleProjectExpanded(p.id);
                         }}
-                        class="flex items-center gap-1.5 min-w-0 flex-1 h-7.5 pl-2 pr-1 text-left cursor-pointer rounded-lg"
+                        class="ml-1 inline-flex h-6 w-5 shrink-0 items-center justify-center rounded-md text-fg-muted hover:text-fg hover:bg-surface-subtle cursor-pointer"
                       >
-                        <span aria-hidden="true" class="inline-flex h-4 w-4 shrink-0 items-center justify-center text-fg-muted">
-                          <Iconify
-                            icon="lucide:chevron-right"
-                            size={12}
-                            class={`shrink-0 transition-transform ${s.isProjectExpanded(p) ? "rotate-90" : ""}`}
-                          />
-                        </span>
+                        <Iconify
+                          icon="lucide:chevron-right"
+                          size={12}
+                          class={`shrink-0 transition-transform ${s.isProjectExpanded(p) ? "rotate-90" : ""}`}
+                        />
+                      </button>
+                      <button
+                        type="button"
+                        ref={press}
+                        onClick={() => {
+                          s.pickProject(p.id);
+                          if (!s.isProjectExpanded(p)) {
+                            s.toggleProjectExpanded(p.id);
+                          }
+                        }}
+                        class="flex items-center gap-1.5 min-w-0 flex-1 h-7.5 pr-1 text-left cursor-pointer rounded-lg"
+                      >
                         <Iconify icon="lucide:folder" size={13} class="shrink-0 text-fg-muted" />
                         <span class={`truncate flex-1 ${activeProj() || folderHasUnread() ? "font-medium text-fg" : "font-normal"}`}>{p.name}</span>
                       </button>
@@ -447,7 +490,7 @@ export function WorkspaceSidebar() {
                               when={folderHasUnread()}
                               fallback={<RadialSpokeSpinner size={12} class="text-fg-muted" />}
                             >
-                              <UnreadDot label="Unread conversation in project" />
+                              <UnreadDot tone={folderUnreadTone()} label="Unread conversation in project" />
                             </Show>
                           </span>
                         </Show>
@@ -503,9 +546,9 @@ export function WorkspaceSidebar() {
                                 type="button"
                                 onClick={(e) => s.deleteProject(p.id, e)}
                                 class="rc-row-action flex h-6 w-6 items-center justify-center rounded-md text-fg-muted hover:text-danger hover:bg-danger-subtle cursor-pointer shrink-0"
-                                data-rc-tip="Remove project" aria-label={`Remove ${p.name}`}
+                                data-rc-tip="Delete project" aria-label={`Delete ${p.name}`}
                               >
-                                <Iconify icon="lucide:x" size={12} />
+                                <Iconify icon="lucide:trash-2" size={12} />
                               </button>
                             </Show>
                           </div>
@@ -514,7 +557,14 @@ export function WorkspaceSidebar() {
                     </div>
                     <Show when={s.isProjectExpanded(p)}>
                       <div class="ml-[17.5px] mt-0.5 space-y-0.5 border-l border-border pl-2">
-                        <For each={s.visibleSessions(p.id, list())}>
+                        <For
+                          each={s.visibleSessions(p.id, list())}
+                          fallback={
+                            <div class="px-2 py-1 text-2xs text-fg-muted select-none">
+                              No conversations yet
+                            </div>
+                          }
+                        >
                           {(sess) => renderRow(sess)}
                         </For>
                         {renderListToggle(p.id, list().length)}
@@ -597,7 +647,7 @@ export function WorkspaceSidebar() {
               class="ui-menu-item ui-menu-item-danger rounded-lg px-2.5 py-1.5 text-xs hover:bg-danger-subtle"
             >
               <Iconify icon="lucide:trash-2" size={13} class="shrink-0" />
-              <span>Remove project</span>
+              <span>Delete project</span>
             </button>
           </Show>
         </FloatMenu>
@@ -694,7 +744,7 @@ export function WorkspaceSidebar() {
         <span class="text-2xs text-fg-muted truncate tabular-nums">
           {s.selectedSessions().size > 0
             ? `${s.selectedSessions().size} selected`
-            : "Select conversations to delete"}
+            : "None selected"}
         </span>
         <div class="flex items-center gap-1.5 shrink-0">
           <button
@@ -727,7 +777,7 @@ export function WorkspaceSidebar() {
   </Show>
 
   <div class="px-2.5 py-2 border-t border-border space-y-0.5 bg-surface-subtle shrink-0">
-    {/* Daemon update: primary concentric rounded-lg button above host selector */}
+    {/* Host update: primary concentric rounded-lg button above host selector */}
     <Show when={(() => { const i = ui.daemonUpdate.info(); return !!i && !!i.available && i.available !== i.current; })()}>{(() => {
       const i = ui.daemonUpdate.info()!;
       const busy = ui.daemonUpdate.applying() || hosts.activeHost()?.status === "updating";
@@ -735,10 +785,11 @@ export function WorkspaceSidebar() {
         <div class="pb-1.5">
           <button
             type="button"
+            ref={press}
             onClick={() => ui.daemonUpdate.apply()}
             disabled={busy}
-            data-rc-tip={i.current ? `Update daemon (${i.current} → ${i.available})` : `Update daemon to ${i.available}`}
-            class="ui-button ui-button-primary w-full rounded-full h-6 min-h-6 py-0 px-3 text-xs gap-1.5"
+            data-rc-tip={i.current ? `Update to ${i.available} (from ${i.current})` : `Update to ${i.available}`}
+            class="ui-button ui-button-primary w-full rounded-lg h-7 min-h-7 py-0 px-3 text-xs gap-1.5"
           >
             <Iconify icon="lucide:arrow-down-to-line" size={13} />
             <span>{busy ? "Updating…" : `Update to ${i.available}`}</span>
@@ -751,7 +802,7 @@ export function WorkspaceSidebar() {
         directly would feed the MouseEvent in as the section. */}
     <button
       type="button"
-      onPointerDown={(e) => press(e.currentTarget)}
+      ref={press}
       onClick={() => {
         m.openSettings?.();
       }}

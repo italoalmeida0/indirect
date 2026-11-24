@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onMount, Show } from "solid-js";
 import { handleBackToGatewayClick } from "../../route-nav";
 import { press } from "../../ds/motion/press";
 import { Icon as Iconify } from "../../components/icon";
@@ -20,7 +20,21 @@ export function Onboarding() {
   const m = useModal();
   const [osTab, setOsTab] = createSignal<"unix" | "windows">(defaultPlatform());
   const [copiedKey, setCopiedKey] = createSignal<"unix" | "windows" | null>(null);
-  m.setShowPairModal(false);
+  const [checking, setChecking] = createSignal(false);
+
+  onMount(() => {
+    m.setShowPairModal(false);
+  });
+
+  const checkConnection = async () => {
+    if (checking()) return;
+    setChecking(true);
+    try {
+      await h.loadHosts();
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const copyCmd = (kind: "unix" | "windows", cmd: string) => {
     setOsTab(kind);
@@ -39,7 +53,7 @@ export function Onboarding() {
       <div class="w-full max-w-xl mx-auto flex items-center justify-start shrink-0">
         <a
           href="#/"
-          onPointerDown={(e) => press(e.currentTarget)}
+          ref={press}
           onClick={handleBackToGatewayClick}
           class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-fg-muted hover:text-fg hover:bg-surface-muted/75 transition-colors"
         >
@@ -68,7 +82,7 @@ export function Onboarding() {
                 >
                   <Show
                     when={!m.pairingLoading()}
-                    fallback={<span class="ui-spinner ui-spinner-sm" aria-hidden="true" />}
+                    fallback={<span class="ui-spinner w-3.5 h-3.5" aria-hidden="true" />}
                   >
                     <Iconify icon="lucide:plus" size={15} />
                   </Show>
@@ -76,24 +90,24 @@ export function Onboarding() {
                 </Btn>
               </div>
 
-              {/* Minimal Hairline Architecture Rail */}
+              {/* Minimal Hairline Feature Rail */}
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-0 sm:divide-x divide-border-subtle border-t border-border-subtle pt-5 text-left max-w-lg mx-auto">
                 <For
                   each={[
                     {
                       icon: "lucide:hard-drive",
-                      title: "Local ownership",
-                      desc: "Repositories, credentials, and transcripts stay on your machine.",
-                    },
-                    {
-                      icon: "lucide:terminal-square",
-                      title: "Single-binary daemon",
-                      desc: "Supervised Go worker with durable background task runners.",
+                      title: "Runs locally",
+                      desc: "Your repositories, files, and conversation history stay on your machine.",
                     },
                     {
                       icon: "lucide:laptop",
-                      title: "Multi-device relay",
-                      desc: "Resume live turns cleanly across desktop and mobile.",
+                      title: "Pick up anywhere",
+                      desc: "Follow live progress and reply cleanly from desktop or mobile.",
+                    },
+                    {
+                      icon: "lucide:terminal-square",
+                      title: "Background tasks keep running",
+                      desc: "Long builds, tests, and servers keep going even after you close the tab.",
                     },
                   ]}
                 >
@@ -122,7 +136,7 @@ export function Onboarding() {
                     <span class="h-2 w-2 rounded-full bg-success animate-pulse" />
                     <span class="text-xs font-medium text-fg">Ready to pair workstation</span>
                   </div>
-                  <Badge tone="green">Valid ~15m</Badge>
+                  <Badge tone="success">Valid ~15m</Badge>
                 </div>
 
                 {/* Unified Terminal Command Block (concentric rounded-lg inside rounded-panel p-4/p-5) */}
@@ -137,7 +151,7 @@ export function Onboarding() {
                         type="button"
                         role="tab"
                         aria-selected={osTab() === "unix"}
-                        onPointerDown={(e) => press(e.currentTarget)}
+                        ref={press}
                         onClick={() => setOsTab("unix")}
                         class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "unix"
@@ -152,7 +166,7 @@ export function Onboarding() {
                         type="button"
                         role="tab"
                         aria-selected={osTab() === "windows"}
-                        onPointerDown={(e) => press(e.currentTarget)}
+                        ref={press}
                         onClick={() => setOsTab("windows")}
                         class={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-2xs font-medium transition-colors cursor-pointer ${
                           osTab() === "windows"
@@ -167,7 +181,7 @@ export function Onboarding() {
 
                     <button
                       type="button"
-                      onPointerDown={(e) => press(e.currentTarget)}
+                      ref={press}
                       onClick={() => copyCmd(osTab(), activeCmd())}
                       class="inline-flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[11px] font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer ml-auto"
                     >
@@ -199,13 +213,13 @@ export function Onboarding() {
                       },
                       {
                         step: "02",
-                        title: "Daemon registers",
-                        desc: "Installs Indirect Code and pairs via this token.",
+                        title: "Host connects",
+                        desc: "Installs Indirect Code and links this machine.",
                       },
                       {
                         step: "03",
-                        title: "Auto-connects",
-                        desc: "This workspace opens as soon as the host checks in.",
+                        title: "Opens automatically",
+                        desc: "This workspace opens as soon as your host checks in.",
                       },
                     ]}
                   >
@@ -226,24 +240,34 @@ export function Onboarding() {
                 {/* Live Listening Status + Actions */}
                 <div class="flex items-center justify-between gap-3 flex-wrap text-xs">
                   <div class="flex items-center gap-2 text-fg-secondary min-w-0">
-                    <span class="ui-spinner ui-spinner-sm text-accent shrink-0" aria-hidden="true" />
+                    <span class="ui-spinner w-3.5 h-3.5 text-accent shrink-0" aria-hidden="true" />
                     <span class="truncate">Waiting for your host…</span>
                   </div>
 
                   <div class="flex items-center gap-2 ml-auto flex-wrap">
                     <button
                       type="button"
-                      onClick={h.loadHosts}
-                      class="inline-flex items-center justify-center rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                      ref={press}
+                      disabled={checking()}
+                      onClick={() => void checkConnection()}
+                      class="inline-flex items-center justify-center gap-1.5 rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed"
                     >
-                      Check connection
+                      <Show when={checking()}>
+                        <span class="ui-spinner w-3 h-3" aria-hidden="true" />
+                      </Show>
+                      <span>{checking() ? "Checking…" : "Check connection"}</span>
                     </button>
                     <button
                       type="button"
+                      ref={press}
+                      disabled={m.pairingLoading()}
                       onClick={() => m.generatePairingToken({ silent: true })}
-                      class="inline-flex items-center justify-center rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                      class="inline-flex items-center justify-center gap-1.5 rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-55 disabled:cursor-not-allowed"
                     >
-                      Regenerate token
+                      <Show when={m.pairingLoading()}>
+                        <span class="ui-spinner w-3 h-3" aria-hidden="true" />
+                      </Show>
+                      <span>{m.pairingLoading() ? "Regenerating…" : "Regenerate token"}</span>
                     </button>
                   </div>
                 </div>

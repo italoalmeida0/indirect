@@ -430,7 +430,10 @@ func (w *turnBridge) run() error {
 	sink := func(ev core.AgentEvent) { w.handleEvent(ev) }
 	if w.snap.compact {
 		w.handleEvent(core.EvToolProgress{Text: "Compacting older context…"})
-		return w.runManualCompact(func(delta string) { w.handleEvent(core.EvToolProgress{Text: delta}) })
+		return w.runManualCompact(func(string) {
+			w.heartbeat()
+			w.extendProviderWaitThrottled()
+		})
 	}
 	var turnErr error
 	if w.snap.resume || w.snap.seeded {
@@ -1489,8 +1492,9 @@ func (w *turnBridge) autoCompact(cctx context.Context, esink func(core.AgentEven
 	w.declareWait("provider", time.Now().Add(tuneWaitProvider))
 	defer w.declareWait("", time.Time{})
 	esink(core.EvToolProgress{Text: "Compacting older context…"})
-	_, err := w.agent.MaybeAutoCompactAt(cctx, window, threshold, func(delta string) {
-		esink(core.EvToolProgress{Text: delta})
+	_, err := w.agent.MaybeAutoCompactAt(cctx, window, threshold, func(string) {
+		w.heartbeat()
+		w.extendProviderWaitThrottled()
 	})
 	return err
 }
@@ -1546,7 +1550,7 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 		w.extendProviderWaitThrottled()
 		payload["event"] = map[string]any{"type": "tool_use_end", "id": e.ID}
 	case core.EvToolProgress:
-		if e.ID == "" && (strings.HasPrefix(e.Text, "Compacting") || strings.HasPrefix(e.Text, "Context limit reached upstream")) {
+		if e.ID == "" && e.Text != "" {
 			w.declareWait("provider", time.Now().Add(tuneWaitProvider))
 		} else if e.ID != "" {
 			wait := tuneWaitTool
@@ -1561,7 +1565,7 @@ func (w *turnBridge) handleEvent(ev core.AgentEvent) {
 			// progress without emitting empty WS frames.
 			return
 		}
-		if e.ID == "" && strings.HasPrefix(e.Text, "Compacting") {
+		if e.ID == "" {
 			payload["event"] = map[string]any{"type": "compact_progress", "text": e.Text}
 		} else {
 			payload["event"] = map[string]any{"type": "tool_progress", "id": e.ID, "text": e.Text}

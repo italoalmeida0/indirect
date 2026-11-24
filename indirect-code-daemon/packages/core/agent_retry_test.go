@@ -43,9 +43,17 @@ func TestAgentRetriesOverloadedStreamError(t *testing.T) {
 	a.RetrySchedule = []time.Duration{time.Millisecond}
 
 	var turnErrs []string
+	var retryErrs []string
 	err := a.Prompt(context.Background(), "hello", nil, func(ev AgentEvent) {
-		if e, ok := ev.(EvTurnEnd); ok && e.Err != nil {
-			turnErrs = append(turnErrs, e.Err.Error())
+		switch e := ev.(type) {
+		case EvTurnEnd:
+			if e.Err != nil {
+				turnErrs = append(turnErrs, e.Err.Error())
+			}
+		case EvRetry:
+			if e.Err != nil {
+				retryErrs = append(retryErrs, e.Err.Error())
+			}
 		}
 	})
 	if err != nil {
@@ -54,8 +62,11 @@ func TestAgentRetriesOverloadedStreamError(t *testing.T) {
 	if got := atomic.LoadInt32(&client.calls); got != 2 {
 		t.Fatalf("Stream calls = %d; want 2", got)
 	}
-	if len(turnErrs) != 1 || !strings.Contains(turnErrs[0], "overloaded_error") {
-		t.Fatalf("turn errors = %v; want one overloaded error before retry", turnErrs)
+	if len(turnErrs) != 0 {
+		t.Fatalf("turn errors = %v; want none before recoverable retry", turnErrs)
+	}
+	if len(retryErrs) != 1 || !strings.Contains(retryErrs[0], "overloaded_error") {
+		t.Fatalf("retry errors = %v; want one overloaded error on EvRetry", retryErrs)
 	}
 	msgs := a.Messages()
 	if len(msgs) != 2 {
@@ -314,12 +325,20 @@ func TestNonRetryableUpstreamErrorTerminatesTurnImmediately(t *testing.T) {
 			a.PersistentTurns = true
 			a.RetrySchedule = []time.Duration{time.Millisecond}
 
-			err := a.Prompt(context.Background(), "hello", nil, nil)
+			var turnErrs []string
+			err := a.Prompt(context.Background(), "hello", nil, func(ev AgentEvent) {
+				if e, ok := ev.(EvTurnEnd); ok && e.Err != nil {
+					turnErrs = append(turnErrs, e.Err.Error())
+				}
+			})
 			if err == nil {
 				t.Fatalf("Prompt succeeded; want non-retryable error")
 			}
 			if !strings.Contains(err.Error(), tc.err) {
 				t.Fatalf("expected error containing %q, got %v", tc.err, err)
+			}
+			if len(turnErrs) != 1 || !strings.Contains(turnErrs[0], tc.err) {
+				t.Fatalf("terminal turn errors = %v; want 1 containing %q", turnErrs, tc.err)
 			}
 			if got := atomic.LoadInt32(&client.calls); got != 1 {
 				t.Fatalf("Stream calls = %d; want exactly 1 (no retries)", got)

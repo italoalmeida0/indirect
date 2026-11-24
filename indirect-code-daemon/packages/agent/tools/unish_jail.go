@@ -795,13 +795,13 @@ func (rt *PolicyRuntime) jailApprover(ctx context.Context, req unish.AccessReque
 			return unish.DecisionAllow, nil
 		}
 		prop, ok := ProposePathRule("fs_read", target, rt.spec.Workspace, prot)
-		reason := fmt.Sprintf("Reading path %q requires approval", target)
+		reason := "Reading file requires approval"
 		risk := "medium"
 		if prot && protReason != "" {
 			reason = protReason
 			risk = "high"
 		} else if rt.spec.Workspace != "" {
-			reason = fmt.Sprintf("Reading %q outside workspace requires approval", target)
+			reason = "Read file outside workspace"
 		}
 		allowed, err := rt.promptUser(ctx, MidExecApprovalReq{
 			Capability:      "fs_read",
@@ -839,7 +839,7 @@ func (rt *PolicyRuntime) jailApprover(ctx context.Context, req unish.AccessReque
 		}
 		prop, ok := ProposePathRule("fs_write", target, rt.spec.Workspace, prot)
 		risk := "medium"
-		reason := fmt.Sprintf("Writing to %q outside workspace requires approval", target)
+		reason := "Write file outside workspace"
 		if prot && protReason != "" {
 			reason = protReason
 			risk = "high"
@@ -870,9 +870,9 @@ func (rt *PolicyRuntime) jailApprover(ctx context.Context, req unish.AccessReque
 			return unish.DecisionAllow, nil
 		}
 		prop, ok := ProposeNetRule(req.Host)
-		reason := fmt.Sprintf("Outbound network access to %q requires approval", hostTarget)
+		reason := "Outbound network request requires approval"
 		if req.Op == unish.OpNetListen {
-			reason = fmt.Sprintf("Binding network listener on %q requires approval", hostTarget)
+			reason = "Binding network listener requires approval"
 			prop, ok = nil, false
 		}
 		allowed, err := rt.promptUser(ctx, MidExecApprovalReq{
@@ -996,7 +996,7 @@ func (h *PolicyCapabilityHook) CheckAccess(ctx context.Context, req unish.Access
 					Meta: ToolApprovalMeta{
 						Capability:      "exec",
 						Target:          rawCmdStr,
-						Reason:          fmt.Sprintf("Supervised mode requires approval before executing `%s`", rawCmdStr),
+						Reason:          "Ask for approval mode requires confirmation before running this command",
 						Risk:            "low",
 						AccessMode:      "ask",
 						ProposedRule:    prop,

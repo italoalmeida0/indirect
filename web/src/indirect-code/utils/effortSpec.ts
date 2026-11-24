@@ -12,11 +12,11 @@ export interface EffortSpec {
 export const EFFORT_SPECS: readonly EffortSpec[] = [
   { level: "none", title: "Off", desc: "Responds immediately without extended thinking" },
   { level: "minimum", title: "Min", desc: "Minimal thinking for quick, routine tasks" },
-  { level: "low", title: "Low", desc: "Light reasoning for everyday coding tasks" },
+  { level: "low", title: "Low", desc: "Quick reasoning for everyday tasks" },
   { level: "medium", title: "Medium", desc: "Balances speed and reasoning depth" },
-  { level: "high", title: "High", desc: "Thinks harder problems through" },
+  { level: "high", title: "High", desc: "Thorough reasoning for complex problems" },
   { level: "xhigh", title: "X-High", desc: "Deep multi-step reasoning for complex problems" },
-  { level: "max", title: "Max", desc: "The slowest and most thorough" },
+  { level: "max", title: "Max", desc: "Deepest reasoning for the hardest problems" },
 ] as const;
 
 export function resolveEffortIndex(raw: string): number {

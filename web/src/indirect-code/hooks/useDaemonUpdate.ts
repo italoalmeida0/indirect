@@ -186,7 +186,6 @@ export function createDaemonUpdate(opts: {
     // F5/reconnect/host-switch keeps showing the right host as updating.
     patch(hid, { lifecycle: "pending", target: cur.available, failedReason: undefined });
     opts.send({ type: "daemon_update_apply", hostId: hid || undefined });
-    opts.toast(`Updating to ${cur.available}…`, "ok");
   }
 
   function noteFailed(hostId: string, reason: string) {
@@ -195,16 +194,17 @@ export function createDaemonUpdate(opts: {
   }
 
   function noteDone(hostId: string, version: string) {
+    const cleanVersion = version.trim();
     if (hostId) {
       patch(hostId, {
-        lifecycle: "done", current: version || states()[hostId]?.current || "",
+        lifecycle: "done", current: cleanVersion || states()[hostId]?.current || "",
         available: "", finishedAt: Date.now(),
         // The finished target is terminal: record it so the NEXT version
         // can reset to idle. Without target, noteUpdate can't tell
         // "done for vX" from "done forever" and a newer available
         // would keep showing the stale finished row (Update button gone
         // until localStorage is wiped — the exact bug reported).
-        target: version || undefined,
+        target: cleanVersion || undefined,
       });
     }
     // Reload so the whole SPA reboots against the new daemon (fresh
@@ -212,10 +212,13 @@ export function createDaemonUpdate(opts: {
     // boot path shows it once and clears it (cleanup = no stale-notice
     // breach on the NEXT update).
     try {
-      localStorage.setItem("llmgw-update-done", version || "done");
+      localStorage.setItem("llmgw-update-done", cleanVersion || "__done__");
     } catch {}
     setTimeout(() => window.location.reload(), 1200);
-    opts.toast(`Daemon updated to ${version}, reloading…`, "ok");
+    opts.toast(
+      cleanVersion ? `Updated to ${cleanVersion}, reloading…` : "Update complete, reloading…",
+      "ok",
+    );
   }
 
   /** Boot cleanup: show + clear a pending post-reload update toast. */
@@ -225,7 +228,10 @@ export function createDaemonUpdate(opts: {
       v = localStorage.getItem("llmgw-update-done");
       if (v) localStorage.removeItem("llmgw-update-done");
     } catch {}
-    if (v) opts.toast(`Daemon updated to ${v}`, "ok");
+    if (v) {
+      const clean = v === "__done__" || v === "done" ? "" : v.trim();
+      opts.toast(clean ? `Updated to ${clean}` : "Update complete", "ok");
+    }
     return v;
   }
 

@@ -29,7 +29,6 @@
   from {
     opacity: 0;
     max-height: 0;
-    margin-bottom: 0;
     overflow: hidden;
     pointer-events: none;
     visibility: hidden;
@@ -37,7 +36,6 @@
   to {
     opacity: 1;
     max-height: 200px;
-    margin-bottom: 0.75rem;
     overflow: visible;
     pointer-events: auto;
     visibility: visible;
@@ -154,6 +152,22 @@ html:not(.mobile) .rc-markdown-control:hover, html.mobile .rc-markdown-control:a
     transform: translate(-50%, -50%);
   }
 }
+/* Sidebar session stop button: keep touch expansion bounded inside its 30-32px row
+ * so it never overlaps adjacent session rows above or below. */
+.rc-session-stop {
+  position: relative;
+}
+@media (pointer: coarse) {
+  .rc-session-stop::after,
+  .rc-msg-action.rc-session-stop::after {
+    content: "";
+    position: absolute;
+    inset: 50%;
+    width: 34px;
+    height: 30px;
+    transform: translate(-50%, -50%);
+  }
+}
 .rc-markdown-control[data-copy-state="copied"] { color: var(--success); }
 .rc-markdown-control[data-copy-state="error"] { color: var(--danger); }
 /* Reveal-on-hover on desktop; always visible on touch (no hover there). */
@@ -161,6 +175,12 @@ html:not(.mobile) .rc-message-actions { opacity: 0; transition: opacity var(--du
 html:not(.mobile) .group\/msg:hover .rc-message-actions,
 html:not(.mobile) .group\/msg:focus-within .rc-message-actions { opacity: 1; }
 html.mobile .rc-message-actions { opacity: 1; }
+/* Generative UI floating corner toolbar: reveal on hover/focus on desktop,
+ * always visible on touch devices (including landscape tablets via html.mobile). */
+html:not(.mobile) .gu-host-toolbar { opacity: 0; transition: opacity var(--duration-fast) var(--ease-standard); }
+html:not(.mobile) .group\/guhost:hover .gu-host-toolbar,
+html:not(.mobile) .group\/guhost:focus-within .gu-host-toolbar { opacity: 1; }
+html.mobile .gu-host-toolbar { opacity: 1; }
 
 /* Search match highlight inside workspace & history cards. */
 .rc-app-shell mark {
@@ -299,16 +319,19 @@ html.mobile .rc-message-actions { opacity: 1; }
   box-shadow: var(--shadow-floating);
 }
 
-/* Touch chrome targets live in @layer base so @layer components/utilities win cleanly. */
-@layer base {
-  html.mobile .rc-sidebar-toggle,
-  html.mobile .rc-composer-add,
-  html.mobile .rc-composer-icon-btn,
-  html.mobile .rc-composer-model,
-  html.mobile .rc-composer-send,
-  html.mobile .rc-composer-stop {
-    position: relative;
-  }
+/* Touch chrome targets live in layer(components) so @layer utilities win cleanly.
+ * Horizontal expansion stays within half the sibling gap so adjacent toolbar
+ * buttons never overlap each other's hit area. */
+html.mobile .rc-sidebar-toggle,
+html.mobile .rc-composer-add,
+html.mobile .rc-composer-icon-btn,
+html.mobile .rc-composer-model,
+html.mobile .rc-composer-send,
+html.mobile .rc-composer-stop,
+html.mobile .rc-composer-voice,
+html.mobile .rc-composer-voice-confirm,
+html.mobile .rc-composer-voice-cancel {
+  position: relative;
 }
 @media (pointer: coarse) {
   .rc-sidebar-toggle,
@@ -316,13 +339,13 @@ html.mobile .rc-message-actions { opacity: 1; }
   .rc-composer-icon-btn,
   .rc-composer-model,
   .rc-composer-send,
-  .rc-composer-stop {
+  .rc-composer-stop,
+  .rc-composer-voice,
+  .rc-composer-voice-confirm,
+  .rc-composer-voice-cancel {
     position: relative;
   }
-  .rc-sidebar-toggle::after,
-  .rc-composer-add::after,
-  .rc-composer-send::after,
-  .rc-composer-stop::after {
+  .rc-sidebar-toggle::after {
     content: "";
     position: absolute;
     inset: 50%;
@@ -330,6 +353,7 @@ html.mobile .rc-message-actions { opacity: 1; }
     height: 44px;
     transform: translate(-50%, -50%);
   }
+  .rc-composer-add::after,
   .rc-composer-icon-btn::after,
   .rc-composer-model::after {
     content: "";
@@ -340,29 +364,18 @@ html.mobile .rc-message-actions { opacity: 1; }
     height: 44px;
     transform: translateY(-50%);
   }
-}
-@layer base {
-  html.mobile .rc-composer-voice,
-  html.mobile .rc-composer-voice-confirm,
-  html.mobile .rc-composer-voice-cancel {
-    position: relative;
-  }
-}
-@media (pointer: coarse) {
-  .rc-composer-voice,
-  .rc-composer-voice-confirm,
-  .rc-composer-voice-cancel {
-    position: relative;
-  }
+  .rc-composer-send::after,
+  .rc-composer-stop::after,
   .rc-composer-voice::after,
   .rc-composer-voice-confirm::after,
   .rc-composer-voice-cancel::after {
     content: "";
     position: absolute;
-    inset: 50%;
-    width: 44px;
+    left: -3px;
+    right: -3px;
+    top: 50%;
     height: 44px;
-    transform: translate(-50%, -50%);
+    transform: translateY(-50%);
   }
 }
 .rc-markdown blockquote {
@@ -862,7 +875,7 @@ html.mobile .rc-composer-voice-cancel:active:not(:disabled) {
   .rc-composer-voice-confirm,
   .rc-composer-send
 ) {
-  background-color: var(--voice-glass-bg);
+  background-color: var(--voice-glass-bg) !important;
   box-shadow: inset 0 0 0 1px var(--voice-glass-border);
   -webkit-backdrop-filter: var(--voice-glass-blur);
   backdrop-filter: var(--voice-glass-blur);
@@ -888,19 +901,19 @@ html.mobile .rc-composer[data-voice-active="true"] .rc-composer-toolbar button:n
   .rc-composer-voice-confirm,
   .rc-composer-send
 )[aria-expanded="true"] {
-  background-color: var(--voice-glass-bg-hover);
+  background-color: var(--voice-glass-bg-hover) !important;
   box-shadow: inset 0 0 0 1px var(--voice-glass-border-hover);
 }
 .rc-composer[data-voice-active="true"] .rc-composer-stop {
-  background-color: color-mix(in oklab, var(--danger) 16%, var(--voice-glass-bg));
-  border-color: color-mix(in oklab, var(--danger) 38%, var(--voice-glass-border));
+  background-color: color-mix(in oklab, var(--danger) 16%, var(--voice-glass-bg)) !important;
+  border-color: color-mix(in oklab, var(--danger) 38%, var(--voice-glass-border)) !important;
   -webkit-backdrop-filter: var(--voice-glass-blur);
   backdrop-filter: var(--voice-glass-blur);
 }
 html:not(.mobile) .rc-composer[data-voice-active="true"] .rc-composer-stop:hover:not(:disabled),
 html.mobile .rc-composer[data-voice-active="true"] .rc-composer-stop:active:not(:disabled) {
-  background-color: color-mix(in oklab, var(--danger) 24%, var(--voice-glass-bg-hover));
-  border-color: color-mix(in oklab, var(--danger) 50%, var(--voice-glass-border-hover));
+  background-color: color-mix(in oklab, var(--danger) 24%, var(--voice-glass-bg-hover)) !important;
+  border-color: color-mix(in oklab, var(--danger) 50%, var(--voice-glass-border-hover)) !important;
 }
 
 :root[data-theme="high-contrast"] .rc-composer-voice,
@@ -923,15 +936,15 @@ html.mobile:root[data-theme="high-contrast"] .rc-composer-voice-cancel:active:no
   color: var(--danger);
 }
 :root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop {
-  background-color: var(--surface);
-  border-color: var(--danger);
+  background-color: var(--surface) !important;
+  border-color: var(--danger) !important;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 html:not(.mobile):root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop:hover:not(:disabled),
 html.mobile:root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop:active:not(:disabled) {
-  background-color: var(--surface-muted);
-  border-color: var(--danger);
+  background-color: var(--surface-muted) !important;
+  border-color: var(--danger) !important;
 }
 
 /* Status overlay entrance & live recording dot */

@@ -57,7 +57,7 @@ export function QueueCard() {
                   class="text-[13px] text-fg truncate min-w-0"
                   data-rc-tip={item.text && item.text.length > 60 ? item.text : undefined}
                 >
-                  {item.text || "(Attachment message)"}
+                  {item.text || "Attachment"}
                 </span>
                 <Show when={item.attachmentIds.length > 0}>
                   <span
@@ -74,7 +74,7 @@ export function QueueCard() {
                     <button
                       type="button"
                       data-action="queue-interrupt-now"
-                      data-rc-tip="Interrupt current step and send now"
+                      data-rc-tip="Interrupt and send now"
                       aria-label="Interrupt current step and send now"
                       onClick={() => q.interruptNow(item.id)}
                       class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface-muted transition-colors cursor-pointer"
@@ -226,7 +226,7 @@ function PassiveQueueLine(props: {
               class="truncate text-fg min-w-0 flex-1 text-xs"
               data-rc-tip={props.item.text && props.item.text.length > 60 ? props.item.text : undefined}
             >
-              {props.item.text || "(Attachment message)"}
+              {props.item.text || "Attachment"}
             </span>
             <Show when={props.item.attachmentIds.length > 0}>
               <span
@@ -257,29 +257,29 @@ function PassiveQueueLine(props: {
                     onClick={props.onSendNow}
                     class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface transition-colors cursor-pointer"
                   >
-                    <Iconify icon="lucide:play" size={11.5} />
+                    <Iconify icon="lucide:play" size={12} />
                   </button>
                 }
               >
                 <button
                   type="button"
                   data-action="queue-send-next"
-                  data-rc-tip="Send on next AI step"
+                  data-rc-tip="Send on next step"
                   aria-label="Send on next AI step"
                   onClick={props.onSendNow}
                   class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface transition-colors cursor-pointer"
                 >
-                  <Iconify icon="lucide:corner-up-right" size={11.5} />
+                  <Iconify icon="lucide:corner-up-right" size={12} />
                 </button>
                 <button
                   type="button"
                   data-action="queue-interrupt-now"
-                  data-rc-tip="Stop current step and send now"
+                  data-rc-tip="Interrupt and send now"
                   aria-label="Stop current step and send now"
                   onClick={props.onInterruptNow}
                   class="inline-flex shrink-0 items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface transition-colors cursor-pointer"
                 >
-                  <Iconify icon="lucide:zap" size={11.5} />
+                  <Iconify icon="lucide:zap" size={12} />
                 </button>
               </Show>
               <Show when={props.total >= 2}>
@@ -292,7 +292,7 @@ function PassiveQueueLine(props: {
                   onClick={props.onMoveUp}
                   class="inline-flex shrink-0 items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
                 >
-                  <Iconify icon="lucide:chevron-up" size={11.5} />
+                  <Iconify icon="lucide:chevron-up" size={12} />
                 </button>
                 <button
                   type="button"
@@ -303,7 +303,7 @@ function PassiveQueueLine(props: {
                   onClick={props.onMoveDown}
                   class="inline-flex shrink-0 items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface disabled:opacity-35 disabled:pointer-events-none transition-colors cursor-pointer"
                 >
-                  <Iconify icon="lucide:chevron-down" size={11.5} />
+                  <Iconify icon="lucide:chevron-down" size={12} />
                 </button>
               </Show>
               <button
@@ -313,7 +313,7 @@ function PassiveQueueLine(props: {
                 onClick={props.onEdit}
                 class="shrink-0 inline-flex items-center justify-center p-1 rounded-md text-fg-muted hover:text-fg hover:bg-surface transition-colors cursor-pointer"
               >
-                <Iconify icon="lucide:pencil" size={11.5} />
+                <Iconify icon="lucide:pencil" size={12} />
               </button>
               <button
                 type="button"

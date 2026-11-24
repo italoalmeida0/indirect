@@ -47,11 +47,12 @@ export function MentionMenu(props: {
             return (
               <button
                 type="button"
+                ref={press}
                 role="option"
                 aria-label={path}
                 aria-selected={active()}
+                data-rc-tip={path}
                 onMouseDown={(e) => e.preventDefault()}
-                onPointerDown={(e) => press(e.currentTarget)}
                 onClick={() => props.mentions.pick(path)}
                 class={`ui-menu-item w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-lg text-xs font-mono cursor-pointer transition-colors ${
                   active()
@@ -60,11 +61,11 @@ export function MentionMenu(props: {
                 }`}
               >
                 <FileIcon path={path} size={14} />
-                <span class="truncate min-w-0">
+                <span class="flex items-baseline min-w-0 flex-1">
                   <Show when={parts.dir}>
-                    <span class="text-fg-muted">{parts.dir}</span>
+                    <span class="truncate min-w-0 text-fg-muted">{parts.dir}</span>
                   </Show>
-                  <span class={active() ? "font-medium text-fg" : "text-fg"}>{parts.base}</span>
+                  <span class={`shrink-0 ${active() ? "font-medium text-fg" : "text-fg"}`}>{parts.base}</span>
                 </span>
               </button>
             );

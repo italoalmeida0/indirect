@@ -275,16 +275,16 @@ describe("specialTitle and groupTitle across all daemon builtins", () => {
     expect(specialTitle([mkUnit("summary")])).toBe("Recorded 1 summary");
     expect(specialTitle([mkUnit("summary"), mkUnit("summary")])).toBe("Recorded 2 summaries");
     expect(specialTitle([mkUnit("finish_entire_request")])).toBe("Completed response");
-    expect(specialTitle([mkUnit("session_history")])).toBe("Searched 1 history query");
-    expect(specialTitle([mkUnit("session_history"), mkUnit("session_history")])).toBe("Searched 2 history queries");
-    expect(specialTitle([mkUnit("explore")])).toBe("Delegated 1 investigation");
-    expect(specialTitle([mkUnit("explore"), mkUnit("explore")])).toBe("Delegated 2 investigations");
+    expect(specialTitle([mkUnit("session_history")])).toBe("Checked history");
+    expect(specialTitle([mkUnit("session_history"), mkUnit("session_history")])).toBe("Checked history (2)");
+    expect(specialTitle([mkUnit("explore")])).toBe("Investigated 1 area");
+    expect(specialTitle([mkUnit("explore"), mkUnit("explore")])).toBe("Investigated 2 areas");
 
     expect(specialTitle([mkUnit("mcp__linear__list_issues")])).toBe("Used 1 MCP tool");
     expect(specialTitle([mkUnit("mcp__linear__list_issues"), mkUnit("mcp__github__pr")])).toBe("Used 2 MCP tools");
 
     // Unknown non-MCP tools still use generic call(s)
-    expect(specialTitle([mkUnit("fetch_url"), mkUnit("mystery")])).toBe("Checked 1 page · 1 call");
+    expect(specialTitle([mkUnit("fetch_url"), mkUnit("mystery")])).toBe("Fetched 1 page · 1 call");
     expect(specialTitle([mkUnit("mystery_a"), mkUnit("mystery_b")])).toBe("2 calls");
   });
 

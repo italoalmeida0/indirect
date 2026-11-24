@@ -17,11 +17,11 @@ describe("EffortPickerBody level specs and geometry helpers", () => {
     expect(EFFORT_SPECS).toEqual([
       { level: "none", title: "Off", desc: "Responds immediately without extended thinking" },
       { level: "minimum", title: "Min", desc: "Minimal thinking for quick, routine tasks" },
-      { level: "low", title: "Low", desc: "Light reasoning for everyday coding tasks" },
+      { level: "low", title: "Low", desc: "Quick reasoning for everyday tasks" },
       { level: "medium", title: "Medium", desc: "Balances speed and reasoning depth" },
-      { level: "high", title: "High", desc: "Thinks harder problems through" },
+      { level: "high", title: "High", desc: "Thorough reasoning for complex problems" },
       { level: "xhigh", title: "X-High", desc: "Deep multi-step reasoning for complex problems" },
-      { level: "max", title: "Max", desc: "The slowest and most thorough" },
+      { level: "max", title: "Max", desc: "Deepest reasoning for the hardest problems" },
     ]);
   });
 
@@ -115,7 +115,7 @@ describe("Separated Effort & Model picker contracts", () => {
   });
 
   test("EffortPickerBody uses corner-safe rounded-[inherit] layering, single topmost ring, and canvas corner guard", () => {
-    expect(effortSrc).toContain("rounded-[10px] overflow-hidden isolate");
+    expect(effortSrc).toContain("rounded-control overflow-hidden isolate");
     expect(effortSrc).toContain("isCellInsideRoundedTrack");
     expect(effortSrc).toContain("const cornerRadius = 10;");
     expect(effortSrc).toContain("const margin = 2.5;");

@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"indirect/indirect-code-daemon/packages/core"
 	"indirect/indirect-code-daemon/packages/provider"
@@ -338,7 +339,7 @@ func TestEditSingle(t *testing.T) {
 	if string(b) != "hello gopher\n" {
 		t.Fatalf("got %q", string(b))
 	}
-	if got := envAttr(res, "info"); got != "Successfully replaced 1 block(s) in a.txt." {
+	if got := envAttr(res, "info"); got != "Successfully replaced 1 block in a.txt." {
 		t.Fatalf("info attr = %q", got)
 	}
 }
@@ -539,7 +540,7 @@ func TestEditLineNumbers(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Confirmation is an envelope attr (info=); body stays empty.
-	if got := envAttr(res, "info"); got != "Successfully replaced 1 block(s) in e.txt." {
+	if got := envAttr(res, "info"); got != "Successfully replaced 1 block in e.txt." {
 		t.Fatalf("info attr = %q", got)
 	}
 	// Frontend display keeps the numbered diff.
@@ -711,5 +712,63 @@ func TestBashEmptyOutputUsesInfoAttr(t *testing.T) {
 	}
 	if got := envAttr(res, "info"); got != "" {
 		t.Fatalf("info attr must be absent when there is output, got %q", got)
+	}
+}
+
+func TestWriteToolDetailsCreatedFlag(t *testing.T) {
+	dir := t.TempDir()
+	tool := &WriteTool{CWD: dir, Sandbox: NewSandbox(dir)}
+
+	res1, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"path":    "hello.txt",
+		"content": "first\n",
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	det1, _ := res1.Details.(map[string]any)
+	if det1["created"] != true {
+		t.Fatalf("first write Details[created] = %v, want true", det1["created"])
+	}
+
+	res2, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"path":    "hello.txt",
+		"content": "second\n",
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	det2, _ := res2.Details.(map[string]any)
+	if det2["created"] != false {
+		t.Fatalf("overwrite Details[created] = %v, want false", det2["created"])
+	}
+}
+
+func TestBashTailTruncationOmitsBogusNextAttr(t *testing.T) {
+	acc := newOutputAccumulator(5, 64*1024)
+	var head bytes.Buffer
+	for i := 1; i <= 10; i++ {
+		line := "line\n"
+		acc.append([]byte(line))
+		head.WriteString(line)
+	}
+	res, err := finishBashCommand(bashArgs{Command: "seq 1 10"}, t.TempDir(), time.Now(), acc, &head, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := envAttr(res, "truncated"); got != "true" {
+		t.Fatalf("truncated attr = %q, want true", got)
+	}
+	if got := envAttr(res, "page"); got != "6-10/10" {
+		t.Fatalf("page attr = %q, want 6-10/10", got)
+	}
+	if got := envAttr(res, "next"); got != "" {
+		t.Fatalf("tail-truncated bash output must not emit bogus next attr, got %q", got)
+	}
+}
+
+func TestPluralSHelper(t *testing.T) {
+	if pluralS(1) != "" || pluralS(0) != "s" || pluralS(5) != "s" {
+		t.Fatalf("unexpected pluralS results: 0=%q 1=%q 5=%q", pluralS(0), pluralS(1), pluralS(5))
 	}
 }

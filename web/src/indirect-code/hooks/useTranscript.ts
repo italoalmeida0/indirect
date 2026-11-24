@@ -171,7 +171,15 @@ export function createTranscript(opts: {
     }
     if (!turn) return "";
     const elapsed = elapsedLabel((turn.endedAt || turnClock()) - turn.startedAt);
-    const label = turn.status === "running" && pendingQuestion() ? "Waiting for your answers" : turn.status === "running" && pendingApproval() ? "Waiting for approval" : { running: "Working", cancelling: "Stopping turn", cancelled: "Turn cancelled", completed: "Turn completed", failed: "Turn failed" }[turn.status];
+    const qCount = pendingQuestion()?.questions?.length ?? 0;
+    const label =
+      turn.status === "running" && pendingQuestion()
+        ? qCount === 1
+          ? "Waiting for your answer"
+          : "Waiting for your answers"
+        : turn.status === "running" && pendingApproval()
+          ? "Waiting for approval"
+          : { running: "Working", cancelling: "Stopping turn", cancelled: "Turn canceled", completed: "Turn completed", failed: "Turn failed" }[turn.status];
     return `${label} · ${elapsed}`;
   };
   /** Last short assistant text of the running turn (single-line hint). */
@@ -1486,10 +1494,10 @@ export function createTranscript(opts: {
 
     const choice = await opts.showChoice({
       title: "Regenerate response?",
-      message: "Everything from this point down will be discarded and the turn re-runs from the previous user message.\n\nFork keeps the current timeline in a copy and regenerates there instead.",
+      message: "Regenerating here replaces this reply and anything after it. Forking keeps this conversation intact and regenerates in a new copy.",
       options: [
-        { id: "resend", label: "Discard & regenerate", hint: "Discards the tail and resends here", primary: true },
-        { id: "fork", label: "Fork & regenerate", hint: "Preserves here, regenerates in a copy" },
+        { id: "fork", label: "Fork & regenerate", hint: "Keep this conversation and retry in a copy", primary: true },
+        { id: "resend", label: "Discard & regenerate", hint: "Replace replies from this point onward" },
       ],
     });
     if (!choice || opts.getHostId() !== host || opts.getSessionId() !== sid || !opts.isOpen() || sessionStatus() === "running") return;
@@ -1767,10 +1775,10 @@ export function createTranscript(opts: {
     if (regen) {
       const choice = await opts.showChoice({
         title: "Resend edited message?",
-        message: "Everything from this message down will be discarded and the turn re-runs with your edited text.\n\nFork keeps the current timeline in a copy and resends there instead.",
+        message: "Resending here replaces replies after this message. Forking keeps this conversation intact and resends in a new copy.",
         options: [
-          { id: "resend", label: "Discard & resend", hint: "Discards the tail and resends here", primary: true },
-          { id: "fork", label: "Fork & resend", hint: "Preserves here, resends in a copy" },
+          { id: "fork", label: "Fork & resend", hint: "Keep this conversation and resend in a copy", primary: true },
+          { id: "resend", label: "Discard & resend", hint: "Replace replies after this message" },
         ],
       });
       if (!choice || editFingerprint() !== initialEditFingerprint || opts.getHostId() !== host || opts.getSessionId() !== sid || editSource !== source || editingMsgIdx() !== idx || !opts.isOpen() || sessionStatus() === "running") return;
@@ -1888,7 +1896,7 @@ export function createTranscript(opts: {
     if (msg.sessionId === opts.getSessionId()) {
       setSessionStatus(msg.status === "running" ? "running" : "idle");
       if (msg.turn) setTurnActivity(previous => normalizeTurnActivity(msg.turn, previous, msg.status));
-      if (msg.status === "idle") {
+      if (msg.status === "idle" || (msg.status as string) === "orphaned") {
         showQuestion(null);
         setCompactingText("");
         setTurnActivity((turn) => finishTurn(turn));
@@ -1896,6 +1904,9 @@ export function createTranscript(opts: {
         setPendingApproval(null);
         setToolProgress({}); setToolStarts({});
         if (thinkingStart() !== null) stampThinkingDuration(stopThinkingTimer());
+        if ((msg.status as string) === "orphaned" && (msg as any).error) {
+          opts.toast(String((msg as any).error), "err");
+        }
       }
     }
   }
@@ -1955,7 +1966,12 @@ export function createTranscript(opts: {
       if (thinkingStart() !== null) stampThinkingDuration(stopThinkingTimer());
       setToolStarts((prev) => ({ ...prev, [ev.id]: ev.startedAt }));
     } else if (ev.type === "tool_progress") {
-      setToolProgress((prev) => ({ ...prev, [ev.id]: ((prev[ev.id] || "") + stripToolEnvelopeDetailed(String(ev.text || "")).body).slice(-65536) }));
+      if (!ev.id) {
+        const clean = stripToolEnvelopeDetailed(String(ev.text || "")).body.trim();
+        if (clean) setCompactingText(clean);
+      } else {
+        setToolProgress((prev) => ({ ...prev, [ev.id]: ((prev[ev.id] || "") + stripToolEnvelopeDetailed(String(ev.text || "")).body).slice(-65536) }));
+      }
     } else if (ev.type === "tool_call") {
       setCompactingText("");
       if (thinkingStart() !== null) stampThinkingDuration(stopThinkingTimer());

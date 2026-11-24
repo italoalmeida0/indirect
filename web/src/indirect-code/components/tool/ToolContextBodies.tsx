@@ -71,21 +71,11 @@ export function ToolContextBodies(props: ToolPartProps) {
                 </span>
                 <Show when={view().turnCapReached}>
                   <span class="inline-flex items-center gap-1 rounded-pill border border-border-subtle bg-warning-subtle px-1.5 py-px font-mono text-2xs font-medium text-warning">
-                    turn cap
+                    step limit
                   </span>
                 </Show>
               </div>
               <div class="flex items-center gap-1.5 flex-wrap font-mono text-2xs text-fg-muted tabular-nums ml-auto">
-                <Show when={view().turns !== undefined}>
-                  <span class="rounded-xs border border-border bg-surface px-1.5 py-px">
-                    {view().turns} {view().turns === 1 ? "turn" : "turns"}
-                  </span>
-                </Show>
-                <Show when={view().toolCalls !== undefined}>
-                  <span class="rounded-xs border border-border bg-surface px-1.5 py-px">
-                    {view().toolCalls} {view().toolCalls === 1 ? "tool call" : "tool calls"}
-                  </span>
-                </Show>
                 <Show when={(view().inputTokens ?? 0) > 0 || (view().outputTokens ?? 0) > 0}>
                   <span class="rounded-xs border border-border bg-surface px-1.5 py-px">
                     {compactTokens(view().inputTokens ?? 0)} + {compactTokens(view().outputTokens ?? 0)} tok
@@ -131,14 +121,14 @@ export function ToolContextBodies(props: ToolPartProps) {
                     </Show>
                     <span class="font-mono truncate">
                       {latestExploreProgress(props.m.prog()) ||
-                        (props.active ? "Running isolated read-only subagent…" : "Investigation did not complete.")}
+                        (props.active ? "Investigating codebase…" : "Investigation did not complete.")}
                     </span>
                   </div>
                 }
               >
                 <div class="px-3 py-2 text-xs leading-relaxed text-fg rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words">
                   <StreamingMarkdown basic={false} noNestedScroll>
-                    {view().synthesis || "(empty synthesis)"}
+                    {view().synthesis || "No findings returned."}
                   </StreamingMarkdown>
                 </div>
               </Show>
@@ -159,14 +149,14 @@ export function ToolContextBodies(props: ToolPartProps) {
                     <div class="bg-surface-subtle border-b border-border-subtle px-3 py-1.5 flex items-center justify-between gap-2 flex-wrap">
                       <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
                         <Iconify icon="lucide:history" size={13} class="shrink-0 text-accent" />
-                        <span class="text-xs font-medium text-fg-secondary">BM25 history search</span>
+                        <span class="text-xs font-medium text-fg-secondary">History search</span>
                         <Show when={sv().query}>
                           <span class="rounded-xs border border-border bg-surface px-1.5 py-px font-mono text-2xs text-fg truncate max-w-full sm:max-w-[18rem]">
                             {sv().query}
                           </span>
                         </Show>
                         <span class="rounded-xs border border-border-subtle bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
-                          {sv().includeLiveTail ? "compacted + live" : "compacted"}
+                          {sv().includeLiveTail ? "all history" : "earlier context"}
                         </span>
                       </div>
                       <div class="flex items-center gap-1.5 flex-wrap font-mono text-2xs text-fg-muted tabular-nums ml-auto shrink-0">
@@ -301,7 +291,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                     <div class="bg-surface-subtle border-b border-border-subtle px-3 py-1.5 flex items-center justify-between gap-2 flex-wrap">
                       <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
                         <Iconify icon="lucide:book-open" size={13} class="shrink-0 text-accent" />
-                        <span class="text-xs font-medium text-fg-secondary">Verbatim history recall</span>
+                        <span class="text-xs font-medium text-fg-secondary">History recall</span>
                         <Show when={rv().blockId}>
                           <span class="rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs font-medium text-fg">
                             era {rv().blockId}
@@ -350,7 +340,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                               embedded
                               plain
                               wrap={true}
-                              text={rv().cleanText.trim() ? rv().cleanText : "(empty recall)"}
+                              text={rv().cleanText.trim() ? rv().cleanText : "No content."}
                               scrollKey={props.m.key()}
                             />
                           }
@@ -370,7 +360,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                                     </span>
                                     <Show when={m.blockId}>
                                       <span class="rounded-xs border border-border-subtle bg-surface px-1.5 py-px font-mono text-2xs text-fg-muted">
-                                        block {m.blockId}
+                                        era {m.blockId}
                                       </span>
                                     </Show>
                                   </div>
@@ -378,7 +368,7 @@ export function ToolContextBodies(props: ToolPartProps) {
                                     embedded
                                     plain
                                     wrap={true}
-                                    text={m.content.trim() ? m.content : "(empty message)"}
+                                    text={m.content.trim() ? m.content : "No content."}
                                     scrollKey={`${props.m.key()}:m${m.msgIdx}`}
                                   />
                                 </div>

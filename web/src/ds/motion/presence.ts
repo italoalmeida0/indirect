@@ -49,7 +49,8 @@ export interface Presence {
 }
 
 export interface PresenceOptions {
-  enter?: (el: HTMLElement) => Controls | void;
+  /** Called when entering; `reversing` is true when interrupting an active exit. */
+  enter?: (el: HTMLElement, reversing?: boolean) => Controls | void;
   exit?: (el: HTMLElement) => Controls | void;
 }
 
@@ -63,12 +64,13 @@ export function createPresence(open: Accessor<boolean>, opts: PresenceOptions): 
   createEffect(on(open, (isOpen) => {
     const mine = ++token;
     if (isOpen) {
+      const wasClosing = closing() || Boolean(exiting);
       setClosing(false);
       const pending = exiting;
       exiting = undefined;
       pending?.stop();
       if (!present()) setPresent(true);
-      else if (el) opts.enter?.(el);
+      else if (el) opts.enter?.(el, wasClosing);
       return;
     }
     if (!present()) return;
@@ -99,7 +101,7 @@ export function createPresence(open: Accessor<boolean>, opts: PresenceOptions): 
       // The ref runs before insertion; enter in a microtask (still before
       // the next paint) once the node is in the document.
       queueMicrotask(() => {
-        if (el === node && open()) opts.enter?.(node);
+        if (el === node && open()) opts.enter?.(node, false);
       });
     },
   };

@@ -13,7 +13,7 @@
  * row and conversation header become the titlebar in an installed window. */
 .brand-wordmark {
   font-family: var(--font-code);
-  font-weight: 600;
+  font-weight: 500;
   text-transform: uppercase;
 }
 .rc-workspace-header { height: 3rem; }
@@ -26,13 +26,13 @@
     padding: var(--sat) var(--sar) var(--sab) var(--sal);
   }
   .rc-update-screen {
-    inset: var(--sat) var(--sar) var(--sab) var(--sal);
+    inset: var(--sat) var(--sar) var(--sab) var(--sal) !important;
   }
   .rc-safe-bottom { padding-bottom: 0.5rem; }
 
   .gw-shell { padding: var(--sat) var(--sar) var(--sab) var(--sal); }
-  .gw-shell .gw-header { top: var(--sat); }
-  .gw-shell .gateway-rail { top: var(--sat); bottom: var(--sab); left: var(--sal); }
+  .gw-shell .gw-header { top: var(--sat) !important; }
+  .gw-shell .gateway-rail { top: var(--sat) !important; bottom: var(--sab) !important; left: var(--sal) !important; }
   .gw-shell::before {
     content: "";
     position: fixed;
@@ -59,8 +59,8 @@
   }
   .rc-workspace-header { height: var(--wco-header-height); }
   .rc-sidebar-header {
-    padding-left: max(0.875rem, calc(var(--wco-left) + 0.5rem));
-    padding-right: max(0.875rem, calc(100% - 100vw + var(--wco-right) + 0.5rem));
+    padding-left: max(0.875rem, calc(var(--wco-left) + 0.5rem)) !important;
+    padding-right: max(0.875rem, calc(100% - 100vw + var(--wco-right) + 0.5rem)) !important;
     -webkit-app-region: drag;
     app-region: drag;
   }
@@ -81,41 +81,41 @@
    * page controls. One opaque sticky surface keeps scrolled content out. */
   .gw-shell { --gw-rail-width: 0px; }
   .gw-shell .gw-header {
-    background: var(--background);
-    backdrop-filter: none;
+    background: var(--background) !important;
+    backdrop-filter: none !important;
     -webkit-app-region: drag;
     app-region: drag;
   }
   .gw-shell header.gw-header {
-    height: var(--wco-header-height);
-    padding-left: max(1.5rem, calc(var(--wco-left) - var(--gw-rail-width) + 0.5rem));
-    padding-right: calc(var(--wco-right) + 1.5rem);
+    height: var(--wco-header-height) !important;
+    padding-left: max(1.5rem, calc(var(--wco-left) - var(--gw-rail-width) + 0.5rem)) !important;
+    padding-right: calc(var(--wco-right) + 1.5rem) !important;
   }
-  .gw-user-email { display: none; }
-  .gw-user-avatar { width: 1.75rem; height: 1.75rem; }
-  .gw-shell .gateway-rail { padding-top: 0; }
+  .gw-user-email { display: none !important; }
+  .gw-user-avatar { width: 1.75rem !important; height: 1.75rem !important; }
+  .gw-shell .gateway-rail { padding-top: 0 !important; }
   .gw-rail-brand { min-height: var(--wco-header-height); min-width: 0; margin-top: 0.25rem; }
-  .gw-rail-logo { width: 1.75rem; height: 1.75rem; }
+  .gw-rail-logo { width: 1.75rem !important; height: 1.75rem !important; }
   .gw-mobile-header {
-    height: var(--wco-header-height);
-    padding-left: max(0.5rem, calc(var(--wco-left) + 0.5rem));
-    padding-right: calc(var(--wco-right) + 0.5rem);
+    height: var(--wco-header-height) !important;
+    padding-left: max(0.5rem, calc(var(--wco-left) + 0.5rem)) !important;
+    padding-right: calc(var(--wco-right) + 0.5rem) !important;
   }
-  .gw-mobile-brand > span { display: none; }
-  .gw-mobile-brand > div, .gw-mobile-brand > img { width: 1.5rem; height: 1.5rem; }
-  .gw-mobile-actions button { width: 1.75rem; height: 1.75rem; }
+  .gw-mobile-brand > span { display: none !important; }
+  .gw-mobile-brand > div, .gw-mobile-brand > img { width: 1.5rem !important; height: 1.5rem !important; }
+  .gw-mobile-actions button { width: 1.75rem !important; height: 1.75rem !important; }
   @media (min-width: 768px) {
     .gw-shell { --gw-rail-width: 4rem; }
   }
   @media (min-width: 1024px) {
     .gw-shell { --gw-rail-width: 16rem; }
-    .gw-rail-brand { padding-left: max(0.5rem, var(--wco-left)); }
+    .gw-rail-brand { padding-left: max(0.5rem, var(--wco-left)) !important; }
   }
   @media (min-width: 768px) and (max-width: 1023px) {
     /* A compact rail cannot fit beside left-side native controls. */
-    .gw-shell .gateway-rail { padding-top: min(var(--wco-left), var(--wco-top)); }
+    .gw-shell .gateway-rail { padding-top: min(var(--wco-left), var(--wco-top)) !important; }
   }
-  .rc-safe-bottom { padding-bottom: max(var(--sab), 0.5rem); }
+  .rc-safe-bottom { padding-bottom: max(var(--sab), 0.5rem) !important; }
 }
 
 ::-webkit-scrollbar {

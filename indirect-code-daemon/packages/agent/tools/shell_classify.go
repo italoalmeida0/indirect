@@ -32,7 +32,7 @@ func EvaluateShellCommand(
 				Meta: ToolApprovalMeta{
 					Capability: "exec",
 					Target:     "bash",
-					Reason:     "Supervised mode requires approval before running shell commands",
+					Reason:     "Ask for approval mode requires confirmation before running shell commands",
 					Risk:       "low",
 					AccessMode: "ask",
 				},
@@ -52,7 +52,7 @@ func EvaluateShellCommand(
 				Meta: ToolApprovalMeta{
 					Capability: "exec",
 					Target:     ClipLabel(trimmed),
-					Reason:     "Supervised mode requires approval before running shell commands",
+					Reason:     "Ask for approval mode requires confirmation before running shell commands",
 					Risk:       "low",
 					AccessMode: "ask",
 				},
@@ -144,7 +144,7 @@ func EvaluateShellCommand(
 		Meta: ToolApprovalMeta{
 			Capability:      "exec",
 			Target:          ClipLabel(trimmed),
-			Reason:          "Supervised mode requires approval before running shell commands",
+			Reason:          "Ask for approval mode requires confirmation before running shell commands",
 			Risk:            "low",
 			AccessMode:      "ask",
 			ProposedRule:    prop,
@@ -274,7 +274,7 @@ func (s *shellWalkState) walkCommand(cmd syntax.Command) {
 					Meta: ToolApprovalMeta{
 						Capability:      "exec",
 						Target:          ClipLabel(full),
-						Reason:          fmt.Sprintf("Piping output directly into `%s` executes dynamic code and requires approval", sinkBin),
+						Reason:          fmt.Sprintf("Piping output directly into %s executes dynamic code and requires approval", sinkBin),
 						Risk:            "high",
 						AccessMode:      s.accessMode,
 						ProposedRule:    nil,
@@ -674,7 +674,7 @@ func evaluateExecArgvCore(
 			return denyExec(origRawCmd, r), false
 		}
 		if accessMode != "full" {
-			return askNonPersistable("exec", origRawCmd, "`env -S` dynamic argument splitting requires explicit approval", "high", accessMode, origRawCmd), false
+			return askNonPersistable("exec", origRawCmd, "env -S dynamic argument splitting requires explicit approval", "high", accessMode, origRawCmd), false
 		}
 	}
 	if envWrap.chdir != "" && accessMode != "full" {
@@ -733,7 +733,7 @@ func evaluateExecArgvCore(
 				sub.Meta.CanAllowAlways = false
 				return sub, false
 			}
-			return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Executing subshell `%s` requires explicit approval", bin), "medium", accessMode, rawCmdStr), false
+			return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Executing subshell %s requires explicit approval", bin), "medium", accessMode, rawCmdStr), false
 		}
 	}
 
@@ -846,7 +846,7 @@ func evaluateExecArgvCore(
 			Meta: ToolApprovalMeta{
 				Capability:      "exec",
 				Target:          rawCmdStr,
-				Reason:          fmt.Sprintf("Executing local script/binary `%s` requires approval", innerArgv[0]),
+				Reason:          fmt.Sprintf("Executing local script/binary %s requires approval", innerArgv[0]),
 				Risk:            "medium",
 				AccessMode:      accessMode,
 				ProposedRule:    prop,
@@ -860,15 +860,15 @@ func evaluateExecArgvCore(
 	// 6. Privilege escalation / non-persistable wrappers / eval / xargs.
 	switch bin {
 	case "sudo", "su", "doas", "pkexec", "runas":
-		return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Privilege escalation (`%s`) requires explicit approval", bin), "high", accessMode, rawCmdStr), false
+		return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Privilege escalation (%s) requires explicit approval", bin), "high", accessMode, rawCmdStr), false
 	case "eval", "exec":
-		return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Dynamic shell `%s` execution requires explicit approval", bin), "high", accessMode, rawCmdStr), false
+		return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Dynamic shell %s execution requires explicit approval", bin), "high", accessMode, rawCmdStr), false
 	case "sh", "bash", "zsh", "dash", "ksh", "ash", "fish", "unish", "cmd", "powershell", "pwsh":
-		return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Executing subshell `%s` requires explicit approval", bin), "medium", accessMode, rawCmdStr), false
+		return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Executing subshell %s requires explicit approval", bin), "medium", accessMode, rawCmdStr), false
 	case "xargs":
 		sub := extractXargsSubcommand(innerArgv[1:])
 		if len(sub) == 0 || !isSafeXargsTarget(baseProgName(sub[0])) {
-			return askNonPersistable("exec", rawCmdStr, "`xargs` executing external/mutating commands requires approval", "high", accessMode, rawCmdStr), false
+			return askNonPersistable("exec", rawCmdStr, "xargs executing external/mutating commands requires approval", "high", accessMode, rawCmdStr), false
 		}
 	}
 
@@ -890,7 +890,7 @@ func evaluateExecArgvCore(
 		if bin == "kill" && allKillTargetsAreShellJobs(innerArgv[1:]) {
 			return PolicyEvaluation{Verdict: VerdictAllow}, explicitExecAllowed
 		}
-		return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Signaling host processes (`%s`) requires approval", bin), "high", accessMode, rawCmdStr), false
+		return askNonPersistable("exec", rawCmdStr, fmt.Sprintf("Signaling host processes (%s) requires approval", bin), "high", accessMode, rawCmdStr), false
 	}
 
 	// 8. If an explicit exec allow rule matched, still verify literal path arguments don't escape
@@ -915,7 +915,7 @@ func evaluateExecArgvCore(
 			prop, ok = nil, false
 		}
 		if riskReason == "" {
-			riskReason = fmt.Sprintf("Executing external command `%s` requires approval", rawCmdStr)
+			riskReason = "Executing external command requires approval"
 		}
 		if riskLevel == "" {
 			riskLevel = "medium"
@@ -1249,14 +1249,14 @@ func evalRmCommand(
 			return res
 		}
 		if t == "." || t == "*" || t == "./*" || strings.HasSuffix(t, "/*") || samePathPlatform(resolved, workspace) {
-			res := askNonPersistable("fs_write", rawCmd, fmt.Sprintf("Bulk deletion (`%s`) requires explicit approval", rawCmd), "high", accessMode, rawCmd)
+			res := askNonPersistable("fs_write", rawCmd, "Bulk deletion requires explicit approval", "high", accessMode, rawCmd)
 			res.Meta.CallGrants = grantRules
 			return res
 		}
 	}
 
 	if recursive || bin == "shred" {
-		res := askNonPersistable("fs_write", rawCmd, fmt.Sprintf("Recursive deletion (`%s`) requires explicit approval", rawCmd), "high", accessMode, rawCmd)
+		res := askNonPersistable("fs_write", rawCmd, "Recursive deletion requires explicit approval", "high", accessMode, rawCmd)
 		res.Meta.CallGrants = grantRules
 		return res
 	}
@@ -1296,7 +1296,7 @@ func evalGitCommand(
 				dirDyn = i < len(dyn) && dyn[i]
 			}
 			if dirDyn {
-				return askNonPersistable("exec", rawCmd, "`git -C` with dynamic directory requires approval", "medium", accessMode, rawCmd), false
+				return askNonPersistable("exec", rawCmd, "git -C with dynamic directory requires approval", "medium", accessMode, rawCmd), false
 			}
 			gitCwd = resolvePath(cwd, expandHomePrefix(dirVal))
 			ev := evaluateFSCheck("fs_read", "", gitCwd, dirVal, "auto", workspace, brainDir, projectReadOnly, rules)
@@ -1312,18 +1312,18 @@ func evalGitCommand(
 				i++
 			}
 			if isDangerousGitConfigKV(cfgVal) {
-				return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git -c %s` overrides executable git hooks/helpers and requires approval", cfgVal), "high", accessMode, rawCmd), false
+				return askNonPersistable("exec", rawCmd, fmt.Sprintf("git -c %s overrides executable git hooks/helpers and requires approval", cfgVal), "high", accessMode, rawCmd), false
 			}
 			continue
 		}
 		if a == "--config-env" || strings.HasPrefix(a, "--config-env=") {
-			return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git %s` injects git configuration from environment and requires approval", a), "high", accessMode, rawCmd), false
+			return askNonPersistable("exec", rawCmd, fmt.Sprintf("git %s injects git configuration from environment and requires approval", a), "high", accessMode, rawCmd), false
 		}
 		if strings.HasPrefix(a, "--exec-path=") || (a == "--exec-path" && i+1 < len(argv)) {
-			return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git %s` overrides executable git helper path and requires approval", a), "high", accessMode, rawCmd), false
+			return askNonPersistable("exec", rawCmd, fmt.Sprintf("git %s overrides executable git helper path and requires approval", a), "high", accessMode, rawCmd), false
 		}
 		if strings.HasPrefix(a, "--git-dir") || strings.HasPrefix(a, "--work-tree") {
-			return askNonPersistable("exec", rawCmd, fmt.Sprintf("`git %s` targeting custom git directory requires approval", a), "medium", accessMode, rawCmd), false
+			return askNonPersistable("exec", rawCmd, fmt.Sprintf("git %s targeting custom git directory requires approval", a), "medium", accessMode, rawCmd), false
 		}
 		if strings.HasPrefix(a, "-") {
 			// `git --version` or `git --help`
@@ -1346,19 +1346,19 @@ func evalGitCommand(
 	case "reset":
 		for _, a := range subArgs {
 			if a == "--hard" || a == "--merge" {
-				return askNonPersistable("exec", rawCmd, fmt.Sprintf("Destructive git operation (`%s`) discards uncommitted work", rawCmd), "high", accessMode, rawCmd), false
+				return askNonPersistable("exec", rawCmd, "Destructive git operation discards uncommitted work", "high", accessMode, rawCmd), false
 			}
 		}
 	case "clean":
 		for _, a := range subArgs {
 			if strings.HasPrefix(a, "-") && !strings.Contains(a, "n") && a != "--dry-run" && strings.ContainsAny(a, "fdxX") {
-				return askNonPersistable("exec", rawCmd, fmt.Sprintf("Destructive git clean (`%s`) deletes untracked files", rawCmd), "high", accessMode, rawCmd), false
+				return askNonPersistable("exec", rawCmd, "Destructive git clean deletes untracked files", "high", accessMode, rawCmd), false
 			}
 		}
 	case "checkout":
 		for _, a := range subArgs {
 			if a == "--" || a == "." || a == "-f" || a == "--force" {
-				return askNonPersistable("exec", rawCmd, fmt.Sprintf("Discarding working-tree changes (`%s`) requires approval", rawCmd), "high", accessMode, rawCmd), false
+				return askNonPersistable("exec", rawCmd, "Discarding working-tree changes requires approval", "high", accessMode, rawCmd), false
 			}
 		}
 	case "restore":
@@ -1372,12 +1372,12 @@ func evalGitCommand(
 			}
 		}
 		if !stagedOnly {
-			return askNonPersistable("exec", rawCmd, fmt.Sprintf("Discarding working-tree changes (`%s`) requires approval", rawCmd), "high", accessMode, rawCmd), false
+			return askNonPersistable("exec", rawCmd, "Discarding working-tree changes requires approval", "high", accessMode, rawCmd), false
 		}
 	case "branch":
 		for _, a := range subArgs {
 			if a == "-D" || strings.Contains(a, "D") && strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") {
-				return askNonPersistable("exec", rawCmd, fmt.Sprintf("Force-deleting a git branch (`%s`) requires approval", rawCmd), "high", accessMode, rawCmd), false
+				return askNonPersistable("exec", rawCmd, "Force-deleting a git branch requires approval", "high", accessMode, rawCmd), false
 			}
 		}
 	}
@@ -1468,9 +1468,9 @@ func evalGitCommand(
 	// Remote / mutating git subcommands (`git push`, `git pull`, `git fetch`, `git rebase`, etc.) prompt!
 	prop, ok := ProposeExecRule([]string{"git", sub})
 	risk := "medium"
-	reason := fmt.Sprintf("Git `%s` modifies repository state or communicates with remotes", sub)
+	reason := fmt.Sprintf("git %s modifies repository state or communicates with remotes", sub)
 	if sub == "push" {
-		reason = fmt.Sprintf("Pushing commits to a remote repository (`%s`) requires approval", rawCmd)
+		reason = "Pushing commits to a remote repository requires approval"
 	}
 	return PolicyEvaluation{
 		Verdict: VerdictAsk,
@@ -1800,7 +1800,7 @@ func evalCurlWgetCommand(
 			Meta: ToolApprovalMeta{
 				Capability:      "net",
 				Target:          rawCmd,
-				Reason:          fmt.Sprintf("Outbound network command `%s` requires approval", rawCmd),
+				Reason:          "Outbound network command requires approval",
 				Risk:            "medium",
 				AccessMode:      accessMode,
 				ProposedRule:    prop,
@@ -1865,7 +1865,7 @@ func evalCurlWgetCommand(
 					Meta: ToolApprovalMeta{
 						Capability: "net",
 						Target:     nonEmpty(u.Host, rawHost),
-						Reason:     fmt.Sprintf("Subdomain %q under .localhost is blocked against SSRF", rawHost),
+						Reason:     fmt.Sprintf("Localhost subdomain %q is blocked for security", rawHost),
 					},
 				}, false
 			}
@@ -1916,7 +1916,7 @@ func evalCurlWgetCommand(
 			Meta: ToolApprovalMeta{
 				Capability:      "net",
 				Target:          host,
-				Reason:          fmt.Sprintf("Outbound network request to `%s` via `%s` requires approval", host, bin),
+				Reason:          fmt.Sprintf("Outbound network request via %s requires approval", bin),
 				Risk:            "medium",
 				AccessMode:      accessMode,
 				ProposedRule:    prop,
@@ -2145,12 +2145,12 @@ func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, work
 		// Allowed ONLY if every destination target is explicitly inside brainDir!
 		paths := nonFlagArgs(argv[1:])
 		if len(paths) == 0 {
-			return fmt.Sprintf("Read-only mode: `%s` is not allowed in workspace", bin)
+			return fmt.Sprintf("Read-only mode: %s is not allowed in workspace", bin)
 		}
 		for _, p := range paths {
 			resolved := resolvePath(cwd, expandHomePrefix(p))
 			if brainDir == "" || !isAllowedInRoots(resolved, brainDir) {
-				return fmt.Sprintf("Read-only mode: `%s` cannot modify workspace path %q", bin, p)
+				return fmt.Sprintf("Read-only mode: %s cannot modify workspace path %q", bin, p)
 			}
 		}
 	case "cp":
@@ -2158,7 +2158,7 @@ func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, work
 		if len(paths) >= 2 {
 			dst := resolvePath(cwd, expandHomePrefix(paths[len(paths)-1]))
 			if brainDir == "" || !isAllowedInRoots(dst, brainDir) {
-				return fmt.Sprintf("Read-only mode: `cp` cannot write to workspace path %q", paths[len(paths)-1])
+				return fmt.Sprintf("Read-only mode: cp cannot write to workspace path %q", paths[len(paths)-1])
 			}
 		}
 	case "tee":
@@ -2168,7 +2168,7 @@ func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, work
 			}
 			resolved := resolvePath(cwd, expandHomePrefix(p))
 			if brainDir == "" || !isAllowedInRoots(resolved, brainDir) {
-				return fmt.Sprintf("Read-only mode: `tee` cannot write to workspace path %q", p)
+				return fmt.Sprintf("Read-only mode: tee cannot write to workspace path %q", p)
 			}
 		}
 	case "tar":
@@ -2176,17 +2176,17 @@ func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, work
 			return reason
 		}
 	case "chmod", "chown", "chgrp", "dd", "unzip", "gunzip", "bunzip2", "xz", "rsync":
-		return fmt.Sprintf("Read-only mode: `%s` cannot modify workspace files", bin)
+		return fmt.Sprintf("Read-only mode: %s cannot modify workspace files", bin)
 	case "sed":
 		for _, a := range argv[1:] {
 			if a == "-i" || strings.HasPrefix(a, "-i") || a == "--in-place" || strings.HasPrefix(a, "--in-place=") {
-				return "Read-only mode: `sed -i` in-place file editing is not allowed"
+				return "Read-only mode: sed -i in-place file editing is not allowed"
 			}
 		}
 	case "gofmt":
 		for _, a := range argv[1:] {
 			if a == "-w" {
-				return "Read-only mode: `gofmt -w` is not allowed"
+				return "Read-only mode: gofmt -w is not allowed"
 			}
 		}
 	case "git":
@@ -2194,31 +2194,31 @@ func checkReadOnlyArgvViolation(bin string, argv []string, dyn []bool, cwd, work
 		switch strings.ToLower(sub) {
 		case "add", "commit", "rm", "mv", "clean", "reset", "checkout", "restore",
 			"init", "clone", "pull", "merge", "rebase", "cherry-pick", "am", "revert", "switch":
-			return fmt.Sprintf("Read-only mode: `git %s` modifies workspace files", sub)
+			return fmt.Sprintf("Read-only mode: git %s modifies workspace files", sub)
 		case "stash":
 			if len(rest) == 0 || (rest[0] != "list" && rest[0] != "show") {
-				return "Read-only mode: `git stash` modifies workspace files"
+				return "Read-only mode: git stash modifies workspace files"
 			}
 		case "apply":
 			if !hasAnyFlag(rest, "--check") {
-				return "Read-only mode: `git apply` modifies workspace files"
+				return "Read-only mode: git apply modifies workspace files"
 			}
 		}
 	case "go":
 		sub, _ := extractCLISubcommand("go", argv[1:])
 		switch sub {
 		case "fmt", "generate", "get", "install":
-			return fmt.Sprintf("Read-only mode: `go %s` modifies workspace files", sub)
+			return fmt.Sprintf("Read-only mode: go %s modifies workspace files", sub)
 		case "mod":
 			if len(argv) >= 3 && (argv[2] == "tidy" || argv[2] == "init" || argv[2] == "edit" || argv[2] == "vendor") {
-				return fmt.Sprintf("Read-only mode: `go mod %s` modifies workspace files", argv[2])
+				return fmt.Sprintf("Read-only mode: go mod %s modifies workspace files", argv[2])
 			}
 		}
 	case "npm", "pnpm", "yarn", "bun":
 		sub, _ := extractCLISubcommand(bin, argv[1:])
 		switch sub {
 		case "install", "i", "add", "remove", "uninstall", "update", "up", "init", "create", "link", "publish":
-			return fmt.Sprintf("Read-only mode: `%s %s` modifies files", bin, sub)
+			return fmt.Sprintf("Read-only mode: %s %s modifies files", bin, sub)
 		}
 	}
 	return ""
@@ -2327,11 +2327,11 @@ func checkReadOnlyTarViolation(args []string, cwd, brainDir string) string {
 			return ""
 		}
 		if archiveFile == "" {
-			return "Read-only mode: `tar` archive modification is not allowed"
+			return "Read-only mode: tar archive modification is not allowed"
 		}
 		resolved := resolvePath(cwd, expandHomePrefix(archiveFile))
 		if brainDir == "" || !isAllowedInRoots(resolved, brainDir) {
-			return fmt.Sprintf("Read-only mode: `tar` cannot write archive %q in workspace", archiveFile)
+			return fmt.Sprintf("Read-only mode: tar cannot write archive %q in workspace", archiveFile)
 		}
 		return ""
 	}
@@ -2340,7 +2340,7 @@ func checkReadOnlyTarViolation(args []string, cwd, brainDir string) string {
 			return ""
 		}
 		if brainDir == "" || !isAllowedInRoots(targetDir, brainDir) {
-			return fmt.Sprintf("Read-only mode: `tar` cannot extract into workspace %q", targetDir)
+			return fmt.Sprintf("Read-only mode: tar cannot extract into workspace %q", targetDir)
 		}
 	}
 	return ""
@@ -2389,7 +2389,7 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 	case "awk", "gawk", "mawk":
 		for _, a := range args {
 			if strings.Contains(a, "system(") {
-				return false, "`awk` program invoking `system()` requires approval", "high"
+				return false, "awk program invoking system() requires approval", "high"
 			}
 		}
 		return true, "", ""
@@ -2398,10 +2398,10 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 		for _, a := range args {
 			switch a {
 			case "-exec", "-execdir", "-ok", "-okdir", "-delete":
-				return false, fmt.Sprintf("`find %s` executes commands or deletes files and requires approval", a), "high"
+				return false, fmt.Sprintf("find %s executes commands or deletes files and requires approval", a), "high"
 			}
 			if strings.HasPrefix(a, "-fprint") || a == "-fls" {
-				return false, fmt.Sprintf("`find %s` writes arbitrary files and requires approval", a), "medium"
+				return false, fmt.Sprintf("find %s writes arbitrary files and requires approval", a), "medium"
 			}
 		}
 		return true, "", ""
@@ -2409,7 +2409,7 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 	case "tar":
 		for _, a := range args {
 			if a == "-P" || a == "--absolute-names" {
-				return false, "`tar --absolute-names` can overwrite outside paths and requires approval", "high"
+				return false, "tar --absolute-names can overwrite outside paths and requires approval", "high"
 			}
 		}
 		return true, "", ""
@@ -2428,7 +2428,7 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 				}
 			}
 		}
-		return false, fmt.Sprintf("`go %s` requires approval", sub), "medium"
+		return false, fmt.Sprintf("go %s requires approval", sub), "medium"
 
 	case "gofmt", "golangci-lint", "staticcheck", "tsc", "eslint", "biome", "vitest", "jest", "pytest":
 		return true, "", ""
@@ -2438,11 +2438,11 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 
 	case "bun":
 		if hasAnyFlag(args, "-e", "--eval", "-p", "--print") {
-			return false, "Inline `bun -e` execution requires approval (use `exec_script` instead)", "medium"
+			return false, "Inline bun -e execution requires approval (use the JavaScript tool instead)", "medium"
 		}
 		for _, a := range args {
 			if a == "-g" || a == "--global" {
-				return false, "Global package installation (`bun -g`) requires approval", "medium"
+				return false, "Global package installation (bun -g) requires approval", "medium"
 			}
 		}
 		sub, _ := extractCLISubcommand("bun", args)
@@ -2456,12 +2456,12 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 		if hasAnyFlag(args, "--version", "-v") {
 			return true, "", ""
 		}
-		return false, fmt.Sprintf("`bun %s` requires approval", sub), "medium"
+		return false, fmt.Sprintf("bun %s requires approval", sub), "medium"
 
 	case "npm", "pnpm", "yarn":
 		for _, a := range args {
 			if a == "-g" || a == "--global" {
-				return false, fmt.Sprintf("Global package installation (`%s -g`) requires approval", bin), "medium"
+				return false, fmt.Sprintf("Global package installation (%s -g) requires approval", bin), "medium"
 			}
 		}
 		sub, _ := extractCLISubcommand(bin, args)
@@ -2469,12 +2469,12 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 		case "test", "t", "tst", "run", "run-script", "list", "ls", "why", "outdated", "pack":
 			return true, "", ""
 		case "publish":
-			return false, fmt.Sprintf("Publishing package (`%s publish`) requires approval", bin), "high"
+			return false, fmt.Sprintf("Publishing package (%s publish) requires approval", bin), "high"
 		}
 		if hasAnyFlag(args, "--version", "-v") {
 			return true, "", ""
 		}
-		return false, fmt.Sprintf("`%s %s` requires approval", bin, sub), "medium"
+		return false, fmt.Sprintf("%s %s requires approval", bin, sub), "medium"
 
 	case "node":
 		if hasAnyFlag(args, "--version", "-v") {
@@ -2483,7 +2483,7 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 		if hasAnyFlag(args, "--check", "-c") && !hasAnyFlag(args, "-e", "--eval", "-p", "--print") {
 			return true, "", ""
 		}
-		return false, "`node` execution requires approval (use `exec_script` for jailed JS)", "medium"
+		return false, "node execution requires approval (use the JavaScript tool for sandboxed JS)", "medium"
 
 	case "python", "python3":
 		if hasAnyFlag(args, "--version", "-V") {
@@ -2492,7 +2492,7 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 		if len(args) >= 2 && args[0] == "-m" && (args[1] == "pytest" || args[1] == "unittest" || args[1] == "py_compile" || args[1] == "json.tool") {
 			return true, "", ""
 		}
-		return false, fmt.Sprintf("`%s` execution requires approval", bin), "medium"
+		return false, fmt.Sprintf("%s execution requires approval", bin), "medium"
 
 	case "cargo":
 		sub, _ := extractCLISubcommand("cargo", args)
@@ -2500,18 +2500,18 @@ func isSafeAutoCommand(bin string, args []string) (bool, string, string) {
 		case "check", "test", "build", "clippy", "fmt", "metadata", "tree", "version":
 			return true, "", ""
 		case "publish":
-			return false, "`cargo publish` requires approval", "high"
+			return false, "cargo publish requires approval", "high"
 		}
 		if hasAnyFlag(args, "--version", "-V") {
 			return true, "", ""
 		}
-		return false, fmt.Sprintf("`cargo %s` requires approval", sub), "medium"
+		return false, fmt.Sprintf("cargo %s requires approval", sub), "medium"
 
 	case "rustc", "zig":
 		if hasAnyFlag(args, "--version", "-V", "version") {
 			return true, "", ""
 		}
-		return false, fmt.Sprintf("`%s` execution requires approval", bin), "medium"
+		return false, fmt.Sprintf("%s execution requires approval", bin), "medium"
 	}
 
 	return false, "", "medium"

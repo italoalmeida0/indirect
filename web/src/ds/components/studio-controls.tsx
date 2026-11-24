@@ -103,7 +103,7 @@ export function CurrencyField(props: {
               type="button"
               tabIndex={-1}
               disabled={props.disabled}
-              onPointerDown={(e) => press(e.currentTarget)}
+              ref={press}
               onClick={() => adjust(-5)}
               class="ui-studio-step-btn"
               aria-label="Decrease by $5"
@@ -115,7 +115,7 @@ export function CurrencyField(props: {
               type="button"
               tabIndex={-1}
               disabled={props.disabled}
-              onPointerDown={(e) => press(e.currentTarget)}
+              ref={press}
               onClick={() => adjust(5)}
               class="ui-studio-step-btn"
               aria-label="Increase by $5"
@@ -128,7 +128,7 @@ export function CurrencyField(props: {
                 type="button"
                 tabIndex={-1}
                 disabled={props.disabled}
-                onPointerDown={(e) => press(e.currentTarget)}
+                ref={press}
                 onClick={() => props.onInput("")}
                 class="ui-studio-step-btn ui-studio-clear-btn"
                 aria-label="Reset to unlimited"
@@ -153,7 +153,7 @@ export function CurrencyField(props: {
                     type="button"
                     tabIndex={-1}
                     disabled={props.disabled}
-                    onPointerDown={(e) => press(e.currentTarget)}
+                    ref={press}
                     onClick={() => props.onInput(preset.value)}
                     class={`ui-studio-preset-pill ${active() ? "is-active" : ""}`}
                   >
@@ -246,7 +246,7 @@ export function StepperField(props: {
             aria-label="Decrease"
             data-tip="Decrease"
             disabled={props.disabled}
-            onPointerDown={(e) => press(e.currentTarget)}
+            ref={press}
             onClick={() => adjust(-1)}
             class="ui-studio-step-btn"
           >
@@ -275,7 +275,7 @@ export function StepperField(props: {
             aria-label="Increase"
             data-tip="Increase"
             disabled={props.disabled}
-            onPointerDown={(e) => press(e.currentTarget)}
+            ref={press}
             onClick={() => adjust(1)}
             class="ui-studio-step-btn"
           >
@@ -293,7 +293,7 @@ export function StepperField(props: {
                     type="button"
                     tabIndex={-1}
                     disabled={props.disabled}
-                    onPointerDown={(e) => press(e.currentTarget)}
+                    ref={press}
                     onClick={() => props.onInput(preset.value)}
                     class={`ui-studio-preset-pill ${active() ? "is-active" : ""}`}
                   >
@@ -370,7 +370,7 @@ export function TokenTagField(props: {
                 <button
                   type="button"
                   tabIndex={-1}
-                  onPointerDown={(e) => press(e.currentTarget)}
+                  ref={press}
                   onClick={() => toggleToken(item.value)}
                   class={`ui-studio-tag-chip ${active() ? "is-active" : ""}`}
                 >
@@ -401,7 +401,7 @@ export function TokenTagField(props: {
               type="button"
               tabIndex={-1}
               aria-hidden="true"
-              onPointerDown={(e) => press(e.currentTarget)}
+              ref={press}
               onClick={() => props.onInput("")}
               class="ui-studio-step-btn ui-studio-clear-btn mr-1"
               aria-label="Clear all"
@@ -469,7 +469,7 @@ export function RoleCardGroup(props: {
                 type="button"
                 aria-pressed={selected()}
                 aria-label={opt.label}
-                onPointerDown={(e) => press(e.currentTarget)}
+                ref={press}
                 onClick={() => props.onChange(opt.value)}
                 class={`ui-studio-choice-card ${selected() ? "is-selected" : ""} ${
                   opt.tone === "danger" ? "is-danger" : opt.tone === "success" ? "is-success" : ""
@@ -556,7 +556,7 @@ export function SecretField(props: {
             <button
               type="button"
               tabIndex={-1}
-              onPointerDown={(e) => press(e.currentTarget)}
+              ref={press}
               onClick={() => setRevealed((v) => !v)}
               class="ui-studio-step-btn"
               aria-label={revealed() ? "Hide secret" : "Reveal secret"}
@@ -621,7 +621,7 @@ export function OtpPinField(props: {
                 </Show>
                 <div
                   class={`ui-studio-otp-slot ${char ? "is-filled" : ""} ${
-                    focused() && activeIdx() === idx() ? "is-Current" : ""
+                    focused() && activeIdx() === idx() ? "is-current" : ""
                   }`}
                 >
                   {char || "•"}

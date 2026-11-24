@@ -472,15 +472,15 @@ export function createVoiceController(opts: CreateVoiceControllerOptions): Voice
         batch(() => {
           setDownloadProgress(roundedPct);
           if (p.stage === "server-warming") {
-            setStatusText("Preparing voice model on server...");
+            setStatusText("Preparing voice…");
             setStatusMeta(p.total > 0 ? `${roundedPct}%` : "");
           } else if (p.stage === "downloading") {
             const loadedMb = Math.round(Math.max(0, p.loaded) / (1024 * 1024));
             const totalMb = Math.max(1, Math.round(Math.max(0, p.total) / (1024 * 1024)));
-            setStatusText("Downloading voice model...");
+            setStatusText("Downloading voice model…");
             setStatusMeta(`${roundedPct}% · ${loadedMb}/${totalMb} MB`);
           } else {
-            setStatusText("Preparing voice engine...");
+            setStatusText("Preparing voice engine…");
             setStatusMeta("Almost ready");
           }
         });
@@ -984,7 +984,7 @@ export function createVoiceController(opts: CreateVoiceControllerOptions): Voice
 
     batch(() => {
       setState("listening");
-      setStatusText("Listening...");
+      setStatusText("Listening…");
       setStatusMeta("0:00");
     });
     auroraHandlers?.setMode("listening");
@@ -1033,7 +1033,7 @@ export function createVoiceController(opts: CreateVoiceControllerOptions): Voice
       batch(() => {
         setState("loading");
         setDownloadProgress(0);
-        setStatusText("Preparing voice engine...");
+        setStatusText("Preparing voice engine…");
         setStatusMeta("");
       });
       auroraHandlers?.setMode("loading");
@@ -1106,7 +1106,7 @@ export function createVoiceController(opts: CreateVoiceControllerOptions): Voice
       setErrorMessage(null);
       setEnergy(0);
       setState("starting");
-      setStatusText("Starting microphone...");
+      setStatusText("Starting microphone…");
       setStatusMeta("");
     });
     auroraHandlers?.setMode("loading");
@@ -1306,7 +1306,7 @@ export function createVoiceController(opts: CreateVoiceControllerOptions): Voice
 
     batch(() => {
       setState("thinking");
-      setStatusText("Transcribing...");
+      setStatusText("Transcribing…");
       setStatusMeta("");
       setEnergy(0);
     });

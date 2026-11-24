@@ -32,9 +32,14 @@ export function Drawer(props: DrawerProps) {
   const side = () => props.side ?? "left";
   let scrim: HTMLDivElement | undefined;
   const presence = createPresence(() => props.open, {
-    enter: (panel) => {
-      if (scrim) animate(scrim, { opacity: "1" }, tween.enter, { from: { opacity: "0" } });
-      return animate(panel, { transform: "none" }, motionTokens.spring.smooth, { from: { transform: OFFSCREEN[side()] } });
+    enter: (panel, reversing) => {
+      if (scrim) animate(scrim, { opacity: "1" }, tween.enter, reversing ? undefined : { from: { opacity: "0" } });
+      return animate(
+        panel,
+        { transform: "none" },
+        motionTokens.spring.smooth,
+        reversing ? undefined : { from: { transform: OFFSCREEN[side()] } },
+      );
     },
     exit: (panel) => {
       if (scrim) animate(scrim, { opacity: "0" }, tween.exit);
@@ -128,7 +133,14 @@ export function Drawer(props: DrawerProps) {
  */
 export function Collapse(props: { open: boolean; children: JSX.Element; class?: string }) {
   const presence = createPresence(() => props.open, {
-    enter: (el): Controls => expandHeight(el),
+    enter: (el, reversing): Controls => {
+      if (!reversing) return expandHeight(el);
+      const target = el.scrollHeight;
+      el.style.overflow = "hidden";
+      return animate(el, { height: `${target}px`, opacity: "1" }, motionTokens.spring.smooth, {
+        clear: ["height", "overflow"],
+      });
+    },
     exit: (el): Controls => collapseHeight(el),
   });
   return (

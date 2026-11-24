@@ -196,7 +196,7 @@ func (t *EditTool) executeInternal(ctx context.Context, raw json.RawMessage, isP
 		// Confirmation is system metadata (info=): the body stays pure
 		// content; the diff is frontend-only (Details.display).
 		Attrs: []core.Attr{
-			{Key: "info", Value: fmt.Sprintf("Successfully replaced %d block(s) in %s.", len(a.Edits), path)},
+			{Key: "info", Value: fmt.Sprintf("Successfully replaced %d block%s in %s.", len(a.Edits), pluralS(len(a.Edits)), path)},
 			{Key: "path", Value: path},
 			{Key: "edits", Value: fmt.Sprintf("%d", len(a.Edits))},
 		},

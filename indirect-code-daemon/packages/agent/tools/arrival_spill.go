@@ -165,7 +165,7 @@ func buildArrivalSpillPreview(fullText, spillPath string) (string, int, int) {
 		}
 		var sb strings.Builder
 		sb.WriteString(head)
-		fmt.Fprintf(&sb, "\n... [%d bytes omitted on line 1] ...\n", omitted)
+		fmt.Fprintf(&sb, "\n… [%d bytes omitted on line 1] …\n", omitted)
 		sb.WriteString(tail)
 		sb.WriteString("\n\n")
 		sb.WriteString(footer)
@@ -201,7 +201,7 @@ func buildArrivalSpillPreview(fullText, spillPath string) (string, int, int) {
 					midLineCount, midStart+1, midEnd, arrivalSpillContextRadius)
 				mb.WriteString(diagBody)
 				if omittedSpans > 0 {
-					fmt.Fprintf(&mb, "\n... (%d more diagnostic span(s) in saved file)", omittedSpans)
+					fmt.Fprintf(&mb, "\n… (%d more diagnostic span%s in saved file)", omittedSpans, pluralS(omittedSpans))
 				}
 				middleSection = mb.String()
 			} else {
@@ -224,7 +224,8 @@ func buildArrivalSpillPreview(fullText, spillPath string) (string, int, int) {
 				sb.WriteString("\n")
 			}
 			if midLineCount > 0 {
-				fmt.Fprintf(&sb, "--- [tail: last %d line(s) (L%d-L%d)] ---\n", n-tailActualStart, tailActualStart+1, n)
+				tailLines := n - tailActualStart
+				fmt.Fprintf(&sb, "--- [tail: last %d line%s (L%d-L%d)] ---\n", tailLines, pluralS(tailLines), tailActualStart+1, n)
 			}
 			sb.WriteString(tailRendered)
 		}
@@ -507,7 +508,7 @@ func enforcePreviewCeiling(preview, footer string) string {
 	if len(preview) <= arrivalSpillMaxPreviewBytes {
 		return preview
 	}
-	const marker = "\n... [preview clipped] ...\n\n"
+	const marker = "\n… [preview clipped] …\n\n"
 	room := arrivalSpillMaxPreviewBytes - len(footer) - len(marker)
 	if room <= 0 {
 		return snapUTF8Prefix(footer, arrivalSpillMaxPreviewBytes)

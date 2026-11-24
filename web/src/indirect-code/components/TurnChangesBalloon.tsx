@@ -54,7 +54,7 @@ function FileChangesRow(props: {
   let rowRef: HTMLDivElement | undefined;
   const meta = () => statusMeta(props.f.status);
   const hasDiff = () => Boolean(props.f.diff);
-  const isExpandable = () => hasDiff() || props.f.status === "binary";
+  const isExpandable = () => hasDiff();
   const displayPath = () => props.f.rel || props.f.path;
   const parts = () => splitDisplayPath(displayPath());
 
@@ -85,7 +85,7 @@ function FileChangesRow(props: {
         <span class="w-3 shrink-0" aria-hidden="true" />
       </Show>
       <FileIcon path={displayPath()} size={13} />
-      <span class="text-[11.5px] font-mono flex items-baseline min-w-0 flex-1" data-rc-tip={displayPath()}>
+      <span class="text-xs font-mono flex items-baseline min-w-0 flex-1" data-rc-tip={displayPath()}>
         <Show when={parts().dir}>
           <span class="text-fg-muted min-w-0 shrink truncate">{parts().dir}</span>
         </Show>
@@ -99,8 +99,12 @@ function FileChangesRow(props: {
       </span>
       <Show when={(props.f.additions || 0) > 0 || (props.f.deletions || 0) > 0}>
         <span class="text-2xs font-mono ml-auto shrink-0 tabular-nums flex items-center gap-1.5">
-          <span class="text-success">+{props.f.additions || 0}</span>
-          <span class="text-danger">-{props.f.deletions || 0}</span>
+          <Show when={(props.f.additions || 0) > 0}>
+            <span class="text-success">+{props.f.additions}</span>
+          </Show>
+          <Show when={(props.f.deletions || 0) > 0}>
+            <span class="text-danger">-{props.f.deletions}</span>
+          </Show>
         </span>
       </Show>
     </>
@@ -111,8 +115,8 @@ function FileChangesRow(props: {
       <Show when={isExpandable()}>
         <button
           type="button"
+          ref={press}
           aria-expanded={props.open}
-          onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => props.onToggle()}
           class="w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors cursor-pointer hover:bg-surface-muted/60"
         >
@@ -127,11 +131,6 @@ function FileChangesRow(props: {
       <DisclosureBody open={props.open && hasDiff()}>
         <div class="border-t border-border-subtle bg-surface">
           <DiffView text={props.f.diff || ""} name={displayPath()} scrollKey={props.scrollKey} />
-        </div>
-      </DisclosureBody>
-      <DisclosureBody open={props.open && !hasDiff()}>
-        <div class="px-3 py-2 text-2xs text-fg-muted border-t border-border-subtle bg-surface-subtle">
-          {props.f.status === "binary" ? "Binary file · no textual diff." : "File too large for a textual diff."}
         </div>
       </DisclosureBody>
     </div>
@@ -150,7 +149,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
   const statCells = createMemo(() => diffStatBlocks(totalAdds(), totalDels()));
   const expandableKeys = createMemo(() =>
     files()
-      .filter((f) => Boolean(f.diff) || f.status === "binary")
+      .filter((f) => Boolean(f.diff))
       .map((f) => fileRowKey(f)),
   );
   const allExpanded = createMemo(() => {
@@ -181,8 +180,8 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
           <div class="flex items-stretch justify-between">
             <button
               type="button"
+              ref={press}
               aria-expanded={props.expanded}
-              onPointerDown={(e) => press(e.currentTarget)}
               onClick={props.onToggle}
               class="group flex flex-1 items-center gap-2 px-3 py-2 cursor-pointer text-left hover:bg-surface-muted/60 transition-colors min-w-0"
             >
@@ -199,14 +198,18 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
               </span>
               <Show when={totalAdds() > 0 || totalDels() > 0}>
                 <span class="text-2xs font-mono tabular-nums flex items-center gap-1.5 shrink-0">
-                  <span class="text-success">+{totalAdds()}</span>
-                  <span class="text-danger">-{totalDels()}</span>
+                  <Show when={totalAdds() > 0}>
+                    <span class="text-success">+{totalAdds()}</span>
+                  </Show>
+                  <Show when={totalDels() > 0}>
+                    <span class="text-danger">-{totalDels()}</span>
+                  </Show>
                 </span>
                 <span class="hidden min-[380px]:inline-flex items-center gap-[2px] ml-0.5 shrink-0" aria-hidden="true">
                   <For each={statCells()}>
                     {(cell) => (
                       <span
-                        class={`h-1.5 w-1.5 rounded-[1.5px] ${
+                        class={`h-1.5 w-1.5 rounded-xs ${
                           cell === "add" ? "bg-success" : cell === "del" ? "bg-danger" : "bg-border"
                         }`}
                       />
@@ -221,7 +224,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                 <Show when={props.expanded && files().length > 1 && expandableKeys().length > 0}>
                   <button
                     type="button"
-                    onPointerDown={(e) => press(e.currentTarget)}
+                    ref={press}
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleExpandAll();
@@ -236,7 +239,7 @@ export function TurnChangesBalloon(props: TurnChangesBalloonProps) {
                 <Show when={props.live && props.onReview}>
                   <button
                     type="button"
-                    onPointerDown={(e) => press(e.currentTarget)}
+                    ref={press}
                     onClick={(e) => {
                       e.stopPropagation();
                       props.onReview!();

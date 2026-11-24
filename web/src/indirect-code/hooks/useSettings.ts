@@ -28,6 +28,23 @@ const defaults: AgentSettings = {
   midTurnSend: "queue",
 };
 
+export function validateProxyUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (!["http:", "https:", "socks5:", "socks5h:"].includes(parsed.protocol)) {
+      return "Use http://, https://, or socks5:// for the proxy URL.";
+    }
+    if (!parsed.hostname) {
+      return "Enter a valid proxy host.";
+    }
+    return null;
+  } catch {
+    return "Enter a valid URL (for example http://proxy.local:8080).";
+  }
+}
+
 function areAgentSettingsEqual(a: AgentSettings, b: AgentSettings): boolean {
   return (
     a.autoCompactPercent === b.autoCompactPercent &&
@@ -52,7 +69,6 @@ export function createSettings(opts: {
   refreshConfig: () => Promise<void>;
 }) {
   const [showConfigModal, setShowConfigModal] = createSignal(false);
-  const [settingsTab, setSettingsTab] = createSignal<"general">("general");
   const [daemonSettings, setDaemonSettings] = createSignal<AgentSettings>({
     ...defaults,
   });
@@ -64,6 +80,7 @@ export function createSettings(opts: {
     const doc = opts.getConfigDoc();
     return doc?.hostId === opts.getHostId() ? doc : null;
   };
+  const configLoaded = () => Boolean(configDoc());
 
   // Skills remain in the config mirror for existing hosts and are consumed by
   // the composer. They are no longer editable through host settings.
@@ -114,8 +131,10 @@ export function createSettings(opts: {
   });
   let saveRequest: { id: string; host: string; revision?: string } | undefined;
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let hydratedOnOpen = false;
 
   const settingsDirty = () => {
+    if (!configDoc()) return false;
     const cur = daemonSettings();
     const base = readMirrorSettings(configDoc());
     return !areAgentSettingsEqual(cur, base);
@@ -132,7 +151,15 @@ export function createSettings(opts: {
   }
 
   createEffect(() => {
-    if (!showConfigModal()) readMirror();
+    const open = showConfigModal();
+    const doc = configDoc();
+    if (!open) {
+      hydratedOnOpen = false;
+      readMirror();
+    } else if (!hydratedOnOpen && doc) {
+      hydratedOnOpen = true;
+      readMirror();
+    }
   });
 
   function stopPending() {
@@ -155,13 +182,9 @@ export function createSettings(opts: {
   onCleanup(stopPending);
 
   function openSettings(sectionId?: string) {
-    if (!configDoc()) {
-      opts.toast("Wait for the host settings to load", "err");
-      return;
-    }
+    hydratedOnOpen = Boolean(configDoc());
     readMirror();
     setSettingsError("");
-    setSettingsTab("general");
     setShowConfigModal(true);
     if (sectionId && typeof document !== "undefined") {
       const jump = () =>
@@ -228,6 +251,10 @@ export function createSettings(opts: {
       setSettingsError("Reconnect the host before saving settings");
       return false;
     }
+    if (!configDoc()) {
+      setSettingsError("Wait for host settings to load before saving.");
+      return false;
+    }
     if (settingsChanged()) {
       setSettingsError(
         "Settings changed on another client. Reload the latest settings before saving.",
@@ -235,6 +262,11 @@ export function createSettings(opts: {
       return false;
     }
     const s = daemonSettings();
+    const proxyError = validateProxyUrl(s.httpProxy ?? "");
+    if (proxyError) {
+      setSettingsError(proxyError);
+      return false;
+    }
     saveRequest = { id: crypto.randomUUID(), host: opts.getHostId() };
     setSettingsError("");
     setSavingSettings(true);
@@ -316,8 +348,7 @@ export function createSettings(opts: {
 
   return {
     showConfigModal,
-    settingsTab,
-    setSettingsTab,
+    configLoaded,
     savingSettings,
     settingsError,
     settingsChanged,

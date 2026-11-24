@@ -148,9 +148,7 @@ export function TranscriptView() {
     <div class="flex justify-center">
       <button
         type="button"
-        onPointerDown={(e) => {
-          if (!t.loadingOlder()) press(e.currentTarget);
-        }}
+        ref={press}
         onClick={() => t.loadOlder()}
         disabled={t.loadingOlder()}
         class="flex items-center gap-1.5 px-3 py-1 rounded-pill text-xs text-fg-secondary border border-border bg-surface-subtle hover:text-fg hover:border-border-strong transition-colors cursor-pointer disabled:opacity-60"
@@ -236,7 +234,7 @@ export function TranscriptView() {
                 <div class={`flex flex-wrap gap-1.5 mb-1.5 ${isEditing() ? "justify-start" : "justify-end"}`}>
                   <For each={msg.attachments || []}>
                     {(file) => (
-                      <button type="button" data-rc-tip="Open preview" onPointerDown={(e) => press(e.currentTarget)} onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="text-2xs bg-surface-subtle border border-border hover:border-border-strong px-2.5 py-1 rounded-control text-fg-secondary hover:text-fg flex items-center gap-1.5 transition-colors cursor-pointer">
+                      <button type="button" ref={press} data-rc-tip="Open preview" onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="text-2xs bg-surface-subtle border border-border hover:border-border-strong px-2.5 py-1 rounded-control text-fg-secondary hover:text-fg flex items-center gap-1.5 transition-colors cursor-pointer">
                         <FileIcon path={file.name} size={13} />
                         <span class="truncate max-w-[14rem]">{file.name}</span>
                       </button>
@@ -250,7 +248,7 @@ export function TranscriptView() {
                 fallback={
                   <Show when={textOf().trim()}>
                     <div class="rc-user-bubble bg-surface-muted border border-border text-fg px-4 py-2.5 rounded-panel">
-                      <p class="whitespace-pre-line break-words text-sm leading-relaxed">{renderUserText(textOf())}</p>
+                      <p class="whitespace-pre-wrap break-words text-sm leading-relaxed">{renderUserText(textOf())}</p>
                     </div>
                   </Show>
                 }
@@ -261,14 +259,14 @@ export function TranscriptView() {
                     <For each={t.editingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-inner border border-border bg-surface-subtle pl-2 pr-1 py-0.5 text-xs text-fg-secondary">
                       <FileIcon path={file.name} size={13} />
                       <button type="button" data-rc-tip="Open preview" onClick={() => m.openStoredPreview(s.activeSessionId(), file.id)} class="cursor-pointer hover:underline hover:text-fg truncate max-w-[12rem]">{file.name}</button>
-                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.setEditingAttachments((prev) => prev.filter((a) => a.id !== file.id))} class="inline-flex items-center justify-center px-1 py-0.5 rounded-inner cursor-pointer text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors disabled:opacity-40">×</button>
+                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.setEditingAttachments((prev) => prev.filter((a) => a.id !== file.id))} class="inline-flex items-center justify-center p-1 rounded-inner cursor-pointer text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors disabled:opacity-40"><Iconify icon="lucide:x" size={11} /></button>
                     </span>}</For>
                     <For each={t.editAttachments.pendingAttachments()}>{(file) => <span class="flex items-center gap-1.5 rounded-inner border border-border bg-surface-subtle pl-2 pr-1 py-0.5 text-xs text-fg-secondary">
                       <FileIcon path={file.name} size={13} />
                       <button type="button" data-rc-tip="Open preview" onClick={() => m.previewPending(file)} class="cursor-pointer hover:underline hover:text-fg truncate max-w-[12rem]">{file.name}</button>
-                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.editAttachments.removePendingAttachment(file.key)} class="inline-flex items-center justify-center px-1 py-0.5 rounded-inner cursor-pointer text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors disabled:opacity-40">×</button>
+                      <button type="button" disabled={t.savingEdit()} data-rc-tip="Remove attachment" aria-label={`Remove ${file.name}`} onClick={() => t.editAttachments.removePendingAttachment(file.key)} class="inline-flex items-center justify-center p-1 rounded-inner cursor-pointer text-fg-muted hover:text-danger hover:bg-danger-subtle transition-colors disabled:opacity-40"><Iconify icon="lucide:x" size={11} /></button>
                     </span>}</For>
-                    <Show when={t.editAttachments.preparingAttachments()}><span role="status" class="text-xs text-fg-muted">Preparing files...</span></Show>
+                    <Show when={t.editAttachments.preparingAttachments()}><span role="status" class="text-xs text-fg-muted">Preparing files…</span></Show>
                   </div>
                   <textarea
                     id="rc-editing-msg"
@@ -337,7 +335,7 @@ export function TranscriptView() {
                       disabled={t.savingEdit() || t.editAttachments.preparingAttachments() > 0}
                       onClick={() => t.saveEditMsg(rawIdx(), msg)}
                     >
-                      Save and Send
+                      Save and send
                     </Btn>
                   </div>
                 </div>

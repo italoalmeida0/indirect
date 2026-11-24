@@ -105,9 +105,9 @@ describe("Conversation History & Global Search Regression (B2-2)", () => {
       expect(p.matchedByCwd(sessions[0])).toBe(false);
     });
 
-    test("HistoryView displays Matched project folder badge when matched by cwd", () => {
+    test("HistoryView highlights project folder pill when matched by cwd", () => {
       const src = read("web/src/indirect-code/components/HistoryView.tsx");
-      expect(src).toMatch(/Matched project folder:/);
+      expect(src).toContain("folderMatched()");
       expect(src).toMatch(/isCwdMatch\(s\)/);
     });
   });

@@ -59,7 +59,7 @@ func (t *SummaryTool) Execute(ctx context.Context, raw json.RawMessage, _ func(s
 
 	forUser := strings.TrimSpace(args.ForUser)
 	if len(userRunes) > 500 {
-		forUser = string(userRunes[:500]) + "..."
+		forUser = string(userRunes[:500]) + "…"
 	}
 
 	forMe := strings.TrimSpace(args.ForMe)

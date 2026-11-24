@@ -449,10 +449,11 @@ function Root() {
   createEffect(() => {
     const p = route().path;
     try {
-      if (p === "/code-dev" || p.startsWith("/code-dev") || p === "/codedev" || p.startsWith("/codedev")) {
+      const isAdmin = currentSession()?.user.role === "admin";
+      if ((p === "/code-dev" || p.startsWith("/code-dev") || p === "/codedev" || p.startsWith("/codedev")) && isAdmin) {
         document.title = "Indirect Code — Dev Mode";
         (window as any).__pageIcon = "/indirect-icon.svg";
-      } else if (p.startsWith("/code")) {
+      } else if (p.startsWith("/code") && !(p === "/code-dev" || p.startsWith("/code-dev") || p === "/codedev" || p.startsWith("/codedev"))) {
         document.title = "Indirect Code";
         (window as any).__pageIcon = "/indirect-icon.svg";
       } else {
@@ -491,6 +492,20 @@ function Root() {
           {(() => {
             const kind = activeRouteKind();
             if (kind === "code-dev") {
+              const isAdmin = current().s?.user.role === "admin";
+              if (!isAdmin) {
+                return (
+                  <AppShell>
+                    <RouteChunk>
+                      <div class="space-y-3">
+                        <h1 class="text-2xl font-medium text-fg">Administration access required</h1>
+                        <p role="alert" class="text-sm text-fg-secondary">Your account does not have permission to use this page.</p>
+                        <a href="#/code" class="text-accent underline">Back to Indirect Code</a>
+                      </div>
+                    </RouteChunk>
+                  </AppShell>
+                );
+              }
               return <RouteChunk><CodeDevPage /></RouteChunk>;
             }
             if (kind === "code") {

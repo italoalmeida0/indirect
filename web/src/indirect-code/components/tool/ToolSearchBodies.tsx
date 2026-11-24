@@ -139,7 +139,7 @@ function flagBadge(flag: string) {
           ? "bg-danger-subtle text-danger"
           : "bg-surface-muted text-fg-secondary";
   return (
-    <span class={`shrink-0 rounded px-1 py-px font-mono text-[10px] ${color}`}>{flag}</span>
+    <span class={`shrink-0 rounded px-1 py-px font-mono text-2xs ${color}`}>{flag}</span>
   );
 }
 
@@ -162,10 +162,7 @@ function ArrivalSpillBanner(props: { spill: ArrivalSpillInfo }) {
       <div class="flex items-center gap-1.5 min-w-0">
         <Iconify icon="lucide:hard-drive-download" size={13} class="shrink-0 text-accent" />
         <span class="text-fg-secondary truncate">
-          Full output preserved in{" "}
-          <span class="font-mono text-fg">
-            {props.spill.fileName ? `brain/${props.spill.fileName}` : "brain/"}
-          </span>
+          Large output · full log saved
         </span>
       </div>
       <Show when={sizeBadge()}>
@@ -180,7 +177,7 @@ function ArrivalSpillBanner(props: { spill: ArrivalSpillInfo }) {
 export function ToolSearchBodies(props: ToolPartProps) {
   const inspectTree = createMemo(() => {
     if (props.m.name() !== "inspect" || props.u.result?.isError) return null;
-    return parseInspectTree(props.m.terminal().output || props.m.output() || "");
+    return parseInspectTree(props.m.terminal().output || props.m.output() || "", props.m.mergedEnv());
   });
   const globList = createMemo(() => {
     if (props.m.name() !== "glob" || props.u.result?.isError) return null;
@@ -295,7 +292,7 @@ export function ToolSearchBodies(props: ToolPartProps) {
                                   <Show when={e.size}>
                                     <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">
                                       {e.size}
-                                      {e.lines !== undefined ? ` · ${e.lines} lines` : ""}
+                                      {e.lines !== undefined ? ` · ${e.lines} ${e.lines === 1 ? "line" : "lines"}` : ""}
                                       <Show when={e.mtime}>
                                         <span class="hidden sm:inline">{" · " + e.mtime}</span>
                                       </Show>
@@ -365,7 +362,11 @@ export function ToolSearchBodies(props: ToolPartProps) {
                           </For>
                         </ul>
                         <Show when={g().truncated}>
-                          <p class="px-3 pb-2 text-2xs text-fg-muted">Truncated: showing first {g().files.length} matches · narrow the pattern</p>
+                          <p class="px-3 pb-2 text-2xs text-fg-muted">
+                            {g().timedOut
+                              ? `Timed out after 90s · showing ${g().files.length} partial ${g().files.length === 1 ? "match" : "matches"}`
+                              : `Showing first ${g().files.length} ${g().files.length === 1 ? "match" : "matches"}`}
+                          </p>
                         </Show>
                       </Show>
                     )}
@@ -549,9 +550,6 @@ export function ToolSearchBodies(props: ToolPartProps) {
                     <div class="px-3 py-2 text-xs leading-relaxed text-fg article-body rc-markdown min-w-0 max-w-full [overflow-wrap:anywhere] break-words">
                       <StreamingMarkdown basic={true} noNestedScroll>{articleMd()}</StreamingMarkdown>
                     </div>
-                    <Show when={fd()?.truncated && !props.m.spill().spilled}>
-                      <p class="px-3 pb-1 text-2xs text-fg-muted">Truncated</p>
-                    </Show>
                   </Show>
                 </Show>
               </Show>
@@ -727,66 +725,60 @@ export function ToolSearchBodies(props: ToolPartProps) {
           })()}
         </Show>
         <Show when={props.m.name() === "bg_cancel"}>
-          <Show
-            when={!props.m.running() && Boolean(props.u.result)}
-            fallback={
-              <div class="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-                <div class="flex items-center gap-2 min-w-0">
-                  <Show
-                    when={props.active}
-                    fallback={<Iconify icon="lucide:square" size={13} class="shrink-0 text-fg-muted" />}
-                  >
-                    <span class="w-3.5 h-3.5 ui-spinner text-accent shrink-0" />
-                  </Show>
-                  <span class="truncate text-fg-secondary">
-                    {props.active
-                      ? `Canceling background task${props.m.args().job_id ? ` (${String(props.m.args().job_id)})` : ""}…`
-                      : `Background cancellation did not complete${props.m.args().job_id ? ` (${String(props.m.args().job_id)})` : ""}.`}
-                  </span>
-                </div>
-                <span class="shrink-0 rounded-xs border border-border bg-surface-muted px-1.5 py-px font-mono text-2xs text-fg-secondary">
-                  {props.active ? "canceling" : "incomplete"}
-                </span>
-              </div>
-            }
-          >
-            {(() => {
-              const isErr = () => Boolean(props.u.result?.isError || props.m.mergedEnv()?.error);
-              const alreadyDone = () =>
-                Boolean(
-                  (props.u.result?.toolDetails as any)?.cancelled === false ||
-                    (props.u.result?.toolDetails as any)?.env?.cancelled === false ||
-                    props.m.mergedEnv()?.cancelled === "false",
-                );
-              return (
-                <div class="flex items-center justify-between gap-2 px-3 py-2 text-xs">
-                  <div class="flex items-center gap-2 min-w-0">
-                    <Iconify
-                      icon={isErr() ? "lucide:alert-circle" : alreadyDone() ? "lucide:info" : "lucide:square"}
-                      size={13}
-                      class={`shrink-0 ${isErr() ? "text-danger" : "text-fg-muted"}`}
-                    />
-                    <span class={`truncate ${isErr() ? "text-danger" : "text-fg-secondary"}`}>
-                      {isErr()
-                        ? props.m.output() || String(props.m.mergedEnv()?.error || "Failed to cancel background task.")
-                        : alreadyDone()
-                          ? props.m.output() || "Background task already finished."
-                          : "Background task canceled."}
+          {(() => {
+            const jobLabel = () => {
+              const id = String(props.m.args().job_id || "").trim();
+              if (!id) return "";
+              const found = props.ctx.backgroundJobs?.().find((j) => j.id === id);
+              return found?.label?.trim() || "";
+            };
+            return (
+              <Show
+                when={!props.m.running() && Boolean(props.u.result)}
+                fallback={
+                  <div class="flex items-center gap-2 px-3 py-2 text-xs min-w-0">
+                    <Show
+                      when={props.active}
+                      fallback={<Iconify icon="lucide:square" size={13} class="shrink-0 text-fg-muted" />}
+                    >
+                      <span class="w-3.5 h-3.5 ui-spinner text-accent shrink-0" />
+                    </Show>
+                    <span class="truncate text-fg-secondary">
+                      {props.active
+                        ? `Canceling background task${jobLabel() ? ` (${jobLabel()})` : ""}…`
+                        : `Background cancellation did not complete${jobLabel() ? ` (${jobLabel()})` : ""}.`}
                     </span>
                   </div>
-                  <span
-                    class={`shrink-0 rounded-xs border px-1.5 py-px font-mono text-2xs ${
-                      isErr()
-                        ? "border-border-subtle bg-danger-subtle text-danger"
-                        : "border-border bg-surface-muted text-fg-secondary"
-                    }`}
-                  >
-                    {isErr() ? "failed" : alreadyDone() ? "finished" : "canceled"}
-                  </span>
-                </div>
-              );
-            })()}
-          </Show>
+                }
+              >
+                {(() => {
+                  const isErr = () => Boolean(props.u.result?.isError || props.m.mergedEnv()?.error);
+                  const alreadyDone = () =>
+                    Boolean(
+                      (props.u.result?.toolDetails as any)?.cancelled === false ||
+                        (props.u.result?.toolDetails as any)?.env?.cancelled === false ||
+                        props.m.mergedEnv()?.cancelled === "false",
+                    );
+                  return (
+                    <div class="flex items-center gap-2 px-3 py-2 text-xs min-w-0">
+                      <Iconify
+                        icon={isErr() ? "lucide:alert-circle" : alreadyDone() ? "lucide:info" : "lucide:square"}
+                        size={13}
+                        class={`shrink-0 ${isErr() ? "text-danger" : "text-fg-muted"}`}
+                      />
+                      <span class={`truncate ${isErr() ? "text-danger" : "text-fg-secondary"}`}>
+                        {isErr()
+                          ? props.m.output() || String(props.m.mergedEnv()?.error || "Failed to cancel background task.")
+                          : alreadyDone()
+                            ? props.m.output() || "Background task already finished."
+                            : `Background task canceled${jobLabel() ? ` (${jobLabel()})` : ""}.`}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </Show>
+            );
+          })()}
         </Show>
         <Show when={(props.m.name() === "exec_script" || props.m.name() === "python") && props.m.spill().spilled && !props.m.bgRunning()}>
           <ArrivalSpillBanner spill={props.m.spill()} />
@@ -795,9 +787,20 @@ export function ToolSearchBodies(props: ToolPartProps) {
           {(() => {
             const cmdHeader = () => props.m.bashHeaderCmd().trim();
             const bashOut = () =>
-              props.m.bgRunning()
-                ? props.m.bgStream() || props.m.prog() || ""
+              props.m.isDetachedBg()
+                ? props.m.bgDisplayOutput()
                 : props.m.output() || props.m.prog() || "";
+            const detachedFallback = () => {
+              const job = props.m.bgJob();
+              if (!job || job.status === "running") return "Running in background…";
+              if (job.status === "cancelled") return "Canceled in background (no output).";
+              if (job.status === "error") {
+                return typeof job.exitCode === "number"
+                  ? `Failed in background with exit code ${job.exitCode} (no output).`
+                  : "Failed in background (no output).";
+              }
+              return "Completed in background (no output).";
+            };
             return (
               <>
                 <Show when={props.m.spill().spilled && !props.m.bgRunning()}>
@@ -811,9 +814,9 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 <Show
                   when={bashOut().trim().length > 0}
                   fallback={
-                    <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
-                      {props.m.bgRunning()
-                        ? "Running in background…"
+                    <div class={`px-3 py-2 text-2xs ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
+                      {props.m.isDetachedBg()
+                        ? detachedFallback()
                         : !props.u.result
                           ? props.active
                             ? "Running…"
@@ -831,8 +834,8 @@ export function ToolSearchBodies(props: ToolPartProps) {
                 >
                   <CodeBlock
                     embedded
-                    follow={() => props.m.open() && props.running}
-                    text={props.m.bgRunning() ? props.m.bgStream() || props.m.prog() || "" : props.m.output() || props.m.prog() || ""}
+                    follow={() => props.m.open() && (props.running || props.m.bgRunning())}
+                    text={bashOut()}
                     language={undefined}
                     plain
                     wrap={false}
@@ -846,15 +849,15 @@ export function ToolSearchBodies(props: ToolPartProps) {
         <Show when={!isDaemonBuiltinTool(props.m.name())}>
           {(() => {
             const mcpOut = () =>
-              props.m.bgRunning()
-                ? props.m.bgStream() || props.m.prog() || ""
+              props.m.isDetachedBg()
+                ? props.m.bgDisplayOutput()
                 : props.m.output() || props.m.prog() || "";
             const isJson = () => looksLikeJsonPayload(mcpOut());
             return (
               <Show
                 when={mcpOut().trim().length > 0}
                 fallback={
-                  <div class={`px-3 py-2 text-[11px] ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
+                  <div class={`px-3 py-2 text-2xs ${props.u.result?.isError ? "text-danger font-mono whitespace-pre-wrap" : "text-fg-muted"}`}>
                     {props.ctx.pendingApproval()?.callId === props.u.call?.toolId
                       ? "Waiting for approval…"
                       : props.m.bgRunning()

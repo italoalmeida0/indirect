@@ -60,6 +60,19 @@ export function setTurnSoundEnabled(v: boolean): void {
   } catch {}
 }
 
+function openActionPhrase(): string {
+  try {
+    if (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(pointer: coarse)").matches
+    ) {
+      return "tap to open";
+    }
+  } catch {}
+  return "click to open";
+}
+
 /** Pure text builder (unit-tested without Notification). */
 export function turnNotifyText(t: Pick<TurnNotifyTarget, "title" | "hostName" | "disposition">): {
   title: string;
@@ -75,7 +88,7 @@ export function turnNotifyText(t: Pick<TurnNotifyTarget, "title" | "hostName" | 
           : t.disposition === "question"
             ? `Your answer needed — ${t.title}`
             : `Turn finished — ${t.title}`;
-  return { title, body: `${t.hostName} · tap to open` };
+  return { title, body: `${t.hostName} · ${openActionPhrase()}` };
 }
 
 /** Short random suffix so each notification is a NEW one (reusing a tag
@@ -169,6 +182,7 @@ function turnToastLabel(disposition: TurnDisposition): string {
 export function createTurnNotify(opts: {
   hosts: () => RemoteHostDto[];
   sessions: () => NotifySession[];
+  sessionsForHost?: (hostId: string) => NotifySession[];
   toast: (message: string, kind?: "ok" | "err") => void;
   onOpenSession: (hostId: string, sessionId: string) => void;
   activeHostId?: () => string;
@@ -254,19 +268,27 @@ export function createTurnNotify(opts: {
     }
   }
 
+  function findSession(hostId: string, sessionId: string): NotifySession | undefined {
+    if (opts.sessionsForHost) {
+      const hit = opts.sessionsForHost(hostId).find((s) => s.id === sessionId);
+      if (hit) return hit;
+    }
+    return opts.sessions().find((s) => s.id === sessionId && (!s.hostId || s.hostId === hostId));
+  }
+
   function resolveNames(hostId: string, sessionId: string): { hostName: string; title: string } {
     const host = opts.hosts().find((h) => h.id === hostId);
-    const session = opts.sessions().find((s) => s.id === sessionId);
+    const session = findSession(hostId, sessionId);
     return {
       hostName: host?.name || host?.hostname || "host",
-      title: session?.title || sessionId.slice(0, 12),
+      title: session?.title || "Conversation",
     };
   }
 
   /** Workspace (Build/Plan) turns notify; Talk/Learning stay silent. See
    * notifiesOnTurnEnd for how the primary skill and the base mode combine. */
   function shouldNotify(hostId: string, sessionId: string): boolean {
-    const session = opts.sessions().find((s) => s.id === sessionId && (!s.hostId || s.hostId === hostId));
+    const session = findSession(hostId, sessionId);
     return notifiesOnTurnEnd(session);
   }
 
@@ -304,7 +326,7 @@ export function createTurnNotify(opts: {
           try {
             window.focus();
           } catch {}
-          go();
+          if (!isTest) go();
           n.close();
         };
       } catch {

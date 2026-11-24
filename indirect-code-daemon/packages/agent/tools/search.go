@@ -556,6 +556,10 @@ func plural(n int) string {
 }
 
 func filePlural(n int) string {
+	return pluralS(n)
+}
+
+func pluralS(n int) string {
 	if n == 1 {
 		return ""
 	}

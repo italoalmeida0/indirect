@@ -1332,7 +1332,7 @@ describe("createVoiceController (`useVoice.ts`)", () => {
       loadId: 1,
       progress: { stage: "server-warming", loaded: 20, total: 100, pct: 20 },
     });
-    expect(h.voice.statusText()).toBe("Preparing voice model on server...");
+    expect(h.voice.statusText()).toBe("Preparing voice…");
     expect(h.voice.statusMeta()).toBe("20%");
     expect(h.voice.downloadProgress()).toBe(20);
 
@@ -1341,7 +1341,7 @@ describe("createVoiceController (`useVoice.ts`)", () => {
       loadId: 1,
       progress: { stage: "downloading", loaded: 100 * 1024 * 1024, total: 200 * 1024 * 1024, pct: 50 },
     });
-    expect(h.voice.statusText()).toBe("Downloading voice model...");
+    expect(h.voice.statusText()).toBe("Downloading voice model…");
     expect(h.voice.statusMeta()).toBe("50% · 100/200 MB");
     expect(h.voice.downloadProgress()).toBe(50);
 
@@ -1350,7 +1350,7 @@ describe("createVoiceController (`useVoice.ts`)", () => {
       loadId: 1,
       progress: { stage: "initializing", loaded: 200, total: 200, pct: 95 },
     });
-    expect(h.voice.statusText()).toBe("Preparing voice engine...");
+    expect(h.voice.statusText()).toBe("Preparing voice engine…");
     expect(h.voice.statusMeta()).toBe("Almost ready");
 
     w.emit({
@@ -1358,7 +1358,7 @@ describe("createVoiceController (`useVoice.ts`)", () => {
       loadId: 1,
       progress: { stage: "warming", loaded: 200, total: 200, pct: 99 },
     });
-    expect(h.voice.statusText()).toBe("Preparing voice engine...");
+    expect(h.voice.statusText()).toBe("Preparing voice engine…");
     expect(h.voice.statusMeta()).toBe("Almost ready");
 
     // Ready -> opens mic & worklet -> listening
@@ -1367,7 +1367,7 @@ describe("createVoiceController (`useVoice.ts`)", () => {
 
     expect(h.voice.modelReady()).toBe(true);
     expect(h.voice.state()).toBe("listening");
-    expect(h.voice.statusText()).toBe("Listening...");
+    expect(h.voice.statusText()).toBe("Listening…");
     expect(h.voice.statusMeta()).toBe("0:00");
     expect(h.audio.workletAddedUrls).toEqual(["workers/voice-worklet.js"]);
 
@@ -1384,7 +1384,7 @@ describe("createVoiceController (`useVoice.ts`)", () => {
     // Confirm -> thinking -> flush worklet -> teardown mic immediately -> dispatch transcribe
     h.voice.confirm();
     expect(h.voice.state()).toBe("thinking");
-    expect(h.voice.statusText()).toBe("Transcribing...");
+    expect(h.voice.statusText()).toBe("Transcribing…");
     expect(h.audio.workletFlushCalls).toBe(1);
 
     h.clock.advance(25);

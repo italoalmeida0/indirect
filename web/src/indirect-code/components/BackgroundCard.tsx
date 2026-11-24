@@ -11,9 +11,9 @@ import { followTail, recordToolScroll, restoreToolScroll } from "../utils/scroll
 function shortLabel(cmd: string, max = 64) {
   const one = cmd.replace(/\s+/g, " ").trim();
   if (one.length <= max) return one;
-  const head = Math.ceil((max - 3) / 2);
-  const tail = max - 3 - head;
-  return `${one.slice(0, head)}...${one.slice(one.length - tail)}`;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = max - 1 - head;
+  return `${one.slice(0, head)}…${one.slice(one.length - tail)}`;
 }
 
 function taskState(status: string) {
@@ -21,7 +21,7 @@ function taskState(status: string) {
     case "running": return { label: "Running", icon: "lucide:terminal", color: "text-accent" };
     case "done": return { label: "Completed", icon: "lucide:circle-check", color: "text-success" };
     case "error": return { label: "Failed", icon: "lucide:circle-x", color: "text-danger" };
-    case "cancelled": return { label: "Cancelled", icon: "lucide:circle-slash", color: "text-fg-muted" };
+    case "cancelled": return { label: "Canceled", icon: "lucide:circle-slash", color: "text-fg-muted" };
     default: return { label: "Stopped", icon: "lucide:circle-stop", color: "text-fg-muted" };
   }
 }
@@ -287,8 +287,8 @@ export function BackgroundCard(props: { contextKey?: string }) {
                           <CodeBlock embedded text={logText(job) || "No output yet."} language={undefined} plain wrap={false} scrollKey={`bg:${job.id}`} />
                         </div>
                         <Show when={(job.droppedLines || 0) > 0}>
-                          <p class="px-3.5 pb-2 text-2xs text-fg-muted">
-                            {job.droppedLines} earlier lines discarded by the tail cap. Use bg_check for full paging.
+                          <p class="px-3.5 pb-2 text-2xs text-fg-muted tabular-nums">
+                            {job.droppedLines!.toLocaleString()} earlier {job.droppedLines === 1 ? "line" : "lines"} trimmed from live tail.
                           </p>
                         </Show>
                       </div>

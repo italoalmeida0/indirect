@@ -94,7 +94,7 @@ function renderThinkingRow(
           class={`rc-markdown w-full text-xs leading-relaxed break-words overflow-x-auto overflow-y-auto max-h-64 ${suppressHeader() ? "pl-0" : "pl-5"} py-1 text-fg-muted`}
         >
           <StreamingMarkdown basic streaming={streaming()} active={effectiveOpen() && !hidden()}>
-            {entry.block.reasoning || "(thinking…)"}
+            {entry.block.reasoning || "Thinking…"}
           </StreamingMarkdown>
         </div>
       </DisclosureBody>
@@ -184,7 +184,7 @@ function renderTurnAggregate(
         </Show>
       </DisclosureTrigger>
       <DisclosureBody open={open() && !(onlyThinking() && thinkingHidden())} keepMounted={running()}>
-        <div class="ml-[6.5px] mt-1 mb-1.5 pl-[12.5px] border-l border-border space-y-0.5">
+        <div class="ml-1.5 mt-1 mb-1.5 pl-3 border-l border-border space-y-0.5">
           <For each={series.entries}>
             {(entry, ei) => {
               const tail = () => ei() === lastEntryIdx();
@@ -265,13 +265,13 @@ function renderImageBlock(ctx: TranscriptRenderCtx, block: ContentBlock) {
       fallback={
         <div class="flex items-center gap-1.5 text-2xs text-fg-muted border border-border rounded-control px-2.5 py-1.5">
           <Iconify icon="lucide:image" size={12} />
-          <span>{block.imageSha256 && ctx.send ? "Loading image…" : `[attached ${block.text || "image"}]`}</span>
+          <span>{block.imageSha256 && ctx.send ? "Loading image…" : block.text || "Attached image"}</span>
         </div>
       }
     >
       <button
         type="button"
-        onPointerDown={(e) => press(e.currentTarget)}
+        ref={press}
         onClick={() =>
           ctx.setPreviewFile({
             name: "attached image",
@@ -332,7 +332,7 @@ function renderToolSegs(ctx: TranscriptRenderCtx, msgId: string, units: () => To
                 </DisclosureTrigger>
               </Show>
               <DisclosureBody open={seg.units.length === 1 || open()} keepMounted={running()}>
-                <div class={seg.units.length > 1 ? "ml-[6.5px] border-l border-border-subtle pl-[12.5px] space-y-0.5 mt-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
+                <div class={seg.units.length > 1 ? "ml-1.5 border-l border-border-subtle pl-3 space-y-0.5 mt-0.5" : "space-y-0.5"} style={{ "overflow-anchor": "none" }}>
                   <For each={seg.units}>
                     {(u) => {
                       // Keep fallback keys relative to the complete tool run.

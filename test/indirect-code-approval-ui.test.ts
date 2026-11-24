@@ -21,7 +21,7 @@ function assertWhisperQuietApprovalHtml(html: string) {
   expect(html).not.toContain("h-6 w-6");
   expect(html).not.toContain("break-all");
   expect(html).not.toContain("—");
-  expect(html).not.toContain("→");
+  expect(html).not.toContain(" -> ");
   expect(html).not.toContain("font-semibold");
   expect(html).not.toContain("font-bold");
 }
@@ -172,18 +172,16 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(html).toContain('data-glyph="lucide:shield-alert"');
     expect(html).toContain(">Review tool call<");
     expect(html).toContain(">bash<");
-    expect(html).toContain("Supervised · Ask");
+    expect(html).toContain("Ask for approval");
     expect(html).toContain("Run approval UI unit suite");
     expect(html).toContain("$ ");
     expect(html).toContain("--bail");
-    expect(html).toContain("Moves to the background automatically after 10s.");
-    expect(html).toContain('data-glyph="lucide:chevron-right"');
-    expect(html).toContain(">Arguments<");
+    expect(html).not.toContain("Moves to the background automatically after 10s.");
 
     // Calm action hierarchy & mobile touch sizing
     expect(html).toContain('data-action="approval-deny"');
     expect(html).toContain('data-action="approval-always"');
-    expect(html).toContain('data-rc-tip="Save global allow rule in Settings -> Permissions"');
+    expect(html).toContain('data-rc-tip="Save global allow rule in Settings → Permissions"');
     expect(html).toContain('aria-label="Always allow"');
     expect(html).toContain('data-action="approval-session"');
     expect(html).toContain('aria-label="Allow for session"');
@@ -232,7 +230,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     expect(jsHtml).toContain("/workspace/app");
     expect(jsHtml).toContain("NODE_ENV=test CI=1");
     expect(jsHtml).toContain(">stdin<");
-    expect(jsHtml).toContain("Moves to the background automatically after 10s.");
+    expect(jsHtml).not.toContain("Moves to the background automatically after 10s.");
     expect(jsHtml).toContain('data-action="approval-always"');
     expect(jsHtml).toContain('data-action="approval-session"');
     expect(jsHtml).toContain('data-action="approval-once"');
@@ -333,7 +331,7 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     assertWhisperQuietApprovalHtml(netHtml);
     expect(netHtml).toContain(">Review permission request<");
     expect(netHtml).toContain('data-approval-badge="auto"');
-    expect(netHtml).toContain("Auto · Boundary check");
+    expect(netHtml).toContain(">Auto<");
     expect(netHtml).toContain(">Network access<");
     expect(netHtml).toContain("api.github.com:443");
     expect(netHtml).toContain('Scope: allow host "api.github.com"');
@@ -582,7 +580,8 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     assertWhisperQuietApprovalHtml(fetchHtml);
     const fetchPreview = fetchHtml.split("<details")[0]!;
     expect(fetchPreview).toContain('data-glyph="lucide:globe"');
-    expect(fetchPreview).toContain(">fetch_url<");
+    expect(fetchPreview).toContain('data-rc-tip="fetch_url"');
+    expect(fetchPreview).toContain(">Fetch URL<");
     expect(fetchPreview).toContain("https://api.example.com/v1/health");
 
     const skillHtml = renderApprovalCardSsr({
@@ -594,7 +593,8 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
     });
     assertWhisperQuietApprovalHtml(skillHtml);
     const skillPreview = skillHtml.split("<details")[0]!;
-    expect(skillPreview).toContain(">use_skill<");
+    expect(skillPreview).toContain('data-rc-tip="use_skill"');
+    expect(skillPreview).toContain(">Load skill<");
     expect(skillPreview).toContain("generative_ui_agentic");
   });
 });
@@ -625,20 +625,20 @@ describe("Brand wordmark & Settings section-jump consistency", () => {
     ]);
 
     expect(shellCss).toMatch(/\.brand-wordmark\s*\{[^}]*font-family:\s*var\(--font-code\)/);
-    expect(shellCss).toMatch(/\.brand-wordmark\s*\{[^}]*font-weight:\s*600/);
+    expect(shellCss).toMatch(/\.brand-wordmark\s*\{[^}]*font-weight:\s*500/);
     expect(shellCss).toMatch(/\.brand-wordmark\s*\{[^}]*text-transform:\s*uppercase/);
     expect(componentsCss).toMatch(/\.rc-brand-name\s*\{[^}]*font-family:\s*var\(--font-code\)/);
 
     expect(indexSrc).toContain('{ path: "/code", label: "Indirect Code", icon: "indirect-code" }');
     expect(indexSrc.match(/brand-wordmark[^\n]*>INDIRECT GATEWAY</g)?.length).toBe(3);
     expect(sidebarSrc).toMatch(/brand-wordmark[\s\S]*?>\s*INDIRECT CODE\s*</);
-    expect(brandSrc).toContain(">INDIRECT<");
+    expect(brandSrc).toContain("INDIRECT CODE");
     expect(loginSrc).toMatch(/brand-wordmark[\s\S]*?>\s*INDIRECT\s*</);
     expect(setPwSrc).toMatch(/brand-wordmark[\s\S]*?>\s*INDIRECT\s*</);
     expect(chromeSrc).toContain('src="/indirect-icon.svg"');
 
+    expect(settingsModalSrc).toContain('label: "Permissions"');
     const navBlock = settingsModalSrc.split('aria-label="Settings sections"')[1]?.split("</nav>")[0] ?? "";
-    expect(navBlock).toContain('label: "Permissions"');
     expect(navBlock).not.toContain("lucide:");
     expect(navBlock).not.toContain("<Iconify");
   });

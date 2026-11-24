@@ -154,10 +154,21 @@ export function animate(el: Element, to: Frame, transition: Transition, opts: An
   const current = { ...readComputed(el, props.filter((prop) => opts.from?.[prop] === undefined)), ...opts.from };
 
   // 2. Supersede running animations that touch the same properties.
+  // Preserve live on-screen values of any other properties owned by a
+  // cancelled multi-property animation so a follow-up call on the same tick
+  // reverses seamlessly instead of snapping to the cancelled final state.
+  const propSet = new Set(props);
   const list = running.get(el) ?? [];
   for (const entry of [...list]) {
     if (props.some((prop) => entry.props.has(prop))) {
+      const otherProps = [...entry.props].filter((prop) => !propSet.has(prop));
+      const frozen = otherProps.length ? readComputed(el, otherProps) : undefined;
       entry.animation.cancel();
+      if (frozen) {
+        for (const prop of otherProps) {
+          if (frozen[prop] !== undefined && frozen[prop] !== "") record[prop] = String(frozen[prop]);
+        }
+      }
       entry.settle();
     }
   }
@@ -226,7 +237,9 @@ export function animate(el: Element, to: Frame, transition: Transition, opts: An
       if (done) return;
       const frozen = readComputed(el, props);
       animation.cancel();
-      for (const prop of props) if (frozen[prop]) record[prop] = String(frozen[prop]);
+      for (const prop of props) {
+        if (frozen[prop] !== undefined && frozen[prop] !== "") record[prop] = String(frozen[prop]);
+      }
       entry.settle();
     },
   };

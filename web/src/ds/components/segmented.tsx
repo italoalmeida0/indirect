@@ -67,9 +67,7 @@ export function SegmentedControl<T extends string>(props: SegmentedControlProps<
             aria-label={option.ariaLabel}
             disabled={option.disabled}
             tabIndex={index() === selectedIndex() ? 0 : -1}
-            onPointerDown={(e) => {
-              if (!option.disabled) press(e.currentTarget);
-            }}
+            ref={press}
             onClick={() => props.onChange(option.value)}
           >
             {option.label}

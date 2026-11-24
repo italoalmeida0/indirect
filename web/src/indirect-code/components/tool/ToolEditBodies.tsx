@@ -180,8 +180,8 @@ function FileEditCard(props: { sec: FileEditSection; scrollKey?: string; hideHea
       <Show when={!props.hideHeader}>
         <button
           type="button"
+          ref={press}
           aria-expanded={open()}
-          onPointerDown={(e) => press(e.currentTarget)}
           onClick={() => setOpen(!open())}
           class="group/file w-full flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-subtle hover:bg-surface-muted/60 text-xs text-left cursor-pointer transition-colors"
         >
@@ -319,10 +319,12 @@ export function ToolEditBodies(props: ToolPartProps) {
 
   const writeText = createMemo(() => {
     if (props.m.name() !== "write" || props.u.result?.isError) return "";
+    // Prefer details.display or the written args.content — never fall back to
+    // props.m.output(), which carries LLM-only confirmation/compacted-advisory text.
     const raw = String(
-      (props.u.result?.toolDetails?.display ?? props.m.output()) ||
-        props.m.args().content ||
-        props.m.prog() ||
+      props.u.result?.toolDetails?.display ??
+        props.m.args().content ??
+        props.m.prog() ??
         "",
     );
     return stripLinePrefixNotice(raw);
@@ -404,7 +406,7 @@ export function ToolEditBodies(props: ToolPartProps) {
               <Show
                 when={readText().trim().length > 0}
                 fallback={
-                  <div class="px-3 py-2 text-[11px] text-fg-muted">
+                  <div class="px-3 py-2 text-2xs text-fg-muted">
                     {!props.u.result
                       ? props.active
                         ? "Reading file…"
@@ -449,7 +451,7 @@ export function ToolEditBodies(props: ToolPartProps) {
           <Show
             when={writeText().trim().length > 0}
             fallback={
-              <div class="px-3 py-2 text-[11px] text-fg-muted">
+              <div class="px-3 py-2 text-2xs text-fg-muted">
                 {!props.u.result
                   ? props.active
                     ? "Writing file…"
@@ -497,9 +499,20 @@ export function ToolEditBodies(props: ToolPartProps) {
           const execError = () =>
             String(props.m.mergedEnv()?.error || (props.u.result?.toolDetails as any)?.env?.error || "");
           const execOut = () =>
-            props.m.bgRunning()
-              ? props.m.bgStream() || props.m.prog() || ""
+            props.m.isDetachedBg()
+              ? props.m.bgDisplayOutput()
               : props.m.output() || props.m.prog() || execError();
+          const detachedFallback = () => {
+            const job = props.m.bgJob();
+            if (!job || job.status === "running") return "Running in background…";
+            if (job.status === "cancelled") return "Canceled in background (no output).";
+            if (job.status === "error") {
+              return typeof job.exitCode === "number"
+                ? `Failed in background with exit code ${job.exitCode} (no output).`
+                : "Failed in background (no output).";
+            }
+            return "Completed in background (no output).";
+          };
           return (
             <>
               <Show when={scriptSource().length > 0}>
@@ -519,8 +532,8 @@ export function ToolEditBodies(props: ToolPartProps) {
                 when={execOut().trim().length > 0}
                 fallback={
                   <div class={`px-3 py-2 text-2xs ${props.u.result?.isError ? "text-danger font-mono" : "text-fg-muted"}`}>
-                    {props.m.bgRunning()
-                      ? "Running in background…"
+                    {props.m.isDetachedBg()
+                      ? detachedFallback()
                       : !props.u.result
                         ? props.active
                           ? isLegacyPy()
@@ -533,15 +546,10 @@ export function ToolEditBodies(props: ToolPartProps) {
                   </div>
                 }
               >
-                <Show when={props.u.result?.toolDetails?.truncated || props.m.mergedEnv()?.truncated === "true"}>
-                  <div class="px-3 py-1.5 bg-surface-subtle border-b border-border-subtle text-2xs text-fg-muted font-mono">
-                    Output truncated (showing last {String(props.u.result?.toolDetails?.page || props.m.mergedEnv()?.page || "portion")})
-                  </div>
-                </Show>
                 <CodeBlock
                   embedded
-                  follow={() => props.m.open() && props.running}
-                  text={props.m.bgRunning() ? props.m.bgStream() || props.m.prog() || "" : props.m.output() || props.m.prog() || execError()}
+                  follow={() => props.m.open() && (props.running || props.m.bgRunning())}
+                  text={execOut()}
                   language={undefined}
                   plain
                   wrap={false}

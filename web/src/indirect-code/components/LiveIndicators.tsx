@@ -120,19 +120,34 @@ export function NeuralMatrixLoader(props: { size?: number; class?: string }) {
   );
 }
 
+export type UnreadDotTone = "accent" | "warning" | "danger";
+
+export function attentionKindToTone(kind?: string): UnreadDotTone {
+  if (kind === "approval" || kind === "question") return "warning";
+  if (kind === "error") return "danger";
+  return "accent";
+}
+
 /**
  * Cross-device unread / attention indicator ("bolinha"):
- * Crisp, static solid circle (`bg-accent`), zero glow, zero pulse.
+ * Crisp, static solid circle differentiated by attention kind, zero glow, zero pulse.
  */
-export function UnreadDot(props: { label?: string; size?: "sm" | "md"; class?: string }) {
+export function UnreadDot(props: { label?: string; size?: "sm" | "md"; tone?: UnreadDotTone; class?: string }) {
   const dim = () => (props.size === "sm" ? "h-1.5 w-1.5" : "h-2 w-2");
+  const color = () =>
+    props.tone === "warning"
+      ? "bg-warning"
+      : props.tone === "danger"
+        ? "bg-danger"
+        : "bg-accent";
   return (
     <span
       data-indicator="unread-dot"
+      data-tone={props.tone ?? "accent"}
       data-rc-tip={props.label}
       aria-label={props.label}
       aria-hidden={props.label ? undefined : "true"}
-      class={`inline-block rounded-full bg-accent shrink-0 ${dim()} ${props.class ?? ""}`}
+      class={`inline-block rounded-full ${color()} shrink-0 ${dim()} ${props.class ?? ""}`}
     />
   );
 }

@@ -6,7 +6,7 @@ import { timeAgo } from "../utils/format";
 import { sessionTimeLabel } from "../paths";
 import type { SessionSummary } from "../types";
 import type { SearchHit } from "../viewTypes";
-import { RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
+import { attentionKindToTone, RadialSpokeSpinner, UnreadDot } from "./LiveIndicators";
 
 export type HistoryTab = "all" | "pinned" | "recent" | "talk";
 
@@ -16,6 +16,29 @@ const FILTER_OPTIONS: Array<{ value: HistoryTab; label: string }> = [
   { value: "recent", label: "Recent" },
   { value: "talk", label: "Talk" },
 ];
+
+function isApplePlatform(): boolean {
+  try {
+    return typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || "");
+  } catch {
+    return false;
+  }
+}
+
+function formatSearchField(field?: string): string {
+  switch ((field || "").toLowerCase()) {
+    case "title":
+      return "Title";
+    case "user":
+      return "You";
+    case "assistant":
+      return "Assistant";
+    case "tool":
+      return "Tool";
+    default:
+      return field ? field.charAt(0).toUpperCase() + field.slice(1) : "";
+  }
+}
 
 /** Highlight matching substrings in search results. */
 export function highlightMatch(text: string, query: string): JSX.Element {
@@ -57,12 +80,14 @@ export interface HistoryViewProps {
   sessionAttentionLabel?: (s: SessionSummary) => string;
   activeSessionId?: () => string;
   sessionStatus?: () => string;
+  searchLoading?: () => boolean;
 }
 
 export function HistoryView(props: HistoryViewProps) {
   const ui = useContext(UICtx);
   const sessionCtx = useContext(SessionCtx);
   const [activeTab, setActiveTab] = createSignal<HistoryTab>("all");
+  const shortcutLabel = isApplePlatform() ? "⌘K" : "Ctrl+K";
 
   const isTalk = (s: SessionSummary) => {
     if (sessionCtx?.isTalkSession) return sessionCtx.isTalkSession(s);
@@ -75,6 +100,8 @@ export function HistoryView(props: HistoryViewProps) {
     if (!q || !s.cwd) return false;
     return !s.title.toLowerCase().includes(q) && s.cwd.toLowerCase().includes(q);
   };
+
+  const isSearching = () => Boolean(props.searchLoading?.() ?? sessionCtx?.searchLoading?.());
 
   const filteredSessions = createMemo(() => {
     const list = props.sessions().filter(props.matchQuery);
@@ -113,6 +140,19 @@ export function HistoryView(props: HistoryViewProps) {
 
   const hasAnyResults = () => filteredSearchResults().length > 0 || filteredSessions().length > 0;
   const widthClass = () => ui?.convWidthClass?.() ?? "max-w-3xl";
+  const countSummary = () => {
+    const shown = filteredSessions().length;
+    const total = props.sessions().length;
+    const hits = filteredSearchResults().length;
+    const base =
+      props.sessionFilter().trim() || activeTab() !== "all"
+        ? `${shown} of ${total} ${total === 1 ? "conversation" : "conversations"}`
+        : `${total} ${total === 1 ? "conversation" : "conversations"}`;
+    if (hits > 0) {
+      return `${base} · ${hits} message ${hits === 1 ? "match" : "matches"}`;
+    }
+    return base;
+  };
 
   return (
     <div class="flex-1 overflow-y-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-7">
@@ -120,8 +160,7 @@ export function HistoryView(props: HistoryViewProps) {
         {/* Compact utility bar (title lives in WorkspaceHeader above) */}
         <div class="flex items-center justify-between gap-3">
           <p class="min-w-0 truncate text-xs text-fg-muted tabular-nums">
-            {props.sessions().length} stored{" "}
-            {props.sessions().length === 1 ? "conversation" : "conversations"}
+            {countSummary()}
           </p>
           <button
             type="button"
@@ -147,7 +186,7 @@ export function HistoryView(props: HistoryViewProps) {
               placeholder={
                 props.isMobile()
                   ? "Search conversations, folders, or messages…"
-                  : "Search conversations, folders, or messages… (Ctrl+K)"
+                  : `Search conversations, folders, or messages… (${shortcutLabel})`
               }
               class="min-w-0 flex-1 bg-transparent text-[13px] text-fg placeholder:text-fg-muted focus:outline-none"
               value={props.sessionFilter()}
@@ -198,36 +237,47 @@ export function HistoryView(props: HistoryViewProps) {
               class="ui-segmented-sm rounded-lg"
               ariaLabel="Filter conversations"
             />
-            <span class="text-2xs text-fg-muted tabular-nums">
-              {filteredSessions().length}{" "}
-              {filteredSessions().length === 1 ? "session" : "sessions"}
-              <Show when={filteredSearchResults().length > 0}>
-                <span> · {filteredSearchResults().length} hits</span>
-              </Show>
-            </span>
+            <Show when={isSearching()}>
+              <span class="inline-flex items-center gap-1.5 text-2xs text-fg-muted">
+                <span class="ui-spinner w-3 h-3" aria-hidden="true" />
+                <span>Searching messages…</span>
+              </span>
+            </Show>
           </div>
         </div>
 
         <Show
           when={hasAnyResults()}
           fallback={
-            <div class="flex flex-col items-center justify-center rounded-panel border border-border bg-surface py-12 px-4 text-center">
-              <Icon name="lucide:search-x" size={20} class="mb-2.5 text-fg-muted" />
-              <p class="text-sm font-medium text-fg">
-                {props.sessionFilter().trim()
-                  ? `No conversations or messages match '${props.sessionFilter().trim()}'`
-                  : activeTab() === "pinned"
-                    ? "No pinned conversations."
-                    : activeTab() === "talk"
-                      ? "No talk conversations."
-                      : "No conversations found."}
-              </p>
-              <Show when={props.sessionFilter().trim()}>
-                <p class="mt-1 text-xs text-fg-muted">
-                  Try another search term or switch filter tabs.
+            <Show
+              when={!isSearching()}
+              fallback={
+                <div class="flex flex-col items-center justify-center rounded-panel border border-border bg-surface py-12 px-4 text-center">
+                  <span class="ui-spinner w-4 h-4 mb-2.5 text-accent" aria-hidden="true" />
+                  <p class="text-sm font-medium text-fg">
+                    Searching conversations and messages…
+                  </p>
+                </div>
+              }
+            >
+              <div class="flex flex-col items-center justify-center rounded-panel border border-border bg-surface py-12 px-4 text-center">
+                <Icon name="lucide:search-x" size={20} class="mb-2.5 text-fg-muted" />
+                <p class="text-sm font-medium text-fg">
+                  {props.sessionFilter().trim()
+                    ? `No conversations or messages match '${props.sessionFilter().trim()}'`
+                    : activeTab() === "pinned"
+                      ? "No pinned conversations."
+                      : activeTab() === "talk"
+                        ? "No talk conversations."
+                        : "No conversations found."}
                 </p>
-              </Show>
-            </div>
+                <Show when={props.sessionFilter().trim()}>
+                  <p class="mt-1 text-xs text-fg-muted">
+                    Try another search term or switch filter tabs.
+                  </p>
+                </Show>
+              </div>
+            </Show>
           }
         >
           <div class="space-y-4">
@@ -236,7 +286,6 @@ export function HistoryView(props: HistoryViewProps) {
               <div>
                 <div class="flex items-center justify-between pb-1.5 px-1 text-2xs font-medium text-fg-muted">
                   <span>Message matches</span>
-                  <span class="tabular-nums">{filteredSearchResults().length}</span>
                 </div>
                 <div class="rounded-panel border border-border bg-surface overflow-hidden divide-y divide-border-subtle">
                   <For each={filteredSearchResults()}>
@@ -294,6 +343,7 @@ export function HistoryView(props: HistoryViewProps) {
                                 }
                               >
                                 <UnreadDot
+                                  tone={attentionKindToTone(hitSession()?.attentionKind)}
                                   label={
                                     hitSession() && props.sessionAttentionLabel
                                       ? props.sessionAttentionLabel(hitSession()!)
@@ -302,8 +352,8 @@ export function HistoryView(props: HistoryViewProps) {
                                 />
                               </Show>
                               <Show when={r.field}>
-                                <span class="rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs font-normal text-fg-muted">
-                                  {r.field}
+                                <span class="rounded-md border border-border bg-surface-subtle px-1.5 py-0.5 text-2xs font-medium text-fg-muted">
+                                  {formatSearchField(r.field)}
                                 </span>
                               </Show>
                               <span class="text-2xs text-fg-muted tabular-nums">
@@ -323,14 +373,13 @@ export function HistoryView(props: HistoryViewProps) {
               </div>
             </Show>
 
-            {/* Session Rows */}
+            {/* Conversation Rows */}
             <Show when={filteredSessions().length > 0}>
               <div>
                 <div class="flex items-center justify-between pb-1.5 px-1 text-2xs font-medium text-fg-muted">
                   <span>
                     {props.sessionFilter().trim() ? "Matching conversations" : "Conversations"}
                   </span>
-                  <span class="tabular-nums">{filteredSessions().length}</span>
                 </div>
                 <div class="rounded-panel border border-border bg-surface overflow-hidden divide-y divide-border-subtle">
                   <For each={filteredSessions()}>
@@ -341,6 +390,7 @@ export function HistoryView(props: HistoryViewProps) {
                         (Boolean(props.activeSessionId?.()) &&
                           props.activeSessionId?.() === s.id &&
                           props.sessionStatus?.() === "running");
+                      const folderMatched = () => isCwdMatch(s);
                       return (
                         <button
                           type="button"
@@ -384,7 +434,10 @@ export function HistoryView(props: HistoryViewProps) {
                                   </Show>
                                 }
                               >
-                                <UnreadDot label={props.sessionAttentionLabel?.(s) ?? "Unread update"} />
+                                <UnreadDot
+                                  tone={attentionKindToTone(s.attentionKind)}
+                                  label={props.sessionAttentionLabel?.(s) ?? "Unread update"}
+                                />
                               </Show>
                               <span class="text-2xs text-fg-muted tabular-nums">
                                 {timeAgo(sessionTimeLabel(s))}
@@ -392,29 +445,33 @@ export function HistoryView(props: HistoryViewProps) {
                             </div>
                           </div>
                           <Show
-                            when={s.cwd && !isTalk(s)}
+                            when={isTalk(s)}
                             fallback={
-                              <div class="mt-1 flex items-center gap-1.5 pl-6 text-2xs text-fg-muted">
-                                <Iconify icon="lucide:messages-square" size={11} class="shrink-0" />
-                                <span>Talk</span>
-                              </div>
+                              <Show when={s.cwd}>
+                                <div class="mt-1 pl-6 min-w-0">
+                                  <span
+                                    class={`inline-flex max-w-full min-w-0 items-center gap-1.5 text-2xs ${
+                                      folderMatched()
+                                        ? "rounded-md border border-accent/30 bg-accent-subtle px-1.5 py-0.5 text-fg"
+                                        : "text-fg-muted"
+                                    }`}
+                                  >
+                                    <Iconify
+                                      icon="lucide:folder"
+                                      size={11}
+                                      class={`shrink-0 ${folderMatched() ? "text-accent" : ""}`}
+                                    />
+                                    <span class="truncate font-mono">
+                                      {highlightMatch(s.cwd, props.sessionFilter())}
+                                    </span>
+                                  </span>
+                                </div>
+                              </Show>
                             }
                           >
-                            <div class="mt-1 flex items-center gap-1.5 pl-6 text-2xs text-fg-muted min-w-0">
-                              <Iconify icon="lucide:folder" size={11} class="shrink-0" />
-                              <span class="truncate font-mono">
-                                {highlightMatch(s.cwd, props.sessionFilter())}
-                              </span>
-                            </div>
-                          </Show>
-                          <Show when={isCwdMatch(s)}>
-                            <div class="mt-1.5 pl-6">
-                              <span class="inline-flex max-w-full min-w-0 items-center gap-1 rounded-md border border-accent/30 bg-accent-subtle px-2 py-0.5 text-2xs font-medium text-fg">
-                                <span class="shrink-0">Matched project folder:</span>
-                                <span class="min-w-0 truncate font-mono text-fg-secondary">
-                                  {highlightMatch(s.cwd, props.sessionFilter())}
-                                </span>
-                              </span>
+                            <div class="mt-1 flex items-center gap-1.5 pl-6 text-2xs text-fg-muted">
+                              <Iconify icon="lucide:messages-square" size={11} class="shrink-0" />
+                              <span>Talk</span>
                             </div>
                           </Show>
                         </button>

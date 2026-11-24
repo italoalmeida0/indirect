@@ -766,7 +766,7 @@ func ProposeExecRule(argv []string) (*PermissionRule, bool) {
 		Effect:  "allow",
 		Kind:    "exec",
 		Pattern: prefix,
-		Label:   "Allow running `" + prefix + "`",
+		Label:   "Allow running " + prefix,
 	}, true
 }
 
@@ -1077,14 +1077,14 @@ func EvaluateToolCall(
 			Effect:  "allow",
 			Kind:    "tool",
 			Pattern: "exec_script",
-			Label:   "Allow running exec_script in workspace",
+			Label:   "Allow running JavaScript in workspace",
 		}
 		return PolicyEvaluation{
 			Verdict: VerdictAsk,
 			Meta: ToolApprovalMeta{
 				Capability:      "exec",
 				Target:          ClipLabel(strArg("code")),
-				Reason:          "Supervised mode requires approval before executing JavaScript scripts",
+				Reason:          "Ask for approval mode requires confirmation before running JavaScript",
 				Risk:            "medium",
 				AccessMode:      "ask",
 				ProposedRule:    rule,
@@ -1154,19 +1154,24 @@ func EvaluateToolCall(
 	if accessMode == "full" {
 		return PolicyEvaluation{Verdict: VerdictAllow}
 	}
+	displayTool := humanToolName(canonicalTool)
+	toolLabel := "Allow tool " + displayTool
+	if displayTool != canonicalTool {
+		toolLabel = "Allow " + displayTool
+	}
 	prop := &PermissionRule{
 		ID:      NewRuleID(),
 		Effect:  "allow",
 		Kind:    "tool",
 		Pattern: canonicalTool,
-		Label:   "Allow tool `" + canonicalTool + "`",
+		Label:   toolLabel,
 	}
 	return PolicyEvaluation{
 		Verdict: VerdictAsk,
 		Meta: ToolApprovalMeta{
 			Capability:      "tool",
 			Target:          canonicalTool,
-			Reason:          fmt.Sprintf("Supervised mode requires approval to run %s", canonicalTool),
+			Reason:          fmt.Sprintf("Ask for approval mode requires confirmation to run %s", displayTool),
 			Risk:            "low",
 			AccessMode:      accessMode,
 			ProposedRule:    prop,
@@ -1287,7 +1292,7 @@ func evaluateFSCheck(
 			Meta: ToolApprovalMeta{
 				Capability:      capKind,
 				Target:          resolvedPath,
-				Reason:          fmt.Sprintf("%s: %s", verb, resolvedPath),
+				Reason:          verb,
 				Risk:            risk,
 				AccessMode:      accessMode,
 				ProposedRule:    prop,
@@ -1336,7 +1341,7 @@ func evaluateFSCheck(
 		Meta: ToolApprovalMeta{
 			Capability:      capKind,
 			Target:          nonEmpty(rawPath, resolvedPath),
-			Reason:          fmt.Sprintf("Supervised mode requires approval before %s %s", verb, nonEmpty(rawPath, resolvedPath)),
+			Reason:          fmt.Sprintf("Ask for approval mode requires confirmation before %s this file", verb),
 			Risk:            "low",
 			AccessMode:      "ask",
 			ProposedRule:    prop,
@@ -1396,7 +1401,7 @@ func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []Permiss
 				Meta: ToolApprovalMeta{
 					Capability: "net",
 					Target:     nonEmpty(u.Host, rawHost),
-					Reason:     fmt.Sprintf("Subdomain %q under .localhost is blocked against SSRF", rawHost),
+					Reason:     fmt.Sprintf("Localhost subdomain %q is blocked for security", rawHost),
 				},
 			}
 		}
@@ -1461,7 +1466,7 @@ func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []Permiss
 		Meta: ToolApprovalMeta{
 			Capability:      "net",
 			Target:          target,
-			Reason:          fmt.Sprintf("Outbound network request to %s requires approval", target),
+			Reason:          "Outbound network request requires approval",
 			Risk:            "medium",
 			AccessMode:      accessMode,
 			ProposedRule:    prop,
@@ -1469,6 +1474,37 @@ func evaluateFetchURLCheck(rawURL, accessMode, workspace string, rules []Permiss
 			CanAllowAlways:  ok,
 			CallGrants:      callGrants,
 		},
+	}
+}
+
+func humanToolName(canonical string) string {
+	switch canonical {
+	case "exec_script":
+		return "JavaScript"
+	case "search_web":
+		return "Web search"
+	case "fetch_url":
+		return "Fetch URL"
+	case "bg_cancel":
+		return "Cancel background task"
+	case "bg_await":
+		return "Wait for background task"
+	case "bg_check":
+		return "Check background task"
+	case "session_history":
+		return "Session history"
+	case "widget_set":
+		return "Save widget"
+	case "widget_list":
+		return "List widgets"
+	case "widget_lint":
+		return "Lint widget"
+	case "widget_read":
+		return "Read widget"
+	case "widget_edit":
+		return "Edit widget"
+	default:
+		return canonical
 	}
 }
 

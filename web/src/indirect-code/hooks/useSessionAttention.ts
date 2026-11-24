@@ -22,6 +22,7 @@ export interface SessionAttentionOpts {
   historyView: () => boolean;
   updating: () => boolean;
   isMobile: () => boolean;
+  overlaySidebar?: () => boolean;
   sidebarOpen: () => boolean;
   hosts: () => Array<{ id: string; status?: string }>;
   sessions: () => SessionSummary[];
@@ -136,7 +137,8 @@ export function createSessionAttention(opts: SessionAttentionOpts) {
     if (!hostId || !sessionId) return false;
     if (!opts.wsOpen() || !opts.isHostOnline()) return false;
     if (opts.draftMode() || opts.historyView() || opts.updating()) return false;
-    if (opts.isMobile() && opts.sidebarOpen()) return false;
+    const isDrawer = opts.overlaySidebar ? opts.overlaySidebar() : opts.isMobile();
+    if (isDrawer && opts.sidebarOpen()) return false;
     if (!isViewportActive()) return false;
     return hostId === opts.activeHostId() && sessionId === opts.activeSessionId();
   }

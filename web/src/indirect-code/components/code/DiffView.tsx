@@ -99,7 +99,7 @@ export function DiffView(props: {
         requestAnimationFrame(() => restoreToolScroll(props.scrollKey, el));
       }}
       onScroll={props.embedded ? undefined : (e) => recordToolScroll(props.scrollKey, e.currentTarget)}
-      class={`font-mono text-[11.5px] leading-relaxed select-text ${
+      class={`font-mono text-xs leading-relaxed select-text ${
         props.embedded
           ? "overflow-visible"
           : "overflow-x-auto overflow-y-auto max-h-96"
@@ -115,24 +115,24 @@ export function DiffView(props: {
                   <div class="sticky left-0 z-10 flex items-center bg-inherit pl-2.5 pr-1 shrink-0">
                     <Show when={isDualGutter()}>
                       <span
-                        class="rc-code-gutter-old select-none text-right font-mono text-[10px] tabular-nums shrink-0 pr-1.5"
+                        class="rc-code-gutter-old select-none text-right font-mono text-2xs tabular-nums shrink-0 pr-1.5"
                         style={{ "min-width": dualColWidth() }}
                       />
                       <span
-                        class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums shrink-0 pr-2 mr-1.5"
+                        class="rc-code-gutter select-none text-right font-mono text-2xs tabular-nums shrink-0 pr-2 mr-1.5"
                         style={{ "min-width": dualColWidth() }}
                       >
                         ⋯
                       </span>
                     </Show>
                     <Show when={hasSingleGutter()}>
-                      <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
+                      <span class="rc-code-gutter select-none text-right font-mono text-2xs tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
                         ⋯
                       </span>
                     </Show>
                     <span class="select-none w-4 shrink-0 text-center text-transparent"> </span>
                   </div>
-                  <code class="font-mono text-[11px] flex-1">
+                  <code class="font-mono text-2xs flex-1">
                     <span class="rc-diff-hunk-range">{r.hunkHeader!.range}</span>
                     <Show when={r.hunkHeader!.context}>
                       <span class="rc-diff-hunk-ctx"> {r.hunkHeader!.context}</span>
@@ -150,7 +150,7 @@ export function DiffView(props: {
                       : r.kind === "meta"
                         ? "rc-diff-meta text-fg-muted"
                         : r.kind === "header"
-                          ? "rc-diff-row-ctx text-fg-muted text-[10px]"
+                          ? "rc-diff-row-ctx text-fg-muted text-2xs"
                           : r.kind === "ellipsis"
                             ? "rc-diff-row-ctx text-fg-muted"
                             : "rc-diff-row-ctx text-fg-secondary"
@@ -159,20 +159,20 @@ export function DiffView(props: {
                 <div class="sticky left-0 z-10 flex items-start bg-inherit pl-2.5 pr-1 shrink-0">
                   <Show when={isDualGutter()}>
                     <span
-                      class="rc-code-gutter-old select-none text-right font-mono text-[10px] tabular-nums shrink-0 pr-1.5"
+                      class="rc-code-gutter-old select-none text-right font-mono text-2xs tabular-nums shrink-0 pr-1.5"
                       style={{ "min-width": dualColWidth() }}
                     >
                       {r.oldLineNum || ""}
                     </span>
                     <span
-                      class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums shrink-0 pr-2 mr-1.5"
+                      class="rc-code-gutter select-none text-right font-mono text-2xs tabular-nums shrink-0 pr-2 mr-1.5"
                       style={{ "min-width": dualColWidth() }}
                     >
                       {r.newLineNum || ""}
                     </span>
                   </Show>
                   <Show when={hasSingleGutter()}>
-                    <span class="rc-code-gutter select-none text-right font-mono text-[10px] tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
+                    <span class="rc-code-gutter select-none text-right font-mono text-2xs tabular-nums min-w-[2.5rem] shrink-0 pr-2 mr-1.5">
                       {r.lineNum || ""}
                     </span>
                   </Show>
@@ -191,7 +191,7 @@ export function DiffView(props: {
                 <Show
                   when={r.kind !== "meta"}
                   fallback={
-                    <code class="font-mono text-[10.5px] italic text-fg-muted flex-1">
+                    <code class="font-mono text-2xs italic text-fg-muted flex-1">
                       {r.rawCode || " "}
                     </code>
                   }
@@ -207,7 +207,7 @@ export function DiffView(props: {
       <Show when={hidden() > 0}>
         <button
           type="button"
-          onPointerDown={(e) => press(e.currentTarget)}
+          ref={press}
           onClick={() => {
             setExpanded(true);
             requestAnimationFrame(() => {
@@ -216,7 +216,7 @@ export function DiffView(props: {
           }}
           class="flex items-center w-full text-left px-3 py-1.5 border-t border-border-subtle bg-surface-subtle text-2xs font-mono text-fg-muted hover:text-fg hover:bg-surface-muted/60 transition-colors cursor-pointer"
         >
-          +{hidden()} more lines
+          +{hidden()} more {hidden() === 1 ? "line" : "lines"}
         </button>
       </Show>
     </div>

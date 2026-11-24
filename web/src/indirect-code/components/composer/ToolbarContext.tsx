@@ -9,6 +9,47 @@ import { MenuItem } from "../MenuItem";
 import { baseMode, effectiveModeSkills, isModeSkillName as isModeSkill, originalUsable } from "../../utils/modeSkills";
 import type { AccessMode } from "../../utils/settingsValidation";
 
+const SKILL_ACRONYMS: Record<string, string> = {
+  ui: "UI",
+  api: "API",
+  cli: "CLI",
+  sql: "SQL",
+  css: "CSS",
+  html: "HTML",
+  json: "JSON",
+  llm: "LLM",
+  mcp: "MCP",
+  sdk: "SDK",
+  url: "URL",
+  http: "HTTP",
+};
+
+const BUILTIN_SKILL_LABELS: Record<string, string> = {
+  generative_ui_agentic: "Generative UI",
+  generative_ui_talk: "Generative UI (Talk)",
+  generative_ui: "Generative UI",
+};
+
+function formatSkillLabel(name: string): string {
+  if (BUILTIN_SKILL_LABELS[name]) return BUILTIN_SKILL_LABELS[name];
+  if (!/[_-]/.test(name)) return name;
+  return name
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part, idx) => {
+      const lower = part.toLowerCase();
+      if (SKILL_ACRONYMS[lower]) return SKILL_ACRONYMS[lower];
+      return idx === 0 ? lower.charAt(0).toUpperCase() + lower.slice(1) : lower;
+    })
+    .join(" ");
+}
+
+function formatUsableLabel(usable: string): string {
+  if (usable === "yolo") return "always";
+  if (usable === "deny") return "hidden";
+  return usable;
+}
+
 export const ACCESS_MODE_SPECS: readonly {
   mode: AccessMode;
   short: string;
@@ -41,9 +82,9 @@ export const ACCESS_MODE_SPECS: readonly {
     mode: "full",
     short: "Full",
     label: "Full access",
-    tip: "Permissions: Full access (unjailed)",
+    tip: "Permissions: Full access",
     description:
-      "Unjailed host access. Runs all commands, file edits, and network requests without asking.",
+      "Unrestricted workspace & host access. Runs all commands, file edits, and network requests without asking.",
     icon: "lucide:shield-alert",
   },
 ];
@@ -296,6 +337,10 @@ export function ToolbarContext() {
     return effectiveSelectedSkills().filter((name) => !isModeSkill(name) && saved[name]?.enabled).length;
   }
 
+  function canReorderAdditional() {
+    return effectiveSelectedSkills().filter((n) => !isModeSkill(n)).length >= 2;
+  }
+
   const PostureSection = () => {
     const [postureTrack, setPostureTrack] = createSignal<HTMLDivElement>();
     const [postureInd, setPostureInd] = createSignal<HTMLSpanElement>();
@@ -321,38 +366,28 @@ export function ToolbarContext() {
       <Show when={modeSkills().length > 0}>
         <div class="px-1.5 pt-1 pb-1.5">
           <div class="flex items-center justify-between px-0.5 pb-1.5">
-            <span class="text-2xs font-medium text-fg-muted">Execution posture</span>
+            <span class="text-2xs font-medium text-fg-muted">Mode</span>
           </div>
           <Show
             when={modeSkills().length > 1}
             fallback={
-              <div role="menu" aria-label="Agent mode">
+              <div role="status" aria-label="Agent mode">
                 <For each={modeSkills()}>
-                  {(mode) => {
-                    const active = () => activeModeSkillName() === mode.name;
-                    return (
-                      <button
-                        type="button"
-                        role="menuitemradio"
-                        aria-checked={active()}
-                        onPointerDown={(e) => press(e.currentTarget)}
-                        onClick={() => chooseModeSkill(mode.name)}
-                        class="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface-subtle px-2.5 py-1.5 text-left transition-colors cursor-pointer"
-                      >
-                        <Iconify icon={mode.icon} size={14} class="text-accent shrink-0" />
-                        <span class="flex-1 min-w-0">
-                          <span class="flex items-center gap-1.5">
-                            <span class="text-xs font-medium text-fg">{mode.label}</span>
-                            <span class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface px-1.5 py-px text-2xs font-medium text-fg-muted">
-                              <Iconify icon="lucide:lock" size={9} class="shrink-0" />
-                              <span>Locked</span>
-                            </span>
+                  {(mode) => (
+                    <div class="w-full flex items-center gap-2.5 rounded-lg border border-border bg-surface-subtle px-2.5 py-1.5 text-left cursor-default">
+                      <Iconify icon={mode.icon} size={14} class="text-accent shrink-0" />
+                      <span class="flex-1 min-w-0">
+                        <span class="flex items-center gap-1.5">
+                          <span class="text-xs font-medium text-fg">{mode.label}</span>
+                          <span class="inline-flex items-center gap-1 rounded-inner border border-border bg-surface px-1.5 py-px text-2xs font-medium text-fg-muted">
+                            <Iconify icon="lucide:lock" size={9} class="shrink-0" />
+                            <span>Locked</span>
                           </span>
-                          <span class="block text-2xs text-fg-muted mt-0.5 leading-snug">{mode.description}</span>
                         </span>
-                      </button>
-                    );
-                  }}
+                        <span class="block text-2xs text-fg-muted mt-0.5 leading-snug">{mode.description}</span>
+                      </span>
+                    </div>
+                  )}
                 </For>
               </div>
             }
@@ -372,12 +407,12 @@ export function ToolbarContext() {
                   return (
                     <button
                       type="button"
+                      ref={press}
                       role="menuitemradio"
                       aria-checked={active()}
                       onPointerEnter={() => setHoveredMode(mode.name)}
                       onFocus={() => setHoveredMode(mode.name)}
                       onBlur={() => setHoveredMode((cur) => (cur === mode.name ? null : cur))}
-                      onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => chooseModeSkill(mode.name)}
                       class={`ui-segment flex-auto px-2 py-1 text-xs font-medium flex items-center justify-center gap-1.5 rounded-inner cursor-pointer transition-colors ${
                         active() ? "text-fg" : "text-fg-muted hover:text-fg-secondary"
@@ -412,28 +447,37 @@ export function ToolbarContext() {
           <For each={additionalSkills()} fallback={<li class="px-2 py-2 text-xs text-fg-muted">No additional skills on this host.</li>}>
             {([name, skill]) => {
               const selected = () => effectiveSelectedSkills().includes(name);
+              const label = formatSkillLabel(name);
+              const usableLabel = () => formatUsableLabel(shownUsable(name));
               return (
                 <li data-id={name} class="group/skill flex items-center gap-1 rounded-lg px-1 py-0.5 hover:bg-surface-muted transition-colors">
-                  <button
-                    type="button"
-                    data-handle
-                    aria-label={`Reorder ${name}`}
-                    data-rc-tip="Drag to reorder"
-                    class={`shrink-0 p-1 rounded-inner text-fg-muted hover:text-fg cursor-grab active:cursor-grabbing transition-opacity ${
-                      ui.isMobile() ? "opacity-60" : "opacity-0 group-hover/skill:opacity-70 focus-visible:opacity-100"
-                    }`}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Iconify icon="lucide:grip-vertical" size={13} />
-                  </button>
+                  <Show when={canReorderAdditional()}>
+                    <Show
+                      when={selected()}
+                      fallback={<span class="w-5 shrink-0" aria-hidden="true" />}
+                    >
+                      <button
+                        type="button"
+                        data-handle
+                        aria-label={`Reorder ${name}`}
+                        data-rc-tip="Drag to reorder"
+                        class={`shrink-0 p-1 rounded-inner text-fg-muted hover:text-fg cursor-grab active:cursor-grabbing transition-opacity ${
+                          ui.isMobile() ? "opacity-60" : "opacity-0 group-hover/skill:opacity-70 focus-visible:opacity-100"
+                        }`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <Iconify icon="lucide:grip-vertical" size={13} />
+                      </button>
+                    </Show>
+                  </Show>
                   <div class="flex-1 flex min-w-0">
                     <button
                       type="button"
+                      ref={press}
                       role="menuitemcheckbox"
                       aria-checked={selected()}
-                      onPointerDown={(e) => press(e.currentTarget)}
                       onClick={() => toggleAdditional(name)}
-                      class="flex-1 min-w-0 py-0.5 pr-1.5 flex items-center gap-2 text-left cursor-pointer"
+                      class={`flex-1 min-w-0 py-0.5 pr-1.5 flex items-center gap-2 text-left cursor-pointer ${canReorderAdditional() ? "" : "pl-1"}`}
                     >
                       <span
                         aria-hidden="true"
@@ -448,8 +492,11 @@ export function ToolbarContext() {
                         </Show>
                       </span>
                       <span class="flex-1 min-w-0">
-                        <span class={`font-mono text-xs block truncate ${selected() ? "font-medium text-fg" : "text-fg-secondary"}`}>
-                          {name}
+                        <span
+                          data-rc-tip={label !== name ? name : undefined}
+                          class={`text-xs block truncate ${label === name ? "font-mono" : ""} ${selected() ? "font-medium text-fg" : "text-fg-secondary"}`}
+                        >
+                          {label}
                         </span>
                         <Show when={skill?.description}>
                           <span class="block text-2xs text-fg-muted leading-tight truncate mt-0.5">
@@ -462,9 +509,9 @@ export function ToolbarContext() {
                   <Show when={originalUsable(skill?.usable) === "ask"}>
                     <button
                       type="button"
-                      aria-label={`Change activation policy for ${name}: ${shownUsable(name)}`}
-                      data-rc-tip={`Activation policy: ${shownUsable(name)} (click to cycle)`}
-                      onPointerDown={(e) => press(e.currentTarget)}
+                      ref={press}
+                      aria-label={`Change activation policy for ${name}: ${usableLabel()}`}
+                      data-rc-tip={`Activation policy: ${usableLabel()} (click to cycle)`}
                       onClick={(e) => { e.stopPropagation(); cycleSkillUsable(name, skill?.usable); }}
                       class={`shrink-0 rounded-inner border px-1.5 py-0.5 font-mono text-2xs font-medium leading-none transition-colors cursor-pointer ${
                         shownUsable(name) === "yolo"
@@ -474,11 +521,11 @@ export function ToolbarContext() {
                           : "border-border bg-surface-subtle text-fg-secondary hover:bg-surface-muted hover:text-fg"
                       }`}
                     >
-                      {shownUsable(name)}
+                      {usableLabel()}
                     </button>
                   </Show>
                   <Show when={originalUsable(skill?.usable) === "yolo"}>
-                    <span data-rc-tip="Always usable without asking" class="shrink-0 rounded-inner border border-[color-mix(in_oklab,var(--warning)_26%,var(--border))] bg-warning-subtle px-1.5 py-0.5 font-mono text-2xs font-medium leading-none text-warning">yolo</span>
+                    <span data-rc-tip="Always usable without asking" class="shrink-0 rounded-inner border border-[color-mix(in_oklab,var(--warning)_26%,var(--border))] bg-warning-subtle px-1.5 py-0.5 font-mono text-2xs font-medium leading-none text-warning">always</span>
                   </Show>
                   <Show when={originalUsable(skill?.usable) === "deny"}>
                     <span data-rc-tip="Hidden from model auto-activation" class="shrink-0 rounded-inner border border-border bg-surface-subtle px-1.5 py-0.5 font-mono text-2xs font-medium leading-none text-fg-muted">hidden</span>
@@ -492,11 +539,17 @@ export function ToolbarContext() {
       <Show when={(m.skillErrors?.() ?? []).length > 0}>
         <div role="status" class="mt-1.5 rounded-lg border border-[color-mix(in_oklab,var(--warning)_32%,var(--border))] bg-warning-subtle px-2.5 py-2 text-2xs text-warning">
           <div class="flex items-center gap-1.5 font-medium">
-            <Iconify icon="lucide:circle-alert" size={12} />
+            <Iconify icon="lucide:circle-alert" size={12} class="shrink-0" />
             <span>{(m.skillErrors?.() ?? []).length === 1 ? "1 skill file failed to load" : `${(m.skillErrors?.() ?? []).length} skill files failed to load`}</span>
           </div>
-          <ul class="mt-1 space-y-0.5 text-fg-secondary font-mono text-2xs">
-            <For each={m.skillErrors?.() ?? []}>{(err) => <li class="break-words">{err}</li>}</For>
+          <ul class="mt-1 max-h-40 overflow-y-auto overscroll-contain space-y-1 text-fg-secondary font-mono text-2xs">
+            <For each={m.skillErrors?.() ?? []}>
+              {(err) => (
+                <li class="line-clamp-2 break-words" data-rc-tip={err.length > 80 ? err : undefined}>
+                  {err}
+                </li>
+              )}
+            </For>
           </ul>
         </div>
       </Show>
@@ -516,10 +569,10 @@ export function ToolbarContext() {
           return (
             <button
               type="button"
+              ref={press}
               role="menuitemradio"
               data-access-option={access.mode}
               aria-checked={active()}
-              onPointerDown={(e) => press(e.currentTarget)}
               onClick={() => {
                 if (c.accessMode() !== access.mode) {
                   c.setAccessMode(access.mode);
@@ -593,16 +646,16 @@ export function ToolbarContext() {
 <div class="shrink-0">
   <button
     type="button"
-    ref={c.addBtn}
+    ref={(el) => {
+      c.addBtn = el;
+      press(el);
+    }}
     data-menubtn
     aria-expanded={c.addContextOpen()}
-    onPointerDown={(e) => press(e.currentTarget)}
     onClick={(e) => {
       e.stopPropagation();
       const next = !c.addContextOpen();
       ui.closeMenus();
-      ui.setEffortMenuOpen?.(false);
-      ui.setModelMenuOpen(false);
       c.setAddContextOpen(next);
     }}
     class="rc-composer-add relative inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
@@ -620,9 +673,6 @@ export function ToolbarContext() {
     placement="top-start"
     width={ui.isMobile() ? "min(15rem, calc(100vw - 1.25rem))" : "13rem"}
   >
-    <div class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 border-b border-border-subtle text-2xs font-medium text-fg-muted">
-      Add context
-    </div>
     <MenuItem
       icon="lucide:paperclip"
       onClick={() => {
@@ -648,9 +698,19 @@ export function ToolbarContext() {
       icon="lucide:slash"
       onClick={() => {
         c.setAddContextOpen(false);
-        c.setInputPrompt("/");
+        const cur = c.inputPrompt();
+        const trimmed = cur.trim();
+        if (!trimmed) {
+          c.setInputPrompt("/");
+        } else if (!trimmed.startsWith("/")) {
+          ui.toast?.("Clear or send your draft before running a slash command", "ok");
+        }
         try {
-          document.querySelector<HTMLTextAreaElement>("#rc-composer")?.focus();
+          const el = document.querySelector<HTMLTextAreaElement>("#rc-composer");
+          el?.focus();
+          if (el && (!trimmed || trimmed.startsWith("/"))) {
+            el.setSelectionRange(el.value.length, el.value.length);
+          }
         } catch {}
       }}
     >
@@ -662,12 +722,14 @@ export function ToolbarContext() {
 <div class="shrink-0">
   <button
     type="button"
-    ref={c.modeBtn}
+    ref={(el) => {
+      c.modeBtn = el;
+      press(el);
+    }}
     data-menubtn
     data-rc-tip="Mode & skills"
     aria-label={`Agent mode and skills: ${currentModeSpec()?.label ?? c.agentMode()}${additionalCount() > 0 ? ` +${additionalCount()}` : ""}`}
     aria-expanded={c.modeMenuOpen()}
-    onPointerDown={(e) => press(e.currentTarget)}
     onClick={(e) => {
       e.stopPropagation();
       const next = !c.modeMenuOpen();
@@ -710,15 +772,15 @@ export function ToolbarContext() {
     open={c.modeMenuOpen()}
     onClose={() => c.setModeMenuOpen(false)}
     role="dialog"
-    aria-label="Mode & Skills"
+    aria-label="Mode & skills"
     placement="top-start"
     width={ui.isMobile() ? "min(24rem, calc(100vw - 1rem))" : "min(24.5rem, calc(100vw - 1.5rem))"}
   >
     <div class="-mx-1.5 -mt-1.5 mb-1 flex items-center justify-between px-3 py-1 border-b border-border-subtle">
-      <span class="font-medium text-xs text-fg">Mode & Skills</span>
+      <span class="font-medium text-xs text-fg">Mode & skills</span>
       <button
         type="button"
-        onPointerDown={(e) => press(e.currentTarget)}
+        ref={press}
         onClick={() => {
           applyDraft();
           c.setModeMenuOpen(false);
@@ -731,7 +793,7 @@ export function ToolbarContext() {
     <PostureSection />
     <div class={`${modeSkills().length > 0 ? "mt-1 -mx-1.5 border-t border-border-subtle pt-1.5 px-1.5" : "pt-1"}`}>
       <div class="flex items-center justify-between px-1.5 pb-1">
-        <span class="text-2xs font-medium text-fg-muted">Skill matrix</span>
+        <span class="text-2xs font-medium text-fg-muted">Additional skills</span>
         <Show when={additionalSkills().length > 0}>
           <span class="font-mono text-2xs text-fg-muted tabular-nums">
             {activeAdditionalCount()}/{additionalSkills().length} active
@@ -747,13 +809,15 @@ export function ToolbarContext() {
 <div class="shrink-0">
   <button
     type="button"
-    ref={c.accessBtn}
+    ref={(el) => {
+      c.accessBtn = el;
+      press(el);
+    }}
     data-menubtn
     data-access-mode={c.accessMode()}
     data-rc-tip={currentAccessSpec().tip}
     aria-label={`Agent permissions: ${currentAccessSpec().label}`}
     aria-expanded={c.accessMenuOpen()}
-    onPointerDown={(e) => press(e.currentTarget)}
     onClick={(e) => {
       e.stopPropagation();
       const next = !c.accessMenuOpen();
@@ -798,11 +862,11 @@ export function ToolbarContext() {
     anchor={() => c.accessBtn}
     open={c.accessMenuOpen()}
     onClose={() => c.setAccessMenuOpen(false)}
-    aria-label="Execution permissions"
+    aria-label="Permissions"
     placement="top-start"
     width={ui.isMobile() ? "min(22.5rem, calc(100vw - 1rem))" : "min(23rem, calc(100vw - 1.5rem))"}
   >
-    <p class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 text-2xs font-medium text-fg-muted border-b border-border-subtle">Execution permissions</p>
+    <p class="-mx-1.5 -mt-1.5 mb-1.5 px-3 py-1.5 text-2xs font-medium text-fg-muted border-b border-border-subtle">Permissions</p>
     {permissionsList(true)}
   </FloatMenu>
 </div>

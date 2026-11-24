@@ -686,7 +686,7 @@ func TestAutoCompactRefreshesFromActorAndCompactionDeclaresProviderWait(t *testi
 		t.Fatalf("autoCompact: %v", err)
 	}
 	// Also exercise reactive overflow progress event wait declaration.
-	w.handleEvent(core.EvToolProgress{Text: "Context limit reached upstream; automatically compacting older context…"})
+	w.handleEvent(core.EvToolProgress{Text: "Context limit reached — compacting older context…"})
 
 	close(spyInbox)
 	<-waitDone

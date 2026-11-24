@@ -55,6 +55,8 @@ export function Composer() {
         !s.workspaceBlocked() &&
         !voice.isActive(),
     );
+  const collapseLabel = () =>
+    t.todos().length > 0 ? "Hide composer and tasks" : "Hide composer";
   const hasTurnRow = () =>
     Boolean(t.turnActivity() || t.compactingText?.());
   const hasQueueShelf = () =>
@@ -86,9 +88,9 @@ export function Composer() {
         <p class="mt-1 text-xs text-fg-muted">{s.workspaceState() === "missing" ? "Recreate this folder on the host to continue this conversation." : "Restore access to this folder on the host to continue."}</p>
         <p class="mt-1 font-mono text-2xs text-fg-secondary break-all">{s.workspacePath()}</p>
         <div class="mt-2.5 flex items-center gap-2">
-          <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={s.checkWorkspace} class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Check again</button>
+          <button type="button" ref={press} onClick={s.checkWorkspace} class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg hover:bg-surface-muted transition-colors cursor-pointer">Check again</button>
           <Show when={t.sessionStatus() === "running"}>
-            <button type="button" onPointerDown={(e) => press(e.currentTarget)} onClick={t.cancelCurrentTurn} class="inline-flex items-center justify-center rounded-lg border border-[color-mix(in_oklab,var(--danger)_30%,var(--border))] bg-danger-subtle px-2.5 py-1 text-xs font-medium text-danger hover:opacity-90 transition-opacity cursor-pointer">Stop turn</button>
+            <button type="button" ref={press} onClick={t.cancelCurrentTurn} class="inline-flex items-center justify-center rounded-lg border border-[color-mix(in_oklab,var(--danger)_30%,var(--border))] bg-danger-subtle px-2.5 py-1 text-xs font-medium text-danger hover:opacity-90 transition-opacity cursor-pointer">Stop turn</button>
           </Show>
         </div>
       </div>
@@ -119,19 +121,19 @@ export function Composer() {
       />
       <ComposerInput />
       <div class="rc-composer-toolbar flex items-center justify-between gap-2 px-2.5 pt-1 pb-2">
-        <div class="flex flex-1 min-w-0 flex-nowrap items-center gap-1 text-xs text-fg-secondary">
+        <div class="flex flex-1 min-w-0 flex-nowrap items-center gap-0.5 sm:gap-1 text-xs text-fg-secondary">
         <ToolbarContext />
         <ToolbarModel />
         </div>
-        <div class="flex shrink-0 items-center gap-1.5">
+        <div class="flex shrink-0 items-center gap-1 sm:gap-1.5">
           <Show when={canCollapse() && !hasTurnRow()}>
             <button
               type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
+              ref={press}
               onClick={ui.toggleComposerCollapsed}
               aria-expanded={true}
-              aria-label="Hide composer and tasks"
-              data-rc-tip="Hide composer and tasks"
+              aria-label={collapseLabel()}
+              data-rc-tip={collapseLabel()}
               data-composer-collapse
               class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
             >

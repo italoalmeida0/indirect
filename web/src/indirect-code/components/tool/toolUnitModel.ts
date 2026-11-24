@@ -110,16 +110,55 @@ const terminalSource = () => {
   return sp.spilled ? sp.cleanBody : stripped.body;
 };
 const terminal = createMemo(() => terminalPresentation(terminalSource()));
-/** Envelope facts as structured chips (exit, page, next...). */
+/** True when raw output is the daemon's LLM-facing background detach instruction block. */
+const BG_DETACH_PLACEHOLDER_RE = /^(?:Command|Script) moved to background \(still running\)\./i;
+
+/** Envelope facts as structured chips (exit, page, offset...). Suppresses
+ * facts already rendered by the tool header, banner, or empty-state body. */
 const footer = (): FooterFact[] => {
   const f = (u.result?.toolDetails as any)?.footer;
-  const facts: FooterFact[] = Array.isArray(f) ? f : rawEnvelope().footer;
-  // A fact that just repeats the body (e.g. summary's info line) adds nothing.
+  const facts: FooterFact[] = Array.isArray(f) ? [...f] : [...rawEnvelope().footer];
+  const n = name();
+  const job = bgJob();
+  if (isDetachedBg() && job && job.status !== "running" && typeof job.exitCode === "number") {
+    if (!facts.some((fact) => /^exit\s+-?\d+$/i.test(fact.label))) {
+      facts.unshift({ label: `exit ${job.exitCode}`, tone: job.exitCode === 0 ? "muted" : "fail" });
+    }
+  }
   const first = rawOutput().split("\n").map((l) => l.trim()).find((l) => l) || "";
   const isImg = imageReadDetails() !== undefined;
+  const showsDurationInHeader =
+    Boolean(elapsed()) &&
+    !isDetachedBg() &&
+    (n === "bash" || n === "exec_script" || n === "python" || n === "explore" || n.startsWith("mcp__"));
+  const showsSpillBanner =
+    spill().spilled &&
+    !bgRunning() &&
+    (n === "bash" || n === "exec_script" || n === "python" || n === "fetch_url");
   return facts.filter((fact) => {
-    if (fact.label === first) return false;
-    if (isImg && /^Read image file \[image\//i.test(fact.label)) return false;
+    const lbl = fact.label.trim();
+    if (!lbl) return false;
+    if (lbl === first) return false;
+    if (lbl === "background") return false;
+    if (isImg && /^Read image file \[image\//i.test(lbl)) return false;
+    if (showsDurationInHeader && /^Took\s+/i.test(lbl)) return false;
+    if (showsSpillBanner && /^saved full output\b/i.test(lbl)) return false;
+    if (n === "bg_cancel" && (/^Background task\b.*\bcancel(?:led|ed)\b/i.test(lbl) || /^(?:canceled|cancelled|finished|failed)$/i.test(lbl))) return false;
+    if (n === "bg_check" || n === "bg_tail") {
+      if (lbl === "No output yet." && !output().trim()) return false;
+      if (mergedEnv()?.status && lbl === mergedEnv()!.status && !mergedEnv()?.command) return false;
+    }
+    if (
+      (n === "bash" || n === "exec_script" || n === "python") &&
+      /^no output$/i.test(lbl) &&
+      !output().trim()
+    ) return false;
+    if ((n === "glob" || n === "search") && /^no matches$/i.test(lbl) && !output().trim()) return false;
+    if (n === "inspect" && /^no entries$/i.test(lbl)) return false;
+    if (n === "widget_list" && /^no widgets$/i.test(lbl)) return false;
+    if (n === "write" && /^Successfully wrote to\b/i.test(lbl)) return false;
+    if ((n === "edit" || n === "widget_edit") && /^Successfully replaced\b/i.test(lbl)) return false;
+    if (n === "widget_set" && /^(?:Successfully stored widget|Deleted widget)\b/i.test(lbl)) return false;
     return true;
   });
 };
@@ -180,7 +219,7 @@ const sleepRemaining = () => {
   if (name() !== "bg_await" || u.result) return "";
   const total = Number((args() as any)?.max_wait_seconds);
   if (!Number.isFinite(total) || total <= 0) return "";
-  const start = ctx.toolStarts()[u.call?.toolId || ""];
+  const start = ctx.toolStarts?.()?.[u.call?.toolId || ""];
   if (!start) return "";
   return `${formatDurationSecs(Math.min(total, Math.max(0, Math.ceil(total - Math.max(0, (ctx.turnClock() - start) / 1000)))))} left`;
 };
@@ -201,27 +240,28 @@ const elapsed = () => {
     u.result?.toolDurationMs ??
     terminal().durationMs ??
     (typeof details?.duration_ms === "number" && Number.isFinite(details.duration_ms) ? details.duration_ms : undefined);
-  if (duration !== undefined) return ctx.elapsedLabel(duration);
+  const fmtElapsed = (ms: number) => (typeof ctx.elapsedLabel === "function" ? ctx.elapsedLabel(ms) : "");
+  if (duration !== undefined) return fmtElapsed(duration);
   const envDuration = typeof mergedEnv()?.duration === "string" ? mergedEnv()!.duration.trim() : "";
   if (envDuration) {
     const parsedMs = parseHumanDurationMs(envDuration);
     if (parsedMs !== undefined) {
-      return parsedMs > 0 && parsedMs < 1000 ? envDuration : ctx.elapsedLabel(parsedMs);
+      return parsedMs > 0 && parsedMs < 1000 ? envDuration : fmtElapsed(parsedMs) || envDuration;
     }
     return envDuration;
   }
   // A running background job ticks off the background clock so the row
   // keeps counting after the turn ends (and across reloads).
   if (bgRunning()) {
-    const job = ctx.backgroundJobs().find((j) => j.id === bgJobId());
-    if (job && job.startedAt) return ctx.elapsedLabel(Math.max(0, ctx.bgClock() - job.startedAt));
+    const job = ctx.backgroundJobs?.().find((j) => j.id === bgJobId());
+    if (job && job.startedAt) return fmtElapsed(Math.max(0, ctx.bgClock() - job.startedAt));
   }
-  const start = ctx.toolStarts()[u.call?.toolId || ""];
-  if (start && active()) return ctx.elapsedLabel(ctx.turnClock() - start);
+  const start = ctx.toolStarts?.()?.[u.call?.toolId || ""];
+  if (start && active()) return fmtElapsed(ctx.turnClock() - start);
   // Detached window: the placeholder landed but the job isn't in the
   // session list yet (register/snapshot still flying). Keep ticking off
   // the tool start so the time never blanks mid-detach.
-  if (isDetachedBg() && start) return ctx.elapsedLabel(Math.max(0, ctx.bgClock() - start));
+  if (isDetachedBg() && start) return fmtElapsed(Math.max(0, ctx.bgClock() - start));
   return "";
 };
 /** Background job id when this call detached (placeholder or folded). */
@@ -229,24 +269,39 @@ const bgJobId = () => {
   const id = (u.result?.toolDetails as any)?.background_job_id;
   return typeof id === "string" && id ? id : "";
 };
+/** Matching session background job record, if registered. */
+const bgJob = () => {
+  const id = bgJobId();
+  return id ? ctx.backgroundJobs().find((j) => j.id === id) : undefined;
+};
 /** True while the detached job is still running (registry-driven, so it
  * survives the turn ending — the row keeps spinning and streaming). */
 const bgRunning = () => {
-  const id = bgJobId();
-  if (!id) return false;
-  return ctx.backgroundJobs().some((j) => j.id === id && j.status === "running");
+  const job = bgJob();
+  return Boolean(job && job.status === "running");
 };
 /** Live streamed output for the running job (bg_output + bg_tail). */
 const bgStream = () => {
   const id = bgJobId();
   return id ? ctx.bgOutput()[id] || "" : "";
 };
+/** Displayable output for a detached background bash/exec_script call: prefers
+ * live stream or saved job log and never renders the LLM detach prompt. */
+const bgDisplayOutput = () => {
+  const streamed = bgStream();
+  if (streamed.trim()) return streamed;
+  const jobContent = typeof (bgJob() as any)?.content === "string" ? (bgJob() as any).content : "";
+  if (jobContent.trim()) return jobContent;
+  const out = output();
+  if (out.trim() && !BG_DETACH_PLACEHOLDER_RE.test(out.trim())) return out;
+  return prog() || "";
+};
 /** True once the call carries a background job — the row renders as a
  * background run (badge, spinner while running). */
 const isDetachedBg = () => bgJobId() !== "";
 /** True while this tool unit is currently executing (no result yet and turn is running). */
 const runningTool = () => !u.result && running();
-  return { key, open, openBody, expandable, hasContent, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, mergedEnv, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, imageReadDetails, elapsed, sleepRemaining, bgJobId, bgRunning, bgStream, isDetachedBg, running: runningTool };
+  return { key, open, openBody, expandable, hasContent, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, mergedEnv, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, imageReadDetails, elapsed, sleepRemaining, bgJobId, bgJob, bgRunning, bgStream, bgDisplayOutput, isDetachedBg, running: runningTool };
 }
 
 export type ToolModel = ReturnType<typeof useToolUnitModel>;

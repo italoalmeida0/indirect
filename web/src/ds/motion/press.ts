@@ -1,7 +1,9 @@
-import { onCleanup } from "solid-js";
+import { getOwner, onCleanup } from "solid-js";
 
 import { animate } from "./animate";
 import { motionTokens } from "./tokens";
+
+const bound = new WeakSet<HTMLElement>();
 
 /**
  * Press feedback: the element sinks to ~0.97 on pointer down and settles
@@ -13,7 +15,8 @@ import { motionTokens } from "./tokens";
  * pressed size. Keyboard and reduced motion get no scale.
  */
 export function press(el: HTMLElement): void {
-  if (typeof window === "undefined") return;
+  if (typeof window === "undefined" || bound.has(el)) return;
+  bound.add(el);
   let pressed = false;
   const anchorsPopup = () =>
     el.matches('[aria-haspopup]:not([aria-haspopup="false"]), [aria-expanded], [role="combobox"]');
@@ -22,7 +25,12 @@ export function press(el: HTMLElement): void {
     return width > 220 ? 0.985 : width && width <= 48 ? 0.96 : 0.97;
   };
   const down = (event: PointerEvent) => {
-    if (event.button !== 0 || (el as HTMLButtonElement).disabled || anchorsPopup()) return;
+    if (
+      event.button !== 0 ||
+      (el as HTMLButtonElement).disabled ||
+      el.getAttribute("aria-disabled") === "true" ||
+      anchorsPopup()
+    ) return;
     pressed = true;
     animate(el, { scale: String(depth()) }, { duration: motionTokens.duration.instant, ease: motionTokens.ease.standard });
   };
@@ -35,10 +43,13 @@ export function press(el: HTMLElement): void {
   el.addEventListener("pointerup", up);
   el.addEventListener("pointerleave", up);
   el.addEventListener("pointercancel", up);
-  onCleanup(() => {
-    el.removeEventListener("pointerdown", down);
-    el.removeEventListener("pointerup", up);
-    el.removeEventListener("pointerleave", up);
-    el.removeEventListener("pointercancel", up);
-  });
+  if (getOwner()) {
+    onCleanup(() => {
+      bound.delete(el);
+      el.removeEventListener("pointerdown", down);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointerleave", up);
+      el.removeEventListener("pointercancel", up);
+    });
+  }
 }

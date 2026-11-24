@@ -21,14 +21,20 @@ export function ToolbarSend() {
   const hasSendableInput = createMemo(
     () => !isPromptBlank() || c.pendingAttachments().length > 0,
   );
+  const sendTip = () =>
+    c.sending()
+      ? c.pendingAttachments().length > 0
+        ? "Uploading attachments…"
+        : "Sending…"
+      : isDraft()
+        ? "Start conversation"
+        : "Send";
   return (
     <div class="flex shrink-0 items-center gap-1.5">
       <Show when={t.sessionStatus() === "running"}>
         <button
           type="button"
-          onPointerDown={(e) => {
-            if (!e.currentTarget.disabled) press(e.currentTarget);
-          }}
+          ref={press}
           onClick={t.cancelCurrentTurn}
           disabled={t.turnActivity()?.status === "cancelling"}
           class="rc-composer-stop relative h-7.5 w-7.5 shrink-0 rounded-full inline-flex items-center justify-center border border-[color-mix(in_oklab,var(--danger)_32%,var(--border))] bg-danger-subtle text-danger hover:bg-[color-mix(in_oklab,var(--danger)_18%,var(--surface))] disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
@@ -52,7 +58,7 @@ export function ToolbarSend() {
                 }
               }}
               onClick={() => voice.start()}
-              disabled={s.creatingSession() || c.sending()}
+              disabled={!voice.supported() || s.creatingSession() || c.sending()}
               class="rc-composer-voice relative h-7.5 w-7.5 shrink-0 rounded-full inline-flex items-center justify-center cursor-pointer"
               data-rc-tip={voice.supported() ? "Voice input" : "Voice input (requires HTTPS)"}
               aria-label="Start voice input"
@@ -62,9 +68,7 @@ export function ToolbarSend() {
             </button>
             <button
               type="button"
-              onPointerDown={(e) => {
-                if (!e.currentTarget.disabled) press(e.currentTarget);
-              }}
+              ref={press}
               onClick={c.sendPrompt}
               disabled={
                 s.creatingSession() ||
@@ -75,7 +79,7 @@ export function ToolbarSend() {
                 (!s.activeSessionId() && !s.activeProject())
               }
               class="rc-composer-send relative h-7.5 w-7.5 shrink-0 rounded-full inline-flex items-center justify-center bg-fg text-background hover:opacity-90 active:opacity-80 disabled:bg-surface-muted disabled:text-fg-muted disabled:opacity-100 disabled:cursor-not-allowed transition-all cursor-pointer"
-              data-rc-tip={c.sending() ? "Uploading attachments..." : isDraft() ? "Start conversation" : "Send"}
+              data-rc-tip={sendTip()}
               aria-label={isDraft() ? "Start conversation" : "Send"}
             >
               <Iconify icon="lucide:arrow-up" size={15} />
@@ -88,22 +92,24 @@ export function ToolbarSend() {
           ref={press}
           onClick={() => voice.cancel()}
           class="rc-composer-voice-cancel relative h-7.5 w-7.5 shrink-0 rounded-full inline-flex items-center justify-center cursor-pointer"
-          data-rc-tip="Cancel voice"
+          data-rc-tip="Cancel dictation"
           aria-label="Cancel voice input"
         >
           <Iconify icon="lucide:x" size={14} />
         </button>
-        <button
-          type="button"
-          ref={press}
-          onClick={() => voice.confirm()}
-          disabled={voice.state() !== "listening"}
-          class="rc-composer-voice-confirm relative h-7.5 w-7.5 shrink-0 rounded-full inline-flex items-center justify-center cursor-pointer"
-          data-rc-tip="Confirm dictation"
-          aria-label="Confirm dictation"
-        >
-          <Iconify icon="lucide:check" size={15} />
-        </button>
+        <Show when={voice.state() !== "thinking"}>
+          <button
+            type="button"
+            ref={press}
+            onClick={() => voice.confirm()}
+            disabled={voice.state() !== "listening"}
+            class="rc-composer-voice-confirm relative h-7.5 w-7.5 shrink-0 rounded-full inline-flex items-center justify-center cursor-pointer"
+            data-rc-tip="Confirm dictation"
+            aria-label="Confirm dictation"
+          >
+            <Iconify icon="lucide:check" size={15} />
+          </button>
+        </Show>
       </Show>
     </div>
   );

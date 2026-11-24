@@ -1,11 +1,11 @@
 @import "tailwindcss";
 @import "./src/ds/tokens.css";
 @import "./src/ds/components.css" layer(components);
-@import "./src/styles/shell.css";
+@import "./src/styles/shell.css" layer(components);
 @import "./src/styles/analytics.css";
 @import "./src/styles/charts.css";
 @import "./src/styles/aggrid.css";
-@import "./src/styles/code.css";
+@import "./src/styles/code.css" layer(components);
 @import "./src/styles/billing.css";
 @import "./src/styles/admin.css";
 

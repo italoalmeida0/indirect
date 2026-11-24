@@ -128,6 +128,7 @@ func (t *WriteTool) Execute(ctx context.Context, raw json.RawMessage, progress f
 			"bytes":       len(a.Content),
 			"total_lines": totalLines,
 			"start_line":  1,
+			"created":     !existed,
 		},
 	}, nil
 }

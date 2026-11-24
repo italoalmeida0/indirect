@@ -3,6 +3,7 @@ import { press } from "../../ds/motion/press";
 import {
   ACCENTS,
   Badge,
+  Select,
   accent,
   setAccent,
   setThemeMode,
@@ -14,6 +15,7 @@ import {
 import { Icon as Iconify } from "../../components/icon";
 import { useHost, useModal, useUI } from "../ctx";
 import { pushSupported } from "../hooks/usePushSubscription";
+import { validateProxyUrl } from "../hooks/useSettings";
 import {
   normalizeAccessMode,
   normalizeMidTurnSend,
@@ -98,7 +100,7 @@ const DEFAULT_ACCESS_OPTIONS: Array<{
     label: "Full access",
     icon: "lucide:shield-alert",
     description:
-      "Unjailed host access. Runs all commands, file edits, and network requests without asking.",
+      "Unrestricted workspace and host access. Runs all commands, file edits, and network requests without asking.",
   },
 ];
 
@@ -165,10 +167,6 @@ function SettingSwitchRow(props: {
   return (
     <label
       for={props.id}
-      onPointerDown={(e) => {
-        const track = e.currentTarget.querySelector<HTMLElement>(".ui-switch-track");
-        if (track) press(track);
-      }}
       class={`flex items-center justify-between gap-4 px-3.5 py-2.5 cursor-pointer select-none hover:bg-surface-subtle/60 transition-colors ${
         props.nested ? "pl-5 bg-surface-subtle/35" : ""
       }`}
@@ -191,6 +189,7 @@ function SettingSwitchRow(props: {
           class="sr-only peer"
         />
         <span
+          ref={press}
           class="ui-switch-track shrink-0"
           aria-hidden="true"
           aria-checked={props.checked()}
@@ -378,7 +377,7 @@ function ThemeStudioPicker() {
             {themeMode() === "system"
               ? "Follows OS appearance"
               : themeMode() === "high-contrast"
-                ? "Maximum WCAG contrast"
+                ? "Maximum contrast"
                 : `${themeMode() === "dark" ? "Dark" : "Light"} surface`}
           </span>
         </div>
@@ -398,7 +397,7 @@ function ThemeStudioPicker() {
                   role="radio"
                   aria-checked={active()}
                   tabIndex={active() ? 0 : -1}
-                  onPointerDown={(e) => press(e.currentTarget)}
+                  ref={press}
                   onClick={(e) => {
                     const rect = e.currentTarget.getBoundingClientRect();
                     setThemeMode(opt.value, {
@@ -452,7 +451,7 @@ function ThemeStudioPicker() {
                   aria-checked={selected()}
                   aria-label={item.label}
                   data-rc-tip={item.label}
-                  onPointerDown={(e) => press(e.currentTarget)}
+                  ref={press}
                   onClick={() => setAccent(item.id as AccentName)}
                   class={`relative flex h-6 w-6 items-center justify-center rounded-full transition-transform cursor-pointer [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-2 [@media(pointer:coarse)]:after:content-[''] ${
                     selected()
@@ -501,8 +500,8 @@ function ColumnWidthPicker(props: {
     <div class="rounded-panel border border-border bg-surface p-3.5">
       <div class="flex items-center justify-between gap-2 mb-2">
         <span class="text-xs font-medium text-fg">Conversation width</span>
-        <span class="text-2xs text-fg-muted tabular-nums">
-          {currentOpt().px} · {currentOpt().caption}
+        <span class="text-2xs text-fg-muted">
+          {currentOpt().caption}
         </span>
       </div>
       <div
@@ -521,7 +520,7 @@ function ColumnWidthPicker(props: {
                 role="radio"
                 aria-checked={active()}
                 tabIndex={active() ? 0 : -1}
-                onPointerDown={(e) => press(e.currentTarget)}
+                ref={press}
                 onClick={() => props.onChange(opt.value)}
                 class={`flex flex-col gap-2 rounded-lg border p-2 text-left transition-colors cursor-pointer group ${
                   active()
@@ -619,7 +618,7 @@ function MidTurnSendPicker(props: {
                 data-midturn-radio={opt.value}
                 aria-checked={active()}
                 tabIndex={active() ? 0 : -1}
-                onPointerDown={(e) => press(e.currentTarget)}
+                ref={press}
                 onClick={() => props.onChange(opt.value)}
                 class={`flex flex-col gap-1.5 rounded-lg border p-2.5 text-left transition-colors cursor-pointer min-w-0 ${
                   active()
@@ -759,7 +758,7 @@ function AutoCompactGauge(props: {
           <button
             type="button"
             aria-pressed={isOff()}
-            onPointerDown={(e) => press(e.currentTarget)}
+            ref={press}
             onClick={() => props.onChange(0)}
             class={`rounded-md px-2.5 py-0.5 text-2xs font-medium transition-colors cursor-pointer ${
               isOff()
@@ -772,7 +771,7 @@ function AutoCompactGauge(props: {
           <button
             type="button"
             aria-pressed={!isOff()}
-            onPointerDown={(e) => press(e.currentTarget)}
+            ref={press}
             onClick={() => {
               if (isOff()) props.onChange(lastAutoPct());
             }}
@@ -787,69 +786,56 @@ function AutoCompactGauge(props: {
         </div>
       </div>
 
-      {/* Zone Legend */}
-      <div class="flex items-center justify-between gap-2 text-2xs" aria-hidden="true">
-        <span class="inline-flex items-center gap-1.5 text-fg-secondary">
-          <span
-            class={`h-2 w-2 rounded-xs ${
-              isOff() ? "bg-fg-muted/40" : "bg-accent"
-            }`}
-          />
-          <span>Conversation history</span>
-        </span>
-        <span class="inline-flex items-center gap-1.5 text-fg-muted">
-          <span>Compaction reserve</span>
-          <span
-            class={`h-2 w-2 rounded-xs ${
-              isOff() ? "bg-border-strong/50" : "bg-warning"
-            }`}
-          />
-        </span>
-      </div>
+      <Show
+        when={!isOff()}
+        fallback={
+          <p class="text-2xs text-fg-muted leading-relaxed">
+            Automatic compaction is off. Run <code class="font-mono text-fg-secondary">/compact</code> manually whenever you want to summarize older turns.
+          </p>
+        }
+      >
+        {/* Zone Legend */}
+        <div class="flex items-center justify-between gap-2 text-2xs" aria-hidden="true">
+          <span class="inline-flex items-center gap-1.5 text-fg-secondary">
+            <span class="h-2 w-2 rounded-xs bg-accent" />
+            <span>Conversation history</span>
+          </span>
+          <span class="inline-flex items-center gap-1.5 text-fg-muted">
+            <span>Compaction reserve</span>
+            <span class="h-2 w-2 rounded-xs bg-warning" />
+          </span>
+        </div>
 
-      {/* Unified Calibrated Partition Track + Proportional Ruler Scale */}
-      <div>
-        <div
-          ref={trackEl}
-          role="slider"
-          tabIndex={0}
-          aria-label="Auto-compact threshold"
-          aria-valuemin={50}
-          aria-valuemax={95}
-          aria-valuenow={isOff() ? 50 : activePct()}
-          aria-valuetext={
-            isOff()
-              ? "Manual /compact only (Off)"
-              : `${activePct()}% trigger · ${headroomPct()}% headroom`
-          }
-          onPointerDown={onTrackPointerDown}
-          onPointerMove={onTrackPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
-          onKeyDown={onSliderKeyDown}
-          class={`relative h-9 w-full rounded-lg border select-none touch-none ${
-            isOff()
-              ? "border-border bg-surface-subtle cursor-pointer"
-              : "border-border-strong bg-surface-subtle cursor-ew-resize"
-          }`}
-        >
-          {/* Clipped inner two-zone fill */}
-          <div class="absolute inset-0 rounded-[7px] overflow-hidden flex pointer-events-none">
-            <div
-              class={`h-full flex items-center pl-2.5 min-w-0 ${
-                dragging() ? "transition-none" : "transition-[width] duration-150 ease-out"
-              } ${
-                isOff()
-                  ? "bg-surface-muted/60"
-                  : "bg-accent-subtle border-r border-accent"
-              }`}
-              style={{ width: `${isOff() ? 100 : activePct()}%` }}
-            >
-              <span class="truncate text-2xs text-fg-secondary tabular-nums">
-                {isOff() ? "0% → 100% unreserved" : `0% → ${activePct()}%`}
-              </span>
-            </div>
-            <Show when={!isOff()}>
+        {/* Unified Calibrated Partition Track + Proportional Ruler Scale */}
+        <div>
+          <div
+            ref={trackEl}
+            role="slider"
+            tabIndex={0}
+            aria-label="Auto-compact threshold"
+            aria-valuemin={50}
+            aria-valuemax={95}
+            aria-valuenow={activePct()}
+            aria-valuetext={`${activePct()}% trigger · ${headroomPct()}% headroom`}
+            onPointerDown={onTrackPointerDown}
+            onPointerMove={onTrackPointerMove}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            onKeyDown={onSliderKeyDown}
+            class="relative h-9 w-full rounded-lg border border-border-strong bg-surface-subtle cursor-ew-resize select-none touch-none"
+          >
+            {/* Clipped inner two-zone fill */}
+            <div class="absolute inset-0 rounded-[7px] overflow-hidden flex pointer-events-none">
+              <div
+                class={`h-full flex items-center pl-2.5 min-w-0 bg-accent-subtle border-r border-accent ${
+                  dragging() ? "transition-none" : "transition-[width] duration-150 ease-out"
+                }`}
+                style={{ width: `${activePct()}%` }}
+              >
+                <span class="truncate text-2xs text-fg-secondary tabular-nums">
+                  {`0% → ${activePct()}%`}
+                </span>
+              </div>
               <div class="h-full flex-1 bg-warning-subtle flex items-center justify-end pr-2 overflow-hidden">
                 <Show when={headroomPct() >= 15}>
                   <span class="text-2xs text-warning tabular-nums">
@@ -857,100 +843,96 @@ function AutoCompactGauge(props: {
                   </span>
                 </Show>
               </div>
-            </Show>
+            </div>
+
+            {/* 50% minimum auto-trigger dashed floor + 5% calibration ticks */}
+            <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
+              <span class="absolute top-0 bottom-0 left-1/2 border-l border-dashed border-border-strong/70" />
+              <For each={COMPACT_TICKS}>
+                {(tick) => {
+                  const major = tick === 50 || tick === 65 || tick === 80 || tick === 95;
+                  return (
+                    <span
+                      class={`absolute bottom-0 -translate-x-1/2 w-px ${
+                        major ? "h-2 bg-border-strong" : "h-1 bg-border-strong/60"
+                      }`}
+                      style={{ left: `${tick}%` }}
+                    />
+                  );
+                }}
+              </For>
+            </div>
+
+            {/* Tactile Partition Handle */}
+            <div
+              aria-hidden="true"
+              class={`absolute -top-1 -bottom-1 w-4 -translate-x-1/2 rounded-md border flex items-center justify-center gap-0.5 pointer-events-none ${
+                dragging()
+                  ? "transition-none scale-105 border-accent bg-surface-raised shadow-raised"
+                  : "transition-[left,transform,opacity] duration-150 ease-out bg-surface-raised border-border-strong"
+              }`}
+              style={{ left: `${activePct()}%` }}
+            >
+              <span class="h-3 w-px rounded-full bg-fg-muted" />
+              <span class="h-3 w-px rounded-full bg-fg-muted" />
+            </div>
           </div>
 
-          {/* 50% minimum auto-trigger dashed floor + 5% calibration ticks */}
-          <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
-            <span class="absolute top-0 bottom-0 left-1/2 border-l border-dashed border-border-strong/70" />
-            <For each={COMPACT_TICKS}>
-              {(tick) => {
-                const major = tick === 50 || tick === 65 || tick === 80 || tick === 95;
+          {/* Proportionally Aligned Calibrated Ruler Scale */}
+          <div
+            role="group"
+            aria-label="Auto-compact threshold presets"
+            class="relative h-6 w-full mt-1 select-none"
+          >
+            <span
+              aria-hidden="true"
+              class="absolute left-0 top-1.5 text-2xs text-fg-muted/70 tabular-nums leading-none pointer-events-none"
+            >
+              0%
+            </span>
+            <For each={COMPACT_RULER_STOPS}>
+              {(mark) => {
+                const selected = () => activePct() === mark;
+                const edgeRight = mark === 95;
                 return (
-                  <span
-                    class={`absolute bottom-0 -translate-x-1/2 w-px ${
-                      major ? "h-2 bg-border-strong" : "h-1 bg-border-strong/60"
+                  <button
+                    type="button"
+                    aria-pressed={selected()}
+                    ref={press}
+                    onClick={() => commitPct(mark)}
+                    style={{ left: `${mark}%` }}
+                    class={`absolute top-0 flex flex-col items-center gap-0.5 border-0 bg-transparent px-1 py-0 cursor-pointer group rounded-xs ${
+                      edgeRight ? "-translate-x-3/4 sm:-translate-x-1/2" : "-translate-x-1/2"
                     }`}
-                    style={{ left: `${tick}%` }}
-                  />
+                  >
+                    <span
+                      aria-hidden="true"
+                      class={`w-px h-1 transition-colors ${
+                        selected()
+                          ? "bg-accent"
+                          : "bg-border-strong group-hover:bg-fg-muted"
+                      }`}
+                    />
+                    <span
+                      class={`text-2xs tabular-nums leading-none transition-colors ${
+                        selected()
+                          ? "text-fg font-medium"
+                          : "text-fg-muted group-hover:text-fg"
+                      }`}
+                    >
+                      {mark}%
+                    </span>
+                  </button>
                 );
               }}
             </For>
           </div>
-
-          {/* Tactile Partition Handle */}
-          <div
-            aria-hidden="true"
-            class={`absolute -top-1 -bottom-1 w-4 -translate-x-1/2 rounded-md border flex items-center justify-center gap-0.5 pointer-events-none ${
-              dragging()
-                ? "transition-none scale-105 border-accent bg-surface-raised shadow-raised"
-                : "transition-[left,transform,opacity] duration-150 ease-out bg-surface-raised"
-            } ${
-              isOff()
-                ? "border-border opacity-45"
-                : "border-border-strong"
-            }`}
-            style={{ left: `${activePct()}%` }}
-          >
-            <span class="h-3 w-px rounded-full bg-fg-muted" />
-            <span class="h-3 w-px rounded-full bg-fg-muted" />
-          </div>
         </div>
 
-        {/* Proportionally Aligned Calibrated Ruler Scale */}
-        <div
-          role="group"
-          aria-label="Auto-compact threshold presets"
-          class="relative h-6 w-full mt-1 select-none"
-        >
-          <span
-            aria-hidden="true"
-            class="absolute left-0 top-1.5 text-2xs text-fg-muted/70 tabular-nums leading-none pointer-events-none"
-          >
-            0%
-          </span>
-          <For each={COMPACT_RULER_STOPS}>
-            {(mark) => {
-              const selected = () => !isOff() && activePct() === mark;
-              const edgeRight = mark === 95;
-              return (
-                <button
-                  type="button"
-                  aria-pressed={selected()}
-                  onPointerDown={(e) => press(e.currentTarget)}
-                  onClick={() => commitPct(mark)}
-                  style={{ left: `${mark}%` }}
-                  class={`absolute top-0 flex flex-col items-center gap-0.5 border-0 bg-transparent px-1 py-0 cursor-pointer group rounded-xs ${
-                    edgeRight ? "-translate-x-3/4 sm:-translate-x-1/2" : "-translate-x-1/2"
-                  }`}
-                >
-                  <span
-                    aria-hidden="true"
-                    class={`w-px h-1 transition-colors ${
-                      selected()
-                        ? "bg-accent"
-                        : "bg-border-strong group-hover:bg-fg-muted"
-                    }`}
-                  />
-                  <span
-                    class={`text-2xs tabular-nums leading-none transition-colors ${
-                      selected()
-                        ? "text-fg font-medium"
-                        : "text-fg-muted group-hover:text-fg"
-                    }`}
-                  >
-                    {mark}%
-                  </span>
-                </button>
-              );
-            }}
-          </For>
-        </div>
-      </div>
-
-      <p class="text-2xs text-fg-muted leading-relaxed">
-        Drag the partition or pick a stop to summarize older turns automatically once context usage crosses the trigger.
-      </p>
+        <p class="text-2xs text-fg-muted leading-relaxed">
+          Drag the partition or pick a stop to summarize older turns automatically once context usage crosses the trigger.
+        </p>
+      </Show>
     </div>
   );
 }
@@ -1019,7 +1001,7 @@ function DefaultAccessPicker(props: {
                 data-default-access-radio={opt.value}
                 aria-checked={active()}
                 tabIndex={active() ? 0 : -1}
-                onPointerDown={(e) => press(e.currentTarget)}
+                ref={press}
                 onClick={() => props.onChange(opt.value)}
                 class={`flex flex-col gap-1.5 rounded-lg border p-2.5 text-left transition-colors cursor-pointer min-w-0 ${
                   active()
@@ -1095,6 +1077,7 @@ function GlobalPermissionRulesManager(props: {
   const [draftEffect, setDraftEffect] = createSignal<PermissionEffect>("allow");
   const [draftKind, setDraftKind] = createSignal<PermissionCapability>("exec");
   const [draftPattern, setDraftPattern] = createSignal("");
+  const [ruleFeedback, setRuleFeedback] = createSignal("");
 
   const currentKindMeta = () =>
     PERMISSION_KIND_OPTIONS.find((k) => k.value === draftKind()) ??
@@ -1106,7 +1089,14 @@ function GlobalPermissionRulesManager(props: {
 
   const handleAddRule = () => {
     const pattern = draftPattern().trim();
-    if (!pattern) return;
+    if (!pattern) {
+      setRuleFeedback("Enter a pattern to add a rule.");
+      return;
+    }
+    if (/[\r\n\0]/.test(pattern)) {
+      setRuleFeedback("Pattern cannot contain line breaks.");
+      return;
+    }
     const effect = draftEffect();
     const kind = draftKind();
     const existing = props.rules();
@@ -1115,7 +1105,7 @@ function GlobalPermissionRulesManager(props: {
         (r) => r.effect === effect && r.kind === kind && r.pattern === pattern,
       )
     ) {
-      setDraftPattern("");
+      setRuleFeedback("This rule already exists.");
       return;
     }
     const nextRule: PermissionRule = {
@@ -1127,6 +1117,7 @@ function GlobalPermissionRulesManager(props: {
     };
     props.onChange([...existing, nextRule]);
     setDraftPattern("");
+    setRuleFeedback("");
   };
 
   const handleRemoveRule = (id: string) => {
@@ -1156,93 +1147,120 @@ function GlobalPermissionRulesManager(props: {
       </div>
 
       {/* Inline Add Rule Control */}
-      <div class="flex flex-col sm:flex-row sm:items-center gap-2">
-        <div class="flex items-center gap-2 min-w-0">
-          <div
-            role="group"
-            aria-label="Rule effect"
-            class="inline-flex shrink-0 items-center rounded-control border border-border bg-surface-subtle p-0.5"
-          >
-            <button
-              type="button"
-              data-rule-effect="allow"
-              aria-pressed={draftEffect() === "allow"}
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => setDraftEffect("allow")}
-              class={`rounded-md px-2 py-1 text-2xs font-medium transition-colors cursor-pointer ${
-                draftEffect() === "allow"
-                  ? "bg-success-subtle text-success border border-success/30"
-                  : "border border-transparent text-fg-muted hover:text-fg"
-              }`}
+      <div class="space-y-1.5">
+        <div class="flex flex-col sm:flex-row sm:items-center gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <div
+              role="group"
+              aria-label="Rule effect"
+              class="inline-flex shrink-0 items-center rounded-control border border-border bg-surface-subtle p-0.5"
             >
-              Allow
-            </button>
-            <button
-              type="button"
-              data-rule-effect="deny"
-              aria-pressed={draftEffect() === "deny"}
-              onPointerDown={(e) => press(e.currentTarget)}
-              onClick={() => setDraftEffect("deny")}
-              class={`rounded-md px-2 py-1 text-2xs font-medium transition-colors cursor-pointer ${
-                draftEffect() === "deny"
-                  ? "bg-danger-subtle text-danger border border-danger/30"
-                  : "border border-transparent text-fg-muted hover:text-fg"
-              }`}
-            >
-              Deny
-            </button>
-          </div>
+              <button
+                type="button"
+                data-rule-effect="allow"
+                aria-pressed={draftEffect() === "allow"}
+                ref={press}
+                onClick={() => {
+                  setDraftEffect("allow");
+                  setRuleFeedback("");
+                }}
+                class={`rounded-md px-2 py-1 text-2xs font-medium transition-colors cursor-pointer ${
+                  draftEffect() === "allow"
+                    ? "bg-success-subtle text-success border border-success/30"
+                    : "border border-transparent text-fg-muted hover:text-fg"
+                }`}
+              >
+                Allow
+              </button>
+              <button
+                type="button"
+                data-rule-effect="deny"
+                aria-pressed={draftEffect() === "deny"}
+                ref={press}
+                onClick={() => {
+                  setDraftEffect("deny");
+                  setRuleFeedback("");
+                }}
+                class={`rounded-md px-2 py-1 text-2xs font-medium transition-colors cursor-pointer ${
+                  draftEffect() === "deny"
+                    ? "bg-danger-subtle text-danger border border-danger/30"
+                    : "border border-transparent text-fg-muted hover:text-fg"
+                }`}
+              >
+                Deny
+              </button>
+            </div>
 
-          <div class="relative flex-1 sm:flex-none min-w-0">
-            <select
-              aria-label="Rule capability kind"
+            <div
               data-rule-kind
-              value={draftKind()}
-              onChange={(e) =>
-                setDraftKind(e.currentTarget.value as PermissionCapability)
-              }
-              class="w-full sm:w-auto h-7 appearance-none rounded-control border border-border-strong bg-surface pl-2.5 pr-6 text-xs text-fg outline-none focus:border-accent transition-colors cursor-pointer"
+              class="flex-1 sm:w-40 sm:flex-none min-w-0 [&_.ui-field]:min-h-7 [&_.ui-field]:h-7 [&_.ui-field]:px-2.5 [&_.ui-field]:text-xs"
             >
-              <For each={PERMISSION_KIND_OPTIONS}>
-                {(k) => <option value={k.value}>{k.label}</option>}
-              </For>
-            </select>
-            <Iconify
-              icon="lucide:chevron-down"
-              size={12}
-              class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-fg-muted"
+              <Select
+                ariaLabel="Rule capability kind"
+                value={draftKind()}
+                onChange={(v) => {
+                  setDraftKind(v as PermissionCapability);
+                  setRuleFeedback("");
+                }}
+                options={PERMISSION_KIND_OPTIONS.map((k) => ({
+                  value: k.value,
+                  label: k.label,
+                }))}
+              />
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2 flex-1 min-w-0">
+            <input
+              type="text"
+              aria-label="Rule pattern"
+              data-rule-pattern
+              value={draftPattern()}
+              onInput={(e) => {
+                setDraftPattern(e.currentTarget.value);
+                if (ruleFeedback()) setRuleFeedback("");
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleAddRule();
+                }
+              }}
+              placeholder={currentKindMeta().placeholder}
+              class={`h-7 flex-1 min-w-0 rounded-control border bg-surface px-2.5 font-mono text-xs text-fg placeholder:font-sans placeholder:text-fg-muted outline-none transition-colors ${
+                ruleFeedback()
+                  ? "border-danger focus:border-danger"
+                  : "border-border-strong focus:border-accent"
+              }`}
             />
+            <button
+              type="button"
+              data-action="add-permission-rule"
+              disabled={!draftPattern().trim()}
+              ref={press}
+              onClick={handleAddRule}
+              class="h-7 shrink-0 inline-flex items-center gap-1 rounded-control border border-border-strong bg-surface-subtle hover:bg-surface-muted px-2.5 text-xs font-medium text-fg transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+            >
+              <Iconify icon="lucide:plus" size={13} class="shrink-0" />
+              <span>Add rule</span>
+            </button>
           </div>
         </div>
 
-        <div class="flex items-center gap-2 flex-1 min-w-0">
-          <input
-            type="text"
-            aria-label="Rule pattern"
-            data-rule-pattern
-            value={draftPattern()}
-            onInput={(e) => setDraftPattern(e.currentTarget.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                handleAddRule();
-              }
-            }}
-            placeholder={currentKindMeta().placeholder}
-            class="h-7 flex-1 min-w-0 rounded-control border border-border-strong bg-surface px-2.5 font-mono text-xs text-fg placeholder:font-sans placeholder:text-fg-muted outline-none focus:border-accent transition-colors"
-          />
-          <button
-            type="button"
-            data-action="add-permission-rule"
-            disabled={!draftPattern().trim()}
-            onPointerDown={(e) => press(e.currentTarget)}
-            onClick={handleAddRule}
-            class="h-7 shrink-0 inline-flex items-center gap-1 rounded-control border border-border-strong bg-surface-subtle hover:bg-surface-muted px-2.5 text-xs font-medium text-fg transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-          >
-            <Iconify icon="lucide:plus" size={13} class="shrink-0" />
-            <span>Add rule</span>
-          </button>
-        </div>
+        <Show
+          when={ruleFeedback()}
+          fallback={
+            <Show when={draftPattern().trim()}>
+              <p class="text-2xs text-fg-muted">
+                Press Enter or click Add rule to include this rule before saving.
+              </p>
+            </Show>
+          }
+        >
+          <p role="alert" class="text-2xs text-danger">
+            {ruleFeedback()}
+          </p>
+        </Show>
       </div>
 
       {/* Rules List / Empty State */}
@@ -1292,7 +1310,7 @@ function GlobalPermissionRulesManager(props: {
                     data-rule-id={rule.id}
                     data-rc-tip="Revoke rule"
                     aria-label={`Revoke ${rule.effect} rule for ${rule.pattern}`}
-                    onPointerDown={(e) => press(e.currentTarget)}
+                    ref={press}
                     onClick={() => handleRemoveRule(rule.id)}
                     class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-danger-subtle hover:text-danger transition-colors cursor-pointer"
                   >
@@ -1308,11 +1326,37 @@ function GlobalPermissionRulesManager(props: {
   );
 }
 
+function HostUnavailableNotice(props: { status?: string; loaded: boolean }) {
+  const message = () => {
+    if (props.status === "updating") {
+      return "This host is updating. Host settings will become editable once it reconnects.";
+    }
+    if (props.status !== "online") {
+      return "This host is offline. Device settings above still apply; reconnect the host to change host settings.";
+    }
+    return "Loading host settings…";
+  };
+  return (
+    <div class="flex items-center gap-2 rounded-panel border border-border bg-surface-subtle/70 px-3.5 py-2.5 text-xs text-fg-secondary">
+      <Show
+        when={props.status === "online" && !props.loaded}
+        fallback={<Iconify icon="lucide:wifi-off" size={14} class="shrink-0 text-fg-muted" />}
+      >
+        <span class="ui-spinner w-3.5 h-3.5 text-accent shrink-0" aria-hidden="true" />
+      </Show>
+      <span>{message()}</span>
+    </div>
+  );
+}
+
 export function SettingsGeneralSection() {
   const m = useModal();
   const ui = useUI();
   const hosts = useHost();
   const hostStatus = () => hosts.activeHost?.()?.status;
+  const hostOnline = () => hostStatus() === "online" && (hosts.wsOpen ? hosts.wsOpen() : true);
+  const configLoaded = () => (typeof m.configLoaded === "function" ? m.configLoaded() : true);
+  const hostEditable = () => configLoaded() && hostOnline();
   const du = ui.daemonUpdate;
   const compactPct = () => m.daemonSettings().autoCompactPercent ?? 80;
   const midTurnSend = () =>
@@ -1320,16 +1364,58 @@ export function SettingsGeneralSection() {
   const defaultAccess = () =>
     normalizeAccessMode(m.daemonSettings().defaultAccess, "auto");
   const permissionRules = () => m.daemonSettings().permissionRules ?? [];
+  const proxyError = () => validateProxyUrl(m.daemonSettings().httpProxy ?? "");
+
+  const pushBlocked = () =>
+    ui.turnNotify.notifyOn() &&
+    (ui.turnNotify.permission() === "denied" || ui.pushSub.state() === "blocked");
+  const pushFailed = () =>
+    ui.turnNotify.notifyOn() && !pushBlocked() && ui.pushSub.state() === "error";
+
+  const pushBadge = () => {
+    if (!ui.turnNotify.notifyOn()) return { tone: "neutral" as const, label: "Push off" };
+    if (pushBlocked()) return { tone: "danger" as const, label: "Push blocked" };
+    if (ui.pushSub.state() === "active") return { tone: "success" as const, label: "Push active" };
+    if (ui.pushSub.state() === "error") return { tone: "danger" as const, label: "Push error" };
+    if (ui.pushSub.state() === "off") return { tone: "neutral" as const, label: "Permission needed" };
+    return { tone: "neutral" as const, label: "Checking…" };
+  };
+
+  const handleUpdateNow = () => {
+    const run = () => {
+      du.apply();
+      m.cancelSettings();
+    };
+    if (m.settingsDirty() && typeof m.showConfirm === "function") {
+      void m
+        .showConfirm({
+          title: "Update host with unsaved changes?",
+          message:
+            "Starting the update will close Settings and discard your unsaved host setting changes.",
+          confirmText: "Discard & update",
+          cancelText: "Keep editing",
+          danger: true,
+        })
+        .then((ok) => {
+          if (ok) run();
+        });
+      return;
+    }
+    run();
+  };
 
   return (
     <div class="space-y-6">
       {/* 1. Appearance & Layout */}
       <section id="rc-set-appearance" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5">
-        <div>
-          <h3 class="text-sm font-medium text-fg">Appearance</h3>
-          <p class="text-xs text-fg-muted mt-0.5">
-            Surface theme, workspace accent, reading column geometry, and stream verbosity.
-          </p>
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 class="text-sm font-medium text-fg">Appearance</h3>
+            <p class="text-xs text-fg-muted mt-0.5">
+              Theme, accent color, layout width, and message display.
+            </p>
+          </div>
+          <span class="text-2xs text-fg-muted shrink-0">Saved on this device</span>
         </div>
 
         <div class="space-y-3 text-xs">
@@ -1356,7 +1442,7 @@ export function SettingsGeneralSection() {
                 } catch {}
               }}
               title="Verbose agent chat"
-              description="Display intermediate thinking steps and tool trace segments."
+              description="Display intermediate thinking steps and tool calls."
             />
 
             <Show when={ui.verboseChat()}>
@@ -1371,41 +1457,28 @@ export function SettingsGeneralSection() {
                   } catch {}
                 }}
                 title="Hide tool call messages"
-                description="Group short intermediate commentary into tool trace blocks. Messages with 50+ tokens always stay visible."
+                description="Group short intermediate commentary into tool calls. Messages with 50+ tokens always stay visible."
               />
             </Show>
           </div>
         </div>
       </section>
 
-      {/* 2. Turn Notifications & Push */}
+      {/* 2. Notifications & Push */}
       <section id="rc-set-notifications" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5">
-        <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-start justify-between gap-3 flex-wrap">
           <div>
-            <h3 class="text-sm font-medium text-fg">Turn notifications</h3>
+            <h3 class="text-sm font-medium text-fg">Notifications</h3>
             <p class="text-xs text-fg-muted mt-0.5">
               Background alerts across hosts and closed browser tabs.
             </p>
           </div>
-          <Show when={ui.pushSub.supported()}>
-            <Badge
-              tone={
-                ui.pushSub.state() === "active"
-                  ? "green"
-                  : ui.pushSub.state() === "blocked" || ui.pushSub.state() === "error"
-                    ? "red"
-                    : "zinc"
-              }
-            >
-              {ui.pushSub.state() === "active"
-                ? "Push active"
-                : ui.pushSub.state() === "blocked"
-                  ? "Push blocked"
-                  : ui.pushSub.state() === "error"
-                    ? "Push error"
-                    : "Push standby"}
-            </Badge>
-          </Show>
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="text-2xs text-fg-muted">Saved on this device</span>
+            <Show when={ui.pushSub.supported()}>
+              <Badge tone={pushBadge().tone}>{pushBadge().label}</Badge>
+            </Show>
+          </div>
         </div>
 
         <div class="space-y-3 text-xs">
@@ -1420,9 +1493,9 @@ export function SettingsGeneralSection() {
               title="Notify when a turn finishes"
               description={
                 <>
-                  Browser notification for turns on any host or conversation, even ones you are not watching.
+                  Browser alerts for workspace turns across any host, even conversations you are not watching. Talk and Learning conversations stay silent.
                   <Show when={pushSupported()}>
-                    <span> With this on and permission granted, closed tabs still notify via push.</span>
+                    <span> With permission granted, closed tabs also notify via push.</span>
                   </Show>
                 </>
               }
@@ -1440,33 +1513,39 @@ export function SettingsGeneralSection() {
             </Show>
           </div>
 
-          <Show when={ui.turnNotify.notifyOn() && ui.turnNotify.permission() === "denied"}>
+          <Show when={pushBlocked()}>
             <p class="rounded-panel border border-danger/30 bg-danger-subtle px-3.5 py-2.5 text-2xs text-danger">
               Browser notifications are blocked for this site. Allow them in your browser site settings, then use Test notification below.
+            </p>
+          </Show>
+          <Show when={pushFailed()}>
+            <p class="rounded-panel border border-danger/30 bg-danger-subtle px-3.5 py-2.5 text-2xs text-danger">
+              Background push setup failed. Click Test notification below to retry.
             </p>
           </Show>
 
           <div class="flex items-center justify-between gap-3 flex-wrap">
             <button
               type="button"
-              onPointerDown={(e) => press(e.currentTarget)}
+              ref={press}
+              disabled={!ui.turnNotify.notifyOn()}
               onClick={() => ui.turnNotify.testNotify()}
-              class="inline-flex items-center gap-1.5 rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+              class="inline-flex items-center gap-1.5 rounded-control border border-border bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
             >
               <Iconify icon="lucide:bell-ring" size={13} class="text-fg-secondary" />
               <span>Test notification</span>
             </button>
-            <Show when={ui.pushSub.supported()}>
+            <Show when={!pushBlocked() && !pushFailed()}>
               <span class="text-2xs text-fg-muted">
-                {ui.pushSub.state() === "active"
-                  ? "Push active on this device: closed tabs still notify."
-                  : ui.pushSub.state() === "blocked"
-                    ? "Push blocked: allow notifications in site settings."
-                    : ui.pushSub.state() === "off"
-                      ? "Push off: turn notifications on to enable."
-                      : ui.pushSub.state() === "error"
-                        ? "Push setup failed: retry with Test notification."
-                        : "Checking push status…"}
+                {!ui.turnNotify.notifyOn()
+                  ? "Turn notifications on to send a test."
+                  : ui.pushSub.supported() && ui.pushSub.state() === "active"
+                    ? "Closed tabs still notify via push."
+                    : ui.pushSub.supported() && ui.pushSub.state() === "off"
+                      ? "Click Test notification to grant browser permission."
+                      : ui.pushSub.supported() && ui.pushSub.state() === "unknown"
+                        ? "Checking push status…"
+                        : ""}
               </span>
             </Show>
           </div>
@@ -1475,11 +1554,11 @@ export function SettingsGeneralSection() {
 
       {/* 3. Updates */}
       <section id="rc-set-updates" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5">
-        <div class="flex items-center justify-between gap-3 flex-wrap">
+        <div class="flex items-start justify-between gap-3 flex-wrap">
           <div>
             <h3 class="text-sm font-medium text-fg">Updates</h3>
             <p class="text-xs text-fg-muted mt-0.5">
-              Daemon slot binary version and update checks.
+              Host version and update checks.
             </p>
           </div>
           <Show when={du.info()?.current}>
@@ -1490,43 +1569,36 @@ export function SettingsGeneralSection() {
         </div>
 
         <div class="space-y-3 text-xs">
-          <div class="rounded-panel border border-border bg-surface divide-y divide-border-subtle overflow-hidden">
-            <SettingSwitchRow
-              id="settings-auto-update"
-              checked={() => du.info()?.autoUpdate ?? true}
-              onChange={(checked) => du.toggle(checked)}
-              title="Auto-update daemon"
-              description="Preference saved for when automatic updates become available. For now, check on start, reconnect and every 10 minutes; use Update now to apply."
-            />
+          <Show when={!hostOnline()}>
+            <HostUnavailableNotice status={hostStatus()} loaded={configLoaded()} />
+          </Show>
 
+          <div class="rounded-panel border border-border bg-surface overflow-hidden">
             <div class="flex items-center justify-between gap-3 px-3.5 py-2.5 flex-wrap">
               <div class="flex items-center gap-2 min-w-0 text-fg-secondary">
                 <Iconify icon="lucide:package-check" size={14} class="shrink-0 text-fg-muted" />
                 <span class="min-w-0 leading-relaxed">
                   {(() => {
                     const i = du.info();
-                    if (!i?.current) return "Version unknown (daemon never reported).";
-                    if (i.current === "dev") return "Running dev build (self-update disabled).";
-                    let s = `Running ${i.current}`;
-                    if (i.available && i.available !== i.current) s += ` · ${i.available} available`;
-                    else if (i.checkedAt) s += " · up to date";
-                    if (hostStatus() === "updating") s += " (updating)";
-                    else if ((i as any).mismatchWant) {
-                      const left = Math.max(
-                        0,
-                        1 - Math.floor((Date.now() - ((i as any).mismatchAt || 0)) / 60000),
-                      );
-                      s += ` (mirror stale: wanted ${(i as any).mismatchWant}, got ${(i as any).mismatchGot || "?"}${left > 0 ? `, retry in ~${left}m` : ""})`;
+                    if (!i?.current) return "Version unavailable (host has not reported yet).";
+                    if (i.current === "dev") return "Dev build (self-update disabled).";
+                    if (hostStatus() === "updating") {
+                      return i.target ? `Updating to ${i.target}…` : "Updating…";
                     }
-                    return s + ".";
+                    if (i.available && i.available !== i.current) {
+                      return `Update available: ${i.available}.`;
+                    }
+                    if (i.checkedAt) return "Up to date.";
+                    return "No update check yet.";
                   })()}
                 </span>
               </div>
               <div class="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onPointerDown={(e) => press(e.currentTarget)}
-                  class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                  ref={press}
+                  disabled={!hostOnline()}
+                  class="inline-flex items-center justify-center rounded-lg border border-border bg-surface px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
                   onClick={() => du.checkNow()}
                 >
                   Check now
@@ -1544,13 +1616,10 @@ export function SettingsGeneralSection() {
                 >
                   <button
                     type="button"
-                    onPointerDown={(e) => press(e.currentTarget)}
-                    class="inline-flex items-center justify-center rounded-lg bg-accent hover:bg-accent-strong text-accent-foreground px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
-                    disabled={du.applying()}
-                    onClick={() => {
-                      du.apply();
-                      m.cancelSettings();
-                    }}
+                    ref={press}
+                    class="inline-flex items-center justify-center rounded-lg bg-accent hover:bg-accent-strong text-accent-foreground px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={du.applying() || !hostOnline()}
+                    onClick={handleUpdateNow}
                   >
                     {du.applying() ? "Updating…" : "Update now"}
                   </button>
@@ -1559,38 +1628,45 @@ export function SettingsGeneralSection() {
             </div>
           </div>
 
-          <Show
-            when={(() => {
-              const i = du.info();
-              return !!i && (i.lifecycle === "failed" || i.lifecycle === "done");
-            })()}
-          >
-            <p class="text-2xs text-fg-muted">
+          <Show when={du.info()?.lifecycle === "failed"}>
+            <p class="text-2xs text-danger">
               {(() => {
-                const i = du.info();
-                if (i?.lifecycle === "failed") {
-                  return `Last update ${i.target || ""} failed: ${i.failedReason || i.error || "unknown error"}.`;
-                }
-                return `Last update finished: now running ${i?.current || ""}.`;
+                const i = du.info()!;
+                return `Last update${i.target ? ` (${i.target})` : ""} failed: ${i.failedReason || i.error || "unknown error"}.`;
               })()}
             </p>
           </Show>
-          <Show when={du.info()?.error}>
+          <Show when={du.info()?.lifecycle === "done"}>
+            <p class="text-2xs text-fg-muted">
+              {`Last update finished${du.info()?.current ? `: now running ${du.info()!.current}` : ""}.`}
+            </p>
+          </Show>
+          <Show when={du.info()?.error && du.info()?.lifecycle !== "failed"}>
             <p class="text-2xs text-danger">{du.info()?.error}</p>
           </Show>
         </div>
       </section>
 
-      {/* 4. Permissions & Sandbox */}
+      {/* 4. Permissions */}
       <section id="rc-set-permissions" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5">
-        <div>
-          <h3 class="text-sm font-medium text-fg">Permissions & sandbox</h3>
-          <p class="text-xs text-fg-muted mt-0.5">
-            Default execution permissions for new conversations and host-wide allow or deny rules.
-          </p>
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 class="text-sm font-medium text-fg">Permissions</h3>
+            <p class="text-xs text-fg-muted mt-0.5">
+              Default execution permissions for new conversations and host-wide allow or deny rules.
+            </p>
+          </div>
+          <span class="text-2xs text-fg-muted shrink-0">Saved on host</span>
         </div>
 
-        <div class="space-y-3 text-xs">
+        <Show when={!hostEditable()}>
+          <HostUnavailableNotice status={hostStatus()} loaded={configLoaded()} />
+        </Show>
+
+        <fieldset
+          disabled={!hostEditable()}
+          class="space-y-3 text-xs min-w-0 disabled:opacity-55"
+        >
           <DefaultAccessPicker
             value={defaultAccess}
             onChange={(mode) =>
@@ -1611,19 +1687,29 @@ export function SettingsGeneralSection() {
               })
             }
           />
-        </div>
+        </fieldset>
       </section>
 
-      {/* 5. Advanced Runtime & Context Compaction */}
+      {/* 5. Runtime */}
       <section id="rc-set-runtime" class="scroll-mt-24 sm:scroll-mt-16 space-y-3.5 pb-3">
-        <div>
-          <h3 class="text-sm font-medium text-fg">Runtime & messaging</h3>
-          <p class="text-xs text-fg-muted mt-0.5">
-            Mid-turn message handling, context compaction partition, TLS policy, and upstream proxy.
-          </p>
+        <div class="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h3 class="text-sm font-medium text-fg">Runtime</h3>
+            <p class="text-xs text-fg-muted mt-0.5">
+              Mid-turn messages, context compaction, conversation titles, and network options.
+            </p>
+          </div>
+          <span class="text-2xs text-fg-muted shrink-0">Saved on host</span>
         </div>
 
-        <div class="space-y-3 text-xs">
+        <Show when={!hostEditable()}>
+          <HostUnavailableNotice status={hostStatus()} loaded={configLoaded()} />
+        </Show>
+
+        <fieldset
+          disabled={!hostEditable()}
+          class="space-y-3 text-xs min-w-0 disabled:opacity-55"
+        >
           <MidTurnSendPicker
             value={midTurnSend}
             onChange={(mode) =>
@@ -1638,27 +1724,7 @@ export function SettingsGeneralSection() {
             }
           />
 
-          <div class="rounded-panel border border-border bg-surface divide-y divide-border-subtle overflow-hidden">
-            <SettingSwitchRow
-              id="settings-insecure-tls"
-              checked={() => m.daemonSettings().insecureTls ?? false}
-              onChange={(checked) =>
-                m.setDaemonSettings({
-                  ...m.daemonSettings(),
-                  insecureTls: checked,
-                })
-              }
-              title={
-                <>
-                  <span>Skip TLS verification</span>
-                  <Show when={m.daemonSettings().insecureTls}>
-                    <Badge tone="amber">Insecure</Badge>
-                  </Show>
-                </>
-              }
-              description="Provider requests accept self-signed certificates. Only the provider client is affected."
-            />
-
+          <div class="rounded-panel border border-border bg-surface overflow-hidden">
             <SettingSwitchRow
               id="settings-auto-title"
               checked={() => !(m.daemonSettings().noAutoTitle ?? false)}
@@ -1673,48 +1739,124 @@ export function SettingsGeneralSection() {
             />
           </div>
 
-          <div class="rounded-panel border border-border bg-surface p-3.5">
-            <div class="flex items-center justify-between gap-2 mb-2">
-              <label for="settings-upstream-proxy" class="font-medium text-fg">
-                Upstream proxy
-              </label>
-              <Badge tone={(m.daemonSettings().httpProxy ?? "").trim() ? "blue" : "zinc"}>
-                {(m.daemonSettings().httpProxy ?? "").trim() ? "Explicit proxy" : "Env default"}
-              </Badge>
-            </div>
-            <div class="flex items-center gap-2 rounded-control border border-border-strong bg-surface px-3 py-1.5 focus-within:border-accent transition-colors">
-              <Iconify icon="lucide:globe" size={14} class="shrink-0 text-fg-muted" />
-              <input
-                id="settings-upstream-proxy"
-                type="text"
-                value={m.daemonSettings().httpProxy ?? ""}
-                onInput={(e) =>
+          <details
+            open={Boolean(proxyError()) || undefined}
+            class="rounded-panel border border-border bg-surface overflow-hidden group"
+          >
+            <summary class="flex items-center justify-between gap-2 px-3.5 py-2.5 text-xs font-medium text-fg cursor-pointer select-none hover:bg-surface-subtle/60 transition-colors list-none [&::-webkit-details-marker]:hidden">
+              <span class="inline-flex items-center gap-2 min-w-0">
+                <Iconify
+                  icon="lucide:chevron-right"
+                  size={13}
+                  class="shrink-0 text-fg-muted transition-transform group-open:rotate-90"
+                />
+                <span>Advanced network</span>
+              </span>
+              <span class="flex items-center gap-1.5 shrink-0">
+                <Show when={m.daemonSettings().insecureTls}>
+                  <Badge tone="warning">Insecure TLS</Badge>
+                </Show>
+                <Show when={(m.daemonSettings().httpProxy ?? "").trim()}>
+                  <Badge tone={proxyError() ? "danger" : "info"}>
+                    {proxyError() ? "Invalid proxy" : "Custom proxy"}
+                  </Badge>
+                </Show>
+              </span>
+            </summary>
+
+            <div class="border-t border-border-subtle divide-y divide-border-subtle">
+              <SettingSwitchRow
+                id="settings-insecure-tls"
+                checked={() => m.daemonSettings().insecureTls ?? false}
+                onChange={(checked) =>
                   m.setDaemonSettings({
                     ...m.daemonSettings(),
-                    httpProxy: e.currentTarget.value,
+                    insecureTls: checked,
                   })
                 }
-                placeholder="http://host:port (empty = environment default)"
-                class="min-w-0 flex-1 bg-transparent font-mono text-xs text-fg placeholder:text-fg-muted outline-none"
-                aria-label="Upstream proxy URL"
+                title={
+                  <>
+                    <span>Skip TLS verification</span>
+                    <Show when={m.daemonSettings().insecureTls}>
+                      <Badge tone="warning">Insecure</Badge>
+                    </Show>
+                  </>
+                }
+                description="Provider requests accept self-signed certificates. Only the provider client is affected."
               />
-              <Show when={(m.daemonSettings().httpProxy ?? "").length > 0}>
-                <button
-                  type="button"
-                  onClick={() => m.setDaemonSettings({ ...m.daemonSettings(), httpProxy: "" })}
-                  class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
-                  data-rc-tip="Clear proxy"
-                  aria-label="Clear upstream proxy"
+
+              <div class="p-3.5">
+                <div class="flex items-center justify-between gap-2 mb-2">
+                  <label for="settings-upstream-proxy" class="font-medium text-fg">
+                    Upstream proxy
+                  </label>
+                  <Badge
+                    tone={
+                      proxyError()
+                        ? "danger"
+                        : (m.daemonSettings().httpProxy ?? "").trim()
+                          ? "info"
+                          : "neutral"
+                    }
+                  >
+                    {proxyError()
+                      ? "Invalid URL"
+                      : (m.daemonSettings().httpProxy ?? "").trim()
+                        ? "Explicit proxy"
+                        : "Env default"}
+                  </Badge>
+                </div>
+                <div
+                  class={`flex items-center gap-2 rounded-control border bg-surface px-3 py-1.5 transition-colors ${
+                    proxyError()
+                      ? "border-danger focus-within:border-danger"
+                      : "border-border-strong focus-within:border-accent"
+                  }`}
                 >
-                  <Iconify icon="lucide:x" size={13} />
-                </button>
-              </Show>
+                  <Iconify icon="lucide:globe" size={14} class="shrink-0 text-fg-muted" />
+                  <input
+                    id="settings-upstream-proxy"
+                    type="text"
+                    aria-invalid={proxyError() ? "true" : undefined}
+                    value={m.daemonSettings().httpProxy ?? ""}
+                    onInput={(e) =>
+                      m.setDaemonSettings({
+                        ...m.daemonSettings(),
+                        httpProxy: e.currentTarget.value,
+                      })
+                    }
+                    placeholder="http://host:port (empty = environment default)"
+                    class="min-w-0 flex-1 bg-transparent font-mono text-xs text-fg placeholder:text-fg-muted outline-none"
+                    aria-label="Upstream proxy URL"
+                  />
+                  <Show when={(m.daemonSettings().httpProxy ?? "").length > 0}>
+                    <button
+                      type="button"
+                      onClick={() => m.setDaemonSettings({ ...m.daemonSettings(), httpProxy: "" })}
+                      class="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-fg-muted hover:bg-surface-muted hover:text-fg transition-colors cursor-pointer"
+                      data-rc-tip="Clear proxy"
+                      aria-label="Clear upstream proxy"
+                    >
+                      <Iconify icon="lucide:x" size={13} />
+                    </button>
+                  </Show>
+                </div>
+                <Show
+                  when={proxyError()}
+                  fallback={
+                    <p class="text-2xs text-fg-muted mt-1.5">
+                      Explicit proxy for provider requests. Empty keeps HTTP(S)_PROXY environment handling.
+                    </p>
+                  }
+                >
+                  <p role="alert" class="text-2xs text-danger mt-1.5">
+                    {proxyError()}
+                  </p>
+                </Show>
+              </div>
             </div>
-            <p class="text-2xs text-fg-muted mt-1.5">
-              Explicit proxy for provider requests. Empty keeps HTTP(S)_PROXY environment handling.
-            </p>
-          </div>
-        </div>
+          </details>
+        </fieldset>
       </section>
     </div>
   );
