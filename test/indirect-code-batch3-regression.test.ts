@@ -21,6 +21,14 @@ describe("Batch 3 Bug Fixes & Regression Suite", () => {
     expect(src).toContain("function makeDownloadButton");
     expect(src).toContain('makeCopyButton(() => tableToMarkdown(table), "Copy table"');
     expect(src).toContain('makeDownloadButton(() => table, "Download CSV"');
+
+    // Cascade invariant: code.css and shell.css must stay unlayered so .rc-markdown
+    // typography/inline-code overrides and WCO safe-area rules beat Tailwind utilities.
+    const tailwindCss = readFileSync(join(root, "web/style.tailwindcss.css"), "utf-8");
+    expect(tailwindCss).toContain('@import "./src/styles/code.css";');
+    expect(tailwindCss).toContain('@import "./src/styles/shell.css";');
+    expect(tailwindCss).not.toContain('./src/styles/code.css" layer(components)');
+    expect(tailwindCss).not.toContain('./src/styles/shell.css" layer(components)');
   });
 
   test("BUG-R3-T1-02: FloatMenu WAI-ARIA keyboard navigation, role='menu' and Escape close", () => {

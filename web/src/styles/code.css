@@ -319,19 +319,21 @@ html.mobile .gu-host-toolbar { opacity: 1; }
   box-shadow: var(--shadow-floating);
 }
 
-/* Touch chrome targets live in layer(components) so @layer utilities win cleanly.
+/* Touch chrome targets live in @layer base so @layer components/utilities win cleanly.
  * Horizontal expansion stays within half the sibling gap so adjacent toolbar
  * buttons never overlap each other's hit area. */
-html.mobile .rc-sidebar-toggle,
-html.mobile .rc-composer-add,
-html.mobile .rc-composer-icon-btn,
-html.mobile .rc-composer-model,
-html.mobile .rc-composer-send,
-html.mobile .rc-composer-stop,
-html.mobile .rc-composer-voice,
-html.mobile .rc-composer-voice-confirm,
-html.mobile .rc-composer-voice-cancel {
-  position: relative;
+@layer base {
+  html.mobile .rc-sidebar-toggle,
+  html.mobile .rc-composer-add,
+  html.mobile .rc-composer-icon-btn,
+  html.mobile .rc-composer-model,
+  html.mobile .rc-composer-send,
+  html.mobile .rc-composer-stop,
+  html.mobile .rc-composer-voice,
+  html.mobile .rc-composer-voice-confirm,
+  html.mobile .rc-composer-voice-cancel {
+    position: relative;
+  }
 }
 @media (pointer: coarse) {
   .rc-sidebar-toggle,
@@ -875,7 +877,7 @@ html.mobile .rc-composer-voice-cancel:active:not(:disabled) {
   .rc-composer-voice-confirm,
   .rc-composer-send
 ) {
-  background-color: var(--voice-glass-bg) !important;
+  background-color: var(--voice-glass-bg);
   box-shadow: inset 0 0 0 1px var(--voice-glass-border);
   -webkit-backdrop-filter: var(--voice-glass-blur);
   backdrop-filter: var(--voice-glass-blur);
@@ -901,19 +903,19 @@ html.mobile .rc-composer[data-voice-active="true"] .rc-composer-toolbar button:n
   .rc-composer-voice-confirm,
   .rc-composer-send
 )[aria-expanded="true"] {
-  background-color: var(--voice-glass-bg-hover) !important;
+  background-color: var(--voice-glass-bg-hover);
   box-shadow: inset 0 0 0 1px var(--voice-glass-border-hover);
 }
 .rc-composer[data-voice-active="true"] .rc-composer-stop {
-  background-color: color-mix(in oklab, var(--danger) 16%, var(--voice-glass-bg)) !important;
-  border-color: color-mix(in oklab, var(--danger) 38%, var(--voice-glass-border)) !important;
+  background-color: color-mix(in oklab, var(--danger) 16%, var(--voice-glass-bg));
+  border-color: color-mix(in oklab, var(--danger) 38%, var(--voice-glass-border));
   -webkit-backdrop-filter: var(--voice-glass-blur);
   backdrop-filter: var(--voice-glass-blur);
 }
 html:not(.mobile) .rc-composer[data-voice-active="true"] .rc-composer-stop:hover:not(:disabled),
 html.mobile .rc-composer[data-voice-active="true"] .rc-composer-stop:active:not(:disabled) {
-  background-color: color-mix(in oklab, var(--danger) 24%, var(--voice-glass-bg-hover)) !important;
-  border-color: color-mix(in oklab, var(--danger) 50%, var(--voice-glass-border-hover)) !important;
+  background-color: color-mix(in oklab, var(--danger) 24%, var(--voice-glass-bg-hover));
+  border-color: color-mix(in oklab, var(--danger) 50%, var(--voice-glass-border-hover));
 }
 
 :root[data-theme="high-contrast"] .rc-composer-voice,
@@ -936,15 +938,15 @@ html.mobile:root[data-theme="high-contrast"] .rc-composer-voice-cancel:active:no
   color: var(--danger);
 }
 :root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop {
-  background-color: var(--surface) !important;
-  border-color: var(--danger) !important;
+  background-color: var(--surface);
+  border-color: var(--danger);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
 html:not(.mobile):root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop:hover:not(:disabled),
 html.mobile:root[data-theme="high-contrast"] .rc-composer[data-voice-active="true"] .rc-composer-stop:active:not(:disabled) {
-  background-color: var(--surface-muted) !important;
-  border-color: var(--danger) !important;
+  background-color: var(--surface-muted);
+  border-color: var(--danger);
 }
 
 /* Status overlay entrance & live recording dot */
