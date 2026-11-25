@@ -341,26 +341,6 @@ export async function pruneUsageEvents(
   }
 }
 
-export function pruneUsageRollups(db: Database, now: number, hourDays: number, minuteDays: number, batch = 1000): void {
-  backfillHourRollups(db, { now, hours: 1 });
-  const today = Math.floor(now / USAGE_DAY) * USAGE_DAY;
-  const hourCutoff = Math.max(0, today - (hourDays - 1) * USAGE_DAY);
-  const minuteCutoff = Math.max(0, today - (minuteDays - 1) * USAGE_DAY);
-  const cappedBatch = Math.min(MAX_PRUNE_TX_ROWS, Math.max(1, Math.floor(batch)));
-  db.transaction(() => {
-    const coverage = db.prepare("UPDATE usage_rollup_coverage SET hour_floor = MAX(hour_floor, ?), minute_floor = MAX(minute_floor, ?), hourly_from = MAX(hourly_from, ?), minute_from = MAX(minute_from, ?) WHERE id = 1");
-    try { coverage.run(hourCutoff, minuteCutoff, hourCutoff, minuteCutoff); } finally { coverage.finalize(); }
-    for (const [kind, cutoff] of [["hour", hourCutoff], ["minute", minuteCutoff]] as const) {
-      const remove = db.prepare(`DELETE FROM usage_${kind}_rollups
-        WHERE (bucket,key_id,proto,provider_id,provider_key_id,model,upstream_model) IN (
-          SELECT bucket,key_id,proto,provider_id,provider_key_id,model,upstream_model
-          FROM usage_${kind}_rollups WHERE bucket < ? ORDER BY bucket LIMIT ?
-        )`);
-      try { remove.run(cutoff, cappedBatch); } finally { remove.finalize(); }
-    }
-  }).immediate();
-}
-
 export async function pruneUsageRollupsAsync(
   db: Database,
   now: number,

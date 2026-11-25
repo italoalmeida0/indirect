@@ -1276,19 +1276,6 @@ func renderVerbatimImage(sb *strings.Builder, img provider.ImageBlock, digests m
 	fmt.Fprintf(sb, "[image: %s, %d bytes]\n", label, byteLen)
 }
 
-func renderVerbatimRange(msgs []provider.Message, blocks []SessionHistoryBlock, keepFrom, startIdx, endExclusive int, callNames map[string]string, digests map[string]string) string {
-	if startIdx < 0 {
-		startIdx = 0
-	}
-	if endExclusive > len(msgs) {
-		endExclusive = len(msgs)
-	}
-	if endExclusive <= startIdx {
-		return ""
-	}
-	return renderVerbatimRangeAt(msgs[startIdx:endExclusive], startIdx, blocks, keepFrom, callNames, digests)
-}
-
 func renderVerbatimRangeAt(msgs []provider.Message, globalStartIdx int, blocks []SessionHistoryBlock, keepFrom int, callNames map[string]string, digests map[string]string) string {
 	var sb strings.Builder
 	for i, m := range msgs {

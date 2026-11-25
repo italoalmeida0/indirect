@@ -98,13 +98,13 @@ func TestFindCutPointKeepsFloorAndToolPairs(t *testing.T) {
 }
 
 func TestShouldCompactReserveMath(t *testing.T) {
-	if !ShouldCompact(100000, 85000) { // 85k > 100k-16384
+	if !ShouldCompactAt(100000, 85000, 0) { // 85k > 100k-16384
 		t.Fatal("expected compact")
 	}
-	if ShouldCompact(100000, 51000) {
+	if ShouldCompactAt(100000, 51000, 0) {
 		t.Fatal("expected no compact")
 	}
-	if ShouldCompact(0, 999999) {
+	if ShouldCompactAt(0, 999999, 0) {
 		t.Fatal("unknown window must not compact")
 	}
 }
@@ -149,7 +149,7 @@ func TestAdvanceCompactionChainAndProjection(t *testing.T) {
 		t.Fatalf("chain head wrong: %+v", state)
 	}
 	// Projection = synthetic summary + kept tail; history untouched.
-	projected := projectMessages(msgs, state)
+	projected := projectMessagesAt(msgs, 0, state)
 	if len(projected) != 1+(len(msgs)-plan.KeepFrom) {
 		t.Fatalf("projection length = %d, keepFrom=%d", len(projected), plan.KeepFrom)
 	}
@@ -178,7 +178,7 @@ func TestAdvanceCompactionChainAndProjection(t *testing.T) {
 	if state2.KeepFrom < state.KeepFrom {
 		t.Fatalf("anchor must never move backwards: %d -> %d", state.KeepFrom, state2.KeepFrom)
 	}
-	projected2 := projectMessages(msgs, state2)
+	projected2 := projectMessagesAt(msgs, 0, state2)
 	if len(projected2) != 1+(len(msgs)-state2.KeepFrom) {
 		t.Fatalf("second projection length = %d", len(projected2))
 	}

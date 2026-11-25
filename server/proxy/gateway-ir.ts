@@ -209,7 +209,7 @@ function systemToString(system: unknown): string {
  *  - Direct string URL (`"data:<mime>;base64,..."` or `"http(s)://..."`)
  *  - OpenAI `{ image_url: { url } }`, `{ image_url: "..." }`, or `{ url }`
  */
-function parseImageSource(source: unknown): IRToolResultImage | null {
+export function parseImageSource(source: unknown): IRToolResultImage | null {
   if (typeof source === "string") {
     const trimmed = source.trim();
     if (!trimmed) return null;
@@ -284,11 +284,6 @@ function parseImageSource(source: unknown): IRToolResultImage | null {
   }
 
   return null;
-}
-
-/** Normalize an image source of any protocol shape into a `data:` or `http(s):` URL. */
-export function imageSourceToDataUrl(source: unknown): string | null {
-  return parseImageSource(source)?.url ?? null;
 }
 
 const BINARY_FIELD_NAMES = new Set(["data", "base64", "b64_json", "bytes", "blob", "raw"]);

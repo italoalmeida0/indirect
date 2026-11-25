@@ -112,23 +112,6 @@ func finishTurnTracking(tfc *turnFileChanges, messageIndex int) *filetrack.TurnC
 	}
 }
 
-// broadcastFileBalloon emits the persistent per-turn balloon to the frontend.
-// The frontend only knows "changes": live=true while the turn runs (the
-// balloon floats above the composer), live=false once the turn finished
-// (the balloon sits below its turn, persistently).
-func broadcastFileBalloon(emit func(any), hostID, sessionID string, balloon *filetrack.TurnChanges) {
-	if balloon == nil || emit == nil {
-		return
-	}
-	emit(map[string]any{
-		"type":      "turn_file_changes",
-		"hostId":    hostID,
-		"sessionId": sessionID,
-		"live":      false,
-		"balloon":   fileBalloonPayload(*balloon),
-	})
-}
-
 // broadcastLiveChanges emits the live view while the turn runs: the same
 // turn_file_changes event with live=true, computed from the incoming
 // snapshot. Incoming is a daemon-internal detail; the frontend never sees

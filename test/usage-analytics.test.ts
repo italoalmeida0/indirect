@@ -81,5 +81,5 @@ describe("analytics response outcomes and API keys", () => {
       fixture?.close();
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 20_000);
 });

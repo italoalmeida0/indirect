@@ -104,11 +104,6 @@ func normalizedOptionsWithJail(o SessionOptions, jailed bool) SessionOptions {
 	return normalizedOptions(o)
 }
 
-// optionsEqual compares two SessionOptions (Skills is a slice).
-func optionsEqual(a, b SessionOptions) bool {
-	return a.Effort == b.Effort && a.Mode == b.Mode && a.Access == b.Access
-}
-
 // Called by the dispatcher with configMu held. Selection is saved on the
 // session; every explicit choice also becomes the default for new sessions.
 
@@ -313,14 +308,6 @@ func modeCompletionTool(mode string) string {
 	default:
 		return completionToolName
 	}
-}
-
-// completionArgName names the single model-facing argument of the turn-ending
-// tool. It is identical in every workspace mode: the model never sees two
-// spellings of the same field.
-func completionArgName(mode string) string {
-	_ = mode
-	return "final_message_to_user"
 }
 
 // Tool exclusivity per base mode. The base registry carries ONLY the auto

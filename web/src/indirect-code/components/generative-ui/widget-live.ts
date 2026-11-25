@@ -67,7 +67,7 @@ export function releaseLiveWidget(id: string, token: symbol, sessionId?: string)
   if (i === stack.length) stack[stack.length - 1].onReactivate();
 }
 
-/** Test hook: how many instances are registered for a widget id (or session). */
+/** @test-hook How many instances are registered for a widget id (or session). */
 export function liveWidgetCount(id: string, sessionId?: string): number {
   if (sessionId) {
     const stack = sessionStacks.get(sessionId);

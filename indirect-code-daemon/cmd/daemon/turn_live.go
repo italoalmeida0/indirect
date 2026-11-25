@@ -513,17 +513,6 @@ func indexByte(s string, c byte) int {
 	return -1
 }
 
-// pagedHistoryBlock swaps a payload's transcript for the tail history
-// block plus the get_history cursor. Prefer sessionPayloadPaged(rec, 0) so
-// full rec.Messages / rec.FileBalloons are never materialized first.
-func pagedHistoryBlock(p map[string]any, rec *SessionRecord) map[string]any {
-	block := sliceHistoryBlockForRecord(rec, 0)
-	p["messages"] = sanitizeMessagesForFrontend(rec.Options.Mode, block.Messages, rec.Attachments)
-	p["fileBalloons"] = fileBalloonPayloads(block.Balloons)
-	p["history"] = historyCursorMap(block)
-	return p
-}
-
 // sessionPayloadPaged builds the gradual-loading session payload directly
 // from sessionPayloadMeta + the requested window slice, NEVER cloning or
 // sanitizing full rec.Messages / rec.FileBalloons.

@@ -1,8 +1,21 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { archiveEntries, detectArchiveFormat, extractBinaryFromArchive } from "../server/archive";
+import { archiveEntries, detectArchiveFormat } from "../server/archive";
 import { OBSCURA_ASSETS, obscuraPlatformKey } from "../server/routes/obscura";
+
+async function readArchiveMember(raw: Uint8Array, binary: string): Promise<Uint8Array> {
+  const entries = archiveEntries(raw);
+  const wanted = binary.toLowerCase();
+  const match =
+    entries.find((entry) => entry.name.toLowerCase() === wanted) ??
+    entries.find((entry) => entry.name.toLowerCase().endsWith(`/${wanted}`)) ??
+    entries.find((entry) => entry.name.toLowerCase().split("/").pop() === wanted && !entry.name.endsWith("/"));
+  if (!match) {
+    throw new Error(`archive has no ${binary}`);
+  }
+  return await match.read();
+}
 
 /**
  * Release archives must unpack in-process on every platform.
@@ -121,14 +134,14 @@ describe("release archive extraction", () => {
     ]);
     expect(detectArchiveFormat(zip)).toBe("zip");
     expect(archiveEntries(zip).map((entry) => entry.name)).toEqual(["obscura.exe", "obscura-worker.exe"]);
-    const extracted = await extractBinaryFromArchive(zip, "obscura.exe");
+    const extracted = await readArchiveMember(zip, "obscura.exe");
     expect(extracted).toEqual(binary("obscura"));
   });
 
   test("a deflated ZIP member is inflated byte-for-byte", async () => {
     const payload = encoder.encode("model-authored widget source ".repeat(500));
     const zip = buildZip([{ name: "nested/dir/obscura", data: payload, deflate: true }]);
-    const extracted = await extractBinaryFromArchive(zip, "obscura");
+    const extracted = await readArchiveMember(zip, "obscura");
     expect(new TextDecoder().decode(extracted)).toBe(new TextDecoder().decode(payload));
   });
 
@@ -139,20 +152,20 @@ describe("release archive extraction", () => {
     ]);
     const gz = new Uint8Array(Bun.gzipSync(new Uint8Array(tar)));
     expect(detectArchiveFormat(gz)).toBe("gzip");
-    expect(await extractBinaryFromArchive(gz, "obscura")).toEqual(binary("linux"));
+    expect(await readArchiveMember(gz, "obscura")).toEqual(binary("linux"));
   });
 
   test("a bare tar is accepted too", async () => {
     const tar = buildTar([{ name: "obscura", data: binary("bare") }]);
     expect(detectArchiveFormat(tar)).toBe("tar");
-    expect(await extractBinaryFromArchive(tar, "obscura")).toEqual(binary("bare"));
+    expect(await readArchiveMember(tar, "obscura")).toEqual(binary("bare"));
   });
 
   test("a corrupt archive fails with a clear message, never a crash", async () => {
     expect(() => archiveEntries(new Uint8Array([1, 2, 3, 4]))).toThrow(/unrecognized archive format/i);
     const truncated = buildZip([{ name: "obscura.exe", data: binary("x") }]).subarray(0, 40);
     expect(() => archiveEntries(truncated)).toThrow();
-    await expect(extractBinaryFromArchive(buildZip([{ name: "other.exe", data: binary("y") }]), "obscura.exe")).rejects.toThrow(/has no obscura\.exe/);
+    await expect(readArchiveMember(buildZip([{ name: "other.exe", data: binary("y") }]), "obscura.exe")).rejects.toThrow(/has no obscura\.exe/);
   });
 
   test("a ZIP that claims a member larger than the buffer is refused", async () => {
@@ -210,7 +223,7 @@ describe("pinned release assets", () => {
     const raw = new Uint8Array(await Bun.file(cached).arrayBuffer());
     const entries = archiveEntries(raw);
     expect(entries.length).toBeGreaterThan(0);
-    const bytes = await extractBinaryFromArchive(raw, OBSCURA_ASSETS[obscuraPlatformKey()]!.binary);
+    const bytes = await readArchiveMember(raw, OBSCURA_ASSETS[obscuraPlatformKey()]!.binary);
     expect(bytes.length).toBeGreaterThan(1_000_000);
     // PE (MZ) on Windows, ELF on Linux, Mach-O on macOS.
     const magic = new TextDecoder("latin1").decode(bytes.subarray(0, 2));

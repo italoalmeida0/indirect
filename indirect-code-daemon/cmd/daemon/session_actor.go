@@ -3018,15 +3018,7 @@ func (a *sessionActor) onWorkerQuestionReq(m workerQuestionReqMsg) {
 	a.emit(map[string]any{"type": "question_request", "sessionId": a.id, "questionId": m.id, "question": map[string]any{"id": m.id, "questions": m.req.Questions}})
 }
 
-// wakeApproval delivers the human decision to the blocked worker.
-func (a *sessionActor) wakeApproval(id string, approved bool) {
-	dec := "deny"
-	if approved {
-		dec = "once"
-	}
-	a.wakeApprovalOutcome(id, approvalOutcome{approved: approved, decision: dec})
-}
-
+// wakeApprovalOutcome delivers the human decision to the blocked worker.
 func (a *sessionActor) wakeApprovalOutcome(id string, out approvalOutcome) {
 	ch, ok := a.approvalWaiters[id]
 	if !ok {

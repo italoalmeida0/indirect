@@ -307,11 +307,9 @@ type spawnResult struct {
 // prompt bumps gen without changing epoch, so gen is the guard that stops
 // a zombie worker's late appends from landing in the NEW turn (B1).
 type walAppendMsg struct {
-	gen           int
-	ev            walEvent
-	liveReset     bool // assistant message started: clear live tail
-	contextNotice provider.Message
-	hasContext    bool
+	gen       int
+	ev        walEvent
+	liveReset bool // assistant message started: clear live tail
 }
 
 // workerRefreshMsg asks the actor for current model/options (BeforeRequest / AutoCompact).

@@ -19,7 +19,6 @@ import {
   base64ToBytes,
   createBlobUrlCache,
   DEFAULT_BLOB_URL_CACHE_MAX_BYTES,
-  type BlobUrlCache,
 } from "../web/src/indirect-code/utils/blobUrlCache";
 import {
   areProjectListsEqual,
@@ -842,7 +841,7 @@ describe("Layer 3 — Frontend Zero-Jank, Bi-Directional History Window & Heap L
     const revoked: string[] = [];
     let seq = 0;
 
-    const cache: BlobUrlCache = createBlobUrlCache({
+    const cache = createBlobUrlCache({
       maxBytes: 10,
       createObjectURL: () => {
         const u = `blob:test/${++seq}`;

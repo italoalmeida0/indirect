@@ -7,7 +7,7 @@ import (
 
 func collectSSE(input string) []sseEvent {
 	ch := make(chan sseEvent, 16)
-	go readSSE(strings.NewReader(input), ch)
+	go readSSEUntil(nil, strings.NewReader(input), ch)
 	var out []sseEvent
 	for ev := range ch {
 		out = append(out, ev)

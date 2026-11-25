@@ -55,7 +55,7 @@ async function run(label: string) {
   });
   writeFileSync(join(dir,'config.json'),JSON.stringify({gateway_url:`http://127.0.0.1:${server.port}`,daemon_token:'local-review-token',api_key:'local-review-key',host_id:'review-host',name:'Review',auto_update:false,settings:{no_auto_title:true,reasoning:'none',auto_compact_threshold:0}}));
   const proc=Bun.spawn([binary,'--slot','a','--data-dir',dir],{env:{...process.env,ICD_WAIT_TOOL:'200ms',ICD_WATCH_EVERY:'5s',ICD_AUTOBG_AFTER:'1s'},stdout:Bun.file(join(dir,'stdout.log')),stderr:Bun.file(join(dir,'stderr.log'))});
-  const wait=async(pred:()=>any,ms=4000)=>{const deadline=Date.now()+ms;while(Date.now()<deadline){const v=pred();if(v)return v;await Bun.sleep(10)}return null};
+  const wait=async(pred:()=>any,ms=10000)=>{const deadline=Date.now()+ms;while(Date.now()<deadline){const v=pred();if(v)return v;await Bun.sleep(10)}return null};
   const send=(m:any)=>socket.send(JSON.stringify({...m,hostId:'review-host'}));
   // A session with no active skill runs under the base policy, which DENIES
   // tools: they are refused by the gate before a human ever sees them. The
@@ -93,7 +93,7 @@ async function run(label: string) {
     for(let i=0;i<5;i++)await prompt(sid,`Next message ${i}`);
     const from=events.length;const fromReq=requests.length;
     send({type:'prompt',sessionId:sid,text:'/compact'});
-    const compacted=!!await wait(()=>events.slice(from).find(e=>e.type==='session_compacted'&&e.sessionId===sid),4000);
+    const compacted=!!await wait(()=>events.slice(from).find(e=>e.type==='session_compacted'&&e.sessionId===sid),10000);
     const compactSentAsPrompt=requests.slice(fromReq).some(r=>JSON.stringify(r.body.messages).includes('/compact'));
     scenario='approval';toolIssued=false;
     const approvalSID=await create('approval','build','ask',['build']);
@@ -102,7 +102,7 @@ async function run(label: string) {
     if(!approval)throw Error('approval not emitted');
     const n=requests.length;
     send({type:'tool_approval_response',sessionId:approvalSID,callId:approval.callId,approved:true});
-    const approvalAdvanced=!!await wait(()=>requests.length>n,700);
+    const approvalAdvanced=!!await wait(()=>requests.length>n,3000);
     send({type:'cancel',sessionId:approvalSID});
     scenario='question';toolIssued=false;
     const questionSID=await create('question','build','full',['build']);

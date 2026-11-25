@@ -599,14 +599,6 @@ export function startVoiceModelBootstrap(): Promise<VoiceModelBootstrapResult> {
   return getDefaultManager().startBootstrap();
 }
 
-export function ensureVoiceModelFile(key: VoiceModelKey): Promise<string> {
-  return getDefaultManager().ensureFile(key);
-}
-
-export function getVoiceModelState(): VoiceModelState {
-  return getDefaultManager().getState();
-}
-
 export function handleVoiceModelRoute(pathname: string, req: Request): Promise<Response | null> {
   return getDefaultManager().handleRoute(pathname, req);
 }

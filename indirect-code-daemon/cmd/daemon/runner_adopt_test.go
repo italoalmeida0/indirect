@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -92,7 +93,7 @@ func spawnTestRunner(t *testing.T, root, dataDir, command string) *tools.Proc {
 	if shell == "" {
 		t.Skip("no usable shell on this host")
 	}
-	proc, err := startRunner(root, "sess1", filepath.Join(dataDir, "brain", "sess1"), tools.ExecSpec{
+	proc, err := startRunnerWithContext(context.Background(), root, "sess1", filepath.Join(dataDir, "brain", "sess1"), tools.ExecSpec{
 		Kind: "bash", Command: command,
 		Argv: []string{shell, flag, command},
 		Env:  os.Environ(),

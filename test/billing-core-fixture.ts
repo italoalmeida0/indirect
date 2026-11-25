@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { db, type ModelRow } from "../server/db";
-import { createKey } from "../server/keys";
+import { insertPreparedKey, prepareKey } from "../server/keys";
 import { assignPlan, billingStatus, cancelBudget, grantReset, recoverBudgets, redeemReset, reserveBudget, settleBudget, startBilling } from "../server/billing";
 
 const now = Date.now(), user = "core-user";
@@ -8,7 +8,7 @@ db.run("INSERT INTO users(id,email,created_at) VALUES (?, ?, ?)", [user, "core@e
 db.run("INSERT INTO billing_plans(id,name,monthly_nanos,weekly_enabled,session_enabled,created_at,updated_at) VALUES ('core-plan','Core',100000000000,1,1,?,?)", [now, now]);
 db.run("INSERT INTO models(id,upstream_model,created_at,updated_at,context_length,max_output_length,pricing_input,pricing_output) VALUES ('core-model','core-model',?,?,100000,1000,.000001,.000003)", [now, now]);
 const model = db.query<ModelRow, []>("SELECT * FROM models WHERE id = 'core-model'").get()!;
-const key = (await createKey(user, { name: "Core" })).row;
+const key = insertPreparedKey(await prepareKey(user, { name: "Core" }));
 assignPlan(user, "core-plan");
 const reserve = (time = now, metadata = model) => reserveBudget(key, metadata, { max_tokens: 64 }, 100, false, true, time);
 const charge = (id: string) => settleBudget(id, { inTok: 100, cacheTok: 0, outTok: 10 });

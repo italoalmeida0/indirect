@@ -221,14 +221,9 @@ func (d *DaemonServer) abortHandoff(reason string) {
 	})
 }
 
-// fetchAppTo downloads the app asset (the multi-call binary — the ONLY
+// fetchAppToVerified downloads the app asset (the multi-call binary — the ONLY
 // artifact) for version into the inactive slot's bin dir, verifying its
 // SHA-256 against the release manifest before chmod/rename/exec.
-func (d *DaemonServer) fetchAppTo(version string, sl slotLayout) (string, error) {
-	local, _, err := d.fetchAppToVerified(version, sl)
-	return local, err
-}
-
 func (d *DaemonServer) fetchAppToVerified(version string, sl slotLayout) (string, string, error) {
 	asset := daemonAssetName()
 	expectedSum, err := d.expectedAssetSum(version, asset)

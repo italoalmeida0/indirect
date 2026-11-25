@@ -129,25 +129,24 @@ test("the effective policy is exposed to the caller and defaults are installable
   expect(adminOwn.data.policy).toMatchObject({ showModelPrices: true, budgetPresentation: "usd" });
 }, 60_000);
 
-test("projection never leaves a monetary key behind, at any depth", async () => {
-  const { projectAmounts } = await import("../server/financial-policy");
-  const payload = {
-    total: 12,
-    cost: 1.5,
-    nested: { spendTodayUsd: 2, cost_in: 1, list: [{ priceUsd: 3, model: "m" }] },
-    plan: { monthlyUsd: 100, name: "Enterprise" },
-    remaining_usd: 4,
-    costCenter: "cc-1",
-    rpm: 10,
-  };
-  expect(moneyKeys(projectAmounts(payload, { showModelPrices: true, budgetPresentation: "hidden", inherited: false }))).toEqual([]);
+test("monetary key classification and grid stripping never leak money columns", async () => {
+  const { isMoneyKey, sanitizeGridForPolicy } = await import("../server/financial-policy");
+  for (const key of ["cost", "spendTodayUsd", "cost_in", "priceUsd", "monthlyUsd", "remaining_usd"]) {
+    expect(isMoneyKey(key)).toBe(true);
+  }
   // Non-monetary fields that merely contain a money-ish word survive.
-  const kept = projectAmounts(payload, { showModelPrices: true, budgetPresentation: "hidden", inherited: false }) as any;
-  expect(kept.costCenter).toBe("cc-1");
-  expect(kept.rpm).toBe(10);
-  expect(kept.total).toBe(12);
+  for (const key of ["costCenter", "costCenterId", "rpmLimit", "usedPercent", "total"]) {
+    expect(isMoneyKey(key)).toBe(false);
+  }
+  const grid = {
+    sort: [{ colId: "cost", sort: "desc" as const }, { colId: "costCenter", sort: "asc" as const }],
+    filters: { spendTodayUsd: { filterType: "number" }, costCenter: { filterType: "text" } },
+  };
+  const stripped = sanitizeGridForPolicy(grid, { showModelPrices: true, budgetPresentation: "hidden", inherited: false });
+  expect(stripped.sort).toEqual([{ colId: "costCenter", sort: "asc" }]);
+  expect(Object.keys(stripped.filters ?? {})).toEqual(["costCenter"]);
   // "usd" is a pass-through, not a copy.
-  expect(projectAmounts(payload, { showModelPrices: true, budgetPresentation: "usd", inherited: false })).toBe(payload);
+  expect(sanitizeGridForPolicy(grid, { showModelPrices: true, budgetPresentation: "usd", inherited: false })).toBe(grid);
 });
 test("an administrator can change the installation default and override one user", async () => {
   const gateway = await boot({ FINANCIAL_DEFAULT_BUDGET: "usd" });

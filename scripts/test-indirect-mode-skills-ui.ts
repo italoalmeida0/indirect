@@ -51,7 +51,7 @@ try {
   const openModeMenu = async () => {
     const btn = page.getByRole("button", { name: "Agent mode and skills" });
     if ((await btn.getAttribute("aria-expanded")) !== "true") await btn.click();
-    await page.waitForSelector('[role="menuitemradio"], [role="menuitemcheckbox"]');
+    await page.waitForSelector('[role="dialog"][aria-label="Mode & skills"]');
   };
   /** Closes the menu deterministically. Escape only reaches the composer's
    * handler while focus is inside it, and after a click on a skill row it is
@@ -59,7 +59,7 @@ try {
   const closeModeMenu = async () => {
     const btn = page.getByRole("button", { name: "Agent mode and skills" });
     if ((await btn.getAttribute("aria-expanded")) === "true") await btn.click();
-    await page.waitForSelector('[role="menuitemradio"], [role="menuitemcheckbox"]', { state: "detached" });
+    await page.waitForSelector('[role="dialog"][aria-label="Mode & skills"]', { state: "detached" });
   };
 
   // --- Draft bootstrap (page calls ensureSelection for a new draft) ---
@@ -110,6 +110,7 @@ try {
     build: { name: "build", description: "Daemon Build desc", body: "", enabled: true, usable: "deny", mode: "agentic" },
     plan: { name: "plan", description: "p", body: "", enabled: true, usable: "never", mode: "agentic" },
     talk: { name: "talk", description: "Daemon Talk desc", body: "", enabled: true, usable: "deny", mode: "talk", approvalMode: "yolo" },
+    shared: { name: "shared", description: "Shared skill", body: "", enabled: true, usable: "ask" },
     custom: { name: "custom", description: "Custom skill", body: "", enabled: true, usable: "ask", mode: "agentic" },
     plain: { name: "plain", description: "No usable key", body: "", enabled: true, mode: "agentic" },
   }); a.setLoaded(true); }`);
@@ -117,39 +118,41 @@ try {
   await page.waitForFunction(() => !(window as any).modeSkillsUI.draftMode());
   await openModeMenu();
   const talkRadios = await radios();
-  assert.equal(talkRadios.length, 1, `talk session picker must only offer talk, got ${JSON.stringify(talkRadios)}`);
-  assert(talkRadios[0].includes("Daemon Talk desc"), "official description must replace the cache one");
+  assert.equal(talkRadios.length, 0, `locked talk session must render a locked status card instead of mode radios, got ${JSON.stringify(talkRadios)}`);
+  const lockedTalkText = (await page.locator('[role="status"][aria-label="Agent mode"]').textContent()) ?? "";
+  assert(lockedTalkText.includes("Talk") && lockedTalkText.includes("Locked"), `talk session must show Locked Talk card, got ${JSON.stringify(lockedTalkText)}`);
+  assert(lockedTalkText.includes("Daemon Talk desc"), "official description must replace the cache one");
   assert.equal(await page.getByRole("button", { name: "Agent permissions" }).count(), 0, "selector must hide: talk approvalMode is yolo");
-  // A Lua skill WITHOUT the usable key has deny as its original: locked
-  // hidden badge, no usable cycle button (session inherit != file value).
-  assert.equal(await page.getByRole("button", { name: "Change activation policy for plain" }).count(), 0, "no-usable-key skill must not offer a usable cycle (original = deny)");
-  // Additional skill of the OTHER mode stays available, but the wire mode
-  // never leaves talk; usable omitted vs differing rules still apply.
+  // Unselected mode-pinned agentic skills stay out of the talk picker.
+  assert.equal(await page.getByRole("menuitemcheckbox").filter({ hasText: "custom" }).count(), 0, "agentic-pinned skill must be hidden in talk session picker");
+  assert.equal(await page.getByRole("menuitemcheckbox").filter({ hasText: "plain" }).count(), 0, "agentic-pinned skill must be hidden in talk session picker");
+  // Mode-agnostic additional skills remain available, the wire mode never
+  // leaves talk, and usable omitted vs differing rules still apply.
   //
   // The mode menu is a DRAFT editor: opening it snapshots the selection,
   // toggles and badge cycles edit that draft, and applyDraft() persists the
   // diff when it closes. So the selection and the update_skills command land
   // on close, not on each click.
-  await page.getByRole("menuitemcheckbox").filter({ hasText: "custom" }).click();
+  await page.getByRole("menuitemcheckbox").filter({ hasText: "shared" }).click();
   assert.equal(await ev(`a => a.options.sessionOptions().mode`), "talk", "locked session mode must not follow an additional skill");
-  const badge = page.getByRole("button", { name: "Change activation policy for custom" });
+  const badge = page.getByRole("button", { name: "Change activation policy for shared" });
   assert.equal((await badge.textContent())?.trim(), "ask", "no override shows the file original (ask)");
-  await badge.click(); // ask (original, no override) -> yolo (differs: sent)
-  assert.equal((await badge.textContent())?.trim(), "yolo");
+  await badge.click(); // ask (original, no override) -> always/yolo (differs: sent)
+  assert.equal((await badge.textContent())?.trim(), "always");
   await closeModeMenu();
-  await page.waitForFunction(() => (window as any).modeSkillsUI.options.selectedSkills().includes("custom"));
-  const upds = (await ev(`a => JSON.parse(JSON.stringify(a.commands))`)).filter((c: any) => c.type === "update_skills" && c.set.custom);
+  await page.waitForFunction(() => (window as any).modeSkillsUI.options.selectedSkills().includes("shared"));
+  const upds = (await ev(`a => JSON.parse(JSON.stringify(a.commands))`)).filter((c: any) => c.type === "update_skills" && c.set.shared);
   assert(upds.length >= 1, `closing the menu must send the skill update, got ${JSON.stringify(upds)}`);
-  assert.equal(upds[upds.length - 1].set.custom.active, true);
-  assert.equal(upds[upds.length - 1].set.custom.usable, "yolo");
+  assert.equal(upds[upds.length - 1].set.shared.active, true);
+  assert.equal(upds[upds.length - 1].set.shared.usable, "yolo");
   // Cycling back to the file's original ask must DROP the override instead of
   // pinning it: omitted means inherit. Driven through the hook because the
   // menu is a modal draft editor and re-opening it mid-assertion only tests the
   // shortcut, not the diff rule.
-  const backToOriginal = (await ev(`a => { a.options.syncSkills(["talk","custom"], { custom: "ask" }); return JSON.parse(JSON.stringify(a.commands)) }`)).filter((c: any) => c.type === "update_skills" && c.set.custom);
+  const backToOriginal = (await ev(`a => { a.options.syncSkills(["talk","shared"], { shared: "ask" }); return JSON.parse(JSON.stringify(a.commands)) }`)).filter((c: any) => c.type === "update_skills" && c.set.shared);
   assert(backToOriginal.length >= 1, "restoring the original usable must still reach the daemon");
-  assert(!("usable" in backToOriginal[backToOriginal.length - 1].set.custom), `usable equal to original must be omitted: ${JSON.stringify(backToOriginal[backToOriginal.length - 1])}`);
-  assert.equal(await ev(`a => { a.options.syncSkills(["custom"]); return a.options.selectedSkills().join(",") }`), "talk,custom", "mandatory primary in a talk session is talk");
+  assert(!("usable" in backToOriginal[backToOriginal.length - 1].set.shared), `usable equal to original must be omitted: ${JSON.stringify(backToOriginal[backToOriginal.length - 1])}`);
+  assert.equal(await ev(`a => { a.options.syncSkills(["shared"]); return a.options.selectedSkills().join(",") }`), "talk,shared", "mandatory primary in a talk session is talk");
   await page.screenshot({ path: "/tmp/mode-skills-talk-locked.png" });
 
   // --- Agentic session: talk is hidden, mode locked to agentic ---
@@ -162,7 +165,16 @@ try {
   await page.waitForFunction(() => (window as any).modeSkillsUI.sid() === "agent-1");
   await openModeMenu();
   const agentRadios = await radios();
-  assert(agentRadios.length === 1 && agentRadios[0].includes("Build"), `agentic session must hide talk (and never/absent), got ${JSON.stringify(agentRadios)}`);
+  assert.equal(agentRadios.length, 0, `locked agentic session (single available mode skill) must render a locked status card, got ${JSON.stringify(agentRadios)}`);
+  const lockedAgentText = (await page.locator('[role="status"][aria-label="Agent mode"]').textContent()) ?? "";
+  assert(
+    lockedAgentText.includes("Build") && lockedAgentText.includes("Locked") && !lockedAgentText.includes("Talk"),
+    `agentic session must show Locked Build card and hide talk (and never/absent), got ${JSON.stringify(lockedAgentText)}`,
+  );
+  // A skill WITHOUT the usable key has deny as its original: locked
+  // hidden badge, no usable cycle button (session inherit != file value).
+  assert.equal(await page.getByRole("menuitemcheckbox").filter({ hasText: "plain" }).count(), 1, "agentic-pinned plain skill must appear in agentic picker");
+  assert.equal(await page.getByRole("button", { name: "Change activation policy for plain" }).count(), 0, "no-usable-key skill must not offer a usable cycle (original = deny)");
   assert.equal(await page.getByRole("button", { name: "Agent permissions" }).count(), 1, "selector returns when the primary is not yolo");
   assert.equal(await ev(`a => a.options.sessionOptions().mode`), "agentic");
   await page.keyboard.press("Escape");

@@ -116,11 +116,6 @@ type CompactionState struct {
 	LearnedContextModel  string            `json:"learnedContextModel,omitempty"`
 }
 
-// CloneCompactionState returns a deep copy of s, or nil when s is nil.
-func CloneCompactionState(s *CompactionState) *CompactionState {
-	return s.Clone()
-}
-
 // Clone returns a deep copy of s, or nil when s is nil.
 func (s *CompactionState) Clone() *CompactionState {
 	if s == nil {
@@ -565,10 +560,6 @@ func projectionAnchorAt(state *CompactionState, baseMsgIdx int, historyLen int) 
 // active FoldBlock followed by the ViewLatch-stabilized tail history[keepFrom:].
 // Legacy states (len(state.Blocks) == 0 && PreviousSummary != "") continue to
 // emit a single synthetic summary message seamlessly.
-func projectMessages(history []provider.Message, state *CompactionState) []provider.Message {
-	return projectMessagesAt(history, 0, state)
-}
-
 func projectMessagesAt(history []provider.Message, baseMsgIdx int, state *CompactionState) []provider.Message {
 	if state == nil {
 		return history
@@ -651,10 +642,6 @@ type FileOps struct {
 	Modified []string
 }
 
-func contextTokens(system string, tools []provider.Tool, msgs []provider.Message) int {
-	return provider.ContextTokens(system, tools, msgs)
-}
-
 func compactTargetTokens(window int, thresholdPct int) int {
 	if thresholdPct > 0 && thresholdPct < 100 {
 		target := window * thresholdPct / 100
@@ -669,13 +656,8 @@ func compactTargetTokens(window int, thresholdPct int) int {
 	return window - CompactionReserveTokens
 }
 
-// ShouldCompact reports whether the session should auto-compact before the
-// next model call: counted context vs window minus reserve.
-func ShouldCompact(window int, countedContext int) bool {
-	return ShouldCompactAt(window, countedContext, 0)
-}
-
-// ShouldCompactAt is ShouldCompact honoring a threshold percent.
+// ShouldCompactAt reports whether the session should auto-compact before the
+// next model call, honoring an optional threshold percent (0 = window minus reserve).
 func ShouldCompactAt(window int, countedContext int, thresholdPct int) bool {
 	if window <= 0 {
 		return false
@@ -698,10 +680,6 @@ func SerializeConversation(msgs []provider.Message) string {
 // fallback digests) in place of User and Tool ImageBlocks.
 func SerializeConversationWithDigests(msgs []provider.Message, digests map[string]string) string {
 	return serializeConversationWithBudgetAndDigests(msgs, digests, serializeBlockBudgetBytes, serializeArgsBudgetBytes)
-}
-
-func serializeConversationWithBudget(msgs []provider.Message, blockMaxBytes, argsMaxBytes int) string {
-	return serializeConversationWithBudgetAndDigests(msgs, nil, blockMaxBytes, argsMaxBytes)
 }
 
 func serializeConversationWithBudgetAndDigests(msgs []provider.Message, digests map[string]string, blockMaxBytes, argsMaxBytes int) string {
@@ -1322,13 +1300,8 @@ func unionFailedCommands(existing, added []FailedCommandSummary) []FailedCommand
 	return out
 }
 
-// MechanicalBlockSummary builds a deterministic, zero-LLM fallback summary for
-// msgs covering [startIdx, endIdx). Used whenever the LLM summarizer errors,
-// attempts a tool call, truncates repeatedly, or exceeds NET_SHRINK_TOLERANCE.
-func MechanicalBlockSummary(msgs []provider.Message, startIdx, endIdx int) string {
-	return MechanicalBlockSummaryWithDigests(msgs, startIdx, endIdx, nil)
-}
-
+// MechanicalBlockSummaryWithDigests builds a deterministic, zero-LLM fallback
+// summary for msgs covering [startIdx, endIdx).
 func MechanicalBlockSummaryWithDigests(msgs []provider.Message, startIdx, endIdx int, digests map[string]string) string {
 	var userPrompts []string
 	var lastAssistant string

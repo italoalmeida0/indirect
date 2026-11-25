@@ -107,7 +107,7 @@ func TestStripSkillArtifactsDropsFailedUseSkillResult(t *testing.T) {
 			provider.ToolResultBlock{CallID: "c2"},
 		}},
 	}
-	out, _ := stripSkillArtifacts(msgs, 3, -1)
+	out, _ := stripSkillArtifactsOnAt(msgs, 0, 3, -1, nil)
 	var results []string
 	for _, m := range out {
 		for _, c := range m.Content {

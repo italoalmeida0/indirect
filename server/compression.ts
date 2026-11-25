@@ -43,6 +43,7 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 let cacheBytes = 0;
 
+/** @test-hook Clear the in-memory compressed asset cache between tests. */
 export function resetCompressionCache(): void {
   cache.clear();
   cacheBytes = 0;
@@ -154,10 +155,10 @@ export function compressedAsset(filePath: string, encoding: Encoding): Uint8Arra
   return bytes;
 }
 
-/** Cache accounting for the readiness/metrics endpoint. */
+/** @test-hook Cache accounting for compression tests. */
 export function compressionCacheStats(): { entries: number; bytes: number } {
   return { entries: cache.size, bytes: cacheBytes };
 }
 
-/** Exposed for tests that build a file without touching the real dist/. */
+/** @test-hook Exposed for tests that build a file without touching the real dist/. */
 export const COMPRESSION_LIMITS = { MIN_BYTES, MAX_CACHE_BYTES };

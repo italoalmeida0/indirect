@@ -93,7 +93,7 @@ func TestHandoffPrimitivesE2E(t *testing.T) {
 		t.Fatalf("copy missing: %v", err)
 	}
 	// Fetch the app into slot-b + self-verify via --version.
-	ap, err := d.fetchAppTo("vE2E.2", sl)
+	ap, _, err := d.fetchAppToVerified("vE2E.2", sl)
 	if err != nil {
 		t.Fatal(err)
 	}

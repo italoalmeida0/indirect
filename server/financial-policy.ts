@@ -193,20 +193,6 @@ export function formatFinancialPolicyHeader(policy: FinancialPolicy): string {
   return `${policy.budgetPresentation};prices=${policy.showModelPrices ? "1" : "0"}`;
 }
 
-/**
- * Project a response payload for the caller's policy.
- *
- * - "usd": returned untouched.
- * - "hidden": every monetary key is dropped at every depth.
- * - "percent": monetary keys are dropped from the top level too — percentages
- *   are supplied by the caller through explicit DTO projections, because only
- *   the domain projector knows which allowance a value belongs to.
- */
-export function projectAmounts<T>(value: T, policy: FinancialPolicy): T {
-  if (policy.budgetPresentation === "usd") return value;
-  return scrub(value) as T;
-}
-
 /** Strip model pricing keys when `showModelPrices` is disabled. */
 export function projectModelPrices(value: unknown, showModelPrices: boolean): unknown {
   if (showModelPrices) return value;
@@ -235,17 +221,6 @@ function publicModelMetadata(value: unknown): unknown {
       (Array.isArray(item) && item.every((part) => typeof part === "string")))) result[key] = item;
   }
   return result;
-}
-
-function scrub(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(scrub);
-  if (!value || typeof value !== "object") return value;
-  const out: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (isMoneyKey(key)) continue;
-    out[key] = scrub(child);
-  }
-  return out;
 }
 
 /** Percentage of an allowance that has been consumed, clamped to 0..100. */

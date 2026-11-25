@@ -308,10 +308,6 @@ func (a *Agent) effectiveMaxWireImageBytes() int {
 	return DefaultMaxWireImageBytes
 }
 
-func collectLiveWireImages(history []provider.Message, keepFrom int, state *CompactionState) ([]wireImageOccurrence, int) {
-	return collectLiveWireImagesAt(history, 0, keepFrom, state)
-}
-
 func collectLiveWireImagesAt(history []provider.Message, baseMsgIdx int, globalKeepFrom int, state *CompactionState) ([]wireImageOccurrence, int) {
 	if baseMsgIdx < 0 {
 		baseMsgIdx = 0
@@ -394,13 +390,9 @@ func (a *Agent) liveWireImageCount() int {
 	return len(live)
 }
 
-// prepareWireImages enforces the hysteresis live-image wire window (6 -> 3 by
+// prepareWireImagesWithProgress enforces the hysteresis live-image wire window (6 -> 3 by
 // default, LearnedMaxImages when learned, and 8 MiB raw wire cap) before a turn
 // request is projected.
-func (a *Agent) prepareWireImages(ctx context.Context) {
-	a.prepareWireImagesWithProgress(ctx, nil)
-}
-
 func (a *Agent) prepareWireImagesWithProgress(ctx context.Context, sink func(string)) {
 	if ctx.Err() != nil {
 		return
@@ -484,18 +476,9 @@ func (a *Agent) prepareWireImagesWithProgress(ctx context.Context, sink func(str
 	}
 }
 
-// shedWireImagesReactive learns an optional provider image cap and dehydrates
+// shedWireImagesReactiveWithProgress learns an optional provider image cap and dehydrates
 // oldest live wire images down to targetKeep, returning how many images were
 // newly dehydrated (or newly suppressed by LearnedMaxImages=0) and how many stay live.
-func (a *Agent) shedWireImagesReactive(
-	ctx context.Context,
-	learnedCap *int,
-	targetKeep int,
-	forceDeterministic bool,
-) (int, int) {
-	return a.shedWireImagesReactiveWithProgress(ctx, learnedCap, targetKeep, forceDeterministic, nil)
-}
-
 func (a *Agent) shedWireImagesReactiveWithProgress(
 	ctx context.Context,
 	learnedCap *int,
@@ -599,17 +582,8 @@ func (a *Agent) shedWireImagesReactiveWithProgress(
 	return len(toEvict), remCount
 }
 
-// ensureSpanImageDigests populates workingState.ImageDigests for all ImageBlocks
+// ensureSpanImageDigestsAt populates workingState.ImageDigests for all ImageBlocks
 // in history[startIdx:endIdx] before compaction summarizes or folds them.
-func (a *Agent) ensureSpanImageDigests(
-	ctx context.Context,
-	history []provider.Message,
-	startIdx, endIdx int,
-	workingState *CompactionState,
-) {
-	a.ensureSpanImageDigestsAt(ctx, history, 0, startIdx, endIdx, workingState, nil)
-}
-
 func (a *Agent) ensureSpanImageDigestsAt(
 	ctx context.Context,
 	history []provider.Message,
@@ -878,10 +852,6 @@ func (a *Agent) transcribeImageViaLLM(ctx context.Context, img provider.ImageBlo
 		return "", false
 	}
 	return truncateRunes(text, 1200), false
-}
-
-func trimImageDigestsMap(digests map[string]string, history []provider.Message, keepFrom int) {
-	trimImageDigestsMapAt(digests, history, 0, keepFrom)
 }
 
 func trimImageDigestsMapAt(digests map[string]string, history []provider.Message, baseMsgIdx int, globalKeepFrom int) {

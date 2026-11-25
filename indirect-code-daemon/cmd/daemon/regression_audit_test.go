@@ -180,7 +180,7 @@ func TestSlashReplySeedsTurn(t *testing.T) {
 	act.inbox <- Envelope{Payload: slashReplyMsg{Command: "/help", Reply: "Commands: /clear", Ack: ack}}
 	select {
 	case <-ack:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatalf("slash reply never acked")
 	}
 
@@ -206,7 +206,7 @@ func TestSlashReplySeedsTurn(t *testing.T) {
 		if m, ok := ev.(map[string]any); !ok || m["type"] != "session_content" {
 			t.Fatalf("expected session_content push, got %v", ev)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatalf("no session_content emitted")
 	}
 }

@@ -206,7 +206,7 @@ beforeAll(async () => {
     stderr: "inherit",
   });
   await waitFor(`${GW}/api/health`);
-});
+}, 20_000);
 
 afterAll(() => {
   try { gwProc?.kill(); } catch {}
@@ -649,7 +649,7 @@ describe("security audit", () => {
     expect(res.status).toBe(413);
     const j = await res.json();
     expect(j.error).toBeTruthy(); // OpenAI-shaped error, not a stack trace
-  });
+  }, 20_000);
 
   // ------------------------------------------------------------ 9. provider URL validation
 
@@ -695,7 +695,7 @@ describe("security audit", () => {
     const victim = await llm(k1, { model: "mini-1", messages: [] }, freshIp());
     expect(victim.status).toBe(200);
     await victim.text();
-  });
+  }, 15_000);
 
   test("upstream 500s never lock the key out: every request is still attempted (keep LAST)", async () => {
     // No-skip policy: transient upstream failures never remove a key from

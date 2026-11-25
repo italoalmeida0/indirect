@@ -15,7 +15,7 @@ func TestFetchManifestParse(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("INDIRECT_REPO_RAW", srv.URL)
-	m, err := fetchManifest()
+	m, err := fetchManifestWithConfig(nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -121,13 +121,3 @@ export function costAggFieldsSql(prefix = "m"): string {
   `;
 }
 
-/** Single-row cost with column alias `AS cost`. */
-export function costRowSql(prefix = "e"): string {
-  return `COALESCE(${costExprSql(prefix)}, 0) AS cost`;
-}
-
-/** Aggregated cost expression: SUM(...) in USD with column alias `AS cost`. */
-export function costAggSql(prefix = "m"): string {
-  return `COALESCE(SUM(${costExprSql(prefix)}), 0) AS cost`;
-}
-

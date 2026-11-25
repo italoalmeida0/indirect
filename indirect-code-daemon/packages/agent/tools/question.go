@@ -28,8 +28,6 @@ type Question struct {
 	DecideLater bool `json:"decide_later,omitempty"`
 }
 
-func (Question) AllowsCustom() bool { return true }
-
 type QuestionRequest struct {
 	Questions []Question `json:"questions"`
 }

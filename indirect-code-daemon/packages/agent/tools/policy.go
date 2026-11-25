@@ -808,18 +808,6 @@ func isShellInterpreterBinary(bin string) bool {
 	}
 }
 
-func isPipeCodeSinkBinary(bin string) bool {
-	if isShellInterpreterBinary(bin) {
-		return true
-	}
-	switch strings.ToLower(bin) {
-	case "python", "python3", "node", "bun", "deno", "perl", "ruby", "php", "osascript":
-		return true
-	default:
-		return false
-	}
-}
-
 func isInlineEvalInvocation(bin string, args []string) bool {
 	switch bin {
 	case "node", "bun", "deno", "python", "python3", "perl", "ruby", "php":

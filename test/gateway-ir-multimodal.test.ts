@@ -15,12 +15,13 @@ const { invalidateModelCache } = await import("../server/models");
 const {
   decodeToIR,
   encodeIR,
-  imageSourceToDataUrl,
+  parseImageSource,
   imageToDataUrl,
   extractToolResultPayload,
   dataUrlToAnthropicSource,
   demoteUnsignedToolCalls,
 } = await import("../server/proxy/gateway-ir");
+const imageSourceToDataUrl = (source: unknown): string | null => parseImageSource(source)?.url ?? null;
 import type {
   GatewayRequest,
   IRImageBlock,

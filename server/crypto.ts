@@ -171,6 +171,7 @@ async function hotp(secretBytes: Uint8Array, counter: number): Promise<string> {
   return String(code % 1_000_000).padStart(6, "0");
 }
 
+/** @test-hook Generate a 6-digit RFC 6238 TOTP code for a given timestamp. */
 export async function totpAt(secret: string, timestampMs: number): Promise<string> {
   return hotp(base32Decode(secret), Math.floor(timestampMs / 1000 / 30));
 }

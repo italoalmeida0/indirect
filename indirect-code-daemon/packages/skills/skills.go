@@ -50,7 +50,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	pathpkg "path"
 	"path/filepath"
@@ -184,43 +183,6 @@ func LoadWithModules(dir string, modules []Source) (map[string]Skill, []error) {
 	}
 	list, loadErrs := LoadSet(roots, modules)
 	return list, append(errs, loadErrs...)
-}
-
-// LoadFS parses every top-level *.js of dir inside fsys (embedded builtin
-// skills). Paths in errors keep the fsys form (dir/name.js).
-func LoadFS(fsys fs.FS, dir string) (map[string]Skill, []error) {
-	roots, errs := SourcesFS(fsys, dir)
-	list, loadErrs := LoadSet(roots, nil)
-	return list, append(errs, loadErrs...)
-}
-
-// SourcesFS reads the top-level *.js files of dir inside fsys as raw
-// sources (for LoadWithModules layering).
-func SourcesFS(fsys fs.FS, dir string) ([]Source, []error) {
-	entries, err := fs.ReadDir(fsys, dir)
-	if err != nil {
-		return nil, []error{err}
-	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() || !isSkillFile(e.Name()) {
-			continue
-		}
-		names = append(names, e.Name())
-	}
-	sort.Strings(names)
-	out := make([]Source, 0, len(names))
-	var errs []error
-	for _, name := range names {
-		p := pathpkg.Join(dir, name)
-		data, err := fs.ReadFile(fsys, p)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		out = append(out, Source{Path: p, Data: data})
-	}
-	return out, errs
 }
 
 const (

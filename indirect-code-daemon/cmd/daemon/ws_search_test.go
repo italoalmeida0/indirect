@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	"indirect/indirect-code-daemon/packages/provider"
@@ -47,7 +48,7 @@ func TestWSSearch(t *testing.T) {
 		ws:      ws,
 	}
 
-	server.onSearch("database", 10)
+	server.onSearchWithContext(context.Background(), "database", 10, "")
 
 	var emitted []map[string]any
 	for len(ws.outbound) > 0 {

@@ -158,12 +158,3 @@ export function deriveDualLineNumbers(text: string): DerivedDualNumber[] | null 
   }
   return nums;
 }
-
-/**
- * Derive primary per-line numbers for a plain unified diff by walking the @@
- * hunk headers. Returns null when the text carries no @@ headers.
- */
-export function deriveLineNumbers(text: string): string[] | null {
-  const dual = deriveDualLineNumbers(text);
-  return dual ? dual.map((d) => d.lineNum) : null;
-}

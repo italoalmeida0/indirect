@@ -11,9 +11,8 @@ const (
 	FieldTitle     Field = 0
 	FieldUser      Field = 1
 	FieldAssistant Field = 2
-	FieldTool      Field = 3
+	FieldTool Field = 3
 
-	numFields     = 4
 	numTurnFields = 3 // User, Assistant, Tool stored in turn segments
 )
 
@@ -30,22 +29,6 @@ func (f Field) String() string {
 		return "tool"
 	default:
 		return "assistant"
-	}
-}
-
-// Boost returns the BM25F field weight for f.
-func (f Field) Boost() float64 {
-	switch f {
-	case FieldTitle:
-		return BoostTitle
-	case FieldUser:
-		return BoostUser
-	case FieldAssistant:
-		return BoostAssistant
-	case FieldTool:
-		return BoostTool
-	default:
-		return 1.0
 	}
 }
 
@@ -111,30 +94,6 @@ type TurnDoc struct {
 	UserMsgIdx      int
 	AssistantMsgIdx int
 	ToolMsgIdx      int
-}
-
-// ResolveMsgIdx returns the exact message index for the winning turn field.
-func (d *TurnDoc) ResolveMsgIdx(f Field) int {
-	if d.HasFieldMsgIdx {
-		switch f {
-		case FieldUser:
-			if d.UserMsgIdx >= 0 {
-				return d.UserMsgIdx
-			}
-		case FieldAssistant:
-			if d.AssistantMsgIdx >= 0 {
-				return d.AssistantMsgIdx
-			}
-		case FieldTool:
-			if d.ToolMsgIdx >= 0 {
-				return d.ToolMsgIdx
-			}
-		}
-	}
-	if d.BestUserOrAsstMsgIdx >= d.FirstMsgIdx {
-		return d.BestUserOrAsstMsgIdx
-	}
-	return d.FirstMsgIdx
 }
 
 // Query configures a full-text BM25F search across indexed sessions.

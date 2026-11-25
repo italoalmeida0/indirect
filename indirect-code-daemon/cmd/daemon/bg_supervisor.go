@@ -25,11 +25,7 @@ const (
 	BgStatusOrphaned  = "orphaned"
 )
 
-const (
-	bgResultCap = 50 * 1024
-	bgStreamCap = 16 * 1024
-	bgLabelMax  = 300
-)
+const bgResultCap = 50 * 1024
 
 // bgJob is one background task. The supervisor goroutine owns the TABLE;
 // each job's mutable fields are written only by terminal transitions that

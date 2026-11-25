@@ -10,7 +10,6 @@ import {
 } from "../web/src/indirect-code/utils/lang";
 import {
   deriveDualLineNumbers,
-  deriveLineNumbers,
   diffRows,
   parseDiffLine,
 } from "../web/src/indirect-code/utils/diffLines";
@@ -263,8 +262,8 @@ describe("unified diff parsing, dual gutters, hunk headers & no-newline metadata
       "\\ No newline at end of file",
     ].join("\n");
 
-    const lineNums = deriveLineNumbers(unified);
-    expect(lineNums).toEqual(["", "10", "11", "", "11", "", "25", "26", "26", ""]);
+    const dual = deriveDualLineNumbers(unified)!;
+    expect(dual.map((d) => d.lineNum)).toEqual(["", "10", "11", "", "11", "", "25", "26", "26", ""]);
     expect(parseDiffLine("\\ No newline at end of file")).toEqual({
       lineNum: "",
       marker: "",
@@ -272,7 +271,6 @@ describe("unified diff parsing, dual gutters, hunk headers & no-newline metadata
       kind: "meta",
     });
 
-    const dual = deriveDualLineNumbers(unified)!;
     expect(dual[3]).toEqual({ lineNum: "", oldLineNum: "", newLineNum: "" });
     // Line after `\ No newline` in hunk 1 MUST be newLine 11, NOT 12!
     expect(dual[4]).toEqual({ lineNum: "11", oldLineNum: "", newLineNum: "11" });

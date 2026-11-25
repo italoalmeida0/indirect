@@ -191,20 +191,6 @@ func (s *skillStore) loadErrors() []error {
 	return out
 }
 
-// skillBodies returns the bodies of the named skills in order, skipping
-// names missing from the store (deleted files never break a session).
-func (s *skillStore) bodies(names []string) []skills.Skill {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]skills.Skill, 0, len(names))
-	for _, n := range names {
-		if sk, ok := s.list[n]; ok {
-			out = append(out, sk)
-		}
-	}
-	return out
-}
-
 // resolveSession computes the effective policy for one session's skill
 // map under the session's own mode (rec.Options.Mode — received from the
 // frontend on create/configure, canonicalized at ingestion). The daemon

@@ -52,12 +52,12 @@ try {
   const openModeMenu = async () => {
     const btn = page.getByRole("button", { name: "Agent mode and skills" });
     if ((await btn.getAttribute("aria-expanded")) !== "true") await btn.click();
-    await page.waitForSelector('[role="menuitemradio"], [role="menuitemcheckbox"]');
+    await page.waitForSelector('[role="dialog"][aria-label="Mode & skills"]');
   };
   const closeModeMenu = async () => {
     const btn = page.getByRole("button", { name: "Agent mode and skills" });
     if ((await btn.getAttribute("aria-expanded")) === "true") await btn.click();
-    await page.waitForSelector('[role="menuitemradio"], [role="menuitemcheckbox"]', { state: "detached" });
+    await page.waitForSelector('[role="dialog"][aria-label="Mode & skills"]', { state: "detached" });
   };
   const openProjectSession = async (title: string, id: string) => {
     if ((await ev(`a => a.projects.sidebarView()`)) !== "projects") {
@@ -106,10 +106,10 @@ try {
   const badge = page.getByRole("button", { name: "Change activation policy for custom" });
   assert.equal((await badge.textContent())?.trim(), "ask", "no override shows the file original (ask)");
   await badge.click();
-  await page.waitForFunction(() => document.querySelector('[aria-label^="Change activation policy for custom"]')?.textContent?.trim() === "yolo");
+  await page.waitForFunction(() => document.querySelector('[aria-label^="Change activation policy for custom"]')?.textContent?.trim() === "always");
   await page.screenshot({ path: "/tmp/skills-flow-badge-yolo.png" });
   await badge.click();
-  await page.waitForFunction(() => document.querySelector('[aria-label^="Change activation policy for custom"]')?.textContent?.trim() === "deny");
+  await page.waitForFunction(() => document.querySelector('[aria-label^="Change activation policy for custom"]')?.textContent?.trim() === "hidden");
   await badge.click();
   await page.waitForFunction(() => document.querySelector('[aria-label^="Change activation policy for custom"]')?.textContent?.trim() === "ask");
   await page.screenshot({ path: "/tmp/skills-flow-badge-ask.png" });
@@ -133,7 +133,7 @@ try {
   assert.equal(await ev(`a => JSON.stringify(a.options.selectedSkills())`), `["build","custom"]`, "rich session selection must load");
   assert.equal(await ev(`a => JSON.stringify(a.options.skillUsables())`), `{"build":"inherit","custom":"yolo"}`, "rich session usables must load");
   assert.equal(await ev(`a => a.options.approvalMode()`), "yolo", "rich session approval mode must load");
-  await page.getByRole("button", { name: "New Conversation", exact: true }).click();
+  await page.getByRole("button", { name: "New conversation", exact: true }).click();
   await page.waitForFunction(() => (window as any).modeSkillsUI.draftMode() === true);
   assert.equal(await ev(`a => JSON.stringify(a.options.selectedSkills())`), `["build"]`, "a fresh draft carries only the remembered mode skill");
   assert.equal(await ev(`a => JSON.stringify(a.options.skillUsables())`), `{}`, "a fresh draft carries no usable override");
@@ -162,7 +162,7 @@ try {
   // --- Skill load errors render in the popup (amber box, relative path). ---
   await ev(`a => a.setSkillErrors(["skill broken.js: boom"])`);
   await openModeMenu();
-  const status = page.getByRole("status");
+  const status = page.locator('[role="status"]').filter({ hasText: "skill file" });
   await status.waitFor();
   assert((await status.textContent())?.includes("1 skill file failed to load"), `skill errors must headline the count, got ${JSON.stringify(await status.textContent())}`);
   assert((await status.textContent())?.includes("broken.js"), `skill errors must name the file, got ${JSON.stringify(await status.textContent())}`);

@@ -247,6 +247,7 @@ export function claimRemoteHintsOwner(setActive: (next: boolean) => void): () =>
   };
 }
 
+/** @test-hook Count currently active RemoteHints tooltip owners. */
 export function getActiveRemoteHintsCount(): number {
   let count = 0;
   for (const slot of remoteHintsSlots) {

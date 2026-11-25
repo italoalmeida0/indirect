@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import path from "node:path";
 import { sqliteRetryDelay, withSqliteRetry, retrySqlite, isRetryableSqliteError } from "../server/sqlite-retry";
-import { batchDelete, batchDeleteComposite } from "../server/batch-delete";
+import { batchDeleteAsync } from "../server/batch-delete";
 import { guardedMaintenance, scheduleMaintenance } from "../server/maintenance";
 import { freshDir, removeTree } from "./sqlite-fixture";
 
@@ -222,7 +222,7 @@ describe("guardedMaintenance", () => {
   });
 });
 
-describe("batchDelete", () => {
+describe("batchDeleteAsync", () => {
   function seed(name: string, rows: number): { db: Database; dir: string } {
     const fixture = fixtureDatabase(name);
     const insert = fixture.db.prepare("INSERT INTO rows(ts) VALUES (?)");
@@ -238,7 +238,7 @@ describe("batchDelete", () => {
     const { db, dir } = seed("batch-all", 1_200);
     try {
       // 1,200 rows with ts = 0..1199; the predicate keeps 900 of them.
-      const result = batchDelete(db, { table: "rows", where: "ts < ?", params: [900], batchSize: 250, maxRows: 100_000 });
+      const result = await batchDeleteAsync(db, { table: "rows", where: "ts < ?", params: [900], batchSize: 250, maxRows: 100_000 });
       expect(result.deleted).toBe(900);
       expect(result.batches).toBe(4);
       expect(result.truncated).toBe(false);
@@ -253,32 +253,10 @@ describe("batchDelete", () => {
   test("honors maxRows so one scheduled run cannot delete an unbounded amount", async () => {
     const { db, dir } = seed("batch-cap", 1_000);
     try {
-      const result = batchDelete(db, { table: "rows", where: "ts >= 0", batchSize: 100, maxRows: 250 });
+      const result = await batchDeleteAsync(db, { table: "rows", where: "ts >= 0", batchSize: 100, maxRows: 250 });
       expect(result.deleted).toBe(250);
       expect(result.truncated).toBe(true);
       expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM rows").get()!.n).toBe(750);
-    } finally {
-      db.close();
-      await removeTree(dir);
-    }
-  });
-
-  test("works on a WITHOUT ROWID table through explicit key columns", async () => {
-    const { db, dir } = fixtureDatabase("batch-composite");
-    db.exec("CREATE TABLE composite (bucket INTEGER NOT NULL, key TEXT NOT NULL, PRIMARY KEY(bucket, key)) WITHOUT ROWID");
-    const insert = db.prepare("INSERT INTO composite(bucket, key) VALUES (?, ?)");
-    try {
-      db.transaction(() => {
-        for (let bucket = 0; bucket < 10; bucket++) for (let key = 0; key < 50; key++) insert.run(bucket, "k" + key);
-      })();
-    } finally {
-      insert.finalize();
-    }
-    try {
-      const result = batchDeleteComposite({ db, table: "composite", keys: ["bucket", "key"], where: "bucket < ?", params: [7], batchSize: 100 });
-      expect(result.deleted).toBe(350);
-      expect(result.batches).toBeGreaterThan(1);
-      expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM composite").get()!.n).toBe(150);
     } finally {
       db.close();
       await removeTree(dir);
@@ -293,7 +271,7 @@ describe("batchDelete", () => {
     try {
       // Every batch must leave the table visible in a committed state, which
       // only holds if the deletes are separate transactions.
-      const result = batchDelete(db, {
+      const result = await batchDeleteAsync(db, {
         table: "rows",
         where: "ts >= 0",
         batchSize: 100,

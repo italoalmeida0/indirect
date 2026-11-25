@@ -8,7 +8,6 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 
 	"indirect/indirect-code-daemon/internal/durable"
@@ -270,12 +269,6 @@ func readTurnIndexFile(path string) ([]TurnEntry, int64, error) {
 	return entries, validBytes, nil
 }
 
-// appendTurnIndexEntry appends a single 88-byte TurnEntry to path in O(1),
-// repairing any uncommitted tail bytes left by an earlier interrupted write.
-func appendTurnIndexEntry(path string, validBytes int64, entry TurnEntry) error {
-	return appendTurnIndexEntries(path, validBytes, []TurnEntry{entry})
-}
-
 // stageTurnIndexEntries opens/truncates/writes added TurnEntries and returns the
 // open *os.File (and optional temp path when creating a brand-new index) ready
 // for a coalesced Sync+Close, followed by optional durable.Rename(tmpPath, path).
@@ -328,33 +321,6 @@ func stageTurnIndexEntries(dir, path string, validBytes int64, added []TurnEntry
 		return nil, "", err
 	}
 	return f, "", nil
-}
-
-// appendTurnIndexEntries appends one or more 88-byte TurnEntries to path in a
-// single write + Sync, repairing any uncommitted tail bytes first.
-func appendTurnIndexEntries(path string, validBytes int64, added []TurnEntry) error {
-	if len(added) == 0 {
-		return nil
-	}
-	dir := filepath.Dir(path)
-	f, tmpPath, err := stageTurnIndexEntries(dir, path, validBytes, added)
-	if err != nil {
-		return err
-	}
-	if err := syncAndCloseFiles([]*os.File{f}); err != nil {
-		if tmpPath != "" {
-			_ = os.Remove(tmpPath)
-		}
-		return err
-	}
-	if tmpPath != "" {
-		if err := durable.Rename(tmpPath, path); err != nil {
-			_ = os.Remove(tmpPath)
-			return err
-		}
-		return durable.SyncDir(dir)
-	}
-	return nil
 }
 
 func readManifestFile(path string) (Manifest, error) {

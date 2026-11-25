@@ -157,16 +157,6 @@ func isSeparatorRune(r rune) bool {
 	}
 }
 
-// Tokenize extracts all normalized search tokens (both sub-tokens and compound
-// code/path tokens) from text without a token cap.
-func Tokenize(text string) []string {
-	var out []string
-	tokenizeStream(text, 0, func(tok string, _ bool) {
-		out = append(out, tok)
-	})
-	return out
-}
-
 // TokenizeField builds a term->TF map and primary token length for one field.
 // When maxPrimaryTokens > 0, tokenization halts once maxPrimaryTokens primary
 // tokens have been emitted (used for FieldTool's 512-token per-block cap).
@@ -733,14 +723,6 @@ func TruncateExcerptRunes(s string, maxRunes int) string {
 		runeCount++
 	}
 	return b.String()
-}
-
-// ExtractSnippet produces a 100% UTF-8 rune-safe excerpt (~maxRunes, default 120)
-// centered around the highest-density cluster of matched query terms (including
-// diacritic-folded PT-BR terms, camelCase/snake_case sub-tokens, and prefixes).
-func ExtractSnippet(text string, rawQuery string, maxRunes int) string {
-	aq := analyzeQuery(rawQuery, true)
-	return extractSnippetWithTerms(text, aq.highlight, maxRunes)
 }
 
 func extractSnippetWithTerms(text string, matchTerms []string, maxRunes int) string {

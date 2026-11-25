@@ -7,8 +7,6 @@ import { ApiError } from "../server/http";
 import { serveStatic } from "../server/static";
 import {
   createVoiceModelManager,
-  ensureVoiceModelFile,
-  getVoiceModelState,
   startVoiceModelBootstrap,
 } from "../server/voice-model";
 
@@ -327,9 +325,6 @@ describe("Self-hosted voice model route & downloader", () => {
     try {
       const boot = await startVoiceModelBootstrap();
       expect(boot.skipped).toBe(true);
-      const defaultState = getVoiceModelState();
-      expect(defaultState.files.encoder.filename).toBe("encoder-model.w2a8.onnx");
-      expect(typeof ensureVoiceModelFile).toBe("function");
     } finally {
       if (prevSkip === undefined) delete process.env.INDIRECT_SKIP_VOICE_MODEL_DOWNLOAD;
       else process.env.INDIRECT_SKIP_VOICE_MODEL_DOWNLOAD = prevSkip;

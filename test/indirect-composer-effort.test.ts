@@ -7,7 +7,6 @@ import {
   EFFORT_SPECS,
   clientXToEffortIndex,
   resolveEffortIndex,
-  resolveEffortSpec,
   stepEffortIndex,
 } from "../web/src/indirect-code/utils/effortSpec";
 
@@ -41,7 +40,7 @@ describe("EffortPickerBody level specs and geometry helpers", () => {
     expect(resolveEffortIndex("xhigh")).toBe(5);
     expect(resolveEffortIndex("maximum")).toBe(5);
     expect(resolveEffortIndex("max")).toBe(6);
-    expect(resolveEffortSpec("MAX").title).toBe("Max");
+    expect(EFFORT_SPECS[resolveEffortIndex("MAX")]!.title).toBe("Max");
   });
 
   test("clientXToEffortIndex maps track coordinates with 14px thumb-center insets to stops 0..6", () => {

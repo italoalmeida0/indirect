@@ -70,7 +70,7 @@ func TestUpdaterSHA256VerificationFailClosed(t *testing.T) {
 			t.Fatalf("checkForUpdates did not retain sum: avail=%q sum=%q want=%q", gotAvail, gotCachedSum, goodHex)
 		}
 
-		appPath, err := d.fetchAppTo("v9.9.9", d.slots())
+		appPath, _, err := d.fetchAppToVerified("v9.9.9", d.slots())
 		if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
 			t.Fatalf("expected sha256 mismatch error, got path=%q err=%v", appPath, err)
 		}
@@ -107,7 +107,7 @@ func TestUpdaterSHA256VerificationFailClosed(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(root, "slots", "active"), []byte("a\n"), 0o600)
 		d.cell.store(&DaemonConfig{HostID: "h1", GatewayURL: srv.URL, DaemonToken: "dmt_upd"})
 
-		if _, err := d.fetchAppTo("v9.9.9", d.slots()); err == nil || !strings.Contains(err.Error(), "sha256") {
+		if _, _, err := d.fetchAppToVerified("v9.9.9", d.slots()); err == nil || !strings.Contains(err.Error(), "sha256") {
 			t.Fatalf("expected missing sha256 error, got %v", err)
 		}
 		if downloadHits.Load() != 0 {
@@ -140,7 +140,7 @@ func TestUpdaterSHA256VerificationFailClosed(t *testing.T) {
 		_ = os.WriteFile(filepath.Join(root, "slots", "active"), []byte("a\n"), 0o600)
 		d.cell.store(&DaemonConfig{HostID: "h1", GatewayURL: srv.URL, DaemonToken: "dmt_upd"})
 
-		appPath, err := d.fetchAppTo("v9.9.9", d.slots())
+		appPath, _, err := d.fetchAppToVerified("v9.9.9", d.slots())
 		if err != nil {
 			t.Fatalf("expected verified download to succeed, got %v", err)
 		}

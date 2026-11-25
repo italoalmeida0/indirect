@@ -130,20 +130,6 @@ func (s *Sandbox) CheckNetHost(host string) error {
 	return fmt.Errorf("permission denied: network host %q is outside declared allowlist", host)
 }
 
-// HasRulesForKind reports whether the sandbox has any active permission rule
-// matching kind (or wildcard "*"). Used as a zero-syscall fast-path check.
-func (s *Sandbox) HasRulesForKind(kind string) bool {
-	if s == nil {
-		return false
-	}
-	for _, r := range s.EffectiveRules() {
-		if r.Kind == kind || r.Kind == "*" {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *Sandbox) CheckReadPath(path string) error {
 	if s != nil && s.isInteractive() {
 		locked := s.Locked()

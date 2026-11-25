@@ -22,10 +22,6 @@ type sseEvent struct {
 // skipped.
 const gatewayUsageCommentPrefix = "x-gateway-usage"
 
-func readSSE(r io.Reader, out chan<- sseEvent) {
-	readSSEUntil(nil, r, out)
-}
-
 func readSSEUntil(done <-chan struct{}, r io.Reader, out chan<- sseEvent) {
 	defer close(out)
 	// linereader (GNU-correct): bufio.Scanner silently DROPS lines over

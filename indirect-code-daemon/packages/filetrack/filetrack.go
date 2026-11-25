@@ -1,7 +1,6 @@
 package filetrack
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -187,23 +186,6 @@ func CapContent(content string) (string, bool) {
 		return "", true
 	}
 	return content, false
-}
-
-// ReadTextSnapshot reads a file for snapshotting. Binary files return
-// ok=false so callers can mark them instead of storing bytes.
-func ReadTextSnapshot(absPath string) (content string, ok bool, err error) {
-	data, err := os.ReadFile(absPath)
-	if err != nil {
-		return "", false, err
-	}
-	if isBinaryBytes(data) {
-		return "", false, nil
-	}
-	capped, tooLarge := CapContent(string(data))
-	if tooLarge {
-		return "", false, nil
-	}
-	return capped, true, nil
 }
 
 func isBinaryBytes(data []byte) bool {

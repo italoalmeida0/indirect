@@ -10,7 +10,7 @@ func TestRegressionSSELineEndings(t *testing.T) {
 		t.Run(ending.name, func(t *testing.T) {
 			stream := strings.Join([]string{"event: message", "data: {\"text\":\"hello\"}", "", "data: [DONE]", "", ""}, ending.sep)
 			out := make(chan sseEvent, 8)
-			readSSE(strings.NewReader(stream), out)
+			readSSEUntil(nil, strings.NewReader(stream), out)
 			var events []sseEvent
 			for ev := range out {
 				events = append(events, ev)

@@ -224,7 +224,7 @@ func TestIsUseSkillResultWithRawMessage(t *testing.T) {
 		},
 	}
 
-	stripped, _ := stripSkillArtifacts(msgs, 1, -1)
+	stripped, _ := stripSkillArtifactsOnAt(msgs, 0, 1, -1, nil)
 	if len(stripped) != 1 {
 		t.Fatalf("expected 1 message remaining after stripSkillArtifacts, got %d", len(stripped))
 	}

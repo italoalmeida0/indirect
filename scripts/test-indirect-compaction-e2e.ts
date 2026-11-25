@@ -37,7 +37,7 @@
  */
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
-import { copyFileSync, existsSync, mkdtempSync, mkdirSync } from "fs";
+import { copyFileSync, mkdtempSync, mkdirSync } from "fs";
 import { homedir, tmpdir } from "os";
 import path from "path";
 import { promises as fs } from "fs";

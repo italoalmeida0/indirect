@@ -175,19 +175,3 @@ export function archiveEntries(raw: Uint8Array): ArchiveEntry[] {
   if (format === "gzip") return readTarMembers(Bun.gunzipSync(new Uint8Array(raw)));
   throw new Error("unrecognized archive format (expected zip, tar or tar.gz)");
 }
-
-/** Case-insensitive member lookup by basename, matching `binary` exactly. */
-export async function extractBinaryFromArchive(raw: Uint8Array, binary: string): Promise<Uint8Array> {
-  const entries = archiveEntries(raw);
-  const wanted = binary.toLowerCase();
-  const match =
-    entries.find((entry) => entry.name.toLowerCase() === wanted) ??
-    entries.find((entry) => entry.name.toLowerCase().endsWith(`/${wanted}`)) ??
-    entries.find((entry) => entry.name.toLowerCase().split("/").pop() === wanted && !entry.name.endsWith("/"));
-  if (!match) {
-    throw new Error(`obscura archive has no ${binary} (found: ${entries.map((entry) => entry.name).slice(0, 20).join(", ") || "no members"})`);
-  }
-  const bytes = await match.read();
-  if (bytes.length === 0) throw new Error(`obscura archive member ${match.name} is empty`);
-  return bytes;
-}

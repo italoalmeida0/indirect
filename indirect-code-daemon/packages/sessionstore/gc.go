@@ -38,16 +38,6 @@ type GCPolicy struct {
 	Now               time.Time
 }
 
-// DefaultGCPolicy returns the standard production GC policy.
-func DefaultGCPolicy() GCPolicy {
-	return GCPolicy{
-		CompressLogsAfter: DefaultCompressLogsAfter,
-		DeleteLogsAfter:   DefaultDeleteLogsAfter,
-		CASGracePeriod:    DefaultCASGracePeriod,
-		MaxDaemonLogBytes: DefaultMaxDaemonLogBytes,
-	}
-}
-
 func normalizeGCPolicy(p GCPolicy) GCPolicy {
 	if p.CompressLogsAfter <= 0 {
 		p.CompressLogsAfter = DefaultCompressLogsAfter

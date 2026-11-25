@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { matchOpenRouterModel, type OpenRouterModel } from "../server/openrouter";
 import { enrichParsedModel, type ParsedModel } from "../server/models";
-import { modelPricingJoins, costExprSql, costRowSql, costAggSql, normalizePricing, pricingColumns } from "../server/pricing";
+import { modelPricingJoins, costExprSql, costRowFieldsSql, costAggFieldsSql, normalizePricing, pricingColumns } from "../server/pricing";
 
 describe("OpenRouter model matching", () => {
   const catalog: OpenRouterModel[] = [
@@ -161,13 +161,13 @@ describe("SQL pricing and cost helpers", () => {
     expect(expr).toContain("e.cache_tok");
     expect(expr).toContain("e.out_tok");
 
-    const rowCost = costRowSql("e");
+    const rowCost = costRowFieldsSql("e");
     expect(rowCost).toContain("e.in_tok");
     expect(rowCost).toContain("e.cache_tok");
     expect(rowCost).toContain("e.out_tok");
     expect(rowCost).toContain("AS cost");
 
-    const aggCost = costAggSql("m");
+    const aggCost = costAggFieldsSql("m");
     expect(aggCost).toContain("COALESCE(SUM(");
     expect(aggCost).toContain("m.in_tok");
     expect(aggCost).toContain("AS cost");

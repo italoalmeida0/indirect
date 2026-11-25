@@ -665,7 +665,7 @@ function broadcastToUser(userId: string, data: string | object): void {
   broadcastToUserCompressed(userId, data, false);
 }
 
-/** Test hook: bounded turn disposition map size. */
+/** @test-hook Bounded turn disposition map size. */
 export function relayDispositionCacheSize(): number {
   return lastDisposition.size;
 }

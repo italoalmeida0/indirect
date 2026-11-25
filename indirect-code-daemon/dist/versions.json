@@ -12,14 +12,14 @@
       "windows-arm64": "indirect-code-windows-arm64.exe"
     },
     "sums": {
-      "indirect-code-darwin-amd64": "706bffb1ca8518414446dd72a0086a936a9c38092c4866d986a02ee6e0f09043",
-      "indirect-code-darwin-arm64": "3ffc6f6c378625f26d9c519d35d3b185ff9164f8bca5d90792f179430cff4fd1",
+      "indirect-code-darwin-amd64": "663b42e80213ce35190843e07f51a492968dbfa521badf6154fc47b2b5075d4c",
+      "indirect-code-darwin-arm64": "38af554f6b87fd53da2cb4f848b3f47e71529e80fe2b7bb9950bfdbaa870a55f",
       "indirect-code-install.ps1": "b74310511d7a8882b921fe263dc6a3837882309861b7339afe3e77b5edd4f53e",
       "indirect-code-install.sh": "6efcb4f10c6f1ae68d9b31a7f05c5b95ed1538f72a1df1296196a0c0c82b02a4",
-      "indirect-code-linux-amd64": "173da72b5d7c804d7fe1d32b601ae2700875a360777dbe9947a4d7a77df26c47",
-      "indirect-code-linux-arm64": "c1af0ce1d1f63c3c490e44745862123ff9869011270ff96ddfcb31345797514e",
-      "indirect-code-windows-amd64.exe": "c11fd6721348541b82ddcb3af3ec72a674ee84a7c9cae93eb021d9a796251fc1",
-      "indirect-code-windows-arm64.exe": "911b0fe3b79629e4b96fee7f4bf82c0ad0818bf3e47efd715c4d4fc5a5e4021e"
+      "indirect-code-linux-amd64": "83a6a37553c494aee7ae36fa22a2e91d7f66dc08a46464bd6c707a538728bcff",
+      "indirect-code-linux-arm64": "27617a3893331c2a23db729a83d57d88582a9a63773dd751f0ad8f93345ea7c1",
+      "indirect-code-windows-amd64.exe": "76a4237c30779c8fcc766c5933f6e0e7cfdc5dfd13893b3cc838d5e7e408a49e",
+      "indirect-code-windows-arm64.exe": "e48bd3c03cf646d9f97a9e410e5ef971d70fcabaf8bcec636f0d40654424b481"
     }
   }
 }

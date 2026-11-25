@@ -34,12 +34,12 @@ export function toastDuration(kind: ToastKind): number {
   return kind === "err" ? 6500 : 3200;
 }
 
-/** Read-only signal accessor of currently active toasts (used in tests). */
+/** @test-hook Read-only signal accessor of currently active toasts. */
 export function activeToasts(): readonly ToastItem[] {
   return items();
 }
 
-/** Immediately clear the toast stack (used in tests). */
+/** @test-hook Immediately clear the toast stack. */
 export function clearToasts(): void {
   setItems([]);
 }

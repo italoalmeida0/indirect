@@ -36,7 +36,7 @@ func TestApplyGatewayUsage(t *testing.T) {
 func TestReadSSEGatewayUsageComment(t *testing.T) {
 	body := "data: {\"a\":1}\n\n: x-gateway-usage in=10,cache=5,out=7,reason=2\n\n: ping\n\ndata: [DONE]\n\n"
 	out := make(chan sseEvent, 8)
-	readSSE(strings.NewReader(body), out)
+	readSSEUntil(nil, strings.NewReader(body), out)
 	var events []sseEvent
 	for ev := range out {
 		events = append(events, ev)

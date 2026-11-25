@@ -170,14 +170,6 @@ func (d *DaemonServer) connectWebSocketOnce() error {
 	return nil
 }
 
-// connectWebSocketWithQuery dials the relay with an extra query suffix
-// (e.g. "&updating=1" for the --update-start naive updater: the relay
-// keeps the host registered but broadcasts host_status updating so the
-// frontend shows the update overlay instead of offline).
-func (d *DaemonServer) connectWebSocketWithQuery(extra string) error {
-	return d.connectWebSocketContext(context.Background(), extra)
-}
-
 // connectWebSocketContext blocks on the socket until it drops. The naive
 // updater answers nothing (the relay blocks client->daemon traffic during
 // ?updating=1), so inbound messages are read and discarded — the socket

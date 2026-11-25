@@ -937,14 +937,6 @@ func recordMeta(rec *SessionRecord) metaLine {
 	}
 }
 
-// discardWAL closes and removes the WAL without committing (purge path).
-func closeWAL(wal **walWriter) {
-	if wal != nil && *wal != nil {
-		_ = (*wal).close()
-		*wal = nil
-	}
-}
-
 // removeStaleWAL deletes the session's WAL when it cannot hold a turn worth
 // resuming (no header, zero/older turn index, or interior corruption that
 // openWALAppend cannot repair) and reports whether a file was actually
@@ -1028,14 +1020,3 @@ func appendWALEvent(wal *walWriter, ev walEvent) error {
 	return wal.flush()
 }
 
-// cloneWALHeader deep-copies a header so resume can overlay the latest
-// body snapshots without mutating the caller's copy.
-func cloneWALHeader(h *walHeader) *walHeader {
-	if h == nil {
-		return nil
-	}
-	cp := *h
-	cp.AttachmentIDs = append([]string{}, h.AttachmentIDs...)
-	cp.Incoming = append([]filetrack.TrackedFile{}, h.Incoming...)
-	return &cp
-}

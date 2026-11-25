@@ -25,10 +25,6 @@ export function resolveEffortIndex(raw: string): number {
   return idx >= 0 ? idx : 3;
 }
 
-export function resolveEffortSpec(raw: string): EffortSpec {
-  return EFFORT_SPECS[resolveEffortIndex(raw)]!;
-}
-
 export function clientXToEffortIndex(clientX: number, trackLeft: number, trackWidth: number): number {
   const span = Math.max(1, trackWidth - 28);
   const ratio = Math.min(1, Math.max(0, (clientX - trackLeft - 14) / span));

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/rand"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -205,14 +203,6 @@ func reorderQueueItems(current []QueuedMessage, ids []string) []QueuedMessage {
 	}
 	sortQueueByDelivery(ordered)
 	return ordered
-}
-
-func randomQueueID() string {
-	id := make([]byte, 8)
-	if _, err := rand.Read(id); err != nil {
-		panic(err)
-	}
-	return fmt.Sprintf("%x", id)
 }
 
 func queuePayload(queue []QueuedMessage) []any {

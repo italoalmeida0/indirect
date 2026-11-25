@@ -96,7 +96,7 @@ func TestCompactionCheckpointIsAppendOnly(t *testing.T) {
 	if len(msgs) != 5 {
 		t.Fatalf("compaction must be append-only; full history = 5 rows, got %d", len(msgs))
 	}
-	projected := projectMessages(msgs, state)
+	projected := projectMessagesAt(msgs, 0, state)
 	if len(projected) != 3 || extractText(projected[1]) != "old" {
 		t.Fatalf("projection must be [summary][3 kept rows], got %+v", projected)
 	}

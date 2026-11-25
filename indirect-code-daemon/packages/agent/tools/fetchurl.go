@@ -248,11 +248,6 @@ func (t *FetchURLTool) guardURL(u *url.URL) error {
 	return t.guardHostPort(host, port)
 }
 
-// guard applies the SSRF and interactive permission policy.
-func (t *FetchURLTool) guard(host string) error {
-	return t.guardHostPort(host, "")
-}
-
 func (t *FetchURLTool) guardHostPort(host, port string) error {
 	if isCloudMetadataHost(host) {
 		return fmt.Errorf("fetch_url: cloud metadata blocked")

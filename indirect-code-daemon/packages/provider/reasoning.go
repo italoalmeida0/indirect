@@ -54,11 +54,6 @@ func containsReasoningLevel(levels []string, target string) bool {
 	return false
 }
 
-func hasReasoningLevelOverride(model Model, level string) bool {
-	_, ok := model.ReasoningLevelMap[NormalizeReasoning(level)]
-	return ok
-}
-
 // ClampReasoningForModel maps a configured level to the nearest level exposed
 // for the active model. Ties prefer the higher level.
 func ClampReasoningForModel(model Model, level string) string {
@@ -169,67 +164,4 @@ func AnthropicAdaptiveEffort(level string) string {
 	default:
 		return ""
 	}
-}
-
-// OpenAIReasoningEffort maps the thinking setting onto the effort enum
-// accepted by generic OpenAI-compatible chat-completions endpoints.
-func OpenAIReasoningEffort(level string) string {
-	switch NormalizeReasoning(level) {
-	case "minimum", "low":
-		// Many compatible endpoints only accept low/medium/high.
-		return "low"
-	case "medium":
-		return "medium"
-	case "high", "xhigh", "max":
-		return "high"
-	default:
-		return ""
-	}
-}
-
-// OpenAICompatAnthropicEffort maps the thinking setting when an adaptive
-// Anthropic model is served over an OpenAI-compatible chat-completions wire.
-// Adaptive models accept native xhigh and max effort values.
-func OpenAICompatAnthropicEffort(level string) string {
-	switch NormalizeReasoning(level) {
-	case "minimum", "low":
-		return "low"
-	case "medium":
-		return "medium"
-	case "high":
-		return "high"
-	case "xhigh":
-		return "xhigh"
-	case "max":
-		return "max"
-	default:
-		return ""
-	}
-}
-
-// OpenAICodexReasoningEffort maps reasoning levels onto the Responses API effort
-// enum. GPT-5.6 and GPT-6 Astra support native max; other models clamp max to xhigh.
-func OpenAICodexReasoningEffort(level, model string) string {
-	switch NormalizeReasoning(level) {
-	case "minimum", "low":
-		return "low"
-	case "medium":
-		return "medium"
-	case "high":
-		return "high"
-	case "xhigh":
-		return "xhigh"
-	case "max":
-		if supportsResponsesMaxEffort(model) {
-			return "max"
-		}
-		return "xhigh"
-	default:
-		return ""
-	}
-}
-
-func supportsResponsesMaxEffort(model string) bool {
-	id := strings.ToLower(model)
-	return strings.HasPrefix(id, "gpt-5.6-") || id == "gpt-6-astra"
 }

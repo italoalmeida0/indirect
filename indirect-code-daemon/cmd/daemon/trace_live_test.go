@@ -590,7 +590,7 @@ func scenarioWaiterLost(t *testing.T) []map[string]any {
 	act.inbox <- Envelope{Payload: hookMsg{fn: func() {
 		act.pending = &pendingAsk{id: "ap9", kind: "approval"}
 		act.state = stateAwaitAppr
-		act.wakeApproval("ap9", true) // no waiter -> lost
+		act.wakeApprovalOutcome("ap9", approvalOutcome{approved: true, decision: "once"}) // no waiter -> lost
 	}}}
 	time.Sleep(80 * time.Millisecond)
 	recs := traceFile(t, traceDir)

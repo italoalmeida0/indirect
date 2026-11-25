@@ -83,22 +83,6 @@ func WrapToolResultContent(res ToolResult) []provider.Content {
 	return out
 }
 
-// ToolResultEnvelopeText returns the single envelope text a tool result
-// serializes to (used by tests and the transcript stub).
-func ToolResultEnvelopeText(res ToolResult) string {
-	typ := "ok"
-	if res.IsError {
-		typ = "error"
-	}
-	var texts []string
-	for _, c := range res.Content {
-		if tb, ok := c.(provider.TextBlock); ok {
-			texts = append(texts, tb.Text)
-		}
-	}
-	return ToolEnvelope(typ, res.Attrs, strings.Join(texts, "\n"))
-}
-
 // escapeAttr entity-escapes an attribute value.
 func escapeAttr(v string) string {
 	v = strings.ReplaceAll(v, "&", "&amp;")

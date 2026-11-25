@@ -89,13 +89,9 @@ func runnerStarter(root, sessionID, brainDir string) tools.Starter {
 	}
 }
 
-// startRunner spawns the runner role for one command and returns the
+// startRunnerWithContext spawns the runner role for one command and returns the
 // tool-visible handle. The identity exists from THIS moment (state file
 // + out naming), before any Slow() registration.
-func startRunner(root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.Proc, error) {
-	return startRunnerWithContext(context.Background(), root, sessionID, brainDir, spec)
-}
-
 func startRunnerWithContext(ctx context.Context, root, sessionID, brainDir string, spec tools.ExecSpec) (*tools.Proc, error) {
 	if ctx == nil {
 		ctx = context.Background()

@@ -436,6 +436,4 @@ export function createBlobUrlCache(options: BlobUrlCacheOptions = {}) {
   };
 }
 
-export type BlobUrlCache = ReturnType<typeof createBlobUrlCache>;
-
 export const sharedBlobUrlCache = createBlobUrlCache();

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/user"
 	"strings"
 	"sync"
@@ -683,42 +682,6 @@ func (a *outputAccumulator) openTempFile() {
 	a.tempPath = f.Name()
 }
 
-// redirectToFile moves the accumulator's persistence from the anonymous
-// temp file to the job's .log file (append mode) — called when the command
-// detaches into a background job. Everything already captured is flushed
-// first so the file starts with the command's earlier output; from then
-// on every chunk lands in BOTH the in-memory tail (live terminal view)
-// and the file (durable record the model can read).
-func (a *outputAccumulator) redirectToFile(path string) {
-	if path == "" {
-		return
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	// Flush what the in-memory accumulator holds (chunks or tail) so the
-	// log reflects the output produced before the detach.
-	if a.tempFile != nil {
-		_ = a.tempFile.Close()
-		if a.tempPath != "" {
-			_ = os.Remove(a.tempPath)
-		}
-		a.tempFile = nil
-		a.tempPath = ""
-	}
-	if len(a.chunks) > 0 {
-		_, _ = f.Write(bytes.Join(a.chunks, nil))
-		a.chunks = nil
-	} else if len(a.tail) > 0 {
-		_, _ = f.Write(a.tail)
-	}
-	a.tempFile = f
-	a.tempPath = path
-}
-
 // getLastLineBytes returns the byte length of the last
 // (possibly still open) line.
 func (a *outputAccumulator) getLastLineBytes() int {
@@ -884,8 +847,3 @@ var (
 	shellMu       sync.RWMutex
 	shellOverride *shellCommand
 )
-
-func newShellCmd(ctx context.Context, command string) *exec.Cmd {
-	shell := currentShell()
-	return exec.CommandContext(ctx, shell.path, shell.flag, command)
-}

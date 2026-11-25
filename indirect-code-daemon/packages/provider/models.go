@@ -26,12 +26,6 @@ type Model struct {
 	Source  string `json:"source,omitempty"`
 }
 
-// ComputeCost returns the USD cost for the given usage on model m.
-func ComputeCost(m Model, u Usage) float64 {
-	in, cache, out := ComputeCostBreakdown(m, u)
-	return in + cache + out
-}
-
 // ComputeCostBreakdown splits the USD cost per bucket: fresh input,
 // cached input (read + write), and output (reasoning bills at the
 // output rate, so it stays inside the output share).

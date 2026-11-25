@@ -413,7 +413,6 @@ func (w *turnBridge) run() error {
 	}
 	w.agent.SummaryNudgeExtra = w.stateSectionsText
 	w.agent.OnMessageAppended = w.onMessageAppended
-	w.agent.OnContextAppended = w.onContextAppended
 	w.agent.OnCompactionState = w.onCompactionState
 	w.agent.OnUsage = w.onUsage
 	w.agent.AutoCompact = w.autoCompact
@@ -1411,13 +1410,6 @@ func (w *turnBridge) onMessageAppended(m provider.Message) {
 	w.sendInbox(walAppendMsg{ev: walMsgEvent(m), liveReset: m.Role == provider.RoleAssistant})
 }
 
-func (w *turnBridge) onContextAppended(m provider.Message) {
-	if m.TurnIndex == 0 {
-		m.TurnIndex = w.snap.turnIndex
-	}
-	w.sendInbox(walAppendMsg{ev: walMsgEvent(m), contextNotice: m})
-}
-
 func (w *turnBridge) onCompactionState(state *core.CompactionState) {
 	if state == nil {
 		return
@@ -2128,10 +2120,6 @@ func wasFileReadInLiveTail(cwd string, tail []provider.Message, target string) b
 		}
 	}
 	return false
-}
-
-func compactedFileAdvisoryFor(cwd string, history []provider.Message, state *core.CompactionState, absPath string) string {
-	return compactedFileAdvisoryForAt(cwd, history, 0, state, absPath)
 }
 
 func compactedFileAdvisoryForAt(cwd string, history []provider.Message, baseMsgIdx int, state *core.CompactionState, absPath string) string {

@@ -3841,10 +3841,6 @@ func (en *rtEntry) opFSGlob(argsStr string) (string, []byte, bool, string, error
 	return string(b), nil, false, "", nil
 }
 
-func (en *rtEntry) matchGlob(baseDir, pattern string) ([]string, string, error) {
-	return en.matchGlobWithExclude(baseDir, pattern, nil)
-}
-
 func normalizeGlobDotSegments(p string) (string, bool) {
 	parts := strings.Split(p, "/")
 	out := make([]string, 0, len(parts))

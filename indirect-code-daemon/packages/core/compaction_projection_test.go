@@ -170,9 +170,9 @@ func TestMaybeAutoCompactTriggerAndNoop(t *testing.T) {
 
 	// Tight window: counted payload blows past window-reserve -> compacts.
 	a := newSeeded()
-	did, err := a.MaybeAutoCompact(context.Background(), 20000, nil)
+	did, err := a.MaybeAutoCompactAt(context.Background(), 20000, 0, nil)
 	if err != nil {
-		t.Fatalf("MaybeAutoCompact: %v", err)
+		t.Fatalf("MaybeAutoCompactAt: %v", err)
 	}
 	if !did {
 		t.Fatalf("expected compaction past the reserve")
@@ -190,9 +190,9 @@ func TestMaybeAutoCompactTriggerAndNoop(t *testing.T) {
 	// Huge window: same transcript fits -> no-op, no summarizer call.
 	b := newSeeded()
 	before := len(b.History())
-	did, err = b.MaybeAutoCompact(context.Background(), 1_000_000, nil)
+	did, err = b.MaybeAutoCompactAt(context.Background(), 1_000_000, 0, nil)
 	if err != nil {
-		t.Fatalf("MaybeAutoCompact: %v", err)
+		t.Fatalf("MaybeAutoCompactAt: %v", err)
 	}
 	if did || b.CompactionChain() != nil {
 		t.Fatalf("expected no-op on a fitting window")
@@ -213,7 +213,7 @@ func TestRunLoopAutoCompactBeforeNextResponse(t *testing.T) {
 	autoFired := false
 	a.AutoCompact = func(ctx context.Context, sink func(AgentEvent)) error {
 		autoFired = true
-		_, err := a.MaybeAutoCompact(ctx, 30000, nil)
+		_, err := a.MaybeAutoCompactAt(ctx, 30000, 0, nil)
 		return err
 	}
 	if err := a.Prompt(context.Background(), "next question", nil, func(AgentEvent) {}); err != nil {
@@ -299,7 +299,7 @@ func TestMaybeAutoCompactAtHonorsThreshold(t *testing.T) {
 	system, tools := "m", ([]provider.Tool)(nil)
 	used := provider.ContextTokens(system, tools, probe)
 	t.Logf("probe transcript = %d counted tokens", used)
-	if ShouldCompact(200000, used) {
+	if ShouldCompactAt(200000, used, 0) {
 		t.Fatalf("precondition broken: legacy ruler must NOT fire at %d/200k", used)
 	}
 	if !ShouldCompactAt(200000, used, 80) {
@@ -321,9 +321,9 @@ func TestMaybeAutoCompactAtHonorsThreshold(t *testing.T) {
 	// (back-compat for threshold <= 0): the fixed reserve line sits at
 	// 184k, above this transcript.
 	b := mkAgent()
-	did, err = b.MaybeAutoCompact(context.Background(), 200000, nil)
+	did, err = b.MaybeAutoCompactAt(context.Background(), 200000, 0, nil)
 	if err != nil {
-		t.Fatalf("MaybeAutoCompact: %v", err)
+		t.Fatalf("MaybeAutoCompactAt: %v", err)
 	}
 	if did || b.CompactionChain() != nil {
 		t.Fatalf("legacy path must keep fixed-reserve behavior (no-op at 170k/200k)")
@@ -354,7 +354,7 @@ func TestMaybeAutoCompactAtRepeatsUntilFit(t *testing.T) {
 		t.Fatalf("expected compaction above the 80%% target")
 	}
 	system, tools := a.System, a.Tools.Specs()
-	msgs := projectMessages(append([]provider.Message(nil), a.History()...), a.CompactionChain())
+	msgs := projectMessagesAt(append([]provider.Message(nil), a.History()...), 0, a.CompactionChain())
 	after := provider.ContextTokens(system, tools, msgs)
 	if after > compactTargetTokens(26000, 80) && client.calls < 3 {
 		t.Fatalf("still over target (%d > %d) after a single pass without retry", after, compactTargetTokens(26000, 80))

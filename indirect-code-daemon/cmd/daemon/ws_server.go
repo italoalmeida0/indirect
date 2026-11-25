@@ -1942,10 +1942,6 @@ func (s *wsServer) onSearchFiles(requestID, sessionID, projectID, query string) 
 	s.emit(payload)
 }
 
-func (s *wsServer) onSearch(query string, limit int) {
-	s.onSearchWithContext(context.Background(), query, limit, "")
-}
-
 func (s *wsServer) onSearchWithContext(ctx context.Context, query string, limit int, requestID string) {
 	if ctx == nil {
 		ctx = context.Background()

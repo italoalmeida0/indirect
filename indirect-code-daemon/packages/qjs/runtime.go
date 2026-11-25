@@ -2076,10 +2076,6 @@ func (en *rtEntry) tryResolveDirIndex(dir string) (string, bool) {
 	return "", false
 }
 
-func (en *rtEntry) tryResolveFileOrDir(cand string, depth int) (string, bool) {
-	return en.tryResolveFileOrDirEx(cand, false, depth)
-}
-
 func (en *rtEntry) tryResolveFileOrDirEx(cand string, isCJS bool, depth int) (string, bool) {
 	if depth > 16 || en.checkPath(cand) != nil {
 		return "", false

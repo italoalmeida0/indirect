@@ -53,15 +53,6 @@ var v5LegacyModes = map[string]string{
 	"learning": "agentic",
 }
 
-// v5LegacySkill maps a legacy mode to the builtin skill carrying its
-// behavior (embedded in the daemon binary from builtin_skills/*.js —
-// migrations never embed prompt strings).
-var v5LegacySkill = map[string]string{
-	"build":    "build",
-	"plan":     "plan",
-	"learning": "learning",
-}
-
 func applyV5(slotDir string) error {
 	// Builtin skill definitions are never seeded anywhere: they live
 	// embedded in the daemon binary (builtin_skills/*.js) and builtin

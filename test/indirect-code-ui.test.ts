@@ -1079,7 +1079,8 @@ describe("unified diff parsing (edit results and turn-change balloons)", () => {
   });
 
   test("derives line numbers from @@ hunk headers for balloon diffs", async () => {
-    const { deriveLineNumbers, diffRows } = await import("../web/src/indirect-code/utils/diffLines");
+    const { deriveDualLineNumbers, diffRows } = await import("../web/src/indirect-code/utils/diffLines");
+    const primaryLineNums = (text: string) => deriveDualLineNumbers(text)?.map((d) => d.lineNum) ?? null;
 
     const unified = [
       "--- src/app.ts",
@@ -1095,7 +1096,7 @@ describe("unified diff parsing (edit results and turn-change balloons)", () => {
       "-  gone = 6;",
     ].join("\n");
 
-    expect(deriveLineNumbers(unified)).toEqual([
+    expect(primaryLineNums(unified)).toEqual([
       "", "10", "11", "11", "12", "", "40", "40", "41",
     ]);
 
@@ -1110,16 +1111,16 @@ describe("unified diff parsing (edit results and turn-change balloons)", () => {
     ]);
 
     // New-file diffs (@@ -0,0 +1,N @@) count context from the new side.
-    expect(deriveLineNumbers("@@ -0,0 +1,3 @@\n+first\n+second\n+third")).toEqual([
+    expect(primaryLineNums("@@ -0,0 +1,3 @@\n+first\n+second\n+third")).toEqual([
       "", "1", "2", "3",
     ]);
 
     // Trailing newline does not produce phantom empty line or fake line number.
-    expect(deriveLineNumbers(unified + "\n")).toEqual(deriveLineNumbers(unified));
+    expect(primaryLineNums(unified + "\n")).toEqual(primaryLineNums(unified));
     expect(diffRows(unified + "\n")).toEqual(rows);
 
     // No @@ headers (edit-tool numbered format) -> null, numbers kept as parsed.
-    expect(deriveLineNumbers("12:+const x = 1;\n13:-old")).toBeNull();
+    expect(primaryLineNums("12:+const x = 1;\n13:-old")).toBeNull();
   });
 
   test("diffRows strips the daemon line-prefix notice", async () => {

@@ -62,16 +62,6 @@ func WithWarmSegmentLimits(maxBytes uint64, maxTurns int) Option {
 	}
 }
 
-// WithColdFrameTargetBytes overrides the target uncompressed Zstandard frame
-// size (default 64 KiB).
-func WithColdFrameTargetBytes(targetBytes int) Option {
-	return func(s *Store) {
-		if targetBytes > 0 {
-			s.coldFrameBytes = targetBytes
-		}
-	}
-}
-
 const maxCachedSessions = 32
 
 type cachedSessionState struct {
@@ -125,9 +115,6 @@ func New(slotDir string, opts ...Option) *Store {
 	}
 	return s
 }
-
-// SlotDir returns the slot directory backing this store.
-func (s *Store) SlotDir() string { return s.slotDir }
 
 // SessionsDir returns <slotDir>/sessions.
 func (s *Store) SessionsDir() string { return s.sessionsDir }
@@ -745,14 +732,6 @@ func cloneManifest(m Manifest) Manifest {
 		}
 	}
 	return cp
-}
-
-func writeAtExactEnd(path string, expectedOffset uint64, payload []byte) error {
-	f, err := stageAtExactEnd(path, expectedOffset, payload)
-	if err != nil || f == nil {
-		return err
-	}
-	return syncAndCloseFiles([]*os.File{f})
 }
 
 // AppendTurn externalizes inline images to CAS, scrubs oversized legacy tool

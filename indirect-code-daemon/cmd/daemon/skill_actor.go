@@ -272,14 +272,6 @@ func (a *sessionActor) endTurnSkills() bool {
 // compaction state). Every removed message at an index below it shifts the
 // kept tail left, so the returned anchor subtracts those removals and is
 // clamped to the new transcript length.
-func stripSkillArtifacts(msgs []provider.Message, turnIdx int, anchor int) ([]provider.Message, int) {
-	return stripSkillArtifactsOnAt(msgs, 0, turnIdx, anchor, nil)
-}
-
-func stripSkillArtifactsWithCompaction(msgs []provider.Message, turnIdx int, comp *core.CompactionState) []provider.Message {
-	return stripSkillArtifactsWithCompactionAt(msgs, 0, turnIdx, comp)
-}
-
 func stripSkillArtifactsWithCompactionAt(msgs []provider.Message, baseMsgIdx int, turnIdx int, comp *core.CompactionState) []provider.Message {
 	anchor := -1
 	if comp != nil {
@@ -287,10 +279,6 @@ func stripSkillArtifactsWithCompactionAt(msgs []provider.Message, baseMsgIdx int
 	}
 	out, _ := stripSkillArtifactsOnAt(msgs, baseMsgIdx, turnIdx, anchor, comp)
 	return out
-}
-
-func stripSkillArtifactsOn(msgs []provider.Message, turnIdx int, anchor int, comp *core.CompactionState) ([]provider.Message, int) {
-	return stripSkillArtifactsOnAt(msgs, 0, turnIdx, anchor, comp)
 }
 
 func stripSkillArtifactsOnAt(msgs []provider.Message, baseMsgIdx int, turnIdx int, anchor int, comp *core.CompactionState) ([]provider.Message, int) {

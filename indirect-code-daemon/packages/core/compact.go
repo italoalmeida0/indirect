@@ -491,20 +491,6 @@ func sliceFoldSpans(history []provider.Message, rawStart, rawCutIdx, targetToken
 	return out
 }
 
-func (a *Agent) summarizeSpan(
-	ctx context.Context,
-	history []provider.Message,
-	baseMsgIdx int,
-	localCStart, localCEnd, localCutIdx int,
-	isFinalSpan bool,
-	carryOverSummary string,
-	digests map[string]string,
-	sink func(delta string),
-) (string, provider.Usage, error) {
-	skipWarm := false
-	return a.summarizeSpanWithWarmOpt(ctx, history, baseMsgIdx, localCStart, localCEnd, localCutIdx, isFinalSpan, carryOverSummary, digests, &skipWarm, sink)
-}
-
 func (a *Agent) summarizeSpanWithWarmOpt(
 	ctx context.Context,
 	history []provider.Message,
@@ -576,19 +562,6 @@ func (a *Agent) hasLivePrefixState() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.System != "" || len(a.Tools) > 0 || a.RequestMessages != nil
-}
-
-func (a *Agent) summarizeChunkWithFallback(
-	ctx context.Context,
-	chunk []provider.Message,
-	cStart, cEnd int,
-	isTurnPrefix bool,
-	carryOverSummary string,
-	digests map[string]string,
-	sink func(delta string),
-) (string, provider.Usage, error) {
-	skipWarm := false
-	return a.summarizeChunkWithWarmOpt(ctx, chunk, cStart, cEnd, isTurnPrefix, carryOverSummary, digests, &skipWarm, sink)
 }
 
 func (a *Agent) summarizeChunkWithWarmOpt(
@@ -905,11 +878,6 @@ func (a *Agent) runWarmPrefixDirective(ctx context.Context, directive string, ex
 	}
 
 	return a.streamSummarizerRequest(ctx, req, sink)
-}
-
-// MaybeAutoCompact is the proactive compaction trigger for the AutoCompact hook.
-func (a *Agent) MaybeAutoCompact(ctx context.Context, window int, sink func(delta string)) (bool, error) {
-	return a.MaybeAutoCompactAt(ctx, window, 0, sink)
 }
 
 // EffectiveContextWindow returns the active context ceiling, honoring any

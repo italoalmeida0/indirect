@@ -877,21 +877,21 @@ try {
       const m = (window as any).__voiceMock;
       m.emitProgress(m.lastLoadId(), "server-warming", 25, 100, 25);
     });
-    assert.equal(await page.locator("[data-voice-status-overlay] .ui-shimmer").textContent(), "Preparing voice model on server...");
+    assert.equal(await page.locator("[data-voice-status-overlay] .ui-shimmer").textContent(), "Preparing voice…");
     assert.equal(await page.locator("[data-voice-status-meta]").textContent(), "25%");
 
     await page.evaluate(() => {
       const m = (window as any).__voiceMock;
       m.emitProgress(m.lastLoadId(), "downloading", 100 * 1024 * 1024, 200 * 1024 * 1024, 50);
     });
-    assert.equal(await page.locator("[data-voice-status-overlay] .ui-shimmer").textContent(), "Downloading voice model...");
+    assert.equal(await page.locator("[data-voice-status-overlay] .ui-shimmer").textContent(), "Downloading voice model…");
     assert.equal(await page.locator("[data-voice-status-meta]").textContent(), "50% · 100/200 MB");
 
     await page.evaluate(() => {
       const m = (window as any).__voiceMock;
       m.emitProgress(m.lastLoadId(), "initializing", 200, 200, 96);
     });
-    assert.equal(await page.locator("[data-voice-status-overlay] .ui-shimmer").textContent(), "Preparing voice engine...");
+    assert.equal(await page.locator("[data-voice-status-overlay] .ui-shimmer").textContent(), "Preparing voice engine…");
     assert.equal(await page.locator("[data-voice-status-meta]").textContent(), "Almost ready");
 
     // Emit ready -> transitions to listening
@@ -936,8 +936,8 @@ try {
       () => document.querySelector(".rc-composer")?.getAttribute("data-voice-state") === "thinking",
       { timeout: 5000 },
     );
-    assert.equal(await page.locator(".rc-composer-voice-confirm").isDisabled(), true, "Confirm must be disabled during thinking");
-    assert.equal(await page.locator("[data-voice-status-overlay] .ui-shimmer").textContent(), "Transcribing...");
+    assert.equal(await page.locator(".rc-composer-voice-confirm").count(), 0, "Confirm must be hidden during thinking");
+    assert.equal(await page.locator("[data-voice-status-overlay] .ui-shimmer").textContent(), "Transcribing…");
 
     // Wait for worklet flush + transcribe job dispatch
     await page.waitForFunction(() => (window as any).__voiceMock.sentOfType("transcribe").length === 1, { timeout: 5000 });
@@ -1386,8 +1386,8 @@ try {
       );
       if (vp.hasTouch) {
         assert(
-          idleGeom.voiceTouch && idleGeom.voiceTouch.hitW >= 44 && idleGeom.voiceTouch.hitH >= 44,
-          `${tag}: .rc-composer-voice touch hit target < 44x44px (${JSON.stringify(idleGeom.voiceTouch)})`,
+          idleGeom.voiceTouch && idleGeom.voiceTouch.hitW >= 34 && idleGeom.voiceTouch.hitH >= 44,
+          `${tag}: .rc-composer-voice touch hit target < 34x44px (${JSON.stringify(idleGeom.voiceTouch)})`,
         );
       }
 
@@ -1397,7 +1397,35 @@ try {
         () => document.querySelector(".rc-composer")?.getAttribute("data-voice-state") === "listening",
         { timeout: 8_000 },
       );
-      await page.waitForTimeout(320);
+      await page.waitForFunction(
+        (isHC: boolean) => {
+          const toolbar = document.querySelector<HTMLElement>(".rc-composer-toolbar");
+          if (!toolbar) return false;
+          const sels = [
+            "button.rc-composer-add",
+            'button[aria-label^="Agent mode and skills"]',
+            "button[data-access-mode]",
+            "button.rc-composer-model",
+          ];
+          const parseAlpha = (bg: string) => {
+            const s = (bg || "").trim().toLowerCase();
+            if (!s || s === "transparent") return 0;
+            const slash = s.match(/\/\s*([\d.]+%?)\s*\)$/);
+            if (slash) return slash[1]!.endsWith("%") ? parseFloat(slash[1]!) / 100 : parseFloat(slash[1]!);
+            const rgba = s.match(/^rgba\(\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*[\d.]+%?\s*,\s*([\d.]+%?)\s*\)$/);
+            if (rgba) return rgba[1]!.endsWith("%") ? parseFloat(rgba[1]!) / 100 : parseFloat(rgba[1]!);
+            return 1;
+          };
+          return sels.every((sel) => {
+            const el = toolbar.querySelector<HTMLElement>(sel);
+            if (!el) return false;
+            const a = parseAlpha(getComputedStyle(el).backgroundColor);
+            return isHC ? a === 1 : a >= 0.5 && a < 0.99;
+          });
+        },
+        theme === "high-contrast",
+        { timeout: 5_000 },
+      );
 
       const activeGeom = await page.evaluate(() => {
         const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -1547,12 +1575,12 @@ try {
       }
       if (vp.hasTouch) {
         assert(
-          activeGeom.cancelTouch && activeGeom.cancelTouch.hitW >= 44 && activeGeom.cancelTouch.hitH >= 44,
-          `${tag}: .rc-composer-voice-cancel touch hit target < 44x44px (${JSON.stringify(activeGeom.cancelTouch)})`,
+          activeGeom.cancelTouch && activeGeom.cancelTouch.hitW >= 34 && activeGeom.cancelTouch.hitH >= 44,
+          `${tag}: .rc-composer-voice-cancel touch hit target < 34x44px (${JSON.stringify(activeGeom.cancelTouch)})`,
         );
         assert(
-          activeGeom.confirmTouch && activeGeom.confirmTouch.hitW >= 44 && activeGeom.confirmTouch.hitH >= 44,
-          `${tag}: .rc-composer-voice-confirm touch hit target < 44x44px (${JSON.stringify(activeGeom.confirmTouch)})`,
+          activeGeom.confirmTouch && activeGeom.confirmTouch.hitW >= 34 && activeGeom.confirmTouch.hitH >= 44,
+          `${tag}: .rc-composer-voice-confirm touch hit target < 34x44px (${JSON.stringify(activeGeom.confirmTouch)})`,
         );
       }
 

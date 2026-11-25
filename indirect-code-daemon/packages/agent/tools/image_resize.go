@@ -24,7 +24,6 @@ import (
 const (
 	// MaxRawImageFileBytes is the hard pre-read / pre-decode input ceiling (50 MiB).
 	MaxRawImageFileBytes = 50 * 1024 * 1024
-	maxRawImageFileBytes = MaxRawImageFileBytes
 
 	// maxImageInputDimension and maxImageInputPixels reject pixel-bomb image headers
 	// before decodeImage allocates a full RGBA buffer.
@@ -64,17 +63,6 @@ type NormalizedImage struct {
 	SHA256         string
 	PreviewDataURL string
 	Hints          []string
-}
-
-type processedImage struct {
-	data           []byte
-	mimeType       string
-	originalWidth  int
-	originalHeight int
-	width          int
-	height         int
-	wasResized     bool
-	hints          []string
 }
 
 var (
@@ -236,24 +224,6 @@ func NormalizeImage(data []byte, mimeHint string) (NormalizedImage, error) {
 	}
 
 	return NormalizedImage{}, errImageTooLarge
-}
-
-// processImage wraps NormalizeImage for legacy internal callers.
-func processImage(input []byte, detectedMIME string) (*processedImage, error) {
-	norm, err := NormalizeImage(input, detectedMIME)
-	if err != nil {
-		return nil, err
-	}
-	return &processedImage{
-		data:           norm.RawBytes,
-		mimeType:       norm.MimeType,
-		originalWidth:  norm.OrigWidth,
-		originalHeight: norm.OrigHeight,
-		width:          norm.Width,
-		height:         norm.Height,
-		wasResized:     norm.Width != norm.OrigWidth || norm.Height != norm.OrigHeight,
-		hints:          norm.Hints,
-	}, nil
 }
 
 type encodedImage struct {

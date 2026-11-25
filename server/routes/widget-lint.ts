@@ -137,7 +137,7 @@ function acquireObscuraSlot(signal?: AbortSignal): Promise<() => void> {
   });
 }
 
-/** Test/observability hook for the Obscura concurrency limiter. */
+/** @test-hook Observability hook for the Obscura concurrency limiter. */
 export function widgetLintConcurrencyStats() {
   return {
     active: activeObscura,

@@ -364,40 +364,6 @@ func expandCenteredWindow(entries []TurnEntry, center, tokenBudget, maxMsgs int)
 	return lo, hi
 }
 
-// ReadLastNTurns returns the final n whole turns of session id without touching
-// earlier segments.
-func (s *Store) ReadLastNTurns(id string, count int) (WindowSlice, error) {
-	if !ValidSessionID(id) {
-		return WindowSlice{}, ErrInvalidSessionID
-	}
-	if count <= 0 {
-		count = 1
-	}
-	if err := s.ensureV2ForRead(context.Background(), id); err != nil {
-		return WindowSlice{}, err
-	}
-	mu := s.sessionLock(id)
-	mu.RLock()
-	defer mu.RUnlock()
-	if s.IsPurged(id) {
-		return WindowSlice{}, os.ErrNotExist
-	}
-
-	_, entries, _, err := s.loadStateReadOnlyLocked(id)
-	if err != nil {
-		return WindowSlice{}, err
-	}
-	n := len(entries)
-	if n == 0 {
-		return WindowSlice{}, nil
-	}
-	lo := n - count
-	if lo < 0 {
-		lo = 0
-	}
-	return s.materializeSliceLocked(id, entries, lo, n, nil)
-}
-
 // ReadTurnRange reads turns in the inclusive [startTurn, endTurn] range (startTurn <= 0
 // starts at the first turn; endTurn <= 0 reads through the final turn).
 func (s *Store) ReadTurnRange(id string, startTurn, endTurn int) ([]provider.Message, []filetrack.TurnChanges, error) {

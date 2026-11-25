@@ -90,7 +90,7 @@ function genUiAiRateHit(userId: string): number {
   return 0;
 }
 
-/** Test hook: clear per-user Gen-UI AI rate limiter buckets. */
+/** @test-hook Clear per-user Gen-UI AI rate limiter buckets. */
 export function resetGenUiAiLimiter(): void {
   userAiBuckets.clear();
 }

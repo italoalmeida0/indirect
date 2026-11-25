@@ -107,7 +107,7 @@ func TestStripSkillArtifactsDropsNoticesAndUseSkill(t *testing.T) {
 		notice,
 		{Role: provider.RoleAssistant, TurnIndex: 6, Content: []provider.Content{provider.ToolCallBlock{Name: "use_skill"}}},
 	}
-	out, _ := stripSkillArtifacts(msgs, 7, -1)
+	out, _ := stripSkillArtifactsOnAt(msgs, 0, 7, -1, nil)
 	joined := ""
 	for _, m := range out {
 		for _, c := range m.Content {
@@ -153,7 +153,7 @@ func TestStripSkillArtifactsDropsReasoningOnlyUseSkillStep(t *testing.T) {
 			provider.ImageBlock{MimeType: "image/png", Data: []byte{1}},
 		}},
 	}
-	out, _ := stripSkillArtifacts(msgs, 4, -1)
+	out, _ := stripSkillArtifactsOnAt(msgs, 0, 4, -1, nil)
 	got := make([]string, 0, len(out))
 	for _, m := range out {
 		got = append(got, m.ID)
@@ -245,7 +245,7 @@ func TestStripSkillArtifactsClampsAnchorAtNewEnd(t *testing.T) {
 			provider.TextBlock{Text: "[system notice] The user deactivated the skill foo"},
 		}},
 	}
-	out, anchor := stripSkillArtifacts(msgs, 2, len(msgs))
+	out, anchor := stripSkillArtifactsOnAt(msgs, 0, 2, len(msgs), nil)
 	if len(out) != 1 || out[0].ID != "u" {
 		t.Fatalf("stripped transcript = %+v, want only the user row", out)
 	}

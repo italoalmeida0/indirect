@@ -9,7 +9,7 @@ import (
 func TestSSEParse(t *testing.T) {
 	r := strings.NewReader("event: foo\ndata: {\"a\":1}\n\ndata: hello\ndata: world\n\n")
 	ch := make(chan sseEvent, 4)
-	go readSSE(r, ch)
+	go readSSEUntil(nil, r, ch)
 
 	e := <-ch
 	if e.Event != "foo" || e.Data != `{"a":1}` {
@@ -24,9 +24,14 @@ func TestSSEParse(t *testing.T) {
 	}
 }
 
+func totalCost(m Model, u Usage) float64 {
+	in, cache, out := ComputeCostBreakdown(m, u)
+	return in + cache + out
+}
+
 func TestComputeCost(t *testing.T) {
 	m := Model{PriceInput: 3, PriceOutput: 15}
-	cost := ComputeCost(m, Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
+	cost := totalCost(m, Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
 	want := m.PriceInput + m.PriceOutput
 	if cost != want {
 		t.Fatalf("cost=%v want=%v", cost, want)
@@ -39,13 +44,13 @@ func TestComputeCostInputTier(t *testing.T) {
 		PriceTierInputTokens: 100,
 		PriceInputAbove:      3, PriceOutputAbove: 4, PriceCacheReadAbove: 0.2,
 	}
-	below := ComputeCost(m, Usage{InputTokens: 50, OutputTokens: 10, CacheReadTokens: 50})
+	below := totalCost(m, Usage{InputTokens: 50, OutputTokens: 10, CacheReadTokens: 50})
 	wantBelow := (50.0*1 + 10*2 + 50*0.1) / 1_000_000
 	if math.Abs(below-wantBelow) > 1e-12 {
 		t.Fatalf("below-tier cost=%v want=%v", below, wantBelow)
 	}
 
-	above := ComputeCost(m, Usage{InputTokens: 51, OutputTokens: 10, CacheReadTokens: 50})
+	above := totalCost(m, Usage{InputTokens: 51, OutputTokens: 10, CacheReadTokens: 50})
 	wantAbove := (51.0*3 + 10*4 + 50*0.2) / 1_000_000
 	if math.Abs(above-wantAbove) > 1e-12 {
 		t.Fatalf("above-tier cost=%v want=%v", above, wantAbove)
@@ -62,9 +67,6 @@ func TestComputeCostBreakdownSplitsBuckets(t *testing.T) {
 		if math.Abs(tc.got-tc.want) > 1e-9 {
 			t.Fatalf("breakdown=%v,%v,%v", in, cache, out)
 		}
-	}
-	if total := ComputeCost(m, u); total != in+cache+out {
-		t.Fatalf("total=%v sum=%v", total, in+cache+out)
 	}
 	stamped := u
 	StampCost(m, &stamped)

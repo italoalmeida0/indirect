@@ -27,7 +27,7 @@ test("retention removes only complete days older than the window and advances th
   const { pruneUsageEvents } = await import("../server/usage-rollup");
 
   const today = Math.floor(Date.now() / DAY) * DAY;
-  db.exec("DELETE FROM usage_events");
+  db.exec("DELETE FROM usage_events; DELETE FROM usage_model_provider_daily; DELETE FROM usage_model_provider_monthly");
   db.prepare("UPDATE usage_rollup_coverage SET raw_from = 0 WHERE id = 1").run();
   const insert = db.prepare(`INSERT INTO usage_events (key_id, user_id, ts, proto, model, in_tok, out_tok, latency_ms, status, stream, estimated)
     VALUES ('k','u',?,'openai','m',1,1,10,200,0,0)`);

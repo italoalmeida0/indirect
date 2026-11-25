@@ -75,36 +75,28 @@ func TestClampReasoningForModel(t *testing.T) {
 func TestReasoningEffortMappings(t *testing.T) {
 	cases := []struct {
 		level      string
-		openai     string
-		anthCompat string
 		budget     int
 		normalized string
 	}{
-		{"", "", "", 0, ""},
-		{"off", "", "", 0, ""},
-		{"none", "", "", 0, ""},
-		{"min", "low", "low", 1024, "minimum"},
-		{"minimum", "low", "low", 1024, "minimum"},
-		{"low", "low", "low", 2048, "low"},
-		{"med", "medium", "medium", 8192, "medium"},
-		{"medium", "medium", "medium", 8192, "medium"},
-		{"hi", "high", "high", 16384, "high"},
-		{"high", "high", "high", 16384, "high"},
-		{"xhigh", "high", "xhigh", 32768, "xhigh"},
-		{"maximum", "high", "xhigh", 32768, "xhigh"},
-		{"max", "high", "max", 32768, "max"},
+		{"", 0, ""},
+		{"off", 0, ""},
+		{"none", 0, ""},
+		{"min", 1024, "minimum"},
+		{"minimum", 1024, "minimum"},
+		{"low", 2048, "low"},
+		{"med", 8192, "medium"},
+		{"medium", 8192, "medium"},
+		{"hi", 16384, "high"},
+		{"high", 16384, "high"},
+		{"xhigh", 32768, "xhigh"},
+		{"maximum", 32768, "xhigh"},
+		{"max", 32768, "max"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.level, func(t *testing.T) {
 			if got := NormalizeReasoning(tc.level); got != tc.normalized {
 				t.Errorf("NormalizeReasoning(%q) = %q; want %q", tc.level, got, tc.normalized)
-			}
-			if got := OpenAIReasoningEffort(tc.level); got != tc.openai {
-				t.Errorf("OpenAIReasoningEffort(%q) = %q; want %q", tc.level, got, tc.openai)
-			}
-			if got := OpenAICompatAnthropicEffort(tc.level); got != tc.anthCompat {
-				t.Errorf("OpenAICompatAnthropicEffort(%q) = %q; want %q", tc.level, got, tc.anthCompat)
 			}
 			if got := ReasoningBudget(tc.level); got != tc.budget {
 				t.Errorf("ReasoningBudget(%q) = %d; want %d", tc.level, got, tc.budget)

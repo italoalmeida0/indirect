@@ -64,11 +64,6 @@ export function insertPreparedKey(prepared: PreparedKey, now = Date.now()): ApiK
   return db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?").get(prepared.id)!;
 }
 
-export async function createKey(userId: string, opts: CreateKeyOptions): Promise<{ row: ApiKeyRow; token: string }> {
-  const prepared = await prepareKey(userId, opts);
-  return { row: insertPreparedKey(prepared), token: prepared.token };
-}
-
 export function markKeyRevoked(keyId: string): void {
   db.prepare("UPDATE api_keys SET status = 'revoked' WHERE id = ?").run(keyId);
 }

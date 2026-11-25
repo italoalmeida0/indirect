@@ -10,7 +10,7 @@ import (
 func TestQuestionReturnsOrderedLabelsAndDefaultCustomAnswer(t *testing.T) {
 	want := [][]string{{"First (Recommended)"}, {"A", "B", "My preference"}, {"Free text"}}
 	tool := &QuestionTool{Ask: func(_ context.Context, req QuestionRequest) ([][]string, error) {
-		if !req.Questions[0].AllowsCustom() || !req.Questions[1].Multiple {
+		if req.Questions[0].Multiple || !req.Questions[1].Multiple {
 			t.Fatal("question options were lost")
 		}
 		return want, nil

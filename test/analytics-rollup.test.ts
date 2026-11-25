@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import path from "node:path";
-import { backfillHourRollups, pruneUsageRollups, rebuildUsageRollups, usageRollupCoverage, USAGE_DAY, USAGE_HOUR, USAGE_HOURLY_BACKFILL_HOURS, USAGE_MINUTE } from "../server/usage-rollup";
+import { backfillHourRollups, pruneUsageRollupsAsync, rebuildUsageRollups, usageRollupCoverage, USAGE_DAY, USAGE_HOUR, USAGE_HOURLY_BACKFILL_HOURS, USAGE_MINUTE } from "../server/usage-rollup";
 import { createUser, login, request, startGateway, waitUntil } from "./gateway-enterprise-fixture";
 
 test("rebuilt rollups preserve exact retained ranges and disclose expanded archived boundaries", async () => {
@@ -106,7 +106,7 @@ test("rebuilt rollups preserve exact retained ranges and disclose expanded archi
     sql.run("UPDATE usage_model_provider_daily SET reqs = reqs - 1 WHERE user_id = ? AND date = ?", [alice.user.id, new Date(rawFrom).toISOString().slice(0, 10)]);
     const afterFailure = await request(gateway.base, `/api/usage/overview?${params(rawFrom + 19 * USAGE_MINUTE, rawFrom + 3 * USAGE_HOUR + 301)}`, { token: alice.accessToken });
     expect(total(afterFailure.data.series)).toBe(5);
-    pruneUsageRollups(sql, Date.now(), 1, 1, 2);
+    await pruneUsageRollupsAsync(sql, Date.now(), 1, 1, 2);
     expect(usageRollupCoverage(sql).hourly_from).toBe(today);
     expect(usageRollupCoverage(sql).minute_from).toBe(today);
     const afterPrune = await request(gateway.base, `/api/usage/overview?${params(rawFrom + 19 * USAGE_MINUTE, rawFrom + 3 * USAGE_HOUR + 301)}`, { token: alice.accessToken });

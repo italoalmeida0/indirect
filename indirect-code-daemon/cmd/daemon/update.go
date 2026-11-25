@@ -154,10 +154,6 @@ func manifestURL() string {
 	return ""
 }
 
-func fetchManifest() (*versionManifest, error) {
-	return fetchManifestWithConfig(nil)
-}
-
 // fetchManifestWithConfig tries the gateway first (instant, no CDN cache),
 // then the public mirror. d may be nil (boot-side callers pass explicit
 // gateway URL + token via fetchManifestGateway).
@@ -272,13 +268,6 @@ func (d *DaemonServer) checkForUpdates(reason string) {
 	st.mu.Unlock()
 	d.broadcastUpdateState()
 	_ = reason
-}
-func (d *DaemonServer) setUpdateError(msg string) {
-	st := d.updateChecker()
-	st.mu.Lock()
-	st.lastError = msg
-	st.mu.Unlock()
-	d.broadcastUpdateState()
 }
 
 // broadcastUpdateState emits daemon_update to all frontend clients.

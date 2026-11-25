@@ -519,12 +519,12 @@ export async function handleGenUiRoute(
   return null;
 }
 
-/** Test hook: widget/module store sizes (bounded LRUs). */
+/** @test-hook Widget/module store sizes (bounded LRUs). */
 export function genUiStoreSize(): number {
   return widgets.size();
 }
 
-/** Test hook: image proxy cache size. */
+/** @test-hook Image proxy cache size. */
 export function genUiImageCacheSize(): number {
   return imgCache.size;
 }

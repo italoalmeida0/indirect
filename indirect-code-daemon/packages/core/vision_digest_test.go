@@ -510,14 +510,14 @@ func TestCancelledVisionTranscriptionNeverPoisonsDigestsOrEvictsImages(t *testin
 	preCancelled, cancelNow := context.WithCancel(context.Background())
 	cancelNow()
 
-	ag.prepareWireImages(preCancelled)
+	ag.prepareWireImagesWithProgress(preCancelled, nil)
 	capTwo := 2
-	shed, _ := ag.shedWireImagesReactive(preCancelled, &capTwo, 2, false)
+	shed, _ := ag.shedWireImagesReactiveWithProgress(preCancelled, &capTwo, 2, false, nil)
 	if shed != 0 {
-		t.Fatalf("expected shedWireImagesReactive with cancelled ctx to shed 0 images, got %d", shed)
+		t.Fatalf("expected shedWireImagesReactiveWithProgress with cancelled ctx to shed 0 images, got %d", shed)
 	}
 	spanState := &CompactionState{}
-	ag.ensureSpanImageDigests(preCancelled, ag.History(), 0, len(ag.History()), spanState)
+	ag.ensureSpanImageDigestsAt(preCancelled, ag.History(), 0, 0, len(ag.History()), spanState, nil)
 	if len(spanState.ImageDigests) != 0 {
 		t.Fatalf("expected ensureSpanImageDigests with cancelled ctx to write 0 digests, got %v", spanState.ImageDigests)
 	}

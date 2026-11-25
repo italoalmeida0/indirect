@@ -4,6 +4,15 @@ import (
 	"indirect/indirect-code-daemon/packages/provider"
 )
 
+const (
+	// PruneProtectTokens is the budget of recent tool output tokens kept verbatim.
+	PruneProtectTokens = 40000
+	// ToolOutputMaxChars is the maximum character length for older individual tool outputs.
+	ToolOutputMaxChars = 2000
+	// PrunedToolNotice replaces the body of pruned tool results.
+	PrunedToolNotice = "[Old tool result content cleared]"
+)
+
 // ApplyViewLatchTail applies monotonic watermark tool-output pruning over a
 // raw history tail slice starting at rawStart (`history[rawStart:]`).
 //

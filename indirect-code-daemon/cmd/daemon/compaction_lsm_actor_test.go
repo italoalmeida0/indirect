@@ -583,7 +583,7 @@ func TestCompactedFileAdvisoryMultibyteUTF8TopicTruncation(t *testing.T) {
 	}
 	st.SyncMirrors()
 	msgs := darMsgs(4)
-	adv := compactedFileAdvisoryFor(cwd, msgs, st, filepath.Join(cwd, "pkg", "utf8.go"))
+	adv := compactedFileAdvisoryForAt(cwd, msgs, 0, st, filepath.Join(cwd, "pkg", "utf8.go"))
 	if adv == "" {
 		t.Fatal("expected non-empty advisory")
 	}
