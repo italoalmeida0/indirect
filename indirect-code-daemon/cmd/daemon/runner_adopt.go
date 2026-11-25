@@ -189,11 +189,15 @@ func (b *bgSupervisor) adoptOne(st *runner.State) {
 	}
 	fp := st.Fingerprint
 	if fp == "" && !st.NoDedupe {
-		fp = bgFingerprint(st.Kind, st.Label)
+		fpSrc := st.Command
+		if fpSrc == "" {
+			fpSrc = st.Label
+		}
+		fp = bgFingerprint(st.Kind, fpSrc)
 	}
 	j := &bgJob{
 		ID: st.JobID, Kind: st.Kind, SessionID: st.SessionID,
-		Label: truncateBgLabel(st.Label), Fingerprint: fp, NoDedupe: st.NoDedupe,
+		Label: truncateBgLabel(st.Label), Command: truncateBgLabel(st.Command), Fingerprint: fp, NoDedupe: st.NoDedupe,
 		PID: st.PID, Identity: st.ProcessIdentity,
 		Runner:    true,
 		Status:    BgStatusRunning,

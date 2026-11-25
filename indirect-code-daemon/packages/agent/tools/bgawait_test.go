@@ -42,7 +42,7 @@ func awaitResult(t *testing.T, tool *BgAwaitTool, args string) (core.ToolResult,
 // never fails) with a pointer to bg_check.
 func TestBgAwaitReturnsImmediatelyWhenPinnedDone(t *testing.T) {
 	tool := &BgAwaitTool{Host: pinHost{status: "done", label: "bun test"}, SessionID: "s"}
-	res, elapsed := awaitResult(t, tool, `{"max_wait_seconds":300,"waiting_for":"bg_1","reason":"waiting for build"}`)
+	res, elapsed := awaitResult(t, tool, `{"max_wait_seconds":300,"waiting_for":"bg_1","summary":"Waiting for build"}`)
 	if elapsed > 10*time.Second {
 		t.Fatalf("pinned-done 300s await must return immediately, took %s", elapsed)
 	}
@@ -50,12 +50,24 @@ func TestBgAwaitReturnsImmediatelyWhenPinnedDone(t *testing.T) {
 	if !strings.Contains(info, "bg_1") || !strings.Contains(info, "bg_check") {
 		t.Fatalf("info must name the task + bg_check: %q", info)
 	}
+	if got := envAttr(res, "summary"); got != "Waiting for build" {
+		t.Fatalf("summary attr = %q, want %q", got, "Waiting for build")
+	}
+}
+
+// Legacy reason alias remains accepted for backward compatibility.
+func TestBgAwaitAcceptsLegacyReasonAlias(t *testing.T) {
+	tool := &BgAwaitTool{Host: pinHost{status: "done", label: "bun test"}, SessionID: "s"}
+	res, _ := awaitResult(t, tool, `{"max_wait_seconds":60,"waiting_for":"bg_1","reason":"legacy wait reason"}`)
+	if got := envAttr(res, "summary"); got != "legacy wait reason" {
+		t.Fatalf("summary attr from legacy reason = %q", got)
+	}
 }
 
 // Unknown pinned id: warn, never fail.
 func TestBgAwaitWarnsOnUnknownPinnedID(t *testing.T) {
 	tool := &BgAwaitTool{Host: pinHost{}, SessionID: "s"}
-	res, _ := awaitResult(t, tool, `{"max_wait_seconds":5,"waiting_for":"bg_nope","reason":"waiting"}`)
+	res, _ := awaitResult(t, tool, `{"max_wait_seconds":5,"waiting_for":"bg_nope","summary":"Waiting for task"}`)
 	if !strings.Contains(envAttr(res, "info"), "unknown") {
 		t.Fatalf("unknown id must warn: %q", envAttr(res, "info"))
 	}
@@ -64,14 +76,15 @@ func TestBgAwaitWarnsOnUnknownPinnedID(t *testing.T) {
 	}
 }
 
-// waiting_for/reason are required; reason trims and caps at 100.
+// waiting_for/summary are required; summary trims and caps at 100.
 func TestBgAwaitRequiresWaitingForAndReason(t *testing.T) {
 	tool := &BgAwaitTool{Host: pinHost{status: "running", label: "x"}, SessionID: "s"}
 	for _, args := range []string{
-		`{"max_wait_seconds":5,"reason":"waiting"}`,
+		`{"max_wait_seconds":5,"summary":"Waiting for build"}`,
 		`{"max_wait_seconds":5,"waiting_for":"bg_1"}`,
+		`{"max_wait_seconds":5,"waiting_for":"bg_1","summary":"   "}`,
 		`{"max_wait_seconds":5,"waiting_for":"bg_1","reason":"   "}`,
-		`{"waiting_for":"bg_1","reason":"waiting"}`,
+		`{"waiting_for":"bg_1","summary":"Waiting for build"}`,
 	} {
 		if _, err := tool.Execute(context.Background(), []byte(args), nil); err == nil {
 			t.Fatalf("args %s must fail", args)
@@ -79,15 +92,15 @@ func TestBgAwaitRequiresWaitingForAndReason(t *testing.T) {
 	}
 }
 
-// Running pinned task: a short await runs its course with the reason up front.
+// Running pinned task: a short await runs its course with the summary up front.
 func TestBgAwaitRunsFullWhenPinnedRunning(t *testing.T) {
 	tool := &BgAwaitTool{Host: pinHost{status: "running", label: "bun test"}, SessionID: "s"}
-	res, elapsed := awaitResult(t, tool, `{"max_wait_seconds":1,"waiting_for":"bg_1","reason":"waiting for build"}`)
+	res, elapsed := awaitResult(t, tool, `{"max_wait_seconds":1,"waiting_for":"bg_1","summary":"Waiting for build"}`)
 	if elapsed < time.Second {
 		t.Fatalf("bg_await must run its full second, took %s", elapsed)
 	}
-	if envAttr(res, "summary") != "waiting for build" || envAttr(res, "status") != "timeout" {
-		t.Fatalf("expected reason + timeout status, got %q / %q", envAttr(res, "summary"), envAttr(res, "status"))
+	if envAttr(res, "summary") != "Waiting for build" || envAttr(res, "status") != "timeout" {
+		t.Fatalf("expected summary + timeout status, got %q / %q", envAttr(res, "summary"), envAttr(res, "status"))
 	}
 	if envAttr(res, "waited") != "1s" {
 		t.Fatalf("waited attr = %q", envAttr(res, "waited"))

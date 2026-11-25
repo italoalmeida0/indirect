@@ -92,16 +92,39 @@ const { open, toggle } = createDisclosure(() => `${running()}:${active()}`,
   () => running() && active() && !u.result && u.call?.toolName !== "question" && hasContent());
 /** Header-only rows stay clickable but never reveal a body. */
 const openBody = () => open() && expandable();
-// Full shell command for the highlighted header: commands[] joined with
-// the effective joiner (&& or ;), else the single command. exec_script rows
-// show the first code line (same as the summary).
-const bashHeaderCmd = () => {
-  if (name() === "exec_script" || name() === "python") return sum().target || "";
+/** Human-readable task summary supplied on bash / exec_script calls. */
+const taskSummary = () => {
+  const n = name();
+  if (n !== "bash" && n !== "exec_script" && n !== "python") return "";
   const a: any = args();
+  return String(a.summary || a.description || "").replace(/\s+/g, " ").trim();
+};
+// Full shell command (for bash body & legacy header) or first code line
+// (for exec_script/python legacy header & tooltip). Never returns taskSummary
+// so expanded bash bodies always preserve the original command verbatim.
+const bashHeaderCmd = () => {
+  const a: any = args();
+  if (name() === "exec_script" || name() === "python") {
+    const code = String(a.code || "");
+    if (code.trim()) {
+      for (const ln of code.split("\n")) {
+        const t = ln.trim();
+        if (t && !t.startsWith("//") && !t.startsWith("#") && !t.startsWith("/*") && !t.startsWith("*")) {
+          return t;
+        }
+      }
+      return code.replace(/\s+/g, " ").trim();
+    }
+    const script = String(a.script || "").trim();
+    if (script) {
+      return [script, ...(Array.isArray(a.args) ? a.args.map(String) : [])].filter(Boolean).join(" ");
+    }
+    return "";
+  }
   if (Array.isArray(a.commands) && a.commands.length > 0) {
     return a.commands.map(String).join(a.stopOnError === false ? " ; " : " && ");
   }
-  return String(a.command || sum().target || "");
+  return String(a.command || "");
 };
 const terminalSource = () => {
   const src = String(u.result?.toolDetails?.display ?? u.result?.toolResult ?? "");
@@ -224,12 +247,12 @@ const sleepRemaining = () => {
   return `${formatDurationSecs(Math.min(total, Math.max(0, Math.ceil(total - Math.max(0, (ctx.turnClock() - start) / 1000)))))} left`;
 };
 /** Header label for a bg_await row (the row is header-only): the time/counter
- * followed by the human-readable reason when the model passed one, e.g.
- * "1m 30s left · waiting for build" or "Waited 1m 30s · waiting for build".
- * The reason must stay visible now that no body renders it. */
+ * followed by the human-readable summary (or legacy reason) when present, e.g.
+ * "1m 30s left · Unit test completion" or "30s · Unit test completion". */
 const sleepLabel = () => {
   const when = sleepRemaining() || sum().target;
-  const summary = String((args() as any)?.reason || "").replace(/\s+/g, " ").trim();
+  const a: any = args();
+  const summary = String(a?.summary || a?.reason || "").replace(/\s+/g, " ").trim();
   if (!summary || summary === when) return when;
   return when ? `${when} · ${summary}` : summary;
 };
@@ -301,7 +324,7 @@ const bgDisplayOutput = () => {
 const isDetachedBg = () => bgJobId() !== "";
 /** True while this tool unit is currently executing (no result yet and turn is running). */
 const runningTool = () => !u.result && running();
-  return { key, open, openBody, expandable, hasContent, toggle, sum, prog, args, name, sleepLabel, bashHeaderCmd, mergedEnv, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, imageReadDetails, elapsed, sleepRemaining, bgJobId, bgJob, bgRunning, bgStream, bgDisplayOutput, isDetachedBg, running: runningTool };
+  return { key, open, openBody, expandable, hasContent, toggle, sum, prog, args, name, taskSummary, sleepLabel, bashHeaderCmd, mergedEnv, terminal, rawOutput, spill, output, footer, exitCode, webDetails, fetchDetails, imageReadDetails, elapsed, sleepRemaining, bgJobId, bgJob, bgRunning, bgStream, bgDisplayOutput, isDetachedBg, running: runningTool };
 }
 
 export type ToolModel = ReturnType<typeof useToolUnitModel>;

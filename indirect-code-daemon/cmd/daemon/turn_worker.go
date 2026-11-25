@@ -1260,7 +1260,7 @@ func (w *turnBridge) ReadBackgroundTask(callerSessionID, jobID string, offset, l
 		if res.Error != "" {
 			return tools.BgCheckResult{}, fmt.Errorf("%s", res.Error)
 		}
-		return tools.BgCheckResult{Found: res.Found, Kind: res.Kind, Label: res.Label, Status: res.Status, ExitCode: res.ExitCode, Text: res.Text, From: res.From, To: res.To, Total: res.Total, Dropped: res.Dropped, Truncated: res.Truncated}, nil
+		return tools.BgCheckResult{Found: res.Found, Kind: res.Kind, Label: res.Label, Command: res.Command, Status: res.Status, ExitCode: res.ExitCode, Text: res.Text, From: res.From, To: res.To, Total: res.Total, Dropped: res.Dropped, Truncated: res.Truncated}, nil
 	case <-w.ctx.Done():
 		return tools.BgCheckResult{}, fmt.Errorf("bg_check: session busy")
 	case <-time.After(replyTimeout):
@@ -1272,7 +1272,7 @@ func (w *turnBridge) ReadBackgroundTask(callerSessionID, jobID string, offset, l
 // (id, logPath, stream, finish) tuple. The child owns its log output;
 // stream emits live bg_output and finish uses the supervisor lifetime.
 func (w *turnBridge) slowHook() tools.SlowHook {
-	return func(kind, label string, process tools.BackgroundProcess) (string, string, func(string), func(string, bool, int)) {
+	return func(kind, cmd string, process tools.BackgroundProcess) (string, string, func(string), func(string, bool, int)) {
 		if w.env.bg == nil {
 			// No supervisor (tests): local stub that still detaches.
 			id := "bg_" + randomID8()
@@ -1282,10 +1282,14 @@ func (w *turnBridge) slowHook() tools.SlowHook {
 			}
 			return id, "", func(string) {}, finish
 		}
+		displayLabel := strings.TrimSpace(process.Label)
+		if displayLabel == "" {
+			displayLabel = cmd
+		}
 		logPath := process.LogPath
 		reply := make(chan any, 1)
 		select {
-		case w.env.bg.inbox <- Envelope{Payload: bgRegisterMsg{Kind: kind, SessionID: w.env.actorID, Label: label, LogPath: logPath, BrainLog: process.BrainLog, StderrPath: process.StderrPath, NoDedupe: process.NoDedupe, PID: process.PID, JobID: process.JobID, StartedAt: process.StartedAt, Stop: process.Stop, Reply: reply}}:
+		case w.env.bg.inbox <- Envelope{Payload: bgRegisterMsg{Kind: kind, SessionID: w.env.actorID, Label: displayLabel, Command: cmd, LogPath: logPath, BrainLog: process.BrainLog, StderrPath: process.StderrPath, NoDedupe: process.NoDedupe, PID: process.PID, JobID: process.JobID, StartedAt: process.StartedAt, Stop: process.Stop, Reply: reply}}:
 		case <-w.ctx.Done():
 			if process.Stop != nil {
 				process.Stop()
@@ -1330,7 +1334,7 @@ func (w *turnBridge) slowHook() tools.SlowHook {
 		if startedAt <= 0 {
 			startedAt = time.Now().UnixMilli() - 10000
 		}
-		send(bgTaskRegisterMsg{JobID: id, Kind: kind, Label: label, StartedAt: startedAt})
+		send(bgTaskRegisterMsg{JobID: id, Kind: kind, Label: displayLabel, Command: cmd, StartedAt: startedAt})
 		stream := func(chunk string) {
 			if chunk == "" {
 				return

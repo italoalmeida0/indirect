@@ -157,14 +157,24 @@ func TestBackgroundCommandPreservesNonzeroExitCode(t *testing.T) {
 	defer func() { tools.AutoBackgroundAfter = old }()
 	dir := t.TempDir()
 	tool := &tools.BashTool{CWD: dir, Sandbox: tools.NewSandbox(dir), Slow: w.slowHook(), LogDir: dir}
-	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep 0.15; echo failed; exit 7"}`), nil); err != nil {
+	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep 0.15; echo failed; exit 7","summary":"Failing background check"}`), nil); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.After(5 * time.Second)
+	sawRegister := false
 	for {
 		select {
 		case env := <-inbox:
+			if reg, ok := env.Payload.(bgTaskRegisterMsg); ok {
+				sawRegister = true
+				if reg.Label != "Failing background check" || reg.Command != "sleep 0.15; echo failed; exit 7" {
+					t.Fatalf("expected summary label and preserved command, got label=%q cmd=%q", reg.Label, reg.Command)
+				}
+			}
 			if m, ok := env.Payload.(bgTaskFinishMsg); ok {
+				if !sawRegister {
+					t.Fatal("expected bgTaskRegisterMsg before bgTaskFinishMsg")
+				}
 				if m.Status != BgStatusError || m.ExitCode != 7 {
 					t.Fatalf("wrong command outcome: %+v", m)
 				}

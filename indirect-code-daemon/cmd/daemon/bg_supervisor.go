@@ -41,6 +41,7 @@ type bgJob struct {
 	Kind      string
 	SessionID string
 	Label     string
+	Command   string
 	// Fingerprint keys the exact command behind the job (duplicate
 	// guard); empty for jobs adopted without a registration label.
 	Fingerprint string
@@ -81,6 +82,7 @@ type bgPidfile struct {
 	SessionID   string `json:"sessionId"`
 	Kind        string `json:"kind"`
 	Label       string `json:"label"`
+	Command     string `json:"command,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 	NoDedupe    bool   `json:"noDedupe,omitempty"`
 	Identity    string `json:"identity,omitempty"`
@@ -96,6 +98,7 @@ type bgRegisterMsg struct {
 	Kind       string
 	SessionID  string
 	Label      string
+	Command    string
 	StderrPath string
 	LogPath    string
 	PID        int
@@ -286,7 +289,15 @@ func (b *bgSupervisor) onRegister(m bgRegisterMsg) {
 	if startedAt <= 0 {
 		startedAt = time.Now().UnixMilli() - 10000
 	}
-	fp := bgFingerprint(m.Kind, m.Label)
+	rawCmd := m.Command
+	if rawCmd == "" {
+		rawCmd = m.Label
+	}
+	displayLabel := m.Label
+	if strings.TrimSpace(displayLabel) == "" {
+		displayLabel = rawCmd
+	}
+	fp := bgFingerprint(m.Kind, rawCmd)
 	if m.NoDedupe {
 		fp = ""
 	}
@@ -294,7 +305,8 @@ func (b *bgSupervisor) onRegister(m bgRegisterMsg) {
 		ID:          jobID,
 		Kind:        m.Kind,
 		SessionID:   m.SessionID,
-		Label:       truncateBgLabel(m.Label),
+		Label:       truncateBgLabel(displayLabel),
+		Command:     truncateBgLabel(rawCmd),
 		Fingerprint: fp,
 		NoDedupe:    m.NoDedupe,
 		PID:         m.PID, Identity: tools.ProcessIdentity(m.PID),

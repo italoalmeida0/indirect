@@ -128,7 +128,7 @@ func runWith(spec Spec, opts runOptions) int {
 	st := &State{
 		V: 1, Proto: ProtoVersion, RunnerVersion: spec.RunnerVersion,
 		JobID: spec.JobID, SessionID: spec.SessionID, Kind: spec.Kind,
-		Label: spec.Label, Fingerprint: spec.Fingerprint, NoDedupe: spec.NoDedupe, PID: os.Getpid(), ProcessIdentity: identity, StartedAt: startedAt,
+		Label: spec.Label, Command: spec.Command, Fingerprint: spec.Fingerprint, NoDedupe: spec.NoDedupe, PID: os.Getpid(), ProcessIdentity: identity, StartedAt: startedAt,
 		LogPath: spec.OutPath, BrainPath: spec.BrainPath,
 		Status: StatusRunning, HeartbeatAt: startedAt,
 	}

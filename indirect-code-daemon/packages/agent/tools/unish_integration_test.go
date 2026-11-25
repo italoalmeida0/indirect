@@ -39,7 +39,7 @@ func TestUnishToolBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tool := &BashTool{CWD: t.TempDir(), LogDir: t.TempDir()}
-			res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": tc.command}), nil)
+			res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": tc.command, "summary": "Stderr and exit check"}), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -59,7 +59,7 @@ func TestUnishToolBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 		tool := &BashTool{CWD: dir, LogDir: dir}
-		res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "cat large.txt"}), nil)
+		res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "cat large.txt", "summary": "Large line output check"}), nil)
 		if err != nil || res.IsError {
 			t.Fatalf("long line: %v %+v", err, res)
 		}
@@ -88,7 +88,7 @@ func TestUnishToolBoundary(t *testing.T) {
 		defer cancel()
 		done := make(chan error, 1)
 		tool := &BashTool{CWD: dir, LogDir: dir}
-		args := mustJSON(t, map[string]any{"command": quoted + " -test.run=^TestUnishExternalChild$; echo child-finished"})
+		args := mustJSON(t, map[string]any{"command": quoted + " -test.run=^TestUnishExternalChild$; echo child-finished", "summary": "External child cancel test"})
 		go func() {
 			_, err := tool.Execute(ctx, args, nil)
 			done <- err

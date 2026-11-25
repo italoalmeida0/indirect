@@ -30,6 +30,7 @@ type State struct {
 	SessionID       string `json:"sessionId"`
 	Kind            string `json:"kind"`
 	Label           string `json:"label"`
+	Command         string `json:"command,omitempty"`
 	Fingerprint     string `json:"fingerprint,omitempty"`
 	NoDedupe        bool   `json:"noDedupe,omitempty"`
 	PID             int    `json:"pid"`

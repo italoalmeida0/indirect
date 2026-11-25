@@ -95,14 +95,14 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
 };
 
 const SHOWN_ARG_KEYS: Record<string, Set<string>> = {
-  bash: new Set(["command", "description"]),
-  exec_script: new Set(["code", "script", "work_dir", "env", "stdin", "legacy_lang"]),
-  python: new Set(["code", "script", "work_dir", "env", "stdin", "legacy_lang"]),
+  bash: new Set(["command", "summary", "description"]),
+  exec_script: new Set(["code", "script", "summary", "description", "work_dir", "env", "stdin", "legacy_lang"]),
+  python: new Set(["code", "script", "summary", "description", "work_dir", "env", "stdin", "legacy_lang"]),
   read: new Set(["path", "offset", "limit"]),
   write: new Set(["path", "content"]),
   edit: new Set(["path", "edits", "old_text", "new_text", "old_string", "new_string", "old", "new"]),
   glob: new Set(["pattern", "path"]),
-  bg_await: new Set(["max_wait_seconds", "reason"]),
+  bg_await: new Set(["max_wait_seconds", "waiting_for", "summary", "reason"]),
   bg_cancel: new Set(["job_id"]),
   todo: new Set(["items", "todos"]),
   todowrite: new Set(["items", "todos"]),
@@ -206,8 +206,16 @@ export function ApprovalCard(props: ApprovalCardProps) {
         const writeLines = writeContent.length > 0 ? writeContent.split("\n") : [];
         const bashCmd = name === "bash" ? String(rawArgs.command || "").replace(/\r\n/g, "\n") : "";
         const bashDesc =
-          name === "bash" && typeof rawArgs.description === "string"
-            ? rawArgs.description.trim()
+          name === "bash"
+            ? scalarText(rawArgs.summary) || scalarText(rawArgs.description)
+            : "";
+        const scriptSummary =
+          name === "exec_script" || name === "python"
+            ? scalarText(rawArgs.summary) || scalarText(rawArgs.description)
+            : "";
+        const awaitSummary =
+          name === "bg_await"
+            ? scalarText(rawArgs.summary) || scalarText(rawArgs.reason)
             : "";
         const envEntries =
           (name === "exec_script" || name === "python") &&
@@ -445,6 +453,9 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       {isUnsupportedLegacyPython ? "Unsupported legacy Python call" : "Run JavaScript"}
                     </span>
                   </div>
+                  <Show when={scriptSummary}>
+                    <div class="text-xs text-fg-secondary">{scriptSummary}</div>
+                  </Show>
                   <pre class="rounded-lg border border-border bg-surface-subtle px-3 py-2 font-mono text-xs text-fg whitespace-pre-wrap break-words max-h-56 overflow-y-auto">
                     {String(rawArgs.code || rawArgs.script || "")}
                   </pre>
@@ -495,9 +506,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
                       </span>
                     </Show>
                     <span class="text-2xs text-fg-muted truncate min-w-0">
-                      {rawArgs.reason
-                        ? String(rawArgs.reason)
-                        : "Ends early when a background task finishes"}
+                      {awaitSummary || "Ends early when a background task finishes"}
                     </span>
                   </div>
                 </Show>

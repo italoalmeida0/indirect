@@ -42,9 +42,10 @@ type BashTool struct {
 
 type bashArgs struct {
 	Command string `json:"command"`
+	Summary string `json:"summary"`
 }
 
-const bashSchema = `{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"}},"required":["command"]}`
+const bashSchema = `{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute"},"summary":{"type":"string","description":"Brief 2-5 word noun phrase describing the command task. Capitalize like a sentence. Some examples: 'Git status check', 'Unit test execution', 'Package build', 'Dev server startup'."}},"required":["command","summary"]}`
 
 func (t *BashTool) Name() string { return "bash" }
 func (t *BashTool) Description() string {
@@ -59,6 +60,10 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	}
 	if strings.TrimSpace(a.Command) == "" {
 		return core.ToolResult{}, fmt.Errorf("command is required")
+	}
+	summary := normalizeTaskSummary(a.Summary)
+	if summary == "" {
+		return core.ToolResult{}, fmt.Errorf("summary is required: provide a brief 2-5 word noun phrase describing the command task")
 	}
 	if s := currentShell(); s.path == "" {
 		return core.ToolResult{}, fmt.Errorf("terminal unavailable: no usable shell on this host (bash, unish, zsh and sh all failed their startup probe)")
@@ -92,7 +97,7 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 			env = append(env, "USER="+u.Username)
 		}
 	}
-	label := ClipLabel(a.Command)
+	cmdPreview := ClipLabel(a.Command)
 	var jailSpec *RuntimeJailSpec
 	var sbApprover MidExecApprover
 	var sbOnWait func(bool)
@@ -108,7 +113,8 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	proc, err := startWith(runCtx, t.Starter, ExecSpec{
 		JobID:      core.ExecutionID(ctx),
 		Kind:       "bash",
-		Command:    label,
+		Command:    cmdPreview,
+		Label:      summary,
 		RawScript:  a.Command,
 		Argv:       []string{sh.path, sh.flag, a.Command},
 		CWD:        cwd,
@@ -308,8 +314,9 @@ func (t *BashTool) Execute(ctx context.Context, raw json.RawMessage, progress fu
 	}
 	// From here the job owns the process lifetime. Pass the full unclipped
 	// command so the duplicate-guard fingerprint hashes the entire command;
-	// the supervisor and session actor clip the stored/display label.
-	jobID, fullLog, stream, deliver := t.Slow("bash", a.Command, BackgroundProcess{JobID: proc.JobID, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, StartedAt: start.UnixMilli(), Stop: func() {
+	// the human-readable summary rides in BackgroundProcess.Label while the
+	// supervisor and session actor also preserve the clipped command.
+	jobID, fullLog, stream, deliver := t.Slow("bash", a.Command, BackgroundProcess{JobID: proc.JobID, Label: summary, PID: proc.PID, LogPath: proc.LogPath, BrainLog: proc.BrainLog, StartedAt: start.UnixMilli(), Stop: func() {
 		runCancel()
 		proc.Stop()
 	}})
@@ -394,7 +401,7 @@ func bashBackgroundNotice(jobID, cmd string, fullLog ...string) string {
 	fmt.Fprintf(&b, "To read the output, call bg_check with job_id %q (paged log: tail by default, offset/limit for more).\n", jobID)
 	fmt.Fprintf(&b, "To force-stop it early, call bg_cancel with job_id %q.\n", jobID)
 	b.WriteString("You are woken automatically when the task finishes — its completion notice is delivered to you then.\n")
-	b.WriteString("While waiting, call bg_await with waiting_for=<job_id> and a reason - it ends early the moment this task finishes. Do not use a shell sleep command to wait: inside a command it would detach into yet another background task and only add noise.")
+	b.WriteString("While waiting, call bg_await with waiting_for=<job_id> and a summary - it ends early the moment this task finishes. Do not use a shell sleep command to wait: inside a command it would detach into yet another background task and only add noise.")
 	return b.String()
 }
 

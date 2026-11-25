@@ -17,6 +17,7 @@ type bgTaskRegisterMsg struct {
 	JobID     string
 	Kind      string
 	Label     string
+	Command   string
 	StartedAt int64
 	Reply     chan any
 }
@@ -54,6 +55,7 @@ type bgTaskReadResult struct {
 	Found     bool
 	Kind      string
 	Label     string
+	Command   string
 	Status    string
 	ExitCode  int
 	Text      string

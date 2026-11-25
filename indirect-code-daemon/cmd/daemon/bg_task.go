@@ -169,6 +169,9 @@ func upsertBgTask(rec *SessionRecord, task *BgTask) {
 		if cp.Status == "" {
 			cp.Status = keep.Status
 		}
+		if cp.Command == "" {
+			cp.Command = keep.Command
+		}
 		rec.BgTasks[i] = cp
 		pruneTerminalBgTasks(rec)
 		return

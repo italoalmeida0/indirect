@@ -407,7 +407,7 @@ func TestBashSuccess(t *testing.T) {
 		t.Skip("posix shell only")
 	}
 	tool := &BashTool{CWD: t.TempDir()}
-	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "echo hi"}), nil)
+	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "echo hi", "summary": "Echo greeting check"}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,6 +438,7 @@ func TestBashSyntax(t *testing.T) {
 	tool := &BashTool{CWD: t.TempDir()}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": `items=(one two); [[ ${#items[@]} -eq 2 ]] && printf 'bash syntax works\n'`,
+		"summary": "Bash array syntax check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -453,7 +454,7 @@ func TestBashFailure(t *testing.T) {
 		t.Skip("posix shell only")
 	}
 	tool := &BashTool{CWD: t.TempDir()}
-	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "false"}), nil)
+	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "false", "summary": "Non-zero exit check"}), nil)
 	// A command's own non-zero exit is NOT a tool error: it is
 	// type=ok exit=1 with the output in the body.
 	if res.IsError {
@@ -475,6 +476,7 @@ func TestBashTailTruncation(t *testing.T) {
 	tool := &BashTool{CWD: t.TempDir()}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": "seq 1 3000",
+		"summary": "Tail truncation check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -677,6 +679,7 @@ func TestBashNoTimeout(t *testing.T) {
 	tool := &BashTool{CWD: t.TempDir()}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": "sleep 1; echo ok",
+		"summary": "Short sleep check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -695,7 +698,7 @@ func TestBashEmptyOutputUsesInfoAttr(t *testing.T) {
 		t.Skip("posix shell only")
 	}
 	tool := &BashTool{CWD: t.TempDir()}
-	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "true"}), nil)
+	res, _ := tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "true", "summary": "Empty output check"}), nil)
 	if got := envBody(t, res); got != "" {
 		t.Fatalf("empty output must have an empty body, got %q", got)
 	}
@@ -706,7 +709,7 @@ func TestBashEmptyOutputUsesInfoAttr(t *testing.T) {
 		t.Fatalf("exit attr = %q", got)
 	}
 	// A command that literally prints "(no output)" keeps it in the body.
-	res, _ = tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "printf '(no output)'"}), nil)
+	res, _ = tool.Execute(context.Background(), mustJSON(t, map[string]any{"command": "printf '(no output)'", "summary": "Literal output check"}), nil)
 	if got := envBody(t, res); got != "(no output)" {
 		t.Fatalf("literal output must reach the body, got %q", got)
 	}

@@ -36,9 +36,10 @@ const (
 type Spec struct {
 	JobID     string   `json:"jobId"`
 	SessionID string   `json:"sessionId"`
-	Kind      string   `json:"kind"`  // "bash" | "exec_script" | …
-	Label     string   `json:"label"` // human label for the UI row
-	Path      string   `json:"path"`  // binary
+	Kind      string   `json:"kind"`              // "bash" | "exec_script" | …
+	Label     string   `json:"label"`             // human label for the UI row
+	Command   string   `json:"command,omitempty"` // clipped command/script preview for the UI row
+	Path      string   `json:"path"`              // binary
 	Args      []string `json:"args"`  // argv after the binary (exec semantics)
 	Env       []string `json:"env"`   // full environment
 	CWD       string   `json:"cwd"`

@@ -1,7 +1,10 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -95,6 +98,50 @@ func TestWidgetSetSchemaVariants(t *testing.T) {
 			if _, ok := shape.Properties[req]; !ok {
 				t.Fatalf("AllowSrcFile=%v requires undeclared %q", allow, req)
 			}
+		}
+	}
+}
+
+// bash, exec_script and bg_await all require a unified `summary` argument.
+func TestExecutionAndAwaitToolsRequireSummary(t *testing.T) {
+	for _, tool := range []interface {
+		Name() string
+		Schema() json.RawMessage
+	}{
+		&BashTool{},
+		&ExecScriptTool{},
+		&BgAwaitTool{},
+	} {
+		var shape struct {
+			Properties map[string]struct {
+				Description string `json:"description"`
+			} `json:"properties"`
+			Required []string `json:"required"`
+		}
+		if err := json.Unmarshal(tool.Schema(), &shape); err != nil {
+			t.Fatalf("%s schema unmarshal: %v", tool.Name(), err)
+		}
+		if !slices.Contains(shape.Required, "summary") {
+			t.Fatalf("%s must require summary, got required=%v", tool.Name(), shape.Required)
+		}
+		prop, ok := shape.Properties["summary"]
+		if !ok || strings.TrimSpace(prop.Description) == "" {
+			t.Fatalf("%s must declare summary with description", tool.Name())
+		}
+		if tool.Name() == "bg_await" {
+			if _, hasReason := shape.Properties["reason"]; hasReason {
+				t.Fatalf("bg_await schema must expose summary, not reason")
+			}
+		}
+	}
+
+	bt := &BashTool{CWD: t.TempDir()}
+	for _, raw := range []string{
+		`{"command":"echo hi"}`,
+		`{"command":"echo hi","summary":"   \n\t  "}`,
+	} {
+		if _, err := bt.Execute(context.Background(), json.RawMessage(raw), nil); err == nil {
+			t.Fatalf("bash args %s must fail without non-empty summary", raw)
 		}
 	}
 }

@@ -536,14 +536,48 @@ describe("ApprovalCard SSR rendering & Arc Design System craft invariants", () =
       approval: {
         callId: "call-await",
         tool: "bg_await",
-        args: JSON.stringify({ max_wait_seconds: 45, reason: "Waiting for daemon test binary" }),
+        args: JSON.stringify({ max_wait_seconds: 45, waiting_for: "bg_1", summary: "Daemon test binary build" }),
       },
     });
     assertWhisperQuietApprovalHtml(awaitHtml);
     expect(awaitHtml).toContain('data-glyph="lucide:timer"');
     expect(awaitHtml).toContain(">Wait<");
     expect(awaitHtml).toContain("45s");
-    expect(awaitHtml).toContain("Waiting for daemon test binary");
+    expect(awaitHtml).toContain("Daemon test binary build");
+    expect(awaitHtml).not.toContain("<details");
+
+    // Legacy bg_await reason arg continues to render cleanly
+    const legacyAwaitHtml = renderApprovalCardSsr({
+      approval: {
+        callId: "call-await-legacy",
+        tool: "bg_await",
+        args: JSON.stringify({ max_wait_seconds: 45, reason: "Waiting for daemon test binary" }),
+      },
+    });
+    expect(legacyAwaitHtml).toContain("Waiting for daemon test binary");
+
+    // bash and exec_script render summary without dumping it to Arguments disclosure, preserving full command/code
+    const bashSummaryHtml = renderApprovalCardSsr({
+      approval: {
+        callId: "call-bash-sum",
+        tool: "bash",
+        args: JSON.stringify({ command: "bun run build:web", summary: "Web bundle build" }),
+      },
+    });
+    expect(bashSummaryHtml).toContain("Web bundle build");
+    expect(bashSummaryHtml).toContain("bun run build:web");
+    expect(bashSummaryHtml).not.toContain("<details");
+
+    const scriptSummaryHtml = renderApprovalCardSsr({
+      approval: {
+        callId: "call-js-sum",
+        tool: "exec_script",
+        args: JSON.stringify({ code: "console.log('verify');", summary: "Output verification check" }),
+      },
+    });
+    expect(scriptSummaryHtml).toContain("Output verification check");
+    expect(scriptSummaryHtml).toContain("console.log('verify');");
+    expect(scriptSummaryHtml).not.toContain("<details");
 
     const cancelHtml = renderApprovalCardSsr({
       jobs: [{ id: "job-99", label: "bun run build:web", status: "running" }],

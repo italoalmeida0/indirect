@@ -3184,11 +3184,19 @@ func (a *sessionActor) onBgTaskRegister(m bgTaskRegisterMsg) {
 			startedAt = time.Now().UnixMilli() - 10000
 		}
 		clippedLabel := tools.ClipLabel(m.Label)
-		task := &BgTask{ID: m.JobID, Kind: m.Kind, Label: clippedLabel, Status: BgStatusRunning, StartedAt: startedAt}
+		clippedCmd := tools.ClipLabel(m.Command)
+		if clippedLabel == "" {
+			clippedLabel = clippedCmd
+		}
+		task := &BgTask{ID: m.JobID, Kind: m.Kind, Label: clippedLabel, Command: clippedCmd, Status: BgStatusRunning, StartedAt: startedAt}
 		upsertBgTask(a.rec, task)
 		a.saveOrAppend(walEvent{Type: walTypeBgTask, BgTask: task})
 		a.pingChange()
-		a.emit(map[string]any{"type": "bg_task_registered", "hostId": a.hostID(), "sessionId": a.id, "jobId": m.JobID, "kind": m.Kind, "label": clippedLabel, "startedAt": task.StartedAt})
+		ev := map[string]any{"type": "bg_task_registered", "hostId": a.hostID(), "sessionId": a.id, "jobId": m.JobID, "kind": m.Kind, "label": clippedLabel, "startedAt": task.StartedAt}
+		if clippedCmd != "" {
+			ev["command"] = clippedCmd
+		}
+		a.emit(ev)
 	}
 	if m.Reply != nil {
 		select {
@@ -3283,6 +3291,7 @@ func (a *sessionActor) onBgTaskRead(m bgTaskReadMsg) {
 		res.Found = true
 		res.Kind = t.Kind
 		res.Label = t.Label
+		res.Command = t.Command
 		res.Status = t.Status
 		res.ExitCode = t.ExitCode
 		res.Total = t.TotalLines

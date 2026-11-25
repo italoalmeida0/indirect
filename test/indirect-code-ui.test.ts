@@ -1935,6 +1935,19 @@ describe("Background tasks (bash/exec_script detach)", () => {
       result: { type: "tool_result", toolId: "t", toolResult: "moved to background", toolDetails: { background_job_id: "bg_js" } },
     } as any);
     expect(jsBg.verb).toBe("Background");
+    // Explicit summary overrides raw command/code in transcript header for both bash & exec_script
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "bash", toolArgs: JSON.stringify({ command: "git status -sb", summary: "Git status check" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "M a.ts" },
+    } as any)).toEqual({ icon: "lucide:terminal", verb: "Ran", target: "Git status check" });
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "bash", toolArgs: JSON.stringify({ command: "bun run dev", summary: "Dev server startup" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "moved", toolDetails: { background_job_id: "bg_dev" } },
+    } as any)).toEqual({ icon: "lucide:terminal", verb: "Background", target: "Dev server startup" });
+    expect(toolSummary({
+      call: { type: "tool_call", toolId: "t", toolName: "exec_script", toolArgs: JSON.stringify({ code: "console.log(42);", summary: "JSON data parsing" }) },
+      result: { type: "tool_result", toolId: "t", toolResult: "42" },
+    } as any)).toEqual({ icon: "mdi:language-javascript", verb: "Ran", target: "JSON data parsing" });
     expect(toolSummary({
       call: { type: "tool_call", toolId: "t", toolName: "bg_cancel", toolArgs: JSON.stringify({ job_id: "bg_js" }) },
       result: { type: "tool_result", toolId: "t", toolResult: "Background Task (exec_script) — cancelled", toolDetails: { env: { kind: "exec_script" } } },
@@ -2034,11 +2047,15 @@ describe("Background hook (session-owned tasks)", () => {
       expect(bg.sessionJobs().map((t) => t.id)).toEqual(["bg_1"]);
       expect(bg.running()).toEqual([]);
       expect(bg.sessionContent("bg_1")).toBe("history-live-1");
-      // Register/finish events touch the list without a full refresh.
-      bg.noteSessionTaskEvent({ type: "bg_task_registered", sessionId: "s1", jobId: "bg_9", kind: "exec_script", label: "code" });
-      expect(bg.sessionJobs().some((t) => t.id === "bg_9")).toBe(true);
+      // Register/finish events touch the list without a full refresh (preserving command preview alongside summary label).
+      bg.noteSessionTaskEvent({ type: "bg_task_registered", sessionId: "s1", jobId: "bg_9", kind: "exec_script", label: "Data parsing run", command: "console.log('parse')" });
+      expect(bg.sessionJobs().find((t) => t.id === "bg_9")).toMatchObject({ label: "Data parsing run", command: "console.log('parse')" });
       bg.noteSessionTaskEvent({ type: "bg_task_finished", sessionId: "s1", jobId: "bg_9", status: "done" });
       expect(bg.sessionJobs().find((t) => t.id === "bg_9")?.status).toBe("done");
+      bg.noteSessionTasks([
+        { id: "bg_9", kind: "exec_script", label: "Data parsing run", command: "console.log('parse')", status: "done", startedAt: 2 },
+      ]);
+      expect(bg.sessionJobs().find((t) => t.id === "bg_9")?.command).toBe("console.log('parse')");
       // Foreign sessions never leak in.
       bg.noteSessionTaskEvent({ type: "bg_task_registered", sessionId: "other", jobId: "bg_x", kind: "bash", label: "x" });
       expect(bg.sessionJobs().some((t) => t.id === "bg_x")).toBe(false);
@@ -2120,6 +2137,29 @@ describe("Tool row model", () => {
       slept.toggle();
       expect(slept.open()).toBe(true);
       expect(slept.openBody()).toBe(false);
+      // New `summary` arg works on bg_await, bash, and exec_script while bashHeaderCmd always preserves raw command/code.
+      const awaitSummaryUnit: any = {
+        call: { type: "tool_call", toolId: "s3", toolName: "bg_await", toolArgs: JSON.stringify({ max_wait_seconds: 60, waiting_for: "bg_1", summary: "Unit test completion" }) },
+        result: { type: "tool_result", toolId: "s3", toolResult: "done", toolDurationMs: 12000 },
+      };
+      const awaitSummary = useToolUnitModel(ctx, "m1", awaitSummaryUnit, 3, () => false, () => false);
+      expect(awaitSummary.sleepLabel()).toBe("12s · Unit test completion");
+      const bashSummaryUnit: any = {
+        call: { type: "tool_call", toolId: "b2", toolName: "bash", toolArgs: JSON.stringify({ command: "git status -sb", summary: "Git status check" }) },
+        result: { type: "tool_result", toolId: "b2", toolResult: "M a.ts" },
+      };
+      const bashSummary = useToolUnitModel(ctx, "m1", bashSummaryUnit, 4, () => false, () => false);
+      expect(bashSummary.taskSummary()).toBe("Git status check");
+      expect(bashSummary.sum().target).toBe("Git status check");
+      expect(bashSummary.bashHeaderCmd()).toBe("git status -sb");
+      const scriptSummaryUnit: any = {
+        call: { type: "tool_call", toolId: "e2", toolName: "exec_script", toolArgs: JSON.stringify({ code: "// parse\nconsole.log(123);", summary: "JSON data parsing" }) },
+        result: { type: "tool_result", toolId: "e2", toolResult: "123" },
+      };
+      const scriptSummary = useToolUnitModel(ctx, "m1", scriptSummaryUnit, 5, () => false, () => false);
+      expect(scriptSummary.taskSummary()).toBe("JSON data parsing");
+      expect(scriptSummary.sum().target).toBe("JSON data parsing");
+      expect(scriptSummary.bashHeaderCmd()).toBe("console.log(123);");
       dispose();
     });
   });

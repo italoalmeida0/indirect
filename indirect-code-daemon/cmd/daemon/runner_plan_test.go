@@ -32,7 +32,7 @@ func resultText(res core.ToolResult) string {
 // bashJSON builds the tool's raw JSON args.
 func bashJSON(t *testing.T, command string) json.RawMessage {
 	t.Helper()
-	raw, err := json.Marshal(map[string]any{"command": command})
+	raw, err := json.Marshal(map[string]any{"command": command, "summary": "Runner test command"})
 	if err != nil {
 		t.Fatal(err)
 	}

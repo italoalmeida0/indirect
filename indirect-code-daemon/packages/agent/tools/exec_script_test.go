@@ -17,7 +17,8 @@ func TestExecScriptCodeExecution(t *testing.T) {
 	dir := t.TempDir()
 	tool := &ExecScriptTool{CWD: dir, Sandbox: NewSandbox(dir)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code": "console.log('hello ' + 'world')",
+		"code":    "console.log('hello ' + 'world')",
+		"summary": "Hello world script",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -35,8 +36,9 @@ func TestExecScriptStdinAndExitCode(t *testing.T) {
 	dir := t.TempDir()
 	tool := &ExecScriptTool{CWD: dir, Sandbox: NewSandbox(dir)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code":  "import fs from 'node:fs'; console.log('got:' + fs.readFileSync(0, 'utf8').trim())",
-		"stdin": "ping",
+		"code":    "import fs from 'node:fs'; console.log('got:' + fs.readFileSync(0, 'utf8').trim())",
+		"summary": "Stdin read check",
+		"stdin":   "ping",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +48,8 @@ func TestExecScriptStdinAndExitCode(t *testing.T) {
 	}
 
 	res, err = tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code": "process.exit(3)",
+		"code":    "process.exit(3)",
+		"summary": "Non-zero exit check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +70,8 @@ func TestExecScriptLocalModuleImport(t *testing.T) {
 	}
 	tool := &ExecScriptTool{CWD: dir, Sandbox: NewSandbox(dir)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code": "import { greet } from './helper.js'; console.log(greet('agent'))",
+		"code":    "import { greet } from './helper.js'; console.log(greet('agent'))",
+		"summary": "Local module import check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -81,8 +85,10 @@ func TestExecScriptValidation(t *testing.T) {
 	dir := t.TempDir()
 	tool := &ExecScriptTool{CWD: dir, Sandbox: NewSandbox(dir)}
 	for name, args := range map[string]any{
-		"empty":      map[string]any{},
-		"whitespace": map[string]any{"code": "   \n\t  "},
+		"empty":           map[string]any{},
+		"whitespace":      map[string]any{"code": "   \n\t  ", "summary": "Whitespace check"},
+		"missing_summary": map[string]any{"code": "console.log(1)"},
+		"blank_summary":   map[string]any{"code": "console.log(1)", "summary": "   \t\n  "},
 	} {
 		if _, err := tool.Execute(context.Background(), mustJSON(t, args), nil); err == nil {
 			t.Fatalf("%s: expected validation error", name)
@@ -107,6 +113,7 @@ func TestExecScriptSandboxJail(t *testing.T) {
 	// Workdir outside the jail must be rejected.
 	if _, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"code":     "console.log(1)",
+		"summary":  "Workdir jail check",
 		"work_dir": "..",
 	}), nil); err == nil {
 		t.Fatal("expected jail rejection for work_dir ..")
@@ -114,6 +121,7 @@ func TestExecScriptSandboxJail(t *testing.T) {
 
 	// Runtime fs access and process.chdir outside jail (even when constructed dynamically to bypass static CheckCommand) must be blocked by JailRoots!
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"summary": "Sandbox jail read check",
 		"code": `
 			import fs from "node:fs";
 			import path from "node:path";
@@ -135,7 +143,8 @@ func TestExecScriptSandboxJail(t *testing.T) {
 
 	// Also verify process.argv does not leak --runner and has length 2.
 	resArgv, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code": `console.log(JSON.stringify({ len: process.argv.length, arg1: process.argv[1] }))`,
+		"code":    `console.log(JSON.stringify({ len: process.argv.length, arg1: process.argv[1] }))`,
+		"summary": "Process argv check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -149,7 +158,8 @@ func TestExecScriptNoTimeout(t *testing.T) {
 	dir := t.TempDir()
 	tool := &ExecScriptTool{CWD: dir, Sandbox: NewSandbox(dir)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code": "await new Promise(r => setTimeout(r, 200)); console.log('done')",
+		"code":    "await new Promise(r => setTimeout(r, 200)); console.log('done')",
+		"summary": "Async timer completion",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -183,8 +193,9 @@ console.log(fs.readFileSync("ação.txt", "utf8"));
 console.error(s);
 `
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code":  code,
-		"stdin": "ação 日本語 🚀",
+		"code":    code,
+		"summary": "Unicode roundtrip test",
+		"stdin":   "ação 日本語 🚀",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +210,8 @@ func TestExecScriptMergesStdoutStderrWithoutMarker(t *testing.T) {
 	dir := t.TempDir()
 	tool := &ExecScriptTool{CWD: dir, Sandbox: NewSandbox(dir)}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code": "console.log('out'); console.error('err')",
+		"code":    "console.log('out'); console.error('err')",
+		"summary": "Merged output check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -213,7 +225,8 @@ func TestExecScriptMergesStdoutStderrWithoutMarker(t *testing.T) {
 	}
 	// Empty output is a fact (attr), never "(no output)" prose in the body.
 	res, err = tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code": "const _ = 1;",
+		"code":    "const _ = 1;",
+		"summary": "Empty output check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -305,6 +318,7 @@ func TestExecScriptReadOnlyProjectAndCheckCommand(t *testing.T) {
 	// 1. Valid JS containing shell-like substrings, paths, or regexes is not falsely rejected pre-execution,
 	// while actual out-of-jail filesystem access is blocked at runtime with EACCES.
 	resLit, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"summary": "Literal string jail check",
 		"code": `
 			import fs from "node:fs";
 			const msg = "sudo is just a word";
@@ -330,6 +344,7 @@ func TestExecScriptReadOnlyProjectAndCheckCommand(t *testing.T) {
 
 	// 2. ReadOnlyRoots allows reading project files and writing to brain extraRoot, but blocks project writes.
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"summary": "Read-only project write check",
 		"code": `
 			import fs from "node:fs";
 			import path from "node:path";
@@ -363,6 +378,7 @@ func TestExecScriptJailedAllowsDotDotLiteralsAndInterleavesOutput(t *testing.T) 
 
 	// Harmless ".." string literals in path computation must not be rejected by bash CheckCommand heuristics.
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"summary": "Read-only project write check",
 		"code": `
 			import path from "node:path";
 			console.error("first-err");
@@ -389,6 +405,7 @@ func TestExecScriptRound8RouteLiteralsAndLegacyArgs(t *testing.T) {
 
 	// 1. URL route strings like "/v1/users" must not be rejected as host root paths in jailed exec_script.
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"summary": "Read-only project write check",
 		"code": `const route = "/v1/users"; console.log("route:" + route);`,
 	}), nil)
 	if err != nil {
@@ -401,7 +418,8 @@ func TestExecScriptRound8RouteLiteralsAndLegacyArgs(t *testing.T) {
 	// 2. Large script (>40KB) in direct mode must succeed via __INDIRECT_CODE_FILE on Windows/POSIX.
 	largeComment := "// " + strings.Repeat("a", 40000) + "\n"
 	res, err = tool.Execute(context.Background(), mustJSON(t, map[string]any{
-		"code": largeComment + `console.log("large-ok");`,
+		"code":    largeComment + `console.log("large-ok");`,
+		"summary": "Large script execution",
 	}), nil)
 	if err != nil {
 		t.Fatalf("large script failed: %v", err)
@@ -466,6 +484,7 @@ func TestExecScriptRound12PermissionsAndDirectEnv(t *testing.T) {
 	t.Setenv("META_API_KEY", "super-secret-daemon-key")
 
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"summary": "Read-only project write check",
 		"code": `
 			import assert from "node:assert";
 			import fs from "node:fs";
@@ -550,6 +569,7 @@ func TestExecScriptNoShellFailsDollarButAllowsDirectChildProcess(t *testing.T) {
 	tool := &ExecScriptTool{CWD: root, LogDir: t.TempDir()}
 
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
+		"summary": "Read-only project write check",
 		"code": `
 			import assert from "node:assert/strict";
 			import cp from "node:child_process";

@@ -24,7 +24,7 @@ func TestRegressionRunnerExecScriptStdin(t *testing.T) {
 	runnerSourceOverride = app
 	defer func() { runnerSourceOverride = old }()
 	tool := &tools.ExecScriptTool{CWD: t.TempDir(), Starter: runnerStarter(root, "sess1", filepath.Join(dataDir, "brain", "sess1"))}
-	raw, _ := json.Marshal(map[string]string{"code": "import fs from 'node:fs'; console.log('got:' + fs.readFileSync(0, 'utf8'));", "stdin": "ping"})
+	raw, _ := json.Marshal(map[string]string{"code": "import fs from 'node:fs'; console.log('got:' + fs.readFileSync(0, 'utf8'));", "summary": "Runner stdin check", "stdin": "ping"})
 	result, err := tool.Execute(context.Background(), raw, nil)
 	if err != nil {
 		t.Fatal(err)

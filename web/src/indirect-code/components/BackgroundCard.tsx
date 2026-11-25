@@ -16,6 +16,23 @@ function shortLabel(cmd: string, max = 64) {
   return `${one.slice(0, head)}…${one.slice(one.length - tail)}`;
 }
 
+/** True when the task carries a preserved command/code preview distinct from its summary label. */
+function hasDistinctCommand(job: SessionBgTask): boolean {
+  const cmd = (job.command || "").trim();
+  if (!cmd) return false;
+  return cmd !== (job.label || "").trim();
+}
+
+function commandPrompt(kind: string): string {
+  return kind === "exec_script" || kind === "python" ? "> " : "$ ";
+}
+
+function commandLanguage(kind: string): string {
+  if (kind === "exec_script") return "javascript";
+  if (kind === "python") return "python";
+  return "bash";
+}
+
 function taskState(status: string) {
   switch (status) {
     case "running": return { label: "Running", icon: "lucide:terminal", color: "text-accent" };
@@ -214,15 +231,38 @@ export function BackgroundCard(props: { contextKey?: string }) {
                         <ProcessEqualizer size={13} class="text-accent" />
                       </Show>
                     </span>
-                    <span
-                      class="truncate text-fg min-w-0 flex-1 text-xs"
-                      data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
+                    <Show
+                      when={hasDistinctCommand(job)}
+                      fallback={
+                        <span
+                          class="truncate text-fg min-w-0 flex-1 text-xs"
+                          data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
+                        >
+                          <ShellCmd
+                            prompt={commandPrompt(job.kind)}
+                            text={shortLabel(job.label || job.id)}
+                          />
+                        </span>
+                      }
                     >
-                      <ShellCmd
-                        prompt={job.kind === "exec_script" || job.kind === "python" ? "> " : "$ "}
-                        text={shortLabel(job.label || job.id)}
-                      />
-                    </span>
+                      <div class="min-w-0 flex-1 flex flex-col sm:flex-row sm:items-baseline sm:gap-2">
+                        <span
+                          class="truncate font-medium text-fg text-xs shrink-0 sm:max-w-[52%]"
+                          data-bg-label
+                          data-rc-tip={job.label && job.label.length > 60 ? job.label : undefined}
+                        >
+                          {shortLabel(job.label || job.id)}
+                        </span>
+                        <span
+                          class="truncate font-mono text-2xs text-fg-muted min-w-0 flex-1"
+                          data-bg-command-preview
+                          data-rc-tip={job.command && job.command.length > 56 ? job.command : undefined}
+                        >
+                          <span class="select-none opacity-75">{commandPrompt(job.kind)}</span>
+                          {shortLabel(job.command || "", 56)}
+                        </span>
+                      </div>
+                    </Show>
                     <Show when={job.status !== "running" && job.exitCode !== undefined}>
                       <span
                         class={`shrink-0 rounded-inner border px-1.5 py-0.5 font-mono text-2xs leading-tight tabular-nums ${exitBadgeTone(job.exitCode!)}`}
@@ -273,6 +313,20 @@ export function BackgroundCard(props: { contextKey?: string }) {
                 </div>
                 <Show when={isOpen(job.id)}>
                   <div class="border-t border-border-subtle bg-surface-subtle overflow-hidden">
+                    <Show when={hasDistinctCommand(job)}>
+                      <div
+                        data-bg-command
+                        class="border-b border-border-subtle bg-surface max-h-28 overflow-auto overscroll-contain"
+                      >
+                        <CodeBlock
+                          embedded
+                          text={job.command!}
+                          language={commandLanguage(job.kind)}
+                          wrap={false}
+                          scrollKey={`bg:${job.id}:cmd`}
+                        />
+                      </div>
+                    </Show>
                     <div
                       ref={(el) => {
                         restoreToolScroll(`bg:${job.id}`, el);

@@ -91,7 +91,7 @@ func TestBgStreamIncludesPreDetachOutput(t *testing.T) {
 			return "bg_1", p.BrainLog, func(chunk string) { mu.Lock(); streamed = append(streamed, chunk); mu.Unlock() }, func(string, bool, int) {}
 		},
 	}
-	args, _ := json.Marshal(map[string]any{"command": "echo EARLY-1; echo EARLY-2; sleep 1; echo LATE-3"})
+	args, _ := json.Marshal(map[string]any{"command": "echo EARLY-1; echo EARLY-2; sleep 1; echo LATE-3", "summary": "Pre-detach stream check"})
 	if _, err := bt.Execute(context.Background(), args, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestBgStreamIncludesPreDetachOutputExecScript(t *testing.T) {
 		},
 	}
 	code := "console.log('JS-EARLY'); await new Promise(r => setTimeout(r, 800)); console.log('JS-LATE');"
-	args, _ := json.Marshal(map[string]any{"code": code})
+	args, _ := json.Marshal(map[string]any{"code": code, "summary": "Script pre-detach stream check"})
 	if _, err := pt.Execute(context.Background(), args, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestBgStreamIncludesPreDetachOutputExecScript(t *testing.T) {
 func TestBgInlineResultNeverLeaksPaths(t *testing.T) {
 	dir := t.TempDir()
 	bt := &tools.BashTool{CWD: dir, LogDir: dir}
-	args, _ := json.Marshal(map[string]any{"command": "for i in $(seq 1 20000); do echo line-$i; done"})
+	args, _ := json.Marshal(map[string]any{"command": "for i in $(seq 1 20000); do echo line-$i; done", "summary": "Large output line sequence"})
 	res, err := bt.Execute(context.Background(), args, nil)
 	if err != nil {
 		t.Fatal(err)

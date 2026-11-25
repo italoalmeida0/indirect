@@ -282,7 +282,7 @@ func TestReviewRealBackgroundProcessRecordsPID(t *testing.T) {
 	tools.AutoBackgroundAfter = 20 * time.Millisecond
 	defer func() { tools.AutoBackgroundAfter = old }()
 	tool := &tools.BashTool{CWD: t.TempDir(), Sandbox: tools.NewSandbox("/tmp"), Slow: w.slowHook()}
-	_, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep 10"}`), nil)
+	_, err := tool.Execute(context.Background(), json.RawMessage(`{"command":"sleep 10","summary":"Background PID check"}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

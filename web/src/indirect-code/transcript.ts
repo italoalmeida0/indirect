@@ -929,15 +929,17 @@ export function toolSummary(u: ToolUnit): ToolSummary {
       };
     }
     case "bash": {
+      const summary = String(args.summary || args.description || "").replace(/\s+/g, " ").trim();
       const cmd = String(args.command || "").replace(/\s+/g, " ").trim();
       const bg = details?.background_job_id;
       // Detached runs (placeholder or folded result) read as background
       // work in the turn and the card, never as a plain synchronous run.
       const verb = typeof bg === "string" && bg ? "Background" : "Ran";
+      const text = summary || cmd;
       return {
         icon: "lucide:terminal",
         verb,
-        target: cmd.length > 90 ? cmd.slice(0, 90) + "…" : cmd,
+        target: text.length > 90 ? text.slice(0, 90) + "…" : text,
       };
     }
     case "bg_await": {
@@ -1063,6 +1065,7 @@ export function toolSummary(u: ToolUnit): ToolSummary {
     }
     case "exec_script":
     case "python": {
+      const summary = String(args.summary || args.description || "").replace(/\s+/g, " ").trim();
       const codeStr = String(args.code || "");
       const scriptStr = String(args.script || "");
       const extractFirstCodeLine = (src: string): string => {
@@ -1092,7 +1095,7 @@ export function toolSummary(u: ToolUnit): ToolSummary {
         : scriptStr.trim()
           ? [baseNameOf(scriptStr) || scriptStr, ...(Array.isArray(args.args) ? args.args.map(String) : [])].join(" ")
           : "";
-      const one = (first || "snippet").replace(/\s+/g, " ").trim();
+      const one = summary || (first || "snippet").replace(/\s+/g, " ").trim();
       const bg = details?.background_job_id;
       const verb = typeof bg === "string" && bg ? "Background" : "Ran";
       const legacyLang = typeof args.legacy_lang === "string" ? args.legacy_lang.trim().toLowerCase() : "";

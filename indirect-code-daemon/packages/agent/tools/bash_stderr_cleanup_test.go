@@ -14,6 +14,7 @@ func TestBashStderrCapture(t *testing.T) {
 	tool := &BashTool{CWD: t.TempDir()}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": "printf 'stdout-msg\n'; printf 'stderr-msg\n' >&2",
+		"summary": "Stderr capture check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +42,7 @@ func TestBashTempLogCleanup(t *testing.T) {
 	// Generate >50KB of output so that openTempFile is triggered
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": "seq 1 4000",
+		"summary": "Large sequence output",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +76,7 @@ func TestBashUserFallback(t *testing.T) {
 	tool := &BashTool{CWD: t.TempDir()}
 	res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": "echo USER=$USER",
+		"summary": "User env fallback check",
 	}), nil)
 	if err != nil {
 		t.Fatal(err)

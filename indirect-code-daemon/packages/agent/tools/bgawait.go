@@ -23,7 +23,9 @@ type BgAwaitArgs struct {
 	WaitingFor string `json:"waiting_for"`
 	// Summary is a ≤100-char note shown in the row body (what is being
 	// waited on). Required, non-empty after trim; longer text is cut.
-	Reason string `json:"reason"`
+	Summary string `json:"summary"`
+	// Reason is the legacy alias for Summary (accepted for backward compatibility).
+	Reason string `json:"reason,omitempty"`
 }
 
 // BgAwaitHost lets the bg_await tool observe background jobs: while it waits,
@@ -56,11 +58,11 @@ type BgAwaitTool struct {
 func (*BgAwaitTool) Name() string { return "bg_await" }
 
 func (*BgAwaitTool) Description() string {
-	return `Wait for a background task to finish (or for max_wait_seconds to pass). REQUIRED args: waiting_for (the bg task id from the detach placeholder) and reason (≤100 chars describing what you are waiting for, shown in the UI). The wait ends EARLY — with a notice — as soon as one of your background tasks finishes. If the pinned task already finished, bg_await returns immediately (no dead-wait, never fails). Prefer a generous max_wait_seconds: bg_await(300, ...) returns immediately when the task completes after 5s. Use this instead of a terminal sleep command: a shell sleep would itself detach into another background task.`
+	return `Wait for a background task to finish (or for max_wait_seconds to pass). REQUIRED args: waiting_for (the bg task id from the detach placeholder) and summary (≤100 chars describing what you are waiting for, shown in the UI). The wait ends EARLY — with a notice — as soon as one of your background tasks finishes. If the pinned task already finished, bg_await returns immediately (no dead-wait, never fails). Prefer a generous max_wait_seconds: bg_await(300, ...) returns immediately when the task completes after 5s. Use this instead of a terminal sleep command: a shell sleep would itself detach into another background task.`
 }
 
 func (*BgAwaitTool) Schema() json.RawMessage {
-	return json.RawMessage(`{"type":"object","properties":{"max_wait_seconds":{"type":"number","minimum":1,"maximum":3600,"description":"Upper bound of the wait in seconds (1–3600). Ends early when a background task finishes."},"waiting_for":{"type":"string","description":"Background task id — the exact job_id from the detached command's placeholder. Required."},"reason":{"type":"string","description":"What you are waiting for, max 100 chars (shown in the UI). Required.","maxLength":100}},"required":["max_wait_seconds","waiting_for","reason"]}`)
+	return json.RawMessage(`{"type":"object","properties":{"max_wait_seconds":{"type":"number","minimum":1,"maximum":3600,"description":"Upper bound of the wait in seconds (1–3600). Ends early when a background task finishes."},"waiting_for":{"type":"string","description":"Background task id — the exact job_id from the detached command's placeholder. Required."},"summary":{"type":"string","description":"Brief 2-5 word noun phrase describing what you are waiting for (max 100 chars, shown in the UI). Capitalize like a sentence. Some examples: 'Unit test completion', 'Package build finish', 'Dev server startup'. Required.","maxLength":100}},"required":["max_wait_seconds","waiting_for","summary"]}`)
 }
 
 func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress func(string)) (core.ToolResult, error) {
@@ -75,16 +77,12 @@ func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress
 	if jobID == "" {
 		return core.ToolResult{}, fmt.Errorf("waiting_for is required: pass the background task id (the job_id from the detached command's placeholder) this await waits on")
 	}
-	reason := strings.TrimSpace(a.Reason)
-	if reason == "" {
-		return core.ToolResult{}, fmt.Errorf("reason is required: describe in ≤100 chars what you are waiting for")
+	summary := normalizeTaskSummary(a.Summary)
+	if summary == "" {
+		summary = normalizeTaskSummary(a.Reason)
 	}
-	if len(reason) > 100 {
-		// Truncate by runes (like noticePreview): a byte cut can split a
-		// multibyte rune and ship invalid UTF-8 in the UI summary.
-		if r := []rune(reason); len(r) > 100 {
-			reason = string(r[:100])
-		}
+	if summary == "" {
+		return core.ToolResult{}, fmt.Errorf("summary is required: describe in ≤100 chars what you are waiting for")
 	}
 	wait := time.Duration(a.MaxWaitSeconds * float64(time.Second))
 	// Subscribe BEFORE the initial status check: a job that finishes in
@@ -107,7 +105,7 @@ func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress
 			status, label, found := ch.BgTaskStatus(t.SessionID, jobID)
 			if !found {
 				return core.ToolResult{Attrs: []core.Attr{
-					{Key: "summary", Value: reason},
+					{Key: "summary", Value: summary},
 					{Key: "status", Value: "unknown_task"},
 					{Key: "job_id", Value: jobID},
 					{Key: "info", Value: fmt.Sprintf("background task %s is unknown in this session — nothing to wait for. Use bg_check with a valid id.", jobID)},
@@ -115,7 +113,7 @@ func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress
 			}
 			if status != "running" {
 				return core.ToolResult{Attrs: []core.Attr{
-					{Key: "summary", Value: reason},
+					{Key: "summary", Value: summary},
 					{Key: "status", Value: "already_" + status},
 					{Key: "job_id", Value: jobID},
 					{Key: "command", Value: label},
@@ -136,13 +134,13 @@ func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress
 	select {
 	case <-ctx.Done():
 		return core.ToolResult{Attrs: []core.Attr{
-			{Key: "summary", Value: reason},
+			{Key: "summary", Value: summary},
 			{Key: "status", Value: "cancelled"},
 			{Key: "job_id", Value: jobID},
 		}}, nil
 	case <-timer.C:
 		return core.ToolResult{Attrs: []core.Attr{
-			{Key: "summary", Value: reason},
+			{Key: "summary", Value: summary},
 			{Key: "status", Value: "timeout"},
 			{Key: "job_id", Value: jobID},
 			{Key: "waited", Value: humanizeSeconds(a.MaxWaitSeconds)},
@@ -150,7 +148,7 @@ func (t *BgAwaitTool) Execute(ctx context.Context, raw json.RawMessage, progress
 		}}, nil
 	case <-wake:
 		return core.ToolResult{Attrs: []core.Attr{
-			{Key: "summary", Value: reason},
+			{Key: "summary", Value: summary},
 			{Key: "status", Value: "woken_early"},
 			{Key: "job_id", Value: jobID},
 			{Key: "waited", Value: humanizeSeconds(time.Since(start).Seconds())},

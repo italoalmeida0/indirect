@@ -164,7 +164,7 @@ func TestBashToolArrivalSpillLosslessAbove50KB(t *testing.T) {
 	}
 
 	ctx := core.WithToolCallID(context.Background(), "call_bash_spill_1")
-	res, err := tool.Execute(ctx, mustJSON(t, map[string]any{"command": "go test ./..."}), nil)
+	res, err := tool.Execute(ctx, mustJSON(t, map[string]any{"command": "go test ./...", "summary": "Go unit test run"}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestExecScriptToolArrivalSpill(t *testing.T) {
 			}
 		}
 	`
-	res, err := tool.Execute(ctx, mustJSON(t, map[string]any{"code": code}), nil)
+	res, err := tool.Execute(ctx, mustJSON(t, map[string]any{"code": code, "summary": "Schema migration output test"}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +445,7 @@ func TestMultiKBAndMultiMBDetailsCappedForExecScriptAndFetchURL(t *testing.T) {
 		}
 		console.log("JS_TAIL_SENTINEL");
 	`
-	jsRes, err := jsTool.Execute(core.WithToolCallID(context.Background(), "call_js_big_det"), mustJSON(t, map[string]any{"code": jsCode}), nil)
+	jsRes, err := jsTool.Execute(core.WithToolCallID(context.Background(), "call_js_big_det"), mustJSON(t, map[string]any{"code": jsCode, "summary": "Large UTF-8 output test"}), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

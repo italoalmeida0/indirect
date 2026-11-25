@@ -44,6 +44,7 @@ type BgCheckResult struct {
 	Found     bool
 	Kind      string
 	Label     string
+	Command   string
 	Status    string
 	ExitCode  int
 	Text      string
@@ -102,11 +103,18 @@ func (t *BgCheckTool) Execute(ctx context.Context, raw json.RawMessage, _ func(s
 	}
 	var sb strings.Builder
 	var attrs []core.Attr
+	cmdAttr := res.Command
+	if cmdAttr == "" {
+		cmdAttr = res.Label
+	}
 	attrs = append(attrs,
 		core.Attr{Key: "kind", Value: res.Kind},
 		core.Attr{Key: "status", Value: res.Status},
-		core.Attr{Key: "command", Value: res.Label},
+		core.Attr{Key: "command", Value: cmdAttr},
 	)
+	if res.Label != "" && res.Label != cmdAttr {
+		attrs = append(attrs, core.Attr{Key: "summary", Value: res.Label})
+	}
 	if res.Status != "running" {
 		attrs = append(attrs, core.Attr{Key: "exit", Value: fmt.Sprintf("%d", res.ExitCode)})
 	}

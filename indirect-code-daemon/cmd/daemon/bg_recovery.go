@@ -80,6 +80,9 @@ func (a *sessionActor) restoreRunnerTask(jobID string) (int64, error) {
 	}
 	task := previous
 	task.ID, task.Kind, task.Label = jobID, st.Kind, truncateBgLabel(st.Label)
+	if st.Command != "" {
+		task.Command = truncateBgLabel(st.Command)
+	}
 	task.StartedAt = st.StartedAt
 	task.Status = BgStatusRunning
 	capBytes := bgLiveCap

@@ -225,6 +225,7 @@ func TestSecurity_PrepareEnvAndBashScrubDaemonSecrets(t *testing.T) {
 	bt := &BashTool{CWD: ws, Sandbox: sb, LogDir: brain, BrainDir: brain}
 	res, berr := bt.Execute(context.Background(), mustJSON(t, map[string]any{
 		"command": `printf 'GW=%s|META=%s|PROXY=%s|GO=%s' "$GATEWAY_SECRET" "$META_API_KEY" "$HTTP_PROXY" "$GOPATH"`,
+		"summary": "Secret env scrub check",
 	}), nil)
 	if berr != nil {
 		t.Fatalf("BashTool.Execute failed: %v", berr)

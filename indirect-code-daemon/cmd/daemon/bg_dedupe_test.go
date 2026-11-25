@@ -108,3 +108,53 @@ func TestAdoptOnePreservesNoDedupe(t *testing.T) {
 		t.Fatalf("NoDedupe adopted job must not match fingerprint lookup, got %+v", got)
 	}
 }
+
+func TestBgSummaryLabelPreservesCommandAndDedupesByCommand(t *testing.T) {
+	b := newBGSupervisor(t.TempDir())
+	reply := make(chan any, 1)
+	b.onRegister(bgRegisterMsg{
+		Kind:      "bash",
+		SessionID: "s1",
+		Label:     "Unit test execution",
+		Command:   "bun test ./test/indirect-code-ui.test.ts",
+		StartedAt: 1000,
+		Reply:     reply,
+	})
+	res, ok := (<-reply).(bgRegisterResult)
+	if !ok || res.Error != "" || res.JobID == "" {
+		t.Fatalf("unexpected register result: %#v", res)
+	}
+	j := b.jobs[res.JobID]
+	if j == nil {
+		t.Fatal("expected registered bgJob")
+	}
+	if j.Label != "Unit test execution" {
+		t.Fatalf("j.Label = %q, want summary", j.Label)
+	}
+	if j.Command != "bun test ./test/indirect-code-ui.test.ts" {
+		t.Fatalf("j.Command = %q, want preserved command", j.Command)
+	}
+	// A duplicate call with a different summary wording still matches the exact command fingerprint.
+	kind, cmd, ok := bgCallLabel(provider.ToolCallBlock{
+		Name:      "bash",
+		Arguments: json.RawMessage(`{"command":"bun test ./test/indirect-code-ui.test.ts","summary":"Different summary wording"}`),
+	})
+	if !ok || kind != "bash" || cmd != "bun test ./test/indirect-code-ui.test.ts" {
+		t.Fatalf("bgCallLabel = (%q, %q, %v)", kind, cmd, ok)
+	}
+	if got := b.findRunningByFingerprint("s1", bgFingerprint(kind, cmd)); got == nil || got.ID != res.JobID {
+		t.Fatalf("expected duplicate guard match by command regardless of summary, got %+v", got)
+	}
+	// Payload serialization ships both label (summary) and command preview.
+	payloads := bgTaskPayloads([]BgTask{{
+		ID:        res.JobID,
+		Kind:      "bash",
+		Label:     j.Label,
+		Command:   j.Command,
+		Status:    BgStatusRunning,
+		StartedAt: 1000,
+	}})
+	if len(payloads) != 1 || payloads[0]["label"] != "Unit test execution" || payloads[0]["command"] != "bun test ./test/indirect-code-ui.test.ts" {
+		t.Fatalf("unexpected bgTaskPayloads: %#v", payloads)
+	}
+}

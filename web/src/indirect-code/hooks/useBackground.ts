@@ -19,6 +19,8 @@ export interface SessionBgTask {
   id: string;
   kind: string;
   label: string;
+  /** Original command/script preview preserved separately when label is a human summary. */
+  command?: string;
   status: string;
   startedAt: number;
   endedAt?: number;
@@ -77,6 +79,7 @@ export function createBackground(opts: {
           id: msg.jobId,
           kind: String(msg.kind || ""),
           label: String(msg.label || ""),
+          ...(typeof msg.command === "string" && msg.command ? { command: msg.command } : {}),
           status: "running",
           startedAt: typeof msg.startedAt === "number" && msg.startedAt > 0 ? msg.startedAt : Date.now(),
         });
@@ -108,6 +111,7 @@ export function createBackground(opts: {
         id: t.id,
         kind: String(t.kind || ""),
         label: String(t.label || ""),
+        command: typeof t.command === "string" && t.command ? t.command : undefined,
         status: String(t.status || "running"),
         startedAt: typeof t.startedAt === "number" ? t.startedAt : 0,
         endedAt: typeof t.endedAt === "number" ? t.endedAt : undefined,

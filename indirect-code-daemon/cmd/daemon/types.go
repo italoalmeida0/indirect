@@ -233,6 +233,7 @@ type BgTask struct {
 	ID           string `json:"id"`
 	Kind         string `json:"kind"` // "bash" | "exec_script"
 	Label        string `json:"label"`
+	Command      string `json:"command,omitempty"`
 	Status       string `json:"status"` // "running" | "done" | "error" | "cancelled"
 	StartedAt    int64  `json:"startedAt"`
 	EndedAt      int64  `json:"endedAt,omitempty"`

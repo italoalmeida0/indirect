@@ -33,10 +33,10 @@ func TestBackgroundCrashHelper(t *testing.T) {
 	var err error
 	if os.Getenv("HARDENING_CRASH_KIND") == "exec_script" {
 		tool := &tools.ExecScriptTool{CWD: dir, Sandbox: tools.NewSandbox(dir), Slow: w.slowHook(), LogDir: logDir}
-		_, err = tool.Execute(context.Background(), json.RawMessage(`{"code":"for (let i = 0; i < 300; i++) { console.log('alive'); console.error('stderr-alive'); await new Promise(r => setTimeout(r, 100)); }"}`), nil)
+		_, err = tool.Execute(context.Background(), json.RawMessage(`{"code":"for (let i = 0; i < 300; i++) { console.log('alive'); console.error('stderr-alive'); await new Promise(r => setTimeout(r, 100)); }","summary":"Crash fixture script"}`), nil)
 	} else {
 		tool := &tools.BashTool{CWD: dir, Sandbox: tools.NewSandbox(dir), Slow: w.slowHook(), LogDir: logDir}
-		_, err = tool.Execute(context.Background(), json.RawMessage(`{"command":"while true; do echo alive; sleep .1; done"}`), nil)
+		_, err = tool.Execute(context.Background(), json.RawMessage(`{"command":"while true; do echo alive; sleep .1; done","summary":"Crash fixture loop"}`), nil)
 	}
 	if err != nil {
 		t.Fatal(err)

@@ -37,6 +37,20 @@ export function ToolUnitHeader(props: ToolPartProps) {
   const verbActive = () => Boolean(props.running && props.active && !props.u.result);
   const verbShimmerStyle = createShimmerStyle(verbActive);
 
+  const isCommandTool = () => {
+    const n = props.m.name();
+    return n === "bash" || n === "exec_script" || n === "python";
+  };
+
+  const commandTooltip = () => {
+    if (!isCommandTool() || !props.m.taskSummary()) return undefined;
+    const raw = collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "").replace(/\s+/g, " ").trim();
+    if (!raw) return undefined;
+    const prompt = props.m.name() === "exec_script" || props.m.name() === "python" ? "> " : "$ ";
+    const clipped = raw.length > 140 ? raw.slice(0, 140) + "…" : raw;
+    return `${prompt}${clipped}`;
+  };
+
   const rowChildren = () => (
     <>
       <span class="inline-flex w-3.5 shrink-0 items-center justify-center">
@@ -48,9 +62,20 @@ export function ToolUnitHeader(props: ToolPartProps) {
       </span>
       <span class={`shrink-0 ${verbActive() ? "ui-shimmer font-medium text-fg-secondary" : "text-fg-muted"}`} style={verbShimmerStyle()}>{props.m.sum().verb}</span>
       <span class="flex items-center gap-1.5 min-w-0 flex-1">
-        <span class="inline-flex items-center gap-1.5 min-w-0 flex-1" data-rc-tip={targetPath() ? absoluteRemotePath(targetPath(), props.ctx.activeSession()?.cwd || "", props.ctx.projects().find((p: { protected?: boolean }) => p.protected)?.path) : undefined}>
+        <span
+          class="inline-flex items-center gap-1.5 min-w-0 flex-1"
+          data-rc-tip={
+            targetPath()
+              ? absoluteRemotePath(
+                  targetPath(),
+                  props.ctx.activeSession()?.cwd || "",
+                  props.ctx.projects().find((p: { protected?: boolean }) => p.protected)?.path,
+                )
+              : commandTooltip()
+          }
+        >
           <Show when={targetPath()}><FileIcon path={targetPath()} size={13} /></Show>
-          <Show when={props.m.name() === "bash" || props.m.name() === "exec_script" || props.m.name() === "python"} fallback={
+          <Show when={isCommandTool() && !props.m.taskSummary()} fallback={
             <span class={`truncate text-fg-secondary group-hover/tool:text-fg min-w-0 transition-colors ${isMonoIdentifier() ? "font-mono text-xs" : ""}`}>{props.m.name() === "bg_await" ? props.m.sleepLabel() : props.m.sum().target}</span>
           }>
             <span class="truncate text-fg-secondary group-hover/tool:text-fg min-w-0 text-xs transition-colors"><ShellCmd prompt={props.m.name() === "exec_script" || props.m.name() === "python" ? "> " : "$ "} text={collapseCwd(props.m.bashHeaderCmd(), props.ctx.activeSession()?.cwd || "")} /></span>

@@ -19,6 +19,8 @@ import (
 type ExecScriptArgs struct {
 	// Code is the JavaScript snippet to execute in the Node.js runtime.
 	Code string `json:"code"`
+	// Summary is a brief 2-5 word noun phrase describing the script task.
+	Summary string `json:"summary"`
 	// Stdin feeds text into the process standard input.
 	Stdin string `json:"stdin,omitempty"`
 	// Env adds extra environment variables (SANDBOX-safe keys only).
@@ -62,7 +64,7 @@ func (t *ExecScriptTool) Description() string {
 		"There is no timeout: if the script still runs after %s it automatically moves to the background (you are notified with a job id; read the output with bg_check, wait with bg_await, stop it with bg_cancel).", humanDuration(AutoBackgroundAfter))
 }
 
-const execScriptSchema = `{"type":"object","properties":{"code":{"type":"string","description":"JavaScript code to execute in Node.js (supports ES import, CommonJS require, top-level await, and the global $ shell helper)."},"stdin":{"type":"string","description":"Text piped to process.stdin."},"env":{"type":"object","additionalProperties":{"type":"string"},"description":"Extra environment variables."},"work_dir":{"type":"string","description":"Working directory (defaults to the current working directory)."}},"required":["code"]}`
+const execScriptSchema = `{"type":"object","properties":{"code":{"type":"string","description":"JavaScript code to execute in Node.js (supports ES import, CommonJS require, top-level await, and the global $ shell helper)."},"summary":{"type":"string","description":"Brief 2-5 word noun phrase describing the script task. Capitalize like a sentence. Some examples: 'JSON data parsing', 'API response check', 'Package build', 'Dev server startup'."},"stdin":{"type":"string","description":"Text piped to process.stdin."},"env":{"type":"object","additionalProperties":{"type":"string"},"description":"Extra environment variables."},"work_dir":{"type":"string","description":"Working directory (defaults to the current working directory)."}},"required":["code","summary"]}`
 
 func (t *ExecScriptTool) Schema() json.RawMessage { return json.RawMessage(execScriptSchema) }
 
@@ -80,6 +82,10 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 			return core.ToolResult{}, fmt.Errorf("exec_script: `code` is required (legacy `script` parameter %q is not supported; pass JavaScript in `code`)", a.Script)
 		}
 		return core.ToolResult{}, fmt.Errorf("exec_script: `code` is required")
+	}
+	summary := normalizeTaskSummary(a.Summary)
+	if summary == "" {
+		return core.ToolResult{}, fmt.Errorf("exec_script: summary is required: provide a brief 2-5 word noun phrase describing the script task")
 	}
 
 	// Resolve the working directory: session CWD by default, jailed when locked.
@@ -105,9 +111,9 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		}
 	}
 
-	// The background job label is clipped to 300 chars (+ …) so state.json
+	// The clipped script preview is kept to 300 chars (+ …) so state.json
 	// and UI rows stay compact regardless of script length.
-	label := ClipLabel(code)
+	cmdPreview := ClipLabel(code)
 	exePath, _ := os.Executable()
 	if exePath == "" {
 		exePath = "indirect-code"
@@ -144,7 +150,8 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	proc, err := startWith(bgCtx, t.Starter, ExecSpec{
 		JobID:         core.ExecutionID(ctx),
 		Kind:          "exec_script",
-		Command:       label,
+		Command:       cmdPreview,
+		Label:         summary,
 		Argv:          argv,
 		CWD:           dir,
 		Env:           execScriptEnv(a.Env),
@@ -317,6 +324,7 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	}
 	jobID, fullLog, sink, deliver := t.Slow("exec_script", code, BackgroundProcess{
 		JobID:      proc.JobID,
+		Label:      summary,
 		PID:        proc.PID,
 		LogPath:    proc.LogPath,
 		BrainLog:   proc.BrainLog,
@@ -359,7 +367,7 @@ func (t *ExecScriptTool) Execute(ctx context.Context, raw json.RawMessage, progr
 		deliver(text, commandFailed(res.Attrs), commandExitCode(res.Attrs))
 	}()
 	return core.ToolResult{
-		Content: []provider.Content{provider.TextBlock{Text: execScriptBackgroundNotice(jobID, label, fullLog)}},
+		Content: []provider.Content{provider.TextBlock{Text: execScriptBackgroundNotice(jobID, summary, fullLog)}},
 		Attrs: []core.Attr{
 			{Key: "status", Value: "background"},
 			{Key: "job_id", Value: jobID},
@@ -377,7 +385,7 @@ func execScriptBackgroundNotice(jobID, label string, fullLog ...string) string {
 	fmt.Fprintf(&b, "To read the output, call bg_check with job_id %q (paged log: tail by default, offset/limit for more).\n", jobID)
 	fmt.Fprintf(&b, "To force-stop it early, call bg_cancel with job_id %q.\n", jobID)
 	b.WriteString("You are woken automatically when the task finishes — its completion notice is delivered to you then.\n")
-	b.WriteString("While waiting, call bg_await with waiting_for=<job_id> and a reason - it ends early the moment this task finishes. Do not use a shell sleep command to wait: inside a command it would detach into yet another background task and only add noise.")
+	b.WriteString("While waiting, call bg_await with waiting_for=<job_id> and a summary - it ends early the moment this task finishes. Do not use a shell sleep command to wait: inside a command it would detach into yet another background task and only add noise.")
 	return b.String()
 }
 

@@ -100,11 +100,14 @@ func TestDirectBashProcessIsolationAndApprover(t *testing.T) {
 
 		var bgPID atomic.Int64
 		doneCh := make(chan struct{}, 1)
+		var bgLabel, bgCmd string
 		tool := &BashTool{
 			CWD:    dir,
 			LogDir: dir,
-			Slow: func(_, _ string, p BackgroundProcess) (string, string, func(string), func(string, bool, int)) {
+			Slow: func(_, cmd string, p BackgroundProcess) (string, string, func(string), func(string, bool, int)) {
 				bgPID.Store(int64(p.PID))
+				bgLabel = p.Label
+				bgCmd = cmd
 				return "bg-direct-test", p.BrainLog, func(string) {}, func(string, bool, int) {
 					select {
 					case doneCh <- struct{}{}:
@@ -115,8 +118,12 @@ func TestDirectBashProcessIsolationAndApprover(t *testing.T) {
 		}
 		if _, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 			"command": "sleep 0.25; echo detached-ok",
+			"summary": "Detached echo test",
 		}), nil); err != nil {
 			t.Fatalf("BashTool.Execute failed: %v", err)
+		}
+		if bgLabel != "Detached echo test" || bgCmd != "sleep 0.25; echo detached-ok" {
+			t.Fatalf("expected summary label and full command in SlowHook, got label=%q cmd=%q", bgLabel, bgCmd)
 		}
 		gotPID := int(bgPID.Load())
 		if gotPID <= 0 || gotPID == selfPID {
@@ -181,6 +188,7 @@ func TestDirectBashProcessIsolationAndApprover(t *testing.T) {
 		outsideSlash := filepath.ToSlash(outsideFile)
 		res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 			"command": "cat '" + outsideSlash + "'",
+			"summary": "Outside file read attempt",
 		}), nil)
 		if err != nil {
 			t.Fatalf("unexpected tool-level error: %v", err)
@@ -247,6 +255,7 @@ func TestDirectBashProcessIsolationAndApprover(t *testing.T) {
 		tool := &BashTool{CWD: ws, Sandbox: sb, LogDir: brain, BrainDir: brain}
 		res, err := tool.Execute(context.Background(), mustJSON(t, map[string]any{
 			"command": "cat '" + outsideSlash + "'",
+			"summary": "Outside file read attempt",
 		}), nil)
 		if err != nil {
 			t.Fatalf("BashTool with approver failed: %v", err)
@@ -275,6 +284,7 @@ func TestDirectBashProcessIsolationAndApprover(t *testing.T) {
 		denyTool := &BashTool{CWD: ws, Sandbox: sbDeny, LogDir: brain, BrainDir: brain}
 		denyRes, err := denyTool.Execute(context.Background(), mustJSON(t, map[string]any{
 			"command": "cat '" + outsideSlash + "'",
+			"summary": "Denied outside read",
 		}), nil)
 		if err != nil {
 			t.Fatalf("unexpected tool-level error on denied read: %v", err)

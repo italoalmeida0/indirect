@@ -169,8 +169,13 @@ func startRunnerWithContext(ctx context.Context, root, sessionID, brainDir strin
 		jailCopy = &cp
 	}
 	expectDaemon := jailCopy != nil && spec.Approver != nil
+	cmdPreview := tools.ClipLabel(spec.Command)
+	displayLabel := tools.ClipLabel(strings.TrimSpace(spec.Label))
+	if displayLabel == "" {
+		displayLabel = cmdPreview
+	}
 	rs := runner.Spec{
-		JobID: jobID, SessionID: sessionID, Kind: spec.Kind, Label: tools.ClipLabel(spec.Command),
+		JobID: jobID, SessionID: sessionID, Kind: spec.Kind, Label: displayLabel, Command: cmdPreview,
 		Fingerprint: fp,
 		NoDedupe:    noDedupe,
 		Path:        specPath, Args: specArgs, Env: spec.Env, CWD: spec.CWD,

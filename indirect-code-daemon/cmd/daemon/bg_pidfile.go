@@ -22,7 +22,7 @@ func (b *bgSupervisor) writePidfile(j *bgJob) error {
 	}
 	pf := bgPidfile{
 		JobID: j.ID, PID: j.PID, Identity: j.Identity, Runner: j.Runner,
-		SessionID: j.SessionID, Kind: j.Kind, Label: j.Label,
+		SessionID: j.SessionID, Kind: j.Kind, Label: j.Label, Command: j.Command,
 		Fingerprint: j.Fingerprint, NoDedupe: j.NoDedupe,
 		LogPath: j.LogPath, StderrPath: j.StderrPath, StartedAt: j.StartedAt,
 	}
@@ -63,11 +63,15 @@ func (b *bgSupervisor) readopt() {
 		if pf.Identity != "" && tools.ProcessIdentity(pf.PID) == pf.Identity {
 			fp := pf.Fingerprint
 			if fp == "" && !pf.NoDedupe {
-				fp = bgFingerprint(pf.Kind, pf.Label)
+				fpSrc := pf.Command
+				if fpSrc == "" {
+					fpSrc = pf.Label
+				}
+				fp = bgFingerprint(pf.Kind, fpSrc)
 			}
 			j := &bgJob{
 				ID: pf.JobID, Kind: pf.Kind, SessionID: pf.SessionID,
-				Label: pf.Label, Fingerprint: fp, NoDedupe: pf.NoDedupe, PID: pf.PID, Identity: pf.Identity, Status: BgStatusRunning,
+				Label: pf.Label, Command: pf.Command, Fingerprint: fp, NoDedupe: pf.NoDedupe, PID: pf.PID, Identity: pf.Identity, Status: BgStatusRunning,
 				StartedAt: pf.StartedAt, LogPath: pf.LogPath, StderrPath: pf.StderrPath,
 				done: make(chan struct{}),
 			}

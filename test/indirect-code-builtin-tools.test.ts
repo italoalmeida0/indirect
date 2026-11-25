@@ -771,6 +771,13 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
     u: ToolUnit,
     opts: { running: boolean; active: boolean; progress?: Record<string, string> },
   ) => string;
+  let renderToolHeaderSsr!: (
+    u: ToolUnit,
+    opts: { running: boolean; active: boolean; cwd?: string },
+  ) => string;
+  let renderBackgroundCardSsr!: (
+    jobs: Array<{ id: string; kind: string; label: string; command?: string; status: string; startedAt: number; content?: string }>,
+  ) => string;
   let stripLinePrefixNoticeFn!: (text: string) => string;
 
   beforeAll(async () => {
@@ -793,6 +800,9 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
               const entryCode = `
                 import { renderToString } from "solid-js/web";
                 import { ToolBody } from "./ToolBody";
+                import { ToolUnitHeader } from "./ToolUnitHeader";
+                import { BackgroundCard } from "../BackgroundCard";
+                import { BackgroundCtx, UICtx } from "../../ctx";
                 import { useToolUnitModel } from "./toolUnitModel";
                 export { stripLinePrefixNotice } from "../CodeBlock";
 
@@ -809,6 +819,49 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
                     const m = useToolUnitModel(ctx, "msg_ssr", u, 0, () => opts.running, () => opts.active);
                     return <ToolBody ctx={ctx} u={u} m={m} running={opts.running} active={opts.active} />;
                   });
+                }
+
+                export function renderToolHeaderSsr(u, opts) {
+                  const ctx = {
+                    toolProgress: () => ({}),
+                    toolTick: () => 0,
+                    toolStarts: () => ({}),
+                    turnClock: () => 0,
+                    elapsedLabel: () => "",
+                    backgroundJobs: () => [],
+                    bgOutput: () => ({}),
+                    bgClock: () => 0,
+                    activeSession: () => ({ cwd: opts.cwd || "" }),
+                    projects: () => [],
+                    pendingApproval: () => null,
+                    pendingQuestion: () => null,
+                    cancelBgJob: () => {},
+                    openFile: () => {},
+                  };
+                  return renderToString(() => {
+                    const m = useToolUnitModel(ctx, "msg_hdr", u, 0, () => opts.running, () => opts.active);
+                    return <ToolUnitHeader ctx={ctx} msgId="msg_hdr" u={u} m={m} running={opts.running} active={opts.active} />;
+                  });
+                }
+
+                export function renderBackgroundCardSsr(jobs) {
+                  const bg = {
+                    sessionJobs: () => jobs,
+                    clock: () => Date.now(),
+                    sessionContent: () => "",
+                    liveTail: () => "",
+                    stop: () => {},
+                  };
+                  const ui = {
+                    convWidthClass: () => "max-w-3xl",
+                  };
+                  return renderToString(() => (
+                    <UICtx.Provider value={ui}>
+                      <BackgroundCtx.Provider value={bg}>
+                        <BackgroundCard contextKey="s1" />
+                      </BackgroundCtx.Provider>
+                    </UICtx.Provider>
+                  ));
                 }
               `;
               const transformed = await transformAsync(entryCode, {
@@ -885,6 +938,8 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
     const jsText = await buildRes.outputs[0]!.text();
     const mod = await import(`data:text/javascript;base64,${Buffer.from(jsText, "utf8").toString("base64")}`);
     renderToolBodySsr = mod.renderToolBodySsr;
+    renderToolHeaderSsr = mod.renderToolHeaderSsr;
+    renderBackgroundCardSsr = mod.renderBackgroundCardSsr;
     stripLinePrefixNoticeFn = mod.stripLinePrefixNotice;
   });
 
@@ -1208,5 +1263,81 @@ describe("SSR <ToolBody> state-matrix across all non-header-only builtins + MCP"
     );
     expect(exploreWalHtml).toContain('data-ssr-markdown="no-nested-scroll"');
     expect(exploreWalHtml).toContain("w-full min-w-0 max-w-full");
+  });
+
+  test("ToolUnitHeader renders plain summary for bash/exec_script/bg_await while ToolBody preserves full code and BackgroundCard shows summary + command preview", () => {
+    // 1. bash with summary: header renders summary text + hover tooltip with command (no ShellCmd in header)
+    const bashUnit = mkUnit(
+      "bash",
+      { command: "git status -sb", summary: "Git status check" },
+      { text: "M src/app.ts" },
+    );
+    const bashHeader = renderToolHeaderSsr(bashUnit, { running: false, active: false });
+    expect(bashHeader).toContain("Ran");
+    expect(bashHeader).toContain("Git status check");
+    expect(bashHeader).toContain('data-rc-tip="$ git status -sb"');
+    expect(bashHeader).not.toContain('class="font-mono truncate min-w-0"');
+    // Expanded bash body STILL shows the full original command verbatim!
+    const bashBody = renderToolBodySsr(bashUnit, { running: false, active: false });
+    expect(bashBody).toContain("git status -sb");
+    expect(bashBody).toContain("M src/app.ts");
+
+    // 2. Legacy bash without summary falls back to ShellCmd in header
+    const legacyBashHeader = renderToolHeaderSsr(
+      mkUnit("bash", { command: "ls -la" }, { text: "ok" }),
+      { running: false, active: false },
+    );
+    expect(legacyBashHeader).toContain('class="font-mono truncate min-w-0"');
+    expect(legacyBashHeader).toContain("ls");
+
+    // 3. exec_script with summary: header shows summary, tooltip shows first code line, body keeps full JS code
+    const scriptUnit = mkUnit(
+      "exec_script",
+      { code: "// inspect\nconst total = 40 + 2;\nconsole.log(total);", summary: "Total calculation script" },
+      { text: "42" },
+    );
+    const scriptHeader = renderToolHeaderSsr(scriptUnit, { running: false, active: false });
+    expect(scriptHeader).toContain("Total calculation script");
+    expect(scriptHeader).toContain('data-rc-tip="> const total = 40 + 2;"');
+    const scriptBody = renderToolBodySsr(scriptUnit, { running: false, active: false });
+    expect(scriptBody).toContain("const total = 40 + 2;");
+    expect(scriptBody).toContain("console.log(total);");
+
+    // 4. bg_await with summary renders summary cleanly in header
+    const awaitHeader = renderToolHeaderSsr(
+      mkUnit(
+        "bg_await",
+        { max_wait_seconds: 60, waiting_for: "bg_1", summary: "Unit test completion" },
+        { text: "done", durationMs: 8000 },
+      ),
+      { running: false, active: false },
+    );
+    expect(awaitHeader).toContain("Waited");
+    expect(awaitHeader).toContain("8s · Unit test completion");
+
+    // 5. BackgroundCard shows human summary label + preserved command preview when distinct, and falls back to ShellCmd for legacy jobs
+    const bgHtml = renderBackgroundCardSsr([
+      {
+        id: "bg_new",
+        kind: "bash",
+        label: "Dev server startup",
+        command: "bun run dev --port 3000",
+        status: "running",
+        startedAt: Date.now() - 5000,
+      },
+      {
+        id: "bg_legacy",
+        kind: "bash",
+        label: "sleep 30",
+        status: "running",
+        startedAt: Date.now() - 3000,
+      },
+    ]);
+    expect(bgHtml).toContain("data-bg-label");
+    expect(bgHtml).toContain("Dev server startup");
+    expect(bgHtml).toContain("data-bg-command-preview");
+    expect(bgHtml).toContain("bun run dev --port 3000");
+    // Legacy row renders through ShellCmd (syntax-highlighting the numeric arg `30`)
+    expect(stripHtmlVisibleText(bgHtml)).toContain("sleep 30");
   });
 });

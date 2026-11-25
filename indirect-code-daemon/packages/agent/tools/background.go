@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"indirect/indirect-code-daemon/packages/core"
@@ -29,6 +30,20 @@ func autoBackgroundAfter() time.Duration {
 // characters of the bash command (or the exec_script code), + … when cut.
 // Notices reference the task exactly the way the card shows it.
 const BgLabelMax = 300
+
+// BgSummaryMax caps the human-readable task summary shown in transcript rows
+// and background task cards.
+const BgSummaryMax = 100
+
+// normalizeTaskSummary trims, collapses internal whitespace (including newlines)
+// into single spaces, and caps at BgSummaryMax runes without splitting UTF-8.
+func normalizeTaskSummary(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > BgSummaryMax {
+		s = string(r[:BgSummaryMax])
+	}
+	return s
+}
 
 // ClipLabel keeps the first BgLabelMax characters (+ … when cut).
 func ClipLabel(s string) string {
@@ -85,6 +100,10 @@ type BackgroundProcess struct {
 	// exists from spawn in runners/<jobId>.state.json, so the registry
 	// reuses this id instead of generating one. "" = legacy direct path.
 	JobID string
+	// Label is the optional human-readable task summary shown on the
+	// background task row. When empty, the daemon falls back to the
+	// clipped command/script passed to SlowHook.
+	Label string
 	// BrainLog is the final log destination (the runner COPIES the live
 	// log there at terminal; == LogPath on the direct path).
 	BrainLog   string
