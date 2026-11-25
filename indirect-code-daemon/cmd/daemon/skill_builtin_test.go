@@ -18,8 +18,8 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 12 {
-		t.Fatalf("embedded builtin files = %d, want 12", len(entries))
+	if len(entries) != 19 {
+		t.Fatalf("embedded builtin files = %d, want 19", len(entries))
 	}
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".js") {
@@ -31,13 +31,15 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("builtin parse errors: %v", errs)
 	}
-	if len(list) != 12 {
-		t.Fatalf("parsed builtins = %d, want 12: %v", len(list), list)
+	if len(list) != 19 {
+		t.Fatalf("parsed builtins = %d, want 19: %v", len(list), list)
 	}
 	for _, name := range []string{
 		"agentic_base", "talk", "build", "plan", "learning",
 		"generative_ui", "generative_ui_agentic", "generative_ui_talk",
 		"genui_games", "genui_visualizers", "genui_dashboards", "genui_engineering",
+		"genui_ai_apps", "genui_forms", "genui_science", "genui_spatial",
+		"genui_business", "genui_education", "genui_creative",
 	} {
 		if _, ok := list[name]; !ok {
 			t.Fatalf("builtin %q missing from the embedded set", name)
@@ -90,7 +92,13 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	}
 	// Text-only gated Gen-UI subskills: no extra tool permissions, usable:"yolo",
 	// properly gated behind their parent Gen-UI skill(s).
-	for _, name := range []string{"genui_games", "genui_visualizers", "genui_dashboards", "genui_engineering"} {
+	sharedSubskills := []string{
+		"genui_visualizers", "genui_dashboards",
+		"genui_ai_apps", "genui_forms", "genui_science", "genui_spatial",
+		"genui_business", "genui_education", "genui_creative",
+	}
+	allSubskills := append([]string{"genui_games", "genui_engineering"}, sharedSubskills...)
+	for _, name := range allSubskills {
 		sk := list[name]
 		if sk.Usable != "yolo" || !sk.IsGated() || len(sk.Permissions) != 0 || strings.TrimSpace(sk.Body) == "" {
 			t.Fatalf("gated subskill %q drifted: usable=%q gated=%v perms=%v", name, sk.Usable, sk.IsGated(), sk.Permissions)
@@ -102,7 +110,7 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	if sk := list["genui_engineering"]; sk.Mode != "agentic" || !containsStr(sk.Requires, "generative_ui_agentic") {
 		t.Fatalf("genui_engineering gating drifted: %+v", sk)
 	}
-	for _, name := range []string{"genui_visualizers", "genui_dashboards"} {
+	for _, name := range sharedSubskills {
 		sk := list[name]
 		if sk.Mode != "" || !containsStr(sk.RequiresAny, "generative_ui_talk") || !containsStr(sk.RequiresAny, "generative_ui_agentic") {
 			t.Fatalf("%s gating drifted: %+v", name, sk)
@@ -138,13 +146,18 @@ func TestBuiltinGenUISubskillGatingEndToEnd(t *testing.T) {
 	defer swapSkillRegistry(prev)
 	swapSkillRegistry(&skillStore{list: builtins})
 
-	// Talk: talk active -> genui_games, genui_visualizers, genui_dashboards unlocked immediately.
+	// Talk: talk active -> genui_games + all shared subskills unlocked immediately.
+	sharedSubskills := []string{
+		"genui_visualizers", "genui_dashboards",
+		"genui_ai_apps", "genui_forms", "genui_science", "genui_spatial",
+		"genui_business", "genui_education", "genui_creative",
+	}
 	talkSel := map[string]skills.SessionSkill{"talk": {Priority: 1, Active: true}}
 	talkEff, err := skillRegistry().resolveSession(talkSel, "talk")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"genui_games", "genui_visualizers", "genui_dashboards"} {
+	for _, want := range append([]string{"genui_games"}, sharedSubskills...) {
 		if !talkEff.Listed[want] {
 			t.Errorf("talk must list %q immediately: %+v", want, talkEff.Listed)
 		}
@@ -156,6 +169,8 @@ func TestBuiltinGenUISubskillGatingEndToEnd(t *testing.T) {
 	}
 
 	// Build, Plan, Learning: before & after generative_ui_agentic activation.
+	allHiddenBefore := append([]string{"genui_games", "genui_engineering"}, sharedSubskills...)
+	allWantAfter := append([]string{"generative_ui_agentic", "genui_engineering"}, sharedSubskills...)
 	for _, modeSkill := range []string{"build", "plan", "learning"} {
 		beforeSel := map[string]skills.SessionSkill{modeSkill: {Priority: 1, Active: true}}
 		effBefore, err := skillRegistry().resolveSession(beforeSel, "agentic")
@@ -165,7 +180,7 @@ func TestBuiltinGenUISubskillGatingEndToEnd(t *testing.T) {
 		if !effBefore.Listed["generative_ui_agentic"] {
 			t.Errorf("%s must list generative_ui_agentic: %+v", modeSkill, effBefore.Listed)
 		}
-		for _, hidden := range []string{"genui_games", "genui_visualizers", "genui_dashboards", "genui_engineering"} {
+		for _, hidden := range allHiddenBefore {
 			if effBefore.Listed[hidden] {
 				t.Errorf("%s before genui must hide %q: %+v", modeSkill, hidden, effBefore.Listed)
 			}
@@ -182,7 +197,7 @@ func TestBuiltinGenUISubskillGatingEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s after: %v", modeSkill, err)
 		}
-		for _, want := range []string{"generative_ui_agentic", "genui_engineering", "genui_visualizers", "genui_dashboards"} {
+		for _, want := range allWantAfter {
 			if !effAfter.Listed[want] {
 				t.Errorf("%s after genui must list %q: %+v", modeSkill, want, effAfter.Listed)
 			}

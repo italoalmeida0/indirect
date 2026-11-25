@@ -1,5 +1,5 @@
 import { LIMITS } from "../config";
-import { stmts, audit, isSqliteBusy, parseStripParams, type AuthStyle, type Proto } from "../db";
+import { stmts, audit, isSqliteBusy, parseStripParams, type ApiKeyRow, type AuthStyle, type Proto } from "../db";
 import { randomToken, sha256Hex } from "../crypto";
 import { ApiError, applyRateLimitHeaders, clientIp, baseHeaders } from "../http";
 import { countRequestTokens, splitKvInput } from "../tokens";
@@ -921,6 +921,40 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
     return envelopeError(proto, 401, "invalid API key", undefined, req);
   }
 
+  return executeProxyForKey(req, url, server, keyRow, route, proto, ip);
+}
+
+/**
+ * Internal gateway dispatch using an already-authenticated `ApiKeyRow` (e.g.
+ * Generative UI embedded AI authenticated via the user's dashboard session).
+ * Preserves the exact same availability, budget, policy, failover, IR, and
+ * usage-ledger pipeline as `/v1/*` without ever decrypting or transmitting
+ * a plaintext gateway key.
+ */
+export async function handleProxyWithKey(
+  req: Request,
+  url: URL,
+  server: any,
+  keyRow: ApiKeyRow,
+  resolvedIp?: string,
+): Promise<Response> {
+  const { match: route, hint } = matchRoute(url.pathname, req.method, req);
+  if (!route) {
+    return envelopeError(hint, 404, "unknown endpoint", "invalid_request_error", req);
+  }
+  return executeProxyForKey(req, url, server, keyRow, route, route.proto, resolvedIp ?? clientIp(req, server));
+}
+
+async function executeProxyForKey(
+  req: Request,
+  url: URL,
+  server: any,
+  keyRow: ApiKeyRow,
+  route: RouteMatch,
+  proto: Proto,
+  ip: string,
+): Promise<Response> {
+
   // ---- availability (revoked/expired/budgets) ----
   const availability = checkKeyAvailability(keyRow);
   // Token counting is free: a spent key budget does not prevent this
@@ -966,7 +1000,7 @@ export async function handleProxy(req: Request, url: URL, server: any): Promise<
   const costCenterId = assignment?.costCenter?.id ?? null;
   const allowedModelIds = allowedModels({ role: owner.role, projectId });
   const catalogAccess = () => db.transaction(() => {
-    const currentKey = stmts.keyByHash.get(sha256Hex(token));
+    const currentKey = stmts.keyById.get(keyRow.id);
     const currentOwner = currentKey ? stmts.userById.get(currentKey.user_id) : null;
     if (!currentKey || currentKey.user_id !== owner.id || currentKey.status === "revoked" || (currentKey.expires_at !== null && currentKey.expires_at <= Date.now()) || !currentOwner || currentOwner.status !== "active") throw new ApiError(401, "API key or account unavailable");
     const currentAssignment = requireKeyProject(currentOwner.id, currentKey.project_id ?? null);

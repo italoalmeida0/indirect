@@ -4,6 +4,7 @@ import { db } from "../db";
 import { sha256Hex } from "../crypto";
 import { isBlockedAddress, safeExternalFetch, SafeFetchError } from "../safe-fetch";
 import { runWidgetLint, WidgetLintBusyError } from "./widget-lint";
+import { handleGenUiAiRoute } from "./gen-ui-ai";
 import {
   buildJsxImportMap,
   buildJsxModuleBody,
@@ -504,6 +505,11 @@ export async function handleGenUiRoute(
       return resp;
     }
     return imageResponse(entry);
+  }
+
+  if (path.startsWith("/api/indirect-code/gen-ui/ai/")) {
+    const viaAi = await handleGenUiAiRoute(path, req, _url, server);
+    if (viaAi) return viaAi;
   }
 
   // Anything else under the gen-ui namespace is a 404, not an unhandled

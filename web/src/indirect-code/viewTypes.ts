@@ -29,6 +29,12 @@ export interface PendingAttachment {
   serverSessionId?: string;
   uploading?: boolean;
   uploadKey?: string;
+  /** Generative UI widget instance that created this attachment (client-only). */
+  widgetOwner?: string;
+  /** Stable slot key within the widget for in-place dynamic updates (client-only). */
+  widgetSlot?: string;
+  /** Last update timestamp for widget-managed attachments (client-only). */
+  updatedAt?: number;
 }
 
 export interface SearchHit {

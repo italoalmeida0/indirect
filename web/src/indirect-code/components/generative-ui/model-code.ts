@@ -653,6 +653,17 @@ function isForbiddenGlobalMember(node: AnyNode, ancestors?: AnyNode[]): boolean 
   if (first === "location") return rest.length > 0 && NAVIGATION_CALLS.has(rest[0]);
   if (first === "history") return rest.length > 0 && HISTORY_CALLS.has(rest[0]);
   if (first === "navigator") return rest.length > 0 && FORBIDDEN_NAVIGATOR_MEMBER_PROPS.has(rest[0]);
+  // Prevent model code from spoofing the widget-to-host __gu postMessage
+  // channel directly (all host ops must go through window.__gu / indirectUi).
+  if (
+    first === "postMessage" &&
+    (root === "parent" ||
+      root === "top" ||
+      root === "frames" ||
+      props.some((p) => p === "parent" || p === "top" || p === "frames"))
+  ) {
+    return true;
+  }
   return FORBIDDEN_WINDOW_PROPS.has(first);
 }
 

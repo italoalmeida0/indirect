@@ -15,12 +15,19 @@ import {
   clampFrameHeight,
   createWidgetPublishController,
   parseSavedStateJSON,
+  postGuAiContext,
+  postGuAiEvent,
+  postGuAttachments,
   postGuFullscreen,
   postGuTheme,
   resolveWidgetStateJSON,
   widgetAccent,
   widgetTheme,
+  type WidgetAiContext,
+  type WidgetAttachPayload,
+  type WidgetAttachmentSummary,
 } from "./bridge";
+import { createWidgetAiController } from "./ai-client";
 import { parseGenerativeUiDsl, type GenerativeUiData } from "./dsl";
 import { resolvePublishedFrame } from "./frame-height";
 import { fetchWidgetSource, invalidateWidgetSources, widgetSourceVersion } from "./widget-source";
@@ -57,6 +64,12 @@ export function GenerativeUiWidget(props: {
   onSendPrompt: (text: string) => void;
   onPrefillPrompt?: (text: string) => void;
   onOpenLink?: (url: string) => void;
+  /** Stable segment fallback identifier for widget-owned composer attachments. */
+  ownerKey?: string;
+  onAttach?: (owner: string, payload: WidgetAttachPayload) => void;
+  onDetach?: (owner: string, key?: string) => void;
+  widgetAttachments?: (owner: string) => WidgetAttachmentSummary[];
+  aiContext?: () => (WidgetAiContext & { hostId?: string }) | undefined;
   /** Relay access for fetching widget sources (absent = static card). */
   ctx?: {
     send: (payload: { type: "get_widget"; sessionId: string; requestId: string; widgetId: string }) => void;
@@ -232,10 +245,33 @@ export function GenerativeUiWidget(props: {
     onCleanup(() => observer.disconnect());
   });
 
+  const ownerId = () =>
+    `${props.ctx?.sessionId || "local"}:${data().id || props.ownerKey || "widget"}`;
+  const aiController = createWidgetAiController();
+  onCleanup(() => aiController.abort());
+
+  const syncFrameAttachments = (win: Window | null | undefined) => {
+    if (!win || !props.widgetAttachments) return;
+    postGuAttachments(win, props.widgetAttachments(ownerId()));
+  };
+  const syncFrameAiContext = (win: Window | null | undefined) => {
+    if (!win || !props.aiContext) return;
+    const ac = props.aiContext();
+    if (!ac) return;
+    postGuAiContext(win, {
+      model: ac.model,
+      modelName: ac.modelName,
+      effort: ac.effort,
+      efforts: ac.efforts,
+      models: ac.models,
+    });
+  };
   const syncFrameAppearance = () => {
     const win = finalEl()?.contentWindow;
     postGuTheme(win, { theme: theme(), accent: accent() });
     postGuFullscreen(win, expanded());
+    syncFrameAttachments(win);
+    syncFrameAiContext(win);
   };
   createEffect(() => {
     const frame = finalEl();
@@ -250,6 +286,41 @@ export function GenerativeUiWidget(props: {
     if (!frame) return;
     postGuFullscreen(frame.contentWindow, isExpanded);
   });
+  createEffect(() => {
+    const frame = finalEl();
+    const list = props.widgetAttachments?.(ownerId());
+    if (!frame || !list) return;
+    postGuAttachments(frame.contentWindow, list);
+  });
+  createEffect(() => {
+    const frame = finalEl();
+    const ac = props.aiContext?.();
+    if (!frame || !ac) return;
+    postGuAiContext(frame.contentWindow, {
+      model: ac.model,
+      modelName: ac.modelName,
+      effort: ac.effort,
+      efforts: ac.efforts,
+      models: ac.models,
+    });
+  });
+  createEffect(
+    on(
+      () => [finalUrl(), frozen(), streaming(), expanded()] as const,
+      ([, isFrozen, isStreaming]) => {
+        if (isFrozen) setFinalEl(null);
+        if (isFrozen || isStreaming) aiController.abort();
+      },
+    ),
+  );
+  createEffect(
+    on(expanded, () => {
+      // Toggling fullscreen remounts the iframe inside/outside Portal; abort
+      // any in-flight AI stream owned by the dying frame immediately.
+      aiController.abort();
+      hasFrameInteracted = false;
+    }, { defer: true }),
+  );
 
   // ---- one live instance per session (transcript-wide) ----
   // Claim order is effect order (document order): the newest fence in the
@@ -401,6 +472,10 @@ export function GenerativeUiWidget(props: {
    * before mounting the new iframe so progress never reverts.
    */
   const setExpandedSync = (next: boolean) => {
+    if (next !== expanded()) {
+      aiController.abort();
+      hasFrameInteracted = false;
+    }
     if (next !== expanded() && !frozen() && !streaming() && source() && widgetKey() !== publisher.publishedKey) {
       publisher.invalidate();
       void finalize();
@@ -431,18 +506,25 @@ export function GenerativeUiWidget(props: {
   const INTERACTION_WINDOW_MS = 30_000;
   let frameMountedAt = 0;
   let lastFrameInteractionAt = 0;
+  let hasFrameInteracted = false;
   createEffect(
     on(finalUrl, (url) => {
+      aiController.abort();
       frameMountedAt = url ? Date.now() : 0;
       lastFrameInteractionAt = 0;
+      hasFrameInteracted = false;
     }),
   );
 
   onMount(() => {
     const onWindowBlur = () => {
       const frame = finalEl();
+      const now = Date.now();
       if (frame && document.activeElement === frame) {
-        lastFrameInteractionAt = Date.now();
+        lastFrameInteractionAt = now;
+        if (frameMountedAt > 0 && now - frameMountedAt >= MIN_MOUNT_SETTLE_MS) {
+          hasFrameInteracted = true;
+        }
       }
     };
     window.addEventListener("blur", onWindowBlur);
@@ -459,6 +541,34 @@ export function GenerativeUiWidget(props: {
           const recentInteraction =
             lastFrameInteractionAt > 0 && now - lastFrameInteractionAt <= INTERACTION_WINDOW_MS;
           return focused || recentInteraction;
+        },
+        onGesture: () => {
+          hasFrameInteracted = true;
+          lastFrameInteractionAt = Date.now();
+        },
+        canAttach: () => {
+          if (frameMountedAt === 0) return false;
+          if (hasFrameInteracted) return true;
+          const now = Date.now();
+          const frame = finalEl();
+          if (frame && document.activeElement === frame && now - frameMountedAt >= MIN_MOUNT_SETTLE_MS) {
+            hasFrameInteracted = true;
+            lastFrameInteractionAt = now;
+            return true;
+          }
+          return false;
+        },
+        canUseAi: () => {
+          if (frameMountedAt === 0) return false;
+          if (hasFrameInteracted) return true;
+          const now = Date.now();
+          const frame = finalEl();
+          if (frame && document.activeElement === frame && now - frameMountedAt >= MIN_MOUNT_SETTLE_MS) {
+            lastFrameInteractionAt = now;
+            hasFrameInteracted = true;
+            return true;
+          }
+          return false;
         },
         onOpenLink: (url) => {
           if (props.onOpenLink) props.onOpenLink(url);
@@ -482,11 +592,41 @@ export function GenerativeUiWidget(props: {
         onEscape: () => {
           if (expanded()) setExpandedSync(false);
         },
+        onAttach: (payload) => {
+          props.onAttach?.(ownerId(), payload);
+        },
+        onDetach: (key) => {
+          props.onDetach?.(ownerId(), key);
+        },
+        onAiRequest: props.aiContext
+          ? (payload) => {
+              const ac = untrack(() => props.aiContext?.());
+              const targetWin = finalEl()?.contentWindow;
+              if (!ac) {
+                postGuAiEvent(targetWin, {
+                  op: "aiError",
+                  reqId: payload.reqId,
+                  error: "Embedded AI is unavailable in this view.",
+                  code: "ai_unavailable",
+                });
+                return;
+              }
+              aiController.start(payload, ac, (ev) => {
+                // Never forward events from a superseded/remounted iframe into a new frame.
+                const curWin = finalEl()?.contentWindow;
+                if (curWin && curWin === targetWin) postGuAiEvent(curWin, ev);
+              });
+            }
+          : undefined,
+        onAiAbort: (reqId) => {
+          aiController.abort(reqId);
+        },
       },
     );
     onCleanup(() => {
       window.removeEventListener("blur", onWindowBlur);
       detach();
+      aiController.abort();
     });
   });
 
@@ -659,8 +799,10 @@ export function GenerativeUiWidget(props: {
           title="Interactive widget"
           src={finalUrl()}
           onLoad={() => {
+            aiController.abort();
             frameMountedAt = Date.now();
             lastFrameInteractionAt = 0;
+            hasFrameInteracted = false;
             syncFrameAppearance();
           }}
           onPointerEnter={() => {
@@ -668,9 +810,14 @@ export function GenerativeUiWidget(props: {
           }}
           onPointerDown={() => {
             lastFrameInteractionAt = Date.now();
+            hasFrameInteracted = true;
           }}
           onFocus={() => {
-            lastFrameInteractionAt = Date.now();
+            const now = Date.now();
+            lastFrameInteractionAt = now;
+            if (frameMountedAt > 0 && now - frameMountedAt >= MIN_MOUNT_SETTLE_MS) {
+              hasFrameInteracted = true;
+            }
           }}
           class={
             isExpanded

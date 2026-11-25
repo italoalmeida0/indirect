@@ -2,13 +2,15 @@ import { createEffect, For, Show, useContext } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { TarnavMarkdown } from "./TarnavMarkdown";
 import { GenerativeUiWidget } from "./generative-ui/renderer";
+import type { WidgetAiContext, WidgetAttachPayload, WidgetAttachmentSummary } from "./generative-ui/bridge";
 import {
   frozenDuplicateSegmentIds,
   splitGenerativeUiSegments,
   withGenerativeUiSegmentIds,
   type GenerativeUiSegmentWithId,
 } from "./generative-ui/dsl";
-import { ComposerCtx, HostCtx, SessionCtx } from "../ctx";
+import { ComposerCtx, HostCtx, SessionCtx, UICtx } from "../ctx";
+import { EFFORT_SPECS } from "../utils/effortSpec";
 
 /**
  * Transcript adapter: the actual markdown renderer is TarnavMarkdown, with
@@ -32,6 +34,62 @@ export function StreamingMarkdown(props: {
   const composer = useContext(ComposerCtx);
   const host = useContext(HostCtx);
   const session = useContext(SessionCtx);
+  const ui = useContext(UICtx);
+  const aiEfforts = EFFORT_SPECS.map((e) => ({
+    id: e.level,
+    label: e.title,
+    description: e.desc,
+  }));
+  const aiContext = (): (WidgetAiContext & { hostId?: string }) | undefined => {
+    if (!composer) return undefined;
+    return {
+      hostId: host?.activeHostId?.() || undefined,
+      model: composer.activeModel(),
+      modelName: composer.activeModelName(),
+      effort: composer.effort(),
+      efforts: aiEfforts,
+      models: (composer.models?.() ?? []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        provider: m.provider,
+        context: m.context,
+        output: m.output,
+      })),
+    };
+  };
+  const handleAttach = (owner: string, payload: WidgetAttachPayload) => {
+    if (!composer?.upsertWidgetAttachment) return;
+    const res = composer.upsertWidgetAttachment({
+      owner,
+      slot: payload.key,
+      name: payload.name,
+      mime: payload.mime,
+      content: payload.content,
+      dataUrl: payload.dataUrl,
+    });
+    if (res.ok && !res.updated) {
+      if (ui?.composerCollapsed?.()) ui.setComposerCollapsed(false);
+      ui?.toast?.(`Attached ${payload.name} to prompt`, "ok");
+    }
+  };
+  const handleDetach = (owner: string, key?: string) => {
+    composer?.removeWidgetAttachment?.(owner, key);
+  };
+  const attachmentsFor = (owner: string): WidgetAttachmentSummary[] => {
+    const list = composer?.pendingAttachments?.() ?? [];
+    const out: WidgetAttachmentSummary[] = [];
+    for (const a of list) {
+      if (a.widgetOwner !== owner) continue;
+      out.push({
+        key: a.widgetSlot,
+        name: a.name,
+        mime: a.mime,
+        size: a.size,
+        updatedAt: a.updatedAt,
+      });
+    }
+    return out;
+  };
   // Widget source access (WS get_widget) — only when the page mounted the
   // contexts (plain fixtures render the static card).
   const widgetCtx = () => {
@@ -77,10 +135,15 @@ export function StreamingMarkdown(props: {
             streaming={() => !!props.streaming && !seg.closed}
             frozen={() => frozenIds().has(seg.id)}
             ctx={widgetCtx()}
+            ownerKey={seg.id}
             onSendPrompt={(text) => {
               void composer?.sendWidgetPrompt(text);
             }}
             onPrefillPrompt={(text) => composer?.setInputPrompt(text)}
+            onAttach={composer ? handleAttach : undefined}
+            onDetach={composer ? handleDetach : undefined}
+            widgetAttachments={composer ? attachmentsFor : undefined}
+            aiContext={composer ? aiContext : undefined}
           />
         )
       }

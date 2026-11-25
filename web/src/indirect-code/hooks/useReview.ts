@@ -220,6 +220,7 @@ export function createReview(opts: {
     objectUrl?: string;
     dataB64?: string;
     size?: number;
+    widgetOwner?: string;
   }) {
     clearTimeout(previewTimer);
     pendingPreview = undefined;
@@ -231,7 +232,9 @@ export function createReview(opts: {
           })
         : undefined;
     if (a.objectUrl || (blob && a.mime.startsWith("image/"))) {
-      let dataUrl = a.objectUrl;
+      // Widget-owned attachments can update in-place while PreviewModal is open
+      // (which revokes a.objectUrl): mint a dedicated transient URL from blob.
+      let dataUrl = a.widgetOwner && blob ? undefined : a.objectUrl;
       if (!dataUrl && blob) {
         dataUrl = URL.createObjectURL(blob);
         transientPreviewUrl = dataUrl;

@@ -115,7 +115,12 @@ export function ComposerInput() {
     <For each={c.pendingAttachments()}>
       {(att) => (
         <div
-          class="group inline-flex items-center bg-surface-subtle rounded-inner border border-border max-w-[220px] text-xs hover:border-border-strong hover:bg-surface-muted transition-colors"
+          data-widget-attachment={att.widgetSlot ? att.widgetSlot : att.widgetOwner ? "static" : undefined}
+          class={`group inline-flex items-center rounded-inner border max-w-[240px] text-xs transition-colors ${
+            att.widgetSlot
+              ? "bg-accent-subtle/60 border-accent/35 hover:border-accent/60 hover:bg-accent-subtle"
+              : "bg-surface-subtle border-border hover:border-border-strong hover:bg-surface-muted"
+          }`}
         >
           <button
             type="button"
@@ -129,7 +134,11 @@ export function ComposerInput() {
               }
             }}
             aria-label={`Preview ${att.name}`}
-            data-rc-tip={`${att.name} (${formatFileSize(att.size)}) · click to preview`}
+            data-rc-tip={
+              att.widgetSlot
+                ? `Live from widget · ${att.name} (${formatFileSize(att.size)}) · click to preview`
+                : `${att.name} (${formatFileSize(att.size)}) · click to preview`
+            }
             class="flex min-w-0 items-center gap-1.5 pl-2 pr-1 py-1 text-left cursor-pointer"
           >
             <Show
@@ -139,6 +148,9 @@ export function ComposerInput() {
               <span class="ui-spinner text-accent shrink-0" aria-hidden="true" />
             </Show>
             <span class="truncate text-fg font-medium">{att.name}</span>
+            <Show when={att.widgetSlot}>
+              <Iconify icon="lucide:link-2" size={11} class="shrink-0 text-accent" aria-hidden="true" />
+            </Show>
             <span class="shrink-0 font-mono text-2xs text-fg-muted tabular-nums">
               {formatFileSize(att.size)}
             </span>

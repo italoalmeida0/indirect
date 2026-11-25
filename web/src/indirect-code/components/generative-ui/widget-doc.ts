@@ -700,22 +700,502 @@ export function escapeStyleClose(raw: string): string {
  */
 
 /** Runtime script of a widget document (see prompt_gen_ui.go for the contract). */
-export function buildRuntimeScript(params: { stateJSON: string }): string {
+export function buildRuntimeScript(params: { stateJSON: string; lintMode?: boolean }): string {
   const stateJSON = params.stateJSON.trim() || "{}";
+  const lintMode = params.lintMode === true;
   return `
 (function () {
   "use strict";
+  var __lintMode = ${lintMode ? "true" : "false"};
+  var __postToParent = (window.parent && typeof window.parent.postMessage === "function")
+    ? window.parent.postMessage.bind(window.parent)
+    : function () {};
+  var __hasTrustedGesture = false;
+  var __gestureSent = false;
+  function __noteTrustedGesture() {
+    __hasTrustedGesture = true;
+    if (!__gestureSent && window.parent !== window) {
+      __gestureSent = true;
+      try { __postToParent({ __gu: "gesture" }, "*"); } catch {}
+    }
+  }
   var state = ${stateJSON};
   var __destroyers = [];
   var __resizers = [];
   var __fullscreenListeners = [];
+  var __attachmentListeners = [];
+  var __aiContextListeners = [];
   var __isFullscreen = false;
   var __errorHandler = null;
+  var __attachments = [];
+  var __lastAttachmentsSig = "";
+  var __lastAiContextSig = "";
+  var __defaultEfforts = [
+    { id: "none", label: "Off", description: "Responds immediately without extended thinking" },
+    { id: "minimum", label: "Min", description: "Minimal thinking for quick, routine tasks" },
+    { id: "low", label: "Low", description: "Quick reasoning for everyday tasks" },
+    { id: "medium", label: "Medium", description: "Balances speed and reasoning depth" },
+    { id: "high", label: "High", description: "Thorough reasoning for complex problems" },
+    { id: "xhigh", label: "X-High", description: "Deep multi-step reasoning for complex problems" },
+    { id: "max", label: "Max", description: "Deepest reasoning for the hardest problems" }
+  ];
+  var __aiContext = __lintMode ? {
+    model: "session-model",
+    modelName: "Session Model",
+    effort: "medium",
+    efforts: __defaultEfforts.slice(),
+    models: [{ id: "session-model", name: "Session Model", provider: "gateway", context: 262144, output: 16384 }],
+    ready: true
+  } : {
+    model: "",
+    modelName: "",
+    effort: "medium",
+    efforts: __defaultEfforts.slice(),
+    models: [],
+    ready: false
+  };
+  var __aiPending = Object.create(null);
+  var __aiSeq = 0;
+
+  function __cloneAttachments() {
+    var out = [];
+    for (var i = 0; i < __attachments.length; i++) {
+      var a = __attachments[i];
+      out.push({ key: a.key, name: a.name, mime: a.mime, size: a.size, updatedAt: a.updatedAt });
+    }
+    return out;
+  }
+  function __notifyAttachments() {
+    if (window.__gu) window.__gu.attachments = __cloneAttachments();
+    var snap = __cloneAttachments();
+    for (var i = 0; i < __attachmentListeners.length; i++) {
+      try { __attachmentListeners[i](snap); } catch (err) { reportError(err); }
+    }
+  }
+  function __cloneAiContext() {
+    var efforts = [];
+    for (var i = 0; i < __aiContext.efforts.length; i++) {
+      var e = __aiContext.efforts[i];
+      efforts.push({ id: e.id, label: e.label, description: e.description });
+    }
+    var models = [];
+    for (var j = 0; j < __aiContext.models.length; j++) {
+      var m = __aiContext.models[j];
+      models.push({ id: m.id, name: m.name, provider: m.provider, context: m.context, output: m.output });
+    }
+    return {
+      model: __aiContext.model,
+      modelName: __aiContext.modelName,
+      effort: __aiContext.effort,
+      efforts: efforts,
+      models: models,
+      ready: __aiContext.ready
+    };
+  }
+  function __notifyAiContext() {
+    var snap = __cloneAiContext();
+    for (var i = 0; i < __aiContextListeners.length; i++) {
+      try { __aiContextListeners[i](snap); } catch (err) { reportError(err); }
+    }
+  }
+
+  function __inferMimeFromName(name) {
+    var low = String(name || "").toLowerCase();
+    if (low.endsWith(".json")) return "application/json";
+    if (low.endsWith(".md") || low.endsWith(".markdown")) return "text/markdown";
+    if (low.endsWith(".csv")) return "text/csv";
+    return "text/plain";
+  }
+  function __sanitizeAttachKey(raw) {
+    if (typeof raw !== "string") return undefined;
+    var clean = raw.trim().replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 64);
+    return clean || undefined;
+  }
+  function __sanitizeAttachName(raw, fallback) {
+    var clean = typeof raw === "string" ? raw.replace(/[\\\\/\\r\\n\\t\\0]+/g, "_").trim().slice(0, 120) : "";
+    if (!clean || clean === "." || clean === "..") return fallback;
+    return clean;
+  }
+  function __utf8ByteLen(str) {
+    try {
+      if (typeof TextEncoder === "function") return new TextEncoder().encode(str).length;
+    } catch {}
+    return str.length;
+  }
+  function __attach(input) {
+    try {
+      if (input === null || input === undefined) return false;
+      var obj = typeof input === "string" ? { content: input } : input;
+      if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+      if (!__lintMode && window.parent !== window && !__hasTrustedGesture) return false;
+      var key = __sanitizeAttachKey(obj.key);
+      if (typeof obj.dataUrl === "string" && obj.dataUrl.length > 0) {
+        var du = obj.dataUrl.trim();
+        var mime = "";
+        var ext = "png";
+        if (du.indexOf("data:image/png;base64,") === 0) { mime = "image/png"; ext = "png"; }
+        else if (du.indexOf("data:image/jpeg;base64,") === 0) { mime = "image/jpeg"; ext = "jpg"; }
+        else if (du.indexOf("data:image/webp;base64,") === 0) { mime = "image/webp"; ext = "webp"; }
+        else return false;
+        if (du.length > 3600000) return false;
+        var imgName = __sanitizeAttachName(obj.name, (key || "widget-snapshot") + "." + ext);
+        if (__lintMode || window.parent === window) {
+          var b64Len = du.length - du.indexOf(",") - 1;
+          var estBytes = Math.floor((b64Len * 3) / 4);
+          __upsertLocalAttachment(key, imgName, mime, estBytes);
+          return true;
+        }
+        __postToParent({ __gu: "attach", key: key, name: imgName, mime: mime, dataUrl: du }, "*");
+        return true;
+      }
+      var rawVal = obj.content !== undefined ? obj.content : obj.data;
+      if (rawVal === undefined) return false;
+      var isObj = typeof rawVal !== "string";
+      var text = isObj ? JSON.stringify(rawVal, null, 2) : rawVal;
+      if (typeof text !== "string" || text.length === 0 || text.length > 1048576) return false;
+      var defExt = isObj ? ".json" : ".txt";
+      var fileName = __sanitizeAttachName(obj.name, (key || "widget-data") + defExt);
+      var rawMime = typeof obj.mime === "string" && obj.mime.trim()
+        ? obj.mime.trim().toLowerCase().slice(0, 64)
+        : (isObj ? "application/json" : __inferMimeFromName(fileName));
+      var mimeType = (rawMime === "application/json" || rawMime === "text/markdown" || rawMime === "text/csv" || rawMime === "text/plain")
+        ? rawMime
+        : "text/plain";
+      if (__lintMode || window.parent === window) {
+        __upsertLocalAttachment(key, fileName, mimeType, __utf8ByteLen(text));
+        return true;
+      }
+      __postToParent({ __gu: "attach", key: key, name: fileName, mime: mimeType, content: text }, "*");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function __upsertLocalAttachment(key, name, mime, size) {
+    var now = Date.now();
+    if (key) {
+      for (var i = 0; i < __attachments.length; i++) {
+        if (__attachments[i].key === key) {
+          __attachments[i] = { key: key, name: name, mime: mime, size: size, updatedAt: now };
+          __notifyAttachments();
+          return;
+        }
+      }
+    }
+    __attachments.push({ key: key, name: name, mime: mime, size: size, updatedAt: now });
+    __notifyAttachments();
+  }
+  function __detach(key) {
+    try {
+      if (!__lintMode && window.parent !== window && !__hasTrustedGesture) return false;
+      var cleanKey = __sanitizeAttachKey(key);
+      if (__lintMode || window.parent === window) {
+        if (cleanKey) {
+          __attachments = __attachments.filter(function (a) { return a.key !== cleanKey; });
+        } else {
+          __attachments = [];
+        }
+        __notifyAttachments();
+        return true;
+      }
+      __postToParent({ __gu: "detach", key: cleanKey }, "*");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  function __onAttachmentsChange(fn) {
+    if (typeof fn !== "function") return function () {};
+    __attachmentListeners.push(fn);
+    return function () {
+      var idx = __attachmentListeners.indexOf(fn);
+      if (idx >= 0) __attachmentListeners.splice(idx, 1);
+    };
+  }
+
+  function __extractJson(raw) {
+    var trimmed = String(raw || "").trim();
+    if (!trimmed) throw new SyntaxError("Model returned an empty response instead of JSON");
+    try { return JSON.parse(trimmed); } catch (_) {}
+    // Try every matched fenced code block (handles multiple fences cleanly).
+    var searchPos = 0;
+    while (searchPos < trimmed.length) {
+      var fenceStart = trimmed.indexOf("\`\`\`", searchPos);
+      if (fenceStart < 0) break;
+      var afterHeader = trimmed.indexOf("\\n", fenceStart);
+      if (afterHeader < 0) break;
+      var fenceEnd = trimmed.indexOf("\`\`\`", afterHeader + 1);
+      if (fenceEnd < 0) break;
+      var inner = trimmed.slice(afterHeader + 1, fenceEnd).trim();
+      if (inner) {
+        try { return JSON.parse(inner); } catch (_) {}
+      }
+      searchPos = fenceEnd + 3;
+    }
+    // Scan balanced {...} / [...] candidates, skipping non-JSON bracketed prose.
+    var scanFrom = 0;
+    while (scanFrom < trimmed.length) {
+      var objIdx = trimmed.indexOf("{", scanFrom);
+      var arrIdx = trimmed.indexOf("[", scanFrom);
+      var start = -1;
+      if (objIdx >= 0 && arrIdx >= 0) start = Math.min(objIdx, arrIdx);
+      else start = Math.max(objIdx, arrIdx);
+      if (start < 0) break;
+      var openCh = trimmed.charAt(start);
+      var closeCh = openCh === "{" ? "}" : "]";
+      var depth = 0;
+      var inStr = false;
+      var esc = false;
+      var endIdx = -1;
+      for (var i = start; i < trimmed.length; i++) {
+        var ch = trimmed.charAt(i);
+        if (inStr) {
+          if (esc) { esc = false; }
+          else if (ch === "\\\\") { esc = true; }
+          else if (ch === '"') { inStr = false; }
+          continue;
+        }
+        if (ch === '"') { inStr = true; continue; }
+        if (ch === openCh) depth++;
+        else if (ch === closeCh) {
+          depth--;
+          if (depth === 0) {
+            endIdx = i;
+            break;
+          }
+        }
+      }
+      if (endIdx > start) {
+        try { return JSON.parse(trimmed.slice(start, endIdx + 1)); } catch (_) {}
+      }
+      scanFrom = start + 1;
+    }
+    throw new SyntaxError("Model did not return valid JSON");
+  }
+
+  function __makeAiError(message, code, status, aborted) {
+    var e = new Error(message || "AI request failed");
+    if (aborted) e.name = "AbortError";
+    if (code) e.code = code;
+    if (typeof status === "number") e.status = status;
+    if (aborted) e.aborted = true;
+    return e;
+  }
+
+  function __cleanupAiEntry(reqId) {
+    var entry = __aiPending[reqId];
+    if (!entry) return null;
+    delete __aiPending[reqId];
+    if (entry.timer) clearTimeout(entry.timer);
+    if (entry.signal && entry.onAbortSignal && typeof entry.signal.removeEventListener === "function") {
+      try { entry.signal.removeEventListener("abort", entry.onAbortSignal); } catch {}
+    }
+    return entry;
+  }
+
+  function __abortAi(reqId) {
+    if (reqId) {
+      var entry = __cleanupAiEntry(reqId);
+      if (entry) {
+        if (!__lintMode && window.parent !== window) {
+          try { __postToParent({ __gu: "aiAbort", reqId: reqId }, "*"); } catch {}
+        }
+        entry.reject(__makeAiError("AI request aborted", "aborted", undefined, true));
+      }
+      return;
+    }
+    var keys = Object.keys(__aiPending);
+    for (var i = 0; i < keys.length; i++) {
+      var e = __cleanupAiEntry(keys[i]);
+      if (e) e.reject(__makeAiError("AI request aborted", "aborted", undefined, true));
+    }
+    if (keys.length > 0 && !__lintMode && window.parent !== window) {
+      try { __postToParent({ __gu: "aiAbort" }, "*"); } catch {}
+    }
+  }
+
+  function __runAiRequest(rawOpts, isStream, isJson) {
+    var opts = typeof rawOpts === "string" ? { prompt: rawOpts } : (rawOpts && typeof rawOpts === "object" ? rawOpts : {});
+    var reqId = "ai_" + (++__aiSeq) + "_" + Date.now().toString(36);
+    var signal = opts.signal;
+    var onToken = typeof opts.onToken === "function" ? opts.onToken : (typeof opts.onDelta === "function" ? opts.onDelta : null);
+    var onReasoning = typeof opts.onReasoning === "function" ? opts.onReasoning : null;
+
+    var p = new Promise(function (resolve, reject) {
+      if (signal && signal.aborted) {
+        reject(__makeAiError("AI request aborted", "aborted", undefined, true));
+        return;
+      }
+      var cleanMessages = undefined;
+      if (Array.isArray(opts.messages)) {
+        cleanMessages = [];
+        for (var i = 0; i < opts.messages.length && cleanMessages.length < 64; i++) {
+          var m = opts.messages[i];
+          if (!m || typeof m !== "object") continue;
+          var r = m.role;
+          if (r !== "system" && r !== "user" && r !== "assistant") continue;
+          if (typeof m.content !== "string") continue;
+          cleanMessages.push({ role: r, content: m.content.slice(0, 65536) });
+        }
+      }
+      var promptStr = typeof opts.prompt === "string" ? opts.prompt.slice(0, 65536) : undefined;
+      var systemStr = typeof opts.system === "string" ? opts.system.slice(0, 32768) : undefined;
+      var modelStr = typeof opts.model === "string" && opts.model.trim() ? opts.model.trim().slice(0, 128) : undefined;
+      var effortStr = typeof opts.effort === "string" && opts.effort.trim() ? opts.effort.trim().slice(0, 24) : undefined;
+      var maxTokens = typeof opts.maxTokens === "number" && Number.isFinite(opts.maxTokens) ? Math.floor(opts.maxTokens) : undefined;
+      var temperature = typeof opts.temperature === "number" && Number.isFinite(opts.temperature) ? opts.temperature : undefined;
+
+      if (__lintMode || window.parent === window) {
+        var lintEntry = {
+          resolve: resolve,
+          reject: reject,
+          signal: signal,
+          onAbortSignal: null,
+          timer: 0
+        };
+        if (signal && typeof signal.addEventListener === "function") {
+          lintEntry.onAbortSignal = function () { __abortAi(reqId); };
+          try { signal.addEventListener("abort", lintEntry.onAbortSignal, { once: true }); } catch {}
+        }
+        __aiPending[reqId] = lintEntry;
+        Promise.resolve().then(function () {
+          var active = __cleanupAiEntry(reqId);
+          if (!active) return;
+          if (signal && signal.aborted) {
+            active.reject(__makeAiError("AI request aborted", "aborted", undefined, true));
+            return;
+          }
+          var mockText = isJson ? '{"ok":true}' : "Mock response (lint preview)";
+          if (isStream && onToken) {
+            try { onToken(mockText, mockText); } catch {}
+          }
+          var baseRes = {
+            text: mockText,
+            reasoning: "",
+            model: modelStr || __aiContext.model || "session-model",
+            effort: effortStr || __aiContext.effort || "medium",
+            finishReason: "stop",
+            usage: { inputTokens: 0, cacheTokens: 0, outputTokens: 0, reasoningTokens: 0 },
+            mocked: true
+          };
+          if (isJson) baseRes.data = { ok: true };
+          active.resolve(baseRes);
+        });
+        return;
+      }
+
+      if (!__hasTrustedGesture) {
+        reject(__makeAiError("AI calls require a user click or interaction in the widget first.", "interaction_required"));
+        return;
+      }
+
+      var entry = {
+        resolve: resolve,
+        reject: reject,
+        onToken: onToken,
+        onReasoning: onReasoning,
+        fullText: "",
+        fullReasoning: "",
+        parseJson: !!isJson,
+        signal: signal,
+        onAbortSignal: null,
+        timer: 0
+      };
+      var resetTimeout = function () {
+        if (entry.timer) clearTimeout(entry.timer);
+        entry.timer = setTimeout(function () {
+          var timed = __cleanupAiEntry(reqId);
+          if (timed) {
+            try { __postToParent({ __gu: "aiAbort", reqId: reqId }, "*"); } catch {}
+            timed.reject(__makeAiError("AI request timed out", "timeout", 504, false));
+          }
+        }, 180000);
+      };
+      entry.resetTimeout = resetTimeout;
+      resetTimeout();
+
+      if (signal && typeof signal.addEventListener === "function") {
+        entry.onAbortSignal = function () { __abortAi(reqId); };
+        try { signal.addEventListener("abort", entry.onAbortSignal, { once: true }); } catch {}
+      }
+      __aiPending[reqId] = entry;
+
+      try {
+        __postToParent({
+          __gu: "aiRequest",
+          reqId: reqId,
+          stream: !!isStream,
+          json: !!isJson,
+          model: modelStr,
+          effort: effortStr,
+          system: systemStr,
+          prompt: promptStr,
+          messages: cleanMessages,
+          maxTokens: maxTokens,
+          temperature: temperature
+        }, "*");
+      } catch (err) {
+        var failed = __cleanupAiEntry(reqId);
+        if (failed) failed.reject(__makeAiError(String((err && err.message) || err), "bridge_error"));
+      }
+    });
+    p.abort = function () { __abortAi(reqId); };
+    p.requestId = reqId;
+    return p;
+  }
+
+  var __ai = Object.freeze({
+    getContext: __cloneAiContext,
+    onContextChange: function (fn) {
+      if (typeof fn !== "function") return function () {};
+      __aiContextListeners.push(fn);
+      return function () {
+        var idx = __aiContextListeners.indexOf(fn);
+        if (idx >= 0) __aiContextListeners.splice(idx, 1);
+      };
+    },
+    listModels: function () {
+      if (__aiContext.ready || __lintMode || window.parent === window) {
+        return Promise.resolve(__cloneAiContext().models);
+      }
+      return new Promise(function (resolve) {
+        var settled = false;
+        var unsub = function () {};
+        var done = function () {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          unsub();
+          resolve(__cloneAiContext().models);
+        };
+        var timer = setTimeout(done, 2000);
+        unsub = __ai.onContextChange(done);
+      });
+    },
+    complete: function (opts) {
+      return __runAiRequest(opts, false, false);
+    },
+    stream: function (opts) {
+      return __runAiRequest(opts, true, false);
+    },
+    json: function (opts) {
+      return __runAiRequest(opts, false, true);
+    },
+    abort: function (reqId) {
+      __abortAi(reqId);
+    }
+  });
+
   var __host = {
-    sendPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "sendPrompt", text: String(text).slice(0, 4000) }, "*"); },
-    prefillPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "prefillPrompt", text: String(text).slice(0, 4000) }, "*"); },
-    openLink: function (url) { if (typeof url === "string") window.parent.postMessage({ __gu: "openLink", url: String(url).slice(0, 2048) }, "*"); },
-    resize: function (height) { if (!__isFullscreen) window.parent.postMessage({ __gu: "resize", height: Number(height) }, "*"); },
+    sendPrompt: function (text) { if (typeof text === "string" && text.trim()) __postToParent({ __gu: "sendPrompt", text: String(text).slice(0, 4000) }, "*"); },
+    prefillPrompt: function (text) { if (typeof text === "string" && text.trim()) __postToParent({ __gu: "prefillPrompt", text: String(text).slice(0, 4000) }, "*"); },
+    openLink: function (url) { if (typeof url === "string") __postToParent({ __gu: "openLink", url: String(url).slice(0, 2048) }, "*"); },
+    resize: function (height) { if (!__isFullscreen) __postToParent({ __gu: "resize", height: Number(height) }, "*"); },
+    attach: __attach,
+    detach: __detach,
+    getAttachments: __cloneAttachments,
+    onAttachmentsChange: __onAttachmentsChange,
+    ai: __ai,
     saveState: function (s) {
       try {
         var payload = s === undefined ? (window.__gu && window.__gu.state) : s;
@@ -727,7 +1207,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
           if (window.__gu) window.__gu.state = copy;
         } catch {}
         try {
-          window.parent.postMessage({ __gu: "state", state: str }, "*");
+          __postToParent({ __gu: "state", state: str }, "*");
         } catch {}
         return true;
       } catch {
@@ -874,6 +1354,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     } catch {}
   }
   function runDestroy() {
+    __abortAi();
     var list = __destroyers.splice(0, __destroyers.length);
     for (var i = 0; i < list.length; i++) { try { list[i](); } catch (err) { reportError(err); } }
   }
@@ -883,6 +1364,15 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     fitCanvas: fitCanvas, isFullscreen: false,
     reportError: reportError, destroy: runDestroy,
     saveState: __host.saveState,
+    sendPrompt: __host.sendPrompt,
+    prefillPrompt: __host.prefillPrompt,
+    openLink: __host.openLink,
+    attach: __attach,
+    detach: __detach,
+    getAttachments: __cloneAttachments,
+    onAttachmentsChange: __onAttachmentsChange,
+    attachments: [],
+    ai: __ai,
     error: null
   };
   // Keyboard & pointer ergonomics: track widget-owned keydown/keyup listeners
@@ -913,6 +1403,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     return false;
   }
   window.addEventListener("keydown", function (ev) {
+    if (ev && ev.isTrusted) __noteTrustedGesture();
     if (!ev || ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey) return;
     var t = ev.target;
     if (ev.key === "Escape" && __isFullscreen && !__isNativeKeyControl(t)) {
@@ -922,7 +1413,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
       var defer = typeof queueMicrotask === "function" ? queueMicrotask : function (fn) { Promise.resolve().then(fn); };
       defer(function () {
         if (!ev.defaultPrevented && __isFullscreen) {
-          try { window.parent.postMessage({ __gu: "escape" }, "*"); } catch {}
+          try { __postToParent({ __gu: "escape" }, "*"); } catch {}
         }
       });
       return;
@@ -936,7 +1427,11 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
       ev.preventDefault();
     }
   });
+  document.addEventListener("touchstart", function (ev) {
+    if (ev && ev.isTrusted) __noteTrustedGesture();
+  }, { capture: true, passive: true });
   document.addEventListener("pointerdown", function (ev) {
+    if (ev && ev.isTrusted) __noteTrustedGesture();
     // Always focus the widget frame on pointerdown even when a game button
     // (e.g. PLAY / FIRE) calls ev.preventDefault() in onPointerDown, so
     // subsequent keyboard controls target the game instead of scrolling chat.
@@ -1120,6 +1615,106 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
           __scheduleHeight();
         }
       });
+      return;
+    }
+    if (d.__gu === "attachments" && Array.isArray(d.items)) {
+      var nextAtt = [];
+      for (var ai = 0; ai < d.items.length; ai++) {
+        var it = d.items[ai];
+        if (!it || typeof it !== "object") continue;
+        nextAtt.push({
+          key: typeof it.key === "string" ? it.key : undefined,
+          name: typeof it.name === "string" ? it.name : "",
+          mime: typeof it.mime === "string" ? it.mime : "text/plain",
+          size: typeof it.size === "number" ? it.size : 0,
+          updatedAt: typeof it.updatedAt === "number" ? it.updatedAt : undefined
+        });
+      }
+      var nextAttSig = "";
+      try { nextAttSig = JSON.stringify(nextAtt); } catch {}
+      if (nextAttSig && nextAttSig === __lastAttachmentsSig) return;
+      __lastAttachmentsSig = nextAttSig;
+      __attachments = nextAtt;
+      __notifyAttachments();
+      return;
+    }
+    if (d.__gu === "aiContext" && d.context && typeof d.context === "object") {
+      var c = d.context;
+      var nextCtx = {
+        model: typeof c.model === "string" ? c.model : "",
+        modelName: typeof c.modelName === "string" ? c.modelName : (typeof c.model === "string" ? c.model : ""),
+        effort: typeof c.effort === "string" && c.effort ? c.effort : "medium",
+        efforts: Array.isArray(c.efforts) && c.efforts.length ? c.efforts : __defaultEfforts.slice(),
+        models: Array.isArray(c.models) ? c.models : [],
+        ready: true
+      };
+      var nextCtxSig = "";
+      try { nextCtxSig = JSON.stringify(nextCtx); } catch {}
+      if (nextCtxSig && nextCtxSig === __lastAiContextSig) return;
+      __lastAiContextSig = nextCtxSig;
+      __aiContext = nextCtx;
+      __notifyAiContext();
+      return;
+    }
+    if (d.__gu === "aiDelta" && typeof d.reqId === "string") {
+      var de = __aiPending[d.reqId];
+      if (!de) return;
+      de.resetTimeout();
+      var dt = typeof d.text === "string" ? d.text : "";
+      if (dt) {
+        de.fullText += dt;
+        if (de.onToken) { try { de.onToken(dt, de.fullText); } catch (err) { reportError(err); } }
+      }
+      return;
+    }
+    if (d.__gu === "aiReasoning" && typeof d.reqId === "string") {
+      var re = __aiPending[d.reqId];
+      if (!re) return;
+      re.resetTimeout();
+      var rt = typeof d.text === "string" ? d.text : "";
+      if (rt) {
+        re.fullReasoning += rt;
+        if (re.onReasoning) { try { re.onReasoning(rt, re.fullReasoning); } catch (err) { reportError(err); } }
+      }
+      return;
+    }
+    if (d.__gu === "aiDone" && typeof d.reqId === "string") {
+      var doneEntry = __cleanupAiEntry(d.reqId);
+      if (!doneEntry) return;
+      var finalText = typeof d.text === "string" ? d.text : doneEntry.fullText;
+      var finalReasoning = typeof d.reasoning === "string" ? d.reasoning : doneEntry.fullReasoning;
+      var resObj = {
+        text: finalText,
+        reasoning: finalReasoning,
+        model: typeof d.model === "string" ? d.model : __aiContext.model,
+        effort: typeof d.effort === "string" ? d.effort : __aiContext.effort,
+        finishReason: typeof d.finishReason === "string" ? d.finishReason : "stop",
+        usage: d.usage && typeof d.usage === "object"
+          ? d.usage
+          : { inputTokens: 0, cacheTokens: 0, outputTokens: 0, reasoningTokens: 0 }
+      };
+      if (doneEntry.parseJson) {
+        try {
+          resObj.data = __extractJson(finalText);
+          doneEntry.resolve(resObj);
+        } catch (parseErr) {
+          doneEntry.reject(parseErr);
+        }
+      } else {
+        doneEntry.resolve(resObj);
+      }
+      return;
+    }
+    if (d.__gu === "aiError" && typeof d.reqId === "string") {
+      var errEntry = __cleanupAiEntry(d.reqId);
+      if (!errEntry) return;
+      errEntry.reject(__makeAiError(
+        typeof d.error === "string" ? d.error : "AI request failed",
+        typeof d.code === "string" ? d.code : undefined,
+        typeof d.status === "number" ? d.status : undefined,
+        !!d.aborted
+      ));
+      return;
     }
   });
   try { window.parent.postMessage({ __gu: "ready" }, "*"); } catch {}

@@ -1,7 +1,7 @@
 export default {
   name: "genui_visualizers",
   description:
-    "Craft guide for 2D & 3D creative interactive labs (generative audio/synth studios, orbital/particle/ecological sandboxes) and technical, scientific, spatial/architectural, math & professional instruments.",
+    "Craft guide for general 2D & 3D interactive simulations, generative/orbital/particle/ecological/fractal sandboxes, and visual explorable models (for dedicated STEM/clinical labs see genui_science; for architecture/CAD/floorplans see genui_spatial; for audio/design/sketch studios see genui_creative).",
   usable: "yolo",
   requiresAny: ["generative_ui_talk", "generative_ui_agentic"],
   body: `# Craft guide: Creative Labs, Scientific & Spatial Visualizers (genui_visualizers)

@@ -271,6 +271,29 @@ export async function api<T = any>(method: string, path: string, body?: unknown,
   }
 }
 
+/** Authenticated fetch returning the raw Response (for streaming endpoints),
+ *  with single-flight token refresh + one retry on 401. */
+export async function authFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const run = () => {
+    const headers = new Headers(init.headers);
+    const auth = authHeaders();
+    if (auth.Authorization) headers.set("Authorization", auth.Authorization);
+    return fetch(path, { ...init, headers });
+  };
+  let res = await run();
+  if (res.status === 401 && latestSession() && !init.signal?.aborted) {
+    res.body?.cancel().catch(() => {});
+    const ok = await refreshSingleFlight();
+    init.signal?.throwIfAborted();
+    if (ok) {
+      res = await run();
+    } else {
+      setSession(null);
+    }
+  }
+  return res;
+}
+
 /** Unauthenticated calls (login, reset, 2FA step). */
 export async function publicApi<T = any>(method: string, path: string, body?: unknown): Promise<T> {
   return rawCall<T>(method, path, body);

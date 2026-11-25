@@ -35,5 +35,6 @@ Build a **crisp, airy interactive engineering instrument** where the developer s
   - \`--gu-danger\` — failed / dropped / timeout / rejected / split-alert
   - \`--gu-line\` / \`--gu-fill\` / \`--gu-elev\` — neutral structure (NEVER hardcoded \`#000\`/\`#0a0a0a\` inner boxes!)
 - Render identifiers, keys, routes, and payloads in \`.gu-mono\`. Persist active preset/parameters via \`window.indirectUi.saveState(...)\` on discrete user changes.
+- **Send specs/states back to the session AI:** When the developer configures a schema, filters a trace, or annotates a system diagram inside the widget, offer a compact \`Attach\` / \`Update\` button using \`window.__gu.attach({ key: "eng-spec", name: "spec.json", content })\` so they can send the exact structured state in their next turn without copy-pasting.
 `,
 };

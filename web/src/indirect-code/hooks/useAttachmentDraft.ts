@@ -7,6 +7,79 @@ export const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 export const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 2.5 * 1024 * 1024;
 
+export interface WidgetAttachmentInput {
+  owner: string;
+  slot?: string;
+  name: string;
+  mime: string;
+  content?: string;
+  dataUrl?: string;
+}
+
+export interface WidgetAttachmentResult {
+  ok: boolean;
+  updated: boolean;
+  error?: string;
+}
+
+function uint8ToBase64(bytes: Uint8Array): string {
+  let bin = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(bin);
+}
+
+function hasValidImageMagic(mime: string, bytes: Uint8Array): boolean {
+  if (mime === "image/png") {
+    return (
+      bytes.length >= 8 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47 &&
+      bytes[4] === 0x0d &&
+      bytes[5] === 0x0a &&
+      bytes[6] === 0x1a &&
+      bytes[7] === 0x0a
+    );
+  }
+  if (mime === "image/jpeg") {
+    return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+  if (mime === "image/webp") {
+    return (
+      bytes.length >= 12 &&
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46 &&
+      bytes[8] === 0x57 &&
+      bytes[9] === 0x45 &&
+      bytes[10] === 0x42 &&
+      bytes[11] === 0x50
+    );
+  }
+  return false;
+}
+
+function decodeImageDataUrl(dataUrl: string): { mime: string; bytes: Uint8Array; b64: string } | null {
+  const match = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
+  if (!match) return null;
+  const mime = match[1]!;
+  const b64 = match[2]!;
+  try {
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    if (!hasValidImageMagic(mime, bytes)) return null;
+    return { mime, bytes, b64 };
+  } catch {
+    return null;
+  }
+}
+
 /** Owns one draft's asynchronous reads, object URLs and correlated uploads. */
 export function createAttachmentDraft(opts: {
   send: (command: DaemonCommand) => void;
@@ -133,6 +206,136 @@ export function createAttachmentDraft(opts: {
     setPendingAttachments((prev) => prev.filter((p) => p.key !== key));
   }
 
+  /** Attach or update in-place a Generative UI widget payload in the composer draft. */
+  function upsertWidgetAttachment(input: WidgetAttachmentInput): WidgetAttachmentResult {
+    const owner = input.owner.trim();
+    if (!owner) return { ok: false, updated: false, error: "Invalid widget owner" };
+    const slot = input.slot?.trim() || undefined;
+    const prevList = pendingAttachments();
+    // Match strictly by (widgetOwner, widgetSlot) tuple — never a delimited
+    // string key that can collide when widget_id or slot contains ':'.
+    const existing = slot
+      ? prevList.find((p) => p.widgetOwner === owner && p.widgetSlot === slot)
+      : undefined;
+
+    let bytes: Uint8Array;
+    let mime: string;
+    let dataB64: string;
+    let text: string | undefined;
+    let isImage = false;
+
+    if (input.dataUrl) {
+      const decoded = decodeImageDataUrl(input.dataUrl);
+      if (!decoded) {
+        opts.toast("Unsupported widget image attachment", "err");
+        return { ok: false, updated: false, error: "Unsupported image format" };
+      }
+      if (decoded.bytes.length === 0 || decoded.bytes.length > MAX_IMAGE_BYTES) {
+        const msg = `'${input.name}' too large (max 2.5MB for images)`;
+        opts.toast(msg, "err");
+        return { ok: false, updated: false, error: msg };
+      }
+      bytes = decoded.bytes;
+      mime = decoded.mime;
+      dataB64 = decoded.b64;
+      isImage = true;
+    } else if (typeof input.content === "string") {
+      bytes = new TextEncoder().encode(input.content);
+      if (bytes.length === 0 || bytes.length > MAX_ATTACHMENT_BYTES) {
+        const msg = `'${input.name}' too large (max 4MB)`;
+        opts.toast(msg, "err");
+        return { ok: false, updated: false, error: msg };
+      }
+      mime = input.mime || "text/plain";
+      dataB64 = uint8ToBase64(bytes);
+      text = input.content;
+    } else {
+      return { ok: false, updated: false, error: "Missing attachment content" };
+    }
+
+    if (!existing) {
+      const currentCount =
+        prevList.length + preparingAttachments() + (opts.additionalCount?.() || 0);
+      if (currentCount >= MAX_ATTACHMENTS) {
+        const msg = `Max ${MAX_ATTACHMENTS} attachments per message`;
+        opts.toast(msg, "err");
+        return { ok: false, updated: false, error: msg };
+      }
+    }
+
+    const currentBytes = prevList.reduce((sum, a) => sum + (a.size || 0), 0);
+    const nextTotal = currentBytes - (existing?.size || 0) + inFlightBytes + bytes.length;
+    if (nextTotal > MAX_TOTAL_BYTES) {
+      const msg = "Total attachments exceed 25MB limit";
+      opts.toast(msg, "err");
+      return { ok: false, updated: false, error: msg };
+    }
+
+    // Mint a fresh key on every revision so an in-flight sendPrompt() detects
+    // the mid-send mutation and never sends stale bytes or deletes the newer revision.
+    const nextKey = crypto.randomUUID();
+    if (existing) {
+      for (const w of waiters.values()) {
+        if (w.key === existing.key) w.fail("Attachment updated");
+      }
+      if (existing.objectUrl) {
+        try {
+          URL.revokeObjectURL(existing.objectUrl);
+        } catch {}
+      }
+    }
+
+    let objectUrl: string | undefined;
+    if (isImage && typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+      objectUrl = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime }));
+    }
+
+    const nextEntry: PendingAttachment = {
+      key: nextKey,
+      name: input.name,
+      mime,
+      size: bytes.length,
+      dataB64,
+      text,
+      objectUrl,
+      widgetOwner: owner,
+      widgetSlot: slot,
+      updatedAt: Date.now(),
+    };
+
+    if (existing) {
+      const prevKey = existing.key;
+      setPendingAttachments((prev) => prev.map((p) => (p.key === prevKey ? nextEntry : p)));
+      return { ok: true, updated: true };
+    }
+    setPendingAttachments((prev) => [...prev, nextEntry]);
+    return { ok: true, updated: false };
+  }
+
+  /** Remove one keyed attachment (or all attachments) owned by a widget. */
+  function removeWidgetAttachment(owner: string, slot?: string): boolean {
+    const cleanOwner = owner.trim();
+    if (!cleanOwner) return false;
+    const cleanSlot = slot?.trim() || undefined;
+    const targets = pendingAttachments().filter(
+      (p) => p.widgetOwner === cleanOwner && (cleanSlot ? p.widgetSlot === cleanSlot : true),
+    );
+    if (!targets.length) return false;
+    const removeKeys = new Set(targets.map((t) => t.key));
+    for (const w of waiters.values()) {
+      if (removeKeys.has(w.key)) w.fail("Attachment removed");
+    }
+    for (const t of targets) {
+      if (t.objectUrl) {
+        try {
+          URL.revokeObjectURL(t.objectUrl);
+        } catch {}
+      }
+    }
+    setPendingAttachments((prev) => prev.filter((p) => !removeKeys.has(p.key)));
+    return true;
+  }
+
   function uploadOneAttachment(
     sid: string,
     a: PendingAttachment,
@@ -236,6 +439,8 @@ export function createAttachmentDraft(opts: {
     preparingAttachments,
     handleFiles,
     removePendingAttachment,
+    upsertWidgetAttachment,
+    removeWidgetAttachment,
     uploadOneAttachment,
     noteAttachmentUploaded,
     failUpload,

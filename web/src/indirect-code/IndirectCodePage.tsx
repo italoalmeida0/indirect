@@ -2062,6 +2062,7 @@ export default function IndirectCodePage() {
     },
     activeModel: options.activeModel,
     activeModelName,
+    models: gatewayModels,
     effort: options.effort,
     agentMode: options.agentMode,
     setAgentMode: options.setAgentMode,

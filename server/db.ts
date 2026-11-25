@@ -1307,6 +1307,7 @@ export const stmts = {
   userByEmail: db.prepare<UserRow, [string]>("SELECT * FROM users WHERE email = ?"),
   userByGoogleId: db.prepare<UserRow, [string]>("SELECT * FROM users WHERE google_id = ?"),
   keyByHash: db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE hash = ?"),
+  keyById: db.prepare<ApiKeyRow, [string]>("SELECT * FROM api_keys WHERE id = ?"),
   sessionByJti: db.prepare<SessionRow, [string]>("SELECT * FROM sessions WHERE jti = ?"),
   sessionByRefreshHash: db.prepare<SessionRow, [string]>(
     "SELECT * FROM sessions WHERE refresh_hash = ?",

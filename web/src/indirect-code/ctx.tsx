@@ -64,6 +64,8 @@ export interface TranscriptCtxValue
 export interface ComposerCtxValue extends Composer {
   activeModel: SessionOptions["activeModel"];
   activeModelName: () => string;
+  /** Allowed gateway models currently available for this session/user. */
+  models?: () => GatewayModel[];
   effort: SessionOptions["effort"];
   agentMode: SessionOptions["agentMode"];
   setAgentMode: SessionOptions["setAgentMode"];

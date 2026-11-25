@@ -197,7 +197,7 @@ export function lintPageHTML(stateJSON: string, hasTest: boolean, libEntries: Re
       ...libEntries,
     },
   })}</script>
-<script>${escapeScriptClose(buildRuntimeScript({ stateJSON }))}</script>
+<script>${escapeScriptClose(buildRuntimeScript({ stateJSON, lintMode: true }))}</script>
 <script>
 // Match the production sandbox="allow-scripts" opaque-origin iframe where
 // localStorage / sessionStorage throw SecurityError: unguarded usage must fail
