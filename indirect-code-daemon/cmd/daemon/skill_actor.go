@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,7 +25,12 @@ func (a *sessionActor) onSkillActivate(m skillActivateMsg) {
 	if m.gen != a.gen || m.name == "" {
 		return
 	}
-	if _, ok := skillRegistry().get(m.name); !ok {
+	store := skillRegistry().all()
+	sk, ok := store[m.name]
+	if !ok {
+		return
+	}
+	if !skills.RequirementsMet(sk, skills.Satisfied(store, a.rec.Skills)) {
 		return
 	}
 	a.touch()
@@ -149,9 +155,50 @@ func (a *sessionActor) onSkillsUpdate(m skillsUpdateMsg) {
 			prio++
 		}
 	}
+	a.pruneUnsatisfiedGatedSkills(true)
 	a.saveSkills()
 	// Complete snapshot back to the client (same shape as the mirror pull).
 	a.emit(map[string]any{"type": "session_data", "hostId": a.hostID(), "session": sessionPayloadPaged(a.rec, 0)})
+}
+
+// pruneUnsatisfiedGatedSkills deactivates any currently active gated subskill
+// whose parent requirements are no longer satisfied (e.g. after the user
+// unchecks a parent skill or a once parent expires at turn end).
+func (a *sessionActor) pruneUnsatisfiedGatedSkills(emitNotice bool) bool {
+	if len(a.rec.Skills) == 0 {
+		return false
+	}
+	store := skillRegistry().all()
+	satisfied := skills.Satisfied(store, a.rec.Skills)
+	names := make([]string, 0, len(a.rec.Skills))
+	for name := range a.rec.Skills {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	changed := false
+	for _, name := range names {
+		st := a.rec.Skills[name]
+		if !st.Active {
+			continue
+		}
+		sk, ok := store[name]
+		if !ok || !sk.IsGated() {
+			continue
+		}
+		if skills.RequirementsMet(sk, satisfied) {
+			continue
+		}
+		if emitNotice && st.ByAI {
+			a.noticeSkillDeactivation(name)
+		}
+		st.Active = false
+		st.Once = false
+		st.InContext = false
+		st.ByAI = false
+		a.rec.Skills[name] = st
+		changed = true
+	}
+	return changed
 }
 
 // noticeSkillDeactivation queues the ephemeral system notice for the AI:
@@ -198,6 +245,9 @@ func (a *sessionActor) endTurnSkills() bool {
 		}
 		st.Once, st.InContext = false, false
 		a.rec.Skills[name] = st
+		changed = true
+	}
+	if a.pruneUnsatisfiedGatedSkills(false) {
 		changed = true
 	}
 	return changed
@@ -422,7 +472,8 @@ func useSkillUsableGate(active map[string]skills.SessionSkill, mode string, args
 	if len(canon) > 0 {
 		_ = json.Unmarshal(canon, &parsed)
 	}
-	sk, ok := skillRegistry().get(parsed.Name)
+	store := skillRegistry().all()
+	sk, ok := store[parsed.Name]
 	if !ok {
 		return "refuse", "unknown skill (use a name exactly as listed in the use_skill description)"
 	}
@@ -436,9 +487,13 @@ func useSkillUsableGate(active map[string]skills.SessionSkill, mode string, args
 	switch usable {
 	case "deny", "never":
 		return "refuse", "skill is not available"
-	case "ask":
-		return "ask", ""
-	case "yolo":
+	case "ask", "yolo":
+		if !skills.RequirementsMet(sk, skills.Satisfied(store, active)) {
+			return "refuse", "skill requires an active parent skill"
+		}
+		if usable == "ask" {
+			return "ask", ""
+		}
 		return "approve", ""
 	default: // unreachable: UsableValue only returns the four originals
 		return "refuse", "skill is not available"

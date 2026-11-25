@@ -385,6 +385,8 @@ export async function handleGenUiRoute(
     await requireAuth(req);
     const body = await readJsonBody(req, 2_500_000);
     const theme: "dark" | "light" = body?.theme === "light" ? "light" : "dark";
+    const VALID_ACCENTS = new Set(["neutral", "violet", "blue", "green", "amber", "orange", "coral", "rose"]);
+    const accent = typeof body?.accent === "string" && VALID_ACCENTS.has(body.accent) ? body.accent : undefined;
     const jsx = typeof body?.jsx === "string" ? body.jsx : "";
     const stateJSON = typeof body?.stateJSON === "string" ? body.stateJSON.trim() || "{}" : "{}";
     try {
@@ -406,7 +408,7 @@ export async function handleGenUiRoute(
     modules.put(moduleId, moduleBody);
     const moduleUrl = `/api/indirect-code/gen-ui/modules/${moduleId}`;
 
-    const id = contentId([theme, moduleId, stateJSON]);
+    const id = contentId(accent ? [theme, accent, moduleId, stateJSON] : [theme, moduleId, stateJSON]);
     const existing = widgets.get(id);
     if (existing) {
       return json({ success: true, id: existing.id, url: `/api/indirect-code/gen-ui/widgets/${existing.id}` }, { req });
@@ -424,6 +426,7 @@ export async function handleGenUiRoute(
     // is rendered on GET (per request origin), never stored baked.
     const entry = widgets.put(id, {
       theme,
+      accent,
       moduleUrl,
       importMap,
       stateJSON,

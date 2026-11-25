@@ -201,6 +201,15 @@ export interface SkillConfig {
    * PRIMARY skill, "yolo" auto-approves resolved asks and hides the
    * ASK/YOLO selector. */
   approvalMode?: string;
+  /** Optional parent skill/identity requirements (ALL must be active).
+   * Presence of `requires` or `requiresAny` marks an internal/conditional
+   * subskill that unlocks via use_skill when its parent is active and stays
+   * hidden from the user's manual additional-skills checkbox list. */
+  requires?: string[];
+  /** Optional parent skill/identity requirements (AT LEAST ONE must be active). */
+  requiresAny?: string[];
+  /** Optional extra capability/parent identities this skill satisfies when active. */
+  provides?: string[];
 }
 
 export interface ToolUnit {

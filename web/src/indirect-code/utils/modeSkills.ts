@@ -104,3 +104,82 @@ export function usableDiffers(sessionUsable: string | undefined, original: strin
   if (!sessionUsable || sessionUsable === "inherit") return false;
   return sessionUsable !== originalUsable(original);
 }
+
+/** True when a skill is a conditional/gated subskill (declares `requires` or
+ * `requiresAny`). Gated subskills unlock automatically via `use_skill` when
+ * their parent skill is active and stay out of the user's manual additional-
+ * skills picker and badge counts. */
+export function isGatedSkill(
+  skill: Pick<SkillConfig, "requires" | "requiresAny"> | undefined,
+): boolean {
+  return (skill?.requires?.length ?? 0) > 0 || (skill?.requiresAny?.length ?? 0) > 0;
+}
+
+/** True when a skill's optional mode pin matches the session's base mode
+ * (unpinned skills match every mode). */
+export function skillMatchesMode(
+  skill: Pick<SkillConfig, "mode"> | undefined,
+  sessionMode: string | undefined,
+): boolean {
+  if (!skill?.mode) return true;
+  return baseMode(skill.mode) === baseMode(sessionMode);
+}
+
+/** Drops any gated subskill from `selection` whose parent requirements are no
+ * longer satisfied by the remaining skills in `selection` (bottom-up fixed
+ * point mirroring the daemon's `skills.Satisfied`). Unloaded/unknown skills
+ * are preserved unchanged so pre-load drafts never lose entries. */
+export function pruneUnsatisfiedGatedSkills(
+  selection: string[],
+  catalog: Record<string, SkillConfig>,
+): string[] {
+  if (selection.length === 0) return selection;
+  const satisfied = new Set<string>();
+  const kept = new Set<string>();
+  const addSatisfied = (name: string, sk: SkillConfig | undefined) => {
+    kept.add(name);
+    satisfied.add(name);
+    if (sk?.name) satisfied.add(sk.name);
+    if (sk?.provides) {
+      for (const p of sk.provides) satisfied.add(p);
+    }
+  };
+  const requirementsMet = (sk: SkillConfig): boolean => {
+    if (sk.requires?.length) {
+      for (const req of sk.requires) {
+        if (!satisfied.has(req)) return false;
+      }
+    }
+    if (sk.requiresAny?.length) {
+      let anyHit = false;
+      for (const req of sk.requiresAny) {
+        if (satisfied.has(req)) {
+          anyHit = true;
+          break;
+        }
+      }
+      if (!anyHit) return false;
+    }
+    return true;
+  };
+
+  for (const name of selection) {
+    const sk = catalog[name];
+    if (!sk || !isGatedSkill(sk)) {
+      addSatisfied(name, sk);
+    }
+  }
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const name of selection) {
+      if (kept.has(name)) continue;
+      const sk = catalog[name];
+      if (sk && requirementsMet(sk)) {
+        addSatisfied(name, sk);
+        progressed = true;
+      }
+    }
+  }
+  return selection.filter((n) => kept.has(n));
+}

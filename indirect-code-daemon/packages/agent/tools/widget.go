@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -184,20 +185,47 @@ type WidgetSetTool struct {
 	CWD          string
 }
 
+// flexJSONString accepts either a JSON string (e.g. "{\"a\":1}") or an inline
+// JSON value/object (e.g. {"a":1}) for widget state args, normalizing objects
+// to compact JSON strings so models succeed on the first call either way.
+type flexJSONString string
+
+func (s *flexJSONString) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		*s = ""
+		return nil
+	}
+	if trimmed[0] == '"' {
+		var str string
+		if err := json.Unmarshal(trimmed, &str); err != nil {
+			return err
+		}
+		*s = flexJSONString(str)
+		return nil
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, trimmed); err != nil {
+		return err
+	}
+	*s = flexJSONString(compact.String())
+	return nil
+}
+
 type widgetSetArgs struct {
 	ID      string `json:"id"`
 	Content string `json:"content"`
 	SrcFile string `json:"src_file"`
 	// State is the fence `state:` JSON the widget will render with — the
 	// lint uses it as props so the smoke render matches what users see.
-	State  string `json:"state"`
-	Delete bool   `json:"delete"`
+	State  flexJSONString `json:"state"`
+	Delete bool           `json:"delete"`
 }
 
 func (t *WidgetSetTool) Name() string { return "widget_set" }
 func (t *WidgetSetTool) Description() string {
 	if t.AllowSrcFile {
-		return "Create, replace or delete an interactive widget in this session. The transcript fence only carries headers (`widget_id:`, `placeholder:`, `state:`) and links the widget by id — this tool stores the widget's TSX source under that id. The source is a raw TSX module (no fence markers): a React 18 function component (`export default function App`) as a single JSX/TSX file, TypeScript allowed. Pass the source directly with `content`, or import an existing workspace file with `src_file` (write the file first with write/edit/bash). The source is linted at the gateway on every save (compile, import audit, smoke render) — fix any reported error before referencing the widget. To CHANGE an existing widget, prefer widget_edit (targeted replacements) over re-sending the whole source here — only rewrite from scratch with this tool when the edits are too tangled to express. Pass `delete: true` to remove the widget."
+		return "Create, replace or delete an interactive widget in this session. The transcript fence only carries headers (`widget_id:`, `placeholder:`, `state:`) and links the widget by id — this tool stores the widget's TSX source under that id. The source is a raw TSX module (no fence markers): a React 18 function component (`export default function App`) as a single JSX/TSX file, TypeScript allowed. Pass the source directly with `content`, or import an existing workspace file with `src_file` (write the file first with write/edit/bash). The source is linted at the gateway on every save (compile, import audit, smoke render) — fix any reported error before referencing the widget. To update an existing widget, edit its workspace file and re-import with `src_file`, or pass the updated source via `content`. Pass `delete: true` to remove the widget."
 	}
 	return "Create, replace or delete an interactive widget in this session. The transcript fence only carries headers (`widget_id:`, `placeholder:`, `state:`) and links the widget by id — this tool stores the widget's TSX source under that id. The source is a raw TSX module (no fence markers): a React 18 function component (`export default function App`) as a single JSX/TSX file, TypeScript allowed — pass it with `content`. The source is linted at the gateway on every save (compile, import audit, smoke render) — fix any reported error before referencing the widget. To CHANGE an existing widget, prefer widget_edit (targeted replacements) over re-sending the whole source here — only rewrite from scratch with this tool when the edits are too tangled to express. Pass `delete: true` to remove the widget."
 }
@@ -270,7 +298,7 @@ func (t *WidgetSetTool) Execute(ctx context.Context, raw json.RawMessage, progre
 	// any legacy `@jsx` marker so the stored source is always a raw module.
 	source = stripWidgetFence(source)
 
-	res := runWidgetLint(ctx, t.Lint, a.ID, source, "", a.State)
+	res := runWidgetLint(ctx, t.Lint, a.ID, source, "", string(a.State))
 	file := WidgetFile{
 		ID:          a.ID,
 		Source:      source,
@@ -304,8 +332,15 @@ func (t *WidgetSetTool) Execute(ctx context.Context, raw json.RawMessage, progre
 		verdict = fmt.Sprintf("LINT FAILED (%d error%s)", len(res.Errors), pluralS(len(res.Errors)))
 	}
 	lintText := renderWidgetLintText(res, a.ID)
+	if res.OK || res.Skipped {
+		lintText += fmt.Sprintf("Mount in your reply with a generative_ui fence (widget_id: %s).\n", a.ID)
+	}
+	infoMsg := fmt.Sprintf("Successfully stored widget %s (%s)", a.ID, verdict)
+	if !res.OK && !res.Skipped {
+		infoMsg = fmt.Sprintf("Stored widget %s — %s", a.ID, verdict)
+	}
 	attrs := []core.Attr{
-		{Key: "info", Value: fmt.Sprintf("Successfully stored widget %s (%s)", a.ID, verdict)},
+		{Key: "info", Value: infoMsg},
 		{Key: "path", Value: a.ID},
 		{Key: "lines", Value: fmt.Sprintf("%d", totalLines)},
 	}
@@ -352,7 +387,7 @@ func stripWidgetFence(source string) string {
 			}
 			// Header lines inside a pasted fence block: drop them.
 			low := strings.ToLower(trimmed)
-			if strings.HasPrefix(low, "placeholder:") || strings.HasPrefix(low, "state:") || strings.HasPrefix(low, "id:") {
+			if strings.HasPrefix(low, "placeholder:") || strings.HasPrefix(low, "state:") || strings.HasPrefix(low, "id:") || strings.HasPrefix(low, "widget_id:") {
 				continue
 			}
 			if trimmed == "" {
@@ -434,9 +469,9 @@ type WidgetLintTool struct {
 }
 
 type widgetLintArgs struct {
-	ID    string `json:"id"`
-	Test  string `json:"test"`
-	State string `json:"state"`
+	ID    string         `json:"id"`
+	Test  string         `json:"test"`
+	State flexJSONString `json:"state"`
 }
 
 func (t *WidgetLintTool) Name() string { return "widget_lint" }
@@ -462,7 +497,7 @@ func (t *WidgetLintTool) Execute(ctx context.Context, raw json.RawMessage, progr
 	if !ok {
 		return core.ToolResult{}, fmt.Errorf("widget %q not found", a.ID)
 	}
-	res := runWidgetLint(ctx, t.Lint, a.ID, file.Source, a.Test, a.State)
+	res := runWidgetLint(ctx, t.Lint, a.ID, file.Source, a.Test, string(a.State))
 	text := renderWidgetLintText(res, a.ID)
 	if progress != nil {
 		progress(text)
@@ -636,7 +671,7 @@ type widgetEditArgs struct {
 
 func (t *WidgetEditTool) Name() string { return "widget_edit" }
 func (t *WidgetEditTool) Description() string {
-	return "Edit a stored widget's TSX source by id using exact text replacement (same contract as edit: every old_text must match a unique, non-overlapping region; merge nearby changes into one edit). This is the PREFERRED way to change an existing widget — much cheaper than re-sending the whole source with widget_set. The diff is shown on the tool body only — widget edits never produce change balloons."
+	return "Edit a stored widget's TSX source by id using exact text replacement (same contract as edit: every old_text must match a unique, non-overlapping region; merge nearby changes into one edit). This is the PREFERRED way to change an existing widget — much cheaper than re-sending the whole source with widget_set. Run widget_lint afterwards to verify the edited widget compiles and renders cleanly. The diff is shown on the tool body only — widget edits never produce change balloons."
 }
 func (t *WidgetEditTool) Schema() json.RawMessage {
 	return json.RawMessage(`{"type":"object","properties":{"id":{"type":"string","description":"Widget id to edit"},"edits":{"type":"array","description":"One or more targeted replacements. Each edit is matched against the current source, not incrementally. Do not include overlapping or nested edits.","items":{"type":"object","properties":{"old_text":{"type":"string","description":"Exact text for one targeted replacement. It must be unique in the current source and must not overlap with any other edits[].old_text in the same call."},"new_text":{"type":"string","description":"Replacement text for this targeted edit."}},"required":["old_text","new_text"]}}},"required":["id","edits"]}`)

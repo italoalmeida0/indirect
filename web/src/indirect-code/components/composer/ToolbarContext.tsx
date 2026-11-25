@@ -6,7 +6,15 @@ import { attachSortable } from "../../../sortable";
 import { useComposerCtx, useModal, useSession, useUI } from "../../ctx";
 import { FloatMenu } from "../FloatMenu";
 import { MenuItem } from "../MenuItem";
-import { baseMode, effectiveModeSkills, isModeSkillName as isModeSkill, originalUsable } from "../../utils/modeSkills";
+import {
+  baseMode,
+  effectiveModeSkills,
+  isGatedSkill,
+  isModeSkillName as isModeSkill,
+  originalUsable,
+  pruneUnsatisfiedGatedSkills,
+  skillMatchesMode,
+} from "../../utils/modeSkills";
 import type { AccessMode } from "../../utils/settingsValidation";
 
 const SKILL_ACRONYMS: Record<string, string> = {
@@ -173,7 +181,7 @@ export function ToolbarContext() {
     const live = new Set(current);
     const kept = targetSkills.filter((n) => !opened.has(n) || live.has(n));
     const arrived = current.filter((n) => !opened.has(n) && !targetSkills.includes(n));
-    const nextSkills = [...kept, ...arrived];
+    const nextSkills = pruneUnsatisfiedGatedSkills([...kept, ...arrived], m.savedSkills?.() ?? {});
 
     // Usables: only the keys the user actually changed in the popup.
     const nextUsables = { ...(c.skillUsables?.() ?? {}) };
@@ -225,9 +233,10 @@ export function ToolbarContext() {
     const spec = modeSkills().find((s) => s.name === name);
     if (!spec) return;
     const mode = baseMode(spec.mode);
+    const saved = m.savedSkills?.() ?? {};
     const currentSkills = isEditing() ? draftSkills() : c.selectedSkills();
     const rest = currentSkills.filter((n) => n !== name && !isModeSkill(n));
-    const nextSkills = [name, ...rest];
+    const nextSkills = pruneUnsatisfiedGatedSkills([name, ...rest], saved);
     const nextUsables = isEditing() ? draftUsables() : undefined;
     const alreadyCommitted =
       arraysEqual(c.selectedSkills(), nextSkills) &&
@@ -250,42 +259,57 @@ export function ToolbarContext() {
     c.configureSession();
   }
 
-  /** Additional skills = everything except the 4 mode skills. Displayed
-   * order: selected (session priority order) first, then the rest by name. */
+  /** Additional skills = everything except the 4 mode skills and conditional
+   * gated subskills (which unlock via use_skill when their parent is active).
+   * Displayed order: selected (session priority order) first, then the rest by name. */
   function additionalSkills(): [string, any][] {
     const saved = m.savedSkills?.() ?? {};
-    const sel = effectiveSelectedSkills().filter((n) => !isModeSkill(n));
+    const mode = effectiveAgentMode();
+    const sel = effectiveSelectedSkills().filter((n) => !isModeSkill(n) && !isGatedSkill(saved[n]));
     const rest = Object.entries(saved)
-      .filter(([n, skill]) => !isModeSkill(n) && skill.enabled && originalUsable(skill.usable) !== "never")
+      .filter(([n, skill]) =>
+        !isModeSkill(n) && !isGatedSkill(skill) && skill.enabled && originalUsable(skill.usable) !== "never" && skillMatchesMode(skill, mode),
+      )
       .map(([n]) => n)
       .filter((n) => !sel.includes(n))
       .sort();
     return [...sel, ...rest].map((n) => [n, saved[n]] as [string, any]);
   }
 
-  /** Drag-to-sort of the additional list: active skills keep their order
-   * under the primary (mode) skill; unusued rows are ignored. */
+  /** Drag-to-sort of the additional list: active visible skills keep their
+   * order under the primary (mode) skill; hidden gated subskills stay
+   * preserved at the tail; unused rows are ignored. */
   function reorderAdditional(ids: string[]) {
+    const saved = m.savedSkills?.() ?? {};
     if (isEditing()) {
       const sel = draftSkills();
       const primary = sel.filter(isModeSkill);
-      const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n));
-      setDraftSkills([...primary, ...rest]);
+      const hidden = sel.filter((n) => !isModeSkill(n) && isGatedSkill(saved[n]));
+      const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n) && !isGatedSkill(saved[n]));
+      setDraftSkills([...primary, ...rest, ...hidden]);
     } else {
       const sel = c.selectedSkills();
       const primary = sel.filter(isModeSkill);
-      const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n));
-      c.syncSkills?.([...primary, ...rest]);
+      const hidden = sel.filter((n) => !isModeSkill(n) && isGatedSkill(saved[n]));
+      const rest = ids.filter((n) => sel.includes(n) && !isModeSkill(n) && !isGatedSkill(saved[n]));
+      c.syncSkills?.([...primary, ...rest, ...hidden]);
     }
   }
 
   function toggleAdditional(name: string) {
+    const saved = m.savedSkills?.() ?? {};
     if (isEditing()) {
       const sel = draftSkills();
-      setDraftSkills(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
+      const next = sel.includes(name)
+        ? pruneUnsatisfiedGatedSkills(sel.filter((n) => n !== name), saved)
+        : [...sel, name];
+      setDraftSkills(next);
     } else {
       const sel = c.selectedSkills();
-      c.syncSkills?.(sel.includes(name) ? sel.filter((n) => n !== name) : [...sel, name]);
+      const next = sel.includes(name)
+        ? pruneUnsatisfiedGatedSkills(sel.filter((n) => n !== name), saved)
+        : [...sel, name];
+      c.syncSkills?.(next);
     }
   }
 
@@ -329,16 +353,17 @@ export function ToolbarContext() {
 
   function additionalCount() {
     const saved = m.savedSkills?.() ?? {};
-    return c.selectedSkills().filter((name) => !isModeSkill(name) && saved[name]?.enabled).length;
+    return c.selectedSkills().filter((name) => !isModeSkill(name) && !isGatedSkill(saved[name]) && saved[name]?.enabled).length;
   }
 
   function activeAdditionalCount() {
     const saved = m.savedSkills?.() ?? {};
-    return effectiveSelectedSkills().filter((name) => !isModeSkill(name) && saved[name]?.enabled).length;
+    return effectiveSelectedSkills().filter((name) => !isModeSkill(name) && !isGatedSkill(saved[name]) && saved[name]?.enabled).length;
   }
 
   function canReorderAdditional() {
-    return effectiveSelectedSkills().filter((n) => !isModeSkill(n)).length >= 2;
+    const saved = m.savedSkills?.() ?? {};
+    return effectiveSelectedSkills().filter((n) => !isModeSkill(n) && !isGatedSkill(saved[n])).length >= 2;
   }
 
   const PostureSection = () => {

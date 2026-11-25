@@ -710,3 +710,394 @@ describe("widget audit blocks sandbox escapes", () => {
     expect(code).toContain("gu-kpi");
   });
 });
+
+describe("widget lint upgraded runtime & shims (3D addons, audio, pointer capture, React parity, storage)", () => {
+  test("Three.js OrbitControls, RoomEnvironment, RoundedBoxGeometry & MeshPhysicalMaterial transmission pass lint", async () => {
+    const src = `import { useEffect, useRef } from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry";
+
+export default function MolecularStudio() {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const canvas = ref.current!;
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setSize(320, 240, false);
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    const scene = new THREE.Scene();
+    scene.environment = envTex;
+    const camera = new THREE.PerspectiveCamera(45, 320 / 240, 0.1, 100);
+    camera.position.set(2, 2, 4);
+    const controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    const glass = new THREE.MeshPhysicalMaterial({ color: 0x88ccff, transmission: 0.6, roughness: 0.1, ior: 1.5 });
+    scene.add(new THREE.Mesh(new RoundedBoxGeometry(1, 1, 1, 4, 0.15), glass));
+    controls.update();
+    renderer.render(scene, camera);
+    return () => { controls.dispose(); envTex.dispose(); pmrem.dispose(); renderer.dispose(); };
+  }, []);
+  return <div className="gu-root"><div className="gu-stage"><canvas ref={ref} width={320} height={240} /></div></div>;
+}`;
+    const res = await runWidgetLint({ id: "t-3d-addons", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+    expect((res.notes || []).some((n) => n.includes("3D exercised"))).toBe(true);
+  }, 60_000);
+
+  test("React parity (lazy useState, memo identity, px styles, CSS vars, select value, SVG markers) + Web Audio + pointer capture + keyboard scroll guard pass", async () => {
+    const src = `import { useState, useEffect, useRef, memo, createContext, useContext } from "react";
+
+const Ctx = createContext("default-ok");
+let memoMounts = 0;
+
+const Child = memo(function Child({ label }: { label: string }) {
+  const ctxVal = useContext(Ctx);
+  useEffect(() => { memoMounts++; }, []);
+  if (ctxVal !== "default-ok") throw new Error("context default failed: " + ctxVal);
+  return <span data-child="1">{label}</span>;
+});
+
+export default () => {
+  const [n, setN] = useState(() => 40 + 2);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    if (n !== 42) throw new Error("lazy useState failed: " + String(n));
+    const box = document.querySelector("[data-box]") as HTMLElement;
+    if (box.style.width !== "200px") throw new Error("numeric px style failed: " + box.style.width);
+    if (box.style.getPropertyValue("--accent-x") !== "12px") throw new Error("css var style failed");
+    const sel = document.querySelector("select") as HTMLSelectElement;
+    if (sel.value !== "b") throw new Error("select initial value failed: " + sel.value);
+    const marker = document.querySelector("marker")!;
+    if (marker.getAttribute("refX") !== "8" || marker.getAttribute("markerWidth") !== "10") {
+      throw new Error("SVG marker attrs broken");
+    }
+    const fit = window.__gu.fitCanvas(canvasRef.current!, 240, 120);
+    if (fit.width !== 240 || fit.height !== 120 || fit.dpr < 1) throw new Error("fitCanvas failed");
+    box.setPointerCapture(7);
+    if (!box.hasPointerCapture(7)) throw new Error("setPointerCapture failed");
+    box.releasePointerCapture(7);
+
+    // Web Audio procedural SFX chain
+    const AC = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AC();
+    const osc = ctx.createOscillator();
+    const pan = ctx.createStereoPanner();
+    const gain = ctx.createGain();
+    osc.frequency.setValueAtTime(440, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.05);
+    gain.gain.setValueAtTime(0.05, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.05);
+    osc.connect(pan).connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.05);
+
+    // Keyboard scroll-chaining guard prevents Space/Arrow scroll when a key handler is registered
+    const onKey = () => {};
+    window.addEventListener("keydown", onKey);
+    const gameEv = new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true });
+    window.dispatchEvent(gameEv);
+    if (!gameEv.defaultPrevented) throw new Error("ArrowDown should be preventDefault'd for interactive game");
+    // Must NOT swallow Space/Arrow inside native <input>
+    const inputEl = document.querySelector("input")!;
+    const inputEv = new KeyboardEvent("keydown", { key: " ", cancelable: true, bubbles: true });
+    inputEl.dispatchEvent(inputEv);
+    if (inputEv.defaultPrevented) throw new Error("Space inside <input> must not be swallowed");
+
+    // Re-render parent to verify React.memo does not unmount/remount Child
+    setN(43);
+    const t = setTimeout(() => {
+      if (memoMounts !== 1) throw new Error("memo child remounted: " + memoMounts);
+    }, 30);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("keydown", onKey);
+      try { ctx.close(); } catch {}
+    };
+  }, []);
+  return (
+    <div className="gu-root">
+      <div data-box="1" style={{ width: 200, "--accent-x": "12px" } as any}>
+        <Child label="stable" />
+      </div>
+      <input type="text" defaultValue="hi" />
+      <select value="b" onChange={() => {}}>
+        <option value="a">A</option>
+        <option value="b">B</option>
+      </select>
+      <canvas ref={canvasRef} width={240} height={120} />
+      <svg width={100} height={40}>
+        <defs><marker id="arr" refX={8} refY={3} markerWidth={10} markerHeight={10}><path d="M0,0 L8,3 L0,6 Z" /></marker></defs>
+      </svg>
+    </div>
+  );
+};`;
+    const res = await runWidgetLint({ id: "t-parity", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+
+  test("unguarded localStorage fails lint with saveState guidance; guarded try/catch passes", async () => {
+    const bad = await runWidgetLint({
+      id: "t-ls-bad",
+      source: `export default function App() {\n  const v = localStorage.getItem("k");\n  return <div className="gu-root">{v}</div>;\n}`,
+    });
+    expect(bad.ok).toBe(false);
+    expect(bad.errors[0].phase).toBe("render");
+    expect(bad.errors[0].message).toContain("saveState");
+
+    const guarded = await runWidgetLint({
+      id: "t-ls-ok",
+      source: `export default function App() {\n  let v = "fallback";\n  try { v = localStorage.getItem("k") || v; } catch {}\n  return <div className="gu-root">{v}</div>;\n}`,
+    });
+    expect(guarded.errors).toEqual([]);
+    expect(guarded.ok).toBe(true);
+  }, 60_000);
+
+  test("optional chaining, nullish coalescing, numeric separators, and class fields pass Obscura lint cleanly", async () => {
+    const src = `class Sim {
+  step = 1_000;
+  tick() { return this.step; }
+}
+export default function App() {
+  useEffect(() => {
+    const s = new Sim();
+    const w = window?.innerWidth ?? 640;
+    window.indirectUi?.saveState?.({ best: s.tick() + w });
+    (globalThis as any).indirectUi?.saveState?.({ ok: true });
+    try { throw new Error("ignored"); } catch {}
+  }, []);
+  return <div className="gu-root">es2022 ok</div>;
+}`;
+    const res = await runWidgetLint({ id: "t-es2022", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+
+  test("onFullscreen returns an unsubscribe function and deferred Escape respects game preventDefault", async () => {
+    const src = `export default function App() {
+  useEffect(() => {
+    let calls = 0;
+    const unsub = window.__gu.onFullscreen(() => { calls++; });
+    if (typeof unsub !== "function") throw new Error("onFullscreen must return unsubscribe fn");
+    unsub();
+    // Simulate a widget handling Escape synchronously in fullscreen
+    let escapePosted = false;
+    const onMsg = (ev: MessageEvent) => { if (ev.data && ev.data.__gu === "escape") escapePosted = true; };
+    window.addEventListener("message", onMsg);
+    const onEsc = (ev: KeyboardEvent) => { if (ev.key === "Escape") ev.preventDefault(); };
+    window.addEventListener("keydown", onEsc);
+    window.postMessage({ __gu: "fullscreen", expanded: true }, "*");
+    const t1 = setTimeout(() => {
+      if (!window.__gu.isFullscreen) throw new Error("fullscreen message did not activate");
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", cancelable: true }));
+    }, 20);
+    const t2 = setTimeout(() => {
+      if (calls !== 0) throw new Error("unsubscribed onFullscreen still fired");
+      if (escapePosted) throw new Error("preventDefault'd Escape should not post escape exit");
+    }, 60);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      window.removeEventListener("keydown", onEsc);
+      window.removeEventListener("message", onMsg);
+    };
+  }, []);
+  return <div className="gu-root">fs ok</div>;
+}`;
+    const res = await runWidgetLint({ id: "t-fs-esc", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+
+  test("reconciler preserves DOM sibling order across state re-renders with component and fragment children", async () => {
+    // Regression guard for the Studio Loft sidebar bug: a leading plain DOM
+    // header followed by function components + a fragment must NEVER teleport
+    // to the bottom of the container on state updates.
+    const src = `import { useState, useEffect, Fragment } from "react";
+
+function ChildA({ v }: { v: number }) {
+  return <div data-item="A">A:{v}</div>;
+}
+function ChildB({ v, extra }: { v: number; extra: boolean }) {
+  return (
+    <Fragment>
+      <div data-item="B1">B1:{v}</div>
+      {extra ? <div data-item="B2">B2</div> : null}
+    </Fragment>
+  );
+}
+
+export default function App() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const order = () =>
+      Array.from(document.querySelectorAll("#panel [data-item]")).map((el) => el.getAttribute("data-item"));
+    if (tick === 0) {
+      if (order().join(",") !== "Header,A,B1,Footer") {
+        throw new Error("initial order wrong: " + order().join(","));
+      }
+      setTick(1);
+    } else if (tick === 1) {
+      if (order().join(",") !== "Header,A,B1,B2,Footer") {
+        throw new Error("rerender 1 order wrong: " + order().join(","));
+      }
+      setTick(2);
+    } else if (tick === 2) {
+      if (order().join(",") !== "Header,A,B1,Footer") {
+        throw new Error("rerender 2 order wrong: " + order().join(","));
+      }
+    }
+  }, [tick]);
+  return (
+    <div className="gu-root">
+      <div id="panel" className="gu-panel">
+        <div data-item="Header">ENVELOPE</div>
+        <ChildA v={tick} />
+        <ChildB v={tick} extra={tick === 1} />
+        <div data-item="Footer">END</div>
+      </div>
+    </div>
+  );
+}`;
+    const res = await runWidgetLint({ id: "t-reconciler-order", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+
+  test("3D Kart/FPS primitives, pointerLock safety, Web Audio Analyser time-domain + nodes, touch probe, and saveState contract pass lint", async () => {
+    const src = `import { useEffect, useRef } from "react";
+import * as THREE from "three";
+
+export default function App(props: { level?: number; gold?: number }) {
+  const c2 = useRef<HTMLCanvasElement | null>(null);
+  const c3 = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    // 1. Mobile touch detection without bare-global false positive
+    const _touch = "ontouchstart" in window || (navigator.maxTouchPoints ?? 0) > 0;
+    // 2. Canvas2D roundRect + raycaster ImageData buffer
+    const ctx2 = c2.current!.getContext("2d")!;
+    ctx2.beginPath();
+    (ctx2 as any).roundRect(2, 2, 28, 28, 6);
+    ctx2.stroke();
+    const img = ctx2.createImageData(32, 32);
+    new Uint32Array(img.data.buffer)[0] = 0xff22cc88;
+    ctx2.putImageData(img, 0, 0);
+    // 3. Sandboxed pointerLock degrades cleanly (never throws or rejects unhandled)
+    const pl = c2.current!.requestPointerLock();
+    if (pl && typeof (pl as any).then === "function") (pl as any).then(() => {});
+    document.exitPointerLock();
+    // 4. Web Audio synth + AnalyserNode time-domain + ConstantSource + ChannelSplitter/Merger
+    const AC = window.AudioContext || (window as any).webkitAudioContext;
+    const ac = new AC();
+    const an = ac.createAnalyser();
+    an.fftSize = 256;
+    const byteTime = new Uint8Array(an.frequencyBinCount || 128);
+    const floatTime = new Float32Array(an.frequencyBinCount || 128);
+    an.getByteTimeDomainData(byteTime);
+    an.getFloatTimeDomainData(floatTime);
+    if (byteTime[0] !== 128) throw new Error("expected neutral byte time-domain fill");
+    const cs = ac.createConstantSource();
+    cs.offset.setValueAtTime(0.5, ac.currentTime);
+    const split = ac.createChannelSplitter(2);
+    const merge = ac.createChannelMerger(2);
+    cs.connect(split);
+    split.connect(merge);
+    merge.connect(an).connect(ac.destination);
+    // 5. saveState contract: returns boolean, updates window.__gu.state, rejects non-objects/oversized
+    const savedOk = window.indirectUi.saveState({ level: (props.level ?? 1) + 1, gold: (props.gold ?? 0) + 50, inv: ["blade"] });
+    if (savedOk !== true) throw new Error("saveState should return true for valid object");
+    if ((window.__gu.state as any).level !== 2 || (window.__gu.state as any).gold !== 50) {
+      throw new Error("window.__gu.state was not updated by saveState");
+    }
+    if ((window.indirectUi.saveState as any)([1, 2]) !== false) throw new Error("saveState should reject arrays");
+    if (window.indirectUi.saveState({ huge: "x".repeat(70000) }) !== false) throw new Error("saveState should reject >64KB");
+    // 6. 3D Kart & FPS Three.js primitives (CanvasTexture, TubeGeometry, ExtrudeGeometry, InstancedMesh, FogExp2, Sprite)
+    const renderer = new THREE.WebGLRenderer({ canvas: c3.current!, antialias: true });
+    renderer.shadowMap.enabled = true;
+    renderer.setSize(320, 200, false);
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x101828, 0.015);
+    const cam = new THREE.PerspectiveCamera(65, 320 / 200, 0.1, 200);
+    cam.position.set(0, 4, 10);
+    const tex = new THREE.CanvasTexture(c2.current!);
+    const curve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(10, 0, 5),
+      new THREE.Vector3(0, 0, 15),
+      new THREE.Vector3(-10, 0, 5),
+    ], true);
+    scene.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 24, 1.4, 8, true), new THREE.MeshStandardMaterial({ map: tex })));
+    const shape = new THREE.Shape();
+    shape.moveTo(0, 0); shape.lineTo(1, 0); shape.lineTo(1, 1); shape.closePath();
+    scene.add(new THREE.Mesh(new THREE.ExtrudeGeometry(shape, { depth: 0.4, bevelEnabled: false }), new THREE.MeshStandardMaterial({ color: 0xff5522 })));
+    const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 1, 0.5), new THREE.MeshStandardMaterial({ color: 0x22cc88 }), 8);
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < 8; i++) { m.makeTranslation(i, 0, 0); inst.setMatrixAt(i, m); }
+    inst.instanceMatrix.needsUpdate = true;
+    scene.add(inst);
+    scene.add(new THREE.Sprite(new THREE.SpriteMaterial({ map: tex })));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.2));
+    renderer.render(scene, cam);
+    return () => {
+      try { ac.close(); } catch {}
+      tex.dispose();
+      renderer.dispose();
+    };
+  }, []);
+  return (
+    <div className="gu-game-stage">
+      <canvas ref={c2} width={32} height={32} className="gu-canvas-interactive" />
+      <canvas ref={c3} width={320} height={200} className="gu-canvas-interactive" />
+      <div className="gu-touch-controls">
+        <div className="gu-dpad">
+          <button className="gu-touch-btn" type="button">W</button>
+        </div>
+        <button className="gu-touch-btn-primary gu-touch-btn-round" type="button">GO</button>
+      </div>
+    </div>
+  );
+}`;
+    const res = await runWidgetLint({ id: "t-wave2-3d-save", source: src, state: '{"level": 1, "gold": 0}' });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+    expect((res.notes || []).some((n) => n.includes("3D exercised"))).toBe(true);
+  }, 60_000);
+
+  test("Chart.js smooth curved line (Path2D.bezierCurveTo / quadraticCurveTo / ellipse / roundRect) and Canvas2D getTransform/reset pass lint", async () => {
+    const src = `import { useEffect, useRef } from "react";
+import Chart from "chart";
+
+export default function App() {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const canvas = ref.current!;
+    const ctx = canvas.getContext("2d")!;
+    const m = ctx.getTransform();
+    if (!m || typeof m.a !== "number") throw new Error("getTransform missing");
+    const p = new Path2D();
+    p.moveTo(0, 0);
+    p.bezierCurveTo(10, 20, 30, 20, 40, 0);
+    p.quadraticCurveTo(50, 10, 60, 0);
+    p.arcTo(70, 0, 70, 10, 4);
+    p.ellipse(20, 20, 10, 6, 0, 0, Math.PI * 2);
+    p.roundRect(2, 2, 16, 12, 3);
+    const chart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels: ["M0", "M6", "M12", "M18", "M24"],
+        datasets: [{ label: "ARR", data: [10, 22, 39, 55, 74], tension: 0.35, fill: true }],
+      },
+      options: { responsive: false, animation: false },
+    });
+    return () => chart.destroy();
+  }, []);
+  return <div className="gu-root"><canvas ref={ref} width={320} height={180} /></div>;
+}`;
+    const res = await runWidgetLint({ id: "t-chart-path2d", source: src });
+    expect(res.errors).toEqual([]);
+    expect(res.ok).toBe(true);
+  }, 60_000);
+});

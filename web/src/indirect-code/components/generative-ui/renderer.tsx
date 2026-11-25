@@ -1,4 +1,4 @@
-import { createEffect, createSignal, on, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, on, onCleanup, onMount, Show, untrack } from "solid-js";
 import { Portal } from "solid-js/web";
 import { authHeaders } from "../../../api";
 import { Icon } from "../../../components/icon";
@@ -13,7 +13,11 @@ import { CodeBlock } from "../CodeBlock";
 import {
   attachGuBridge,
   clampFrameHeight,
+  createWidgetPublishController,
+  parseSavedStateJSON,
+  postGuFullscreen,
   postGuTheme,
+  resolveWidgetStateJSON,
   widgetAccent,
   widgetTheme,
 } from "./bridge";
@@ -77,6 +81,12 @@ export function GenerativeUiWidget(props: {
   const liveToken = Symbol("gu-live");
   /** Immersive fullscreen overlay (games/3D widgets on small screens). */
   const [expanded, setExpanded] = createSignal(false);
+  /** Narrow/mobile viewport: dock the host toolbar above the frame so it never covers widget HUDs. */
+  const [narrow, setNarrow] = createSignal(
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 639px)").matches
+      : false,
+  );
   /** Global confirm modal (promise-based) for the destructive reset. */
   const modal = useModal();
   /**
@@ -116,8 +126,7 @@ export function GenerativeUiWidget(props: {
     if (!id || !props.ctx) return;
     // Drop the published doc + the cached source so finalize really
     // re-POSTs (the content-addressed publish key would otherwise no-op).
-    publishedKey = "";
-    setFinalUrl("");
+    publisher.invalidate();
     invalidateWidgetSources(props.ctx!.sessionId, id);
     const rec = await fetchWidgetSource(props.ctx!.send, props.ctx!.hostId, props.ctx!.sessionId, id);
     if (rec?.source) {
@@ -126,8 +135,9 @@ export function GenerativeUiWidget(props: {
     } else {
       setMissing(true);
       setSource("");
+      publisher.invalidate();
+      return;
     }
-    forcePublish = true;
     void finalize();
   };
 
@@ -136,12 +146,12 @@ export function GenerativeUiWidget(props: {
   let hostRootEl: HTMLDivElement | undefined;
   createEffect(() => {
     if (!expanded()) return;
-    const unregisterNav = registerFullscreenWidget(() => setExpanded(false));
+    const unregisterNav = registerFullscreenWidget(() => setExpandedSync(false));
     const removeLayer = pushLayer({
       kind: "popover",
       contains: (node) => Boolean(hostRootEl?.contains(node)),
       onEscape: () => {
-        setExpanded(false);
+        setExpandedSync(false);
       },
     });
     const unlock = lockScroll();
@@ -179,16 +189,21 @@ export function GenerativeUiWidget(props: {
   const [savedState, setSavedState] = createSignal<string | null>(null);
   const readSavedState = (id: string): string | null => {
     try {
-      return window.localStorage.getItem(stateKey(id));
+      const raw = window.localStorage.getItem(stateKey(id));
+      const parsed = parseSavedStateJSON(raw);
+      return parsed ? JSON.stringify(parsed) : null;
     } catch {
       return null;
     }
   };
   const writeSavedState = (id: string, stateJSON: string): void => {
+    const parsed = parseSavedStateJSON(stateJSON);
+    if (!parsed) return;
+    const normalized = JSON.stringify(parsed);
     try {
-      window.localStorage.setItem(stateKey(id), stateJSON);
+      window.localStorage.setItem(stateKey(id), normalized);
     } catch {}
-    setSavedState(stateJSON);
+    setSavedState(normalized);
   };
   const deleteSavedState = (id: string): void => {
     try {
@@ -207,11 +222,20 @@ export function GenerativeUiWidget(props: {
       attributes: true,
       attributeFilter: ["data-theme", "data-accent", "class"],
     });
+    if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+      const mql = window.matchMedia("(max-width: 639px)");
+      const onMediaChange = (ev: MediaQueryListEvent) => setNarrow(ev.matches);
+      setNarrow(mql.matches);
+      mql.addEventListener("change", onMediaChange);
+      onCleanup(() => mql.removeEventListener("change", onMediaChange));
+    }
     onCleanup(() => observer.disconnect());
   });
 
-  const syncFrameTheme = () => {
-    postGuTheme(finalEl()?.contentWindow, { theme: theme(), accent: accent() });
+  const syncFrameAppearance = () => {
+    const win = finalEl()?.contentWindow;
+    postGuTheme(win, { theme: theme(), accent: accent() });
+    postGuFullscreen(win, expanded());
   };
   createEffect(() => {
     const frame = finalEl();
@@ -219,6 +243,12 @@ export function GenerativeUiWidget(props: {
     const curAccent = accent();
     if (!frame) return;
     postGuTheme(frame.contentWindow, { theme: curTheme, accent: curAccent });
+  });
+  createEffect(() => {
+    const frame = finalEl();
+    const isExpanded = expanded();
+    if (!frame) return;
+    postGuFullscreen(frame.contentWindow, isExpanded);
   });
 
   // ---- one live instance per session (transcript-wide) ----
@@ -260,11 +290,16 @@ export function GenerativeUiWidget(props: {
   // ---- source resolution (id → session widget store) ----
   const [source, setSource] = createSignal<string>("");
   const [missing, setMissing] = createSignal(false);
+  const [sourceVer, setSourceVer] = createSignal(widgetSourceVersion.get());
+  onMount(() => {
+    setSourceVer(widgetSourceVersion.get());
+    onCleanup(widgetSourceVersion.subscribe(setSourceVer));
+  });
   createEffect(
     on(
-      // widgetSourceVersion bumps on cache invalidation: the effect must
-      // re-run so a dropped cache entry is actually re-fetched.
-      () => [data().id, streaming(), widgetSourceVersion.get()] as const,
+      // sourceVer bumps on cache invalidation: the effect must re-run so a
+      // dropped cache entry or late widget_data answer is actually picked up.
+      () => [data().id, streaming(), sourceVer()] as const,
       ([id, stillStreaming]) => {
         if (!id || stillStreaming || !props.ctx || frozen()) return;
         // fetchWidgetSource serves the in-memory cache when present (a
@@ -277,7 +312,7 @@ export function GenerativeUiWidget(props: {
           } else {
             setMissing(true);
             setSource("");
-            setFinalUrl("");
+            publisher.invalidate();
           }
         });
       },
@@ -294,8 +329,7 @@ export function GenerativeUiWidget(props: {
   const stateJSON = () => {
     const d = data();
     const saved = d.id ? readSavedState(d.id) : null;
-    if (saved) return saved;
-    return JSON.stringify(d.state ?? {});
+    return resolveWidgetStateJSON(d.state, saved);
   };
 
   /** Reset to the fence default state and remount fresh — destructive (the
@@ -311,7 +345,10 @@ export function GenerativeUiWidget(props: {
     });
     if (!ok) return;
     deleteSavedState(id);
-    forcePublish = true;
+    // Drop the published URL before re-publishing: the content-addressed URL
+    // for the default state often equals the original mount URL, so without
+    // clearing finalUrl Solid would keep the stale in-memory iframe alive.
+    publisher.invalidate();
     void finalize();
   };
 
@@ -319,62 +356,67 @@ export function GenerativeUiWidget(props: {
   const widgetKey = () => `${theme()}\u0000${stateJSON()}\u0000${source()}`;
 
   // ---- final widget ----
-  let publishInFlight = false;
-  let publishedKey = "";
-  /** Set by reload(): the next publish must not dedupe by content key. */
-  let forcePublish = false;
-  const finalize = async () => {
-    const d = data();
-    if (!d.id || !source() || publishInFlight || frozen()) {
-      if (!source()) setFinalUrl("");
-      return;
-    }
-    // Snapshot reconciliation can re-trigger this with semantically identical
-    // content (escaped text resolves, footers strip): publishing the same
-    // content again is a no-op worth keeping — a second POST would only
-    // return the same content-addressed URL. An explicit reload overrides
-    // the dedupe so the iframe document is rebuilt from scratch.
-    const key = widgetKey();
-    if (!forcePublish && key === publishedKey && finalUrl()) return;
-    publishInFlight = true;
-    try {
+  const publisher = createWidgetPublishController({
+    canPublish: () => !!data().id && !!source() && !frozen(),
+    getKey: widgetKey,
+    hasUrl: () => !!finalUrl(),
+    clearUrl: () => setFinalUrl(""),
+    publish: async () => {
       const res = await fetch("/api/indirect-code/gen-ui/widgets", {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           theme: theme(),
+          accent: untrack(accent),
           jsx: source(),
           stateJSON: stateJSON(),
         }),
       });
       const out = await res.json().catch(() => null);
       if (res.ok && out?.url) {
-        publishedKey = key;
-        forcePublish = false;
-        const resolved = resolvePublishedFrame({
-          nextUrl: out.url as string,
-          currentUrl: finalUrl(),
-          currentHeight: finalHeight(),
-          cachedHeight: frameHeights.get(out.url as string),
-        });
-        setFinalUrl(resolved.url);
-        setFinalHeight(resolved.height);
-        setError("");
-      } else {
-        setError(out?.error || `Widget could not be published (HTTP ${res.status}).`);
+        return { ok: true, url: out.url as string };
       }
-    } catch {
-      setError("Widget could not be published (network error).");
-    } finally {
-      publishInFlight = false;
+      return { ok: false, error: out?.error || `Widget could not be published (HTTP ${res.status}).` };
+    },
+    onSuccess: (url) => {
+      const resolved = resolvePublishedFrame({
+        nextUrl: url,
+        currentUrl: finalUrl(),
+        currentHeight: finalHeight(),
+        cachedHeight: frameHeights.get(url),
+      });
+      setFinalUrl(resolved.url);
+      setFinalHeight(resolved.height);
+      setError("");
+    },
+    onError: (message) => setError(message),
+  });
+  onCleanup(() => publisher.dispose());
+  const finalize = () => publisher.run();
+
+  /**
+   * Toggle fullscreen while preserving any state saved since the iframe was
+   * mounted: switching into/out of Portal remounts the iframe, so if
+   * localStorage now holds a newer snapshot than `publishedKey`, republish
+   * before mounting the new iframe so progress never reverts.
+   */
+  const setExpandedSync = (next: boolean) => {
+    if (next !== expanded() && !frozen() && !streaming() && source() && widgetKey() !== publisher.publishedKey) {
+      publisher.invalidate();
+      void finalize();
     }
+    setExpanded(next);
   };
 
   createEffect(
     on(
       () => [source(), stateJSON(), theme(), streaming()] as const,
-      ([, , , stillStreaming]) => {
+      ([src, , , stillStreaming]) => {
         if (stillStreaming) return;
+        if (!src) {
+          publisher.invalidate();
+          return;
+        }
         void finalize();
       },
     ),
@@ -423,6 +465,7 @@ export function GenerativeUiWidget(props: {
           else window.open(url, "_blank", "noopener,noreferrer");
         },
         onResize: (height) => {
+          if (expanded()) return;
           const url = finalUrl();
           if (url) frameHeights.set(url, height);
           setFinalHeight(height);
@@ -434,7 +477,10 @@ export function GenerativeUiWidget(props: {
           if (id) writeSavedState(id, stateJSON);
         },
         onReady: () => {
-          syncFrameTheme();
+          syncFrameAppearance();
+        },
+        onEscape: () => {
+          if (expanded()) setExpandedSync(false);
         },
       },
     );
@@ -459,7 +505,7 @@ export function GenerativeUiWidget(props: {
   };
 
   const isStatic = () => !data().id || (!props.ctx && !streaming());
-  const dockInlineToolbar = () => showSource() || missing();
+  const dockInlineToolbar = () => showSource() || missing() || narrow();
 
   const renderToolbarButtons = () => (
     <Show
@@ -487,7 +533,7 @@ export function GenerativeUiWidget(props: {
         tip={expanded() ? "Exit fullscreen" : "Fullscreen widget"}
         icon={expanded() ? "lucide:minimize" : "lucide:maximize"}
         compact
-        onClick={() => setExpanded(!expanded())}
+        onClick={() => setExpandedSync(!expanded())}
       />
       <MsgIconBtn
         tip="Unload widget"
@@ -504,7 +550,7 @@ export function GenerativeUiWidget(props: {
   const renderCardContents = (isExpanded: boolean) => (
     <>
       <Show when={showSource() && !!source()}>
-        <div class="border-b border-border-subtle bg-surface-subtle p-3 text-fg">
+        <div class="shrink-0 border-b border-border-subtle bg-surface-subtle p-3 text-fg">
           <div class="mb-2 flex items-center justify-between gap-2">
             <div class="flex items-center gap-2 min-w-0">
               <span class="text-xs font-medium text-fg-secondary">Source code</span>
@@ -599,7 +645,10 @@ export function GenerativeUiWidget(props: {
              the widget is unloaded (frozen), missing or static — those
              states render their own compact card. */
           <Show when={!frozen() && !missing() && !isStatic() && !error()}>
-            <div class="block w-full border-0 bg-surface" style={{ height: `${MIN_START_HEIGHT}px` }} />
+            <div
+              class={isExpanded ? "block min-h-0 w-full flex-1 border-0 bg-surface" : "block w-full border-0 bg-surface"}
+              style={isExpanded ? undefined : { height: `${MIN_START_HEIGHT}px` }}
+            />
           </Show>
         }
       >
@@ -612,7 +661,7 @@ export function GenerativeUiWidget(props: {
           onLoad={() => {
             frameMountedAt = Date.now();
             lastFrameInteractionAt = 0;
-            syncFrameTheme();
+            syncFrameAppearance();
           }}
           onPointerEnter={() => {
             lastFrameInteractionAt = Date.now();
@@ -625,18 +674,18 @@ export function GenerativeUiWidget(props: {
           }}
           class={
             isExpanded
-              ? "block h-full w-full border-0 bg-surface"
+              ? "block min-h-0 w-full flex-1 border-0 bg-surface"
               : "block w-full border-0 bg-surface transition-[height] duration-200 ease-out motion-reduce:transition-none"
           }
           style={
             isExpanded
-              ? { height: "100%" }
+              ? undefined
               : { height: `${clampFrameHeight(finalHeight() || MIN_START_HEIGHT)}px` }
           }
         />
       </Show>
       <Show when={error()}>
-        <div class="flex items-center gap-2 border-t border-border-subtle bg-surface-subtle px-3 py-2">
+        <div class="flex shrink-0 items-center gap-2 border-t border-border-subtle bg-surface-subtle px-3 py-2">
           <span class="shrink-0 text-2xs font-medium text-danger">Widget error</span>
           <span class="min-w-0 flex-1 truncate text-2xs text-fg-secondary" data-rc-tip={error()}>
             {error()}
@@ -719,7 +768,7 @@ export function GenerativeUiWidget(props: {
                 <div class="flex items-center gap-0.5">{renderToolbarButtons()}</div>
               </div>
             </Show>
-            <div class="relative min-h-0 flex-1 overflow-hidden bg-surface">
+            <div class="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-surface">
               {renderCardContents(true)}
             </div>
           </div>

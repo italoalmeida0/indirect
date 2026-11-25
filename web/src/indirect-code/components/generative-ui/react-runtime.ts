@@ -29,6 +29,7 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   var FORWARD_REF_TYPE = (typeof Symbol === "function" && Symbol.for) ? Symbol.for("react.forward_ref") : 0xead0;
   var MEMO_TYPE = (typeof Symbol === "function" && Symbol.for) ? Symbol.for("react.memo") : 0xead3;
   var PROVIDER_TYPE = (typeof Symbol === "function" && Symbol.for) ? Symbol.for("react.context") : 0xeace;
+  var ARRAY_TYPE = (typeof Symbol === "function" && Symbol.for) ? Symbol.for("react.array") : 0xead5;
 
   var Fragment = REACT_FRAGMENT_TYPE;
 
@@ -62,13 +63,25 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
     return { $$typeof: REACT_ELEMENT_TYPE, type: type, key: key, ref: ref, props: props };
   }
 
-  function cloneElement(element) {
+  function cloneElement(element, config) {
     if (element == null || typeof element !== "object") return element;
-    var args = [element.type, element.props];
+    var merged = Object.assign({}, element.props);
+    var key = element.key;
+    var ref = element.ref;
+    if (config != null) {
+      if (config.key !== undefined && config.key !== null) key = "" + config.key;
+      if (config.ref !== undefined) ref = config.ref;
+      for (var k in config) {
+        if (!Object.prototype.hasOwnProperty.call(config, k)) continue;
+        if (k === "key" || k === "ref" || k === "__self" || k === "__source") continue;
+        merged[k] = config[k];
+      }
+    }
+    var args = [element.type, merged];
     for (var i = 2; i < arguments.length; i++) args.push(arguments[i]);
     var copy = createElement.apply(null, args);
-    copy.key = element.key;
-    copy.ref = element.ref;
+    copy.key = key;
+    copy.ref = ref;
     return copy;
   }
 
@@ -173,6 +186,7 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
     var context = {
       $$typeof: PROVIDER_TYPE,
       _id: id,
+      __defaultValue: defaultValue,
       Provider: Provider,
       Consumer: function (props) {
         return props.children(readContext(context));
@@ -216,7 +230,11 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   }
 
   function useState(initial) {
-    return useReducer(basicStateReducer, initial);
+    return useReducer(
+      basicStateReducer,
+      initial,
+      typeof initial === "function" ? function (fn) { return fn(); } : undefined
+    );
   }
 
   function useReducer(reducer, initialArg, init) {
@@ -229,6 +247,9 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
     var dispatch = hook.dispatch;
     if (!dispatch) {
       dispatch = hook.dispatch = function (action) {
+        if (hook.reducer === basicStateReducer && hook.queue.length === 0 && typeof action !== "function" && Object.is(action, hook.state)) {
+          return;
+        }
         hook.queue.push(function (prev) { return hook.reducer(prev, action); });
         scheduleRender(fiber);
       };
@@ -325,6 +346,7 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
 
   function useSyncExternalStore(subscribe, getSnapshot) {
     var hook = getHook(undefined);
+    var fiber = currentFiber;
     if (!hook.init) {
       hook.state = getSnapshot();
       hook.init = true;
@@ -335,7 +357,7 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
         var next = getSnapshot();
         if (!Object.is(next, hook.state)) {
           hook.state = next;
-          scheduleRender(currentFiberOf(hook));
+          scheduleRender(fiber);
         }
       });
     }, [subscribe, getSnapshot]);
@@ -429,6 +451,7 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   function scheduleRender(fiber) {
     var root = fiber.__root;
     if (!root || root.__unmounted) return;
+    for (var cur = fiber; cur; cur = cur.parent) cur.__dirty = true;
     hookRootFiber = fiber;
     if (dirtyRoots.indexOf(root) === -1) dirtyRoots.push(root);
     if (!flushScheduled) {
@@ -493,7 +516,7 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
       };
       root.__fiber = host;
     }
-    reconcileChildren(host, [element], container);
+    reconcileChildren(host, [element], container, true);
     runEffects(pendingLayoutEffects);
     runEffects(pendingEffects);
     afterRender();
@@ -521,28 +544,33 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
 
   /**
    * Reconcile rendered children into parentFiber, diffing against
-   * parentFiber.children and placing the produced DOM under domParent.
+   * parentFiber.children. Only true DOM owners (place === true: root host
+   * and DOM element fibers) place the resulting DOM surface into domParent —
+   * transparent wrappers (components, Fragments, Context providers) pass
+   * place = false and bubble their nodes up so sibling DOM elements in
+   * the shared ancestor never get pushed behind re-rendered components.
    */
-  function reconcileChildren(parentFiber, elements, domParent) {
+  function reconcileChildren(parentFiber, elements, domParent, place) {
+    parentFiber.__dirty = false;
     var oldFibers = parentFiber.children;
     var used = {};
     var i;
 
-    var flat = [];
-    flattenInto(elements, flat);
+    var list = Array.isArray(elements) ? elements : [elements];
+    var newFibers = new Array(list.length);
 
-    var newFibers = new Array(flat.length);
-    var cursor = domParent.firstChild;
-
-    for (var idx = 0; idx < flat.length; idx++) {
-      var el = flat[idx];
+    for (var idx = 0; idx < list.length; idx++) {
+      var el = list[idx];
       if (el === null || el === undefined || typeof el === "boolean") {
         newFibers[idx] = null;
         continue;
       }
 
-      var elKey = (typeof el === "object" && el.key != null) ? "k" + el.key : null;
-      var type = typeof el === "object" ? el.type : TEXT_TYPE;
+      var isArr = Array.isArray(el);
+      var elKey = (!isArr && typeof el === "object" && el.key != null) ? "k" + el.key : null;
+      var type = isArr ? ARRAY_TYPE : (typeof el === "object" ? el.type : TEXT_TYPE);
+      var elProps = isArr ? { children: el } : (typeof el === "object" ? el.props : { value: el });
+      var elRef = (!isArr && typeof el === "object") ? el.ref : null;
       var match = null;
 
       if (elKey != null) {
@@ -555,30 +583,25 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
             break;
           }
         }
-      }
-      if (!match) {
-        for (i = 0; i < oldFibers.length; i++) {
-          if (used[i]) continue;
-          var cand = oldFibers[i];
-          if (cand && cand.key == null && sameType(cand.type, type)) {
-            match = cand;
-            used[i] = true;
-            break;
-          }
+      } else {
+        var cand = oldFibers[idx];
+        if (!used[idx] && cand && cand.key == null && sameType(cand.type, type)) {
+          match = cand;
+          used[idx] = true;
         }
       }
 
       var fiber;
       if (match) {
         fiber = match;
-        fiber.props = typeof el === "object" ? el.props : { value: el };
-        fiber.ref = typeof el === "object" ? el.ref : null;
+        fiber.props = elProps;
+        fiber.ref = elRef;
       } else {
         fiber = {
           type: type,
-          props: typeof el === "object" ? el.props : { value: el },
-          key: typeof el === "object" ? el.key : null,
-          ref: typeof el === "object" ? el.ref : null,
+          props: elProps,
+          key: (!isArr && typeof el === "object") ? el.key : null,
+          ref: elRef,
           dom: null,
           nodes: [],
           children: [],
@@ -591,31 +614,38 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
       }
       fiber.parent = parentFiber;
       fiber.__root = parentFiber.__root;
-      if (!fiber.__contexts || fiber.__contexts === (parentFiber.parent && parentFiber.parent.__contexts)) {
-        fiber.__contexts = parentFiber.__contexts;
-      }
+      fiber.__contexts = parentFiber.__contexts;
 
       renderFiber(fiber);
       newFibers[idx] = fiber;
-
-      // Placement: walk the cursor past nodes already in place, insert the
-      // fiber's DOM surface before it otherwise.
-      for (var ni = 0; ni < fiber.nodes.length; ni++) {
-        var node = fiber.nodes[ni];
-        if (!node) continue;
-        if (cursor === node) {
-          cursor = node.nextSibling;
-        } else {
-          domParent.insertBefore(node, cursor);
-        }
-      }
     }
 
-    // Unmount leftovers.
+    // Unmount leftovers BEFORE placement so the placement cursor never sees a
+    // detached node.
     for (i = 0; i < oldFibers.length; i++) {
       if (!used[i]) unmountFiber(oldFibers[i]);
     }
     parentFiber.children = newFibers;
+
+    if (place) {
+      // Placement: walk one cursor across domParent in exact tree order so
+      // unchanged nodes stay put (preserving input focus and slider drags)
+      // while moved/new nodes land in their exact slot.
+      var cursor = domParent.firstChild;
+      for (var fi = 0; fi < newFibers.length; fi++) {
+        var nf = newFibers[fi];
+        if (!nf || !nf.nodes) continue;
+        for (var ni = 0; ni < nf.nodes.length; ni++) {
+          var node = nf.nodes[ni];
+          if (!node) continue;
+          if (cursor === node) {
+            cursor = node.nextSibling;
+          } else {
+            domParent.insertBefore(node, cursor);
+          }
+        }
+      }
+    }
   }
 
   function unmountFiber(fiber) {
@@ -641,6 +671,10 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   function renderFiber(fiber) {
     var type = fiber.type;
     var props = fiber.props;
+    var isDirty = !!fiber.__dirty;
+    var ctxChanged = fiber.__prevContexts !== fiber.__contexts;
+    fiber.__dirty = false;
+    fiber.__prevContexts = fiber.__contexts;
 
     // Text / number.
     if (type === TEXT_TYPE) {
@@ -651,44 +685,71 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
       return;
     }
 
-    // Fragment: marker + children in the parent DOM.
+    // Nested child array: keep positional slot isolation for siblings.
+    if (type === ARRAY_TYPE) {
+      var arrDom = findDomParent(fiber);
+      var arrHolder = ensureHolder(fiber);
+      reconcileChildren(arrHolder, props.children, arrDom, false);
+      fiber.nodes = surfaceNodes(arrHolder.children);
+      return;
+    }
+
+    // Fragment: marker + children in the parent DOM (owning DOM parent places).
     if (type === Fragment || type === REACT_FRAGMENT_TYPE) {
       if (!fiber.dom) fiber.dom = document.createComment("");
       var fragDom = findDomParent(fiber);
       var holder = ensureHolder(fiber);
-      reconcileChildren(holder, [props.children], fragDom);
+      reconcileChildren(holder, props.children, fragDom, false);
       fiber.nodes = [fiber.dom].concat(surfaceNodes(holder.children));
       return;
     }
 
     // Plain DOM element.
     if (typeof type === "string") {
-      if (!fiber.dom) fiber.dom = createElementForType(type);
-      applyProps(fiber.dom, fiber.__prevProps || {}, props, type);
+      var isNewDom = !fiber.dom;
+      if (isNewDom) fiber.dom = createElementForType(type, findDomParent(fiber));
+      applyProps(fiber.dom, fiber.__prevProps || {}, props, isNewDom);
       fiber.__prevProps = props;
-      reconcileChildren(fiber, props.children, fiber.dom);
+      reconcileChildren(fiber, props.children, fiber.dom, true);
+      if (type === "select") {
+        if (props.value !== undefined) setControlProp(fiber.dom, "value", props.value);
+        else if (isNewDom && props.defaultValue !== undefined) setControlProp(fiber.dom, "value", props.defaultValue);
+      }
       fiber.nodes = [fiber.dom];
       applyRef(fiber);
       return;
     }
 
-    // memo(): unwrap.
+    // memo(): compare props and render the wrapped component WITHOUT
+    // mutating fiber.type (mutating fiber.type breaks sameType on the next
+    // reconciliation pass and forces unmount/remount on every render).
     if (type && type.$$typeof === MEMO_TYPE) {
-      if (fiber.__prevProps && type.compare && type.compare(fiber.__prevProps, props)) {
-        // Same props: keep subtree as-is.
+      if (!isDirty && !ctxChanged && fiber.__prevProps && type.compare && type.compare(fiber.__prevProps, props)) {
+        // Same props, no dirty descendant, same context: keep subtree as-is.
         fiber.nodes = componentSurface(fiber);
         fiber.__prevProps = props;
         return;
       }
       fiber.__prevProps = props;
-      fiber.type = type.type;
-      renderFiber(fiber);
+      renderComponentType(fiber, type.type, props, isDirty, ctxChanged);
       return;
     }
 
+    renderComponentType(fiber, type, props, isDirty, ctxChanged);
+  }
+
+  function renderComponentType(fiber, type, props, isDirty, ctxChanged) {
     // forwardRef
     if (type && type.$$typeof === FORWARD_REF_TYPE) {
-      var frEl = type.render(props, fiber.ref || null);
+      var prevFr = currentFiber;
+      currentFiber = fiber;
+      hookIndex = 0;
+      var frEl;
+      try {
+        frEl = type.render(props, fiber.ref || null);
+      } finally {
+        currentFiber = prevFr;
+      }
       renderChildIntoFiber(fiber, frEl);
       return;
     }
@@ -696,15 +757,25 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
     // Context provider
     if (type && type.__isProvider) {
       if (!fiber.dom) fiber.dom = document.createComment("");
-      var contexts = Object.assign({}, fiber.parent ? fiber.parent.__contexts : {});
-      contexts[type.__id] = props.value === undefined ? type.__defaultValue : props.value;
+      var parentCtx = fiber.parent ? fiber.parent.__contexts : {};
+      var nextVal = props.value === undefined ? type.__defaultValue : props.value;
+      var contexts;
+      if (fiber.__providerContexts && fiber.__providerParentCtx === parentCtx && Object.is(fiber.__providerVal, nextVal)) {
+        contexts = fiber.__providerContexts;
+      } else {
+        contexts = Object.assign({}, parentCtx);
+        contexts[type.__id] = nextVal;
+        fiber.__providerContexts = contexts;
+        fiber.__providerParentCtx = parentCtx;
+        fiber.__providerVal = nextVal;
+      }
       fiber.__contexts = contexts;
       var provHolder = ensureHolder(fiber);
       provHolder.__contexts = contexts;
-      // Descendants read context through the fiber chain.
+      // Descendants read context through the fiber chain (owning DOM parent places).
       var saved = currentFiber;
       currentFiber = fiber;
-      reconcileChildren(provHolder, [props.children], findDomParent(fiber));
+      reconcileChildren(provHolder, props.children, findDomParent(fiber), false);
       currentFiber = saved;
       fiber.nodes = [fiber.dom].concat(surfaceNodes(provHolder.children));
       return;
@@ -735,7 +806,7 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
           inst.state = pend(inst.state == null ? {} : inst.state);
         }
         inst.props = props;
-        if (inst.isPureReactComponent && shallowEqual(prevProps, props) && inst.state === prevState) {
+        if (inst.isPureReactComponent && !isDirty && !ctxChanged && shallowEqual(prevProps, props) && inst.state === prevState) {
           fiber.nodes = componentSurface(fiber);
           return;
         }
@@ -805,14 +876,14 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
     }
     holder.parent = fiber;
     holder.__root = fiber.__root;
-    if (fiber.type && fiber.type.__isProvider) holder.__contexts = fiber.__contexts;
+    holder.__contexts = fiber.__contexts;
     return holder;
   }
 
   /** Render a component's single output (may be an array) into its holder. */
   function renderChildIntoFiber(fiber, childEl) {
     var holder = ensureHolder(fiber);
-    reconcileChildren(holder, [childEl], findDomParent(fiber));
+    reconcileChildren(holder, childEl, findDomParent(fiber), false);
     fiber.nodes = surfaceNodes(holder.children);
   }
 
@@ -822,13 +893,21 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
       if (p.dom && p.dom.nodeType === 1) return p.dom;
       p = p.parent;
     }
-    return (fiber.__root && fiber.__root.dom) || document.body;
+    return (fiber.__root && fiber.__root.__container) || document.body;
   }
 
   function applyRef(fiber) {
-    if (!fiber.ref) return;
+    var prevRef = fiber.__prevRef || null;
+    var nextRef = fiber.ref || null;
     var value = fiber.dom && fiber.dom.nodeType === 1 ? fiber.dom : null;
-    setRef(fiber.ref, value);
+    if (prevRef && prevRef !== nextRef) {
+      try { setRef(prevRef, null); } catch (err) { reportError(err); }
+    }
+    if (nextRef && (nextRef !== prevRef || value !== fiber.__prevRefDom || typeof nextRef !== "function")) {
+      setRef(nextRef, value);
+    }
+    fiber.__prevRef = nextRef;
+    fiber.__prevRefDom = value;
   }
 
   /* ---------------- props / DOM ---------------- */
@@ -885,14 +964,17 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   function namespaceFor(type, parent) {
     var t = String(type);
     var lower = t.toLowerCase();
+    var parentNs = parent && parent.namespaceURI;
+    // Tag-local names shared between HTML and SVG stay in their parent namespace.
+    if (lower === "a" || lower === "title") {
+      return parentNs === SVG_NS ? SVG_NS : null;
+    }
     // Registry-based, exactly like React's createElementNS decision: the
-    // tag name alone picks the namespace (so <a>/<title> stay HTML, nested
-    // <svg> inside <foreignObject> is still SVG). The parent is only a
-    // fallback for unknown custom elements written all-lowercase inside an
-    // SVG subtree (d3-style helpers).
+    // tag name alone picks the namespace (nested <svg> inside <foreignObject>
+    // is still SVG). The parent is only a fallback for unknown custom elements
+    // written all-lowercase inside an SVG subtree (d3-style helpers).
     if (SVG_TAGS[t] || (SVG_TAGS[lower] && t !== lower)) return SVG_NS;
     if (MATHML_TAGS[t] || (MATHML_TAGS[lower] && t !== lower)) return MATHML_NS;
-    var parentNs = parent && parent.namespaceURI;
     if (t === lower && parentNs === SVG_NS && !HTML_TAGS[lower]) return SVG_NS;
     if (t === lower && parentNs === MATHML_NS && !HTML_TAGS[lower]) return MATHML_NS;
     return null;
@@ -969,7 +1051,13 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
     textAnchor: "text-anchor", textanchor: "text-anchor",
     textDecoration: "text-decoration", textdecoration: "text-decoration",
     textRendering: "text-rendering", textrendering: "text-rendering",
-    textLength: "text-length",
+    textLength: "textLength",
+    markerWidth: "markerWidth", markerHeight: "markerHeight", markerUnits: "markerUnits",
+    refX: "refX", refY: "refY",
+    startOffset: "startOffset", lengthAdjust: "lengthAdjust",
+    xChannelSelector: "xChannelSelector", yChannelSelector: "yChannelSelector",
+    edgeMode: "edgeMode", keyPoints: "keyPoints", zoomAndPan: "zoomAndPan",
+    baseProfile: "baseProfile", requiredFeatures: "requiredFeatures", viewTarget: "viewTarget",
     underlinePosition: "underline-position", underlineposition: "underline-position",
     underlineThickness: "underline-thickness", underlinethickness: "underline-thickness",
     unicodeBidi: "unicode-bidi", unicodedebi: "unicode-bidi",
@@ -1044,11 +1132,11 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
     __self: 1, __source: 1,
   };
 
-  function applyProps(dom, oldProps, newProps) {
+  function applyProps(dom, oldProps, newProps, isNewDom) {
     var k;
     for (k in oldProps) {
       if (!Object.prototype.hasOwnProperty.call(oldProps, k)) continue;
-      if (RESERVED[k]) continue;
+      if (RESERVED[k] || k === "defaultValue" || k === "defaultChecked") continue;
       if (newProps[k] !== undefined) continue;
       if (k === "className") dom.removeAttribute("class");
       else if (k === "style") dom.removeAttribute("style");
@@ -1062,6 +1150,14 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
       if (RESERVED[k]) continue;
       var v = newProps[k];
       var ov = oldProps[k];
+      if (k === "defaultValue") {
+        if (isNewDom && newProps.value === undefined && v !== undefined && v !== null) setControlProp(dom, "value", v);
+        continue;
+      }
+      if (k === "defaultChecked") {
+        if (isNewDom && newProps.checked === undefined && v !== undefined && v !== null) setControlProp(dom, "checked", !!v);
+        continue;
+      }
       if (v === ov) continue;
       if (k === "className") setAttr(dom, "class", v);
       else if (k === "style") applyStyle(dom, ov, v);
@@ -1099,13 +1195,19 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   var LISTENERS = typeof WeakMap !== "undefined" ? new WeakMap() : null;
   var listenerId = 0;
 
-  function eventName(prop) {
-    var name = prop.slice(2).toLowerCase();
-    if (name === "doubleclick") return "dblclick";
+  function parseEventProp(prop) {
+    var capture = false;
+    var raw = prop.slice(2);
+    if (raw.length > 7 && raw.slice(-7) === "Capture") {
+      capture = true;
+      raw = raw.slice(0, -7);
+    }
+    var name = raw.toLowerCase();
+    if (name === "doubleclick") name = "dblclick";
     // React parity: onChange is the DOM input event (range/checkbox/select
     // fire input on every interaction, change only on commit).
-    if (name === "change") return "input";
-    return name;
+    else if (name === "change") name = "input";
+    return { ev: name, capture: capture };
   }
 
   function listenerKey(prop, fn) {
@@ -1113,25 +1215,57 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   }
 
   function addEventListener(dom, prop, fn) {
-    var ev = eventName(prop);
-    if (!LISTENERS) { dom.addEventListener(ev, fn); return; }
+    var info = parseEventProp(prop);
+    if (info.ev === "keydown" || info.ev === "keyup") {
+      dom.__guKeyCount = (dom.__guKeyCount || 0) + 1;
+      dom.__guHasKey = true;
+    }
+    if (!LISTENERS) { dom.addEventListener(info.ev, fn, info.capture); return; }
     var map = LISTENERS.get(dom);
     if (!map) { map = {}; LISTENERS.set(dom, map); }
-    map[listenerKey(prop, fn)] = { ev: ev, fn: fn };
-    dom.addEventListener(ev, fn);
+    map[listenerKey(prop, fn)] = { ev: info.ev, fn: fn, capture: info.capture };
+    dom.addEventListener(info.ev, fn, info.capture);
   }
 
   function removeEventListener(dom, prop, fn) {
-    var ev = eventName(prop);
-    if (!LISTENERS) { dom.removeEventListener(ev, fn); return; }
+    var info = parseEventProp(prop);
+    if (info.ev === "keydown" || info.ev === "keyup") {
+      dom.__guKeyCount = Math.max(0, (dom.__guKeyCount || 1) - 1);
+      dom.__guHasKey = dom.__guKeyCount > 0;
+    }
+    if (!LISTENERS) { dom.removeEventListener(info.ev, fn, info.capture); return; }
     var map = LISTENERS.get(dom);
     if (!map) return;
     var key = listenerKey(prop, fn);
     var entry = map[key];
     if (entry) {
-      dom.removeEventListener(entry.ev, entry.fn);
+      dom.removeEventListener(entry.ev, entry.fn, entry.capture);
       delete map[key];
     }
+  }
+
+  // Standard React 18 unitless CSS properties: every other numeric value in a
+  // style object gets a "px" suffix so style={{ width: 320, gap: 12 }} works.
+  var UNITLESS_CSS = {
+    animationIterationCount: 1, aspectRatio: 1, borderImageOutset: 1,
+    borderImageSlice: 1, borderImageWidth: 1, boxFlex: 1, boxFlexGroup: 1,
+    boxOrdinalGroup: 1, columnCount: 1, columns: 1, flex: 1, flexGrow: 1,
+    flexPositive: 1, flexShrink: 1, flexNegative: 1, flexOrder: 1,
+    gridArea: 1, gridRow: 1, gridRowEnd: 1, gridRowSpan: 1, gridRowStart: 1,
+    gridColumn: 1, gridColumnEnd: 1, gridColumnSpan: 1, gridColumnStart: 1,
+    fontWeight: 1, lineClamp: 1, lineHeight: 1, opacity: 1, order: 1,
+    orphans: 1, scale: 1, tabSize: 1, widows: 1, zIndex: 1, zoom: 1,
+    fillOpacity: 1, floodOpacity: 1, stopOpacity: 1, strokeDasharray: 1,
+    strokeDashoffset: 1, strokeMiterlimit: 1, strokeOpacity: 1, strokeWidth: 1
+  };
+
+  function formatStyleValue(k, v) {
+    if (typeof v === "number") {
+      if (!isFinite(v)) return "";
+      if (k.slice(0, 2) === "--" || UNITLESS_CSS[k]) return String(v);
+      return v + "px";
+    }
+    return String(v);
   }
 
   function applyStyle(dom, oldV, newV) {
@@ -1145,7 +1279,8 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
         for (var sk in newV) {
           if (!Object.prototype.hasOwnProperty.call(newV, sk)) continue;
           if (newV[sk] === null || newV[sk] === undefined || newV[sk] === false) continue;
-          flat += sk + ":" + newV[sk] + ";";
+          var cssKey = sk.slice(0, 2) === "--" ? sk : sk.replace(/[A-Z]/g, function (ch) { return "-" + ch.toLowerCase(); });
+          flat += cssKey + ":" + formatStyleValue(sk, newV[sk]) + ";";
         }
         if (flat) setAttr(dom, "style", flat);
         else dom.removeAttribute("style");
@@ -1164,14 +1299,23 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
     if (oldV && typeof oldV === "object") {
       for (var ok in oldV) {
         if (!Object.prototype.hasOwnProperty.call(oldV, ok)) continue;
-        if (newV[ok] === undefined) css[ok] = "";
+        if (newV[ok] === undefined) {
+          if (ok.slice(0, 2) === "--") css.removeProperty(ok);
+          else css[ok] = "";
+        }
       }
     }
     for (var k in newV) {
       if (!Object.prototype.hasOwnProperty.call(newV, k)) continue;
       var v = newV[k];
-      if (v === null || v === undefined || v === false) css[k] = "";
-      else css[k] = v;
+      if (v === null || v === undefined || v === false) {
+        if (k.slice(0, 2) === "--") css.removeProperty(k);
+        else css[k] = "";
+      } else if (k.slice(0, 2) === "--") {
+        css.setProperty(k, String(v));
+      } else {
+        css[k] = formatStyleValue(k, v);
+      }
     }
   }
 
@@ -1213,11 +1357,19 @@ export const REACT_RUNTIME_JS = String.raw`(function () {
   }
 
   function PortalHost(props) {
+    var rootRef = useRef(null);
     useEffect(function () {
       var root = createRoot(props.container);
+      rootRef.current = root;
       root.render(props.children);
-      return function () { root.unmount(); };
+      return function () {
+        rootRef.current = null;
+        root.unmount();
+      };
     }, [props.container]);
+    useEffect(function () {
+      if (rootRef.current) rootRef.current.render(props.children);
+    }, [props.children]);
     return null;
   }
 

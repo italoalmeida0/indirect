@@ -647,6 +647,38 @@ export const WEBGL_POLYFILL_JS = String.raw`(function () {
             MAX_CLIP_DISTANCES_EXT: 0x0D32, MAX_CULL_DISTANCES_EXT: 0x82F9,
             MAX_COMBINED_CLIP_AND_CULL_DISTANCES_EXT: 0x82FA
           };
+        case "WEBGL_multisampled_render_to_texture":
+          return {
+            RENDERBUFFER_SAMPLES_EXT: 0x8CAB,
+            FRAMEBUFFER_INCOMPLETE_MULTISAMPLE_EXT: 0x8D56,
+            MAX_SAMPLES_EXT: 0x8D57,
+            TEXTURE_SAMPLES_EXT: 0x9106,
+            renderbufferStorageMultisampleEXT: function (target, samples, internalformat, width, height) {
+              if (state.bound.renderbuffer) {
+                state.bound.renderbuffer.w = width;
+                state.bound.renderbuffer.h = height;
+                state.bound.renderbuffer.format = internalformat;
+              }
+            },
+            framebufferTexture2DMultisampleEXT: function (target, attachment, textarget, texture) {
+              if (state.bound.framebuffer) state.bound.framebuffer.attachments[attachment] = texture;
+            }
+          };
+        case "WEBGL_multi_draw":
+          return {
+            multiDrawArraysWEBGL: function (mode, firstsList, firstsOffset, countsList, countsOffset, drawcount) {
+              STATS.drawCalls += Math.max(0, drawcount | 0);
+            },
+            multiDrawElementsWEBGL: function (mode, countsList, countsOffset, type, offsetsList, offsetsOffset, drawcount) {
+              STATS.drawCalls += Math.max(0, drawcount | 0);
+            },
+            multiDrawArraysInstancedWEBGL: function (mode, firstsList, firstsOffset, countsList, countsOffset, instanceCountsList, instanceCountsOffset, drawcount) {
+              STATS.drawCalls += Math.max(0, drawcount | 0);
+            },
+            multiDrawElementsInstancedWEBGL: function (mode, countsList, countsOffset, type, offsetsList, offsetsOffset, instanceCountsList, instanceCountsOffset, drawcount) {
+              STATS.drawCalls += Math.max(0, drawcount | 0);
+            }
+          };
         case "EXT_color_buffer_float":
         case "EXT_color_buffer_half_float":
         case "EXT_float_blend":
@@ -659,7 +691,6 @@ export const WEBGL_POLYFILL_JS = String.raw`(function () {
         case "WEBGL_color_buffer_float":
         case "WEBGL_depth_texture":
         case "OES_element_index_uint":
-        case "WEBGL_multisampled_render_to_texture":
         case "WEBGL_render_shared_exponent":
         case "EXT_texture_compression_bptc":
         case "WEBGL_compressed_texture_s3tc":
@@ -876,7 +907,7 @@ export const WEBGL_POLYFILL_JS = String.raw`(function () {
     ctx.uniform2ui = ctx.uniform2i;
     ctx.uniform3ui = ctx.uniform3i;
     ctx.uniform4ui = ctx.uniform4i;
-    ctx.uniform1fv = makeSetter(function (v) { return Array.prototype.slice.call(v); });
+    ctx.uniform1fv = makeSetter(function (v) { return v ? Array.prototype.slice.call(v) : []; });
     ctx.uniform2fv = ctx.uniform1fv;
     ctx.uniform3fv = ctx.uniform1fv;
     ctx.uniform4fv = ctx.uniform1fv;
@@ -888,7 +919,7 @@ export const WEBGL_POLYFILL_JS = String.raw`(function () {
     ctx.uniform2uiv = ctx.uniform1fv;
     ctx.uniform3uiv = ctx.uniform1fv;
     ctx.uniform4uiv = ctx.uniform1fv;
-    ctx.uniformMatrix2fv = makeSetter(function (v) { return Array.prototype.slice.call(v); });
+    ctx.uniformMatrix2fv = makeSetter(function (_transpose, v) { return v ? Array.prototype.slice.call(v) : []; });
     ctx.uniformMatrix3fv = ctx.uniformMatrix2fv;
     ctx.uniformMatrix4fv = ctx.uniformMatrix2fv;
     ctx.uniformMatrix2x3fv = ctx.uniformMatrix2fv;

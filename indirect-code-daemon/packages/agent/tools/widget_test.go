@@ -123,14 +123,25 @@ func TestWidgetSetStripsPastedFence(t *testing.T) {
 	tool := &WidgetSetTool{Store: store, Lint: lintOK}
 	runSet(t, tool, map[string]any{
 		"id":      "w",
-		"content": "```generative_ui\nplaceholder: Hi\nstate: {}\n@jsx\nexport default function App() { return null; }\n```",
+		"content": "```generative_ui\nwidget_id: w\nplaceholder: Hi\nstate: {}\n@jsx\nexport default function App() { return null; }\n```",
 	})
 	f, _ := store.GetWidget("w")
-	if strings.Contains(f.Source, "```") || strings.Contains(f.Source, "@jsx") || strings.Contains(f.Source, "placeholder:") {
+	if strings.Contains(f.Source, "```") || strings.Contains(f.Source, "@jsx") || strings.Contains(f.Source, "placeholder:") || strings.Contains(f.Source, "widget_id:") {
 		t.Fatalf("fence noise not stripped: %q", f.Source)
 	}
 	if !strings.Contains(f.Source, "export default function App") {
 		t.Fatalf("source lost: %q", f.Source)
+	}
+}
+
+func TestWidgetSetAgenticDescriptionOmitsWidgetEdit(t *testing.T) {
+	agentic := &WidgetSetTool{AllowSrcFile: true}
+	if strings.Contains(agentic.Description(), "widget_edit") {
+		t.Fatalf("agentic widget_set description must not suggest denied widget_edit: %q", agentic.Description())
+	}
+	talk := &WidgetSetTool{AllowSrcFile: false}
+	if !strings.Contains(talk.Description(), "widget_edit") {
+		t.Fatalf("talk widget_set description should suggest widget_edit: %q", talk.Description())
 	}
 }
 
@@ -144,14 +155,12 @@ func TestWidgetSetLintsBeforeStoring(t *testing.T) {
 	if _, ok := store.GetWidget("w"); !ok {
 		t.Fatal("widget must still be stored (with the lint warning)")
 	}
-	foundWarning := false
-	for _, a := range res.Attrs {
-		if a.Key == "warning" {
-			foundWarning = true
-		}
-	}
-	if !foundWarning {
+	attrs := attrMap(res)
+	if attrs["warning"] == "" {
 		t.Fatal("expected warning attr on lint failure")
+	}
+	if strings.Contains(attrs["info"], "Successfully") {
+		t.Fatalf("failed lint info attr must not claim Successfully: %q", attrs["info"])
 	}
 }
 
@@ -315,5 +324,56 @@ func TestRenderWidgetLintTextIncludes3DNotes(t *testing.T) {
 	}
 	if !strings.Contains(text, "[note] 3D exercised") {
 		t.Fatalf("expected the 3D note line in %q", text)
+	}
+}
+
+func TestWidgetSetAndLintAcceptObjectOrStringState(t *testing.T) {
+	store := newFakeWidgetStore()
+	var gotStates []string
+	captureLint := func(_ context.Context, _, _, _, state string) (WidgetLintResult, error) {
+		gotStates = append(gotStates, state)
+		return WidgetLintResult{OK: true, DurationMs: 1}, nil
+	}
+	setTool := &WidgetSetTool{Store: store, Lint: captureLint}
+	lintTool := &WidgetLintTool{Store: store, Lint: captureLint}
+
+	// Object state in widget_set
+	setRes, err := setTool.Execute(context.Background(), json.RawMessage(`{"id":"w1","content":"export default function App(){return null;}","state":{"level":2,"gold":50}}`), nil)
+	if err != nil {
+		t.Fatalf("widget_set with object state failed: %v", err)
+	}
+	if !strings.Contains(widgetText(setRes), "generative_ui fence (widget_id: w1)") {
+		t.Fatalf("expected fence mount reminder on passing widget_set, got %q", widgetText(setRes))
+	}
+	// Failing lint must NOT emit the mount reminder.
+	failSet := &WidgetSetTool{Store: store, Lint: lintFail}
+	failRes, err := failSet.Execute(context.Background(), json.RawMessage(`{"id":"wfail","content":"export default function App(){return null;}"}`), nil)
+	if err != nil {
+		t.Fatalf("widget_set lintFail errored: %v", err)
+	}
+	if strings.Contains(widgetText(failRes), "Mount in your reply") {
+		t.Fatalf("failed lint must not suggest mounting fence: %q", widgetText(failRes))
+	}
+	// String state in widget_set
+	if _, err := setTool.Execute(context.Background(), json.RawMessage(`{"id":"w1","content":"export default function App(){return null;}","state":"{\"level\":3}"}`), nil); err != nil {
+		t.Fatalf("widget_set with string state failed: %v", err)
+	}
+	// Null state in widget_set
+	if _, err := setTool.Execute(context.Background(), json.RawMessage(`{"id":"w1","content":"export default function App(){return null;}","state":null}`), nil); err != nil {
+		t.Fatalf("widget_set with null state failed: %v", err)
+	}
+	// Object state in widget_lint
+	if _, err := lintTool.Execute(context.Background(), json.RawMessage(`{"id":"w1","state":{"hp":90}}`), nil); err != nil {
+		t.Fatalf("widget_lint with object state failed: %v", err)
+	}
+
+	want := []string{`{"gold":50,"level":2}`, `{"level":3}`, "", `{"hp":90}`}
+	if len(gotStates) != len(want) {
+		t.Fatalf("captured states = %v, want %v", gotStates, want)
+	}
+	for i := range want {
+		if gotStates[i] != want[i] {
+			t.Fatalf("state[%d] = %q, want %q", i, gotStates[i], want[i])
+		}
 	}
 }

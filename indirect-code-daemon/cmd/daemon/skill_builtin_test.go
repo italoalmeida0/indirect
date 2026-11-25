@@ -18,8 +18,8 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 8 {
-		t.Fatalf("embedded builtin files = %d, want 8", len(entries))
+	if len(entries) != 12 {
+		t.Fatalf("embedded builtin files = %d, want 12", len(entries))
 	}
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".js") {
@@ -31,10 +31,14 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("builtin parse errors: %v", errs)
 	}
-	if len(list) != 8 {
-		t.Fatalf("parsed builtins = %d, want 8: %v", len(list), list)
+	if len(list) != 12 {
+		t.Fatalf("parsed builtins = %d, want 12: %v", len(list), list)
 	}
-	for _, name := range []string{"agentic_base", "talk", "build", "plan", "learning", "generative_ui", "generative_ui_agentic", "generative_ui_talk"} {
+	for _, name := range []string{
+		"agentic_base", "talk", "build", "plan", "learning",
+		"generative_ui", "generative_ui_agentic", "generative_ui_talk",
+		"genui_games", "genui_visualizers", "genui_dashboards", "genui_engineering",
+	} {
 		if _, ok := list[name]; !ok {
 			t.Fatalf("builtin %q missing from the embedded set", name)
 		}
@@ -62,30 +66,140 @@ func TestBuiltinSkillsParseFromBinary(t *testing.T) {
 	if talk.Permissions["widget_set"].Policy != skills.PolicyYolo || talk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
 		t.Fatalf("talk widget_set must keep the concrete policy plus the denied argument: %+v", talk.Permissions["widget_set"])
 	}
+	if !containsStr(talk.Provides, "generative_ui_talk") || !containsStr(talk.Provides, "generative_ui") {
+		t.Fatalf("talk must spread generative_ui_talk provides: %+v", talk.Provides)
+	}
 	build := list["build"]
 	if build.Mode != "agentic" || build.Usable != "deny" || build.Permissions["read"].Policy != skills.PolicyAsk {
 		t.Fatalf("build conversion drifted: %+v", build)
 	}
 	gen := list["generative_ui"]
-	if gen.Usable != "never" || gen.Permissions["widget_set"].Policy != skills.PolicyYolo || !strings.HasPrefix(gen.Body, "# Interactive widgets (generative_ui)") || !strings.HasSuffix(gen.Body, "are fully allowed.") {
-		t.Fatalf("generative_ui conversion drifted: usable=%q body=%q...%q", gen.Usable, gen.Body[:min(40, len(gen.Body))], gen.Body[max(0, len(gen.Body)-40):])
+	if gen.Usable != "never" || gen.Permissions["widget_set"].Policy != skills.PolicyYolo || !strings.HasPrefix(gen.Body, "# Interactive widgets (generative_ui)") || !containsStr(gen.Provides, "generative_ui") {
+		t.Fatalf("generative_ui conversion drifted: usable=%q provides=%v body=%q...", gen.Usable, gen.Provides, gen.Body[:min(40, len(gen.Body))])
 	}
 	genTalk := list["generative_ui_talk"]
 	// The base grants widget_set as "yolo"; talk narrows one argument, so the
 	// policy is restated as the concrete value a chain would have resolved to.
-	if genTalk.Usable != "never" || genTalk.Permissions["widget_set"].Policy != skills.PolicyYolo || genTalk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny {
+	if genTalk.Usable != "never" || genTalk.Permissions["widget_set"].Policy != skills.PolicyYolo || genTalk.Permissions["widget_set"].Args["src_file"] != skills.PolicyDeny || !containsStr(genTalk.Provides, "generative_ui_talk") {
 		t.Fatalf("generative_ui_talk conversion drifted: %+v", genTalk)
 	}
-	// Agentic widgets are opt-in: the mode skills do not import them, and
-	// the user adds generative_ui_agentic per session (deny = user-visible,
-	// hidden from use_skill), pinned to agentic sessions.
-	if genAgentic := list["generative_ui_agentic"]; genAgentic.Usable != "deny" || genAgentic.Mode != "agentic" || genAgentic.Permissions["widget_read"].Policy != skills.PolicyDeny || genAgentic.Permissions["widget_set"].Policy != skills.PolicyYolo {
+	// Agentic widgets are discoverable and self-activatable by the agent via
+	// use_skill (usable: "yolo"), pinned to agentic sessions.
+	if genAgentic := list["generative_ui_agentic"]; genAgentic.Usable != "yolo" || genAgentic.Mode != "agentic" || !containsStr(genAgentic.Provides, "generative_ui_agentic") || genAgentic.Permissions["widget_read"].Policy != skills.PolicyDeny || genAgentic.Permissions["widget_edit"].Policy != skills.PolicyDeny || genAgentic.Permissions["widget_set"].Policy != skills.PolicyYolo {
 		t.Fatalf("generative_ui_agentic conversion drifted: %+v", genAgentic)
+	}
+	// Text-only gated Gen-UI subskills: no extra tool permissions, usable:"yolo",
+	// properly gated behind their parent Gen-UI skill(s).
+	for _, name := range []string{"genui_games", "genui_visualizers", "genui_dashboards", "genui_engineering"} {
+		sk := list[name]
+		if sk.Usable != "yolo" || !sk.IsGated() || len(sk.Permissions) != 0 || strings.TrimSpace(sk.Body) == "" {
+			t.Fatalf("gated subskill %q drifted: usable=%q gated=%v perms=%v", name, sk.Usable, sk.IsGated(), sk.Permissions)
+		}
+	}
+	if sk := list["genui_games"]; sk.Mode != "talk" || !containsStr(sk.Requires, "generative_ui_talk") {
+		t.Fatalf("genui_games gating drifted: %+v", sk)
+	}
+	if sk := list["genui_engineering"]; sk.Mode != "agentic" || !containsStr(sk.Requires, "generative_ui_agentic") {
+		t.Fatalf("genui_engineering gating drifted: %+v", sk)
+	}
+	for _, name := range []string{"genui_visualizers", "genui_dashboards"} {
+		sk := list[name]
+		if sk.Mode != "" || !containsStr(sk.RequiresAny, "generative_ui_talk") || !containsStr(sk.RequiresAny, "generative_ui_agentic") {
+			t.Fatalf("%s gating drifted: %+v", name, sk)
+		}
 	}
 	for _, name := range []string{"plan", "learning"} {
 		sk := list[name]
 		if sk.Mode != "agentic" || sk.Permissions["write"].Policy != skills.PolicyDeny || sk.Permissions["edit"].Policy != skills.PolicyDeny {
 			t.Fatalf("%s conversion drifted: %+v", name, sk)
+		}
+	}
+}
+
+func containsStr(list []string, target string) bool {
+	for _, s := range list {
+		if s == target {
+			return true
+		}
+	}
+	return false
+}
+
+// Verifies the REAL embedded builtin skills end-to-end across Talk, Build,
+// Plan, and Learning modes: Talk immediately unlocks Talk + shared subskills;
+// Agentic modes discover generative_ui_agentic while hiding all subskills
+// until generative_ui_agentic activates (and Plan/Learning stay read-only).
+func TestBuiltinGenUISubskillGatingEndToEnd(t *testing.T) {
+	builtins, errs := builtinSkills()
+	if len(errs) > 0 {
+		t.Fatalf("builtin parse errors: %v", errs)
+	}
+	prev := skillRegistry()
+	defer swapSkillRegistry(prev)
+	swapSkillRegistry(&skillStore{list: builtins})
+
+	// Talk: talk active -> genui_games, genui_visualizers, genui_dashboards unlocked immediately.
+	talkSel := map[string]skills.SessionSkill{"talk": {Priority: 1, Active: true}}
+	talkEff, err := skillRegistry().resolveSession(talkSel, "talk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"genui_games", "genui_visualizers", "genui_dashboards"} {
+		if !talkEff.Listed[want] {
+			t.Errorf("talk must list %q immediately: %+v", want, talkEff.Listed)
+		}
+	}
+	for _, hidden := range []string{"generative_ui_agentic", "genui_engineering"} {
+		if talkEff.Listed[hidden] {
+			t.Errorf("talk must hide %q: %+v", hidden, talkEff.Listed)
+		}
+	}
+
+	// Build, Plan, Learning: before & after generative_ui_agentic activation.
+	for _, modeSkill := range []string{"build", "plan", "learning"} {
+		beforeSel := map[string]skills.SessionSkill{modeSkill: {Priority: 1, Active: true}}
+		effBefore, err := skillRegistry().resolveSession(beforeSel, "agentic")
+		if err != nil {
+			t.Fatalf("%s before: %v", modeSkill, err)
+		}
+		if !effBefore.Listed["generative_ui_agentic"] {
+			t.Errorf("%s must list generative_ui_agentic: %+v", modeSkill, effBefore.Listed)
+		}
+		for _, hidden := range []string{"genui_games", "genui_visualizers", "genui_dashboards", "genui_engineering"} {
+			if effBefore.Listed[hidden] {
+				t.Errorf("%s before genui must hide %q: %+v", modeSkill, hidden, effBefore.Listed)
+			}
+		}
+		if effBefore.ToolDecision("widget_set") != skills.PolicyDeny {
+			t.Errorf("%s before genui must not grant widget_set", modeSkill)
+		}
+
+		afterSel := map[string]skills.SessionSkill{
+			modeSkill:               {Priority: 1, Active: true},
+			"generative_ui_agentic": {Priority: 2, Active: true},
+		}
+		effAfter, err := skillRegistry().resolveSession(afterSel, "agentic")
+		if err != nil {
+			t.Fatalf("%s after: %v", modeSkill, err)
+		}
+		for _, want := range []string{"generative_ui_agentic", "genui_engineering", "genui_visualizers", "genui_dashboards"} {
+			if !effAfter.Listed[want] {
+				t.Errorf("%s after genui must list %q: %+v", modeSkill, want, effAfter.Listed)
+			}
+		}
+		if effAfter.Listed["genui_games"] {
+			t.Errorf("%s must keep talk-only genui_games hidden", modeSkill)
+		}
+		if effAfter.ToolDecision("widget_set") != skills.PolicyYolo || effAfter.ToolDecision("widget_list") != skills.PolicyYolo || effAfter.ToolDecision("widget_lint") != skills.PolicyYolo {
+			t.Errorf("%s after genui must grant widget_set/list/lint", modeSkill)
+		}
+		if effAfter.ToolDecision("widget_read") != skills.PolicyDeny || effAfter.ToolDecision("widget_edit") != skills.PolicyDeny {
+			t.Errorf("%s after genui must keep widget_read/edit denied", modeSkill)
+		}
+		if modeSkill != "build" {
+			if effAfter.ToolDecision("write") != skills.PolicyDeny || effAfter.ToolDecision("edit") != skills.PolicyDeny {
+				t.Errorf("%s after genui must remain read-only for write/edit", modeSkill)
+			}
 		}
 	}
 }

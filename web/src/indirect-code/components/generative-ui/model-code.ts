@@ -430,6 +430,18 @@ const RESOLVABLE_SPECIFIERS = new Set([
   "chart.js",
   "chart.js/auto",
   "three",
+  "three/addons/controls/OrbitControls.js",
+  "three/addons/controls/OrbitControls",
+  "three/examples/jsm/controls/OrbitControls.js",
+  "three/examples/jsm/controls/OrbitControls",
+  "three/addons/environments/RoomEnvironment.js",
+  "three/addons/environments/RoomEnvironment",
+  "three/examples/jsm/environments/RoomEnvironment.js",
+  "three/examples/jsm/environments/RoomEnvironment",
+  "three/addons/geometries/RoundedBoxGeometry.js",
+  "three/addons/geometries/RoundedBoxGeometry",
+  "three/examples/jsm/geometries/RoundedBoxGeometry.js",
+  "three/examples/jsm/geometries/RoundedBoxGeometry",
   "leaflet",
   "cannon-es",
   "cannon",
@@ -517,6 +529,22 @@ function isTypeofOperand(node: AnyNode, ancestors?: AnyNode[]): boolean {
 }
 
 /**
+ * True when the expression is the RHS of a static-string `in` feature check
+ * (`"ontouchstart" in window`, `"AudioContext" in window`). The `in` operator
+ * returns only a boolean and never yields the global object or invokes getters.
+ */
+function isInOperatorProbe(node: AnyNode, ancestors?: AnyNode[]): boolean {
+  const enc = enclosingOf(node, ancestors);
+  return (
+    !!enc &&
+    enc.holder.type === "BinaryExpression" &&
+    enc.holder.operator === "in" &&
+    enc.holder.right === enc.top &&
+    staticStringValue(enc.holder.left) !== null
+  );
+}
+
+/**
  * `Object.<method>` / `window.Object.<method>` rules. `assign` is audited
  * with its first argument at the call site (a direct call is not a read);
  * every reflection helper is a capability the read would hand over.
@@ -573,8 +601,8 @@ function isGlobalObjectAlias(node: AnyNode, ancestors?: AnyNode[]): boolean {
   const props = memberProps(node);
   if (!props || props.length === 0) return false;
   if (!props.every((prop) => BARE_GLOBAL_ROOTS.has(prop))) return false;
-  // `typeof window.document` asks for a type string, not the object.
-  if (isTypeofOperand(node, ancestors)) return false;
+  // `typeof window.document` / `"ontouchstart" in window.document` ask for a primitive, not the object.
+  if (isTypeofOperand(node, ancestors) || isInOperatorProbe(node, ancestors)) return false;
   return !isMemberObject(node, ancestors) && !isPatternSourcePosition(node, ancestors);
 }
 
@@ -1253,9 +1281,14 @@ function isForbiddenExpression(node: AnyNode, ancestors?: AnyNode[]): boolean {
     if (PROTECTED_PATTERN_ROOTS.has(node.name) && isPatternSourcePosition(node, ancestors)) return false;
     if (FORBIDDEN_IDENTIFIERS.has(node.name)) return true;
     // `const w = window` aliases the global object; `window.innerWidth`
-    // keeps the capability behind an auditable member chain, and
-    // `typeof window` only probes for a type string.
-    return BARE_GLOBAL_ROOTS.has(node.name) && !isMemberObject(node, ancestors) && !isTypeofOperand(node, ancestors);
+    // keeps the capability behind an auditable member chain, `typeof window`
+    // probes for a type string, and `"ontouchstart" in window` probes a boolean.
+    return (
+      BARE_GLOBAL_ROOTS.has(node.name) &&
+      !isMemberObject(node, ancestors) &&
+      !isTypeofOperand(node, ancestors) &&
+      !isInOperatorProbe(node, ancestors)
+    );
   }
 
   if (node.type === "ImportExpression") {
@@ -1344,15 +1377,46 @@ export type AuditFinding = { line?: number; column?: number; reason: string };
 /** Short human label for a sanitized node — the lint shows it per line. */
 function describeForbidden(node: AnyNode): string {
   if (node.type === "Identifier") {
+    if (BARE_GLOBAL_ROOTS.has(node.name)) {
+      return `\`${node.name}\` global-object alias (read properties directly, e.g. \`${node.name}.innerWidth\`, instead of aliasing \`${node.name}\`)`;
+    }
+    if (node.name === "fetch" || node.name === "XMLHttpRequest" || node.name === "WebSocket" || node.name === "EventSource") {
+      return `\`${node.name}\` reference (network requests are blocked in widgets; embed data inline)`;
+    }
     return `\`${node.name}\` reference (forbidden capability)`;
   }
   if (node.type === "MemberExpression") {
-    return `\`.${propName(node.property, node.computed)}\` access (prototype-chain escape)`;
+    const p = propName(node.property, node.computed);
+    if (!p) {
+      return "dynamic property lookup on a global object (use a static property name or a local object)";
+    }
+    if (p === "constructor" || p === "__proto__" || p === "prototype" || p === "ownerDocument" || p === "defaultView") {
+      return `\`.${p}\` access (prototype-chain escape)`;
+    }
+    if (BARE_GLOBAL_ROOTS.has(p)) {
+      return `\`.${p}\` global-object alias (access properties directly instead of aliasing)`;
+    }
+    if (p === "fetch" || p === "XMLHttpRequest" || p === "WebSocket" || p === "EventSource" || p === "sendBeacon") {
+      return `\`.${p}\` access (network requests are blocked in widgets; embed data inline)`;
+    }
+    if (p === "innerHTML" || p === "outerHTML" || p === "insertAdjacentHTML") {
+      return `\`.${p}\` access (HTML injection sink; render JSX instead)`;
+    }
+    return `\`.${p}\` access (forbidden capability)`;
   }
   if (node.type === "CallExpression" || node.type === "NewExpression") {
     const callee: AnyNode = node.callee;
     const tail = callee && callee.type === "MemberExpression" ? propName(callee.property, callee.computed) : null;
     const name = callee && callee.type === "Identifier" ? callee.name : tail;
+    if (name === "fetch" || name === "XMLHttpRequest" || name === "WebSocket" || name === "EventSource" || name === "sendBeacon") {
+      return `\`${name}\` call (network requests are blocked in widgets; embed data inline)`;
+    }
+    if (name === "open") {
+      return "`open` call (use `window.indirectUi.openLink(url)` instead)";
+    }
+    if (name === "setAttribute") {
+      return "`setAttribute` with dynamic or unsafe attribute name (use JSX props or a literal non-on* attribute name)";
+    }
     return `\`${name || node.type}\` call (forbidden capability)`;
   }
   if (node.type === "TaggedTemplateExpression") {
@@ -1364,7 +1428,25 @@ function describeForbidden(node: AnyNode): string {
     return "loop into a protected assignment target";
   }
   if (node.type === "VariableDeclaration") return "destructuring of forbidden capability names";
-  if (node.type === "AssignmentExpression") return "assignment to a protected target";
+  if (node.type === "AssignmentExpression") {
+    if (node.left?.type === "MemberExpression") {
+      const last = propName(node.left.property, node.left.computed);
+      const root = rootIdentifier(node.left);
+      if (last === "innerHTML" || last === "outerHTML") {
+        return `assignment to \`.${last}\` (HTML injection sink; render JSX instead)`;
+      }
+      if (last === "location") {
+        return "assignment to `.location` (navigation is blocked; use `window.indirectUi.openLink(url)`)";
+      }
+      if (root === "document") {
+        return "assignment to global `document` (mutate a React ref element instead, e.g. `containerRef.current.style.cursor = ...`)";
+      }
+      if (root && WINDOW_ROOTS.has(root)) {
+        return `assignment to global \`${root}\` (keep state in React hooks/refs or module variables instead)`;
+      }
+    }
+    return "assignment to a protected target";
+  }
   if (node.type === "UpdateExpression") return "update of a protected target";
   if (node.type === "UnaryExpression") return "`delete` of a protected target";
   if (node.type === "Property") {
@@ -1864,8 +1946,9 @@ function auditImports(ast: Node): { error: string; loc?: { line?: number; column
       loc: firstLoc,
       error:
         `unsupported import${bad.length > 1 ? "s" : ""}: ${bad.map((s) => JSON.stringify(s)).join(", ")} — ` +
-        `widgets may only import react / react-dom and the preloaded libs ` +
-        `(d3, gsap, chart, three, leaflet, cannon-es, matter-js); esm.sh needs net: true`,
+        `built-in static imports are: react, react-dom/client, three (also exports OrbitControls, RoomEnvironment, RoundedBoxGeometry), ` +
+        `d3, gsap, chart (or chart.js/auto), leaflet, cannon-es, matter-js. ` +
+        `For other packages use dynamic import("https://esm.sh/pkg@version") with a fallback.`,
     };
   }
   if (indirect) {
@@ -1996,20 +2079,73 @@ export function sanitizeModelJS(js: string): string {
  * never lives inside the HTML document.
  */
 export function buildJsxModuleBody(compiledCode: string): string {
-  return `${escapeScriptClose(sanitizeModelJS(compiledCode))}
+  const sanitized = escapeScriptClose(sanitizeModelJS(compiledCode));
+  let code = sanitized;
+  let defaultRef = "App";
+  const ast = parseModelModule(sanitized);
+  if (ast) {
+    const body: AnyNode[] = (ast as AnyNode).body || [];
+    const def = body.find((n) => n.type === "ExportDefaultDeclaration");
+    if (def) {
+      const decl = def.declaration;
+      if (decl?.type === "Identifier" && decl.name) {
+        defaultRef = decl.name;
+      } else if (
+        (decl?.type === "FunctionDeclaration" || decl?.type === "ClassDeclaration") &&
+        decl.id?.name
+      ) {
+        defaultRef = decl.id.name;
+      } else if (decl && typeof def.start === "number" && typeof decl.start === "number") {
+        // Anonymous default export (`export default () => ...`, `export default (() => ...)`,
+        // `export default function() {}`, `export default memo(...)`): rewrite ONLY the
+        // `export ... default` keyword span in place (preserving parentheses, comments, and
+        // all line numbers for source maps) and re-export at the tail.
+        const ms = new MagicString(sanitized);
+        const prefix = sanitized.slice(def.start, decl.start);
+        const kwMatch = /^export(?:[\s\uFEFF\xA0]|\/\/[^\r\n]*(?:\r?\n|$)|\/\*[\s\S]*?\*\/)+default\b/.exec(prefix);
+        const kwEnd = kwMatch ? def.start + kwMatch[0].length : decl.start;
+        const replaced = sanitized.slice(def.start, kwEnd);
+        const nl = (replaced.match(/\n/g) || []).length;
+        const spacer = kwEnd === decl.start ? " " : "";
+        ms.overwrite(def.start, kwEnd, "const __guDefaultExport =" + "\n".repeat(nl) + spacer);
+        if (typeof def.end === "number" && sanitized[def.end - 1] !== ";") {
+          ms.appendRight(def.end, ";");
+        }
+        code = ms.toString() + "\nexport default __guDefaultExport;";
+        defaultRef = "__guDefaultExport";
+      }
+    } else {
+      for (const n of body) {
+        if (n.type !== "ExportNamedDeclaration" || n.source || !Array.isArray(n.specifiers)) continue;
+        const spec = n.specifiers.find(
+          (s: AnyNode) =>
+            s?.type === "ExportSpecifier" &&
+            (s.exported?.name === "default" || s.exported?.value === "default"),
+        );
+        if (spec?.local?.name) {
+          defaultRef = spec.local.name;
+          break;
+        }
+      }
+    }
+  }
+  const fallbackAppCheck =
+    defaultRef !== "App"
+      ? `if (!__app) { try { __app = App; } catch (err) { __app = null; } }\n  `
+      : "";
+  return `${code}
 ;
 (function () {
   "use strict";
   var __app = null;
   try {
-    // Module-scope binding: "export default function App", named App, or the
-    // default export alias. Missing binding is a ReferenceError -> null.
-    __app = App;
+    // Module-scope binding: default export (named or anonymous), or fallback App.
+    __app = ${defaultRef};
   } catch (err) { __app = null; }
-  try {
+  ${fallbackAppCheck}try {
     if (!__app && typeof window.App === "function") __app = window.App;
     if (!__app) {
-      if (window.__gu && window.__gu.reportError) window.__gu.reportError(new Error("widget: export a default React component (App)"));
+      if (window.__gu && window.__gu.reportError) window.__gu.reportError(new Error("widget: export a default React component (e.g. export default function App)"));
       return;
     }
     var root = window.ReactDOMClient.createRoot(document.body);

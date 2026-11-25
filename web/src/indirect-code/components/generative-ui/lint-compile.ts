@@ -115,6 +115,11 @@ export function compileWidgetForLint(src: string, file = "widget.tsx"): LintComp
   try {
     const out = transform(src, {
       transforms: ["typescript", "jsx"],
+      // Keep native ES2022 syntax (?. / ?? / class fields / numeric separators /
+      // optional catch) intact so lint matches Bun.Transpiler on the publish path
+      // and never downlevels `window.indirectUi?.saveState?.(...)` into helper
+      // calls that falsely trip the bare-global alias audit.
+      disableESTransforms: true,
       jsxPragma: "React.createElement",
       jsxFragmentPragma: "React.Fragment",
       production: true,

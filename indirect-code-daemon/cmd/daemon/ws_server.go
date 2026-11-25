@@ -2295,8 +2295,9 @@ func (s *wsServer) rememberSelection(model string, options SessionOptions) error
 }
 
 // rememberableSkills filters a create/configure skill choice down to the
-// skills the store knows and the user may see (never-usable bases drop).
-// Always non-nil so the JSON carries [] rather than null.
+// skills the store knows and the user may see (never-usable bases and
+// conditional gated subskills drop so AI-loaded subskills never leak into
+// future fresh drafts). Always non-nil so the JSON carries [] rather than null.
 func rememberableSkills(in []SkillChoice) []SkillChoice {
 	out := []SkillChoice{}
 	store := skillRegistry().all()
@@ -2306,6 +2307,9 @@ func rememberableSkills(in []SkillChoice) []SkillChoice {
 			continue
 		}
 		if usable, err := skills.UsableValue(sk, ""); err != nil || usable == "never" {
+			continue
+		}
+		if sk.IsGated() {
 			continue
 		}
 		out = append(out, choice)

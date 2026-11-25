@@ -246,6 +246,10 @@ describe("gen-ui widget routes", () => {
     const map = JSON.parse(/<script type="importmap"[^>]*>([\s\S]*?)<\/script>/.exec(html)![1]);
     for (const [spec, file] of [
       ["three", "three.js"],
+      ["three/addons/controls/OrbitControls.js", "three.js"],
+      ["three/examples/jsm/controls/OrbitControls.js", "three.js"],
+      ["three/addons/environments/RoomEnvironment.js", "three.js"],
+      ["three/addons/geometries/RoundedBoxGeometry.js", "three.js"],
       ["d3", "d3.js"],
       ["gsap", "gsap.js"],
       ["chart", "chart.js"],
@@ -273,7 +277,10 @@ describe("gen-ui widget routes", () => {
     // each bundle must re-export the library's named surface — a bare
     // `export default` makes every namespace call fail at runtime.
     const documented: Record<string, string[]> = {
-      "three.js": ["Scene", "Mesh", "WebGLRenderer", "PerspectiveCamera", "TorusKnotGeometry", "DirectionalLight"],
+      "three.js": [
+        "Scene", "Mesh", "WebGLRenderer", "PerspectiveCamera", "TorusKnotGeometry", "DirectionalLight",
+        "OrbitControls", "RoomEnvironment", "RoundedBoxGeometry",
+      ],
       "d3.js": ["select", "scaleLinear", "arc"],
       "gsap.js": ["to", "from", "timeline", "killTweensOf", "set", "default"],
       "chart.js": ["Chart", "default"],
@@ -341,6 +348,31 @@ describe("gen-ui widget routes", () => {
     const moduleUrl = /src="(\/api\/indirect-code\/gen-ui\/modules\/[0-9a-f]{64})"/.exec(html)![1];
     const code = await (await get(moduleUrl)).text();
     expect(code).toContain('import "three";');
+  });
+
+  test("optional accent stamps data-accent on served document without breaking default dedupe", async () => {
+    const defA: any = await (await post("/api/indirect-code/gen-ui/widgets", {
+      theme: "dark",
+      jsx: APP,
+      stateJSON: "{}",
+    })).json();
+    const defTeal: any = await (await post("/api/indirect-code/gen-ui/widgets", {
+      theme: "dark",
+      accent: "teal",
+      jsx: APP,
+      stateJSON: "{}",
+    })).json();
+    expect(defTeal.id).toBe(defA.id);
+
+    const violet: any = await (await post("/api/indirect-code/gen-ui/widgets", {
+      theme: "dark",
+      accent: "violet",
+      jsx: APP,
+      stateJSON: "{}",
+    })).json();
+    expect(violet.id).not.toBe(defA.id);
+    const html = await (await get(violet.url)).text();
+    expect(html).toContain('data-theme="dark" data-accent="violet"');
   });
 });
 

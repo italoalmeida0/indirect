@@ -238,6 +238,25 @@ func (s *skillStore) normalizeSessionSkills(in map[string]skills.SessionSkill) m
 		}
 		out[name] = skills.SessionSkill{Priority: st.Priority, Active: st.Active, Usable: st.Usable}
 	}
+	// Never persist unsatisfied gated subskills as Active: if the parent later
+	// activates, a dormant Active:true entry would silently turn effective
+	// without going through use_skill or approval.
+	satisfied := skills.Satisfied(store, out)
+	for name, st := range out {
+		if !st.Active {
+			continue
+		}
+		sk := store[name]
+		if !sk.IsGated() || skills.RequirementsMet(sk, satisfied) {
+			continue
+		}
+		if st.Usable == "" {
+			delete(out, name)
+		} else {
+			st.Active = false
+			out[name] = st
+		}
+	}
 	return out
 }
 
@@ -263,11 +282,13 @@ func skillModeMatches(sk skills.Skill, mode string) bool {
 
 // skillsDescription renders the model-facing skill listing for the
 // use_skill tool description: one line per skill the AI may activate
-// (effective usable ask/yolo only). The system prompt never lists skills —
-// the tool description is the single source. Bodies ride the ephemeral
-// <skill> prefix of the turns where they are active.
+// (effective usable ask/yolo only, matching mode, and with any gated
+// requires/requiresAny parent satisfied). The system prompt never lists
+// skills — the tool description is the single source. Bodies ride the
+// ephemeral <skill> prefix of the turns where they are active.
 func (s *skillStore) skillsDescription(mode string, active map[string]skills.SessionSkill) string {
 	store := s.all()
+	satisfied := skills.Satisfied(store, active)
 
 	type entry struct{ display, description string }
 	var entries []entry
@@ -285,6 +306,9 @@ func (s *skillStore) skillsDescription(mode string, active map[string]skills.Ses
 		if err != nil || usable == "deny" || usable == "never" {
 			continue // AI cannot activate it directly
 		}
+		if !skills.RequirementsMet(sk, satisfied) {
+			continue // gated behind an inactive parent skill
+		}
 		entries = append(entries, entry{name, sk.Description})
 	}
 	if len(entries) == 0 {
@@ -298,10 +322,65 @@ func (s *skillStore) skillsDescription(mode string, active map[string]skills.Ses
 	return b.String()
 }
 
+// newlyUnlockedSkills returns the gated subskills (sorted by name) that become
+// visible and callable via use_skill in mode as a direct result of activating
+// the named skill. Used to notify the model immediately inside the parent
+// skill's use_skill tool_result (in addition to updating use_skill's tool
+// description on the next step).
+func (s *skillStore) newlyUnlockedSkills(mode string, active map[string]skills.SessionSkill, activating string) []skills.Skill {
+	store := s.all()
+	before := skills.Satisfied(store, active)
+	afterActive := cloneSkillsMap(active)
+	if afterActive == nil {
+		afterActive = map[string]skills.SessionSkill{}
+	}
+	st := afterActive[activating]
+	st.Active = true
+	afterActive[activating] = st
+	after := skills.Satisfied(store, afterActive)
+
+	names := make([]string, 0, len(store))
+	for name := range store {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var unlocked []skills.Skill
+	for _, name := range names {
+		if name == activating || active[name].Active {
+			continue
+		}
+		sk := store[name]
+		if !sk.IsGated() || !skillModeMatches(sk, mode) {
+			continue
+		}
+		usable, err := skills.UsableValue(sk, active[name].Usable)
+		if err != nil || usable == "deny" || usable == "never" {
+			continue
+		}
+		if !skills.RequirementsMet(sk, before) && skills.RequirementsMet(sk, after) {
+			unlocked = append(unlocked, sk)
+		}
+	}
+	return unlocked
+}
+
+func formatUnlockedSkillsHint(unlocked []skills.Skill) string {
+	if len(unlocked) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Newly unlocked skills now available via use_skill:\n")
+	for _, sk := range unlocked {
+		fmt.Fprintf(&b, "- %s: %s\n", sk.Name, sk.Description)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 // skillsListing renders the whole skill store for the config pull (the
 // frontend's skill manager and session-creation picker). Shape matches the
 // web SkillConfig mirror: name -> {name, description, enabled, usable,
-// mode, approvalMode}. Load errors travel separately (skillLoadErrors).
+// mode, approvalMode, requires?, requiresAny?, provides?}. Load errors travel
+// separately (skillLoadErrors).
 func skillsListing() map[string]any {
 	list := skillRegistry().all()
 	out := make(map[string]any, len(list))
@@ -317,7 +396,7 @@ func skillsListing() map[string]any {
 		if usable == "never" {
 			continue // base-only: the user must never see it
 		}
-		out[name] = map[string]any{
+		entry := map[string]any{
 			"name":        sk.Name,
 			"description": sk.Description,
 			"enabled":     true,
@@ -327,6 +406,16 @@ func skillsListing() map[string]any {
 			// primary skill, so the official list must carry approvalMode.
 			"approvalMode": sk.ApprovalMode,
 		}
+		if len(sk.Requires) > 0 {
+			entry["requires"] = sk.Requires
+		}
+		if len(sk.RequiresAny) > 0 {
+			entry["requiresAny"] = sk.RequiresAny
+		}
+		if len(sk.Provides) > 0 {
+			entry["provides"] = sk.Provides
+		}
+		out[name] = entry
 	}
 	return out
 }

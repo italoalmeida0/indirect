@@ -6,7 +6,10 @@ import {
   deriveSessionMode,
   effectiveModeSkills,
   ensureModeSkill,
+  isGatedSkill,
   originalUsable,
+  pruneUnsatisfiedGatedSkills,
+  skillMatchesMode,
   usableDiffers,
 } from "../web/src/indirect-code/utils/modeSkills";
 import { normalizeSession } from "../web/src/indirect-code/store/sessions";
@@ -160,5 +163,63 @@ describe("composer execution-permission trigger (ToolbarContext)", () => {
     expect(src).toContain('label: "Auto"');
     expect(src).toContain('label: "Ask for approval"');
     expect(src).toContain('label: "Full access"');
+  });
+
+  test("gated subskills stay hidden from the manual picker list and badge counts while preserving active order", () => {
+    expect(src).toContain("!isModeSkill(n) && !isGatedSkill(saved[n])");
+    expect(src).toContain("!isModeSkill(n) && !isGatedSkill(skill)");
+    expect(src).toContain("pruneUnsatisfiedGatedSkills(");
+    expect(src).toContain("skillMatchesMode(skill, mode)");
+  });
+});
+
+describe("skillMatchesMode (unselected additional skills mode filter)", () => {
+  test("unpinned skills match all modes; mode-pinned skills match only their own base mode", () => {
+    expect(skillMatchesMode({ mode: undefined }, "talk")).toBe(true);
+    expect(skillMatchesMode({ mode: "" }, "agentic")).toBe(true);
+    expect(skillMatchesMode({ mode: "agentic" }, "agentic")).toBe(true);
+    expect(skillMatchesMode({ mode: "agentic" }, "build")).toBe(true);
+    expect(skillMatchesMode({ mode: "agentic" }, "talk")).toBe(false);
+    expect(skillMatchesMode({ mode: "talk" }, "talk")).toBe(true);
+    expect(skillMatchesMode({ mode: "talk" }, "agentic")).toBe(false);
+  });
+});
+
+describe("gated subskills (isGatedSkill & pruneUnsatisfiedGatedSkills)", () => {
+  const catalog = official({
+    talk: { mode: "talk", provides: ["generative_ui", "generative_ui_talk"] },
+    build: { mode: "agentic" },
+    generative_ui_agentic: { mode: "agentic", usable: "yolo", provides: ["generative_ui", "generative_ui_agentic"] },
+    genui_games: { mode: "talk", usable: "yolo", requires: ["generative_ui_talk"] },
+    genui_visualizers: { usable: "yolo", requiresAny: ["generative_ui_talk", "generative_ui_agentic"] },
+    genui_engineering: { mode: "agentic", usable: "yolo", requires: ["generative_ui_agentic"] },
+    genui_nested: { mode: "agentic", usable: "yolo", requires: ["genui_engineering"] },
+  });
+
+  test("isGatedSkill detects requires or requiresAny only", () => {
+    expect(isGatedSkill(undefined)).toBe(false);
+    expect(isGatedSkill(catalog.build)).toBe(false);
+    expect(isGatedSkill(catalog.generative_ui_agentic)).toBe(false);
+    expect(isGatedSkill(catalog.genui_games)).toBe(true);
+    expect(isGatedSkill(catalog.genui_visualizers)).toBe(true);
+    expect(isGatedSkill({ requires: [], requiresAny: [] })).toBe(false);
+  });
+
+  test("pruneUnsatisfiedGatedSkills drops orphaned subskills and keeps satisfied chains", () => {
+    expect(
+      pruneUnsatisfiedGatedSkills(["talk", "genui_games", "genui_visualizers", "genui_engineering"], catalog),
+    ).toEqual(["talk", "genui_games", "genui_visualizers"]);
+
+    expect(
+      pruneUnsatisfiedGatedSkills(["build", "generative_ui_agentic", "genui_engineering", "genui_nested"], catalog),
+    ).toEqual(["build", "generative_ui_agentic", "genui_engineering", "genui_nested"]);
+
+    // Unchecking the parent prunes both direct and transitive subskills.
+    expect(
+      pruneUnsatisfiedGatedSkills(["build", "genui_engineering", "genui_nested", "genui_visualizers"], catalog),
+    ).toEqual(["build"]);
+
+    // Unknown/not-yet-loaded skills are preserved safely.
+    expect(pruneUnsatisfiedGatedSkills(["build", "unloaded_skill"], {})).toEqual(["build", "unloaded_skill"]);
   });
 });

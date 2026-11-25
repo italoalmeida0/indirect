@@ -7,6 +7,9 @@
 //	  usable: "ask",           // deny (default) | never | ask | yolo
 //	  mode: "agentic",         // optional: agentic | talk
 //	  approvalMode: "ask",     // optional: ask | yolo
+//	  provides: ["review"],    // optional: extra identities satisfied when active
+//	  requires: ["parent"],    // optional: ALL listed skills/identities must be active
+//	  requiresAny: ["a", "b"], // optional: AT LEAST ONE listed skill/identity must be active
 //	  permissions: {
 //	    read: "inherit",
 //	    edit: "deny",
@@ -103,12 +106,33 @@ type Skill struct {
 	// ApprovalMode is "ask" or "yolo"; empty inherits (default "ask" for
 	// the first skill in the priority queue).
 	ApprovalMode string `json:"approvalMode,omitempty"`
+	// Provides lists optional capability or parent identities this skill
+	// satisfies when active (in addition to its own Name). Because skills
+	// compose via plain JS spread, a base module like generative_ui_talk can
+	// publish `provides: ["generative_ui", "generative_ui_talk"]` and any
+	// module that spreads it (e.g. talk) automatically satisfies those
+	// requirements without Go-side merging.
+	Provides []string `json:"provides,omitempty"`
+	// Requires lists skill names or provided identities that must ALL be
+	// active for this skill to be visible in use_skill, activatable, or
+	// effective.
+	Requires []string `json:"requires,omitempty"`
+	// RequiresAny lists skill names or provided identities where AT LEAST
+	// ONE must be active for this skill to be visible in use_skill,
+	// activatable, or effective. May be combined with Requires (both apply).
+	RequiresAny []string `json:"requiresAny,omitempty"`
 	// Permissions doubles as the tool GRANT list: a tool listed here with
 	// any policy except deny is granted by this skill (the base registry
 	// carries only the mode's auto tools). deny still blocks.
 	Permissions map[string]PermSpec `json:"permissions,omitempty"`
 	Body        string              `json:"body"`
 	Path        string              `json:"path,omitempty"`
+}
+
+// IsGated reports whether this skill has conditional parent requirements
+// (requires or requiresAny).
+func (s Skill) IsGated() bool {
+	return len(s.Requires) > 0 || len(s.RequiresAny) > 0
 }
 
 // Source is one in-memory JavaScript skill module: Path is the
@@ -322,7 +346,8 @@ func decodeSkill(path string, v any) (Skill, error) {
 	}
 	allowed := map[string]bool{
 		"name": true, "description": true, "usable": true, "mode": true,
-		"approvalMode": true, "permissions": true, "tools": true, "body": true,
+		"approvalMode": true, "provides": true, "requires": true, "requiresAny": true,
+		"permissions": true, "tools": true, "body": true,
 	}
 	for key := range top {
 		if strings.HasPrefix(key, "_") {
@@ -335,7 +360,7 @@ func decodeSkill(path string, v any) (Skill, error) {
 				file, moduleStem(file))
 		}
 		if !allowed[key] {
-			return Skill{}, fmt.Errorf("skill %s: unknown key %q (allowed: name, description, usable, mode, approvalMode, permissions, tools, body)", file, key)
+			return Skill{}, fmt.Errorf("skill %s: unknown key %q (allowed: name, description, usable, mode, approvalMode, provides, requires, requiresAny, permissions, tools, body)", file, key)
 		}
 	}
 
@@ -370,6 +395,15 @@ func decodeSkill(path string, v any) (Skill, error) {
 		if sk.Mode != "agentic" && sk.Mode != "talk" {
 			return Skill{}, fmt.Errorf("skill %s: `mode` must be agentic or talk, got %q", file, sk.Mode)
 		}
+	}
+	if sk.Provides, err = stringListField(top, "provides", file); err != nil {
+		return Skill{}, err
+	}
+	if sk.Requires, err = stringListField(top, "requires", file); err != nil {
+		return Skill{}, err
+	}
+	if sk.RequiresAny, err = stringListField(top, "requiresAny", file); err != nil {
+		return Skill{}, err
 	}
 	approval, hasApproval := top["approvalMode"]
 	perms, hasPerms := top["permissions"]
@@ -453,6 +487,38 @@ func stringField(top map[string]any, key, file string) (string, error) {
 		return "", fmt.Errorf("skill %s: key %q must be a string, got %s", file, key, snapshotType(v))
 	}
 	return s, nil
+}
+
+func stringListField(top map[string]any, key, file string) ([]string, error) {
+	v, present := top[key]
+	if !present {
+		return nil, nil
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil, fmt.Errorf("skill %s: key %q must be an array of strings, got %s", file, key, snapshotType(v))
+	}
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for i, elem := range raw {
+		s, ok := elem.(string)
+		if !ok {
+			return nil, fmt.Errorf("skill %s: %s[%d] must be a string, got %s", file, key, i, snapshotType(elem))
+		}
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
+			return nil, fmt.Errorf("skill %s: %s[%d] must not be empty", file, key, i)
+		}
+		if seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		out = append(out, trimmed)
+	}
+	return out, nil
 }
 
 func checkEnum(what, value string, allowed []string) error {

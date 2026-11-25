@@ -75,6 +75,92 @@ type Effective struct {
 	// tool_result THIS turn: the <skill> prefix omits them so the body
 	// text appears exactly once per turn.
 	Delivered map[string]bool
+	// Satisfied is the set of active skill names and provided identities
+	// (Skill.Name and Skill.Provides) contributed by currently effective
+	// active skills. Conditional subskills (Requires/RequiresAny) are gated
+	// against this set.
+	Satisfied map[string]bool
+}
+
+// RequirementsMet reports whether sk's gating conditions (Requires and
+// RequiresAny) are satisfied by the active identity set. Unconditional skills
+// always return true.
+func RequirementsMet(sk Skill, satisfied map[string]bool) bool {
+	for _, req := range sk.Requires {
+		if !satisfied[req] {
+			return false
+		}
+	}
+	if len(sk.RequiresAny) > 0 {
+		matched := false
+		for _, req := range sk.RequiresAny {
+			if satisfied[req] {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// Satisfied computes the set of active skill names and provided identities
+// from the session's active skills using a bottom-up fixed point:
+// unconditional active skills activate first, then any active gated skill
+// whose requirements are satisfied joins. This prevents self-satisfaction,
+// mutual cycles without an active root, and stale orphan subskills when a
+// parent deactivates.
+func Satisfied(store map[string]Skill, active map[string]SessionSkill) map[string]bool {
+	satisfied, _ := resolveActiveSatisfied(store, active)
+	return satisfied
+}
+
+func resolveActiveSatisfied(store map[string]Skill, active map[string]SessionSkill) (map[string]bool, map[string]bool) {
+	candidates := make([]string, 0, len(active))
+	for name, s := range active {
+		if !s.Active {
+			continue
+		}
+		sk, ok := store[name]
+		if !ok {
+			continue // deleted skill never breaks a session
+		}
+		if usable, err := UsableValue(sk, ""); err == nil && usable == "never" {
+			continue // base-only: invisible even to the user
+		}
+		candidates = append(candidates, name)
+	}
+	sort.Strings(candidates)
+
+	satisfied := map[string]bool{}
+	effectiveActive := map[string]bool{}
+	for {
+		progressed := false
+		for _, name := range candidates {
+			if effectiveActive[name] {
+				continue
+			}
+			sk := store[name]
+			if !RequirementsMet(sk, satisfied) {
+				continue
+			}
+			effectiveActive[name] = true
+			satisfied[name] = true
+			if sk.Name != "" {
+				satisfied[sk.Name] = true
+			}
+			for _, p := range sk.Provides {
+				satisfied[p] = true
+			}
+			progressed = true
+		}
+		if !progressed {
+			break
+		}
+	}
+	return satisfied, effectiveActive
 }
 
 // Resolve computes the effective skill state from the session's active
@@ -100,18 +186,11 @@ func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string
 		eff.Mode = "talk"
 	}
 
-	names := make([]string, 0, len(active))
-	for name, s := range active {
-		if !s.Active {
-			continue
-		}
-		sk, ok := store[name]
-		if !ok {
-			continue // deleted skill never breaks a session
-		}
-		if usable, err := UsableValue(sk, ""); err == nil && usable == "never" {
-			continue // base-only: invisible even to the user
-		}
+	satisfied, effectiveActive := resolveActiveSatisfied(store, active)
+	eff.Satisfied = satisfied
+
+	names := make([]string, 0, len(effectiveActive))
+	for name := range effectiveActive {
 		names = append(names, name)
 	}
 	sort.Slice(names, func(i, j int) bool {
@@ -148,8 +227,8 @@ func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string
 	// Model-facing listing: every skill the AI may activate with use_skill
 	// — effective usable (file original + session override) ask/yolo only;
 	// deny/never stay hidden. Across the whole store (use_skill activates
-	// skills that are not active yet). Skills pinned to another mode
-	// never show.
+	// skills that are not active yet). Skills pinned to another mode or
+	// gated behind an inactive parent never show.
 	eff.Delivered = map[string]bool{}
 	for name, sk := range store {
 		usable, err := UsableValue(sk, active[name].Usable)
@@ -158,6 +237,9 @@ func Resolve(store map[string]Skill, active map[string]SessionSkill, mode string
 		}
 		if sk.Mode != "" && sk.Mode != eff.Mode {
 			continue // another mode's skill
+		}
+		if !RequirementsMet(sk, satisfied) {
+			continue // gated behind an inactive parent skill
 		}
 		eff.Listed[name] = true
 	}

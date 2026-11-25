@@ -133,4 +133,15 @@ describe("widget source cache", () => {
     invalidateWidgetSources("gone");
     await drain();
   });
+
+  test("widgetSourceVersion.subscribe notifies listeners and unsubscribes cleanly", () => {
+    const seen: number[] = [];
+    const unsub = widgetSourceVersion.subscribe((v) => seen.push(v));
+    invalidateWidgetSources("sub-session", "w1");
+    expect(seen.length).toBe(1);
+    expect(seen[0]).toBe(widgetSourceVersion.get());
+    unsub();
+    invalidateWidgetSources("sub-session", "w1");
+    expect(seen.length).toBe(1);
+  });
 });

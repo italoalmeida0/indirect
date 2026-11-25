@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"indirect/indirect-code-daemon/packages/agent/tools"
 	"indirect/indirect-code-daemon/packages/core"
@@ -45,16 +46,32 @@ func (w *turnBridge) LoadSkill(name string) (string, error) {
 		// only contributes when another module imports it.
 		return "", fmt.Errorf("skill is not available")
 	}
+	if !skills.RequirementsMet(sk, w.skillEff.Satisfied) {
+		return "", fmt.Errorf("skill requires an active parent skill")
+	}
+	unlockedHint := formatUnlockedSkillsHint(skillRegistry().newlyUnlockedSkills(w.skillEff.Mode, w.snap.skills, name))
 	if w.skillBodyInContext(name) {
 		w.lastSkillDelivered = false
-		return skillFoldPlaceholder(name), nil
+		ack := skillFoldPlaceholder(name)
+		if unlockedHint != "" {
+			return ack + "\n\n" + unlockedHint, nil
+		}
+		return ack, nil
 	}
 	if w.skillsSent == nil {
 		w.skillsSent = map[string]bool{}
 	}
 	w.skillsSent[name] = true
 	w.lastSkillDelivered = true
-	return sk.Body, nil
+	body := sk.Body
+	if unlockedHint != "" {
+		if body == "" {
+			body = unlockedHint
+		} else {
+			body = strings.TrimRight(body, "\n") + "\n\n" + unlockedHint
+		}
+	}
+	return body, nil
 }
 
 // skillBodyInContext reports whether the skill's body is already in this
@@ -95,6 +112,29 @@ func (w *turnBridge) RecordSkillUse(name string, once bool) string {
 	w.lastSkillDelivered = false
 	w.sendInbox(skillActivateMsg{gen: w.snap.gen, name: name, once: once, delivered: delivered})
 	w.skillUses = append(w.skillUses, skillUseRecord{name: name, once: once})
+	// Mirror the activation onto the worker's local snapshot immediately so
+	// consecutive use_skill calls in the same assistant step see the newly
+	// active parent (BeforeRequest overwrites w.snap.skills from the actor on
+	// the next model step).
+	nextSkills := cloneSkillsMap(w.snap.skills)
+	if nextSkills == nil {
+		nextSkills = map[string]skills.SessionSkill{}
+	}
+	st, exists := nextSkills[name]
+	if !(st.Active && !st.ByAI) {
+		st.ByAI = true
+		st.Once = once
+	}
+	st.Active = true
+	if delivered {
+		st.InContext = true
+	}
+	if !exists || st.Priority == 0 {
+		st.Priority = nextSkillPriority(nextSkills)
+	}
+	nextSkills[name] = st
+	w.snap.skills = nextSkills
+	_ = w.resolveSkillPolicy()
 	return name
 }
 
@@ -114,11 +154,16 @@ func (w *turnBridge) resolveSkillPolicy() error {
 
 // effectiveRegistry combines the base mode allowlist with the resolved
 // skill policy: denied tools vanish from the model-facing registry. The
-// use_skill tool carries the live skill listing (ask/yolo only).
+// use_skill tool carries the live skill listing (ask/yolo only, respecting
+// mode and parent gating) on a fresh tool instance so concurrent readers
+// never race on Listing.
 func (w *turnBridge) effectiveRegistry() core.Registry {
 	reg := skillsRegistry(w.reg, w.skillEff)
 	if t, ok := reg["use_skill"].(*tools.UseSkillTool); ok {
-		t.Listing = skillRegistry().skillsDescription(w.skillEff.Mode, w.snap.skills)
+		reg["use_skill"] = &tools.UseSkillTool{
+			Host:    t.Host,
+			Listing: skillRegistry().skillsDescription(w.skillEff.Mode, w.snap.skills),
+		}
 	}
 	return reg
 }

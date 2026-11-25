@@ -199,6 +199,25 @@ export function lintPageHTML(stateJSON: string, hasTest: boolean, libEntries: Re
   })}</script>
 <script>${escapeScriptClose(buildRuntimeScript({ stateJSON }))}</script>
 <script>
+// Match the production sandbox="allow-scripts" opaque-origin iframe where
+// localStorage / sessionStorage throw SecurityError: unguarded usage must fail
+// lint immediately with a clear pointer to window.indirectUi.saveState().
+(function () {
+  function blockStorage(name) {
+    try {
+      Object.defineProperty(window, name, {
+        configurable: true,
+        get: function () {
+          var msg = name + " is blocked in the sandboxed widget iframe — use window.indirectUi.saveState(snapshot) to persist state (or guard with try/catch)";
+          if (typeof DOMException === "function") throw new DOMException(msg, "SecurityError");
+          throw new Error(msg);
+        }
+      });
+    } catch (_) {}
+  }
+  blockStorage("localStorage");
+  blockStorage("sessionStorage");
+})();
 window.__lint_result = { errors: [], output: [], done: false, webgl: null };
 // WebGL availability for the 3D path: the polyfill installs before any
 // widget code runs and reports what it did (contexts, programs, draws).

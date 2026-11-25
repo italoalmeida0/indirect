@@ -525,3 +525,238 @@ func TestLoadDuplicateNamesFirstFileWins(t *testing.T) {
 		t.Fatalf("duplicate errors = %v", errs)
 	}
 }
+
+func TestParseConditionalSubskillFields(t *testing.T) {
+	dir := t.TempDir()
+	baseSrc := `
+export default {
+  name: "gen_base",
+  description: "base gen ui",
+  usable: "never",
+  provides: ["generative_ui", "generative_ui_talk", "generative_ui"],
+  body: "base",
+};
+`
+	talkSrc := `
+import base from "skill:gen_base";
+export default {
+  ...base,
+  name: "talk",
+  description: "talk mode",
+  usable: "deny",
+  mode: "talk",
+  body: "talk " + base.body,
+};
+`
+	clearedSrc := `
+import base from "skill:gen_base";
+export default {
+  ...base,
+  name: "plain_talk",
+  description: "talk without genui",
+  usable: "deny",
+  mode: "talk",
+  provides: [],
+  body: "plain",
+};
+`
+	subSrc := `
+export default {
+  name: "genui_sub",
+  description: "subskill",
+  usable: "yolo",
+  requires: ["  parent_a  ", "parent_a"],
+  requiresAny: ["generative_ui_talk", "generative_ui_agentic"],
+  body: "sub body",
+};
+`
+	for name, src := range map[string]string{
+		"gen_base.js":   baseSrc,
+		"talk.js":       talkSrc,
+		"plain_talk.js": clearedSrc,
+		"genui_sub.js":  subSrc,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, errs := Load(dir)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected load errors: %v", errs)
+	}
+	talk := list["talk"]
+	if len(talk.Provides) != 2 || talk.Provides[0] != "generative_ui" || talk.Provides[1] != "generative_ui_talk" {
+		t.Fatalf("spread provides lost/not deduped: %+v", talk.Provides)
+	}
+	if talk.IsGated() {
+		t.Fatalf("talk must not be gated: %+v", talk)
+	}
+	if plain := list["plain_talk"]; len(plain.Provides) != 0 {
+		t.Fatalf("empty provides array must clear spread provides, got %+v", plain.Provides)
+	}
+	sub := list["genui_sub"]
+	if !sub.IsGated() {
+		t.Fatal("subskill must report IsGated() == true")
+	}
+	if len(sub.Requires) != 1 || sub.Requires[0] != "parent_a" {
+		t.Fatalf("requires = %+v, want [parent_a]", sub.Requires)
+	}
+	if len(sub.RequiresAny) != 2 || sub.RequiresAny[0] != "generative_ui_talk" || sub.RequiresAny[1] != "generative_ui_agentic" {
+		t.Fatalf("requiresAny = %+v", sub.RequiresAny)
+	}
+
+	// Reject malformed gating / provides values and non-plain QuickJS data.
+	bad := map[string]string{
+		"requires string":      `export default { name: "x", description: "d", requires: "p", body: "b" };`,
+		"requiresAny object":   `export default { name: "x", description: "d", requiresAny: { a: true }, body: "b" };`,
+		"provides number":      `export default { name: "x", description: "d", provides: 1, body: "b" };`,
+		"requires non-string":  `export default { name: "x", description: "d", requires: [42], body: "b" };`,
+		"requires empty elem":  `export default { name: "x", description: "d", requires: ["   "], body: "b" };`,
+		"requiresAny func":     `export default { name: "x", description: "d", requiresAny: [() => "a"], body: "b" };`,
+		"provides sparse":      `const a = []; a[1] = "x"; export default { name: "x", description: "d", provides: a, body: "b" };`,
+		"requires cyclic":      `const a = []; a.push(a); export default { name: "x", description: "d", requires: a, body: "b" };`,
+	}
+	for label, src := range bad {
+		if _, err := Parse("bad.js", []byte(src)); err == nil {
+			t.Fatalf("%s: expected parse error", label)
+		}
+	}
+}
+
+func TestResolveConditionalSubskillGating(t *testing.T) {
+	store := map[string]Skill{
+		"talk": {
+			Name:     "talk",
+			Mode:     "talk",
+			Usable:   "deny",
+			Provides: []string{"generative_ui", "generative_ui_talk"},
+			Body:     "talk body",
+		},
+		"build": {
+			Name:   "build",
+			Mode:   "agentic",
+			Usable: "deny",
+			Body:   "build body",
+		},
+		"gen_agentic": {
+			Name:     "gen_agentic",
+			Mode:     "agentic",
+			Usable:   "yolo",
+			Provides: []string{"generative_ui", "generative_ui_agentic"},
+			Body:     "gen agentic body",
+		},
+		"games": {
+			Name:     "games",
+			Mode:     "talk",
+			Usable:   "yolo",
+			Requires: []string{"generative_ui_talk"},
+			Body:     "games body",
+		},
+		"viz": {
+			Name:        "viz",
+			Usable:      "yolo",
+			RequiresAny: []string{"generative_ui_talk", "generative_ui_agentic"},
+			Body:        "viz body",
+		},
+		"eng": {
+			Name:     "eng",
+			Mode:     "agentic",
+			Usable:   "yolo",
+			Requires: []string{"generative_ui_agentic"},
+			Body:     "eng body",
+		},
+		"combo": {
+			Name:        "combo",
+			Mode:        "agentic",
+			Usable:      "yolo",
+			Requires:    []string{"build", "generative_ui_agentic"},
+			RequiresAny: []string{"eng", "viz"},
+			Body:        "combo body",
+		},
+		"cycle_a": {Name: "cycle_a", Usable: "yolo", Requires: []string{"cycle_b"}, Body: "ca"},
+		"cycle_b": {Name: "cycle_b", Usable: "yolo", Requires: []string{"cycle_a"}, Body: "cb"},
+	}
+
+	// 1. Agentic before gen_agentic active: only gen_agentic is listed; gated subskills stay hidden.
+	effBefore, err := Resolve(store, map[string]SessionSkill{
+		"build": {Priority: 1, Active: true},
+	}, "agentic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !effBefore.Listed["gen_agentic"] {
+		t.Fatalf("gen_agentic must be listed in agentic mode: %+v", effBefore.Listed)
+	}
+	for _, hidden := range []string{"games", "viz", "eng", "combo", "cycle_a", "cycle_b"} {
+		if effBefore.Listed[hidden] {
+			t.Errorf("%q must be hidden before parent is active: %+v", hidden, effBefore.Listed)
+		}
+	}
+
+	// 2. Agentic after gen_agentic active: viz & eng unlock, games stays mode+parent hidden, combo still needs eng or viz.
+	effAfter, err := Resolve(store, map[string]SessionSkill{
+		"build":       {Priority: 1, Active: true},
+		"gen_agentic": {Priority: 2, Active: true},
+	}, "agentic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"gen_agentic", "viz", "eng"} {
+		if !effAfter.Listed[want] {
+			t.Errorf("%q must unlock once gen_agentic is active: %+v", want, effAfter.Listed)
+		}
+	}
+	if effAfter.Listed["games"] {
+		t.Errorf("talk-only games must stay hidden in agentic: %+v", effAfter.Listed)
+	}
+	if effAfter.Listed["combo"] {
+		t.Errorf("combo requires (build AND generative_ui_agentic) AND (eng OR viz); must stay hidden until eng or viz activates")
+	}
+
+	// 3. Transitive activation: activating eng unlocks combo too!
+	effChain, err := Resolve(store, map[string]SessionSkill{
+		"build":       {Priority: 1, Active: true},
+		"gen_agentic": {Priority: 2, Active: true},
+		"eng":         {Priority: 3, Active: true},
+	}, "agentic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !effChain.Listed["combo"] {
+		t.Fatalf("combo must unlock once build + gen_agentic + eng are active: %+v", effChain.Listed)
+	}
+
+	// 4. Talk session: talk spreads provides:["generative_ui","generative_ui_talk"], unlocking games & viz immediately.
+	effTalk, err := Resolve(store, map[string]SessionSkill{
+		"talk": {Priority: 1, Active: true},
+	}, "talk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !effTalk.Listed["games"] || !effTalk.Listed["viz"] {
+		t.Fatalf("talk must unlock games and viz immediately, got %+v", effTalk.Listed)
+	}
+	if effTalk.Listed["gen_agentic"] || effTalk.Listed["eng"] || effTalk.Listed["combo"] {
+		t.Fatalf("agentic skills must stay hidden in talk, got %+v", effTalk.Listed)
+	}
+
+	// 5. Orphan active gated skills and cycles without an active root are excluded from Order/Bodies/Chain/Satisfied.
+	effOrphan, err := Resolve(store, map[string]SessionSkill{
+		"build":   {Priority: 1, Active: true},
+		"eng":     {Priority: 2, Active: true}, // parent gen_agentic NOT active
+		"cycle_a": {Priority: 3, Active: true},
+		"cycle_b": {Priority: 4, Active: true},
+	}, "agentic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(effOrphan.Order) != 1 || effOrphan.Order[0] != "build" {
+		t.Fatalf("unsatisfied gated skills and cycles must not enter Order: %v", effOrphan.Order)
+	}
+	if _, ok := effOrphan.Bodies["eng"]; ok {
+		t.Fatal("unsatisfied gated skill body must not leak into Bodies")
+	}
+	if effOrphan.Satisfied["eng"] || effOrphan.Satisfied["cycle_a"] || effOrphan.Satisfied["cycle_b"] {
+		t.Fatalf("unsatisfied gated skills must not populate Satisfied: %+v", effOrphan.Satisfied)
+	}
+}

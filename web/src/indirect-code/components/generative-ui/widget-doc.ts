@@ -28,15 +28,49 @@ export { buildJsxModuleBody, escapeScriptClose, sanitizeModelJS };
 export const WIDGET_BASE_CSS = `
 *, *::before, *::after { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
+html { overflow-x: clip; }
 body {
   font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", ui-sans-serif, Roboto, "Helvetica Neue", Arial, sans-serif;
   background: var(--gu-bg);
   color: var(--gu-text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* The frame auto-fits the root height; the document itself never scrolls. */
+  /* The frame auto-fits the root height; flow-root keeps child margins inside
+     body so non-.gu-root game shells never clip. */
+  display: flow-root;
   overflow: hidden;
 }
+img, canvas, svg { max-width: 100%; }
+html[data-fullscreen="true"] { height: 100%; }
+html[data-fullscreen="true"] body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+html[data-fullscreen="true"] .gu-root {
+  flex: 1 0 auto;
+  min-height: 100%;
+}
+html[data-fullscreen="true"] body > div:not(.gu-root) {
+  flex: 1 0 100%;
+  min-height: 100%;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+}
+html[data-fullscreen="true"] .gu-game-stage {
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  border-radius: 0 !important;
+}
+html[data-fullscreen="true"] .gu-game-stage:only-child {
+  height: 100% !important;
+  min-height: 100vh !important;
+}
+canvas:focus:not(:focus-visible) { outline: none; }
+canvas:focus-visible { outline: 2px solid var(--gu-brand); outline-offset: -2px; }
 ::selection { background: color-mix(in oklab, var(--gu-brand) 28%, transparent); }
 /* Tokens mirror the host Arc theme (web/src/ds/tokens.css). The widget surface
    IS the host --surface color, so a widget reads as native transcript content,
@@ -85,9 +119,10 @@ body {
   --gu-chart-3: oklch(73.5% 0.105 74);
   --gu-chart-4: oklch(79% 0.095 236);
   --gu-chart-5: oklch(78% 0 0);
-  --gu-radius: 10px;
-  --gu-radius-sm: 7px;
-  --gu-gap: 12px;
+  --gu-radius: 12px;
+  --gu-radius-sm: 8px;
+  --gu-gap: 16px;
+  --gu-gap-sm: 10px;
   --gu-shadow: 0 1px 2px oklch(0% 0 0 / 0.18);
   --gu-thumb: oklch(97% 0 0);
 }
@@ -149,40 +184,45 @@ body {
 :root[data-theme="light"][data-accent="coral"] { --gu-brand: oklch(59% 0.19 26); }
 :root[data-theme="light"][data-accent="rose"] { --gu-brand: oklch(58% 0.2 354); }
 .gu-root {
-  padding: 16px;
+  padding: 20px;
   background: var(--gu-bg);
   color: var(--gu-text);
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.55;
   min-height: 100%;
+  overflow-x: clip;
 }
-@media (max-width: 420px) { .gu-root { padding: 14px; } }
 .gu-root * { min-width: 0; }
 .gu-root img, .gu-root canvas, .gu-root svg { max-width: 100%; }
 .gu-root img { display: block; border-radius: var(--gu-radius-sm); }
 /* Header group: title + caption stay tight wherever they sit. */
-.gu-header .gu-title, .gu-header .gu-subtitle { margin-bottom: 2px; }
+.gu-header { margin-bottom: 14px; }
+.gu-header .gu-title, .gu-header .gu-subtitle { margin-bottom: 3px; }
 .gu-header .gu-caption, .gu-header .gu-body { margin: 0; }
 /* Type scale: one clear hierarchy (title > subtitle > body > caption), weights 400/500 only. */
-.gu-title { font-size: 17px; font-weight: 500; line-height: 1.3; letter-spacing: -0.02em; text-wrap: balance; margin: 0 0 3px; color: var(--gu-text); }
-.gu-subtitle { font-size: 13.5px; font-weight: 500; line-height: 1.4; letter-spacing: -0.01em; margin: 0 0 3px; color: var(--gu-text); }
-.gu-body { margin: 0 0 10px; color: var(--gu-text); text-wrap: pretty; }
-.gu-caption { font-size: 12px; line-height: 1.5; color: var(--gu-text-faint); margin: 0 0 12px; text-wrap: pretty; }
+.gu-title { font-size: 18px; font-weight: 500; line-height: 1.28; letter-spacing: -0.02em; text-wrap: balance; margin: 0 0 4px; color: var(--gu-text); }
+.gu-subtitle { font-size: 14px; font-weight: 500; line-height: 1.38; letter-spacing: -0.01em; margin: 0 0 4px; color: var(--gu-text); }
+.gu-body { margin: 0 0 12px; color: var(--gu-text); text-wrap: pretty; }
+.gu-caption { font-size: 12.5px; line-height: 1.5; color: var(--gu-text-faint); margin: 0 0 12px; text-wrap: pretty; }
 .gu-strong { font-weight: 500; }
 .gu-dim { color: var(--gu-text-dim); }
 .gu-mono { font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
-.gu-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gu-gap); }
-.gu-col { display: flex; flex-direction: column; gap: var(--gu-gap); }
+.gu-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gu-gap-sm) 12px; }
+.gu-col, .gu-stack { display: flex; flex-direction: column; gap: var(--gu-gap); }
+.gu-stack-sm { display: flex; flex-direction: column; gap: var(--gu-gap-sm); }
+.gu-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; max-width: 100%; }
 /* Inside a stack the gap owns the rhythm; block margins would double it. */
-.gu-col > :is(.gu-title, .gu-subtitle, .gu-body, .gu-caption, .gu-divider) { margin: 0; }
+.gu-col > :is(.gu-title, .gu-subtitle, .gu-body, .gu-caption, .gu-divider, .gu-header),
+.gu-stack > :is(.gu-title, .gu-subtitle, .gu-body, .gu-caption, .gu-divider, .gu-header),
+.gu-stack-sm > :is(.gu-title, .gu-subtitle, .gu-body, .gu-caption, .gu-divider, .gu-header) { margin: 0; }
 .gu-spacer { flex: 1 1 auto; }
-.gu-divider { border: 0; border-top: 1px solid var(--gu-line); margin: 12px 0; }
+.gu-divider { border: 0; border-top: 1px solid var(--gu-line); margin: 16px 0; }
 /* Surfaces: prefer ONE surface per widget. Cards rest on a crisp 1px border, no drop shadows. */
 .gu-card {
   background: var(--gu-elev);
   border: 1px solid var(--gu-line);
-  border-radius: 12px;
-  padding: 14px;
+  border-radius: 14px;
+  padding: 16px 18px;
 }
 .gu-card.is-selected {
   background: color-mix(in oklab, var(--gu-brand) 6%, var(--gu-elev));
@@ -193,7 +233,7 @@ body {
   background: var(--gu-fill);
   border: 0;
   border-radius: var(--gu-radius);
-  padding: 12px;
+  padding: 14px 16px;
 }
 /* Button base is self-contained per class: gu-btn-primary / gu-btn-ghost /
    gu-btn-sm work standalone (models follow the docs and use one class), and
@@ -228,20 +268,31 @@ body {
 }
 .gu-btn-ghost:hover { background: color-mix(in oklab, var(--gu-text) 7%, transparent); color: var(--gu-text); }
 .gu-btn-sm { min-height: 28px; padding: 0 10px; font-size: 12px; border-radius: 7px; }
-/* Segmented control: use for dataset / view switches instead of loose pills. */
-.gu-segmented {
-  display: inline-flex; align-items: center; gap: 2px; padding: 2px; max-width: 100%;
+/* Segmented control & tabs: use for dataset / view switches instead of loose pills.
+   Horizontally scrollable on narrow mobile screens so multi-tab strips never overflow or crush. */
+.gu-segmented, .gu-tabs {
+  display: inline-flex; align-items: center; gap: 2px; padding: 3px; max-width: 100%;
   background: var(--gu-fill); border-radius: 10px;
+  overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none;
 }
-.gu-segmented .gu-btn, .gu-segmented button {
-  min-height: 28px; padding: 0 12px; min-width: 0;
+.gu-segmented::-webkit-scrollbar, .gu-tabs::-webkit-scrollbar { display: none; }
+.gu-segmented .gu-btn, .gu-segmented button,
+.gu-tabs .gu-btn, .gu-tabs button {
+  flex: 0 0 auto;
+  min-height: 30px; padding: 0 12px;
   font-family: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
   background: transparent; border: 0; border-radius: 8px; box-shadow: none; color: var(--gu-text-dim);
+  transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
-.gu-segmented .gu-btn:hover, .gu-segmented button:hover { color: var(--gu-text); background: transparent; }
+.gu-segmented .gu-btn:hover, .gu-segmented button:hover,
+.gu-tabs .gu-btn:hover, .gu-tabs button:hover { color: var(--gu-text); background: transparent; }
 .gu-segmented .gu-btn[aria-pressed="true"], .gu-segmented button[aria-pressed="true"],
-.gu-segmented .gu-btn.is-active, .gu-segmented button.is-active {
+.gu-segmented .gu-btn[aria-selected="true"], .gu-segmented button[aria-selected="true"],
+.gu-segmented .gu-btn.is-active, .gu-segmented button.is-active,
+.gu-tabs .gu-btn[aria-pressed="true"], .gu-tabs button[aria-pressed="true"],
+.gu-tabs .gu-btn[aria-selected="true"], .gu-tabs button[aria-selected="true"],
+.gu-tabs .gu-btn.is-active, .gu-tabs button.is-active {
   background: var(--gu-elev); color: var(--gu-text); box-shadow: var(--gu-shadow);
 }
 /* Choice tiles (time slots, option grids). */
@@ -255,7 +306,13 @@ body {
 .gu-choice:hover { background: color-mix(in oklab, var(--gu-elev) 88%, var(--gu-text) 5%); }
 .gu-choice:focus-visible { outline: 2px solid var(--gu-brand); outline-offset: 2px; }
 .gu-choice[aria-pressed="true"], .gu-choice.is-selected, .gu-choice.selected {
-  background: var(--gu-accent); color: var(--gu-accent-fg); border-color: transparent;
+  background: color-mix(in oklab, var(--gu-brand) 14%, var(--gu-elev));
+  color: var(--gu-text);
+  border-color: color-mix(in oklab, var(--gu-brand) 58%, var(--gu-line));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--gu-brand) 36%, transparent);
+}
+.gu-choice[aria-pressed="true"]:hover, .gu-choice.is-selected:hover, .gu-choice.selected:hover {
+  background: color-mix(in oklab, var(--gu-brand) 19%, var(--gu-elev));
 }
 .gu-input, .gu-select, .gu-textarea {
   width: 100%; font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
@@ -269,6 +326,7 @@ body {
   transition: border-color 140ms ease;
 }
 .gu-select { appearance: auto; }
+.gu-select option, select option { background: var(--gu-elev); color: var(--gu-text); }
 .gu-textarea { min-height: 64px; resize: vertical; }
 .gu-input::placeholder, .gu-textarea::placeholder { color: var(--gu-text-faint); }
 .gu-input:focus, .gu-select:focus, .gu-textarea:focus { border-color: var(--gu-brand); }
@@ -318,11 +376,16 @@ body {
   background: var(--gu-fill);
   border: 0;
 }
-button.gu-chip { appearance: none; cursor: pointer; font-family: inherit; transition: background 140ms ease, color 140ms ease; }
+button.gu-chip { appearance: none; cursor: pointer; font-family: inherit; transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease; }
 button.gu-chip:hover { color: var(--gu-text); }
 button.gu-chip:focus-visible { outline: 2px solid var(--gu-brand); outline-offset: 2px; }
 button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
-  background: var(--gu-accent); color: var(--gu-accent-fg);
+  background: color-mix(in oklab, var(--gu-brand) 16%, var(--gu-elev));
+  color: var(--gu-text);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--gu-brand) 54%, transparent);
+}
+button.gu-chip[aria-pressed="true"]:hover, button.gu-chip.is-active:hover {
+  background: color-mix(in oklab, var(--gu-brand) 22%, var(--gu-elev));
 }
 .gu-badge {
   display: inline-flex; align-items: center; gap: 5px;
@@ -343,16 +406,23 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
   background: var(--gu-brand);
   transition: width 260ms ease;
 }
-.gu-kpi { display: flex; flex-wrap: wrap; gap: var(--gu-gap); }
+.gu-kpi, .gu-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 152px), 1fr));
+  gap: var(--gu-gap-sm);
+}
 .gu-kpi-item {
-  flex: 1 1 110px;
   background: var(--gu-elev);
   border: 1px solid var(--gu-line);
   border-radius: 12px;
-  padding: 12px;
+  padding: 14px 16px;
+  min-width: 0;
 }
-.gu-kpi-value { display: block; font-size: 21px; font-weight: 500; line-height: 1.15; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.gu-kpi-label { display: block; font-size: 12px; font-weight: 500; color: var(--gu-text-faint); margin-top: 2px; }
+.gu-kpi-value {
+  display: block; font-size: 22px; font-weight: 500; line-height: 1.15;
+  letter-spacing: -0.02em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+.gu-kpi-label { display: block; font-size: 12px; font-weight: 500; color: var(--gu-text-faint); margin-top: 4px; }
 /* Tables: hairlines only, no zebra, always inside .gu-table-wrap. */
 .gu-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: var(--gu-radius); }
 .gu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -392,8 +462,111 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
 .gu-svg text { fill: var(--gu-text-faint); font-size: 11px; font-family: inherit; }
 .gu-svg .axis-line, .gu-svg .grid-line { stroke: var(--gu-grid); stroke-width: 1; }
 /* Media, map and 3D stages share one clipped stage treatment. */
-.gu-stage { border-radius: 12px; overflow: hidden; background: var(--gu-fill); }
+.gu-stage { position: relative; border-radius: 12px; overflow: hidden; background: var(--gu-fill); }
 .gu-stage canvas { display: block; }
+.gu-game-stage {
+  position: relative; width: 100%; overflow: hidden; background: var(--gu-fill);
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.gu-game-stage canvas { display: block; width: 100%; height: 100%; }
+.gu-canvas-interactive {
+  touch-action: none; user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  cursor: grab;
+}
+.gu-canvas-interactive:active { cursor: grabbing; }
+.gu-stage-hud {
+  position: absolute; top: 10px; left: 10px; right: 10px; z-index: 2;
+  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 6px;
+  pointer-events: none;
+}
+.gu-stage-hud > * { pointer-events: auto; max-width: 100%; }
+.gu-hud-pill {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 3px 10px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 500; line-height: 1.4; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  color: var(--gu-text);
+  background: color-mix(in oklab, var(--gu-bg) 80%, transparent);
+  border: 1px solid color-mix(in oklab, var(--gu-line) 85%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+/* Mobile & desktop game touch controls: glassmorphic >=44px targets, zero scroll/callout leak. */
+.gu-touch-controls {
+  position: absolute; left: 10px; right: 10px; bottom: 10px; z-index: 3;
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 10px;
+  pointer-events: none;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.gu-touch-controls > * { pointer-events: auto; }
+.gu-touch-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px;
+  background: var(--gu-elev); border-top: 1px solid var(--gu-line);
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.gu-touch-group {
+  display: inline-flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+}
+.gu-touch-btn, .gu-touch-btn-primary {
+  appearance: none; cursor: pointer;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  min-width: 48px; min-height: 48px; padding: 0 13px;
+  font: inherit; font-size: 13px; font-weight: 500; line-height: 1; white-space: nowrap;
+  color: var(--gu-text);
+  background: color-mix(in oklab, var(--gu-bg) 74%, transparent);
+  border: 1px solid color-mix(in oklab, var(--gu-text) 22%, transparent);
+  border-radius: 14px;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px oklch(0% 0 0 / 0.22);
+  transition: transform 80ms ease, background 100ms ease, border-color 100ms ease;
+}
+.gu-touch-btn:active, .gu-touch-btn.is-active, .gu-touch-btn[aria-pressed="true"],
+.gu-touch-btn-primary:active, .gu-touch-btn-primary.is-active, .gu-touch-btn-primary[aria-pressed="true"] {
+  transform: scale(0.93);
+  background: color-mix(in oklab, var(--gu-brand) 34%, var(--gu-bg));
+  border-color: var(--gu-brand);
+}
+.gu-touch-btn-primary {
+  background: color-mix(in oklab, var(--gu-brand) 28%, var(--gu-bg));
+  border-color: color-mix(in oklab, var(--gu-brand) 70%, transparent);
+}
+.gu-touch-btn-primary:active, .gu-touch-btn-primary.is-active, .gu-touch-btn-primary[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--gu-brand) 52%, var(--gu-bg));
+}
+.gu-touch-btn-round {
+  border-radius: 999px; width: 52px; height: 52px; min-width: 52px; min-height: 52px; padding: 0;
+}
+.gu-dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 44px);
+  grid-template-rows: repeat(3, 44px);
+  gap: 4px;
+  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.gu-dpad .gu-touch-btn, .gu-dpad .gu-touch-btn-primary {
+  min-width: 44px; min-height: 44px; width: 44px; height: 44px;
+  padding: 0; border-radius: 12px;
+}
+.gu-kbd {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11px; font-weight: 500; line-height: 1;
+  color: var(--gu-text-dim);
+  background: var(--gu-elev);
+  border: 1px solid var(--gu-line);
+  box-shadow: inset 0 -1px 0 var(--gu-line);
+}
+.gu-callout {
+  padding: 12px 14px; border-radius: var(--gu-radius-sm);
+  background: var(--gu-fill);
+  border-left: 2.5px solid var(--gu-brand);
+  font-size: 12.5px; line-height: 1.5; color: var(--gu-text-dim);
+}
 .gu-root .leaflet-container { font: inherit; border-radius: 12px; background: var(--gu-fill); }
 .gu-root .leaflet-control-attribution {
   font-size: 10px; line-height: 1.4; padding: 1px 6px;
@@ -401,7 +574,13 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
 }
 .gu-root .leaflet-bar { border: 1px solid var(--gu-line); border-radius: 8px; overflow: hidden; box-shadow: var(--gu-shadow); }
 .gu-root .leaflet-bar a { background: var(--gu-elev); color: var(--gu-text); border-bottom-color: var(--gu-line); }
-/* Multi-column layouts (reference: cards in a main+side grid). */
+/* Multi-column layouts (responsive auto-fit + explicit splits/grids). */
+.gu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--gu-gap);
+  align-items: start;
+}
 .gu-split {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
@@ -420,8 +599,33 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
   gap: var(--gu-gap);
   align-items: start;
 }
+.gu-grid-4 {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--gu-gap);
+  align-items: start;
+}
 @media (max-width: 640px) {
-  .gu-split, .gu-grid-2, .gu-grid-3 { grid-template-columns: minmax(0, 1fr); }
+  .gu-split { grid-template-columns: minmax(0, 1fr); }
+  .gu-grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  :root { --gu-gap: 12px; }
+  .gu-root { padding: 16px; }
+  .gu-card { padding: 14px; }
+  .gu-panel { padding: 12px; }
+  .gu-grid-2, .gu-grid-3 { grid-template-columns: minmax(0, 1fr); }
+  .gu-kpi, .gu-kpis { grid-template-columns: repeat(auto-fit, minmax(min(100%, 144px), 1fr)); }
+  .gu-kpi-item { padding: 12px 14px; }
+  .gu-kpi-value { font-size: 19px; }
+  .gu-stage-hud { top: 8px; left: 8px; right: 8px; gap: 5px; }
+  .gu-hud-pill { padding: 3px 8px; font-size: 11px; gap: 4px; }
+  .gu-btn, .gu-btn-primary, .gu-btn-ghost { min-height: 36px; }
+  .gu-btn-sm { min-height: 32px; }
+  .gu-segmented .gu-btn, .gu-segmented button,
+  .gu-tabs .gu-btn, .gu-tabs button { min-height: 32px; padding: 0 11px; }
+  .gu-chip { min-height: 28px; padding: 4px 11px; }
+  .gu-slider { height: 36px; }
 }
 @media (max-width: 480px) {
   /* Bars stack: label + value on one line, full-width track below. */
@@ -429,6 +633,14 @@ button.gu-chip[aria-pressed="true"], button.gu-chip.is-active {
   .gu-bar-label { flex: 1 1 auto; }
   .gu-bar-track { order: 3; flex: 1 1 100%; }
   .gu-bar-value { margin-left: auto; }
+}
+@media (max-width: 420px) {
+  .gu-root { padding: 14px; }
+  .gu-title { font-size: 16.5px; }
+  .gu-touch-controls { left: 8px; right: 8px; bottom: 8px; gap: 6px; }
+  .gu-touch-btn, .gu-touch-btn-primary { min-width: 44px; min-height: 44px; font-size: 12.5px; padding: 0 10px; }
+  .gu-touch-btn-round { width: 48px; height: 48px; min-width: 48px; min-height: 48px; }
+  .gu-dpad { grid-template-columns: repeat(3, 44px); grid-template-rows: repeat(3, 44px); gap: 3px; }
 }
 .gu-hidden { display: none !important; }
 @media (hover: hover) and (pointer: fine) {
@@ -496,19 +708,31 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
   var state = ${stateJSON};
   var __destroyers = [];
   var __resizers = [];
+  var __fullscreenListeners = [];
+  var __isFullscreen = false;
   var __errorHandler = null;
   var __host = {
     sendPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "sendPrompt", text: String(text).slice(0, 4000) }, "*"); },
     prefillPrompt: function (text) { if (typeof text === "string" && text.trim()) window.parent.postMessage({ __gu: "prefillPrompt", text: String(text).slice(0, 4000) }, "*"); },
     openLink: function (url) { if (typeof url === "string") window.parent.postMessage({ __gu: "openLink", url: String(url).slice(0, 2048) }, "*"); },
-    resize: function (height) { window.parent.postMessage({ __gu: "resize", height: Number(height) }, "*"); },
+    resize: function (height) { if (!__isFullscreen) window.parent.postMessage({ __gu: "resize", height: Number(height) }, "*"); },
     saveState: function (s) {
       try {
-        var str = JSON.stringify(s === undefined ? window.__gu.state : s);
-        if (typeof str === "string" && str.length <= 20000) {
+        var payload = s === undefined ? (window.__gu && window.__gu.state) : s;
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+        var str = JSON.stringify(payload);
+        if (typeof str !== "string" || str.length > 65536) return false;
+        try {
+          var copy = JSON.parse(str);
+          if (window.__gu) window.__gu.state = copy;
+        } catch {}
+        try {
           window.parent.postMessage({ __gu: "state", state: str }, "*");
-        }
-      } catch {}
+        } catch {}
+        return true;
+      } catch {
+        return false;
+      }
     }
   };
   window.indirectUi = Object.freeze(__host);
@@ -518,6 +742,7 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     return Math.ceil(root.getBoundingClientRect().height);
   }
   function __postHeight(height) {
+    if (__isFullscreen) return height;
     if (height > 0 && Math.abs(height - __lastHeight) > 1) {
       __lastHeight = height;
       window.parent.postMessage({ __gu: "resize", height: height }, "*");
@@ -611,8 +836,35 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
     for (var i = 0; i < list.length; i++) __proxyImg(list[i]);
   }
   function $onDestroy(fn) { if (typeof fn === "function") __destroyers.push(fn); }
-  function $onResize(fn) { if (typeof fn === "function") __resizers.push(fn); }
+  function $onResize(fn) {
+    if (typeof fn !== "function") return function () {};
+    __resizers.push(fn);
+    return function () {
+      var idx = __resizers.indexOf(fn);
+      if (idx >= 0) __resizers.splice(idx, 1);
+    };
+  }
+  function $onFullscreen(fn) {
+    if (typeof fn !== "function") return function () {};
+    __fullscreenListeners.push(fn);
+    return function () {
+      var idx = __fullscreenListeners.indexOf(fn);
+      if (idx >= 0) __fullscreenListeners.splice(idx, 1);
+    };
+  }
   function $onError(fn) { if (typeof fn === "function") __errorHandler = fn; }
+  function fitCanvas(canvas, cssW, cssH) {
+    if (!canvas) return { width: 0, height: 0, dpr: 1 };
+    var dpr = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
+    var rect = (!cssW || !cssH) && canvas.getBoundingClientRect ? canvas.getBoundingClientRect() : null;
+    var w = Math.max(1, Math.round(cssW || (rect && rect.width) || canvas.clientWidth || canvas.width || 300));
+    var h = Math.max(1, Math.round(cssH || (rect && rect.height) || canvas.clientHeight || canvas.height || 200));
+    var bw = Math.round(w * dpr);
+    var bh = Math.round(h * dpr);
+    if (canvas.width !== bw) canvas.width = bw;
+    if (canvas.height !== bh) canvas.height = bh;
+    return { width: w, height: h, dpr: dpr };
+  }
   function reportError(err) {
     try {
       var message = String((err && err.message) || err).slice(0, 500);
@@ -627,11 +879,151 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
   }
   window.__gu = {
     state: state, render: $render,
-    onDestroy: $onDestroy, onResize: $onResize, onError: $onError,
+    onDestroy: $onDestroy, onResize: $onResize, onFullscreen: $onFullscreen, onError: $onError,
+    fitCanvas: fitCanvas, isFullscreen: false,
     reportError: reportError, destroy: runDestroy,
     saveState: __host.saveState,
     error: null
   };
+  // Keyboard & pointer ergonomics: track widget-owned keydown/keyup listeners
+  // BEFORE widget code runs so Space/Arrow keys never scroll-chain into the
+  // parent chat while playing a game, and clicking a canvas focuses it cleanly.
+  var __keyListenerCount = 0;
+  function __isTextInputControl(el) {
+    if (!el || el.nodeType !== 1) return false;
+    var tag = el.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+    return !!el.isContentEditable;
+  }
+  function __isNativeKeyControl(el) {
+    if (__isTextInputControl(el)) return true;
+    if (!el || el.nodeType !== 1) return false;
+    var tag = el.tagName;
+    return tag === "BUTTON" || tag === "A" || tag === "SUMMARY";
+  }
+  function __isTouchGameButton(el) {
+    return !!(el && el.nodeType === 1 && el.closest && el.closest(".gu-touch-btn,.gu-touch-btn-primary,.gu-touch-controls,.gu-dpad"));
+  }
+  function __hasReactKeyHandler(el) {
+    var cur = el;
+    while (cur && cur.nodeType === 1) {
+      if (cur.__guHasKey) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+  window.addEventListener("keydown", function (ev) {
+    if (!ev || ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    var t = ev.target;
+    if (ev.key === "Escape" && __isFullscreen && !__isNativeKeyControl(t)) {
+      // Defer past widget-owned window keydown listeners (registered later)
+      // so a game calling ev.preventDefault() on Escape to pause does not
+      // accidentally exit fullscreen.
+      var defer = typeof queueMicrotask === "function" ? queueMicrotask : function (fn) { Promise.resolve().then(fn); };
+      defer(function () {
+        if (!ev.defaultPrevented && __isFullscreen) {
+          try { window.parent.postMessage({ __gu: "escape" }, "*"); } catch {}
+        }
+      });
+      return;
+    }
+    var isSpace = ev.key === " ";
+    var isArrow = ev.key === "ArrowUp" || ev.key === "ArrowDown" || ev.key === "ArrowLeft" || ev.key === "ArrowRight";
+    if (!isSpace && !isArrow) return;
+    if (__isTextInputControl(t)) return;
+    if (isSpace && __isNativeKeyControl(t) && !__isTouchGameButton(t)) return;
+    if (__keyListenerCount > 0 || __hasReactKeyHandler(t) || (t && t.tagName === "CANVAS")) {
+      ev.preventDefault();
+    }
+  });
+  document.addEventListener("pointerdown", function (ev) {
+    // Always focus the widget frame on pointerdown even when a game button
+    // (e.g. PLAY / FIRE) calls ev.preventDefault() in onPointerDown, so
+    // subsequent keyboard controls target the game instead of scrolling chat.
+    try { window.focus(); } catch {}
+    var t = ev.target;
+    if (!t || t.nodeType !== 1) return;
+    if (__isNativeKeyControl(t) || (t.closest && t.closest("input,textarea,select,button,a,label,summary,[contenteditable]"))) return;
+    var canvas = t.tagName === "CANVAS" ? t : (t.closest ? t.closest("canvas") : null);
+    if (canvas) {
+      if (canvas.tabIndex < 0 && (__keyListenerCount > 0 || __hasReactKeyHandler(canvas))) {
+        canvas.setAttribute("tabindex", "0");
+      }
+      if (canvas.tabIndex >= 0 && typeof canvas.focus === "function") {
+        try { canvas.focus({ preventScroll: true }); } catch {}
+      }
+    }
+  }, true);
+  function __wrapKeyListeners(target) {
+    if (!target || typeof target.addEventListener !== "function") return;
+    var origAdd = target.addEventListener;
+    var origRemove = target.removeEventListener;
+    target.addEventListener = function (type, listener) {
+      if ((type === "keydown" || type === "keyup") && listener) __keyListenerCount++;
+      return origAdd.apply(this, arguments);
+    };
+    target.removeEventListener = function (type, listener) {
+      if ((type === "keydown" || type === "keyup") && listener) __keyListenerCount = Math.max(0, __keyListenerCount - 1);
+      return origRemove.apply(this, arguments);
+    };
+  }
+  __wrapKeyListeners(window);
+  __wrapKeyListeners(document);
+  // Sandboxed widget frames omit allow-pointer-lock and allow-fullscreen:
+  // degrade requestPointerLock / exitPointerLock / requestFullscreen quietly
+  // instead of throwing or emitting unhandled SecurityError rejections so
+  // FPS drag-aim, touch pads and keyboard controls work cleanly everywhere.
+  try {
+    var __elProto = typeof Element !== "undefined" ? Element.prototype : null;
+    if (__elProto) {
+      var __origRpl = __elProto.requestPointerLock;
+      __elProto.requestPointerLock = function () {
+        if (typeof __origRpl === "function") {
+          try {
+            var res = __origRpl.apply(this, arguments);
+            if (res && typeof res.catch === "function") {
+              return res.catch(function () { return undefined; });
+            }
+            return res;
+          } catch (_) {
+            return Promise.resolve();
+          }
+        }
+        return Promise.resolve();
+      };
+      var __origRfs = __elProto.requestFullscreen;
+      if (typeof __origRfs === "function") {
+        __elProto.requestFullscreen = function () {
+          try {
+            var res = __origRfs.apply(this, arguments);
+            if (res && typeof res.catch === "function") {
+              return res.catch(function () { return undefined; });
+            }
+            return res;
+          } catch (_) {
+            return Promise.resolve();
+          }
+        };
+      }
+    }
+    if (document) {
+      if (typeof document.exitPointerLock !== "function") {
+        document.exitPointerLock = function () {};
+      } else {
+        var __origEpl = document.exitPointerLock;
+        document.exitPointerLock = function () {
+          try { return __origEpl.apply(this, arguments); } catch (_) { return undefined; }
+        };
+      }
+    }
+  } catch (_) {}
+  // Suppress long-press context menus on mobile touch game controls and canvases.
+  document.addEventListener("contextmenu", function (ev) {
+    var t = ev.target;
+    if (t && t.nodeType === 1 && t.closest && t.closest(".gu-touch-controls,.gu-touch-bar,.gu-touch-btn,.gu-touch-btn-primary,.gu-dpad,.gu-canvas-interactive")) {
+      ev.preventDefault();
+    }
+  });
   function __bootObservers() {
     var root = document.querySelector(".gu-root") || document.body;
     __syncSliders(document);
@@ -694,18 +1086,40 @@ export function buildRuntimeScript(params: { stateJSON: string }): string {
   });
   // Runs when the widget leaves the page (iframe swap, navigation, close).
   window.addEventListener("pagehide", runDestroy);
-  // Receive live host theme/accent updates from the parent window.
+  // Receive live host theme/accent and fullscreen updates from the parent window.
   var __accents = { teal: 1, neutral: 1, violet: 1, blue: 1, green: 1, amber: 1, orange: 1, coral: 1, rose: 1 };
   window.addEventListener("message", function (ev) {
     if (ev.source !== window.parent) return;
     var d = ev.data;
-    if (!d || typeof d !== "object" || d.__gu !== "theme") return;
-    if (d.theme === "dark" || d.theme === "light") {
-      document.documentElement.setAttribute("data-theme", d.theme);
+    if (!d || typeof d !== "object") return;
+    if (d.__gu === "theme") {
+      if (d.theme === "dark" || d.theme === "light") {
+        document.documentElement.setAttribute("data-theme", d.theme);
+      }
+      if (typeof d.accent === "string" && __accents[d.accent]) {
+        if (d.accent === "teal") document.documentElement.removeAttribute("data-accent");
+        else document.documentElement.setAttribute("data-accent", d.accent);
+      }
+      return;
     }
-    if (typeof d.accent === "string" && __accents[d.accent]) {
-      if (d.accent === "teal") document.documentElement.removeAttribute("data-accent");
-      else document.documentElement.setAttribute("data-accent", d.accent);
+    if (d.__gu === "fullscreen") {
+      var nextFs = !!d.expanded;
+      if (nextFs === __isFullscreen) return;
+      __isFullscreen = nextFs;
+      window.__gu.isFullscreen = nextFs;
+      if (nextFs) document.documentElement.setAttribute("data-fullscreen", "true");
+      else document.documentElement.removeAttribute("data-fullscreen");
+      for (var i = 0; i < __fullscreenListeners.length; i++) {
+        try { __fullscreenListeners[i](nextFs); } catch (err) { reportError(err); }
+      }
+      try { window.dispatchEvent(new Event("resize")); } catch {}
+      requestAnimationFrame(function () {
+        try { window.dispatchEvent(new Event("resize")); } catch {}
+        if (!nextFs) {
+          __lastHeight = 0;
+          __scheduleHeight();
+        }
+      });
     }
   });
   try { window.parent.postMessage({ __gu: "ready" }, "*"); } catch {}
@@ -772,6 +1186,20 @@ export function buildJsxImportMap(moduleUrls: {
   if (moduleUrls.libs.chart) {
     imports["chart.js"] = moduleUrls.libs.chart;
     imports["chart.js/auto"] = moduleUrls.libs.chart;
+  }
+  if (moduleUrls.libs.three) {
+    imports["three/addons/controls/OrbitControls.js"] = moduleUrls.libs.three;
+    imports["three/addons/controls/OrbitControls"] = moduleUrls.libs.three;
+    imports["three/examples/jsm/controls/OrbitControls.js"] = moduleUrls.libs.three;
+    imports["three/examples/jsm/controls/OrbitControls"] = moduleUrls.libs.three;
+    imports["three/addons/environments/RoomEnvironment.js"] = moduleUrls.libs.three;
+    imports["three/addons/environments/RoomEnvironment"] = moduleUrls.libs.three;
+    imports["three/examples/jsm/environments/RoomEnvironment.js"] = moduleUrls.libs.three;
+    imports["three/examples/jsm/environments/RoomEnvironment"] = moduleUrls.libs.three;
+    imports["three/addons/geometries/RoundedBoxGeometry.js"] = moduleUrls.libs.three;
+    imports["three/addons/geometries/RoundedBoxGeometry"] = moduleUrls.libs.three;
+    imports["three/examples/jsm/geometries/RoundedBoxGeometry.js"] = moduleUrls.libs.three;
+    imports["three/examples/jsm/geometries/RoundedBoxGeometry"] = moduleUrls.libs.three;
   }
   if (moduleUrls.libs["cannon-es"]) {
     imports.cannon = moduleUrls.libs["cannon-es"];

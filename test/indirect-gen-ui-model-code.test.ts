@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { parse } from "acorn";
 
-import { sanitizeModelJS, sanitizeModelModule } from "../web/src/indirect-code/components/generative-ui/model-code";
+import {
+  buildJsxModuleBody,
+  sanitizeModelJS,
+  sanitizeModelModule,
+} from "../web/src/indirect-code/components/generative-ui/model-code";
 import { compileJsxModule } from "../web/src/indirect-code/components/generative-ui/jsx-compile";
 
 /**
@@ -1100,5 +1104,128 @@ describe("model-code audit closes dynamic walk-back and aliased capability reads
     if (!res.ok) return;
     expect(res.stripped).toEqual([]);
     expect(res.code).toBe(src);
+  });
+});
+
+describe("buildJsxModuleBody mounts any default export without shifting lines", () => {
+  test("named non-App default function export resolves cleanly", () => {
+    const body = buildJsxModuleBody(`export default function SolarSystem() { return null; }`);
+    expect(body).toContain("__app = SolarSystem;");
+    expect(() => parse(body, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+  });
+
+  test("identifier default export resolves cleanly", () => {
+    const body = buildJsxModuleBody(`const FloorPlan = () => null;\nexport default FloorPlan;`);
+    expect(body).toContain("__app = FloorPlan;");
+    expect(() => parse(body, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+  });
+
+  test("anonymous arrow default export preserves line numbers and re-exports default", () => {
+    const src = `const x = 1;\nexport default () => {\n  return x;\n};`;
+    const body = buildJsxModuleBody(src);
+    expect(body).toContain("const __guDefaultExport = () => {");
+    expect(body).toContain("export default __guDefaultExport;");
+    expect(body).toContain("__app = __guDefaultExport;");
+    // Line 3 in original source (`  return x;`) must stay on line 3.
+    expect(body.split("\n")[2]).toBe("  return x;");
+    expect(() => parse(body, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+  });
+
+  test("anonymous default function followed by paren/bracket statement does not ASI-bind", () => {
+    const src = `export default function() { return null; }\n(function init() {})()`;
+    const body = buildJsxModuleBody(src);
+    expect(body).toContain("const __guDefaultExport = function() { return null; };\n(function init() {})()");
+    const ast = parse(body, { ecmaVersion: "latest", sourceType: "module" }) as { body: unknown[] };
+    expect(ast.body.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("parenthesized anonymous default exports keep valid syntax and line numbers", () => {
+    const cases = [
+      `const x = 1;\nexport default (() => {\n  return x;\n});`,
+      `const x = 1;\nexport default (function() {\n  return x;\n});`,
+      `const x = 1;\nexport default (function NamedExpr() {\n  return x;\n});`,
+      `const x = 1;\nexport /* c1 */ default /* c2 */ (() => {\n  return x;\n});`,
+      `const x = 1;\nexport default(() => {\n  return x;\n});`,
+    ];
+    for (const src of cases) {
+      const body = buildJsxModuleBody(src);
+      expect(body).toContain("export default __guDefaultExport;");
+      expect(body).toContain("__app = __guDefaultExport;");
+      expect(body.split("\n")[2]).toBe("  return x;");
+      expect(() => parse(body, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+    }
+  });
+
+  test("multiline export default preserves line numbers for parenthesized exports", () => {
+    const src = `const x = 1;\nexport\ndefault\n(() => {\n  return x;\n});`;
+    const body = buildJsxModuleBody(src);
+    expect(body.split("\n")[4]).toBe("  return x;");
+    expect(() => parse(body, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+  });
+
+  test("named re-export as default (`export { Comp as default }`) resolves cleanly", () => {
+    for (const src of [
+      `function Dashboard() { return null; }\nexport { Dashboard as default };`,
+      `const Dashboard = () => null;\nexport { Dashboard as "default" };`,
+    ]) {
+      const body = buildJsxModuleBody(src);
+      expect(body).toContain("__app = Dashboard;");
+      expect(() => parse(body, { ecmaVersion: "latest", sourceType: "module" })).not.toThrow();
+    }
+  });
+});
+
+describe("model-code audit produces actionable diagnostics (never .null)", () => {
+  test("dynamic global lookup describes itself clearly without .null", () => {
+    const res = sanitizeModelModule(`const k = "x"; const v = window[k];`);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.stripped.length).toBeGreaterThan(0);
+    expect(res.stripped[0].reason).not.toContain(".null");
+    expect(res.stripped[0].reason).toContain("dynamic property lookup");
+  });
+
+  test("document assignment points models at React refs", () => {
+    const res = sanitizeModelModule(`document.body.style.cursor = "grabbing";`);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.stripped[0].reason).toContain("React ref");
+  });
+
+  test("Three.js addon subpath imports are allowed", () => {
+    const src = [
+      `import { OrbitControls } from "three/addons/controls/OrbitControls.js";`,
+      `import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";`,
+      `import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry";`,
+      `export default function App() { return [OrbitControls, RoomEnvironment, RoundedBoxGeometry]; }`,
+    ].join("\n");
+    const res = sanitizeModelModule(src);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.stripped).toEqual([]);
+  });
+
+  test("static-string `in` feature probes on globals pass while dynamic `in` and aliases stay blocked", () => {
+    const allowed = [
+      `const touch = "ontouchstart" in window || navigator.maxTouchPoints > 0;`,
+      `const hasAudio = "AudioContext" in window || "webkitAudioContext" in window;`,
+      `const hasDocTouch = "ontouchstart" in window.document;`,
+    ];
+    for (const src of allowed) {
+      const res = sanitizeModelModule(src);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.stripped).toEqual([]);
+      expect(res.code).toBe(src);
+    }
+
+    const blocked = [
+      `const k = "fetch"; const has = k in window;`,
+      `const w = window;`,
+    ];
+    for (const src of blocked) {
+      const { stripped } = sanitize(src);
+      expect(stripped).toBeGreaterThan(0);
+    }
   });
 });

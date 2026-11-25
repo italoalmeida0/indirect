@@ -55,14 +55,31 @@ const transpiler = new Bun.Transpiler({
  * and assigns its global. Detection is conservative (distinctive tokens and
  * known leaflet entry points only).
  */
-const GLOBAL_USAGE: { specifier: string; pattern: RegExp }[] = [
-  { specifier: "three", pattern: /\bTHREE\b/ },
+const GLOBAL_USAGE: { specifier: string; aliases?: string[]; pattern: RegExp }[] = [
+  {
+    specifier: "three",
+    aliases: [
+      "three/addons/controls/OrbitControls.js",
+      "three/addons/controls/OrbitControls",
+      "three/examples/jsm/controls/OrbitControls.js",
+      "three/examples/jsm/controls/OrbitControls",
+      "three/addons/environments/RoomEnvironment.js",
+      "three/addons/environments/RoomEnvironment",
+      "three/examples/jsm/environments/RoomEnvironment.js",
+      "three/examples/jsm/environments/RoomEnvironment",
+      "three/addons/geometries/RoundedBoxGeometry.js",
+      "three/addons/geometries/RoundedBoxGeometry",
+      "three/examples/jsm/geometries/RoundedBoxGeometry.js",
+      "three/examples/jsm/geometries/RoundedBoxGeometry",
+    ],
+    pattern: /\bTHREE\b/,
+  },
   { specifier: "d3", pattern: /\bd3\s*\./ },
   { specifier: "gsap", pattern: /\bgsap\s*[.(]/ },
-  { specifier: "chart", pattern: /\bChart\s*[.(]/ },
+  { specifier: "chart", aliases: ["chart.js", "chart.js/auto"], pattern: /\bChart\s*[.(]/ },
   { specifier: "leaflet", pattern: /\bL\s*\.\s*(?:map|marker|tileLayer|polyline|polygon|circle|circleMarker|latLng|icon|divIcon|featureGroup|layerGroup|geoJSON|control)\s*\(|\bwindow\s*\.\s*L\b/ },
-  { specifier: "cannon-es", pattern: /\bCANNON\b/ },
-  { specifier: "matter-js", pattern: /\bMatter\s*\./ },
+  { specifier: "cannon-es", aliases: ["cannon"], pattern: /\bCANNON\b/ },
+  { specifier: "matter-js", aliases: ["matter"], pattern: /\bMatter\s*\./ },
 ];
 
 /** Prepend side-effect imports for libs the code uses but never imports. */
@@ -78,8 +95,8 @@ function injectGlobalImports(code: string): string {
 export function globalImportsFor(code: string): string[] {
   const imported = new Set(jsxBareSpecifiers(code));
   const prelude: string[] = [];
-  for (const { specifier, pattern } of GLOBAL_USAGE) {
-    if (imported.has(specifier) || !pattern.test(code)) continue;
+  for (const { specifier, aliases, pattern } of GLOBAL_USAGE) {
+    if (imported.has(specifier) || aliases?.some((a) => imported.has(a)) || !pattern.test(code)) continue;
     prelude.push(`import ${JSON.stringify(specifier)};`);
   }
   return prelude;

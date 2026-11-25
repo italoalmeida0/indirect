@@ -87,4 +87,41 @@ export default a + b;
     expect(pos?.line).toBe(2);
     expect(res.map.originalPositionFor(99, 0)).toBeNull();
   });
+
+  test("optional chaining on window.indirectUi / window.__gu / document does not trigger bare-global false positives", () => {
+    const src = `export default function App() {
+  const w = window?.innerWidth ?? 640;
+  const cw = document.body?.clientWidth ?? 400;
+  window.indirectUi?.saveState?.({ best: 1_000 });
+  (globalThis as any).indirectUi?.prefillPrompt?.("hi");
+  window.__gu?.fitCanvas?.(null);
+  return <div className="gu-root">{w + cw}</div>;
+}`;
+    const res = compileWidgetForLint(src);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.findings).toEqual([]);
+    expect(res.code).not.toContain("_optionalChain");
+  });
+
+  test("optional chaining still blocks forbidden capabilities and bare global aliases", () => {
+    const fetchRes = compileWidgetForLint(`export default function App() { window?.fetch?.("https://evil.example"); return <div/>; }`);
+    expect(fetchRes.ok).toBe(true);
+    if (fetchRes.ok) {
+      expect(fetchRes.findings.length).toBeGreaterThan(0);
+      expect(fetchRes.code).not.toContain("fetch");
+    }
+    const evalRes = compileWidgetForLint(`export default function App() { window?.eval?.("1"); return <div/>; }`);
+    expect(evalRes.ok).toBe(true);
+    if (evalRes.ok) {
+      expect(evalRes.findings.length).toBeGreaterThan(0);
+      expect(evalRes.code).not.toContain("eval");
+    }
+    const aliasRes = compileWidgetForLint(`export default function App() { const w = (window as any); return <div>{String(!!w)}</div>; }`);
+    expect(aliasRes.ok).toBe(true);
+    if (aliasRes.ok) {
+      expect(aliasRes.findings.length).toBeGreaterThan(0);
+      expect(aliasRes.code).not.toMatch(/\bwindow\b/);
+    }
+  });
 });

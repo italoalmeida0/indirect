@@ -44,7 +44,7 @@ type useSkillArgs struct {
 
 const useSkillArgsJSON = `{"type":"object","properties":{"name":{"type":"string","description":"The skill name, exactly as listed in the tool description."},"once":{"type":"boolean","description":"true loads the skill for THIS turn only (deactivated at turn end). false/omitted activates it for the rest of the session."}},"required":["name"]}`
 
-const useSkillBaseDescription = "Load one skill by name. On success the skill's full instruction body is returned inside the tool_result for immediate use this turn; it also stays active for the session (injected as a <skill> block in later requests). With once=true it applies to this turn only. Loading an already-loaded skill just acknowledges it."
+const useSkillBaseDescription = "Load one skill by name. On success the skill's full instruction body is returned inside the tool_result for immediate use this turn; it also stays active for the session (injected as a <skill> block in later requests), and any tools or specialized subskills it unlocks become available immediately on the next step. With once=true it applies to this turn only. Loading an already-loaded skill just acknowledges it."
 
 func (*UseSkillTool) Name() string { return "use_skill" }
 

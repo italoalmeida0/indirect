@@ -28,13 +28,26 @@ export type WidgetSourceRecord = {
 };
 
 // Tiny dependency-free signal (the SPA is Solid, but this module must stay
-// importable from the server-side lint tests too).
+// importable from the server-side lint tests too). Listeners let Solid
+// components bridge updates into a real reactive signal.
 function signal<T>(initial: T) {
   let value = initial;
+  const listeners = new Set<(v: T) => void>();
   return {
     get: () => value,
     set: (v: T) => {
       value = v;
+      for (const fn of listeners) {
+        try {
+          fn(v);
+        } catch {}
+      }
+    },
+    subscribe: (fn: (v: T) => void) => {
+      listeners.add(fn);
+      return () => {
+        listeners.delete(fn);
+      };
     },
   };
 }
