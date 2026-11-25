@@ -147,6 +147,8 @@ try {
   await composer.fill("/skills");
   await composer.press("Enter");
   await page.waitForFunction(() => (window as any).modeSkillsUI.options.modeMenuOpen() === true);
+  await page.waitForSelector('[role="dialog"][aria-label="Mode & skills"]');
+  await page.locator('[role="menuitemcheckbox"]').first().waitFor({ state: "visible" });
   assert(await page.locator('[role="menuitemcheckbox"]').first().isVisible(), "/skills must open the Mode & Skills popup");
   assert(!(await commands()).some((c) => c.type === "prompt"), `/skills must not send a prompt, got ${JSON.stringify(await commands())}`);
   await page.screenshot({ path: "/tmp/skills-flow-slash-skills.png" });
